@@ -15,6 +15,16 @@
       },
       "source": "./plugins/nerd",
       "category": "development"
+    },
+    {
+      "name": "clawcrush",
+      "description": "Find and destroy zombie processes and repo slop spawned by Claude Code sessions",
+      "version": "0.1.0",
+      "author": {
+        "name": "Shawn Roos"
+      },
+      "source": "./plugins/clawcrush",
+      "category": "utilities"
     }
   ]
 }
