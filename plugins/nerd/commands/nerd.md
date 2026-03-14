@@ -160,6 +160,29 @@ Present summary. Clean up remaining worktrees:
 git worktree prune
 ```
 
+## Phase 8: Scout for Loop Candidates
+
+After findings are compiled, run the loop-scout to identify what deserves deep iteration:
+
+```
+Agent(subagent_type="nerd:loop-scout", prompt="Analyze research findings in docs/research/ and the backlog in .claude/nerd.local.md. Identify the best candidates for /nerd-loop continuous improvement. Write recommendations to docs/research/loop-candidates.md.", run_in_background=false)
+```
+
+Present the scout's recommendations:
+
+```
+Loop Candidates (ranked by potential):
+
+  1. Search Relevance (8/10) — 12% headroom, eval harness ready, 3 files in scope
+  2. Prompt Efficiency (7/10) — 99% token reduction possible, clear metric
+  3. Sync Pipeline (5/10) — needs eval harness first, broad scope
+
+  Run /nerd-loop "search relevance" to start deep iteration.
+  Or /nerd-schedule tonight to run the top candidate overnight.
+```
+
+If running in scheduled mode (`NERD_SCHEDULED=1`) and the schedule window has time remaining, automatically launch `/nerd-loop` on the top candidate.
+
 ## Error Handling
 
 - Agent fails → mark `failed`, keep worktree, continue others
