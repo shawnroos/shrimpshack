@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "shawnroos-plugins",
+  "description": "Claude Code plugins by @shawnroos",
+  "owner": {
+    "name": "Shawn Roos"
+  },
+  "plugins": [
+    {
+      "name": "nerd",
+      "description": "Autonomous codebase research — discovers tunable parameters, runs experiments overnight in worktrees, delivers findings with KEEP/CHANGE/INVESTIGATE recommendations",
+      "version": "0.1.0",
+      "author": {
+        "name": "Shawn Roos"
+      },
+      "source": "./plugins/nerd",
+      "category": "development"
+    }
+  ]
+}
