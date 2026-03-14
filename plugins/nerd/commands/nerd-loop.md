@@ -88,9 +88,15 @@ best_metric: {baseline_value}
 5. If metric worse OR tests fail → git reset --hard, try something different
 6. NEVER STOP. Run until manually interrupted.
 
+## State
+- consecutive_discards: 0
+- phase: normal          # normal → pivot → escalate → local_maximum
+- total_iterations: 0
+- total_kept: 0
+
 ## Experiment Log
-| # | Change | Metric | vs Best | Status |
-|---|--------|--------|---------|--------|
+| # | Change | Metric | vs Best | Status | Phase |
+|---|--------|--------|---------|--------|-------|
 ```
 
 ## Step 2: Create the Loop Branch
@@ -138,15 +144,41 @@ THE LOOP (run forever):
 5. DECIDE:
    - If metric improved: git add {scope_files} && git commit -m 'loop: {description}'
      Update the experiment log and best_metric in the protocol file.
+     Reset the consecutive_discards counter to 0.
    - If metric same or worse: git reset --hard HEAD
      Log as 'discard' with the metric value.
+     Increment consecutive_discards counter.
 
-6. REFLECT: After every 5 iterations, re-read the experiment log.
+6. CHECK FOR LOCAL MAXIMUM:
+   Track consecutive discards (iterations where the metric didn't improve).
+
+   - **consecutive_discards < 5**: Normal operation. Keep trying.
+   - **consecutive_discards reaches 5**: PIVOT. You've exhausted minor variations.
+     Log: "Pivot: 5 consecutive discards. Switching approach."
+     Try something fundamentally different — new algorithm, structural change,
+     remove a component, change the data flow. Reset consecutive_discards to 0.
+   - **consecutive_discards reaches 5 AFTER a pivot**: ESCALATE. Two approach
+     classes have plateaued.
+     Log: "Escalate: plateau after pivot."
+     Re-read ALL kept commits. Ask: "Is there a completely different framing
+     of this problem?" Try the opposite of what's been working.
+     Reset consecutive_discards to 0.
+   - **consecutive_discards reaches 5 AFTER an escalation**: LOCAL MAXIMUM REACHED.
+     Log: "Local maximum reached after {total_iterations} iterations."
+     Log: "Best metric: {best_metric} (improved from {baseline} = {improvement}%)"
+     STOP THE LOOP. Proceed to Step 6 (wrap-up).
+
+   This gives the loop 3 chances (normal → pivot → escalate) before concluding
+   it has found the local optimum. That's 15 consecutive failed iterations across
+   3 different strategic approaches.
+
+7. REFLECT: After every 5 iterations (regardless of discard count), re-read
+   the experiment log.
    - What patterns emerge? (Do all architecture changes help? Do parameter tweaks plateau?)
-   - Are you stuck in a local optimum? Try something radically different.
-   - Has the metric plateaued? Try a completely different approach.
+   - What's the ratio of kept to discarded?
+   - Are the improvements getting smaller? (diminishing returns)
 
-7. GOTO 1. NEVER STOP.
+8. GOTO 1.
 
 IMPORTANT:
 - Each iteration should take 2-10 minutes depending on build/test time.
@@ -191,12 +223,57 @@ Nerd Loop Started
 
 Then use `/loop 5m` to periodically check the agent's progress and report iteration count + current best metric.
 
-## Step 6: When Interrupted
+## Step 6: When Loop Ends (Local Maximum or Interrupted)
 
-When the user stops the session (or the scheduled window closes):
+The loop ends when either:
+- **Local maximum detected**: 15 consecutive discards across 3 strategic phases (normal → pivot → escalate)
+- **User interrupts**: manually stops the session
+- **Scheduled window closes**: overnight run ends
 
 1. Read the final protocol file for the experiment log
-2. Summarize: total iterations, best metric achieved, improvement over baseline
+2. Compile a loop report at `docs/research/loop-{focus-slug}-report.md`:
+
+```markdown
+---
+title: "Nerd Loop: {research_focus}"
+status: local_maximum|interrupted|window_closed
+total_iterations: {N}
+kept: {N}
+discarded: {N}
+baseline_metric: {value}
+best_metric: {value}
+improvement: {percent}%
+exit_reason: "{why it stopped}"
+---
+
+# Loop Results: {research_focus}
+
+## Summary
+Ran {total} iterations over {duration}. Kept {kept}, discarded {discarded}.
+Improved {metric} from {baseline} to {best} ({improvement}%).
+
+## Exit Reason
+{local_maximum: "Plateaued after 15 consecutive discards across 3 strategic phases."}
+{interrupted: "Manually stopped by user."}
+{window_closed: "Scheduled window ended."}
+
+## Improvement Timeline
+| Iteration | Change | Metric | Improvement |
+|-----------|--------|--------|-------------|
+{rows for kept changes only, showing progression}
+
+## What Worked
+{Pattern analysis of kept changes — what types of changes produced improvements?}
+
+## What Didn't Work
+{Pattern analysis of discarded changes — what approaches were dead ends?}
+
+## Approaches Tried
+- Normal phase: {what was tried, N iterations}
+- Pivot phase: {what was tried, N iterations}
+- Escalation phase: {what was tried, N iterations}
+```
+
 3. List the top changes that were kept (from git log)
 4. The branch `nerd-loop/{focus-slug}` contains all the accumulated improvements
 5. Ask: "Merge nerd-loop/{focus-slug} into your working branch?"
