@@ -54,6 +54,12 @@ backlog: []
 ---
 ```
 
+Add `.claude/nerd.local.md` to the project's `.gitignore` if not already present:
+
+```bash
+grep -q "nerd.local.md" .gitignore 2>/dev/null || echo ".claude/nerd.local.md" >> .gitignore
+```
+
 This means `/nerd-setup` is only needed once per machine (hardware calibration). Every new project auto-inits on first `/nerd` run.
 
 **Detect project:**

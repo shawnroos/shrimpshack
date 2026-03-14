@@ -155,7 +155,17 @@ fi
 Write the calibration results to the global nerd config:
 
 ```bash
-mkdir -p ~/.claude/plugins/nerd
+mkdir -p ~/.claude/plugins/nerd/logs
+```
+
+Ensure machine-specific files are never committed. Create or update `.gitignore` in the plugin directory:
+
+```bash
+cat > ~/.claude/plugins/nerd/.gitignore << 'EOF'
+hardware-profile.yaml
+global-queue.yaml
+logs/
+EOF
 ```
 
 Write to `~/.claude/plugins/nerd/hardware-profile.yaml`:
