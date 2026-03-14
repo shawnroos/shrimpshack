@@ -1,6 +1,6 @@
 ---
 name: nerd-setup
-description: "First-time setup for the nerd plugin. Detects hardware, installs the appropriate training variant (MLX for Apple Silicon, original for NVIDIA), runs calibration benchmarks, and saves a hardware profile. Also initializes the docs/research/ structure in the current project."
+description: "One-time global setup for the nerd plugin. Detects hardware, installs the training variant (MLX for Apple Silicon, original for NVIDIA), runs calibration benchmarks, and saves a hardware profile. Only needs to run once per machine — projects auto-initialize on first /nerd run."
 allowed-tools: "Read,Write,Edit,Bash,Glob,Grep,AskUserQuestion,Agent"
 ---
 
@@ -191,71 +191,7 @@ codebase:
 calibrated_at: "2026-03-14T00:00:00Z"
 ```
 
-## Step 4b: Configure Merge Strategy
-
-Use AskUserQuestion to determine how the user wants experiment results handled:
-
-```
-"How should completed experiments be merged?"
-
-Options:
-1. Auto-merge (Recommended for overnight runs)
-   — Experiments merge into the current branch as they complete.
-     Tests run after merge. Auto-reverts if tests fail.
-
-2. PR per experiment
-   — Each experiment creates a PR for review. Nothing merges
-     without explicit approval. Best for shared/team repos.
-
-3. Collect on branches
-   — Experiments stay on their worktree branches. You review
-     and cherry-pick what you want. Worktrees preserved.
-```
-
-Also ask about cleanup:
-
-```
-"Should worktrees be cleaned up automatically after merge?"
-
-Options:
-1. Yes — remove worktree + delete branch after successful merge
-2. Keep for 24h — auto-cleanup after one day (lets you inspect)
-3. Manual — never auto-cleanup, you decide when to remove
-```
-
-## Step 5: Initialize Project Research Structure
-
-In the current project directory:
-
-```bash
-mkdir -p docs/research/plans
-mkdir -p docs/research/results
-```
-
-Create `.claude/nerd.local.md` if it doesn't exist:
-
-```yaml
----
-max_parallel_experiments: 4
-worktree_prefix: "research"
-merge_strategy: "auto"        # auto | pr | branches
-auto_cleanup_worktrees: true   # true | delayed_24h | false
-backlog: []
----
-
-# Nerd Project Config
-
-Research backlog and settings for this project.
-```
-
-Set `merge_strategy` and `auto_cleanup_worktrees` based on user's answers from Step 4b.
-
-Add to `.gitignore` if not already present:
-```
-.claude/nerd.local.md
-```
-
-## Step 6: Verify and Report
+## Step 5: Verify and Report
 
 Display the setup summary:
 
@@ -263,20 +199,17 @@ Display the setup summary:
 Nerd Setup Complete
 ═══════════════════════════
 
-Hardware: Apple M1 Pro (16GB)
-LLM Training: autoresearch-mlx installed
-  Baseline: val_bpb 2.793 | 3 steps/5min | ~3.1 experiments/hour
-  Eval batch: 64 (tuned for 16GB)
+Hardware: {chip} ({memory_gb}GB)
+GPU: {gpu_type}
+LLM Training: {variant} installed at {install_path}
+  Baseline: val_bpb {baseline} | {steps}/5min | ~{rate} experiments/hour
+  Eval batch: {eval_batch_size}
 
-Codebase: Rust (cargo build 6.5s, 477 tests in 12.3s)
-
-Project initialized:
-  docs/research/plans/    ✓
-  docs/research/results/  ✓
-  .claude/nerd.local.md  ✓
-
-Ready! Run /nerd to start.
+Hardware profile saved to: ~/.claude/plugins/nerd/hardware-profile.yaml
+This is a one-time global setup. Projects auto-initialize on first /nerd run.
 ```
+
+**Note:** Per-project config (`.claude/nerd.local.md`, `docs/research/`) is created automatically when `/nerd` is first run in a project. No need to run `/nerd-setup` per repo.
 
 ## Hardware Profile Usage
 

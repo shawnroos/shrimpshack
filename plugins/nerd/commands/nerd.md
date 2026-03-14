@@ -17,20 +17,52 @@ Turn the nerd loose. It will find every hardcoded threshold, magic number, and u
 
 **Check schedule mode:** If `NERD_SCHEDULED=1` is set, operate fully autonomously — skip all AskUserQuestion calls, execute all backlog experiments, make decisions without user input.
 
-**Check setup:**
+**Check global setup:**
 ```bash
 cat ~/.claude/plugins/nerd/hardware-profile.yaml 2>/dev/null
 ```
 If no hardware profile: "Run /nerd-setup first to calibrate your hardware." Stop.
 
+**Auto-init project (if not already initialized):**
+Check if this project has been set up for nerd. If not, do it silently:
+
+```bash
+if [ ! -f .claude/nerd.local.md ]; then
+    # First run in this project — auto-initialize
+    mkdir -p docs/research/plans docs/research/results .claude
+
+    # Detect project language and test command
+    if [ -f Cargo.toml ]; then lang="rust"; test_cmd="cargo test"; build_cmd="cargo build";
+    elif [ -f package.json ]; then lang="typescript"; test_cmd="bun test"; build_cmd="bun run typecheck";
+    elif [ -f pyproject.toml ]; then lang="python"; test_cmd="pytest"; build_cmd="python -m py_compile";
+    elif [ -f go.mod ]; then lang="go"; test_cmd="go test ./..."; build_cmd="go build ./...";
+    else lang="unknown"; test_cmd="echo 'no tests configured'"; build_cmd="echo 'no build configured'"; fi
+fi
+```
+
+Create `.claude/nerd.local.md` with defaults:
+
+```yaml
+---
+max_parallel_experiments: 4
+merge_strategy: auto
+auto_cleanup_worktrees: true
+language: {lang}
+test_command: "{test_cmd}"
+build_command: "{build_cmd}"
+backlog: []
+---
+```
+
+This means `/nerd-setup` is only needed once per machine (hardware calibration). Every new project auto-inits on first `/nerd` run.
+
 **Detect project:**
 ```bash
-ls Cargo.toml package.json pyproject.toml go.mod 2>/dev/null
 cat CLAUDE.md .claude/CLAUDE.md 2>/dev/null | head -50
 git branch --show-current
 ```
 
-Store: language, test command, current branch.
+Store: language, test command, current branch from the local config.
 
 ## Phase 1: Check the Backlog
 
