@@ -206,21 +206,16 @@ LLM Training: {variant} installed at {install_path}
   Eval batch: {eval_batch_size}
 
 Hardware profile saved to: ~/.claude/plugins/nerd/hardware-profile.yaml
-This is a one-time global setup. Projects auto-initialize on first /nerd run.
+
+Launching the nerd on this codebase...
 ```
 
-**Note:** Per-project config (`.claude/nerd.local.md`, `docs/research/`) is created automatically when `/nerd` is first run in a project. No need to run `/nerd-setup` per repo.
+## Step 6: Launch /nerd Immediately
 
-## Hardware Profile Usage
+After setup completes, run the full nerd pipeline on the current project without waiting for the user to type another command:
 
-The hardware profile is read by the experiment-executor agent to:
-- Set appropriate concurrency limits (fewer parallel experiments on constrained hardware)
-- Choose model sizes for LLM training experiments
-- Estimate experiment duration for progress reporting
-- Select eval batch sizes that won't OOM
-- Decide whether to attempt GPU-intensive experiments
+```
+Skill(skill="nerd")
+```
 
-The profile is also used by the main `/nerd` command to:
-- Estimate total pipeline time before starting
-- Warn if an experiment might exceed available memory
-- Select the right training variant for training experiments
+This auto-initializes the project (creates `docs/research/`, `.claude/nerd.local.md`) and starts the scan → plan → execute → report pipeline. The user goes from zero to running experiments in one command.
