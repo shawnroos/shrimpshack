@@ -1,89 +1,131 @@
 # nerd
 
-Your obsessive overnight research assistant for Claude Code. Finds every tunable parameter in your codebase, designs rigorous experiments, runs them in worktrees while you sleep, and delivers findings with actionable recommendations.
+Your obsessive overnight research assistant for Claude Code. Finds every tunable parameter in your codebase, designs experiments with competing theories, runs them in worktrees while you sleep, and delivers findings that tell you what to keep, what to change, and what to rearchitect.
+
+## Install
+
+```bash
+claude plugin marketplace add https://github.com/shawnroos/shrimpshack.git
+claude plugin install nerd
+```
 
 ## Quick Start
 
 ```bash
-/nerd-setup                    # Calibrate your hardware
-/nerd                          # Let it loose on your codebase
-/nerd search relevance         # Focus on a specific area
-/nerd-schedule tonight         # Schedule overnight runs
-/nerd-status                   # Check what it's up to
+/nerd-setup                        # One-time: calibrate hardware
+/nerd                              # Scan → plan → execute → report → scout for loops
+/nerd-loop "search relevance"      # Deep continuous iteration on one area
+/nerd-schedule tonight             # Schedule overnight runs
+/nerd-status                       # Check what the nerd is up to
 ```
 
-## What It Does
+`/nerd-setup` runs once per machine. Projects auto-initialize on first `/nerd` run.
 
-Codebases accumulate hardcoded thresholds, magic numbers, and heuristic weights chosen by intuition, not measurement. The nerd finds them all and proves whether they're optimal.
+## Two Research Modes
+
+### `/nerd` — Broad Survey
+
+Scans the codebase, identifies tunable parameters, plans experiments with competing theories, executes them in parallel worktrees, compiles findings, then scouts for the best loop candidate.
 
 ```
 /nerd
-  |
-  +-- parameter-scanner (cyan)
-  |     Obsessively greps for: thresholds, weights, prompts, budgets, timing
-  |
-  +-- You pick which findings to investigate
-  |
-  +-- plan-reviewer (yellow, opus)
-  |     Designs experiments with: hypothesis, metric, sweep, ground truth
-  |     Reviews its own plans for gaps before proceeding
-  |
-  +-- experiment-executor (green) x N parallel
-  |     Builds eval harnesses in worktree branches
-  |     Runs parameter sweeps, captures results
-  |     Auto-merges on success, auto-reverts on test failure
-  |
-  +-- /loop 5m monitors until queue complete
-  |
-  +-- report-compiler (blue)
-        Writes: docs/research/findings.md + per-experiment reports
-        Each finding: KEEP, CHANGE (with code diff), or INVESTIGATE
+  ├─ parameter-scanner finds opportunities
+  ├─ You pick which to investigate
+  ├─ plan-reviewer generates 3 competing theories per experiment
+  ├─ experiment-executor builds harnesses in parallel worktrees
+  ├─ report-compiler evaluates which theories held up
+  └─ loop-scout recommends the best target for deep iteration
 ```
+
+### `/nerd-loop` — Deep Iteration
+
+Continuous self-improvement on one area. The agent reads the code, hypothesizes an improvement, makes the change, measures, keeps if better, reverts if not — and repeats until it hits a local maximum.
+
+```
+/nerd-loop "search relevance"
+  ├─ Establishes baseline metric
+  ├─ Loops: edit → test → measure → keep/discard
+  ├─ Pivots strategy after 5 consecutive failures
+  ├─ Escalates after another 5
+  └─ Stops at local maximum (15 failures across 3 strategies)
+```
+
+The loop doesn't just sweep parameters — it rewrites algorithms, restructures logic, removes unnecessary code. Anything within the scoped files is fair game.
+
+## Competing Theories
+
+Every experiment generates 3+ competing theories:
+
+| Theory Type | Example |
+|-------------|---------|
+| **Parameter is wrong** | The threshold of 0.85 should be 0.80 |
+| **Model is wrong** | Exponential decay doesn't fit — data is bursty, try power-law |
+| **Feature is unnecessary** | LLM curation adds latency but no quality over the algorithmic reranker |
+| **Data is the bottleneck** | Thresholds don't matter because 99% of resolution is via exact email match |
+| **Architecture is the bottleneck** | Sequential hydration should be parallel — no parameter can fix this |
+
+Reports evaluate each theory as SUPPORTED / REFUTED / INCONCLUSIVE and recommend: **KEEP**, **CHANGE**, **REMOVE**, **REARCHITECT**, or **INVESTIGATE**.
 
 ## Overnight Runs
 
-The nerd is designed to work while you sleep:
-
 ```bash
-/nerd-schedule tonight          # Run 22:00 - 06:00
+/nerd-schedule tonight          # 22:00 - 06:00
 /nerd-schedule weeknights       # Recurring M-F 22:00-06:00
 /nerd-schedule 23:00-05:00      # Custom window
-/nerd-schedule cancel           # Stop scheduled runs
+/nerd-schedule cancel           # Stop
 ```
 
-Scheduled runs use macOS LaunchAgents. Retry on failure (3 attempts), low CPU priority, crash recovery on next session start.
+Scheduled runs are fully autonomous. The nerd runs `/nerd` first, then the loop-scout picks the top finding, and `/nerd-loop` goes deep for the rest of the window. Features: retry on failure, low CPU priority, crash recovery.
 
 ## Passive Discovery
 
-A `PostToolUse` hook watches as you write code. When you create hardcoded thresholds or magic numbers, the nerd silently adds them to the backlog. By the time you run `/nerd`, there's already a queue of findings waiting.
+A `PostToolUse` hook watches as you code. When you write hardcoded thresholds or magic numbers, the nerd adds them to the project backlog. Next `/nerd` run, there's already a queue waiting.
 
 ## Multi-Project Scheduling
 
-Running experiments across Arras, Jeans, and other projects? The global queue coordinates:
-- Round-robin across projects for fairness
-- Max 4 parallel experiments total, 2 per project
-- Stored at `~/.claude/plugins/nerd/global-queue.yaml`
+Global queue at `~/.claude/plugins/nerd/global-queue.yaml` coordinates across repos:
+- Round-robin for fairness
+- Max 4 parallel experiments, 2 per project
+
+## Pipeline
+
+```
+/nerd-setup (once per machine)
+    ↓
+/nerd (broad survey)
+    ├─ Phase 1-2: Scan for parameters
+    ├─ Phase 3:   Plan with competing theories
+    ├─ Phase 4:   Review gate
+    ├─ Phase 5:   Execute in parallel worktrees
+    ├─ Phase 6:   Monitor with /loop
+    ├─ Phase 7:   Compile theory-aware findings
+    └─ Phase 8:   Scout for loop candidates
+                    ↓
+/nerd-loop (deep iteration)
+    ├─ Baseline → edit → test → measure → keep/discard
+    ├─ Reflect every 5 iterations
+    ├─ Normal → Pivot → Escalate → Local Maximum
+    └─ Report with improvement timeline
+```
 
 ## Output
 
-After the nerd finishes, your project has:
-
 ```
 docs/research/
-  findings.md              # Executive summary
-  plans/E001-plan.md       # Experiment plans
-  results/E001-results.json # Raw sweep data
-  E001-report.md           # KEEP / CHANGE / INVESTIGATE
+├── findings.md                 # Executive summary with theory verdicts
+├── loop-candidates.md          # Scout recommendations for deep iteration
+├── plans/E001-plan.md          # Plans with competing theories
+├── results/E001-results.json   # Raw data
+├── E001-report.md              # KEEP / CHANGE / REARCHITECT / REMOVE
+└── loop-search-relevance-report.md  # Deep loop improvement timeline
 ```
 
 ## Configuration
 
-### Hardware Profile
-
+### Hardware Profile (global)
 Created by `/nerd-setup` at `~/.claude/plugins/nerd/hardware-profile.yaml`.
 
-### Project Config
-
+### Project Config (auto-created)
 Per-project at `.claude/nerd.local.md`:
 
 ```yaml
@@ -91,40 +133,35 @@ Per-project at `.claude/nerd.local.md`:
 max_parallel_experiments: 4
 merge_strategy: auto
 auto_cleanup_worktrees: true
-backlog:
-  - id: E001
-    title: "JW Threshold Tuning"
-    status: proposed
-    parameter: jw_threshold
-    file: src/entities/resolution.rs
-    line: 92
-    current_value: "0.85"
+language: rust
+test_command: "cargo test"
+backlog: []
 ---
 ```
 
-## Components
+## Agents
 
-| Type | Name | Purpose |
-|------|------|---------|
-| `/nerd` | Main command | Full pipeline: scan, plan, execute, report |
-| `/nerd-setup` | Setup | Hardware calibration + dependency install |
-| `/nerd-schedule` | Schedule | Overnight runs via LaunchAgent |
-| `/nerd-status` | Status | Queue and progress monitor |
-| `parameter-scanner` | Agent (cyan) | Finds tunable parameters |
-| `plan-reviewer` | Agent (yellow) | Reviews experiment plans (Opus) |
-| `experiment-executor` | Agent (green) | Runs experiments in worktrees |
-| `report-compiler` | Agent (blue) | Writes research reports |
-| `SessionStart` | Hook | Checks backlog, detects crashed sessions |
-| `PostToolUse:Write` | Hook | Passively discovers tunable parameters |
+| Agent | Color | Model | Role |
+|-------|-------|-------|------|
+| `parameter-scanner` | Cyan | Sonnet | Finds tunable parameters |
+| `plan-reviewer` | Yellow | Opus | Generates competing theories, reviews plans |
+| `experiment-executor` | Green | Sonnet | Builds and runs experiments in worktrees |
+| `report-compiler` | Blue | Sonnet | Evaluates theories, writes findings |
+| `loop-scout` | Magenta | Sonnet | Identifies best candidates for /nerd-loop |
+
+## Requirements
+
+- Git with worktree support
+- Claude Code with agent capabilities
+- macOS (for LaunchAgent scheduling)
 
 ## Origin
 
-Born from a session where 15 experiments were designed, built, and run across two codebases in one sitting. Key findings from that first run:
+Born from a session where 15 experiments were designed, built, and run across two codebases. The key insight: **the most valuable findings weren't parameter tweaks — they were architectural discoveries that emerged from testing competing theories.**
 
-- Entity resolution thresholds were already optimal (validated, not assumed)
-- System prompt compression saves 99% tokens for query expansion
-- Orchestrator layout weights were dead code in the primary path
-- Pre-validation heuristics catch 30-40% of design issues at zero API cost
-- Temporal decay data was bursty, not exponential — the model was wrong
+- Entity resolution thresholds were optimal — **but 99% of resolution was via exact email match, making the fuzzy tier irrelevant** (data was the bottleneck, not the threshold)
+- System prompt compression saves 99% tokens — **the feature worked but was sent 3700 tokens of context it never used** (feature was unnecessary in current form)
+- Orchestrator weights were dead code — **the LLM generates its own heights, bypassing the weights entirely** (architecture bypasses the parameter)
+- Temporal decay was bursty, not exponential — **the model was wrong, not the parameters** (model mismatch)
 
-The nerd packages that workflow so it runs on any codebase, any night.
+The nerd packages these patterns into a plugin that runs on any codebase, any night.
