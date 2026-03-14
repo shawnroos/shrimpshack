@@ -1,0 +1,9 @@
+{
+  "name": "nerd",
+  "version": "0.1.0",
+  "description": "Your overnight research assistant. Obsessively analyzes codebases for tunable parameters, designs experiments, runs them in worktrees while you sleep, and delivers findings with recommendations.",
+  "author": {
+    "name": "Shawn Roos"
+  },
+  "keywords": ["research", "experiments", "optimization", "parameter-tuning", "nerd"]
+}
