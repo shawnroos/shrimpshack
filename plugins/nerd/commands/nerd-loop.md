@@ -1,0 +1,219 @@
+---
+name: nerd-loop
+description: "Run a continuous self-improvement loop on a specific aspect of your codebase. The agent edits code, runs it, measures the result, keeps improvements, discards regressions, and repeats indefinitely. Like Karpathy's autoresearch but for any codebase feature. Use: /nerd-loop 'search relevance' or /nerd-loop 'api response time'"
+argument-hint: "<research focus>"
+allowed-tools: "Read,Write,Edit,Bash,Glob,Grep,Agent,AskUserQuestion"
+---
+
+# nerd-loop — Continuous Self-Improvement Loop
+
+Run an autonomous, never-ending improvement loop on a specific part of your codebase. The agent reads the code, hypothesizes an improvement, makes the change, measures the result, keeps it if better, reverts if not, and repeats — indefinitely until you interrupt it.
+
+This is Karpathy's autoresearch pattern applied to your own code.
+
+## Input
+
+<research_focus>$ARGUMENTS</research_focus>
+
+If empty, ask: "What should the nerd obsess over? Examples: 'search relevance', 'API latency', 'prompt efficiency', 'test coverage', 'bundle size'"
+
+## Step 1: Define the Loop Contract
+
+Before starting, the nerd needs to establish the rules of the loop. Read the codebase and determine:
+
+### 1a: What to optimize (the metric)
+
+Based on the research focus, identify or create a measurable metric:
+
+| Focus | Metric | How to Measure |
+|-------|--------|---------------|
+| search relevance | nDCG@10 | run eval harness against search_feedback |
+| API latency | p95 response time | run benchmark suite |
+| prompt efficiency | tokens per call | count tokens in prompt variants |
+| test coverage | line coverage % | run coverage tool |
+| bundle size | bytes | build and measure |
+| memory usage | peak RSS | run with instrumentation |
+| compile time | seconds | time the build |
+
+If no eval harness exists for this metric, **build one first** (a minimal script that outputs a single number). This is the equivalent of autoresearch's `evaluate_bpb`.
+
+### 1b: What can be modified (the scope)
+
+Identify the files the agent is allowed to change. Like autoresearch constrains changes to `train.py`, the loop needs boundaries:
+
+```
+Determine the relevant files:
+- If focus is "search relevance" → src/search/*.rs
+- If focus is "prompt efficiency" → src/acp/mod.rs (prompt builders)
+- If focus is "API latency" → src/api/*.rs, src/handlers/*.rs
+```
+
+Use AskUserQuestion to confirm: "I'll focus on modifying {files}. The metric is {metric}. Does this scope look right?"
+
+### 1c: What's fixed (the constraints)
+
+Establish what CANNOT change:
+- The evaluation harness / metric computation
+- The test suite (must pass after every change)
+- Public API contracts
+- Database schema
+- Dependencies
+
+### 1d: Write the loop protocol
+
+Create `docs/research/loop-protocol-{focus-slug}.md`:
+
+```markdown
+---
+focus: "{research_focus}"
+metric: "{metric_name}"
+metric_command: "{command to measure}"
+scope: ["{file1}", "{file2}"]
+constraints:
+  - Tests must pass: "{test_command}"
+  - No new dependencies
+  - No public API changes
+started_at: "{timestamp}"
+iterations: 0
+best_metric: {baseline_value}
+---
+
+# Nerd Loop: {research_focus}
+
+## Rules
+1. ONLY modify files in scope: {files}
+2. After every change, run: {test_command}
+3. Measure with: {metric_command}
+4. If metric improved AND tests pass → git commit, update best_metric
+5. If metric worse OR tests fail → git reset --hard, try something different
+6. NEVER STOP. Run until manually interrupted.
+
+## Experiment Log
+| # | Change | Metric | vs Best | Status |
+|---|--------|--------|---------|--------|
+```
+
+## Step 2: Create the Loop Branch
+
+```bash
+git checkout -b nerd-loop/{focus-slug}
+```
+
+## Step 3: Measure Baseline
+
+Run the metric command to establish the starting point:
+
+```bash
+{metric_command}
+```
+
+Record the baseline in the protocol file.
+
+## Step 4: Launch the Loop
+
+Launch an autonomous agent that runs indefinitely:
+
+```
+Agent(subagent_type="nerd:experiment-executor", prompt="
+You are running a continuous self-improvement loop.
+
+PROTOCOL: Read docs/research/loop-protocol-{focus-slug}.md for the full rules.
+
+THE LOOP (run forever):
+
+1. THINK: Look at the current code in {scope_files}. Look at the experiment log
+   in the protocol file. What has been tried? What worked? What didn't?
+   Based on this, hypothesize a specific improvement. Be creative — don't just
+   tweak numbers. Try new algorithms, restructure logic, remove unnecessary code,
+   add new signals, change data structures.
+
+2. EDIT: Make the change. Keep it focused — one idea per iteration.
+
+3. TEST: Run {test_command}. If tests fail, revert immediately:
+   git reset --hard HEAD
+   Log as 'fail (tests)' and try something different.
+
+4. MEASURE: Run {metric_command}. Record the result.
+
+5. DECIDE:
+   - If metric improved: git add {scope_files} && git commit -m 'loop: {description}'
+     Update the experiment log and best_metric in the protocol file.
+   - If metric same or worse: git reset --hard HEAD
+     Log as 'discard' with the metric value.
+
+6. REFLECT: After every 5 iterations, re-read the experiment log.
+   - What patterns emerge? (Do all architecture changes help? Do parameter tweaks plateau?)
+   - Are you stuck in a local optimum? Try something radically different.
+   - Has the metric plateaued? Try a completely different approach.
+
+7. GOTO 1. NEVER STOP.
+
+IMPORTANT:
+- Each iteration should take 2-10 minutes depending on build/test time.
+- If you've tried 5 similar ideas and none worked, pivot to a fundamentally different approach.
+- Keep a running count of iterations in the protocol file.
+- The goal is not just to find a better parameter — it's to find better CODE.
+  You can rewrite functions, change algorithms, restructure modules, simplify logic.
+  Anything within the scope files is fair game.
+
+CREATIVITY PROMPTS (use when stuck):
+- What would happen if I removed this entire function and inlined the logic?
+- Is there a simpler data structure that would be faster here?
+- Could I precompute this instead of computing it on every call?
+- What if I reversed the order of operations?
+- Is there a well-known algorithm for this problem that isn't being used?
+- What would a 10x improvement require? (Then try for 2x of that.)
+- What assumption is this code making that might be wrong?
+
+Hardware: Read ~/.claude/plugins/nerd/hardware-profile.yaml for constraints.
+", run_in_background=true)
+```
+
+## Step 5: Monitor
+
+Report to the user:
+
+```
+Nerd Loop Started
+  Focus: {research_focus}
+  Metric: {metric_name}
+  Baseline: {baseline_value}
+  Branch: nerd-loop/{focus-slug}
+  Scope: {files}
+
+  The nerd is now obsessively improving your {focus}.
+  It will run until you interrupt it.
+
+  Monitor:  cat docs/research/loop-protocol-{focus-slug}.md
+  Progress: git log --oneline nerd-loop/{focus-slug} | head -20
+  Stop:     interrupt this session
+```
+
+Then use `/loop 5m` to periodically check the agent's progress and report iteration count + current best metric.
+
+## Step 6: When Interrupted
+
+When the user stops the session (or the scheduled window closes):
+
+1. Read the final protocol file for the experiment log
+2. Summarize: total iterations, best metric achieved, improvement over baseline
+3. List the top changes that were kept (from git log)
+4. The branch `nerd-loop/{focus-slug}` contains all the accumulated improvements
+5. Ask: "Merge nerd-loop/{focus-slug} into your working branch?"
+
+## Combining with /nerd
+
+The standard `/nerd` pipeline (scan → plan → execute → report) identifies WHAT to research.
+`/nerd-loop` does the actual deep, iterative research on a specific area.
+
+A natural workflow:
+1. `/nerd` scans the codebase, identifies 10 research opportunities
+2. User picks "search relevance" as the highest-priority target
+3. `/nerd-loop "search relevance"` runs overnight, making 30+ iterations
+4. Next morning: review the loop's findings, merge the improvements
+
+Or schedule it:
+```
+/nerd-schedule tonight
+```
+The scheduled runner can alternate between `/nerd` (batch analysis) and `/nerd-loop` (deep iteration) based on what's in the backlog.
