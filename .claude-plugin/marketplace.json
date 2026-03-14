@@ -1,6 +1,6 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "shawnroos-plugins",
+  "name": "shrimpshack",
   "description": "Claude Code plugins by @shawnroos",
   "owner": {
     "name": "Shawn Roos"
