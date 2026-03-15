@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Nerd Research DAG",
+  "description": "Schema for the nerd research knowledge graph. Per-project files store theories, verdicts, build infrastructure profiles (build_profile, cache_verdict), and edges. The global index stores synthesis nodes and tool_availability nodes. Infra nodes use I-prefixed IDs.",
+
+  "definitions": {
+    "theory_node": {
+      "type": "object",
+      "description": "A competing hypothesis about why a system behaves a certain way.",
+      "required": ["id", "type", "title", "source_experiment", "source_files", "codebase_hash", "created_at", "status", "tags"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^T\\d{3,}$", "description": "Theory ID, e.g. T001" },
+        "type": { "const": "theory" },
+        "title": { "type": "string", "description": "Human-readable theory statement" },
+        "source_experiment": { "type": "string", "description": "Experiment ID that generated this theory, e.g. E001" },
+        "source_files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "File paths this theory is about"
+        },
+        "codebase_hash": { "type": "string", "pattern": "^[a-f0-9]{8}$", "description": "8-char SHA hash of sorted source file contents at time of creation" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "status": { "enum": ["active", "stale"], "description": "Active = current, stale = source files changed since creation" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Category tags for matching and synthesis clustering"
+        },
+        "spawned_from": { "type": ["string", "null"], "description": "Verdict ID that spawned this theory, if any" }
+      }
+    },
+
+    "verdict_node": {
+      "type": "object",
+      "description": "The outcome of testing a theory via experiment.",
+      "required": ["id", "type", "theory_id", "result", "evidence", "recommendation", "source_experiment", "source_files", "codebase_hash", "created_at", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^V\\d{3,}$", "description": "Verdict ID, e.g. V001" },
+        "type": { "const": "verdict" },
+        "theory_id": { "type": "string", "description": "ID of the theory this verdict evaluates" },
+        "result": { "enum": ["SUPPORTED", "REFUTED", "INCONCLUSIVE"] },
+        "evidence": { "type": "string", "description": "One-line summary of evidence" },
+        "recommendation": { "enum": ["KEEP", "CHANGE", "REARCHITECT", "REMOVE", "INVESTIGATE"] },
+        "source_experiment": { "type": "string", "description": "Experiment ID that produced this verdict" },
+        "source_files": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "codebase_hash": { "type": "string", "pattern": "^[a-f0-9]{8}$" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "status": { "enum": ["active", "stale"] }
+      }
+    },
+
+    "build_profile_node": {
+      "type": "object",
+      "description": "Build infrastructure profile for a project — dependency count, build times, artifact sizes. Created by lab-tech Check 7.",
+      "required": ["id", "type", "title", "data", "source_files", "codebase_hash", "created_at", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^I\\d{3,}$", "description": "Infra node ID, e.g. I001" },
+        "type": { "const": "build_profile" },
+        "title": { "type": "string", "description": "Human-readable profile summary" },
+        "data": {
+          "type": "object",
+          "required": ["language", "build_time_cold_seconds", "build_time_incremental_seconds"],
+          "properties": {
+            "language": { "type": "string" },
+            "dependency_count": { "type": "integer" },
+            "build_time_cold_seconds": { "type": "number" },
+            "build_time_incremental_seconds": { "type": "number" },
+            "artifact_size_mb": { "type": "number" },
+            "measured_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        "source_files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Files that affect build profile, e.g. Cargo.toml, Cargo.lock"
+        },
+        "codebase_hash": { "type": "string", "pattern": "^[a-f0-9]{8}$" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "status": { "enum": ["active", "stale"] }
+      }
+    },
+
+    "cache_verdict_node": {
+      "type": "object",
+      "description": "Success/failure record for a build cache strategy. Written by report-compiler after experiment batches.",
+      "required": ["id", "type", "title", "strategy", "result", "evidence", "created_at", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^I\\d{3,}$", "description": "Infra node ID, e.g. I002" },
+        "type": { "const": "cache_verdict" },
+        "title": { "type": "string" },
+        "strategy": { "enum": ["sccache", "target_copy", "incremental", "none"], "description": "The cache strategy that was tested" },
+        "result": { "enum": ["SUCCESS", "FAILED"] },
+        "evidence": { "type": "string", "description": "One-line evidence summary" },
+        "runs_tested": { "type": "integer", "description": "Number of batch runs this verdict covers" },
+        "failure_count": { "type": "integer", "description": "Number of CACHE_FALLBACK events if FAILED" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "status": { "enum": ["active", "stale"] }
+      }
+    },
+
+    "tool_availability_node": {
+      "type": "object",
+      "description": "Record of a build cache tool detected on this machine. Global scope (project: null in the global index).",
+      "required": ["id", "type", "title", "data", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^I\\d{3,}$", "description": "Infra node ID, e.g. I003" },
+        "type": { "const": "tool_availability" },
+        "title": { "type": "string" },
+        "data": {
+          "type": "object",
+          "required": ["tool", "detected_at"],
+          "properties": {
+            "tool": { "type": "string", "description": "Tool name, e.g. sccache" },
+            "version": { "type": "string" },
+            "path": { "type": "string", "description": "Absolute path to the tool binary" },
+            "detected_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        "status": { "enum": ["active", "stale"] }
+      }
+    },
+
+    "synthesis_node": {
+      "type": "object",
+      "description": "A pattern observed across 3+ verdicts, potentially cross-project. Stored in index.json.",
+      "required": ["id", "type", "title", "claim", "supporting_verdicts", "confidence", "created_at", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^S\\d{3,}$", "description": "Synthesis ID, e.g. S001" },
+        "type": { "const": "synthesis" },
+        "project": { "type": ["string", "null"], "description": "null for cross-project synthesis" },
+        "title": { "type": "string" },
+        "claim": { "type": "string", "description": "Specific claim with evidence count" },
+        "supporting_verdicts": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "object",
+            "required": ["project", "id"],
+            "properties": {
+              "project": { "type": "string", "description": "Project slug of the verdict" },
+              "id": { "type": "string", "description": "Verdict ID in that project" }
+            }
+          },
+          "description": "Qualified references to verdicts supporting this synthesis"
+        },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "status": { "enum": ["active", "stale"] }
+      }
+    },
+
+    "edge": {
+      "type": "object",
+      "description": "A relationship between two nodes with explanatory context.",
+      "required": ["from", "to", "type"],
+      "properties": {
+        "from": { "type": "string", "description": "Source node ID" },
+        "to": { "type": "string", "description": "Target node ID" },
+        "type": { "enum": ["supports", "refutes", "spawned"] },
+        "reason": { "type": "string", "description": "Why this relationship exists" }
+      }
+    }
+  },
+
+  "type": "object",
+  "description": "A DAG file — either a per-project file or the global index.",
+  "required": ["nodes", "edges", "version"],
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/definitions/theory_node" },
+          { "$ref": "#/definitions/verdict_node" },
+          { "$ref": "#/definitions/synthesis_node" },
+          { "$ref": "#/definitions/build_profile_node" },
+          { "$ref": "#/definitions/cache_verdict_node" },
+          { "$ref": "#/definitions/tool_availability_node" }
+        ]
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/edge" },
+      "description": "Relationships between nodes. Present in project files, optional in index."
+    },
+    "project": { "type": "string", "description": "Project slug (per-project files only)" },
+    "project_path": { "type": "string", "description": "Absolute path to project root, for collision detection" },
+    "version": { "type": "integer", "minimum": 1, "description": "Schema version for future migration" }
+  }
+}

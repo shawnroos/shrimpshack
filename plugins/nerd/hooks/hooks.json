@@ -16,7 +16,7 @@
       "hooks": [
         {
           "type": "prompt",
-          "prompt": "Check if the file just written/edited contains new hardcoded numeric thresholds or tunable parameters. Look for: float comparisons (>= 0.85), const/DEFAULT_ declarations with numeric values that control behavior, hardcoded timeouts/limits/weights. Skip: UI styling, math constants, protocol values, test fixtures. If a strong candidate is found, append it to .claude/nerd.local.md backlog as a 'proposed' entry with id, title, parameter name, file path, line number, and current value. Keep the entry minimal — one line of YAML per finding."
+          "prompt": "Check if the file just written/edited contains new hardcoded numeric thresholds or tunable parameters. Skip files under ~/.claude/plugins/nerd/dag/ — these are research metadata, not codebase parameters. Also skip: UI styling, math constants, protocol values, test fixtures. Look for: float comparisons (>= 0.85), const/DEFAULT_ declarations with numeric values that control behavior, hardcoded timeouts/limits/weights. Before appending, check if .claude/nerd.local.md already has a proposed entry for this exact file:line:value — if so, skip to avoid duplicates. If a strong candidate is found, append it to .claude/nerd.local.md backlog as a 'proposed' entry with id, title, parameter name, file path, line number, and current value. Keep the entry minimal — one line of YAML per finding."
         }
       ]
     }

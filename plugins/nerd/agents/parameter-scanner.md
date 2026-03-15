@@ -46,6 +46,23 @@ You are an expert at identifying empirically tunable parameters in codebases. Yo
 - Concurrency limits (parallel operations, semaphore permits)
 - Field extraction heuristics (probe key orders, fallback chains)
 
+## Prior Research Context
+
+If the prompt includes a **"Prior Research"** section from the DAG, use it to avoid redundant work:
+
+- **Skip** parameters listed as "already resolved" — do not include them in your output. These have active, non-stale verdicts (REFUTED with KEEP, or any REMOVE recommendation).
+- **Re-test** parameters listed as "stale" — include them in your output with a note about the prior finding. Source files changed since the experiment, so the previous verdict may no longer apply.
+- **Seed** from "open hypotheses" — include these as high-priority entries in your output. They are untested theories spawned from prior verdicts, waiting for an experiment.
+- If no prior research section is provided, scan everything (first run behavior).
+
+For DAG-sourced entries, add these fields to the output JSON:
+```json
+{
+  "dag_context": "Previously tested in E001 (REFUTED, stale). Source files changed.",
+  "dag_source": "T003"
+}
+```
+
 ## How to Scan
 
 1. **Search for numeric literals** in config files, constants, and function signatures:

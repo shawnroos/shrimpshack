@@ -133,6 +133,21 @@ Extract from output:
 - `num_steps` — steps completed in 5-minute budget
 - `num_params_M` — model parameter count
 
+### Build Cache Tools
+
+Detect available compilation cache tools:
+
+```bash
+# sccache — compilation cache for Rust (primary mechanism for parallel worktree builds)
+SCCACHE_PATH=$(which sccache 2>/dev/null)
+SCCACHE_VERSION=$(sccache --version 2>/dev/null | head -1)
+
+# ccache — C/C++ compilation cache
+CCACHE_PATH=$(which ccache 2>/dev/null)
+```
+
+These are recorded in the hardware profile so lab-tech Check 7 can read them without re-detecting every run.
+
 ### For Codebase Experiments
 
 Run a quick compile + test timing:
@@ -165,7 +180,19 @@ cat > ~/.claude/plugins/nerd/.gitignore << 'EOF'
 hardware-profile.yaml
 global-queue.yaml
 logs/
+dag/
 EOF
+```
+
+**Initialize the Research DAG directory:**
+
+```bash
+mkdir -p ~/.claude/plugins/nerd/dag/projects
+
+# Create global index if it doesn't exist
+if [ ! -f ~/.claude/plugins/nerd/dag/index.json ]; then
+    echo '{"nodes":[],"edges":[],"version":1}' > ~/.claude/plugins/nerd/dag/index.json
+fi
 ```
 
 Write to `~/.claude/plugins/nerd/hardware-profile.yaml`:
@@ -197,6 +224,11 @@ codebase:
   test_time_seconds: 12.3
   test_count: 477
   language: rust
+
+cache_tools:
+  sccache: "/usr/local/bin/sccache"   # or null if not installed
+  sccache_version: "0.8.1"            # or null
+  ccache: null                         # or path if installed
 
 calibrated_at: "2026-03-14T00:00:00Z"
 ```

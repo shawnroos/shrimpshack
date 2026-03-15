@@ -27,12 +27,25 @@ Read the experiment plan thoroughly. Extract:
 - Metrics to compute
 - Acceptance criteria
 
-### Step 2: Detect Project Language and Conventions
+### Step 2: Detect Project Language, Conventions, and Build Cache
+
 Determine the project's language and conventions:
 - Check for Cargo.toml (Rust), package.json (Node/TS), pyproject.toml (Python), go.mod (Go)
 - Read any CLAUDE.md for project conventions
 - Check existing test patterns
 - Match coding style, naming conventions, and test frameworks
+
+**Build cache configuration:** Read `.claude/nerd.local.md` for `build_cache_strategy` and `build_cache_env`. If `build_cache_env` is set (e.g., `RUSTC_WRAPPER=sccache`), prefix ALL build and test commands with it:
+
+```bash
+# Instead of: cargo build
+# Use:        RUSTC_WRAPPER=sccache cargo build
+
+# Instead of: cargo test
+# Use:        RUSTC_WRAPPER=sccache cargo test
+```
+
+**IMPORTANT**: Use inline env var prefixing, NOT `export`. Shell state does not persist between Bash tool calls — each call starts a fresh shell. `export RUSTC_WRAPPER=sccache` in one Bash call has no effect on subsequent calls.
 
 ### Step 3: Extend the Shared Eval Module
 
@@ -126,3 +139,13 @@ When complete, write a summary to stdout:
 - If the sweep produces no usable data (empty DB, no feedback data), report this as a finding rather than a failure
 - If a phase is blocked by missing infrastructure, document what's needed and complete what's possible
 - If another experiment's changes are in the worktree (from the shared base), don't modify them
+
+### Build Cache Fallback
+
+If a build fails AND `build_cache_env` is set, the cache layer may be the cause (e.g., sccache server crashed, RUSTC_WRAPPER conflict). Apply this fallback:
+
+1. Retry the build **without** the cache env var prefix (plain `cargo build` instead of `RUSTC_WRAPPER=sccache cargo build`)
+2. If the retry succeeds: the cache was the problem. Continue the experiment without cache for all remaining builds. Add `"cache_fallback": true` to the results JSON with the error message from the failed build.
+3. If the retry also fails: the cache was not the problem — it's a genuine build error. Fix the code as normal.
+
+Detection heuristic: if the build error output contains `sccache`, `RUSTC_WRAPPER`, `failed to spawn`, or `server not running`, it is almost certainly a cache failure — skip straight to the retry without cache.

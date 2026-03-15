@@ -62,6 +62,65 @@ grep -q "nerd.local.md" .gitignore 2>/dev/null || echo ".claude/nerd.local.md" >
 
 This means `/nerd-setup` is only needed once per machine (hardware calibration). Every new project auto-inits on first `/nerd` run.
 
+**Auto-init Research DAG (per-project):**
+
+```bash
+PROJECT_SLUG=$(echo "$(basename "$(dirname "$PWD")")-$(basename "$PWD")" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+DAG_DIR="$HOME/.claude/plugins/nerd/dag"
+DAG_PATH="$DAG_DIR/projects/$PROJECT_SLUG.json"
+
+# Create project DAG if missing
+if [ ! -f "$DAG_PATH" ]; then
+    mkdir -p "$DAG_DIR/projects"
+    echo '{"nodes":[],"edges":[],"project":"'"$PROJECT_SLUG"'","project_path":"'"$PWD"'","version":1}' > "$DAG_PATH"
+fi
+
+# Create global index if missing (in case nerd-setup wasn't run)
+if [ ! -f "$DAG_DIR/index.json" ]; then
+    echo '{"nodes":[],"edges":[],"version":1}' > "$DAG_DIR/index.json"
+fi
+
+# Verify project_path matches current directory (detect slug collisions)
+stored_path=$(python3 -c "import json; print(json.load(open('$DAG_PATH')).get('project_path',''))" 2>/dev/null)
+if [ -n "$stored_path" ] && [ "$stored_path" != "$PWD" ]; then
+    echo "ERROR: DAG slug collision — $DAG_PATH belongs to $stored_path, not $PWD. Cannot use the same DAG for different projects. Rename one project directory or manually move the DAG file."
+    # Do not proceed with DAG operations — set dag_path to empty so agents skip DAG features
+    DAG_PATH=""
+fi
+```
+
+**Compute DAG staleness and generate summaries:**
+
+Read the project DAG. For each active node with `source_files`, hash the current file contents and compare against `codebase_hash`. If the hash differs or any source file is deleted, mark the node `status: "stale"`. Write the updated DAG back using the crash-safe protocol (backup → tmp → validate → rename).
+
+Then generate two markdown summaries for downstream agents:
+
+**Scanner summary** (for Phase 2 parameter-scanner):
+```markdown
+## Prior Research (from DAG)
+
+### Skip These Parameters (already resolved):
+- {file}:{line} `{param}` — {result} in {experiment}: "{evidence}". Recommendation: {rec}.
+
+### Re-test These (stale — source files changed):
+- {file}:{line} `{param}` — tested in {experiment} but source file changed. Previous: {result}.
+
+### Open Hypotheses (untested theories from prior runs):
+- {theory_id}: "{title}" — spawned from {verdict_id}, no experiment yet.
+```
+
+**Per-experiment plan-reviewer summaries** (for Phase 3, one per experiment):
+```markdown
+## Prior Theories on {parameter} ({file}:{line})
+
+- {theory_id} ({result}): "{title}" — {evidence}
+- Edge: {verdict_id} spawned {theory_id} — "{reason}"
+```
+
+Filter plan-reviewer summaries by source file overlap with the experiment's target files. Include edge context (spawned relationships).
+
+Store: `$PROJECT_SLUG`, `$DAG_PATH`, `$DAG_DIR/index.json`, scanner summary, per-experiment summaries.
+
 **Detect project:**
 ```bash
 cat CLAUDE.md .claude/CLAUDE.md 2>/dev/null | head -50
@@ -84,7 +143,7 @@ If backlog empty or topic specified: continue to Phase 2.
 Launch the parameter-scanner agent to crawl the codebase:
 
 ```
-Agent(subagent_type="nerd:parameter-scanner", prompt="Scan {cwd} for tunable parameters. Topic: {user_topic or 'all'}. Return structured JSON list.", run_in_background=false)
+Agent(subagent_type="nerd:parameter-scanner", prompt="Scan {cwd} for tunable parameters. Topic: {user_topic or 'all'}. {scanner_dag_summary}. Return structured JSON list.", run_in_background=false)
 ```
 
 Present findings. Use AskUserQuestion: "The nerd found {N} research opportunities. Which ones should it investigate?"
@@ -96,7 +155,7 @@ Add selections to backlog.
 For each `proposed` entry, launch plan-reviewer agents **in parallel**:
 
 ```
-Agent(subagent_type="nerd:plan-reviewer", prompt="Create experiment plan for {entry.title}. Parameter: {entry.parameter} at {entry.file}:{entry.line}. Write to docs/research/plans/{entry.id}-plan.md.", run_in_background=true)
+Agent(subagent_type="nerd:plan-reviewer", prompt="Create experiment plan for {entry.title}. Parameter: {entry.parameter} at {entry.file}:{entry.line}. {per_experiment_dag_summary}. Write to docs/research/plans/{entry.id}-plan.md.", run_in_background=true)
 ```
 
 Update status: `proposed` → `planned`. Wait for all plan agents.
@@ -105,7 +164,53 @@ Update status: `proposed` → `planned`. Wait for all plan agents.
 
 Present plans. Use AskUserQuestion: "Plans ready. Execute all, review first, or select subset?"
 
+## Phase 4.5: Lab Readiness Check
+
+Before spinning up expensive experiment agents, validate that the lab is ready.
+
+```
+Agent(subagent_type="nerd:lab-tech", prompt="
+Validate readiness for experiments: {comma-separated plan paths}.
+Project root: {cwd}. Language: {lang}. Test command: {test_cmd}. Build command: {build_cmd}.
+Project DAG path: {dag_path}. Max parallel experiments: {max_parallel_experiments}.
+Run all checks: data access, config wiring, eval commands, tool availability, worktree readiness, cross-experiment conflicts, and build infrastructure (Check 7).
+Check 7: Profile the build, detect sccache, select cache strategy, set up caching, write build_cache config to .claude/nerd.local.md. Read infra nodes from the DAG for prior cache verdicts.
+Scaffold any missing infrastructure (export scripts, test fixtures). Do NOT create the eval module — Phase 5.1 handles that.
+Write report to docs/research/lab-readiness-batch-{timestamp}.md.
+", run_in_background=false)
+```
+
+**Based on the lab-tech report:**
+- **All READY**: Continue to Phase 5.
+- **Some SCAFFOLDED**: Lab-tech already fixed these. Continue to Phase 5.
+- **Any BLOCKED**: Present blockers to user. Use AskUserQuestion: "Lab-tech found blockers: {blocker_summary}. Skip blocked experiments, or proceed anyway (results may be invalid)?"
+  - If skip: remove blocked experiments from this batch, continue with the rest.
+  - If proceed: mark experiments as "may produce invalid results" and continue.
+  - Note: blockers like dead config fields require code changes that are outside the lab-tech's scope. The user should fix these manually before re-running `/nerd`.
+
+In scheduled mode (`NERD_SCHEDULED=1`): skip blocked experiments automatically, proceed with ready ones.
+
 ## Phase 5: Run Experiments in Worktrees
+
+### 5.0: Build Infrastructure Setup
+
+Read the build cache config written by lab-tech Check 7:
+
+```bash
+grep -E "^build_cache" .claude/nerd.local.md 2>/dev/null
+```
+
+**If strategy is `sccache`:**
+- Verify the sccache server is running: `sccache --show-stats 2>/dev/null`
+- If not running, start it: `sccache --start-server`
+- Store the env var prefix for Phase 5.2: `RUSTC_WRAPPER=sccache`
+
+**If strategy is `target_copy`:**
+- Verify `target/` exists in the main worktree (lab-tech's cache warming in Check 7d should have populated it)
+- Note: the copy happens during worktree creation in Phase 5.2
+
+**If strategy is `none` or not set:**
+- Proceed without build caching. Experiments will compile independently.
 
 ### 5.1: Create Shared Eval Scaffold
 
@@ -114,15 +219,25 @@ Before launching experiments, set up consolidated infrastructure on current bran
 mkdir -p docs/research/plans docs/research/results
 ```
 
-If no eval module exists, create a scaffold appropriate to the project language (e.g., `src/eval/mod.rs` for Rust, `src/eval/index.ts` for TS). Add a single `Eval` CLI subcommand. Each experiment extends this — never creates its own.
+If no eval module exists (check first — lab-tech in Phase 4.5 does NOT create it), create a scaffold appropriate to the project language (e.g., `src/eval/mod.rs` for Rust, `src/eval/index.ts` for TS). Add a single `Eval` CLI subcommand. Each experiment extends this — never creates its own.
 
 ### 5.2: Launch Experiment Agents
 
 For each `planned` experiment:
 
 ```bash
+PROJECT_ROOT="$(pwd)"
 git worktree add worktrees/nerd-{entry.id} --detach HEAD
 cd worktrees/nerd-{entry.id} && git checkout -b nerd/{entry.id}
+cd "$PROJECT_ROOT"
+```
+
+If target_copy strategy, clone build artifacts using copy-on-write:
+```bash
+# macOS (APFS):
+cp -c -r "$PROJECT_ROOT/target/" "$PROJECT_ROOT/worktrees/nerd-{entry.id}/target/" 2>/dev/null
+# Linux (btrfs):
+# cp --reflink=auto -r "$PROJECT_ROOT/target/" "$PROJECT_ROOT/worktrees/nerd-{entry.id}/target/" 2>/dev/null
 ```
 
 ```
@@ -132,6 +247,9 @@ Worktree: {path}. Language: {lang}. Tests: {test_cmd}.
 Put code in src/eval/{entry.id}.rs (or equivalent).
 Add to existing EvalAction enum. Commit conventionally.
 Write results to docs/research/results/{entry.id}-results.json.
+Before building, read .claude/nerd.local.md for build_cache_strategy and build_cache_env.
+If build_cache_env is set, prefix all cargo/build commands with it inline (e.g., RUSTC_WRAPPER=sccache cargo build).
+If a build fails with cache, retry without it and add cache_fallback: true to results JSON.
 ", run_in_background=true)
 ```
 
@@ -158,7 +276,7 @@ Use `/loop 5m` to check on background agents. Merge experiments as they complete
 ## Phase 7: Deliver Findings
 
 ```
-Agent(subagent_type="nerd:report-compiler", prompt="Compile findings from docs/research/results/ into docs/research/findings.md and per-experiment reports.", run_in_background=false)
+Agent(subagent_type="nerd:report-compiler", prompt="Compile findings from docs/research/results/ into docs/research/findings.md and per-experiment reports. Write theories, verdicts, and edges to project DAG: {dag_path}.", run_in_background=false)
 ```
 
 Present summary. Clean up remaining worktrees:
@@ -171,7 +289,7 @@ git worktree prune
 After findings are compiled, run the loop-scout to identify what deserves deep iteration:
 
 ```
-Agent(subagent_type="nerd:loop-scout", prompt="Analyze research findings in docs/research/ and the backlog in .claude/nerd.local.md. Identify the best candidates for /nerd-loop continuous improvement. Write recommendations to docs/research/loop-candidates.md.", run_in_background=false)
+Agent(subagent_type="nerd:loop-scout", prompt="Analyze research findings in docs/research/ and the backlog in .claude/nerd.local.md. Project DAG: {dag_path}. Global index: {dag_dir}/index.json. Identify the best candidates for /nerd-loop continuous improvement. Write synthesis nodes to global index when 3+ verdicts share a pattern. Write recommendations to docs/research/loop-candidates.md.", run_in_background=false)
 ```
 
 Present the scout's recommendations:
@@ -188,6 +306,16 @@ Loop Candidates (ranked by potential):
 ```
 
 If running in scheduled mode (`NERD_SCHEDULED=1`) and the schedule window has time remaining, automatically launch `/nerd-loop` on the top candidate.
+
+## Phase 9: Cleanup
+
+Stop the sccache server if one was started in Phase 5.0:
+
+```bash
+sccache --stop-server 2>/dev/null
+```
+
+This is safe to run even if sccache was not started — it exits silently.
 
 ## Error Handling
 

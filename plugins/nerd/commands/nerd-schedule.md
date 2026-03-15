@@ -21,6 +21,10 @@ Schedule when experiments run. Supports overnight windows and recurring schedule
 - `cancel` / `stop` → Remove scheduled runs
 - Empty → Show current schedule and ask
 
+**Time handling:** If `tonight` is specified and the start hour has already passed, check the current time:
+- If still within the window (e.g., it's 23:20 and window is 22:00-06:00), start immediately by setting the trigger to 5 minutes from now.
+- If the window has fully passed, schedule for tomorrow and inform the user.
+
 ## Check Prerequisites
 
 ```bash
@@ -36,6 +40,20 @@ experiments_per_hour = {from hardware profile}
 window_hours = (stop - start)
 capacity = experiments_per_hour * window_hours
 ```
+
+**Build cache adjustment:** Check the project's `.claude/nerd.local.md` for `build_cache_strategy` and `build_time_warm_seconds`. If a cache strategy is active (sccache or target_copy), the effective build time per experiment is lower, increasing throughput:
+
+```
+# If build cache is available:
+effective_build_time = build_time_warm_seconds   # from nerd.local.md (e.g., 12s)
+# Otherwise:
+effective_build_time = build_time_seconds         # from hardware profile (e.g., 180s)
+
+# Adjusted rate (if hardware profile has per-experiment timing):
+adjusted_experiments_per_hour = 60 / ((effective_build_time + test_time_seconds + 60) / 60)
+```
+
+Use `adjusted_experiments_per_hour` for capacity calculation when cache config is present. The `+ 60` accounts for agent overhead per experiment. Display the adjustment in the confirmation output.
 
 ## Register in Global Queue
 
@@ -98,7 +116,7 @@ while [ "$attempt" -lt "$max_attempts" ]; do
     attempt=$((attempt + 1))
     log "Attempt $attempt/$max_attempts"
 
-    NERD_SCHEDULED=1 claude --print --dangerously-skip-permissions -p "
+    NERD_SCHEDULED=1 claude --print --allow-dangerously-skip-permissions --dangerously-skip-permissions -p "
 Run /nerd. Execute all backlog experiments autonomously.
 Use /loop 5m to monitor agents. Merge completed experiments.
 When all done, compile reports and exit.
@@ -150,7 +168,7 @@ cat > "$PLIST" << PLIST
         <key>PROJECT_DIR</key>
         <string>{cwd}</string>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
     <key>StartCalendarInterval</key>
     {calendar_interval_entries}

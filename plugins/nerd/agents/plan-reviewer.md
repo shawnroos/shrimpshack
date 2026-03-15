@@ -26,6 +26,31 @@ Read the experiment plan thoroughly. Also read the actual code being studied —
 - What the proposed methodology is
 - What metrics are used to evaluate results
 
+### Step 1.5: Check Prior Theories from DAG
+
+If the prompt includes a **"Prior Theories"** section from the DAG, check it before generating new theories. This prevents re-testing hypotheses that have already been resolved.
+
+**Matching rule:** Two theories match if they share **at least 1 identical source_file path AND at least 1 identical tag string**.
+
+For each theory you are about to generate, search the prior theories for a match:
+
+- **SUPPORTED**: Note in the plan: "Theory already confirmed in {source_experiment}. Consider building on this finding rather than re-testing." Do not re-test the same hypothesis — reformulate or build on it.
+- **REFUTED**: Do NOT include as a competing theory unless your approach is **substantially different** from the prior experiment. Note: "Previously disproved in {source_experiment}: {evidence}."
+- **INCONCLUSIVE**: Include it and design the experiment specifically to resolve it. Reference the prior evidence as context.
+
+Check **spawned edges** in the prior theories section — theories spawned from prior verdicts are high-priority hypotheses that should be included as competing theories.
+
+Add a `## DAG Context` section to the plan listing relevant prior theories, their verdicts, and any spawned relationships:
+
+```markdown
+## DAG Context
+- T001 (REFUTED): "Parameter tuning" — disproved in E001, fuzzy tier irrelevant
+- T003 (INCONCLUSIVE): "Pipeline simplification" — needs more data, spawned from V001
+- No prior theories on this parameter's architectural role
+```
+
+If no prior theories section is provided, skip this step and generate theories from scratch (first run behavior).
+
 ### Step 2: Generate Competing Theories
 
 This is the most important step. For every experiment, develop **at least 3 competing theories** about what's really going on. Don't just test "is the threshold optimal?" — ask "why does this threshold exist, and what are the alternative explanations?"

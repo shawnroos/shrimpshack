@@ -75,7 +75,7 @@ constraints:
   - No public API changes
 started_at: "{timestamp}"
 iterations: 0
-best_metric: {baseline_value}
+best_metric: null  # filled after baseline measurement in Step 4
 ---
 
 # Nerd Loop: {research_focus}
@@ -99,13 +99,45 @@ best_metric: {baseline_value}
 |---|--------|--------|---------|--------|-------|
 ```
 
-## Step 2: Create the Loop Branch
+## Step 2: Lab Readiness Check
+
+Before measuring baseline or starting the loop, validate the environment:
+
+```
+Agent(subagent_type="nerd:lab-tech", prompt="
+Validate readiness for a continuous loop on '{research_focus}'. This is loop mode — no experiment plans.
+Metric command: {metric_command}. Scope files: {scope_files}.
+Project root: {cwd}. Language: {lang}. Test command: {test_cmd}. Build command: {build_cmd}. Project DAG path: {dag_path}.
+Check: data access for the metric command, eval command readiness (verify metric_command runs and produces output), tool availability, worktree readiness (disk space for many iterations), and build infrastructure (Check 7 steps 7a-7c, 7f — detect sccache availability and report the env var prefix if available).
+Scaffold missing eval infrastructure if needed (you own eval module creation in loop mode).
+Write report to docs/research/lab-readiness-loop-{focus-slug}.md.
+", run_in_background=false)
+```
+
+**Based on the lab-tech report:**
+- **READY**: Continue to Step 3.
+- **SCAFFOLDED**: Lab-tech fixed the issues. Note: scaffolded files are on the current branch. Continue to Step 3.
+- **BLOCKED**: Present blockers. Use AskUserQuestion: "Lab readiness check failed: {blocker_summary}. Fix and retry, or abort?"
+  - If fix: user fixes the issue, re-run lab-tech.
+  - If abort: stop with a clear message. Do not create the loop branch or protocol file.
+
+## Step 2.5: Start Build Cache (if available)
+
+If the lab-tech report indicates sccache is available (Check 7f reports `[OK] sccache available`):
+
+```bash
+sccache --start-server 2>/dev/null
+```
+
+Store the env var prefix `RUSTC_WRAPPER=sccache` for use in the loop iteration commands. This benefits loop mode significantly — hundreds of incremental recompilations across iterations get cached.
+
+## Step 3: Create the Loop Branch
 
 ```bash
 git checkout -b nerd-loop/{focus-slug}
 ```
 
-## Step 3: Measure Baseline
+## Step 4: Measure Baseline
 
 Run the metric command to establish the starting point:
 
@@ -115,7 +147,7 @@ Run the metric command to establish the starting point:
 
 Record the baseline in the protocol file.
 
-## Step 4: Launch the Loop
+## Step 5: Launch the Loop
 
 Launch an autonomous agent that runs indefinitely:
 
@@ -135,7 +167,9 @@ THE LOOP (run forever):
 
 2. EDIT: Make the change. Keep it focused — one idea per iteration.
 
-3. TEST: Run {test_command}. If tests fail, revert immediately:
+3. TEST: Run {test_command}. If sccache is available (check lab-tech report from Step 2),
+   prefix with RUSTC_WRAPPER=sccache (e.g., RUSTC_WRAPPER=sccache cargo test).
+   If tests fail, revert immediately:
    git reset --hard HEAD
    Log as 'fail (tests)' and try something different.
 
@@ -166,7 +200,7 @@ THE LOOP (run forever):
    - **consecutive_discards reaches 5 AFTER an escalation**: LOCAL MAXIMUM REACHED.
      Log: "Local maximum reached after {total_iterations} iterations."
      Log: "Best metric: {best_metric} (improved from {baseline} = {improvement}%)"
-     STOP THE LOOP. Proceed to Step 6 (wrap-up).
+     STOP THE LOOP. Proceed to Step 7 (wrap-up).
 
    This gives the loop 3 chances (normal → pivot → escalate) before concluding
    it has found the local optimum. That's 15 consecutive failed iterations across
@@ -201,7 +235,7 @@ Hardware: Read ~/.claude/plugins/nerd/hardware-profile.yaml for constraints.
 ", run_in_background=true)
 ```
 
-## Step 5: Monitor
+## Step 6: Monitor
 
 Report to the user:
 
@@ -223,15 +257,16 @@ Nerd Loop Started
 
 Then use `/loop 5m` to periodically check the agent's progress and report iteration count + current best metric.
 
-## Step 6: When Loop Ends (Local Maximum or Interrupted)
+## Step 7: When Loop Ends (Local Maximum or Interrupted)
 
 The loop ends when either:
 - **Local maximum detected**: 15 consecutive discards across 3 strategic phases (normal → pivot → escalate)
 - **User interrupts**: manually stops the session
 - **Scheduled window closes**: overnight run ends
 
-1. Read the final protocol file for the experiment log
-2. Compile a loop report at `docs/research/loop-{focus-slug}-report.md`:
+1. Stop sccache if it was started in Step 2.5: `sccache --stop-server 2>/dev/null`
+2. Read the final protocol file for the experiment log
+3. Compile a loop report at `docs/research/loop-{focus-slug}-report.md`:
 
 ```markdown
 ---

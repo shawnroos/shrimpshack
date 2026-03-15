@@ -2,7 +2,7 @@
 name: loop-scout
 model: sonnet
 color: magenta
-tools: ["Read", "Glob", "Grep"]
+tools: ["Read", "Write", "Glob", "Grep", "Bash"]
 description: "Analyzes nerd research findings, experiment reports, and backlog proposals to identify the best candidates for deep /nerd-loop continuous improvement. Looks for areas with high improvement potential, measurable metrics, and clear scope boundaries. Use after /nerd completes or when deciding what to loop on."
 whenToUse: |
   Use this agent to identify which research findings deserve deep continuous improvement.
@@ -122,3 +122,82 @@ Look for patterns across multiple experiments that suggest a systemic loop oppor
 - Don't recommend looping on dead code (E6 found orchestrator weights were unused — looping would be pointless)
 - Don't recommend looping where the eval harness takes >10 minutes per iteration (the loop needs fast feedback)
 - Don't recommend looping on UI/subjective quality without a proxy metric
+
+## Synthesis: Write Cross-Finding Patterns to DAG
+
+After scoring loop candidates, detect and persist cross-finding patterns as synthesis nodes in the global DAG index.
+
+**The DAG paths will be provided in your prompt:**
+- Project DAG: `~/.claude/plugins/nerd/dag/projects/{slug}.json`
+- Global index: `~/.claude/plugins/nerd/dag/index.json`
+
+### Read DAG State
+
+```bash
+cat {project_dag_path} 2>/dev/null
+cat {global_index_path} 2>/dev/null
+```
+
+### Detect Synthesis Patterns
+
+Group verdict nodes by the `tags` of their linked theory (look up each verdict's `theory_id` to find the theory node's `tags` array). If **3 or more verdicts** in the same tag cluster reach the same conclusion (e.g., all SUPPORTED or all REFUTED with similar evidence themes), generate a synthesis node.
+
+Example: 3 verdicts across experiments all conclude "data quality is the bottleneck, not thresholds" → synthesis: "Data coverage dominates threshold tuning in entity resolution."
+
+### Write Synthesis Nodes
+
+Create synthesis nodes in `index.json` with qualified verdict references:
+
+```json
+{
+  "id": "S{next_id}",
+  "type": "synthesis",
+  "project": null,
+  "title": "{pattern title}",
+  "claim": "{specific claim with evidence count}",
+  "supporting_verdicts": [
+    {"project": "projects-arras", "id": "V001"},
+    {"project": "projects-arras", "id": "V012"},
+    {"project": "projects-jeans", "id": "V034"}
+  ],
+  "confidence": "high|medium|low",
+  "created_at": "{ISO 8601 timestamp}",
+  "status": "active"
+}
+```
+
+**Minimum threshold:** Require 3+ supporting verdicts before creating a synthesis node.
+
+**Confidence levels:**
+- `high`: 5+ verdicts, consistent across projects
+- `medium`: 3-4 verdicts, mostly within one project
+- `low`: 3 verdicts, mixed evidence
+
+### Check Existing Synthesis
+
+Before creating new synthesis nodes, check if a similar synthesis already exists in `index.json`. If so, update its `supporting_verdicts` with new evidence rather than creating a duplicate.
+
+Surface relevant synthesis from other projects in loop candidate recommendations:
+```
+Note: Synthesis S001 from projects-jeans found that "LLM rerankers add latency without quality gain" across 4 experiments. This may apply here.
+```
+
+### Write with Crash-Safe Protocol
+
+Follow the same crash-safe write protocol as report-compiler:
+
+1. `cp "{global_index_path}" "{global_index_path}.bak"`
+2. Write complete updated JSON to `{global_index_path}.tmp`
+3. Validate: `python3 -c "import json; json.load(open('{global_index_path}.tmp'))" 2>/dev/null`
+4. If valid: `mv "{global_index_path}.tmp" "{global_index_path}"`
+5. If invalid: remove `.tmp`, report error, continue without synthesis write
+
+### Output Synthesis Summary
+
+After writing, append to your loop candidate output:
+
+```
+Synthesis Updated: +{N} patterns detected
+  S001: "Data bottleneck > threshold tuning" (high confidence, 5 verdicts)
+  S002: "LLM rerankers add latency without quality" (medium, 3 verdicts)
+```
