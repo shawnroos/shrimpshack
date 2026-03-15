@@ -1,0 +1,14 @@
+{
+  "id": "rc-003-neutral",
+  "difficulty": "easy",
+  "input": {
+    "experiment_id": "E003",
+    "parameter": "MAX_RETRIES",
+    "before": {"value": "3", "metrics": {"success_rate": 0.994, "avg_latency_ms": 230, "error_count": 6}},
+    "after": {"value": "5", "metrics": {"success_rate": 0.995, "avg_latency_ms": 228, "error_count": 5}}
+  },
+  "expected_output": {
+    "classification": "neutral",
+    "evidence": "Success rate changed by 0.1% (0.994 to 0.995), within noise. Latency and error count changes are negligible. The parameter change has no meaningful impact."
+  }
+}

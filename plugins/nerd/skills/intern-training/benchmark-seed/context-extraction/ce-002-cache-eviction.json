@@ -1,0 +1,13 @@
+{
+  "id": "ce-002-cache-eviction",
+  "language": "go",
+  "difficulty": "medium",
+  "context_tokens": 200,
+  "input": {
+    "file": "cache/lru.go",
+    "region": "func (c *LRUCache) evict() {\n\tfor c.currentSize > c.maxSize {\n\t\toldest := c.list.Back()\n\t\tif oldest == nil {\n\t\t\tbreak\n\t\t}\n\t\tentry := oldest.Value.(*cacheEntry)\n\t\tc.list.Remove(oldest)\n\t\tdelete(c.items, entry.key)\n\t\tc.currentSize -= entry.size\n\t\tc.evictionCount++\n\t\tif c.onEvict != nil {\n\t\t\tc.onEvict(entry.key, entry.value)\n\t\t}\n\t}\n}"
+  },
+  "expected_output": {
+    "summary": "LRU cache eviction that removes the oldest entries until the cache is within its size limit. Tracks eviction count for monitoring and calls an optional callback when entries are removed, enabling downstream cleanup like closing file handles or invalidating dependent caches."
+  }
+}

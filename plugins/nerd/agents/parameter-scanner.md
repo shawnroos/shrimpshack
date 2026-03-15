@@ -99,12 +99,18 @@ Return a structured list as JSON:
     "current_value": "0.85",
     "category": "numeric_threshold",
     "impact": "high",
+    "measurability": "experimentable",
+    "metric_command": "cargo run -- eval entity-resolution --dataset fixtures/entities.json",
     "rationale": "Controls entity resolution quality. Too high = fragmentation, too low = false merges. Currently hardcoded with no empirical validation.",
     "experiment_type": "parameter_sweep",
     "sweep_range": "0.70:0.95:0.05"
   }
 ]
 ```
+
+- `measurability`: `"experimentable"` (automated metric exists or can be built) or `"analytical"` (no automated metric — reasoning only)
+- `metric_command`: the shell command that produces a number for experimentable parameters, `null` for analytical
+- Analytical parameters MUST use `"experiment_type": "analytical"` and MUST NOT have a `sweep_range`
 
 Sort by impact (high → medium → low), then by category.
 

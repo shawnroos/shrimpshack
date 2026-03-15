@@ -1,0 +1,14 @@
+{
+  "id": "rc-004-mixed-signals",
+  "difficulty": "hard",
+  "input": {
+    "experiment_id": "E004",
+    "parameter": "BATCH_SIZE",
+    "before": {"value": "32", "metrics": {"throughput_rps": 1200, "p95_latency_ms": 85, "memory_mb": 2048, "accuracy": 0.94}},
+    "after": {"value": "128", "metrics": {"throughput_rps": 3800, "p95_latency_ms": 210, "memory_mb": 6144, "accuracy": 0.94}}
+  },
+  "expected_output": {
+    "classification": "improved",
+    "evidence": "Throughput increased 3.2x (1200 to 3800 rps). Accuracy unchanged. Latency increased from 85ms to 210ms and memory tripled, but throughput is the primary optimization target for batch processing."
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "pd-002-python-retry",
+  "language": "python",
+  "difficulty": "easy",
+  "context_tokens": 150,
+  "input": {
+    "file": "services/api_client.py",
+    "content": "import time\nimport requests\n\nMAX_RETRIES = 3\nBASE_DELAY = 1.5\nTIMEOUT_SECONDS = 30\nRATE_LIMIT_BACKOFF = 60\n\ndef fetch_with_retry(url: str, headers: dict) -> dict:\n    for attempt in range(MAX_RETRIES):\n        try:\n            resp = requests.get(url, headers=headers, timeout=TIMEOUT_SECONDS)\n            if resp.status_code == 429:\n                time.sleep(RATE_LIMIT_BACKOFF)\n                continue\n            resp.raise_for_status()\n            return resp.json()\n        except requests.RequestException:\n            if attempt < MAX_RETRIES - 1:\n                time.sleep(BASE_DELAY * (2 ** attempt))\n            else:\n                raise"
+  },
+  "expected_output": {
+    "parameters": [
+      {"name": "MAX_RETRIES", "file": "services/api_client.py", "line": 4, "value": "3"},
+      {"name": "BASE_DELAY", "file": "services/api_client.py", "line": 5, "value": "1.5"},
+      {"name": "TIMEOUT_SECONDS", "file": "services/api_client.py", "line": 6, "value": "30"},
+      {"name": "RATE_LIMIT_BACKOFF", "file": "services/api_client.py", "line": 7, "value": "60"}
+    ]
+  }
+}

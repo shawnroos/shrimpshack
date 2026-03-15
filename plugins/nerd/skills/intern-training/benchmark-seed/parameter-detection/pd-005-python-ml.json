@@ -1,0 +1,22 @@
+{
+  "id": "pd-005-python-ml",
+  "language": "python",
+  "difficulty": "hard",
+  "context_tokens": 250,
+  "input": {
+    "file": "models/classifier.py",
+    "content": "import numpy as np\nfrom sklearn.ensemble import RandomForestClassifier\nfrom sklearn.model_selection import train_test_split\n\nTEST_SPLIT_RATIO = 0.2\nRANDOM_SEED = 42\nN_ESTIMATORS = 100\nMAX_DEPTH = 10\nMIN_SAMPLES_LEAF = 5\nCLASS_WEIGHT_RATIO = 0.7\nFEATURE_IMPORTANCE_THRESHOLD = 0.05\nCV_FOLDS = 5\n\ndef train_model(X, y):\n    X_train, X_test, y_train, y_test = train_test_split(\n        X, y, test_size=TEST_SPLIT_RATIO, random_state=RANDOM_SEED\n    )\n    \n    weights = {0: 1.0, 1: 1.0 / CLASS_WEIGHT_RATIO}\n    \n    clf = RandomForestClassifier(\n        n_estimators=N_ESTIMATORS,\n        max_depth=MAX_DEPTH,\n        min_samples_leaf=MIN_SAMPLES_LEAF,\n        class_weight=weights,\n        random_state=RANDOM_SEED\n    )\n    clf.fit(X_train, y_train)\n    \n    importances = clf.feature_importances_\n    selected = importances >= FEATURE_IMPORTANCE_THRESHOLD\n    \n    return clf, selected, clf.score(X_test, y_test)"
+  },
+  "expected_output": {
+    "parameters": [
+      {"name": "TEST_SPLIT_RATIO", "file": "models/classifier.py", "line": 5, "value": "0.2"},
+      {"name": "N_ESTIMATORS", "file": "models/classifier.py", "line": 7, "value": "100"},
+      {"name": "MAX_DEPTH", "file": "models/classifier.py", "line": 8, "value": "10"},
+      {"name": "MIN_SAMPLES_LEAF", "file": "models/classifier.py", "line": 9, "value": "5"},
+      {"name": "CLASS_WEIGHT_RATIO", "file": "models/classifier.py", "line": 10, "value": "0.7"},
+      {"name": "FEATURE_IMPORTANCE_THRESHOLD", "file": "models/classifier.py", "line": 11, "value": "0.05"},
+      {"name": "CV_FOLDS", "file": "models/classifier.py", "line": 12, "value": "5"}
+    ]
+  },
+  "notes": "RANDOM_SEED is NOT tunable — it's a reproducibility constant, not a behavior parameter."
+}

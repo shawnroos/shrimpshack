@@ -1,0 +1,13 @@
+{
+  "id": "ce-001-auth-middleware",
+  "language": "typescript",
+  "difficulty": "easy",
+  "context_tokens": 150,
+  "input": {
+    "file": "middleware/auth.ts",
+    "region": "export function requireAuth(req: Request, res: Response, next: NextFunction) {\n  const token = req.headers.authorization?.replace('Bearer ', '');\n  if (!token) {\n    return res.status(401).json({ error: 'No token provided' });\n  }\n  try {\n    const decoded = jwt.verify(token, process.env.JWT_SECRET!);\n    req.user = decoded;\n    next();\n  } catch (err) {\n    return res.status(401).json({ error: 'Invalid token' });\n  }\n}"
+  },
+  "expected_output": {
+    "summary": "Authentication middleware that validates JWT bearer tokens from request headers. Extracts and verifies the token against a secret, attaches the decoded user to the request object, and rejects unauthorized requests with a 401 status."
+  }
+}

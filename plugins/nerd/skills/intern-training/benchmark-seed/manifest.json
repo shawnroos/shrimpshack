@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "created": "2026-03-15",
+  "task_types": {
+    "parameter-detection": {
+      "count": 5,
+      "languages": ["rust", "python", "typescript", "go"],
+      "difficulties": {"easy": 2, "medium": 2, "hard": 1}
+    },
+    "result-classification": {
+      "count": 5,
+      "difficulties": {"easy": 3, "medium": 1, "hard": 1}
+    },
+    "context-extraction": {
+      "count": 4,
+      "languages": ["typescript", "go", "python", "rust"],
+      "difficulties": {"easy": 2, "medium": 2}
+    }
+  },
+  "total_examples": 14,
+  "notes": "Seed benchmarks v1. Minimum viable set for aptitude testing. Expand with project-specific examples over time."
+}

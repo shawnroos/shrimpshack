@@ -193,7 +193,11 @@ THE LOOP (run forever):
    git reset --hard HEAD
    Log as 'fail (tests)' and try something different.
 
-4. MEASURE: Run {metric_command}. Record the result.
+4. MEASURE: Run {metric_command}. Parse the output as a number.
+   If the command fails (non-zero exit) or produces non-numeric output,
+   STOP the loop immediately and report: "Metric command failed or produced
+   non-numeric output. Cannot continue iteration without a working metric."
+   Do not retry — this indicates the metric command is broken, not a code issue.
 
 5. DECIDE:
    - If metric improved: git add {scope_files} && git commit -m 'loop: {description}'

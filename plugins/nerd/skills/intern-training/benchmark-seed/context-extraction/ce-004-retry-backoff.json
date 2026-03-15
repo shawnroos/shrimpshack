@@ -1,0 +1,13 @@
+{
+  "id": "ce-004-retry-backoff",
+  "language": "rust",
+  "difficulty": "easy",
+  "context_tokens": 160,
+  "input": {
+    "file": "src/client/retry.rs",
+    "region": "pub async fn with_backoff<F, T, E>(f: F, max_retries: u32) -> Result<T, E>\nwhere\n    F: Fn() -> Pin<Box<dyn Future<Output = Result<T, E>>>>,\n    E: std::fmt::Debug,\n{\n    let mut delay = Duration::from_millis(100);\n    for attempt in 0..max_retries {\n        match f().await {\n            Ok(val) => return Ok(val),\n            Err(e) if attempt < max_retries - 1 => {\n                log::warn!(\"Attempt {} failed: {:?}, retrying in {:?}\", attempt + 1, e, delay);\n                tokio::time::sleep(delay).await;\n                delay *= 2;\n            }\n            Err(e) => return Err(e),\n        }\n    }\n    unreachable!()\n}"
+  },
+  "expected_output": {
+    "summary": "Exponential backoff retry wrapper for async operations. Starts with a 100ms delay and doubles it on each failure, up to a configurable maximum number of retries. Logs each failed attempt with the error before waiting. Returns the first success or the final error after all retries are exhausted."
+  }
+}

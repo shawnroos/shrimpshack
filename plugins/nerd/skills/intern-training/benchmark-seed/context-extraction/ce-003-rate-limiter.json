@@ -1,0 +1,13 @@
+{
+  "id": "ce-003-rate-limiter",
+  "language": "python",
+  "difficulty": "medium",
+  "context_tokens": 180,
+  "input": {
+    "file": "middleware/rate_limit.py",
+    "region": "class TokenBucket:\n    def __init__(self, rate: float, capacity: int):\n        self.rate = rate\n        self.capacity = capacity\n        self.tokens = capacity\n        self.last_refill = time.monotonic()\n\n    def consume(self, tokens: int = 1) -> bool:\n        now = time.monotonic()\n        elapsed = now - self.last_refill\n        self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)\n        self.last_refill = now\n        if self.tokens >= tokens:\n            self.tokens -= tokens\n            return True\n        return False"
+  },
+  "expected_output": {
+    "summary": "Token bucket rate limiter that refills tokens at a configurable rate up to a maximum capacity. Consumers request tokens and are either granted (reducing the bucket) or denied. The refill is calculated lazily on each consume call rather than running a background timer, making it lightweight for per-client rate limiting."
+  }
+}

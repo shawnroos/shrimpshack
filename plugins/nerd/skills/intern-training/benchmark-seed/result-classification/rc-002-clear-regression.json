@@ -1,0 +1,14 @@
+{
+  "id": "rc-002-clear-regression",
+  "difficulty": "easy",
+  "input": {
+    "experiment_id": "E002",
+    "parameter": "CACHE_TTL",
+    "before": {"value": "3600", "metrics": {"hit_rate": 0.85, "p99_latency_ms": 45, "memory_mb": 512}},
+    "after": {"value": "600", "metrics": {"hit_rate": 0.52, "p99_latency_ms": 120, "memory_mb": 280}}
+  },
+  "expected_output": {
+    "classification": "regressed",
+    "evidence": "Hit rate dropped from 0.85 to 0.52 (-39%). p99 latency increased from 45ms to 120ms (+167%). Memory savings do not compensate for the performance regression."
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "rc-001-clear-improvement",
+  "difficulty": "easy",
+  "input": {
+    "experiment_id": "E001",
+    "parameter": "FUZZY_MATCH_THRESHOLD",
+    "before": {"value": "0.85", "metrics": {"ndcg": 0.72, "p95_latency_ms": 12, "recall_at_10": 0.65}},
+    "after": {"value": "0.80", "metrics": {"ndcg": 0.78, "p95_latency_ms": 13, "recall_at_10": 0.74}}
+  },
+  "expected_output": {
+    "classification": "improved",
+    "evidence": "Primary metric nDCG improved from 0.72 to 0.78 (+8.3%). Recall@10 also improved from 0.65 to 0.74. Latency increase of 1ms is negligible."
+  }
+}

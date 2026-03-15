@@ -135,6 +135,8 @@ Return a structured JSON object:
           "current_value": "5000",
           "category": "temporal",
           "impact": "high",
+          "measurability": "experimentable",
+          "metric_command": "hyperfine --runs 50 'cargo run -- ipc-bench'",
           "rationale": "Controls how long the TUI waits for agent subprocess response. Too short = false timeouts under load. Too long = unresponsive UI on agent crash. No empirical basis for current value.",
           "experiment_type": "parameter_sweep",
           "sweep_range": "1000:10000:1000"

@@ -1,0 +1,14 @@
+{
+  "id": "rc-005-subtle-regression",
+  "difficulty": "medium",
+  "input": {
+    "experiment_id": "E005",
+    "parameter": "LEARNING_RATE",
+    "before": {"value": "0.001", "metrics": {"val_loss": 0.342, "train_loss": 0.298, "f1_score": 0.87}},
+    "after": {"value": "0.01", "metrics": {"val_loss": 0.389, "train_loss": 0.195, "f1_score": 0.83}}
+  },
+  "expected_output": {
+    "classification": "regressed",
+    "evidence": "Validation loss increased from 0.342 to 0.389 while training loss decreased significantly (0.298 to 0.195), indicating overfitting. F1 score dropped from 0.87 to 0.83. The model memorizes training data but generalizes worse."
+  }
+}

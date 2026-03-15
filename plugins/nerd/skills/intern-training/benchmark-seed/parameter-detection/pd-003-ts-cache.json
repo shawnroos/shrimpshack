@@ -1,0 +1,19 @@
+{
+  "id": "pd-003-ts-cache",
+  "language": "typescript",
+  "difficulty": "medium",
+  "context_tokens": 220,
+  "input": {
+    "file": "src/cache/manager.ts",
+    "content": "import { Redis } from 'ioredis';\n\nconst CACHE_TTL = 3600;\nconst MAX_CACHE_SIZE = 10000;\nconst STALE_WHILE_REVALIDATE = 300;\nconst COMPRESSION_THRESHOLD = 1024;\nconst PI = 3.14159265;\nconst HTTP_OK = 200;\n\nexport class CacheManager {\n  private redis: Redis;\n  private hitCount = 0;\n  private missCount = 0;\n\n  async get<T>(key: string): Promise<T | null> {\n    const cached = await this.redis.get(key);\n    if (!cached) {\n      this.missCount++;\n      return null;\n    }\n    this.hitCount++;\n    const parsed = JSON.parse(cached);\n    if (parsed.size > COMPRESSION_THRESHOLD) {\n      return decompress(parsed.data);\n    }\n    return parsed.data;\n  }\n\n  async set<T>(key: string, value: T, ttl = CACHE_TTL): Promise<void> {\n    const size = JSON.stringify(value).length;\n    const data = size > COMPRESSION_THRESHOLD ? compress(value) : value;\n    await this.redis.setex(key, ttl, JSON.stringify({ data, size }));\n    await this.evictIfNeeded();\n  }\n\n  private async evictIfNeeded(): Promise<void> {\n    const count = await this.redis.dbsize();\n    if (count > MAX_CACHE_SIZE) {\n      // LRU eviction\n    }\n  }\n}"
+  },
+  "expected_output": {
+    "parameters": [
+      {"name": "CACHE_TTL", "file": "src/cache/manager.ts", "line": 3, "value": "3600"},
+      {"name": "MAX_CACHE_SIZE", "file": "src/cache/manager.ts", "line": 4, "value": "10000"},
+      {"name": "STALE_WHILE_REVALIDATE", "file": "src/cache/manager.ts", "line": 5, "value": "300"},
+      {"name": "COMPRESSION_THRESHOLD", "file": "src/cache/manager.ts", "line": 6, "value": "1024"}
+    ]
+  },
+  "notes": "PI and HTTP_OK are NOT tunable — math constant and protocol value. Model should skip them."
+}

@@ -1,0 +1,26 @@
+{
+  "tasks": {
+    "parameter-detection": {
+      "mode": "disabled",
+      "accuracy": 0.0,
+      "shadow_window": [],
+      "promoted_at": null
+    },
+    "result-classification": {
+      "mode": "disabled",
+      "accuracy": 0.0,
+      "shadow_window": [],
+      "promoted_at": null
+    },
+    "context-extraction": {
+      "mode": "disabled",
+      "accuracy": 0.0,
+      "shadow_window": [],
+      "promoted_at": null
+    }
+  },
+  "last_run": null,
+  "lifetime_claude_calls_saved": 0,
+  "setup_timestamp": "2026-03-15T20:05:00Z",
+  "gpu_type": "metal"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "pd-004-go-ratelimit",
+  "language": "go",
+  "difficulty": "medium",
+  "context_tokens": 200,
+  "input": {
+    "file": "middleware/ratelimit.go",
+    "content": "package middleware\n\nimport (\n\t\"net/http\"\n\t\"sync\"\n\t\"time\"\n)\n\nconst (\n\tmaxRequestsPerMinute = 100\n\tburstSize            = 20\n\tcleanupInterval      = 5 * time.Minute\n\tbanDuration          = 15 * time.Minute\n\tbanThreshold         = 3\n)\n\ntype RateLimiter struct {\n\tmu       sync.Mutex\n\tclients  map[string]*clientState\n}\n\ntype clientState struct {\n\ttokens    int\n\tlastSeen  time.Time\n\tviolations int\n\tbannedUntil time.Time\n}\n\nfunc (rl *RateLimiter) Allow(ip string) bool {\n\trl.mu.Lock()\n\tdefer rl.mu.Unlock()\n\n\tclient, exists := rl.clients[ip]\n\tif !exists {\n\t\trl.clients[ip] = &clientState{tokens: burstSize, lastSeen: time.Now()}\n\t\treturn true\n\t}\n\n\tif time.Now().Before(client.bannedUntil) {\n\t\treturn false\n\t}\n\n\telapsed := time.Since(client.lastSeen)\n\trefill := int(elapsed.Minutes() * float64(maxRequestsPerMinute))\n\tclient.tokens = min(client.tokens+refill, burstSize)\n\tclient.lastSeen = time.Now()\n\n\tif client.tokens <= 0 {\n\t\tclient.violations++\n\t\tif client.violations >= banThreshold {\n\t\t\tclient.bannedUntil = time.Now().Add(banDuration)\n\t\t}\n\t\treturn false\n\t}\n\n\tclient.tokens--\n\treturn true\n}"
+  },
+  "expected_output": {
+    "parameters": [
+      {"name": "maxRequestsPerMinute", "file": "middleware/ratelimit.go", "line": 10, "value": "100"},
+      {"name": "burstSize", "file": "middleware/ratelimit.go", "line": 11, "value": "20"},
+      {"name": "cleanupInterval", "file": "middleware/ratelimit.go", "line": 12, "value": "5 * time.Minute"},
+      {"name": "banDuration", "file": "middleware/ratelimit.go", "line": 13, "value": "15 * time.Minute"},
+      {"name": "banThreshold", "file": "middleware/ratelimit.go", "line": 14, "value": "3"}
+    ]
+  }
+}
