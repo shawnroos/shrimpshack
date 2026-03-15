@@ -68,6 +68,15 @@ fi
 
 This closes the `if [ ! -f .claude/nerd.local.md ]` block — the config file and gitignore entry are only created on first run.
 
+**Intern Pre-flight (if enabled):**
+
+```bash
+# Check if intern is configured
+INTERN_ENABLED=$(grep -A1 "intern:" .claude/nerd.local.md 2>/dev/null | grep "enabled: true" | wc -l | tr -d ' ')
+```
+
+If `INTERN_ENABLED == 1`: Execute the Pre-Run Health Check defined in `Skill(skill="nerd:intern-delegation")`, Phase 0. Read intern config from `.claude/nerd.local.md` and state from `.nerd/intern/state.json`. If state.json exists but fails JSON parsing, treat as if intern is not configured for this run and log warning. Store the resulting `INTERN_AVAILABLE`, config values, and task modes.
+
 **Detect project:**
 ```bash
 cat CLAUDE.md .claude/CLAUDE.md 2>/dev/null | head -50
@@ -168,6 +177,8 @@ Use AskUserQuestion to confirm. If the user wants to adjust:
 
 ## Phase 3: Thematic Parameter Scan
 
+**Intern delegation (parameter-detection):** If `INTERN_AVAILABLE == 1`, delegate per `Skill(skill="nerd:intern-delegation")` — check task mode, call intern if live/shadow, validate, gate on confidence, log to delegation log. If run failure counter > 3, skip remaining intern calls.
+
 Launch the context-scanner agent with the confirmed scope:
 
 ```
@@ -194,8 +205,6 @@ Return structured JSON with themed parameter groups.
 - **Zero parameters found**: "No tunable parameters found in your scoped files. Try `/nerd` for a full codebase scan, or adjust your scope with `/nerd-this <broader topic>`." — Stop.
 - **One theme**: Skip Phase 4, proceed directly with the single theme.
 - **2-6 themes**: Continue to Phase 4.
-
-**Note:** The context-scanner classifies each parameter as experimentable (`parameter_sweep`, `comparison`, `ablation`) or analytical (`experiment_type: "analytical"`). Display this in the theme presentation so the user knows which findings can be swept vs reasoned about.
 
 ## Phase 4: Theme Selection
 
@@ -392,6 +401,26 @@ Loop Candidates (ranked by potential):
 ```
 
 If running in scheduled mode (`NERD_SCHEDULED=1`) and the schedule window has time remaining, automatically launch `/nerd-loop` on the top candidate.
+
+## Phase 10.5: Training Data Extraction (if enabled)
+
+If `intern.collect_training_data: true` in config (or `intern.enabled: true`):
+
+Extract training examples from Claude's outputs in this run. Same format and protocol as `/nerd` Phase 7.5 — see `Skill(skill="nerd:intern-delegation")` for the delegation protocol and training data format.
+
+| Task | Input | Output | Source |
+|------|-------|--------|--------|
+| parameter-detection | Source file contents | context-scanner's JSON results | Phase 3 |
+| result-classification | Experiment results JSON | report-compiler's verdict | Phase 10 |
+| context-extraction | Source file + function | context-scanner's rationale field | Phase 3 |
+
+Include `reasoning` field — capture Claude's chain-of-thought. Dedup with 24-hour time window. Append to `.nerd/intern/training-data/{task_type}.jsonl`.
+
+## Phase 10.6: Intern State Update (if enabled)
+
+If `INTERN_AVAILABLE == 1` and delegation occurred this run:
+
+Same protocol as `/nerd` Phase 7.6 — read delegation log for this run_id, update shadow windows, check promotion/demotion/circuit breaker, write updated `.nerd/intern/state.json` atomically.
 
 ## Error Handling
 

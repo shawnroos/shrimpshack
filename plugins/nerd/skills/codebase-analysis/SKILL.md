@@ -27,10 +27,6 @@ grep -rn "system_prompt\|systemPrompt\|PROMPT\|template\|instructions"
 grep -rn "TODO.*tun\|FIXME.*threshold\|TODO.*calibrat\|TODO.*magic"
 ```
 
-## Skip: math constants, UI colors/padding, protocol values (HTTP codes), test fixtures, values with citations, parameters in non-executable files (markdown, docs) unless flagged as analytical.
+## Skip: math constants, UI colors/padding, protocol values (HTTP codes), test fixtures, values with citations.
 
-## Prioritize by: **measurability first** (can a shell command output a number?), then frequency (per-request > per-session), sweep feasibility (no side effects), data availability (feedback/ground truth exists).
-
-## Measurability Classification
-- **Experimentable**: parameter is in executable code, changing it produces a measurable effect on an automated metric → `experiment_type: "parameter_sweep"` or `"comparison"` or `"ablation"`
-- **Analytical**: parameter is in non-executable files (markdown, config comments, agent prompts) or requires human judgment to evaluate → `experiment_type: "analytical"` — suitable for `/nerd` batch analysis but NOT for `/nerd-loop`
+## Prioritize by: frequency (per-request > per-session), measurability (clear metric exists), sweep feasibility (no side effects), data availability (feedback/ground truth exists).

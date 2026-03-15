@@ -76,13 +76,6 @@ You will receive:
 - Protocol-defined values (HTTP status codes, standard ports)
 - Values with comments explaining why they're that specific value
 - Test fixtures and mock data
-- Parameters that cannot be empirically measured (see Measurability Gate below)
-
-## Measurability Gate
-
-**Only include parameters that can be empirically measured.** For each parameter, ask: "Can I write a command that outputs a number reflecting this parameter's effect?" If not, flag it as `experiment_type: "analytical"` — it can be reasoned about but not swept.
-
-Parameters in non-executable files (markdown, documentation, agent prompts) are almost always analytical. When the scoped files are primarily non-executable, note this in the output: "Most parameters in scope are analytical — recommend /nerd batch analysis rather than /nerd-loop."
 
 ## Thematic Clustering
 
@@ -135,8 +128,6 @@ Return a structured JSON object:
           "current_value": "5000",
           "category": "temporal",
           "impact": "high",
-          "measurability": "experimentable",
-          "metric_command": "hyperfine --runs 50 'cargo run -- ipc-bench'",
           "rationale": "Controls how long the TUI waits for agent subprocess response. Too short = false timeouts under load. Too long = unresponsive UI on agent crash. No empirical basis for current value.",
           "experiment_type": "parameter_sweep",
           "sweep_range": "1000:10000:1000"

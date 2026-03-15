@@ -99,18 +99,12 @@ Return a structured list as JSON:
     "current_value": "0.85",
     "category": "numeric_threshold",
     "impact": "high",
-    "measurability": "experimentable",
-    "metric_command": "cargo run -- eval entity-resolution --dataset fixtures/entities.json",
     "rationale": "Controls entity resolution quality. Too high = fragmentation, too low = false merges. Currently hardcoded with no empirical validation.",
     "experiment_type": "parameter_sweep",
     "sweep_range": "0.70:0.95:0.05"
   }
 ]
 ```
-
-- `measurability`: `"experimentable"` (automated metric exists or can be built) or `"analytical"` (no automated metric — reasoning only)
-- `metric_command`: the shell command that produces a number for experimentable parameters, `null` for analytical
-- Analytical parameters MUST use `"experiment_type": "analytical"` and MUST NOT have a `sweep_range`
 
 Sort by impact (high → medium → low), then by category.
 
@@ -121,22 +115,3 @@ Sort by impact (high → medium → low), then by category.
 - Protocol-defined values (HTTP status codes, standard ports)
 - Values with comments explaining why they're that specific value
 - Test fixtures and mock data
-
-## Measurability Gate
-
-**CRITICAL: Only include parameters that can be empirically measured.**
-
-For each parameter you discover, ask: "Can I write a command that outputs a number reflecting this parameter's effect?" If the answer is no, the parameter is not experimentable — it may still be worth flagging as an analytical finding, but it MUST NOT be proposed as an experiment.
-
-**Experimentable** (include with `experiment_type`):
-- Parameters in executable code with a measurable output (latency, accuracy, throughput, token count, etc.)
-- Config values that affect runtime behavior you can benchmark
-- Thresholds you can sweep while running a test suite or eval harness
-
-**Not experimentable** (exclude or flag as `experiment_type: "analytical"`):
-- Parameters in documentation, comments, or non-executable instructions (e.g., markdown agent prompts, README values)
-- Heuristics embedded in LLM prompts where the only "metric" would be LLM-as-judge (too noisy for sweep)
-- Values that require human judgment to evaluate (UX choices, naming conventions)
-- Parameters where changing the value has no observable effect on any automated test or benchmark
-
-When the project is primarily non-executable (e.g., a documentation repo, a Claude Code plugin of markdown files), most findings will be analytical. Flag this early: "This project is primarily {language/markdown/config}. Most parameters found are analytical — they can be reasoned about but not swept empirically. Consider using /nerd (batch analysis) rather than /nerd-loop for this project."
