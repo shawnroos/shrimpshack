@@ -54,7 +54,7 @@
 
     "build_profile_node": {
       "type": "object",
-      "description": "Build infrastructure profile for a project — dependency count, build times, artifact sizes. Created by lab-tech Check 7.",
+      "description": "Build infrastructure profile for a project — dependency count, build times, artifact sizes. Created by lab-tech Check 7. Language-agnostic.",
       "required": ["id", "type", "title", "data", "source_files", "codebase_hash", "created_at", "status"],
       "properties": {
         "id": { "type": "string", "pattern": "^I\\d{3,}$", "description": "Infra node ID, e.g. I001" },
@@ -91,7 +91,7 @@
         "id": { "type": "string", "pattern": "^I\\d{3,}$", "description": "Infra node ID, e.g. I002" },
         "type": { "const": "cache_verdict" },
         "title": { "type": "string" },
-        "strategy": { "enum": ["sccache", "target_copy", "incremental", "none"], "description": "The cache strategy that was tested" },
+        "strategy": { "type": "string", "description": "The cache strategy that was tested (e.g., sccache, ccache, artifact_copy, incremental, none)" },
         "result": { "enum": ["SUCCESS", "FAILED"] },
         "evidence": { "type": "string", "description": "One-line evidence summary" },
         "runs_tested": { "type": "integer", "description": "Number of batch runs this verdict covers" },

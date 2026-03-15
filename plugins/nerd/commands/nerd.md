@@ -200,17 +200,16 @@ Read the build cache config written by lab-tech Check 7:
 grep -E "^build_cache" .claude/nerd.local.md 2>/dev/null
 ```
 
-**If strategy is `sccache`:**
-- Verify the sccache server is running: `sccache --show-stats 2>/dev/null`
-- If not running, start it: `sccache --start-server`
-- Store the env var prefix for Phase 5.2: `RUSTC_WRAPPER=sccache`
+**If `build_cache_strategy` and `build_cache_env` are set:**
+- Start any required cache daemon (e.g., `sccache --start-server` for Rust)
+- Store the env var prefix from `build_cache_env` for Phase 5.2
 
-**If strategy is `target_copy`:**
-- Verify `target/` exists in the main worktree (lab-tech's cache warming in Check 7d should have populated it)
+**If strategy is `artifact_copy`:**
+- Verify the build output directory exists in the main worktree (lab-tech's cache warming should have populated it)
 - Note: the copy happens during worktree creation in Phase 5.2
 
 **If strategy is `none` or not set:**
-- Proceed without build caching. Experiments will compile independently.
+- Proceed without build caching. Experiments will build independently.
 
 ### 5.1: Create Shared Eval Scaffold
 
@@ -219,7 +218,7 @@ Before launching experiments, set up consolidated infrastructure on current bran
 mkdir -p docs/research/plans docs/research/results
 ```
 
-If no eval module exists (check first — lab-tech in Phase 4.5 does NOT create it), create a scaffold appropriate to the project language (e.g., `src/eval/mod.rs` for Rust, `src/eval/index.ts` for TS). Add a single `Eval` CLI subcommand. Each experiment extends this — never creates its own.
+If no eval module exists (check first — lab-tech in Phase 4.5 does NOT create it), create a scaffold appropriate to the project language. Add a single eval CLI subcommand or script entry point. Each experiment extends this — never creates its own.
 
 ### 5.2: Launch Experiment Agents
 
@@ -232,23 +231,22 @@ cd worktrees/nerd-{entry.id} && git checkout -b nerd/{entry.id}
 cd "$PROJECT_ROOT"
 ```
 
-If target_copy strategy, clone build artifacts using copy-on-write:
+If `artifact_copy` strategy, clone build artifacts using copy-on-write. The build output directory varies by language (e.g., `target/` for Rust, `node_modules/.cache` for JS, `__pycache__` for Python):
 ```bash
 # macOS (APFS):
-cp -c -r "$PROJECT_ROOT/target/" "$PROJECT_ROOT/worktrees/nerd-{entry.id}/target/" 2>/dev/null
+cp -c -r "$PROJECT_ROOT/{build_output_dir}/" "$PROJECT_ROOT/worktrees/nerd-{entry.id}/{build_output_dir}/" 2>/dev/null
 # Linux (btrfs):
-# cp --reflink=auto -r "$PROJECT_ROOT/target/" "$PROJECT_ROOT/worktrees/nerd-{entry.id}/target/" 2>/dev/null
+# cp --reflink=auto -r "$PROJECT_ROOT/{build_output_dir}/" "$PROJECT_ROOT/worktrees/nerd-{entry.id}/{build_output_dir}/" 2>/dev/null
 ```
 
 ```
 Agent(subagent_type="nerd:experiment-executor", prompt="
 Execute plan at docs/research/plans/{entry.id}-plan.md.
 Worktree: {path}. Language: {lang}. Tests: {test_cmd}.
-Put code in src/eval/{entry.id}.rs (or equivalent).
-Add to existing EvalAction enum. Commit conventionally.
+Extend the existing eval module with your experiment code. Commit conventionally.
 Write results to docs/research/results/{entry.id}-results.json.
 Before building, read .claude/nerd.local.md for build_cache_strategy and build_cache_env.
-If build_cache_env is set, prefix all cargo/build commands with it inline (e.g., RUSTC_WRAPPER=sccache cargo build).
+If build_cache_env is set, prefix all build commands with it inline (e.g., for Rust: RUSTC_WRAPPER=sccache cargo build).
 If a build fails with cache, retry without it and add cache_fallback: true to results JSON.
 ", run_in_background=true)
 ```
@@ -267,7 +265,7 @@ git merge nerd/{entry.id} --no-edit
 If tests fail: `git reset --hard HEAD~1`, mark `failed`, keep worktree.
 If merge succeeds: `git worktree remove worktrees/nerd-{entry.id}`.
 
-Merge conflicts in eval module files (mod.rs, EvalAction enum) are additive — combine both sides.
+Merge conflicts in eval module files are additive — combine both sides.
 
 ## Phase 6: Monitor
 
@@ -309,13 +307,7 @@ If running in scheduled mode (`NERD_SCHEDULED=1`) and the schedule window has ti
 
 ## Phase 9: Cleanup
 
-Stop the sccache server if one was started in Phase 5.0:
-
-```bash
-sccache --stop-server 2>/dev/null
-```
-
-This is safe to run even if sccache was not started — it exits silently.
+Stop any build cache daemon started in Phase 5.0 (e.g., `sccache --stop-server` for Rust). Safe to run even if no daemon was started.
 
 ## Error Handling
 

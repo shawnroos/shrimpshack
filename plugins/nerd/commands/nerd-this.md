@@ -321,11 +321,10 @@ cd worktrees/nerd-{entry.id} && git checkout -b nerd/{entry.id}
 Agent(subagent_type="nerd:experiment-executor", prompt="
 Execute plan at docs/research/plans/{entry.id}-plan.md.
 Worktree: {path}. Language: {lang}. Tests: {test_cmd}.
-Put code in src/eval/{entry.id}.rs (or equivalent).
-Add to existing EvalAction enum. Commit conventionally.
+Extend the existing eval module with your experiment code. Commit conventionally.
 Write results to docs/research/results/{entry.id}-results.json.
 Before building, read .claude/nerd.local.md for build_cache_strategy and build_cache_env.
-If build_cache_env is set, prefix all cargo/build commands with it inline (e.g., RUSTC_WRAPPER=sccache cargo build).
+If build_cache_env is set, prefix all build commands with it inline (e.g., for Rust: RUSTC_WRAPPER=sccache cargo build).
 If a build fails with cache, retry without it and add cache_fallback: true to results JSON.
 ", run_in_background=true)
 ```
@@ -344,7 +343,7 @@ git merge nerd/{entry.id} --no-edit
 If tests fail: `git reset --hard HEAD~1`, mark `failed`, keep worktree.
 If merge succeeds: `git worktree remove worktrees/nerd-{entry.id}`.
 
-Merge conflicts in eval module files (mod.rs, EvalAction enum) are additive — combine both sides.
+Merge conflicts in eval module files are additive — combine both sides.
 
 ## Phase 9: Monitor
 

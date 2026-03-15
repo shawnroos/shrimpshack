@@ -191,19 +191,3 @@ docs/research/
 └── loop-search-relevance-report.md    # Deep loop improvement timeline
 ```
 
-## Requirements
-
-- Git with worktree support
-- Claude Code with agent capabilities
-- macOS (for LaunchAgent scheduling)
-
-## Origin
-
-Born from a session where 15 experiments were designed, built, and run across two codebases. The key insight: **the most valuable findings weren't parameter tweaks — they were architectural discoveries that emerged from testing competing theories.**
-
-- Entity resolution thresholds were optimal — **but 99% of resolution was via exact email match, making the fuzzy tier irrelevant**
-- System prompt compression saves 99% tokens — **the feature worked but was sent 3700 tokens of context it never used**
-- Orchestrator weights were dead code — **the LLM generates its own weights, bypassing the config entirely**
-- Temporal decay was bursty, not exponential — **the model was wrong, not the parameters**
-
-The nerd packages these patterns into a plugin that runs on any codebase, any night.

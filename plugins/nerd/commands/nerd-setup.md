@@ -135,25 +135,25 @@ Extract from output:
 
 ### Build Cache Tools
 
-Detect available compilation cache tools:
+Detect available compilation cache tools for compiled languages:
 
 ```bash
-# sccache — compilation cache for Rust (primary mechanism for parallel worktree builds)
+# sccache — compilation cache (Rust, C/C++)
 SCCACHE_PATH=$(which sccache 2>/dev/null)
 SCCACHE_VERSION=$(sccache --version 2>/dev/null | head -1)
 
-# ccache — C/C++ compilation cache
+# ccache — compilation cache (C/C++)
 CCACHE_PATH=$(which ccache 2>/dev/null)
 ```
 
-These are recorded in the hardware profile so lab-tech Check 7 can read them without re-detecting every run.
+These are recorded in the hardware profile so lab-tech Check 7 can read them without re-detecting every run. Only relevant for compiled languages — Python, TypeScript, and Go have built-in caching.
 
 ### For Codebase Experiments
 
 Run a quick compile + test timing:
 
 ```bash
-# Detect build system
+# Detect build system and time a build + test cycle
 if [ -f "Cargo.toml" ]; then
     time cargo build 2>&1 | tail -3
     time cargo test 2>&1 | tail -3
@@ -161,7 +161,11 @@ elif [ -f "package.json" ]; then
     time bun run typecheck 2>&1 | tail -3
     time bun test 2>&1 | tail -3
 elif [ -f "pyproject.toml" ]; then
+    time python -m py_compile $(find . -name '*.py' -not -path './.*' | head -5) 2>&1
     time pytest 2>&1 | tail -3
+elif [ -f "go.mod" ]; then
+    time go build ./... 2>&1 | tail -3
+    time go test ./... 2>&1 | tail -3
 fi
 ```
 
@@ -223,12 +227,12 @@ codebase:
   build_time_seconds: 6.5
   test_time_seconds: 12.3
   test_count: 477
-  language: rust
+  language: auto-detected              # rust, typescript, python, go, etc.
 
 cache_tools:
-  sccache: "/usr/local/bin/sccache"   # or null if not installed
-  sccache_version: "0.8.1"            # or null
-  ccache: null                         # or path if installed
+  sccache: null                        # path if installed, relevant for Rust/C/C++
+  sccache_version: null
+  ccache: null                         # path if installed, relevant for C/C++
 
 calibrated_at: "2026-03-14T00:00:00Z"
 ```

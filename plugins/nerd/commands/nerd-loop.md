@@ -42,10 +42,10 @@ If no eval harness exists for this metric, **build one first** (a minimal script
 Identify the files the agent is allowed to change. Like autoresearch constrains changes to `train.py`, the loop needs boundaries:
 
 ```
-Determine the relevant files:
-- If focus is "search relevance" → src/search/*.rs
-- If focus is "prompt efficiency" → src/acp/mod.rs (prompt builders)
-- If focus is "API latency" → src/api/*.rs, src/handlers/*.rs
+Determine the relevant files based on the project's language and structure:
+- If focus is "search relevance" → search-related source files (e.g., src/search/)
+- If focus is "prompt efficiency" → prompt builder modules
+- If focus is "API latency" → API handler/route files
 ```
 
 Use AskUserQuestion to confirm: "I'll focus on modifying {files}. The metric is {metric}. Does this scope look right?"
@@ -123,13 +123,9 @@ Write report to docs/research/lab-readiness-loop-{focus-slug}.md.
 
 ## Step 2.5: Start Build Cache (if available)
 
-If the lab-tech report indicates sccache is available (Check 7f reports `[OK] sccache available`):
+If the lab-tech report indicates a build cache is available (Check 7f), start the cache daemon and store the env var prefix from `build_cache_env` for use in loop iteration commands. This benefits loop mode significantly — hundreds of incremental rebuilds across iterations get cached.
 
-```bash
-sccache --start-server 2>/dev/null
-```
-
-Store the env var prefix `RUSTC_WRAPPER=sccache` for use in the loop iteration commands. This benefits loop mode significantly — hundreds of incremental recompilations across iterations get cached.
+Example for Rust: `sccache --start-server` with prefix `RUSTC_WRAPPER=sccache`.
 
 ## Step 3: Create the Loop Branch
 
@@ -167,9 +163,8 @@ THE LOOP (run forever):
 
 2. EDIT: Make the change. Keep it focused — one idea per iteration.
 
-3. TEST: Run {test_command}. If sccache is available (check lab-tech report from Step 2),
-   prefix with RUSTC_WRAPPER=sccache (e.g., RUSTC_WRAPPER=sccache cargo test).
-   If tests fail, revert immediately:
+3. TEST: Run {test_command}. If a build cache env prefix is available (from lab-tech report),
+   prefix build/test commands with it. If tests fail, revert immediately:
    git reset --hard HEAD
    Log as 'fail (tests)' and try something different.
 
@@ -264,7 +259,7 @@ The loop ends when either:
 - **User interrupts**: manually stops the session
 - **Scheduled window closes**: overnight run ends
 
-1. Stop sccache if it was started in Step 2.5: `sccache --stop-server 2>/dev/null`
+1. Stop any build cache daemon started in Step 2.5 (e.g., `sccache --stop-server` for Rust)
 2. Read the final protocol file for the experiment log
 3. Compile a loop report at `docs/research/loop-{focus-slug}-report.md`:
 

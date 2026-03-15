@@ -35,17 +35,15 @@ Determine the project's language and conventions:
 - Check existing test patterns
 - Match coding style, naming conventions, and test frameworks
 
-**Build cache configuration:** Read `.claude/nerd.local.md` for `build_cache_strategy` and `build_cache_env`. If `build_cache_env` is set (e.g., `RUSTC_WRAPPER=sccache`), prefix ALL build and test commands with it:
+**Build cache configuration:** Read `.claude/nerd.local.md` for `build_cache_strategy` and `build_cache_env`. If `build_cache_env` is set, prefix ALL build and test commands with it:
 
 ```bash
+# Example (Rust with sccache):
 # Instead of: cargo build
 # Use:        RUSTC_WRAPPER=sccache cargo build
-
-# Instead of: cargo test
-# Use:        RUSTC_WRAPPER=sccache cargo test
 ```
 
-**IMPORTANT**: Use inline env var prefixing, NOT `export`. Shell state does not persist between Bash tool calls — each call starts a fresh shell. `export RUSTC_WRAPPER=sccache` in one Bash call has no effect on subsequent calls.
+**IMPORTANT**: Use inline env var prefixing, NOT `export`. Shell state does not persist between Bash tool calls — each call starts a fresh shell.
 
 ### Step 3: Extend the Shared Eval Module
 
@@ -53,21 +51,17 @@ Determine the project's language and conventions:
 
 The nerd pipeline creates a shared eval module BEFORE launching experiment agents. Your job is to ADD your experiment to it.
 
-**For Rust projects:**
-- Create `src/eval/{experiment_id}.rs` with your experiment's types and functions
-- Add `pub mod {experiment_id};` to `src/eval/mod.rs`
-- Add your subcommand variant to the existing `EvalAction` enum in `src/main.rs`
-- Do NOT create `src/eval.rs` as a standalone file
+Follow the language conventions of the project:
 
-**For TypeScript projects:**
-- Create `src/eval/{experiment-id}.ts` with your experiment's interfaces and functions
-- Add export to `src/eval/index.ts`
-- Wire into existing CLI structure
+**Rust:** Create `src/eval/{experiment_id}.rs`, add `pub mod {experiment_id};` to `src/eval/mod.rs`, add subcommand variant to the existing enum in `src/main.rs`.
 
-**For Python projects:**
-- Create `eval/{experiment_id}.py` with your experiment's dataclasses and functions
-- Import in `eval/__init__.py`
-- Wire into existing CLI
+**TypeScript:** Create `src/eval/{experiment-id}.ts`, add export to `src/eval/index.ts`, wire into existing CLI.
+
+**Python:** Create `eval/{experiment_id}.py`, import in `eval/__init__.py`, wire into existing CLI.
+
+**Go:** Create `eval/{experiment_id}.go`, register in the eval package's command registry.
+
+**Other:** Create the eval file in the project's module conventions and wire into any existing CLI/runner.
 
 ### Step 4: Implement the Experiment
 Follow the plan's implementation sequence. For each phase:
@@ -99,31 +93,28 @@ feat(eval/{experiment_id}): add {metric} sweep harness
 To minimize merge conflicts when multiple experiments run in parallel:
 
 1. **One file per experiment** in the eval module directory — each experiment is isolated
-2. **Additive-only changes** to mod.rs — just add `pub mod {id};`
-3. **Additive-only changes** to the EvalAction enum — just add one variant
-4. **Avoid modifying shared functions** unless the plan explicitly requires it (e.g., threading a config parameter through a call chain)
-5. **Schema changes** go in your experiment file's init function, not in shared schema.sql
+2. **Additive-only changes** to the module index/registry — just register your experiment
+3. **Avoid modifying shared functions** unless the plan explicitly requires it (e.g., threading a config parameter through a call chain)
+4. **Schema changes** go in your experiment file's init function, not in shared schema files
 
 ## Language-Specific Patterns
 
+Match the project's existing conventions. Common patterns by language:
+
 ### Rust
-- Use `#[cfg(test)]` inline modules for tests
-- `anyhow::Result` for error handling
-- Clap derive for CLI subcommands
-- `serde` for serialization
-- `tokio::test` for async tests
+- `#[cfg(test)]` inline modules, `anyhow::Result`, Clap derive, `serde`, `tokio::test`
 
 ### TypeScript
-- Interfaces over types, no classes
-- Functional patterns
-- Vitest or project's existing test framework
-- kebab-case files
+- Interfaces over types, functional patterns, project's test framework, kebab-case files
 
 ### Python
-- pytest for testing
-- dataclasses or Pydantic for config structs
-- argparse or click for CLI
-- Type hints throughout
+- pytest, dataclasses/Pydantic for config, argparse/click for CLI, type hints
+
+### Go
+- Table-driven tests, `testing` package, `cobra`/`flag` for CLI, error wrapping
+
+### Other
+- Read existing code for conventions — match test frameworks, CLI patterns, and module structure
 
 ## Output
 When complete, write a summary to stdout:
@@ -142,10 +133,10 @@ When complete, write a summary to stdout:
 
 ### Build Cache Fallback
 
-If a build fails AND `build_cache_env` is set, the cache layer may be the cause (e.g., sccache server crashed, RUSTC_WRAPPER conflict). Apply this fallback:
+If a build fails AND `build_cache_env` is set, the cache layer may be the cause. Apply this fallback:
 
-1. Retry the build **without** the cache env var prefix (plain `cargo build` instead of `RUSTC_WRAPPER=sccache cargo build`)
-2. If the retry succeeds: the cache was the problem. Continue the experiment without cache for all remaining builds. Add `"cache_fallback": true` to the results JSON with the error message from the failed build.
-3. If the retry also fails: the cache was not the problem — it's a genuine build error. Fix the code as normal.
+1. Retry the build **without** the cache env var prefix (use the plain build command)
+2. If the retry succeeds: the cache was the problem. Continue without cache for remaining builds. Add `"cache_fallback": true` to the results JSON.
+3. If the retry also fails: it's a genuine build error. Fix the code as normal.
 
-Detection heuristic: if the build error output contains `sccache`, `RUSTC_WRAPPER`, `failed to spawn`, or `server not running`, it is almost certainly a cache failure — skip straight to the retry without cache.
+Detection heuristic: if the build error mentions the cache tool name (e.g., `sccache`, `ccache`), `failed to spawn`, or `server not running`, skip straight to the retry without cache.

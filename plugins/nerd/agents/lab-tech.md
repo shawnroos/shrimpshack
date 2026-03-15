@@ -92,14 +92,16 @@ Experiments often parameterize config struct fields. Verify the fields are actua
 
 Use the Grep tool (not bash grep) to trace field usage. Adapt patterns to the project language:
 
-**Rust:** Use `Grep(pattern="field_name", glob="*.rs")` to find the declaration, then `Grep(pattern="\\.field_name", glob="*.rs")` to find reads. Exclude struct definitions, doc comments (`///`), and test modules (`#[test]`).
+**Python:** `Grep(pattern="field_name", glob="*.py")` for declaration, `Grep(pattern="\\.field_name|\\[.field_name.\\]", glob="*.py")` for reads. Exclude class definitions and test files (`test_*.py`).
 
-**TypeScript:** Use `Grep(pattern="field_name", glob="*.ts")` for declaration, then `Grep(pattern="\\.fieldName", glob="*.ts")` for reads. Exclude interface definitions and test files (`*.test.ts`).
+**TypeScript:** `Grep(pattern="field_name", glob="*.ts")` for declaration, `Grep(pattern="\\.fieldName", glob="*.ts")` for reads. Exclude interface definitions and test files (`*.test.ts`).
 
-**Python:** Use `Grep(pattern="field_name", glob="*.py")` for declaration, then `Grep(pattern="\\.field_name|\\[.field_name.\\]", glob="*.py")` for reads. Exclude class definitions and test files (`test_*.py`).
+**Go:** `Grep(pattern="FieldName", glob="*.go")` for declaration, `Grep(pattern="\\.FieldName", glob="*.go")` for reads. Exclude test files (`*_test.go`).
+
+**Rust:** `Grep(pattern="field_name", glob="*.rs")` for declaration, `Grep(pattern="\\.field_name", glob="*.rs")` for reads. Exclude struct definitions and test modules (`#[test]`).
 
 If a field is **dead or partially wired**, flag it:
-- "WARNING: `SearchConfig.boost_recent` is declared at src/search/config.rs:42 but never read in any execution path. Sweeping this parameter will produce identical results for all values."
+- "WARNING: `{ConfigType}.{field}` is declared at {file}:{line} but never read in any execution path. Sweeping this parameter will produce identical results for all values."
 - Recommend: wire the field first, then run the experiment
 
 ### Check 3: Eval Command Readiness
@@ -110,10 +112,10 @@ Many experiments need an eval harness or CLI command to measure results. Verify 
 
 | Language | Module exists? | Command runs? |
 |----------|---------------|---------------|
-| Rust | `ls src/eval/ 2>/dev/null` | `cargo run -- eval --help 2>/dev/null` |
-| TypeScript | `ls src/eval/ 2>/dev/null` | `bun run src/eval/index.ts --help 2>/dev/null` or check package.json scripts |
 | Python | `ls eval/ 2>/dev/null` | `python -m eval --help 2>/dev/null` or check for CLI entry points |
+| TypeScript | `ls src/eval/ 2>/dev/null` | `bun run src/eval/index.ts --help 2>/dev/null` or check package.json scripts |
 | Go | `ls eval/ 2>/dev/null` | `go run ./eval --help 2>/dev/null` |
+| Rust | `ls src/eval/ 2>/dev/null` | `cargo run -- eval --help 2>/dev/null` |
 
 **For each experiment's metric command:**
 1. Parse the metric command from the plan
@@ -134,10 +136,11 @@ Check that required external tools are installed:
 which sqlite3 hyperfine jq python3 2>/dev/null
 ```
 
-Check language-specific tools:
-- Rust: `cargo`, `rustc`, required crate features
+Check language-specific tools based on the detected project language:
+- Python: `python3`, `pip`/`uv`, required packages
 - TypeScript: `node`, `bun`/`npm`, required packages
-- Python: `python3`, `pip`, required packages
+- Go: `go`, required modules
+- Rust: `cargo`, `rustc`, required crate features
 
 ### Check 5: Worktree Readiness
 
@@ -169,111 +172,107 @@ When multiple experiments will run in parallel, check for conflicts:
 
 ### Check 7: Build Infrastructure
 
-For Rust projects running in batch mode (multiple parallel worktrees), redundant dependency compilation is the dominant time cost. This check profiles the build, detects cache tools, selects a strategy, and configures artifact sharing.
+For compiled-language projects running in batch mode (multiple parallel worktrees), redundant dependency compilation can be the dominant time cost. This check profiles the build, detects cache tools, selects a strategy, and configures artifact sharing.
 
 **Applicability:**
 - **Batch mode**: Full Check 7 (steps 7a-7f). This is where parallel worktrees compete for CPU recompiling the same dependencies.
-- **Loop mode**: Steps 7a-7c and 7f only (profile, detect, select, report). If sccache is detected in 7b, report the env var prefix so the loop orchestrator can use it. Skip 7d (cache warming) and 7e (config handoff) — loop runs in a single worktree.
-- **Non-Rust projects**: Report `[OK] {language}: build cache not applicable or already handled by default tooling` and skip. Go's build cache is already global. Python's pip cache is already shared. TypeScript projects benefit from `tsc --incremental` but this is a tsconfig setting, not an infra concern.
+- **Loop mode**: Steps 7a-7c and 7f only (profile, detect, select, report). If a cache tool is detected in 7b, report the env var prefix so the loop orchestrator can use it. Skip 7d (cache warming) and 7e (config handoff) — loop runs in a single worktree.
+- **Languages with built-in caching** (Go, Python, TypeScript): Report `[OK] {language}: build cache handled by default tooling` and skip. Go's build cache is global. Python's bytecode cache is automatic. TypeScript projects benefit from `tsc --incremental` (a tsconfig setting, not an infra concern).
 
 #### 7a. Build Profile
 
-Read the project DAG for existing `build_profile` infra nodes. If one exists with `status: "active"` and a fresh `codebase_hash` (compare against current hash of `Cargo.toml` + `Cargo.lock`), use the cached profile. Otherwise, measure:
+Read the project DAG for existing `build_profile` infra nodes. If one exists with `status: "active"` and a fresh `codebase_hash`, use the cached profile. Otherwise, measure using the project's build system:
 
+**Rust:**
 ```bash
-# Count dependencies (use --no-deps for speed, count entries in Cargo.lock instead)
 grep -c '^\[\[package\]\]' Cargo.lock 2>/dev/null
-
-# Time an incremental check ONLY if target/ already exists (avoids accidental cold build)
 if [ -d target ] && [ -n "$(ls -A target/ 2>/dev/null)" ]; then
     time cargo check 2>&1
 fi
-
-# Measure artifact size
 du -sh target/ 2>/dev/null
 ```
 
-Record: `dependency_count`, `build_time_incremental_seconds` (null if target/ was empty), `artifact_size_mb`.
+**Other compiled languages:** Adapt — count dependencies from lock files, time an incremental build if build artifacts exist, measure artifact size.
+
+Record: `dependency_count`, `build_time_incremental_seconds` (null if no cached artifacts), `artifact_size_mb`.
 
 #### 7b. Cache Tool Detection
 
-Check what's available on this machine:
+Check what's available on this machine. The relevant tools depend on the project language:
 
+**Rust:** sccache (compilation cache daemon)
 ```bash
-# sccache — the primary mechanism for parallel Rust builds
 which sccache 2>/dev/null && sccache --version 2>/dev/null
-
-# Check if RUSTC_WRAPPER is already set (might conflict)
-echo "$RUSTC_WRAPPER"
-
-# Check existing sccache server
+echo "$RUSTC_WRAPPER"  # check for conflicts
 sccache --show-stats 2>/dev/null
 ```
+If `RUSTC_WRAPPER` is already set to something other than sccache, flag as `[WARNING] RUSTC_WRAPPER conflict. Using artifact_copy strategy instead.`
 
-If `RUSTC_WRAPPER` is already set to something other than sccache (e.g., `cargo-clippy`), flag as `[WARNING] RUSTC_WRAPPER already set to {value}. sccache would override it. Using target_copy strategy instead.`
+**C/C++:** ccache
+```bash
+which ccache 2>/dev/null && ccache --version 2>/dev/null
+```
+
+**Go/Python/TypeScript:** No external cache tools needed — skip to 7f.
 
 #### 7c. Cache Strategy Selection
 
-For Rust projects in batch mode, select the best strategy:
+For compiled-language projects in batch mode, select the best strategy:
 
-1. **sccache available AND no RUSTC_WRAPPER conflict**: Use sccache. This is a compilation cache daemon safe for concurrent builds. Each worktree compiles independently, but sccache deduplicates identical compilation units across all worktrees.
+1. **Cache tool available** (e.g., sccache for Rust, ccache for C/C++): Use it. These cache daemons are safe for concurrent builds — each worktree compiles independently, but the cache deduplicates identical compilation units.
 
-2. **sccache unavailable**: Use target_copy. Build dependencies once in the main worktree before creating experiment worktrees, then clone `target/` to each worktree using filesystem-level copy-on-write:
-   - macOS (APFS): `cp -c -r target/ worktrees/nerd-{id}/target/`
-   - Linux (btrfs): `cp --reflink=auto -r target/ worktrees/nerd-{id}/target/`
-   - Other: `cp -r target/ worktrees/nerd-{id}/target/`
+2. **No cache tool available**: Use `artifact_copy`. Build dependencies once in the main worktree, then clone the build output directory to each worktree using copy-on-write:
+   - macOS (APFS): `cp -c -r {build_dir}/ worktrees/nerd-{id}/{build_dir}/`
+   - Linux (btrfs): `cp --reflink=auto -r {build_dir}/ worktrees/nerd-{id}/{build_dir}/`
 
-   **WARNING**: Cargo's `target/debug/.fingerprint/` contains path-dependent hashes. Copying `target/` to a different worktree path may trigger fingerprint invalidation and full recompilation. If this strategy has a FAILED `cache_verdict` in the DAG from a prior run, skip it and report `[SETUP NEEDED] Install sccache for faster parallel builds: cargo install sccache`.
+   **WARNING (Rust-specific)**: Cargo's `target/debug/.fingerprint/` contains path-dependent hashes. Copying `target/` to a different worktree path may trigger full recompilation. If this strategy has a FAILED `cache_verdict` in the DAG, skip it and recommend installing sccache.
 
-3. **Both unavailable or previously failed**: Report `[SETUP NEEDED] Install sccache for faster parallel builds: cargo install sccache`. Experiments will run with cold builds.
+3. **Both unavailable or previously failed**: Report `[SETUP NEEDED]` with install instructions for the relevant cache tool. Experiments will run with cold builds.
 
-**Read DAG for prior cache_verdict nodes.** If a strategy has `result: "FAILED"` with `status: "active"`, do not select it. Prefer strategies with `result: "SUCCESS"`.
+**Read DAG for prior cache_verdict nodes.** If a strategy has `result: "FAILED"` with `status: "active"`, do not select it.
 
 #### 7d. Cache Setup & Warming (batch mode only)
 
-If strategy is **sccache**:
+Start the cache daemon if applicable:
 ```bash
-# Start the daemon if not running
+# Example for Rust/sccache:
 sccache --start-server 2>/dev/null
-
-# Verify it responds
 sccache --show-stats 2>/dev/null
 ```
-If the server fails to start, fall back to target_copy or none. Report `[WARNING] sccache server failed to start: {error}. Falling back to cold builds.`
+If the daemon fails to start, fall back to `artifact_copy` or `none`.
 
-If strategy is **target_copy**:
+If strategy is **artifact_copy**, run the build command to populate the build output directory:
 ```bash
-# Build dependencies in main worktree to populate target/
 {build_command}
 ```
-This warming build is typically absorbed by Phase 5.1's eval scaffold creation (which also requires a build).
 
 #### 7e. Configuration Handoff (batch mode only)
 
-Write the cache configuration to `.claude/nerd.local.md` so experiment-executors can read it. Use flat keys matching the file's existing style:
+Write the cache configuration to `.claude/nerd.local.md` so experiment-executors can read it:
 
 ```yaml
-build_cache_strategy: sccache
-build_cache_env: "RUSTC_WRAPPER=sccache"
+build_cache_strategy: sccache          # or artifact_copy, incremental, none
+build_cache_env: "RUSTC_WRAPPER=sccache"  # language-specific env prefix, or empty
+build_output_dir: "target"             # language-specific: target/, dist/, build/, etc.
 build_time_warm_seconds: 12
 build_time_cold_seconds: 180
 ```
 
-If strategy is `target_copy` or `none`, set `build_cache_env` to empty string.
+If no cache env is needed, set `build_cache_env` to empty string.
 
 #### 7f. Report
 
 Use standard lab-tech status prefixes:
 
-- `[OK] Build cache: sccache active, estimated savings ~{cold - warm}s per worktree ({N} worktrees)`
-- `[FIXED] sccache server started, compilation cache enabled`
-- `[SETUP NEEDED] Install sccache for faster parallel builds: cargo install sccache`
-- `[OK] Build cache: target_copy strategy, dependencies pre-built`
-- `[WARNING] target_copy strategy previously failed (Cargo fingerprint invalidation). Install sccache for reliable caching.`
-- `[OK] Go/Python/TypeScript: build cache not applicable or already handled by default tooling`
+- `[OK] Build cache: {tool} active, estimated savings ~{cold - warm}s per worktree ({N} worktrees)`
+- `[FIXED] Cache daemon started, compilation cache enabled`
+- `[SETUP NEEDED] Install {tool} for faster parallel builds: {install_command}`
+- `[OK] Build cache: artifact_copy strategy, dependencies pre-built`
+- `[WARNING] artifact_copy strategy previously failed. Install {tool} for reliable caching.`
+- `[OK] {language}: build cache handled by default tooling`
 
-In loop mode, if sccache is detected:
-- `[OK] sccache available. Prefix build commands with: RUSTC_WRAPPER=sccache`
+In loop mode, if a cache tool is detected:
+- `[OK] {tool} available. Prefix build commands with: {env_prefix}`
 
 ## Scaffolding
 
