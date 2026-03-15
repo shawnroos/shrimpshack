@@ -23,19 +23,44 @@ Before starting, the nerd needs to establish the rules of the loop. Read the cod
 
 ### 1a: What to optimize (the metric)
 
-Based on the research focus, identify or create a measurable metric:
+Based on the research focus, identify or create a measurable metric.
 
-| Focus | Metric | How to Measure |
-|-------|--------|---------------|
-| search relevance | nDCG@10 | run eval harness against search_feedback |
-| API latency | p95 response time | run benchmark suite |
-| prompt efficiency | tokens per call | count tokens in prompt variants |
-| test coverage | line coverage % | run coverage tool |
-| bundle size | bytes | build and measure |
-| memory usage | peak RSS | run with instrumentation |
-| compile time | seconds | time the build |
+**MEASURABILITY GATE — the loop MUST NOT start without this:**
 
-If no eval harness exists for this metric, **build one first** (a minimal script that outputs a single number). This is the equivalent of autoresearch's `evaluate_bpb`.
+The metric must be:
+1. **Automated** — a shell command that outputs a number with no human judgment
+2. **Deterministic** — running it twice on the same code produces the same result (within noise)
+3. **Sensitive** — small code changes produce detectable metric changes
+4. **Fast** — runs in under 5 minutes (the loop needs hundreds of iterations)
+
+If the research focus cannot produce a metric meeting all four criteria, **stop here** and tell the user:
+
+"The nerd-loop requires an automated, deterministic metric to iterate against. '{research_focus}' doesn't have one — the quality can only be assessed through human judgment or LLM-as-judge (too noisy for iteration).
+
+For this kind of research, use `/nerd` instead — it does analytical batch analysis with plan-reviewer agents, which is the right tool for parameters that can be reasoned about but not swept empirically."
+
+**Do not attempt to use LLM-as-judge as a loop metric.** LLM evaluations have too much variance between calls to reliably distinguish "kept" from "discarded" iterations. They work for one-shot analysis (as in `/nerd`) but not for iterative hill-climbing.
+
+Examples of valid metrics:
+
+| Focus | Metric | Command |
+|-------|--------|---------|
+| search relevance | nDCG@10 | `cargo run -- eval search --dataset queries.json` |
+| API latency | p95 response time | `hyperfine --runs 100 'curl ...'` |
+| token efficiency | tokens per call | `python eval/count_tokens.py` |
+| test coverage | line coverage % | `pytest --cov --cov-report=term` |
+| bundle size | bytes | `npm run build && stat -f%z dist/index.js` |
+| compile time | seconds | `time cargo build 2>&1` |
+
+Examples of **invalid** metrics (use `/nerd` instead):
+
+| Focus | Why It Fails |
+|-------|-------------|
+| code quality | requires human judgment |
+| prompt clarity | LLM-as-judge is too noisy |
+| documentation quality | no automated measure |
+| experiment plan quality | subjective assessment |
+| architectural elegance | not quantifiable |
 
 ### 1b: What can be modified (the scope)
 

@@ -195,6 +195,8 @@ Return structured JSON with themed parameter groups.
 - **One theme**: Skip Phase 4, proceed directly with the single theme.
 - **2-6 themes**: Continue to Phase 4.
 
+**Note:** The context-scanner classifies each parameter as experimentable (`parameter_sweep`, `comparison`, `ablation`) or analytical (`experiment_type: "analytical"`). Display this in the theme presentation so the user knows which findings can be swept vs reasoned about.
+
 ## Phase 4: Theme Selection
 
 Present discovered themes to the user. Skip in scheduled mode (auto-select all).

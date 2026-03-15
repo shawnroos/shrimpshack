@@ -155,7 +155,28 @@ Launch the parameter-scanner agent to crawl the codebase:
 Agent(subagent_type="nerd:parameter-scanner", prompt="Scan {cwd} for tunable parameters. Topic: {user_topic or 'all'}. {scanner_dag_summary}. Return structured JSON list.", run_in_background=false)
 ```
 
-Present findings. Use AskUserQuestion: "The nerd found {N} research opportunities. Which ones should it investigate?"
+**Classify findings by measurability:**
+
+Split the scanner results into two groups:
+- **Experimentable**: Parameters in executable code where a shell command can measure the effect (has a valid `experiment_type` like `parameter_sweep`, `comparison`, or `ablation`)
+- **Analytical**: Parameters in non-executable files or where the only evaluation is human judgment (has `experiment_type: "analytical"`)
+
+Present findings grouped by type:
+
+```
+Experimentable ({N}): Can be swept with automated metrics
+  E001: {title} — {metric}
+  E002: {title} — {metric}
+
+Analytical ({N}): Can be reasoned about but not swept
+  E010: {title} — no automated metric
+  E011: {title} — requires human judgment
+```
+
+Use AskUserQuestion: "The nerd found {N} research opportunities ({E} experimentable, {A} analytical). Which ones should it investigate?"
+
+Experimentable findings proceed to Phase 3 (experiment design → worktree execution).
+Analytical findings proceed to Phase 3 but use the plan-reviewer for **analytical review** — generating competing theories and reasoned recommendations without building sweep harnesses.
 
 Add selections to backlog.
 
