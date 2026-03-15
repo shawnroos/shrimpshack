@@ -1,6 +1,6 @@
 ---
 name: context-scanner
-model: sonnet
+model: haiku
 color: white
 tools: ["Read", "Glob", "Grep", "Bash"]
 description: "Scans a scoped set of files for tunable parameters and clusters results into research themes. Used by /nerd-this for context-scoped experiment discovery."

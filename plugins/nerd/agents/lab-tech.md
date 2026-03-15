@@ -1,6 +1,6 @@
 ---
 name: lab-tech
-model: sonnet
+model: haiku
 color: orange
 tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
 description: "Pre-flight validation agent that checks whether the lab is ready before experiments run. Verifies data access (WAL-mode, file permissions, exports), confirms config fields are actually wired in execution paths, scaffolds missing eval infrastructure (export scripts, test fixtures, datasets), and reports readiness. Use before experiment execution or before starting a nerd-loop to confirm the environment can produce valid results."

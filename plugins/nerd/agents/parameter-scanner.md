@@ -1,6 +1,6 @@
 ---
 name: parameter-scanner
-model: sonnet
+model: haiku
 color: cyan
 tools: ["Read", "Glob", "Grep", "Bash"]
 description: "Scans codebases for tunable parameters, hardcoded thresholds, magic numbers, and empirical optimization opportunities. Use when nerd needs to discover what experiments to run."
