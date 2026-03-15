@@ -201,8 +201,8 @@ THE LOOP (run forever):
    it has found the local optimum. That's 15 consecutive failed iterations across
    3 different strategic approaches.
 
-7. REFLECT: After every 5 iterations (regardless of discard count), re-read
-   the experiment log.
+7. REFLECT: After every 3 iterations (regardless of discard count), AND at every
+   phase transition (normal→pivot, pivot→escalate), re-read the experiment log.
    - What patterns emerge? (Do all architecture changes help? Do parameter tweaks plateau?)
    - What's the ratio of kept to discarded?
    - Are the improvements getting smaller? (diminishing returns)

@@ -19,9 +19,11 @@ recommendation: keep|change|investigate
 ```
 
 ## Recommendation Logic
-- **KEEP**: best config == current, OR improvement < 1%
-- **CHANGE**: best config != current AND improvement >= 1% (include exact code diff)
-- **INVESTIGATE**: insufficient data or inconclusive metric
+- **KEEP**: best config == current, OR improvement < 3% (below typical experiment noise floor)
+- **CHANGE**: best config != current AND improvement >= 3% (include exact code diff)
+- **INVESTIGATE**: insufficient data, inconclusive metric, or improvement 1-3% (borderline — may be noise)
+
+The 3% threshold reflects that LLM-evaluated metrics and small-sample experiments typically have noise floors of 1-2%. Experiments can override this with a per-experiment `significance_threshold` in the plan if they have tighter measurement (e.g., latency benchmarks with >1000 samples may use 1%).
 
 ## Writing Style
 - Lead with recommendation, not methodology

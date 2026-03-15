@@ -37,11 +37,19 @@ if [ ! -f .claude/nerd.local.md ]; then
     else lang="unknown"; test_cmd="echo 'no tests configured'"; build_cmd="echo 'no build configured'"; fi
 ```
 
+Derive `max_parallel_experiments` from the hardware profile:
+```bash
+memory_gb=$(grep "memory_gb" ~/.claude/plugins/nerd/hardware-profile.yaml 2>/dev/null | awk '{print $2}')
+max_parallel=$(( (${memory_gb:-16} - 4) / 2 ))
+[ "$max_parallel" -lt 1 ] && max_parallel=1
+[ "$max_parallel" -gt 6 ] && max_parallel=6
+```
+
 Create `.claude/nerd.local.md` with defaults (still inside the `if` block — only when no config exists):
 
 ```yaml
 ---
-max_parallel_experiments: 4
+max_parallel_experiments: {max_parallel}
 merge_strategy: auto
 auto_cleanup_worktrees: true
 language: {lang}
@@ -59,15 +67,6 @@ fi
 ```
 
 This closes the `if [ ! -f .claude/nerd.local.md ]` block — the config file and gitignore entry are only created on first run.
-
-**Intern Pre-flight (if enabled):**
-
-```bash
-# Check if intern is configured
-INTERN_ENABLED=$(grep -A1 "intern:" .claude/nerd.local.md 2>/dev/null | grep "enabled: true" | wc -l | tr -d ' ')
-```
-
-If `INTERN_ENABLED == 1`: Execute the Pre-Run Health Check defined in `Skill(skill="nerd:intern-delegation")`, Phase 0. Read intern config from `.claude/nerd.local.md` and state from `.nerd/intern/state.json`. If state.json exists but fails JSON parsing, treat as if intern is not configured for this run and log warning. Store the resulting `INTERN_AVAILABLE`, config values, and task modes.
 
 **Detect project:**
 ```bash
@@ -168,8 +167,6 @@ Use AskUserQuestion to confirm. If the user wants to adjust:
 - They can type a topic to re-run scope resolution with a narrower focus
 
 ## Phase 3: Thematic Parameter Scan
-
-**Intern delegation (parameter-detection):** If `INTERN_AVAILABLE == 1`, delegate per `Skill(skill="nerd:intern-delegation")` — check task mode, call intern if live/shadow, validate, gate on confidence, log to delegation log. If run failure counter > 3, skip remaining intern calls.
 
 Launch the context-scanner agent with the confirmed scope:
 
@@ -393,26 +390,6 @@ Loop Candidates (ranked by potential):
 ```
 
 If running in scheduled mode (`NERD_SCHEDULED=1`) and the schedule window has time remaining, automatically launch `/nerd-loop` on the top candidate.
-
-## Phase 10.5: Training Data Extraction (if enabled)
-
-If `intern.collect_training_data: true` in config (or `intern.enabled: true`):
-
-Extract training examples from Claude's outputs in this run. Same format and protocol as `/nerd` Phase 7.5 — see `Skill(skill="nerd:intern-delegation")` for the delegation protocol and training data format.
-
-| Task | Input | Output | Source |
-|------|-------|--------|--------|
-| parameter-detection | Source file contents | context-scanner's JSON results | Phase 3 |
-| result-classification | Experiment results JSON | report-compiler's verdict | Phase 10 |
-| context-extraction | Source file + function | context-scanner's rationale field | Phase 3 |
-
-Include `reasoning` field — capture Claude's chain-of-thought. Dedup with 24-hour time window. Append to `.nerd/intern/training-data/{task_type}.jsonl`.
-
-## Phase 10.6: Intern State Update (if enabled)
-
-If `INTERN_AVAILABLE == 1` and delegation occurred this run:
-
-Same protocol as `/nerd` Phase 7.6 — read delegation log for this run_id, update shadow windows, check promotion/demotion/circuit breaker, write updated `.nerd/intern/state.json` atomically.
 
 ## Error Handling
 

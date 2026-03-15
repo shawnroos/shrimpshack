@@ -32,14 +32,13 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null
 
 Classify the hardware:
 
-| Hardware | Training Variant | Expected Performance |
-|----------|-----------------|---------------------|
-| Apple Silicon M1 (16GB) | autoresearch-mlx | ~3-4 experiments/hour |
-| Apple Silicon M1 Pro/Max (32GB+) | autoresearch-mlx | ~6-8 experiments/hour |
-| Apple Silicon M2/M3/M4 | autoresearch-mlx | ~8-12 experiments/hour |
-| NVIDIA GPU (24GB+) | autoresearch (original) | ~8-12 experiments/hour |
-| NVIDIA GPU (80GB+, H100) | autoresearch (original) | ~12+ experiments/hour |
-| No GPU / CPU only | Skip LLM training | Codebase experiments only |
+| Hardware | Training Variant |
+|----------|-----------------|
+| Apple Silicon (any) | autoresearch-mlx |
+| NVIDIA GPU (24GB+) | autoresearch (original) |
+| No GPU / CPU only | Skip LLM training — codebase experiments only |
+
+Note: actual experiments-per-hour is measured during calibration (Step 3), not estimated from chip model. Different workloads (fast test suites vs heavy compilation) vary too much for pre-calibration estimates to be useful.
 
 ## Step 2: Install Nerd Training
 
@@ -235,50 +234,6 @@ cache_tools:
   ccache: null                         # path if installed, relevant for C/C++
 
 calibrated_at: "2026-03-14T00:00:00Z"
-```
-
-## Step 4.5: Detect Intern Capability
-
-Check whether this machine can run a local LLM intern:
-
-```bash
-# Check for LLM serving providers
-OLLAMA_PATH=$(which ollama 2>/dev/null)
-MLX_AVAILABLE=$(python3 -c "import mlx_lm" 2>/dev/null && echo "true" || echo "false")
-LLAMA_CPP_PATH=$(which llama-server 2>/dev/null || which llama.cpp 2>/dev/null)
-```
-
-Determine recommended models based on RAM:
-
-| RAM | Max Model Size | Recommended Intern Models |
-|-----|---------------|--------------------------|
-| 8GB | ~1B Q4_K_M | Gemma 3 1B, Qwen 3.5 0.8B |
-| 16GB | ~4B Q4_K_M | Qwen 3.5 4B, Phi-4 Mini |
-| 32GB+ | ~9B Q4_K_M | Qwen 3.5 9B, StarCoder 2 7B |
-| 64GB+ | ~32B Q4_K_M | Qwen 2.5 Coder 32B |
-
-Add to hardware profile under `intern:` key:
-
-```yaml
-intern:
-  ollama_available: true
-  ollama_path: /usr/local/bin/ollama
-  mlx_available: false
-  llama_cpp_available: false
-  gpu_type: metal          # metal, cuda, cpu
-  recommended_models:
-    - qwen3.5-4b-q4
-    - phi-4-mini-q4
-  max_model_size_gb: 4
-```
-
-**Do NOT auto-enable the intern.** Just inform:
-
-```
-Local LLM Intern: Your hardware supports a local model (up to ~{max_size}).
-  Providers detected: {list}
-  Recommended: {top model}
-  Run /nerd-intern setup to configure one.
 ```
 
 ## Step 5: Verify and Report

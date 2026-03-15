@@ -50,10 +50,12 @@ effective_build_time = build_time_warm_seconds   # from nerd.local.md (e.g., 12s
 effective_build_time = build_time_seconds         # from hardware profile (e.g., 180s)
 
 # Adjusted rate (if hardware profile has per-experiment timing):
-adjusted_experiments_per_hour = 60 / ((effective_build_time + test_time_seconds + 60) / 60)
+# Use measured agent_overhead_seconds from hardware profile if available, else default 60s
+agent_overhead = agent_overhead_seconds from hardware profile, or 60 if not yet measured
+adjusted_experiments_per_hour = 60 / ((effective_build_time + test_time_seconds + agent_overhead) / 60)
 ```
 
-Use `adjusted_experiments_per_hour` for capacity calculation when cache config is present. The `+ 60` accounts for agent overhead per experiment. Display the adjustment in the confirmation output.
+Use `adjusted_experiments_per_hour` for capacity calculation when cache config is present. The overhead value is self-correcting — after each batch run, the report-compiler computes median actual overhead from DAG timestamps and writes it back to the hardware profile. Display the adjustment in the confirmation output.
 
 ## Register in Global Queue
 
@@ -75,8 +77,8 @@ queue:
 ```
 
 **Concurrency rules** (enforced by the runner):
-- `max_codebase_experiments: 4` — total parallel across ALL projects
-- `max_per_project: 2` — prevent one project hogging the window
+- `max_codebase_experiments`: derived from hardware profile — `floor((memory_gb - 2) / 2)`, clamped to 2-8. Batch mode uses a smaller reserve (2GB) than interactive (4GB) since no user workload competes. Falls back to 4 if no hardware profile.
+- `max_per_project`: equals `max_codebase_experiments` when only one project is queued (no capacity waste for solo developers); otherwise `ceil(max_codebase_experiments / active_project_count)` for fair sharing.
 - Round-robin within priority tiers for fairness across projects
 
 Show global queue state before confirming:
@@ -130,8 +132,12 @@ Never ask questions — make all decisions autonomously.
     else
         log "WARNING: claude exited with code $exit_code"
         if [ "$attempt" -lt "$max_attempts" ]; then
-            log "Retrying in 30 seconds..."
-            sleep 30
+            # Exponential backoff with jitter: ~10s, ~45s
+            base_delay=$((10 * (2 ** (attempt - 1))))
+            jitter=$((RANDOM % (base_delay / 2 + 1)))
+            delay=$((base_delay + jitter))
+            log "Retrying in ${delay} seconds (backoff attempt $attempt)..."
+            sleep "$delay"
         else
             log "ERROR: All $max_attempts attempts failed"
         fi
