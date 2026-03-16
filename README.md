@@ -1,6 +1,6 @@
-# shawnroos-plugins
+# The Shrimp Shack
+Tasty crustacey morsels for Claude by [@shawnroos](https://github.com/shawnroos).
 
-Claude Code plugin marketplace by [@shawnroos](https://github.com/shawnroos).
 
 ## Plugins
 
