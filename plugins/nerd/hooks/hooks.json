@@ -5,7 +5,7 @@
       "hooks": [
         {
           "type": "prompt",
-          "prompt": "Check .claude/nerd.local.md for the research backlog. If it has 'proposed' entries, mention: 'Nerd: {N} proposals in backlog. Run /nerd to start.' Also check for stale 'running' entries — if any experiment has status 'running' but no corresponding worktree exists (check with 'git worktree list | grep nerd-'), warn: 'Nerd: {N} experiments marked running but worktrees missing (possible crashed session). Run /nerd to recover.' If no backlog file exists, say nothing."
+          "prompt": "Check .claude/nerd.local.md for the research backlog. If it has 'proposed' entries, mention: 'Nerd: {N} proposals in backlog. Run /nerd to start.' Also check for stale 'running' entries — if any experiment has status 'running' but no corresponding worktree exists (check with 'git worktree list | grep nerd-'), warn: 'Nerd: {N} experiments marked running but worktrees missing (possible crashed session). Run /nerd to recover.' If no backlog file exists, say nothing. Also check intern state: if ~/.claude/plugins/nerd/intern/state.json exists, read it. If any task was recently promoted (promoted_at within last 7 days), mention: 'Intern: {task} promoted to {mode}!' If intern endpoint is configured but health check fails, mention: 'Intern: endpoint unreachable.'"
         }
       ]
     }

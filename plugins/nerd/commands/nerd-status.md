@@ -80,7 +80,7 @@ curl -s -m 5 "${BASE_URL}/models" 2>/dev/null
 
 ```bash
 # Training data counts
-for task in parameter-detection result-classification context-extraction; do
+for task in parameter-detection result-classification context-extraction perf-area-mapping perf-classification; do
   wc -l < ".nerd/intern/training-data/${task}.jsonl" 2>/dev/null || echo "0"
 done
 ```

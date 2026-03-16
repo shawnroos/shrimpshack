@@ -68,14 +68,23 @@ fi
 
 This closes the `if [ ! -f .claude/nerd.local.md ]` block — the config file and gitignore entry are only created on first run.
 
-**Intern Pre-flight (if enabled):**
+**Intern Pre-flight (global default, local override):**
 
 ```bash
-# Check if intern is configured
-INTERN_ENABLED=$(grep -A1 "intern:" .claude/nerd.local.md 2>/dev/null | grep "enabled: true" | wc -l | tr -d ' ')
+# Check intern config — project-local first, then global
+if grep -q "intern:" .claude/nerd.local.md 2>/dev/null; then
+  INTERN_DISABLED=$(grep -A5 "intern:" .claude/nerd.local.md 2>/dev/null | grep "enabled: false" | wc -l | tr -d ' ')
+  [ "$INTERN_DISABLED" = "1" ] && INTERN_SOURCE="none" || INTERN_SOURCE="project"
+elif [ -f ~/.claude/plugins/nerd/intern/config.yaml ]; then
+  INTERN_SOURCE="global"
+else
+  INTERN_SOURCE="none"
+fi
 ```
 
-If `INTERN_ENABLED == 1`: Execute the Pre-Run Health Check defined in `Skill(skill="nerd:intern-delegation")`, Phase 0. Read intern config from `.claude/nerd.local.md` and state from `.nerd/intern/state.json`. If state.json exists but fails JSON parsing, treat as if intern is not configured for this run and log warning. Store the resulting `INTERN_AVAILABLE`, config values, and task modes.
+If `INTERN_SOURCE != "none"`: Execute the Pre-Run Health Check defined in `Skill(skill="nerd:intern-delegation")`, Phase 0. Read config from the resolved source. Read state from the resolved source. **Always-shadow:** intern shadows ALL tasks on every run — see `Skill(skill="nerd:intern-delegation")` for the always-shadow protocol.
+
+Store: `INTERN_AVAILABLE`, `INTERN_SOURCE`, config values, and task modes.
 
 **Detect project:**
 ```bash
@@ -175,11 +184,13 @@ Use AskUserQuestion to confirm. If the user wants to adjust:
 - They can type paths to remove (e.g., `- src/tests/`)
 - They can type a topic to re-run scope resolution with a narrower focus
 
-## Phase 3: Thematic Parameter Scan
+## Phase 3: Thematic Scan (Parameters + Performance)
 
 **Intern delegation (parameter-detection):** If `INTERN_AVAILABLE == 1`, delegate per `Skill(skill="nerd:intern-delegation")` — check task mode, call intern if live/shadow, validate, gate on confidence, log to delegation log. If run failure counter > 3, skip remaining intern calls.
 
-Launch the context-scanner agent with the confirmed scope:
+### Phase 3a: Context Scanner + Performance Explorer (parallel)
+
+Launch both scans in parallel on the scoped files:
 
 ```
 Agent(subagent_type="nerd:context-scanner", prompt="
@@ -197,14 +208,50 @@ Start IDs from: {computed_start_id}
 (Before this Agent call, compute the start ID: parse all `id:` fields in the backlog YAML, extract the numeric suffix from each (e.g., E042 → 42), take the maximum, add 1, zero-pad to 3 digits, prefix with E. If backlog is empty or has no valid IDs, use E001.)
 
 Return structured JSON with themed parameter groups.
-", run_in_background=false)
+", run_in_background=true)
+
+Agent(subagent_type="nerd:perf-explorer", prompt="
+Map these scoped files for performance research:
+
+Files:
+{scoped_file_list — one file per line}
+
+Topic: {user_topic or 'inferred from session context'}
+
+Only explore the provided files, but trace calls that leave the scope to identify I/O boundaries.
+Return structured JSON area map.
+", run_in_background=true)
 ```
+
+Wait for both to complete. Store: parameter themes, performance area map.
+
+### Phase 3b: Performance Specialist Dispatch (after explorer)
+
+If the perf-explorer found areas of interest, use **judgment** to decide which specialist agents to launch based on the area map's `characteristics`. Same guidance as `/nerd` Phase 2b:
+
+| Characteristic | Category Parameter |
+|---|---|
+| `iteration_heavy`, `complex_logic` | `nerd:perf-specialist` with `category=algorithmic` |
+| `io_boundary` | `nerd:perf-specialist` with `category=io` |
+| `allocation_hot` | `nerd:perf-specialist` with `category=memory` |
+| `repeated_computation` | `nerd:perf-specialist` with `category=caching` |
+| `network_boundary` | `nerd:perf-specialist` with `category=network` |
+
+Launch selected specialists in parallel, passing relevant areas. Wait for completion.
+
+Compute start IDs for performance findings: continue from highest ID used by context-scanner.
+
+### Phase 3c: Combine Results
+
+Merge parameter themes and performance findings. Performance findings are grouped into their own theme(s) by category (e.g., "I/O Performance", "Algorithmic Complexity").
 
 ### Handle Results
 
-- **Zero parameters found**: "No tunable parameters found in your scoped files. Try `/nerd` for a full codebase scan, or adjust your scope with `/nerd-this <broader topic>`." — Stop.
-- **One theme**: Skip Phase 4, proceed directly with the single theme.
-- **2-6 themes**: Continue to Phase 4.
+- **Zero parameters AND zero performance findings**: "No research opportunities found in your scoped files. Try `/nerd` for a full codebase scan, or adjust your scope with `/nerd-this <broader topic>`." — Stop.
+- **One theme total**: Skip Phase 4, proceed directly with the single theme.
+- **2+ themes**: Continue to Phase 4.
+
+**Note:** The context-scanner classifies each parameter as experimentable (`parameter_sweep`, `comparison`, `ablation`) or analytical (`experiment_type: "analytical"`). Display this in the theme presentation so the user knows which findings can be swept vs reasoned about.
 
 ## Phase 4: Theme Selection
 
@@ -243,16 +290,25 @@ cat .claude/nerd.local.md 2>/dev/null
 
 ### Deduplication
 
-For each parameter in the selected themes:
+For each finding in the selected themes:
+
+**Parameter findings:**
 1. Check if the backlog already contains an entry with the same `file` AND `parameter` (variable/constant name)
 2. If no `parameter` name match, fall back to matching by `file` AND `line` (approximate — line numbers shift as code changes)
 3. If a match exists, skip the duplicate (the existing entry may already be `planned` or `running`)
 4. If no match, add the new entry
 
+**Performance findings:**
+1. Check if the backlog already contains an entry with the same `dedup_key` (format: `file:function:metric_type`)
+2. Functions are more stable than line numbers — use `file` + `function` + `metric` as the dedup key
+3. If a match exists, skip the duplicate
+4. If no match, add the new entry
+
 ### Add Entries
 
-For each non-duplicate parameter, create a backlog entry:
+For each non-duplicate finding, create a backlog entry:
 
+**Parameter findings:**
 ```yaml
 - id: {parameter.id}
   title: "{parameter.title}"
@@ -270,6 +326,28 @@ For each non-duplicate parameter, create a backlog entry:
   theme: "{theme.name}"
 ```
 
+**Performance findings:**
+```yaml
+- id: {finding.id}
+  title: "{finding.title}"
+  research_type: performance
+  category: {finding.category}
+  file: {finding.file}
+  function: {finding.function}
+  line: {finding.line}
+  current_behavior: "{finding.current_behavior}"
+  proposed_improvement: "{finding.proposed_improvement}"
+  impact: {finding.impact}
+  metric: {finding.metric}
+  metric_command: "{finding.metric_command}"
+  metric_direction: {finding.metric_direction}
+  experiment_type: {finding.experiment_type}
+  dedup_key: "{finding.dedup_key}"
+  status: proposed
+  source: nerd-this
+  theme: "{theme.name}"
+```
+
 ### Update Backlog
 
 Edit `.claude/nerd.local.md` to append new entries to the `backlog:` array.
@@ -278,10 +356,16 @@ Report: "Added {N} experiments to backlog across {T} themes. ({S} skipped as dup
 
 ## Phase 6: Experiment Design
 
-For each `proposed` entry from the new batch, launch plan-reviewer agents **in parallel**:
+For each `proposed` entry from the new batch, launch plan-reviewer agents **in parallel**. Adapt the prompt based on whether the entry is a parameter or performance finding:
 
+**Parameter entries:**
 ```
 Agent(subagent_type="nerd:plan-reviewer", prompt="Create experiment plan for {entry.title}. Parameter: {entry.parameter} at {entry.file}:{entry.line}. Current value: {entry.current_value}. Sweep range: {entry.sweep_range}. Write to docs/research/plans/{entry.id}-plan.md.", run_in_background=true)
+```
+
+**Performance entries** (entries with `research_type: performance`):
+```
+Agent(subagent_type="nerd:plan-reviewer", prompt="Create experiment plan for {entry.title}. Performance finding at {entry.file}:{entry.function} (line {entry.line}). Current behavior: {entry.current_behavior}. Proposed improvement: {entry.proposed_improvement}. Metric: {entry.metric} ({entry.metric_direction}). Metric command: {entry.metric_command}. Category: {entry.category}. Write to docs/research/plans/{entry.id}-plan.md.", run_in_background=true)
 ```
 
 Update status: `proposed` → `planned`. Wait for all plan agents.
@@ -303,6 +387,7 @@ Project root: {cwd}. Language: {lang}. Test command: {test_cmd}. Build command: 
 Project DAG path: {dag_path}. Max parallel experiments: {max_parallel_experiments}.
 Run all checks: data access, config wiring, eval commands, tool availability, worktree readiness, cross-experiment conflicts, and build infrastructure (Check 7).
 Check 7: Profile the build, detect sccache, select cache strategy, set up caching, write build_cache config to .claude/nerd.local.md. Read infra nodes from the DAG for prior cache verdicts.
+If any experiments have research_type: performance, also run Check 8 (Performance Profiling Readiness): 8a tool availability for profiling tools, 8b determinism validation of metric commands, 8c build mode check for debug symbols, 8d build cache awareness for profiling flags.
 Scaffold any missing infrastructure (export scripts, test fixtures). Do NOT create the eval module — Phase 8.1 handles that.
 Write report to docs/research/lab-readiness-batch-{timestamp}.md.
 ", run_in_background=false)
@@ -402,25 +487,38 @@ Loop Candidates (ranked by potential):
 
 If running in scheduled mode (`NERD_SCHEDULED=1`) and the schedule window has time remaining, automatically launch `/nerd-loop` on the top candidate.
 
-## Phase 10.5: Training Data Extraction (if enabled)
+## Phase 10.5: Training Data Extraction (ALWAYS runs)
 
-If `intern.collect_training_data: true` in config (or `intern.enabled: true`):
-
-Extract training examples from Claude's outputs in this run. Same format and protocol as `/nerd` Phase 7.5 — see `Skill(skill="nerd:intern-delegation")` for the delegation protocol and training data format.
+**Always runs** — same as `/nerd` Phase 7.5. Dual-writes to project-local AND global corpus regardless of intern config.
 
 | Task | Input | Output | Source |
 |------|-------|--------|--------|
-| parameter-detection | Source file contents | context-scanner's JSON results | Phase 3 |
-| result-classification | Experiment results JSON | report-compiler's verdict | Phase 10 |
-| context-extraction | Source file + function | context-scanner's rationale field | Phase 3 |
+| parameter-detection | Source file contents | context-scanner's JSON results | Phase 3a |
+| result-classification | Experiment results JSON (parameter OR performance) | report-compiler's verdict | Phase 10 |
+| context-extraction | Source file + function | context-scanner's or perf-specialist's rationale | Phase 3a/3b |
+| perf-area-mapping | Source file contents | perf-explorer's area map entries | Phase 3a |
+| perf-classification | Performance experiment results JSON | report-compiler's perf verdict | Phase 10 |
 
-Include `reasoning` field — capture Claude's chain-of-thought. Dedup with 24-hour time window. Append to `.nerd/intern/training-data/{task_type}.jsonl`.
+```bash
+mkdir -p .nerd/intern/training-data
+mkdir -p ~/.claude/plugins/nerd/intern/training-data
+# Append to both: .nerd/intern/training-data/{task}.jsonl AND ~/.claude/plugins/nerd/intern/training-data/{task}.jsonl
+```
 
-## Phase 10.6: Intern State Update (if enabled)
+Include `reasoning` field and `project` field. Dedup with 24-hour time window.
+
+## Phase 10.6: Intern State Update and Auto-Eval (if enabled)
 
 If `INTERN_AVAILABLE == 1` and delegation occurred this run:
 
-Same protocol as `/nerd` Phase 7.6 — read delegation log for this run_id, update shadow windows, check promotion/demotion/circuit breaker, write updated `.nerd/intern/state.json` atomically.
+Same protocol as `/nerd` Phase 7.6 — three sub-steps:
+- **10.6a:** Update shadow windows and check promotion/demotion
+- **10.6b:** Auto-eval on accumulated training data (if 10+ new examples since last eval — reuse shadow outputs from this run, score against Claude's training data, update accuracy)
+- **10.6c:** Write state atomically
+
+## Phase 10.7: Intern Performance Summary
+
+If `INTERN_AVAILABLE == 1` and any delegation occurred, display intern performance summary. Same format as `/nerd` Phase 8.5 — show per-task agreement counts, mode changes, accuracy trends from auto-eval, shadow window progress, latency, and training examples collected.
 
 ## Error Handling
 

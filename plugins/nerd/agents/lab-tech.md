@@ -382,6 +382,85 @@ Lab Readiness: 2/3 experiments ready
   Action needed: Wire SearchConfig.boost_recent before running E003
 ```
 
+### Check 8: Performance Profiling Readiness
+
+**Reference:** Load `Skill(skill="nerd:performance-analysis")` for the profiling tool matrix and metric command templates.
+
+**Applicability:** Only run this check when the experiment batch contains findings with `research_type: "performance"`. Skip entirely for parameter-only batches.
+
+#### 8a. Profiling Tool Availability
+
+Check that profiling tools required by the performance experiments are available. The required tools depend on the project language AND the experiment categories:
+
+| Category | Rust | Python | TypeScript/Node | Go |
+|----------|------|--------|-----------------|-----|
+| Benchmark | `criterion`, `hyperfine` | `pytest-benchmark` | project bench suite | `go test -bench` |
+| CPU Profile | `cargo flamegraph`, `perf` | `py-spy`, `scalene` | `clinic.js`, `0x` | `pprof` |
+| Memory | `heaptrack` (Linux), `leaks` (macOS) | `tracemalloc`, `memory_profiler` | `--inspect`, `clinic heapprofile` | `pprof` (heap) |
+| I/O | `strace`/`dtrace` | `py-spy` | `clinic doctor` | `trace` |
+| Network | `curl`, `wrk`, `k6` | `locust` | `autocannon` | `vegeta` |
+
+```bash
+# Check common profiling tools
+which hyperfine wrk k6 2>/dev/null
+# Check language-specific tools based on detected language
+```
+
+Report each tool as:
+- `[OK] {tool} available at {path}`
+- `[SETUP NEEDED] {tool} not found. Install: {install_command}`
+
+Missing profiling tools are WARNINGs, not BLOCKERs — experiments can often fall back to simpler measurement (e.g., `time` instead of `hyperfine`).
+
+#### 8b. Determinism Validation
+
+Performance metrics must be reproducible for loop iteration to be meaningful. Run the metric command 4 times: discard the first run (cold-start bias from JIT, filesystem cache warming, etc.), then use the remaining 3 runs to check the coefficient of variation:
+
+```bash
+# Run metric command 4x, extract the numeric result each time
+# DISCARD the first result (warm-up run)
+# From runs 2-4: compute mean, stddev, coefficient_of_variation = stddev/mean
+```
+
+- **CV < 5%**: `[OK] Metric is stable (CV={cv}%). Safe for loop iteration.`
+- **CV 5-15%**: `[WARNING] Metric has moderate variance (CV={cv}%). Results may be noisy. Consider more runs or a quieter machine.`
+- **CV > 15%**: `[WARNING] Metric is unstable (CV={cv}%). Loop iteration will struggle to detect improvements. Investigate: background processes, disk I/O, thermal throttling.`
+
+#### 8c. Build Mode Check
+
+Performance profiling usually needs optimized builds, but flamegraphs need debug symbols. Check for the right build configuration:
+
+**Rust:**
+```bash
+# Check for release profile with debug symbols
+grep -A3 '\[profile.release\]' Cargo.toml 2>/dev/null | grep 'debug'
+```
+- If `debug = true` or `debug = 2` in `[profile.release]`: `[OK] Release build has debug symbols`
+- If no debug in release profile: `[WARNING] Release profile has no debug symbols. Flamegraphs will lack function names. Add debug = true to [profile.release] in Cargo.toml.`
+
+**Go:** Debug symbols included by default in Go builds. `[OK] Go: debug symbols included by default.`
+
+**Python/TypeScript:** Not applicable (interpreted). `[OK] {language}: no build mode concerns.`
+
+#### 8d. Build Cache Awareness for Profiling
+
+Profiling builds may need different flags than regular builds. Check that the build cache strategy from Check 7 accounts for this:
+
+- If profiling requires special flags (e.g., `RUSTFLAGS="-C debuginfo=2"`), these MUST be inlined as environment variable prefixes, not set via `export` (Claude Code shell state limitation).
+- Check for existing build artifacts appropriate for profiling (release build with debug symbols).
+- If the regular build cache (sccache) is active, verify it handles profiling flags correctly.
+
+```bash
+# Check if profiling-appropriate build artifacts exist
+# Rust: target/release/ with debug symbols
+# Go: existing binaries
+ls -la target/release/ 2>/dev/null | head -3
+```
+
+Report:
+- `[OK] Profiling build artifacts present. Ready for benchmarks.`
+- `[SETUP NEEDED] No profiling build artifacts. First benchmark will include a cold build. Inline env var prefix: {prefix}`
+
 ## Error Handling
 
 - If a check fails to run (e.g., `sqlite3` not installed), report it as a blocker with install instructions

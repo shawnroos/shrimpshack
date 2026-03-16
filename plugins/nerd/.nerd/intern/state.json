@@ -1,26 +1,32 @@
 {
   "tasks": {
     "parameter-detection": {
-      "mode": "disabled",
-      "accuracy": 0.0,
+      "mode": "shadow",
+      "accuracy": 0.96,
       "shadow_window": [],
       "promoted_at": null
     },
     "result-classification": {
-      "mode": "disabled",
-      "accuracy": 0.0,
+      "mode": "shadow",
+      "accuracy": 0.60,
       "shadow_window": [],
       "promoted_at": null
     },
     "context-extraction": {
       "mode": "disabled",
-      "accuracy": 0.0,
+      "accuracy": 0.46,
       "shadow_window": [],
       "promoted_at": null
     }
   },
   "last_run": null,
   "lifetime_claude_calls_saved": 0,
-  "setup_timestamp": "2026-03-15T20:05:00Z",
-  "gpu_type": "metal"
+  "setup_timestamp": "2026-03-15T22:00:00Z",
+  "gpu_type": "metal",
+  "aptitude_test": {
+    "model": "qwen3:4b",
+    "provider": "ollama",
+    "timestamp": "2026-03-15T22:00:00Z",
+    "notes": "PD: 0.96 F1 (perfect on 3/5, missed STALE_WHILE_REVALIDATE, false positive RANDOM_SEED). RC: 0.60 (3/5 correct, confused neutral for improved). CE: 0.46 Jaccard (summaries are good but Jaccard is strict on vocabulary). Avg latency 80-250s per call on M1 Pro with qwen3:4b."
+  }
 }

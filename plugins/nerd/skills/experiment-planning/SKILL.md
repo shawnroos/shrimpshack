@@ -35,6 +35,20 @@ time = combos * data_size * cost_per_eval
 if time > 1 hour: reduce ranges or use random search
 ```
 
+## Analytical vs Experimental
+
+Not all parameters can be swept. Parameters in non-executable files (markdown agent prompts, documentation, config comments) or those requiring human judgment are **analytical** — they can be reasoned about with competing theories but cannot be iterated in a nerd-loop.
+
+For analytical parameters:
+- Still generate competing theories and testable predictions
+- Recommendations come from reasoning and analogies, not measured data
+- Do NOT propose sweep harnesses or eval commands
+- Mark as `experiment_type: "analytical"` in the plan
+
+For experimentable parameters:
+- Full sweep harness with automated metric
+- The metric must be: automated (shell command → number), deterministic, sensitive to changes, and fast (<5 min)
+
 ## Anti-Patterns
 - Single-hypothesis experiments (only testing "is the parameter optimal?")
 - Sweeping dead code parameters (verify the hot path first)
@@ -42,3 +56,4 @@ if time > 1 hour: reduce ranges or use random search
 - No ablation (never tested if the feature matters at all)
 - Insufficient data (<30 points per config = noise)
 - No baseline (always include current values as comparison)
+- **Proposing a nerd-loop on parameters that have no automated metric** — use analytical batch analysis instead

@@ -26,7 +26,8 @@
           "items": { "type": "string" },
           "description": "Category tags for matching and synthesis clustering"
         },
-        "spawned_from": { "type": ["string", "null"], "description": "Verdict ID that spawned this theory, if any" }
+        "spawned_from": { "type": ["string", "null"], "description": "Verdict ID that spawned this theory, if any" },
+        "research_type": { "type": "string", "enum": ["parameter", "performance"], "description": "Distinguishes parameter research from performance research. Performance theories go stale faster — codebase_hash should be scoped to profiled functions, not whole codebase." }
       }
     },
 
