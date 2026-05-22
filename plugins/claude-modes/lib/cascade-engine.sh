@@ -83,8 +83,16 @@ try:
 except Exception:
     sys.exit(0)
 
-# Shape: {"plugins": {"<name>@<marketplace>": {"installPath": "..."}}}
-# or top-level dict — we try both.
+# Shape: {"plugins": {"<name>@<marketplace>": <record>}} or top-level dict.
+# CRITICAL: the real installed_plugins.json keys each plugin to a LIST of
+# install records (one per scope), NOT a single dict:
+#   {"plugins": {"name@mkt": [{"scope": "user", "installPath": "..."}]}}
+# A marketplace-installed plugin is therefore a list, and the old
+# `isinstance(val, dict)` guard skipped EVERY real entry → the resolver always
+# fell through to the local-dev synthetic. Handle both the list-of-records and
+# the bare-dict shape. (Bug surfaced on first contact with a real marketplace
+# install; never exercised because tests used CLAUDE_MODES_CANONICAL_ID or the
+# fallback. Mirror this list-awareness in any future registry reader.)
 candidates = []
 plugins = data.get("plugins") if isinstance(data, dict) else None
 if isinstance(plugins, dict):
@@ -93,14 +101,17 @@ elif isinstance(data, dict):
     candidates = data.items()
 
 for key, val in candidates:
-    if not isinstance(val, dict):
-        continue
-    install_path = val.get("installPath") or val.get("install_path")
-    if not install_path:
-        continue
-    if os.path.realpath(install_path) == plugin_root:
-        sys.stdout.write(key)
-        sys.exit(0)
+    # val may be a list of install records OR a single record dict.
+    records = val if isinstance(val, list) else [val]
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        install_path = rec.get("installPath") or rec.get("install_path")
+        if not install_path:
+            continue
+        if os.path.realpath(install_path) == plugin_root:
+            sys.stdout.write(key)
+            sys.exit(0)
 sys.exit(0)
 PYEOF
 )
