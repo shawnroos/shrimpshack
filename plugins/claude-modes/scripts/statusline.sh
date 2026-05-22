@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# claude-modes: statusline emitter.
+#
+# Claude Code's statusline mechanism: the harness invokes this script
+# on every status refresh, passes session metadata as JSON on stdin,
+# and renders whatever this script writes to stdout as the right-hand
+# statusline.
+#
+# Visibility rules (V1.1, per design decision A.2):
+#   - When a mode IS active on the current branch: emit `🔧 <mode> · <branch>`
+#   - When NO mode is active (or not in a git repo, or modes dir absent):
+#     emit nothing. Silence is the default state; the positive signal
+#     should be unmistakable when present, and the negative signal
+#     should not steal statusline real estate from the user's other
+#     tooling (cmux, crex, git status, etc.).
+#
+# Cost-of-being-installed guarantee: the FIRST check is the modes-dir
+# presence gate, before any subprocess work (git, etc.). Same pattern
+# as scripts/on-*.sh hook shims.
+#
+# Statusline scripts are perf-sensitive (called frequently). This script
+# must complete in well under 100ms in the no-mode case.
+
+# ── Helper: emit an OSC 2 terminal title escape ────────────────────────────
+# Most modern terminals (iTerm2, Ghostty, kitty, alacritty) interpret
+# `\033]2;<title>\007` as a window-title set. cmux picks the same
+# escape up for tab titles. The escape is non-printing in terminals
+# that don't support it, so it's a safe always-emit signal.
+#
+# Per A.2-with-reset decision: we ALWAYS emit a title (even when no
+# mode is active) so the title reflects current state. Otherwise a
+# stale `[mode] foo` title would persist in the tab after /mode:clear.
+
+set -uo pipefail
+
+# Source the shared display sanitizer early (pure function def, no side effects
+# — doesn't violate the cost-of-being-installed presence gate below, which is
+# about WORK not function definitions). __cm_title is the single chokepoint for
+# every terminal title this script emits, so sanitizing $1 here covers ALL
+# title content (the cwd basename — attacker-influenceable via clone dir name —
+# and the validated mode name). The OSC-2 framing is this script's own (safe).
+__cm_sl_dir="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "${__cm_sl_dir}/../lib/sanitize.sh" 2>/dev/null || true
+
+__cm_title() {
+  # terminal-escape: strip Cc+Cf from title content so a crafted cwd basename
+  # can't inject OSC/CSI/bidi into the terminal title. Falls back to raw only
+  # if the sanitizer somehow didn't load (then the title is best-effort).
+  local __t="$1"
+  if command -v claude_modes::sanitize_for_display >/dev/null 2>&1; then
+    __t="$(claude_modes::sanitize_for_display "$1")"
+  fi
+  printf '\033]2;%s\007' "$__t"
+}
+
+# ── Modes-dir guard (MUST be first — cost-of-being-installed) ────────────
+# When the modes dir is absent, we can't even know whether a mode is
+# active — so we emit nothing (no statusline segment, no title). The
+# user's existing host title-setting (if any) takes over.
+[ -d "${HOME}/.claude/modes" ] || exit 0
+
+# ── Read stdin event JSON (Claude Code passes session metadata) ───────────
+# We need the cwd to decide which repo we're in. Claude Code passes it
+# as `workspace.current_dir` or similar; pull both via Python for
+# robustness. Bail silently if we can't parse — the statusline must
+# never block the prompt with an error.
+CLAUDE_MODES_PYTHON3="${CLAUDE_MODES_PYTHON3:-/usr/bin/python3}"
+
+input=$(cat 2>/dev/null)
+if [ -z "$input" ]; then
+  exit 0
+fi
+
+cwd=$(
+  "$CLAUDE_MODES_PYTHON3" - "$input" <<'PYEOF' 2>/dev/null
+import json, sys, os
+try:
+    d = json.loads(sys.argv[1])
+    # Claude Code statusline event shape: workspace.current_dir.
+    # Defensive: also try cwd / current_dir at the top level.
+    cwd = (
+        d.get("workspace", {}).get("current_dir")
+        or d.get("cwd")
+        or d.get("current_dir")
+        or os.getcwd()
+    )
+    print(cwd)
+except Exception:
+    pass
+PYEOF
+)
+
+# If we couldn't determine cwd, fall back to bash's PWD. Statusline
+# scripts inherit cwd from the caller in most harnesses, so this is
+# usually correct.
+[ -z "$cwd" ] && cwd="${PWD}"
+[ -d "$cwd" ] || exit 0
+
+# Compute the cwd basename once — used in both the "active mode" title
+# (`[mode] basename`) and the "no mode" title (`basename` alone).
+cwd_basename=$(basename "$cwd")
+
+# ── No-mode reset helper ───────────────────────────────────────────────────
+# Per A.2-with-reset: when there's no active mode (for any reason —
+# not in a git repo, detached HEAD, no .mode file, empty mode name),
+# emit a bare-cwd-basename title to clear any stale `[mode] ...`
+# prefix from a previous active state. Emit NO statusline segment
+# (A.2 silence on the statusline side — only the title resets).
+__cm_reset_and_exit() {
+  __cm_title "$cwd_basename"
+  exit 0
+}
+
+# ── Resolve repo root + branch via git ────────────────────────────────────
+# Use -C "$cwd" so we don't depend on the script's caller cwd.
+repo_root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || __cm_reset_and_exit
+raw_branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null) || __cm_reset_and_exit
+
+# Detached HEAD: no branch → no mode lookup. (Matches set-mode/active-mode
+# behavior; consistent silence is the contract.)
+[ "$raw_branch" = "HEAD" ] && __cm_reset_and_exit
+
+# ── Slugify via the shared helper ─────────────────────────────────────────
+# This is the same slugifier set-mode + active-mode + gate-delegation
+# all use. If we used a different rule here, the statusline could
+# disagree with /mode:status — exactly the slug-drift bug ce-code-review
+# loop-1+2 closed in the delegation gate.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/../lib/validate-mode-name.sh"
+# active-mode.sh provides read_validated_mode_body (sources validate-mode-name).
+. "${SCRIPT_DIR}/../lib/active-mode.sh"
+branch_slug=$(claude_modes::slugify_branch "$raw_branch" 2>/dev/null) || __cm_reset_and_exit
+
+# ── Read the .mode pointer ─────────────────────────────────────────────────
+mode_file="${repo_root}/.claude/modes/${branch_slug}.mode"
+[ -f "$mode_file" ] || __cm_reset_and_exit
+
+# sec re-review (L3): read THROUGH the validated reader, not raw `tr`. The
+# .mode file is an attacker-controllable committed repo artifact; a raw read
+# would let ESC/OSC/CSI/bidi bytes flow into the OSC-2 title escape and the
+# visible statusline (terminal injection on checkout, no consent gate). A
+# validated mode name (charset [A-Za-z0-9_-]+, reserved-token-rejected) cannot
+# contain any control/escape byte by construction — closing the injection sink
+# AND keeping statusline in agreement with the other read sites (no slug/body drift).
+mode_name=$(claude_modes::read_validated_mode_body "$mode_file" 2>/dev/null) || __cm_reset_and_exit
+[ -n "$mode_name" ] || __cm_reset_and_exit
+
+# ── Emit the statusline segment ────────────────────────────────────────────
+# Format: `🔧 <mode>` wrapped in ANSI yellow.
+# Designed for COMPOSITION with an existing statusline (like the
+# claude-code-templates beads-statusline pattern). The host statusline
+# is expected to chain this snippet via:
+#
+#   modes_segment=""
+#   if [ -x "$HOME/.claude/plugins/claude-modes/scripts/statusline.sh" ]; then
+#     modes_segment=$(echo "$input" | bash "$HOME/.claude/plugins/claude-modes/scripts/statusline.sh" 2>/dev/null)
+#     [ -n "$modes_segment" ] && modes_segment=" $modes_segment"
+#   fi
+#   printf "📁 %s%s%s%s" "$display_path" "$git_status" "$beads_status" "$modes_segment"
+#
+# We omit the branch slug from the segment because the host statusline
+# almost certainly already shows the git branch. Showing it twice would
+# be visual noise. The mode name alone is the load-bearing signal —
+# the user can cross-reference it with the existing git-branch segment
+# if they want to verify slug consistency.
+#
+# We do NOT prepend a separator (space / bullet) — the host composes
+# the separator. This mirrors the convention beads-statusline.sh uses.
+#
+# ── Title escape (B.1 prefix style: `[mode] cwd-basename`) ────────────────
+# OSC 2 escape — most terminals and cmux pick this up as the window/tab
+# title. Emit it BEFORE the visible statusline segment so the title
+# escape doesn't appear as a visible artifact in renderers that DON'T
+# interpret OSC 2 (it'd be a no-op in those terminals; the visible
+# segment still renders correctly). Per A.2-with-reset, this fires on
+# every refresh when a mode is active, which keeps the title in sync
+# with mode state.
+__cm_title "[${mode_name}] ${cwd_basename}"
+
+# ── Statusline segment ─────────────────────────────────────────────────────
+# ANSI color: yellow (\033[33m) to visually distinguish the mode segment
+# from the host's path/git/beads context (which all render in default
+# fg). Reset (\033[0m) at the end so the color doesn't bleed into any
+# future host content that might render AFTER the mode segment.
+# Per-mode color (declarative `color:` field in the mode YAML) is a
+# V1.2 candidate — once there are more than 2 authored modes, having
+# discovery=yellow / delivery=green / oncall=red becomes useful, but
+# V1 ships single-color so the mechanism is verifiable first.
+printf '\033[33m🔧 %s\033[0m' "$mode_name"

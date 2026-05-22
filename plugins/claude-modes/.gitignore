@@ -1,0 +1,22 @@
+# Registry file is a per-machine derived artifact (rebuildable via /mode:registry --rebuild)
+# — if it ever lands in the repo accidentally during dev, this excludes it.
+registry.json
+
+# Test ephemera
+tests/perf-baseline.txt
+.test-home-*
+
+# Python bytecode cache (generated when tests import lib/*.py helpers)
+__pycache__/
+*.pyc
+
+# OS noise
+.DS_Store
+
+# Editor noise
+*.swp
+.idea/
+.vscode/
+
+# V2 plugin state — dogfooding artifacts and per-machine derived files
+.claude/modes/

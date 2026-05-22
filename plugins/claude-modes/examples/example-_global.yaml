@@ -1,0 +1,25 @@
+# Example _global.yaml — the always-active baseline tier (tier 2) of the
+# cascade. Lives at ~/.claude/modes/_global.yaml after install.
+#
+# Auto-generated at install by /mode:setup from your pre-existing
+# ~/.claude/settings.json::enabledPlugins. Edit directly to set
+# machine-wide plugin defaults that apply across ALL modes.
+#
+# V2.0 scope cut (2026-05-18): only `enabledPlugins` flows through the
+# cascade into <repo>/.claude/settings.local.json. Other settings
+# (hooks, env, permissions, mcpServers) stay in ~/.claude/settings.json
+# untouched — they're user-managed outside the plugin's awareness.
+schema_version: 2
+name: _global
+description: |
+  Always-active baseline of plugins enabled across all modes on this
+  machine. Mode YAMLs cascade ON TOP of this; the result becomes
+  <repo>/.claude/settings.local.json after /mode:set + /reload-plugins.
+
+mechanism:
+  enabledPlugins:
+    # The plugin must always be enabled (R22 — the meta-plugin must be
+    # loaded for /mode:set to keep working after a swap).
+    "claude-modes@local-dev": true
+    # Add other plugins you want available everywhere here, e.g.:
+    # "compound-engineering@every-marketplace": true

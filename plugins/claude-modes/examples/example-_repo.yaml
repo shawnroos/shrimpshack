@@ -1,0 +1,37 @@
+# Example _repo.yaml — the repo baseline tier (tier 4) of the cascade.
+#
+# Lives at <repo>/.claude/modes/_repo.yaml (optional). Apply across ALL
+# modes when working inside this repo. Useful for repo-specific plugins
+# that should be loaded regardless of which mode is active.
+#
+# V2.0 scope cut: only `enabledPlugins` (with optional `disable:` block)
+# flows through the cascade. Other settings stay in your settings.json.
+#
+# SECURITY: when this file is committed to source control and someone
+# clones your repo, the cascade engine prompts them with a named diff
+# before merging this file's enabledPlugins on first /mode:set. They
+# must explicitly trust the file (direnv pattern); subsequent edits
+# re-prompt by content hash. See trust gate in U4.
+schema_version: 2
+name: _repo
+description: |
+  Repo-wide baseline that applies across all modes when working in this
+  repo. Hooks/env/permissions/mcpServers belong in your ~/.claude/
+  settings.json directly, not here — V2.0 cascade only handles plugins.
+
+mechanism:
+  # Empty map parses cleanly and compiles to NO plugins. Add real
+  # "name@marketplace": true entries below. (Do NOT use a placeholder like
+  # `pass: noop` — every key here is compiled verbatim into enabledPlugins,
+  # and bool("noop") is true, so a placeholder would enable a bogus plugin.)
+  enabledPlugins: {}
+    # Example: this repo uses Slate's plugin regardless of mode.
+    # "slate-devs@local": true
+
+# Subtract globally-enabled plugins that aren't relevant to this repo.
+# `disable:` is a TOP-LEVEL key (sibling of `mechanism:`), NOT nested under it —
+# the cascade engine reads `disable` at the document root, so a nested block is
+# silently ignored.
+# disable:
+#   enabledPlugins:
+#     - "frontend-only-plugin@marketplace"

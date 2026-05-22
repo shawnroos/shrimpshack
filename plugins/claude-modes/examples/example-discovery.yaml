@@ -1,0 +1,71 @@
+# Discovery mode — the exploration phase of feature work.
+#
+# Paired with delivery mode for the dual-track PR workflow: the
+# discovery branch carves into delivery PRs once substrate is review-clean.
+#
+# Cascades ON TOP of _global.yaml (tier 2) + your repo's _repo.yaml if
+# present (tier 4). The compiled result is written to
+# <repo>/.claude/settings.local.json on /mode:set discovery.
+schema_version: 2
+name: discovery
+description: |
+  A workflow-stage mode for the exploration phase of feature work.
+  Sprawl is by design. The discovery branch exists to learn the shape
+  of the problem, not to ship.
+
+mechanism:
+  # Enable plugins that aid exploration. _global.yaml's enabledPlugins
+  # apply automatically; this section ADDS on top.
+  enabledPlugins:
+    "compound-engineering@every-marketplace": true
+
+  # User-catalog manifest: which of your authored ~/.claude/commands/
+  # and ~/.claude/agents/ files are visible in this mode. Empty list =
+  # no user commands/agents visible in this mode (mode-author can fill
+  # this in conversationally via /mode:registry).
+  user_catalog:
+    commands: []
+    agents: []
+
+# Optionally subtract plugins from prior tiers. `disable:` is a TOP-LEVEL key
+# (sibling of `mechanism:`), NOT nested under it — the cascade engine reads
+# `disable` at the document root, so a nested block is silently ignored.
+# disable:
+#   enabledPlugins:
+#     - "some-strict-checker@marketplace"
+
+# Prose layer — injected into Claude's context via the R25 UserPromptSubmit
+# hook when this mode is active. Shapes Claude's reasoning, doesn't gate
+# tool dispatch.
+philosophy: |
+  Sprawl is by design. The discovery branch exists to learn the shape of
+  the problem, not to ship. Optimize for learning velocity over code
+  cleanliness. Force-pushes are fine. Substrate churns freely. Reviewers
+  bounce off draft-labeled PRs by convention.
+
+scope: |
+  Branches prefixed `feature/` or labeled `[discovery]`. Long-lived
+  draft PR opened immediately for infra access (preview links, staging
+  DB, sharing). Multiple ideas can live here; some will be killed, the
+  rest will be carved into delivery PRs when ready.
+
+lens: |
+  Treat code as substrate to throw away, not artifact to defend.
+  Prefer the shortest path to a working answer over the most elegant one.
+  Don't refactor for style; do refactor when the shape of the wrong
+  abstraction blocks learning the next thing.
+
+constraints:
+  - Never merge a discovery branch directly to main — carve delivery PRs from it
+  - Don't run multi-persona code review on discovery substrate
+  - Don't enforce strict-mode review bar; flag follow-up cleanups but don't gate on them
+  - Don't ship in this mode; the deliverable is learning
+
+# Per-command runtime injection. When a slash command runs, these
+# fields are appended to Claude's context as a <system-reminder>.
+command_heuristics:
+  "/compound-engineering:ce-code-review":
+    focus: surface functional bugs and structural problems blocking next learning step
+    bar: clean, solid, working — but accept rough edges and TODO markers
+    behavior: demarcate refactors needed for delivery; do not gate on them
+    scope: changed files only

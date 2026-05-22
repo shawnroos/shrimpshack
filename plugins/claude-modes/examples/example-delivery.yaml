@@ -1,0 +1,64 @@
+# Delivery mode — the shipping phase of feature work.
+#
+# Paired with discovery mode for the dual-track PR workflow: delivery
+# PRs are carved from a review-clean discovery substrate.
+schema_version: 2
+name: delivery
+description: |
+  A workflow-stage mode for the shipping phase of feature work.
+  Code ships. Quality is non-negotiable; the discovery branch already
+  taught us the shape — now we deliver.
+
+mechanism:
+  enabledPlugins:
+    "compound-engineering@every-marketplace": true
+
+  user_catalog:
+    commands: []
+    agents: []
+
+# Example: disable a plugin that's globally enabled but inappropriate for
+# delivery's strict review bar. `disable:` is a TOP-LEVEL key (sibling of
+# `mechanism:`), NOT nested under it — the cascade engine reads `disable` at the
+# document root, so a nested block is silently ignored.
+# disable:
+#   enabledPlugins:
+#     - "rapid-prototyper@marketplace"
+
+philosophy: |
+  Code ships. Quality is non-negotiable; the discovery branch already
+  taught us the shape — now we deliver. Multi-persona review fires by
+  default. Severity gates are real. Force-push is allowed only on the
+  feature branch before the first review, never after.
+
+scope: |
+  Branches carved from a discovery substrate, typically prefixed
+  `feature/` with a delivery-scoped name (e.g., `feature/ai-tools-pr1-foundation`).
+  Smaller surface, sharper purpose. Each delivery PR ships one
+  reviewable, testable, mergeable piece of value.
+
+lens: |
+  Treat every line as if it will be read by someone solving an incident
+  at 2am. Clean code, clear naming, comments only where the why is
+  non-obvious. Tests cover the golden path and the named edge cases —
+  not implementation details, not coverage theater.
+
+constraints:
+  - Multi-persona code review fires; P0/P1/P2 must be addressed before merge
+  - Tests pass; no skipped tests added without a tracking issue
+  - No TODO markers introduced; resolve or remove during this PR
+  - Migrations must be reversible OR have an explicit rollback plan
+  - Avoid backwards-compat shims; just change the code
+
+command_heuristics:
+  "/compound-engineering:ce-code-review":
+    focus: production readiness — security, performance, maintainability
+    bar: strict; enforce SOLID, name clarity, test coverage
+    behavior: assume code works; review for quality, not correctness; surface every P0–P2
+    scope: targeted to changed files plus their direct callers
+
+  "/compound-engineering:ce-work":
+    focus: ship complete and reviewable units of value
+    bar: each commit is independently meaningful; no WIP commits land
+    behavior: prefer many small commits over one big one; finish before moving on
+    scope: scoped to the PR's stated deliverable; defer adjacent work

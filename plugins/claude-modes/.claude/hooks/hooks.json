@@ -1,0 +1,39 @@
+{
+  "description": "claude-modes V2 plugin hooks. UserPromptSubmit injects active mode's prose layer (R25). SessionStart runs Python orchestrator for worktree reconciliation (R27) + new-file scan (R20c) + contract anchor logging. PostToolUse Write offers adoption consent when Claude writes files at user-catalog paths (R20b). V1's PreToolUse(Task|Skill|Agent) gate is intentionally dropped — V2 reshapes catalogs via settings.local.json cascade, not via tool-dispatch interception.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/on-prompt-submit.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/on-post-tool-use.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/on-session-start.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
