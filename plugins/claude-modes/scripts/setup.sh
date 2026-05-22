@@ -54,6 +54,8 @@ PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 . "${PLUGIN_ROOT}/lib/audit.sh"
 # shellcheck disable=SC1091
 . "${PLUGIN_ROOT}/lib/symlink-rebuild.sh"
+# shellcheck disable=SC1091
+. "${PLUGIN_ROOT}/lib/cascade-engine.sh"  # __claude_modes::resolve_self_identifier
 
 CLAUDE_MODES_PYTHON3="${CLAUDE_MODES_PYTHON3:-/usr/bin/python3}"
 
@@ -291,21 +293,31 @@ PYEOF
     notice_needed=1
   fi
 
-  # R22: ensure claude-modes is present in the cascade total. Pre-publication
-  # we use the synthetic "claude-modes@local-dev" identifier; this will be
-  # swapped post-publication for the canonical marketplace name.
+  # R22: ensure claude-modes is present in the cascade total. Resolve the
+  # ACTUAL installed identifier (marketplace install → "claude-modes@<mkt>",
+  # e.g. "claude-modes@shrimpshack") rather than hardcoding the synthetic
+  # "claude-modes@local-dev". resolve_self_identifier falls back to
+  # "claude-modes@local-dev" only when there is genuinely no marketplace
+  # registry match — so this is strictly better: it uses the real id when one
+  # exists, and local-dev only pre-publication. (Hardcoding local-dev here was
+  # the third manifestation of the registry-shape resolver bug: even after the
+  # resolver was fixed, setup wrote local-dev → compiled a phantom plugin and
+  # dropped the real one. See lib/cascade-engine.sh resolver + Scenario 11.)
+  local self_id
+  self_id=$(__claude_modes::resolve_self_identifier 2>/dev/null)
+  [ -z "$self_id" ] && self_id="claude-modes@local-dev"
   if [ "$notice_needed" -eq 1 ]; then
     if [ -n "$plugins_block" ]; then
-      plugins_block="${plugins_block}"$'\n'"    \"claude-modes@local-dev\": true"
+      plugins_block="${plugins_block}"$'\n'"    \"${self_id}\": true"
     else
-      plugins_block="    \"claude-modes@local-dev\": true"
+      plugins_block="    \"${self_id}\": true"
     fi
   fi
 
   # If after all of that there are STILL no entries (shouldn't happen, but
   # defensive), emit at least claude-modes.
   if [ -z "$plugins_block" ]; then
-    plugins_block="    \"claude-modes@local-dev\": true"
+    plugins_block="    \"${self_id}\": true"
   fi
 
   local ts
@@ -337,7 +349,7 @@ ${plugins_block}
   # exist (idempotent).
   if [ "$notice_needed" -eq 1 ] && [ ! -f "$NOTICE_FILE" ]; then
     local notice_content
-    notice_content="claude-modes auto-added as \"claude-modes@local-dev\" to your _global.yaml because no marketplace identifier was found in ~/.claude/settings.json::enabledPlugins. This is the expected behavior pre-publication; update to the canonical marketplace name post-publication. Edit ~/.claude/modes/_global.yaml to change."
+    notice_content="claude-modes auto-added as \"${self_id}\" to your _global.yaml because it was not already in ~/.claude/settings.json::enabledPlugins. If this says \"@local-dev\" you are running a pre-publication/dev checkout; once installed from a marketplace, re-run /mode:setup (or edit ~/.claude/modes/_global.yaml) so the canonical marketplace identifier is used."
     (umask 077 && printf '%s\n' "$notice_content" > "$NOTICE_FILE") || \
       _err "could not write first-install notice"
     if [ -f "$NOTICE_FILE" ] && [ ! -L "$NOTICE_FILE" ]; then

@@ -96,26 +96,46 @@ __claude_modes::adopt_under_dir() {
 # mechanism.user_catalog.$1 manifest. Echoes the first mode name found,
 # or nothing if no mode claims it. Mode-agnostic staging means we can't
 # tell from the symlink target alone (advisor finding).
+# Find which mode YAML claims <basename> in its user_catalog.<category>.
+# Returns 0 + prints the claimant mode name when found.
+# Returns 1 (no output) when no mode claims it AND every YAML parsed cleanly.
+# Returns 2 (no output) when at least one competing mode YAML FAILED TO PARSE
+#   and no claimant was found — the claimant landscape is UNCERTAIN, so callers
+#   that repair/recover on "no claimant" must treat this as "do not proceed"
+#   rather than "definitely unclaimed". (round-8/9: a malformed competing YAML
+#   was silently swallowed by `2>/dev/null` + the grep simply not matching, so
+#   recovery could double-record a basename a malformed mode actually claims.)
 __claude_modes::adopt_find_mode_of_record() {
   local category="$1"
   local basename="$2"
   local modes_dir="${HOME}/.claude/modes"
-  [ -d "$modes_dir" ] || return 0
+  [ -d "$modes_dir" ] || return 1
 
-  local yaml claimant
+  local yaml saw_unparseable=0
   for yaml in "$modes_dir"/*.yaml; do
     [ -f "$yaml" ] || continue
     # Skip cascade-tier baseline files.
     case "$(basename "$yaml")" in
       _global.yaml|_repo.yaml) continue ;;
     esac
-    if claude_modes::get_user_catalog "$yaml" "$category" 2>/dev/null \
-         | grep -Fxq -- "$basename"; then
-      claimant="$(basename "${yaml%.yaml}")"
-      printf '%s' "$claimant"
+    # Capture catalog output AND exit code separately (a pipe would hide the
+    # parse-error rc behind grep's rc). py_yaml_query exits 3 on YAML parse
+    # error, 2 on file-not-found, 0 on success.
+    local catalog rc
+    catalog=$(claude_modes::get_user_catalog "$yaml" "$category" 2>/dev/null)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      saw_unparseable=1
+      continue
+    fi
+    if printf '%s\n' "$catalog" | grep -Fxq -- "$basename"; then
+      printf '%s' "$(basename "${yaml%.yaml}")"
       return 0
     fi
   done
+  # No claimant found. If any YAML was unparseable, the answer is uncertain.
+  [ "$saw_unparseable" -eq 1 ] && return 2
+  return 1
 }
 
 # Internal: recover a half-adopted file orphaned by reconcile (round-8 P1).
@@ -155,8 +175,19 @@ __claude_modes::adopt_recover_orphaned_staging() {
   if [ -e "$live_path" ] || [ -L "$live_path" ]; then
     return 1
   fi
-  if [ -n "$(__claude_modes::adopt_find_mode_of_record "$cat" "$arg")" ]; then
+  # Claimant check. rc 0 = a mode claims it (not an orphan → don't recover).
+  # rc 2 = a competing YAML failed to parse, so we CAN'T be sure it's unclaimed
+  # — refuse to recover rather than risk double-recording into the active mode.
+  # rc 1 = cleanly unclaimed → genuine orphan, proceed.
+  local __claimant __fmr_rc
+  __claimant=$(__claude_modes::adopt_find_mode_of_record "$cat" "$arg")
+  __fmr_rc=$?
+  if [ -n "$__claimant" ] || [ "$__fmr_rc" -eq 0 ]; then
     return 1
+  fi
+  if [ "$__fmr_rc" -eq 2 ]; then
+    echo "/mode:adopt: '${arg}' is staged but a mode YAML failed to parse, so its claimant cannot be determined — refusing to recover (fix the malformed YAML, then re-run). " >&2
+    return 2  # handled + reported, NOT recovered
   fi
 
   # Re-derive the active mode (same source as the normal flow + L7-c repair).
@@ -395,13 +426,41 @@ claude_modes::adopt_file() {
   if [ -L "$file_path" ]; then
     local link_resolved
     link_resolved=$(__claude_modes::adopt_realpath "$file_path")
+    # round-8 P2: a BROKEN symlink (staging target deleted) still satisfies
+    # adopt_under_dir because adopt_realpath uses os.path.realpath, which
+    # resolves a dangling target's PATH without requiring it to exist. Repairing
+    # from here would write a manifest entry for a file that no longer exists +
+    # report success. Require the staging target to actually exist before the
+    # already-adopted / half-state-repair logic runs; a dangling plugin-owned
+    # symlink is a corruption to report, not a state to "repair".
+    # round-8 P2: a BROKEN symlink (staging target deleted) still satisfies
+    # adopt_under_dir because adopt_realpath uses os.path.realpath, which
+    # resolves a dangling target's PATH without requiring it to exist. The
+    # pure-basename arg path is already guarded (its `[ -e ]` probe rejects a
+    # dangling link as "not found"), but the PATH-SHAPED arg form reaches here
+    # with a dangling link — repairing it would write a manifest entry for a
+    # nonexistent file + report success. Refuse a dangling plugin-owned symlink.
+    if [ -L "$file_path" ] && [ ! -e "$file_path" ] \
+       && __claude_modes::adopt_under_dir "$link_resolved" "$user_catalog_root"; then
+      echo "/mode:adopt: '${basename}' is a plugin-owned symlink whose staging target no longer exists ('${link_resolved}') — refusing to repair a dangling entry. Remove the symlink and re-adopt the original file." >&2
+      return 1
+    fi
     if __claude_modes::adopt_under_dir "$link_resolved" "$user_catalog_root"; then
       # Try to identify which mode declares it.
-      local claimant
+      local claimant claimant_rc
       claimant=$(__claude_modes::adopt_find_mode_of_record "$category" "$basename")
+      claimant_rc=$?
       if [ -n "$claimant" ]; then
         echo "/mode:adopt: '${basename}' already managed by mode '${claimant}'" >&2
         return 0
+      fi
+      # rc 2 = a competing mode YAML failed to parse → claimant uncertain.
+      # Refuse to "repair" (which would write this basename into the active
+      # mode) when a malformed YAML might already claim it (round-8/9: silent
+      # parse-swallow could double-record). Report and stop.
+      if [ "$claimant_rc" -eq 2 ]; then
+        echo "/mode:adopt: '${basename}' is staged but a mode YAML failed to parse, so its claimant cannot be determined — refusing to repair the manifest (fix the malformed YAML, then re-run /mode:adopt)." >&2
+        return 1
       fi
       # NO claimant but the symlink IS staged → HALF-ADOPTED state: a prior
       # adopt ran steps 6-7 (mv + symlink) but step 8 (manifest write) failed
