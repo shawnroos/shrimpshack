@@ -38,8 +38,8 @@
     },
     {
       "name": "auto",
-      "description": "Workflow-agnostic pulsed loop engine \u2014 runs the auto loop pattern (plan-loop, parallel fan-out, review-fix until only P3 issues remain) as a durable, observable state machine backed by a per-unit ledger. Workflow-blind: drives Compound Engineering, native Claude, or any workflow through a thin adapter.",
-      "version": "0.1.0",
+      "description": "Workflow-agnostic pulsed loop engine with natural-language commands \u2014 runs the auto loop pattern (plan-loop, parallel fan-out, review-fix until only P3 issues remain) as a durable, observable state machine backed by a per-unit ledger. Three commands (/auto, /auto-status, /auto-resume) accept either explicit flags or freeform sentences. Workflow-blind: drives Compound Engineering, native Claude, or any workflow through a thin adapter.",
+      "version": "0.1.1",
       "author": {
         "name": "Shawn Roos"
       },
