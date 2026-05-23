@@ -348,6 +348,27 @@ main() {
         body+=$'\n'
       fi
 
+      # Subagent-dispatch guidance (R31): give primacy to mode-specified
+      # agents and propagate the mode's lens to subagent dispatches. The
+      # UserPromptSubmit hook only fires for the user's prompt to the main
+      # agent; subagents dispatched via Task DO inherit the catalog (so they
+      # see the same shrunken plugin set), but they DON'T automatically read
+      # the active mode's philosophy/lens/constraints unless the orchestrator
+      # forwards them in the dispatch prompt. This block makes that forwarding
+      # explicit so subagents operate with the same framing as the parent.
+      local mode_agents
+      mode_agents=$(claude_modes::get_user_catalog "$yaml_file" agents 2>/dev/null || true)
+      body+="When dispatching subagents via the Task tool while this mode is active:"$'\n'
+      body+="  - Prepend the active mode's lens and constraints to the dispatch prompt so the subagent inherits the same framing as this conversation."$'\n'
+      if [ -n "$mode_agents" ]; then
+        # Names without the .md suffix — that is the subagent-type identifier.
+        body+="  - Use these mode-specified agents (not generic alternatives) for in-mode work:"$'\n'
+        while IFS= read -r a; do
+          [ -n "$a" ] && body+="      - ${a%.md}"$'\n'
+        done <<< "$mode_agents"
+      fi
+      body+="  - If the work being delegated falls OUTSIDE the active mode's scope (e.g., the user asks for debugging while in design mode), invoke the mode-suggester skill to surface a mode-switch suggestion before dispatching. In an autonomous context with no human present to confirm a switch, note the mismatch in your response and proceed in the current mode without blocking on AskUserQuestion."$'\n\n'
+
       # Trim a single trailing blank line for tidiness.
       body="${body%$'\n'}"
       [ -n "$body" ] && sections+=("$body")
