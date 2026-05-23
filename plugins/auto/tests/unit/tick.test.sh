@@ -1,0 +1,680 @@
+#!/usr/bin/env bash
+# auto U4 unit test: lib/tick.py — one ScheduleWakeup-paced advance
+# of the ledger. The tick reads ALL loop state from the disk ledger, does ONE
+# smallest-useful advance inside a try/except, persists atomically via
+# ledger.py, and emits the re-arm INTENT as a JSON dict (it NEVER calls
+# ScheduleWakeup — that is a model tool, not a CLI).
+#
+# SELF-CONTAINED: this test defines its own minimal it/pass/fail/assert helpers
+# and HOME isolation inline, mirroring tests/unit/ledger.test.sh. It does NOT
+# source claude-modes' test-helpers nor auto shared helpers (those
+# are U2's, not yet present). When U2 lands, this file may migrate to them.
+#
+# Scenarios (mapped to the U4 plan, tested against tick.py's ACTUAL surface):
+#   1. predicate NOT met -> tick advances one step + signals re-arm (action=rearm)
+#   2. predicate met -> emits report, action=stop, does NOT re-arm
+#   3. stalled unit (dispatched past stall_threshold, no verdict) -> marked
+#      stalled; it + transitive dependents halted; independent siblings advance
+#      (Covers AE4)
+#   4. adapter raises mid-tick -> unit.last_error recorded + unit marked stalled;
+#      ledger never half-written; + deliberate-fail control proving the adapter
+#      genuinely raises (so the clean-return is real try/except capture)
+#   5. tick NEVER dispatches and NEVER writes verdicts: a work-loop tick that
+#      sees a self-written verdict reads it + applies a fix (verdict-returned ->
+#      fixed) but makes NO dispatch call and writes NO finding
+#   6. non-stateless safety: invoke the tick twice from FRESH processes against
+#      the same ledger -> it advances purely from ledger state
+#   7. anti-livelock: a plan-loop run advances plan -> deepen -> review_plan
+#      ACROSS fresh-process ticks WITHOUT re-planning. The tick persists the
+#      executed plan_step (schema §3.1) so the next tick reads it instead of
+#      re-reading null and re-running "plan" forever. Includes a deliberate-fail
+#      control (env-gated no-persist) proving the test goes RED without the write.
+#   8. Bug #5 gap-write: advance_plan_loop persists gaps_open from a DICT
+#      review_plan return carrying `gap_set` (the live envelope shape), AND from
+#      an empty gap_set (real length 0 -> "done"), keeping the plan loop open
+#      until a real review reports.
+#   9. Bug #5 null-path: the LIVE PREPARE envelope has NO gap_set key (model fills
+#      it out-of-band); gaps_open must stay NULL (never default 0), so plan-met
+#      does NOT fire after one un-reviewed pass. Deliberate-fail control replicates
+#      the buggy gap_set=[] default and proves it produces a DIFFERENT plan-met
+#      outcome (the discriminator).
+#  10. phantom-dispatch self-heal: detect_and_halt_stalled reclaims a unit stuck
+#      `dispatched` past its stall_threshold (the orchestrator rescue-swallow P3
+#      bound) -> stalled. Deliberate-fail control: WITHOUT the reaper the phantom
+#      stays dispatched.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+TICK_PY="${AUTO_ROOT}/lib/tick.py"
+TICK_SH="${AUTO_ROOT}/lib/tick.sh"
+LEDGER_PY="${AUTO_ROOT}/lib/ledger.py"
+PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
+
+# ── Minimal inline test harness ────────────────────────────────────────────
+PASS=0
+FAIL=0
+CURRENT="anonymous"
+
+it()   { CURRENT="${1:-anonymous}"; }
+pass() { PASS=$((PASS + 1)); printf "  \033[32m✓\033[0m %s\n" "$CURRENT"; }
+fail() {
+  FAIL=$((FAIL + 1))
+  printf "  \033[31m✗\033[0m %s\n" "$CURRENT"
+  [ -n "${1:-}" ] && printf "      %s\n" "$1"
+  return 0
+}
+assert_eq() { [ "$1" = "$2" ] && pass || fail "expected '$1' got '$2'"; }
+
+# ── HOME / sandbox isolation ───────────────────────────────────────────────
+ORIG_HOME="$HOME"
+SANDBOX="$(mktemp -d -t auto-test.XXXXXX)"
+export HOME="$SANDBOX"
+cleanup() {
+  export HOME="$ORIG_HOME"
+  case "$SANDBOX" in
+    */auto-test.*) rm -rf "$SANDBOX" ;;
+  esac
+}
+trap cleanup EXIT
+
+REPO="${SANDBOX}/repo"
+mkdir -p "$REPO"
+
+# ── tiny python helpers run against the modules ────────────────────────────
+# init <run> <json-units> [adapter] [phase]  — create a ledger with given units.
+ledger_init() {
+  local run="$1" units_json="$2" adapter="${3:-ce}" phase="${4:-work}"
+  "$PY" - "$REPO" "$run" "$units_json" "$adapter" "$phase" "$LEDGER_PY" <<'PYEOF'
+import json, sys, importlib.util
+repo, run, units_json, adapter, phase, ledger_py = sys.argv[1:7]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.init_ledger(repo, run, adapter=adapter, units=json.loads(units_json), loop_phase=phase)
+PYEOF
+}
+
+# field <run> <python-expr-on-ledger-named-L>  — print a value from the ledger.
+ledger_field() {
+  local run="$1" expr="$2"
+  "$PY" - "$REPO" "$run" "$expr" "$LEDGER_PY" <<'PYEOF'
+import json, sys, importlib.util
+repo, run, expr, ledger_py = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+L = m.read_ledger(repo, run)
+print(eval(expr))
+PYEOF
+}
+
+# now_minus <seconds>  — print an ISO-8601 UTC timestamp <seconds> in the past.
+now_minus() {
+  "$PY" - "$1" <<'PYEOF'
+import sys, datetime
+secs = int(sys.argv[1])
+dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=secs)
+print(dt.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"))
+PYEOF
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+echo "tick.test.sh"
+
+# ─── Scenario 1: predicate NOT met -> advance one step + signal re-arm ────────
+# A work-loop with one verdict-returned unit carrying an open blocker: the
+# predicate is NOT met (blocker present). The tick should apply ONE fix
+# (verdict-returned -> fixed) and signal re-arm. The blocker remains (R8: a fix
+# does not close findings), so met stays false and the chain keeps ticking.
+it "predicate NOT met: tick advances one step (fix applied) and signals re-arm"
+ledger_init "rearm-run" '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"open"}]}]' \
+  >/dev/null 2>&1
+res1="$("$PY" - "$REPO" "rearm-run" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+r = t.dispatch_tick(repo, run)
+print(json.dumps({
+    "action": r.get("action"),
+    "delay": r.get("delay"),
+    "prompt": r.get("prompt"),
+    "advanced": (r.get("advance") or {}).get("advanced"),
+}))
+PYEOF
+)"
+action="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['action'])" "$res1")"
+delay="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['delay'])" "$res1")"
+prompt="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['prompt'])" "$res1")"
+advanced="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res1")"
+st1="$(ledger_field "rearm-run" 'L["units"][0]["state"]')"
+if [ "$action" = "rearm" ] && [ "$delay" = "60" ] && [ "$prompt" = "/auto-tick rearm-run" ] \
+   && [ "$advanced" = "fix-applied" ] && [ "$st1" = "fixed" ]; then
+  pass
+else
+  fail "action=$action delay=$delay prompt=$prompt advanced=$advanced state=$st1 (expected rearm/60/.../fix-applied/fixed)"
+fi
+
+# ─── Scenario 2: predicate met -> emit report, action=stop, NO re-arm ─────────
+# A terminal, defect-free, single-unit work-loop: init_ledger's atomic write
+# recomputes the predicate, so met is already true at read time. The tick must
+# stop (reason=predicate-met) and emit a report; it must NOT re-arm.
+it "predicate met: tick emits report, action=stop (predicate-met), does NOT re-arm"
+ledger_init "met-run" '[{"id":"U1","state":"verdict-returned","findings":[]}]' >/dev/null 2>&1
+met_at_read="$(ledger_field "met-run" 'L["exit_predicate_result"]["met"]')"
+res2="$("$PY" - "$REPO" "met-run" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+r = t.dispatch_tick(repo, run)
+print(json.dumps({
+    "action": r.get("action"),
+    "reason": r.get("reason"),
+    "has_report": isinstance(r.get("report"), dict),
+}))
+PYEOF
+)"
+action2="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['action'])" "$res2")"
+reason2="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['reason'])" "$res2")"
+hasrep2="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['has_report'])" "$res2")"
+phase2="$(ledger_field "met-run" 'L["loop_phase"]')"
+if [ "$met_at_read" = "True" ] && [ "$action2" = "stop" ] && [ "$reason2" = "predicate-met" ] \
+   && [ "$hasrep2" = "True" ] && [ "$phase2" = "done" ]; then
+  pass
+else
+  fail "met_at_read=$met_at_read action=$action2 reason=$reason2 has_report=$hasrep2 phase=$phase2"
+fi
+
+# ─── Scenario 3: stall detection + transitive halt; siblings advance (AE4) ────
+# Ua dispatched 1h ago with stall_threshold 10s (age > threshold, strictly) ->
+# stalled. Ub depends on Ua -> transitively halted. Uc is independent and
+# verdict-returned with an open blocker -> the fix-due sibling that should still
+# advance (verdict-returned -> fixed) while Ua/Ub are halted.
+it "stall: dispatched-past-threshold unit -> stalled; it + transitive dependents halted; independent sibling advances"
+DISP_AT="$(now_minus 3600)"
+ledger_init "stall-run" \
+  "$(printf '[{"id":"Ua","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10},{"id":"Ub","state":"pending","depends_on":["Ua"]},{"id":"Uc","state":"verdict-returned","findings":[{"severity":"major","note":"open"}]}]' "$DISP_AT")" \
+  >/dev/null 2>&1
+res3="$("$PY" - "$REPO" "stall-run" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+r = t.dispatch_tick(repo, run)
+print(json.dumps({
+    "action": r.get("action"),
+    "stalled": sorted(r.get("stalled") or []),
+    "halted": sorted(r.get("halted") or []),
+    "advanced": (r.get("advance") or {}).get("advanced"),
+    "advanced_unit": (r.get("advance") or {}).get("unit"),
+}))
+PYEOF
+)"
+st_ua="$(ledger_field "stall-run" 'next(u["state"] for u in L["units"] if u["id"]=="Ua")')"
+st_uc="$(ledger_field "stall-run" 'next(u["state"] for u in L["units"] if u["id"]=="Uc")')"
+stalled_list="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['stalled']))" "$res3")"
+halted_list="$("$PY" -c "import json,sys;print(','.join(json.loads(sys.argv[1])['halted']))" "$res3")"
+adv_unit="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced_unit'])" "$res3")"
+adv_kind="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res3")"
+# Ua marked stalled; Ua+Ub in halted set; Uc NOT halted and is the unit that
+# advanced (fix-applied) — the independent sibling progressing past the stall.
+if [ "$st_ua" = "stalled" ] && [ "$stalled_list" = "Ua" ] && [ "$halted_list" = "Ua,Ub" ] \
+   && [ "$adv_kind" = "fix-applied" ] && [ "$adv_unit" = "Uc" ] && [ "$st_uc" = "fixed" ]; then
+  pass
+else
+  fail "st_ua=$st_ua stalled=[$stalled_list] halted=[$halted_list] adv=$adv_kind/$adv_unit st_uc=$st_uc (expected stalled / Ua / Ua,Ub / fix-applied/Uc / fixed)"
+fi
+
+# ─── Scenario 4: adapter raises mid-tick -> last_error recorded + stalled ─────
+# A plan-loop with one dispatched unit. We inject an adapter whose next_plan_step
+# raises. The tick's try/except must convert the raise into a recorded
+# last_error on the in-flight unit + mark it stalled, WITHOUT crashing and
+# WITHOUT leaving a half-written ledger.
+it "adapter raise: try/except records last_error + marks unit stalled; ledger stays valid (no half-write)"
+DISP4="$(now_minus 5)"
+ledger_init "raise-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":600}]' "$DISP4")" \
+  ce plan >/dev/null 2>&1
+res4="$("$PY" - "$REPO" "raise-run" "$TICK_PY" <<'PYEOF'
+import sys, importlib.util, json
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+
+class BoomAdapter:
+    def next_plan_step(self, ledger):
+        raise RuntimeError("adapter exploded mid-step")
+
+# The tick must NOT propagate the raise; it returns a normal intent dict.
+r = t.dispatch_tick(repo, run, adapter=BoomAdapter())
+print(json.dumps({
+    "action": r.get("action"),
+    "advanced": (r.get("advance") or {}).get("advanced"),
+}))
+PYEOF
+)"
+rc4=$?
+st4="$(ledger_field "raise-run" 'L["units"][0]["state"]')"
+err_call="$(ledger_field "raise-run" 'L["units"][0]["last_error"]["call"]')"
+err_msg_has="$(ledger_field "raise-run" '"RuntimeError" in (L["units"][0]["last_error"]["message"] or "")')"
+# Ledger must still parse cleanly; no stray tempfile (atomic write held).
+tmp_left4="$(find "$REPO/.claude/auto" -name '.ledger.*' 2>/dev/null | wc -l | tr -d ' ')"
+adv4="$("$PY" -c "import json,sys;print(json.loads(sys.argv[1])['advanced'])" "$res4")"
+if [ "$rc4" -eq 0 ] && [ "$st4" = "stalled" ] && [ "$err_call" = "plan" ] \
+   && [ "$err_msg_has" = "True" ] && [ "$adv4" = "error" ] && [ "$tmp_left4" = "0" ]; then
+  pass
+else
+  fail "rc=$rc4 state=$st4 err_call=$err_call err_msg_has=$err_msg_has advanced=$adv4 tmpfiles=$tmp_left4"
+fi
+
+it "deliberate-fail control: the injected adapter genuinely raises (proves S4's clean return is real try/except capture, not a benign no-op)"
+# If we call the adapter op directly — OUTSIDE the tick's try/except — it MUST
+# propagate. This proves the adapter is not silently benign, so the prior test's
+# clean return + recorded last_error is meaningful (the try/except did the work).
+raised="$("$PY" - <<'PYEOF'
+class BoomAdapter:
+    def next_plan_step(self, ledger):
+        raise RuntimeError("adapter exploded mid-step")
+try:
+    BoomAdapter().next_plan_step({})
+    print("DID-NOT-RAISE")
+except RuntimeError:
+    print("raised")
+PYEOF
+)"
+assert_eq "raised" "$raised"
+
+# ─── Scenario 5: tick NEVER dispatches and NEVER writes verdicts ──────────────
+# A work-loop tick that sees a self-written verdict (verdict-returned + open
+# major) applies ONE fix (-> fixed) but makes NO dispatch call and writes NO
+# finding. Assert: (a) the fix-due unit becomes fixed; (b) its findings are
+# byte-identical to setup (a fix does not touch findings — R8); (c) no pending
+# sibling was moved to dispatched (the tick never owns pending -> dispatched).
+it "tick never dispatches / never writes verdicts: applies a fix, leaves findings + pending siblings untouched"
+ledger_init "no-dispatch-run" \
+  '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"major","note":"fix me"}]},{"id":"U2","state":"pending"}]' \
+  >/dev/null 2>&1
+findings_before="$(ledger_field "no-dispatch-run" 'json.dumps(next(u["findings"] for u in L["units"] if u["id"]=="U1"), sort_keys=True)')"
+"$PY" - "$REPO" "no-dispatch-run" "$TICK_PY" <<'PYEOF' >/dev/null
+import sys, importlib.util
+repo, run, tick_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+t.dispatch_tick(repo, run)
+PYEOF
+st_u1="$(ledger_field "no-dispatch-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
+st_u2="$(ledger_field "no-dispatch-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
+findings_after="$(ledger_field "no-dispatch-run" 'json.dumps(next(u["findings"] for u in L["units"] if u["id"]=="U1"), sort_keys=True)')"
+# U1 fixed (fix applied); U2 still pending (NEVER dispatched by the tick);
+# U1 findings unchanged (NO verdict written by the tick).
+if [ "$st_u1" = "fixed" ] && [ "$st_u2" = "pending" ] && [ "$findings_before" = "$findings_after" ]; then
+  pass
+else
+  fail "st_u1=$st_u1 st_u2=$st_u2 findings_changed=$([ "$findings_before" = "$findings_after" ] && echo no || echo YES)"
+fi
+
+# ─── Scenario 6: non-stateless safety — two FRESH-process ticks, one ledger ───
+# Invoke the tick TWICE via the bash shim (each a separate process; no shared
+# in-memory state). It must advance purely from the disk ledger: tick 1 applies
+# the fix to U1; tick 2, from a clean process, sees U1 already fixed and applies
+# the fix to U2. Proves the tick treats conversation/process context as
+# irrelevant (re-injection-safe under ScheduleWakeup).
+it "non-stateless: two ticks from FRESH processes advance purely from the disk ledger"
+ledger_init "stateless-run" \
+  '[{"id":"U1","state":"verdict-returned","findings":[{"severity":"blocker","note":"a"}]},{"id":"U2","state":"verdict-returned","findings":[{"severity":"blocker","note":"b"}]}]' \
+  >/dev/null 2>&1
+# First fresh process.
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "stateless-run" >/dev/null 2>&1
+st1_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
+st1_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
+# Second fresh process — must observe the first's mutation and advance the next.
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "stateless-run" >/dev/null 2>&1
+st2_u1="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U1")')"
+st2_u2="$(ledger_field "stateless-run" 'next(u["state"] for u in L["units"] if u["id"]=="U2")')"
+# After tick 1: one of U1/U2 fixed, the other still verdict-returned.
+# After tick 2: both fixed (the second process picked up where the first left).
+if [ "$st1_u1" = "fixed" ] && [ "$st1_u2" = "verdict-returned" ] \
+   && [ "$st2_u1" = "fixed" ] && [ "$st2_u2" = "fixed" ]; then
+  pass
+else
+  fail "after-tick1: U1=$st1_u1 U2=$st1_u2 ; after-tick2: U1=$st2_u1 U2=$st2_u2 (expected fixed/verdict-returned then fixed/fixed)"
+fi
+
+# ─── Scenario 7: anti-livelock — plan_step advances across fresh-process ticks ─
+# THE integration-blocking bug this fix closes: next_plan_step is pure over the
+# ledger and each tick is a fresh process. If the tick does not persist the
+# executed plan_step, every tick reads plan_step==null, the adapter returns
+# "plan", and the plan-loop re-plans forever. With the persist (ledger.set_loop
+# plan_step=...), three fresh-process ticks walk plan -> deepen -> review_plan.
+#
+# We use the REAL ce adapter (its plan/deepen/review_plan ops are pure
+# envelope-returning no-ops). One PENDING unit keeps all_units_terminal==false
+# so the predicate never short-circuits the plan-loop to done. gaps_open stays
+# NULL (Bug #5 fix: the live envelope carries no gap_set, so the engine never
+# defaults it to 0 — the never-reviewed value is null, not zero), but the
+# coherence guard keys on plan_step=="review_plan" specifically, so it does NOT
+# fire until AFTER a real review_plan step has been persisted — exactly the walk
+# we assert.
+it "anti-livelock: 3 fresh-process plan ticks walk plan -> deepen -> review_plan (step persisted, no re-plan)"
+ledger_init "antilivelock-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+step0="$(ledger_field "antilivelock-run" 'L.get("plan_step")')"
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+step1="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+step2="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
+CLAUDE_AUTO_REPO="$REPO" bash "$TICK_SH" "antilivelock-run" >/dev/null 2>&1
+step3="$(ledger_field "antilivelock-run" 'L["plan_step"]')"
+# init -> null; tick1 ran "plan"; tick2 ran "deepen"; tick3 ran "review_plan".
+# The walk MONOTONICALLY ADVANCES — it never gets stuck re-running "plan".
+if [ "$step0" = "None" ] && [ "$step1" = "plan" ] && [ "$step2" = "deepen" ] \
+   && [ "$step3" = "review_plan" ]; then
+  pass
+else
+  fail "plan_step walk: init=$step0 t1=$step1 t2=$step2 t3=$step3 (expected None/plan/deepen/review_plan)"
+fi
+
+it "deliberate-fail control: WITHOUT the persist, plan_step stays stuck at the first step -> livelock (proves the persist is load-bearing)"
+# Run the SAME plan-loop, but neuter the tick's persist by monkeypatching
+# ledger.set_loop to DROP the plan_step kwarg (simulating the pre-fix tick that
+# advanced the step but never wrote it back). Three ticks must then NEVER record
+# a step beyond null — the adapter would re-return "plan" every time (livelock).
+# This proves the prior test passes BECAUSE of the persist, not by accident.
+stuck="$("$PY" - "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, tick_py, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(spec); spec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+
+run = "antilivelock-nopersist"
+ledg.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
+
+# Neuter the persist: t.ledger.set_loop forwarded WITHOUT plan_step. The tick's
+# beat write (set_loop(driver="self", beat=True)) still works; only the
+# plan_step persist is dropped — exactly the pre-fix behaviour.
+_real_set_loop = ledg.set_loop
+def _no_plan_step_set_loop(repo_root, run_id, **kw):
+    kw.pop("plan_step", None)
+    return _real_set_loop(repo_root, run_id, **kw)
+t.ledger.set_loop = _no_plan_step_set_loop
+
+steps = []
+for _ in range(3):
+    t.dispatch_tick(repo, run)
+    steps.append(ledg.read_ledger(repo, run).get("plan_step"))
+# Without the persist every read is None -> the plan-loop is livelocked.
+print("stuck" if all(s is None for s in steps) else "ADVANCED:%r" % steps)
+PYEOF
+)"
+assert_eq "stuck" "$stuck"
+
+# ─── Scenario 8: Bug #5 — gaps_open persisted from a DICT review_plan return ──
+# advance_plan_loop must persist gaps_open from BOTH a bare list AND a dict
+# envelope carrying `gap_set` (the LIVE adapters return a dict — that branch was
+# previously dead, so gaps_open was never written from a real review and plan-met
+# fired after a SINGLE review pass, making the deepen-refinement loop unreachable).
+# We exercise the DICT path specifically with a stub adapter whose review_plan
+# returns {"gap_set": [...]} of length N.
+#
+# Verify-RED: lib/tick.py advance_plan_loop, delete the
+#   `elif isinstance(result, dict) and isinstance(result.get("gap_set"), list):`
+# branch (the dict extraction). gap_set stays None for the dict envelope, the
+# `step == "review_plan" and gap_set is not None` write never fires, gaps_open
+# stays 0, and these dict-path assertions go RED.
+it "Bug #5: dict review_plan return with gap_set of N -> gaps_open==N, plan NOT met (deepen loop stays open)"
+# Seed plan_step="deepen" so the stub's next_plan_step -> "review_plan" lands on
+# the review step (the only step that persists gaps).
+ledger_init "gaps-dict-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+"$PY" - "$REPO" "gaps-dict-run" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.set_loop(repo, run, plan_step="deepen")
+PYEOF
+gaps_dict="$("$PY" - "$REPO" "gaps-dict-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+
+class DictGapAdapter:
+    # Live-adapter shape: review_plan returns a DICT envelope carrying gap_set.
+    def next_plan_step(self, ledger):
+        return "review_plan"
+    def review_plan(self, ledger):
+        return {"op": "review_plan", "gap_set": [{"id": "g1"}, {"id": "g2"}, {"id": "g3"}]}
+
+led = ledg.read_ledger(repo, run)
+t.advance_plan_loop(repo, run, led, DictGapAdapter())
+print(ledg.read_ledger(repo, run)["exit_predicate_result"]["gaps_open"])
+PYEOF
+)"
+# gaps_open must equal the gap_set length (3), persisted from the dict envelope.
+assert_eq "3" "$gaps_dict"
+
+it "Bug #5: gaps_open==3 keeps the PLAN loop open (plan-met requires gaps_open==0)"
+# With three gaps open, the plan predicate is NOT met regardless of plan_step.
+met_dict="$(ledger_field "gaps-dict-run" 'L["exit_predicate_result"]["met"]')"
+gaps_chk="$(ledger_field "gaps-dict-run" 'L["exit_predicate_result"]["gaps_open"]')"
+phase_chk="$(ledger_field "gaps-dict-run" 'L["loop_phase"]')"
+if [ "$met_dict" = "False" ] && [ "$gaps_chk" = "3" ] && [ "$phase_chk" = "plan" ]; then
+  pass
+else
+  fail "met=$met_dict gaps_open=$gaps_chk phase=$phase_chk (expected False/3/plan)"
+fi
+
+it "Bug #5: dict review_plan return with EMPTY gap_set -> gaps_open==0; next_plan_step -> done (real length, not accidental zero)"
+# Empty gap_set must write gaps_open==0 (the actual length), AND because the dict
+# path persisted plan_step="review_plan", the REAL ce sequencer then returns
+# "done" (gaps closed by a real review). Proves the write is len(gap_set), not a
+# default 0 that happened to match.
+ledger_init "gaps-empty-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+"$PY" - "$REPO" "gaps-empty-run" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.set_loop(repo, run, plan_step="deepen")
+PYEOF
+empty_out="$("$PY" - "$REPO" "gaps-empty-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+# Use the REAL ce adapter for next_plan_step (the live sequencer) but feed an
+# empty-gap_set dict via a thin subclass of its review_plan, so the "done"
+# coherence guard is exercised end-to-end after a real (empty) review.
+import importlib.util as _il
+aspec = _il.spec_from_file_location("adapter_ce", ledger_py.replace("ledger.py", "adapter-ce.py"))
+ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
+
+class EmptyGapAdapter(ace.Adapter):
+    def review_plan(self, ledger):
+        return {"op": "review_plan", "gap_set": []}
+
+led = ledg.read_ledger(repo, run)
+adapter = EmptyGapAdapter()
+t.advance_plan_loop(repo, run, led, adapter)
+led2 = ledg.read_ledger(repo, run)
+gaps = led2["exit_predicate_result"]["gaps_open"]
+# Now ask the live sequencer for the next step: review_plan persisted +
+# gaps_open==0 -> the §4.1 coherence guard returns "done".
+nxt = adapter.next_plan_step(led2)
+print("%s,%s,%s" % (gaps, led2.get("plan_step"), nxt))
+PYEOF
+)"
+# gaps_open==0 (real length of empty list), plan_step persisted as review_plan,
+# next step "done" — the plan loop CAN now reach met (gaps closed by a real review).
+if [ "$empty_out" = "0,review_plan,done" ]; then
+  pass
+else
+  fail "gaps,plan_step,next = $empty_out (expected 0,review_plan,done)"
+fi
+
+# ─── Scenario 9: Bug #5 null-path — LIVE PREPARE envelope (NO gap_set key) ────
+# The previous Bug #5 scenarios drive review_plan returns that CARRY a gap_set
+# (dict-with-key, bare list). This scenario covers the OTHER live shape that has
+# no dedicated test: the REAL ce/native adapters' review_plan returns a PREPARE
+# envelope WITHOUT a gap_set key — the model fills it out-of-band AFTER the engine
+# reads. The correct behaviour (the round-2 premature-plan-met fix) is that
+# gaps_open stays NULL (never a default 0), so plan-met does NOT fire after one
+# un-reviewed pass and the deepen-refinement loop stays open. A regression that
+# defaulted gap_set=[] for the keyless envelope would silently reopen the bug:
+# gaps_open=0 -> plan-met -> the loop exits before a real review reports gaps.
+#
+# We drive advance_plan_loop with the REAL ce adapter (review_plan returns the
+# live envelope shape, NO gap_set), then assert gaps_open is still null and plan
+# is NOT met after the review pass. The deliberate-fail control below replicates
+# the buggy default-zero extraction and proves it produces a DIFFERENT, plan-met
+# outcome — so this test genuinely distinguishes correct-from-broken.
+it "Bug #5 null-path: LIVE review_plan envelope (no gap_set key) -> gaps_open stays NULL, plan NOT met (deepen loop stays open)"
+ledger_init "gaps-null-run" '[{"id":"U1","state":"pending"}]' ce plan >/dev/null 2>&1
+# Seed plan_step="deepen" so the live sequencer's next step lands on review_plan.
+"$PY" - "$REPO" "gaps-null-run" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, ledger_py = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("ledger", ledger_py)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.set_loop(repo, run, plan_step="deepen")
+PYEOF
+null_out="$("$PY" - "$REPO" "gaps-null-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+# REAL ce adapter: review_plan returns the live PREPARE envelope, which carries
+# NO gap_set key (the model fills it out-of-band after the engine reads).
+import importlib.util as _il
+aspec = _il.spec_from_file_location("adapter_ce", ledger_py.replace("ledger.py", "adapter-ce.py"))
+ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
+adapter = ace.Adapter()
+# Guard: confirm the envelope really has NO gap_set key (the shape under test).
+env = adapter.review_plan(ledg.read_ledger(repo, run))
+assert isinstance(env, dict) and "gap_set" not in env, "envelope unexpectedly has gap_set: %r" % env
+
+led = ledg.read_ledger(repo, run)
+t.advance_plan_loop(repo, run, led, adapter)
+L2 = ledg.read_ledger(repo, run)
+go = L2["exit_predicate_result"]["gaps_open"]
+met = L2["exit_predicate_result"]["met"]
+phase = L2.get("loop_phase")
+step = L2.get("plan_step")
+# go is None (NOT 0); met False; loop stays in plan; step persisted as review_plan.
+print("%s,%s,%s,%s" % (go, met, phase, step))
+PYEOF
+)"
+# gaps_open stays None; plan NOT met; loop stays in plan phase; review_plan persisted.
+if [ "$null_out" = "None,False,plan,review_plan" ]; then
+  pass
+else
+  fail "gaps_open,met,phase,step = $null_out (expected None,False,plan,review_plan)"
+fi
+
+it "deliberate-fail control: the BUGGY gap_set=[] default for a keyless envelope writes gaps_open=0 and FIRES plan-met (proves the null-path test discriminates)"
+# Replicate the regression inline: extract with result.get("gap_set", []) — the
+# default-zero short-circuit the engine MUST NOT have — against the SAME live ce
+# envelope. This must produce a DIFFERENT outcome from the correct path above:
+# gaps_open=0, plan-met True, next step "done". If this control matched the
+# correct path, the prior test would prove nothing.
+buggy_out="$("$PY" - "$REPO" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util
+repo, tick_py, ledger_py = sys.argv[1:4]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+import importlib.util as _il
+aspec = _il.spec_from_file_location("adapter_ce", ledger_py.replace("ledger.py", "adapter-ce.py"))
+ace = _il.module_from_spec(aspec); aspec.loader.exec_module(ace)
+
+run = "gaps-null-buggy"
+ledg.init_ledger(repo, run, adapter="ce", units=[{"id":"U1","state":"pending"}], loop_phase="plan")
+ledg.set_loop(repo, run, plan_step="deepen")
+adapter = ace.Adapter()
+result = adapter.review_plan(ledg.read_ledger(repo, run))  # live envelope, NO gap_set
+# THE BUG: default-zero extraction for a keyless envelope.
+buggy_gap_set = result.get("gap_set", [])
+ledg.set_gaps_open(repo, run, len(buggy_gap_set))
+ledg.set_loop(repo, run, plan_step="review_plan")
+L = ledg.read_ledger(repo, run)
+go = L["exit_predicate_result"]["gaps_open"]
+met = L["exit_predicate_result"]["met"]
+nxt = adapter.next_plan_step(L)
+print("%s,%s,%s" % (go, met, nxt))
+PYEOF
+)"
+# The buggy default produces gaps_open=0 (NOT None), plan-met True, next "done" —
+# materially different from the correct None/False path. Discriminator confirmed.
+if [ "$buggy_out" = "0,True,done" ]; then
+  pass
+else
+  fail "buggy default outcome = $buggy_out (expected 0,True,done — the regression this null-path guards)"
+fi
+
+# ─── Scenario 10: phantom-dispatch self-heal (orchestrator P3 bound) ──────────
+# orchestrator.dispatch_batch's launch guard (Bug #8) marks a unit stalled if
+# launch_fn raises. If the rescue transition (dispatched->stalled) ALSO raises,
+# the broadened `except Exception` swallows it and the unit stays `dispatched`
+# with no agent — a phantom. The CLAIM bounding that P3 is that the phantom
+# self-heals: detect_and_halt_stalled reclaims ANY dispatched-past-stall_threshold
+# unit on a later tick. This test proves that bound.
+#
+# We simulate the phantom directly (a unit stuck `dispatched` with dispatched_at
+# older than its stall_threshold, no verdict) and run detect_and_halt_stalled.
+# The reaper must transition it to `stalled` (reclaimed) with last_error null
+# (a plain timeout, not an adapter-raise). The deliberate-fail control is the
+# ABSENCE of the reaper call: without it, the phantom stays `dispatched` forever.
+it "phantom-dispatch self-heal: detect_and_halt_stalled reclaims a dispatched-past-threshold phantom -> stalled (last_error null)"
+PHANTOM_AT="$(now_minus 3600)"
+ledger_init "phantom-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10}]' "$PHANTOM_AT")" \
+  ce work >/dev/null 2>&1
+# Baseline: the phantom IS dispatched before the reaper runs (the swallowed-rescue
+# state the orchestrator P3 leaves behind).
+st_before="$(ledger_field "phantom-run" 'L["units"][0]["state"]')"
+phantom_out="$("$PY" - "$REPO" "phantom-run" "$TICK_PY" "$LEDGER_PY" <<'PYEOF'
+import sys, importlib.util, datetime
+repo, run, tick_py, ledger_py = sys.argv[1:5]
+lspec = importlib.util.spec_from_file_location("ledger", ledger_py)
+ledg = importlib.util.module_from_spec(lspec); lspec.loader.exec_module(ledg)
+tspec = importlib.util.spec_from_file_location("tick", tick_py)
+t = importlib.util.module_from_spec(tspec); tspec.loader.exec_module(t)
+led = ledg.read_ledger(repo, run)
+now = datetime.datetime.now(datetime.timezone.utc)
+fresh, halted, newly = t.detect_and_halt_stalled(repo, run, led, now)
+after = ledg.read_ledger(repo, run)
+u = after["units"][0]
+print("%s,%s,%s" % (u["state"], (",".join(newly)) if newly else "-", u.get("last_error")))
+PYEOF
+)"
+st_after="$(ledger_field "phantom-run" 'L["units"][0]["state"]')"
+# Before: dispatched (phantom). After the reaper: stalled, newly_stalled=[U1],
+# last_error null (plain timeout — NOT an adapter-raise error object).
+if [ "$st_before" = "dispatched" ] && [ "$phantom_out" = "stalled,U1,None" ] \
+   && [ "$st_after" = "stalled" ]; then
+  pass
+else
+  fail "before=$st_before reaper_out=$phantom_out after=$st_after (expected dispatched / stalled,U1,None / stalled)"
+fi
+
+it "deliberate-fail control: WITHOUT the reaper, the phantom stays dispatched forever (proves the reclaim is load-bearing)"
+# Same phantom, but we DO NOT call detect_and_halt_stalled. The unit must remain
+# `dispatched` — the absence of the reaper IS the control. If the phantom self-
+# healed without the reaper, the prior test would prove nothing.
+ledger_init "phantom-noreap-run" \
+  "$(printf '[{"id":"U1","state":"dispatched","dispatched_at":"%s","stall_threshold_seconds":10}]' "$PHANTOM_AT")" \
+  ce work >/dev/null 2>&1
+noreap_state="$(ledger_field "phantom-noreap-run" 'L["units"][0]["state"]')"
+assert_eq "dispatched" "$noreap_state"
+
+# ── summary ─────────────────────────────────────────────────────────────────
+echo ""
+echo "tick.test.sh: ${PASS} passed, ${FAIL} failed"
+[ "$FAIL" -eq 0 ]
