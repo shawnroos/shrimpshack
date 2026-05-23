@@ -751,4 +751,11 @@ main() {
   return 0
 }
 
-main "$@"
+# Source-safe guard: only invoke main when the script is executed directly
+# (`bash scripts/setup.sh`), NOT when it's sourced (e.g. by the
+# setup-interactive skill, which calls individual step functions one at a
+# time with AskUserQuestion gates between them). Same pattern as
+# lib/cascade-engine.sh's `cascade_compile` invocation guard.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi

@@ -1,7 +1,7 @@
 {
   "name": "claude-modes",
   "description": "Modal harness for Claude Code: named working stances that reshape the catalog at the harness level via a 5-tier cascading configuration system. Modes are settings overlays; per-repo isolation via <repo>/.claude/settings.local.json; hooks live in ~/.claude/settings.json (machine-wide) or <repo>/.claude/hooks/hooks.json (per-repo), never in any cascade YAML. Solves harness-bloat at scale.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": {
     "name": "Shawn Roos",
     "email": "shawn@slateteams.com"
