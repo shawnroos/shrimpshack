@@ -35,6 +35,16 @@
       },
       "source": "./plugins/claude-modes",
       "category": "development"
+    },
+    {
+      "name": "auto",
+      "description": "Workflow-agnostic pulsed loop engine \u2014 runs the auto loop pattern (plan-loop, parallel fan-out, review-fix until only P3 issues remain) as a durable, observable state machine backed by a per-unit ledger. Workflow-blind: drives Compound Engineering, native Claude, or any workflow through a thin adapter.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Shawn Roos"
+      },
+      "source": "./plugins/auto",
+      "category": "development"
     }
   ]
 }
