@@ -56,9 +56,18 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_ledger  # noqa: E402 — after _LIB_DIR is on sys.path.
+from _bootstrap import load_ledger, load_lib_module  # noqa: E402 — after _LIB_DIR is on sys.path.
 
 ledger = load_ledger()
+# The ONE phase-decision module (U5). All phase routing reads through it; the
+# AST lint forbids the raw "loop_phase" literal here so a divergent comparison
+# can't sneak back in.
+phase_grammar = load_lib_module("phase-grammar")
+# The emitter registry (U5b/v0.2.0): the seam-handler resolves a recipe's
+# declared emitter name through emitters.resolve() and hands the function to
+# ledger.transition_and_emit. No hyphen in the module name, so a plain import
+# works once _LIB_DIR is on sys.path.
+import emitters  # noqa: E402
 
 # Re-arm delay between ticks. ScheduleWakeup clamps to [60, 3600]s; we sit at
 # the floor so the smallest-useful advance paces as fast as the substrate
@@ -373,6 +382,29 @@ def advance_work_loop(repo_root, run_id, ledger_dict, halted_ids):
     return {"advanced": "none", "reason": "no-fix-due"}
 
 
+def _persist_enumerated_units(repo_root, run_id, enumerated):
+    """Persist the plan's enumerated work units onto the plan unit (U6 producer).
+
+    Targets the plan-phase unit being advanced. For A1 (single plan unit) and the
+    per-tick serialized A2 advance, that is the lone plan unit currently at
+    plan-done; we resolve it from the fresh ledger (the unit whose phase is
+    'plan'). If there are multiple plan units (A2), the active one is the one the
+    round-robin advanced this tick — for the V1 testable slice we target the first
+    plan-phase unit lacking enumerated_units, which the serialized one-per-tick
+    advance makes unambiguous. Idempotent-safe: re-persist overwrites.
+    """
+    led = ledger.read_ledger(repo_root, run_id)
+    plan_units = [u for u in led.get("units", []) if u.get("phase") == "plan"]
+    if not plan_units:
+        return
+    target = next(
+        (u for u in plan_units
+         if not (u.get("dispatch_context") or {}).get("enumerated_units")),
+        plan_units[0],
+    )
+    ledger.set_enumerated_units(repo_root, run_id, target["id"], enumerated)
+
+
 def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     """Plan-loop advance: ask the adapter for the next step and call that ONE
     step. The ADAPTER owns plan-step sequencing — the engine never picks it.
@@ -408,6 +440,25 @@ def advance_plan_loop(repo_root, run_id, ledger_dict, adapter):
     """
     step = adapter.next_plan_step(ledger_dict)
     if step == "done":
+        # PLAN-DONE: the plan sequence finished — enumerate this plan's work units
+        # via the v0.2.0 adapter op and PERSIST them onto the plan unit's
+        # dispatch_context.enumerated_units, so the phase-transition emitter (U5b)
+        # can read them when it emits work units (resolves F4 — the producer).
+        # enumerate_plan_units is prepare-only: it may return a bare list (a
+        # synchronous/test adapter) OR a PREPARE envelope the model fills with the
+        # units under the canonical "units" key. We persist whichever concrete list
+        # is available; a freshly-prepared envelope with no "units" key leaves the
+        # field untouched (same no-premature-default discipline as gaps_open).
+        enum_op = getattr(adapter, "enumerate_plan_units", None)
+        if callable(enum_op):
+            enum_result = enum_op(ledger_dict)
+            enumerated = None
+            if isinstance(enum_result, list):
+                enumerated = enum_result
+            elif isinstance(enum_result, dict) and isinstance(enum_result.get("units"), list):
+                enumerated = enum_result["units"]
+            if enumerated is not None:
+                _persist_enumerated_units(repo_root, run_id, enumerated)
         return {"advanced": "plan-done"}, None
     if step not in _PLAN_STEP_OPS:
         raise TickError(f"adapter returned unknown plan step: {step!r}")
@@ -494,7 +545,7 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
     now_iso = ledger._now_iso()
 
     led = ledger.read_ledger(repo_root, run_id)
-    phase = led.get("loop_phase")
+    phase = phase_grammar.current_phase(led)
 
     # 1. Predicate met? Route PHASE-AWARELY (gap #4 — the met-check must NOT
     #    preempt the seam). I-3: keep liveness honest by NOT stamping a beat for
@@ -620,7 +671,15 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
         }
 
     # 6. Re-arm the successor. The driver issues ScheduleWakeup(delay, prompt).
-    return {
+    # v0.2.0 fix-pass H: attach a loud operator-guidance block so an agent
+    # reading the INTENT can't miss the prepare/execute contract. The plan-loop
+    # is the most common operator trap (field bug 2026-05-25, second report:
+    # agent ticked 5 times expecting units to materialize; ledger stayed at
+    # units=[] because they never ran the prepared /ce-plan invocation). The
+    # guidance is phase-aware: plan-loop names the invocation + the gaps_open
+    # guard; work-loop reinforces the yield-to-harness pattern from fix-pass G.
+    led_now = ledger.read_ledger(repo_root, run_id)
+    intent = {
         "action": "rearm",
         "run": run_id,
         "delay": int(delay),
@@ -628,7 +687,143 @@ def _tick_body(repo_root, run_id, *, adapter, auto, delay):
         "advance": advance_result,
         "stalled": newly_stalled,
         "halted": halted_ids,
+        "operator_guidance": _operator_guidance_for(phase, advance_result, led_now),
     }
+    gap_guard = _gaps_open_guard(phase, led_now)
+    if gap_guard is not None:
+        intent["gaps_open_guard"] = gap_guard
+    return intent
+
+
+def _operator_guidance_for(phase, advance_result, led):
+    """Build the prepare/execute reminder block that rides every rearm intent.
+
+    v0.2.0 fix-pass H (memory feedback_auto_prepare_execute_operator_traps):
+    field bug where an agent ticked 5 times expecting units to populate. Root
+    cause was invisible contract: the tick prepares invocations; the model
+    EXECUTES them; if the model doesn't, the ledger doesn't progress. The
+    rearm intent now carries this reminder explicitly. Phase-aware so plan-
+    loop and work-loop get the right framing.
+    """
+    if phase == "plan":
+        step = None
+        if isinstance(advance_result, dict):
+            step = advance_result.get("step")
+        invocation = _PLAN_STEP_INVOCATION.get(step, "(see adapter contract)")
+        return (
+            "prepare/execute contract: I PREPARED a plan-loop invocation; "
+            "YOU must run it. I do NOT dispatch the work — my role is to "
+            "advance the state machine AFTER you feed structured results back "
+            "(set_gaps_open for review_plan, etc.). Re-ticking without running "
+            f"the invocation is a NO-OP — units will stay []. Just-prepared "
+            f"step: {step!r}; expected invocation: {invocation}."
+        )
+    if phase == "work":
+        # In the work-loop, the trap is different: the driver dispatches background
+        # Agents via the orchestrator and then YIELDS for harness re-invocation
+        # (fix-pass G). Don't ScheduleWakeup-poll waiting for verdicts.
+        return (
+            "prepare/execute contract: in the work-loop YOU drive the "
+            "orchestrator fan-out (orchestrator.ready_units + dispatch_batch); "
+            "after dispatching, YIELD silently — the harness re-invokes you "
+            "when a verdict lands (fix-pass G). Re-ticking without running "
+            "dispatch is a no-op."
+        )
+    return (
+        "prepare/execute contract: I prepare; YOU execute. Re-ticking without "
+        "running the prepared invocation does not advance the ledger."
+    )
+
+
+def _gaps_open_guard(phase, led):
+    """Warn the operator when they are in the deepen↔review livelock state.
+
+    This is Trap 2 from feedback_auto_prepare_execute_operator_traps: the
+    plan-loop cycles `plan → deepen → review_plan → deepen → review_plan → …`
+    forever unless the operator runs a real review and feeds back
+    ``set_gaps_open(N)``. Without that, gaps_open stays null, plan-met never
+    fires, and units never materialize.
+
+    The livelock signature is: ``plan_step ∈ {"deepen", "review_plan"}`` AND
+    ``gaps_open is None``. We do NOT key only on review_plan because the tick
+    PERSISTS plan_step AFTER the step runs (anti-livelock §3.1 fix), so by the
+    time this guard reads the ledger the just-completed review_plan has been
+    succeeded by a deepen → plan_step="deepen", gaps_open still null. Both
+    states are diagnostically equivalent: the operator hasn't fed back gaps yet.
+    """
+    if phase != "plan":
+        return None
+    plan_step = led.get("plan_step") or ""
+    if plan_step not in ("deepen", "review_plan"):
+        return None
+    pred = led.get("exit_predicate_result") or {}
+    if pred.get("gaps_open") is not None:
+        return None
+    return (
+        "gaps_open is NULL — plan-met cannot fire until a real review_plan "
+        "step has run and you call ledger.set_gaps_open(<N>) with the gap "
+        "count from /ce-doc-review's output. Without this the plan-loop will "
+        "deepen↔review_plan forever and units will never materialize. "
+        "Feeding back gaps_open=0 closes the loop and starts the work-loop."
+    )
+
+
+# Map a plan_step name to the invocation an operator should run. Authoritative
+# source for the operator-guidance string; if a new plan-step ships, add it here.
+_PLAN_STEP_INVOCATION = {
+    "plan": "/ce-plan <issue>",
+    "deepen": "/ce-plan deepen",
+    "review_plan": "/ce-doc-review",
+}
+
+
+def advance_to_phase(repo_root, run_id, led, *, to_phase):
+    """Advance loop_phase to ``to_phase``, emitting that phase's units if the
+    recipe declares an emitter for arrival there.
+
+    v0.2.0 fix-pass A.2 — the single chokepoint for phase advancement. Resolves
+    the recipe's {to: to_phase} emitter via phase_grammar.emitter_name_for_arrival
+    and calls ledger.transition_and_emit (atomic advance+emit+recompute). When
+    no emitter is declared we still need to fall back to a raw set_loop:
+
+    * Legacy ledger (recipe is None, e.g. a v0.1.x run resumed under v0.2.0) —
+      no recipe means no phase_transitions; use set_loop to preserve byte-
+      identical R13 behavior.
+    * v0.2.0 ledger with no matching transition — the recipe declares no
+      emitter for arrival at to_phase; this is a RECIPE BUG (the validator
+      should have rejected it earlier, but defense in depth: raise here so a
+      misconfigured workspace recipe can't silently no-op).
+
+    `feedback_plan_documents_transition_code_doesnt_wire_it`: this helper IS
+    the wire — every phase advance that crosses a transition boundary goes
+    through here.
+    """
+    emitter_name = phase_grammar.emitter_name_for_arrival(led, to_phase)
+    legacy_ledger = led.get("recipe") is None
+    if emitter_name is None:
+        if not legacy_ledger:
+            raise ledger.LedgerError(
+                f"recipe {led.get('recipe',{}).get('name')!r} declares no emitter "
+                f"for arrival at {to_phase!r}; either add a phase_transitions entry "
+                f"or fix the recipe"
+            )
+        # legacy: no recipe declared, behave like v0.1.x — raw advance.
+        # transition_and_emit's v0.2.0 path writes seam_paused=(to_phase=="seam");
+        # we mirror that here so manual seam→work via auto-resume clears the
+        # pause flag on legacy ledgers too. The auto-flip path (called with
+        # to_phase="work") clears it; future helpers that arrive at "seam"
+        # would set it. Either way, both writes happen in one set_loop.
+        ledger.set_loop(
+            repo_root,
+            run_id,
+            loop_phase=to_phase,
+            seam_paused=(to_phase == "seam"),
+            driver="self",
+            beat=True,
+        )
+        return
+    emitter_fn = emitters.resolve(emitter_name)
+    ledger.transition_and_emit(repo_root, run_id, to_phase, emitter_fn)
 
 
 def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
@@ -643,7 +838,16 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
 
     Manual (not auto): write loop_phase="seam", seam_paused=true,
     loop.driver="manual"; do NOT re-arm (signal seam_pause to the caller).
-    Auto: flip plan → work directly and keep re-arming.
+    Auto: flip plan → work directly via the recipe's emitter (v0.2.0; P0 #1
+    fix-pass A.2 — the load-bearing rewire). Reads the recipe's
+    phase_transitions for the {to: work} emitter, resolves it, and calls
+    ledger.transition_and_emit atomically (advance + emit + recompute in ONE
+    locked snapshot — the G3/F2 invariant). Legacy ledgers (no recipe) fall
+    back to the raw set_loop path so v0.1.x runs resumed under v0.2.0 keep
+    working. A v0.2.0 ledger missing the {to: work} declaration is a recipe
+    bug; we raise rather than silently no-op (per
+    feedback_plan_documents_transition_code_doesnt_wire_it — silent fallback
+    on configured recipes IS the build-bug class).
     """
     pred = led.get("exit_predicate_result") or {}
     plan_done = (
@@ -653,7 +857,7 @@ def _maybe_seam(repo_root, run_id, led, *, auto, advance_result):
     if not pred.get("met") and not plan_done:
         return advance_result  # gaps still open; keep ticking the plan loop.
     if _is_auto(auto):
-        ledger.set_loop(repo_root, run_id, loop_phase="work", driver="self", beat=True)
+        advance_to_phase(repo_root, run_id, led, to_phase="work")
         out = dict(advance_result or {})
         out["seam"] = "auto-flip-to-work"
         return out
@@ -680,7 +884,7 @@ def _build_report(led):
             if f.get("severity") == "minor":
                 minors.append({"unit": u.get("id"), "note": f.get("note", "")})
     return {
-        "loop_phase": led.get("loop_phase"),
+        phase_grammar.LOOP_PHASE_KEY: phase_grammar.current_phase(led),
         "blockers": pred.get("blockers", 0),
         "majors": pred.get("majors", 0),
         "minors": pred.get("minors", 0),

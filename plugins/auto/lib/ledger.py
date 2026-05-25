@@ -45,6 +45,7 @@ import os
 import re
 import sys
 import tempfile
+from typing import Callable
 
 # ──────────────────────────────────────────────────────────────────────────
 # Module constants (importable; consumers MUST read these, not hardcode copies).
@@ -308,11 +309,28 @@ def recompute_predicate(ledger: dict) -> dict:
         gaps_open = int(gaps_open)
 
     scale = ledger.get("adapter_scale", "three-tier")
-    all_units_terminal = all(
+    # v0.2.0 fix-pass A.1 (correctness P0 #3 / api-contract AC-2): the work-loop
+    # exit predicate's terminal check is scoped to the units in the CURRENT phase,
+    # not the global unit set. Pre-v0.2.0 (units=[] in the plan phase, the seam
+    # synthesized work units), the global all() was equivalent. v0.2.0 declares
+    # plan units explicitly in the recipe (a1's "plan", a2's "plan-1/2/3"); those
+    # plan units stay `pending` after plan-done is reached (the plan-loop's
+    # advance is recorded in plan_step, not via a unit state transition). A global
+    # all_units_terminal would block work-met forever. Scoping by phase makes each
+    # phase have its own terminality. terminal_phase from the recipe gates which
+    # phase's units count for run-exit (AC-2 — the doc promised this but the code
+    # didn't honor it). Global all_units_terminal is retained for the
+    # exit_predicate_result reporting field (downstream consumers may want it).
+    current_phase = ledger.get("loop_phase") or "plan"
+    terminal_phase = ledger.get("terminal_phase") or "work"
+    all_units_terminal_global = all(
         unit_is_terminal(u, scale) for u in ledger.get("units", [])
     )
+    current_phase_units = [
+        u for u in ledger.get("units", []) if u.get("phase") == current_phase
+    ]
 
-    if ledger.get("loop_phase") == "plan":
+    if current_phase == "plan":
         # Plan-loop exit: a REAL review reported zero gaps AND a review_plan
         # actually ran (§3.1). Bug #5: gaps_open must be NON-NULL — a null/unknown
         # gap count means no review has filled it yet, so plan-met cannot fire. The
@@ -340,15 +358,42 @@ def recompute_predicate(ledger: dict) -> dict:
         # Whether majors gate is decided by the SINGLE helper (the one source of
         # truth) — never a hardcoded scale comparison here.
         no_majors = "major" not in gating_severities(scale) or majors == 0
-        # Bug #4 — vacuous work-phase exit. all_units_terminal = all([]) is
-        # vacuously True, so an auto plan→work flip with ZERO units dispatched
-        # would declare `met` before the orchestrator ever fanned out work. The
-        # work-loop is not met until at least one unit exists; an empty plan phase
-        # is fine (handled by the plan branch above). We do NOT redefine
-        # all_units_terminal globally — the pure all([])==True is correct and read
-        # elsewhere; the empty-units guard lives only in the work-loop met.
-        has_units = bool(ledger.get("units"))
-        met = blockers == 0 and no_majors and all_units_terminal and has_units
+        # Bug #4 — vacuous work-phase exit. all([]) is vacuously True, so a
+        # phase flip with ZERO units dispatched would declare met before the
+        # orchestrator fans out work. The phase-scoped check
+        # (all_terminal_in_eval_phase + has_units_in_phase) addresses both this AND
+        # the v0.2.0 fix-pass A.1 (plan units in declared recipes shouldn't gate
+        # the work-loop's terminal check).
+        # AC-2 fix: `met` requires loop_phase == terminal_phase (the run doesn't
+        # exit until the terminal phase is reached AND its own units are terminal).
+        # Post-terminal: "done" is the exit sentinel set BY a met-triggered tick
+        # (the LAST member of LOOP_PHASES, never a member of any recipe's
+        # phase_order). At "done", phase-scoped units would be empty (no unit
+        # declares phase=done), so we'd vacuously flip met→false on the recompute
+        # that fires when set_loop writes "done". Treat "done" as
+        # terminal-equivalent for predicate purposes: the run already exited at
+        # terminal_phase; "done" preserves that state. Any FUTURE post-terminal
+        # sentinel (aborted/error/…) added to LOOP_PHASES would need the same
+        # treatment here; today "done" is the only post-terminal value.
+        # For v0.2.0's recipes terminal_phase is always "work"; v0.2.1's A3 will
+        # have non-work terminal phases and this gate becomes load-bearing.
+        eval_phase = terminal_phase if current_phase == "done" else current_phase
+        eval_phase_units = (
+            current_phase_units
+            if current_phase != "done"
+            else [u for u in ledger.get("units", []) if u.get("phase") == terminal_phase]
+        )
+        all_terminal_in_eval_phase = all(
+            unit_is_terminal(u, scale) for u in eval_phase_units
+        )
+        has_units_in_phase = bool(eval_phase_units)
+        met = (
+            eval_phase == terminal_phase
+            and blockers == 0
+            and no_majors
+            and all_terminal_in_eval_phase
+            and has_units_in_phase
+        )
 
     return {
         "met": bool(met),
@@ -356,17 +401,34 @@ def recompute_predicate(ledger: dict) -> dict:
         "majors": majors,
         "minors": minors,
         "gaps_open": gaps_open,
-        "all_units_terminal": bool(all_units_terminal),
+        "all_units_terminal": bool(all_units_terminal_global),
     }
 
 
 def is_orphaned(ledger: dict, now=None) -> bool:
     """I-3 orphan predicate (§5), excluding seam-paused surfacing (U7's concern).
 
-    Resumable iff loop_phase != "done" AND (driver == "manual" OR last_beat_at
+    Resumable iff current phase != "done" AND (driver == "manual" OR last_beat_at
     older than GRACE_SECONDS).
+
+    P2-10: routes the current-phase read through ``phase_grammar.current_phase``
+    for consistency with the rest of the codebase (the AST lint allows the raw
+    literal in ledger.py, but the convention is to read the field through the
+    one phase-decision module). Lazy import to avoid module-load ordering
+    surprises (ledger.py is loaded from many sites, sometimes before sys.path
+    is set up for sibling modules).
     """
-    if ledger.get("loop_phase") == "done":
+    # Lazy import: phase-grammar.py is a sibling lib module; loading it at
+    # module import time would create a load-order dependency, so we defer.
+    import sys as _sys
+    import os as _os
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    from _bootstrap import load_lib_module as _load
+    phase_grammar = _load("phase-grammar")
+
+    if phase_grammar.current_phase(ledger) == "done":
         return False
     loop = ledger.get("loop") or {}
     if loop.get("driver") == "manual":
@@ -495,6 +557,10 @@ def init_ledger(
     units=None,
     loop_phase: str = "plan",
     plan_step=None,
+    recipe=None,
+    phase_order=None,
+    terminal_phase=None,
+    phase_transitions=None,
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
@@ -502,15 +568,59 @@ def init_ledger(
     fields are filled with schema defaults. The predicate is recomputed and the
     file is written atomically under flock. ``plan_step`` defaults to ``None``
     (no plan step run yet — schema §3.1).
+
+    v0.2.0 recipe fields (all additive / backward-compatible — a v0.1.x ledger
+    with none of them reads identically; see _normalize_unit and §2 of the
+    ledger-schema contract):
+      ``recipe``         — optional dict {name, source_tier}; the recipe this run
+                           was built from. None on a recipe-blind (v0.1.x) ledger.
+      ``phase_order``    — optional list; the run's phase sequence. Defaults to
+                           ["plan", "seam", "work"] (the v0.1.x grammar).
+      ``terminal_phase`` — optional str; the phase whose completion ends the run.
+                           Defaults to "work". MUST be a member of phase_order.
+      ``phase_transitions`` — optional list of {from, to, emitter} dicts; the
+                           recipe's emitter declarations. Persisted on the ledger
+                           so seam-handlers can resolve the emitter for a given
+                           arrival phase without re-loading the recipe file
+                           (which could drift mid-run). Defaults to [] (no
+                           emitters declared — legacy v0.1.x behavior, the run
+                           emits nothing at phase boundaries).
     """
     if adapter not in ("ce", "native"):
         raise LedgerError(f"invalid adapter: {adapter!r}")
     if adapter_scale not in ("three-tier", "blocker-only"):
         raise LedgerError(f"invalid adapter_scale: {adapter_scale!r}")
-    if loop_phase not in LOOP_PHASES:
-        raise LedgerError(f"invalid loop_phase: {loop_phase!r}")
+
+    # phase_order / terminal_phase default to the v0.1.x grammar so a call with
+    # neither produces a ledger that behaves exactly as before.
+    if phase_order is None:
+        phase_order = ["plan", "seam", "work"]
+    elif not isinstance(phase_order, list) or not phase_order:
+        raise LedgerError(f"phase_order must be a non-empty list: {phase_order!r}")
+    if terminal_phase is None:
+        terminal_phase = "work"
+    if terminal_phase not in phase_order:
+        raise LedgerError(
+            f"terminal_phase {terminal_phase!r} not in phase_order {phase_order!r}"
+        )
+    # loop_phase must be a member of the run's phase_order (which, for the
+    # default grammar, is exactly the legacy LOOP_PHASES minus the terminal
+    # "done" sentinel — "done" is a post-terminal marker, never a start phase).
+    if loop_phase != "done" and loop_phase not in phase_order:
+        raise LedgerError(
+            f"invalid loop_phase {loop_phase!r} for phase_order {phase_order!r}"
+        )
     if plan_step is not None and plan_step not in PLAN_STEPS:
         raise LedgerError(f"invalid plan_step: {plan_step!r}")
+
+    # phase_transitions defaults to []; basic shape check (the recipe validator
+    # does the full check, but we don't trust that the caller already validated).
+    if phase_transitions is None:
+        phase_transitions = []
+    elif not isinstance(phase_transitions, list):
+        raise LedgerError(
+            f"phase_transitions must be a list: {phase_transitions!r}"
+        )
 
     path = ledger_path(repo_root, run_id)
     lpath = lock_path(repo_root, run_id)
@@ -532,7 +642,7 @@ def init_ledger(
         for u in units or []:
             if "id" not in u:
                 raise LedgerError("unit missing 'id'")
-            norm_units.append(_normalize_unit(u))
+            norm_units.append(_normalize_unit(u, loop_phase=loop_phase))
 
         ledger = {
             "run_id": run_id,
@@ -541,6 +651,13 @@ def init_ledger(
             "seam_paused": loop_phase == "seam",
             "adapter": adapter,
             "adapter_scale": adapter_scale,
+            # v0.2.0 recipe fields (additive). recipe is None on a recipe-blind
+            # v0.1.x ledger; phase_order/terminal_phase default to the legacy
+            # grammar so the predicate + phase routing behave identically.
+            "recipe": recipe,
+            "phase_order": phase_order,
+            "terminal_phase": terminal_phase,
+            "phase_transitions": phase_transitions,
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": _now_iso()},
@@ -551,13 +668,20 @@ def init_ledger(
     return _flock_run(lpath, body)
 
 
-def _normalize_unit(u: dict) -> dict:
+def _normalize_unit(u: dict, *, loop_phase: str = "plan") -> dict:
     state = u.get("state", "pending")
     if state not in UNIT_STATES:
         raise LedgerError(f"invalid unit state: {state!r}")
+    # v0.2.0 per-unit `phase` (additive). A unit with no explicit phase inherits
+    # the run's start phase when that is a plan phase, else defaults to "work" —
+    # matching the v0.1.x reality where plan-phase runs have no work units yet and
+    # any pre-declared unit is a work unit. Recipes set `phase` explicitly.
+    default_phase = "plan" if loop_phase == "plan" else "work"
+    phase = u.get("phase", default_phase)
     return {
         "id": u["id"],
         "state": state,
+        "phase": phase,
         "depends_on": list(u.get("depends_on") or []),
         "dispatched_at": u.get("dispatched_at"),
         "verdict_at": u.get("verdict_at"),
@@ -574,6 +698,23 @@ def _normalize_unit(u: dict) -> dict:
         # when record_verdict is called without an explicit attempt.
         "attempt": int(u.get("attempt", 0) or 0),
         "findings": list(u.get("findings") or []),
+        # v0.2.0 per-unit additive fields (all backward-compatible — an old
+        # ledger with none of these reads as the documented defaults below and
+        # behaves identically; same discipline as `attempt` above):
+        #   plan_step       — per-unit plan-step for N>1 parallel plan-loops (R11);
+        #                     A1's single plan-loop keeps using the top-level
+        #                     scalar, so this stays None there. None = no step yet.
+        #   gaps_open       — per-unit open-gap count for N>1 plan-loops. None until
+        #                     a review feeds one back.
+        #   dispatch_context— recipe-side metadata merged from `invokes` (e.g.
+        #                     prompt_template, bias) + engine-written keys like
+        #                     enumerated_units. {} when absent.
+        #   last_advanced_at— round-robin tiebreaker for serialized N>1 plan
+        #                     advance (null sorts oldest → picked first).
+        "plan_step": u.get("plan_step"),
+        "gaps_open": u.get("gaps_open"),
+        "dispatch_context": dict(u.get("dispatch_context") or {}),
+        "last_advanced_at": u.get("last_advanced_at"),
     }
 
 
@@ -658,6 +799,59 @@ def transition(repo_root, run_id, unit_id, new_state, **fields):
                 int(passed) if passed is not None else 0,
             )
         return unit["state"]
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def transition_and_emit(
+    repo_root, run_id, to_phase, emitter: Callable[[dict, str], list]
+):
+    """Advance ``loop_phase`` to ``to_phase`` AND emit that phase's units, in ONE
+    atomic write (v0.2.0 U5b / KTD-6 — the G3/F2 fix).
+
+    This is the phase-transition primitive. The round-1 framing tried to do the
+    advance and the emission as SEPARATE locked writes (`set_loop` then an emit),
+    which left a torn-state window: a reader between the two writes would see the
+    new phase with zero emitted units, and `recompute_predicate` could fire
+    ``met`` prematurely (e.g. A2's judge terminal → all_units_terminal with no
+    work units yet). Doing both inside one ``_with_locked_ledger`` body closes
+    that window: the emitter's units are appended BEFORE ``_atomic_write``'s
+    mandatory predicate recompute, so ``met`` is always computed against the
+    post-emission unit set.
+
+    ``emitter`` is a PURE callable ``(ledger, to_phase) -> list[new_unit_dict]``.
+    It MUST NOT call any ledger mutator (`transition`, `record_verdict`,
+    `set_loop`, …): those re-acquire the flock on a fresh fd and would deadlock
+    inside this already-locked body (F3). The emitter only READS the passed
+    ledger dict and RETURNS new partial unit dicts; this primitive normalizes and
+    appends them. New unit ids must not collide with existing ones.
+
+    Returns the list of newly-appended unit ids.
+    """
+    def mutate(ledger):
+        new_units = emitter(ledger, to_phase) or []
+        existing_ids = {u["id"] for u in ledger.get("units", [])}
+        appended = []
+        for nu in new_units:
+            if "id" not in nu:
+                raise LedgerError("emitted unit missing 'id'")
+            if nu["id"] in existing_ids:
+                raise LedgerError(f"emitted unit id collides: {nu['id']!r}")
+            # Emitted units default to the arriving phase unless they declare one.
+            nu = dict(nu)
+            nu.setdefault("phase", to_phase)
+            ledger.setdefault("units", []).append(
+                _normalize_unit(nu, loop_phase=ledger.get("loop_phase", "plan"))
+            )
+            existing_ids.add(nu["id"])
+            appended.append(nu["id"])
+        # Advance the phase AFTER emission (the units belong to to_phase; setting
+        # loop_phase first or last is equivalent here since both happen in one
+        # snapshot, but advancing last keeps "emit produces units FOR to_phase"
+        # readable). seam_paused tracks the phase per the v0.1.x rule.
+        ledger["loop_phase"] = to_phase
+        ledger["seam_paused"] = to_phase == "seam"
+        return appended
 
     return _with_locked_ledger(repo_root, run_id, mutate)
 
@@ -833,6 +1027,81 @@ def set_gaps_open(repo_root, run_id, gaps_open: int):
         epr = ledger.setdefault("exit_predicate_result", {})
         epr["gaps_open"] = n
         return n
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def set_enumerated_units(repo_root, run_id, unit_id, enumerated):
+    """Persist a plan unit's ``enumerate_plan_units`` output onto its
+    ``dispatch_context.enumerated_units`` (v0.2.0 U6, the producer-persist).
+
+    Called at plan-done with the adapter's enumerated work-unit list. The
+    phase-transition emitter (U5b) reads it from here when emitting work units —
+    so this is the on-ledger bridge between "the plan finished" and "here are its
+    work units," resolving F4 (v0.1.x had no in-code producer). ``enumerated`` is
+    a list of partial unit dicts (each at least an ``id``). Raises if the named
+    unit doesn't exist. Atomic (predicate recompute is a no-op here — the plan
+    unit's own state is unchanged — but the write stays on the I-1 path).
+    """
+    if not isinstance(enumerated, list):
+        raise LedgerError("enumerated units must be a list")
+
+    def mutate(ledger):
+        unit = _find_unit(ledger, unit_id)
+        dc = unit.setdefault("dispatch_context", {})
+        dc["enumerated_units"] = list(enumerated)
+        return len(enumerated)
+
+    return _with_locked_ledger(repo_root, run_id, mutate)
+
+
+def set_winner_unit_id(repo_root, run_id, judge_unit_id, winner_id):
+    """Persist an A2 judge's winner pick onto its ``dispatch_context.winner_unit_id``
+    (v0.2.0 round-2 P0 fix — fix-pass I).
+
+    A2's ``judge_winner_to_work_units`` emitter needs to know which plan unit won.
+    The original design read it from ``findings[].winner_unit_id``, but
+    ``record_verdict`` normalizes findings to ``{severity, note}`` only —
+    stripping the winner before the emitter ever runs. Production A2 was
+    unrunnable end-to-end. dispatch_context is the right home: same channel as
+    ``enumerated_units``, preserved by ``transition()`` and the verdict-write
+    path, and findings stay narrow.
+
+    The judge agent (or its launcher) calls THIS mutator alongside
+    ``record_verdict`` to declare the winner. ``winner_id`` must be a non-empty
+    string AND must reference an existing unit id in the ledger (defensive — a
+    typo'd winner would surface as a hard error here rather than a confusing
+    emitter raise later). Raises if the judge unit doesn't exist or the winner
+    is invalid. Atomic (predicate recompute is a no-op here — the judge's own
+    state is unchanged — but the write stays on the I-1 path).
+    """
+    if not isinstance(winner_id, str) or not winner_id:
+        raise LedgerError(f"winner_id must be a non-empty string, got {winner_id!r}")
+
+    def mutate(ledger):
+        judge = _find_unit(ledger, judge_unit_id)
+        # The eligible-winner set is "every unit except the judge itself"
+        # (round-3 P3 promotion — fix-pass J). The previous check accepted
+        # the judge naming itself as winner, which would pass the guard, the
+        # emitter would call _enumerated_units(judge) which returns [] (judges
+        # don't carry enumerated_units), and the run would silently emit no
+        # work units — exactly the failure mode the design was trying to
+        # prevent ("malformed judge verdict is a hard error, not silent empty
+        # emission"). Excluding judge_unit_id from existing_ids tightens the
+        # contract to "winner must be SOME OTHER unit" and surfaces the
+        # malformed case as the LedgerError it deserves.
+        existing_ids = {
+            u.get("id") for u in ledger.get("units", [])
+        } - {judge_unit_id}
+        if winner_id not in existing_ids:
+            raise LedgerError(
+                f"winner_id {winner_id!r} does not name an eligible unit "
+                f"(must differ from judge {judge_unit_id!r}); "
+                f"known: {sorted(i for i in existing_ids if i)!r}"
+            )
+        dc = judge.setdefault("dispatch_context", {})
+        dc["winner_unit_id"] = winner_id
+        return winner_id
 
     return _with_locked_ledger(repo_root, run_id, mutate)
 
