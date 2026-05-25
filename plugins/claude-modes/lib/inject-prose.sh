@@ -16,8 +16,12 @@
 #     (consumed on read).
 #
 # Writes:
-#   - {"systemMessage": "..."} JSON object on stdout (single line, json.dumps
-#     for safe escaping).
+#   - {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+#     "additionalContext": "..."}} JSON object on stdout (single line,
+#     json.dumps for safe escaping). The harness inserts additionalContext
+#     as a HIDDEN system-reminder Claude sees on the next model request;
+#     the text does NOT appear in the chat transcript. (See Claude Code
+#     Hooks reference, UserPromptSubmit output schema.)
 #   - First-injection marker ~/.claude/modes/.sessions/<session>.injected
 #     (used to suppress the "Active mode: <name>" header on subsequent
 #     prompts in the same session).
@@ -43,15 +47,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ──────────────────────────────────────────────────────────────────────────
 # Helpers.
 
-# Emit {"systemMessage": "<msg>"} on stdout via Python json.dumps so we
-# never hand-escape prose containing markdown, quotes, or unicode.
+# Emit the prose as HIDDEN context to the next model call, wrapped in
+# the documented Claude Code hook output envelope:
+#
+#   {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+#                            "additionalContext": "<msg>"}}
+#
+# The harness reads this and inserts <msg> as a system-reminder Claude
+# sees on the next model request, but the text does NOT appear in the
+# chat transcript. (See Claude Code Hooks reference, UserPromptSubmit
+# output schema.)
+#
+# WHY NOT systemMessage: pre-fix this lib emitted {"systemMessage": "..."},
+# which the docs document as "warning message shown to the user" — i.e.
+# user-visible UI text, not hidden context. The harness duly rendered the
+# whole prose block (active-mode header, philosophy, scope, lens, R31
+# subagent-dispatch guidance) as visible chat content on every prompt
+# ("⎿  UserPromptSubmit says: ..."). additionalContext is the right key.
+#
 # ensure_ascii=False keeps emoji as valid UTF-8 (RFC 7159) — V1 had a bug
 # where the default True produced lone surrogate halves on macOS Python.
 __emit_system_message() {
   local msg="$1"
   "$CLAUDE_MODES_PYTHON3" -c '
 import sys, json
-print(json.dumps({"systemMessage": sys.argv[1]}, ensure_ascii=False))
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": sys.argv[1],
+    }
+}, ensure_ascii=False))
 ' "$msg"
 }
 
@@ -292,7 +317,8 @@ main() {
     exit 0
   fi
 
-  # Build the systemMessage piece-by-piece.
+  # Build the additionalContext body piece-by-piece (see header — emitted
+  # via hookSpecificOutput.additionalContext, NOT systemMessage).
   local sections=()
   local is_first=0
 

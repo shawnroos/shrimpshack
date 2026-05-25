@@ -60,13 +60,18 @@ threat class — prompt injection, not terminal escape).
 | raw branch name | `/mode:status` "Current branch:" | repo | sanitize_for_display | SANITIZED (L4-b) |
 | cwd basename (clone dir) | statusline OSC-2 title (`__cm_title`) | path | sanitize_for_display (chokepoint) | SANITIZED (L4-b) |
 | adopted-file basename | PostToolUse `/dev/tty` consent prompt | repo | sanitize_for_display | SANITIZED (L3-a) |
-| adopted-file basename / path | adopt-file.sh stderr error messages | user | none | DEFERRED (P3) — `$arg`/`$file_path` are the USER's own typed `/mode:adopt` argument; self-shoot surface, not hostile-repo. |
+| adopted-file basename / path | adopt-file.sh stderr error messages | user | none | DEFERRED (P3) — `$arg`/`$file_path` are the USER's own typed `/mode:adopt` argument; self-shoot surface, not hostile-repo. (`arg` is deliberately NOT in ATTACKER_VARS: it's a generic name reused across files with self-shoot threat models — globally allowlisting it would force re-litigating this and several sibling deferred sinks. mode-add.sh's parse_candidate diagnostic instead uses a FIXED string so it carries no raw-var sink.) |
 | repo path from registry | unmodes.sh `_log` skip/preserve messages | repo (via clone-dir name) | none | DEFERRED (P3) — hostile-repo-reachable (the clone-dir name carries the bytes), BUT the attack chain requires three deliberate user steps with the dir name visible throughout: clone a hostile-named dir → run `/mode:set` in it (consent) → later run `/mode:uninstall`. The three-step user-intent attenuates the vector substantially. Revisit if uninstall ever runs unattended. |
 | `_repo.yaml` path (`$candidate`/`$repo_yaml`) + ancestor-symlink realpath (`$__real_cand`) | cascade-engine.sh R30 rejection + "could not hash" stderr (lines 213/360/387) | repo / path | sanitize_for_display | SANITIZED (L6-a) — round-6: these rejection branches fire on the FIRST `/mode:set` in a hostile clone, BEFORE the consent gate, printing the attacker clone path / symlink-target realpath raw. Missed for rounds because cascade-engine.sh was not in the hand-maintained lint file list (now computed via find). |
 | sentinel body (`$prev`) | set-mode.sh resume/replace stderr | impossible | none | DEFERRED — sentinel is written by set-mode itself with a validated name; an attacker writing it already owns `~/.claude/`. |
 | untagged-file basename/path | `.untagged-files` marker → inject-prose systemMessage | agent | json.dumps (wire-encoded) | OUT OF SCOPE — agent channel, not a terminal renderer. Prompt-injection class, handled separately. |
 | `.last-active-mode` body | (all read sites) | repo | read_validated_mode_body | VALIDATED |
 | sidecar `source_modes` | `/mode:status` tier-4 [contributed] | repo (plugin-written) | membership check only (not displayed raw) | SAFE |
+| cached SKILL.md `name:` field + plugin dir name (`plugin_d`/`skill_d`) | resolve-catalog-candidate.sh `kind=skill` TSV record (caller prints to disambiguation UI) | repo (hostile plugin in `~/.claude/plugins/cache`) | sanitize_for_display (bash) at the format site | SANITIZED (U2) — values come from a glob over the plugin cache; a hostile cached SKILL.md could plant ESC/OSC/Cf bytes in its `name:` value or its containing dir name. Sanitized into `_d` locals BEFORE the printf. |
+| skill's parent-plugin FQN from installed_plugins.json (`parent_d`) | resolve-catalog-candidate.sh `kind=skill … parent_plugin=` TSV field | repo (registry is user-writable JSON) | sanitize_for_display (bash) at the format site | SANITIZED (Batch-4) — the skill row's parent_plugin field cross-references the user-writable registry for the skill's installed parent. Raw `parent_raw` reaches printf only via the sanitized `parent_d`; ATTACKER_VARS lists `parent_raw`. |
+| user's typed query / colon-FQN | mode-add.sh parse_candidate diagnostic stderr | user / repo (FQN-shortcut path's arg could echo a hostile cached SKILL.md name) | FIXED string (no interpolation) | SAFE (Batch-4) — the parse_candidate diagnostic is a FIXED string that does NOT interpolate `$arg`; ALL mode-add.sh error branches are fixed strings, so this lib has no attacker-class terminal sink (matches its SECURITY header). Chosen over the sanitize+allowlist option because `arg` is a generic name with documented-deferred sinks in adopt-file.sh/unmodes.sh — a global ATTACKER_VARS entry would cascade into those. |
+| installed_plugins.json plugin key (`key_d`) | resolve-catalog-candidate.sh `kind=plugin source=installed` TSV record | repo (registry is user-writable JSON) | sanitize_for_display (bash) at the format site | SANITIZED (U2) |
+| marketplace.json plugin `name` + top-level `name` → FQN (`fqn_d`) | resolve-catalog-candidate.sh `kind=plugin source=marketplace` TSV record | repo (marketplace.json is user-writable JSON) | sanitize_for_display (bash) at the format site | SANITIZED (U2) |
 
 ## Lint enforcement
 
@@ -108,6 +113,33 @@ L7 closed the language boundary:
 - `lib/drift-diff.py` is excluded (NOT WIRED IN for V2.0 — no callers); apply
   the strip at V2.1 wiring time. `lib/reconcile-symlinks.py` is excluded (logs
   only to files, never a terminal).
+
+**round-8 (U2) — resolve-catalog-candidate.sh + post-write-reload.sh.** U2's
+catalog resolver and U6's reload helper introduced new attacker-controllable
+sinks (see the SANITIZED (U2) rows above). The bash lint's `ATTACKER_VARS`
+allowlist now lists every RAW (un-`_d`) name they carry so the sanitize
+invariant is mechanically enforced, not convention:
+- `plugin_raw` / `skill_raw` — hostile cached `SKILL.md` `name:` value + its
+  containing plugin dir name (`~/.claude/plugins/cache`).
+- `key_raw` — user-writable `installed_plugins.json` plugin key.
+- `fqn_raw` — user-writable `marketplace.json` plugin/top-level `name` → FQN.
+- `delta_summary` — post-write-reload's raw delta string (may embed plugin
+  keys).
+All currently reach `printf` only via their `_d` display variants; the lint now
+turns any future raw-var print into a red build. `mode_name` is deliberately NOT
+listed — post-write-reload.sh interpolates only `mode_name_d` into every printf
+(raw `mode_name` reaches no terminal sink), so it stays validated-by-construction
+like `active_mode` / `branch_slug`.
+
+**round-8 (U2) — Python transport-boundary strip.** resolve-catalog-candidate.sh's
+three Python helpers emit `\n`-separated, `\t`-delimited records that bash then
+splits BEFORE per-field sanitize. A hostile cache plugin-dir name / registry key
+/ marketplace name carrying an embedded newline would forge phantom TSV rows
+(one on-disk skill → N rows). Fixed at the transport boundary: each helper
+applies an inline Cc+Cf strip (same contract as `lib/sanitize.py`) to every
+component BEFORE the `sys.stdout.write(... + '\t' + ... + '\n')`, so an injected
+`\n`/`\t` can never reach the record/field separator. The bash-side
+`sanitize_for_display` stays as display defense-in-depth.
 
 Adding a new sink in EITHER language requires routing through that language's
 `sanitize_for_display` AND updating this doc. Both lints fail CI otherwise.

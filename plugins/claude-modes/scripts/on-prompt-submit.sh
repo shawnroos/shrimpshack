@@ -8,8 +8,15 @@
 #   4. Dispatch to lib/inject-prose.sh with the tmpfile path as argv.
 #   5. Always exit 0 (rel-001 contract — UserPromptSubmit must never block).
 #
-# Output contract: a single JSON object {"systemMessage": "..."} on stdout
-# if injection is warranted, else no output. Errors → stderr, exit 0.
+# Output contract: a single JSON object
+#   {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+#                            "additionalContext": "..."}}
+# on stdout if injection is warranted, else no output. The harness inserts
+# additionalContext as a HIDDEN system-reminder Claude sees on the next
+# model request — the prose does NOT render in the chat transcript.
+# (Pre-fix the contract was {"systemMessage": ...}, which renders as a
+# user-visible warning per Claude Code Hooks docs — that was the bug.)
+# Errors → stderr, exit 0.
 
 # Cost-of-being-installed: this is the absolute first check, before any
 # subprocess work (python3, mktemp). If a user doesn't use modes, the hook

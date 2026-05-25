@@ -54,6 +54,32 @@ that prepares your user catalog and per-machine baseline.
 /mode:statusline install        # wire mode visibility into your statusline
 ```
 
+### Editing the active mode in-flow (0.3.0)
+
+You don't have to leave your work to reshape the mode you're in:
+
+```
+/mode:add figma                 # add a plugin (or skill) to the active mode
+/mode:drop typescript-lsp       # remove (disable) one from the active mode
+/mode:edit                      # converse with the mode agent about changes
+@mode add figma                 # same agent, conversational shorthand
+```
+
+`/mode:add` and `/mode:drop` resolve what you name across your installed
+plugins, cached skills, and known marketplaces. When a name is ambiguous
+(e.g. a skill and a plugin share it), they surface the candidates so you
+pick. Adding a **plugin-shipped skill** enables its parent plugin (that's
+how you get the skill); adding a **user-authored** command/agent stages it
+in the mode's user-catalog. Every edit is written atomically, preserves the
+mode's prose layer (philosophy / scope / lens / constraints), keeps
+`claude-modes` itself enabled (R22), and prints a `/reload-plugins` prompt
+so the new loadout takes effect.
+
+`@mode` (or `/mode:edit`) opens the **mode agent** — it runs in its own
+context window, can explain what the active mode enables and why, walks you
+through accept/reject, and redirects you to `/mode:suggester` if you
+actually want to *switch* modes or to `mode-author` if you want a *new* one.
+
 Modes are **per-branch** by design: `feature/ai-pipeline` and
 `main` can have different active modes in the same repo, and a
 worktree carries its own pointer. `/mode:set` writes a pointer

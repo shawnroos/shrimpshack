@@ -228,8 +228,14 @@ __claude_modes::set_mode_locked() {
   fi
 
   # ─── Step 2: resolve repo_root + branch_slug ───────────────────────
+  # WRITE-side: use the git toplevel directly. The READ-side resolver
+  # (claude_modes::current_repo_root) requires the `.claude/modes/`
+  # marker dir to exist AND cwd to be git-tracked under it; on a
+  # project's FIRST `/mode:set`, the marker dir doesn't exist yet
+  # (chicken-and-egg). So set-mode goes straight to the git toplevel
+  # and CREATES `.claude/modes/` if needed when writing the pin.
   local repo_root branch_slug
-  repo_root=$(claude_modes::current_repo_root)
+  repo_root=$(claude_modes::current_git_toplevel)
   branch_slug=""
   if [ -n "$repo_root" ]; then
     branch_slug=$(claude_modes::current_branch_slug 2>/dev/null || true)
@@ -333,8 +339,11 @@ claude_modes::clear_mode() {
 # catalog lock is held — see claude_modes::clear_mode.
 __claude_modes::clear_mode_locked() {
   # ─── Resolve repo_root + branch_slug ────────────────────────────────
+  # WRITE-side: use the git toplevel directly (same reasoning as set-mode
+  # above — clear writes a sentinel pin file, so it needs the toplevel
+  # regardless of whether the resolver's read-side gates would qualify).
   local repo_root branch_slug
-  repo_root=$(claude_modes::current_repo_root)
+  repo_root=$(claude_modes::current_git_toplevel)
   branch_slug=""
   if [ -n "$repo_root" ]; then
     branch_slug=$(claude_modes::current_branch_slug 2>/dev/null || true)

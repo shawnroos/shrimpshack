@@ -16,8 +16,8 @@ Argument forms:
 - **Basename**: `/mode:adopt strict-deploy.md` — probes both
   `~/.claude/commands/` and `~/.claude/agents/`; refuses on ambiguity.
 - **Absolute path**: `/mode:adopt ~/.claude/commands/strict-deploy.md`
-  (leading `~/` is expanded by the dispatch script — slash-command
-  `$ARGUMENTS` is not shell-expanded by the harness).
+  (leading `~/` is expanded by the dispatch script — the slash-command
+  argument string is not shell-expanded by the harness).
 
 Refusals (each surfaced as a clear stderr message):
 

@@ -93,6 +93,13 @@ except Exception:
 # the bare-dict shape. (Bug surfaced on first contact with a real marketplace
 # install; never exercised because tests used CLAUDE_MODES_CANONICAL_ID or the
 # fallback. Mirror this list-awareness in any future registry reader.)
+# REGISTRY-READER SYNC (round-8 / U2): the same installed_plugins.json shape-
+# normalization lives in TWO sibling readers in lib/resolve-catalog-candidate.sh
+# (its installed-plugins source + its marketplaces membership check). Those do
+# DIFFERENT work (iterate-by-name / collect-keys) vs this realpath-match-by-
+# installPath, so they're intentionally kept as separate readers — but the
+# `{"plugins": dict} → items` shape handling MUST stay identical across all
+# three. Change the accepted registry shape here → update the resolver too.
 candidates = []
 plugins = data.get("plugins") if isinstance(data, dict) else None
 if isinstance(plugins, dict):
