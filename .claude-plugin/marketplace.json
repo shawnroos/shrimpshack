@@ -38,8 +38,8 @@
     },
     {
       "name": "auto",
-      "description": "Workflow-agnostic pulsed loop engine with natural-language commands \u2014 runs the auto loop pattern (plan-loop, parallel fan-out, review-fix until only P3 issues remain) as a durable, observable state machine backed by a per-unit ledger. v0.3.0 adds outcomes-gated emission: recipes can declare an iteration block where a gate unit's verdict.decision drives advance/iterate/exit, bounded by max_attempts + active-wall-time \u2014 A2 (Parallel Theories+Judge) and A4 (Adversarial Pair+Comparator) re-spawn under bound when the judge says iterate, closing the v0.2.x round-gated gap. Plus operator kill-switch (CLAUDE_AUTO_DISABLE_ITERATION), shape-corruption shields, and the iteration-crash exit_reason ledger field for post-crash diagnosis. Workflow-blind: drives Compound Engineering, native Claude, or any workflow through a thin adapter.",
-      "version": "0.3.0",
+      "description": "Workflow-agnostic pulsed loop engine with natural-language commands \u2014 runs the auto loop pattern (plan-loop, parallel fan-out, review-fix until only P3 issues remain) as a durable, observable state machine backed by a per-unit ledger. Outcomes-gated emission: recipes declare an iteration block where a gate unit's verdict.decision drives advance/iterate/exit, bounded by max_attempts + active-wall-time \u2014 A2 (Parallel Theories+Judge) and A4 (Adversarial Pair+Comparator) re-spawn under bound when the judge says iterate. Operator kill-switch (CLAUDE_AUTO_DISABLE_ITERATION), shape-corruption shields, iteration-crash exit_reason for post-crash diagnosis. v0.3.1 is a structural release: the ledger and tick engines are decomposed into focused modules (no file over 1k LOC) with an import-topology lint locking the dependency DAG \u2014 behavior-identical, 434 tests green. Workflow-blind: drives Compound Engineering, native Claude, or any workflow through a thin adapter.",
+      "version": "0.3.1",
       "author": {
         "name": "Shawn Roos"
       },
