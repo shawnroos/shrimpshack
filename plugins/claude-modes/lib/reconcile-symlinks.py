@@ -168,11 +168,67 @@ def _read_session_id() -> str:
 # Branch resolution + slugify.
 
 
+def _gated_repo_root(cwd: str) -> Optional[str]:
+    """READ-side repo root: nearest ancestor of cwd with a .claude/modes/
+    directory under which cwd is git-tracked. None otherwise.
+
+    Python mirror of claude_modes::current_repo_root (lib/repo-root.sh). MUST
+    stay behavior-equivalent — pinned by mode-body-read-equivalence. This is
+    NOT bare `git rev-parse --show-toplevel`: that would let an untracked
+    scratch dir under a modes-using project inherit the project's per-branch
+    pin (the cross-project leak). Walk up for the .claude/modes/ opt-in marker
+    AND require cwd to be git-tracked under it.
+    """
+    try:
+        home_canon = os.path.realpath(os.path.expanduser("~"))
+        cur = os.path.realpath(cwd)
+    except OSError:
+        return None
+    d = cur
+    while d and d != "/" and d != home_canon:
+        if os.path.isdir(os.path.join(d, ".claude", "modes")):
+            # cwd == project root always qualifies.
+            if cur == d:
+                return d
+            relpath = os.path.relpath(cur, d)
+            # Non-empty ls-files stdout = some tracked file lives under cwd.
+            try:
+                proc = subprocess.run(
+                    ["git", "-C", d, "ls-files", "--", relpath],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    return d
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                pass
+            # Marker found but cwd untracked → inner marker claims this
+            # subtree; do not walk further.
+            return None
+        d = os.path.dirname(d)
+    return None
+
+
 def _resolve_branch(cwd: str) -> Tuple[Optional[str], Optional[str]]:
-    """Return (branch_or_detached, repo_root). Both None if no git repo."""
-    # repo root
+    """Return (branch_or_detached, repo_root). Both None if no git repo.
+
+    repo_root here is the BARE working-tree toplevel — it answers "am I in a
+    git repo at all," which reconcile uses for the no-repo vs no-mode vs
+    reconcile 3-way classification and for reading per-branch state. The
+    read-side leak gate (walk-up for .claude/modes marker + git-tracked cwd)
+    is applied SEPARATELY at the per-branch-pin decision in main() via
+    _gated_repo_root — NOT here. Conflating the two collapses no-repo and
+    no-mode into one bucket (regression caught by worktree-mode-reconciliation).
+    """
+    # repo root — bare --show-toplevel (the read-path-toplevel-lint excuses
+    # this via the inline marker below). The gate is applied SEPARATELY at
+    # the per-branch-pin decision in main() via _gated_repo_root; here the
+    # bare toplevel is needed for the 3-way no-repo/no-mode/reconcile
+    # classification. See the docstring above.
     try:
         proc = subprocess.run(
+            # lint: read-path-toplevel-ok — gate applied in main() via _gated_repo_root
             ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
@@ -388,6 +444,14 @@ def _read_manifest(mode_yaml_path: str) -> Tuple[List[str], List[str]]:
 
 # ──────────────────────────────────────────────────────────────────────────
 # Symlink enumeration / comparison.
+#
+# These functions duplicate symlink-rebuild.sh::enumerate_plugin_symlinks at
+# the Bash↔Python language boundary. The duplication is DELIBERATE — see
+# docs/solutions/2026-05-27-symlink-enum-dedup-rejected.md for the verdict:
+# collapsing would replace ~1ms in-process enumeration with ~20ms-per-call
+# subprocess startup, ~4 calls per SessionStart = 80ms+ added to the hot path.
+# Not worth it. If drift becomes a risk, the right answer is an equivalence
+# test (mirroring the validator + resolver patterns), not a collapse.
 
 
 def _enumerate_plugin_symlinks(live_dir: str, staging_root: str) -> Set[str]:
@@ -627,13 +691,25 @@ def main() -> int:
     if not branch_slug:
         branch_slug = "(none)"
 
-    # Read per-branch state; fall back to last-active-mode if missing.
+    # Read per-branch state — but ONLY when cwd passes the read-side leak gate
+    # (walk-up for a .claude/modes/ marker + git-tracked cwd). An untracked
+    # scratch dir nested under a marked project is in a git repo (so repo_root
+    # is set and we're past the no-repo branch), but must NOT inherit that
+    # project's per-branch pin. The gated root must also match the classified
+    # repo_root — a marker found higher up than the working-tree toplevel
+    # doesn't apply. See lib/repo-root.sh / _gated_repo_root.
     intended_mode: Optional[str] = None
-    if branch_slug and branch_slug != "(none)":
+    gated_root = _gated_repo_root(cwd)
+    if (
+        gated_root
+        and gated_root == repo_root
+        and branch_slug
+        and branch_slug != "(none)"
+    ):
         intended_mode = _read_per_branch_mode(repo_root, branch_slug)
 
     if intended_mode is None:
-        # File missing → fall back to user-global.
+        # No per-branch pin (or cwd gated out) → fall back to user-global.
         intended_mode = _read_last_active_mode()
 
     if intended_mode is None:

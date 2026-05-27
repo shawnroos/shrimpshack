@@ -116,6 +116,12 @@ __claude_modes::validate_manifest_entries() {
 #   $1 = live dir (e.g., ~/.claude/commands)
 #   $2 = staging dir (e.g., ~/.claude/modes/.user-catalog/commands)
 # Stdout: basename per line of each plugin-owned symlink.
+#
+# Sibling enumerator in reconcile-symlinks.py (_enumerate_plugin_symlinks).
+# The Bash↔Python duplication is DELIBERATE — see
+# docs/solutions/2026-05-27-symlink-enum-dedup-rejected.md for the verdict:
+# the two callers are on different sides of a language boundary; collapsing
+# adds ~80ms subprocess cost per SessionStart on the reconcile hot path.
 __claude_modes::enumerate_plugin_symlinks() {
   local live_dir="$1"
   local staging="$2"

@@ -1,0 +1,19 @@
+# Keep the marketplace vendor lean.
+#
+# `git archive` (used by shrimpshack vendoring to snapshot a plugin into
+# ~/.claude/plugins/marketplaces/shrimpshack/plugins/claude-modes/) honors
+# `export-ignore` and skips matching paths. These docs are development
+# artifacts — brainstorm transcripts, plan documents, and spike results
+# captured during 0.2.x → 0.3.0 work. They're useful in the source repo
+# (and worth keeping in git history) but bloat installed plugins for
+# every downstream user without adding runtime value.
+#
+# Solutions docs (docs/solutions/) are intentionally NOT export-ignored —
+# they're learning artifacts that downstream readers may want to consult
+# (e.g. docs/solutions/2026-05-25-plugin-shipped-agents.md documents the
+# precedent the in-flow editor agent set). If that ever changes, drop a
+# rule below.
+
+docs/brainstorms/ export-ignore
+docs/plans/ export-ignore
+docs/spikes/ export-ignore

@@ -128,8 +128,8 @@ __claude_modes::edit_op_for_kind() {
 # Given a plugin NAME (the part before ':' in a skill FQN, or the cached skill's
 # containing plugin dir), look up its installed "<name>@<marketplace>" FQN from
 # installed_plugins.json. Echoes the FQN on success, NOTHING on a miss (plugin
-# not installed / no registry / unparseable). Mirrors the LIST-of-records shape
-# handling of the resolver's installed-plugins source (REGISTRY-READER SYNC).
+# not installed / no registry / unparseable). Reads the registry via the
+# canonical lib/registry.py::iter_plugin_entries.
 #
 # Used by the FQN-shortcut re-invoke path: when the caller re-invokes with a
 # chosen skill colon-FQN (`<plugin>:<skill>`), the parent_plugin field from the
@@ -138,27 +138,12 @@ __claude_modes::parent_plugin_for_name() {
   local plugin_name="$1"
   local registry="${HOME}/.claude/plugins/installed_plugins.json"
   [ -f "$registry" ] || return 0
-  "$CLAUDE_MODES_PYTHON3" - "$registry" "$plugin_name" <<'PYEOF' 2>/dev/null
-import sys, json
-registry_path, name = sys.argv[1], sys.argv[2]
-try:
-    with open(registry_path) as f:
-        data = json.load(f)
-except Exception:
-    sys.exit(0)
-plugins = data.get("plugins") if isinstance(data, dict) else None
-if isinstance(plugins, dict):
-    items = plugins.items()
-elif isinstance(data, dict):
-    items = data.items()
-else:
-    items = []
-for key, val in items:
-    if not isinstance(key, str):
-        continue
-    records = val if isinstance(val, list) else [val]
-    if not any(isinstance(r, dict) for r in records):
-        continue
+  "$CLAUDE_MODES_PYTHON3" - "$registry" "$plugin_name" "$SCRIPT_DIR" <<'PYEOF' 2>/dev/null
+import sys
+registry_path, name, lib_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, lib_dir)
+from registry import iter_plugin_entries, load_registry  # noqa: E402
+for key, _records in iter_plugin_entries(load_registry(registry_path)):
     if key.split("@", 1)[0] == name:
         sys.stdout.write(key)
         break

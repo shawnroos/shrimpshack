@@ -29,7 +29,7 @@
     {
       "name": "claude-modes",
       "description": "Modes as first-class Claude Code infrastructure \u2014 named, durable working stances that recompose the plugin catalog per mode via a cascading config system. Solves harness-bloat at scale.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Shawn Roos"
       },

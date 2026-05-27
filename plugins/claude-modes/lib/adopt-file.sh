@@ -273,38 +273,6 @@ PYEOF
   return 0
 }
 
-# Internal: atomic mv with cross-FS fallback (cp -p + sha256 verify + rm).
-__claude_modes::adopt_safe_move() {
-  local src="$1"
-  local dst="$2"
-
-  if mv "$src" "$dst" 2>/dev/null; then
-    return 0
-  fi
-
-  # Fallback: cp + verify + rm. Cross-FS is unlikely (both paths under
-  # $HOME) but cheap to guard.
-  if ! cp -p "$src" "$dst" 2>/dev/null; then
-    echo "adopt-file: cp fallback failed ('${src}' → '${dst}')" >&2
-    return 1
-  fi
-
-  local src_sha dst_sha
-  src_sha=$(claude_modes::sha256_of_file "$src" 2>/dev/null)
-  dst_sha=$(claude_modes::sha256_of_file "$dst" 2>/dev/null)
-  if [ -z "$src_sha" ] || [ "$src_sha" != "$dst_sha" ]; then
-    rm -f "$dst" 2>/dev/null || true
-    echo "adopt-file: sha256 mismatch after cp fallback — refusing to remove source" >&2
-    return 1
-  fi
-
-  if ! rm -f "$src" 2>/dev/null; then
-    echo "adopt-file: cp succeeded but rm of source failed — leaving both copies in place" >&2
-    return 1
-  fi
-  return 0
-}
-
 # Public.
 claude_modes::adopt_file() {
   local arg="${1:-}"
@@ -533,7 +501,7 @@ claude_modes::adopt_file() {
     return 1
   fi
 
-  if ! __claude_modes::adopt_safe_move "$file_path" "$dst"; then
+  if ! claude_modes::safe_move "$file_path" "$dst"; then
     return 1
   fi
 

@@ -32,50 +32,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/mode-yaml.sh"
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/sanitize.sh"  # terminal-escape: claude_modes::sanitize_for_display
+# shellcheck disable=SC1091
+# Canonical active-mode resolver (read_active_mode_name) + its repo-root +
+# validate-mode-name deps. One source of truth, shared with inject-prose and
+# the statusline; no inline resolver/validator copy.
+. "${SCRIPT_DIR}/active-mode.sh"
 
 CLAUDE_MODES_PYTHON3="${CLAUDE_MODES_PYTHON3:-/usr/bin/python3}"
-
-# Inlined active-mode resolver (mirrors lib/inject-prose.sh::__resolve_active_mode).
-# Returns the active mode name on stdout, or empty string if none.
-# Resolution order:
-#   1. <repo>/.claude/modes/<branch-slug>.mode  (per-branch tier-6 pointer)
-#   2. ~/.claude/modes/.last-active-mode        (user-global fallback)
-#
-# Security (sec-001 P0): .mode body validated before path construction.
-# Slug-divergence (P1 cluster): detached-HEAD synthesizes `detached-<sha>`
-# to match active-mode.sh::current_branch_slug. Behavior-equivalence test
-# at tests/integration/active-mode-resolver-equivalence.test.sh.
-__claude_modes::status_validate_mode_body() {
-  local name="$1"
-  [ -z "$name" ] && return 1
-  # "claude" is the Claude-Mode sentinel — accept as a valid marker.
-  [ "$name" = "claude" ] && return 0
-  [ "${#name}" -gt 64 ] && return 1
-  case "$name" in
-    .|..|*..*) return 1 ;;
-    [-_]*|*[-_]) return 1 ;;
-  esac
-  # Reserved tokens (mirrors CLAUDE_MODES_RESERVED_TOKENS; see
-  # lib/inject-prose.sh::__inject_prose::validate_mode_body for rationale).
-  case "$name" in
-    default|none|set|status|clear|apply|registry|adopt|setup|list|help|promote|rebuild|coverage)
-      return 1 ;;
-  esac
-  if LC_ALL=C printf '%s' "$name" | grep -qE '[^A-Za-z0-9_-]'; then
-    return 1
-  fi
-  return 0
-}
-
-# Read a .mode body, edge-stripping only (mirror Python's str.strip()).
-# sec-005: see lib/inject-prose.sh::read_mode_body — `tr -d '[:space:]'`
-# deleted internal whitespace, diverging from Python's .strip() and letting
-# the same .mode file resolve to different modes across read sites.
-__claude_modes::status_read_mode_body() {
-  local mode_file="$1"
-  LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' < "$mode_file" 2>/dev/null \
-    | head -c 256
-}
 
 # Returns 0 if the cascade sidecar's source_modes lists "_repo.yaml" — i.e.
 # tier-4 was actually merged (not just present on disk). Ground truth for the
@@ -96,52 +59,6 @@ sys.exit(0 if "_repo.yaml" in sm else 1)
 PYEOF
 }
 
-__claude_modes::status_slugify_branch() {
-  local branch="$1"
-  [ -z "$branch" ] && return 1
-  local slug
-  slug=$(LC_ALL=C printf '%s' "$branch" | LC_ALL=C tr -c 'A-Za-z0-9_-' '-')
-  slug=$(printf '%s' "$slug" | sed -E 's/-+/-/g; s/^-+//; s/-+$//')
-  [ -z "$slug" ] && return 1
-  case "$slug" in .|..|*..*) return 1 ;; esac
-  printf '%s' "$slug"
-}
-
-__claude_modes::status_resolve_active_mode() {
-  local branch_slug short_sha repo_root mode_file content=""
-
-  if repo_root=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$repo_root" ]; then
-    if branch_slug=$(git symbolic-ref --short -q HEAD 2>/dev/null) && [ -n "$branch_slug" ]; then
-      branch_slug=$(__claude_modes::status_slugify_branch "$branch_slug") || branch_slug=""
-    else
-      if short_sha=$(git rev-parse --short HEAD 2>/dev/null) && [ -n "$short_sha" ]; then
-        branch_slug=$(__claude_modes::status_slugify_branch "detached-${short_sha}") || branch_slug=""
-      fi
-    fi
-    if [ -n "$branch_slug" ]; then
-      mode_file="${repo_root}/.claude/modes/${branch_slug}.mode"
-      if [ -f "$mode_file" ]; then
-        content=$(__claude_modes::status_read_mode_body "$mode_file")
-        if __claude_modes::status_validate_mode_body "$content"; then
-          printf '%s' "$content"
-          return 0
-        fi
-        content=""
-      fi
-    fi
-  fi
-
-  mode_file="${HOME}/.claude/modes/.last-active-mode"
-  if [ -f "$mode_file" ]; then
-    content=$(__claude_modes::status_read_mode_body "$mode_file")
-    if __claude_modes::status_validate_mode_body "$content"; then
-      printf '%s' "$content"
-      return 0
-    fi
-  fi
-
-  return 0
-}
 
 # Count plugin-owned symlinks under a live dir whose targets resolve under
 # the user-catalog staging dir. Returns count on stdout.
@@ -220,11 +137,15 @@ PYEOF
 # diagnostics about missing files are inline (no stderr noise).
 claude_modes::status() {
   local active_mode
-  active_mode=$(__claude_modes::status_resolve_active_mode)
+  active_mode=$(claude_modes::read_active_mode_name)
 
-  # Resolve repo root (if any) for tier-4 + compiled-settings lookups.
+  # Resolve repo root (if any) for tier-4 + compiled-settings lookups. Use the
+  # SAME gated resolver as the active-mode resolution above: if the gate
+  # refuses this project (untracked subdir of a marked project), status must
+  # not display that project's tier-4 / compiled-settings paths as in-effect —
+  # that would contradict the "no active mode here" result. See lib/repo-root.sh.
   local repo_root=""
-  repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || repo_root=""
+  repo_root=$(claude_modes::current_repo_root) || repo_root=""
 
   local tier_1_path="${HOME}/.claude/settings.json"
   local tier_2_path="${HOME}/.claude/modes/_global.yaml"

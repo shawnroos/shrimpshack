@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# Behavior-equivalence test for the four mode-name/body validators:
-#   1. claude_modes::validate_name        (lib/validate-mode-name.sh — canonical)
-#   2. __inject_prose::validate_mode_body (lib/inject-prose.sh inline)
-#   3. __claude_modes::status_validate_mode_body (lib/status.sh inline)
-#   4. _validate_mode_body                (lib/reconcile-symlinks.py inline)
+# Behavior-equivalence test for the TWO remaining mode-name/body validators:
+#   1. claude_modes::validate_name  (lib/validate-mode-name.sh — canonical Bash)
+#   2. _validate_mode_body          (lib/reconcile-symlinks.py — Python)
 #
-# Why three inline copies (per project_slate_crop_overlay_perf_pattern memory):
-#   inject-prose.sh runs on every UserPromptSubmit; sourcing the shared lib
-#   adds subprocess + parse cost on the hot path. status.sh and
-#   reconcile-symlinks.py have the same concern. We accept duplication and
-#   guard against drift with this test.
+# Why two (and only two): the Bash inline copies that used to live in
+# inject-prose.sh and status.sh were DELETED — both files now source
+# active-mode.sh and call the canonical claude_modes::read_active_mode_name
+# (which uses claude_modes::validate_name). The ONE unavoidable copy is the
+# Python validator in reconcile-symlinks.py: a SessionStart hook in Python
+# can't source a Bash function, so the validation rules are mirrored across
+# the language boundary. This test pins that Bash↔Python pair equivalent —
+# the single drift risk that centralization can't remove.
 #
 # Fixture categories:
-#   - Accept: valid mode names that all 4 implementations must accept
-#   - Reject: invalid mode names that all 4 implementations must reject
+#   - Accept: valid mode names both implementations must accept
+#   - Reject: invalid mode names both implementations must reject
 #
 # Why these fixtures:
 #   - The accept set includes names that exercise allowed characters and
@@ -34,8 +35,6 @@ claude_modes_test::setup
 
 # shellcheck disable=SC1091
 . "${PLUGIN_ROOT}/lib/validate-mode-name.sh"
-. "${PLUGIN_ROOT}/lib/inject-prose.sh"
-. "${PLUGIN_ROOT}/lib/status.sh"
 
 CLAUDE_MODES_PYTHON3="${CLAUDE_MODES_PYTHON3:-/usr/bin/python3}"
 
@@ -67,87 +66,82 @@ sys.exit(0 if ok else 1)
 PYEOF
 }
 
-# Run all four implementations on `input`; assert all four return the same
-# rc (accept = 0, reject = 1).
+# Run canonical Bash + Python on `input`; assert both return the same rc
+# (accept = 0, reject = 1). The Python read-site validator (_is_valid_mode_marker)
+# accepts the "claude" sentinel where canonical rejects it — that ONE split is
+# tested separately below; every other fixture must agree across the boundary.
 __test_compare_all_four() {
   local label="$1"
   local input="$2"
   local expected="$3"  # "accept" or "reject"
 
-  local rc1 rc2 rc3 rc4
+  local rc1 rc4
   claude_modes::validate_name "$input" >/dev/null 2>&1; rc1=$?
-  __inject_prose::validate_mode_body "$input" >/dev/null 2>&1; rc2=$?
-  __claude_modes::status_validate_mode_body "$input" >/dev/null 2>&1; rc3=$?
   __test_validate_python "$input" >/dev/null 2>&1; rc4=$?
 
   # Normalize to accept/reject ("0" = accept, anything else = reject).
-  local act1="reject" act2="reject" act3="reject" act4="reject"
+  local act1="reject" act4="reject"
   [ "$rc1" -eq 0 ] && act1="accept"
-  [ "$rc2" -eq 0 ] && act2="accept"
-  [ "$rc3" -eq 0 ] && act3="accept"
   [ "$rc4" -eq 0 ] && act4="accept"
 
-  if [ "$act1" = "$expected" ] \
-     && [ "$act2" = "$expected" ] \
-     && [ "$act3" = "$expected" ] \
-     && [ "$act4" = "$expected" ]; then
+  if [ "$act1" = "$expected" ] && [ "$act4" = "$expected" ]; then
     claude_modes_test::pass
   else
-    claude_modes_test::fail "[${label}] input='${input}' expected=${expected} got: canonical=${act1} inject=${act2} status=${act3} reconcile=${act4}"
+    claude_modes_test::fail "[${label}] input='${input}' expected=${expected} got: canonical=${act1} reconcile=${act4}"
   fi
 }
 
 # ─── Accept fixtures ──────────────────────────────────────────────────
-claude_modes_test::it "all four validators accept 'discovery'"
+claude_modes_test::it "canonical + Python validators accept 'discovery'"
 __test_compare_all_four "happy-1" "discovery" "accept"
 
-claude_modes_test::it "all four validators accept 'delivery'"
+claude_modes_test::it "canonical + Python validators accept 'delivery'"
 __test_compare_all_four "happy-2" "delivery" "accept"
 
-claude_modes_test::it "all four validators accept 'review-pass'"
+claude_modes_test::it "canonical + Python validators accept 'review-pass'"
 __test_compare_all_four "hyphen" "review-pass" "accept"
 
-claude_modes_test::it "all four validators accept 'underscore_name'"
+claude_modes_test::it "canonical + Python validators accept 'underscore_name'"
 __test_compare_all_four "underscore-mid" "underscore_name" "accept"
 
-claude_modes_test::it "all four validators accept 64-char boundary"
+claude_modes_test::it "canonical + Python validators accept 64-char boundary"
 __test_compare_all_four "len-64" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "accept"
 
 # ─── Reject fixtures: path-traversal (sec-001 P0 surface) ────────────
-claude_modes_test::it "all four validators reject '..'"
+claude_modes_test::it "canonical + Python validators reject '..'"
 __test_compare_all_four "traversal-dotdot" ".." "reject"
 
-claude_modes_test::it "all four validators reject '.'"
+claude_modes_test::it "canonical + Python validators reject '.'"
 __test_compare_all_four "traversal-dot" "." "reject"
 
-claude_modes_test::it "all four validators reject '../../tmp/evil'"
+claude_modes_test::it "canonical + Python validators reject '../../tmp/evil'"
 __test_compare_all_four "traversal-rel" "../../tmp/evil" "reject"
 
-claude_modes_test::it "all four validators reject 'name..with..dotdot'"
+claude_modes_test::it "canonical + Python validators reject 'name..with..dotdot'"
 __test_compare_all_four "embedded-dotdot" "name..with..dotdot" "reject"
 
-claude_modes_test::it "all four validators reject empty string"
+claude_modes_test::it "canonical + Python validators reject empty string"
 __test_compare_all_four "empty" "" "reject"
 
 # ─── Reject fixtures: length cap ──────────────────────────────────────
-claude_modes_test::it "all four validators reject 65-char (cap bypass)"
+claude_modes_test::it "canonical + Python validators reject 65-char (cap bypass)"
 __test_compare_all_four "len-65" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "reject"
 
 # ─── Reject fixtures: leading/trailing punctuation ────────────────────
-claude_modes_test::it "all four validators reject leading dash '-foo'"
+claude_modes_test::it "canonical + Python validators reject leading dash '-foo'"
 __test_compare_all_four "lead-dash" "-foo" "reject"
 
-claude_modes_test::it "all four validators reject trailing dash 'foo-'"
+claude_modes_test::it "canonical + Python validators reject trailing dash 'foo-'"
 __test_compare_all_four "trail-dash" "foo-" "reject"
 
-claude_modes_test::it "all four validators reject leading underscore '_foo'"
+claude_modes_test::it "canonical + Python validators reject leading underscore '_foo'"
 __test_compare_all_four "lead-underscore" "_foo" "reject"
 
 # ─── Reject fixtures: forbidden chars ─────────────────────────────────
-claude_modes_test::it "all four validators reject path separator 'a/b'"
+claude_modes_test::it "canonical + Python validators reject path separator 'a/b'"
 __test_compare_all_four "slash" "a/b" "reject"
 
-claude_modes_test::it "all four validators reject shell metachar 'a;ls'"
+claude_modes_test::it "canonical + Python validators reject shell metachar 'a;ls'"
 __test_compare_all_four "semicolon" "a;ls" "reject"
 
 # sec-005: internal whitespace must be rejected by ALL validators. The bug
@@ -157,38 +151,32 @@ __test_compare_all_four "semicolon" "a;ls" "reject"
 # themselves always rejected internal whitespace via the charset regex;
 # this fixture guards that contract so a future read-path change can't
 # silently reintroduce the divergence.
-claude_modes_test::it "all four validators reject internal space 'delivery x'"
+claude_modes_test::it "canonical + Python validators reject internal space 'delivery x'"
 __test_compare_all_four "internal-space" "delivery x" "reject"
 
-claude_modes_test::it "all four validators reject internal tab 'a\\tb'"
+claude_modes_test::it "canonical + Python validators reject internal tab 'a\\tb'"
 __test_compare_all_four "internal-tab" "$(printf 'a\tb')" "reject"
 
-claude_modes_test::it "all four validators reject UTF-8 lookalike (Cyrillic 'а')"
+claude_modes_test::it "canonical + Python validators reject UTF-8 lookalike (Cyrillic 'а')"
 # U+0430 looks like Latin 'a' but encodes as bytes D0 B0 — must reject.
 __test_compare_all_four "utf8" "$(printf '\xd0\xb0')" "reject"
 
 # ─── Special-case: 'claude' Claude-Mode sentinel ───────────────────────
 # "claude" has a SPLIT contract by design:
 #   - canonical (validate_name): REJECT — cannot NAME a mode "claude"
-#   - read-site validators: ACCEPT — sentinel for "no mode active"
-# So the equivalence test must check the three read-site validators
-# agree (accept) and the canonical disagrees (reject).
-claude_modes_test::it "3 read-site validators accept 'claude' sentinel; canonical rejects (intentional split)"
-# Read-site validators model what production calls at the .mode read site:
-# the shell inline validators (which accept "claude") and the Python
-# _is_valid_mode_marker wrapper (which also accepts "claude"). The canonical
-# write-validator rejects it (you cannot NAME a mode "claude").
+#   - Python read-site marker (_is_valid_mode_marker): ACCEPT — sentinel for
+#     "no mode active" (the canonical Bash read site, read_validated_mode_body,
+#     accepts it via an explicit `[ "$content" = "claude" ]` short-circuit
+#     BEFORE calling validate_name — so the split lives at the read site, not
+#     the validator).
+# This pins the deliberate canonical-rejects / Python-marker-accepts split.
+claude_modes_test::it "Python read-site marker accepts 'claude' sentinel; canonical validator rejects (intentional split)"
 __rc_canonical=$(claude_modes::validate_name "claude" >/dev/null 2>&1; echo $?)
-__rc_inj=$(__inject_prose::validate_mode_body "claude" >/dev/null 2>&1; echo $?)
-__rc_stat=$(__claude_modes::status_validate_mode_body "claude" >/dev/null 2>&1; echo $?)
 __rc_py=$(__test_validate_python "claude" "_is_valid_mode_marker" >/dev/null 2>&1; echo $?)
-if [ "$__rc_canonical" -ne 0 ] \
-   && [ "$__rc_inj" -eq 0 ] \
-   && [ "$__rc_stat" -eq 0 ] \
-   && [ "$__rc_py" -eq 0 ]; then
+if [ "$__rc_canonical" -ne 0 ] && [ "$__rc_py" -eq 0 ]; then
   claude_modes_test::pass
 else
-  claude_modes_test::fail "expected canonical=reject + read-sites=accept; got canonical=${__rc_canonical} inj=${__rc_inj} stat=${__rc_stat} py=${__rc_py}"
+  claude_modes_test::fail "expected canonical=reject + python-marker=accept; got canonical=${__rc_canonical} py=${__rc_py}"
 fi
 
 # ─── Reserved tokens: security-critical subset (all four reject) ──────
@@ -197,10 +185,10 @@ fi
 # a structural config file, so every validator — including the inline
 # path-safety subset — must reject them. The leading-underscore rule
 # (`[-_]*`) is what catches these in all four implementations.
-claude_modes_test::it "all four validators reject reserved token '_global'"
+claude_modes_test::it "canonical + Python validators reject reserved token '_global'"
 __test_compare_all_four "reserved-global" "_global" "reject"
 
-claude_modes_test::it "all four validators reject reserved token '_repo'"
+claude_modes_test::it "canonical + Python validators reject reserved token '_repo'"
 __test_compare_all_four "reserved-repo" "_repo" "reject"
 
 # ─── Reserved tokens: ALL four validators must reject (parametrized) ──
@@ -215,7 +203,7 @@ __test_compare_all_four "reserved-repo" "_repo" "reject"
 # Tokens correspond to CLAUDE_MODES_RESERVED_TOKENS minus claude/_global/_repo
 # (_global/_repo are covered by the underscore-edge reject fixtures above).
 for __rt in default none set status clear apply registry adopt setup list help promote rebuild coverage; do
-  claude_modes_test::it "all four validators reject reserved token '${__rt}'"
+  claude_modes_test::it "canonical + Python validators reject reserved token '${__rt}'"
   __test_compare_all_four "reserved-${__rt}" "$__rt" "reject"
 done
 

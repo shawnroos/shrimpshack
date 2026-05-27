@@ -107,6 +107,34 @@ sys.stdout.write(v)
 PYEOF
 }
 
+# Extract hookSpecificOutput.hookEventName — the field the harness routes on.
+# A missing/wrong hookEventName means the harness silently ignores the
+# injection even though additionalContext is present. Emits the value, or
+# "MISSING_systemMessage_KEY" if the OLD pre-fix top-level systemMessage key
+# is present (regression: emitting both envelopes), or empty otherwise.
+__extract_hook_event_name() {
+  local stdout="$1"
+  "$CLAUDE_MODES_PYTHON3" - "$stdout" <<'PYEOF' 2>/dev/null || true
+import sys, json
+raw = sys.argv[1]
+if not raw.strip():
+    sys.exit(0)
+try:
+    obj = json.loads(raw)
+except Exception:
+    sys.exit(0)
+# Regression guard: the old envelope used a top-level "systemMessage" key
+# (user-visible). Its presence means the fix regressed — flag it loudly.
+if "systemMessage" in obj:
+    sys.stdout.write("REGRESSION_systemMessage_present")
+    sys.exit(0)
+hso = obj.get("hookSpecificOutput") or {}
+if not isinstance(hso, dict):
+    sys.exit(0)
+sys.stdout.write(hso.get("hookEventName") or "")
+PYEOF
+}
+
 # ──────────────────────────────────────────────────────────────────────────
 # Scenario 1: Happy path — first prompt, active mode set.
 # ──────────────────────────────────────────────────────────────────────────
@@ -128,6 +156,12 @@ if [ -n "$sm" ]; then
 else
   claude_modes_test::fail "no additionalContext extracted from: '${out}'"
 fi
+
+# Harness-contract field: hookEventName must be exactly "UserPromptSubmit",
+# or the harness silently drops the injection. Also guards against a
+# regression that re-emits the old top-level "systemMessage" key.
+claude_modes_test::it "first prompt: hookEventName is 'UserPromptSubmit' (harness routing contract)"
+claude_modes_test::assert_eq "UserPromptSubmit" "$(__extract_hook_event_name "$out")"
 
 # additionalContext contains "Active mode: delivery".
 claude_modes_test::it "first prompt: additionalContext contains 'Active mode: delivery'"

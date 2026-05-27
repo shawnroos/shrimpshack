@@ -112,39 +112,35 @@ __cm_reset_and_exit() {
   exit 0
 }
 
-# ── Resolve repo root + branch via git ────────────────────────────────────
-# Use -C "$cwd" so we don't depend on the script's caller cwd.
-repo_root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || __cm_reset_and_exit
-raw_branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null) || __cm_reset_and_exit
-
-# Detached HEAD: no branch → no mode lookup. (Matches set-mode/active-mode
-# behavior; consistent silence is the contract.)
-[ "$raw_branch" = "HEAD" ] && __cm_reset_and_exit
-
-# ── Slugify via the shared helper ─────────────────────────────────────────
-# This is the same slugifier set-mode + active-mode + gate-delegation
-# all use. If we used a different rule here, the statusline could
-# disagree with /mode:status — exactly the slug-drift bug ce-code-review
-# loop-1+2 closed in the delegation gate.
+# ── Resolve the active mode via the canonical per-branch chain ──────────
+# Source active-mode.sh (transitively sources validate-mode-name + repo-root)
+# and call read_per_branch_mode_name from a subshell cd'd into $cwd, so the
+# resolver sees the harness-provided cwd (not the script's process PWD).
+#
+# CRITICAL: read_per_branch_mode_name — NOT read_active_mode_name. The
+# statusline is a per-repo display surface; it must NOT consult the
+# user-global ~/.claude/modes/.last-active-mode pointer. That pointer is a
+# shared mutable variable across every concurrent claude-modes session
+# (see feedback_mode_set_leaks_via_global_pointer_to_other_sessions); a
+# statusline that read it would flicker to reflect another tab's
+# /mode:set in a repo/branch that has no pin of its own. The per-branch
+# function returns empty when there's no pin in this repo+branch —
+# correct behavior for "this repo's mode."
+#
+# Routing through claude_modes::current_repo_root (the GATED read-side
+# resolver: walks up for a .claude/modes marker AND requires cwd to be
+# git-tracked under it) ALSO refuses to display a parent project's mode
+# from an untracked subdir. The .mode body goes through read_validated_
+# mode_body (charset [A-Za-z0-9_-]+, reserved-token-rejected, length-
+# capped, "claude" sentinel accepted) so the OSC-2 title and statusline
+# segment cannot carry ESC/OSC/CSI/bidi bytes from a hostile committed
+# .mode file.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-. "${SCRIPT_DIR}/../lib/validate-mode-name.sh"
-# active-mode.sh provides read_validated_mode_body (sources validate-mode-name).
 . "${SCRIPT_DIR}/../lib/active-mode.sh"
-branch_slug=$(claude_modes::slugify_branch "$raw_branch" 2>/dev/null) || __cm_reset_and_exit
-
-# ── Read the .mode pointer ─────────────────────────────────────────────────
-mode_file="${repo_root}/.claude/modes/${branch_slug}.mode"
-[ -f "$mode_file" ] || __cm_reset_and_exit
-
-# sec re-review (L3): read THROUGH the validated reader, not raw `tr`. The
-# .mode file is an attacker-controllable committed repo artifact; a raw read
-# would let ESC/OSC/CSI/bidi bytes flow into the OSC-2 title escape and the
-# visible statusline (terminal injection on checkout, no consent gate). A
-# validated mode name (charset [A-Za-z0-9_-]+, reserved-token-rejected) cannot
-# contain any control/escape byte by construction — closing the injection sink
-# AND keeping statusline in agreement with the other read sites (no slug/body drift).
-mode_name=$(claude_modes::read_validated_mode_body "$mode_file" 2>/dev/null) || __cm_reset_and_exit
+mode_name=$(cd "$cwd" 2>/dev/null && claude_modes::read_per_branch_mode_name) || __cm_reset_and_exit
 [ -n "$mode_name" ] || __cm_reset_and_exit
+# "claude" is the no-mode-active sentinel; reset to bare-cwd title.
+[ "$mode_name" = "claude" ] && __cm_reset_and_exit
 
 # ── Emit the statusline segment ────────────────────────────────────────────
 # Format: `🔧 <mode>` wrapped in ANSI yellow.

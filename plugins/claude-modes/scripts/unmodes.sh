@@ -87,14 +87,6 @@ FILES_SKIPPED_USER_CATALOG=0
 _log() { printf 'unmodes.sh: %s\n' "$1"; }
 _err() { printf 'unmodes.sh: %s\n' "$1" >&2; }
 
-# Cross-platform stat helpers (mirror setup.sh).
-_stat_device_id() {
-  if [ "$(uname)" = "Darwin" ]; then
-    stat -f '%d' "$1" 2>/dev/null
-  else
-    stat -c '%d' "$1" 2>/dev/null
-  fi
-}
 
 # Python realpath helper (portable; macOS lacks coreutils realpath).
 _realpath() {
@@ -370,46 +362,11 @@ _do_return_file() {
   local label="$3"
   local basename_f="$4"
 
-  local staged_dev live_dev
-  staged_dev=$(_stat_device_id "$staged")
-  live_dev=$(_stat_device_id "$live")
-  if [ -z "$live_dev" ]; then
-    live_dev=$(_stat_device_id "$(dirname "$live")")
-  fi
-
-  if [ -n "$staged_dev" ] && [ -n "$live_dev" ] && [ "$staged_dev" = "$live_dev" ]; then
-    # Same filesystem — single atomic mv.
-    if ! mv "$staged" "$live"; then
-      _err "${label}: mv failed: ${staged} → ${live}"
-      return 1
-    fi
-  else
-    # Cross-filesystem — cp + sha256 verify + rm (mirror setup.sh).
-    _log "${label}: cross-filesystem return — using cp+verify+rm for ${basename_f}"
-    local src_sum dst_sum
-    src_sum=$(claude_modes::sha256_of_file "$staged") || {
-      _err "${label}: could not hash staged ${staged}"
-      return 1
-    }
-    if ! cp "$staged" "$live" 2>/dev/null; then
-      rm -f "$live"
-      _err "${label}: cp failed: ${staged} → ${live}"
-      return 1
-    fi
-    dst_sum=$(claude_modes::sha256_of_file "$live") || {
-      rm -f "$live"
-      _err "${label}: could not hash returned ${live}"
-      return 1
-    }
-    if [ "$src_sum" != "$dst_sum" ]; then
-      rm -f "$live"
-      _err "${label}: sha256 mismatch after cross-fs copy of ${staged}"
-      return 1
-    fi
-    rm "$staged" || {
-      _err "${label}: could not rm staged ${staged} after verified copy"
-      return 1
-    }
+  # Atomic move with cross-FS fallback (canonical claude_modes::safe_move:
+  # try mv, else cp+sha256-verify+rm). Replaces the prior stat-device-id branch.
+  if ! claude_modes::safe_move "$staged" "$live"; then
+    _err "${label}: safe_move failed returning ${basename_f}: ${staged} → ${live}"
+    return 1
   fi
 
   # Live file is now a regular file. Don't chmod — user-authored content

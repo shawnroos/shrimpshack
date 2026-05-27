@@ -125,6 +125,19 @@ __claude_modes::post_write_reload_auto() {
   # confirms it triggers an in-harness reload. Until then the only way to
   # reach the "ok" branch is the test mock, and unmocked production
   # correctly falls through to reload_fail.
+  #
+  # What would unblock the upgrade:
+  #   1. A fresh Claude Code session installs claude-modes 0.3.0+.
+  #   2. The user invokes /mode:add <plugin> in that session.
+  #   3. The new plugin's commands are reachable WITHOUT the user typing
+  #      /reload-plugins manually — i.e. the post-write notice was acted
+  #      on by the harness, not just displayed.
+  # If that observation holds across two independent sessions, replace
+  # the CLAUDE_MODES_TEST_RELOAD default of "fail" with a real emission
+  # path (likely a stdout marker the harness recognizes, or a hook).
+  # Background and prior-art analysis: docs/spikes/2026-05-23-phase0-spike-results.md
+  # (Spike D). The current "fail" default is deliberate — silently faking
+  # success would hide the upgrade work from anyone running the editor.
   local reload_outcome="${CLAUDE_MODES_TEST_RELOAD:-fail}"
 
   if [ "$reload_outcome" = "ok" ]; then

@@ -43,6 +43,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/mode-yaml.sh"
 # shellcheck source=lib/audit.sh
 . "$SCRIPT_DIR/audit.sh"
+# shellcheck source=lib/active-mode.sh
+# Canonical active-mode resolver. Sourcing the full chain (active-mode →
+# validate-mode-name + repo-root) costs <1ms/call (measured) — negligible
+# against the ~6 python3 YAML re-parses this hook already does per prompt. No
+# inline resolver/validator copies; read_active_mode_name is the one source of
+# truth, shared with /mode:status and the statusline.
+. "$SCRIPT_DIR/active-mode.sh"
 
 # ──────────────────────────────────────────────────────────────────────────
 # Helpers.
@@ -100,129 +107,6 @@ sys.stdout.write(str(v))
 PYEOF
 }
 
-# Resolve the active-mode name, returning empty string if none.
-# Resolution order: per-branch (<repo>/.claude/modes/<branch-slug>.mode)
-# then user-global (~/.claude/modes/.last-active-mode).
-# Either source may be missing — fall through silently.
-#
-# Security (sec-001 P0): .mode file body is attacker-controllable via
-# committed `.claude/modes/<slug>.mode` in a public repo. Body content
-# is path-traversal-validated below (mirrors claude_modes::validate_name
-# rules) before it leaves this function. Invalid bodies are treated as
-# no-mode-active (silent rejection, no error to stderr — hooks must
-# never block).
-__inject_prose::validate_mode_body() {
-  local name="$1"
-  [ -z "$name" ] && return 1
-  # "claude" is the Claude-Mode sentinel — accept as a valid marker even
-  # though it's a reserved mode-name token. See _is_valid_mode_marker in
-  # reconcile-symlinks.py for the same logic.
-  [ "$name" = "claude" ] && return 0
-  [ "${#name}" -gt 64 ] && return 1
-  case "$name" in
-    .|..|*..*) return 1 ;;
-    [-_]*|*[-_]) return 1 ;;
-  esac
-  # Reserved tokens (other than the "claude" sentinel accepted above and
-  # _global/_repo already caught by the underscore rule). Without this, the
-  # read sites would resolve a .mode body of e.g. "setup"/"default" to a mode
-  # while the canonical validator + reconcile-symlinks.py reject it — a
-  # status-vs-reconcile disagreement (correctness re-review finding). Mirrors
-  # CLAUDE_MODES_RESERVED_TOKENS in lib/validate-mode-name.sh (kept inline
-  # for the UserPromptSubmit hot path; equivalence test guards drift).
-  case "$name" in
-    default|none|set|status|clear|apply|registry|adopt|setup|list|help|promote|rebuild|coverage)
-      return 1 ;;
-  esac
-  if LC_ALL=C printf '%s' "$name" | grep -qE '[^A-Za-z0-9_-]'; then
-    return 1
-  fi
-  return 0
-}
-
-# Read a .mode body and strip ONLY leading/trailing whitespace, mirroring
-# Python's str.strip() at the reconcile-symlinks.py read site.
-#
-# sec-005: the old `tr -d '[:space:]'` deleted ALL whitespace including
-# internal — so a body like "delivery x" became "deliveryx" (accepted)
-# here while Python's .strip() kept "delivery x" (rejected by its regex).
-# Two read sites resolving the same .mode file to different modes. Edge-only
-# stripping lets internal whitespace reach the validator, which rejects it,
-# so all read sites agree.
-#
-# Residual (accepted, non-security): sed strips per-LINE, and `$(...)` also
-# trims trailing newlines, so a MULTI-LINE body (e.g. a leading blank line:
-# "\ndelivery") may be rejected here while Python's whole-string .strip()
-# would accept "delivery". This direction is safe (shell rejects MORE, never
-# resolves an attacker token Python wouldn't) — at worst a malformed,
-# manually-edited .mode shows "Claude Mode" here while reconcile builds the
-# mode manifest. A single-line body (the only shape /mode:set ever writes)
-# is handled identically by both. Not worth a whole-file normalizer for V2.0.
-__inject_prose::read_mode_body() {
-  local mode_file="$1"
-  LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' < "$mode_file" 2>/dev/null \
-    | head -c 256
-}
-
-# Synthesize the per-branch slug. Mirrors claude_modes::slugify_branch
-# from lib/validate-mode-name.sh (kept inline for hot-path latency —
-# inject-prose runs on every UserPromptSubmit; sourcing the shared lib
-# would add subprocess + parse cost). A behavior-equivalence test under
-# tests/integration/active-mode-resolver-equivalence.test.sh asserts this
-# stays in sync with the canonical helper.
-__inject_prose::slugify_branch() {
-  local branch="$1"
-  [ -z "$branch" ] && return 1
-  local slug
-  slug=$(LC_ALL=C printf '%s' "$branch" | LC_ALL=C tr -c 'A-Za-z0-9_-' '-')
-  slug=$(printf '%s' "$slug" | sed -E 's/-+/-/g; s/^-+//; s/-+$//')
-  [ -z "$slug" ] && return 1
-  case "$slug" in .|..|*..*) return 1 ;; esac
-  printf '%s' "$slug"
-}
-
-__resolve_active_mode() {
-  local branch_slug short_sha repo_root mode_file content=""
-
-  # Per-branch lookup: only meaningful inside a git working tree.
-  if repo_root=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$repo_root" ]; then
-    if branch_slug=$(git symbolic-ref --short -q HEAD 2>/dev/null) && [ -n "$branch_slug" ]; then
-      branch_slug=$(__inject_prose::slugify_branch "$branch_slug") || branch_slug=""
-    else
-      # Detached HEAD: mirror active-mode.sh::current_branch_slug — synthesize
-      # detached-<short-sha> so /mode:set writes and inject-prose reads agree.
-      if short_sha=$(git rev-parse --short HEAD 2>/dev/null) && [ -n "$short_sha" ]; then
-        branch_slug=$(__inject_prose::slugify_branch "detached-${short_sha}") || branch_slug=""
-      fi
-    fi
-    if [ -n "$branch_slug" ]; then
-      mode_file="${repo_root}/.claude/modes/${branch_slug}.mode"
-      if [ -f "$mode_file" ]; then
-        content=$(__inject_prose::read_mode_body "$mode_file")
-        if __inject_prose::validate_mode_body "$content"; then
-          printf '%s' "$content"
-          return 0
-        fi
-        # Invalid body — fall through to user-global. Silent rejection: hooks
-        # must never block or error-log on hostile repo content.
-        content=""
-      fi
-    fi
-  fi
-
-  # User-global fallback.
-  mode_file="${HOME}/.claude/modes/.last-active-mode"
-  if [ -f "$mode_file" ]; then
-    content=$(__inject_prose::read_mode_body "$mode_file")
-    if __inject_prose::validate_mode_body "$content"; then
-      printf '%s' "$content"
-      return 0
-    fi
-  fi
-
-  # No active mode.
-  return 0
-}
 
 # Consume a one-shot marker file: print its contents, then delete it.
 # If the file doesn't exist, prints nothing. Used for divergence-toast,
@@ -292,9 +176,12 @@ main() {
     session_key="ppid-${PPID:-noppid}"
   fi
 
-  # Resolve the active mode. Empty string ⇒ no mode set anywhere.
+  # Resolve the active mode via the canonical resolver (active-mode.sh).
+  # Empty string ⇒ no mode set anywhere. read_active_mode_name applies the
+  # same gated repo-root walk + .mode-body validation as /mode:status and the
+  # statusline — one source of truth, no inline copy.
   local mode_name
-  mode_name=$(__resolve_active_mode)
+  mode_name=$(claude_modes::read_active_mode_name)
 
   # Consume one-time markers BEFORE we decide whether to inject. Markers
   # like a divergence toast should fire even if no mode is currently
@@ -434,8 +321,9 @@ main() {
 }
 
 # Source-guard: run main only when executed, not when sourced. Tests source
-# this file to reuse __inject_prose::validate_mode_body; without the guard,
-# main's `exit 0` would terminate the sourcing shell before any test runs.
+# this file to exercise its helpers (__emit_system_message, __consume_marker)
+# without firing main; without the guard, main's `exit 0` would terminate the
+# sourcing shell before any test runs.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   main "$@"
 fi

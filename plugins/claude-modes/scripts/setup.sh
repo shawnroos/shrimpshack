@@ -96,14 +96,6 @@ _stat_link_count() {
   fi
 }
 
-_stat_device_id() {
-  if [ "$(uname)" = "Darwin" ]; then
-    stat -f '%d' "$1" 2>/dev/null
-  else
-    stat -c '%d' "$1" 2>/dev/null
-  fi
-}
-
 # Path realpath via pinned Python (portable across macOS sans coreutils).
 _realpath() {
   "$CLAUDE_MODES_PYTHON3" -c \
@@ -527,46 +519,12 @@ _apply_category() {
     # symlink `continue` above — every symlink is skipped before reaching
     # here, so a prior crashed run's symlinks are left in place.)
 
-    # Same-filesystem check. $staged doesn't exist yet, so probe the live
-    # file and the staging DIR (its eventual parent). Both calls are distinct;
-    # the prior 5-call retry chain probed the same path repeatedly (dead).
-    local live_dev staging_dev
-    live_dev=$(_stat_device_id "$file")
-    staging_dev=$(_stat_device_id "$staging")
-
-    if [ -n "$live_dev" ] && [ -n "$staging_dev" ] && [ "$live_dev" = "$staging_dev" ]; then
-      # Same filesystem — single atomic mv.
-      if ! mv "$file" "$staged"; then
-        _err "${label}: mv failed: ${file} → ${staged}"
-        exit 1
-      fi
-    else
-      # Cross-filesystem — cp + verify(sha256) + rm.
-      _log "${label}: cross-filesystem move detected — using cp+verify+rm for ${file}"
-      local src_sum dst_sum
-      src_sum=$(claude_modes::sha256_of_file "$file") || {
-        _err "${label}: could not hash source ${file}"
-        exit 1
-      }
-      if ! cp "$file" "$staged" 2>/dev/null; then
-        rm -f "$staged"
-        _err "${label}: cp failed: ${file} → ${staged}"
-        exit 1
-      fi
-      dst_sum=$(claude_modes::sha256_of_file "$staged") || {
-        rm -f "$staged"
-        _err "${label}: could not hash destination ${staged}"
-        exit 1
-      }
-      if [ "$src_sum" != "$dst_sum" ]; then
-        rm -f "$staged"
-        _err "${label}: sha256 mismatch after cross-fs copy of ${file}"
-        exit 1
-      fi
-      rm "$file" || {
-        _err "${label}: could not rm source ${file} after verified copy"
-        exit 1
-      }
+    # Atomic move with cross-FS fallback (canonical claude_modes::safe_move:
+    # try mv, else cp+sha256-verify+rm). Replaces the prior stat-device-id
+    # branch — mv's own failure is the cross-FS signal.
+    if ! claude_modes::safe_move "$file" "$staged"; then
+      _err "${label}: safe_move failed: ${file} → ${staged}"
+      exit 1
     fi
 
     # Set staged file perms (don't follow symlinks).

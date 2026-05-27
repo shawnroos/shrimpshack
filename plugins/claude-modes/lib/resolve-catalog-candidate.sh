@@ -98,27 +98,19 @@ __claude_modes::emit_candidates_from_skills_cache() {
   local registry="${HOME}/.claude/plugins/installed_plugins.json"
 
   local raw rc
-  raw=$("$CLAUDE_MODES_PYTHON3" - "$query" "$HOME" "$registry" <<'PYEOF'
-import sys, os, glob, json, unicodedata
+  raw=$("$CLAUDE_MODES_PYTHON3" - "$query" "$HOME" "$registry" "$SCRIPT_DIR" <<'PYEOF'
+import sys, os, glob, json
 
 query = sys.argv[1]
 home = sys.argv[2]
 registry_path = sys.argv[3]
+sys.path.insert(0, sys.argv[4])
+from registry import iter_plugin_entries, load_registry  # noqa: E402
+# Transport-boundary strip (Cc+Cf) — canonical impl shared with the bash twin.
+from sanitize import sanitize_for_display as _sd  # noqa: E402
 
 if not query:
     sys.exit(0)
-
-
-def _sd(s):
-    # Transport-boundary strip: drop Unicode Cc (control, incl. \n \t \x1b) and
-    # Cf (format, incl. bidi overrides) BEFORE the value can reach the record
-    # ('\n') or field ('\t') separator. A hostile cache plugin-dir name or
-    # SKILL.md `name:` carrying an embedded newline/tab would otherwise forge
-    # phantom TSV rows that the bash-side per-field sanitize runs too late to
-    # collapse. Mirrors lib/sanitize.py (Cc+Cf only — same contract as the
-    # bash/python twins). The bash sanitize_for_display stays as display
-    # defense-in-depth.
-    return "".join(c for c in s if unicodedata.category(c) not in ("Cc", "Cf"))
 
 cache_root = os.path.join(home, ".claude", "plugins", "cache")
 if not os.path.isdir(cache_root):
@@ -131,29 +123,10 @@ def _build_plugin_fqn_map(path):
     # installed_plugins.json, so a cached skill can name its installed parent
     # plugin's FQN. A missing/unparseable registry → empty map (the skill row's
     # parent_plugin field is then emitted empty; the orchestrator refuses with
-    # "install the plugin first"). Mirrors the LIST-of-records shape handling of
-    # the installed-plugins source (REGISTRY-READER SYNC — see source 2).
+    # "install the plugin first"). Registry shape handled by the canonical
+    # lib/registry.py::iter_plugin_entries.
     out = {}
-    if not os.path.isfile(path):
-        return out
-    try:
-        with open(path) as f:
-            data = json.load(f)
-    except Exception:
-        return out
-    plugins = data.get("plugins") if isinstance(data, dict) else None
-    if isinstance(plugins, dict):
-        items = plugins.items()
-    elif isinstance(data, dict):
-        items = data.items()
-    else:
-        items = []
-    for key, val in items:
-        if not isinstance(key, str):
-            continue
-        records = val if isinstance(val, list) else [val]
-        if not any(isinstance(r, dict) for r in records):
-            continue
+    for key, _records in iter_plugin_entries(load_registry(path)):
         name = key.split("@", 1)[0]
         # First-wins: keep the first install record's FQN for a given name.
         if name not in out:
@@ -281,60 +254,30 @@ __claude_modes::emit_candidates_from_installed_plugins() {
   [ -f "$registry" ] || return 0
 
   local raw rc
-  raw=$("$CLAUDE_MODES_PYTHON3" - "$registry" "$query" <<'PYEOF'
-import sys, json, unicodedata
+  raw=$("$CLAUDE_MODES_PYTHON3" - "$registry" "$query" "$SCRIPT_DIR" <<'PYEOF'
+import sys, json
 
 registry_path = sys.argv[1]
 query = sys.argv[2]
+sys.path.insert(0, sys.argv[3])
+from registry import iter_plugin_entries  # noqa: E402
+from sanitize import sanitize_for_display as _sd  # noqa: E402
 
 if not query:
     sys.exit(0)
 
-
-def _sd(s):
-    # Transport-boundary strip (Cc+Cf) — a hostile installed_plugins.json KEY
-    # with an embedded newline/tab would otherwise forge phantom TSV rows the
-    # bash split sees before per-field sanitize. Mirrors lib/sanitize.py.
-    return "".join(c for c in s if unicodedata.category(c) not in ("Cc", "Cf"))
-
-
+# Explicit load (NOT registry.load_registry) so a parse failure can signal the
+# caller via exit 3 — the caller emits an "installed-plugins-parse-failed"
+# diagnostic on non-zero rc. load_registry would swallow the error to {}.
 try:
     with open(registry_path) as f:
         data = json.load(f)
 except Exception:
-    # Path exists but parse failed — signal the caller via exit 3.
     sys.exit(3)
 
-# Shape: {"plugins": {"<name>@<marketplace>": [<record>, ...]}} (real) or a
-# top-level dict. CRITICAL: each plugin keys to a LIST of install records, NOT a
-# single dict. A dict-only guard skips every real entry (see cascade-engine.sh).
-# REGISTRY-READER SYNC (round-8 / U2): this installed_plugins.json shape-
-# normalization is mirrored in TWO sibling readers — the marketplaces-source
-# membership check below, and __claude_modes::resolve_self_identifier in
-# lib/cascade-engine.sh. The three do DIFFERENT work (iterate-by-name here;
-# collect-all-keys below; realpath-match-installPath in cascade-engine) so they
-# are intentionally NOT factored into one helper, but the `{"plugins": dict} →
-# items` shape handling MUST stay identical across all three. If you change the
-# accepted registry shape here, update the other two.
-plugins = data.get("plugins") if isinstance(data, dict) else None
-if isinstance(plugins, dict):
-    candidates = plugins.items()
-elif isinstance(data, dict):
-    candidates = data.items()
-else:
-    candidates = []
-
+# Registry shape + record-validity handled by the canonical iterator.
 seen = set()
-for key, val in candidates:
-    if not isinstance(key, str):
-        continue
-    # val may be a list of records OR a single record dict — both are valid
-    # shapes. We don't need a record field here (the key carries name@market),
-    # but we DO require the value to be a real install record (list-of-dicts or
-    # dict), mirroring the list-awareness so a malformed entry doesn't match.
-    records = val if isinstance(val, list) else [val]
-    if not any(isinstance(r, dict) for r in records):
-        continue
+for key, _records in iter_plugin_entries(data):
     name = key.split("@", 1)[0]
     if name != query:
         continue
@@ -382,46 +325,24 @@ __claude_modes::emit_candidates_from_marketplaces() {
   [ -d "$market_glob_root" ] || return 0
 
   local raw rc
-  raw=$("$CLAUDE_MODES_PYTHON3" - "$query" "$market_glob_root" "$registry" <<'PYEOF'
-import sys, os, json, glob, unicodedata
+  raw=$("$CLAUDE_MODES_PYTHON3" - "$query" "$market_glob_root" "$registry" "$SCRIPT_DIR" <<'PYEOF'
+import sys, os, json, glob
 
 query = sys.argv[1]
 market_root = sys.argv[2]
 registry_path = sys.argv[3]
+sys.path.insert(0, sys.argv[4])
+from registry import iter_plugin_entries, load_registry  # noqa: E402
+from sanitize import sanitize_for_display as _sd  # noqa: E402
 
 if not query:
     sys.exit(0)
 
-
-def _sd(s):
-    # Transport-boundary strip (Cc+Cf) — a hostile marketplace.json plugin
-    # `name` or top-level `name` with an embedded newline/tab would otherwise
-    # forge phantom TSV rows the bash split sees before per-field sanitize.
-    # Mirrors lib/sanitize.py.
-    return "".join(c for c in s if unicodedata.category(c) not in ("Cc", "Cf"))
-
 # Build the set of already-installed "<name>@<marketplace>" keys so we only emit
 # installable-but-not-installed entries. A missing/unparseable registry just
 # means "treat nothing as installed" (best-effort; the registry-parse failure is
-# separately reported by source 2).
-installed_keys = set()
-if os.path.isfile(registry_path):
-    try:
-        with open(registry_path) as f:
-            data = json.load(f)
-        # REGISTRY-READER SYNC (round-8 / U2): same installed_plugins.json shape-
-        # normalization as the installed-plugins source above and
-        # resolve_self_identifier in lib/cascade-engine.sh — kept as separate
-        # readers (different work) but the `{"plugins": dict} → items` handling
-        # MUST stay identical. Change one shape rule → change all three.
-        plugins = data.get("plugins") if isinstance(data, dict) else None
-        items = plugins.items() if isinstance(plugins, dict) else (
-            data.items() if isinstance(data, dict) else [])
-        for k, _v in items:
-            if isinstance(k, str):
-                installed_keys.add(k)
-    except Exception:
-        installed_keys = set()
+# separately reported by source 2). Registry shape via canonical iterator.
+installed_keys = {key for key, _records in iter_plugin_entries(load_registry(registry_path))}
 
 any_parse_failure = False
 pattern = os.path.join(market_root, "*", ".claude-plugin", "marketplace.json")

@@ -28,6 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/audit.sh"
 . "${SCRIPT_DIR}/install-registry.sh"  # api-contract: register_repo (canonical writer)
 . "${SCRIPT_DIR}/sanitize.sh"          # terminal-escape: claude_modes::sanitize_for_display
+. "${SCRIPT_DIR}/repo-root.sh"         # write-side current_git_toplevel
 
 CLAUDE_MODES_PYTHON3="${CLAUDE_MODES_PYTHON3:-/usr/bin/python3}"
 CASCADE_PY="${SCRIPT_DIR}/cascade-engine.py"
@@ -73,46 +74,20 @@ __claude_modes::resolve_self_identifier() {
     # this plugin's realpath, and return its identifier. We use Python to
     # avoid jq dependency.
     local id
-    id=$("$CLAUDE_MODES_PYTHON3" - "$registry" "$plugin_root" <<'PYEOF'
-import json, os, sys
+    id=$("$CLAUDE_MODES_PYTHON3" - "$registry" "$plugin_root" "$SCRIPT_DIR" <<'PYEOF'
+import os, sys
 registry_path = sys.argv[1]
 plugin_root = os.path.realpath(sys.argv[2])
-try:
-    with open(registry_path) as f:
-        data = json.load(f)
-except Exception:
-    sys.exit(0)
+sys.path.insert(0, sys.argv[3])
+from registry import iter_plugin_entries, load_registry  # noqa: E402
 
-# Shape: {"plugins": {"<name>@<marketplace>": <record>}} or top-level dict.
-# CRITICAL: the real installed_plugins.json keys each plugin to a LIST of
-# install records (one per scope), NOT a single dict:
-#   {"plugins": {"name@mkt": [{"scope": "user", "installPath": "..."}]}}
-# A marketplace-installed plugin is therefore a list, and the old
-# `isinstance(val, dict)` guard skipped EVERY real entry → the resolver always
-# fell through to the local-dev synthetic. Handle both the list-of-records and
-# the bare-dict shape. (Bug surfaced on first contact with a real marketplace
-# install; never exercised because tests used CLAUDE_MODES_CANONICAL_ID or the
-# fallback. Mirror this list-awareness in any future registry reader.)
-# REGISTRY-READER SYNC (round-8 / U2): the same installed_plugins.json shape-
-# normalization lives in TWO sibling readers in lib/resolve-catalog-candidate.sh
-# (its installed-plugins source + its marketplaces membership check). Those do
-# DIFFERENT work (iterate-by-name / collect-keys) vs this realpath-match-by-
-# installPath, so they're intentionally kept as separate readers — but the
-# `{"plugins": dict} → items` shape handling MUST stay identical across all
-# three. Change the accepted registry shape here → update the resolver too.
-candidates = []
-plugins = data.get("plugins") if isinstance(data, dict) else None
-if isinstance(plugins, dict):
-    candidates = plugins.items()
-elif isinstance(data, dict):
-    candidates = data.items()
-
-for key, val in candidates:
-    # val may be a list of install records OR a single record dict.
-    records = val if isinstance(val, list) else [val]
+# Registry shape + record-validity handled by the canonical iterator
+# (iter_plugin_entries yields only dict records, so no per-rec isinstance
+# guard is needed). This reader's distinct work: realpath-match each record's
+# installPath against this plugin's root to recover its "<name>@<marketplace>"
+# identifier.
+for key, records in iter_plugin_entries(load_registry(registry_path)):
     for rec in records:
-        if not isinstance(rec, dict):
-            continue
         install_path = rec.get("installPath") or rec.get("install_path")
         if not install_path:
             continue
@@ -322,10 +297,13 @@ __claude_modes::tier4_trust_gate() {
 # Args:
 #   mode_name  — name of the active mode (tier 3). Pass "" or "claude"
 #                for Claude Mode (no tier-3 contribution).
-#   repo_root  — optional; if omitted, resolved via `git -C "$PWD"
-#                rev-parse --show-toplevel`. If no repo, the cascade
-#                compiles only tiers 2 and 3 but does NOT write a
-#                per-repo settings.local.json (no-repo case).
+#   repo_root  — optional; if omitted, resolved via the canonical write-side
+#                resolver claude_modes::current_git_toplevel (bare
+#                `git rev-parse --show-toplevel` — this is a WRITE op that
+#                creates <repo>/.claude/settings.local.json in cwd's repo, so
+#                the bare toplevel is correct; the read-side leak gate does
+#                NOT apply here). If no repo, the cascade compiles only tiers
+#                2 and 3 but does NOT write a per-repo settings.local.json.
 #
 # Returns 0 on success; non-zero on cascade failure or trust-gate decline.
 claude_modes::cascade_compile() {
@@ -333,8 +311,9 @@ claude_modes::cascade_compile() {
   local repo_root="${2:-}"
 
   # ─── Resolve repo_root (or detect no-repo case) ──────────────────────
+  # WRITE-side resolution (see current_git_toplevel in lib/repo-root.sh).
   if [ -z "$repo_root" ]; then
-    repo_root=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)
+    repo_root=$(claude_modes::current_git_toplevel)
   fi
 
   local no_repo=0

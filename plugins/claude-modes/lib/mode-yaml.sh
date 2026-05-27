@@ -258,6 +258,48 @@ with open(sys.argv[1], 'rb') as f:
 " "$path"
 }
 
+# claude_modes::safe_move <src> <dst>
+#
+# Atomic move with a cross-filesystem fallback. Tries `mv` first (atomic on
+# the same FS, and its failure is itself the cross-FS signal — no separate
+# device-id stat needed); on mv failure, falls back to cp + sha256-verify +
+# rm-source, refusing to remove the source if the copy doesn't verify.
+#
+# Returns 0 on success, 1 on any failure (cp failed / hash failed / sha
+# mismatch / source-rm failed). Prints a one-line diagnostic to stderr on
+# failure. Callers own their own logging + exit policy: a library caller
+# checks the return code; a script caller wraps `|| { _err ...; exit 1; }`.
+#
+# THE single mover. Replaces three hand-copied implementations (adopt-file.sh
+# try-mv-fallback + setup.sh / unmodes.sh stat-device-id-branch) and removes
+# the duplicated _stat_device_id helper.
+claude_modes::safe_move() {
+  local src="$1" dst="$2"
+
+  if mv "$src" "$dst" 2>/dev/null; then
+    return 0
+  fi
+
+  # Cross-FS (or same-FS mv refused): cp + verify + rm.
+  if ! cp -p "$src" "$dst" 2>/dev/null; then
+    printf 'safe_move: cp fallback failed (%s -> %s)\n' "$src" "$dst" >&2
+    return 1
+  fi
+  local src_sha dst_sha
+  src_sha=$(claude_modes::sha256_of_file "$src" 2>/dev/null)
+  dst_sha=$(claude_modes::sha256_of_file "$dst" 2>/dev/null)
+  if [ -z "$src_sha" ] || [ "$src_sha" != "$dst_sha" ]; then
+    rm -f "$dst" 2>/dev/null || true
+    printf 'safe_move: sha256 mismatch after cp — source left in place (%s)\n' "$src" >&2
+    return 1
+  fi
+  if ! rm -f "$src" 2>/dev/null; then
+    printf 'safe_move: cp verified but source rm failed — both copies remain (%s)\n' "$src" >&2
+    return 1
+  fi
+  return 0
+}
+
 # Allow execution as a script for debugging:
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   case "${1:-}" in
