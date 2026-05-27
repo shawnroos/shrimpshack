@@ -78,6 +78,68 @@ The three pieces you integrate:
 
 ---
 
+## 0.5. Outcomes-gated emission (v0.3.0)
+
+**v0.3.0 closes the gap that v0.2.x's A2/A4 were round-gated, not outcomes-gated.**
+A recipe may now declare an `iteration` block that lets a designated **gate
+unit**'s `verdict.decision` drive the loop directly — the gate decides whether
+the run advances to the terminal phase, emits another round of work and
+re-engages, or stops with an audit trail. Auto's identity is **durability +
+outcomes-gating**; v0.3.0 is the second half landing.
+
+**How it routes** (`lib/tick.py::advance_iteration_loop`, fires BEFORE the
+predicate-met short-circuit at the top of `_tick_body`):
+
+- **No `iteration` block on the ledger → no-op.** A1, W, and every v0.2.x
+  recipe early-return through this path with zero side effects. Standard flow
+  continues; the predicate-met short-circuit evaluates exactly as before.
+- **Gate verdict `decision == "advance"`** → fall through to the standard
+  predicate-met flow; the loop advances to `done`.
+- **`decision == "iterate"` under bound** → engine calls
+  `ledger.atomic_iterate_step` in ONE locked body: increments
+  `iteration_attempts`, emits N new sibling units via `iterate_template`
+  (N from `decision_payload.emit_count`, default 1, capped at 10), resets the
+  gate unit (`verdict-returned → pending`, `depends_on` extended,
+  `dispatch_context.decision` cleared). The tick emits a rearm intent; the next
+  tick dispatches the new units.
+- **`decision == "exit"` OR `"iterate" over bound`** → engine writes
+  `dispatch_context.bound_override = { bound, original_decision, at: <iso> }`
+  on the gate unit and flips the loop directly to `done` / `driver = "manual"`.
+  The bound breach is a recorded decision, not an error — surface it from the
+  `bound_override` audit trail when reporting the run's exit.
+
+**Bounds are engine-enforced** (deterministic over probabilistic):
+`bound.max_attempts` caps the
+honored iterate count (pre-increment check, so the Nth attempt is blocked when
+`iteration_attempts == max_attempts` on entry); optional
+`bound.max_wall_seconds` caps cumulative ACTIVE wall-time
+(`active_wall_seconds`) — pauses don't burn budget, only `_tick_body`'s active
+duration. A misbehaving gate agent cannot loop forever.
+
+**Operator kill-switch.** Setting `CLAUDE_AUTO_DISABLE_ITERATION=1` in the
+environment makes `advance_iteration_loop` return None — every tick proceeds
+as if the recipe had no `iteration` block, so the run exits through the
+standard predicate-met path on the first terminal-state tick. This is a REAL
+operator knob (unfenced in v0.3.0 F5), useful for emergency rollback of an
+outcomes-gated recipe without redeploying or editing the recipe. The decision
+on disk is UNTOUCHED — unsetting the var resumes outcomes-gating on the next
+tick. As the skill driver you don't toggle this yourself, but you CAN tell an
+operator about it when they're stuck in a misbehaving iteration loop.
+
+**Reading the decision.** Every consumer routes through
+`lib/iteration.py::read_decision` / `evaluate_decision`; the AST lint
+(`tests/unit/iteration-ast-lint.test.sh`) forbids the raw `"decision"` literal
+anywhere in `lib/*.py` except `lib/iteration.py` + `lib/ledger.py` (the writer).
+NEVER reach into a unit's `dispatch_context["decision"]` from this skill or any
+operator path — the lint exists because that's exactly how the "plan documents
+a behavior the code never wires" build-bug class keeps happening.
+
+See `docs/contracts/recipe-format.md` §6 + §7 for the recipe shape and
+`docs/contracts/ledger-schema.md` §2.1 + §2.3 for the ledger fields the engine
+reads/writes through this primitive.
+
+---
+
 ## 1. Goal binding (ALWAYS — there is no un-goaled run)
 
 Before arming anything, **set a deliberate-stop goal bound to the loop's exit.**
@@ -265,6 +327,28 @@ The exit report lists the **remaining minor findings** for operator promotion �
 minors never gate the loop (they ship), but they are reported so the operator can
 promote any that are actually long-term work. Format: per remaining minor, the
 unit id and the finding note.
+
+**v0.3.0 — non-clean exit reasons (G2).** If the ledger's top-level
+`exit_reason` field is non-null, the loop did NOT exit via the clean
+predicate-met path — `advance_iteration_loop` raised and the F2 catches
+forced `loop_phase=done`. Surface this in the exit report alongside the
+minors so the operator sees WHY the loop ended. Two `kind` values exist
+(`lib/ledger.py::EXIT_REASON_KINDS`):
+
+- `iteration-check-failed` — an unexpected raise from
+  `advance_iteration_loop` (typically a malformed iteration block or
+  corrupted gate verdict). Surface the `error.type` + `error.message`;
+  recommend the operator inspect the ledger's `iteration` block.
+- `recipe-bug` — a `LedgerError` subclass (`UnknownUnit`,
+  `InvalidTransition`, `StaleVerdict`) escaped the iteration check.
+  Surface `error.type` + `error.message`; recommend the operator
+  inspect the recipe JSON against `docs/contracts/recipe-format.md`.
+
+`exit_reason` is the durable on-ledger record (the transient harness
+stop intent carries the same `kind`, but it's consumed by the harness —
+the ledger field is what `/auto-status` reads to distinguish a clean
+exit from a crash exit post-run). Do not invent additional `kind`
+values; the constant tuple is the contract.
 
 ---
 

@@ -303,6 +303,459 @@ assert_eq "u,do_unit,p/x.md" "$(reg unit-for-merge)"
 it "validate_and_lint warns: phase with no units + no emitter"
 assert_eq "warned" "$(reg lint-empty-phase)"
 
+# ─── U5 (v0.3.0): iteration + emit_templates validation ─────────────────────
+# Twelve scenarios covering R2, R3, R7 (a1/W backward compat), the pairing
+# rule per round-3 P2 #21 (iteration WITHOUT emit_templates is valid IFF
+# iteration.emit_template is also absent), and the editorial warnings.
+# Plus one DELIBERATE-FAIL probe (gate_unit ghost) — Edit removes the check,
+# the test goes RED, Edit restores.
+itr() {
+  "$PY" - "$AUTO_ROOT" "$@" <<'PYEOF'
+import sys, os, json
+auto_root = sys.argv[1]
+sys.path.insert(0, os.path.join(auto_root, "lib"))
+from _bootstrap import load_lib_module
+recipes = load_lib_module("recipes")
+op = sys.argv[2]
+
+def vresult(d):
+    try:
+        recipes.validate(d); return "valid"
+    except recipes.RecipeError:
+        return "rejected"
+
+# Full v0.3.0 A2 recipe shape — the GREEN reference. Per the plan's
+# High-Level Technical Design block (lines 158-187). Every error-case test
+# below mutates a single field off this base.
+def a2_v030():
+    return {
+        "name": "a2", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan-1", "phase": "plan", "invokes": {}},
+            {"id": "plan-2", "phase": "plan", "invokes": {}},
+            {"id": "plan-3", "phase": "plan", "invokes": {}},
+            {"id": "judge", "phase": "work",
+             "depends_on": ["plan-1","plan-2","plan-3"], "invokes": {}},
+        ],
+        "phase_transitions": [
+            {"from": "plan", "to": "work", "emitter": "judge_winner_to_work_units"}
+        ],
+        "iteration": {
+            "gate_unit": "judge",
+            "emit_template": "plan-candidate",
+            "bound": {"max_attempts": 5, "max_wall_seconds": 1800},
+        },
+        "emit_templates": {
+            "plan-candidate": {
+                "phase": "plan",
+                "invokes": {"adapter_op": "next_plan_step"},
+                "id_prefix": "plan-",
+            }
+        },
+    }
+
+if op == "a2-v030-happy":
+    print(vresult(a2_v030()))
+
+elif op == "a1-still-valid":
+    # R7: v0.2.0 a1 shape (no iteration, no emit_templates) still validates.
+    with open(os.path.join(auto_root, "recipes", "a1.json")) as f:
+        print(vresult(json.load(f)))
+
+elif op == "w-still-valid":
+    # R7: W recipe (no iteration, no emit_templates) still validates.
+    with open(os.path.join(auto_root, "recipes", "w.json")) as f:
+        print(vresult(json.load(f)))
+
+elif op == "gate-unit-ghost":
+    r = a2_v030()
+    r["iteration"]["gate_unit"] = "ghost"
+    print(vresult(r))
+
+elif op == "emit-template-missing":
+    r = a2_v030()
+    r["iteration"]["emit_template"] = "does-not-exist"
+    print(vresult(r))
+
+elif op == "bound-negative":
+    r = a2_v030()
+    r["iteration"]["bound"]["max_attempts"] = -1
+    print(vresult(r))
+
+elif op == "bound-string":
+    r = a2_v030()
+    r["iteration"]["bound"]["max_attempts"] = "5"
+    print(vresult(r))
+
+elif op == "emit-template-phase-bad":
+    r = a2_v030()
+    r["emit_templates"]["plan-candidate"]["phase"] = "nonexistent"
+    print(vresult(r))
+
+elif op == "pairing-template-without-templates":
+    # iteration.emit_template named but emit_templates ABSENT → must reject.
+    # The round-3 P2 #21 relaxation only applies when iteration.emit_template
+    # is ALSO absent (bare iteration: re-engage gate, no new siblings).
+    r = a2_v030()
+    del r["emit_templates"]
+    # iteration.emit_template is "plan-candidate" — points at a now-missing key
+    print(vresult(r))
+
+elif op == "pairing-bare-iteration-valid":
+    # Round-3 P2 #21 relaxation: iteration without emit_template is valid;
+    # emit_templates may be absent too. Supports A4's "re-compare without new
+    # candidates" use case.
+    r = a2_v030()
+    del r["emit_templates"]
+    del r["iteration"]["emit_template"]
+    print(vresult(r))
+
+elif op == "bound-missing-max-attempts":
+    r = a2_v030()
+    del r["iteration"]["bound"]["max_attempts"]
+    print(vresult(r))
+
+elif op == "lint-max-attempts-loud":
+    # Editorial — max_attempts = 15 > 10 → warning surface.
+    r = a2_v030()
+    r["iteration"]["bound"]["max_attempts"] = 15
+    warns = recipes.validate_and_lint(r)
+    print("warned" if any("max_attempts" in w for w in warns) else "no-warning")
+
+elif op == "lint-max-wall-short":
+    # Editorial — max_wall_seconds < 60 → warning surface.
+    r = a2_v030()
+    r["iteration"]["bound"]["max_wall_seconds"] = 30
+    warns = recipes.validate_and_lint(r)
+    print("warned" if any("max_wall_seconds" in w for w in warns) else "no-warning")
+
+elif op == "u6-depends-on-id-prefix-valid":
+    # v0.3.0 U6 (F4-tightened): a structural unit may forward-reference units
+    # produced by an emit_template. With F4 SCHEMA TIGHTENING the recipe must
+    # DECLARE the emitter-produced ids via `expected_emit_outputs` — they are
+    # no longer accepted on prefix-match alone. A4's `compare` is the canonical
+    # example: its depends_on names "build-clarity" and "build-perf"
+    # (materialized by the bias-builder emit_template + the
+    # plan_output_to_paired_builders phase-transition emitter). The validator
+    # MUST accept this AFTER the recipe declares them in expected_emit_outputs.
+    r = {
+        "name": "u6-fwdref", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-clarity", "build-perf"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "expected_emit_outputs": ["build-clarity", "build-perf"],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "u6-depends-on-unrelated-rejected":
+    # The carve-out is NARROW: depends_on must either reference an existing
+    # unit id, an iterate-shaped id ({id_prefix}{positive_int}), or a member
+    # of expected_emit_outputs. An unrelated string ("totally-unrelated")
+    # still rejects — proving the carve-out is not a blanket "accept any
+    # forward reference."
+    r = {
+        "name": "u6-bad", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["totally-unrelated"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "f4-build-typo-rejected":
+    # F4 DF control (a): the prior carve-out accepted ANY depends_on string
+    # starting with an emit_template's id_prefix — `"build-typo"` would pass
+    # against id_prefix `"build-"` even though no emitter would ever produce
+    # `build-typo`. After F4 the validator requires either iterate-shape
+    # ({id_prefix}{positive_int}) OR declaration in expected_emit_outputs.
+    # `build-typo` matches NEITHER, so it must reject.
+    r = {
+        "name": "f4-typo", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-typo"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "f4-iterate-shape-accepted":
+    # F4 DF control (b): iterate-shape ids ({id_prefix}{positive_int}) are
+    # plausibly produced by `iterate_template` (see lib/emitters.py: the emit
+    # math is `f"{id_prefix}{base + i + 1}"`), so `build-1`, `build-7`, etc.
+    # must validate WITHOUT requiring expected_emit_outputs.
+    r = {
+        "name": "f4-iterate", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-1", "build-2"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "f4-bare-prefix-rejected":
+    # F4 edge: the bare id_prefix string itself (`"build-"` with no suffix) is
+    # NOT a valid iterate output (iterate emits `{id_prefix}{N}`, N >= 1), so
+    # it must reject unless declared in expected_emit_outputs. Guards against
+    # off-by-one in the iterate-shape check.
+    r = {
+        "name": "f4-bare", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "f4-eeo-rejects-non-list":
+    # F4 shape: expected_emit_outputs must be a list of non-empty strings.
+    r = {
+        "name": "f4-eeo-bad", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [{"id": "plan", "phase": "plan", "invokes": {}}],
+        "expected_emit_outputs": "build-clarity",  # str, not list
+    }
+    print(vresult(r))
+
+elif op == "g3-doc-claim-parity-without-eeo":
+    # G3 (API-R2-1): doc-claim ↔ validator-behavior parity check (§8 of
+    # docs/contracts/recipe-format.md). The doc says depends_on members are
+    # accepted iff (a) in units[], (b) iterate-shape, OR (c) in
+    # expected_emit_outputs. Toggle pair: same recipe, depends_on names
+    # `unicorn` (not in units[], not iterate-shape, NOT in EEO) → must reject.
+    r = {
+        "name": "g3-no-eeo", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["unicorn"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        # NO expected_emit_outputs declared, and `unicorn` isn't iterate-shape
+        # against any declared id_prefix.
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "g3-doc-claim-parity-with-eeo":
+    # G3 (API-R2-1): same recipe as g3-doc-claim-parity-without-eeo BUT with
+    # `unicorn` declared in expected_emit_outputs → must validate. Together
+    # these two prove the third branch of the documented contract (§8) is
+    # exactly what the validator enforces.
+    r = {
+        "name": "g3-with-eeo", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["unicorn"],
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "expected_emit_outputs": ["unicorn"],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+
+elif op == "g1-isdigit-unicode-superscript":
+    # G1 / ADV-R2-3: `_matches_iterate_shape` previously used
+    # `suffix.isdigit() and int(suffix) >= 1`. The trap: `'²'.isdigit()` is
+    # True but `int('²')` raises ValueError, so a depends_on of "build-²"
+    # would crash the validator with an unhandled exception instead of
+    # rejecting cleanly. G1 swaps isdigit→isdecimal: `'²'.isdecimal()` is
+    # False, so "build-²" falls through to "not iterate-shaped" and the
+    # validator rejects it via the existing unknown-unit path — same final
+    # verdict the author intended.
+    #
+    # The DF revert (Edit isdecimal→isdigit in lib/recipes.py) shows the
+    # un-fixed validator RAISES on this input (test goes RED with a
+    # `raised:ValueError` shape instead of `rejected`).
+    r = {
+        "name": "g1-isdigit-trap", "version": "1",
+        "phase_order": ["plan", "seam", "work"],
+        "terminal_phase": "work",
+        "units": [
+            {"id": "plan", "phase": "plan", "depends_on": [], "invokes": {}},
+            {"id": "compare", "phase": "work",
+             "depends_on": ["build-²"],  # 'build-²' — isdigit True, int raises
+             "invokes": {"adapter_op": "review"}}
+        ],
+        "iteration": {"gate_unit": "compare", "emit_template": "bias-builder",
+                      "bound": {"max_attempts": 4}},
+        "emit_templates": {"bias-builder": {
+            "phase": "work", "invokes": {"adapter_op": "do_unit"},
+            "id_prefix": "build-"}}
+    }
+    print(vresult(r))
+PYEOF
+}
+
+it "U5 happy path: full A2 v0.3.0 recipe (iteration + emit_templates) validates"
+assert_eq "valid" "$(itr a2-v030-happy)"
+
+it "U5 R7: a1 (no iteration, no emit_templates) still validates"
+assert_eq "valid" "$(itr a1-still-valid)"
+
+it "U5 R7: W (no iteration, no emit_templates) still validates"
+assert_eq "valid" "$(itr w-still-valid)"
+
+it "U5 error: iteration.gate_unit references nonexistent unit ('ghost') → rejected"
+assert_eq "rejected" "$(itr gate-unit-ghost)"
+
+it "U5 error: iteration.emit_template references missing template key → rejected"
+assert_eq "rejected" "$(itr emit-template-missing)"
+
+it "U5 error: iteration.bound.max_attempts = -1 → rejected"
+assert_eq "rejected" "$(itr bound-negative)"
+
+it "U5 error: iteration.bound.max_attempts = '5' (string) → rejected"
+assert_eq "rejected" "$(itr bound-string)"
+
+it "U5 error: emit_templates.<x>.phase not in phase_order → rejected"
+assert_eq "rejected" "$(itr emit-template-phase-bad)"
+
+it "U5 error: iteration.emit_template present but emit_templates absent → rejected (pairing)"
+assert_eq "rejected" "$(itr pairing-template-without-templates)"
+
+it "U5 relaxed pairing: bare iteration (no emit_template, no emit_templates) → valid"
+assert_eq "valid" "$(itr pairing-bare-iteration-valid)"
+
+it "U5 error: iteration.bound missing max_attempts (required) → rejected"
+assert_eq "rejected" "$(itr bound-missing-max-attempts)"
+
+it "U5 editorial: validate_and_lint warns on max_attempts > 10"
+assert_eq "warned" "$(itr lint-max-attempts-loud)"
+
+it "U5 editorial: validate_and_lint warns on max_wall_seconds < 60"
+assert_eq "warned" "$(itr lint-max-wall-short)"
+
+# ── v0.3.0 U6: depends_on may forward-reference emit_template id_prefixes ──
+# This carve-out (mirror of the gate_unit carve-out) is mandated by U6's
+# "compare is structural" contract — A4's `compare` declares
+# depends_on: [build-clarity, build-perf] in units[], but those concrete ids
+# don't exist at validate-time; they're materialized by the bias-builder
+# emit_template (id_prefix "build-").
+it "U6 carve-out: depends_on forward-refs an emit_template id_prefix → valid"
+assert_eq "valid" "$(itr u6-depends-on-id-prefix-valid)"
+
+it "U6 carve-out is narrow: unrelated depends_on id still rejects"
+assert_eq "rejected" "$(itr u6-depends-on-unrelated-rejected)"
+
+# ── v0.3.0 F4: depends_on carve-out tightened (ADV-2 + maint-4) ─────────────
+# The prior carve-out accepted ANY depends_on string starting with an
+# emit_template id_prefix — `"build-typo"` would pass against id_prefix
+# `"build-"`. F4 narrows to: in units[], OR iterate-shape ({id_prefix}{N}),
+# OR explicitly declared in expected_emit_outputs.
+#
+# DF rationale (memory feedback_new_tests_need_deliberate_fail_smoke_check):
+# we proved these tests are real by widening the validator (adding
+# `"build-typo"` to a4.json's expected_emit_outputs) and confirming RED, then
+# restoring. Without the DF the green here proves nothing.
+it "F4 (DF-a): build-typo in depends_on rejected — loose prefix-match closed"
+assert_eq "rejected" "$(itr f4-build-typo-rejected)"
+
+it "F4 (DF-b): build-1 iterate-shape id accepted without expected_emit_outputs"
+assert_eq "valid" "$(itr f4-iterate-shape-accepted)"
+
+it "F4 edge: bare id_prefix 'build-' (no suffix) rejects unless declared"
+assert_eq "rejected" "$(itr f4-bare-prefix-rejected)"
+
+it "F4 shape: expected_emit_outputs must be a list of non-empty strings"
+assert_eq "rejected" "$(itr f4-eeo-rejects-non-list)"
+
+# ── G3 (API-R2-1): doc-claim ↔ validator-behavior parity check ─────────────
+# docs/contracts/recipe-format.md §8 documents `expected_emit_outputs`. The
+# doc claims depends_on members are accepted iff (a) in units[], (b)
+# iterate-shape, OR (c) in expected_emit_outputs. These two tests are a
+# toggle pair on branch (c) — same recipe, only `expected_emit_outputs`
+# differs. If the doc and validator ever drift on this contract, one of
+# these will flip.
+#
+# DF rationale (memory feedback_new_tests_need_deliberate_fail_smoke_check):
+# we proved this test is real by commenting out the `if d in
+# expected_emit_outputs_set: continue` lines in lib/recipes.py via Edit and
+# observing the g3-doc-claim-parity-with-eeo case flip from valid → rejected
+# (red), then restoring. Without the DF the green here proves nothing.
+it "G3 doc-parity (§8): depends_on='unicorn' without expected_emit_outputs → rejected"
+assert_eq "rejected" "$(itr g3-doc-claim-parity-without-eeo)"
+
+it "G3 doc-parity (§8): depends_on='unicorn' WITH expected_emit_outputs → valid"
+assert_eq "valid" "$(itr g3-doc-claim-parity-with-eeo)"
+
+# ── v0.3.0 G1 / ADV-R2-3: isdigit() Unicode trap closed ────────────────────
+# `_matches_iterate_shape` previously called `suffix.isdigit()` then
+# `int(suffix)`. `'²'.isdigit()` is True but `int('²')` raises ValueError —
+# an author-crafted depends_on of "build-²" would crash the validator
+# (unhandled ValueError escapes through `validate` → caller). G1 uses
+# `isdecimal()` which matches exactly the chars `int()` accepts, so
+# "build-²" is treated as not-iterate-shaped and rejected via the standard
+# unknown-unit path (i.e. with a RecipeError, not a ValueError).
+#
+# DF-verified (commit message): with the production fix reverted
+# (isdecimal → isdigit), this test fails RED — vresult returns a
+# non-"rejected" value because the underlying `int(suffix)` raises
+# ValueError, which vresult only handles for RecipeError.
+it "G1 / ADV-R2-3: depends_on 'build-²' rejects cleanly (no isdigit/int Unicode crash)"
+assert_eq "rejected" "$(itr g1-isdigit-unicode-superscript)"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "recipes.test.sh: ${PASS} passed, ${FAIL} failed"
