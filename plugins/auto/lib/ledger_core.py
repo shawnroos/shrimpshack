@@ -71,23 +71,39 @@ LOOP_PHASES = ("plan", "seam", "work", "done")
 # adapter reads plan_step to compute the NEXT step; the tick persists the step it
 # ran. `null` (no step yet) is ALSO valid and is the initial value.
 PLAN_STEPS = ("plan", "deepen", "review_plan")
-# v0.3.0 H / API-R3-2: canonical exit_reason.kind values. set_exit_reason
-# writes ledger["exit_reason"]["kind"] from one of these; tick.py imports and
-# uses the named constants rather than re-spelling the strings inline (which
-# would create a divergent-literal class the prose claims is a fixed enum but
-# the code only enforces by convention). EXIT_REASON_KINDS is the validation
-# tuple; the named constants are how callers spell intent.
+# v0.3.0 H / API-R3-2 → v0.3.1 B11: canonical exit_reason.kind enum.
+# set_exit_reason writes ledger["exit_reason"]["kind"] from one of these; tick.py
+# spells intent as `ledger.ExitReason.RECIPE_BUG` rather than a string literal
+# (which would create a divergent-literal class the prose claims is a fixed enum
+# but the code only enforces by convention). StrEnum: members ARE strings, so
+# `ExitReason.RECIPE_BUG == "recipe-bug"` is True and JSON-serialization round-
+# trips. Membership check (`kind in ExitReason`) replaces H's manual KINDS tuple
+# — one canonical surface instead of three top-level names + a tuple.
+#
 #   ITERATION_CHECK_FAILED → an unexpected raise from advance_iteration_loop
 #     (typically a malformed iteration block or gate verdict).
 #   RECIPE_BUG → a LedgerError subclass (UnknownUnit, InvalidTransition,
 #     StaleVerdict) escaping the iteration check, which signals the recipe's
 #     units[] / phase_transitions are mis-shaped relative to what the engine
 #     reached for.
+#
 # Both reasons drive /auto-status's exit_reason render and the harness
 # stop-intent's reason field.
-EXIT_REASON_ITERATION_CHECK_FAILED = "iteration-check-failed"
-EXIT_REASON_RECIPE_BUG = "recipe-bug"
-EXIT_REASON_KINDS = (EXIT_REASON_ITERATION_CHECK_FAILED, EXIT_REASON_RECIPE_BUG)
+from enum import Enum
+
+
+# `str, Enum` (the pre-3.11 portable equivalent of StrEnum — Python 3.9 is the
+# auto runtime's actual floor, per `#!/usr/bin/env python3` on macOS which
+# resolves to 3.9). Members ARE strings via the str mixin:
+# `ExitReason.RECIPE_BUG == "recipe-bug"` is True; JSON-serializes as the
+# value when `default=str` or via explicit `.value`. The one wrinkle vs
+# native StrEnum: `str(ExitReason.RECIPE_BUG)` gives `"ExitReason.RECIPE_BUG"`
+# (the repr), so set_exit_reason persists `kind.value` explicitly to keep
+# the on-disk shape backwards-compatible with v0.3.0 (where kind was a
+# plain string like "recipe-bug").
+class ExitReason(str, Enum):
+    ITERATION_CHECK_FAILED = "iteration-check-failed"
+    RECIPE_BUG = "recipe-bug"
 UNIT_STATES = (
     "pending",
     "dispatched",
@@ -743,6 +759,7 @@ def init_ledger(
     phase_transitions=None,
     iteration=None,
     emit_templates=None,
+    goal_intent=None,
 ):
     """Create a new ledger. Rejects if one already exists (LedgerExists).
 
@@ -794,6 +811,15 @@ def init_ledger(
         )
     if plan_step is not None and plan_step not in PLAN_STEPS:
         raise LedgerError(f"invalid plan_step: {plan_step!r}")
+
+    # v0.4.0 goal_intent (KTD-2): one-line user-facing intent sentence, frozen
+    # at init time. Acceptable shapes: None (legacy / unknown), or a string
+    # (typically derived from plan title for /auto <plan>, from hypothesis for
+    # bare /auto, from input for freeform). We do NOT trim or normalize — the
+    # caller owns the wording — but we reject non-string non-None to keep the
+    # on-disk shape clean.
+    if goal_intent is not None and not isinstance(goal_intent, str):
+        raise LedgerError(f"goal_intent must be a string or None: {goal_intent!r}")
 
     # phase_transitions defaults to []; basic shape check (the recipe validator
     # does the full check, but we don't trust that the caller already validated).
@@ -915,6 +941,14 @@ def init_ledger(
             # plumbing gap U1-U5 left for U6 to close.
             "iteration": iteration,
             "emit_templates": emit_templates,
+            # v0.4.0 KTD-2 (additive): the one-line user-facing intent sentence
+            # frozen at init time. Derived by the caller — plan title for
+            # /auto <plan>, hypothesis summary for bare /auto, the input for
+            # freeform. None on a legacy or recipe-unaware init. The
+            # ambiguous-runs hypothesis surfaces this verbatim when listing
+            # in-flight runs so an operator picking between two runs sees what
+            # each was started for, not just a slug.
+            "goal_intent": goal_intent,
             "exit_predicate_result": {},  # filled by _atomic_write recompute.
             "units": norm_units,
             "loop": {"driver": "self", "last_beat_at": _now_iso()},

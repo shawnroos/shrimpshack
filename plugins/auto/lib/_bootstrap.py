@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -91,6 +92,117 @@ def resolve_repo() -> str:
             return dir_
         dir_ = os.path.dirname(dir_)
     return os.getcwd()
+
+
+def resolve_host_repo_root(*, cwd=None):
+    """Absolute path of the MAIN repo (the host of any worktrees), or None.
+
+    v0.4.0 KTD-3 (round-3 finding R3-001 — empirically verified): from inside a
+    git worktree, ``git rev-parse --show-toplevel`` returns the *worktree's*
+    own root, NOT the main repo. For multi-plan fanout we need the host repo
+    so spawned worktrees nest under the main checkout's ``worktrees/`` —
+    independent of which worktree the parent session is itself running in.
+
+    The mechanism uses ``git rev-parse --git-common-dir``: from a main repo
+    this returns ``.git`` (the actual git dir); from a worktree it returns
+    the main repo's ``.git`` (NOT the worktree's ``.git/worktrees/<name>/``
+    private dir). The parent of the resolved common-dir is the host repo
+    root in both cases.
+
+    Returns the absolute host repo path. Returns ``None`` when git is not
+    available or cwd is not inside a git tree — callers must handle the
+    None case (typically by erroring out: fanout requires a git repo).
+
+    Pass ``cwd`` to run git from a specific directory (review round 1 fix:
+    on-stop.py needs to query the host repo from a process whose cwd may
+    be elsewhere).
+    """
+    return _resolve_host_repo_root(cwd=cwd)
+
+
+def _resolve_host_repo_root(*, cwd=None):
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=cwd,
+        )
+    except (OSError, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    common_dir = result.stdout.strip()
+    if not common_dir:
+        return None
+    # git emits a relative path when cwd is inside the main repo (".git") and
+    # an absolute path from inside a worktree. Resolve to absolute either way,
+    # then return the parent (the main repo root). When cwd is provided,
+    # `os.path.abspath` resolves the relative path against the PROCESS cwd
+    # rather than the cwd we passed to git — so for relative outputs we must
+    # join explicitly against cwd before resolving.
+    if not os.path.isabs(common_dir) and cwd is not None:
+        common_dir = os.path.join(cwd, common_dir)
+    abs_common = os.path.abspath(common_dir)
+    return os.path.dirname(abs_common)
+
+
+def resolve_shared_dir(*, cwd=None):
+    """Absolute path to ``<host-repo-root>/.claude/auto/``, or None.
+
+    v0.4.0 KTD-3: shared state — batch sidecars, cross-worktree run discovery,
+    the v0.4 default-flip back-compat marker — lives at the HOST repo's
+    ``.claude/auto/`` (NOT the cwd worktree's). This helper wraps
+    ``resolve_host_repo_root()`` + the ``.claude/auto/`` join so every shared-
+    state consumer reads the same path.
+
+    Returns ``None`` when ``resolve_host_repo_root()`` returns None (no git).
+    Callers that need a directory MUST handle None — typically by degrading
+    to per-worktree state (the legacy ``resolve_repo`` shape) or erroring out
+    for features that genuinely require shared state (fanout).
+
+    Distinct from ``resolve_repo()``: that returns the per-worktree ledger
+    home (env-pinned via ``CLAUDE_AUTO_REPO`` for sub-runs); this returns the
+    main repo's shared state directory. Both are needed: the per-worktree
+    helper for "what does THIS worktree own", this helper for "what does the
+    parent know across worktrees".
+    """
+    host = resolve_host_repo_root(cwd=cwd)
+    if host is None:
+        return None
+    return os.path.join(host, ".claude", "auto")
+
+
+# Round-3 P3: cmux ref token character class — shared across every
+# Python module that grep/regex-matches cmux IDs (workspace/pane/surface).
+# auto-workspace.py originally lifted this internally; auto-spawn.py
+# still inlined the literal, so the round-2 consolidation was incomplete.
+# Lifting here makes both consumers import from the same source of
+# truth. cmux-socket.sh (bash) inlines independently — Python constants
+# don't cross to bash; a one-line comment in that file points at this
+# constant as the source of truth so future cmux-alphabet changes get
+# a coordinated edit.
+CMUX_REF_CHARS = r"[0-9a-zA-Z_.-]+"
+
+
+def cmux_available() -> bool:
+    """Probe whether the cmux binary (or its override) is on PATH.
+
+    Plan-004 round-1 review P3 #7: previously duplicated in
+    lib/auto-spawn.py and lib/auto-workspace.py. Lifted here so both
+    callers share one definition (and one place to evolve, e.g. to
+    add a timeout if cmux gets slow).
+
+    Round-2 P1 — the original `sh -c "command -v {name}"` form had
+    a shell-injection surface: an operator with CLAUDE_AUTO_CMUX
+    containing shell metachars (typo, copy-paste, malicious dotfile)
+    would execute arbitrary code under `sh -c`. shutil.which does
+    the same PATH-resolution job with NO shell — safe by default.
+    """
+    import shutil
+    name = os.environ.get("CLAUDE_AUTO_CMUX", "cmux")
+    return shutil.which(name) is not None
 
 
 def load_ledger():

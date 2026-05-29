@@ -1,0 +1,5 @@
+# Runtime artifacts — never commit.
+# auto plugin's per-run ledger directory + loop scheduling lock.
+.claude/auto/
+**/.claude/scheduled_tasks.lock
+.DS_Store

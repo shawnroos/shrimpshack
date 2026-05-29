@@ -71,10 +71,10 @@ REQUIRED=(
   "atomic_iterate_step"
   # v0.3.0 G2: set_exit_reason mutator (round-3 API-R3-1 — the gap this lint exists to prevent)
   "set_exit_reason"
-  # v0.3.0 H: EXIT_REASON constants exposed by ledger module
-  "EXIT_REASON_KINDS"
-  "EXIT_REASON_ITERATION_CHECK_FAILED"
-  "EXIT_REASON_RECIPE_BUG"
+  # v0.3.1 B11: ExitReason StrEnum (replaces H's three top-level EXIT_REASON_* names)
+  "ExitReason"
+  # v0.4.0 U1: goal_intent ledger field — one-line user-facing intent sentence
+  "goal_intent"
 )
 
 # ─── Scenario 1: each REQUIRED symbol appears in the schema doc ─────────────
