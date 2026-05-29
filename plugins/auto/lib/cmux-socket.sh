@@ -163,6 +163,96 @@ auto::build_spawn_command() {
     "sleep 1; claude '/auto-resume ${run}'"
 }
 
+# auto::cmux_spawn_workspace <name> <cwd> <command>
+#   v0.4.0 U2 (KTD-2 dispatch contract): the REUSABLE cmux workspace spawn
+#   primitive, factored out of auto::spawn_resume's body so multi-plan fanout
+#   (lib/auto-spawn.py) can reach the same `cmux new-workspace` shape that
+#   ships in this repo for /auto-resume orphans.
+#
+#   Shape verified by docs/research/cmux-socket-spike.md and locked by the
+#   round-4 finding R4-001 (the harness's native Agent tool does NOT expose
+#   cwd/env, and `bash -lc "claude /auto <plan> &"` exits before the loop can
+#   drive — so the cmux primitive is the ONLY working dispatch).
+#
+#   Mechanism (per the spike):
+#     * --command sends keystrokes + Enter into a fresh, app-owned workspace.
+#       App-owned => survives the parent session's exit.
+#     * --focus false => parent's pane/layout undisturbed.
+#     * The `sleep 1;` lead-in is LOAD-BEARING: a still-initializing login
+#       shell can SWALLOW the keystrokes sent by --command. The lead-in lets
+#       the shell settle.
+#
+#   This helper deliberately omits the per-run double-drive + in-flight
+#   guards (which are auto::spawn_resume's concern — they don't apply at
+#   fanout-START because each fanout sub-run has a fresh run-id with NO
+#   prior tick lock and NO prior spawn-attempt sentinel). The guards stay
+#   in spawn_resume; this helper is the bare cmux invocation.
+#
+#   Both bash callers (auto::spawn_resume) and Python callers
+#   (lib/auto-spawn.py) shell out to the same surface: this function.
+#   The Python caller invokes via `bash -c 'source cmux-socket.sh;
+#   auto::cmux_spawn_workspace ...'`.
+auto::cmux_spawn_workspace() {
+  local name="$1" cwd="$2" command="$3"
+  # shellcheck disable=SC2046 — deliberate: word-split the command into argv.
+  $CLAUDE_AUTO_CMUX new-workspace \
+    --name "$name" \
+    --cwd "$cwd" \
+    --command "$command" \
+    --focus false
+}
+
+# auto::cmux_spawn_tab <pane-ref> <cwd> <command>
+#   v0.4.1 U2 (plan 004): in-pane analog of cmux_spawn_workspace.
+#   Creates a new surface (tab) in <pane-ref> and starts <command>
+#   inside it. Unlike new-workspace, `cmux new-surface` does NOT
+#   accept --command — the command is delivered via a follow-up
+#   `cmux send` call, with the same `sleep 1;` lead-in that workspace
+#   spawn uses (a freshly-created surface's login shell can still
+#   swallow keystrokes).
+#
+#   Mechanism (per the spike at docs/research/cmux-layout-fanout-spike.md):
+#     1. `cmux new-surface --pane <ref> --focus false` returns the new
+#        surface ID on stdout.
+#     2. `cmux send --surface <ref> "<sleep 1; cd <cwd> && <command>>"`
+#        sends the command. The `cd <cwd>` is explicit because
+#        `cmux new-surface` doesn't accept --cwd.
+#
+#   Echoes the new surface ID on stdout so the caller (auto-spawn.py)
+#   can record it in the batch sidecar's `cmux.tab_surface_id` field.
+#   Returns non-zero if either step fails.
+auto::cmux_spawn_tab() {
+  local pane="$1" cwd="$2" command="$3"
+  local surface_out surface_id
+  surface_out="$("$CLAUDE_AUTO_CMUX" new-surface --pane "$pane" --focus false 2>&1)"
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'auto::cmux_spawn_tab: new-surface failed: %s\n' "$surface_out" >&2
+    return "$rc"
+  fi
+  # Character class must match _bootstrap.CMUX_REF_CHARS (the Python
+  # source of truth for cmux ref tokens). Bash can't import Python
+  # constants — if cmux changes the alphabet, edit BOTH sites.
+  surface_id="$(printf '%s\n' "$surface_out" | grep -oE 'surface:[0-9a-zA-Z_.-]+' | head -1)"
+  if [ -z "$surface_id" ]; then
+    printf 'auto::cmux_spawn_tab: could not extract surface id from: %s\n' "$surface_out" >&2
+    return 1
+  fi
+  # Build the full command line with the sleep lead-in and explicit cd.
+  local full="sleep 1; cd $(printf '%q' "$cwd") && $command"
+  # Round-2 P2: redirect `cmux send` output to stderr so the final
+  # surface_id printf is the ONLY line on stdout. Without this, any
+  # cmux release that adds a "sent N bytes" status to stdout would
+  # break the Python caller's `.splitlines()[-1]` parser.
+  "$CLAUDE_AUTO_CMUX" send --surface "$surface_id" "$full" >&2
+  local send_rc=$?
+  if [ "$send_rc" -ne 0 ]; then
+    printf 'auto::cmux_spawn_tab: send failed (surface %s)\n' "$surface_id" >&2
+    return "$send_rc"
+  fi
+  printf '%s\n' "$surface_id"
+}
+
 # auto::spawn_resume <repo> <run>
 #   Spawn ONE fresh /auto-resume workspace for an orphaned run, IF safe:
 #     * tick lock free (no live driver) — else NO-OP (double-drive guard).
@@ -203,13 +293,13 @@ PYEOF
   ( umask 077; : > "$sentinel" ) 2>/dev/null || true
 
   # ── Spawn the app-owned /auto-resume workspace (verified mechanism). ──
-  # shellcheck disable=SC2046 — deliberate: the command is built as a string and
-  # we want word-splitting into argv for the cmux binary.
-  $CLAUDE_AUTO_CMUX new-workspace \
-    --name "auto-resume-${run}" \
-    --cwd "$repo" \
-    --command "sleep 1; claude '/auto-resume ${run}'" \
-    --focus false
+  # v0.4.0 U2: routes through auto::cmux_spawn_workspace so multi-plan fanout
+  # (lib/auto-spawn.py) reaches the same workspace shape. The guards above
+  # (double-drive, in-flight) are auto-resume-specific and stay here.
+  auto::cmux_spawn_workspace \
+    "auto-resume-${run}" \
+    "$repo" \
+    "sleep 1; claude '/auto-resume ${run}'"
   return 0
 }
 
@@ -236,11 +326,20 @@ auto::scan() {
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   sub="${1:-scan}"; shift || true
   case "$sub" in
-    scan)      auto::scan "$@" ;;
-    spawn)     auto::spawn_resume "$@" ;;
-    command)   auto::build_spawn_command "$@" ;;
-    orphans)   auto::resumable_orphans "$@" ;;
-    lock-held) auto::tick_lock_held "$@" ;;
+    scan)             auto::scan "$@" ;;
+    spawn)            auto::spawn_resume "$@" ;;
+    command)          auto::build_spawn_command "$@" ;;
+    orphans)          auto::resumable_orphans "$@" ;;
+    lock-held)        auto::tick_lock_held "$@" ;;
+    # v0.4.0 U2: bare cmux workspace spawn (the dispatch primitive shared by
+    # auto-resume + multi-plan fanout). Three positional args: name, cwd,
+    # command. Used by lib/auto-spawn.py shelling into this script.
+    spawn-workspace)  auto::cmux_spawn_workspace "$@" ;;
+    # v0.4.1 U2 (plan 004): in-pane tab spawn for in-workspace fanout.
+    # Three positional args: pane-ref, cwd, command. Echoes new surface
+    # ID on stdout so the Python caller (auto-spawn.py) can record it
+    # in the batch sidecar's cmux.tab_surface_id field.
+    spawn-tab)        auto::cmux_spawn_tab "$@" ;;
     *)
       echo "cmux-socket.sh: unknown subcommand '${sub}'" >&2
       exit 2
