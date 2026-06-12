@@ -182,6 +182,8 @@ step "carried docs: $CARRIED recent plan/brainstorm file(s)"
 # ---- cmux: launch a briefed Claude (tab in current workspace, or new workspace)
 WORKSPACE_REF=""
 SURFACE_REF=""
+VIEWER_OK=0          # set when the handoff markdown viewer actually renders
+LB_READY=0           # set to 1 by launch_and_brief when the prompt was confirmed ready
 LAUNCH_CMD="cd '$WORKTREE' && claude"
 KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Get oriented (goal, decisions, open questions, starting point), confirm you understand, then wait for my direction."
 
@@ -253,8 +255,12 @@ if [ -n "${CMUX_WORKSPACE_ID:-}" ] && [ -x "$CMUX" ]; then
         PANE_OUT="$("$CMUX" new-pane --type terminal --direction right --workspace "$WORKSPACE_REF" --focus false 2>&1)"
         RIGHT_PANE="$(echo "$PANE_OUT" | grep -oE 'pane:[0-9]+' | head -1)"
         if [ -n "$RIGHT_PANE" ]; then
-          "$CMUX" open "$HANDOFF_DST" --pane "$RIGHT_PANE" --workspace "$WORKSPACE_REF" --no-focus >/dev/null 2>&1
-          step "  handoff viewer: $RIGHT_PANE"
+          if "$CMUX" open "$HANDOFF_DST" --pane "$RIGHT_PANE" --workspace "$WORKSPACE_REF" --no-focus >/dev/null 2>&1; then
+            VIEWER_OK=1
+            step "  handoff viewer: $RIGHT_PANE"
+          else
+            echo "  ⚠ opened right pane but could not render the handoff viewer" >&2
+          fi
         else
           echo "  ⚠ could not create right pane for handoff viewer; cmux output was:" >&2
           echo "$PANE_OUT" >&2
@@ -304,10 +310,14 @@ echo "  branch:    $BRANCH  (from $BASE_REF)"
 echo "  worktree:  $WORKTREE"
 echo "  handoff:   $HANDOFF_DST"
 echo "  docs:      $CARRIED carried"
+# Describe the launched session honestly: only claim "briefed" when readiness was
+# confirmed, and only claim the viewer when it actually rendered.
+if [ "$LB_READY" = "1" ]; then SESS_STATE="open + briefed"; else SESS_STATE="launched (readiness not confirmed — check the surface)"; fi
+VIEWER_NOTE=""; [ "$VIEWER_OK" = "1" ] && VIEWER_NOTE=" (handoff viewer alongside)"
 if [ -n "$SURFACE_REF" ] && [ -n "$WORKSPACE_REF" ]; then
-  echo "  cmux:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session open + briefed (handoff viewer alongside)"
+  echo "  cmux:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session $SESS_STATE$VIEWER_NOTE"
 elif [ -n "$SURFACE_REF" ]; then
-  echo "  cmux tab:  $SURFACE_REF — new Claude session open + briefed"
+  echo "  cmux tab:  $SURFACE_REF — new Claude session $SESS_STATE"
 elif [ -n "$WORKSPACE_REF" ]; then
   # Workspace was created (and focused) but no agent surface launched — don't claim
   # "not created" and strand the user in an empty focused workspace.
