@@ -16,12 +16,18 @@ NAME=""
 HANDOFF_SRC=""
 BASE=""                      # empty => current HEAD
 PREFIX="feature"
+TARGET="tab"                 # tab => surface in current workspace; workspace => new workspace
+SESSION_TRANSCRIPT=""        # explicit originating-session transcript (set by the skill when backgrounded)
+SESSION_CWD=""               # cwd of the originating session, for the resume one-liner
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
     --handoff) HANDOFF_SRC="$2"; shift 2 ;;
     --base) BASE="$2"; shift 2 ;;
     --branch-prefix) PREFIX="$2"; shift 2 ;;
+    --target) TARGET="$2"; shift 2 ;;
+    --session-transcript) SESSION_TRANSCRIPT="$2"; shift 2 ;;
+    --session-cwd) SESSION_CWD="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -32,6 +38,10 @@ die()  { echo "✗ $*" >&2; exit 1; }
 [ -n "$NAME" ] || die "missing --name <kebab-feature-name>"
 [ -n "$HANDOFF_SRC" ] || die "missing --handoff <path-to-handoff.md>"
 [ -f "$HANDOFF_SRC" ] || die "handoff file not found: $HANDOFF_SRC"
+case "$TARGET" in
+  tab|workspace) ;;
+  *) die "invalid --target '$TARGET' (expected: tab | workspace)" ;;
+esac
 
 CMUX="/Applications/cmux.app/Contents/Resources/bin/cmux"
 
@@ -92,14 +102,25 @@ if [ -n "${SPINOFF_BOOTSTRAP_CMD:-}" ]; then
   fi
 fi
 
-# ---- discover current session transcript ------------------------------------
-# Prefer an explicit env var if Claude Code exposes one; else newest .jsonl for
-# this project dir (project key = cwd with / -> -).
+# ---- discover originating session transcript --------------------------------
+# The originating session is the one that invoked /start. When the skill runs the
+# mechanical work in a BACKGROUND AGENT (the default), it resolves its own
+# transcript in the main session and passes it via --session-transcript, because
+# auto-discovery from inside a background agent can resolve to the AGENT's own
+# transcript and silently break the resume link. Auto-discovery (env var, then
+# newest .jsonl) stays as the fallback for manual/foreground runs.
+#
+# Resume cwd: the resume one-liner must `cd` into a dir whose Claude project
+# matches the transcript (claude -r resolves the session within the cwd's
+# project). The skill passes --session-cwd (the originating session's cwd); we
+# fall back to REPO_ROOT when it's absent.
 SESSION_LINE="(session transcript not found)"
 PROJ_KEY="$(echo "$REPO_ROOT" | sed 's#/#-#g')"
 PROJ_DIR="$HOME/.claude/projects/$PROJ_KEY"
 TRANSCRIPT=""
-if [ -n "${CLAUDE_TRANSCRIPT_PATH:-}" ] && [ -f "${CLAUDE_TRANSCRIPT_PATH:-}" ]; then
+if [ -n "$SESSION_TRANSCRIPT" ] && [ -f "$SESSION_TRANSCRIPT" ]; then
+  TRANSCRIPT="$SESSION_TRANSCRIPT"          # explicit, set by the skill (backgrounded path)
+elif [ -n "${CLAUDE_TRANSCRIPT_PATH:-}" ] && [ -f "${CLAUDE_TRANSCRIPT_PATH:-}" ]; then
   TRANSCRIPT="$CLAUDE_TRANSCRIPT_PATH"
 elif [ -n "${CLAUDE_SESSION_ID:-}" ] && [ -f "$PROJ_DIR/$CLAUDE_SESSION_ID.jsonl" ]; then
   TRANSCRIPT="$PROJ_DIR/$CLAUDE_SESSION_ID.jsonl"
@@ -108,8 +129,9 @@ elif [ -d "$PROJ_DIR" ]; then
 fi
 if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
   UUID="$(basename "$TRANSCRIPT" .jsonl)"
+  RESUME_CWD="${SESSION_CWD:-$REPO_ROOT}"
   SESSION_LINE="Transcript: \`$TRANSCRIPT\`
-Resume:     \`cd $REPO_ROOT && claude -r $UUID\`"
+Resume:     \`cd $RESUME_CWD && claude -r $UUID\`"
 fi
 step "source session: ${TRANSCRIPT:-not found}"
 
@@ -149,70 +171,111 @@ if [ -d "$REPO_ROOT/docs" ]; then
 fi
 step "carried docs: $CARRIED recent plan/brainstorm file(s)"
 
-# ---- cmux: open new tab on left agent pane + launch Claude ------------------
+# ---- cmux: launch a briefed Claude (tab in current workspace, or new workspace)
+WORKSPACE_REF=""
 SURFACE_REF=""
 LAUNCH_CMD="cd '$WORKTREE' && claude"
 KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Get oriented (goal, decisions, open questions, starting point), confirm you understand, then wait for my direction."
 
-if [ -n "${CMUX_WORKSPACE_ID:-}" ] && [ -x "$CMUX" ]; then
-  step "opening cmux tab on the left agent surface…"
-  # Identify the left-hand agent pane: the lowest-indexed pane in this workspace
-  # that holds terminal surfaces (the markdown/browser pane is the other one).
-  WS="$CMUX_WORKSPACE_ID"
-  LEFT_PANE="$("$CMUX" tree --workspace "$WS" 2>/dev/null \
-    | awk '/pane / { for(i=1;i<=NF;i++) if($i ~ /^pane:/){p=$i} }
-           /surface .*\[terminal\]/ && p { print p; exit }')"
-  CREATE_ARGS=(--type terminal --workspace "$WS" --focus true)
-  if [ -n "$LEFT_PANE" ]; then
-    CREATE_ARGS=(--type terminal --pane "$LEFT_PANE" --workspace "$WS" --focus true)
-    step "  left agent pane: $LEFT_PANE"
-  else
-    step "  ⚠ no terminal pane identified — using focused pane"
-  fi
-  # Create the surface; capture its ref from output.
-  CREATE_OUT="$("$CMUX" new-surface "${CREATE_ARGS[@]}" 2>&1)"
-  SURFACE_REF="$(echo "$CREATE_OUT" | grep -oE 'surface:[0-9]+' | head -1)"
-  if [ -n "$SURFACE_REF" ]; then
-    "$CMUX" rename-tab --surface "$SURFACE_REF" --workspace "$WS" "$NAME" >/dev/null 2>&1
-    # Launch Claude in the worktree dir.
-    "$CMUX" send --surface "$SURFACE_REF" --workspace "$WS" "$LAUNCH_CMD" >/dev/null 2>&1
-    "$CMUX" send-key --surface "$SURFACE_REF" --workspace "$WS" enter >/dev/null 2>&1
-
-    # Wait until Claude's input prompt is actually ready before sending the
-    # kickoff. A fixed sleep is unreliable: a fresh claude can spend several
-    # seconds loading MCP servers, and an Enter sent too early is swallowed (the
-    # text lands but never submits). Poll read-screen for the prompt chrome
-    # (the "❯" input marker) — up to ~30s — then type + submit.
-    READY=0
-    for _ in $(seq 1 30); do
-      sleep 1
-      SCREEN="$("$CMUX" read-screen --surface "$SURFACE_REF" --workspace "$WS" 2>/dev/null)"
-      case "$SCREEN" in
-        *"❯"*|*"bypass permissions"*|*"shift+tab to cycle"*) READY=1; break ;;
-      esac
-    done
-    "$CMUX" send --surface "$SURFACE_REF" --workspace "$WS" "$KICKOFF" >/dev/null 2>&1
+# launch_and_brief <workspace-ref> <surface-ref>
+# Renames the tab, launches Claude in the worktree, waits for the input prompt to
+# be ready (a fixed sleep is unreliable — a fresh claude can spend seconds loading
+# MCP servers, and an Enter sent too early is swallowed), then sends + submits the
+# kickoff and verifies it actually submitted. Sets LB_READY=1 on confirmed ready.
+launch_and_brief() {
+  local ws="$1" sfc="$2" screen after
+  LB_READY=0
+  "$CMUX" rename-tab --surface "$sfc" --workspace "$ws" "$NAME" >/dev/null 2>&1
+  "$CMUX" send --surface "$sfc" --workspace "$ws" "$LAUNCH_CMD" >/dev/null 2>&1
+  "$CMUX" send-key --surface "$sfc" --workspace "$ws" enter >/dev/null 2>&1
+  for _ in $(seq 1 30); do
     sleep 1
-    "$CMUX" send-key --surface "$SURFACE_REF" --workspace "$WS" enter >/dev/null 2>&1
-    # Verify the kickoff actually submitted (input line should no longer hold it).
-    sleep 2
-    AFTER="$("$CMUX" read-screen --surface "$SURFACE_REF" --workspace "$WS" 2>/dev/null)"
-    case "$AFTER" in
-      *"Read docs/handoff.md"*)
-        # Still sitting on the input line un-submitted → retry one Enter.
-        "$CMUX" send-key --surface "$SURFACE_REF" --workspace "$WS" enter >/dev/null 2>&1 ;;
+    screen="$("$CMUX" read-screen --surface "$sfc" --workspace "$ws" 2>/dev/null)"
+    case "$screen" in
+      *"❯"*|*"bypass permissions"*|*"shift+tab to cycle"*) LB_READY=1; break ;;
     esac
-    if [ "$READY" = "1" ]; then
-      step "  new surface: $SURFACE_REF (Claude ready, briefed)"
+  done
+  "$CMUX" send --surface "$sfc" --workspace "$ws" "$KICKOFF" >/dev/null 2>&1
+  sleep 1
+  "$CMUX" send-key --surface "$sfc" --workspace "$ws" enter >/dev/null 2>&1
+  # Verify the kickoff actually submitted (input line should no longer hold it).
+  sleep 2
+  after="$("$CMUX" read-screen --surface "$sfc" --workspace "$ws" 2>/dev/null)"
+  case "$after" in
+    *"Read docs/handoff.md"*)
+      # Still sitting on the input line un-submitted → retry one Enter.
+      "$CMUX" send-key --surface "$sfc" --workspace "$ws" enter >/dev/null 2>&1 ;;
+  esac
+}
+
+if [ -n "${CMUX_WORKSPACE_ID:-}" ] && [ -x "$CMUX" ]; then
+  if [ "$TARGET" = "workspace" ]; then
+    # New workspace: briefed Claude on the left, handoff markdown viewer on the right.
+    step "creating a new cmux workspace…"
+    WS_OUT="$("$CMUX" new-workspace --name "$NAME" --cwd "$WORKTREE" --focus true 2>&1)"
+    WORKSPACE_REF="$(echo "$WS_OUT" | grep -oE 'workspace:[0-9]+' | head -1)"
+    if [ -n "$WORKSPACE_REF" ]; then
+      step "  new workspace: $WORKSPACE_REF"
+      # The fresh workspace has one terminal surface — find its ref.
+      SURFACE_REF="$("$CMUX" tree --workspace "$WORKSPACE_REF" 2>/dev/null \
+        | awk '/surface .*\[terminal\]/ { for(i=1;i<=NF;i++) if($i ~ /^surface:/){print $i; exit} }')"
+      if [ -n "$SURFACE_REF" ]; then
+        launch_and_brief "$WORKSPACE_REF" "$SURFACE_REF"
+        # Right pane: render the handoff in cmux's live-reload markdown viewer.
+        PANE_OUT="$("$CMUX" new-pane --type terminal --direction right --workspace "$WORKSPACE_REF" --focus false 2>&1)"
+        RIGHT_PANE="$(echo "$PANE_OUT" | grep -oE 'pane:[0-9]+' | head -1)"
+        if [ -n "$RIGHT_PANE" ]; then
+          "$CMUX" open "$HANDOFF_DST" --pane "$RIGHT_PANE" --workspace "$WORKSPACE_REF" --no-focus >/dev/null 2>&1
+          step "  handoff viewer: $RIGHT_PANE"
+        else
+          echo "  ⚠ could not create right pane for handoff viewer; cmux output was:" >&2
+          echo "$PANE_OUT" >&2
+        fi
+        if [ "$LB_READY" = "1" ]; then
+          step "  agent surface: $SURFACE_REF (Claude ready, briefed)"
+        else
+          step "  agent surface: $SURFACE_REF (Claude launched; readiness not confirmed — check the workspace)"
+        fi
+      else
+        echo "  ⚠ no terminal surface found in the new workspace — skipping launch" >&2
+      fi
     else
-      step "  new surface: $SURFACE_REF (Claude launched; readiness not confirmed — check the tab)"
+      echo "  ⚠ could not parse new workspace ref; cmux output was:" >&2
+      echo "$WS_OUT" >&2
     fi
   else
-    echo "  ⚠ could not parse new surface ref; cmux output was:" >&2
-    echo "$CREATE_OUT" >&2
+    # Tab: new surface on the current workspace's left agent pane.
+    step "opening cmux tab on the left agent surface…"
+    # Identify the left-hand agent pane: the lowest-indexed pane in this workspace
+    # that holds terminal surfaces (the markdown/browser pane is the other one).
+    WS="$CMUX_WORKSPACE_ID"
+    LEFT_PANE="$("$CMUX" tree --workspace "$WS" 2>/dev/null \
+      | awk '/pane / { for(i=1;i<=NF;i++) if($i ~ /^pane:/){p=$i} }
+             /surface .*\[terminal\]/ && p { print p; exit }')"
+    CREATE_ARGS=(--type terminal --workspace "$WS" --focus true)
+    if [ -n "$LEFT_PANE" ]; then
+      CREATE_ARGS=(--type terminal --pane "$LEFT_PANE" --workspace "$WS" --focus true)
+      step "  left agent pane: $LEFT_PANE"
+    else
+      step "  ⚠ no terminal pane identified — using focused pane"
+    fi
+    # Create the surface; capture its ref from output.
+    CREATE_OUT="$("$CMUX" new-surface "${CREATE_ARGS[@]}" 2>&1)"
+    SURFACE_REF="$(echo "$CREATE_OUT" | grep -oE 'surface:[0-9]+' | head -1)"
+    if [ -n "$SURFACE_REF" ]; then
+      launch_and_brief "$WS" "$SURFACE_REF"
+      if [ "$LB_READY" = "1" ]; then
+        step "  new surface: $SURFACE_REF (Claude ready, briefed)"
+      else
+        step "  new surface: $SURFACE_REF (Claude launched; readiness not confirmed — check the tab)"
+      fi
+    else
+      echo "  ⚠ could not parse new surface ref; cmux output was:" >&2
+      echo "$CREATE_OUT" >&2
+    fi
   fi
 else
-  step "not inside cmux (or cmux CLI missing) — skipping tab automation"
+  step "not inside cmux (or cmux CLI missing) — skipping cmux automation"
 fi
 
 # ---- summary ----------------------------------------------------------------
@@ -223,10 +286,12 @@ echo "  branch:    $BRANCH  (from $BASE_REF)"
 echo "  worktree:  $WORKTREE"
 echo "  handoff:   $HANDOFF_DST"
 echo "  docs:      $CARRIED carried"
-if [ -n "$SURFACE_REF" ]; then
+if [ -n "$SURFACE_REF" ] && [ -n "$WORKSPACE_REF" ]; then
+  echo "  cmux:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session open + briefed (handoff viewer alongside)"
+elif [ -n "$SURFACE_REF" ]; then
   echo "  cmux tab:  $SURFACE_REF — new Claude session open + briefed"
 else
-  echo "  cmux tab:  not created — start manually:"
+  echo "  cmux:      not created — start manually:"
   echo "             $LAUNCH_CMD"
 fi
 echo "════════════════════════════════════════════════════════"
