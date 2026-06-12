@@ -1,6 +1,6 @@
 ---
 title: "feat: cmux-spinoff background execution + new-workspace command"
-status: active
+status: completed
 date: 2026-06-12
 type: feat
 target_repo: shrimpshack
