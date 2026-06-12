@@ -48,8 +48,8 @@
     },
     {
       "name": "cmux-spinoff",
-      "description": "Fork the current thread of work into its own place — takes the topic/plan/idea just discussed and moves it into a fresh git worktree with a new, already-briefed Claude session in a new cmux tab, so the current session stays focused and the new one picks up the context. Command-invoked only via /start: branches a worktree (current HEAD or develop), writes a handoff doc linking back to the originating session's transcript, carries over recent plan/brainstorm docs, opens a tab on the left-hand agent surface of the current cmux workspace, and boots a briefed Claude there.",
-      "version": "0.1.0",
+      "description": "Fork the current thread of work into its own place — takes the topic/plan/idea just discussed and moves it into a fresh git worktree with a new, already-briefed Claude session, so the current session stays focused and the new one picks up the context. Command-invoked only via /start-session, /start-workspace, or the /start alias: branches a worktree (current HEAD or develop), writes a handoff doc linking back to the originating session's transcript, carries over recent plan/brainstorm docs, and boots a briefed Claude — either in a new tab on the current cmux workspace or in a brand-new two-pane workspace with the handoff alongside. The mechanical work runs in a background agent so it doesn't consume the originating session's context.",
+      "version": "0.2.0",
       "author": {
         "name": "Shawn Roos"
       },
