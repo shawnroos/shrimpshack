@@ -234,22 +234,27 @@ launch_and_brief() {
 if [ -n "${CMUX_WORKSPACE_ID:-}" ] && [ -x "$CMUX" ]; then
   if [ "$TARGET" = "workspace" ]; then
     # New workspace: briefed Claude on the left, handoff markdown viewer on the right.
+    # Create it UNFOCUSED — we only switch the user into it once a surface has actually
+    # launched, so a discovery failure never strands them in an empty focused workspace.
     step "creating a new cmux workspace…"
-    WS_OUT="$("$CMUX" new-workspace --name "$NAME" --cwd "$WORKTREE" --focus true 2>&1)"
+    WS_OUT="$("$CMUX" new-workspace --name "$NAME" --cwd "$WORKTREE" --focus false 2>&1)"
     WORKSPACE_REF="$(echo "$WS_OUT" | grep -oE 'workspace:[0-9]+' | head -1)"
     if [ -n "$WORKSPACE_REF" ]; then
       step "  new workspace: $WORKSPACE_REF"
       # The fresh workspace has one terminal surface — find its ref. The surface may
-      # not be registered the instant new-workspace returns, so poll briefly (unlike
-      # the tab path, which gets its ref straight from new-surface's own output).
+      # not be registered the instant new-workspace returns, so poll (unlike the tab
+      # path, which gets its ref straight from new-surface's own output). ~10s budget,
+      # closer to launch_and_brief's 30s readiness window than the old 5s.
       SURFACE_REF=""
-      for _ in $(seq 1 10); do
+      for _ in $(seq 1 20); do
         SURFACE_REF="$("$CMUX" tree --workspace "$WORKSPACE_REF" 2>/dev/null \
           | awk '/surface .*\[terminal\]/ { for(i=1;i<=NF;i++) if($i ~ /^surface:/){print $i; exit} }')"
         [ -n "$SURFACE_REF" ] && break
         sleep 0.5
       done
       if [ -n "$SURFACE_REF" ]; then
+        # Surface exists — now safe to switch the user into the new workspace.
+        "$CMUX" select-workspace --workspace "$WORKSPACE_REF" >/dev/null 2>&1
         launch_and_brief "$WORKSPACE_REF" "$SURFACE_REF" "agent surface" "workspace"
         # Right pane: render the handoff in cmux's live-reload markdown viewer.
         PANE_OUT="$("$CMUX" new-pane --type terminal --direction right --workspace "$WORKSPACE_REF" --focus false 2>&1)"
