@@ -28,6 +28,16 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Bound for the `git rev-parse` in _git_worktree_root so a hung filesystem
+# (sick NFS/autofs mount) can't block repo-root resolution. Mirrors the
+# detector's CLAUDE_AUTO_GIT_TIMEOUT_SECONDS knob — keep the two in sync.
+try:
+    _GIT_TIMEOUT_SECONDS = float(os.environ.get("CLAUDE_AUTO_GIT_TIMEOUT_SECONDS", "5"))
+except (TypeError, ValueError):
+    _GIT_TIMEOUT_SECONDS = 5.0
+if _GIT_TIMEOUT_SECONDS <= 0:
+    _GIT_TIMEOUT_SECONDS = 5.0
+
 
 def load_lib_module(name: str):
     """Load and return a sibling lib/ module by its filename stem, by file path.
@@ -73,25 +83,74 @@ def load_lib_module(name: str):
     return module
 
 
+def _git_worktree_root(start):
+    """The git worktree top for ``start``, or None when not in a git tree.
+
+    ``git rev-parse --show-toplevel`` reports the WORKTREE's own root (a
+    worktree reports itself, not the host repo) — the upper bound for the
+    per-worktree ledger home. Distinct from ``resolve_host_repo_root()``
+    (``--git-common-dir``), which deliberately resolves the MAIN repo for
+    cross-worktree shared state.
+
+    Carries a timeout so a hung git (sick NFS/autofs mount) can't block the CLI
+    callers (``auto.py`` / ``auto-resume.py`` / ``auto-status.py``), which
+    invoke ``resolve_repo`` with no try/except of their own. On timeout/spawn
+    failure we return None → ``resolve_repo`` falls back to cwd.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=start,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # OSError: git absent / cwd gone. SubprocessError covers TimeoutExpired.
+        return None
+    if result.returncode != 0:
+        return None
+    top = result.stdout.strip()
+    return top or None
+
+
 def resolve_repo() -> str:
-    """Repo root: $CLAUDE_AUTO_REPO, else walk up from cwd for .claude/auto.
+    """Repo root: $CLAUDE_AUTO_REPO, else the git-worktree-bounded ledger home.
 
     Used by every CLI module that needs to find the repo's ``.claude/auto``
     directory (``auto.py``, ``auto-resume.py``, ``auto-status.py``). Consolidated
     here from three identical copies (P2-8) so the lookup rule lives in ONE
     place. ``$CLAUDE_AUTO_REPO`` is the explicit override; otherwise we walk up
-    from cwd looking for ``.claude/auto``; the fallback is cwd (a fresh run that
-    has not yet created the directory — ``init_ledger`` creates it).
+    from cwd looking for ``.claude/auto`` — but NEVER above the git worktree
+    root, and never walking up at all outside a git tree. The fallback is the
+    worktree root (or cwd, no git), where ``init_ledger`` will create the dir.
+
+    The bound fixes the 2026-06 mis-root field bug: a fresh worktree has no
+    ``.claude/auto`` yet, so the unbounded walk-up escaped to
+    ``$HOME/.claude/auto`` and bound the run against ``$HOME`` (a dispatched
+    run fell through to an empty terminal ``done``, having looked for its plan
+    under ``$HOME/docs/plans``).
+
+    NOTE: ``lib/auto-detect.sh::_repo_root()`` inlines this same logic (its
+    single-quoted heredoc keeps a dependency-free copy on purpose) — keep the
+    two in sync.
     """
     env = os.environ.get("CLAUDE_AUTO_REPO")
     if env:
         return env
-    dir_ = os.getcwd()
+    start = os.getcwd()
+    boundary = _git_worktree_root(start)
+    dir_ = start
     while dir_ and dir_ != os.path.dirname(dir_):
         if os.path.isdir(os.path.join(dir_, ".claude", "auto")):
             return dir_
+        if boundary is None:
+            break
+        if os.path.abspath(dir_) == os.path.abspath(boundary):
+            break
         dir_ = os.path.dirname(dir_)
-    return os.getcwd()
+    return boundary or os.getcwd()
 
 
 def resolve_host_repo_root(*, cwd=None):
