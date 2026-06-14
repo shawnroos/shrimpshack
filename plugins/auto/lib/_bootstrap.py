@@ -21,7 +21,9 @@ duplication. The two-line sys.path prepend + plain import is the dedup.
 
 from __future__ import annotations
 
+import glob
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -271,6 +273,42 @@ def load_ledger():
     because eight consumers already call it; the load strategy lives in one place.
     """
     return load_lib_module("ledger")
+
+
+def load_ledger_safe(path: str):
+    """Read a ledger JSON file; return its dict, or None on ANY read/parse
+    failure OR a non-dict top-level value (rel-001). Never raises, so a caller
+    scanning siblings keeps going and a fail-closed hook stays fail-closed.
+
+    The dict guard is folded in here: returning None on a non-dict value means a
+    list/scalar ledger skips instead of raising AttributeError at the caller's
+    ``led.get(...)`` — strictly safer than the bare ``json.load`` it replaced.
+    """
+    try:
+        with open(path, "r") as fh:
+            led = json.load(fh)
+    except Exception:
+        return None
+    return led if isinstance(led, dict) else None
+
+
+def iter_worktree_ledgers(repo_root: str):
+    """Yield ``(run_id, ledger_dict)`` for each parseable ledger under
+    ``<repo_root>/.claude/auto/*.json``, sorted by path. ``run_id`` is
+    ``led["run_id"]`` when present, else the filename stem.
+
+    Per-worktree glob ONLY — fan-out sub-runs carry their own session_id/shared
+    dir and are out of scope by design (KTD-5); this does NOT walk batch
+    sidecars. A consumer needing the sidecar walk (on-stop.py) keeps its own loop
+    over ``load_ledger_safe``. Never raises: a missing dir yields nothing.
+    """
+    dispatch_dir = os.path.join(repo_root, ".claude", "auto")
+    for path in sorted(glob.glob(os.path.join(dispatch_dir, "*.json"))):
+        led = load_ledger_safe(path)
+        if led is None:
+            continue
+        run_id = led.get("run_id") or os.path.splitext(os.path.basename(path))[0]
+        yield run_id, led
 
 
 def test_hatch_enabled(hatch_var: str) -> bool:
