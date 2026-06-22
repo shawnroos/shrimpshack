@@ -8,7 +8,7 @@ Subcommands:
     [<run>]            default continue: re-record the driving session (so the
                        advisor gates own the re-armed run — fix-round-6 P1),
                        flip a paused seam -> work, then emit a re-arm INTENT
-                       (the model fires /auto-tick).
+                       (the model fires /auto:auto-tick).
     continue <run>     explicit continue (same as default with a run-id).
     pause <run> [why]  blocked on a human/external action (auth, approval,
                        missing creds): flip driver -> "manual" so the Stop hook
@@ -95,12 +95,12 @@ def _resumable_runs(ledger, repo_root: str):
 
 
 def _emit_rearm(run_id: str, note: str) -> int:
-    """Emit the re-arm INTENT — the model fires the actual /auto-tick."""
+    """Emit the re-arm INTENT — the model fires the actual /auto:auto-tick."""
     json.dump(
         {
             "action": "arm-tick",
             "run": run_id,
-            "prompt": f"/auto-tick {run_id}",
+            "prompt": f"/auto:auto-tick {run_id}",
             "note": note,
         },
         sys.stdout,
@@ -122,7 +122,8 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str) -> int:
     deterministic backstop dark. Re-recording closes that hole.
 
     Returns 0 on success. Refuses (returns 1, leaves the run paused, prints a loud
-    warning) when the driving session cannot be determined — a child/unset env. We
+    warning) when CLAUDE_CODE_SESSION_ID is unset/empty (a truly headless context;
+    v0.6.4 dropped the CHILD_SESSION guard, so a child env no longer refuses). We
     must NOT pass None to ``set_driving_session_id`` (None CLEARS the field, which
     fails BOTH gates OPEN), and we must NOT re-arm a self-driven run whose backstop
     is dark. Resume runs INSIDE the live interactive session, so this is normally
@@ -131,12 +132,12 @@ def _rearm_owns_session(ledger, repo_root: str, run_id: str) -> int:
     sid = driver_session.driving_session_id()
     if not sid:
         sys.stderr.write(
-            f"resume: refusing to re-arm run {run_id!r} — cannot determine the "
-            "driving session id (CLAUDE_CODE_SESSION_ID unset, or a spawned "
-            "child). Re-arming now would leave the advisor-gate destructive "
-            "backstop dark (no owning session => gates fail open). The run stays "
-            "paused. Re-run `/auto-resume continue` from the interactive driver "
-            "session.\n"
+            f"resume: refusing to re-arm run {run_id!r} — CLAUDE_CODE_SESSION_ID "
+            "is unset (a truly headless/env-less context). Re-arming now would "
+            "leave the advisor-gate destructive backstop dark (no owning session "
+            "=> gates fail open). The run stays paused. Re-run `/auto-resume "
+            "continue` from an interactive Claude Code session (where the id is "
+            "present).\n"
         )
         return 1
     ledger.set_driving_session_id(repo_root, run_id, sid)
