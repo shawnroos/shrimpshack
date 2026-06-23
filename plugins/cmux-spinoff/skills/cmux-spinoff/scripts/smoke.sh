@@ -55,13 +55,13 @@ run --name feat-compat --handoff "$HANDOFF" >/dev/null 2>&1
 # 5. Label default → "<repo-basename>/<name>" when --label omitted.
 repo_base="$(basename "$WORK")"
 out="$(run --name feat-deflabel --handoff "$HANDOFF")"
-echo "$out" | grep -q "label:       $repo_base/feat-deflabel" \
+echo "$out" | grep -qE "label: +$repo_base/feat-deflabel" \
   && ok "label defaults to <repo>/<name>" \
   || bad "default label wrong: $(echo "$out" | grep -i 'label:' || echo '<none>')"
 
 # 6. Explicit --label is used verbatim.
 out="$(run --name feat-label --handoff "$HANDOFF" --label 'smoke·work')"
-echo "$out" | grep -q "label:       smoke·work" \
+echo "$out" | grep -qE 'label: +smoke·work' \
   && ok "explicit --label used verbatim" \
   || bad "explicit label wrong: $(echo "$out" | grep -i 'label:' || echo '<none>')"
 

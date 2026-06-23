@@ -13,7 +13,7 @@ set -uo pipefail
 
 # ---- args -------------------------------------------------------------------
 NAME=""
-LABEL=""                     # short display name for the tab/workspace (workspace + work); defaults to <repo>/<name>
+LABEL=""                     # short display name for the cmux tab/workspace (see derivation below)
 HANDOFF_SRC=""
 BASE=""                      # empty => current HEAD
 PREFIX="feature"
@@ -206,7 +206,9 @@ KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Get oriented
 launch_and_brief() {
   local ws="$1" sfc="$2" label="${3:-surface}" where="${4:-tab}" screen after
   LB_READY=0
-  "$CMUX" rename-tab --surface "$sfc" --workspace "$ws" "$LABEL" >/dev/null 2>&1
+  # --title (not a bare positional) so a $LABEL starting with '-' can't be
+  # misparsed as a flag — matches the new-workspace --name call's robustness.
+  "$CMUX" rename-tab --surface "$sfc" --workspace "$ws" --title "$LABEL" >/dev/null 2>&1
   "$CMUX" send --surface "$sfc" --workspace "$ws" "$LAUNCH_CMD" >/dev/null 2>&1
   "$CMUX" send-key --surface "$sfc" --workspace "$ws" enter >/dev/null 2>&1
   for _ in $(seq 1 30); do
