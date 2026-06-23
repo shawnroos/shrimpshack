@@ -13,6 +13,7 @@ set -uo pipefail
 
 # ---- args -------------------------------------------------------------------
 NAME=""
+LABEL=""                     # short display name for the tab/workspace (workspace + work); defaults to <repo>/<name>
 HANDOFF_SRC=""
 BASE=""                      # empty => current HEAD
 PREFIX="feature"
@@ -22,6 +23,7 @@ SESSION_CWD=""               # cwd of the originating session, for the resume on
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
+    --label) LABEL="$2"; shift 2 ;;
     --handoff) HANDOFF_SRC="$2"; shift 2 ;;
     --base) BASE="$2"; shift 2 ;;
     --branch-prefix) PREFIX="$2"; shift 2 ;;
@@ -62,9 +64,16 @@ CUR_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 BRANCH="$PREFIX/$NAME"
 WORKTREE="$MAIN_ROOT/worktrees/$NAME"
 
+# Display name for the cmux tab/workspace: a short label that captures BOTH the
+# workspace (repo) this was forked from AND the work it's for, so a glance at the
+# tab tells you where it came from and what it's for. The skill passes a curated
+# short --label; absent that, default to <repo>/<name>.
+[ -n "$LABEL" ] || LABEL="$(basename "$MAIN_ROOT")/$NAME"
+
 step "repo:        $MAIN_ROOT"
 step "new branch:  $BRANCH"
 step "worktree:    $WORKTREE"
+step "label:       $LABEL"
 
 [ -e "$WORKTREE" ] && die "worktree path already exists: $WORKTREE"
 if git -C "$MAIN_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -185,7 +194,7 @@ SURFACE_REF=""
 VIEWER_OK=0          # set when the handoff markdown viewer actually renders
 LB_READY=0           # set to 1 by launch_and_brief when the prompt was confirmed ready
 LAUNCH_CMD="cd '$WORKTREE' && claude"
-KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Get oriented (goal, decisions, open questions, starting point), confirm you understand, then wait for my direction."
+KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Get oriented (goal, decisions, open questions, starting point). Then recommend the next step in the compound-engineering flow: /ce-brainstorm if scope or approach is still ambiguous, /ce-plan if it's clear enough to plan, or a more specific CE command if one fits better — each with a one-line rationale grounded in the handoff. The handoff's 'Recommended next step' section is a starting suggestion; validate it against what you read rather than echoing it. Give me your recommendation, then wait for my direction."
 
 # launch_and_brief <workspace-ref> <surface-ref> <surface-label> <where>
 # Renames the tab, launches Claude in the worktree, waits for the input prompt to
@@ -197,7 +206,7 @@ KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Get oriented
 launch_and_brief() {
   local ws="$1" sfc="$2" label="${3:-surface}" where="${4:-tab}" screen after
   LB_READY=0
-  "$CMUX" rename-tab --surface "$sfc" --workspace "$ws" "$NAME" >/dev/null 2>&1
+  "$CMUX" rename-tab --surface "$sfc" --workspace "$ws" "$LABEL" >/dev/null 2>&1
   "$CMUX" send --surface "$sfc" --workspace "$ws" "$LAUNCH_CMD" >/dev/null 2>&1
   "$CMUX" send-key --surface "$sfc" --workspace "$ws" enter >/dev/null 2>&1
   for _ in $(seq 1 30); do
@@ -237,7 +246,7 @@ if [ -n "${CMUX_WORKSPACE_ID:-}" ] && [ -x "$CMUX" ]; then
     # Create it UNFOCUSED — we only switch the user into it once a surface has actually
     # launched, so a discovery failure never strands them in an empty focused workspace.
     step "creating a new cmux workspace…"
-    WS_OUT="$("$CMUX" new-workspace --name "$NAME" --cwd "$WORKTREE" --focus false 2>&1)"
+    WS_OUT="$("$CMUX" new-workspace --name "$LABEL" --cwd "$WORKTREE" --focus false 2>&1)"
     WORKSPACE_REF="$(echo "$WS_OUT" | grep -oE 'workspace:[0-9]+' | head -1)"
     if [ -n "$WORKSPACE_REF" ]; then
       step "  new workspace: $WORKSPACE_REF"

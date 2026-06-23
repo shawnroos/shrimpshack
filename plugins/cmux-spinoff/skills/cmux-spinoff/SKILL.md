@@ -91,6 +91,14 @@ section — it's what's most expensive to rediscover.>
 ## Starting point
 <Where to look first: files, tickets, the carried-over docs. Concrete paths.>
 
+## Recommended next step
+<Your read on where this work should enter the compound-engineering flow:
+`/ce-brainstorm` if scope/approach is still ambiguous, `/ce-plan` if it's clear
+enough to plan, or a more specific CE command if one fits — with a one-line
+reason grounded in the goal + open questions above. The new session validates
+this against what it reads rather than taking it on faith; it's a strong starting
+suggestion, not a directive.>
+
 ## Source session
 <The script fills this in — leave a placeholder line `<!-- SESSION -->`.>
 ```
@@ -136,6 +144,14 @@ Pick `--name` from the workstream's topic (kebab-case, e.g. `crop-snapping`,
 suffix. Pick `--target` from the command: `tab` for `/start-session` (or
 `/start`), `workspace` for `/start-workspace`.
 
+Also pass `--label` — the **short display name** for the cmux tab/workspace.
+It should capture both the **workspace** (where this forked from) and the **work**,
+at a glance, e.g. `slate·crop-snap` or `auto·recipes`. Keep it short (~24 chars):
+a short workspace token (usually the repo, abbreviated if long) + a `·`/`/`/`:`
+separator + a tight form of the work. If you omit `--label`, the script defaults
+to `<repo-basename>/<name>`, which is correct but often longer than ideal — prefer
+passing a curated short one.
+
 Dispatch a **background agent** (`Agent` with `run_in_background: true`) whose
 entire job is to run the one command below and report back. The agent must NOT
 re-synthesize anything or do extra work — it runs the script, waits, and returns
@@ -144,6 +160,7 @@ the summary fields.
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/cmux-spinoff/scripts/spinoff.sh" \
   --name "<kebab-feature-name>" \
+  --label "<short workspace·work label>" \
   --handoff /tmp/cmux-spinoff-handoff.md \
   --target <tab|workspace> \
   --session-transcript "<resolved transcript path>" \
@@ -174,7 +191,10 @@ order:
      launches `claude` in its terminal surface, then splits a right pane and opens
      `docs/handoff.md` in cmux's markdown viewer alongside.
 7. Waits for the new Claude's input prompt to be ready, then sends the kickoff
-   ("read docs/handoff.md and get oriented") and verifies it submitted.
+   (read `docs/handoff.md`, get oriented, **then recommend the next
+   compound-engineering step** — `/ce-brainstorm` vs `/ce-plan` vs a more
+   specific CE command — and wait for direction) and verifies it submitted. The
+   tab/workspace is named with `--label`, not the bare `--name`.
 
 ## Step 5 — Relay
 
