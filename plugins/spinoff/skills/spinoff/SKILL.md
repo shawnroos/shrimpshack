@@ -1,5 +1,5 @@
 ---
-name: cmux-spinoff
+name: spinoff
 description: >-
   Command-invoked only (via /start-session, /start-workspace, or the /start alias)
   — do NOT trigger this skill from conversational phrasing on your own. It forks the
@@ -15,7 +15,7 @@ description: >-
   merely describe wanting to fork work, suggest the command rather than acting.
 ---
 
-# cmux Spinoff
+# Spinoff
 
 **Invoked only via `/start-session`, `/start-workspace`, or the `/start` alias.**
 This skill has real side effects (creates a worktree, opens a tab or workspace,
@@ -103,7 +103,7 @@ suggestion, not a directive.>
 <The script fills this in — leave a placeholder line `<!-- SESSION -->`.>
 ```
 
-Write it to `/tmp/cmux-spinoff-handoff.md`. Keep it tight and real — a handoff
+Write it to `/tmp/spinoff-handoff.md`. Keep it tight and real — a handoff
 that reads like genuine working notes beats a padded template every time.
 
 ## Step 2 — Confirm the branch base
@@ -158,10 +158,10 @@ re-synthesize anything or do extra work — it runs the script, waits, and retur
 the summary fields.
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/skills/cmux-spinoff/scripts/spinoff.sh" \
+bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   --name "<kebab-feature-name>" \
   --label "<short workspace·work label>" \
-  --handoff /tmp/cmux-spinoff-handoff.md \
+  --handoff /tmp/spinoff-handoff.md \
   --target <tab|workspace> \
   --session-transcript "<resolved transcript path>" \
   --session-cwd "<resolved cwd>" \

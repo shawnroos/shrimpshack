@@ -1,4 +1,4 @@
-# cmux-spinoff
+# spinoff
 
 Fork the current thread of work into its own place.
 
@@ -21,7 +21,7 @@ The mechanical work (worktree, handoff, cmux launch, readiness polling) runs in 
 
 ```
 /plugin marketplace add shawnroos/shrimpshack
-/plugin install cmux-spinoff@shrimpshack
+/plugin install spinoff@shrimpshack
 ```
 
 ## Use

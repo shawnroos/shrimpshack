@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # spinoff.sh — fork the current workstream into a fresh worktree + a new cmux
-# tab running a briefed Claude session. Driven by the cmux-spinoff skill.
+# tab running a briefed Claude session. Driven by the spinoff skill.
 #
 # Mechanical only: the CALLER (Claude) supplies a synthesized handoff doc. This
 # script handles worktree creation, env bootstrap, handoff finalization, doc
