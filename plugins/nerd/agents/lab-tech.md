@@ -31,7 +31,7 @@ You run between experiment design (Phase 3) and experiment execution (Phase 5). 
 
 You are invoked in one of two modes:
 
-**Batch mode** (from `/nerd` Phase 4.5):
+**Batch mode** (from `/nerd` Phase 5):
 - One or more experiment plan paths (e.g., `docs/research/plans/E001-plan.md`)
 - The project's language, test command, and build command from `.claude/nerd.local.md`
 - The project root directory
@@ -71,6 +71,15 @@ If WAL mode is detected:
 - Verify all data files referenced in the plan exist and are non-empty
 - Check file permissions (readable by the current user)
 - If the plan references a dataset that needs to be generated, flag as "needs setup"
+
+**Data-prerequisite gate (before selecting a data-dependent experiment for a batch):**
+
+An experiment that needs live data — entity-bearing queries, search-feedback rows, session history — must have that data *before* it consumes an executor slot. Otherwise the executor runs, finds zero usable rows, and returns `FAILED (data_insufficiency)` with all theories inconclusive (the empty-`arras.db` failure that blocked three consecutive batches). Check the prerequisite explicitly:
+
+- Determine the minimum data the experiment requires from its plan (e.g., "≥15 entity-bearing queries", "non-empty session history").
+- Verify the production data source actually meets it (row counts, non-empty tables — after the WAL checkpoint above).
+- If it does NOT: `[BLOCKER] E-{id} requires {data requirement} but the data source has {actual}. Do not launch an executor — it will return FAILED (data_insufficiency).` Recommend the fix: a seeded eval database committed to the repo and loaded by harnesses as a fallback (`docs/research/fixtures/` or a checked-in minimal `arras.db`-style seed), so data-dependent experiments have realistic data without a live workspace.
+- This gate runs at readiness time so the orchestrator can drop the experiment from the batch rather than burning a slot on it.
 
 **API access:**
 - If the plan requires API calls (e.g., LLM evaluation), verify credentials are available
@@ -123,9 +132,63 @@ Many experiments need an eval harness or CLI command to measure results. Verify 
 3. If it requires test data (e.g., `--dataset queries.json`), check if that file exists
 4. If it requires a prior export step, check if the export has been run
 
+**Set `has_harness` per experiment.** A finding has a harness when the eval module *already implements this experiment's metric* (the metric command runs and exercises real experiment code), not merely when an eval module exists. Set `has_harness: true` only if the experiment's specific metric command runs against existing code; set `has_harness: false` when the executor would have to build the harness from scratch. This field gates autonomous (scheduled-mode) execution — building a harness is the token-heavy phase that exhausts an executor's tool budget, so scheduled mode avoids launching full executors on `has_harness: false` experiments.
+
 Flag missing infrastructure:
 - "BLOCKER: Plan E003 requires `cargo run -- eval coherence --dataset test-queries.json` but `test-queries.json` does not exist. Need to run export first."
-- "SETUP NEEDED: No eval module exists. The experiment-executor will need to create one."
+- "SETUP NEEDED: No eval module exists. The experiment-executor will need to create one." (→ `has_harness: false`)
+
+**Sensitivity smoke-test — does the metric actually respond to change?**
+
+A metric command that runs and emits a number is not enough: if the metric does not *move* when the thing it measures changes, every sweep value comes back identical and every theory is inconclusive-by-association (a broken instrument silently invalidates the whole experiment). Before classifying a finding "experimentable," verify the metric is sensitive to a known perturbation. This is distinct from Check 8b's determinism validation — they are opposite assertions:
+
+| Check | Question | Pass condition |
+|-------|----------|----------------|
+| 8b Determinism | Same code → same number? | Low coefficient of variation across repeated runs |
+| 3 Sensitivity | Different code → different number? | The number moves under a known perturbation |
+
+**Classify the metric shape first, because auto-perturbation only works for some shapes:**
+
+- **Mechanical metrics** (bundle size, compile time, latency, I/O count, memory): a perturbation is cheap and synthesizable — append bytes to an artifact, inject a `sleep`, add a delay, allocate more. Apply the perturbation, re-run the metric, confirm the number moves in the expected direction.
+  - **The perturbation MUST be fully reverted before you finish — this is mandatory, not optional.** You are running in the live working tree on the source branch; an un-reverted perturbation bleeds into every experiment worktree created from that branch (Phase 6c) and corrupts the baseline measurement. Apply the perturbation against a throwaway copy, OR snapshot first (`git stash` / record the file) and restore immediately after re-running the metric, then assert the tree is clean (`git status --porcelain` empty and any touched non-tracked artifact deleted). If you cannot guarantee a clean revert, do NOT perturb in place — treat it as a semantic metric (SETUP NEEDED) instead.
+  - Moves → `[OK] Metric is sensitive (responds to known perturbation).` (and the perturbation has been reverted)
+  - Does not move → `[BLOCKER] Instrument insensitive: metric does not respond to a known perturbation. Sweeping it will produce identical results regardless of parameter value. Fix the instrument before experimenting.` (revert the perturbation regardless of outcome)
+- **Semantic metrics** (search relevance / nDCG, quality scores, business KPIs): a *meaningful* perturbation is project-specific and usually cannot be synthesized from the metric command alone — you'd need to understand and corrupt the input. Do NOT fake it. Emit an actionable setup request rather than a false "ready":
+  - `[SETUP NEEDED] Cannot auto-verify sensitivity for semantic metric {metric}. Provide a known-good / known-bad fixture pair so the harness can confirm the metric distinguishes them before the sweep runs.`
+
+A finding whose metric is insensitive (BLOCKER) or whose sensitivity cannot be verified (SETUP NEEDED) is NOT classified "experimentable" — it is instrument-blocked until the instrument is trusted. You MAY reuse one harness-setup pass to emit both the 8b determinism verdict and this sensitivity verdict, but keep them as two separate verdicts — never merge them into one "metric health" check.
+
+**Judge-instrument gate — when an experiment declares `instrument: judge_rubric`.**
+
+A rubric-judged experiment uses an LLM judge against a pre-registered rubric instead of a numeric metric command. The judge *is* the instrument, so it must earn trust through a gate at least as strict as the numeric sensitivity smoke-test above — same `[OK]/[FIXED]/[BLOCKER]/[SETUP NEEDED]` vocabulary, same "instrument-blocked until trusted" outcome. Check 3 runs exactly one sub-path per experiment: if the plan declares `instrument: judge_rubric`, run this judge-instrument gate; otherwise run the numeric sensitivity smoke-test above. The two never both fire on the same experiment.
+
+Run three sub-checks in fixed order — cheapest first, so a broken rubric short-circuits before expensive judge calls (hash read < N=6 fixture calls < N≥10 triangle calls). The first failure stops the gate with its specific BLOCKER.
+
+1. **Hash-lock (R5 — strict pre-registration).** Resolve the rubric: a bare library id → `.nerd/rubrics/<id>.yaml`; an inline path (`./…` or containing `/`) is read directly. Compute the sha256 of the **raw rubric file bytes** (not a YAML-parse-then-reserialize — every component that hashes the rubric, here and in the executor's drift check, must hash the raw bytes so the values agree). If the orchestrator's pre-flight context injected a prior hash for this rubric (a `Rubric on file: <id> hash=<sha256> source=<path>` line — see Read path below), compare:
+   - First run (no prior hash on file): record the hash, emit `[OK] rubric <id> hash-locked (<8-char prefix>…).`
+   - Match: `[OK] rubric <id> hash unchanged since pre-registration.`
+   - Mismatch: `[BLOCKER] rubric_hash_mismatch: rubric "<id>" was hash-locked at <prior 8-char>… ; current content hashes to <new 8-char>…. There is no in-band amendment — copy .nerd/rubrics/<id>.yaml to a new id, edit, and re-run with rubric:<new-id>.`
+2. **Fixture-pair sensitivity (R1 — can the judge tell good from bad?).** The judge-side analogue of the numeric sensitivity smoke-test: a judge that scores known-good and known-bad stimuli the same is a flat instrument. Load `anchors: {good, bad}` from the experiment plan (preferred) or the rubric's `default_anchors` (fallback, R8):
+   - Neither present: `[BLOCKER] anchors_missing: rubric "<id>" needs anchors.good and anchors.bad (in the experiment plan or the rubric's default_anchors) plus min_anchor_separation, so the judge's discrimination can be verified before the sweep.`
+   - Run the declared judge N≥3 times on each anchor; take the mean score on the rubric's headline criterion. Invoke the judge with the rubric's pinned settings (`default_judge` temperature/seed, default temperature 0) — the *same* settings the executor uses at run time, so this calibration actually predicts execution behavior. (The triangle sub-check below uses the same settings.) If `mean(good) − mean(bad) < min_anchor_separation`: `[BLOCKER] judge_instrument_insensitive: <judge_id> separated the anchors by <delta> on <headline_criterion>, below the required <min_anchor_separation>. The judge cannot discriminate this rubric's good/bad cases — refine the anchors or use a more capable judge.`
+   - Separates adequately: `[OK] judge separates anchors by <delta> on <headline_criterion> (≥ <min_anchor_separation>).`
+3. **Triangle discriminability, cached (R2).** A blind three-item test confirms the judge attends to the rubric's headline criterion rather than a confound (e.g. "longer text = more different"). Consult the orchestrator-injected triangle-verdict block (Read path below) for a verdict matching `(rubric_hash, judge_id)`:
+   - Cache hit, `result: PASS`, `verified_at` within the rubric's `triangle_cache_days` (a positive integer; treat absent or `<= 0` as the default 30 — never "always stale"): `[OK] triangle cached (verified <date>, <correct>/<total> trials).` Skip the run.
+   - Cache hit, `result: FAIL` (still fresh): `[BLOCKER] judge_fails_triangle_discriminability (cached <date>): <judge_id> identified the odd stimulus in only <correct>/<total> trials — at or near chance. Refine the rubric or use a more capable judge.`
+   - Cache miss or stale: run the triangle. Generate N≥15 trials (default 15), half `{good, good, bad}` and half `{good, bad, bad}`; present the three stimuli labeled A/B/C in randomized order; ask the judge which of A/B/C is most different on `<headline_criterion>`; record the single-letter answer. **The null is random guessing among three items — chance = 1/3, not 1/2** (this is a 3-alternative forced choice; state the null so it isn't misread). **PASS requires ≥80% correct *and* binomial p<0.05 against the 1/3 null**; at N=15 the 80% line (12/15) clears p<0.05 comfortably, so the two conditions agree. Use N≥15 so the threshold stays unambiguous. Below 80% or not significant → FAIL. Emit the verdict as a structured block (see Output → Write path) for report-compiler to persist; emit `[OK] triangle PASS (<correct>/<total>, verified <date>)` on PASS or the `[BLOCKER] judge_fails_triangle_discriminability` above on FAIL. (The exact triangle prompt wording is written against the real anchor fixtures at run time; this gate specifies only the structural contract — blind three-item, headline-criterion question, single-letter answer.)
+
+**Read path (honoring the DAG filtered-markdown rule).** lab-tech never parses raw DAG JSON. The orchestrator (`/nerd` Phase 5) queries the DAG for prior `rubric` and `triangle_verdict` nodes relevant to the batch and injects them into this agent's context as two line types:
+
+```
+Rubric on file: portrait-v3 hash=<full-sha256> source=.nerd/rubrics/portrait-v3.yaml
+Triangle verdicts on file: (rubric_hash=<full-sha256>, judge=claude-opus-4-7) PASS 13/15 verified 2026-05-12; (rubric_hash=<full-sha256>, judge=claude-opus-4-7) FAIL 6/15 verified 2026-04-30
+```
+
+If no such block is present, treat every check as a first run (no prior hash, no cached verdict). Match `rubric_hash` byte-for-byte against the freshly computed file hash — the injected hashes are full sha256, not prefixes.
+
+**Write path (single-writer invariant).** lab-tech is a markdown producer, not a DAG writer (only report-compiler and loop-scout write the DAG). When a fresh triangle test runs, emit its verdict into this readiness report as a structured block so report-compiler can persist a `triangle_verdict` node at batch-end (see Output).
+
+A judge-rubric experiment that fails any sub-check is instrument-blocked (exactly like a numeric experiment that fails sensitivity) — it does not proceed to the executor.
 
 ### Check 4: Tool Availability
 
@@ -328,6 +391,27 @@ Report format:
 checked_at: "{timestamp}"
 experiments_checked: [{ids}]
 status: ready|blocked|needs_setup
+# Per-experiment harness presence — read by the orchestrator to gate autonomous
+# (scheduled-mode) execution. has_harness:false means the executor would have to
+# BUILD the harness, which is the token-heavy phase that exhausts tool budget.
+has_harness:
+  E001: true
+  E002: false
+# Per-experiment rubric-instrument provenance (judge_rubric experiments only).
+# Read by report-compiler at batch-end to write rubric / triangle_verdict DAG nodes
+# and rubric provenance on verdict nodes. Omit entirely for numeric experiments.
+rubric_instrument:
+  E004:
+    instrument_kind: judge_rubric
+    rubric_id: portrait-v3
+    rubric_version: 3                          # from the rubric YAML — report-compiler needs it for the rubric_node
+    rubric_hash: "<full-sha256>"
+    source_path: .nerd/rubrics/portrait-v3.yaml  # report-compiler needs it for the rubric_node and the executor for the locked-hash check
+    judge_id: claude-opus-4-7
+    # No triangle_verdict_id here: report-compiler owns the DAG and resolves the verdict→triangle link
+    # itself (it mints the TRI node on a fresh triangle, or looks up the existing one by rubric_hash+judge_id
+    # on a cache hit). When a fresh triangle ran this batch, emit the triangle_verdict: block below so
+    # report-compiler can persist the node.
 ---
 
 # Lab Readiness Report
@@ -337,11 +421,12 @@ status: ready|blocked|needs_setup
 - Ready: {N}
 - Blocked: {N}
 - Needs setup (auto-scaffolded): {N}
+- Pre-existing harness (no build phase needed): {N}
 
 ## Per-Experiment Status
 
 ### E001: {title} — READY
-All checks passed. Data accessible, config wired, eval command works.
+All checks passed. Data accessible, config wired, eval command works. `has_harness: true` (eval module already implements this experiment's metric).
 
 ### E002: {title} — SCAFFOLDED
 - [FIXED] Created data export: scripts/nerd-export-search-feedback.sh
@@ -356,6 +441,19 @@ All checks passed. Data accessible, config wired, eval command works.
   - Sweeping this parameter will produce identical results
   - Fix: Wire the field into the scoring function at src/search/rank.rs:104
 - Status: Cannot run until field is wired
+
+### E004: {title} — READY (rubric-judged)
+- [OK] rubric portrait-v3 hash-locked (a1b2c3d4…)
+- [OK] judge separates anchors by 1.2 on subject_identity (≥ 1.0)
+- [OK] triangle PASS (13/15, verified 2026-06-23)
+- Instrument: judge_rubric; judge: claude-opus-4-7
+- A fresh triangle ran this batch, so emit the verdict block below for report-compiler to persist:
+
+```
+triangle_verdict: { rubric_hash: <full-sha256>, judge_id: claude-opus-4-7, correct_count: 13, total_trials: 15, result: PASS, verified_at: 2026-06-23T09:00:00Z }
+```
+
+(On a cache hit no block is emitted — the verdict already lives in the DAG and was read back via the orchestrator's injected `Triangle verdicts on file:` line.)
 
 ## Infrastructure Created
 - scripts/nerd-export-search-feedback.sh — exports search_feedback table from WAL-mode DB

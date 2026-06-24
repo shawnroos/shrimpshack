@@ -1,9 +1,9 @@
 {
   "name": "nerd",
   "version": "0.1.0",
-  "description": "Your overnight research assistant. Obsessively analyzes codebases for tunable parameters, designs experiments, runs them in worktrees while you sleep, and delivers findings with recommendations.",
+  "description": "Your overnight research assistant. Runs any falsifiable experiment that produces a measurable number against your codebase — parameter sweeps, single-commit hypothesis tests, model/prompt comparisons — in worktrees while you sleep, and delivers findings with recommendations. Finding the magic numbers you forgot is one mode, not the whole job.",
   "author": {
     "name": "Shawn Roos"
   },
-  "keywords": ["research", "experiments", "optimization", "parameter-tuning", "nerd"]
+  "keywords": ["research", "experiments", "optimization", "hypothesis-testing", "parameter-tuning", "nerd"]
 }

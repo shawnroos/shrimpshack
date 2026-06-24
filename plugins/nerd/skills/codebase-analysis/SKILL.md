@@ -1,6 +1,6 @@
 ---
 name: codebase-analysis
-description: "Reference for identifying tunable parameters in codebases. Use when scanning for research targets — hardcoded thresholds, magic numbers, heuristic weights, prompt templates, pipeline budgets."
+description: "Reference for identifying sweepable experiment targets in codebases — tunable parameters and the values behind falsifiable questions. Use when scanning for research targets: hardcoded thresholds, magic numbers, heuristic weights, prompt templates, pipeline budgets."
 ---
 
 # Codebase Analysis for Nerd

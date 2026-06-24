@@ -21,6 +21,7 @@ You compile nerd experiment results into clear, theory-aware research reports. D
 - Raw results from `docs/research/results/*.json`
 - Experiment plans from `docs/research/plans/*-plan.md` (especially the Competing Theories section)
 - Backlog entries from `.claude/nerd.local.md`
+- Lab-readiness reports from `docs/research/lab-readiness-*.md` (batch or loop). These carry the per-experiment `rubric_instrument` provenance (instrument_kind, rubric_id, rubric_version, rubric_hash, source_path, judge_id) and any fresh `triangle_verdict:` blocks emitted by lab-tech's judge-instrument gate. Read them so rubric-judged experiments get their provenance onto the DAG and a `triangle_verdict` node persisted. (lab-tech does not emit `triangle_verdict_id` — report-compiler resolves the verdict→triangle link itself in Step 8.2b.) (Numeric experiments carry no `rubric_instrument` block — this read is inert for them.)
 
 ## Output Structure
 
@@ -42,6 +43,11 @@ supported_theory: "A|B|C"
 
 ## Summary
 One paragraph: what was tested, which theory was supported, what should change.
+
+<!-- Rubric-judged experiments only: a readable provenance line for humans. This is NOT
+     the surface lab-tech reads on resume (that is the orchestrator's Phase 5 filtered-
+     markdown block, fed by the DAG nodes written in Step 8.2b). Omit for numeric experiments. -->
+**Rubric:** portrait-v3 (hash a1b2c3d4…); judge: claude-opus-4-7; triangle: PASS (13/15, verified 2026-06-23)
 
 ## Competing Theories
 
@@ -157,7 +163,7 @@ threshold tuning."}
 
 ## Step 8: Write to Research DAG
 
-After writing all reports and the executive summary, persist theories and verdicts to the project DAG for cross-session memory.
+After writing all reports and the executive summary, persist theories and verdicts to the project DAG for cross-session memory. For rubric-judged experiments, also persist `rubric` and `triangle_verdict` nodes (Step 8.2b) so the judge instrument's hash-lock and triangle calibration survive across sessions — these are what the orchestrator reads back into lab-tech's pre-flight context on the next run.
 
 **The DAG path will be provided in your prompt** (e.g., `~/.claude/plugins/nerd/dag/projects/{slug}.json`).
 
@@ -167,7 +173,7 @@ After writing all reports and the executive summary, persist theories and verdic
 cat {dag_path}
 ```
 
-Parse the existing `nodes` and `edges` arrays. Note the highest existing T and V ID numbers.
+Parse the existing `nodes` and `edges` arrays. Note the highest existing T and V ID numbers — and, when the batch has rubric-judged experiments, the highest existing R (rubric) and TRI (triangle_verdict) ID numbers too.
 
 ### 8.2: Create Theory Nodes
 
@@ -183,20 +189,55 @@ For **each competing theory** in **each experiment plan**, create a theory node:
   "codebase_hash": "{8-char hash}",
   "created_at": "{ISO 8601 timestamp}",
   "status": "active",
+  "research_type": "{parameter | performance | experiment}",
   "tags": ["{category tags — e.g., 'entity-resolution', 'data-bottleneck'}"]
 }
 ```
 
+Set `research_type` from the experiment's nature: `parameter` for a tunable-value sweep, `performance` for a perf benchmark (carry through the finding's `research_type: performance` when present), `experiment` for any other falsifiable experiment with a numeric metric (model/prompt comparison, ablation) that fits neither, and `hypothesis` for a single-commit / single-change sweep-of-one from the `/nerd-this` brief mode. The finding's own `research_type` field (e.g., perf findings carry `research_type: "performance"`) is the upstream source — propagate it.
+
 If the theory was spawned by a prior verdict, add `"spawned_from": "{verdict_id}"`.
+
+**Rubric-judged experiments** (the lab-readiness report has a `rubric_instrument` entry for this experiment with `instrument_kind: judge_rubric`) set `research_type: "experiment"` on the theory node. The rubric *provenance* (rubric_id, rubric_hash, judge_id, triangle_verdict_id, criterion_scores) lives on the **verdict** node (Step 8.3) — that is the queryable outcome record R4 specifies — not duplicated onto the theory node.
 
 **Codebase hash computation** (sort files for deterministic hashing):
 ```bash
 cat $(echo "{source_files}" | tr ' ' '\n' | sort) | shasum | cut -c1-8
 ```
 
+### 8.2b: Create Rubric and Triangle-Verdict Nodes (judge-rubric experiments only)
+
+Runs **before** verdict creation (8.3) so the verdict node can reference an already-existing `triangle_verdict` id — no back-fill. Skip this step entirely for batches with no rubric-judged experiments. For each rubric-judged experiment, using the `rubric_instrument` provenance and any `triangle_verdict:` block from the lab-readiness report:
+
+1. **Rubric node** — if the DAG has no `rubric` node whose `content_hash` matches this experiment's `rubric_hash`, append one (note the highest existing `R` id; the next is `R{n+1}`). The criteria are NOT embedded — the YAML library file is the source of truth. All provenance fields come from the experiment's `rubric_instrument` block — `rubric_library_id` ← `rubric_id`, `version` ← `rubric_version`, `content_hash` ← `rubric_hash`, `source_path` ← `source_path` — except `created_at`, which you stamp at write time:
+   ```json
+   {
+     "id": "R{next_id}", "type": "rubric",
+     "rubric_library_id": "portrait-v3", "version": 3,
+     "content_hash": "{full sha256}", "source_path": ".nerd/rubrics/portrait-v3.yaml",
+     "created_at": "{ISO 8601 — stamp now}", "status": "active"
+   }
+   ```
+   If a matching `rubric` node already exists (same `content_hash`), reuse it — do not duplicate. (If `rubric_version` or `source_path` is somehow absent from the `rubric_instrument` block, read them from the rubric YAML at `source_path` rather than guessing.)
+
+2. **Triangle-verdict node.** Determine the `triangle_verdict` id this experiment's verdict will reference (`TRI_ID`), in one of two ways:
+   - **Fresh triangle** (the lab-readiness report contains a `triangle_verdict: { ... }` block for this experiment): append a new `triangle_verdict` node (next `TRI` id), copying the block's fields and adding `status: "active"`. `TRI_ID` is the id you just minted.
+     ```json
+     {
+       "id": "TRI{next_id}", "type": "triangle_verdict",
+       "rubric_hash": "{full sha256}", "judge_id": "claude-opus-4-7",
+       "correct_count": 13, "total_trials": 15, "result": "PASS",
+       "verified_at": "{ISO 8601}", "status": "active"
+     }
+     ```
+     **Runtime assertion before writing:** confirm `correct_count <= total_trials` (this schema expresses no cross-field constraint, so report-compiler enforces it). If violated, skip the node, emit `malformed_triangle_skipped: correct_count <n> > total_trials <m>` in the DAG summary, and leave `TRI_ID` unset rather than writing a bad node.
+   - **Cache hit** (no `triangle_verdict:` block — lab-tech reused a prior verdict): do not mint a node. Resolve `TRI_ID` by finding the existing `triangle_verdict` node in the DAG (read in Step 8.1) whose `rubric_hash` and `judge_id` match this experiment's, choosing the most recent `active` one by `verified_at`. (lab-tech does not pass the id — report-compiler owns the DAG and resolves it.)
+
+   Carry `TRI_ID` into Step 8.3's verdict node as `triangle_verdict_id`.
+
 ### 8.3: Create Verdict Nodes
 
-For **each theory result** (SUPPORTED / REFUTED / INCONCLUSIVE), create a verdict node:
+For **each theory result** (SUPPORTED / REFUTED / INCONCLUSIVE), create a verdict node. For rubric-judged experiments, map the executor's `experiment_verdict` to the `result` enum: **PASS → SUPPORTED, FAIL → REFUTED** (a rubric run that produced no usable judgment — e.g. the judge was unreachable — yields no verdict node at all, so INCONCLUSIVE does not arise from the rubric path in v1).
 
 ```json
 {
@@ -213,6 +254,21 @@ For **each theory result** (SUPPORTED / REFUTED / INCONCLUSIVE), create a verdic
   "status": "active"
 }
 ```
+
+**Rubric-judged experiments** add the rubric provenance fields to the verdict node (R4), all sourced from the experiment's `rubric_instrument` block in the lab-readiness report and its results JSON:
+
+```json
+{
+  "...": "all the standard verdict fields above, plus:",
+  "rubric_id": "portrait-v3",
+  "rubric_hash": "{full sha256 of the rubric YAML}",
+  "judge_id": "claude-opus-4-7",
+  "triangle_verdict_id": "{TRI_ID resolved in Step 8.2b}",
+  "criterion_scores": { "subject_identity": 4.93, "composition": 5.0, "face_drift": false }
+}
+```
+
+`criterion_scores` keys are the rubric's criterion names; values are numeric (e.g. Likert means rolled up across cells) or boolean (pass/fail flags). Numeric experiments emit none of these fields — their verdict nodes are byte-identical to today.
 
 ### 8.4: Create Edges
 

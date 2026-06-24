@@ -1,3 +1,6 @@
 hardware-profile.yaml
 global-queue.yaml
 logs/
+.claude/
+.claude/nerd.local.md
+.nerd/intern/

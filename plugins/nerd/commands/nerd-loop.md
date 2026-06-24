@@ -30,7 +30,7 @@ Based on the research focus, identify or create a measurable metric.
 The metric must be:
 1. **Automated** — a shell command that outputs a number with no human judgment
 2. **Deterministic** — running it twice on the same code produces the same result (within noise)
-3. **Sensitive** — small code changes produce detectable metric changes
+3. **Sensitive** — small code changes produce detectable metric changes. **Verify this mechanically, do not assume it.** Apply a known perturbation and confirm the metric *moves* (the same sensitivity smoke-test lab-tech runs in Check 3: for mechanical metrics, perturb and re-run; for semantic metrics that can't be auto-perturbed, require a known-good/known-bad fixture pair). A metric that does not respond to a known perturbation is a broken instrument — every iteration would look identical and the loop would hill-climb on noise. Treat an unverifiable or insensitive metric as a gate failure.
 4. **Fast** — runs in under 5 minutes (the loop needs hundreds of iterations)
 
 If the research focus cannot produce a metric meeting all four criteria, **stop here** and tell the user:
@@ -157,6 +157,20 @@ If the lab-tech report indicates a build cache is available (Check 7f), start th
 Example for Rust: `sccache --start-server` with prefix `RUSTC_WRAPPER=sccache`.
 
 ## Step 3: Create the Loop Branch
+
+**Guard: loop must not run off main.**
+
+```bash
+CURRENT_BRANCH=$(git branch --show-current)
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+[ -z "$DEFAULT_BRANCH" ] && DEFAULT_BRANCH=$(git rev-parse --verify origin/main >/dev/null 2>&1 && echo "main" || echo "master")
+```
+
+If `$CURRENT_BRANCH` equals `$DEFAULT_BRANCH` (or is empty/detached):
+- In interactive mode: Use AskUserQuestion: "You're on {default_branch}. The loop creates a branch and commits improvements — running off main risks polluting it. Create a working branch first? (suggest: `git checkout -b nerd/loop-{focus-slug}`)"
+- In scheduled mode: Auto-create `nerd/loop-{focus-slug}` and switch to it.
+
+Store `$CURRENT_BRANCH` — the loop branch merges back here when done (Step 7).
 
 ```bash
 git checkout -b nerd-loop/{focus-slug}
@@ -339,7 +353,12 @@ Improved {metric} from {baseline} to {best} ({improvement}%).
 
 3. List the top changes that were kept (from git log)
 4. The branch `nerd-loop/{focus-slug}` contains all the accumulated improvements
-5. Ask: "Merge nerd-loop/{focus-slug} into your working branch?"
+5. Merge back into the **source branch** (`$CURRENT_BRANCH` from Step 3):
+   ```bash
+   git checkout "$CURRENT_BRANCH"
+   ```
+   Ask: "Merge nerd-loop/{focus-slug} into `$CURRENT_BRANCH`?"
+   In scheduled mode: auto-merge without asking.
 
 ## Combining with /nerd
 

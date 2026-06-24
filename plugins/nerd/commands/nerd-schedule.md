@@ -119,7 +119,8 @@ while [ "$attempt" -lt "$max_attempts" ]; do
     log "Attempt $attempt/$max_attempts"
 
     NERD_SCHEDULED=1 claude --print --allow-dangerously-skip-permissions --dangerously-skip-permissions -p "
-Run /nerd. Execute all backlog experiments autonomously.
+Run /nerd. Execute backlog experiments autonomously.
+Per /nerd Phase 6c scheduled-mode gate: only launch full executors for experiments lab-tech marked has_harness:true; defer has_harness:false experiments to a supervised run rather than burning an executor that will exhaust its tool budget building a harness.
 Use /loop 5m to monitor agents. Merge completed experiments.
 When all done, compile reports and exit.
 Never ask questions — make all decisions autonomously.

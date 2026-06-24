@@ -1,0 +1,35 @@
+# Example rubric — a worked template for a judge-rubric experiment.
+# In a real project this file lives at .nerd/rubrics/portrait-v3.yaml (the library
+# convention documented in commands/nerd-this.md). It is a pure-YAML file: one
+# document, top-of-file metadata keys, then the rubric body. Once a judge runs
+# against it, the file is content-hashed (sha256 of the raw bytes) and locked —
+# a substantive edit forks to a new id rather than mutating this one.
+id: portrait-v3
+version: 3
+created_at: 2026-06-20
+created_by: shawn
+used_in: [E-PORTRAIT-IDENTITY]   # back-references, append-only
+default_judge: claude-opus-4-7
+triangle_cache_days: 30          # positive integer; absent or <= 0 -> default 30
+
+criteria:
+  # The first criterion listed is the headline criterion — the one the
+  # fixture-pair sensitivity check and the triangle discriminability test use.
+  - name: subject_identity
+    scale: "1-5 Likert"
+    anchor_examples: "5 = unmistakably the same person; 1 = clearly a different person"
+    pass_condition: "mean >= 4.0"
+    theory_tag: identity-preserved   # optional — mirrors the "Theory Tested" column in research plans
+  - name: composition
+    scale: "1-5 Likert"
+    anchor_examples: "5 = balanced, intentional framing; 1 = awkward crop or clutter"
+    pass_condition: "mean >= 3.5"
+  - name: face_drift
+    scale: "boolean"
+    anchor_examples: "true = facial features visibly drifted from the reference; false = stable"
+    pass_condition: "no cell == true"
+
+min_anchor_separation: 1.0       # default 1.0 for a 1-5 Likert headline criterion
+default_anchors:                 # used when an experiment doesn't supply its own anchors (R8)
+  good: docs/research/examples/fixtures/portrait/good.png
+  bad: docs/research/examples/fixtures/portrait/bad.png

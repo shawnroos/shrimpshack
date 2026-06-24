@@ -3,9 +3,9 @@ name: parameter-scanner
 model: haiku
 color: cyan
 tools: ["Read", "Glob", "Grep", "Bash"]
-description: "Scans codebases for tunable parameters, hardcoded thresholds, magic numbers, and empirical optimization opportunities. Use when nerd needs to discover what experiments to run."
+description: "Scans codebases for tunable parameters, hardcoded thresholds, magic numbers, and empirical optimization opportunities — one source of falsifiable experiments nerd can run (others, like single-commit hypothesis tests, arrive as briefs rather than scans). Use when nerd needs to discover sweepable experiments from the code itself."
 whenToUse: |
-  Use this agent to analyze a codebase for tunable parameters and optimization opportunities.
+  Use this agent to analyze a codebase for tunable parameters and other sweepable experiment opportunities.
   <example>
   Context: Starting a nerd session on a new codebase
   user: "Let the nerd loose on this project"

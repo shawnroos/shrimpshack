@@ -18,7 +18,7 @@ description: "Reference for designing nerd experiments — competing theories, s
 - **Parameter is wrong**: a different value would improve the metric
 - **Model is wrong**: a different model (not just parameters) would fit better
 - **Feature is unnecessary**: removing it entirely causes no degradation
-- **Metric is wrong**: we're optimizing the wrong thing
+- **Metric is wrong**: we're optimizing the wrong thing — when this is the live theory, consider *inverting* the experiment to make the measurement instrument the system-under-test (sweep which surface/threshold/cadence to read until the metric responds to a known perturbation), rather than sweeping the source code
 - **Data is the bottleneck**: the parameter doesn't matter because the input data is the real problem
 - **Architecture is the bottleneck**: no parameter value can fix this
 

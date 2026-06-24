@@ -1,13 +1,13 @@
 ---
 name: nerd
-description: "Let the nerd loose on your codebase. Obsessively finds every tunable parameter, designs rigorous experiments, runs them in worktrees while you sleep, and delivers findings. Use with no args to nerd out on everything, or pass a topic to focus (e.g., /nerd search relevance)."
+description: "Let the nerd loose on your codebase. Designs and runs rigorous experiments — any falsifiable question with a trusted instrument, whether a measurable numeric metric (parameter sweeps, single-commit hypothesis tests) or an LLM judge scoring against a pre-registered rubric — in worktrees while you sleep, and delivers findings. Use with no args to nerd out on everything, or pass a topic to focus (e.g., /nerd search relevance)."
 argument-hint: "[topic]"
 allowed-tools: "Read,Write,Edit,Bash,Glob,Grep,Agent,AskUserQuestion"
 ---
 
 # nerd — Obsessive Codebase Research Pipeline
 
-Turn the nerd loose. It will find every hardcoded threshold, magic number, and untested heuristic in your codebase, then systematically prove whether they're optimal or not.
+Turn the nerd loose. It runs any falsifiable experiment that produces a measurable number against your codebase — proving whether a change helps, hurts, or does nothing. Finding every hardcoded threshold, magic number, and untested heuristic and proving whether they're optimal is one thing it does well; testing whether a specific commit caused a regression, or whether one model/prompt beats another, is the same machinery pointed at a different question.
 
 ## Input
 
@@ -175,11 +175,44 @@ git branch --show-current
 
 Store: language, test command, current branch from the local config.
 
+**Guard: experiments must not run off main.**
+
+```bash
+CURRENT_BRANCH=$(git branch --show-current)
+# Resolve the default branch without assuming 'master' when origin is absent.
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+if [ -z "$DEFAULT_BRANCH" ]; then
+  for cand in main master; do
+    if git rev-parse --verify "origin/$cand" >/dev/null 2>&1 || git rev-parse --verify "$cand" >/dev/null 2>&1; then
+      DEFAULT_BRANCH="$cand"; break
+    fi
+  done
+fi
+```
+
+**Detached HEAD / empty branch is a hard stop.** If `$CURRENT_BRANCH` is empty, the repo is in a detached-HEAD state. Do NOT proceed — every downstream step (worktree creation from `$CURRENT_BRANCH`, the Phase 6e merge-back, the Phase 8 `git branch --merged "$CURRENT_BRANCH"` reconcile) misbehaves or errors fatally on an empty branch name. In interactive mode, stop and ask the user to check out a branch first; in scheduled mode, auto-create and switch to `nerd/scheduled-{date}` (handled below), then re-capture.
+
+If `$CURRENT_BRANCH` is empty/detached, OR equals `$DEFAULT_BRANCH`, OR `$DEFAULT_BRANCH` could not be resolved (treat an unresolvable default as "the current branch may be protected — ask"):
+- In interactive mode: Use AskUserQuestion: "You're on {current_branch_or_'a detached HEAD'}. Experiments create worktrees and merge results back into your current branch — running off main (or a detached HEAD) risks polluting it with experiment branches and partial results. Create a branch first? (suggest: `git checkout -b nerd/research-{date}`)"
+- In scheduled mode: Auto-create `nerd/scheduled-{date}` and switch to it.
+
+**After any switch, re-capture `CURRENT_BRANCH`.** Whether the user accepted the interactive branch-create or scheduled mode auto-switched, the working branch has changed — so re-run `CURRENT_BRANCH=$(git branch --show-current)` and store the *post-switch* value. Every later step that says "the source branch" / `$CURRENT_BRANCH` (Phase 6c worktree creation, Phase 6e merge-back, Phase 8 reconcile) MUST use this re-captured value, never the pre-switch one — otherwise experiments branch from and merge into the very branch the guard just moved you off.
+
+Store: the re-captured `$CURRENT_BRANCH`, `$DEFAULT_BRANCH`.
+
 ## Phase 1: Check the Backlog
 
 ```bash
 cat .claude/nerd.local.md 2>/dev/null
 ```
+
+**Resurface deferred experiments (closes the breadcrumb loop).** Scheduled runs append experiments they couldn't run (e.g. `has_harness: false`) to `docs/research/deferred-experiments.md`. Read it and fold any still-relevant entries into this run's candidate set so a deferral is a *postponement*, not a silent drop — this is the consumer for the breadcrumb Phase 6c writes:
+
+```bash
+cat docs/research/deferred-experiments.md 2>/dev/null
+```
+
+For each deferred entry whose blocking reason may now be resolvable (e.g. an interactive run can build the harness a scheduled run skipped), add it to the backlog as a candidate; drop entries that are stale or already completed in the DAG.
 
 If backlog has `proposed` entries and no topic: skip to Phase 3 — the nerd has already been collecting findings.
 If backlog empty or topic specified: continue to Phase 2.
@@ -236,9 +269,11 @@ Combine parameter findings and performance findings into a unified candidate lis
 
 **Classify all findings by measurability:**
 
-Split into two groups:
-- **Experimentable**: Findings where a shell command can measure the effect (parameter sweeps, benchmarks, I/O counts). Has a valid `experiment_type` like `parameter_sweep`, `comparison`, `ablation`, `algo_benchmark`, `io_benchmark`, `memory_benchmark`, `cache_benchmark`, `network_benchmark`.
+Split into groups:
+- **Experimentable (provisional)**: Findings where a shell command can measure the effect (parameter sweeps, benchmarks, I/O counts). Has a valid `experiment_type` like `parameter_sweep`, `comparison`, `ablation`, `algo_benchmark`, `io_benchmark`, `memory_benchmark`, `cache_benchmark`, `network_benchmark`. **"Experimentable" here is provisional — it means a sweepable value exists, not that the metric is trusted.** Lab-tech (Phase 5) verifies the metric is actually *sensitive* to change; a finding whose metric does not respond to a known perturbation, or whose data prerequisites are unmet, is demoted to **instrument-blocked** and does NOT proceed to execution until the instrument is fixed.
 - **Analytical**: Findings where the only evaluation is human judgment or code review (has `experiment_type: "analytical"` or `measurability: "analytical"`).
+- **Instrument-blocked** (assigned by lab-tech, not at scan time): a finding that looked experimentable but has no trusted/sensitive metric or unmet data prerequisites. Surfaced as a blocker for the user to fix, not run.
+- **Rubric-judged** (declared by the experiment author, not at scan time): an experiment whose plan declares `instrument: judge_rubric` — evaluated by an LLM judge against a pre-registered rubric instead of a numeric metric. This is the *expected positive* route for a qualitative sweep (rendered images, prompts, model outputs), distinct from instrument-blocked (a *failure* outcome): a rubric-judged experiment proceeds to lab-tech's **judge-instrument gate** (Check 3) in Phase 5, and only becomes instrument-blocked if it *fails* that gate (anchors missing, judge insensitive, judge fails the triangle test, or rubric hash mismatch). A plan that declares `instrument: judge_rubric` but no `rubric:` field is a BLOCKER here, before lab-tech runs: `instrument: judge_rubric requires a rubric: field naming a library id or path.` Because rubric mode is author-declared (the parameter/performance scanners do not emit rubric findings), rubric experiments arrive as hand-authored plans or via `/nerd-this` brief mode — they do not use the Phase 3 parameter/performance plan-reviewer templates, so no rubric variant of those templates is needed.
 
 **Deduplication for performance findings:** Use `dedup_key` (format: `file:function:metric_type`). If the backlog already has an entry with the same dedup_key, skip it.
 
@@ -268,8 +303,9 @@ Which ones should the nerd investigate?
 
 Use AskUserQuestion to let the user select. Add selections to backlog.
 
-Experimentable findings proceed to Phase 3 (experiment design → worktree execution).
+Experimentable findings proceed to Phase 3 (experiment design → worktree execution) — but only those that survive lab-tech's sensitivity + data-prerequisite checks in Phase 5. Findings demoted to **instrument-blocked** there are pulled from the batch and surfaced to the user with the instrument fix needed.
 Analytical findings proceed to Phase 3 but use the plan-reviewer for **analytical review** — generating competing theories and reasoned recommendations without building sweep harnesses.
+Rubric-judged findings proceed to Phase 3 and Phase 5 like experimentable findings, but lab-tech runs the **judge-instrument gate** (Check 3) instead of the numeric sensitivity check, and Phase 6c runs them through the executor's judge-rubric branch (no harness to build — see the rubric note in Phase 6c). A rubric-judged experiment that fails the gate is demoted to instrument-blocked, exactly like a numeric experiment with an insensitive metric.
 
 ## Phase 3: Experiment Design
 
@@ -295,12 +331,22 @@ Present plans. Use AskUserQuestion: "Plans ready. Execute all, review first, or 
 
 Before spinning up expensive experiment agents, validate that the lab is ready.
 
+**Rubric-instrument pre-flight context (judge_rubric batches only).** If any experiment in the batch declares `instrument: judge_rubric`, the orchestrator first queries the project DAG for `rubric` and `triangle_verdict` nodes matching the batch's rubrics and judges, and renders them into a filtered-markdown block injected into lab-tech's prompt. lab-tech must not parse raw DAG JSON — these are orchestrator-mediated reads per `docs/solutions/architecture-decisions/research-dag-cross-session-memory.md`. The block carries **full** sha256 hashes (not prefixes) so lab-tech's hash-lock check can match byte-for-byte:
+
+```
+Rubric on file: portrait-v3 hash=<full-sha256> source=.nerd/rubrics/portrait-v3.yaml
+Triangle verdicts on file: (rubric_hash=<full-sha256>, judge=claude-opus-4-7) PASS 13/15 verified 2026-05-12; (rubric_hash=<full-sha256>, judge=claude-opus-4-7) FAIL 6/15 verified 2026-04-30
+```
+
+lab-tech's judge-instrument gate (Check 3) reads this block for its hash-lock and triangle-cache sub-checks. Omit the block (and the `{rubric_triangle_block}` prompt line) for batches with no rubric experiments — it is inert there.
+
 ```
 Agent(subagent_type="nerd:lab-tech", prompt="
 Validate readiness for experiments: {comma-separated plan paths}.
 Project root: {cwd}. Language: {lang}. Test command: {test_cmd}. Build command: {build_cmd}.
 Project DAG path: {dag_path}. Max parallel experiments: {max_parallel_experiments}.
 Run all checks: data access, config wiring, eval commands, tool availability, worktree readiness, cross-experiment conflicts, and build infrastructure (Check 7).
+For any experiment declaring instrument: judge_rubric, run the judge-instrument gate (Check 3) instead of the numeric sensitivity check. On-file rubric hashes and cached triangle verdicts (orchestrator-injected; do not read the DAG directly): {rubric_triangle_block}
 Check 7: Profile the build, detect sccache, select cache strategy, set up caching, write build_cache config to .claude/nerd.local.md. Read infra nodes from the DAG for prior cache verdicts.
 If any experiments have research_type: performance, also run Check 8 (Performance Profiling Readiness): 8a tool availability for profiling tools, 8b determinism validation of metric commands, 8c build mode check for debug symbols, 8d build cache awareness for profiling flags.
 Scaffold any missing infrastructure (export scripts, test fixtures). Do NOT create the eval module — Phase 6b handles that.
@@ -350,14 +396,7 @@ If no eval module exists (check first — lab-tech in Phase 5 does NOT create it
 
 ### Phase 6c: Launch Experiment Agents
 
-For each `planned` experiment:
-
-```bash
-PROJECT_ROOT="$(pwd)"
-git worktree add worktrees/nerd-{entry.id} --detach HEAD
-cd worktrees/nerd-{entry.id} && git checkout -b nerd/{entry.id}
-cd "$PROJECT_ROOT"
-```
+For each `planned` experiment, create the worktree by following **`skills/worktree-lifecycle` §Create** (canonical procedure — run its bash verbatim; it handles the empty/detached-HEAD guard and the branch-collision suffix). It sets `$WT_BRANCH` to the actually-created branch name; use that (not the literal `nerd/{entry.id}`) in this experiment's later merge and cleanup steps.
 
 If `artifact_copy` strategy, clone build artifacts using copy-on-write. The build output directory varies by language (e.g., `target/` for Rust, `node_modules/.cache` for JS, `__pycache__` for Python):
 ```bash
@@ -367,19 +406,72 @@ cp -c -r "$PROJECT_ROOT/{build_output_dir}/" "$PROJECT_ROOT/worktrees/nerd-{entr
 # cp --reflink=auto -r "$PROJECT_ROOT/{build_output_dir}/" "$PROJECT_ROOT/worktrees/nerd-{entry.id}/{build_output_dir}/" 2>/dev/null
 ```
 
+**Scheduled-mode harness gate (`NERD_SCHEDULED=1`):** read `has_harness` for each experiment from the lab-readiness report. For experiments where `has_harness: false`, do NOT launch a full autonomous executor — building the harness is the token-heavy phase that exhausts the executor's tool budget before it can measure (the recurring S025 failure). Instead, **append the deferred experiment to `docs/research/deferred-experiments.md`** (id, reason `has_harness:false`, and the lab-readiness setup note) so it is a visible breadcrumb for the next supervised run, not silently dropped from the batch — then continue with the `has_harness: true` ones. In interactive mode, all experiments run (the user can intervene if an executor stalls).
+
+**Don't trust `has_harness` blindly — it's a model-judged field.** Before treating an experiment as `has_harness: true` in scheduled mode, independently confirm the harness actually runs: execute the eval/metric command from the lab-readiness report once in the worktree and check it exits 0 and emits output. If the dry-run fails, the field was a false positive — demote the experiment to deferred (as above) rather than launching a `phase=run` that finds no harness, or a single-shot executor that exhausts its budget rebuilding one.
+
+**Two-phase executor split (separate tool budgets).** Harness-writing and the measurement run are **two distinct executor invocations** so that exhausting the build budget never starves the measurement. They share state ONLY through the committed worktree, which means **`phase=run` must not start until `phase=build` has finished and committed** — otherwise `run` opens a worktree with no harness in it. Run the two phases **strictly sequentially within one experiment**; parallelism is *across experiments*, never between the two phases of the same experiment.
+
 ```
-Agent(subagent_type="nerd:experiment-executor", prompt="
+# Phase build — write and COMMIT the harness, then stop. Launch in the FOREGROUND (or await it)
+# so the run phase sees the committed harness. Do NOT background this and immediately launch run.
+build_result = Agent(subagent_type="nerd:experiment-executor", prompt="
+phase=build
 Execute plan at docs/research/plans/{entry.id}-plan.md.
 Worktree: {path}. Language: {lang}. Tests: {test_cmd}.
-Extend the existing eval module with your experiment code. Commit conventionally.
-Write results to docs/research/results/{entry.id}-results.json.
+Extend the existing eval module with your experiment code and COMMIT it. Do NOT run the sweep.
+Report the commit SHA and the exact eval/metric command the run phase should execute.
 Before building, read .claude/nerd.local.md for build_cache_strategy and build_cache_env.
 If build_cache_env is set, prefix all build commands with it inline (e.g., for Rust: RUSTC_WRAPPER=sccache cargo build).
-If a build fails with cache, retry without it and add cache_fallback: true to results JSON.
+If a build fails with cache, retry without it and note cache_fallback: true.
+", run_in_background=false)
+
+```
+
+**Gate between the phases (run this — do not skip).** After `phase=build` returns, confirm the harness was actually committed before launching `phase=run`. This is an enforced step, not a hope: a `phase=run` against an uncommitted/empty harness produces a garbage verdict.
+
+```bash
+# Capture the worktree HEAD before/after isn't needed — just confirm a harness commit exists now.
+BUILD_HEAD=$(git -C "{path}" rev-parse HEAD 2>/dev/null)
+if [ -z "$BUILD_HEAD" ] || ! git -C "{path}" log -1 --oneline | grep -qiE 'eval|harness|{entry.id}'; then
+  echo "SKIP phase=run for {entry.id}: build phase left no harness commit — mark experiment failed." >&2
+  # do NOT launch phase=run; record failed and move on.
+else
+  : # harness committed → launch phase=run below
+fi
+```
+
+Only if the gate passed:
+
+```
+# Phase run — harness is now committed; run the sweep with a fresh budget. Safe to background
+# (and to parallelize across DIFFERENT experiments) now that this experiment's build is done.
+Agent(subagent_type="nerd:experiment-executor", prompt="
+phase=run
+Execute plan at docs/research/plans/{entry.id}-plan.md. The harness is already committed in the worktree (build commit: $BUILD_HEAD).
+Worktree: {path}. Language: {lang}. Tests: {test_cmd}.
+Re-read the plan and the committed harness, run the sweep, and write results to docs/research/results/{entry.id}-results.json. Commit the results. Do NOT rebuild the harness.
 ", run_in_background=true)
 ```
 
-Cap parallel agents at `max_parallel_experiments` from config.
+For `has_harness: true` experiments the harness already exists in the eval module on `$CURRENT_BRANCH`, so it is present in the worktree created from that branch (Phase 6c, above) — skip `phase=build` and launch `phase=run` directly. Cap *concurrent experiments* at `max_parallel_experiments` from config; within each experiment, build→run is sequential, so an experiment occupies one slot across both its phases.
+
+**Rubric-judged experiments (`instrument: judge_rubric`) have no harness to build.** Like `has_harness: true` experiments, skip `phase=build` entirely and launch only `phase=run` — there is no metric command to wire into an eval module; the judge is the instrument. The run invocation carries the rubric and judge forward so the executor's judge-rubric branch knows what to score against:
+
+```
+# Phase run (judge-rubric) — no harness; the judge scores each cell against the rubric.
+Agent(subagent_type="nerd:experiment-executor", prompt="
+phase=run
+Execute plan at docs/research/plans/{entry.id}-plan.md. instrument: judge_rubric.
+Worktree: {path}. Language: {lang}. Tests: {test_cmd}.
+Rubric: {entry.rubric}  (library id or inline path). Judge: {entry.judge_id}.
+Locked rubric hash: {entry.rubric_hash}  (read from the lab-readiness rubric_instrument block; the executor re-hashes the rubric file and aborts with rubric_hash_drift_detected if it no longer matches).
+The rubric is already hash-locked (lab-tech Check 3 passed). Do NOT build or expect a committed harness.
+Run the judge-rubric branch: for each cell, invoke the judge against the rubric, collect per-criterion scores, evaluate the pass condition, and write results to docs/research/results/{entry.id}-results.json. Commit the results.
+", run_in_background=true)
+```
+
+(The executor's internal judge-rubric branch — what `phase=run` does when `instrument: judge_rubric` — is defined in `agents/experiment-executor.md`. If a caller ever invokes `phase=build` on a rubric experiment anyway, the executor returns immediately with "no harness needed for judge-rubric mode" rather than building one.)
 
 ### Phase 6d: Intern Result Classification
 
@@ -387,17 +479,7 @@ After each experiment-executor completes and writes results JSON, if `INTERN_AVA
 
 ### Phase 6e: Merge Completed Experiments
 
-As each agent completes, merge immediately:
-
-```bash
-git merge nerd/{entry.id} --no-edit
-{test_command}  # verify tests pass
-```
-
-If tests fail: `git reset --hard HEAD~1`, mark `failed`, keep worktree.
-If merge succeeds: `git worktree remove worktrees/nerd-{entry.id}`.
-
-Merge conflicts in eval module files are additive — combine both sides.
+As each agent completes, merge it back by following **`skills/worktree-lifecycle` §Merge** (canonical procedure — run its bash verbatim). It merges into the re-captured `$CURRENT_BRANCH`, serializes per-experiment, skips on a dirty tree, uses `git merge --abort` for conflicts vs `reset --hard HEAD~1` only for clean-merge-then-tests-fail, and on success cleans up via the fail-safe cleanup gate. Merge conflicts in eval-module files are additive — combine both sides.
 
 ## Phase 7: Monitor
 
@@ -409,10 +491,7 @@ Use `/loop 5m` to check on background agents. Merge experiments as they complete
 Agent(subagent_type="nerd:report-compiler", prompt="Compile findings from docs/research/results/ into docs/research/findings.md and per-experiment reports. Write theories, verdicts, and edges to project DAG: {dag_path}.", run_in_background=false)
 ```
 
-Present summary. Clean up remaining worktrees:
-```bash
-git worktree prune
-```
+Present summary. Then reconcile and clean up worktrees by following **`skills/worktree-lifecycle` §Reconcile** (canonical procedure — run its bash verbatim). It removes only worktrees whose branch is already merged into `$CURRENT_BRANCH` (checking `git branch --merged`, not just `git worktree prune`), deletes the merged branches, surfaces any worktree it couldn't remove instead of swallowing the error, and is gated by the same fail-safe cleanup flag.
 
 ## Phase 9: Training Data Extraction (ALWAYS runs)
 

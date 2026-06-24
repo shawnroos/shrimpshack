@@ -3,10 +3,10 @@ name: context-scanner
 model: haiku
 color: white
 tools: ["Read", "Glob", "Grep", "Bash"]
-description: "Scans a scoped set of files for tunable parameters and clusters results into research themes. Used by /nerd-this for context-scoped experiment discovery."
+description: "Scans a scoped set of files for tunable parameters and other sweepable experiment opportunities, and clusters results into research themes. Used by /nerd-this for context-scoped experiments."
 whenToUse: |
-  Use this agent to scan a specific set of files (not the whole codebase) for tunable parameters,
-  then group the results into coherent research themes.
+  Use this agent to scan a specific set of files (not the whole codebase) for tunable parameters
+  and other sweepable opportunities, then group the results into coherent research themes.
   <example>
   Context: User wants to research parameters related to their current spike
   user: "/nerd-this pi agent migration"
