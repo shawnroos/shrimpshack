@@ -193,7 +193,7 @@ WORKSPACE_REF=""
 SURFACE_REF=""
 VIEWER_OK=0          # set when the handoff markdown viewer actually renders
 LB_READY=0           # set to 1 by launch_and_brief when the prompt was confirmed ready
-LAUNCH_CMD="cd '$WORKTREE' && claude"
+LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
 KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Get oriented (goal, decisions, open questions, starting point). Then recommend the next step in the compound-engineering flow: /ce-brainstorm if scope or approach is still ambiguous, /ce-plan if it's clear enough to plan, or a more specific CE command if one fits better — each with a one-line rationale grounded in the handoff. The handoff's 'Recommended next step' section is a starting suggestion; validate it against what you read rather than echoing it. Give me your recommendation, then wait for my direction."
 
 # launch_and_brief <workspace-ref> <surface-ref> <surface-label> <where>
