@@ -1,0 +1,50 @@
+{
+  "description": "reflect plugin hooks. UserPromptSubmit runs once-per-session seeded recall (qmd search, fail-safe — never blocks the prompt, exits 0 on any error/timeout/absence). PostToolUse + PreToolUse fire the reflect-trigger flag at completion boundaries (PR create/merge, ExitPlanMode, all-todos-done) so /reflect runs its hygiene pass. All hooks fail-open and exit 0; hook arrays merge additively with the user's settings and other plugins. Paths resolve via ${CLAUDE_PLUGIN_ROOT}.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"${CLAUDE_PLUGIN_ROOT}/hooks/seeded-recall.sh\" ] && \"${CLAUDE_PLUGIN_ROOT}/hooks/seeded-recall.sh\" || true",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -qE 'gh pr (create|merge)'; then \"${CLAUDE_PLUGIN_ROOT}/hooks/reflect-trigger.sh\" PR_event; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/reflect-trigger.sh\" ExitPlanMode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "TodoWrite",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -qE '\"status\":\"completed\"' && ! echo \"$TOOL_INPUT\" | grep -qE '\"status\":\"(pending|in_progress)\"'; then \"${CLAUDE_PLUGIN_ROOT}/hooks/reflect-trigger.sh\" TodoWrite_all_done; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
