@@ -106,17 +106,39 @@ suggestion, not a directive.>
 Write it to `/tmp/spinoff-handoff.md`. Keep it tight and real — a handoff
 that reads like genuine working notes beats a padded template every time.
 
-## Step 2 — Confirm the branch base
+## How decisions get made in this skill (engaged agent, escalate on low confidence)
 
-Ask Shawn where the new worktree should branch from. **Recommend branching off
-the current HEAD** (carries the in-progress context that motivated the spinoff),
-but offer `develop` for a genuinely clean start. One question, then proceed —
-don't belabor it. This question stays in the main session: the background agent
-that runs the script has no way to ask it.
+You resolve the spinoff's three knobs — **which repo**, **which base**, **which
+workspace** — from a rubric, acting autonomously when you're confident and only
+asking Shawn (`AskUserQuestion`) when you genuinely can't tell. The script keeps
+deterministic backstops (a helpful failure when no repo resolves, a stale-base
+warning), but those are the safety net, not the decision-maker. **All resolution
+and any question must happen here, in the main session** — the background agent
+that runs the script can't prompt, so a decision deferred to it is a decision lost.
 
-Resolve his answer to a concrete base ref:
-- "current" / current HEAD → use the current branch name (the script defaults to this)
-- "develop" / clean → pass `--base origin/develop` (the script fetches it fresh)
+## Step 2 — Resolve the repo and the base
+
+**Repo** — the script roots the worktree in a git repo. The originating `/start`
+session's cwd is often *not* inside the target repo (e.g. you're in `~`), so
+resolve the intended repo and pass it as `--repo <path>`:
+- *Repo rubric:* derive it from the work under discussion / the carried-over
+  plan-brainstorm docs / `--session-cwd` when that cwd is itself a git repo. If
+  one repo is clearly the subject, pass `--repo` for it. If it's genuinely
+  ambiguous, ask (`AskUserQuestion`). When the originating cwd already *is* the
+  target repo, `--repo` is optional (the script falls back to cwd).
+
+**Base** — **default to a fresh `origin` base**, not local HEAD. A stale local
+`main` silently reproduces old state (this is a real failure mode), so prefer
+`--base origin/<default-branch>` (the script fetches it fresh):
+- *Base rubric:* resolve the default branch with
+  `git -C "$REPO" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@'`
+  (fall back to `main`), and pass `--base origin/<that>`. Deviate only with a clear
+  reason — e.g. Shawn explicitly wants the in-progress local HEAD carried in, in
+  which case omit `--base` (the script defaults to current HEAD). If unsure which
+  base is intended, ask.
+
+One light confirmation is fine; don't belabor it. The script's stale-base warning
+backstops a local base that turns out to be behind its remote.
 
 ## Step 3 — Resolve this session's transcript + cwd
 
@@ -134,8 +156,34 @@ TRANSCRIPT="$(ls -t "$HOME/.claude/projects/$PROJ_KEY"/*.jsonl 2>/dev/null | hea
 
 Prefer `CLAUDE_TRANSCRIPT_PATH` / `CLAUDE_SESSION_ID` when they're set. You'll
 pass `--session-transcript "$TRANSCRIPT"` and `--session-cwd "$SESSION_CWD"` to
-the script. (If you can't resolve a transcript, omit the flags — the script falls
-back to its own discovery; just note the link may be approximate.)
+the script. If you can't resolve a transcript *and you're not passing `--repo`*,
+omitting the flags is acceptable — the script falls back to its own discovery;
+just note the link may be approximate.
+
+**When you pass `--repo`, these flags are load-bearing — always pass them
+(absolute).** Under `--repo` the script's own discovery looks inside the *target*
+repo, but the originating session lives outside it, so the fallback would point
+the resume link at the wrong project. Resolve the transcript + cwd here and pass
+them explicitly whenever `--repo` is set.
+
+## Step 3.5 — Confirm the target workspace (when it differs)
+
+A `--target tab` spinoff opens in the **current** cmux workspace. Usually that's
+right — but if the workspace you're in is anchored on a *different* repo than the
+one you're forking (`--repo`), the new tab would land somewhere surprising. Catch
+that here, before dispatch (the background agent can't ask):
+
+- Determine the current workspace's anchor repo and compare it to the resolved
+  `--repo`. **Same repo → proceed silently.** **Different repo, or you can't
+  determine it → confirm with Shawn (`AskUserQuestion`)** before launching — this
+  is the low-confidence case, so don't proceed silently.
+- *How to read the current workspace's repo (execution-time detail):* the current
+  workspace is `CMUX_WORKSPACE_ID`; read its primary terminal surface's cwd and run
+  `git -C <cwd> rev-parse --show-toplevel`. cmux's `tree` exposes surface/pane refs
+  but not cwds directly, so if no clean way to get the cwd exists, treat the repo as
+  *undetectable* → confirm (the fail-safe above). Don't block the common
+  same-workspace path on a perfect query.
+- This is moot for `--target workspace` (a brand-new workspace is the intent).
 
 ## Step 4 — Dispatch a background agent to run the script
 
@@ -165,7 +213,8 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   --target <tab|workspace> \
   --session-transcript "<resolved transcript path>" \
   --session-cwd "<resolved cwd>" \
-  [--base origin/develop] \
+  --repo "<resolved target repo path>" \      # when the originating cwd isn't inside it
+  --base "origin/<default-branch>" \           # fresh base (Step 2); omit only to carry local HEAD
   [--branch-prefix feature]      # default: feature/
 ```
 
@@ -208,8 +257,11 @@ continues in the new tab/workspace.
 - **Not inside cmux** (`CMUX_WORKSPACE_ID` unset): the script still creates the
   worktree + handoff and prints the manual `cd <worktree> && claude` command, so
   the spinoff isn't lost — only the tab/workspace automation is skipped. Tell Shawn.
-- **Not in a git repo / dirty index blocks worktree add**: the script reports the
-  git error verbatim. Don't paper over it — surface it.
+- **No repo resolves**: if neither `--repo` nor the cwd lands in a git repo, the
+  script fails with a message naming `--repo` — resolve the target repo (Step 2)
+  and pass it, don't paper over it.
+- **Dirty index blocks worktree add**: the script reports the git error verbatim.
+  Surface it.
 - **Ambiguous left pane** (tab target, e.g. a single-pane workspace): the script
   falls back to adding the surface to the focused pane and notes it. Usually fine.
 - **Can't parse the new workspace/surface ref** (workspace target): the script

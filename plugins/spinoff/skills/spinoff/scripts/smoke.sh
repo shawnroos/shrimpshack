@@ -65,6 +65,63 @@ echo "$out" | grep -qE 'label: +smoke·work' \
   && ok "explicit --label used verbatim" \
   || bad "explicit label wrong: $(echo "$out" | grep -i 'label:' || echo '<none>')"
 
+# 7. --repo roots the worktree in the named repo from a NON-repo cwd.
+OUTSIDE="$(mktemp -d)"            # not a git repo
+trap 'rm -rf "$WORK" "$OUTSIDE"' EXIT
+run_out() { ( cd "$OUTSIDE" && unset CMUX_WORKSPACE_ID && bash "$SPINOFF" "$@" 2>&1 ); }
+run_out --name feat-repo --handoff "$HANDOFF" --repo "$WORK" >/dev/null 2>&1
+[ -f "$WORK/worktrees/feat-repo/docs/handoff.md" ] \
+  && ok "--repo roots worktree in target repo from outside cwd" \
+  || bad "--repo did not create worktree in target repo"
+
+# 8. --repo with a nonexistent path fails clearly.
+out="$(run_out --name feat-norepo --handoff "$HANDOFF" --repo /no/such/repo)"
+echo "$out" | grep -q "repo path not found" \
+  && ok "--repo nonexistent path rejected" \
+  || bad "--repo nonexistent path not rejected: $out"
+
+# 9. No --repo and cwd not a git repo → helpful failure naming --repo.
+out="$(run_out --name feat-nogit --handoff "$HANDOFF")"
+echo "$out" | grep -q -- "--repo" \
+  && ok "non-repo cwd fails with a message naming --repo" \
+  || bad "non-repo cwd failure did not mention --repo: $out"
+
+# 10. --repo with a RELATIVE --handoff (cwd outside repo) → real body lands,
+#     not the placeholder fallback (canonicalized before the cd).
+printf '# Spinoff: rel\nBODY-MARKER\n## Source session\n<!-- SESSION -->\n' > "$OUTSIDE/rel-handoff.md"
+( cd "$OUTSIDE" && unset CMUX_WORKSPACE_ID && bash "$SPINOFF" \
+    --name feat-rel --handoff rel-handoff.md --repo "$WORK" ) >/dev/null 2>&1
+grep -q "BODY-MARKER" "$WORK/worktrees/feat-rel/docs/handoff.md" 2>/dev/null \
+  && ok "--repo + relative --handoff lands the real body" \
+  || bad "--repo + relative --handoff lost the handoff body"
+
+# 11. Stale base: a local branch behind its upstream warns (non-blocking).
+# Build a behind-upstream state with local plumbing only (no network): point
+# origin/feat one commit ahead of feat, and wire enough remote config that
+# `feat@{upstream}` resolves (branch.* + a remote.origin fetch refspec).
+base_sha="$(git -C "$WORK" rev-parse HEAD)"
+ahead_sha="$(git -C "$WORK" commit-tree "HEAD^{tree}" -p "$base_sha" -m ahead)"
+git -C "$WORK" branch feat "$base_sha"
+git -C "$WORK" update-ref refs/remotes/origin/feat "$ahead_sha"
+git -C "$WORK" config remote.origin.url .
+git -C "$WORK" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+git -C "$WORK" config branch.feat.remote origin
+git -C "$WORK" config branch.feat.merge refs/heads/feat
+out="$(run --name feat-stale --handoff "$HANDOFF" --base feat)"
+echo "$out" | grep -q "behind" \
+  && ok "stale local base (behind upstream) warns" \
+  || bad "stale base did not warn: $out"
+[ -d "$WORK/worktrees/feat-stale" ] \
+  && ok "stale base warning is non-blocking (worktree still created)" \
+  || bad "stale base blocked worktree creation"
+
+# 12. Local branch with NO upstream → no stale warning (silent skip).
+git -C "$WORK" branch noup "$base_sha"
+out="$(run --name feat-noup --handoff "$HANDOFF" --base noup)"
+echo "$out" | grep -q "behind" \
+  && bad "no-upstream base should not warn: $out" \
+  || ok "no-upstream local base does not warn"
+
 echo "-------------------------------------------"
 echo "passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]

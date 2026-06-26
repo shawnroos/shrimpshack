@@ -15,6 +15,7 @@ set -uo pipefail
 NAME=""
 LABEL=""                     # short display name for the cmux tab/workspace (see derivation below)
 HANDOFF_SRC=""
+REPO=""                      # explicit target repo (when the originating cwd isn't inside it)
 BASE=""                      # empty => current HEAD
 PREFIX="feature"
 TARGET="tab"                 # tab => surface in current workspace; workspace => new workspace
@@ -25,6 +26,7 @@ while [ $# -gt 0 ]; do
     --name) NAME="$2"; shift 2 ;;
     --label) LABEL="$2"; shift 2 ;;
     --handoff) HANDOFF_SRC="$2"; shift 2 ;;
+    --repo) REPO="$2"; shift 2 ;;
     --base) BASE="$2"; shift 2 ;;
     --branch-prefix) PREFIX="$2"; shift 2 ;;
     --target) TARGET="$2"; shift 2 ;;
@@ -36,6 +38,10 @@ done
 
 step() { echo "▸ $*"; }
 die()  { echo "✗ $*" >&2; exit 1; }
+# Make a path absolute against the CURRENT cwd. Used to pin relative file args
+# (handoff, transcript) BEFORE a `--repo` cd changes cwd out from under them —
+# they're read later (post-cd), so a relative path would otherwise be lost.
+abspath() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd -P)" "$1" ;; esac; }
 
 [ -n "$NAME" ] || die "missing --name <kebab-feature-name>"
 [ -n "$HANDOFF_SRC" ] || die "missing --handoff <path-to-handoff.md>"
@@ -49,8 +55,27 @@ esac
 CMUX="$(command -v cmux 2>/dev/null)"
 [ -n "$CMUX" ] || CMUX="/Applications/cmux.app/Contents/Resources/bin/cmux"
 
+# ---- resolve target repo (--repo) before any cwd-relative git/IO ------------
+# The originating /start session's cwd is often NOT inside the target repo (e.g.
+# run from ~), so `--repo` names it explicitly. Relative file args are read AFTER
+# this cd (handoff at finalize ~line 161, transcript at discovery ~line 138), so
+# pin them absolute FIRST; then cd so every cwd-relative git call below resolves
+# against the intended repo. The main-tree walk and `git -C "$MAIN_ROOT"` calls
+# are unchanged — they just inherit the corrected cwd.
+if [ -n "$REPO" ]; then
+  [ -d "$REPO" ] || die "--repo path not found: $REPO"
+  HANDOFF_SRC="$(abspath "$HANDOFF_SRC")"
+  [ -n "$SESSION_TRANSCRIPT" ] && SESSION_TRANSCRIPT="$(abspath "$SESSION_TRANSCRIPT")"
+  cd "$REPO" || die "could not cd into --repo: $REPO"
+  # Under --repo the transcript auto-discovery fallback searches the TARGET repo's
+  # project dir (not the originating session's), so an omitted --session-transcript
+  # yields a wrong resume link. Warn — symmetric with the missing-file warning below.
+  [ -z "$SESSION_TRANSCRIPT" ] && echo "  ⚠ --repo set without --session-transcript — the resume link will be derived from the target repo and may point at the wrong session. Pass --session-transcript <abs-path>." >&2
+fi
+
 # ---- locate repo + current branch ------------------------------------------
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repo"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" \
+  || die "could not resolve a git repo from $(pwd) — pass --repo <path-to-target-repo> (the originating /start session's cwd may be outside the target repo)"
 # If invoked from inside a worktree, resolve to the MAIN working tree so
 # worktrees nest under the primary repo, not under another worktree.
 COMMON_GIT="$(git rev-parse --git-common-dir 2>/dev/null)"
@@ -91,6 +116,23 @@ else
   BASE_REF="$CUR_BRANCH"          # branch off current HEAD
 fi
 step "base ref:    $BASE_REF"
+
+# Stale-base guard: branching off a local branch that's behind its remote
+# silently reproduces old state (this is exactly how a spinoff lands on a stale
+# layout). origin/* bases are fetched above, so skip them; a local branch with no
+# upstream can't be compared, so skip silently. Warn loudly but never block —
+# branching off local HEAD stays valid when intended.
+case "$BASE_REF" in
+  origin/*) ;;
+  *)
+    if BASE_UP="$(git -C "$MAIN_ROOT" rev-parse --abbrev-ref "$BASE_REF@{upstream}" 2>/dev/null)"; then
+      BEHIND="$(git -C "$MAIN_ROOT" rev-list --count "$BASE_REF..$BASE_REF@{upstream}" 2>/dev/null)"
+      if [ -n "$BEHIND" ] && [ "$BEHIND" -gt 0 ] 2>/dev/null; then
+        echo "  ⚠ base '$BASE_REF' is $BEHIND commit(s) behind '$BASE_UP' — the new worktree may start from stale state. Consider --base origin/<branch> for a fresh base." >&2
+      fi
+    fi
+    ;;
+esac
 
 # ---- create worktree --------------------------------------------------------
 step "creating worktree…"
