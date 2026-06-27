@@ -1,24 +1,27 @@
 {
-  "SessionStart": [
-    {
-      "matcher": "",
-      "hooks": [
-        {
-          "type": "prompt",
-          "prompt": "Check .claude/nerd.local.md for the research backlog. If it has 'proposed' entries, mention: 'Nerd: {N} proposals in backlog. Run /nerd to start.' Also check for stale 'running' entries — if any experiment has status 'running' but no corresponding worktree exists (check with 'git worktree list | grep nerd-'), warn: 'Nerd: {N} experiments marked running but worktrees missing (possible crashed session). Run /nerd to recover.' If no backlog file exists, say nothing. Also check intern state: if ~/.claude/plugins/nerd/intern/state.json exists, read it. If any task was recently promoted (promoted_at within last 7 days), mention: 'Intern: {task} promoted to {mode}!' If intern endpoint is configured but health check fails, mention: 'Intern: endpoint unreachable.'"
-        }
-      ]
-    }
-  ],
-  "PostToolUse": [
-    {
-      "matcher": "Write|Edit",
-      "hooks": [
-        {
-          "type": "prompt",
-          "prompt": "Check if the file just written/edited contains new hardcoded numeric thresholds or tunable parameters. Skip files under ~/.claude/plugins/nerd/dag/ and .nerd/intern/ — these are research metadata and intern training data, not codebase parameters. Also skip: UI styling, math constants, protocol values, test fixtures. Look for: float comparisons (>= 0.85), const/DEFAULT_ declarations with numeric values that control behavior, hardcoded timeouts/limits/weights. Before appending, check if .claude/nerd.local.md already has a proposed entry for this exact file:line:value — if so, skip to avoid duplicates. If a strong candidate is found, append it to .claude/nerd.local.md backlog as a 'proposed' entry with id, title, parameter name, file path, line number, and current value. Keep the entry minimal — one line of YAML per finding."
-        }
-      ]
-    }
-  ]
+  "description": "nerd plugin hooks. SessionStart surfaces the research backlog (proposed entries, stale 'running' experiments whose worktrees are missing) and intern state. PostToolUse scans newly written/edited files for hardcoded tunable parameters and appends strong candidates to the backlog as 'proposed' experiments.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check .claude/nerd.local.md for the research backlog. If it has 'proposed' entries, mention: 'Nerd: {N} proposals in backlog. Run /nerd to start.' Also check for stale 'running' entries — if any experiment has status 'running' but no corresponding worktree exists (check with 'git worktree list | grep nerd-'), warn: 'Nerd: {N} experiments marked running but worktrees missing (possible crashed session). Run /nerd to recover.' If no backlog file exists, say nothing. Also check intern state: if ~/.claude/plugins/nerd/intern/state.json exists, read it. If any task was recently promoted (promoted_at within last 7 days), mention: 'Intern: {task} promoted to {mode}!' If intern endpoint is configured but health check fails, mention: 'Intern: endpoint unreachable.'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check if the file just written/edited contains new hardcoded numeric thresholds or tunable parameters. Skip files under ~/.claude/plugins/nerd/dag/ and .nerd/intern/ — these are research metadata and intern training data, not codebase parameters. Also skip: UI styling, math constants, protocol values, test fixtures. Look for: float comparisons (>= 0.85), const/DEFAULT_ declarations with numeric values that control behavior, hardcoded timeouts/limits/weights. Before appending, check if .claude/nerd.local.md already has a proposed entry for this exact file:line:value — if so, skip to avoid duplicates. If a strong candidate is found, append it to .claude/nerd.local.md backlog as a 'proposed' entry with id, title, parameter name, file path, line number, and current value. Keep the entry minimal — one line of YAML per finding."
+          }
+        ]
+      }
+    ]
+  }
 }

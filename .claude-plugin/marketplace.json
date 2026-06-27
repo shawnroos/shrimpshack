@@ -9,7 +9,7 @@
     {
       "name": "nerd",
       "description": "Autonomous codebase research \u2014 discovers tunable parameters, runs experiments overnight in worktrees, delivers findings with KEEP/CHANGE/INVESTIGATE recommendations",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Shawn Roos"
       },
