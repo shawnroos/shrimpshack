@@ -12,6 +12,10 @@
 #   3. patch the Memory Protocol section in your ~/.claude/CLAUDE.md (conservative,
 #      backs up, skips on ambiguous structure)
 #   4. create + embed the Claude-owned QMD collections (no-op without qmd)
+#   5. pin Claude Code's auto-memory dir to the canonical store (autoMemoryDirectory
+#      in $LIVE/settings.json; backs up, no-clobber)
+#   6. ensure the repo-scope subtree (_scope/) exists + dry-run the scope backfill
+#      (the backfill APPLY is a manual opt-in — it never mutates the store here)
 #
 # Overrides (for tests / non-default homes):
 #   CLAUDE_HOME, REFLECT_MEMORY_DIR, REFLECT_DOC_STORE
@@ -54,5 +58,22 @@ fi
 QMD_RECONCILE_MEMORY_DIR="$MEMDIR" QMD_RECONCILE_DOC_STORE="$DOCSTORE" \
   bash "$PLUGIN_ROOT/scripts/qmd-reconcile-collections.sh" || \
   echo "reflect setup: collection reconcile reported an issue (recoverable next reflect)" >&2
+
+# 5. pin Claude Code's native auto-memory dir to the canonical store so a session
+#    started in any project repo writes memories there, not to a git-root-derived
+#    per-project store. Writes autoMemoryDirectory into $LIVE/settings.json (the
+#    $LIVE var — NOT a literal $HOME/.claude — so an isolated CLAUDE_HOME redirects
+#    it). Idempotent, conservative, backs up; see scripts/pin-auto-memory-dir.py.
+python3 "$PLUGIN_ROOT/scripts/pin-auto-memory-dir.py" "$LIVE/settings.json" "$MEMDIR" || \
+  echo "reflect setup: auto-memory pin reported an issue (recoverable next setup)" >&2
+
+# 6. repo-scoped memory (plan 003): ensure the _scope/ subtree exists. Go-forward
+#    scope backfill is NOT auto-applied — it moves bodies in the live (un-versioned)
+#    store irreversibly, so it stays an explicit opt-in tool. Run a dry run to
+#    surface what it WOULD tag; apply manually with:
+#      python3 scripts/scoped-memory/backfill.py "$MEMDIR" "$LIVE/projects" --apply
+mkdir -p "$MEMDIR/_scope"
+python3 "$PLUGIN_ROOT/scripts/scoped-memory/backfill.py" "$MEMDIR" "$LIVE/projects" \
+  --home-slug "$_slug" 2>/dev/null || true
 
 echo "reflect setup: done"

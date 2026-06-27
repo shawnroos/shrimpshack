@@ -26,12 +26,26 @@
 
 INPUT="$(cat)"
 export CLAUDE_HOOK_INPUT="$INPUT"
+# Shared scope module (plan 003 U2/U4). If absent/broken, recall falls back to
+# today's unscoped behavior — scoping is purely additive and never required.
+export SCOPED_MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts/scoped-memory" 2>/dev/null && pwd)"
 
 exec python3 - <<'PY'
 import os, sys, json, subprocess, hashlib, re, time
 
 def out_nothing():
     sys.exit(0)
+
+# Shared scope module — repo-scoped recall (plan 003). Import is fail-open: any
+# problem leaves `scope` as None and recall behaves exactly as it did pre-scoping.
+scope = None
+try:
+    _smd = os.environ.get("SCOPED_MEMORY_DIR")
+    if _smd and os.path.isdir(_smd):
+        sys.path.insert(0, _smd)
+        import scope as scope  # noqa: F401  (resolver + qmd-path parse/match)
+except Exception:
+    scope = None
 
 try:
     payload = json.loads(os.environ.get("CLAUDE_HOOK_INPUT", "") or "{}")
@@ -117,11 +131,38 @@ except Exception:
 if not isinstance(results, list) or not results:
     out_nothing()
 
-# In-script bounding: optional score floor, then top-K (do NOT trust qmd flags).
+# In-script bounding: optional GLOBAL score floor (governs global selection,
+# unchanged), then keep results carrying a file. Top-K is applied below.
 if min_score is not None:
     results = [r for r in results if isinstance(r, dict)
                and isinstance(r.get("score"), (int, float)) and r["score"] >= min_score]
-results = [r for r in results if isinstance(r, dict) and r.get("file")][:K]
+results = [r for r in results if isinstance(r, dict) and r.get("file")]
+if not results:
+    out_nothing()
+
+# Repo-scoped recall (plan 003 U4): keep today's top-K of the GLOBAL/ancestor pool,
+# then ADD the single best current-repo memory above a DISTINCT repo floor as a
+# K+1th item (front-and-center). Siblings (other repos) are suppressed. Degrades to
+# today's exact behavior when the scope module is unavailable, we're not in a repo,
+# or there are no scoped results. Globals are never displaced — the extra is additive.
+try:
+    _rf = os.environ.get("SEEDED_RECALL_REPO_MIN_SCORE")
+    repo_floor = float(_rf) if _rf not in (None, "") else None
+except ValueError:
+    repo_floor = None
+
+if scope:
+    try:
+        # Shared pure function (also unit-tested in the harness) — no hook/test drift.
+        # Bound git to the REMAINING wall budget and fail open to today's behavior on
+        # any error (e.g. os.getcwd() on a deleted cwd) — recall must never crash.
+        _t = max(0.1, deadline - time.monotonic())
+        cur_slug = scope.resolve_repo_slug(os.getcwd(), timeout=_t)
+        results = scope.select_scoped(results, cur_slug, K, repo_floor)
+    except Exception:
+        results = results[:K]
+else:
+    results = results[:K]                        # scope module absent -> today's behavior
 if not results:
     out_nothing()
 

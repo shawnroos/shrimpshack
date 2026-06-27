@@ -5,7 +5,27 @@ description: Silent memory hygiene and session consolidation. Reviews memories s
 
 # /reflect — Silent session consolidation
 
-Reflect operates without user involvement. Output goes to `REFLECT.log` in the memory dir (`~/.claude/projects/<project-slug>/memory/`) as a single line per run. Only interrupt the user for genuine exception conditions (see end of file).
+Reflect operates without user involvement. Output goes to `REFLECT.log` in the canonical memory dir — the `$HOME`-derived store `~/.claude/projects/-Users-<you>/memory/` (e.g. `~/.claude/projects/-Users-shawnroos/memory/`) — as a single line per run. This is one fixed store regardless of which project you're working in: `setup.sh` pins Claude Code's native auto-memory directory there via the `autoMemoryDirectory` setting, so a session started inside a project repo doesn't scatter memories to a git-root-derived per-project store. Only interrupt the user for genuine exception conditions (see end of file).
+
+## Repo-scoped recall (plan 003)
+
+Memories carry a **scope** encoded in their storage path within the one store:
+global memories live flat at the root; repo-scoped memories live under
+`_scope/<repo-slug>/`. The `seeded-recall` hook resolves the current repo (git
+root, worktrees folded to parent), reads each candidate's scope from the qmd
+result `file` path (free — no extra fetch), and **adds** the single best
+current-repo memory above a relevance floor (`SEEDED_RECALL_REPO_MIN_SCORE`) as an
+extra item alongside the usual top-K globals — never displacing a global, and
+suppressing other repos' memories. Outside any repo, only globals surface. The
+behavior degrades to today's exact recall when the scope module is absent.
+
+Drive it with `scripts/scoped-memory/reflect_cli.py`: `recall --here`, `save
+--scope <repo:.|repo:slug|global>`, `promote`/`rescope` (the move-between-scopes
+escape hatch for a mis-scoped memory), and `list [--here|--scope]`. The shared
+`scope.py` (resolver + qmd-path scope match + `select_scoped`) is the single source
+of truth the hook and tools both use. The archived per-repo stores are restored
+tagged via `scripts/scoped-memory/reimport.py`; go-forward native writes are
+scoped best-effort by `scripts/scoped-memory/backfill.py` (run from `setup.sh`).
 
 Run when:
 - The user types `/reflect` or "reflect now" → silent mode

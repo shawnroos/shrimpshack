@@ -20,7 +20,7 @@ SCRIPTS="$REPO/scripts"
 HOOKS="$REPO/hooks"
 PASS=0; FAIL=0
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/reflect-harness.XXXXXX")"
-trap 'rm -rf "$ROOT"' EXIT
+trap 'rm -rf "$ROOT" "${RR:-/nonexistent-xyzzy}"' EXIT   # RR: a real repo the backfill test makes outside $ROOT
 
 ok()   { PASS=$((PASS+1)); echo "  ok   - $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  FAIL - $1" >&2; }
@@ -193,8 +193,17 @@ S="$ROOT/live"; MEM="$S/projects/slug/memory"; mkdir -p "$MEM" "$S/qmdcwd"
 printf '# Guidelines\n\n## Memory Protocol\n\nold protocol prose.\n\n## Workflow\n\nkeep me.\n' > "$S/CLAUDE.md"
 printf 'body a\n' > "$MEM/a.md"
 printf '# Memory Index\n\n## A heading\n- See [a.md](a.md) — %s\n' "$(python3 -c 'print("verbose "*60)')" > "$MEM/MEMORY.md"
+# Regression lock (plan 003): a flat, repo-resolving, non-pointered body must NOT be
+# moved by setup step 6 — proving step 6 runs the backfill DRY (never --apply).
+SRR="$(mktemp -d "${TMPDIR:-/tmp}/srrXXXXXX")"; ( cd "$SRR" && git init -q )
+SRSLUG="$(python3 "$REPO/scripts/scoped-memory/scope.py" "$SRR")"; SSID="33333333-3333-3333-3333-333333333333"
+mkdir -p "$S/projects/$SRSLUG"; touch "$S/projects/$SRSLUG/$SSID.jsonl"
+printf -- '---\nname: cand\nmetadata:\n  originSessionId: %s\n---\nflat repo-resolving body\n' "$SSID" > "$MEM/cand.md"
 run_setup() { ( cd "$S/qmdcwd" && CLAUDE_HOME="$S" REFLECT_MEMORY_DIR="$MEM" REFLECT_DOC_STORE="$S/doc-store" QMD_RECONCILE_NO_EMBED=1 bash "$SCRIPTS/setup.sh" >/dev/null 2>&1 ); }
 run_setup
+check "setup step 6 creates _scope/ but moves NO bodies (backfill is dry, not --apply)" \
+  "[ -d '$MEM/_scope' ] && [ -f '$MEM/cand.md' ] && [ ! -f '$MEM/_scope/$SRSLUG/cand.md' ]"
+rm -rf "$SRR"
 check "setup scaffolds the doc-store" "[ -d '$S/doc-store/brainstorms' ] && [ -d '$S/doc-store/solutions' ]"
 check "setup migrates MEMORY.md under budget" "[ \"\$(wc -c < '$MEM/MEMORY.md' | tr -d ' ')\" -lt 25600 ]"
 check "setup patches CLAUDE.md Memory Protocol" "grep -q 'QMD is the recall layer' '$S/CLAUDE.md'"
@@ -230,6 +239,228 @@ if [ "$UK1" = "$UK2" ] && grep -q 'keep me' "$UF/CLAUDE.md"; then
 else
   bad "unbalanced fence: file left untouched (no silent deletion)"
 fi
+
+# ------------------------------------------------------- auto-memory dir pin
+# setup.sh step 5 pins Claude Code's native auto-memory dir (autoMemoryDirectory)
+# to the canonical store via $LIVE/settings.json. Run fully isolated (CLAUDE_HOME
+# = $S) so the real ~/.claude/settings.json is never touched. run_setup discards
+# stdout+stderr, so caveat/warning assertions use a capturing variant -> $PINOUT.
+echo "== auto-memory pin =="
+SET="$S/settings.json"
+REAL="$HOME/.claude/settings.json"
+REAL_BEFORE="$(md5 -q "$REAL" 2>/dev/null || md5sum "$REAL" 2>/dev/null | awk '{print $1}')"
+pin_setup() { PINOUT="$( cd "$S/qmdcwd" && CLAUDE_HOME="$S" REFLECT_MEMORY_DIR="$MEM" REFLECT_DOC_STORE="$S/doc-store" QMD_RECONCILE_NO_EMBED=1 bash "$SCRIPTS/setup.sh" 2>&1 )"; }
+pin_val() { python3 -c "import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get('autoMemoryDirectory',''))
+except Exception:
+    print('')" "$SET" 2>/dev/null; }
+pin_norm() { python3 -c "import os,sys;print(os.path.expanduser(sys.argv[1]).rstrip('/'))" "$1" 2>/dev/null; }
+md5of() { md5 -q "$1" 2>/dev/null || md5sum "$1" 2>/dev/null | awk '{print $1}'; }
+
+# (a) writes the key when settings.json has other keys but no pin; preserves them;
+#     backs up the pre-write file
+printf '{\n  "$schema": "x",\n  "permissions": {"allow": []}\n}\n' > "$SET"
+PRE_BAK="$(md5of "$SET")"
+pin_setup
+check "pin: writes key (normalizes to MEMDIR)" '[ "$(pin_norm "$(pin_val)")" = "$(pin_norm "$MEM")" ]'
+check "pin: preserves existing keys" 'grep -q permissions "$SET" && grep -q schema "$SET"'
+check "pin: caveat printed to stdout" 'echo "$PINOUT" | grep -q "effective on Claude Code >= 2.1.74"'
+check "pin: backup created matching pre-write content" '[ -f "$SET.pre-auto-memory-pin.bak" ] && [ "$(md5of "$SET.pre-auto-memory-pin.bak")" = "$PRE_BAK" ]'
+
+# (b) idempotent: settings.json byte-stable on re-run
+PK1="$(md5 -q "$SET" 2>/dev/null || md5sum "$SET" | awk '{print $1}')"
+pin_setup
+PK2="$(md5 -q "$SET" 2>/dev/null || md5sum "$SET" | awk '{print $1}')"
+check "pin: idempotent (settings byte-stable on re-run)" '[ "$PK1" = "$PK2" ]'
+
+# (c) creates the file when missing
+rm -f "$SET"
+pin_setup
+check "pin: creates settings.json when missing" '[ -f "$SET" ] && [ -n "$(pin_val)" ]'
+
+# (d) empty / whitespace-only file treated as missing (not skipped as malformed)
+printf '   \n' > "$SET"
+pin_setup
+check "pin: empty file treated as missing (key written)" '[ -n "$(pin_val)" ]'
+
+# (e) no-clobber: a foreign value is preserved and a warning is emitted
+printf '{\n  "autoMemoryDirectory": "/some/other/dir"\n}\n' > "$SET"
+pin_setup
+check "pin: no-clobber preserves foreign value" '[ "$(pin_val)" = "/some/other/dir" ]'
+check "pin: no-clobber warns" 'echo "$PINOUT" | grep -qi "not the canonical store"'
+
+# (f) normalized equality: a trailing-slash variant of the same dir is NOT clobbered
+python3 -c "import json,sys;open(sys.argv[1],'w').write(json.dumps({'autoMemoryDirectory':sys.argv[2]+'/'}))" "$SET" "$MEM"
+PN1="$(md5 -q "$SET" 2>/dev/null || md5sum "$SET" | awk '{print $1}')"
+pin_setup
+PN2="$(md5 -q "$SET" 2>/dev/null || md5sum "$SET" | awk '{print $1}')"
+check "pin: normalized equality (trailing slash not clobbered/warned)" '[ "$PN1" = "$PN2" ] && ! echo "$PINOUT" | grep -qi "not the canonical store"'
+
+# (g) malformed JSON: left unchanged, warned
+printf '{ not json ' > "$SET"
+MB1="$(md5 -q "$SET" 2>/dev/null || md5sum "$SET" | awk '{print $1}')"
+pin_setup
+MB2="$(md5 -q "$SET" 2>/dev/null || md5sum "$SET" | awk '{print $1}')"
+check "pin: malformed JSON left unchanged + warned" '[ "$MB1" = "$MB2" ] && echo "$PINOUT" | grep -qi "not valid JSON"'
+
+# (h) valid-but-non-object JSON: left unchanged (byte-stable), warned
+printf '[]\n' > "$SET"
+NO1="$(md5of "$SET")"
+pin_setup
+NO2="$(md5of "$SET")"
+check "pin: non-object JSON left unchanged + warned" '[ "$NO1" = "$NO2" ] && echo "$PINOUT" | grep -qi "not an object"'
+
+# (i) honors REFLECT_MEMORY_DIR override (a different target dir)
+rm -f "$SET"; ALT="$ROOT/altmem"; mkdir -p "$ALT"
+PINOUT="$( cd "$S/qmdcwd" && CLAUDE_HOME="$S" REFLECT_MEMORY_DIR="$ALT" REFLECT_DOC_STORE="$S/doc-store" QMD_RECONCILE_NO_EMBED=1 bash "$SCRIPTS/setup.sh" 2>&1 )"
+check "pin: honors REFLECT_MEMORY_DIR override" '[ "$(pin_norm "$(pin_val)")" = "$(pin_norm "$ALT")" ]'
+
+# Direct-helper invocations for path-form cases — fixtures live under $HOME via a
+# synthetic HOME, which the full-setup runs (rooted in a temp dir outside $HOME)
+# can't exercise. These prove the ~/-portability branch, not just normalization.
+# (k) target under $HOME -> stores the ~/-prefixed RAW form (no hardcoded username)
+HT="$ROOT/fakehome"; mkdir -p "$HT/.claude" "$HT/mem"
+HOME="$HT" python3 "$SCRIPTS/pin-auto-memory-dir.py" "$HT/.claude/settings.json" "$HT/mem" >/dev/null 2>&1
+pin_raw() { python3 -c "import json,sys
+try: print(json.load(open(sys.argv[1])).get('autoMemoryDirectory',''))
+except Exception: print('')" "$1" 2>/dev/null; }
+check "pin: stores ~/-form when target under \$HOME" '[ "$(pin_raw "$HT/.claude/settings.json")" = "~/mem" ]'
+
+# (l) prefix-but-not-subdir is kept absolute (HOME=/x/fakehome, target=/x/fakehomeSIB/mem)
+HOME="$HT" python3 "$SCRIPTS/pin-auto-memory-dir.py" "$ROOT/sib.json" "${HT}sib/mem" >/dev/null 2>&1
+check "pin: prefix-not-subdir kept absolute (no bogus ~)" '[ "$(pin_raw "$ROOT/sib.json")" = "${HT}sib/mem" ]'
+
+# (m) stored ~/-form vs absolute target of the SAME dir -> no clobber, no warning
+python3 -c "import json,sys;open(sys.argv[1],'w').write(json.dumps({'autoMemoryDirectory':'~/mem'}))" "$HT/.claude/settings.json"
+MM1="$(md5of "$HT/.claude/settings.json")"
+PINOUT2="$(HOME="$HT" python3 "$SCRIPTS/pin-auto-memory-dir.py" "$HT/.claude/settings.json" "$HT/mem" 2>&1)"
+MM2="$(md5of "$HT/.claude/settings.json")"
+check "pin: ~/-form vs absolute same dir not clobbered/warned" '[ "$MM1" = "$MM2" ] && ! echo "$PINOUT2" | grep -qi "not the canonical store"'
+
+# (n) non-UTF-8 settings.json: fail-open (exit 0), unchanged, warned (never crashes)
+printf '\xff\xfe not utf8 ' > "$SET"
+NU1="$(md5of "$SET")"
+PINOUT3="$(python3 "$SCRIPTS/pin-auto-memory-dir.py" "$SET" "$MEM" 2>&1)"; NUEXIT=$?
+NU2="$(md5of "$SET")"
+check "pin: non-UTF-8 fail-open (exit 0, unchanged, warned)" '[ "$NUEXIT" = "0" ] && [ "$NU1" = "$NU2" ] && echo "$PINOUT3" | grep -qi "could not read"'
+
+# (o) live config untouched: the real ~/.claude/settings.json was never modified
+REAL_AFTER="$(md5 -q "$REAL" 2>/dev/null || md5sum "$REAL" 2>/dev/null | awk '{print $1}')"
+check "pin: real ~/.claude/settings.json untouched" '[ "$REAL_BEFORE" = "$REAL_AFTER" ]'
+
+# ----------------------------------------------------- scope module (U1/U2, plan 003)
+# The shared resolver + qmd-path scope parser the recall match depends on. The F-A
+# fixture is the REAL qmd-output format (underscore + leading-dash stripped, qmd://
+# prefix) — verified in plan 003 round 3, so the match is asserted against what qmd
+# actually emits, not a synthetic path.
+echo "== scope module (U1/U2) =="
+SCOPE="$REPO/scripts/scoped-memory/scope.py"
+scope_py() { python3 -c "import sys; sys.path.insert(0,'$REPO/scripts/scoped-memory'); import scope; $1"; }
+check "scope: F-A — real qmd-output path matches resolver slug" \
+  "scope_py \"sys.exit(0 if scope.scope_matches('qmd://fa/scope/Users-shawnroos-projects-slate-web-app/conv.md','-Users-shawnroos-projects-slate-web-app') else 1)\""
+check "scope: flat-root (global) body does not match a repo slug" \
+  "scope_py \"sys.exit(0 if not scope.scope_matches('qmd://fa/global.md','-Users-shawnroos-projects-slate-web-app') else 1)\""
+check "scope: parses scope slug from a _scope path too (unmangled)" \
+  "scope_py \"sys.exit(0 if scope.scope_of_qmd_file('mem/_scope/-Users-x-proj/a.md')=='-Users-x-proj' else 1)\""
+check "scope: resolver folds this worktree to its parent repo (reflect)" \
+  "scope_py \"sys.exit(0 if scope.repo_root('$REPO').endswith('/projects/reflect') and 'worktrees' not in scope.repo_root('$REPO') else 1)\""
+check "scope: outside a git repo resolves to global" \
+  "scope_py \"sys.exit(0 if scope.resolve_repo_slug('/tmp')=='global' else 1)\""
+check "scope: home slug is an ancestor of a repo slug; siblings are not" \
+  "scope_py \"sys.exit(0 if scope.is_ancestor_scope('-Users-shawnroos','-Users-shawnroos-projects-slate-web-app') and not scope.is_ancestor_scope('-Users-shawnroos-projects-slate-web-app','-Users-shawnroos-projects-ai-editor-backend') else 1)\""
+
+# U4 selection logic — deterministic (synthetic qmd results, no flaky search):
+# in-repo boost (current-repo front), no global displacement, repo-floor gate,
+# home-session suppression, K+1 shape. Lives in its own file to dodge nested quoting.
+check "select_scoped: boost / no-displacement / floor / home-suppression / K+1" \
+  "python3 '$REPO/tests/scope_select_test.py' >/dev/null 2>&1"
+
+# ----------------------------------------------------- scoped re-import (U6, plan 003)
+echo "== scoped re-import =="
+RIA="$ROOT/ri/archive"; RIS="$ROOT/ri/store"
+mkdir -p "$RIA/-Users-x-slate/memory" "$RIA/-Users-x-acme/memory" "$RIS"
+printf -- '---\nname: slate conv\n---\nSlate uses pnpm in the web app.\n' > "$RIA/-Users-x-slate/memory/conv.md"
+printf -- '---\nname: gen pref\ncross-project: yes\n---\nPrefer rebase over merge everywhere.\n' > "$RIA/-Users-x-acme/memory/pref.md"
+printf -- '---\nname: t\n---\nx\n' > "$RIA/-Users-x-acme/memory/cruft.md"
+printf '# idx\n' > "$RIA/-Users-x-slate/memory/MEMORY.md"
+REIMPORT_TODAY=2026-06-27 python3 "$REPO/scripts/scoped-memory/reimport.py" "$RIA" "$RIS" --apply >/dev/null 2>&1
+check "reimport: repo memory lands under _scope/<slug>/ with pin + scope" \
+  "[ -f '$RIS/_scope/-Users-x-slate/conv.md' ] && grep -q 'scope: repo:-Users-x-slate' '$RIS/_scope/-Users-x-slate/conv.md' && grep -q 'pin: true' '$RIS/_scope/-Users-x-slate/conv.md'"
+check "reimport: cross-cutting memory lands FLAT (global), not scoped" \
+  "[ -f '$RIS/pref.md' ] && [ ! -f '$RIS/_scope/-Users-x-acme/pref.md' ]"
+check "reimport: trivial body dropped; MEMORY.md not imported" \
+  "[ ! -f '$RIS/_scope/-Users-x-acme/cruft.md' ] && [ ! -f '$RIS/MEMORY.md' ]"
+RI_BEFORE="$(find "$RIS" -name '*.md' | wc -l | tr -d ' ')"
+REIMPORT_TODAY=2026-06-27 python3 "$REPO/scripts/scoped-memory/reimport.py" "$RIA" "$RIS" --apply >/dev/null 2>&1
+RI_AFTER="$(find "$RIS" -name '*.md' | wc -l | tr -d ' ')"
+check "reimport: idempotent (no duplicate bodies on re-run)" '[ "$RI_BEFORE" = "$RI_AFTER" ]'
+check "reimport: archive left untouched (non-destructive)" "[ -f '$RIA/-Users-x-slate/memory/conv.md' ]"
+# collision: two cross-cutting same-name bodies from different origins -> both kept
+RIC="$ROOT/ric"; mkdir -p "$RIC/archive/-A/memory" "$RIC/archive/-B/memory" "$RIC/store"
+printf -- '---\nname: x\ncross-project: yes\n---\nfrom A general one here\n' > "$RIC/archive/-A/memory/feedback.md"
+printf -- '---\nname: y\ncross-project: yes\n---\nfrom B general two here\n' > "$RIC/archive/-B/memory/feedback.md"
+python3 "$REPO/scripts/scoped-memory/reimport.py" "$RIC/archive" "$RIC/store" --apply >/dev/null 2>&1
+check "reimport: same-name cross-cutting bodies disambiguated (no clobber)" \
+  "[ -f '$RIC/store/feedback.md' ] && [ -f '$RIC/store/feedback__B.md' ]"
+
+# ----------------------------------------------------- scoped CLI tools (U5, plan 003)
+echo "== scoped CLI =="
+CS="$ROOT/cli"; mkdir -p "$CS"; CP="$REPO/scripts/scoped-memory/reflect_cli.py"
+REFLECT_MEMORY_DIR="$CS" python3 "$CP" save --scope global --name "g pref" "prefer rebase" >/dev/null 2>&1
+REFLECT_MEMORY_DIR="$CS" python3 "$CP" save --scope repo:-Users-x-slate --name "slate b" "build pnpm" >/dev/null 2>&1
+check "cli save: global -> flat root with scope:global" \
+  "[ -f '$CS/g-pref.md' ] && grep -q '^scope: global' '$CS/g-pref.md'"
+check "cli save: repo -> _scope/<slug>/ with scope:repo:<slug>" \
+  "[ -f '$CS/_scope/-Users-x-slate/slate-b.md' ] && grep -q '^scope: repo:-Users-x-slate' '$CS/_scope/-Users-x-slate/slate-b.md'"
+check "cli list --scope: filters to that scope" \
+  "REFLECT_MEMORY_DIR='$CS' python3 '$CP' list --scope repo:-Users-x-slate 2>/dev/null | grep -q 'slate-b.md'"
+REFLECT_MEMORY_DIR="$CS" python3 "$CP" promote slate-b.md >/dev/null 2>&1
+check "cli promote: repo memory -> flat/global (escape hatch)" \
+  "[ -f '$CS/slate-b.md' ] && grep -q '^scope: global' '$CS/slate-b.md' && [ ! -f '$CS/_scope/-Users-x-slate/slate-b.md' ]"
+REFLECT_MEMORY_DIR="$CS" python3 "$CP" rescope slate-b.md repo:-Users-x-acme >/dev/null 2>&1
+check "cli rescope: global -> repo (file moves, frontmatter updated)" \
+  "[ -f '$CS/_scope/-Users-x-acme/slate-b.md' ] && grep -q '^scope: repo:-Users-x-acme' '$CS/_scope/-Users-x-acme/slate-b.md'"
+check "cli promote: idempotent noop when already global" \
+  "REFLECT_MEMORY_DIR='$CS' python3 '$CP' promote g-pref.md 2>/dev/null | grep -qi noop"
+# collision: rescoping into an existing same-name body errors instead of clobbering
+CC="$ROOT/clitest"; mkdir -p "$CC"
+REFLECT_MEMORY_DIR="$CC" python3 "$CP" save --scope global --name dup "GLOBAL keep" >/dev/null 2>&1
+REFLECT_MEMORY_DIR="$CC" python3 "$CP" save --scope repo:-r-x --name dup "SCOPED one" >/dev/null 2>&1
+check "cli promote: collision errors, existing body not clobbered" \
+  "! REFLECT_MEMORY_DIR='$CC' python3 '$CP' promote _scope/-r-x/dup.md >/dev/null 2>&1 && grep -q 'GLOBAL keep' '$CC/dup.md'"
+
+# ----------------------------------------------------- scope backfill (U3, plan 003)
+# Conservative: tags only when the session cwd reconstructs to an on-disk path that
+# resolve_repo_slug confirms is the EXACT repo root. Use a real no-hyphen git repo so
+# slug reconstruction is lossless; a hyphenated/worktree/gone path stays global.
+echo "== scope backfill =="
+BF="$ROOT/bf"; mkdir -p "$BF/store"
+RR="$(mktemp -d "${TMPDIR:-/tmp}/bfXXXXXX")"; ( cd "$RR" && git init -q )
+RSLUG="$(python3 "$REPO/scripts/scoped-memory/scope.py" "$RR")"
+HSLUG="-Users-home"
+mkdir -p "$BF/projects/$RSLUG" "$BF/projects/$HSLUG"
+BU1="11111111-1111-1111-1111-111111111111"; BU2="22222222-2222-2222-2222-222222222222"
+touch "$BF/projects/$RSLUG/$BU1.jsonl" "$BF/projects/$HSLUG/$BU2.jsonl"
+printf -- '---\nname: a\nmetadata:\n  originSessionId: %s\n---\nrepo body\n' "$BU1" > "$BF/store/a.md"
+printf -- '---\nname: b\nmetadata:\n  originSessionId: %s\n---\nhome body\n' "$BU2" > "$BF/store/b.md"
+printf -- '---\nname: c\n---\nno-origin body\n' > "$BF/store/c.md"
+printf -- '---\nname: d\nscope: repo:-Users-x-acme\n---\nscoped body\n' > "$BF/store/d.md"
+# p.md is index-referenced AND repo-resolving — must NOT be moved (U3 invariant)
+printf -- '---\nname: p\nmetadata:\n  originSessionId: %s\n---\npointered body\n' "$BU1" > "$BF/store/p.md"
+printf '# Memory Index\n- [p](p.md) — pointered, always-loaded\n' > "$BF/store/MEMORY.md"
+python3 "$REPO/scripts/scoped-memory/backfill.py" "$BF/store" "$BF/projects" --home-slug "$HSLUG" --apply >/dev/null 2>&1
+check "backfill: repo-session memory tagged into _scope/<confirmed-slug>/" \
+  "[ -f '$BF/store/_scope/$RSLUG/a.md' ] && grep -q 'scope: repo:$RSLUG' '$BF/store/_scope/$RSLUG/a.md'"
+check "backfill: MEMORY.md-pointered memory NOT moved (no demotion)" \
+  "[ -f '$BF/store/p.md' ] && [ ! -f '$BF/store/_scope/$RSLUG/p.md' ]"
+check "backfill: home-session memory stays flat/global" "[ -f '$BF/store/b.md' ]"
+check "backfill: no-origin memory stays flat/global" "[ -f '$BF/store/c.md' ]"
+check "backfill: already-scoped memory untouched" "[ -f '$BF/store/d.md' ]"
+BF_A="$(find "$BF/store" -name '*.md' | wc -l | tr -d ' ')"
+python3 "$REPO/scripts/scoped-memory/backfill.py" "$BF/store" "$BF/projects" --home-slug "$HSLUG" --apply >/dev/null 2>&1
+BF_B="$(find "$BF/store" -name '*.md' | wc -l | tr -d ' ')"
+check "backfill: idempotent (file count stable on re-run)" '[ "$BF_A" = "$BF_B" ]'
 
 # ---------------------------------------------------------------------- report
 echo
