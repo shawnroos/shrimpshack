@@ -1,10 +1,9 @@
 {
   "name": "nerd",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Your overnight research assistant. Runs any falsifiable experiment that produces a measurable number against your codebase — parameter sweeps, single-commit hypothesis tests, model/prompt comparisons — in worktrees while you sleep, and delivers findings with recommendations. Finding the magic numbers you forgot is one mode, not the whole job.",
   "author": {
     "name": "Shawn Roos"
   },
-  "hooks": "./hooks/hooks.json",
   "keywords": ["research", "experiments", "optimization", "hypothesis-testing", "parameter-tuning", "nerd"]
 }
