@@ -74,6 +74,9 @@ apply — don't pad):
 ```markdown
 # Spinoff: <short title of this workstream>
 
+> This handoff is directional — author intent and a starting point, not a spec.
+> The code and tests are the source of truth; validate against them and refine.
+
 ## Goal
 <1–3 sentences: what this batch of work is meant to achieve.>
 
@@ -105,6 +108,16 @@ suggestion, not a directive.>
 
 Write it to `/tmp/spinoff-handoff.md`. Keep it tight and real — a handoff
 that reads like genuine working notes beats a padded template every time.
+
+Write it as **directional intent**, not a spec: convey enough information,
+direction, and author intent for the new session to *start*, with the code and
+tests as the source of truth — not a definitive blueprint to execute literally.
+That's why the template opens with the directional banner above. If you omit the
+banner, `spinoff.sh` injects it when it finalizes the handoff (idempotently — it
+won't double up), so the stance is carried even for a workspace viewer or a human
+reader who never sees the kickoff message. Don't over-rotate into "treat this as
+unreliable": the decisions and facts are still worth trusting — the stance is
+orient-and-validate.
 
 ## How decisions get made in this skill (engaged agent, escalate on low confidence)
 
@@ -240,9 +253,11 @@ order:
      launches `claude` in its terminal surface, then splits a right pane and opens
      `docs/handoff.md` in cmux's markdown viewer alongside.
 7. Waits for the new Claude's input prompt to be ready, then sends the kickoff
-   (read `docs/handoff.md`, get oriented, **then recommend the next
-   compound-engineering step** — `/ce-brainstorm` vs `/ce-plan` vs a more
-   specific CE command — and wait for direction) and verifies it submitted. The
+   (read `docs/handoff.md`, **treat the whole handoff as directional** — author
+   intent and a starting point, with the code/tests as the source of truth, not a
+   spec to execute literally — get oriented, **then recommend the next
+   compound-engineering step** — `/ce-brainstorm` vs `/ce-plan` vs a more specific
+   CE command — and wait for direction) and verifies it submitted. The
    tab/workspace is named with `--label`, not the bare `--name`.
 
 ## Step 5 — Relay

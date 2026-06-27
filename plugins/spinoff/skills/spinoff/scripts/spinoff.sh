@@ -207,6 +207,22 @@ block = os.environ.get("SESSION_BLOCK", "")
 text = open(src).read()
 if "<!-- SESSION -->" in text:
     text = text.replace("<!-- SESSION -->", block)
+# Self-declaring directional stance: a one-line banner so the framing survives
+# even when the receiving session never sees the kickoff (a /start-workspace
+# markdown viewer, or a human reading the doc later). Idempotent — skipped if a
+# banner is already present (e.g. the authoring agent wrote one per SKILL Step 1).
+banner = "> This handoff is directional — author intent and a starting point, enough to orient and begin, not a spec to execute literally. The code and tests are the source of truth: validate against them and expect to refine."
+marker = "This handoff is directional"
+if marker not in text:
+    lines = text.split("\n")
+    out, inserted = [], False
+    for line in lines:
+        out.append(line)
+        if not inserted and line.startswith("# "):
+            out.append("")
+            out.append(banner)
+            inserted = True
+    text = "\n".join(out) if inserted else banner + "\n\n" + text
 open(dst, "w").write(text)
 PY
 # Safety net: if the placeholder was missing (so the block never got inserted),
@@ -236,7 +252,7 @@ SURFACE_REF=""
 VIEWER_OK=0          # set when the handoff markdown viewer actually renders
 LB_READY=0           # set to 1 by launch_and_brief when the prompt was confirmed ready
 LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
-KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Get oriented (goal, decisions, open questions, starting point). Then recommend the next step in the compound-engineering flow: /ce-brainstorm if scope or approach is still ambiguous, /ce-plan if it's clear enough to plan, or a more specific CE command if one fits better — each with a one-line rationale grounded in the handoff. The handoff's 'Recommended next step' section is a starting suggestion; validate it against what you read rather than echoing it. Give me your recommendation, then wait for my direction."
+KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Treat the whole handoff as directional: it conveys author intent and a starting point — enough to orient and begin — not a definitive spec to execute literally. The code and tests are the source of truth; validate the handoff's claims against them as you go, and expect to refine. Where the code contradicts the handoff, follow the code — that's expected here, not a failure. (This isn't license to ignore it: the handoff still carries real decisions and facts worth trusting; the stance is orient-and-validate, not distrust.) Get oriented (goal, decisions, open questions, starting point), then recommend the next step in the compound-engineering flow: /ce-brainstorm if scope or approach is still ambiguous, /ce-plan if it's clear enough to plan, or a more specific CE command if one fits better — each with a one-line rationale grounded in the handoff. The 'Recommended next step' section is itself just a starting suggestion; validate it against what you read rather than echoing it. Give me your recommendation, then wait for my direction."
 
 # launch_and_brief <workspace-ref> <surface-ref> <surface-label> <where>
 # Renames the tab, launches Claude in the worktree, waits for the input prompt to
