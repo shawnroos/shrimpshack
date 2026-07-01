@@ -122,6 +122,71 @@ echo "$out" | grep -q "behind" \
   && bad "no-upstream base should not warn: $out" \
   || ok "no-upstream local base does not warn"
 
+# 13. Docs carry: the WHOLE docs/ tree is carried (nested + oddly-named +
+#     uncommitted), not a name/recency-filtered slice; handoff.md is not re-copied.
+mkdir -p "$WORK/docs/plans"
+printf 'nested plan\n' > "$WORK/docs/plans/nested.md"      # nested subdir
+printf 'assessment\n'  > "$WORK/docs/odd-name.md"          # non-plan name
+printf 'wip\n'         > "$WORK/docs/handoff.md"           # must be SKIPPED
+out="$(run --name feat-docs --handoff "$HANDOFF")"
+WT="$WORK/worktrees/feat-docs"
+[ -f "$WT/docs/plans/nested.md" ] && [ -f "$WT/docs/odd-name.md" ] \
+  && ok "docs carry copies nested + oddly-named files recursively" \
+  || bad "docs carry missed nested/oddly-named files"
+# the carried docs/handoff.md must be the script-generated brief, not the source
+# docs/handoff.md ('wip') — i.e. the source docs/handoff.md was skipped.
+grep -q "Spinoff: smoke" "$WT/docs/handoff.md" 2>/dev/null && ! grep -qx "wip" "$WT/docs/handoff.md" 2>/dev/null \
+  && ok "source docs/handoff.md not carried over the generated handoff" \
+  || bad "docs/handoff.md was clobbered by the source copy"
+echo "$out" | grep -qE "carried docs: [1-9]" \
+  && ok "docs count reported non-zero" \
+  || bad "docs count wrong: $(echo "$out" | grep -i 'carried docs' || echo '<none>')"
+rm -rf "$WORK/docs"   # keep later fixtures clean
+
+# 14. Dotfile carry + secret guard: an untracked .env (repo does NOT ignore it)
+#     is carried, kept out of git via the exclude, and flagged in the handoff.
+printf 'SECRET=1\n' > "$WORK/.env"
+out="$(run --name feat-dotenv --handoff "$HANDOFF")"
+WT="$WORK/worktrees/feat-dotenv"
+[ -f "$WT/.env" ] \
+  && ok "dotfile carry copies root .env into the worktree" \
+  || bad "dotfile carry did not copy .env"
+# exclude guard: .env must NOT show up as an untracked file in the worktree.
+if git -C "$WT" status --porcelain 2>/dev/null | grep -q '\.env$'; then
+  bad "carried .env is NOT excluded from git (exclude guard failed)"
+else
+  ok "carried .env kept out of git via info/exclude"
+fi
+grep -q "Security note" "$WT/docs/handoff.md" 2>/dev/null \
+  && ok "handoff carries the security footnote when a dotfile was carried" \
+  || bad "security footnote missing after dotfile carry"
+echo "$out" | grep -qE "carried dotfiles: [1-9]" \
+  && ok "dotfiles count reported non-zero" \
+  || bad "dotfiles count wrong: $(echo "$out" | grep -i 'carried dotfiles' || echo '<none>')"
+rm -f "$WORK/.env"
+
+# 15. No dotfiles → no footnote, dotfiles count zero (conditional footnote).
+out="$(run --name feat-nodot --handoff "$HANDOFF")"
+grep -q "Security note" "$WORK/worktrees/feat-nodot/docs/handoff.md" 2>/dev/null \
+  && bad "security footnote appeared with no dotfile carried" \
+  || ok "no security footnote when no dotfile carried"
+echo "$out" | grep -qE "carried dotfiles: 0" \
+  && ok "dotfiles count is 0 when none carried" \
+  || bad "dotfiles count not zero: $(echo "$out" | grep -i 'carried dotfiles' || echo '<none>')"
+
+# 16. Kickoff brevity: the KICKOFF string is short enough for one TUI paste and
+#     the resubmit-guard match is a substring of its first line. (Static check —
+#     a real cmux send is out of scope for the dependency-free smoke.)
+kickoff_line="$(grep -m1 '^KICKOFF="' "$SPINOFF" | sed 's/^KICKOFF="//; s/"$//')"
+klen=${#kickoff_line}
+[ "$klen" -gt 0 ] && [ "$klen" -le 600 ] \
+  && ok "KICKOFF is a short pointer ($klen chars, <=600)" \
+  || bad "KICKOFF length out of range: $klen chars"
+case "$kickoff_line" in
+  "Read docs/handoff.md"*) ok "resubmit-guard substring matches KICKOFF first line" ;;
+  *) bad "KICKOFF no longer starts with the resubmit-guard substring" ;;
+esac
+
 echo "-------------------------------------------"
 echo "passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]

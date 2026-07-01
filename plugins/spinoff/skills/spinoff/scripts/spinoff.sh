@@ -232,19 +232,54 @@ grep -q "Resume:" "$HANDOFF_DST" 2>/dev/null || {
 }
 step "handoff:     $HANDOFF_DST"
 
-# ---- carry over recent plan/brainstorm docs ---------------------------------
+# ---- carry over the whole docs/ tree ----------------------------------------
+# A fresh worktree only materializes COMMITTED content, so uncommitted/WIP docs a
+# handoff references simply aren't there unless copied. Copy the entire docs/
+# tree recursively (preserving subdirs) rather than a name/recency-filtered slice
+# — an assessment, spec, or nested docs/plans/… file the handoff points at must
+# land too. Skip handoff.md (the script writes that itself) and never clobber a
+# file already present in the worktree (committed content wins over a WIP copy).
 CARRIED=0
 if [ -d "$REPO_ROOT/docs" ]; then
-  # files modified in last 6h matching planning patterns, top-level of docs/
   while IFS= read -r -d '' f; do
-    base="$(basename "$f")"
-    [ "$base" = "handoff.md" ] && continue
-    cp "$f" "$WORKTREE/docs/$base" 2>/dev/null && CARRIED=$((CARRIED+1))
-  done < <(find "$REPO_ROOT/docs" -maxdepth 1 -type f -mmin -360 \
-            \( -iname '*plan*' -o -iname '*brainstorm*' -o -iname '*requirement*' -o -iname '*notes*' \) \
-            -print0 2>/dev/null)
+    rel="${f#"$REPO_ROOT/docs/"}"
+    [ "$rel" = "handoff.md" ] && continue        # script writes this itself
+    dst="$WORKTREE/docs/$rel"
+    [ -e "$dst" ] && continue                     # no-clobber: committed wins
+    mkdir -p "$(dirname "$dst")"
+    cp "$f" "$dst" 2>/dev/null && CARRIED=$((CARRIED+1))
+  done < <(find "$REPO_ROOT/docs" -type f -print0 2>/dev/null)
 fi
-step "carried docs: $CARRIED recent plan/brainstorm file(s)"
+step "carried docs: $CARRIED file(s) from docs/"
+
+# ---- carry over root-level config dotfiles (conservative allowlist) ----------
+# The briefed session should run against real config, but a fresh worktree only
+# has committed content — an uncommitted .env never materializes. Carry a small
+# allowlist (NOT a blanket cp .[^.]* — that would sweep .git, .DS_Store, editor
+# state). Fully-qualify each glob against $REPO_ROOT so a bare pattern can't
+# pre-expand against the cwd. No-clobber, same as docs. Secret guard: append the
+# carried basenames to the repo's git exclude so they can never be `git add`'d;
+# note this is the COMMON (shared) exclude in a linked worktree — good enough for
+# the accidental-commit goal, there is no per-worktree gitignore.
+DOTS=0; CARRIED_DOTS=""
+for f in "$REPO_ROOT"/.env "$REPO_ROOT"/.env.* "$REPO_ROOT"/.envrc \
+         "$REPO_ROOT"/.tool-versions "$REPO_ROOT"/.nvmrc; do
+  [ -f "$f" ] || continue                       # skips unmatched literal globs
+  base="$(basename "$f")"
+  dst="$WORKTREE/$base"
+  [ -e "$dst" ] && continue                     # no-clobber: committed wins
+  cp "$f" "$dst" 2>/dev/null && { DOTS=$((DOTS+1)); CARRIED_DOTS="$CARRIED_DOTS $base"; }
+done
+if [ "$DOTS" -gt 0 ]; then
+  excl="$(git -C "$WORKTREE" rev-parse --git-path info/exclude 2>/dev/null)"
+  for base in $CARRIED_DOTS; do
+    [ -n "$excl" ] && ! grep -qxF "$base" "$excl" 2>/dev/null && printf '%s\n' "$base" >> "$excl"
+  done
+  # Conditional security footnote on the handoff — only when a dotfile was carried.
+  printf '\n> **Security note:** carried local config (%s) into this worktree — secrets now live in a second on-disk location. Kept out of git via the repo'"'"'s shared git exclude (info/exclude); never commit them.\n' \
+    "$(echo "$CARRIED_DOTS" | xargs)" >> "$HANDOFF_DST"
+fi
+step "carried dotfiles: $DOTS config file(s)"
 
 # ---- cmux: launch a briefed Claude (tab in current workspace, or new workspace)
 WORKSPACE_REF=""
@@ -252,7 +287,13 @@ SURFACE_REF=""
 VIEWER_OK=0          # set when the handoff markdown viewer actually renders
 LB_READY=0           # set to 1 by launch_and_brief when the prompt was confirmed ready
 LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
-KICKOFF="Read docs/handoff.md — it's the brief for this worktree. Treat the whole handoff as directional: it conveys author intent and a starting point — enough to orient and begin — not a definitive spec to execute literally. The code and tests are the source of truth; validate the handoff's claims against them as you go, and expect to refine. Where the code contradicts the handoff, follow the code — that's expected here, not a failure. (This isn't license to ignore it: the handoff still carries real decisions and facts worth trusting; the stance is orient-and-validate, not distrust.) Get oriented (goal, decisions, open questions, starting point), then recommend the next step in the compound-engineering flow: /ce-brainstorm if scope or approach is still ambiguous, /ce-plan if it's clear enough to plan, or a more specific CE command if one fits better — each with a one-line rationale grounded in the handoff. The 'Recommended next step' section is itself just a starting suggestion; validate it against what you read rather than echoing it. Give me your recommendation, then wait for my direction."
+# Short pointer, not the full directional prose. A ~1080-char single-line paste
+# overruns the TUI input line and the launched session gets a truncated kickoff.
+# The "treat the handoff as directional" framing already lives authoritatively in
+# every generated handoff (the banner injected above + the handoff body), so the
+# kickoff only needs to point at it. Keep the first line's "Read docs/handoff.md"
+# substring in sync with the resubmit-guard match below.
+KICKOFF="Read docs/handoff.md — it's the brief for this worktree (treat it as directional: orient and validate against the code, don't execute literally). Get oriented, then recommend the next compound-engineering step (/ce-brainstorm if ambiguous, /ce-plan if clear) with a one-line rationale, and wait for my direction."
 
 # launch_and_brief <workspace-ref> <surface-ref> <surface-label> <where>
 # Renames the tab, launches Claude in the worktree, waits for the input prompt to
@@ -384,6 +425,7 @@ echo "  branch:    $BRANCH  (from $BASE_REF)"
 echo "  worktree:  $WORKTREE"
 echo "  handoff:   $HANDOFF_DST"
 echo "  docs:      $CARRIED carried"
+echo "  dotfiles:  $DOTS carried"
 # Describe the launched session honestly: only claim "briefed" when readiness was
 # confirmed, and only claim the viewer when it actually rendered.
 if [ "$LB_READY" = "1" ]; then SESS_STATE="open + briefed"; else SESS_STATE="launched (readiness not confirmed — check the surface)"; fi
