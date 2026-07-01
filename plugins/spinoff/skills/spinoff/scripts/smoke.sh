@@ -163,7 +163,28 @@ grep -q "Security note" "$WT/docs/handoff.md" 2>/dev/null \
 echo "$out" | grep -qE "carried dotfiles: [1-9]" \
   && ok "dotfiles count reported non-zero" \
   || bad "dotfiles count wrong: $(echo "$out" | grep -i 'carried dotfiles' || echo '<none>')"
+# exclude entry is ROOT-ANCHORED (/name), so it can't hide same-named files nested
+# elsewhere in the repo or a sibling worktree.
+excl="$(git -C "$WT" rev-parse --git-path info/exclude 2>/dev/null)"
+grep -qxF '/.env' "$excl" 2>/dev/null \
+  && ok "exclude entry is root-anchored (/.env, not bare .env)" \
+  || bad "exclude entry not root-anchored: $(grep -n env "$excl" 2>/dev/null || echo '<none>')"
 rm -f "$WORK/.env"
+
+# 14b. Multi-dotfile carry via the .env.* branch: .env + .env.local both carried,
+#      both excluded (array path — a whitespace/glob name can't split the guard).
+printf 'A=1\n' > "$WORK/.env"; printf 'B=2\n' > "$WORK/.env.local"
+run --name feat-multidot --handoff "$HANDOFF" >/dev/null 2>&1
+WT="$WORK/worktrees/feat-multidot"
+[ -f "$WT/.env" ] && [ -f "$WT/.env.local" ] \
+  && ok "dotfile carry copies both .env and .env.local (.env.* branch)" \
+  || bad "multi-dotfile carry missed a file"
+if git -C "$WT" status --porcelain 2>/dev/null | grep -qE '\.env(\.local)?$'; then
+  bad "a carried dotfile is NOT excluded (multi-file guard failed)"
+else
+  ok "both carried dotfiles kept out of git"
+fi
+rm -f "$WORK/.env" "$WORK/.env.local"
 
 # 15. No dotfiles → no footnote, dotfiles count zero (conditional footnote).
 out="$(run --name feat-nodot --handoff "$HANDOFF")"

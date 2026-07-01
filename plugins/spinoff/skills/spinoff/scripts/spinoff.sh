@@ -257,27 +257,44 @@ step "carried docs: $CARRIED file(s) from docs/"
 # has committed content — an uncommitted .env never materializes. Carry a small
 # allowlist (NOT a blanket cp .[^.]* — that would sweep .git, .DS_Store, editor
 # state). Fully-qualify each glob against $REPO_ROOT so a bare pattern can't
-# pre-expand against the cwd. No-clobber, same as docs. Secret guard: append the
-# carried basenames to the repo's git exclude so they can never be `git add`'d;
-# note this is the COMMON (shared) exclude in a linked worktree — good enough for
-# the accidental-commit goal, there is no per-worktree gitignore.
-DOTS=0; CARRIED_DOTS=""
+# pre-expand against the cwd. No-clobber, same as docs. Names accumulate in an
+# ARRAY (not a space-joined string) so a filename with whitespace can't split
+# into bogus exclude lines or a garbled footnote.
+DOTS=0; CARRIED_DOTS=()
 for f in "$REPO_ROOT"/.env "$REPO_ROOT"/.env.* "$REPO_ROOT"/.envrc \
          "$REPO_ROOT"/.tool-versions "$REPO_ROOT"/.nvmrc; do
   [ -f "$f" ] || continue                       # skips unmatched literal globs
   base="$(basename "$f")"
   dst="$WORKTREE/$base"
   [ -e "$dst" ] && continue                     # no-clobber: committed wins
-  cp "$f" "$dst" 2>/dev/null && { DOTS=$((DOTS+1)); CARRIED_DOTS="$CARRIED_DOTS $base"; }
+  cp "$f" "$dst" 2>/dev/null && { DOTS=$((DOTS+1)); CARRIED_DOTS+=("$base"); }
 done
 if [ "$DOTS" -gt 0 ]; then
+  # Secret guard: keep carried dotfiles out of `git add`. git reads the COMMON
+  # (shared) info/exclude even from a linked worktree — there is no per-worktree
+  # exclude — so ROOT-ANCHOR each pattern ("/name") to match only the dotfile at
+  # a worktree root, never a same-named file nested elsewhere in the repo or a
+  # sibling worktree. Then verify the pattern actually landed before the handoff
+  # claims protection (an empty/unwritable exclude must not produce a false note).
   excl="$(git -C "$WORKTREE" rev-parse --git-path info/exclude 2>/dev/null)"
-  for base in $CARRIED_DOTS; do
-    [ -n "$excl" ] && ! grep -qxF "$base" "$excl" 2>/dev/null && printf '%s\n' "$base" >> "$excl"
-  done
-  # Conditional security footnote on the handoff — only when a dotfile was carried.
-  printf '\n> **Security note:** carried local config (%s) into this worktree — secrets now live in a second on-disk location. Kept out of git via the repo'"'"'s shared git exclude (info/exclude); never commit them.\n' \
-    "$(echo "$CARRIED_DOTS" | xargs)" >> "$HANDOFF_DST"
+  guarded=0
+  if [ -n "$excl" ]; then
+    for base in "${CARRIED_DOTS[@]}"; do
+      grep -qxF "/$base" "$excl" 2>/dev/null || printf '/%s\n' "$base" >> "$excl"
+    done
+    guarded=1
+    for base in "${CARRIED_DOTS[@]}"; do
+      grep -qxF "/$base" "$excl" 2>/dev/null || guarded=0
+    done
+  fi
+  note_files="$(printf '%s ' "${CARRIED_DOTS[@]}")"; note_files="${note_files% }"
+  if [ "$guarded" = "1" ]; then
+    printf '\n> **Security note:** carried local config (%s) into this worktree — secrets now live in a second on-disk location. Kept out of git via the repo'"'"'s shared exclude (info/exclude, root-anchored); never commit them.\n' \
+      "$note_files" >> "$HANDOFF_DST"
+  else
+    printf '\n> **Security note:** carried local config (%s) into this worktree but could NOT write the git exclude — these files are VISIBLE to git. Add them to .gitignore and never commit them.\n' \
+      "$note_files" >> "$HANDOFF_DST"
+  fi
 fi
 step "carried dotfiles: $DOTS config file(s)"
 
