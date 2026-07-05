@@ -11,6 +11,380 @@
 
 set -uo pipefail
 
+step() { echo "▸ $*"; }
+die()  { echo "✗ $*" >&2; exit 1; }
+# Make a path absolute against the CURRENT cwd. Used to pin relative file args
+# (handoff, transcript) BEFORE a `--repo` cd changes cwd out from under them —
+# they're read later (post-cd), so a relative path would otherwise be lost.
+abspath() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd -P)" "$1" ;; esac; }
+
+# ---- launcher seam (KTD-1 / KTD-2) ------------------------------------------
+# The launch region near the bottom is backend-neutral: it calls launcher_*
+# verbs that dispatch on the resolved $LAUNCHER. cmux is the only implemented
+# backend today — its *_cmux verbs issue byte-identical CLI calls to the pre-seam
+# script (a herdr-absent run behaves exactly as before). herdr verbs are stubs
+# that later units (U3/U4) fill in. LAUNCHER=none reproduces today's
+# "not inside cmux" manual-line fallback.
+
+# Liveness probes. herdr: the binary resolves AND `status server` reports running
+# (a stale HERDR_ENV=1 must not win — R8). cmux: the binary is executable.
+_herdr_probe() { [ -n "${HERDR:-}" ] && "$HERDR" status server 2>/dev/null | grep -qi 'running'; }
+_cmux_probe()  { [ -n "${CMUX:-}" ] && [ -x "$CMUX" ]; }
+
+# resolve_launcher — collapse env + flag into a single $LAUNCHER (KTD-2).
+# Precedence for `auto`: herdr (live) > cmux > none. A forced --launcher
+# herdr|cmux skips the env-keyed detection but STILL probes the chosen backend,
+# falling back to auto-detection (never hard-erroring) on probe failure (R8).
+resolve_launcher() {
+  case "$LAUNCHER" in
+    herdr) if _herdr_probe; then LAUNCHER=herdr; return; fi
+           echo "  ⚠ --launcher herdr requested but the herdr server isn't reachable — falling back to auto-detection" >&2 ;;
+    cmux)  if _cmux_probe; then LAUNCHER=cmux; return; fi
+           echo "  ⚠ --launcher cmux requested but the cmux CLI isn't available — falling back to auto-detection" >&2 ;;
+  esac
+  if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
+  elif [ -n "${CMUX_WORKSPACE_ID:-}" ] && _cmux_probe;    then LAUNCHER=cmux
+  else                                                         LAUNCHER=none
+  fi
+}
+
+# --- neutral verb dispatchers (case-on-$LAUNCHER, KTD-1) ----------------------
+launcher_new_tab()        { case "$LAUNCHER" in cmux) launcher_new_tab_cmux ;;        herdr) launcher_new_tab_herdr ;; esac; }
+launcher_new_workspace()  { case "$LAUNCHER" in cmux) launcher_new_workspace_cmux ;;  herdr) launcher_new_workspace_herdr ;; esac; }
+launcher_find_left_pane() { case "$LAUNCHER" in cmux) launcher_find_left_pane_cmux ;; herdr) launcher_find_left_pane_herdr ;; esac; }
+launcher_launch_agent()   { case "$LAUNCHER" in cmux) launcher_launch_agent_cmux ;;   herdr) launcher_launch_agent_herdr ;; esac; }
+launcher_wait_ready()     { case "$LAUNCHER" in cmux) launcher_wait_ready_cmux ;;     herdr) launcher_wait_ready_herdr ;; esac; }
+launcher_send_kickoff()   { case "$LAUNCHER" in cmux) launcher_send_kickoff_cmux ;;   herdr) launcher_send_kickoff_herdr ;; esac; }
+launcher_open_viewer()    { case "$LAUNCHER" in cmux) launcher_open_viewer_cmux ;;    herdr) launcher_open_viewer_herdr ;; esac; }
+
+# --- cmux backend (BEHAVIOR-PRESERVING: exact pre-seam CLI calls) -------------
+# Identify the left-hand agent pane: the lowest-indexed pane in this workspace
+# that holds terminal surfaces (the markdown/browser pane is the other one).
+launcher_find_left_pane_cmux() {
+  LEFT_PANE="$("$CMUX" tree --workspace "$WS" 2>/dev/null \
+    | awk '/pane / { for(i=1;i<=NF;i++) if($i ~ /^pane:/){p=$i} }
+           /surface .*\[terminal\]/ && p { print p; exit }')"
+}
+
+# Tab: new surface on the current workspace's left agent pane. Sets SURFACE_REF
+# and the LAUNCH_* refs the later verbs consume.
+launcher_new_tab_cmux() {
+  step "opening cmux tab on the left agent surface…"
+  WS="$CMUX_WORKSPACE_ID"
+  launcher_find_left_pane_cmux
+  CREATE_ARGS=(--type terminal --workspace "$WS" --focus true)
+  if [ -n "$LEFT_PANE" ]; then
+    CREATE_ARGS=(--type terminal --pane "$LEFT_PANE" --workspace "$WS" --focus true)
+    step "  left agent pane: $LEFT_PANE"
+  else
+    step "  ⚠ no terminal pane identified — using focused pane"
+  fi
+  # Create the surface; capture its ref from output.
+  CREATE_OUT="$("$CMUX" new-surface "${CREATE_ARGS[@]}" 2>&1)"
+  SURFACE_REF="$(echo "$CREATE_OUT" | grep -oE 'surface:[0-9]+' | head -1)"
+  if [ -z "$SURFACE_REF" ]; then
+    echo "  ⚠ could not parse new surface ref; cmux output was:" >&2
+    echo "$CREATE_OUT" >&2
+  fi
+  LAUNCH_WS="$WS"; LAUNCH_SFC="$SURFACE_REF"; LAUNCH_LABEL="new surface"; LAUNCH_WHERE="tab"
+}
+
+# New workspace: create it UNFOCUSED, find its terminal surface (poll — it may
+# not be registered the instant new-workspace returns), THEN switch the user in
+# so a discovery failure never strands them in an empty focused workspace.
+launcher_new_workspace_cmux() {
+  step "creating a new cmux workspace…"
+  WS_OUT="$("$CMUX" new-workspace --name "$LABEL" --cwd "$WORKTREE" --focus false 2>&1)"
+  WORKSPACE_REF="$(echo "$WS_OUT" | grep -oE 'workspace:[0-9]+' | head -1)"
+  if [ -z "$WORKSPACE_REF" ]; then
+    echo "  ⚠ could not parse new workspace ref; cmux output was:" >&2
+    echo "$WS_OUT" >&2
+    LAUNCH_WS=""; LAUNCH_SFC=""; return
+  fi
+  step "  new workspace: $WORKSPACE_REF"
+  SURFACE_REF=""
+  for _ in $(seq 1 20); do
+    SURFACE_REF="$("$CMUX" tree --workspace "$WORKSPACE_REF" 2>/dev/null \
+      | awk '/surface .*\[terminal\]/ { for(i=1;i<=NF;i++) if($i ~ /^surface:/){print $i; exit} }')"
+    [ -n "$SURFACE_REF" ] && break
+    sleep 0.5
+  done
+  if [ -z "$SURFACE_REF" ]; then
+    echo "  ⚠ no terminal surface found in the new workspace — skipping launch" >&2
+    LAUNCH_WS="$WORKSPACE_REF"; LAUNCH_SFC=""; return
+  fi
+  # Surface exists — now safe to switch the user into the new workspace.
+  "$CMUX" select-workspace --workspace "$WORKSPACE_REF" >/dev/null 2>&1
+  LAUNCH_WS="$WORKSPACE_REF"; LAUNCH_SFC="$SURFACE_REF"; LAUNCH_LABEL="agent surface"; LAUNCH_WHERE="workspace"
+}
+
+# Rename the tab, launch Claude in the worktree, submit. --title (not a bare
+# positional) so a $LABEL starting with '-' can't be misparsed as a flag.
+launcher_launch_agent_cmux() {
+  LB_READY=0
+  "$CMUX" rename-tab --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" --title "$LABEL" >/dev/null 2>&1
+  "$CMUX" send --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" "$LAUNCH_CMD" >/dev/null 2>&1
+  "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1
+}
+
+# Wait for the input prompt to be ready (a fixed sleep is unreliable — a fresh
+# claude can spend seconds loading MCP servers, and an Enter sent too early is
+# swallowed). Sets LB_READY=1 on confirmed ready.
+launcher_wait_ready_cmux() {
+  local screen
+  for _ in $(seq 1 30); do
+    sleep 1
+    screen="$("$CMUX" read-screen --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" 2>/dev/null)"
+    case "$screen" in
+      *"❯"*|*"bypass permissions"*|*"shift+tab to cycle"*) LB_READY=1; break ;;
+    esac
+  done
+}
+
+# Send + submit the kickoff, then verify it actually submitted (input line should
+# no longer hold it); retry one Enter if it's still sitting there. Reports
+# readiness honestly using the LAUNCH_LABEL / LAUNCH_WHERE set by new_tab/new_workspace.
+launcher_send_kickoff_cmux() {
+  local after
+  "$CMUX" send --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" "$KICKOFF" >/dev/null 2>&1
+  sleep 1
+  "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1
+  sleep 2
+  after="$("$CMUX" read-screen --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" 2>/dev/null)"
+  case "$after" in
+    *"Read docs/handoff.md"*)
+      # Still sitting on the input line un-submitted → retry one Enter.
+      "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1 ;;
+  esac
+  if [ "$LB_READY" = "1" ]; then
+    step "  $LAUNCH_LABEL: $LAUNCH_SFC (Claude ready, briefed)"
+  else
+    step "  $LAUNCH_LABEL: $LAUNCH_SFC (Claude launched; readiness not confirmed — check the $LAUNCH_WHERE)"
+  fi
+}
+
+# Right pane (workspace target only): render the handoff in cmux's live-reload
+# markdown viewer. Best-effort — sets VIEWER_OK=1 only when it actually renders.
+launcher_open_viewer_cmux() {
+  local PANE_OUT RIGHT_PANE
+  PANE_OUT="$("$CMUX" new-pane --type terminal --direction right --workspace "$LAUNCH_WS" --focus false 2>&1)"
+  RIGHT_PANE="$(echo "$PANE_OUT" | grep -oE 'pane:[0-9]+' | head -1)"
+  if [ -n "$RIGHT_PANE" ]; then
+    if "$CMUX" open "$HANDOFF_DST" --pane "$RIGHT_PANE" --workspace "$LAUNCH_WS" --no-focus >/dev/null 2>&1; then
+      VIEWER_OK=1
+      step "  handoff viewer: $RIGHT_PANE"
+    else
+      echo "  ⚠ opened right pane but could not render the handoff viewer" >&2
+    fi
+  else
+    echo "  ⚠ could not create right pane for handoff viewer; cmux output was:" >&2
+    echo "$PANE_OUT" >&2
+  fi
+}
+
+# --- herdr backend -----------------------------------------------------------
+# Signatures below are the LIVE-VERIFIED herdr 0.7.1 invocations from the plan's
+# ## Spike Findings (U1) — do not re-guess flags against group help.
+_launcher_herdr_todo() { HERDR_NOTE="herdr backend not yet implemented (${1:-launch}) — later units wire this"; step "  ⚠ $HERDR_NOTE"; }
+
+# Extract a dotted field (e.g. result.agent.pane_id) from herdr JSON on stdin.
+# jq when present (Spike Findings), python3 as the guaranteed-portable fallback.
+_herdr_json() {
+  local path="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r ".$path // empty" 2>/dev/null
+  else
+    JPATH="$path" python3 -c '
+import sys, json, os
+try:
+    d = json.load(sys.stdin)
+    for k in os.environ["JPATH"].split("."):
+        d = d[k]
+    sys.stdout.write("" if d is None else str(d))
+except Exception:
+    sys.stdout.write("")
+' 2>/dev/null
+  fi
+}
+
+# Pick the first pane id from `herdr pane list --workspace` JSON on stdin — the
+# new workspace's root terminal pane (used only to confirm the workspace
+# materialized before we switch the user in). jq when present, python3 fallback.
+_herdr_first_pane() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.result.panes[0].pane_id // empty' 2>/dev/null
+  else
+    python3 -c '
+import sys, json
+try:
+    print(json.load(sys.stdin)["result"]["panes"][0]["pane_id"])
+except Exception:
+    pass
+' 2>/dev/null
+  fi
+}
+
+# Tab target: unlike cmux (create a surface, THEN send `claude`), herdr's
+# `agent start` both creates the tab/pane and execs claude in one call (Spike
+# Findings (b)), so there is no surface to pre-create here. Resolve the workspace
+# to launch into and mark the precondition met (LAUNCH_SFC non-empty) so the
+# shared launch guard proceeds; launcher_launch_agent_herdr replaces LAUNCH_SFC
+# with the real pane id it captures.
+launcher_new_tab_herdr() {
+  step "opening a herdr agent tab…"
+  local ws="${HERDR_WORKSPACE_ID:-}"
+  if [ -z "$ws" ]; then
+    echo "  ⚠ HERDR_WORKSPACE_ID is not set — cannot resolve a herdr workspace to launch into" >&2
+    LAUNCH_WS=""; LAUNCH_SFC=""; return
+  fi
+  LAUNCH_WS="$ws"
+  LAUNCH_SFC="pending"        # sentinel: real pane id set by launcher_launch_agent_herdr
+  LAUNCH_LABEL="agent tab"; LAUNCH_WHERE="tab"
+  step "  target workspace: $ws"
+}
+
+# Workspace target: create a brand-new herdr workspace, then let the shared
+# launch region brief the agent into it via the U3 verbs. Mirrors the cmux
+# workspace block's ordering (Spike Findings (f)): create UNFOCUSED → confirm a
+# terminal pane materialized (poll `pane list`) → only THEN focus the user in, so
+# a discovery failure never strands them in an empty focused workspace. Sets
+# WORKSPACE_REF (summary) + LAUNCH_WS (the workspace agent start launches into);
+# LAUNCH_SFC is a sentinel the agent-launch verb replaces with the real pane id.
+launcher_new_workspace_herdr() {
+  step "creating a new herdr workspace…"
+  local out ws pane
+  out="$("$HERDR" workspace create --cwd "$WORKTREE" --label "$LABEL" --no-focus 2>/dev/null)"
+  ws="$(printf '%s' "$out" | _herdr_json 'result.workspace.workspace_id')"
+  if [ -z "$ws" ]; then
+    echo "  ⚠ could not capture the herdr workspace id; workspace create output was:" >&2
+    echo "$out" >&2
+    LAUNCH_WS=""; LAUNCH_SFC=""; return
+  fi
+  WORKSPACE_REF="$ws"; LAUNCH_WS="$ws"
+  step "  new workspace: $ws"
+  # Confirm the workspace has a terminal pane before switching the user in (the
+  # pane may not register the instant `workspace create` returns — poll, same as
+  # the cmux surface poll).
+  pane=""
+  for _ in $(seq 1 20); do
+    pane="$("$HERDR" pane list --workspace "$ws" 2>/dev/null | _herdr_first_pane)"
+    [ -n "$pane" ] && break
+    sleep 0.5
+  done
+  if [ -z "$pane" ]; then
+    echo "  ⚠ no terminal pane found in the new herdr workspace — skipping launch" >&2
+    LAUNCH_SFC=""; return
+  fi
+  LEFT_PANE="$pane"           # root pane; agent start splits its OWN pane (Spike (b))
+  LAUNCH_SFC="pending"        # sentinel: real agent pane set by launcher_launch_agent_herdr
+  LAUNCH_LABEL="agent surface"; LAUNCH_WHERE="workspace"
+  # Pane exists — now safe to switch the user into the new workspace (best-effort;
+  # a focus failure must never fail the launch).
+  "$HERDR" workspace focus "$ws" >/dev/null 2>&1 || true
+}
+
+launcher_find_left_pane_herdr() { _launcher_herdr_todo find_left_pane; }
+
+# Launch claude in the worktree via `agent start`, capturing the pane id the
+# later verbs (wait/send/read) consume. KTD-8: direct `-- claude` exec by default
+# (spike verified claude resolves on herdr's inherited PATH); a `$SHELL -lc` login
+# wrap is the guarded fallback for an env where claude isn't on that PATH.
+launcher_launch_agent_herdr() {
+  LB_READY=0
+  local out pane
+  if command -v claude >/dev/null 2>&1; then
+    out="$("$HERDR" agent start "$LABEL" --cwd "$WORKTREE" --workspace "$LAUNCH_WS" --no-focus \
+             -- claude --name "$LABEL" 2>/dev/null)"
+  else
+    out="$("$HERDR" agent start "$LABEL" --cwd "$WORKTREE" --workspace "$LAUNCH_WS" --no-focus \
+             -- "$SHELL" -lc "claude --name '$LABEL'" 2>/dev/null)"
+  fi
+  pane="$(printf '%s' "$out" | _herdr_json 'result.agent.pane_id')"
+  if [ -z "$pane" ]; then
+    echo "  ⚠ could not capture the herdr agent pane id; agent start output was:" >&2
+    echo "$out" >&2
+    HERDR_PANE=""; LAUNCH_SFC=""; SURFACE_REF=""; return
+  fi
+  HERDR_PANE="$pane"; LAUNCH_SFC="$pane"; SURFACE_REF="$pane"
+  step "  herdr agent pane: $pane"
+}
+
+# Block on herdr's first-class readiness wait (Spike Findings (c): `agent wait
+# --status idle` fires reliably for a fresh claude — the 30× read-screen poll is
+# NOT on the herdr path). Sets LB_READY=1 on confirmed idle, 0 on timeout.
+launcher_wait_ready_herdr() {
+  LB_READY=0
+  [ -n "${HERDR_PANE:-}" ] || return
+  if "$HERDR" agent wait "$HERDR_PANE" --status idle --timeout 30000 >/dev/null 2>&1; then
+    LB_READY=1
+  fi
+}
+
+# Fire the kickoff with EXACTLY ONE submit (KTD-4 / R7): `agent send` STAGES the
+# literal text (does NOT press Enter), then a single `pane send-keys … Enter`
+# submits. This stage-only behavior of `agent send` was verified LIVE against
+# herdr 0.7.1 twice (U1 spike + a standalone probe on 2026-07-05: sent text to a
+# `read`-blocked pane with no Enter → the read did NOT complete), overriding older
+# lore that `agent send` auto-submits. Safety net (adapted from the cmux path): if
+# a read shows the kickoff still staged, retry one Enter — never a second send.
+launcher_send_kickoff_herdr() {
+  local after
+  [ -n "${HERDR_PANE:-}" ] || return
+  "$HERDR" agent send "$HERDR_PANE" "$KICKOFF" >/dev/null 2>&1     # stage literal text
+  "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1      # single submit
+  sleep 2
+  after="$("$HERDR" pane read "$HERDR_PANE" --source recent --lines 20 2>/dev/null | _herdr_json 'result.read.text')"
+  case "$after" in
+    *"Read docs/handoff.md"*)
+      # Still staged on the input line → retry one Enter (no extra `agent send`).
+      "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1 ;;
+  esac
+  if [ "$LB_READY" = "1" ]; then
+    step "  $LAUNCH_LABEL: $HERDR_PANE (Claude ready, briefed)"
+  else
+    step "  $LAUNCH_LABEL: $HERDR_PANE (Claude launched; readiness not confirmed — check the $LAUNCH_WHERE)"
+  fi
+}
+
+# Right-pane handoff viewer (workspace target only). herdr has NO native markdown
+# viewer (Spike Findings (d)), so: split a right pane off the agent pane and render
+# the handoff statically with a pager (glow, then bat). BEST-EFFORT — VIEWER_OK=1
+# only when a pager actually renders; a missing pager / failed split leaves
+# VIEWER_OK=0 and the launch STILL succeeds (R5 / KTD-6). Also closes the leftover
+# root shell `agent start` orphaned (Spike (b): `agent start --workspace` splits a
+# fresh pane and leaves the workspace's original root pane a bare idle shell) so the
+# workspace ends up a clean agent-left / viewer-right pair (parity with cmux).
+launcher_open_viewer_herdr() {
+  local split view
+  local left="${HERDR_PANE:-}"
+  [ -n "$left" ] || return    # agent launch produced no pane → nothing to view against
+  if [ -n "${LEFT_PANE:-}" ] && [ "$LEFT_PANE" != "$left" ]; then
+    "$HERDR" pane close "$LEFT_PANE" >/dev/null 2>&1 || true   # drop the orphan root shell
+  fi
+  split="$("$HERDR" pane split "$left" --direction right --no-focus 2>/dev/null)"
+  view="$(printf '%s' "$split" | _herdr_json 'result.pane.pane_id')"
+  if [ -z "$view" ]; then
+    echo "  ⚠ could not create a right pane for the handoff viewer — continuing without it" >&2
+    return                    # VIEWER_OK stays 0 — the launch already succeeded
+  fi
+  if command -v glow >/dev/null 2>&1; then
+    "$HERDR" pane run "$view" "glow '$HANDOFF_DST'" >/dev/null 2>&1 && VIEWER_OK=1
+  elif command -v bat >/dev/null 2>&1; then
+    "$HERDR" pane run "$view" "bat --paging=always '$HANDOFF_DST'" >/dev/null 2>&1 && VIEWER_OK=1
+  fi
+  if [ "$VIEWER_OK" = "1" ]; then
+    step "  handoff viewer: $view"
+  else
+    echo "  ⚠ opened a right pane but no markdown pager (glow/bat) is available — skipping the handoff render" >&2
+  fi
+}
+
+# ---- test hook --------------------------------------------------------------
+# When sourced by the bats suite (SPINOFF_TEST_SOURCE=1), stop here: load the
+# functions above so they can be exercised in isolation, but run none of the
+# main worktree/launch work below.
+[ -n "${SPINOFF_TEST_SOURCE:-}" ] && return 0
+
 # ---- args -------------------------------------------------------------------
 NAME=""
 LABEL=""                     # short display name for the cmux tab/workspace (see derivation below)
@@ -19,6 +393,7 @@ REPO=""                      # explicit target repo (when the originating cwd is
 BASE=""                      # empty => current HEAD
 PREFIX="feature"
 TARGET="tab"                 # tab => surface in current workspace; workspace => new workspace
+LAUNCHER="auto"              # launch backend: herdr | cmux | auto (auto => detect, see resolve_launcher)
 SESSION_TRANSCRIPT=""        # explicit originating-session transcript (set by the skill when backgrounded)
 SESSION_CWD=""               # cwd of the originating session, for the resume one-liner
 while [ $# -gt 0 ]; do
@@ -30,20 +405,26 @@ while [ $# -gt 0 ]; do
     --base) BASE="$2"; shift 2 ;;
     --branch-prefix) PREFIX="$2"; shift 2 ;;
     --target) TARGET="$2"; shift 2 ;;
+    --launcher) LAUNCHER="$2"; shift 2 ;;
     --session-transcript) SESSION_TRANSCRIPT="$2"; shift 2 ;;
     --session-cwd) SESSION_CWD="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
-step() { echo "▸ $*"; }
-die()  { echo "✗ $*" >&2; exit 1; }
-# Make a path absolute against the CURRENT cwd. Used to pin relative file args
-# (handoff, transcript) BEFORE a `--repo` cd changes cwd out from under them —
-# they're read later (post-cd), so a relative path would otherwise be lost.
-abspath() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd -P)" "$1" ;; esac; }
+# ---- validate --launcher ----------------------------------------------------
+case "$LAUNCHER" in
+  herdr|cmux|auto) ;;
+  *) die "invalid --launcher '$LAUNCHER' (expected: herdr | cmux | auto)" ;;
+esac
 
 [ -n "$NAME" ] || die "missing --name <kebab-feature-name>"
+# A curated --label is passed to `herdr agent start "$LABEL"` as a BARE positional
+# (before flags), so a leading '-' would be misparsed as an option — the hazard the
+# cmux path sidesteps with `--title`. Reject it early with a clear message rather
+# than letting `agent start` fail obscurely. (The default label, set later from the
+# repo basename + name, can't start with '-', so this only guards user input.)
+case "$LABEL" in -*) die "--label must not start with '-' (got: $LABEL)" ;; esac
 [ -n "$HANDOFF_SRC" ] || die "missing --handoff <path-to-handoff.md>"
 [ -f "$HANDOFF_SRC" ] || die "handoff file not found: $HANDOFF_SRC"
 case "$TARGET" in
@@ -54,6 +435,10 @@ esac
 # Prefer cmux on PATH (Homebrew, Linux); fall back to the macOS app bundle path.
 CMUX="$(command -v cmux 2>/dev/null)"
 [ -n "$CMUX" ] || CMUX="/Applications/cmux.app/Contents/Resources/bin/cmux"
+
+# Resolve herdr the same way (KTD-2): a missing binary means the herdr backend is
+# unavailable regardless of HERDR_ENV. No app-bundle fallback — herdr is PATH-only.
+HERDR="$(command -v herdr 2>/dev/null)"
 
 # ---- resolve target repo (--repo) before any cwd-relative git/IO ------------
 # The originating /start session's cwd is often NOT inside the target repo (e.g.
@@ -298,11 +683,15 @@ if [ "$DOTS" -gt 0 ]; then
 fi
 step "carried dotfiles: $DOTS config file(s)"
 
-# ---- cmux: launch a briefed Claude (tab in current workspace, or new workspace)
+# ---- launch a briefed Claude via the resolved backend -----------------------
 WORKSPACE_REF=""
 SURFACE_REF=""
 VIEWER_OK=0          # set when the handoff markdown viewer actually renders
-LB_READY=0           # set to 1 by launch_and_brief when the prompt was confirmed ready
+LB_READY=0           # set to 1 when the input prompt was confirmed ready
+LEFT_PANE=""; WS=""  # cmux discovery scratch (set by the cmux verbs)
+HERDR_PANE=""        # herdr agent pane id (set by launcher_launch_agent_herdr)
+# Backend-neutral refs the launch verbs hand off to each other:
+LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""
 LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
 # Short pointer, not the full directional prose. A ~1080-char single-line paste
 # overruns the TUI input line and the launched session gets a truncated kickoff.
@@ -312,126 +701,28 @@ LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
 # substring in sync with the resubmit-guard match below.
 KICKOFF="Read docs/handoff.md — it's the brief for this worktree (treat it as directional: orient and validate against the code, don't execute literally). Get oriented, then recommend the next compound-engineering step (/ce-brainstorm if ambiguous, /ce-plan if clear) with a one-line rationale, and wait for my direction."
 
-# launch_and_brief <workspace-ref> <surface-ref> <surface-label> <where>
-# Renames the tab, launches Claude in the worktree, waits for the input prompt to
-# be ready (a fixed sleep is unreliable — a fresh claude can spend seconds loading
-# MCP servers, and an Enter sent too early is swallowed), then sends + submits the
-# kickoff and verifies it actually submitted. Reports readiness using <surface-label>
-# (e.g. "new surface" / "agent surface") and <where> (e.g. "tab" / "workspace") for
-# the not-confirmed hint. Sets LB_READY=1 on confirmed ready.
-launch_and_brief() {
-  local ws="$1" sfc="$2" label="${3:-surface}" where="${4:-tab}" screen after
-  LB_READY=0
-  # --title (not a bare positional) so a $LABEL starting with '-' can't be
-  # misparsed as a flag — matches the new-workspace --name call's robustness.
-  "$CMUX" rename-tab --surface "$sfc" --workspace "$ws" --title "$LABEL" >/dev/null 2>&1
-  "$CMUX" send --surface "$sfc" --workspace "$ws" "$LAUNCH_CMD" >/dev/null 2>&1
-  "$CMUX" send-key --surface "$sfc" --workspace "$ws" enter >/dev/null 2>&1
-  for _ in $(seq 1 30); do
-    sleep 1
-    screen="$("$CMUX" read-screen --surface "$sfc" --workspace "$ws" 2>/dev/null)"
-    case "$screen" in
-      *"❯"*|*"bypass permissions"*|*"shift+tab to cycle"*) LB_READY=1; break ;;
-    esac
-  done
-  "$CMUX" send --surface "$sfc" --workspace "$ws" "$KICKOFF" >/dev/null 2>&1
-  sleep 1
-  "$CMUX" send-key --surface "$sfc" --workspace "$ws" enter >/dev/null 2>&1
-  # Verify the kickoff actually submitted (input line should no longer hold it).
-  sleep 2
-  after="$("$CMUX" read-screen --surface "$sfc" --workspace "$ws" 2>/dev/null)"
-  case "$after" in
-    *"Read docs/handoff.md"*)
-      # Still sitting on the input line un-submitted → retry one Enter.
-      "$CMUX" send-key --surface "$sfc" --workspace "$ws" enter >/dev/null 2>&1 ;;
-  esac
-  if [ "$LB_READY" = "1" ]; then
-    step "  $label: $sfc (Claude ready, briefed)"
-  else
-    step "  $label: $sfc (Claude launched; readiness not confirmed — check the $where)"
-  fi
-}
-
-# NB: cmux automation is gated on CMUX_WORKSPACE_ID, which the script relies on
-# inheriting from the (possibly background-agent) environment that launched it —
-# the same background-context dependency the explicit --session-transcript pass
-# guards against. Empirically the var is inherited by dispatched agents today; if a
-# future runtime stops passing it, this whole block silently no-ops (worktree +
-# handoff still produced) and the skill should pass the workspace id explicitly.
-if [ -n "${CMUX_WORKSPACE_ID:-}" ] && [ -x "$CMUX" ]; then
-  if [ "$TARGET" = "workspace" ]; then
-    # New workspace: briefed Claude on the left, handoff markdown viewer on the right.
-    # Create it UNFOCUSED — we only switch the user into it once a surface has actually
-    # launched, so a discovery failure never strands them in an empty focused workspace.
-    step "creating a new cmux workspace…"
-    WS_OUT="$("$CMUX" new-workspace --name "$LABEL" --cwd "$WORKTREE" --focus false 2>&1)"
-    WORKSPACE_REF="$(echo "$WS_OUT" | grep -oE 'workspace:[0-9]+' | head -1)"
-    if [ -n "$WORKSPACE_REF" ]; then
-      step "  new workspace: $WORKSPACE_REF"
-      # The fresh workspace has one terminal surface — find its ref. The surface may
-      # not be registered the instant new-workspace returns, so poll (unlike the tab
-      # path, which gets its ref straight from new-surface's own output). ~10s budget,
-      # closer to launch_and_brief's 30s readiness window than the old 5s.
-      SURFACE_REF=""
-      for _ in $(seq 1 20); do
-        SURFACE_REF="$("$CMUX" tree --workspace "$WORKSPACE_REF" 2>/dev/null \
-          | awk '/surface .*\[terminal\]/ { for(i=1;i<=NF;i++) if($i ~ /^surface:/){print $i; exit} }')"
-        [ -n "$SURFACE_REF" ] && break
-        sleep 0.5
-      done
-      if [ -n "$SURFACE_REF" ]; then
-        # Surface exists — now safe to switch the user into the new workspace.
-        "$CMUX" select-workspace --workspace "$WORKSPACE_REF" >/dev/null 2>&1
-        launch_and_brief "$WORKSPACE_REF" "$SURFACE_REF" "agent surface" "workspace"
-        # Right pane: render the handoff in cmux's live-reload markdown viewer.
-        PANE_OUT="$("$CMUX" new-pane --type terminal --direction right --workspace "$WORKSPACE_REF" --focus false 2>&1)"
-        RIGHT_PANE="$(echo "$PANE_OUT" | grep -oE 'pane:[0-9]+' | head -1)"
-        if [ -n "$RIGHT_PANE" ]; then
-          if "$CMUX" open "$HANDOFF_DST" --pane "$RIGHT_PANE" --workspace "$WORKSPACE_REF" --no-focus >/dev/null 2>&1; then
-            VIEWER_OK=1
-            step "  handoff viewer: $RIGHT_PANE"
-          else
-            echo "  ⚠ opened right pane but could not render the handoff viewer" >&2
-          fi
-        else
-          echo "  ⚠ could not create right pane for handoff viewer; cmux output was:" >&2
-          echo "$PANE_OUT" >&2
-        fi
-      else
-        echo "  ⚠ no terminal surface found in the new workspace — skipping launch" >&2
-      fi
-    else
-      echo "  ⚠ could not parse new workspace ref; cmux output was:" >&2
-      echo "$WS_OUT" >&2
-    fi
-  else
-    # Tab: new surface on the current workspace's left agent pane.
-    step "opening cmux tab on the left agent surface…"
-    # Identify the left-hand agent pane: the lowest-indexed pane in this workspace
-    # that holds terminal surfaces (the markdown/browser pane is the other one).
-    WS="$CMUX_WORKSPACE_ID"
-    LEFT_PANE="$("$CMUX" tree --workspace "$WS" 2>/dev/null \
-      | awk '/pane / { for(i=1;i<=NF;i++) if($i ~ /^pane:/){p=$i} }
-             /surface .*\[terminal\]/ && p { print p; exit }')"
-    CREATE_ARGS=(--type terminal --workspace "$WS" --focus true)
-    if [ -n "$LEFT_PANE" ]; then
-      CREATE_ARGS=(--type terminal --pane "$LEFT_PANE" --workspace "$WS" --focus true)
-      step "  left agent pane: $LEFT_PANE"
-    else
-      step "  ⚠ no terminal pane identified — using focused pane"
-    fi
-    # Create the surface; capture its ref from output.
-    CREATE_OUT="$("$CMUX" new-surface "${CREATE_ARGS[@]}" 2>&1)"
-    SURFACE_REF="$(echo "$CREATE_OUT" | grep -oE 'surface:[0-9]+' | head -1)"
-    if [ -n "$SURFACE_REF" ]; then
-      launch_and_brief "$WS" "$SURFACE_REF" "new surface" "tab"
-    else
-      echo "  ⚠ could not parse new surface ref; cmux output was:" >&2
-      echo "$CREATE_OUT" >&2
-    fi
-  fi
+# Detect the backend once (KTD-2), then drive the launch through the neutral
+# verbs. resolve_launcher's precedence (herdr live > cmux > none) subsumes the old
+# CMUX_WORKSPACE_ID gate; LAUNCHER=none reproduces the previous no-op fallback
+# (worktree + handoff still produced, summary prints the manual line).
+resolve_launcher
+if [ "$LAUNCHER" = "none" ]; then
+  step "not inside cmux/herdr (or the CLI is missing) — skipping launch automation"
 else
-  step "not inside cmux (or cmux CLI missing) — skipping cmux automation"
+  step "launcher:    $LAUNCHER"
+  if [ "$TARGET" = "workspace" ]; then
+    launcher_new_workspace     # sets WORKSPACE_REF + LAUNCH_SFC (workspace target)
+  else
+    launcher_new_tab           # sets SURFACE_REF + LAUNCH_SFC (tab target)
+  fi
+  # Only brief once a surface actually materialized (byte-identical to the old
+  # "if [ -n "$SURFACE_REF" ]" guards). The viewer is workspace-only, best-effort.
+  if [ -n "$LAUNCH_SFC" ]; then
+    launcher_launch_agent
+    launcher_wait_ready
+    launcher_send_kickoff
+    [ "$TARGET" = "workspace" ] && launcher_open_viewer
+  fi
 fi
 
 # ---- summary ----------------------------------------------------------------
@@ -443,21 +734,28 @@ echo "  worktree:  $WORKTREE"
 echo "  handoff:   $HANDOFF_DST"
 echo "  docs:      $CARRIED carried"
 echo "  dotfiles:  $DOTS carried"
-# Describe the launched session honestly: only claim "briefed" when readiness was
-# confirmed, and only claim the viewer when it actually rendered.
+echo "  launcher:  $LAUNCHER"
+# Describe the launched session honestly: name the backend ACTUALLY used
+# ("herdr tab" / "cmux tab" / "herdr:  workspace …" / "cmux:  workspace …"),
+# only claim "briefed" when readiness was confirmed, and only claim the viewer
+# when it actually rendered (R9). The label is driven by $LAUNCHER / $TARGET —
+# never hard-code "cmux" here (a herdr run must not report itself as cmux).
 if [ "$LB_READY" = "1" ]; then SESS_STATE="open + briefed"; else SESS_STATE="launched (readiness not confirmed — check the surface)"; fi
 VIEWER_NOTE=""; [ "$VIEWER_OK" = "1" ] && VIEWER_NOTE=" (handoff viewer alongside)"
 if [ -n "$SURFACE_REF" ] && [ -n "$WORKSPACE_REF" ]; then
-  echo "  cmux:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session $SESS_STATE$VIEWER_NOTE"
+  echo "  $LAUNCHER:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session $SESS_STATE$VIEWER_NOTE"
 elif [ -n "$SURFACE_REF" ]; then
-  echo "  cmux tab:  $SURFACE_REF — new Claude session $SESS_STATE"
+  echo "  $LAUNCHER tab:  $SURFACE_REF — new Claude session $SESS_STATE"
 elif [ -n "$WORKSPACE_REF" ]; then
   # Workspace was created (and focused) but no agent surface launched — don't claim
   # "not created" and strand the user in an empty focused workspace.
-  echo "  cmux:      workspace $WORKSPACE_REF created, but no agent surface launched — start Claude in it manually:"
+  echo "  $LAUNCHER:      workspace $WORKSPACE_REF created, but no agent surface launched — start Claude in it manually:"
+  echo "             $LAUNCH_CMD"
+elif [ "$LAUNCHER" = none ]; then
+  echo "  launch:    not automated (not inside cmux/herdr) — start manually:"
   echo "             $LAUNCH_CMD"
 else
-  echo "  cmux:      not created — start manually:"
+  echo "  $LAUNCHER:      not created — start manually:"
   echo "             $LAUNCH_CMD"
 fi
 echo "════════════════════════════════════════════════════════"
