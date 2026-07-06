@@ -224,23 +224,65 @@ except Exception:
   fi
 }
 
-# Tab target: unlike cmux (create a surface, THEN send `claude`), herdr's
-# `agent start` both creates the tab/pane and execs claude in one call (Spike
-# Findings (b)), so there is no surface to pre-create here. Resolve the workspace
-# to launch into and mark the precondition met (LAUNCH_SFC non-empty) so the
-# shared launch guard proceeds; launcher_launch_agent_herdr replaces LAUNCH_SFC
-# with the real pane id it captures.
+# First pane id belonging to <tab_id> from `herdr pane list` JSON on stdin.
+_herdr_pane_in_tab() {
+  local tab="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg t "$tab" 'first(.result.panes[] | select(.tab_id==$t) | .pane_id) // empty' 2>/dev/null
+  else
+    TAB="$tab" python3 -c '
+import sys, json, os
+try:
+    d = json.load(sys.stdin); t = os.environ["TAB"]
+    for p in d["result"]["panes"]:
+        if p.get("tab_id") == t:
+            print(p["pane_id"]); break
+except Exception:
+    pass
+' 2>/dev/null
+  fi
+}
+
+# Tab target: create a NEW, named tab and capture its single root pane; the shared
+# launch verb then runs claude INTO that pane. CRITICAL: `agent start --workspace`
+# does NOT open a fresh tab — it SPLITS a pane in the CURRENT tab (re-verified live
+# 2026-07-06; the original "split lands in a fresh tab" reading was wrong). So the
+# tab must be pre-created with `tab create --label` (a real new tab, named for the
+# session) and claude launched into its root pane via `pane run` — one tab, one
+# pane, no split, no leftover root shell.
 launcher_new_tab_herdr() {
   step "opening a herdr agent tab…"
-  local ws="${HERDR_WORKSPACE_ID:-}"
+  local ws="${HERDR_WORKSPACE_ID:-}" out tab pane
   if [ -z "$ws" ]; then
     echo "  ⚠ HERDR_WORKSPACE_ID is not set — cannot resolve a herdr workspace to launch into" >&2
     LAUNCH_WS=""; LAUNCH_SFC=""; return
   fi
   LAUNCH_WS="$ws"
-  LAUNCH_SFC="pending"        # sentinel: real pane id set by launcher_launch_agent_herdr
+  out="$("$HERDR" tab create --workspace "$ws" --label "$LABEL" --no-focus 2>/dev/null)"
+  tab="$(printf '%s' "$out" | _herdr_json 'result.tab.tab_id')"
+  if [ -z "$tab" ]; then
+    echo "  ⚠ could not create a herdr tab; tab create output was:" >&2
+    echo "$out" >&2
+    LAUNCH_SFC=""; return
+  fi
+  # Its root pane: prefer the tab-create payload; else poll pane list for this tab
+  # (the pane_id field is absent on some responses).
+  pane="$(printf '%s' "$out" | _herdr_json 'result.tab.pane_id')"
+  if [ -z "$pane" ]; then
+    for _ in $(seq 1 20); do
+      pane="$("$HERDR" pane list --workspace "$ws" 2>/dev/null | _herdr_pane_in_tab "$tab")"
+      [ -n "$pane" ] && break
+      sleep 0.5
+    done
+  fi
+  if [ -z "$pane" ]; then
+    echo "  ⚠ created herdr tab $tab but could not resolve its pane — skipping launch" >&2
+    LAUNCH_SFC=""; return
+  fi
+  LAUNCH_RUN_PANE="$pane"      # the single pane claude runs in (no split)
+  LAUNCH_SFC="$pane"          # real pane id — satisfies the shared launch guard
   LAUNCH_LABEL="agent tab"; LAUNCH_WHERE="tab"
-  step "  target workspace: $ws"
+  step "  new herdr tab: $tab (pane $pane)"
 }
 
 # Workspace target: create a brand-new herdr workspace, then let the shared
@@ -275,8 +317,9 @@ launcher_new_workspace_herdr() {
     echo "  ⚠ no terminal pane found in the new herdr workspace — skipping launch" >&2
     LAUNCH_SFC=""; return
   fi
-  LEFT_PANE="$pane"           # root pane; agent start splits its OWN pane (Spike (b))
-  LAUNCH_SFC="pending"        # sentinel: real agent pane set by launcher_launch_agent_herdr
+  LEFT_PANE="$pane"           # root pane of the new workspace's default tab
+  LAUNCH_RUN_PANE="$pane"     # claude runs INTO this pane (no split)
+  LAUNCH_SFC="$pane"          # real pane id — satisfies the shared launch guard
   LAUNCH_LABEL="agent surface"; LAUNCH_WHERE="workspace"
   # Pane exists — now safe to switch the user into the new workspace (best-effort;
   # a focus failure must never fail the launch).
@@ -285,26 +328,20 @@ launcher_new_workspace_herdr() {
 
 launcher_find_left_pane_herdr() { _launcher_herdr_todo find_left_pane; }
 
-# Launch claude in the worktree via `agent start`, capturing the pane id the
-# later verbs (wait/send/read) consume. KTD-8: direct `-- claude` exec by default
-# (spike verified claude resolves on herdr's inherited PATH); a `$SHELL -lc` login
-# wrap is the guarded fallback for an env where claude isn't on that PATH.
+# Launch claude by running it INTO the pre-created pane (the new tab's root, or the
+# new workspace's root) with `pane run` — command+Enter into the pane's interactive
+# shell, so claude resolves on PATH exactly like the cmux `send "claude"` path (no
+# exec-env concern, and no split: `agent start --workspace/--tab` would add a SECOND
+# pane). herdr still detects the launched claude as an agent, so `agent wait --status
+# idle` works (re-verified live 2026-07-06). HERDR_PANE is that same pane.
 launcher_launch_agent_herdr() {
   LB_READY=0
-  local out pane
-  if command -v claude >/dev/null 2>&1; then
-    out="$("$HERDR" agent start "$LABEL" --cwd "$WORKTREE" --workspace "$LAUNCH_WS" --no-focus \
-             -- claude --name "$LABEL" 2>/dev/null)"
-  else
-    out="$("$HERDR" agent start "$LABEL" --cwd "$WORKTREE" --workspace "$LAUNCH_WS" --no-focus \
-             -- "$SHELL" -lc "claude --name '$LABEL'" 2>/dev/null)"
-  fi
-  pane="$(printf '%s' "$out" | _herdr_json 'result.agent.pane_id')"
+  local pane="${LAUNCH_RUN_PANE:-}"
   if [ -z "$pane" ]; then
-    echo "  ⚠ could not capture the herdr agent pane id; agent start output was:" >&2
-    echo "$out" >&2
+    echo "  ⚠ no herdr pane resolved to launch claude into" >&2
     HERDR_PANE=""; LAUNCH_SFC=""; SURFACE_REF=""; return
   fi
+  "$HERDR" pane run "$pane" "cd '$WORKTREE' && claude --name '$LABEL'" >/dev/null 2>&1
   HERDR_PANE="$pane"; LAUNCH_SFC="$pane"; SURFACE_REF="$pane"
   step "  herdr agent pane: $pane"
 }
@@ -691,7 +728,7 @@ LB_READY=0           # set to 1 when the input prompt was confirmed ready
 LEFT_PANE=""; WS=""  # cmux discovery scratch (set by the cmux verbs)
 HERDR_PANE=""        # herdr agent pane id (set by launcher_launch_agent_herdr)
 # Backend-neutral refs the launch verbs hand off to each other:
-LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""
+LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""; LAUNCH_RUN_PANE=""
 LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
 # Short pointer, not the full directional prose. A ~1080-char single-line paste
 # overruns the TUI input line and the launched session gets a truncated kickoff.
