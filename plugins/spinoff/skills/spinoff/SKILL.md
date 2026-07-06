@@ -8,8 +8,9 @@ description: >-
   so this session stays focused and the new one picks up the context. Branches a
   worktree (from current HEAD or develop), writes a handoff doc linking back to this
   session's transcript, carries over recent plan/brainstorm docs, and boots a briefed
-  Claude — either in a new tab on the current cmux workspace (/start-session) or in a
-  brand-new two-pane workspace with the handoff alongside (/start-workspace). The
+  Claude — either in a new tab on the current workspace (/start-session) or in a
+  brand-new two-pane workspace with the handoff alongside (/start-workspace), using
+  whichever launcher backend is live (cmux or herdr, auto-detected). The
   mechanical work runs in a background agent so it doesn't consume this session's
   context. Only run when the user explicitly invokes one of the commands — if they
   merely describe wanting to fork work, suggest the command rather than acting.
@@ -31,23 +32,45 @@ pick up exactly where this one left off.
 This exists because the most expensive thing lost between sessions is *context* —
 the why, the dead-ends, the decisions. A spinoff that just makes a branch loses
 all of that. So the heart of this skill is writing a genuinely useful handoff,
-not the mechanical git/cmux plumbing (which the bundled script handles).
+not the mechanical git/terminal plumbing (which the bundled script handles).
 
 ## Two commands, one skill
 
 | Command | Where the new Claude lands |
 | --- | --- |
-| `/start-session` (and the `/start` alias) | A new **tab** on the current cmux workspace's left agent pane — `--target tab`. |
-| `/start-workspace` | A **brand-new cmux workspace**: briefed Claude on the left, the handoff markdown rendered in a live-reload viewer on the right — `--target workspace`. |
+| `/start-session` (and the `/start` alias) | A new **tab** on the current workspace's left agent pane — `--target tab`. |
+| `/start-workspace` | A **brand-new workspace**: briefed Claude on the left, the handoff markdown rendered alongside on the right — `--target workspace`. |
 
 Both run the same `spinoff.sh`; they differ only in the `--target` they pass.
+
+## Two backends: cmux or herdr (auto-detected)
+
+The launch is driven through a backend the script picks at run time — **cmux** or
+**herdr** — so `/start` works under whichever terminal multiplexer this session is
+running in. You don't choose it; the script detects it. The `--launcher` flag
+(`herdr | cmux | auto`, default `auto`) forces a backend or leaves it to detection:
+
+- **`auto`** (default) — pick **herdr** when `HERDR_ENV=1` *and* the herdr server is
+  live (a `herdr status server` probe — a stale `HERDR_ENV` never wins); else **cmux**
+  when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **none** (worktree +
+  handoff still produced, plus a manual `cd … && claude` line). Both env sets can be
+  present at once, so precedence is explicit: **herdr (live) > cmux > none**.
+- **`--launcher herdr` / `--launcher cmux`** — force that backend, but it's *still*
+  probed; if the probe fails it falls back to auto-detection rather than hard-erroring.
+
+The two backends differ in one load-bearing way worth knowing: on the **herdr** path
+the readiness wait is a real blocking primitive (`agent wait --status idle`), not the
+cmux path's 30× screen-scrape poll for the prompt glyph — so the kickoff lands on a
+genuinely-ready session. Everything else (worktree, handoff, doc carry-over, the
+single-submit kickoff, the honest summary) is identical across backends.
 
 ## The context model: synthesis here, mechanics in the background
 
 Only **handoff synthesis** needs this conversation, so it stays in the main
 session. Everything mechanical — running the script, watching ~40 lines of step
-output, polling cmux until the new Claude's prompt is ready, verifying the
-kickoff submitted — is noise the main session never needs to keep. So after you
+output, waiting until the new Claude's prompt is ready (a herdr blocking wait or a
+cmux screen-scrape poll), verifying the kickoff submitted — is noise the main
+session never needs to keep. So after you
 synthesize the handoff and get the branch base, you **dispatch a background agent
 to run the script** and report back a short summary. The verbose output lives in
 the background agent's context; the main session stays light.
@@ -181,21 +204,21 @@ them explicitly whenever `--repo` is set.
 
 ## Step 3.5 — Confirm the target workspace (when it differs)
 
-A `--target tab` spinoff opens in the **current** cmux workspace. Usually that's
-right — but if the workspace you're in is anchored on a *different* repo than the
-one you're forking (`--repo`), the new tab would land somewhere surprising. Catch
-that here, before dispatch (the background agent can't ask):
+A `--target tab` spinoff opens in the **current** workspace (cmux or herdr).
+Usually that's right — but if the workspace you're in is anchored on a *different*
+repo than the one you're forking (`--repo`), the new tab would land somewhere
+surprising. Catch that here, before dispatch (the background agent can't ask):
 
 - Determine the current workspace's anchor repo and compare it to the resolved
   `--repo`. **Same repo → proceed silently.** **Different repo, or you can't
   determine it → confirm with Shawn (`AskUserQuestion`)** before launching — this
   is the low-confidence case, so don't proceed silently.
 - *How to read the current workspace's repo (execution-time detail):* the current
-  workspace is `CMUX_WORKSPACE_ID`; read its primary terminal surface's cwd and run
-  `git -C <cwd> rev-parse --show-toplevel`. cmux's `tree` exposes surface/pane refs
-  but not cwds directly, so if no clean way to get the cwd exists, treat the repo as
-  *undetectable* → confirm (the fail-safe above). Don't block the common
-  same-workspace path on a perfect query.
+  workspace is `CMUX_WORKSPACE_ID` (cmux) or `HERDR_WORKSPACE_ID` (herdr); read its
+  primary terminal pane's cwd and run `git -C <cwd> rev-parse --show-toplevel`. If
+  neither backend exposes the cwd cleanly, treat the repo as *undetectable* →
+  confirm (the fail-safe above). Don't block the common same-workspace path on a
+  perfect query.
 - This is moot for `--target workspace` (a brand-new workspace is the intent).
 
 ## Step 4 — Dispatch a background agent to run the script
@@ -205,7 +228,7 @@ Pick `--name` from the workstream's topic (kebab-case, e.g. `crop-snapping`,
 suffix. Pick `--target` from the command: `tab` for `/start-session` (or
 `/start`), `workspace` for `/start-workspace`.
 
-Also pass `--label` — the **short display name** for the cmux tab/workspace.
+Also pass `--label` — the **short display name** for the new tab/workspace.
 It should capture both the **workspace** (where this forked from) and the **work**,
 at a glance, e.g. `slate·crop-snap` or `auto·recipes`. Keep it short (~24 chars):
 a short workspace token (usually the repo, abbreviated if long) + a `·`/`/`/`:`
@@ -228,12 +251,17 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   --session-cwd "<resolved cwd>" \
   --repo "<resolved target repo path>" \      # when the originating cwd isn't inside it
   --base "origin/<default-branch>" \           # fresh base (Step 2); omit only to carry local HEAD
-  [--branch-prefix feature]      # default: feature/
+  [--branch-prefix feature] \    # default: feature/
+  [--launcher auto]              # default: auto (herdr-live > cmux > none); force with herdr|cmux
 ```
 
-Tell the background agent to return: the branch, the worktree path, the cmux
-tab/workspace + agent surface ref, and the source-session resume line — i.e. the
-contents of the script's `✓ Spinoff complete` summary block, plus any `⚠` lines.
+`--launcher` almost never needs setting — `auto` picks the right backend (see
+*Two backends* above). Pass `herdr` or `cmux` only to force one, e.g. to reproduce a
+cmux launch while herdr is also live.
+
+Tell the background agent to return: the branch, the worktree path, the launcher
+backend + tab/workspace + agent pane ref, and the source-session resume line — i.e.
+the contents of the script's `✓ Spinoff complete` summary block, plus any `⚠` lines.
 
 The script is safe to read top-to-bottom; it prints each step. What it does, in
 order:
@@ -246,13 +274,18 @@ order:
    session transcript + `claude -r <uuid>` resume one-liner into `<!-- SESSION -->`.
 5. Copies recent `docs/` plan/brainstorm/notes files (modified in the last ~6h)
    into the new worktree's `docs/`.
-6. **Launches a briefed Claude**, per `--target`:
-   - `tab` — finds the left agent pane of the current workspace, opens a new
-     terminal surface there, `cd`s into the worktree, launches `claude`.
-   - `workspace` — creates a new cmux workspace (`new-workspace --cwd <worktree>`),
-     launches `claude` in its terminal surface, then splits a right pane and opens
-     `docs/handoff.md` in cmux's markdown viewer alongside.
-7. Waits for the new Claude's input prompt to be ready, then sends the kickoff
+6. **Launches a briefed Claude** via the auto-detected backend (cmux or herdr —
+   see *Two backends*), per `--target`:
+   - `tab` — opens a new agent tab/surface in the current workspace, in the
+     worktree, and launches `claude`. (cmux adds a surface to the left agent pane
+     and `send`s the launch; herdr `agent start`s the agent directly in the worktree.)
+   - `workspace` — creates a new workspace rooted at the worktree, launches `claude`
+     on the left, then splits a right pane and renders `docs/handoff.md` alongside
+     (cmux uses its live-reload markdown viewer; herdr has no native viewer, so it
+     renders the handoff statically with a pager — best-effort either way).
+7. Waits for the new Claude's input prompt to be ready — a **herdr** blocking wait
+   (`agent wait --status idle`) or the **cmux** screen-scrape poll — then sends the
+   kickoff
    (read `docs/handoff.md`, **treat the whole handoff as directional** — author
    intent and a starting point, with the code/tests as the source of truth, not a
    spec to execute literally — get oriented, **then recommend the next
@@ -269,7 +302,8 @@ continues in the new tab/workspace.
 
 ## When the script can't do something
 
-- **Not inside cmux** (`CMUX_WORKSPACE_ID` unset): the script still creates the
+- **Not inside cmux or herdr** (no live backend — `CMUX_WORKSPACE_ID` unset *and*
+  herdr not running, so detection resolves to `none`): the script still creates the
   worktree + handoff and prints the manual `cd <worktree> && claude` command, so
   the spinoff isn't lost — only the tab/workspace automation is skipped. Tell Shawn.
 - **No repo resolves**: if neither `--repo` nor the cwd lands in a git repo, the
@@ -280,8 +314,8 @@ continues in the new tab/workspace.
 - **Ambiguous left pane** (tab target, e.g. a single-pane workspace): the script
   falls back to adding the surface to the focused pane and notes it. Usually fine.
 - **Can't parse the new workspace/surface ref** (workspace target): the script
-  prints the raw cmux output and degrades gracefully — the worktree + handoff
-  still exist. Surface the warning and the manual launch command.
+  prints the raw backend (cmux/herdr) output and degrades gracefully — the worktree
+  + handoff still exist. Surface the warning and the manual launch command.
 - **Right-pane handoff viewer fails** (workspace target): the briefed Claude is
   still launched on the left; only the markdown viewer is missing. Non-fatal.
 
