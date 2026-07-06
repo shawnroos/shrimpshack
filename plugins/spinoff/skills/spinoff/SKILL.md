@@ -236,7 +236,16 @@ separator + a tight form of the work. If you omit `--label`, the script defaults
 to `<repo-basename>/<name>`, which is correct but often longer than ideal — prefer
 passing a curated short one.
 
-Dispatch a **background agent** (`Agent` with `run_in_background: true`) whose
+**You MUST run the script through a background `Agent` (`run_in_background: true`) —
+never inline in this session.** This is not optional and not a "trivial bash
+command" exception: `spinoff.sh` prints ~40 lines of step output and polls the
+terminal while it waits for the new Claude's prompt, and that noise is exactly what
+this skill exists to keep OUT of the main session (synthesis here, mechanics in the
+background — see "The context model" above). Running it inline defeats the whole
+design. So: after Steps 1–3.5 are resolved here, hand the finished args to a
+background agent and let it run the command; do not execute `spinoff.sh` yourself.
+
+Dispatch that **background agent** (`Agent` with `run_in_background: true`) whose
 entire job is to run the one command below and report back. The agent must NOT
 re-synthesize anything or do extra work — it runs the script, waits, and returns
 the summary fields.

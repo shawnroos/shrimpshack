@@ -49,8 +49,10 @@ fi
 case "$1 $2" in
   "workspace create")
     echo '{"result":{"workspace":{"workspace_id":"wS"},"root_pane":{"pane_id":"wS:p1"},"tab":{"tab_id":"wS:t1"}}}' ;;
+  "tab create")
+    echo '{"result":{"tab":{"tab_id":"wS:t2","pane_id":"wS:p2"}}}' ;;
   "pane list")
-    echo '{"result":{"panes":[{"pane_id":"wS:p1","agent_status":"unknown","workspace_id":"wS"}]}}' ;;
+    echo '{"result":{"panes":[{"pane_id":"wS:p2","tab_id":"wS:t2","agent_status":"unknown","workspace_id":"wS"}]}}' ;;
   "agent start")
     echo '{"result":{"agent":{"pane_id":"wS:p2","tab_id":"wS:t1","workspace_id":"wS","agent_status":"unknown"},"type":"agent_started"}}' ;;
   "agent wait")
@@ -279,12 +281,16 @@ run_resolve() {
 
 # ---- U3: herdr tab launch path ---------------------------------------------
 
-@test "herdr tab: launch issues 'agent start … -- claude' with --cwd \$WORKTREE and --workspace" {
+@test "herdr tab: creates a NEW named tab and runs claude into its pane (no split)" {
   run_herdr_tab
   [ "$status" -eq 0 ]
   [ -f "$HERDR_ARGV_LOG" ]
-  # DIRECT exec form (KTD-8), worktree path + resolved workspace, `-- claude`.
-  grep -qE "^agent start testlabel --cwd .*/worktrees/htab --workspace wS --no-focus -- claude --name testlabel$" "$HERDR_ARGV_LOG"
+  # a real new tab, named for the session…
+  grep -qxF "tab create --workspace wS --label testlabel --no-focus" "$HERDR_ARGV_LOG"
+  # …and claude is RUN INTO its root pane (cd + claude), never `agent start`
+  # (which splits a pane in the CURRENT tab — the bug this replaces).
+  grep -qE "^pane run wS:p2 cd '.*/worktrees/htab' && claude --name 'testlabel'$" "$HERDR_ARGV_LOG"
+  ! grep -q "^agent start" "$HERDR_ARGV_LOG"
 }
 
 @test "herdr tab: readiness blocks on 'agent wait --status idle' with a timeout (KTD-3)" {
@@ -303,7 +309,8 @@ run_resolve() {
   [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 1 ]
   # no second send of ANY kind (auto-fire-cascade guard)
   [ "$(grep -c '^agent send ' "$HERDR_ARGV_LOG")" -eq 1 ]
-  ! grep -q "^pane run " "$HERDR_ARGV_LOG"
+  # the only pane run is the single launch (cd + claude), not a kickoff send
+  [ "$(grep -c '^pane run wS:p2 cd ' "$HERDR_ARGV_LOG")" -eq 1 ]
 }
 
 @test "herdr tab: LB_READY=1 (open + briefed) when the wait succeeds" {
@@ -349,8 +356,9 @@ run_resolve() {
   # confirms a terminal pane materialized before switching the user in.
   grep -qxF "pane list --workspace wS" "$HERDR_ARGV_LOG"
   grep -qxF "workspace focus wS" "$HERDR_ARGV_LOG"
-  # the agent is launched (U3 verb reused) into the NEW workspace, direct exec.
-  grep -qE "^agent start testlabel --cwd .*/worktrees/hws --workspace wS --no-focus -- claude --name testlabel$" "$HERDR_ARGV_LOG"
+  # claude is RUN INTO the workspace's root pane (shared verb), never `agent start`.
+  grep -qE "^pane run wS:p2 cd '.*/worktrees/hws' && claude --name 'testlabel'$" "$HERDR_ARGV_LOG"
+  ! grep -q "^agent start" "$HERDR_ARGV_LOG"
   # readiness still uses the blocking wait — no read-screen poll on the herdr path.
   grep -qxF "agent wait wS:p2 --status idle --timeout 30000" "$HERDR_ARGV_LOG"
   ! grep -q "read-screen" "$HERDR_ARGV_LOG"
