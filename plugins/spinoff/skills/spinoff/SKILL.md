@@ -245,6 +245,17 @@ background — see "The context model" above). Running it inline defeats the who
 design. So: after Steps 1–3.5 are resolved here, hand the finished args to a
 background agent and let it run the command; do not execute `spinoff.sh` yourself.
 
+**NEVER hand-roll the launch with `herdr`/`cmux` commands.** Do not run `herdr
+tab create`, `herdr agent start`, `herdr pane run`, `herdr workspace create`,
+`cmux new-surface`, `cmux send`, or any other multiplexer command yourself — not
+to "place the tab", not to launch Claude, not to send the kickoff. `spinoff.sh`
+owns ALL of that and does it deterministically: it resolves the session's live
+workspace, creates one correctly-placed named tab (no split), launches Claude, and
+sends the kickoff. Hand-walking those steps is exactly what produces the wrong
+workspace and split-pane bugs — the script exists so the sequence is deterministic,
+not improvised. Your only mechanical job is to invoke the script (via the bg agent);
+if the script does the wrong thing, FIX THE SCRIPT, don't work around it by hand.
+
 Dispatch that **background agent** (`Agent` with `run_in_background: true`) whose
 entire job is to run the one command below and report back. The agent must NOT
 re-synthesize anything or do extra work — it runs the script, waits, and returns

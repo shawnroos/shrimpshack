@@ -243,21 +243,38 @@ except Exception:
   fi
 }
 
+# Resolve the ORIGINATING session's CURRENT workspace from the LIVE herdr server,
+# not the HERDR_WORKSPACE_ID env var — that var is frozen at session-spawn and lags
+# the workspace the session actually lives in now (the "spinoff spawned from space A
+# lands in space B" bug). The launcher (bg agent) inherits the originating session's
+# HERDR_PANE_ID, so `pane get` on it reports the workspace that pane REALLY belongs
+# to now. Falls back to the env var only if the live probe yields nothing.
+_herdr_current_workspace() {
+  local ws=""
+  if [ -n "${HERDR_PANE_ID:-}" ]; then
+    ws="$("$HERDR" pane get "$HERDR_PANE_ID" 2>/dev/null | _herdr_json 'result.pane.workspace_id')"
+  fi
+  [ -n "$ws" ] || ws="${HERDR_WORKSPACE_ID:-}"
+  printf '%s' "$ws"
+}
+
 # Tab target: create a NEW, named tab and capture its single root pane; the shared
 # launch verb then runs claude INTO that pane. CRITICAL: `agent start --workspace`
 # does NOT open a fresh tab — it SPLITS a pane in the CURRENT tab (re-verified live
 # 2026-07-06; the original "split lands in a fresh tab" reading was wrong). So the
 # tab must be pre-created with `tab create --label` (a real new tab, named for the
-# session) and claude launched into its root pane via `pane run` — one tab, one
-# pane, no split, no leftover root shell.
+# session, in the session's LIVE workspace) and claude launched into its root pane
+# via `pane run` — one tab, one pane, no split, no leftover root shell.
 launcher_new_tab_herdr() {
   step "opening a herdr agent tab…"
-  local ws="${HERDR_WORKSPACE_ID:-}" out tab pane
+  local ws out tab pane
+  ws="$(_herdr_current_workspace)"
   if [ -z "$ws" ]; then
-    echo "  ⚠ HERDR_WORKSPACE_ID is not set — cannot resolve a herdr workspace to launch into" >&2
+    echo "  ⚠ could not resolve the current herdr workspace (no live pane, no HERDR_WORKSPACE_ID)" >&2
     LAUNCH_WS=""; LAUNCH_SFC=""; return
   fi
   LAUNCH_WS="$ws"
+  step "  target workspace: $ws (live-resolved)"
   out="$("$HERDR" tab create --workspace "$ws" --label "$LABEL" --no-focus 2>/dev/null)"
   tab="$(printf '%s' "$out" | _herdr_json 'result.tab.tab_id')"
   if [ -z "$tab" ]; then
