@@ -243,21 +243,45 @@ except Exception:
   fi
 }
 
+# Resolve the ORIGINATING session's CURRENT workspace from the LIVE herdr server,
+# not the HERDR_WORKSPACE_ID env var — that var is frozen at session-spawn and lags
+# the workspace the session actually lives in now (the "spinoff spawned from space A
+# lands in space B" bug). The launcher (bg agent) inherits the originating session's
+# HERDR_PANE_ID, so `pane get` on it reports the workspace that pane REALLY belongs
+# to now. Falls back to the env var only if the live probe yields nothing.
+# Sets HERDR_WS_SOURCE=live|frozen so callers can label honestly and a future
+# wrong-workspace recurrence is diagnosable (was it the live pane or the stale env?).
+_herdr_current_workspace() {
+  local ws=""
+  HERDR_WS_SOURCE="frozen"
+  if [ -n "${HERDR_PANE_ID:-}" ]; then
+    ws="$("$HERDR" pane get "$HERDR_PANE_ID" 2>/dev/null | _herdr_json 'result.pane.workspace_id')"
+    [ -n "$ws" ] && HERDR_WS_SOURCE="live"
+  fi
+  if [ -z "$ws" ]; then
+    ws="${HERDR_WORKSPACE_ID:-}"
+    [ -n "$ws" ] && echo "  ⚠ could not resolve the workspace from a live pane — falling back to the possibly-stale HERDR_WORKSPACE_ID=$ws" >&2
+  fi
+  printf '%s' "$ws"
+}
+
 # Tab target: create a NEW, named tab and capture its single root pane; the shared
 # launch verb then runs claude INTO that pane. CRITICAL: `agent start --workspace`
 # does NOT open a fresh tab — it SPLITS a pane in the CURRENT tab (re-verified live
 # 2026-07-06; the original "split lands in a fresh tab" reading was wrong). So the
 # tab must be pre-created with `tab create --label` (a real new tab, named for the
-# session) and claude launched into its root pane via `pane run` — one tab, one
-# pane, no split, no leftover root shell.
+# session, in the session's LIVE workspace) and claude launched into its root pane
+# via `pane run` — one tab, one pane, no split, no leftover root shell.
 launcher_new_tab_herdr() {
   step "opening a herdr agent tab…"
-  local ws="${HERDR_WORKSPACE_ID:-}" out tab pane
+  local ws out tab pane
+  ws="$(_herdr_current_workspace)"
   if [ -z "$ws" ]; then
-    echo "  ⚠ HERDR_WORKSPACE_ID is not set — cannot resolve a herdr workspace to launch into" >&2
+    echo "  ⚠ could not resolve the current herdr workspace (no live pane, no HERDR_WORKSPACE_ID)" >&2
     LAUNCH_WS=""; LAUNCH_SFC=""; return
   fi
   LAUNCH_WS="$ws"
+  step "  target workspace: $ws (${HERDR_WS_SOURCE:-frozen})"
   out="$("$HERDR" tab create --workspace "$ws" --label "$LABEL" --no-focus 2>/dev/null)"
   tab="$(printf '%s' "$out" | _herdr_json 'result.tab.tab_id')"
   if [ -z "$tab" ]; then
@@ -728,7 +752,7 @@ LB_READY=0           # set to 1 when the input prompt was confirmed ready
 LEFT_PANE=""; WS=""  # cmux discovery scratch (set by the cmux verbs)
 HERDR_PANE=""        # herdr agent pane id (set by launcher_launch_agent_herdr)
 # Backend-neutral refs the launch verbs hand off to each other:
-LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""; LAUNCH_RUN_PANE=""
+LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""; LAUNCH_RUN_PANE=""; HERDR_WS_SOURCE=""
 LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
 # Short pointer, not the full directional prose. A ~1080-char single-line paste
 # overruns the TUI input line and the launched session gets a truncated kickoff.

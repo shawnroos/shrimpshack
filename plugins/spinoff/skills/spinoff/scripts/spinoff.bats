@@ -49,6 +49,10 @@ fi
 case "$1 $2" in
   "workspace create")
     echo '{"result":{"workspace":{"workspace_id":"wS"},"root_pane":{"pane_id":"wS:p1"},"tab":{"tab_id":"wS:t1"}}}' ;;
+  "pane get")
+    # live workspace resolution: report the pane's CURRENT workspace, which the
+    # test controls via HERDR_STUB_LIVE_WS (defaults to wS = matches the env var).
+    echo "{\"result\":{\"pane\":{\"workspace_id\":\"${HERDR_STUB_LIVE_WS:-wS}\"}}}" ;;
   "tab create")
     echo '{"result":{"tab":{"tab_id":"wS:t2","pane_id":"wS:p2"}}}' ;;
   "pane list")
@@ -122,6 +126,7 @@ run_herdr_tab() {
           HERDR_STUB_LIVE=1 \
           HERDR_ENV=1 \
           HERDR_WORKSPACE_ID=wS \
+          HERDR_PANE_ID=wS:p1 \
           CMUX_WORKSPACE_ID= \
       bash "$SCRIPT" --name htab --label testlabel --handoff "$handoff" \
                      --repo "$repo" --target tab --launcher herdr
@@ -291,6 +296,17 @@ run_resolve() {
   # (which splits a pane in the CURRENT tab — the bug this replaces).
   grep -qE "^pane run wS:p2 cd '.*/worktrees/htab' && claude --name 'testlabel'$" "$HERDR_ARGV_LOG"
   ! grep -q "^agent start" "$HERDR_ARGV_LOG"
+}
+
+@test "herdr tab: places the tab in the LIVE workspace, not a stale HERDR_WORKSPACE_ID" {
+  # the env var says wS, but the live pane reports wLIVE — the tab must follow the
+  # LIVE workspace (the "spinoff spawned from space A lands in space B" fix).
+  export HERDR_STUB_LIVE_WS=wLIVE
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  grep -qxF "tab create --workspace wLIVE --label testlabel --no-focus" "$HERDR_ARGV_LOG"
+  # never falls back to the stale env workspace when a live one resolved
+  ! grep -qE "tab create --workspace wS " "$HERDR_ARGV_LOG"
 }
 
 @test "herdr tab: readiness blocks on 'agent wait --status idle' with a timeout (KTD-3)" {
