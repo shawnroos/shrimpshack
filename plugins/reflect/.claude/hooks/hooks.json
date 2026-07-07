@@ -1,6 +1,17 @@
 {
-  "description": "reflect plugin hooks. UserPromptSubmit runs once-per-session seeded recall (qmd search, fail-safe — never blocks the prompt, exits 0 on any error/timeout/absence). PostToolUse + PreToolUse fire the reflect-trigger flag at completion boundaries (PR create/merge, ExitPlanMode, all-todos-done) so /reflect runs its hygiene pass. All hooks fail-open and exit 0; hook arrays merge additively with the user's settings and other plugins. Paths resolve via ${CLAUDE_PLUGIN_ROOT}.",
+  "description": "reflect plugin hooks. SessionStart re-renders MEMORY.md as the activation-ranked hot tier so the auto-loaded index self-heals under the load budget (cheap, fail-open, write-skips when unchanged). UserPromptSubmit runs once-per-session seeded recall (qmd vsearch, fail-safe — never blocks the prompt, exits 0 on any error/timeout/absence). PostToolUse + PreToolUse fire the reflect-trigger flag at completion boundaries (PR create/merge, ExitPlanMode, all-todos-done) so /reflect runs its hygiene pass. All hooks fail-open and exit 0; hook arrays merge additively with the user's settings and other plugins. Paths resolve via ${CLAUDE_PLUGIN_ROOT}.",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-index-render.py\" >/dev/null 2>&1 || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

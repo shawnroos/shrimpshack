@@ -2,17 +2,24 @@
 #
 # memory-index-lint.sh — guard MEMORY.md against the Claude Code load-cutoff.
 #
-# The platform truncates the auto-loaded index at ~25 KB AND ~200 lines, dropping
-# the tail silently. This lint HARD-FAILS (exit 1) when either budget is
-# exceeded, so the truncation bug can never silently return. It also reports
-# entry<->body PARITY drift (index links with no body file, body files with no
-# index entry) as warnings; pass --strict to make parity drift fail too.
+# The Claude Code binary auto-loads MEMORY.md and nags ("approaching the read
+# limit") once the index reaches 80% of its byte cap, truncating the tail past
+# the cap. Verified against the binary (v2.1.x): byte cap ≈ 24.4 KB, warn
+# fraction yEm = 0.8 (nag at ≈ 19.5 KB), and the binary's own suggested compact
+# target is 0.7 × cap ≈ 17.1 KB. This lint targets that 17.1 KB compact point so
+# a passing lint guarantees the nag NEVER fires (it sits below the 0.8 trigger).
+#
+# The index is the activation-ranked hot tier (memory-index-render.py): cold
+# memories live on disk + QMD but are intentionally absent from MEMORY.md, so a
+# body file with no index entry is EXPECTED, not drift. Parity therefore only
+# flags DEAD links (index entries with no body file); orphan bodies are normal.
 #
 #   MEMORY_INDEX   path to the index   (default ~/.claude/projects/-Users-shawnroos/memory/MEMORY.md)
 #   MEMORY_DIR     dir holding bodies  (default: dirname of MEMORY_INDEX)
-#   MAX_BYTES      default 25600
+#   MAX_BYTES      default 17408 (17 KiB, under the 17.1 KB native compact target)
 #   MAX_LINES      default 200
-#   --strict       parity drift also exits non-zero
+#   --strict       accepted for compatibility; dead links now always fail and cold
+#                  bodies are never drift, so it no longer changes the verdict
 
 set -euo pipefail
 
@@ -25,7 +32,7 @@ _proj_slug="-${HOME#/}"; _proj_slug="${_proj_slug%/}"; _proj_slug="${_proj_slug/
 DEFAULT_INDEX="$HOME/.claude/projects/$_proj_slug/memory/MEMORY.md"
 INDEX="${MEMORY_INDEX:-$DEFAULT_INDEX}"
 DIR="${MEMORY_DIR:-$(dirname "$INDEX")}"
-MAX_BYTES="${MAX_BYTES:-25600}"
+MAX_BYTES="${MAX_BYTES:-17408}"
 MAX_LINES="${MAX_LINES:-200}"
 
 if [ ! -f "$INDEX" ]; then
@@ -68,20 +75,24 @@ for ln in text.splitlines():
         links.add(m.group(1))
 bodies = {f for f in os.listdir(d) if f.endswith(".md") and f != "MEMORY.md"}
 dead = sorted(t for t in links if t not in bodies)
-orphan = sorted(f for f in bodies if f not in links)
+# Cold memories (body present, no index entry) are EXPECTED under the projection
+# model — the index is the budget-truncated hot tier, not every body. So orphans
+# are informational only and never fail; only DEAD links (entry -> missing body)
+# indicate real drift.
+cold = sorted(f for f in bodies if f not in links)
 
 if dead:
-    print(f"  {'FAIL' if strict else 'WARN'}: {len(dead)} index link(s) with no body file: {dead[:5]}",
+    # Always fail on dead links: the render is the canonical MEMORY.md writer and
+    # produces a parity-clean index by construction, so an entry pointing at a
+    # missing body is genuine drift (a hand-edit or a lost file), not noise.
+    print(f"  FAIL: {len(dead)} index link(s) with no body file: {dead[:5]}",
           file=sys.stderr)
-    if strict:
-        fail = True
-if orphan:
-    print(f"  {'FAIL' if strict else 'WARN'}: {len(orphan)} body file(s) with no index entry: {orphan[:5]}",
-          file=sys.stderr)
-    if strict:
-        fail = True
-if not dead and not orphan:
-    print(f"  OK: parity clean ({len(links)} entries == {len(bodies)} bodies)")
+    fail = True
+if cold:
+    print(f"  info: {len(cold)} cold memorie(s) on disk but not in the hot index "
+          f"(expected under the projection model)")
+if not dead:
+    print(f"  OK: no dead links ({len(links)} hot entries, {len(cold)} cold bodies)")
 
 sys.exit(1 if fail else 0)
 PY

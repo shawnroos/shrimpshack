@@ -88,12 +88,20 @@ if command -v qmd >/dev/null 2>&1; then
   printf '# Unrelated\nCats and dogs and weather.\n' > mem/other.md
   qmd collection add ./mem >/dev/null 2>&1
   qmd collection rename mem claude-memory >/dev/null 2>&1
+  # seeded-recall now uses `qmd vsearch` (vector) — the Phase B spike showed BM25
+  # under-recalls realistic prompts. Vector search needs embeddings, so embed the
+  # isolated test collection first. qmd loads the embedding model PER PROCESS, and
+  # each hook invocation is a fresh process, so every recall assertion below pays a
+  # cold model load (seconds, up to ~20s on a busy machine). The tests run with a
+  # generous wall budget (60s) so the cold-load tail can't flake the suite. (In
+  # production this per-process cold load is the case for the warm-daemon upgrade —
+  # see scripts/spikes/RESULTS.md.)
+  qmd embed -c claude-memory >/dev/null 2>&1 || true
 
   FLAG="$H/flags"
-  export SEEDED_RECALL_COLLECTION=claude-memory SEEDED_RECALL_FLAG_DIR="$FLAG" SEEDED_RECALL_K=3 SEEDED_RECALL_TIMEOUT=20
-  # BM25 is lexical/exact-term — the seed query must share literal terms with the
-  # body (the accepted lexical-seed tradeoff; natural-language prompts with
-  # morphological variants under-recall and the hook then stays silent by design).
+  export SEEDED_RECALL_COLLECTION=claude-memory SEEDED_RECALL_FLAG_DIR="$FLAG" SEEDED_RECALL_K=3 SEEDED_RECALL_TIMEOUT=60
+  # vsearch is semantic, so the seed prompt need not share literal terms with the
+  # body — a paraphrase recalls (the whole point of the Phase B switch).
   OUT1="$(printf '{"prompt":"widget pipeline batches frobnicators","session_id":"S1"}' | bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
   check "recall injects the relevant body" "echo \"\$OUT1\" | grep -qi 'widget pipeline batches frobnicators'"
   check "recall emits the wrapper tag" "echo \"\$OUT1\" | grep -q 'recalled-memories'"
@@ -107,10 +115,28 @@ if command -v qmd >/dev/null 2>&1; then
   # cumulative wall-budget exhausted -> exit 0, no output (never blocks the prompt)
   OUT5="$(printf '{"prompt":"widget pipeline","session_id":"S5"}' | SEEDED_RECALL_TIMEOUT=0.01 SEEDED_RECALL_FLAG_DIR="$FLAG" bash "$HOOKS/seeded-recall.sh" 2>/dev/null; echo "EXIT:$?")"
   check "budget exhausted: exit 0, no output" "echo \"\$OUT5\" | grep -q '^EXIT:0$' && [ \"\$(echo \"\$OUT5\" | grep -v '^EXIT:')\" = '' ]"
-  # empty first prompt must NOT set the flag -> a later matching prompt still fires
-  OUT6A="$(printf '{"prompt":"zzznomatchxyz","session_id":"SR"}' | SEEDED_RECALL_FLAG_DIR="$FLAG" SEEDED_RECALL_TIMEOUT=20 bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
-  OUT6B="$(printf '{"prompt":"widget pipeline batches frobnicators","session_id":"SR"}' | SEEDED_RECALL_FLAG_DIR="$FLAG" SEEDED_RECALL_TIMEOUT=20 bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
-  check "empty first prompt does not burn the session (retry fires)" '[ -z "$OUT6A" ] && echo "$OUT6B" | grep -qi widget'
+  # A no-output first prompt must NOT set the flag -> a later matching prompt still
+  # fires. Vector search always returns nearest neighbours (no BM25-style empty),
+  # so "no output" is forced via a score floor: the distant prompt scores below it
+  # (filtered to nothing), the strong prompt clears it.
+  OUT6A="$(printf '{"prompt":"zzznomatchxyz","session_id":"SR"}' | SEEDED_RECALL_FLAG_DIR="$FLAG" SEEDED_RECALL_MIN_SCORE=0.6 SEEDED_RECALL_TIMEOUT=60 bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
+  OUT6B="$(printf '{"prompt":"widget pipeline batches frobnicators","session_id":"SR"}' | SEEDED_RECALL_FLAG_DIR="$FLAG" SEEDED_RECALL_MIN_SCORE=0.6 SEEDED_RECALL_TIMEOUT=60 bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
+  check "no-output first prompt does not burn the session (retry fires)" '[ -z "$OUT6A" ] && echo "$OUT6B" | grep -qi widget'
+
+  # U6 activation floor — proves the floor ENGAGES (the activation module actually
+  # loads via SCOPED_MEMORY_DIR and filters), not just fails open. A fresh body
+  # (last_used today -> activation ~1.3) and a faded body (last_used 2020 ->
+  # activation ~0.3) both match the query; with an aggressive span the faded one's
+  # required floor (~1.5) exceeds any vector score and it is dropped, while the
+  # fresh one (required ~0.0) survives. Regression guard against the floor silently
+  # reverting to dead code.
+  printf -- '---\nlast_used: %s\n---\nThe widget pipeline batches frobnicators nightly FRESHTOKEN.\n' "$(date +%F)" > mem/wfresh.md
+  printf -- '---\nlast_used: 2020-01-01\n---\nThe widget pipeline batches frobnicators nightly FADEDTOKEN.\n' > mem/wfaded.md
+  qmd update >/dev/null 2>&1; qmd embed -c claude-memory >/dev/null 2>&1 || true  # re-scan: new files aren't indexed until update
+  OUT7="$(printf '{"prompt":"widget pipeline batches frobnicators","session_id":"U6"}' | SEEDED_RECALL_FLAG_DIR="$FLAG" SEEDED_RECALL_MEMORY_DIR="$H/mem" SEEDED_RECALL_FLOOR_BASE=0.0 SEEDED_RECALL_FLOOR_SPAN=2.0 SEEDED_RECALL_K=5 SEEDED_RECALL_TIMEOUT=60 bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
+  check "U6 floor engages: fresh (high-activation) memory surfaces" "echo \"\$OUT7\" | grep -q FRESHTOKEN"
+  check "U6 floor engages: faded (low-activation) memory is filtered out" "! echo \"\$OUT7\" | grep -q FADEDTOKEN"
+
   unset SEEDED_RECALL_COLLECTION SEEDED_RECALL_FLAG_DIR SEEDED_RECALL_K SEEDED_RECALL_TIMEOUT
   cd "$REPO"
 fi
@@ -180,6 +206,43 @@ else
 fi
 GK2="$(md5 -q "$GG/idx/MEMORY.md" 2>/dev/null || md5sum "$GG/idx/MEMORY.md" | awk '{print $1}')"
 check "gut-guard leaves the original index untouched" '[ "$GK1" = "$GK2" ]'
+cd "$REPO"
+
+# ------------------------------------------------ activation + render unit tests
+# Pure-Python suites (isolated tempdirs of their own): the activation arithmetic
+# (U2) and the activation-ranked index render (U5 — hot/cold split, no-delete,
+# idempotency, AE2 re-promotion, AE6 pin).
+echo "== activation + render unit tests =="
+if python3 "$REPO/tests/activation_test.py" >/dev/null 2>&1; then
+  ok "activation_test.py passes"
+else
+  bad "activation_test.py passes"
+fi
+if python3 "$REPO/tests/render_test.py" >/dev/null 2>&1; then
+  ok "render_test.py passes"
+else
+  bad "render_test.py passes"
+fi
+
+# Render integration: an over-budget index of many bodies renders to a hot/cold
+# split that passes the (recalibrated) lint, with every body preserved on disk.
+echo "== render integration =="
+RN="$ROOT/render"; mkdir -p "$RN"; cd "$RN"
+for i in $(seq 1 120); do
+  printf -- '---\nlast_used: 2026-06-%02d\n---\nbody %d with a reasonably long hook sentence here\n' \
+    "$(( (i % 28) + 1 ))" "$i" > "feedback_m$i.md"
+done
+printf '# Memory Index\n\n' > MEMORY.md
+MEMORY_DIR="$RN" MAX_BYTES=4096 python3 "$SCRIPTS/memory-index-render.py" "$RN/MEMORY.md" >/dev/null 2>&1
+HOT="$(grep -c '^- ' MEMORY.md)"
+check "render produces a hot/cold split (fewer hot than total bodies)" '[ "$HOT" -lt 120 ] && [ "$HOT" -gt 0 ]'
+check "every body file survives the render (none deleted)" '[ "$(ls feedback_m*.md | wc -l | tr -d " ")" = "120" ]'
+check "rendered hot index passes the lint at the same budget" \
+  "MEMORY_INDEX=\"$RN/MEMORY.md\" MEMORY_DIR=\"$RN\" MAX_BYTES=4096 bash \"$SCRIPTS/memory-index-lint.sh\" >/dev/null 2>&1"
+RC1="$(md5 -q MEMORY.md 2>/dev/null || md5sum MEMORY.md | awk '{print $1}')"
+MEMORY_DIR="$RN" MAX_BYTES=4096 python3 "$SCRIPTS/memory-index-render.py" "$RN/MEMORY.md" >/dev/null 2>&1
+RC2="$(md5 -q MEMORY.md 2>/dev/null || md5sum MEMORY.md | awk '{print $1}')"
+check "render is idempotent on the live-shaped fixture" '[ "$RC1" = "$RC2" ]'
 cd "$REPO"
 
 # ------------------------------------------------- opt-in setup (/reflect-setup)

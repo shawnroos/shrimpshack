@@ -57,6 +57,8 @@ This pass produces an internal mental model only. Never surface to the user exce
 - Memories where the session revealed nuance or contradiction: edit content to incorporate it (this counts as reinforcement — touch the file's mtime)
 - Corrections that emerged but aren't yet memories: save now as `feedback_*.md`
 
+This use-tracking is the activation signal: `last_used` and `MEMORY_USE.log` count feed the render's ranking (Pass 6), so using a cold memory bumps it back toward the hot tier. Recording use here is what makes accessibility self-reversing. An **absent** `last_used` means "unknown", not "never used" — the activation function seeds it at a neutral value, so a valuable-but-never-cited memory is never sunk purely for missing telemetry.
+
 Tally: `updated=N saved=M`.
 
 ### 3. Memory merge pass
@@ -67,24 +69,17 @@ Tally: `updated=N saved=M`.
 
 Tally: `merged=N`.
 
-### 4. Memory prune pass — silent, automatic, deterministic
+### 4. Accessibility & retirement pass — silent, automatic, deterministic
 
-Apply hard rules. No user confirmation.
+Memories are **not deleted for capacity.** Accessibility decays with disuse and is restored by use, the way memory itself works. The index (Pass 6) is the activation-ranked hot tier; a memory that falls past the budget cut becomes *cold* — it stays on disk and in QMD, reachable by recall, and re-enters the hot tier when its activation rises (use bumps `last_used` / `MEMORY_USE.log` in Pass 2). Nothing is lost. There is no capacity-driven delete, no `.trash/`, no recoverability question. `type: idea` memories follow the same decay as everything else — ideas you don't return to fade; ideas you reinforce stay hot.
 
-**Delete a memory if** ALL of these are true:
-- `last_used` is older than 90 days from today, OR `last_used` field is absent (treated as never-used)
-- File mtime (last reinforcement) is older than 30 days from today
-- Frontmatter does NOT contain `pin: true`
+Deletion is reserved for **correctness, not capacity:**
+- **Contradiction:** if a memory is explicitly contradicted by a newer one (one says "always use X", another "never use X" with a more recent `last_used`), retire the older — prefer the newer.
+- **Duplication:** exact or near-duplicates collapse via the merge pass (Pass 3).
 
-`type: idea` memories follow the same standard 90/30 rule as everything else — no special handling. Ideas you don't come back to age out naturally; ideas you reinforce stay.
+Retire by deleting the file — the same way Pass 3 deletes an absorbed memory. A contradicted or duplicate memory is *wrong*, and archiving it inside the store would leave it QMD-indexed and able to resurface in recall, which is exactly what retirement prevents. `pin: true` is never retired. A merely-old, uncontradicted memory is never retired; it fades via activation instead — that is the case the user's "why delete at all?" was about, and the answer is: it isn't deleted, it fades.
 
-**Also delete** if the memory is explicitly contradicted by another newer memory (e.g., one says "always use X", another says "never use X" with a more recent `last_used`). Prefer keeping the newer.
-
-**Never delete** memories with `pin: true` in frontmatter, regardless of age. This is the user's escape hatch.
-
-Memory files are git-tracked / recoverable, so deletions are reversible if a mistake is made. Don't ask, don't surface — just apply the rules.
-
-Tally: `pruned=N`.
+Tally: `retired=N`.
 
 ### 5. Compound pass
 - Did any technical learnings emerge that belong in `docs/solutions/` for the current project?
@@ -93,11 +88,11 @@ Tally: `pruned=N`.
 
 Tally: `compounded=N`.
 
-### 6. Index-budget pass — silent, automatic
+### 6. Index render pass — silent, automatic
 
-- Run `${CLAUDE_PLUGIN_ROOT}/scripts/memory-index-lint.sh` to check `MEMORY.md` against the Claude Code load budget (~25 KB AND ~200 lines) and entry↔body parity.
-- If the lint fails on budget, tighten the index back to one concise line per memory (`- [Title](file.md) — ≤1-line hook`), relocating verbose detail into the body file (QMD indexes bodies — that's where the recall signal belongs). Re-run the lint until it passes.
-- This is the guardrail against the silent load-cutoff: the auto-loaded index must never exceed the budget.
+- Run `${CLAUDE_PLUGIN_ROOT}/scripts/memory-index-render.py` to project `MEMORY.md` as the activation-ranked, budget-truncated hot tier. The highest-activation memories (pinned, plus recently and frequently used) fill the load budget; the rest are cold — on disk and in QMD, omitted from the index. The render is idempotent and never deletes a body.
+- Run `${CLAUDE_PLUGIN_ROOT}/scripts/memory-index-lint.sh` to confirm the rendered index is under budget. The binary nags at ~80% of its ~24.4 KB cap; the render targets the ~17.1 KB compact point, so a passing lint guarantees the nag never fires.
+- This self-heals silently and caps the auto-load size regardless of total memory count. The render runs every reflect trigger; a save-time render (the memory-write hook) keeps the index honest between triggers.
 
 Tally: `index_tightened=0|1`.
 
@@ -130,13 +125,13 @@ Tally: `worktrees_removed=N`.
 Append one line to `<memory-dir>/REFLECT.log`. The field set is extended additively with `index_tightened=`, `captured=`, and `embedded=` (any REFLECT.log parser must be updated for the new fields):
 
 ```
-<ISO8601 timestamp> <trigger> updated=N saved=M merged=K pruned=L compounded=C index_tightened=I captured=X embedded=Y worktrees_removed=W
+<ISO8601 timestamp> <trigger> updated=N saved=M merged=K retired=L compounded=C index_tightened=I captured=X embedded=Y worktrees_removed=W
 ```
 
 Examples:
 ```
-2026-05-08T18:42:13-07:00 manual updated=2 saved=0 merged=0 pruned=1 compounded=0 index_tightened=1 captured=0 embedded=1 worktrees_removed=0
-2026-05-08T19:15:00-07:00 PR_event updated=0 saved=1 merged=0 pruned=0 compounded=1 index_tightened=0 captured=2 embedded=2 worktrees_removed=2
+2026-05-08T18:42:13-07:00 manual updated=2 saved=0 merged=0 retired=1 compounded=0 index_tightened=1 captured=0 embedded=1 worktrees_removed=0
+2026-05-08T19:15:00-07:00 PR_event updated=0 saved=1 merged=0 retired=0 compounded=1 index_tightened=0 captured=2 embedded=2 worktrees_removed=2
 ```
 
 In verbose mode (`/reflect verbose`): also print the full pass-by-pass summary to screen, ending with the log line. In silent mode: only the log line is written; nothing prints to screen unless an exception is raised.

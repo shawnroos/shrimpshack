@@ -3,12 +3,17 @@
 # seeded-recall.sh — UserPromptSubmit hook. Once per session, on the first
 # prompt, inject the most relevant memory bodies as added context.
 #
-# Reads the hook payload from stdin JSON (.prompt, .session_id). Performs a FAST
-# lexical search (`qmd search`, BM25, ~0.25s — never `qmd query`, which loads
-# three models and stalls ~18-31s on this synchronous prompt path), under a hard
-# timeout. Bounds results in-script (top-K + optional score floor) because qmd
-# silently swallows unknown flags, so `-n`/`--min-score` are not trusted. Fetches
-# each body with `qmd get` and emits them on stdout (exit 0 → injected context).
+# Reads the hook payload from stdin JSON (.prompt, .session_id). Performs a VECTOR
+# search (`qmd vsearch`) under a hard wall budget. The Phase B spike (see
+# scripts/spikes/RESULTS.md) measured recall@3 of 0.75 for vsearch vs 0.25 for
+# full-prompt BM25 — BM25 is AND-over-content-terms, so a realistic paraphrased
+# prompt under-recalls. vsearch costs latency (p50 ~4s, cold-load tail to ~20s);
+# the fail-open wall budget below handles the tail (a slow first prompt simply
+# gets no recall that session — never blocked). `qmd query` (hybrid+rerank) is
+# avoided: it loads three models and stalls ~18-31s. Bounds results in-script
+# (top-K + optional global floor + an activation-scaled per-memory floor) because
+# qmd silently swallows unknown flags. Fetches each body with `qmd get` and emits
+# them on stdout (exit 0 → injected context).
 #
 # Fail-safe: any missing qmd, error, or timeout exits 0 with no output — recall
 # degrades to the manual pointer-index fallback, the prompt is never blocked.
@@ -16,7 +21,7 @@
 # Config (env, all optional):
 #   SEEDED_RECALL_COLLECTION   (default claude-memory)
 #   SEEDED_RECALL_K            (default 3)        top-K bodies to inject
-#   SEEDED_RECALL_TIMEOUT      (default 6)        seconds, TOTAL wall budget across
+#   SEEDED_RECALL_TIMEOUT      (default 7)        seconds, TOTAL wall budget across
 #                                                 all qmd calls (keep below the
 #                                                 settings-level hook timeout, 8s)
 #   SEEDED_RECALL_MIN_SCORE    (default unset)    drop results below this score
@@ -67,9 +72,12 @@ except ValueError:
 # settings-level hook timeout (keep this default below it). run() draws each
 # call's timeout from the remaining budget.
 try:
-    budget = float(os.environ.get("SEEDED_RECALL_TIMEOUT", "6"))
+    # vsearch is slower than the old BM25 path (p50 ~4s); give it room while
+    # staying under the settings-level hook timeout (8s). The cold-load tail
+    # exceeds this and fails open by design.
+    budget = float(os.environ.get("SEEDED_RECALL_TIMEOUT", "7"))
 except ValueError:
-    budget = 6.0
+    budget = 7.0
 try:
     raw_ms = os.environ.get("SEEDED_RECALL_MIN_SCORE")
     min_score = float(raw_ms) if raw_ms not in (None, "") else None
@@ -111,17 +119,14 @@ def run(args):
         return None
     return r.stdout
 
-# Seed the query with the prompt plus the current branch.
-branch = ""
-b = run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-if b:
-    branch = b.strip()
-query = prompt if not branch else f"{prompt} {branch}"
-query = query[:400]
+# Vector search is semantic — the prompt alone is the query. The branch name
+# (a useful lexical signal for the old BM25 path) is noise for a vector query and
+# is dropped; repo scoping is applied separately below via the working directory.
+query = prompt[:400]
 
 # `--` ends flag parsing so a leading-dash prompt can't inject a flag (e.g. a
 # second -c that redirects the collection).
-raw = run(["qmd", "search", "-c", collection, "--format", "json", "--", query])
+raw = run(["qmd", "vsearch", "-c", collection, "--format", "json", "--", query])
 if not raw:
     out_nothing()
 try:
@@ -137,8 +142,81 @@ if min_score is not None:
     results = [r for r in results if isinstance(r, dict)
                and isinstance(r.get("score"), (int, float)) and r["score"] >= min_score]
 results = [r for r in results if isinstance(r, dict) and r.get("file")]
+# Drop the index itself: MEMORY.md is in the QMD collection and matches almost any
+# prompt (it carries every hook), so it scores high and would pollute recall. The
+# index is auto-loaded already — recall is for the bodies behind it.
+results = [r for r in results if os.path.basename(r["file"]) != "MEMORY.md"]
 if not results:
     out_nothing()
+
+# Activation-scaled floor (U6) — the "more intention to reach" proxy. A faded
+# (low-activation) memory must clear a HIGHER vector-score floor to surface than a
+# fresh one; a pinned/fresh memory clears a low floor. Fully fail-open: any
+# problem (no activation module, body not found, parse error) leaves the result
+# in, so recall never degrades below the global-floor behavior above.
+try:
+    # Locate memory_activation.py via SCOPED_MEMORY_DIR (exported above, absolute,
+    # = <scripts>/scoped-memory) — NOT __file__, which is the literal "<stdin>"
+    # under `python3 - <<'PY'` and would resolve against the cwd.
+    import importlib.util as _ilu
+    _scripts = os.path.dirname(os.environ.get("SCOPED_MEMORY_DIR", "") or "")
+    if not _scripts:
+        raise RuntimeError("no SCOPED_MEMORY_DIR")
+    _spec = _ilu.spec_from_file_location("memory_activation",
+                                         os.path.join(_scripts, "memory_activation.py"))
+    _ma = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_ma)
+    from datetime import date as _date, datetime as _dt
+
+    def _floorf(name, default):
+        try:
+            v = os.environ.get(name)
+            return float(v) if v not in (None, "") else default
+        except ValueError:
+            return default
+    _base = _floorf("SEEDED_RECALL_FLOOR_BASE", 0.45)   # floor a FRESH memory must clear
+    _span = _floorf("SEEDED_RECALL_FLOOR_SPAN", 0.15)   # extra a fully-faded one must clear
+    _ref = _floorf("SEEDED_RECALL_FLOOR_ACT_REF", 1.3)  # activation treated as "fresh"
+
+    # Canonical store dir (same derivation as the lint/render scripts).
+    _slug = "-" + os.path.expanduser("~").lstrip("/").replace("/", "-")
+    _memdir = os.environ.get("SEEDED_RECALL_MEMORY_DIR") or os.path.expanduser(
+        f"~/.claude/projects/{_slug}/memory")
+    _today = _date.today()
+    # Read use-frequency once (not per candidate) so the floor scores activation
+    # from the SAME inputs as the render — a frequently-cited memory shouldn't face
+    # a harsher floor than its true (frequency-boosted) activation warrants.
+    _use_counts = _ma.use_counts(os.path.join(_memdir, "MEMORY_USE.log"))
+
+    def _act_for(pointer):
+        # qmd pointers dash-case the filename; bodies use underscores.
+        base = os.path.basename(pointer)
+        cand = base.replace("-", "_")
+        for fn in (cand, base):
+            p = os.path.join(_memdir, fn)
+            if os.path.isfile(p):
+                try:
+                    md = _dt.fromtimestamp(os.path.getmtime(p)).date()
+                except Exception:
+                    md = None
+                stem = fn[:-3]
+                uc = _use_counts.get(stem, 0) or _use_counts.get(stem.replace("_", "-"), 0)
+                return _ma.activation(_today, _ma.parse_last_used(p), md, uc,
+                                      _ma.parse_pinned(p))
+        return None
+
+    def _passes(r):
+        a = _act_for(r["file"])
+        if a is None:
+            return True                      # unknown -> keep (fail-open)
+        required = _ma.recall_floor(a, _base, _span, _ref)
+        s = r.get("score")
+        return not isinstance(s, (int, float)) or s >= required
+
+    _filtered = [r for r in results if _passes(r)]
+    if _filtered:                            # never let the floor empty the set to nothing
+        results = _filtered
+except Exception:
+    pass                                     # any failure -> unchanged results
 
 # Repo-scoped recall (plan 003 U4): keep today's top-K of the GLOBAL/ancestor pool,
 # then ADD the single best current-repo memory above a DISTINCT repo floor as a

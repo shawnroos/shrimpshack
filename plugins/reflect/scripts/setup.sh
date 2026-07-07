@@ -35,15 +35,18 @@ echo "reflect setup: starting (idempotent)"
 mkdir -p "$DOCSTORE/brainstorms" "$DOCSTORE/handoffs" "$DOCSTORE/solutions"
 echo "reflect setup: doc-store ready at $DOCSTORE"
 
-# 2. migrate an existing MEMORY.md (idempotent; backs up to .pre-qmd-migration.bak)
+# 2. render an existing MEMORY.md as the activation-ranked hot tier (idempotent;
+#    backs up to .pre-render.bak). Supersedes the one-time migrate script: render
+#    reads existing hooks, ranks every body by activation, and truncates at the
+#    load budget — cold memories stay on disk, nothing is deleted.
 if [ -f "$MEMDIR/MEMORY.md" ]; then
-  if MEMORY_DIR="$MEMDIR" python3 "$PLUGIN_ROOT/scripts/migrate-memory-index.py" "$MEMDIR/MEMORY.md"; then
+  if MEMORY_DIR="$MEMDIR" python3 "$PLUGIN_ROOT/scripts/memory-index-render.py" "$MEMDIR/MEMORY.md"; then
     :
   else
-    echo "reflect setup: index migration skipped/failed (left unchanged)" >&2
+    echo "reflect setup: index render skipped/failed (left unchanged)" >&2
   fi
 else
-  echo "reflect setup: no MEMORY.md at $MEMDIR — skipping migration" >&2
+  echo "reflect setup: no MEMORY.md at $MEMDIR — skipping render" >&2
 fi
 
 # 3. patch the Memory Protocol in the user's CLAUDE.md (opt-in; conservative)

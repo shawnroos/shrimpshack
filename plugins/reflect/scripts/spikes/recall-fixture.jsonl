@@ -1,0 +1,28 @@
+{"prompt": "I'm mid stash pop and the conflict markers confuse me, which side is theirs", "expect": "git-checkout-theirs-inverts-in-stash-pop"}
+{"prompt": "my jasmine unit test spy seems to leak into another test in the same describe", "expect": "jasmine-shared-spy-leaks-across-sibling-tests"}
+{"prompt": "git pull threw away one of my merge commits somehow", "expect": "pull-rebase-drops-merge-commits"}
+{"prompt": "the bevels on the crop overlay render wrong on the canvas", "expect": "slate-crop-overlay-bevels"}
+{"prompt": "ng test keeps dying with chrome out of memory", "expect": "slate-webapp-ng-test-chrome-heap"}
+{"prompt": "how should I land this finished feature branch onto main", "expect": "squash-on-pr-landing"}
+{"prompt": "a launchdarkly flag I expected isn't in the served browser config", "expect": "ld-clientside-availability-gates-browser-flags"}
+{"prompt": "where does the slash goal command actually live, not in any plugin", "expect": "native-commands-live-in-the-binary"}
+{"prompt": "the agent wrote a comment explaining why some code exists but it sounds invented", "expect": "agent-comments-fabricate-plausible-mechanisms"}
+{"prompt": "two CE pipelines running at once flipped my main branch", "expect": "concurrent-agents-branch-switch-hazard"}
+{"prompt": "should I prefer the CLI or the MCP server for this integration", "expect": "prefer-cli-over-mcp"}
+{"prompt": "the worktrees seem to get made and cleaned up on their own", "expect": "worktrees-automatic"}
+{"prompt": "a subagent said it wrote the files but I should double check they exist", "expect": "subagent-write-verification"}
+{"prompt": "how does the agent-browser vs cmux-browser vs playwright choice work", "expect": "browser-hierarchy"}
+{"prompt": "the spinoff start command picked an old stale transcript file", "expect": "spinoff-transcript-resolution-by-content-not-mtime"}
+{"prompt": "my agents got stuck right after making edits, something blocking", "expect": "slate-roadmap-watchdog-blocks-all-sessions"}
+{"prompt": "a slate LD flag missing from browser config, is that an availability gate", "expect": "ld-clientside-availability-gates-browser-flags"}
+{"prompt": "new shapes need a finite default clip or the videofill guard trips", "expect": "slate-shapes-finite-default-clip"}
+{"prompt": "is skia a build target for the shapes work", "expect": "slate-shapes-skia-portability-constraint"}
+{"prompt": "the reflect command runs silently on its own to consolidate memory", "expect": "reflect-command"}
+{"prompt": "when planning infra features compute against real file lists not prose", "expect": "plan-against-real-data-not-prose-abstractions"}
+{"prompt": "the dominant bug from a plan is prose describing a transition the code never wires", "expect": "plan-documents-transition-code-doesnt-wire-it"}
+{"prompt": "do it all means do the sound work with judgment not literally everything", "expect": "do-it-all-means-sound-not-every"}
+{"prompt": "the slate outer repo and the web-app are actually separate git repos", "expect": "slate-outer-webapp-inner-separate-repos"}
+{"prompt": "a hand rolled probe is broken unless it matches the test harness env", "expect": "adhoc-probe-must-replicate-test-harness-env"}
+{"prompt": "clear the terminal file explorer options, which one is primary", "expect": "terminal-tools"}
+{"prompt": "auto is prepare and execute not self driving, the tick loop doesn't advance it", "expect": "auto-prepare-execute-operator-traps"}
+{"prompt": "what reduces permission prompts by allowlisting common read only calls", "expect": "fewer-permission"}
