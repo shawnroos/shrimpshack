@@ -249,12 +249,19 @@ except Exception:
 # lands in space B" bug). The launcher (bg agent) inherits the originating session's
 # HERDR_PANE_ID, so `pane get` on it reports the workspace that pane REALLY belongs
 # to now. Falls back to the env var only if the live probe yields nothing.
+# Sets HERDR_WS_SOURCE=live|frozen so callers can label honestly and a future
+# wrong-workspace recurrence is diagnosable (was it the live pane or the stale env?).
 _herdr_current_workspace() {
   local ws=""
+  HERDR_WS_SOURCE="frozen"
   if [ -n "${HERDR_PANE_ID:-}" ]; then
     ws="$("$HERDR" pane get "$HERDR_PANE_ID" 2>/dev/null | _herdr_json 'result.pane.workspace_id')"
+    [ -n "$ws" ] && HERDR_WS_SOURCE="live"
   fi
-  [ -n "$ws" ] || ws="${HERDR_WORKSPACE_ID:-}"
+  if [ -z "$ws" ]; then
+    ws="${HERDR_WORKSPACE_ID:-}"
+    [ -n "$ws" ] && echo "  ⚠ could not resolve the workspace from a live pane — falling back to the possibly-stale HERDR_WORKSPACE_ID=$ws" >&2
+  fi
   printf '%s' "$ws"
 }
 
@@ -274,7 +281,7 @@ launcher_new_tab_herdr() {
     LAUNCH_WS=""; LAUNCH_SFC=""; return
   fi
   LAUNCH_WS="$ws"
-  step "  target workspace: $ws (live-resolved)"
+  step "  target workspace: $ws (${HERDR_WS_SOURCE:-frozen})"
   out="$("$HERDR" tab create --workspace "$ws" --label "$LABEL" --no-focus 2>/dev/null)"
   tab="$(printf '%s' "$out" | _herdr_json 'result.tab.tab_id')"
   if [ -z "$tab" ]; then
@@ -745,7 +752,7 @@ LB_READY=0           # set to 1 when the input prompt was confirmed ready
 LEFT_PANE=""; WS=""  # cmux discovery scratch (set by the cmux verbs)
 HERDR_PANE=""        # herdr agent pane id (set by launcher_launch_agent_herdr)
 # Backend-neutral refs the launch verbs hand off to each other:
-LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""; LAUNCH_RUN_PANE=""
+LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""; LAUNCH_RUN_PANE=""; HERDR_WS_SOURCE=""
 LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
 # Short pointer, not the full directional prose. A ~1080-char single-line paste
 # overruns the TUI input line and the launched session gets a truncated kickoff.
