@@ -1,0 +1,29 @@
+{
+  "description": "lint-router hooks — prepare the right lint profile automatically so the check is ready the moment it's needed. SessionStart + PostToolUse(EnterWorktree) run the router in --setup-only mode (idempotent): for a Slate web-app it writes the gitignored overlay; for your own repos it ensures the bundled deps are installed (one-time) in the stable state dir; elsewhere it's a silent no-op. Never lints here — that's the skill's job.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/tools/lint-router/run.sh --setup-only",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "EnterWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/tools/lint-router/run.sh --setup-only",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

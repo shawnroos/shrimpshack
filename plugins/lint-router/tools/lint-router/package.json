@@ -1,0 +1,12 @@
+{
+  "name": "lint-router",
+  "private": true,
+  "version": "2.0.0",
+  "description": "lint-router: route to a different lint config by who the work is for \u2014 curated unicorn overlay for Slate repos; full unicorn (flat/all) self-contained lint for personal repos. Never touches any repo shared config.",
+  "type": "module",
+  "dependencies": {
+    "eslint": "9.39.2",
+    "@typescript-eslint/parser": "8.53.1",
+    "eslint-plugin-unicorn": "65.0.0"
+  }
+}

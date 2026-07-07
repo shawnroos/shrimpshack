@@ -65,6 +65,16 @@
       },
       "source": "./plugins/reflect",
       "category": "development"
+    },
+    {
+      "name": "lint-router",
+      "description": "Route to a different lint config based on WHO the work is for. In a Slate web-app checkout it layers a vetted, curated eslint-plugin-unicorn subset ON TOP of Slate's own linting (composes with ng lint; footguns off; never touches shared config or CI). In one of your own repos it runs the full unicorn suite (flat/all) as a self-contained lint. In another Slate team repo it does nothing. Personal and local: it writes only a gitignored overlay or nothing at all, never a repo's committed config, deps, or CI. A SessionStart hook prepares the right profile automatically; invoke the skill to run the check before committing or opening a PR. The router is one function, so adding a profile extends it.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Shawn Roos"
+      },
+      "source": "./plugins/lint-router",
+      "category": "development"
     }
   ]
 }
