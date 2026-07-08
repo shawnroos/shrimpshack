@@ -1,0 +1,32 @@
+[
+  {
+    "name": "work",
+    "when": {
+      "any": [
+        { "origin": "*slateteams/*" },
+        { "has_file": { "path": "eslint.config.mjs", "contains": "@angular-eslint" } }
+      ]
+    },
+    "linters": [
+      {
+        "linter": "eslint",
+        "mode": "overlay",
+        "config": "configs/work-eslint.mjs",
+        "files": "^src/.*\\.ts$",
+        "requires_file": "eslint.config.mjs"
+      }
+    ]
+  },
+  {
+    "name": "personal",
+    "when": { "default": true },
+    "linters": [
+      {
+        "linter": "eslint",
+        "mode": "standalone",
+        "config": "configs/personal-eslint.mjs",
+        "files": "\\.(ts|tsx|js|jsx|mjs|cjs)$"
+      }
+    ]
+  }
+]
