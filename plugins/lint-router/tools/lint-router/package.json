@@ -1,0 +1,12 @@
+{
+  "name": "lint-router",
+  "private": true,
+  "version": "2.0.0",
+  "description": "lint-router: registry-driven router that runs the right linters for the current repo, chosen by who the work is for. Bundles eslint (+ its unicorn plugin) as the default seed; add any linter via the plugin skills. Never touches any repo's committed config.",
+  "type": "module",
+  "dependencies": {
+    "eslint": "9.39.2",
+    "@typescript-eslint/parser": "8.53.1",
+    "eslint-plugin-unicorn": "65.0.0"
+  }
+}

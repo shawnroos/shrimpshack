@@ -1,0 +1,11 @@
+{
+  "name": "lint-router",
+  "description": "A registry-driven lint router: it picks which linters to run based on WHO the work is for — matched by git origin or marker files — then runs that profile's linters on just the files you changed. Profiles live in a routes.json registry (ordered, first match wins); add, configure, remove, or discover linters through the bundled skills — eslint, ruff, clippy, shellcheck, prettier, or any tool you register, across languages. A profile can layer a linter as an overlay on a repo's own config or run one standalone, and a profile that matches nothing runs nothing — so it never imposes a lint on code that shouldn't have one. Personal and local by design: it writes only a gitignored overlay or nothing at all, never a repo's committed config, deps, or CI. A SessionStart hook prepares the right profile automatically; invoke the skill to run the check before committing or opening a PR.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Shawn Roos",
+    "email": "shawn@slateteams.com"
+  },
+  "keywords": ["lint", "eslint", "linter", "code-quality", "router"],
+  "skills": "./skills"
+}
