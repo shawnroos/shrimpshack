@@ -2,12 +2,21 @@
 #
 # smoke.sh — fast, dependency-free checks for spinoff.sh's arg-validation,
 # session-transcript passthrough, and back-compat. Exercises everything that
-# runs BEFORE the cmux automation (which is gated on CMUX_WORKSPACE_ID, unset
-# here), so it needs no cmux and no real Claude session — just git.
+# runs BEFORE the launch automation, so it needs no cmux/herdr and no real
+# Claude session — just git.
 #
 # Run: bash smoke.sh   →   exits 0 if all checks pass, 1 otherwise.
 
 set -uo pipefail
+
+# Disable the launch automation for EVERY run in this file. Unsetting
+# CMUX_WORKSPACE_ID alone was enough when cmux was the only backend, but herdr
+# detects on HERDR_ENV + a live server — so under herdr the smoke suite launched
+# REAL tabs into mktemp worktrees, then deleted the worktrees, littering the live
+# workspace with dead tabs (observed: 10 of them). --launcher none is belt and
+# braces alongside the unsets in run().
+export HERDR_ENV=0
+unset CMUX_WORKSPACE_ID HERDR_WORKSPACE_ID HERDR_PANE_ID 2>/dev/null || true
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SPINOFF="$HERE/spinoff.sh"
 PASS=0 FAIL=0

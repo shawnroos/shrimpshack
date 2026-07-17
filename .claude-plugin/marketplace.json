@@ -49,7 +49,7 @@
     {
       "name": "spinoff",
       "description": "Fork the current thread of work into its own place \u2014 takes the topic/plan/idea just discussed and moves it into a fresh git worktree with a new, already-briefed Claude session, so the current session stays focused and the new one picks up the context. Command-invoked only via /start-session, /start-workspace, or the /start alias: branches a worktree (current HEAD or develop), writes a handoff doc linking back to the originating session's transcript, carries over the whole docs/ tree plus local config dotfiles (.env, .envrc, .tool-versions, .nvmrc), and boots a briefed Claude \u2014 either in a new tab on the current cmux workspace or in a brand-new two-pane workspace with the handoff alongside. The mechanical work runs in a background agent so it doesn't consume the originating session's context. The receiving session is told to treat the handoff as directional author-intent — enough to orient and start, with the code and tests as the source of truth — both in the kickoff and via a self-declaring banner on the doc itself. Launches the briefed session under either cmux or herdr, auto-detected.",
-      "version": "0.8.2",
+      "version": "0.8.3",
       "author": {
         "name": "Shawn Roos"
       },

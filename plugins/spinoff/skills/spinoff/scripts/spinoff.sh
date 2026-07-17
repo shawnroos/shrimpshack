@@ -130,9 +130,13 @@ launcher_launch_agent_cmux() {
 # Wait for the input prompt to be ready (a fixed sleep is unreliable — a fresh
 # claude can spend seconds loading MCP servers, and an Enter sent too early is
 # swallowed). Sets LB_READY=1 on confirmed ready.
+# The poll count is derived from the same ceiling as the herdr path (a 1s sleep per
+# iteration), so both backends tolerate an equally slow boot. Unlike herdr's blocking
+# wait this does pay ~1s per iteration, but it breaks the instant the prompt shows —
+# a fast boot still exits after a second or two.
 launcher_wait_ready_cmux() {
   local screen
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 "$(( SPINOFF_READY_TIMEOUT_MS / 1000 + 1 ))"); do
     sleep 1
     screen="$("$CMUX" read-screen --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" 2>/dev/null)"
     case "$screen" in
@@ -144,8 +148,15 @@ launcher_wait_ready_cmux() {
 # Send + submit the kickoff, then verify it actually submitted (input line should
 # no longer hold it); retry one Enter if it's still sitting there. Reports
 # readiness honestly using the LAUNCH_LABEL / LAUNCH_WHERE set by new_tab/new_workspace.
+# Same readiness GATE as the herdr path: never submit into a session that never
+# reached a ready prompt (the Enter is swallowed and the brief is left staged).
 launcher_send_kickoff_cmux() {
   local after
+  if [ "$LB_READY" != "1" ]; then
+    KICKOFF_OK=0
+    step "  $LAUNCH_LABEL: $LAUNCH_SFC (NOT briefed — Claude never reached a ready prompt; kickoff withheld)"
+    return
+  fi
   "$CMUX" send --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" "$KICKOFF" >/dev/null 2>&1
   sleep 1
   "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1
@@ -156,11 +167,8 @@ launcher_send_kickoff_cmux() {
       # Still sitting on the input line un-submitted → retry one Enter.
       "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1 ;;
   esac
-  if [ "$LB_READY" = "1" ]; then
-    step "  $LAUNCH_LABEL: $LAUNCH_SFC (Claude ready, briefed)"
-  else
-    step "  $LAUNCH_LABEL: $LAUNCH_SFC (Claude launched; readiness not confirmed — check the $LAUNCH_WHERE)"
-  fi
+  KICKOFF_OK=1
+  step "  $LAUNCH_LABEL: $LAUNCH_SFC (Claude ready, briefed)"
 }
 
 # Right pane (workspace target only): render the handoff in cmux's live-reload
@@ -370,15 +378,61 @@ launcher_launch_agent_herdr() {
   step "  herdr agent pane: $pane"
 }
 
-# Block on herdr's first-class readiness wait (Spike Findings (c): `agent wait
-# --status idle` fires reliably for a fresh claude — the 30× read-screen poll is
-# NOT on the herdr path). Sets LB_READY=1 on confirmed idle, 0 on timeout.
+# Readiness for the herdr path. Sets LB_READY=1 only when claude's input prompt is
+# actually drawn and unblocked.
+#
+# Both of the traps below were measured live against herdr 0.7.1 + claude 2.1.212.
+#
+# 1. `agent wait <pane> --status idle` does NOT wait for the agent to EXIST. On an
+#    unregistered pane it returns `agent_not_found` and exits 1 in ~0.4s — the
+#    --timeout only governs a STATUS TRANSITION on an already-registered agent.
+#    `pane run` returns as soon as the command hits the shell, so claude is always
+#    still starting here: a single `agent wait` fails instantly, whatever the ceiling.
+#
+# 2. `agent_status: idle` does NOT mean "ready for input". A spinoff worktree is a
+#    NEW project path, so a repo with .mcp.json greets a fresh claude with a trust
+#    modal ("N new MCP servers found in this project"), and the agent registers as
+#    **idle** while that modal blocks the prompt.
+#
+# Together these are the real "staged but unsubmitted" cause: readiness came back
+# false in 0.4s, the old code sent anyway, the text was typed at the pane, the tty
+# buffered it, and claude picked it up on first stdin read — leaving the brief in the
+# input box, never submitted. So: read readiness off the SCREEN, dismiss the modal,
+# and only then report ready.
+#
+# Match claude's own footer, NEVER a bare "❯" — that is also the SHELL prompt, i.e.
+# a guaranteed false positive before claude has drawn at all.
 launcher_wait_ready_herdr() {
   LB_READY=0
   [ -n "${HERDR_PANE:-}" ] || return
-  if "$HERDR" agent wait "$HERDR_PANE" --status idle --timeout 30000 >/dev/null 2>&1; then
-    LB_READY=1
-  fi
+  local deadline screen
+  deadline=$(( $(date +%s) + SPINOFF_READY_TIMEOUT_MS / 1000 ))
+  while :; do
+    # NB: `pane read` emits RAW TEXT, not JSON (only `agent read` is JSON — and that
+    # one 404s until the agent registers). Piping this through _herdr_json yields an
+    # empty string forever, which is exactly why the old resubmit guard below never
+    # fired even once. Read it raw.
+    screen="$("$HERDR" pane read "$HERDR_PANE" --source visible 2>/dev/null)"
+    case "$screen" in
+      *"shift+tab to cycle"*|*"bypass permissions"*|*"? for shortcuts"*) LB_READY=1; return ;;
+      *"new MCP servers found"*|*"Select any you wish to enable"*)
+        # Confirm the pre-checked default (Enter). The spinoff is a worktree of a repo
+        # the user already works in, so this reproduces the parent repo's state rather
+        # than granting anything new — but it IS a trust prompt, so it's disclosed in
+        # the output, never silent. SPINOFF_MCP_MODAL=reject Escapes out instead
+        # (session gets no MCP servers); =abort leaves it up and fails the brief.
+        case "${SPINOFF_MCP_MODAL:-accept}" in
+          reject) "$HERDR" pane send-keys "$HERDR_PANE" Escape >/dev/null 2>&1
+                  step "  … MCP trust modal: rejected all (SPINOFF_MCP_MODAL=reject)" ;;
+          abort)  step "  … MCP trust modal is up and SPINOFF_MCP_MODAL=abort — not briefing"; return ;;
+          *)      "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1
+                  step "  … MCP trust modal: accepted the pre-checked default (new worktree = new project path)" ;;
+        esac
+        sleep 2 ;;
+    esac
+    [ "$(date +%s)" -ge "$deadline" ] && return
+    sleep 1
+  done
 }
 
 # Fire the kickoff with EXACTLY ONE submit (KTD-4 / R7): `agent send` STAGES the
@@ -388,23 +442,37 @@ launcher_wait_ready_herdr() {
 # `read`-blocked pane with no Enter → the read did NOT complete), overriding older
 # lore that `agent send` auto-submits. Safety net (adapted from the cmux path): if
 # a read shows the kickoff still staged, retry one Enter — never a second send.
+#
+# GATE (the fix for "staged but unsubmitted"): readiness is a CONTROL signal, not
+# a narration variable. If the session never came up ready, DO NOT fire — an Enter
+# into a booting TUI is swallowed, and firing anyway is what produced a correctly
+# branched tab holding an unsubmitted brief, reported as success. Sets KICKOFF_OK=1
+# only when the kickoff was submitted into a confirmed-ready session.
 launcher_send_kickoff_herdr() {
   local after
   [ -n "${HERDR_PANE:-}" ] || return
+  # Never send blind. wait_ready already burned the full ceiling; a second wait
+  # would just re-pay it, so treat not-ready as terminal and report loudly.
+  if [ "$LB_READY" != "1" ]; then
+    KICKOFF_OK=0
+    step "  $LAUNCH_LABEL: $HERDR_PANE (NOT briefed — Claude never reached a ready prompt; kickoff withheld)"
+    return
+  fi
   "$HERDR" agent send "$HERDR_PANE" "$KICKOFF" >/dev/null 2>&1     # stage literal text
   "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1      # single submit
-  sleep 2
-  after="$("$HERDR" pane read "$HERDR_PANE" --source recent --lines 20 2>/dev/null | _herdr_json 'result.read.text')"
+  # Readiness-aware retry: re-wait for idle rather than a blind fixed sleep, so the
+  # retry Enter can't land inside the same swallow window as the first.
+  "$HERDR" agent wait "$HERDR_PANE" --status idle --timeout "$SPINOFF_RETRY_TIMEOUT_MS" >/dev/null 2>&1 || true
+  # Raw text, not JSON — see the note in launcher_wait_ready_herdr.
+  after="$("$HERDR" pane read "$HERDR_PANE" --source recent --lines 20 2>/dev/null)"
   case "$after" in
     *"Read docs/handoff.md"*)
-      # Still staged on the input line → retry one Enter (no extra `agent send`).
+      # Still staged on the input line → retry one Enter (no extra `agent send`,
+      # preserving the EXACTLY-ONE-submit invariant: send stages, Enter submits).
       "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1 ;;
   esac
-  if [ "$LB_READY" = "1" ]; then
-    step "  $LAUNCH_LABEL: $HERDR_PANE (Claude ready, briefed)"
-  else
-    step "  $LAUNCH_LABEL: $HERDR_PANE (Claude launched; readiness not confirmed — check the $LAUNCH_WHERE)"
-  fi
+  KICKOFF_OK=1
+  step "  $LAUNCH_LABEL: $HERDR_PANE (Claude ready, briefed)"
 }
 
 # Right-pane handoff viewer (workspace target only). herdr has NO native markdown
@@ -749,6 +817,13 @@ WORKSPACE_REF=""
 SURFACE_REF=""
 VIEWER_OK=0          # set when the handoff markdown viewer actually renders
 LB_READY=0           # set to 1 when the input prompt was confirmed ready
+KICKOFF_OK=0         # set to 1 ONLY when the kickoff was submitted into a ready session
+# Readiness ceiling. A boot slower than this is a hard failure (kickoff withheld,
+# reported loudly, non-zero exit) rather than a silently-unbriefed tab. Generous by
+# design: herdr's `agent wait` returns the instant the agent is idle, so a fast boot
+# pays nothing. Env-overridable — the deliberate-fail test sets it to 1.
+SPINOFF_READY_TIMEOUT_MS="${SPINOFF_READY_TIMEOUT_MS:-180000}"
+SPINOFF_RETRY_TIMEOUT_MS="${SPINOFF_RETRY_TIMEOUT_MS:-5000}"
 LEFT_PANE=""; WS=""  # cmux discovery scratch (set by the cmux verbs)
 HERDR_PANE=""        # herdr agent pane id (set by launcher_launch_agent_herdr)
 # Backend-neutral refs the launch verbs hand off to each other:
@@ -787,9 +862,23 @@ else
 fi
 
 # ---- summary ----------------------------------------------------------------
+# Did we actually try to brief a session? (Launcher resolved AND a surface came up.)
+# Only then can an unsubmitted kickoff be a failure — a LAUNCHER=none run is a
+# legitimate worktree-only spinoff and still "complete".
+BRIEF_ATTEMPTED=0
+[ "$LAUNCHER" != "none" ] && [ -n "$LAUNCH_SFC" ] && BRIEF_ATTEMPTED=1
+
+# NEVER render an unbriefed session as success. The skill mandates relaying this
+# block verbatim, so a failure formatted as a success line inside a ✓ block is a
+# failure that reaches the user as "done" — which is exactly how the staged-kickoff
+# bug survived. Header + exit code both tell the truth.
 echo
 echo "════════════════════════════════════════════════════════"
-echo "✓ Spinoff complete"
+if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
+  echo "⚠ Spinoff INCOMPLETE — worktree is ready, session is NOT briefed"
+else
+  echo "✓ Spinoff complete"
+fi
 echo "  branch:    $BRANCH  (from $BASE_REF)"
 echo "  worktree:  $WORKTREE"
 echo "  handoff:   $HANDOFF_DST"
@@ -801,7 +890,7 @@ echo "  launcher:  $LAUNCHER"
 # only claim "briefed" when readiness was confirmed, and only claim the viewer
 # when it actually rendered (R9). The label is driven by $LAUNCHER / $TARGET —
 # never hard-code "cmux" here (a herdr run must not report itself as cmux).
-if [ "$LB_READY" = "1" ]; then SESS_STATE="open + briefed"; else SESS_STATE="launched (readiness not confirmed — check the surface)"; fi
+if [ "$KICKOFF_OK" = "1" ]; then SESS_STATE="open + briefed"; else SESS_STATE="launched but NOT briefed — kickoff withheld (never reached a ready prompt)"; fi
 VIEWER_NOTE=""; [ "$VIEWER_OK" = "1" ] && VIEWER_NOTE=" (handoff viewer alongside)"
 if [ -n "$SURFACE_REF" ] && [ -n "$WORKSPACE_REF" ]; then
   echo "  $LAUNCHER:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session $SESS_STATE$VIEWER_NOTE"
@@ -820,3 +909,22 @@ else
   echo "             $LAUNCH_CMD"
 fi
 echo "════════════════════════════════════════════════════════"
+
+# The worktree/branch/handoff are real and worth keeping — but an unbriefed session
+# is NOT a completed spinoff. Say so OUTSIDE the block (so it survives a summary
+# relay), hand over the exact recovery, and exit non-zero so a caller that only
+# checks status can't mistake this for success.
+if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
+  echo
+  echo "⚠ THE NEW SESSION WAS NOT BRIEFED." >&2
+  echo "  Claude never reached a ready prompt within ${SPINOFF_READY_TIMEOUT_MS}ms, so the kickoff was" >&2
+  echo "  withheld rather than fired blind into a booting TUI (an early Enter is swallowed," >&2
+  echo "  which silently leaves the brief staged and unsubmitted)." >&2
+  echo "  The worktree, branch and handoff are intact. To brief it by hand, run this in the tab:" >&2
+  echo >&2
+  echo "    Read docs/handoff.md and get oriented, then recommend the next step." >&2
+  echo >&2
+  echo "  A slow boot (e.g. MCP servers still loading) is the usual cause — retrying, or raising" >&2
+  echo "  SPINOFF_READY_TIMEOUT_MS, generally clears it." >&2
+  exit 3
+fi
