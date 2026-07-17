@@ -1,0 +1,42 @@
+{
+  "_comment": "Component batch for wcs-paper harvest (Unit U6). Each entry is one WCS component to render + harvest. SCHEMA per entry: { name, selector, route, trigger? } — U8 reads this to drive the harvest. `name` is the stable id used in Paper; `selector` is the CSS root of the rendered component; `route` is the URL/path (relative to --base-url, or absolute) that puts it on screen; `trigger` (optional) is a list of agent-browser command arg-arrays run after open to make it render, e.g. [[\"click\",\"button.wcs-open-typography\"],[\"wait\",\"app-wc-typography-heading\"]].",
+  "_selectors_are_best_effort": "IMPORTANT: the selectors and routes below are best-effort GUESSES. The WCS editor requires auth + a loaded project before any app-* component renders, and the exact element selectors / editor route could not be verified without a running dev server. CONFIRM each selector and route against a live, logged-in dev server (inspect the DOM) before trusting a harvest run. The SCHEMA (name/selector/route/trigger) is the stable contract; the values are placeholders to be corrected.",
+  "components": [
+    {
+      "name": "typography-heading",
+      "selector": "app-wc-typography-heading",
+      "route": "/creation-studio",
+      "trigger": []
+    },
+    {
+      "name": "typography-body",
+      "selector": "app-wc-typography-body",
+      "route": "/creation-studio",
+      "trigger": []
+    },
+    {
+      "name": "typography-micro",
+      "selector": "app-wc-typography-micro",
+      "route": "/creation-studio",
+      "trigger": []
+    },
+    {
+      "name": "typography-pica",
+      "selector": "app-wc-typography-pica",
+      "route": "/creation-studio",
+      "trigger": []
+    },
+    {
+      "name": "typography-point",
+      "selector": "app-wc-typography-point",
+      "route": "/creation-studio",
+      "trigger": []
+    },
+    {
+      "name": "typography-action",
+      "selector": "app-wc-typography-action",
+      "route": "/creation-studio",
+      "trigger": []
+    }
+  ]
+}

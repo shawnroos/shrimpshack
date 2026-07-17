@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "theme": "dark",
+  "selector": "app-typography-heading",
+  "root": {
+    "tag": "app-typography-heading",
+    "text": "",
+    "styles": { "display": "block" },
+    "children": [
+      {
+        "tag": "h1",
+        "text": "Heading",
+        "styles": {
+          "color": "rgb(255, 255, 255)",
+          "font-size": "32px",
+          "font-weight": "700",
+          "line-height": "40px",
+          "border-bottom-color": "rgb(88, 101, 242)",
+          "border-bottom-width": "2px",
+          "border-bottom-style": "solid"
+        },
+        "children": []
+      }
+    ]
+  }
+}
