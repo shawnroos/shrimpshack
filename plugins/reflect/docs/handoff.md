@@ -1,96 +1,92 @@
-# Spinoff: make the memory-index budget self-heal (stop the MEMORY.md nag for good)
+# Spinoff: reflect — a wedged qmd taxes EVERY prompt 8s (retry-forever guard)
 
-> This handoff is directional — author intent and a starting point, enough to orient and begin, not a spec to execute literally. The code and tests are the source of truth: validate against them and expect to refine.
-
-> **Directional handoff.** Intent + grounding, not a spec. Diagnosis below is
-> verified, but the "resolves-itself" architecture has real forks — brainstorm them,
-> don't just implement the first option. Validate against the reflect code.
+> This handoff is directional — author intent and a starting point, not a spec.
+> The code and tests are the source of truth; validate against them and refine.
 
 ## Goal
-Make the auto-memory index (`MEMORY.md`) budget **self-managing and silent** so Shawn
-is never again interrupted by "compact MEMORY.md" warnings. The system should keep the
-index under the load limit automatically — prune/tighten on its own — and the nag
-should simply stop happening because the index never gets big enough to trigger it.
+Make reflect's seeded-recall hook **degrade instead of taxing every prompt** when
+qmd is unavailable. Today a wedged qmd costs Shawn ~8 seconds on *every single
+prompt, for the life of the session*. Recall is a nice-to-have; it must never sit
+in the critical path of typing.
 
-## Shawn's two questions, answered up front
-- **"Is this even a real issue?"** *Yes.* As of 2026-06-27 the index is **25,096
-  bytes / 152 lines** — already **past the native ~24.4 KB read limit**. Claude Code
-  auto-loads `MEMORY.md` and **silently truncates** past the cutoff, so the
-  lowest-listed memories are at risk of dropping out of recall. The hard cap is real;
-  losing the tail is the actual cost.
-- **"It should resolve itself."** *Agreed — that's the whole point of this workstream.*
-  Reflect already has the passes for it (Pass 4 prune, Pass 6 index-tighten) but they
-  can't currently keep up / run safely (see blockers). The fix is to make budget
-  management automatic and safe, not to nag the user.
+Scope is the **reflect plugin only**. Fixing qmd itself is a separate, independent
+job — don't chase it here beyond what's needed to test.
 
-## Key facts established (verified 2026-06-27)
-- **The nag is NATIVE, not reflect.** The warning ("…approaching the 24.4 KB read
-  limit. Compact it to under 17.1 KB now…") appears in **no plugin, hook, or settings
-  file** — grep came up empty across `~/.claude/plugins`, `~/.claude/hooks`,
-  `settings.json`, `~/.cc-cmux`, and the reflect repo. It's emitted by the Claude Code
-  binary's memory system. **Implication: we cannot mute it from a plugin**
-  (cf. memory `native-commands-live-in-the-binary-not-just-plugin-dirs` — verify by
-  grepping the binary). The ONLY lever is keeping the index small enough that it never
-  fires.
-- **Prune is currently neutered.** Reflect's deterministic prune (Pass 4) would shrink
-  the index, but the memory dir `~/.claude/projects/-Users-shawnroos/memory/` is
-  **git-UNTRACKED** (`~/.claude` is a git repo but the memory files aren't tracked), so
-  deletions aren't recoverable. Earlier this session the prune was deliberately skipped
-  for safety — which is why the index keeps growing and the nag keeps returning.
-- **17.1 KB is unreachable by tightening alone.** With ~150 entries, the per-line
-  scaffold (`- [title](file.md) — hook`) alone exceeds the target; you can't hit 17 KB
-  without either removing entries (needs safe prune) or shortening
-  titles/filenames (renames break QMD parity). Tightening hooks already happened this
-  session and only bought ~4 KB.
-- **Reflect repo:** `~/projects/reflect`, `main` in sync with origin (`cb20c1d`) —
-  branch off current HEAD.
-- **Adjacent in-flight work:** `feature/memory-path-pin` (spun off earlier today, same
-  reflect repo) fixes WHERE memories get written (canonical store). This budget work is
-  the sibling "how big does the loaded index get" problem — coordinate / may want to
-  land in sequence.
+## Why now / context
+Diagnosed live today. Shawn thought his Enter key was broken.
 
-## Open questions / the "resolves-itself" architecture (the real design work)
-1. **Unblock safe prune — git-track vs recoverable trash?**
-   - (a) `git init` the memory dir (or track it within `~/.claude`) → prune deletions
-     become recoverable + you get full history/undo of every memory edit. Strongest.
-   - (b) A `.trash/` move-instead-of-delete with TTL → recoverable without git.
-   Pick one so Pass 4 can actually run.
-2. **Two-tier index (the durable "never nags again" answer).** Only HOT pointers
-   (pinned + recently-used N) live in the auto-loaded `MEMORY.md`; the long tail lives
-   in QMD only (still searchable via seeded-recall, just not auto-loaded). This caps
-   the auto-load size **regardless of total memory count** — the structural fix.
-   Inclusion rule for "hot"? (pin:true + last_used within X days + cap at K lines?)
-3. **Cadence — does reflect run often enough to self-heal before the native nag?**
-   Reflect triggers on PR/ExitPlanMode/TodoWrite-done. Budget can blow past those
-   boundaries (this session did). Consider a lightweight save-time tighten/prune so the
-   index self-heals right after each save.
-4. **Prune signal quality.** ~25 entries match the 90/30 rule but mostly because
-   `last_used` is ABSENT (use-tracking is inconsistently written), NOT because they're
-   stale. Fix use-tracking and/or prune by age-only — don't nuke valuable-but-never-
-   cited memories. (This bit us this session.)
-5. **Raise/retune the lint budget** (`scripts/memory-index-lint.sh`, currently 25600 /
-   200 lines) to match whatever the real native cutoff is, and make `/reflect` enforce
-   it automatically rather than surfacing it.
+- `qmd --help` works (1.28s) — the binary loads fine.
+- `qmd --version`, `qmd status` **hang forever** — anything touching the store wedges.
+- `seeded-recall.sh` therefore burns its whole budget and gets killed at the 8s
+  hook timeout. Every prompt. ~8s of nothing.
+
+Note this is NOT the known node-native-module breakage (memory
+`reference_qmd_breaks_on_node_upgrade_native_module`) — that **errors**, this
+**hangs**. Different failure, different fix. Node is v26.4.0; qmd installed Jul 7.
+
+## Key decisions already made / grounded diagnosis (verified in code)
+- **The bug is the once-per-session guard arming only on success.** In
+  `hooks/seeded-recall.sh`: the flag is *checked* at ~L99–103 but only *written* at
+  ~L278–283, deliberately — the comment (~L96–98) says:
+  > "The flag is checked here but WRITTEN only after we successfully build output —
+  > so a cold/timed-out/empty first prompt does not disable recall for the rest of
+  > the session; it simply retries on the next prompt."
+  That's a sound design against a **transient** failure. Against a **permanently
+  wedged** qmd it never arms, so retry-forever converts a one-time cost into a
+  per-prompt tax. **The design isn't wrong — its failure taxonomy is incomplete:
+  it has no notion of a persistent failure.** That's the thing to fix.
+- **Timeouts are the symptom, not the cause.** `SEEDED_RECALL_TIMEOUT` defaults to
+  **7** (`seeded-recall.sh` ~L24, ~L78) and the hook registration in
+  `.claude/hooks/hooks.json` (UserPromptSubmit, ~L15–24) sets `"timeout": 8` — the
+  script is *supposed* to self-bound under the hook ceiling. Measured 8.15s, i.e. it
+  overran its own 7s budget and was killed by the harness. Worth understanding why
+  the internal budget didn't hold (a `run()` call not drawing from the remaining
+  budget? qmd ignoring SIGTERM on a wedged store?) before just lowering numbers.
+- **Repo:** `/Users/shawnroos/projects/reflect`, currently `0.3.0`, published via the
+  shrimpshack vendored monorepo (version-gated — bump `plugin.json` **and** the
+  marketplace entry, keep them in sync, or the store won't pull it).
+
+## Open questions / not yet decided
+- **What's the right failure taxonomy?** Options, roughly escalating:
+  (a) arm the guard on *persistent* failure too (e.g. after N consecutive failures,
+      or on a failure that isn't "cold start"), so it self-disables for the session;
+  (b) a circuit breaker with a short cross-session cooldown (a stamp file), so a
+      wedged qmd doesn't re-probe every session either;
+  (c) a fast liveness pre-check (a ~300ms `qmd` probe) before committing to the
+      real query — cheap, and it's exactly the "is the store openable" question.
+  (a) is the minimum; (c) is probably what makes it feel instant. Prefer
+  deterministic over clever.
+- **Why did the internal 7s budget not hold** (measured 8.15s)? Fix that too, or the
+  script keeps getting harness-killed rather than exiting cleanly. Suspect the wedged
+  qmd ignores the timeout signal — may need a hard kill.
+- **Should recall ever block the prompt at all?** Worth asking whether this belongs
+  on UserPromptSubmit synchronously. A ~1s ceiling might be the real answer.
+- Shawn was offered "cap SEEDED_RECALL_TIMEOUT below 8s / disable the hook" as a
+  stop-the-bleeding step and hasn't chosen — **check with him before touching global
+  settings.** The durable fix lives in the plugin, not in his settings.json.
 
 ## Starting point
-- Reflect repo `~/projects/reflect` (branch from `main` `cb20c1d`):
-  `skills/reflect/SKILL.md` (Pass 4 prune, Pass 6 index-tighten — the self-heal
-  passes), `scripts/memory-index-lint.sh` (budget enforcement), `scripts/migrate-
-  memory-index.py`, `.claude/hooks/hooks.json` (trigger cadence),
-  `hooks/seeded-recall.sh` (how the tail is recalled from QMD — relevant to two-tier).
-- Live data: `~/.claude/projects/-Users-shawnroos/memory/` — 152 entries, `MEMORY.md`
-  25 KB, untracked. This is the thing to make self-healing.
-- Confirm the native nag's exact threshold by grepping the claude binary (per the
-  native-commands memory) so the lint budget matches reality.
+- `hooks/seeded-recall.sh` — the guard check (~L99–103), the deliberate comment
+  (~L96–98), the flag write (~L278–283), the budget (~L70–80), `run()` (~L108+).
+- `.claude/hooks/hooks.json` — UserPromptSubmit registration, `"timeout": 8`.
+- Env knobs already present: `SEEDED_RECALL_TIMEOUT` (default 7),
+  `SEEDED_RECALL_FLAG_DIR`, `SEEDED_RECALL_FORCE=1` (bypass guard — useful for tests).
+- **Reproduce before fixing** — qmd is wedged *right now*, so the failure is live and
+  free to observe. Also simulate it (a stub `qmd` on PATH that `sleep`s forever)
+  so the test doesn't depend on a broken machine.
+- See a new test fail once before it passes (Shawn's standing rule).
+- Memories: `reference_qmd_breaks_on_node_upgrade_native_module` (the *other*,
+  error-not-hang qmd failure), `feedback_reproduce_before_you_plan`,
+  `feedback_deterministic_over_probabilistic_v1`,
+  `feedback_new_tests_need_deliberate_fail_smoke_check`.
 
 ## Recommended next step
-`/ce-brainstorm` — the intent is unambiguous (self-healing, no nag) but the
-architecture has genuine forks (git-track vs trash for safe prune; two-tier hot/cold
-index; self-heal cadence). Brainstorm the shape, then `/ce-plan`. The fastest path to
-"stop the bleeding" is option 1(a) git-track + let Pass 4 prune run; the durable path
-is the two-tier index (2). Per global CLAUDE.md, offer post-brainstorm handoff choices
-rather than auto-writing a requirements doc.
+`/ce-plan`. The diagnosis is nailed and the fix space is small and well-bounded —
+the only real fork is the failure-taxonomy choice above, which is a plan decision,
+not a brainstorm. Plan it as: reproduce with a stub-wedged qmd → make the guard
+handle persistent failure → make the budget actually hold → test both the wedged and
+healthy paths → bump + publish.
 
 ## Source session
-Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/dde8ee69-bcee-40bd-a003-27e56020f197.jsonl`
-Resume:     `cd /Users/shawnroos && claude -r dde8ee69-bcee-40bd-a003-27e56020f197`
+Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/d7fba74d-4df6-426b-aeea-a7f3c587a64a.jsonl`
+Resume:     `cd /Users/shawnroos && claude -r d7fba74d-4df6-426b-aeea-a7f3c587a64a`

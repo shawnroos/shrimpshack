@@ -16,18 +16,28 @@
 # them on stdout (exit 0 → injected context).
 #
 # Fail-safe: any missing qmd, error, or timeout exits 0 with no output — recall
-# degrades to the manual pointer-index fallback, the prompt is never blocked.
+# degrades to the manual pointer-index fallback, the prompt is never blocked. A
+# slow/wedged qmd is not just tolerated but *remembered*: after N consecutive health
+# failures a cross-session cooldown stamp short-circuits future prompts (no qmd call)
+# until it ages out, so a wedged qmd costs a bounded few probes per window instead of
+# taxing every prompt. qmd children run in their own process group and are killed as
+# a group on timeout, so no orphaned model-loader subprocesses survive the hook.
 #
 # Config (env, all optional):
-#   SEEDED_RECALL_COLLECTION   (default claude-memory)
-#   SEEDED_RECALL_K            (default 3)        top-K bodies to inject
-#   SEEDED_RECALL_TIMEOUT      (default 7)        seconds, TOTAL wall budget across
-#                                                 all qmd calls (keep below the
-#                                                 settings-level hook timeout, 8s)
-#   SEEDED_RECALL_MIN_SCORE    (default unset)    drop results below this score
-#   SEEDED_RECALL_MAX_BODY     (default 1200)     chars per body, budget guard
-#   SEEDED_RECALL_FLAG_DIR     (default $TMPDIR/claude-seeded-recall)
-#   SEEDED_RECALL_FORCE=1      bypass the once-per-session guard (tests)
+#   SEEDED_RECALL_COLLECTION      (default claude-memory)
+#   SEEDED_RECALL_K               (default 3)        top-K bodies to inject
+#   SEEDED_RECALL_TIMEOUT         (default 6)        seconds, TOTAL wall budget across
+#                                                    all qmd calls; above healthy
+#                                                    vsearch latency, under the 8s hook
+#                                                    ceiling (headroom is the group-kill)
+#   SEEDED_RECALL_MIN_SCORE       (default unset)    drop results below this score
+#   SEEDED_RECALL_MAX_BODY        (default 1200)     chars per body, budget guard
+#   SEEDED_RECALL_FLAG_DIR        (default $TMPDIR/claude-seeded-recall)
+#   SEEDED_RECALL_COOLDOWN        (default 600)      seconds an armed failure stamp
+#                                                    suppresses recall (cross-session)
+#   SEEDED_RECALL_FAIL_THRESHOLD  (default 2)        consecutive failures before the
+#                                                    cooldown arms (transient tolerance)
+#   SEEDED_RECALL_FORCE=1         bypass the once-per-session guard AND the cooldown (tests)
 
 INPUT="$(cat)"
 export CLAUDE_HOOK_INPUT="$INPUT"
@@ -36,7 +46,7 @@ export CLAUDE_HOOK_INPUT="$INPUT"
 export SCOPED_MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts/scoped-memory" 2>/dev/null && pwd)"
 
 exec python3 - <<'PY'
-import os, sys, json, subprocess, hashlib, re, time
+import os, sys, json, subprocess, hashlib, re, time, signal
 
 def out_nothing():
     sys.exit(0)
@@ -72,12 +82,16 @@ except ValueError:
 # settings-level hook timeout (keep this default below it). run() draws each
 # call's timeout from the remaining budget.
 try:
-    # vsearch is slower than the old BM25 path (p50 ~4s); give it room while
-    # staying under the settings-level hook timeout (8s). The cold-load tail
-    # exceeds this and fails open by design.
-    budget = float(os.environ.get("SEEDED_RECALL_TIMEOUT", "7"))
+    # The default must sit ABOVE healthy vsearch latency (p50 ~4s per the header),
+    # not be minimized: too low a budget starves the healthy median query and, via
+    # the cooldown stamp below, would suppress recall on a working qmd. The 8s
+    # ceiling headroom comes from run()'s process-group kill (near-instant teardown),
+    # NOT from a small budget. 6 leaves room for the follow-on gets while staying
+    # under 8s even after the bounded kill escalation. Validate against a measured
+    # healthy full-path number, never the wedged-index pathology.
+    budget = float(os.environ.get("SEEDED_RECALL_TIMEOUT", "6"))
 except ValueError:
-    budget = 7.0
+    budget = 6.0
 try:
     raw_ms = os.environ.get("SEEDED_RECALL_MIN_SCORE")
     min_score = float(raw_ms) if raw_ms not in (None, "") else None
@@ -92,6 +106,52 @@ flag_dir = os.environ.get("SEEDED_RECALL_FLAG_DIR") or os.path.join(
     os.environ.get("TMPDIR", "/tmp"), "claude-seeded-recall")
 force = os.environ.get("SEEDED_RECALL_FORCE") == "1"
 
+# Cross-session failure cooldown (KTD1). A qmd *health* failure is recorded in a
+# single shared stamp (fixed name, not session-keyed) carrying a consecutive-failure
+# count and the failure time. Recall self-suppresses only once the count reaches the
+# threshold AND the stamp is still fresh — so one transient blip (count 1) does not
+# black out recall, but a persistently-wedged qmd is capped at `threshold` probes
+# then silence for the TTL. A success clears the stamp (self-heal).
+try:
+    cooldown = float(os.environ.get("SEEDED_RECALL_COOLDOWN", "600"))
+except ValueError:
+    cooldown = 600.0
+try:
+    fail_threshold = max(1, int(os.environ.get("SEEDED_RECALL_FAIL_THRESHOLD", "2")))
+except ValueError:
+    fail_threshold = 2
+stamp_path = os.path.join(flag_dir, "qmd-failure-stamp")
+
+def _read_stamp():
+    """Return (count, ts) from the stamp, or (0, 0.0) on any problem (fail open)."""
+    try:
+        with open(stamp_path) as fh:
+            d = json.load(fh)
+        return int(d.get("count", 0)), float(d.get("ts", 0.0))
+    except Exception:
+        return 0, 0.0
+
+def note_failure():
+    """Record one qmd-health failure. Continues the streak only if the prior stamp is
+    still fresh; a stale prior stamp starts a new streak. Best-effort — never raises."""
+    try:
+        count, ts = _read_stamp()
+        prev = count if (time.time() - ts) < cooldown else 0
+        os.makedirs(flag_dir, exist_ok=True)
+        tmp = stamp_path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"count": prev + 1, "ts": time.time()}, fh)
+        os.replace(tmp, stamp_path)
+    except Exception:
+        pass  # best-effort; worst case the cooldown just doesn't arm this round
+
+def clear_stamp():
+    """Drop the failure stamp on success so a recovered qmd resets the streak."""
+    try:
+        os.remove(stamp_path)
+    except OSError:
+        pass
+
 # Once-per-session guard (keyed on session id; hash so the filename is safe). The
 # flag is checked here but WRITTEN only after we successfully build output (near
 # the end) — so a cold/timed-out/empty first prompt does not disable recall for
@@ -102,22 +162,67 @@ if not force:
     flag = os.path.join(flag_dir, hashlib.sha1(key.encode()).hexdigest())
     if os.path.exists(flag):
         out_nothing()              # already injected this session
+    # Cooldown gate: a fresh, armed failure stamp means a recent qmd probe (or two)
+    # already failed — skip immediately, no qmd call, so a wedged qmd stops taxing
+    # every prompt. A count below the threshold does NOT suppress (transient tolerance).
+    _c, _ts = _read_stamp()
+    if _c >= fail_threshold and (time.time() - _ts) < cooldown:
+        out_nothing()
 
 deadline = time.monotonic() + budget
 
+def _killpg(p):
+    """Terminate the child's whole process group so a wedged qmd leaves no orphaned
+    grandchildren (subprocess timeout only signals the direct child). SIGTERM first
+    for a clean exit, then SIGKILL as a backstop; all best-effort."""
+    try:
+        pgid = os.getpgid(p.pid)
+    except OSError:
+        pgid = None
+    def _sig(s):
+        try:
+            if pgid is not None:
+                os.killpg(pgid, s)
+            else:
+                p.send_signal(s)
+        except OSError:
+            pass
+    _sig(signal.SIGTERM)
+    try:
+        p.wait(timeout=0.3)
+        return                       # exited cleanly on SIGTERM
+    except Exception:
+        pass                         # includes TimeoutExpired -> escalate to SIGKILL
+    _sig(signal.SIGKILL)
+    try:
+        p.wait(timeout=0.2)
+    except Exception:
+        pass
+
 def run(args):
     """Run a qmd command, bounded by the REMAINING wall budget. Returns stdout, or
-    None on any failure (missing binary, non-zero exit, timeout, budget spent)."""
+    None on any failure (missing binary, non-zero exit, timeout, budget spent). The
+    child runs in its own process group (start_new_session) and, on timeout, the whole
+    group is killed — no orphaned qmd model-loader subprocesses survive the hook."""
     remaining = deadline - time.monotonic()
     if remaining <= 0.05:
         return None
     try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=remaining)
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, start_new_session=True)
+    except (FileNotFoundError, OSError):
         return None
-    if r.returncode != 0:
+    try:
+        out, _ = p.communicate(timeout=remaining)
+    except subprocess.TimeoutExpired:
+        _killpg(p)                   # wedged qmd: reap the whole group, fail open
         return None
-    return r.stdout
+    except Exception:
+        _killpg(p)                   # any other error: same — never leak a child
+        return None
+    if p.returncode != 0:
+        return None
+    return out
 
 # Vector search is semantic — the prompt alone is the query. The branch name
 # (a useful lexical signal for the old BM25 path) is noise for a vector query and
@@ -128,6 +233,11 @@ query = prompt[:400]
 # second -c that redirects the collection).
 raw = run(["qmd", "vsearch", "-c", collection, "--format", "json", "--", query])
 if not raw:
+    # The one genuine qmd-health signal: vsearch itself failed (missing binary,
+    # timeout, non-zero exit, unparseable output). Record it toward the cooldown.
+    # Downstream empty/filtered result sets and get-loop misses are NOT health
+    # failures (qmd answered) and deliberately do not stamp.
+    note_failure()
     out_nothing()
 try:
     results = json.loads(raw)
@@ -281,6 +391,10 @@ if flag is not None:
         open(flag, "w").close()
     except Exception:
         pass  # best-effort; worst case recall fires again next prompt
+
+# qmd answered successfully — clear any failure stamp so a recovered qmd resets the
+# streak and doesn't sit under a lingering cooldown (self-heal). Best-effort.
+clear_stamp()
 
 print("<recalled-memories source=\"seeded-recall\">")
 if stale_note:

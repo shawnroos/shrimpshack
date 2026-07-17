@@ -109,11 +109,14 @@ if command -v qmd >/dev/null 2>&1; then
   check "once-per-session: same session_id re-fires nothing" '[ -z "$OUT2" ]'
   OUT3="$(printf '{"prompt":"widget pipeline","session_id":"S2"}' | bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
   check "new session_id fires again" "echo \"\$OUT3\" | grep -qi 'widget'"
-  # fail-safe: qmd not on PATH
-  OUT4="$(printf '{"prompt":"widget","session_id":"S3"}' | PATH="/usr/bin:/bin" SEEDED_RECALL_FLAG_DIR="$FLAG" bash "$HOOKS/seeded-recall.sh" 2>/dev/null; echo "EXIT:$?")"
+  # fail-safe: qmd not on PATH. Isolated FLAG_DIR: this is a deliberate qmd-health
+  # failure, and the (correct) cooldown stamp it writes would otherwise arm and
+  # suppress the later real-qmd success assertions that share $FLAG.
+  OUT4="$(printf '{"prompt":"widget","session_id":"S3"}' | PATH="/usr/bin:/bin" SEEDED_RECALL_FLAG_DIR="$FLAG-absent" bash "$HOOKS/seeded-recall.sh" 2>/dev/null; echo "EXIT:$?")"
   check "fail-safe when qmd absent: exit 0, no output" "echo \"\$OUT4\" | grep -q '^EXIT:0$' && [ \"\$(echo \"\$OUT4\" | grep -v '^EXIT:')\" = '' ]"
-  # cumulative wall-budget exhausted -> exit 0, no output (never blocks the prompt)
-  OUT5="$(printf '{"prompt":"widget pipeline","session_id":"S5"}' | SEEDED_RECALL_TIMEOUT=0.01 SEEDED_RECALL_FLAG_DIR="$FLAG" bash "$HOOKS/seeded-recall.sh" 2>/dev/null; echo "EXIT:$?")"
+  # cumulative wall-budget exhausted -> exit 0, no output (never blocks the prompt).
+  # Isolated FLAG_DIR for the same reason (a timeout is a health failure that stamps).
+  OUT5="$(printf '{"prompt":"widget pipeline","session_id":"S5"}' | SEEDED_RECALL_TIMEOUT=0.01 SEEDED_RECALL_FLAG_DIR="$FLAG-budget" bash "$HOOKS/seeded-recall.sh" 2>/dev/null; echo "EXIT:$?")"
   check "budget exhausted: exit 0, no output" "echo \"\$OUT5\" | grep -q '^EXIT:0$' && [ \"\$(echo \"\$OUT5\" | grep -v '^EXIT:')\" = '' ]"
   # A no-output first prompt must NOT set the flag -> a later matching prompt still
   # fires. Vector search always returns nearest neighbours (no BM25-style empty),
@@ -140,6 +143,112 @@ if command -v qmd >/dev/null 2>&1; then
   unset SEEDED_RECALL_COLLECTION SEEDED_RECALL_FLAG_DIR SEEDED_RECALL_K SEEDED_RECALL_TIMEOUT
   cd "$REPO"
 fi
+
+# ------------------------------------------------ seeded-recall degrade (wedged qmd)
+# These use a STUB `qmd` on PATH (no real qmd needed), so they run even when qmd is
+# absent — and deterministically, without the cold-load flake real vsearch carries.
+# Cover the failure-memory guard (cooldown stamp + threshold-2), the process-group
+# kill (no orphans on timeout), and the shipped default budget firing on a healthy qmd.
+echo "== seeded-recall degrade (wedged/healthy stubs) =="
+SR="$ROOT/recall-degrade"; mkdir -p "$SR/bin" "$SR/flags" "$SR/mem"
+# A wedged stub: hangs forever and spawns two long-lived grandchildren, recording
+# their PIDs so the orphan test can check survival by PID. (macOS pgrep -f can't
+# match a marker — /bin/sh exec-rewrites the sleep's argv — so PID + `kill -0` is
+# the reliable probe.) The stub then `wait`s on them, so run()'s wall budget times
+# out here. SR_PIDFILE is passed via env; it is truncated by whichever test cares.
+export SR_PIDFILE="$SR/child-pids"; : > "$SR_PIDFILE"
+cat > "$SR/bin/qmd" <<'STUB'
+#!/usr/bin/env bash
+sleep 300 & echo $! >> "$SR_PIDFILE"
+sleep 300 & echo $! >> "$SR_PIDFILE"
+wait
+STUB
+chmod +x "$SR/bin/qmd"
+# A healthy stub: instant valid vsearch JSON + get body + empty status. Emits a
+# unique token so the recall assertion is unambiguous.
+cat > "$SR/bin/qmd-healthy" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  vsearch) printf '[{"file":"recall_stub_body.md","title":"Recall Stub","score":0.9}]' ;;
+  get)     printf 'HEALTHYSTUBTOKEN body content\n' ;;
+  status)  printf 'QMD Status\nPending: 0 need embedding\n' ;;
+  *)       exit 0 ;;
+esac
+STUB
+chmod +x "$SR/bin/qmd-healthy"
+SR_WEDGED_PATH="$SR/bin:/usr/bin:/bin"
+# count recorded child PIDs still alive
+sr_alive() { local n=0 p; while read -r p; do [ -n "$p" ] && kill -0 "$p" 2>/dev/null && n=$((n+1)); done < "$1"; echo "$n"; }
+sr_killall() { local p; [ -f "$SR_PIDFILE" ] && while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null; done < "$SR_PIDFILE"; }
+sr_elapsed_gt() { python3 -c 'import sys;sys.exit(0 if float(sys.argv[2])-float(sys.argv[1])>0.5 else 1)' "$1" "$2"; }
+sr_elapsed_lt() { python3 -c 'import sys;sys.exit(0 if float(sys.argv[2])-float(sys.argv[1])<0.5 else 1)' "$1" "$2"; }
+sr_now() { python3 -c 'import time;print(time.time())'; }
+
+# --- U1: failure-memory guard (cooldown stamp + threshold-2) ---
+F1="$SR/flags-cooldown"; mkdir -p "$F1"
+# 1st wedged prompt: probes, times out, exits 0/no output, records failure #1
+OUTW1="$(printf '{"prompt":"anything","session_id":"W1"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" 2>/dev/null; echo "EXIT:$?")"
+check "wedged 1st prompt: exit 0, no output" "echo \"\$OUTW1\" | grep -q '^EXIT:0$' && [ \"\$(echo \"\$OUTW1\" | grep -v '^EXIT:')\" = '' ]"
+# 2nd wedged prompt (different session): count==1 < threshold 2 -> still PROBES (not instant)
+T1=$(sr_now)
+printf '{"prompt":"anything","session_id":"W2"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
+T2=$(sr_now)
+check "wedged 2nd prompt still probes (transient tolerance, not suppressed)" "sr_elapsed_gt $T1 $T2"
+# 3rd wedged prompt (different session): count>=2 -> suppressed INSTANTLY, no qmd call
+T3=$(sr_now)
+OUTW3="$(printf '{"prompt":"anything","session_id":"W3"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
+T4=$(sr_now)
+check "cooldown armed on 2nd failure: 3rd prompt suppressed instantly" "[ -z \"\$OUTW3\" ] && sr_elapsed_lt $T3 $T4"
+# FORCE bypasses an armed cooldown (still attempts qmd -> takes ~budget, not instant)
+T5=$(sr_now)
+printf '{"prompt":"anything","session_id":"W4"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_FORCE=1 SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
+T6=$(sr_now)
+check "cooldown: SEEDED_RECALL_FORCE=1 bypasses an armed stamp (still probes)" "sr_elapsed_gt $T5 $T6"
+
+# --- U1: self-heal — a healthy probe clears a not-yet-armed stamp ---
+# (An ARMED cooldown correctly suppresses even a healthy call until TTL — that's the
+# circuit-breaker. The success-clear self-heal is exercised at count=1, before arming:
+# one blip followed by a healthy prompt fully resets the streak.)
+HEALPATH="$SR/healthybin"; mkdir -p "$HEALPATH"; cp "$SR/bin/qmd-healthy" "$HEALPATH/qmd"; chmod +x "$HEALPATH/qmd"
+F2="$SR/flags-heal"; mkdir -p "$F2"
+# one failure -> count=1 (not armed)
+printf '{"prompt":"x","session_id":"H1"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F2" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
+check "self-heal: a single failure records but does not arm" "[ -f \"$F2/qmd-failure-stamp\" ]"
+# a healthy prompt is NOT suppressed at count=1 -> fires recall AND clears the stamp
+OUTHEAL="$(printf '{"prompt":"x","session_id":"H2"}' | PATH="$HEALPATH:/usr/bin:/bin" SEEDED_RECALL_FLAG_DIR="$F2" SEEDED_RECALL_MEMORY_DIR="$SR/mem" bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
+check "self-heal: healthy probe fires recall despite a not-yet-armed stamp" "echo \"\$OUTHEAL\" | grep -q HEALTHYSTUBTOKEN"
+check "self-heal: healthy success clears the failure stamp" "[ ! -f \"$F2/qmd-failure-stamp\" ]"
+# self-heal via TTL: an armed stamp older than COOLDOWN=0 is treated as expired -> probes
+F3="$SR/flags-ttl"; mkdir -p "$F3"
+printf '{"prompt":"x","session_id":"T1"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F3" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
+printf '{"prompt":"x","session_id":"T2"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F3" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
+T9=$(sr_now)
+printf '{"prompt":"x","session_id":"T3"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F3" SEEDED_RECALL_COOLDOWN=0 SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
+T10=$(sr_now)
+check "self-heal via TTL: expired stamp (COOLDOWN=0) re-probes" "sr_elapsed_gt $T9 $T10"
+# fail-open on unwritable flag dir: point at a path under a regular FILE (can't mkdir)
+printf 'x' > "$SR/notadir"
+OUTFO="$(printf '{"prompt":"x","session_id":"FO"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$SR/notadir/sub" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" 2>/dev/null; echo "EXIT:$?")"
+check "fail-open: unwritable stamp dir still exits 0, no crash" "echo \"\$OUTFO\" | grep -q '^EXIT:0$'"
+
+# --- U2: process-group kill — no orphaned qmd descendants after a timeout ---
+F4="$SR/flags-orphan"; mkdir -p "$F4"
+SR_BEFORE="$(grep -c . "$SR_PIDFILE" 2>/dev/null || echo 0)"   # snapshot ledger offset
+printf '{"prompt":"x","session_id":"O1"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F4" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
+sleep 0.5   # give any orphans a moment — if not group-killed they are still alive
+tail -n +"$((SR_BEFORE+1))" "$SR_PIDFILE" > "$SR/orphan-new-pids" 2>/dev/null || : > "$SR/orphan-new-pids"
+RECORDED="$(grep -c . "$SR/orphan-new-pids" 2>/dev/null || echo 0)"
+ALIVE="$(sr_alive "$SR/orphan-new-pids")"
+check "process-group kill: stub actually spawned children (test is live)" '[ "$RECORDED" -ge 1 ]'
+check "process-group kill: no orphaned qmd descendants after timeout" '[ "$ALIVE" = "0" ]'
+
+# --- U4: shipped default budget fires recall on a healthy qmd (no pinned TIMEOUT) ---
+F5="$SR/flags-default"; mkdir -p "$F5"
+OUTDEF="$(printf '{"prompt":"x","session_id":"D1"}' | PATH="$HEALPATH:/usr/bin:/bin" SEEDED_RECALL_FLAG_DIR="$F5" SEEDED_RECALL_MEMORY_DIR="$SR/mem" bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
+check "shipped default budget: healthy recall fires with TIMEOUT unset" "echo \"\$OUTDEF\" | grep -q HEALTHYSTUBTOKEN"
+check "shipped default budget: healthy success writes NO failure stamp" "[ ! -f \"$F5/qmd-failure-stamp\" ]"
+sr_killall   # reap any grandchildren left by the wedged-stub tests above
+cd "$REPO"
 
 # ----------------------------------------------------------------------- lint
 echo "== memory-index-lint =="
