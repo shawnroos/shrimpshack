@@ -18,8 +18,8 @@
     },
     {
       "name": "clawcrush",
-      "description": "Find and destroy zombie processes and repo slop spawned by Claude Code sessions",
-      "version": "0.1.0",
+      "description": "Find and destroy zombie processes and repo slop from Claude Code sessions — kills by ownership and liveness, never age",
+      "version": "0.2.0",
       "author": {
         "name": "Shawn Roos"
       },
