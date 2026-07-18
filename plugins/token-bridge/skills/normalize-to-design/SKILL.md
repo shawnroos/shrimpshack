@@ -1,15 +1,18 @@
 ---
-name: emit-tokens
+name: normalize-to-design
 description: >
-  Emit a CSS file from a Paper design file's tokens — the reverse of sync (Paper → code).
-  Use when someone asks to write Paper's tokens back to CSS, export design tokens from
-  Paper, or push token tweaks made in Paper back into a codebase. Reads the target Paper
-  fileId, the output path (emitTarget), the prefix, and the theme conventions from the
-  codebase's token-bridge.config.json (found via --repo).
+  Normalize the code to the design: fix the codebase's CSS to match the Paper file's
+  tokens (design is the source of truth). Use when someone asks to make the code match
+  the design, pull Paper's tokens back into code, write Paper's tokens to CSS, or export
+  design tokens from Paper. Reads the target Paper fileId, the output path (emitTarget),
+  the prefix, and the theme conventions from the codebase's token-bridge.config.json
+  (found via --repo).
 allowed-tools: Bash, Read
 ---
 
-# Emit Paper tokens to CSS
+# Normalize the code to the design
+
+Design is the source of truth: this writes the Paper file's tokens back out as CSS at the configured `emitTarget`. (Runs the Paper → CSS emitter.)
 
 The script owns the inversion end-to-end. Your job is to run it and relay its JSON report — do not hand-assemble the CSS.
 

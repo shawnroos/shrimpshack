@@ -1,15 +1,18 @@
 ---
-name: sync-tokens
+name: normalize-to-code
 description: >
-  Sync a codebase's CSS custom-property design tokens into a Paper design file.
-  Use when someone asks to sync tokens to Paper, update the Paper design tokens, or
-  reconcile a Paper file with a codebase's design system. Reads the source path,
-  prefix, theme conventions, and target Paper fileId from the codebase's
+  Normalize the design to the code: fix the Paper file's tokens to match the
+  codebase's CSS custom properties (code is the source of truth). Use when someone
+  asks to push code tokens to Paper, make the design match the code, sync tokens to
+  Paper, or reconcile a Paper file with a codebase's design system. Reads the source
+  path, prefix, theme conventions, and target Paper fileId from the codebase's
   token-bridge.config.json (found via --repo); the reconcile is idempotent.
 allowed-tools: Bash, Read
 ---
 
-# Sync tokens to Paper
+# Normalize the design to the code
+
+Code is the source of truth: this rewrites the Paper file's tokens to match the codebase. (Runs the token-sync reconcile.)
 
 The script owns the reconcile end-to-end. Your job is to run it and relay its JSON report — do not re-derive, re-order, or second-guess its decisions.
 

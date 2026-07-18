@@ -418,6 +418,16 @@ class PaperClient:
     def delete_nodes(self, arguments: dict) -> dict:
         return self.call_tool("delete_nodes", arguments)
 
+    # -- file lifecycle (connect) --------------------------------------------
+
+    def create_file(self, name: str | None = None) -> dict:
+        """Create a new Paper file in the active team; the result carries the
+        new file's ID. Used by `connect --create-file`."""
+        args = {}
+        if name:
+            args["name"] = name
+        return self.call_tool("create_file", args)
+
 
 # --- CLI ---------------------------------------------------------------------
 
