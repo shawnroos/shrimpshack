@@ -1,133 +1,187 @@
 #!/usr/bin/env bats
-# Unit tests for lib/parse_tokens.py
-# Verifies the per-theme token model: alias resolution, theme-varying detection
-# (including light-only aliases that flip), targeted --font-family extraction,
-# and idempotent normalization.
+# Unit tests for lib/parse_tokens.py — the config-driven theme-scope resolver.
+# Covers: data-attribute + media-query conventions, base anchoring to the
+# top-level :root, brace-aware @media descent, the carried alias-flip and
+# idempotency invariants, the both-conventions disagreement warning, and the
+# prefix filter.
 
 setup() {
     SCRIPT_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     LIB="$SCRIPT_DIR/lib/parse_tokens.py"
     FIXTURE_DIR="$SCRIPT_DIR/tests/fixtures"
-    TOKENS="$FIXTURE_DIR/tokens_sample.scss"
-    GENERAL="$FIXTURE_DIR/general_sample.scss"
-    EXPECTED="$FIXTURE_DIR/tokens_expected.json"
+
+    DATAATTR="$FIXTURE_DIR/tokens_dataattr.css"
+    MEDIAQUERY="$FIXTURE_DIR/tokens_mediaquery.css"
+    BOTH="$FIXTURE_DIR/tokens_both.css"
+    MULTIROOT="$FIXTURE_DIR/tokens_multiroot.css"
+
+    CONV_DATAATTR='[{"type":"data-attribute","attr":"data-theme","value":"dark"}]'
+    CONV_MEDIAQUERY='[{"type":"media-query","query":"(prefers-color-scheme: dark)"}]'
+    CONV_BOTH='[{"type":"data-attribute","attr":"data-theme","value":"dark","primary":true},{"type":"media-query","query":"(prefers-color-scheme: dark)"}]'
 }
 
-# helper: field of the record with a given name
+# helper: field of the record with a given name (reads $output)
 field() { # <name> <field>
     echo "$output" | jq -r --arg n "$1" --arg f "$2" '.[] | select(.name==$n) | .[$f]'
 }
 
-# ============================================================================
-# Happy path — a redeclared token resolves to distinct light/dark
-# ============================================================================
-
-@test "parse_tokens: redeclared token (--wcs-accent) resolves distinct light/dark" {
-    run bash -c "cat '$TOKENS' | python3 '$LIB'"
-    [ "$status" -eq 0 ]
-    [ "$(field --wcs-accent light)" = "#37D895" ]
-    [ "$(field --wcs-accent dark)" = "#00B72B" ]
-    # alias in light, literal in dark
-    [ "$(field --wcs-accent light_alias)" = "--wcs-green-500" ]
-    [ "$(field --wcs-accent dark_alias)" = "null" ]
+# helper: run the CLI over a fixture with a conventions arg (+ optional --prefix)
+run_parse() { # <fixture> <conventions-json> [--prefix <p>]
+    local fixture="$1" conv="$2"
+    shift 2
+    run bash -c "cat '$fixture' | python3 '$LIB' --conventions '$conv' $*"
 }
 
 # ============================================================================
-# Flipping alias — declared only in light, referent redeclared in dark
+# data-attribute happy path — distinct base/dark effective values
 # ============================================================================
 
-@test "parse_tokens: flipping alias (--wcs-timeline-playhead) is theme-varying" {
-    run bash -c "cat '$TOKENS' | python3 '$LIB'"
+@test "data-attribute: :root + [data-theme=dark] resolve distinct base/dark" {
+    run_parse "$DATAATTR" "$CONV_DATAATTR"
     [ "$status" -eq 0 ]
-    # light resolves to the light accent, dark flips with the redeclared accent
-    [ "$(field --wcs-timeline-playhead light)" = "#37D895" ]
-    [ "$(field --wcs-timeline-playhead dark)" = "#00B72B" ]
-    # non-null dark == theme-varying
-    [ "$(field --wcs-timeline-playhead dark)" != "null" ]
-    [ "$(field --wcs-timeline-playhead light_alias)" = "--wcs-accent" ]
+    [ "$(field --brand-accent light)" = "#37D895" ]
+    [ "$(field --brand-accent dark)" = "#00B72B" ]
+    # alias in base, literal in dark
+    [ "$(field --brand-accent light_alias)" = "--brand-green-500" ]
+    [ "$(field --brand-accent dark_alias)" = "null" ]
+}
+
+@test "data-attribute: rgba() internal commas survive intact" {
+    run_parse "$DATAATTR" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-lasso-fill light)" = "rgba(55, 216, 149, 0.18)" ]
+    [ "$(field --brand-lasso-fill dark)" = "rgba(136, 200, 46, 0.16)" ]
 }
 
 # ============================================================================
-# Non-flipping alias — referent never redeclared in dark
+# alias-flip — the invariant carried from the WCS parser
 # ============================================================================
 
-@test "parse_tokens: non-flipping alias (--wcs-warn-text) is theme-invariant" {
-    run bash -c "cat '$TOKENS' | python3 '$LIB'"
+@test "alias-flip: base alias whose referent flips in dark is theme-varying" {
+    run_parse "$DATAATTR" "$CONV_DATAATTR"
     [ "$status" -eq 0 ]
-    [ "$(field --wcs-warn-text light)" = "#C67700" ]
-    # dark is null because the resolved value does not differ by theme
-    [ "$(field --wcs-warn-text dark)" = "null" ]
-    [ "$(field --wcs-warn-text light_alias)" = "--wcs-amber-text" ]
+    [ "$(field --brand-playhead light)" = "#37D895" ]
+    [ "$(field --brand-playhead dark)" = "#00B72B" ]
+    [ "$(field --brand-playhead dark)" != "null" ]
+    [ "$(field --brand-playhead light_alias)" = "--brand-accent" ]
+}
+
+@test "non-flipping alias: referent never redeclared in dark is theme-invariant" {
+    run_parse "$DATAATTR" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-warn-text light)" = "#C67700" ]
+    [ "$(field --brand-warn-text dark)" = "null" ]
+    [ "$(field --brand-warn-text light_alias)" = "--brand-amber-text" ]
+}
+
+@test "theme-invariant primitive has null dark" {
+    run_parse "$DATAATTR" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-space-2 light)" = "8px" ]
+    [ "$(field --brand-space-2 dark)" = "null" ]
 }
 
 # ============================================================================
-# Mode-invariant primitive
+# media-query happy path — parser descends the @media block (brace-aware)
 # ============================================================================
 
-@test "parse_tokens: mode-invariant primitive (--wcs-space-2) has null dark" {
-    run bash -c "cat '$TOKENS' | python3 '$LIB'"
+@test "media-query: :root + @media dark :root resolve distinct base/dark" {
+    run_parse "$MEDIAQUERY" "$CONV_MEDIAQUERY"
     [ "$status" -eq 0 ]
-    [ "$(field --wcs-space-2 light)" = "8px" ]
-    [ "$(field --wcs-space-2 dark)" = "null" ]
+    [ "$(field --brand-accent light)" = "#37D895" ]
+    [ "$(field --brand-accent dark)" = "#00B72B" ]
+}
+
+@test "media-query brace-aware: only the inner :root is read, not the .foo decoy" {
+    run_parse "$MEDIAQUERY" "$CONV_MEDIAQUERY"
+    [ "$status" -eq 0 ]
+    # #00B72B is from the media :root; #FF0000 is the .foo decoy that must be ignored
+    [ "$(field --brand-accent dark)" = "#00B72B" ]
+    [ "$(field --brand-accent dark)" != "#FF0000" ]
 }
 
 # ============================================================================
-# rgba() with internal commas must not corrupt the parse
+# base anchoring — top-level :root only; nested/@media/attribute :root are not base
 # ============================================================================
 
-@test "parse_tokens: rgba() internal commas survive intact" {
-    run bash -c "cat '$TOKENS' | python3 '$LIB'"
+@test "base anchoring: base is the top-level :root, not nested/@media/attribute :root" {
+    run_parse "$MULTIROOT" "$CONV_DATAATTR"
     [ "$status" -eq 0 ]
-    [ "$(field --wcs-lasso-fill light)" = "rgba(55, 216, 149, 0.18)" ]
-    [ "$(field --wcs-lasso-fill dark)" = "rgba(136, 200, 46, 0.16)" ]
+    # base = top-level :root (#aaaaaa), NOT the @media :root (#bbbbbb)
+    [ "$(field --brand-x light)" = "#AAAAAA" ]
+    # dark = :root[data-theme="dark"] (#cccccc), matched by the data-attribute conv
+    [ "$(field --brand-x dark)" = "#CCCCCC" ]
 }
 
 # ============================================================================
-# Multi-part box-shadow + 8-digit hex uppercased
+# both conventions — disagreeing dark values warn; primary wins
 # ============================================================================
 
-@test "parse_tokens: multi-part box-shadow keeps commas, uppercases 8-digit hex" {
-    run bash -c "cat '$TOKENS' | python3 '$LIB'"
+@test "both-conventions: disagreeing dark values warn (via diagnostics), primary wins" {
+    run python3 -c "
+import sys, json
+sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens
+text = open('$BOTH').read()
+conv = json.loads('$CONV_BOTH')
+res = parse_tokens.parse_with_diagnostics(text, conv)
+assert res['warnings'], 'expected at least one warning'
+assert any('--brand-accent' in w for w in res['warnings']), res['warnings']
+acc = [t for t in res['tokens'] if t['name'] == '--brand-accent'][0]
+assert acc['dark'] == '#00B72B', 'primary (data-attribute) value expected, got %r' % acc['dark']
+print('OK')
+"
     [ "$status" -eq 0 ]
-    [ "$(field --wcs-panel-shadow light)" = "0px 1px 3px #0000000F, 0 0 0 1px #0000000A" ]
-    [ "$(field --wcs-green-100 dark)" = "#00B72B1A" ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "both-conventions: warning is also observable on stderr" {
+    run_parse "$BOTH" "$CONV_BOTH"
+    [ "$status" -eq 0 ]
+    # bats merges stderr into $output; the _log warning must be visible
+    [[ "$output" == *"--brand-accent"* ]]
+    [[ "$output" == *"differs"* ]]
 }
 
 # ============================================================================
-# parse_general — targeted --font-family extraction, ignores imports/keyframes
+# prefix filter
 # ============================================================================
 
-@test "parse_general: extracts --font-family from html,body and ignores noise" {
-    run bash -c "cat '$GENERAL' | python3 '$LIB' --general"
+@test "prefix filter: a prefix includes only matching custom properties" {
+    # value starts with '-', so the =form is required (argparse rejects it as a flag otherwise)
+    run_parse "$DATAATTR" "$CONV_DATAATTR" --prefix=--brand-
     [ "$status" -eq 0 ]
-    name=$(echo "$output" | jq -r '.name')
-    [ "$name" = "--font-family" ]
-    value=$(echo "$output" | jq -r '.light')
-    [[ "$value" == *"Inter"* ]]
-    [[ "$value" == *"sans-serif"* ]]
-    # the decoy buried in the @keyframes block must NOT be picked
-    [[ "$value" != *"DECOY"* ]]
-    # theme-invariant record
-    [ "$(echo "$output" | jq -r '.dark')" = "null" ]
+    # unprefixed --other-thing is excluded
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--other-thing")] | length')" = "0" ]
+    # prefixed props remain
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--brand-accent")] | length')" = "1" ]
+}
+
+@test "prefix filter: no prefix includes all custom properties" {
+    run_parse "$DATAATTR" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--other-thing")] | length')" = "1" ]
+    [ "$(field --other-thing light)" = "#123456" ]
 }
 
 # ============================================================================
-# Normalization — names lowercased, hex uppercased, valid JSON, golden match
+# idempotency + normalization
 # ============================================================================
 
-@test "parse_tokens: output is valid JSON matching the golden fixture" {
-    run bash -c "cat '$TOKENS' | python3 '$LIB'"
+@test "output is valid JSON, sorted, names lowercased, hex uppercased" {
+    run_parse "$DATAATTR" "$CONV_DATAATTR"
     [ "$status" -eq 0 ]
     echo "$output" | jq . > /dev/null
-    diff <(echo "$output") "$EXPECTED"
+    # sorted by name
+    sorted=$(echo "$output" | jq -r '[.[].name] == ([.[].name] | sort)')
+    [ "$sorted" = "true" ]
+    [[ "$output" == *'"#37D895"'* ]]
+    [[ "$output" != *'"#37d895"'* ]]
 }
 
-@test "parse_tokens: idempotent — two runs are byte-identical" {
-    one=$(cat "$TOKENS" | python3 "$LIB")
-    two=$(cat "$TOKENS" | python3 "$LIB")
+@test "idempotent — two runs are byte-identical" {
+    one=$(cat "$DATAATTR" | python3 "$LIB" --conventions "$CONV_DATAATTR")
+    two=$(cat "$DATAATTR" | python3 "$LIB" --conventions "$CONV_DATAATTR")
     [ "$one" = "$two" ]
-    # normalization: names lowercased, hex uppercased
-    [[ "$one" == *'"--wcs-accent"'* ]]
-    [[ "$one" == *'"#37D895"'* ]]
-    [[ "$one" != *'"#37d895"'* ]]
+    [[ "$one" == *'"--brand-accent"'* ]]
 }

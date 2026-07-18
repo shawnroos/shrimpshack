@@ -1,0 +1,18 @@
+/* Both conventions declare the dark scope. data-attribute is primary. The two
+   dark declarations of --brand-accent DISAGREE (#00b72b vs #111111), so parse
+   must warn and use the primary (data-attribute) value. */
+
+:root {
+  --brand-green-500: #37d895;
+  --brand-accent: var(--brand-green-500);
+}
+
+[data-theme="dark"] {
+  --brand-accent: #00b72b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand-accent: #111111;
+  }
+}

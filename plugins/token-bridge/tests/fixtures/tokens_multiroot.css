@@ -1,0 +1,18 @@
+/* Base-anchoring edge: THREE :root-bearing rules. The base must resolve to the
+   top-level bare :root only — never the :root nested in @media, never the
+   attribute-scoped :root[data-theme="dark"]. With a data-attribute convention,
+   the dark scope is the attribute rule. */
+
+:root {
+  --brand-x: #aaaaaa;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand-x: #bbbbbb;
+  }
+}
+
+:root[data-theme="dark"] {
+  --brand-x: #cccccc;
+}

@@ -1,52 +1,62 @@
 #!/usr/bin/env python3
-"""Normalize the WCS design-token SCSS into a per-theme token model.
+"""Normalize a codebase's CSS design tokens into a base+dark token model.
 
-Two entry points, both operating on SCSS *text* (never a path) so they are
-trivially fixture-testable:
+The parser is config-driven: it is told the target codebase's *theme
+conventions* (how the dark scope is declared) rather than assuming any fixed
+selectors. v1 is base + exactly one "dark" theme.
 
-  parse_tokens(text) -> list[dict]
-      Parses the two flat custom-property blocks
-      (`body.wcs-theme { … }` light, `body.wcs-theme.wcs-dark { … }` dark),
-      resolves each token's *effective* light and dark value (chasing var()
-      aliases per-theme), and emits one record per token:
+  parse_tokens(text, conventions, prefix=None) -> list[dict]
+      Resolves each custom property's *effective* base ("light") and dark value
+      (chasing var() aliases per-scope) and emits one record per token:
 
         {
-          "name":        "--wcs-accent",
-          "light":       "#37D895",        # resolved light literal
-          "dark":        "#00B72B",        # resolved dark literal, or null when
-                                           # the effective value is theme-invariant
-          "light_alias": "--wcs-green-500",# referent when the LIGHT declaration
-                                           # is a var(), else null
-          "dark_alias":  null              # referent when the DARK declaration
-                                           # is a var(), else null (null if the
-                                           # token has no dark declaration)
+          "name":        "--accent",
+          "light":       "#37D895",   # resolved base literal
+          "dark":        "#00B72B",   # resolved dark literal, or null when the
+                                      # effective value is theme-invariant
+          "light_alias": "--green-500",# referent when the BASE declaration is a
+                                      # var(), else null
+          "dark_alias":  null          # referent when the DARK declaration is a
+                                      # var(), else null
         }
 
       A token carries a non-null `dark` whenever its effective value differs by
-      theme. That INCLUDES component aliases declared only in the light block
-      whose referent is redeclared in dark (e.g. --wcs-timeline-playhead =
-      var(--wcs-accent)): the alias line only appears in light, but its resolved
-      value flips because --wcs-accent flips.
+      theme — INCLUDING an alias declared only in the base scope whose referent
+      is redeclared in the dark scope (the value flips because the referent
+      flips). This alias-flip invariant is preserved from the WCS-specific
+      predecessor; only the block-finding is generalized.
 
-  parse_general(text) -> dict
-      Targeted extraction of exactly --font-family from a full nested SCSS file
-      (it lives inside an `html, body { … }` block amid @imports and @keyframes).
-      Emits one theme-invariant record.
+Theme-scope resolution (KTD2):
+  - The BASE scope is the top-level, unscoped `:root { … }` (brace-depth 0). A
+    `:root` nested inside an `@media` block, and a `:root[data-theme="dark"]`
+    attribute-scoped block, are NOT the base.
+  - A data-attribute convention `{attr, value}` resolves the CSS rule whose
+    selector targets `[attr="value"]` (both `[data-theme="dark"]` and
+    `:root[data-theme="dark"]` match).
+  - A media-query convention `{query}` descends the `@media <query> { … }` block
+    (brace-aware) and reads its inner `:root`.
+
+When more than one convention is configured, one is `primary`. Parsing reads the
+primary's dark scope; if the primary and a non-primary convention BOTH declare a
+token whose resolved dark value disagrees, a warning is emitted (KTD3) and the
+primary's value is used. Warnings go to stderr and are also returned by
+parse_with_diagnostics so they are assertable without capturing stderr.
 
 Normalization makes output idempotent (parsing the same input twice is
 byte-identical): token names are lowercased, hex literals are uppercased,
 records are sorted by name.
 
 CLI:
-  cat tokens.scss  | python3 parse_tokens.py            # -> JSON array
-  cat general.scss | python3 parse_tokens.py --general  # -> JSON object
+  cat tokens.css | python3 parse_tokens.py --conventions '<json array>' \
+      [--prefix '--brand-']   # -> JSON array on stdout, warnings on stderr
 """
 
+import argparse
 import json
 import re
 import sys
 
-# A custom-property declaration inside a flat block: `--name: value;`
+# A custom-property declaration inside a block body: `--name: value;`
 # Values never contain a semicolon, so `[^;]+` is a safe value grab (box-shadows,
 # rgba() with internal commas, cubic-bezier(), etc. all lack `;`).
 _DECL = re.compile(r"--([A-Za-z0-9-]+)\s*:\s*([^;]+);")
@@ -58,10 +68,17 @@ _VAR = re.compile(r"^var\(\s*(--[A-Za-z0-9-]+)\s*\)$")
 _HEX = re.compile(r"#[0-9a-fA-F]+")
 
 
+def _log(msg):
+    """Diagnostics/warnings go to stderr so stdout stays clean JSON."""
+    print(f"[parse_tokens] {msg}", file=sys.stderr)
+
+
 def strip_comments(text):
-    """Strip `//` line comments. Guards against `://` (URL protocols) so a
-    value like url(https://…) is not truncated — the token file has none, but
-    the general file does."""
+    """Strip `/* … */` block comments and `//` line comments.
+
+    The `//` handling guards against `://` (URL protocols) so a value like
+    url(https://…) is not truncated."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     out = []
     for line in text.splitlines():
         idx = line.find("//")
@@ -75,11 +92,141 @@ def strip_comments(text):
     return "\n".join(out)
 
 
-def _extract_block(text, selector_pattern):
-    """Return the flat body of the first `<selector> { … }` block, or ''.
-    The token blocks contain no nested braces, so `[^}]*` is exact."""
-    m = re.search(selector_pattern + r"\s*\{([^}]*)\}", text)
-    return m.group(1) if m else ""
+# --- brace-aware block scanning ----------------------------------------------
+
+
+def _match_brace(text, open_idx):
+    """Given the index of a `{` at text[open_idx], return (body, close_idx):
+    the substring between the matched braces (exclusive) and the index of the
+    matching `}`. Brace-aware, so nested blocks (e.g. inside @media) are handled.
+    On an unbalanced source, returns the remainder and len(text)."""
+    depth = 0
+    n = len(text)
+    i = open_idx
+    while i < n:
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_idx + 1 : i], i
+        i += 1
+    return text[open_idx + 1 :], n
+
+
+def _top_level_rules(text):
+    """Yield (selector, body) for each `selector { … }` rule at brace-depth 0.
+
+    Nested blocks are consumed whole by _match_brace, so a rule nested inside an
+    @media block does NOT appear here — call _top_level_rules again on an
+    @media body to reach its inner rules. At-statements without a block (e.g.
+    `@import "x";`) carry no braces; any such prefix is trimmed from the next
+    rule's selector via the trailing-`;` split."""
+    rules = []
+    n = len(text)
+    i = 0
+    sel_start = 0
+    while i < n:
+        if text[i] == "{":
+            selector = text[sel_start:i].split(";")[-1].strip()
+            body, close_idx = _match_brace(text, i)
+            rules.append((selector, body))
+            i = close_idx + 1
+            sel_start = i
+            continue
+        i += 1
+    return rules
+
+
+def _norm_ws(s):
+    """Collapse runs of whitespace to a single space and strip the ends."""
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _is_bare_root(selector):
+    """True when `selector` is (or contains as a group member) a bare `:root` —
+    NOT `:root[…]` and NOT an at-rule."""
+    if selector.startswith("@"):
+        return False
+    return any(part.strip() == ":root" for part in selector.split(","))
+
+
+def _base_block(text):
+    """Return the body of the top-level unscoped `:root { … }` block, or ''."""
+    for selector, body in _top_level_rules(text):
+        if _is_bare_root(selector):
+            return body
+    return ""
+
+
+def _data_attribute_block(text, attr, value):
+    """Return the body of the top-level rule whose selector targets
+    [attr="value"] (matching both `[attr="value"]` and `:root[attr="value"]`),
+    or ''."""
+    pat = re.compile(
+        r"\[\s*" + re.escape(attr) + r"\s*=\s*[\"']?" + re.escape(value) + r"[\"']?\s*\]"
+    )
+    for selector, body in _top_level_rules(text):
+        if selector.startswith("@"):
+            continue
+        if pat.search(selector):
+            return body
+    return ""
+
+
+def _media_query_block(text, query):
+    """Descend the top-level `@media <query> { … }` block and return its inner
+    `:root` body, or ''. Brace-aware: the @media body may contain sibling rules
+    alongside the :root."""
+    target = _norm_ws(query)
+    for selector, body in _top_level_rules(text):
+        if not selector.startswith("@media"):
+            continue
+        cond = _norm_ws(selector[len("@media") :])
+        if cond == target or target in cond:
+            return _base_block(body)
+    return ""
+
+
+def _scope_decls(text, conv):
+    """Resolve one convention's dark-scope declarations into a raw decl dict."""
+    ctype = conv.get("type")
+    if ctype == "data-attribute":
+        body = _data_attribute_block(text, conv.get("attr"), conv.get("value"))
+    elif ctype == "media-query":
+        body = _media_query_block(text, conv.get("query"))
+    else:
+        raise ValueError(f"unknown themeConvention type: {ctype!r}")
+    return _parse_decls(body)
+
+
+def _primary_convention(conventions):
+    """The primary convention: the sole entry when there is one, else the one
+    flagged `primary` (read_config guarantees exactly one when there are >1)."""
+    if not conventions:
+        raise ValueError("themeConventions must have at least one entry")
+    if len(conventions) == 1:
+        return conventions[0]
+    for conv in conventions:
+        if conv.get("primary"):
+            return conv
+    raise ValueError(
+        "with more than one themeConvention, exactly one must set 'primary': true"
+    )
+
+
+def _conv_label(conv):
+    """A short human label for a convention, used in warning text."""
+    ctype = conv.get("type")
+    if ctype == "data-attribute":
+        return f'[{conv.get("attr")}="{conv.get("value")}"]'
+    if ctype == "media-query":
+        return f'@media {conv.get("query")}'
+    return str(ctype)
+
+
+# --- declaration parsing + effective-value resolution ------------------------
 
 
 def _parse_decls(body):
@@ -99,10 +246,10 @@ def _alias_of(raw):
 
 
 def _resolve(name, primary, fallback):
-    """Resolve a token to its effective literal in one theme.
+    """Resolve a token to its effective literal in one scope.
 
-    `primary` is the theme's own dict; `fallback` (light) is consulted when the
-    token/referent is absent from `primary` (dark falls through to light).
+    `primary` is the scope's own dict; `fallback` (base) is consulted when the
+    token/referent is absent from `primary` (dark falls through to base).
     Chases var() aliases until a literal is reached. Cycle-guarded."""
     seen = set()
     cur = name
@@ -127,59 +274,165 @@ def _normalize_hex(value):
     return _HEX.sub(lambda m: m.group(0).upper(), value)
 
 
-def parse_tokens(text):
-    """Parse the two theme blocks into a normalized per-token model."""
+def parse_with_diagnostics(text, conventions, prefix=None):
+    """Parse `text` into the base+dark token model, returning both the token
+    records and any warnings.
+
+    Returns {"tokens": [record, …], "warnings": [str, …]}.
+
+    `conventions` is the config `themeConventions` list. `prefix`, when a
+    non-empty string, restricts output to custom properties whose name starts
+    with it; None/"" includes all."""
     text = strip_comments(text)
-    # The light selector (`body.wcs-theme`) is a prefix of the dark one
-    # (`body.wcs-theme.wcs-dark`), but requiring `{` after the selector keeps
-    # them distinct: only the light block has `{` immediately after
-    # `body.wcs-theme`.
-    light = _parse_decls(_extract_block(text, r"body\.wcs-theme"))
-    dark = _parse_decls(_extract_block(text, r"body\.wcs-theme\.wcs-dark"))
+    base = _parse_decls(_base_block(text))
+
+    primary = _primary_convention(conventions)
+    dark = _scope_decls(text, primary)
+
+    warnings = []
+    # Cross-check every non-primary convention against the primary (KTD3): for a
+    # token both scopes DECLARE, a disagreeing effective dark value is a warning.
+    for conv in conventions:
+        if conv is primary:
+            continue
+        other = _scope_decls(text, conv)
+        for name in sorted(set(dark) & set(other)):
+            pv = _normalize_hex(_resolve(name, dark, base))
+            ov = _normalize_hex(_resolve(name, other, base))
+            if pv != ov:
+                msg = (
+                    f"{name}: dark value differs between conventions "
+                    f"(primary {_conv_label(primary)}={pv}, "
+                    f"{_conv_label(conv)}={ov}); using primary"
+                )
+                warnings.append(msg)
+                _log("WARNING: " + msg)
 
     records = []
-    for name in sorted(set(light) | set(dark)):
-        light_val = _normalize_hex(_resolve(name, light, None))
-        dark_val = _normalize_hex(_resolve(name, dark, light))
+    for name in sorted(set(base) | set(dark)):
+        if prefix and not name.startswith(prefix):
+            continue
+        light_val = _normalize_hex(_resolve(name, base, None))
+        dark_val = _normalize_hex(_resolve(name, dark, base))
         records.append(
             {
                 "name": name,
                 "light": light_val,
                 # null when the effective value does not differ by theme
                 "dark": None if dark_val == light_val else dark_val,
-                "light_alias": _alias_of(light.get(name)),
+                "light_alias": _alias_of(base.get(name)),
                 "dark_alias": _alias_of(dark.get(name)),
             }
         )
-    return records
+    return {"tokens": records, "warnings": warnings}
 
 
-def parse_general(text):
-    """Extract exactly --font-family from a nested SCSS file's `html, body`
-    block, ignoring @imports and @keyframes."""
-    text = strip_comments(text)
-    m = re.search(r"html\s*,\s*body\s*\{([^{}]*)\}", text, re.S)
-    body = m.group(1) if m else ""
-    fm = re.search(r"--font-family\s*:\s*([^;]+);", body)
-    value = fm.group(1).strip() if fm else None
-    return {
-        "name": "--font-family",
-        "light": _normalize_hex(value),
-        "dark": None,
-        "light_alias": _alias_of(value),
-        "dark_alias": None,
-    }
+def parse_tokens(text, conventions, prefix=None):
+    """Parse `text` into the base+dark token model (the records only).
+
+    See parse_with_diagnostics for the record shape and semantics; this is the
+    thin wrapper the deterministic-diff callers use when they don't need the
+    warnings list (warnings still reach stderr)."""
+    return parse_with_diagnostics(text, conventions, prefix)["tokens"]
 
 
-def main(argv):
+# --- source loading ----------------------------------------------------------
+
+
+def load_source(cfg):
+    """Read the config's source CSS text.
+
+    `cfg` is the dict returned by paper_client.read_config (it carries `_repo`).
+    The source path resolves relative to the repo root. When `source.ref` is set
+    (a git ref like 'origin/develop'), the file is read at that ref via
+    `git show <ref>:<relative-path>`; otherwise the working-tree file is read.
+    Raises RuntimeError on a git failure or a missing/unreadable file."""
+    import os
+    import subprocess
+
+    # Sibling lib module — resolve_repo_path lives beside this file.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from paper_client import resolve_repo_path  # noqa: E402
+
+    source = cfg.get("source") or {}
+    rel = source.get("path")
+    if not rel:
+        raise RuntimeError("config 'source.path' is required to load the CSS source")
+
+    ref = source.get("ref")
+    if ref:
+        repo = cfg.get("_repo")
+        if not repo:
+            raise RuntimeError(
+                "config is missing '_repo'; load it via read_config before load_source"
+            )
+        spec = f"{ref}:{rel}"
+        try:
+            result = subprocess.run(
+                ["git", "-C", repo, "show", spec],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except FileNotFoundError as exc:  # git not installed
+            raise RuntimeError(f"git is not available to read {spec}: {exc}") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip() or (exc.stdout or "").strip()
+            raise RuntimeError(
+                f"could not read source at ref '{spec}' in {repo}: {detail}"
+            ) from exc
+        return result.stdout
+
+    abs_path = resolve_repo_path(cfg, rel)
+    try:
+        with open(abs_path, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError as exc:
+        raise RuntimeError(f"could not read source file {abs_path}: {exc}") from exc
+
+
+# --- CLI ---------------------------------------------------------------------
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="parse_tokens.py",
+        description=(
+            "Parse a codebase's CSS design tokens (stdin) into the base+dark "
+            "token model, driven by the configured theme conventions."
+        ),
+    )
+    parser.add_argument(
+        "--conventions",
+        required=True,
+        help="JSON array of themeConventions (data-attribute / media-query).",
+    )
+    parser.add_argument(
+        "--prefix",
+        default=None,
+        help="Only include custom properties whose name starts with this prefix.",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        conventions = json.loads(args.conventions)
+    except json.JSONDecodeError as exc:
+        _log(f"--conventions is not valid JSON: {exc}")
+        return 2
+    if not isinstance(conventions, list):
+        _log("--conventions must be a JSON array of convention objects")
+        return 2
+
     text = sys.stdin.read()
-    if "--general" in argv:
-        result = parse_general(text)
-    else:
-        result = parse_tokens(text)
-    print(json.dumps(result, indent=2))
+    try:
+        result = parse_with_diagnostics(text, conventions, args.prefix)
+    except ValueError as exc:
+        _log(str(exc))
+        return 2
+
+    print(json.dumps(result["tokens"], indent=2))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
