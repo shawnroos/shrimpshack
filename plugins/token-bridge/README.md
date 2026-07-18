@@ -1,47 +1,90 @@
-# wcs-paper
+# token-bridge
 
-Mirror the Web Creation Studio (WCS) design system into a [Paper](https://paper.design) file, so mockups of new editor tools are built against values that are actually true in code — not hand-copied and quietly stale.
+A config-driven bridge between one codebase's CSS custom-property design tokens and one [Paper](https://paper.design) file. Tokens flow **both ways**; components harvest one way. Point it at any codebase with `--repo` — nothing is hardcoded to a particular design system.
 
 ## What it does
 
-Two commands, both one-way (code → Paper, never the reverse):
+| You want to…                               | Use                                | Direction    |
+| ------------------------------------------ | ---------------------------------- | ------------ |
+| Push a codebase's design tokens into Paper | `/token-bridge:sync-tokens`        | code → Paper |
+| Pull Paper's tokens back out as a CSS file | `/token-bridge:emit-tokens`        | Paper → code |
+| Pull rendered components into Paper        | `/token-bridge:refresh-components` | code → Paper |
 
-| You want to…                                       | Use                             |
-| -------------------------------------------------- | ------------------------------- |
-| Get the current `--wcs-*` design tokens into Paper | `/wcs-paper:sync-tokens`        |
-| Get rendered WCS components into Paper             | `/wcs-paper:refresh-components` |
+- **`sync-tokens`** reads the tokens from the configured CSS source and reconciles them into the Paper file: new tokens created, changed values updated, removed tokens deleted, retyped tokens recreated. Re-running with an unchanged source writes nothing (idempotent).
+- **`emit-tokens`** reads the Paper file's tokens and writes a CSS file — a base `:root` block plus a dark override block in your declared theme convention. The round-trip is stable: CSS emitted from a file already in sync re-parses to the same token model.
+- **`refresh-components`** harvests a component's rendered structure and computed styles from a running dev server, maps the values back to token references, and writes it into Paper — replacing any prior copy.
 
-`sync-tokens` reads the tokens from the merged `develop` ref of `web-app` and reconciles them into the Paper file: new tokens created, changed values updated, removed tokens deleted, retyped tokens recreated. Re-running with an unchanged source writes nothing.
+## The theme model
 
-`refresh-components` harvests a component's rendered structure and computed styles from a running dev server, maps the values back to token references, and writes it into Paper — replacing any prior copy.
+v1 is **base + one "dark" theme**. Paper has no per-token theme mode, so the two themes are written as two separately named Paper tokens: the base value keeps the token's name (`--accent`), and a theme-varying token's dark value gets a `-dark` twin (`--accent-dark`). `emit` inverts this exactly.
+
+You declare **how the dark scope is expressed** in your source, via `themeConventions`:
+
+| Convention       | Source shape it matches                               | Status    |
+| ---------------- | ----------------------------------------------------- | --------- |
+| `data-attribute` | `:root[data-theme="dark"] { … }`                      | supported |
+| `media-query`    | `@media (prefers-color-scheme: dark) { :root { … } }` | supported |
+| scoped-class     | `.dark { … }`                                         | deferred  |
+
+The base is always the top-level, unscoped `:root`.
+
+## Configuration
+
+Each bridged codebase carries a `token-bridge.config.json` at its root. The plugin is pointed at it with `--repo <path>`; all paths resolve relative to that root.
+
+```json
+{
+  "fileId": "01KXXXXXXXXXXXXXXXXXXXXXXX",
+  "paperDaemonUrl": "http://127.0.0.1:29979/mcp",
+  "source": {
+    "path": "src/styles/tokens.css",
+    "ref": null,
+    "prefix": "--brand-"
+  },
+  "emitTarget": "src/styles/tokens.generated.css",
+  "themeConventions": [
+    {
+      "type": "data-attribute",
+      "attr": "data-theme",
+      "value": "dark",
+      "primary": true
+    }
+  ],
+  "harvest": {
+    "themeSignal": {
+      "type": "data-attribute",
+      "attr": "data-theme",
+      "value": "dark"
+    },
+    "batch": []
+  }
+}
+```
+
+- **`fileId`** — the segment after `/file/` in the Paper URL. **The token commands refuse to run while `fileId` is empty** — a destructive reconcile must never fall back to whatever file happens to be open.
+- **`source.path`** — the CSS/SCSS file, relative to `--repo`. **`source.ref`** (optional) reads the file from a git ref (e.g. `origin/main`) instead of the working tree. **`source.prefix`** filters custom properties; `null`/`""` takes all of them.
+- **`emitTarget`** — where `emit-tokens` writes. Emit refuses to write in place over a source that declares more than one convention (it would drop the non-primary block).
+- **`themeConventions`** — one or more (see above). With more than one, exactly one must be `"primary": true`; parse reads the primary's dark scope and emit writes only the primary's block, warning if the conventions disagree.
+- **`harvest.themeSignal`** — how the live page reports dark (a data-attribute read off the root, or a media query via `matchMedia`). **`harvest.batch`** — the components to harvest, each `{ name, selector, route, trigger? }`.
 
 ## Prerequisites
 
 - The Paper desktop app running (its daemon at `http://127.0.0.1:29979/mcp`).
 - `python3`, `jq`, `bats` (tests), `agent-browser` (harvest).
-- For `refresh-components`: a running `web-app` dev server and a logged-in browser profile.
-
-## Configuration
-
-Set the target Paper file in `wcs-paper.config.json`:
-
-```json
-{ "fileId": "01KXXXXXXXXXXXXXXXXXXXXXXX" }
-```
-
-The `fileId` is the segment after `/file/` in the Paper URL. **Both commands refuse to run while `fileId` is empty** — a destructive reconcile must never fall back to whatever file happens to be open.
+- For `refresh-components`: a running, logged-in dev server for the target codebase.
 
 ## Honest about what it doesn't do
 
-- **No motion.** Paper has no transition/easing token type and drops `transition` even as a style. WCS motion tokens are simply not represented.
-- **No shadows as tokens.** Paper silently corrupts a shadow value written as a token (it stores `#000000`), so shadows are excluded from token sync and expressed on components instead.
-- **No Paper → code.** Designs authored in Paper do not flow back into the repo. Paper is always the derived side.
-- **No auto-sync.** There is no hook, watcher, or CI job. You run the commands.
-- **Harvest needs a live server.** Token sync works offline from the git ref; component harvest requires a running, logged-in dev server.
+- **One codebase ↔ one Paper file.** No many-to-one or one-to-many; the config binds a single codebase to a single `fileId`.
+- **No Paper → component code-gen.** The reverse direction is tokens only. Components stay a one-way harvest — faithful code-gen from a canvas is fuzzy and fights the "Paper is the derived side" invariant.
+- **No motion, no shadows as tokens.** Paper has no transition/easing type (it drops `transition`) and silently corrupts a shadow written as a token (stores `#000000`), so both are excluded from token sync with a reason. Shadows still work as component styles.
+- **One base + one dark theme.** Multiple named themes, scoped-class conventions, and multi-file (`light.css`/`dark.css`) inputs are deferred.
+- **Harvest needs a live server.** Token sync and emit work from the daemon (and the source file/git ref); component harvest requires a running, logged-in dev server.
+- **No auto-sync.** No hook, watcher, or CI job — you run the commands.
 
 ## Where things live
 
-- `lib/` — the deterministic Python/JS scripts (parser, classifier, sync, harvester, writer, Paper client).
-- `wcs-paper.config.json` — the target `fileId` (committed with an empty value; set it locally).
-- `harvest_batch.json` — the component batch: per entry a `selector`, `route`, and any `trigger` steps.
+- `lib/` — the deterministic Python/JS scripts: `parse_tokens` (theme-scope parser), `classify_tokens`, `sync_tokens` (code → Paper reconcile), `emit_tokens` (Paper → CSS), `harvest`/`harvest_extract.js`/`write_component`/`map_to_tokens` (component harvest), `paper_client` (the SSE JSON-RPC daemon client + `read_config`).
+- `token-bridge.config.json` — the plugin-local template; the real config lives in each target codebase's root.
+- `lib/harvest_batch.json` — the fallback component batch when the config declares none.
 - `tests/` — bats suite (`./tests/run-tests.sh unit`) and fixtures.

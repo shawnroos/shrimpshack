@@ -5,7 +5,7 @@
   "paperDaemonUrl": "http://127.0.0.1:29979/mcp",
 
   "source": {
-    "_comment": "The CSS/SCSS file tokens are read from. 'path' is relative to --repo. 'ref' is optional: when set (e.g. 'origin/develop') the file is read from that git ref via `git show <ref>:<path>` instead of the working tree. 'prefix' filters custom properties (e.g. '--brand-'); null or '' takes ALL custom properties.",
+    "_comment": "The CSS/SCSS file tokens are read from. 'path' is relative to --repo. 'ref' is optional: when set (e.g. 'origin/main') the file is read from that git ref via `git show <ref>:<path>` instead of the working tree. 'prefix' filters custom properties (e.g. '--brand-'); null or '' takes ALL custom properties.",
     "path": "src/styles/tokens.css",
     "ref": null,
     "prefix": null

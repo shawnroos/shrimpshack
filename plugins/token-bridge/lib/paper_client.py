@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Paper desktop daemon client — JSON-RPC 2.0 over HTTP with SSE-framed responses.
 
-Reusable by wcs-paper token-sync (U5) and component-harvest (U8). Wraps the
+Reusable by token sync and component harvest. Wraps the
 paper-desktop MCP tool surface:
   - token sync:      get_tokens / set_tokens / create_tokens
   - component harvest: write_html / find_nodes / delete_nodes
@@ -108,7 +108,7 @@ def _validate_config(cfg: dict) -> str | None:
             return "'source.prefix' must be a string, or null/\"\" to take all custom properties."
         ref = src.get("ref")
         if ref is not None and not isinstance(ref, str):
-            return "'source.ref' must be a git ref string (e.g. 'origin/develop') or null."
+            return "'source.ref' must be a git ref string (e.g. 'origin/main') or null."
 
     if cfg.get("emitTarget") is not None and not isinstance(cfg.get("emitTarget"), str):
         return "'emitTarget' must be a string path relative to --repo."

@@ -23,8 +23,8 @@ selectors. v1 is base + exactly one "dark" theme.
       A token carries a non-null `dark` whenever its effective value differs by
       theme — INCLUDING an alias declared only in the base scope whose referent
       is redeclared in the dark scope (the value flips because the referent
-      flips). This alias-flip invariant is preserved from the WCS-specific
-      predecessor; only the block-finding is generalized.
+      flips). This alias-flip invariant is theme-convention agnostic — only the
+      block-finding is driven by config.
 
 Theme-scope resolution (KTD2):
   - The BASE scope is the top-level, unscoped `:root { … }` (brace-depth 0). A
@@ -344,7 +344,7 @@ def load_source(cfg):
 
     `cfg` is the dict returned by paper_client.read_config (it carries `_repo`).
     The source path resolves relative to the repo root. When `source.ref` is set
-    (a git ref like 'origin/develop'), the file is read at that ref via
+    (a git ref like 'origin/main'), the file is read at that ref via
     `git show <ref>:<relative-path>`; otherwise the working-tree file is read.
     Raises RuntimeError on a git failure or a missing/unreadable file."""
     import os

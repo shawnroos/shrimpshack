@@ -1,0 +1,41 @@
+{
+  "_comment": "Test batch for harvest.bats — six generic components, decoupled from the shipped lib/harvest_batch.json (which is an empty fallback). Order matters: the --list test asserts [0] == typography-heading.",
+  "components": [
+    {
+      "name": "typography-heading",
+      "selector": "app-typography-heading",
+      "route": "/",
+      "trigger": []
+    },
+    {
+      "name": "typography-body",
+      "selector": "app-typography-body",
+      "route": "/",
+      "trigger": []
+    },
+    {
+      "name": "typography-micro",
+      "selector": "app-typography-micro",
+      "route": "/",
+      "trigger": []
+    },
+    {
+      "name": "typography-pica",
+      "selector": "app-typography-pica",
+      "route": "/",
+      "trigger": []
+    },
+    {
+      "name": "typography-point",
+      "selector": "app-typography-point",
+      "route": "/",
+      "trigger": []
+    },
+    {
+      "name": "typography-action",
+      "selector": "app-typography-action",
+      "route": "/",
+      "trigger": []
+    }
+  ]
+}

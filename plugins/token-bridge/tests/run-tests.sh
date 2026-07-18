@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test runner for wcs-paper
+# Test runner for token-bridge
 # Usage: ./run-tests.sh [unit|integration|all] [--verbose]
 
 set -euo pipefail
@@ -61,7 +61,7 @@ run_suite() {
 
 main() {
     echo "========================================"
-    echo "wcs-paper — Test Suite"
+    echo "token-bridge — Test Suite"
     echo "========================================"
     echo ""
     check_dependencies

@@ -27,7 +27,9 @@ setup() {
     LIB_DIR="$SCRIPT_DIR/lib"
     FIXTURE_DIR="$SCRIPT_DIR/tests/fixtures"
     HARVEST="$LIB_DIR/harvest.py"
-    BATCH="$LIB_DIR/harvest_batch.json"
+    # A self-contained test batch, decoupled from the shipped lib fallback
+    # (which is intentionally empty). Six components; [0] == typography-heading.
+    BATCH="$FIXTURE_DIR/harvest_batch_test.json"
 
     FAKE="$FIXTURE_DIR/fake-agent-browser.sh"
     chmod +x "$FAKE"
