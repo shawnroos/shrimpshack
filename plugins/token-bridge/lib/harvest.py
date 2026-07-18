@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""harvest.py — wrap agent-browser to harvest a WCS component's rendered structure
-and computed styles from a running dev server, producing JSON for the U7 mapper.
+"""harvest.py — wrap agent-browser to harvest a component's rendered structure
+and computed styles from a running dev server, producing JSON for the mapper.
 
-Unit U6 of the wcs-paper plugin.
+Part of token-bridge's code -> Paper component harvest path.
 
 WHAT IT DOES
 ------------
 For a component entry (name / selector / route / optional trigger steps) it drives a
 logged-in agent-browser session:
-  1. open the route (the WCS editor needs auth + a loaded project, so this runs against
-     an `agent-browser --profile <name>` session that is already logged in),
+  1. open the route (an app that needs auth + a loaded project runs against an
+     `agent-browser --profile <name>` session that is already logged in),
   2. run any trigger steps (e.g. open a drawer) to make the component render,
   3. eval harvest_extract.js against the selector, which returns the node tree + the
      active theme with getComputedStyle values already resolved to literals.
+
+The extractor's theme detection is config-driven: the harvest `themeSignal` (a
+data-attribute or media-query descriptor, from token-bridge.config.json) is injected
+into the eval template alongside the selector, so the page's active theme is read the
+way the target codebase actually declares it — no hardcoded framework class.
 
 FAIL-SOFT ENVELOPES (never a hang or a stack trace to the caller)
   - dev server unreachable  -> {"ok": false, "error": "server_unreachable", ...}
@@ -20,18 +25,18 @@ FAIL-SOFT ENVELOPES (never a hang or a stack trace to the caller)
 A selector that never renders is NEVER reported as an empty-but-successful result.
 
 TEST COVERAGE (see tests/unit/harvest.bats)
-  UNIT-TESTED (no live server; agent-browser faked via $WCS_PAPER_AGENT_BROWSER):
+  UNIT-TESTED (no live server; agent-browser faked via $TB_AGENT_BROWSER):
     - server_unreachable envelope when `open` fails,
     - component_not_found envelope when eval yields a null/empty node,
     - structure pass-through: one record per node + active theme, from a fixture blob,
-    - selector injection into the eval script,
+    - selector + theme-signal injection into the eval script,
     - envelope shape / valid-JSON output.
-  SMOKE-ONLY (needs a live, logged-in WCS dev server — cannot be unit-tested here):
-    - AE4: a currentColor / color-mix() border coming back as a LITERAL hex/rgb value.
+  SMOKE-ONLY (needs a live, logged-in dev server — cannot be unit-tested here):
+    - a currentColor / color-mix() border coming back as a LITERAL hex/rgb value.
       That resolution happens in the real browser's getComputedStyle; a fixture can
       only assert the pass-through, not that the browser did the resolving.
 
-The agent-browser binary is taken from $WCS_PAPER_AGENT_BROWSER (default: "agent-browser")
+The agent-browser binary is taken from $TB_AGENT_BROWSER (default: "agent-browser")
 so tests can inject a fake command without a PATH shim.
 """
 
@@ -45,15 +50,19 @@ import sys
 from pathlib import Path
 
 LIB_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(LIB_DIR))
+from paper_client import read_config  # noqa: E402
+
 EXTRACT_JS_PATH = LIB_DIR / "harvest_extract.js"
 DEFAULT_BATCH_PATH = LIB_DIR / "harvest_batch.json"
-SELECTOR_TOKEN = '"__WCS_PAPER_SELECTOR__"'
+SELECTOR_TOKEN = '"__TB_SELECTOR__"'
+THEME_SIGNAL_TOKEN = "__TB_THEME_SIGNAL__"
 
-AGENT_BROWSER = os.environ.get("WCS_PAPER_AGENT_BROWSER", "agent-browser")
-DEFAULT_BASE_URL = os.environ.get("WCS_PAPER_BASE_URL", "http://localhost:4200")
-DEFAULT_PROFILE = os.environ.get("WCS_PAPER_PROFILE", "wcs")
+AGENT_BROWSER = os.environ.get("TB_AGENT_BROWSER", "agent-browser")
+DEFAULT_BASE_URL = os.environ.get("TB_BASE_URL", "http://localhost:4200")
+DEFAULT_PROFILE = os.environ.get("TB_PROFILE", "default")
 # agent-browser can genuinely hang if the page never settles; bound every call.
-STEP_TIMEOUT = int(os.environ.get("WCS_PAPER_STEP_TIMEOUT", "60"))
+STEP_TIMEOUT = int(os.environ.get("TB_STEP_TIMEOUT", "60"))
 
 # Substrings in agent-browser stderr that mean "the dev server isn't reachable".
 _UNREACHABLE_MARKERS = (
@@ -82,13 +91,17 @@ class HarvestError(Exception):
 # Pure, unit-testable logic (no subprocess, no browser)                        #
 # --------------------------------------------------------------------------- #
 
-def build_extract_js(template: str, selector: str) -> str:
-    """Inject `selector` into the eval template by replacing the quoted token.
+def build_extract_js(template: str, selector: str, theme_signal=None) -> str:
+    """Inject the selector and the theme signal into the eval template.
 
-    json.dumps gives a correctly-escaped JS string literal, so a selector with
-    quotes/backslashes can't break out of the string.
+    The quoted `"__TB_SELECTOR__"` token is replaced with the JSON-encoded
+    selector string; the bare `__TB_THEME_SIGNAL__` token is replaced with the
+    JSON-encoded theme-signal object (or `null` when none is configured). Both use
+    json.dumps, so a selector with quotes/backslashes can't break out of its
+    string and the signal is always a valid JS literal.
     """
-    return template.replace(SELECTOR_TOKEN, json.dumps(selector))
+    js = template.replace(SELECTOR_TOKEN, json.dumps(selector))
+    return js.replace(THEME_SIGNAL_TOKEN, json.dumps(theme_signal))
 
 
 def _unwrap(data):
@@ -162,7 +175,7 @@ def build_success_envelope(entry: dict, payload: dict) -> dict:
 
 
 def error_envelope(code: str, message: str, entry: dict | None = None) -> dict:
-    # `note` is the field every other wcs-paper script uses for the human
+    # `note` is the field every other token-bridge script uses for the human
     # message (paper_client/sync_tokens/write_component); keep `message` too so
     # anything already reading it still works.
     env = {"ok": False, "error": code, "note": message, "message": message}
@@ -211,7 +224,7 @@ def run_agent_browser(args: list[str]) -> subprocess.CompletedProcess:
         )
 
 
-def harvest_entry(entry: dict, base_url: str, profile: str) -> dict:
+def harvest_entry(entry: dict, base_url: str, profile: str, theme_signal=None) -> dict:
     """Harvest one component. Always returns an envelope (ok or error), never raises."""
     selector = entry.get("selector")
     route = entry.get("route", "")
@@ -233,7 +246,7 @@ def harvest_entry(entry: dict, base_url: str, profile: str) -> dict:
             )
 
         # 2. Trigger steps (best-effort). Each is a list of agent-browser args,
-        #    e.g. ["click", "button.wcs-open-typography"]. If a step can't run the
+        #    e.g. ["click", "button.open-typography"]. If a step can't run the
         #    dev server is likely down; anything else is left for the eval to catch.
         for step in triggers:
             if not isinstance(step, list) or not step:
@@ -245,9 +258,9 @@ def harvest_entry(entry: dict, base_url: str, profile: str) -> dict:
                     f"trigger step {step} failed: {(res.stderr or '').strip()[:200]}",
                 )
 
-        # 3. Eval the extractor against the selector.
+        # 3. Eval the extractor against the selector, injecting the theme signal.
         template = EXTRACT_JS_PATH.read_text()
-        js = build_extract_js(template, selector)
+        js = build_extract_js(template, selector, theme_signal)
         evaluated = run_agent_browser(["--profile", profile, "eval", js, "--json"])
         if evaluated.returncode != 0:
             if _looks_unreachable(evaluated.stderr):
@@ -281,14 +294,36 @@ def load_batch(path: Path) -> list[dict]:
     return []
 
 
+def _config_harvest(repo):
+    """Load the harvest section of the target codebase config via --repo.
+
+    Returns (theme_signal, batch, error_envelope_or_None). A missing/unreadable
+    config is a hard error; a config that merely lacks a fileId (the destructive
+    refuse guard) is fine here — harvest reads, it never writes to Paper — so its
+    `harvest` block is still used.
+    """
+    _file_id, cfg, err = read_config(repo)
+    if err is not None and err.get("error") in ("no_config", "bad_config"):
+        return None, None, err
+    harvest_cfg = (cfg or {}).get("harvest") or {}
+    return harvest_cfg.get("themeSignal"), harvest_cfg.get("batch"), None
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Harvest a WCS component's structure + computed styles as JSON."
+        description="Harvest a component's structure + computed styles as JSON."
+    )
+    parser.add_argument(
+        "--repo",
+        default=None,
+        help="Target codebase root holding token-bridge.config.json; sources the "
+        "harvest batch and theme signal from config (falls back to --batch).",
     )
     parser.add_argument(
         "--batch",
         default=str(DEFAULT_BATCH_PATH),
-        help="Path to harvest_batch.json (default: alongside this script).",
+        help="Path to a harvest batch JSON file (fallback when --repo is absent or "
+        "its config declares no batch; default: alongside this script).",
     )
     parser.add_argument(
         "--name",
@@ -311,15 +346,27 @@ def main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
 
-    batch_path = Path(args.batch)
-    if not batch_path.exists():
-        print(
-            json.dumps(error_envelope("batch_not_found", f"no batch file at {batch_path}")),
-            file=sys.stdout,
-        )
-        return 2
+    # Theme signal + batch come from config when --repo is given; otherwise the
+    # batch file is the fallback and there is no injected theme signal.
+    theme_signal = None
+    entries = None
+    if args.repo:
+        theme_signal, cfg_batch, cfg_err = _config_harvest(args.repo)
+        if cfg_err is not None:
+            print(json.dumps(cfg_err), file=sys.stdout)
+            return 2
+        if cfg_batch:
+            entries = cfg_batch
 
-    entries = load_batch(batch_path)
+    if entries is None:
+        batch_path = Path(args.batch)
+        if not batch_path.exists():
+            print(
+                json.dumps(error_envelope("batch_not_found", f"no batch file at {batch_path}")),
+                file=sys.stdout,
+            )
+            return 2
+        entries = load_batch(batch_path)
 
     if args.list:
         print(json.dumps([e.get("name") for e in entries]))
@@ -334,11 +381,13 @@ def main(argv=None) -> int:
                 )
             )
             return 2
-        print(json.dumps(harvest_entry(match, args.base_url, args.profile)))
+        print(json.dumps(harvest_entry(match, args.base_url, args.profile, theme_signal)))
         return 0
 
     # Whole batch: fail-soft per component, wrapped in a single result object.
-    components = [harvest_entry(e, args.base_url, args.profile) for e in entries]
+    components = [
+        harvest_entry(e, args.base_url, args.profile, theme_signal) for e in entries
+    ]
     print(json.dumps({"ok": True, "components": components}))
     return 0
 

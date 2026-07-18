@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""write_component.py — harvest WCS components, map their values to --wcs-* token
-refs, and write them into the configured Paper file, REPLACING any prior copy.
+"""write_component.py — harvest components, map their values to design-token refs,
+and write them into the configured Paper file, REPLACING any prior copy.
 
-Unit U8 of the wcs-paper plugin. The end-to-end "refresh components" command.
+The end-to-end "refresh components" command of token-bridge's code -> Paper path.
 
 WHAT IT DOES (real / smoke path)
 --------------------------------
-1. Read the target `fileId` from wcs-paper.config.json. If it is empty/absent the
-   script REFUSES: it writes NOTHING, constructs no Paper client, and exits
-   non-zero with an actionable message. A destructive reconcile must never fall
-   back to whatever Paper file happens to be open (same guard as U5 token-sync).
-2. For each component in the batch (harvest_batch.json — typography first, R12):
+1. Read the target `fileId` from the target codebase's token-bridge.config.json
+   (found via --repo). If it is empty/absent the script REFUSES: it writes
+   NOTHING, constructs no Paper client, and exits non-zero with an actionable
+   message. A destructive reconcile must never fall back to whatever Paper file
+   happens to be open (same guard as token-sync).
+2. For each component in the harvest batch:
      a. harvest it via harvest.py (drives a logged-in agent-browser session),
-     b. map its computed-style literals to var(--wcs-*) refs via map_to_tokens.py
-        against the parsed token set.
-3. Write the mapped component into Paper as nodes, REPLACING not duplicating (R13):
+     b. map its computed-style literals to var(--…) token refs via map_to_tokens.py
+        against the parsed token set (parsed from the config source, not a
+        hardcoded path).
+3. Write the mapped component into Paper as nodes, REPLACING not duplicating:
      find_nodes  -> locate the existing wrapper by its stable layer name,
      delete_nodes -> remove it (and its subtree) if present,
      write_html  -> write the fresh copy.
@@ -29,16 +31,16 @@ LOGIC — the refuse-without-fileId guard and the find -> delete -> write replac
 sequence — is unit-testable with NO live daemon or dev server:
 
   * The Paper client is dependency-injected through a factory (`make_client`).
-    Setting $WCS_PAPER_FAKE_CLIENT to a JSON spec file swaps in a FakePaperClient
+    Setting $TB_FAKE_CLIENT to a JSON spec file swaps in a FakePaperClient
     that replays scripted find_nodes responses and RECORDS every call (method +
-    args) to $WCS_PAPER_CALL_LOG, so a test can assert the exact call sequence.
+    args) to $TB_CALL_LOG, so a test can assert the exact call sequence.
   * `--mapped-file <path>` feeds a pre-mapped component envelope (or a list of
     them) straight into the write path, bypassing the live harvest+map entirely.
   * The refuse guard runs BEFORE any client is constructed, so a refusal provably
     issues ZERO Paper calls (the call log is never even written).
 
 See tests/unit/write_component.bats. Scenarios that need a live, logged-in dev
-server + Paper daemon (the actual six-typography-components-land check) are
+server + Paper daemon (the actual components-land-on-canvas check) are
 SMOKE-ONLY and are not covered by the unit suite.
 """
 
@@ -51,29 +53,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Import the shared Paper client (READ-ONLY dependency — never modified here).
+# Import the shared Paper client + the token parser (READ-ONLY dependencies —
+# never modified here).
 LIB_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB_DIR))
-from paper_client import PaperClient, read_config  # noqa: E402
+from paper_client import read_config, PaperClient  # noqa: E402
+import parse_tokens  # noqa: E402
 
-PLUGIN_ROOT = LIB_DIR.parent
-DEFAULT_CONFIG_PATH = PLUGIN_ROOT / "wcs-paper.config.json"
 DEFAULT_BATCH_PATH = LIB_DIR / "harvest_batch.json"
 
 HARVEST_PY = LIB_DIR / "harvest.py"
 MAP_PY = LIB_DIR / "map_to_tokens.py"
-PARSE_TOKENS_PY = LIB_DIR / "parse_tokens.py"
-
-# Web-app checkout to read the token source from (origin/develop), overridable so
-# the smoke path can point at a local worktree.
-WEB_APP_DIR = os.environ.get(
-    "WCS_PAPER_WEB_APP_DIR",
-    str(Path.home() / "projects" / "Slate" / "web-app"),
-)
-TOKENS_SCSS_REF = os.environ.get(
-    "WCS_PAPER_TOKENS_REF",
-    "origin/develop:src/styles/themes/_wcs-design-tokens.scss",
-)
 
 # Component wrappers are found on re-run by listing the target node's children
 # and matching the wrapper's layer name (get_children) — a sentinel style was
@@ -108,8 +98,8 @@ def _escape_text(value) -> str:
 
 
 def _style_attr(styles: dict) -> str:
-    """Serialize a {prop: value} dict to a CSS inline-style string. var(--wcs-*)
-    refs are emitted verbatim so token bindings survive into the written HTML.
+    """Serialize a {prop: value} dict to a CSS inline-style string. var(--…)
+    token refs are emitted verbatim so token bindings survive into the written HTML.
 
     Values are HTML-attribute-escaped: getComputedStyle font-family values carry
     double quotes (`"Helvetica Neue", sans-serif`) and typography is the first
@@ -125,7 +115,7 @@ def _style_attr(styles: dict) -> str:
 def render_node_html(node: dict) -> str:
     """Render one harvested/mapped node (and its subtree) to an HTML string.
 
-    Style values are passed through untouched, so a mapped `var(--wcs-accent)`
+    Style values are passed through untouched, so a mapped `var(--accent)`
     lands as-is in the Paper write payload.
     """
     tag = (node.get("tag") or "div").strip() or "div"
@@ -162,7 +152,7 @@ def render_component_html(mapped: dict) -> str:
     body = render_node_html(root)
     return (
         f'<div layer-name="{_escape_text(layer)}" '
-        f'data-wcs-component="{_escape_text(name)}" '
+        f'data-tb-component="{_escape_text(name)}" '
         f'style="{WRAPPER_CSS}">{body}</div>'
     )
 
@@ -293,9 +283,9 @@ def load_batch(path: Path) -> list:
 # --------------------------------------------------------------------------- #
 
 def make_client(url: str | None = None):
-    """Return a Paper client. When $WCS_PAPER_FAKE_CLIENT points at a JSON spec,
+    """Return a Paper client. When $TB_FAKE_CLIENT points at a JSON spec,
     return a FakePaperClient instead (for unit tests / dry runs)."""
-    spec_path = os.environ.get("WCS_PAPER_FAKE_CLIENT")
+    spec_path = os.environ.get("TB_FAKE_CLIENT")
     if spec_path:
         return FakePaperClient.from_spec_file(spec_path)
     return PaperClient(url=url)
@@ -303,8 +293,8 @@ def make_client(url: str | None = None):
 
 class FakePaperClient:
     """A record-and-replay stand-in for PaperClient, activated in tests via
-    $WCS_PAPER_FAKE_CLIENT. It records every call (method + args) to
-    $WCS_PAPER_CALL_LOG and returns scripted envelopes from the spec.
+    $TB_FAKE_CLIENT. It records every call (method + args) to
+    $TB_CALL_LOG and returns scripted envelopes from the spec.
 
     Spec shape (all optional):
       {
@@ -321,7 +311,7 @@ class FakePaperClient:
         self.spec = spec or {}
         self.calls: list = []
         self._cursors: dict = {}
-        self.log_path = os.environ.get("WCS_PAPER_CALL_LOG")
+        self.log_path = os.environ.get("TB_CALL_LOG")
 
     @classmethod
     def from_spec_file(cls, path: str):
@@ -407,25 +397,27 @@ def _first_artboard_id(payload) -> str | None:
 # Harvest + map (smoke path only — needs a live dev server)                    #
 # --------------------------------------------------------------------------- #
 
-def _parse_token_set() -> str:
-    """Return the parsed token-set JSON (as a string) from origin/develop SCSS."""
-    scss = subprocess.run(
-        ["git", "-C", WEB_APP_DIR, "show", TOKENS_SCSS_REF],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    parsed = subprocess.run(
-        ["python3", str(PARSE_TOKENS_PY)],
-        input=scss, capture_output=True, text=True, check=True,
+def _parse_token_set(config: dict) -> str:
+    """Return the parsed token-set JSON (as a string) from the config source.
+
+    Reads the CSS/SCSS the config points at (working-tree path, or a git ref when
+    `source.ref` is set) and parses it into the base+dark token records the mapper
+    consumes — no hardcoded token path."""
+    text = parse_tokens.load_source(config)
+    records = parse_tokens.parse_tokens(
+        text,
+        config.get("themeConventions") or [],
+        (config.get("source") or {}).get("prefix"),
     )
-    return parsed.stdout
+    return json.dumps(records)
 
 
-def harvest_and_map(entry: dict, tokens_json: str) -> dict:
+def harvest_and_map(entry: dict, tokens_json: str, repo: str) -> dict:
     """Harvest one component (live) and map its literals to token refs.
     SMOKE-ONLY: harvest.py drives a real logged-in agent-browser session."""
     name = entry.get("name")
     harvested = subprocess.run(
-        ["python3", str(HARVEST_PY), "--name", name],
+        ["python3", str(HARVEST_PY), "--name", name, "--repo", repo],
         capture_output=True, text=True,
     )
     if harvested.returncode != 0:
@@ -478,14 +470,14 @@ def write_all(client, file_id: str, mapped_components: list, target_node_id: str
     }
 
 
-def run(config_path: Path, batch_path: Path, mapped_file: str | None,
+def run(repo: str, batch_path: Path, mapped_file: str | None,
         target_override: str | None, url_override: str | None,
         names: list | None = None) -> tuple:
     """Full orchestration. Returns (envelope, exit_code)."""
     # --- refuse guard: BEFORE any client is constructed (zero Paper calls) ---
-    file_id, config, refuse = read_config(str(config_path))
+    file_id, config, refuse = read_config(repo)
     if refuse is not None:
-        code = EXIT_BAD_ARGS if refuse.get("error") == "bad_config" else EXIT_REFUSED
+        code = EXIT_BAD_ARGS if refuse.get("error") in ("bad_config", "no_config") else EXIT_REFUSED
         return (refuse, code)
 
     url = url_override or config.get("paperDaemonUrl")
@@ -500,7 +492,7 @@ def run(config_path: Path, batch_path: Path, mapped_file: str | None,
             "note": (
                 "Could not resolve a Paper node to write components under. Open the "
                 "target file in Paper and pass --target-node-id <artboardId> (or set "
-                "$WCS_PAPER_TARGET_NODE_ID)."
+                "$TB_TARGET_NODE_ID)."
             ),
             "fileId": file_id,
         }, EXIT_ERROR)
@@ -511,7 +503,7 @@ def run(config_path: Path, batch_path: Path, mapped_file: str | None,
         mapped_components = data if isinstance(data, list) else [data]
     else:
         # SMOKE path — needs a live dev server + Paper daemon.
-        entries = load_batch(batch_path)  # typography first (R12)
+        entries = load_batch(batch_path)
         if names:
             wanted = set(names)
             entries = [e for e in entries if e.get("name") in wanted]
@@ -520,8 +512,8 @@ def run(config_path: Path, batch_path: Path, mapped_file: str | None,
                 return ({"ok": False, "error": "unknown_component",
                          "note": f"not in {batch_path.name}: {sorted(missing)}"},
                         EXIT_BAD_ARGS)
-        tokens_json = _parse_token_set()
-        mapped_components = [harvest_and_map(e, tokens_json) for e in entries]
+        tokens_json = _parse_token_set(config)
+        mapped_components = [harvest_and_map(e, tokens_json, repo) for e in entries]
 
     report = write_all(client, file_id, mapped_components, target_node_id)
     return (report, EXIT_OK if report.get("ok") else EXIT_ERROR)
@@ -534,19 +526,20 @@ def run(config_path: Path, batch_path: Path, mapped_file: str | None,
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="write_component.py",
-        description="Harvest WCS components, map to --wcs-* tokens, and write them "
-                    "into the configured Paper file (replacing any prior copy).",
+        description="Harvest components, map their values to design-token refs, and "
+                    "write them into the configured Paper file (replacing any prior copy).",
     )
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
-                        help="Path to wcs-paper.config.json (holds the target fileId).")
+    parser.add_argument("--repo", default=".",
+                        help="Target codebase root holding token-bridge.config.json "
+                             "(the config carries the target fileId + token source).")
     parser.add_argument("--batch", default=str(DEFAULT_BATCH_PATH),
-                        help="Path to harvest_batch.json (the component batch, typography first).")
+                        help="Path to the harvest batch JSON (the component batch).")
     parser.add_argument("--mapped-file",
                         help="Skip live harvest+map: read a pre-mapped component envelope "
                              "(or a JSON array of them) from this path and write it. Used by "
                              "the unit tests and for dry runs.")
     parser.add_argument("--target-node-id",
-                        default=os.environ.get("WCS_PAPER_TARGET_NODE_ID"),
+                        default=os.environ.get("TB_TARGET_NODE_ID"),
                         help="Paper node id to insert components under (else resolved live).")
     parser.add_argument("--url", default=None, help="Paper daemon URL override.")
     parser.add_argument("--name", action="append", dest="names", metavar="COMPONENT",
@@ -555,7 +548,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     envelope, code = run(
-        config_path=Path(args.config),
+        repo=args.repo,
         batch_path=Path(args.batch),
         mapped_file=args.mapped_file,
         target_override=args.target_node_id,

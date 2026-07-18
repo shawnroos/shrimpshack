@@ -1,21 +1,25 @@
 #!/usr/bin/env bats
-# Unit tests for lib/write_component.py — the U8 end-to-end component-refresh
-# orchestration.
+# Unit tests for lib/write_component.py — the end-to-end component-refresh
+# orchestration of token-bridge's code -> Paper path.
 #
 # UNIT vs SMOKE
 # -------------
 # These are all UNIT tests: they exercise the orchestration logic with a
 # FAKE, injected PaperClient and a pre-mapped component fixture — NO live Paper
 # daemon and NO dev server. The fake client is activated by setting
-# $WCS_PAPER_FAKE_CLIENT to a JSON spec (scripted responses) and records every
-# call it receives to $WCS_PAPER_CALL_LOG, so a test can assert the exact
-# get_children -> delete_nodes -> write_html sequence (R13).
+# $TB_FAKE_CLIENT to a JSON spec (scripted responses) and records every
+# call it receives to $TB_CALL_LOG, so a test can assert the exact
+# get_children -> delete_nodes -> write_html sequence.
+#
+# The target codebase is given by --repo <dir>: read_config loads
+# <dir>/token-bridge.config.json (which carries the target fileId). The refuse
+# guard runs off that fileId, before any Paper client is constructed.
 #
 # The following are SMOKE-ONLY and are deliberately NOT covered here (they need a
-# running, logged-in WCS dev server AND a running Paper daemon):
+# running, logged-in dev server AND a running Paper daemon):
 #   - the actual live harvest of a component (harvest.py driving agent-browser),
 #   - the real Paper write landing nodes on the canvas,
-#   - the six-typography-components-actually-land end-to-end check (R12).
+#   - the components-actually-land-on-canvas end-to-end check.
 
 setup() {
     SCRIPT_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
@@ -24,7 +28,7 @@ setup() {
     rm -f "$CALL_LOG"
 
     # A pre-mapped component (name = layer name = "typography-heading"). One style
-    # value is already a var(--wcs-*) token ref so we can assert it survives into
+    # value is already a var(--…) token ref so we can assert it survives into
     # the write payload.
     MAPPED="$BATS_TMPDIR/mapped.json"
     cat > "$MAPPED" <<'JSON'
@@ -42,26 +46,30 @@ setup() {
       {
         "tag": "h1",
         "text": "Heading",
-        "styles": { "color": "var(--wcs-heading-fg)", "font-size": "32px" },
+        "styles": { "color": "var(--brand-heading-fg)", "font-size": "32px" },
         "children": []
       }
     ]
   },
   "near_misses": [
-    { "path": "0.0", "prop": "color", "value": "#37d895", "token": "--wcs-accent", "theme": "light" }
+    { "path": "0.0", "prop": "color", "value": "#37d895", "token": "--brand-accent", "theme": "light" }
   ]
 }
 JSON
 }
 
-# Write a config fixture with the given fileId value (may be empty).
-_write_config() {
+# Write a token-bridge.config.json with the given fileId into a fresh --repo dir
+# and echo the dir. The writer is pointed at it via --repo (read_config loads
+# <dir>/token-bridge.config.json). fileId may be empty to exercise the refuse guard.
+_write_repo() {
     local file_id="$1"
-    local path="$BATS_TMPDIR/config.json"
-    cat > "$path" <<JSON
+    local repo="$BATS_TMPDIR/repo"
+    rm -rf "$repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<JSON
 { "fileId": "$file_id", "paperDaemonUrl": "http://127.0.0.1:29979/mcp" }
 JSON
-    echo "$path"
+    echo "$repo"
 }
 
 # ============================================================================
@@ -71,7 +79,7 @@ JSON
 # ============================================================================
 
 @test "R13 present: existing component issues get_children -> delete -> write in sequence" {
-    config="$(_write_config "01TARGETFILE")"
+    repo="$(_write_repo "01TARGETFILE")"
 
     # Fake: find_nodes reports one existing wrapper whose layer name matches.
     spec="$BATS_TMPDIR/spec_present.json"
@@ -83,8 +91,8 @@ JSON
 }
 JSON
 
-    WCS_PAPER_FAKE_CLIENT="$spec" WCS_PAPER_CALL_LOG="$CALL_LOG" \
-        run python3 "$WRITER" --config "$config" --mapped-file "$MAPPED" --target-node-id "AB-1"
+    TB_FAKE_CLIENT="$spec" TB_CALL_LOG="$CALL_LOG" \
+        run python3 "$WRITER" --repo "$repo" --mapped-file "$MAPPED" --target-node-id "AB-1"
     [ "$status" -eq 0 ]
 
     # The recorded call sequence is exactly find_nodes, delete_nodes, write_html.
@@ -113,7 +121,7 @@ JSON
 # ============================================================================
 
 @test "R13 absent: not-yet-present component skips delete, only writes" {
-    config="$(_write_config "01TARGETFILE")"
+    repo="$(_write_repo "01TARGETFILE")"
 
     spec="$BATS_TMPDIR/spec_absent.json"
     cat > "$spec" <<'JSON'
@@ -123,8 +131,8 @@ JSON
 }
 JSON
 
-    WCS_PAPER_FAKE_CLIENT="$spec" WCS_PAPER_CALL_LOG="$CALL_LOG" \
-        run python3 "$WRITER" --config "$config" --mapped-file "$MAPPED" --target-node-id "AB-1"
+    TB_FAKE_CLIENT="$spec" TB_CALL_LOG="$CALL_LOG" \
+        run python3 "$WRITER" --repo "$repo" --mapped-file "$MAPPED" --target-node-id "AB-1"
     [ "$status" -eq 0 ]
 
     [ -f "$CALL_LOG" ]
@@ -148,13 +156,13 @@ JSON
 # ============================================================================
 
 @test "safety: empty fileId refuses, non-zero exit, ZERO client calls" {
-    config="$(_write_config "")"
+    repo="$(_write_repo "")"
 
     spec="$BATS_TMPDIR/spec_any.json"
     echo '{ "write_html": { "ok": true } }' > "$spec"
 
-    WCS_PAPER_FAKE_CLIENT="$spec" WCS_PAPER_CALL_LOG="$CALL_LOG" \
-        run python3 "$WRITER" --config "$config" --mapped-file "$MAPPED" --target-node-id "AB-1"
+    TB_FAKE_CLIENT="$spec" TB_CALL_LOG="$CALL_LOG" \
+        run python3 "$WRITER" --repo "$repo" --mapped-file "$MAPPED" --target-node-id "AB-1"
 
     # Non-zero exit, distinct refuse code.
     [ "$status" -eq 3 ]
@@ -168,12 +176,12 @@ JSON
 }
 
 # ============================================================================
-# (OPTIONAL, UNIT): mapped token refs (var(--wcs-*)) survive into the write_html
-# HTML payload.
+# (OPTIONAL, UNIT): mapped token refs (var(--…)) survive into the write_html HTML
+# payload, and the wrapper stamps the neutral data-tb-component attribute (R8).
 # ============================================================================
 
-@test "token refs survive: var(--wcs-*) reaches the write_html payload" {
-    config="$(_write_config "01TARGETFILE")"
+@test "token refs survive: var(--…) reaches the write_html payload with a neutral wrapper" {
+    repo="$(_write_repo "01TARGETFILE")"
 
     spec="$BATS_TMPDIR/spec_survive.json"
     cat > "$spec" <<'JSON'
@@ -183,15 +191,20 @@ JSON
 }
 JSON
 
-    WCS_PAPER_FAKE_CLIENT="$spec" WCS_PAPER_CALL_LOG="$CALL_LOG" \
-        run python3 "$WRITER" --config "$config" --mapped-file "$MAPPED" --target-node-id "AB-1"
+    TB_FAKE_CLIENT="$spec" TB_CALL_LOG="$CALL_LOG" \
+        run python3 "$WRITER" --repo "$repo" --mapped-file "$MAPPED" --target-node-id "AB-1"
     [ "$status" -eq 0 ]
 
     html=$(jq -r '[.[] | select(.method=="write_html")][0].args.html' "$CALL_LOG")
-    [[ "$html" == *"var(--wcs-heading-fg)"* ]]
+    [[ "$html" == *"var(--brand-heading-fg)"* ]]
 
     # The wrapper carries the stable layer name used for find/replace.
     [[ "$html" == *'layer-name="typography-heading"'* ]]
+
+    # R8: the wrapper is stamped with the neutral data-tb-component attribute,
+    # never the old WCS-specific data-wcs-component.
+    [[ "$html" == *'data-tb-component="typography-heading"'* ]]
+    [[ "$html" != *'data-wcs-component'* ]]
 }
 
 # ============================================================================
@@ -203,7 +216,7 @@ JSON
 # ============================================================================
 
 @test "guard: single-component refresh never deletes sibling/nameless wrappers" {
-    config="$(_write_config "01TARGETFILE")"
+    repo="$(_write_repo "01TARGETFILE")"
 
     spec="$BATS_TMPDIR/spec_siblings.json"
     cat > "$spec" <<'JSON'
@@ -216,8 +229,8 @@ JSON
 }
 JSON
 
-    WCS_PAPER_FAKE_CLIENT="$spec" WCS_PAPER_CALL_LOG="$CALL_LOG" \
-        run python3 "$WRITER" --config "$config" --mapped-file "$MAPPED" --target-node-id "AB-1"
+    TB_FAKE_CLIENT="$spec" TB_CALL_LOG="$CALL_LOG" \
+        run python3 "$WRITER" --repo "$repo" --mapped-file "$MAPPED" --target-node-id "AB-1"
     [ "$status" -eq 0 ]
 
     # No delete at all — nothing matched "typography-heading".
@@ -235,7 +248,7 @@ JSON
 # ============================================================================
 
 @test "guard: a failed delete skips the write and reports replace_failed" {
-    config="$(_write_config "01TARGETFILE")"
+    repo="$(_write_repo "01TARGETFILE")"
 
     spec="$BATS_TMPDIR/spec_delfail.json"
     cat > "$spec" <<'JSON'
@@ -246,8 +259,8 @@ JSON
 }
 JSON
 
-    WCS_PAPER_FAKE_CLIENT="$spec" WCS_PAPER_CALL_LOG="$CALL_LOG" \
-        run python3 "$WRITER" --config "$config" --mapped-file "$MAPPED" --target-node-id "AB-1"
+    TB_FAKE_CLIENT="$spec" TB_CALL_LOG="$CALL_LOG" \
+        run python3 "$WRITER" --repo "$repo" --mapped-file "$MAPPED" --target-node-id "AB-1"
 
     # find + delete happened, but NO write_html (the count must not grow).
     writes=$(jq '[.[] | select(.method=="write_html")] | length' "$CALL_LOG")
@@ -263,7 +276,7 @@ JSON
 # ============================================================================
 
 @test "guard: a quoted font-family style value is escaped, not raw" {
-    config="$(_write_config "01TARGETFILE")"
+    repo="$(_write_repo "01TARGETFILE")"
 
     mapped_q="$BATS_TMPDIR/mapped_quoted.json"
     cat > "$mapped_q" <<'JSON'
@@ -277,8 +290,8 @@ JSON
     spec="$BATS_TMPDIR/spec_q.json"
     echo '{ "get_children": { "ok": true, "result": { "children": [] } }, "write_html": { "ok": true, "result": {} } }' > "$spec"
 
-    WCS_PAPER_FAKE_CLIENT="$spec" WCS_PAPER_CALL_LOG="$CALL_LOG" \
-        run python3 "$WRITER" --config "$config" --mapped-file "$mapped_q" --target-node-id "AB-1"
+    TB_FAKE_CLIENT="$spec" TB_CALL_LOG="$CALL_LOG" \
+        run python3 "$WRITER" --repo "$repo" --mapped-file "$mapped_q" --target-node-id "AB-1"
     [ "$status" -eq 0 ]
 
     html=$(jq -r '[.[] | select(.method=="write_html")][0].args.html' "$CALL_LOG")
@@ -296,7 +309,7 @@ JSON
 # ============================================================================
 
 @test "svg fidelity: an svgHtml node is emitted verbatim, not walked" {
-    config="$(_write_config "01TARGETFILE")"
+    repo="$(_write_repo "01TARGETFILE")"
     mapped_svg="$BATS_TMPDIR/mapped_svg.json"
     cat > "$mapped_svg" <<'JSON'
 {
@@ -308,8 +321,8 @@ JSON
 JSON
     spec="$BATS_TMPDIR/spec_svg.json"
     echo '{ "get_children": { "ok": true, "result": { "children": [] } }, "write_html": { "ok": true, "result": {} } }' > "$spec"
-    WCS_PAPER_FAKE_CLIENT="$spec" WCS_PAPER_CALL_LOG="$CALL_LOG" \
-        run python3 "$WRITER" --config "$config" --mapped-file "$mapped_svg" --target-node-id "AB-1"
+    TB_FAKE_CLIENT="$spec" TB_CALL_LOG="$CALL_LOG" \
+        run python3 "$WRITER" --repo "$repo" --mapped-file "$mapped_svg" --target-node-id "AB-1"
     [ "$status" -eq 0 ]
     html=$(jq -r '[.[] | select(.method=="write_html")][0].args.html' "$CALL_LOG")
     # the svg geometry (the path d) survives into the write payload
@@ -325,7 +338,7 @@ JSON
 # ============================================================================
 
 @test "img fidelity: an imgSrc node emits a real img with its src" {
-    config="$(_write_config "01TARGETFILE")"
+    repo="$(_write_repo "01TARGETFILE")"
     mapped_img="$BATS_TMPDIR/mapped_img.json"
     cat > "$mapped_img" <<'JSON'
 {
@@ -337,8 +350,8 @@ JSON
 JSON
     spec="$BATS_TMPDIR/spec_img.json"
     echo '{ "get_children": { "ok": true, "result": { "children": [] } }, "write_html": { "ok": true, "result": {} } }' > "$spec"
-    WCS_PAPER_FAKE_CLIENT="$spec" WCS_PAPER_CALL_LOG="$CALL_LOG" \
-        run python3 "$WRITER" --config "$config" --mapped-file "$mapped_img" --target-node-id "AB-1"
+    TB_FAKE_CLIENT="$spec" TB_CALL_LOG="$CALL_LOG" \
+        run python3 "$WRITER" --repo "$repo" --mapped-file "$mapped_img" --target-node-id "AB-1"
     [ "$status" -eq 0 ]
     html=$(jq -r '[.[] | select(.method=="write_html")][0].args.html' "$CALL_LOG")
     [[ "$html" == *'<img src="data:image/png;base64,AAAA"'* ]]

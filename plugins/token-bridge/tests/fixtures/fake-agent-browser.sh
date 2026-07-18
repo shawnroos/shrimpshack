@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# fake-agent-browser.sh — stand-in for `agent-browser` in wcs-paper harvest unit
-# tests. harvest.py invokes whatever $WCS_PAPER_AGENT_BROWSER points at, so pointing
+# fake-agent-browser.sh — stand-in for `agent-browser` in token-bridge harvest unit
+# tests. harvest.py invokes whatever $TB_AGENT_BROWSER points at, so pointing
 # it here lets the whole harvest path run with NO live server or real browser.
 #
 # Behaviour is driven by env vars:

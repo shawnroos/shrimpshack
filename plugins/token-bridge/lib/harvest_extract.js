@@ -1,17 +1,22 @@
-// harvest_extract.js — agent-browser `eval` page script for wcs-paper (Unit U6).
+// harvest_extract.js — agent-browser `eval` page script for token-bridge.
 //
-// Runs INSIDE the WCS editor page. Given a component root selector, walks its DOM
-// subtree and records, per node: tag, direct text, and a curated getComputedStyle
-// snapshot. Also records the page's active theme (WCS dark class = body.wcs-dark).
+// Runs INSIDE the target codebase's live page. Given a component root selector,
+// walks its DOM subtree and records, per node: tag, direct text, and a curated
+// getComputedStyle snapshot. Also records the page's active theme, decided by an
+// injected theme SIGNAL (config-driven — no hardcoded framework class).
 //
 // WHY getComputedStyle: the browser resolves color-mix() and currentColor down to
 // literal values (e.g. rgb(...) / rgba(...)). That is the whole point of harvesting
 // from a live page instead of parsing CSS text — it dodges the mangling Paper does
 // to color-mix()/currentColor when those reach it as authored strings.
 //
-// harvest.py injects the selector by replacing the "__WCS_PAPER_SELECTOR__" token
-// (quotes included) with a JSON-encoded selector string before passing this to
-// `agent-browser eval <js> --json`.
+// harvest.py injects two tokens before passing this to `agent-browser eval <js> --json`:
+//   - the selector: it replaces the quoted "__TB_SELECTOR__" token with a
+//     JSON-encoded selector string.
+//   - the theme signal: it replaces the bare __TB_THEME_SIGNAL__ token with a
+//     JSON object describing how to read the active theme from the live page:
+//       { "type": "data-attribute", "attr": "data-theme", "value": "dark" }
+//       { "type": "media-query", "query": "(prefers-color-scheme: dark)" }
 //
 // Return shape (the value agent-browser serialises):
 //   found:     { "ok": true,  "theme": "dark"|"light", "selector": "...", "root": <node> }
@@ -19,10 +24,11 @@
 // where <node> = { tag, text, styles: { <prop>: <literal>, ... }, children: [ <node>, ... ] }.
 
 (() => {
-  const SELECTOR = "__WCS_PAPER_SELECTOR__";
+  const SELECTOR = "__TB_SELECTOR__";
+  const THEME_SIGNAL = __TB_THEME_SIGNAL__;
 
   // Curated computed-style properties that actually matter for mapping back to
-  // WCS design tokens (colors, spacing, borders, typography, layout, background).
+  // design tokens (colors, spacing, borders, typography, layout, background).
   // Deliberately NOT the full ~350-property dump — that would bury the signal.
   const STYLE_PROPS = [
     // color / background
@@ -96,8 +102,22 @@
     "cursor",
   ];
 
-  // WCS editor dark theme is body.wcs-theme.wcs-dark; light is the absence of wcs-dark.
-  const theme = document.body.classList.contains("wcs-dark") ? "dark" : "light";
+  // Resolve the active theme from the injected signal (config-driven). A
+  // data-attribute signal reads the attribute off <html> or <body>; a
+  // media-query signal evaluates the query via matchMedia. Anything else (or a
+  // missing signal) falls back to "light".
+  let theme = "light";
+  if (THEME_SIGNAL && THEME_SIGNAL.type === "data-attribute") {
+    const attr = THEME_SIGNAL.attr;
+    const value = THEME_SIGNAL.value;
+    theme =
+      document.documentElement.getAttribute(attr) === value ||
+      document.body.getAttribute(attr) === value
+        ? "dark"
+        : "light";
+  } else if (THEME_SIGNAL && THEME_SIGNAL.type === "media-query") {
+    theme = window.matchMedia(THEME_SIGNAL.query).matches ? "dark" : "light";
+  }
 
   const root = document.querySelector(SELECTOR);
   if (!root) {

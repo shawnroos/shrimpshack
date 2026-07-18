@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
-# Unit tests for lib/harvest.py (Unit U6).
+# Unit tests for lib/harvest.py (token-bridge component harvest).
 #
 # These run WITHOUT a live dev server: agent-browser is faked via the
-# $WCS_PAPER_AGENT_BROWSER env override (tests/fixtures/fake-agent-browser.sh),
+# $TB_AGENT_BROWSER env override (tests/fixtures/fake-agent-browser.sh),
 # whose behaviour is switched with FAKE_MODE / FAKE_EVAL_FILE.
 #
 # UNIT-TESTED here:
@@ -10,13 +10,17 @@
 #   - component_not_found envelope when the selector never renders (null eval)
 #   - structure pass-through: one record per node, active theme recorded
 #   - selector injection into the eval script (build_extract_js)
+#   - theme-signal injection into the eval script (config-driven, R6)
 #   - wrapper unwrapping + envelope shape + valid JSON
 #   - whole-batch and --list CLI modes
 #
-# SMOKE-ONLY (NOT covered here — needs a live, logged-in WCS dev server):
-#   - AE4: a currentColor / color-mix() border coming back as a LITERAL hex/rgb.
+# SMOKE-ONLY (NOT covered here — needs a live, logged-in dev server):
+#   - a currentColor / color-mix() border coming back as a LITERAL hex/rgb.
 #     getComputedStyle does that resolution in the real browser; a fixture can only
 #     prove pass-through, not that the browser resolved it. Verify on a live server.
+#   - the theme signal actually reading the live page's theme — the fake browser
+#     replays a fixture blob and does not run the injected JS, so the unit suite
+#     proves the signal is INJECTED into the template, not that the browser used it.
 
 setup() {
     SCRIPT_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
@@ -29,10 +33,10 @@ setup() {
     chmod +x "$FAKE"
 
     # Route harvest.py at the fake agent-browser and keep every call fast.
-    export WCS_PAPER_AGENT_BROWSER="$FAKE"
-    export WCS_PAPER_PROFILE="test-profile"
-    export WCS_PAPER_BASE_URL="http://localhost:4200"
-    export WCS_PAPER_STEP_TIMEOUT="10"
+    export TB_AGENT_BROWSER="$FAKE"
+    export TB_PROFILE="test-profile"
+    export TB_BASE_URL="http://localhost:4200"
+    export TB_STEP_TIMEOUT="10"
     unset FAKE_MODE FAKE_EVAL_FILE 2>/dev/null || true
 }
 
@@ -165,10 +169,10 @@ setup() {
 import sys
 sys.path.insert(0, '$LIB_DIR')
 import harvest
-tpl = 'const S = \"__WCS_PAPER_SELECTOR__\"; S'
+tpl = 'const S = \"__TB_SELECTOR__\"; S'
 out = harvest.build_extract_js(tpl, 'app-typography-heading')
 assert 'app-typography-heading' in out, out
-assert '__WCS_PAPER_SELECTOR__' not in out, out
+assert '__TB_SELECTOR__' not in out, out
 print('OK')
 "
     [ "$status" -eq 0 ]
@@ -180,10 +184,61 @@ print('OK')
 import sys
 sys.path.insert(0, '$LIB_DIR')
 import harvest
-tpl = 'x \"__WCS_PAPER_SELECTOR__\" y'
+tpl = 'x \"__TB_SELECTOR__\" y'
 out = harvest.build_extract_js(tpl, 'a[data-x=\"y\"]')
 # Must remain a single valid JS string literal (escaped inner quotes).
 assert '\\\\\"y\\\\\"' in out or '\\\\u0022' in out, out
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK"* ]]
+}
+
+# R6: harvest.py injects the config theme signal into the eval template, dropping
+# the bare __TB_THEME_SIGNAL__ token and leaving a valid JS object literal. This is
+# the unit-level proof of the config-driven theme signal — the fake browser doesn't
+# run JS, so a live server is needed to prove the browser then USES it.
+@test "harvest: build_extract_js injects the data-attribute theme signal" {
+    run python3 -c "
+import json, sys
+sys.path.insert(0, '$LIB_DIR')
+import harvest
+tpl = 'const S = \"__TB_SELECTOR__\"; const T = __TB_THEME_SIGNAL__;'
+signal = {'type': 'data-attribute', 'attr': 'data-theme', 'value': 'dark'}
+out = harvest.build_extract_js(tpl, 'app-x', signal)
+assert '__TB_THEME_SIGNAL__' not in out, out
+assert json.dumps(signal) in out, out
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK"* ]]
+}
+
+@test "harvest: build_extract_js injects a media-query theme signal" {
+    run python3 -c "
+import json, sys
+sys.path.insert(0, '$LIB_DIR')
+import harvest
+tpl = 'const T = __TB_THEME_SIGNAL__;'
+signal = {'type': 'media-query', 'query': '(prefers-color-scheme: dark)'}
+out = harvest.build_extract_js(tpl, 'app-x', signal)
+assert '__TB_THEME_SIGNAL__' not in out, out
+assert json.dumps(signal) in out, out
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK"* ]]
+}
+
+@test "harvest: build_extract_js injects null when no theme signal is configured" {
+    run python3 -c "
+import sys
+sys.path.insert(0, '$LIB_DIR')
+import harvest
+tpl = 'const T = __TB_THEME_SIGNAL__;'
+out = harvest.build_extract_js(tpl, 'app-x')
+assert '__TB_THEME_SIGNAL__' not in out, out
+assert 'const T = null;' in out, out
 print('OK')
 "
     [ "$status" -eq 0 ]

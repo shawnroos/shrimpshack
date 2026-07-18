@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""map_to_tokens.py — rewrite harvested literal style values back to --wcs-* token
+"""map_to_tokens.py — rewrite harvested literal style values back to design-token
 references, matching against the theme the component was harvested in.
 
-Unit U7 of the wcs-paper plugin.
+Part of token-bridge's code -> Paper component harvest path.
 
 INPUTS
 ------
@@ -23,13 +23,13 @@ For each node, every style literal is compared — by NORMALIZED equivalence, no
 string identity — against every token's EFFECTIVE value FOR THE NODE'S HARVESTED
 THEME:
 
-  - match in the harvested theme      -> the literal is replaced by `var(--wcs-x)`.
+  - match in the harvested theme      -> the literal is replaced by `var(--x)`.
   - match only in the OTHER theme      -> the literal is left as-is and a record is
                                           added to `near_misses` (a human can then
                                           see the theme mismatch).
   - no match in either theme           -> the literal is left unchanged.
 
-So a dark-rendered #00b72b matches --wcs-accent (dark-effective #00B72B), and is
+So a dark-rendered #00b72b matches --accent (dark-effective #00B72B), and is
 NOT left unmapped by comparing it against the light-effective #37D895.
 
 NORMALIZATION (both sides go through normalize_value before comparison)
@@ -45,8 +45,8 @@ DETERMINISTIC TIE-BREAK
   chosen deterministically:
     1. prefer a SEMANTIC (Tier-2) token over a PRIMITIVE (Tier-1). A primitive is
        detected by name shape — its final `-`-delimited segment is all digits
-       (a numbered scale step, e.g. `--wcs-green-500`); everything else is
-       semantic (e.g. `--wcs-accent`, `--wcs-nav-item-active-fg`).
+       (a numbered scale step, e.g. `--green-500`); everything else is
+       semantic (e.g. `--accent`, `--nav-item-active-fg`).
     2. among tokens of the same tier, pick the alphabetically-first `name`.
   Same input -> same winner, every run.
 
@@ -146,7 +146,7 @@ def effective_value(token: dict, theme: str):
 
 def _is_primitive(name: str) -> bool:
     """A Tier-1 primitive is a numbered scale step: its final `-`-segment is all
-    digits (e.g. --wcs-green-500). Everything else is treated as semantic."""
+    digits (e.g. --green-500). Everything else is treated as semantic."""
     return name.rsplit("-", 1)[-1].isdigit()
 
 
@@ -209,7 +209,7 @@ def _map_node_tree(node: dict, envelope_theme: str, light_idx: dict, dark_idx: d
 
 def map_component(harvest: dict, tokens: list) -> dict:
     """Map a harvested component envelope, returning a copy with style literals
-    rewritten to var(--wcs-*) refs and a top-level `near_misses` list."""
+    rewritten to var(--…) token refs and a top-level `near_misses` list."""
     out = copy.deepcopy(harvest)
 
     # A non-success envelope (error) has nothing to map.
@@ -241,7 +241,7 @@ def map_component(harvest: dict, tokens: list) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Rewrite harvested style literals back to --wcs-* token refs."
+        description="Rewrite harvested style literals back to design-token refs."
     )
     parser.add_argument(
         "--tokens",
