@@ -185,3 +185,77 @@ print('OK')
     [ "$one" = "$two" ]
     [[ "$one" == *'"--brand-accent"'* ]]
 }
+
+# ============================================================================
+# media-query EXACT match — a compound @media that merely CONTAINS the config
+# query is a different scope and must NOT be grabbed as the dark scope.
+# ============================================================================
+
+@test "media-query: a compound @media is not mistaken for the bare dark query" {
+    src="$BATS_TMPDIR/compound.css"
+    cat > "$src" <<'CSS'
+:root { --brand-bg: #ffffff; }
+@media (prefers-color-scheme: dark) and (min-width: 900px) {
+  :root { --brand-bg: #101010; }
+}
+CSS
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_MEDIAQUERY'"
+    [ "$status" -eq 0 ]
+    # The compound scope is NOT the dark scope: bg stays base-only (dark null).
+    [ "$(field --brand-bg light)" = "#FFFFFF" ]
+    [ "$(field --brand-bg dark)" = "null" ]
+}
+
+@test "media-query: colon-spacing differences still match (whitespace-insensitive)" {
+    src="$BATS_TMPDIR/spacing.css"
+    # Source omits the space after the colon that the config query carries.
+    cat > "$src" <<'CSS'
+:root { --brand-bg: #ffffff; }
+@media (prefers-color-scheme:dark) { :root { --brand-bg: #101010; } }
+CSS
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_MEDIAQUERY'"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-bg dark)" = "#101010" ]
+}
+
+# ============================================================================
+# Prefix dangling-alias warning — an included token that aliases a referent the
+# prefix filter EXCLUDED warns (Paper would drop the dangling var reference).
+# ============================================================================
+
+@test "prefix: an alias to a referent outside the prefix warns on stderr" {
+    src="$BATS_TMPDIR/dangling.css"
+    cat > "$src" <<'CSS'
+:root {
+  --color-green-500: #37d895;
+  --brand-accent: var(--color-green-500);
+}
+CSS
+    err="$BATS_TMPDIR/dangling.stderr"
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_DATAATTR' --prefix=--brand- 2>'$err'"
+    [ "$status" -eq 0 ]
+    # only the prefixed token is emitted
+    [ "$(field --brand-accent light_alias)" = "--color-green-500" ]
+    [ "$(echo "$output" | jq 'length')" -eq 1 ]
+    # and a dangling-alias warning was logged
+    grep -q 'outside the prefix filter' "$err"
+    grep -q -- '--color-green-500' "$err"
+}
+
+# ============================================================================
+# Public seam — sibling modules depend on these re-exported names.
+# ============================================================================
+
+@test "public seam: VAR_ALIAS_RE / normalize_hex / primary_convention are exported" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as p
+assert p.VAR_ALIAS_RE.match('var(--x)'), 'VAR_ALIAS_RE'
+assert p.normalize_hex('#abc123') == '#ABC123', p.normalize_hex('#abc123')
+conv = [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}]
+assert p.primary_convention(conv)['type'] == 'data-attribute'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}

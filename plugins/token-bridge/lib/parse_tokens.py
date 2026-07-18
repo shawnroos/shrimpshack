@@ -144,6 +144,14 @@ def _norm_ws(s):
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _canon_media(q):
+    """Canonicalize a media-query condition for EXACT comparison: drop all
+    whitespace so `(prefers-color-scheme:dark)` and `(prefers-color-scheme: dark)`
+    compare equal, while a compound query (`… and (min-width: 800px)`) stays
+    distinct — so it is NOT mistaken for the bare dark query."""
+    return re.sub(r"\s+", "", q)
+
+
 def _is_bare_root(selector):
     """True when `selector` is (or contains as a group member) a bare `:root` —
     NOT `:root[…]` and NOT an at-rule."""
@@ -179,12 +187,14 @@ def _media_query_block(text, query):
     """Descend the top-level `@media <query> { … }` block and return its inner
     `:root` body, or ''. Brace-aware: the @media body may contain sibling rules
     alongside the :root."""
-    target = _norm_ws(query)
+    target = _canon_media(query)
     for selector, body in _top_level_rules(text):
         if not selector.startswith("@media"):
             continue
-        cond = _norm_ws(selector[len("@media") :])
-        if cond == target or target in cond:
+        # EXACT match (whitespace-insensitive) — a compound query that merely
+        # CONTAINS the target (`… and (min-width: 800px)`) is a different scope
+        # and must not be grabbed as the dark scope.
+        if _canon_media(selector[len("@media") :]) == target:
             return _base_block(body)
     return ""
 
@@ -274,6 +284,18 @@ def _normalize_hex(value):
     return _HEX.sub(lambda m: m.group(0).upper(), value)
 
 
+# --- public seam for sibling modules -----------------------------------------
+# sync_tokens and emit_tokens share this module's token model and deliberately
+# reuse these three internals. They are re-exported under public names so the
+# cross-module dependency is an explicit contract: a refactor that renames the
+# underscore-prefixed originals must keep these public aliases pointing at the
+# equivalent behavior. Do NOT reach past this seam into other `_`-prefixed
+# helpers from another module.
+VAR_ALIAS_RE = _VAR  # compiled regex matching a bare `var(--x)` alias
+normalize_hex = _normalize_hex  # uppercase every hex run in a value (idempotent)
+primary_convention = _primary_convention  # the primary themeConvention resolver
+
+
 def parse_with_diagnostics(text, conventions, prefix=None):
     """Parse `text` into the base+dark token model, returning both the token
     records and any warnings.
@@ -309,19 +331,34 @@ def parse_with_diagnostics(text, conventions, prefix=None):
                 _log("WARNING: " + msg)
 
     records = []
+    included = {n for n in (set(base) | set(dark)) if not (prefix and not n.startswith(prefix))}
     for name in sorted(set(base) | set(dark)):
         if prefix and not name.startswith(prefix):
             continue
         light_val = _normalize_hex(_resolve(name, base, None))
         dark_val = _normalize_hex(_resolve(name, dark, base))
+        light_alias = _alias_of(base.get(name))
+        dark_alias = _alias_of(dark.get(name))
+        # Dangling-alias warning: an included token that aliases a referent the
+        # prefix filter EXCLUDED. build_desired keeps the alias as var(--referent),
+        # but that referent is never synced, so Paper drops the dangling reference.
+        for ref in (light_alias, dark_alias):
+            if ref and ref not in included:
+                msg = (
+                    f"{name} aliases {ref}, which is outside the prefix "
+                    f"filter ({prefix!r}) — Paper will drop the dangling "
+                    f"var({ref}) reference. Widen the prefix or inline the value."
+                )
+                warnings.append(msg)
+                _log("WARNING: " + msg)
         records.append(
             {
                 "name": name,
                 "light": light_val,
                 # null when the effective value does not differ by theme
                 "dark": None if dark_val == light_val else dark_val,
-                "light_alias": _alias_of(base.get(name)),
-                "dark_alias": _alias_of(dark.get(name)),
+                "light_alias": light_alias,
+                "dark_alias": dark_alias,
             }
         )
     return {"tokens": records, "warnings": warnings}

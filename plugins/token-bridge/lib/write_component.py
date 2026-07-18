@@ -412,9 +412,12 @@ def _parse_token_set(config: dict) -> str:
     return json.dumps(records)
 
 
-def harvest_and_map(entry: dict, tokens_json: str, repo: str) -> dict:
+def harvest_and_map(entry: dict, tokens_json: str, repo: str, primitive_pattern=None) -> dict:
     """Harvest one component (live) and map its literals to token refs.
-    SMOKE-ONLY: harvest.py drives a real logged-in agent-browser session."""
+    SMOKE-ONLY: harvest.py drives a real logged-in agent-browser session.
+
+    `primitive_pattern` (config `primitivePattern`) overrides the mapper's
+    default primitive-detection rule used in the value-collision tie-break."""
     name = entry.get("name")
     harvested = subprocess.run(
         ["python3", str(HARVEST_PY), "--name", name, "--repo", repo],
@@ -429,8 +432,11 @@ def harvest_and_map(entry: dict, tokens_json: str, repo: str) -> dict:
         tf.write(tokens_json)
         tokens_path = tf.name
     try:
+        map_cmd = ["python3", str(MAP_PY), "--tokens", tokens_path]
+        if primitive_pattern:
+            map_cmd += ["--primitive-pattern", primitive_pattern]
         mapped = subprocess.run(
-            ["python3", str(MAP_PY), "--tokens", tokens_path],
+            map_cmd,
             input=harvested.stdout, capture_output=True, text=True,
         )
     finally:
@@ -513,7 +519,10 @@ def run(repo: str, batch_path: Path, mapped_file: str | None,
                          "note": f"not in {batch_path.name}: {sorted(missing)}"},
                         EXIT_BAD_ARGS)
         tokens_json = _parse_token_set(config)
-        mapped_components = [harvest_and_map(e, tokens_json, repo) for e in entries]
+        primitive_pattern = config.get("primitivePattern")
+        mapped_components = [
+            harvest_and_map(e, tokens_json, repo, primitive_pattern) for e in entries
+        ]
 
     report = write_all(client, file_id, mapped_components, target_node_id)
     return (report, EXIT_OK if report.get("ok") else EXIT_ERROR)

@@ -42,6 +42,7 @@ Each bridged codebase carries a `token-bridge.config.json` at its root. The plug
     "prefix": "--brand-"
   },
   "emitTarget": "src/styles/tokens.generated.css",
+  "primitivePattern": null,
   "themeConventions": [
     {
       "type": "data-attribute",
@@ -64,6 +65,7 @@ Each bridged codebase carries a `token-bridge.config.json` at its root. The plug
 - **`fileId`** — the segment after `/file/` in the Paper URL. **The token commands refuse to run while `fileId` is empty** — a destructive reconcile must never fall back to whatever file happens to be open.
 - **`source.path`** — the CSS/SCSS file, relative to `--repo`. **`source.ref`** (optional) reads the file from a git ref (e.g. `origin/main`) instead of the working tree. **`source.prefix`** filters custom properties; `null`/`""` takes all of them.
 - **`emitTarget`** — where `emit-tokens` writes. Emit refuses to write in place over a source that declares more than one convention (it would drop the non-primary block).
+- **`primitivePattern`** (optional) — a regex overriding how the component-harvest mapper distinguishes a Tier-1 primitive (`--green-500`) from a semantic token in the value-collision tie-break (semantic wins). Default (`null`) treats a trailing `-<digits>` scale step as primitive; set e.g. `"-base$"` when your primitives are named `--blue-base`.
 - **`themeConventions`** — one or more (see above). With more than one, exactly one must be `"primary": true`; parse reads the primary's dark scope and emit writes only the primary's block, warning if the conventions disagree.
 - **`harvest.themeSignal`** — how the live page reports dark (a data-attribute read off the root, or a media query via `matchMedia`). **`harvest.batch`** — the components to harvest, each `{ name, selector, route, trigger? }`.
 

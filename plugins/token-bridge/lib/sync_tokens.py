@@ -95,7 +95,7 @@ def _norm_value(v):
     (var(...), rgba(...), 8px) are unaffected beyond a strip."""
     if v is None:
         return None
-    return parse_tokens._normalize_hex(v.strip())
+    return parse_tokens.normalize_hex(v.strip())
 
 
 def _norm_name(name):

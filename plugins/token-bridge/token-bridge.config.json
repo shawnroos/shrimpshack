@@ -13,6 +13,9 @@
 
   "emitTarget": "src/styles/tokens.generated.css",
 
+  "_primitivePattern_comment": "Optional regex overriding how the component-harvest mapper tells a Tier-1 primitive (e.g. --green-500) from a semantic token, for the value-collision tie-break (semantic wins). Default (null) treats a numbered scale step — trailing -<digits> — as primitive. Set it when your primitives are named differently, e.g. '-base$' for --blue-base.",
+  "primitivePattern": null,
+
   "themeConventions": [
     {
       "_comment": "How the dark scope is expressed in the source CSS. v1 supports 'data-attribute' and 'media-query'. When BOTH are declared, exactly one must set primary:true — parse reads the primary's dark scope, emit writes only the primary's block; a single convention is primary by default. data-attribute needs attr+value; media-query needs query.",

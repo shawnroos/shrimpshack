@@ -169,3 +169,45 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *"OK"* ]]
 }
+
+# ============================================================================
+# Primitive detection is config-overridable (the default is a naming CONVENTION)
+# ============================================================================
+
+@test "map_to_tokens: default primitive rule = numbered scale step, semantic wins the tie" {
+    run python3 -c "
+import sys
+sys.path.insert(0, '$LIB_DIR')
+import map_to_tokens as m
+assert m._is_primitive('--green-500') and not m._is_primitive('--accent')
+assert m.pick_token(['--green-500', '--accent']) == '--accent'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK"* ]]
+}
+
+@test "map_to_tokens: a config primitivePattern overrides the hardcoded default" {
+    run python3 -c "
+import sys, re
+sys.path.insert(0, '$LIB_DIR')
+import map_to_tokens as m
+# A codebase whose primitives end in '-base' (no digits): the default digit
+# rule would call BOTH semantic; the override makes --blue-base primitive so
+# the semantic --brand-primary wins the value-collision tie deterministically.
+pat = re.compile(r'-base\$')
+assert m._is_primitive('--blue-base', pat) and not m._is_primitive('--brand-primary', pat)
+idx = m.build_index([
+  {'name':'--blue-base','light':'#0000FF','dark':None},
+  {'name':'--brand-primary','light':'#0000FF','dark':None},
+], 'light', pat)
+# both tokens share one normalized value; the override makes the semantic one win
+assert list(idx.values()) == ['--brand-primary'], idx
+# _compile_primitive_pattern accepts a STRING (as the CLI passes it) or None
+assert m._compile_primitive_pattern(None) is None
+assert m._compile_primitive_pattern(r'-base\$').search('--x-base')
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK"* ]]
+}

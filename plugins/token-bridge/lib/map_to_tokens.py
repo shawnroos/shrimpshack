@@ -144,20 +144,29 @@ def effective_value(token: dict, theme: str):
     return token.get("light")
 
 
-def _is_primitive(name: str) -> bool:
-    """A Tier-1 primitive is a numbered scale step: its final `-`-segment is all
-    digits (e.g. --green-500). Everything else is treated as semantic."""
-    return name.rsplit("-", 1)[-1].isdigit()
+# Default primitive-detection rule: a Tier-1 primitive is a numbered scale step,
+# so its final `-`-segment is all digits (e.g. --green-500). This is a naming
+# CONVENTION, not universal — a codebase whose primitives are named differently
+# (`--color-blue-base`) can override it via the config's `primitivePattern`.
+_DEFAULT_PRIMITIVE = re.compile(r"-\d+$")
 
 
-def pick_token(names) -> str:
+def _is_primitive(name: str, pattern=None) -> bool:
+    """True when `name` is a Tier-1 primitive. `pattern` is an optional compiled
+    regex (from config `primitivePattern`); when omitted the default numbered-
+    scale-step rule applies. Everything not matching is treated as semantic."""
+    rx = pattern or _DEFAULT_PRIMITIVE
+    return rx.search(name) is not None
+
+
+def pick_token(names, primitive_pattern=None) -> str:
     """Deterministic tie-break: semantic over primitive, then alphabetical."""
-    semantic = sorted(n for n in names if not _is_primitive(n))
-    primitive = sorted(n for n in names if _is_primitive(n))
+    semantic = sorted(n for n in names if not _is_primitive(n, primitive_pattern))
+    primitive = sorted(n for n in names if _is_primitive(n, primitive_pattern))
     return (semantic or primitive)[0]
 
 
-def build_index(tokens, theme: str) -> dict:
+def build_index(tokens, theme: str, primitive_pattern=None) -> dict:
     """normalized-effective-value -> winning token name, for one theme."""
     buckets: dict = {}
     for tok in tokens:
@@ -165,7 +174,18 @@ def build_index(tokens, theme: str) -> dict:
         if not norm:
             continue
         buckets.setdefault(norm, set()).add(tok["name"])
-    return {norm: pick_token(names) for norm, names in buckets.items()}
+    return {norm: pick_token(names, primitive_pattern) for norm, names in buckets.items()}
+
+
+def _compile_primitive_pattern(pattern):
+    """Coerce a config `primitivePattern` (a regex string, or None) to a compiled
+    regex, or None for the default rule. A bad regex raises re.error — surfaced
+    to the caller rather than silently ignored."""
+    if pattern in (None, ""):
+        return None
+    if hasattr(pattern, "search"):  # already compiled
+        return pattern
+    return re.compile(pattern)
 
 
 def map_styles(styles: dict, theme: str, light_idx: dict, dark_idx: dict):
@@ -207,9 +227,13 @@ def _map_node_tree(node: dict, envelope_theme: str, light_idx: dict, dark_idx: d
         _map_node_tree(child, envelope_theme, light_idx, dark_idx)
 
 
-def map_component(harvest: dict, tokens: list) -> dict:
+def map_component(harvest: dict, tokens: list, primitive_pattern=None) -> dict:
     """Map a harvested component envelope, returning a copy with style literals
-    rewritten to var(--…) token refs and a top-level `near_misses` list."""
+    rewritten to var(--…) token refs and a top-level `near_misses` list.
+
+    `primitive_pattern` (a regex string or compiled regex, from config
+    `primitivePattern`) overrides the default primitive-detection rule used in the
+    value-collision tie-break; None keeps the numbered-scale-step default."""
     out = copy.deepcopy(harvest)
 
     # A non-success envelope (error) has nothing to map.
@@ -217,8 +241,9 @@ def map_component(harvest: dict, tokens: list) -> dict:
         out["near_misses"] = []
         return out
 
-    light_idx = build_index(tokens, "light")
-    dark_idx = build_index(tokens, "dark")
+    rx = _compile_primitive_pattern(primitive_pattern)
+    light_idx = build_index(tokens, "light", rx)
+    dark_idx = build_index(tokens, "dark", rx)
     envelope_theme = out.get("theme") or "light"
 
     all_near_misses = []
@@ -252,6 +277,11 @@ def main(argv=None) -> int:
         "--harvest",
         help="Path to the harvest.py envelope JSON (default: read from stdin).",
     )
+    parser.add_argument(
+        "--primitive-pattern",
+        default=None,
+        help="Regex overriding the default primitive-detection rule (config primitivePattern).",
+    )
     args = parser.parse_args(argv)
 
     with open(args.tokens) as fh:
@@ -263,7 +293,7 @@ def main(argv=None) -> int:
     else:
         harvest = json.loads(sys.stdin.read())
 
-    print(json.dumps(map_component(harvest, tokens), indent=2))
+    print(json.dumps(map_component(harvest, tokens, args.primitive_pattern), indent=2))
     return 0
 
 

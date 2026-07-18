@@ -73,7 +73,7 @@ def _strip_dark_alias(value):
     A non-twin referent (`var(--y)`) or a literal is returned unchanged."""
     if value is None:
         return value
-    m = parse_tokens._VAR.match(value.strip())
+    m = parse_tokens.VAR_ALIAS_RE.match(value.strip())
     if not m:
         return value
     ref = m.group(1)
@@ -108,7 +108,7 @@ def emit_css(paper_tokens, conventions, prefix=None):
     both the twin name and its alias referents (KTD4). `prefix`, when set,
     restricts output to matching names (the Paper set is already prefix-filtered
     by sync, so this is a belt-and-suspenders match for the round-trip)."""
-    primary = parse_tokens._primary_convention(conventions)
+    primary = parse_tokens.primary_convention(conventions)
 
     def keep(name):
         return (not prefix) or name.startswith(prefix)
