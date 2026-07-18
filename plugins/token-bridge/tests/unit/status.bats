@@ -79,3 +79,42 @@ print('OK')
     [ "$(echo "$output" | jq -r '.refused')" = "true" ]
     [ "$(echo "$output" | jq -r '.error')" = "no_config" ]
 }
+
+@test "status: _tokens_from tolerates a bare array, {tokens:[]}, and a result envelope" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$LIB_DIR')
+import status
+bare = [{'name':'--x','type':'color','value':'#000'}]
+assert status._tokens_from(bare) == bare
+assert status._tokens_from({'tokens': bare}) == bare
+assert status._tokens_from({'result': {'tokens': bare}}) == bare
+assert status._tokens_from(None) == []
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK"* ]]
+}
+
+@test "status: run() uses _tokens_from so a bare-array daemon payload does not crash" {
+    repo="$BATS_TMPDIR/status_barelist"
+    mkdir -p "$repo/styles"
+    printf ':root { --brand-x: #000000; }\n' > "$repo/styles/tokens.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "f", "source": { "path": "styles/tokens.css", "prefix": "--brand-" },
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true } ] }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$LIB_DIR')
+import status
+class FakeClient:
+    def get_tokens(self, fid):
+        # daemon returns a BARE array (not {tokens:[]}) — must not crash
+        return {'ok': True, 'result': [{'name':'--brand-x','type':'color','value':'#000000'}]}
+report, code = status.run(repo='$repo', client=FakeClient())
+assert code == 0, (report, code)
+assert report['ok'] is True and report['inSync'] is True, report
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK"* ]]
+}

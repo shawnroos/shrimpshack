@@ -187,6 +187,16 @@ print('OK')
     [[ "$output" == *"OK"* ]]
 }
 
+@test "map_to_tokens: a bad --primitive-pattern regex returns a clean envelope, not a traceback" {
+    echo '{"ok":true,"theme":"light","nodes":[]}' > "$BATS_TMPDIR/mp_harvest.json"
+    echo '[]' > "$BATS_TMPDIR/mp_tokens.json"
+    run bash -c "python3 '$LIB' --tokens '$BATS_TMPDIR/mp_tokens.json' --harvest '$BATS_TMPDIR/mp_harvest.json' --primitive-pattern '['"
+    [ "$status" -eq 2 ]
+    # valid JSON envelope, not a Python traceback
+    [ "$(echo "$output" | jq -r '.error')" = "bad_primitive_pattern" ]
+    [[ "$output" != *"Traceback"* ]]
+}
+
 @test "map_to_tokens: a config primitivePattern overrides the hardcoded default" {
     run python3 -c "
 import sys, re

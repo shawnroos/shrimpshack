@@ -242,6 +242,21 @@ CSS
     grep -q -- '--color-green-500' "$err"
 }
 
+@test "prefix: an alias to an UNDECLARED referent (no prefix) warns accurately, not about a prefix" {
+    src="$BATS_TMPDIR/undeclared.css"
+    cat > "$src" <<'CSS'
+:root { --a: var(--undefined-x); }
+CSS
+    err="$BATS_TMPDIR/undeclared.stderr"
+    # No --prefix at all: the cause is an undeclared referent, not a filter.
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>'$err'"
+    [ "$status" -eq 0 ]
+    grep -q 'is not declared in the source' "$err"
+    # must NOT claim a (None) prefix filter or advise widening it
+    ! grep -q 'prefix filter (None)' "$err"
+    ! grep -q 'Widen the prefix' "$err"
+}
+
 # ============================================================================
 # Public seam — sibling modules depend on these re-exported names.
 # ============================================================================

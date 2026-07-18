@@ -110,14 +110,25 @@ print('OK')
     [[ "$output" == *"OK"* ]]
 }
 
-@test "connect: extract_file_id handles URL and bare id" {
+@test "connect: extract_file_id handles URL and bare id, rejects a URL with no /file/<id>" {
     run python3 -c "
 import sys; sys.path.insert(0, '$LIB_DIR')
 import connect
 assert connect.extract_file_id('https://app.paper.design/file/01XYZ/2-3') == '01XYZ'
 assert connect.extract_file_id('01XYZ') == '01XYZ'
+# URL-shaped but no /file/<id>: return '' so the caller rejects it
+assert connect.extract_file_id('https://app.paper.design/files/ABC/edit') == ''
+assert connect.extract_file_id('https://app.paper.design/file/') == ''
 print('OK')
 "
     [ "$status" -eq 0 ]
     [[ "$output" == *"OK"* ]]
+}
+
+@test "connect: a URL with no resolvable id is rejected at connect time (bad_file_ref)" {
+    run bash -c "python3 '$LIB' --repo '$REPO' --source src/styles/tokens.css --file 'https://app.paper.design/files/ABC/edit' 2>/dev/null"
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -r '.error')" = "bad_file_ref" ]
+    # no config was written
+    [ ! -f "$CONFIG" ]
 }

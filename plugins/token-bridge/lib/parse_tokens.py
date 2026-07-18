@@ -343,14 +343,24 @@ def parse_with_diagnostics(text, conventions, prefix=None):
         # prefix filter EXCLUDED. build_desired keeps the alias as var(--referent),
         # but that referent is never synced, so Paper drops the dangling reference.
         for ref in (light_alias, dark_alias):
-            if ref and ref not in included:
-                msg = (
-                    f"{name} aliases {ref}, which is outside the prefix "
-                    f"filter ({prefix!r}) — Paper will drop the dangling "
-                    f"var({ref}) reference. Widen the prefix or inline the value."
-                )
-                warnings.append(msg)
-                _log("WARNING: " + msg)
+            if not ref or ref in included:
+                continue
+            # Two distinct causes: the referent exists but the prefix filter
+            # excluded it, or it is simply not declared anywhere. Attribute the
+            # warning accurately (a "widen the prefix" fix is nonsense when the
+            # referent is undeclared, or when no prefix is set).
+            if prefix and not ref.startswith(prefix):
+                cause = f"is outside the prefix filter ({prefix!r})"
+                fix = "Widen the prefix or inline the value."
+            else:
+                cause = "is not declared in the source"
+                fix = "Declare it or inline the value."
+            msg = (
+                f"{name} aliases {ref}, which {cause} — Paper will drop the "
+                f"dangling var({ref}) reference. {fix}"
+            )
+            warnings.append(msg)
+            _log("WARNING: " + msg)
         records.append(
             {
                 "name": name,

@@ -293,7 +293,14 @@ def main(argv=None) -> int:
     else:
         harvest = json.loads(sys.stdin.read())
 
-    print(json.dumps(map_component(harvest, tokens, args.primitive_pattern), indent=2))
+    try:
+        mapped = map_component(harvest, tokens, args.primitive_pattern)
+    except re.error as exc:
+        # A hand-edited config primitivePattern can be an invalid regex — return a
+        # clean envelope like every other failure, not a raw traceback.
+        print(json.dumps({"ok": False, "error": "bad_primitive_pattern", "note": str(exc)}))
+        return 2
+    print(json.dumps(mapped, indent=2))
     return 0
 
 

@@ -93,7 +93,9 @@ def run(repo=".", url=None, client=None):
     env = client.get_tokens(file_id)
     if not env.get("ok"):
         return {"ok": False, "error": "get_tokens failed", "envelope": env}, EXIT_ERROR
-    live = env.get("result", {}).get("tokens", []) or []
+    # Use the module's own tolerant extractor (handles {tokens:[]} and a bare
+    # array) rather than a dict-only access on the daemon-controlled payload.
+    live = _tokens_from(env.get("result")) or []
 
     d = drift(desired, live, owned_prefix=prefix)
     report = {

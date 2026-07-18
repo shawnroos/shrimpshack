@@ -40,10 +40,19 @@ def _log(msg: str) -> None:
 
 
 def extract_file_id(ref: str) -> str:
-    """Resolve a Paper file id from a full URL or a bare id (returned as-is)."""
+    """Resolve a Paper file id from a full URL or a bare id.
+
+    Returns "" for a URL/path-shaped input we can't pull a `/file/<id>` segment
+    from (a plural `/files/`, a share link, a truncated URL) — so the caller
+    rejects it at connect time instead of writing a garbage fileId that only
+    fails later at the daemon. A bare id (no slash) is returned as-is."""
     ref = (ref or "").strip()
     m = _FILE_ID_IN_URL.search(ref)
-    return m.group(1) if m else ref
+    if m:
+        return m.group(1)
+    if "/" in ref:  # URL/path-shaped but no /file/<id> — not a usable id
+        return ""
+    return ref
 
 
 def _convention(kind, attr, value, query):
@@ -161,7 +170,15 @@ def run(
     else:
         file_id = extract_file_id(file_ref)
         if not file_id:
-            return ({"ok": False, "error": "bad_file_ref", "note": file_ref}, EXIT_BAD_ARGS)
+            return (
+                {
+                    "ok": False,
+                    "error": "bad_file_ref",
+                    "note": f"could not resolve a Paper file id from {file_ref!r} — "
+                    "pass a bare id or a full app.paper.design/file/<id> URL.",
+                },
+                EXIT_BAD_ARGS,
+            )
 
     cfg = build_config(file_id, source_path, prefix, convention, emit_target, daemon_url)
 
