@@ -1,0 +1,5 @@
+{
+  "_comment": "Fallback component batch for the harvest command, used only when the target codebase's token-bridge.config.json has no harvest.batch. Prefer declaring the batch in that config. SCHEMA per entry: { name, selector, route, trigger? } — `name` is the stable id used in Paper; `selector` is the CSS root of the rendered component; `route` is the URL/path (relative to the base URL, or absolute) that puts it on screen; `trigger` (optional) is a list of agent-browser command arg-arrays run after open to make it render, e.g. [[\"click\", \"button.open-panel\"], [\"wait\", \".my-component\"]].",
+  "_note": "Selectors and routes must be confirmed against a live, logged-in dev server before a harvest run — a component only renders once its route is loaded and any auth/app state is in place. The SCHEMA is the stable contract; fill values per your codebase.",
+  "components": []
+}

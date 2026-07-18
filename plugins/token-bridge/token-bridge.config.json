@@ -1,0 +1,38 @@
+{
+  "_comment": "token-bridge config. Lives at the ROOT of the TARGET codebase (not the plugin). The plugin is pointed at a codebase with --repo <path> and loads <path>/token-bridge.config.json. All paths below (source.path, emitTarget) resolve relative to <path>. Both token commands REFUSE to run while fileId is empty — a destructive reconcile must never fall back to whatever Paper file is currently open.",
+
+  "fileId": "",
+  "paperDaemonUrl": "http://127.0.0.1:29979/mcp",
+
+  "source": {
+    "_comment": "The CSS/SCSS file tokens are read from. 'path' is relative to --repo. 'ref' is optional: when set (e.g. 'origin/main') the file is read from that git ref via `git show <ref>:<path>` instead of the working tree. 'prefix' filters custom properties (e.g. '--brand-'); null or '' takes ALL custom properties.",
+    "path": "src/styles/tokens.css",
+    "ref": null,
+    "prefix": null
+  },
+
+  "emitTarget": "src/styles/tokens.generated.css",
+
+  "_primitivePattern_comment": "Optional regex overriding how the component-harvest mapper tells a Tier-1 primitive (e.g. --green-500) from a semantic token, for the value-collision tie-break (semantic wins). Default (null) treats a numbered scale step — trailing -<digits> — as primitive. Set it when your primitives are named differently, e.g. '-base$' for --blue-base.",
+  "primitivePattern": null,
+
+  "themeConventions": [
+    {
+      "_comment": "How the dark scope is expressed in the source CSS. v1 supports 'data-attribute' and 'media-query'. When BOTH are declared, exactly one must set primary:true — parse reads the primary's dark scope, emit writes only the primary's block; a single convention is primary by default. data-attribute needs attr+value; media-query needs query.",
+      "type": "data-attribute",
+      "attr": "data-theme",
+      "value": "dark",
+      "primary": true
+    }
+  ],
+
+  "harvest": {
+    "_comment": "Component harvest (code → Paper). 'themeSignal' tells the live-page extractor how the rendered page reports dark: a data-attribute is read off the scope element; a media-query is read via matchMedia. 'batch' lists the components to harvest — each {name, selector, route, trigger?}.",
+    "themeSignal": {
+      "type": "data-attribute",
+      "attr": "data-theme",
+      "value": "dark"
+    },
+    "batch": []
+  }
+}

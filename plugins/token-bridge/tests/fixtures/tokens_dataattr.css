@@ -1,0 +1,29 @@
+/* data-attribute theme convention: :root base + [data-theme="dark"] override.
+   Exercises alias-flip, non-flipping alias, rgba() internal commas, prefix
+   filtering (--other-thing is unprefixed), and hex/name normalization. */
+
+:root {
+  /* Primitives (theme-invariant referents for the aliases below) */
+  --brand-green-500: #37d895;
+  --brand-amber-text: #c67700;
+  --brand-space-2: 8px;
+
+  /* Semantics */
+  --brand-accent: var(--brand-green-500); /* alias in base, literal in dark */
+  --brand-lasso-fill: rgba(55, 216, 149, 0.18);
+
+  /* Alias whose referent is NEVER redeclared in dark (does NOT flip) */
+  --brand-warn-text: var(--brand-amber-text);
+
+  /* Alias whose referent (--brand-accent) IS redeclared in dark, so it flips
+     even though the alias line only appears in the base block */
+  --brand-playhead: var(--brand-accent);
+
+  /* Unprefixed — included only when no prefix filter is applied */
+  --other-thing: #123456;
+}
+
+[data-theme="dark"] {
+  --brand-accent: #00b72b;
+  --brand-lasso-fill: rgba(136, 200, 46, 0.16);
+}

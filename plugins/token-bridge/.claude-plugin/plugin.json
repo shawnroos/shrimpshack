@@ -1,0 +1,16 @@
+{
+  "name": "token-bridge",
+  "version": "1.0.0",
+  "description": "A config-driven, bidirectional bridge between one codebase's CSS design tokens and one Paper file — sync custom-property tokens code ↔ Paper and harvest rendered components code → Paper, driven by a codebase-local config rather than hardcoded paths",
+  "author": {
+    "name": "Shawn Roos"
+  },
+  "keywords": [
+    "paper",
+    "design-tokens",
+    "design-system",
+    "css-custom-properties",
+    "bidirectional",
+    "figma-alternative"
+  ]
+}

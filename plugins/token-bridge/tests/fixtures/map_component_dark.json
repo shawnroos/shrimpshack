@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "name": "sample-dark",
+  "selector": ".x",
+  "route": "editor",
+  "theme": "dark",
+  "root": {
+    "tag": "div",
+    "text": "",
+    "styles": {
+      "color": "#00b72b",
+      "border-top-color": "#ff0000",
+      "background-color": "#123456"
+    },
+    "children": []
+  },
+  "nodes": [
+    {
+      "path": "0",
+      "tag": "div",
+      "text": "",
+      "styles": {
+        "color": "#00b72b",
+        "border-top-color": "#ff0000",
+        "background-color": "#123456"
+      },
+      "theme": "dark"
+    }
+  ]
+}

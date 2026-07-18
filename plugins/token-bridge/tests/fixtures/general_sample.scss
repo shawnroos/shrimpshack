@@ -1,0 +1,27 @@
+// Distilled from the real _general.scss — proves parse_general reaches into the
+// html,body block for --font-family and ignores @import lines and @keyframes,
+// including a decoy --font-family buried in a keyframe (must NOT be picked).
+
+@import "variables";
+@import "mixins";
+
+@keyframes scaleIn {
+  0% {
+    transform: scale(0.5);
+    --font-family: "DECOY", serif;
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+html,
+body {
+  height: 100%;
+  --font-family: "Inter", sans-serif;
+}
+
+.form-group {
+  margin-bottom: 1rem;
+}

@@ -1,0 +1,22 @@
+/* media-query theme convention: :root base + @media (prefers-color-scheme: dark).
+   The @media body carries a sibling rule (.foo {}) alongside the dark :root, so
+   a correct descent MUST be brace-aware and read only the inner :root — never
+   the .foo decoy. */
+
+:root {
+  --brand-green-500: #37d895;
+  --brand-accent: var(--brand-green-500);
+  --brand-space-2: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .foo {
+    color: red;
+    /* decoy: a custom property outside :root must be ignored */
+    --brand-accent: #ff0000;
+  }
+
+  :root {
+    --brand-accent: #00b72b;
+  }
+}

@@ -1,0 +1,40 @@
+[
+  {
+    "name": "--font-family",
+    "type": "fontFamily",
+    "value": "\"Inter\", sans-serif"
+  },
+  { "name": "--wcs-accent", "type": "color", "value": "var(--wcs-green-500)" },
+  { "name": "--wcs-accent-dark", "type": "color", "value": "#00B72B" },
+  { "name": "--wcs-amber-text", "type": "color", "value": "#C67700" },
+  { "name": "--wcs-green-100", "type": "color", "value": "#E3F9EC" },
+  { "name": "--wcs-green-100-dark", "type": "color", "value": "#00B72B1A" },
+  { "name": "--wcs-green-500", "type": "color", "value": "#111111" },
+  {
+    "name": "--wcs-nav-item-active-fg",
+    "type": "color",
+    "value": "var(--wcs-accent)"
+  },
+  {
+    "name": "--wcs-nav-item-active-fg-dark",
+    "type": "color",
+    "value": "var(--wcs-accent-dark)"
+  },
+  { "name": "--wcs-space-2", "type": "radius", "value": "8px" },
+  {
+    "name": "--wcs-timeline-playhead",
+    "type": "color",
+    "value": "var(--wcs-accent)"
+  },
+  {
+    "name": "--wcs-timeline-playhead-dark",
+    "type": "color",
+    "value": "var(--wcs-accent-dark)"
+  },
+  {
+    "name": "--wcs-warn-text",
+    "type": "color",
+    "value": "var(--wcs-amber-text)"
+  },
+  { "name": "--wcs-legacy-panel", "type": "color", "value": "#ABCDEF" }
+]

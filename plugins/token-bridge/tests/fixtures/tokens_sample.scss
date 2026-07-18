@@ -1,0 +1,32 @@
+// Distilled from the real _wcs-design-tokens.scss — one instance of every
+// hard case the parser must handle. Flat plain-CSS custom properties, `//`
+// comments only, exactly two blocks.
+
+body.wcs-theme {
+  // Primitives (mode-invariant, referents for the aliases below)
+  --wcs-green-500: #37d895; // primary accent
+  --wcs-amber-text: #c67700;
+  --wcs-space-2: 8px; // 4px base scale — mode-invariant
+
+  // Semantics
+  --wcs-accent: var(--wcs-green-500); // alias in light, literal in dark
+  --wcs-green-100: #e3f9ec; // 8-digit hex in the dark block
+  --wcs-lasso-fill: rgba(55, 216, 149, 0.18); // rgba() with internal commas
+  --wcs-panel-shadow:
+    0px 1px 3px #0000000f, 0 0 0 1px #0000000a; // multi-part box-shadow
+
+  // Feedback — alias whose referent is NEVER redeclared in dark (does NOT flip)
+  --wcs-warn-text: var(--wcs-amber-text);
+
+  // Component aliases — referent (--wcs-accent) is redeclared in dark, so these
+  // flip even though the alias line only appears in the light block.
+  --wcs-timeline-playhead: var(--wcs-accent);
+  --wcs-nav-item-active-fg: var(--wcs-accent);
+}
+
+body.wcs-theme.wcs-dark {
+  --wcs-accent: #00b72b;
+  --wcs-green-100: #00b72b1a;
+  --wcs-lasso-fill: rgba(136, 200, 46, 0.16);
+  --wcs-panel-shadow: 0 1px 4px #0000002e, inset 0 1px 0 #ffffff0a;
+}

@@ -1,0 +1,27 @@
+[
+  {
+    "name": "--brand-accent",
+    "type": "color",
+    "value": "var(--brand-green-500)"
+  },
+  { "name": "--brand-accent-dark", "type": "color", "value": "#00B72B" },
+  { "name": "--brand-amber-text", "type": "color", "value": "#C67700" },
+  { "name": "--brand-green-500", "type": "color", "value": "#111111" },
+  {
+    "name": "--brand-nav-active-fg",
+    "type": "color",
+    "value": "var(--brand-accent)"
+  },
+  {
+    "name": "--brand-nav-active-fg-dark",
+    "type": "color",
+    "value": "var(--brand-accent-dark)"
+  },
+  { "name": "--brand-space-2", "type": "radius", "value": "8px" },
+  {
+    "name": "--brand-warn-text",
+    "type": "color",
+    "value": "var(--brand-amber-text)"
+  },
+  { "name": "--brand-legacy-panel", "type": "color", "value": "#ABCDEF" }
+]
