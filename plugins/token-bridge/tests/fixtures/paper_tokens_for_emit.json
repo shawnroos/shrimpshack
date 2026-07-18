@@ -1,0 +1,20 @@
+{
+  "_comment": "A Paper token set as get_tokens would return it: base tokens plus -dark twins, values in Paper's canonical serialized form (uppercase hex, px units). Exercises: a flip-through alias (accent -> green-500, both flip), a plain theme-varying literal (bg), a base-only token (radius, no twin). types match what classify_tokens assigns to the resolved literals.",
+  "tokens": [
+    { "name": "--brand-green-500", "type": "color", "value": "#37D895" },
+    { "name": "--brand-green-500-dark", "type": "color", "value": "#00B72B" },
+    {
+      "name": "--brand-accent",
+      "type": "color",
+      "value": "var(--brand-green-500)"
+    },
+    {
+      "name": "--brand-accent-dark",
+      "type": "color",
+      "value": "var(--brand-green-500-dark)"
+    },
+    { "name": "--brand-bg", "type": "color", "value": "#FFFFFF" },
+    { "name": "--brand-bg-dark", "type": "color", "value": "#101010" },
+    { "name": "--brand-radius", "type": "radius", "value": "8px" }
+  ]
+}
