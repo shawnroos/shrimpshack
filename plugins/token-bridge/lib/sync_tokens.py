@@ -245,16 +245,37 @@ def _same_value(live_val, desired_val):
 # --- the diff engine (PURE — no config, no daemon) ---------------------------
 
 
-def diff_tokens(desired, live):
+def _owns(name, owned_prefix):
+    """Whether the plugin OWNS this live token name, and may therefore delete it
+    when it's absent from the desired set.
+
+    With a configured `owned_prefix`, ownership is scoped to that namespace: the
+    source only defines prefixed tokens (and their `-dark` twins, which also
+    start with the prefix), so a token outside it — a Paper-native `--color-*`,
+    another team's prefix, a hand-authored token — is NOT ours to delete. With no
+    prefix (source is "all custom properties"), the plugin owns the whole file
+    and full reconcile applies."""
+    if not owned_prefix:
+        return True
+    return _norm_name(name).startswith(_norm_name(owned_prefix))
+
+
+def diff_tokens(desired, live, owned_prefix=None):
     """Diff the desired Paper token set against the live one (pure function).
 
     Compares with NORMALIZED name (lowercase) and value (uppercased hex) so an
     unchanged source yields an EMPTY diff (R3).
 
+    `owned_prefix` scopes deletions: a live token absent from the desired set is
+    deleted only when the plugin OWNS it (see `_owns`). This stops a prefixed
+    sync from wiping Paper-native or other-namespace tokens that share the target
+    file. Creates/updates/recreates are always driven by the desired set, so they
+    are unaffected.
+
     Returns {creates, updates, deletes, recreates}:
       creates    tokens present in desired, absent from live         -> create
       updates    same name+type, value changed                       -> set value
-      deletes    present in live, absent from desired                -> delete
+      deletes    OWNED, present in live, absent from desired          -> delete
       recreates  same name, TYPE changed (Paper cannot retype)       -> delete+create
     """
     live_by_name = {}
@@ -281,7 +302,7 @@ def diff_tokens(desired, live):
     deletes = [
         {"name": t["name"]}
         for t in live
-        if _norm_name(t["name"]) not in desired_names
+        if _norm_name(t["name"]) not in desired_names and _owns(t["name"], owned_prefix)
     ]
 
     return {
@@ -447,7 +468,9 @@ def run(repo=".", url=None, apply=True):
         )
     live = live_env.get("result", {}).get("tokens", []) or []
 
-    diff = diff_tokens(desired, live)
+    # Scope deletes to the owned prefix so a prefixed sync never wipes
+    # Paper-native or other-namespace tokens sharing the target file.
+    diff = diff_tokens(desired, live, owned_prefix=prefix)
 
     report = {
         "ok": True,
@@ -498,6 +521,8 @@ def main(argv=None):
     p_diff = sub.add_parser("diff", help="Pure diff of desired vs live JSON files.")
     p_diff.add_argument("--desired", required=True)
     p_diff.add_argument("--live", required=True)
+    p_diff.add_argument("--owned-prefix", default=None,
+                        help="Only delete live tokens with this prefix (plugin ownership scope)")
 
     p_sim = sub.add_parser("simulate-apply", help="Pure in-memory apply of a diff to a live state.")
     p_sim.add_argument("--live", required=True)
@@ -540,7 +565,7 @@ def main(argv=None):
         live = _load_json_file(args.live)
         if isinstance(live, dict):  # accept a get_tokens result envelope too
             live = live.get("tokens", live.get("result", {}).get("tokens", []))
-        print(json.dumps(diff_tokens(desired, live), indent=2))
+        print(json.dumps(diff_tokens(desired, live, owned_prefix=args.owned_prefix), indent=2))
         return EXIT_OK
 
     if cmd == "simulate-apply":

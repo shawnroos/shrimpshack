@@ -237,3 +237,47 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == OK* ]]
 }
+
+# ============================================================================
+# Ownership-scoped deletes — a prefixed sync must NOT delete tokens outside its
+# namespace (Paper-native --color-*, another prefix, hand-authored). Only tokens
+# the plugin owns (prefix-matching) and absent from source are deleted. With no
+# prefix (source is "all custom properties"), the plugin owns the whole file.
+# ============================================================================
+
+@test "reconcile: a prefixed sync deletes only owned (prefixed) tokens, never foreign ones" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens
+# Source defines exactly one owned token.
+desired = [{'name':'--brand-accent','type':'color','value':'#37D895'}]
+# Live has: the owned token (kept), a STALE owned token (delete), and two
+# FOREIGN tokens the plugin doesn't own (must survive a prefixed sync).
+live = [
+  {'name':'--brand-accent','type':'color','value':'#37D895'},
+  {'name':'--brand-stale','type':'color','value':'#111111'},
+  {'name':'--color-blue-500','type':'color','value':'#0000FF'},
+  {'name':'--legacy-bg','type':'color','value':'#EEEEEE'},
+]
+# Prefixed sync: only the stale OWNED token is deleted.
+diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-')
+dels = sorted(d['name'] for d in diff['deletes'])
+assert dels == ['--brand-stale'], dels
+# No-prefix sync owns everything: both foreign tokens ARE deleted.
+diff_all = sync_tokens.diff_tokens(desired, live)
+dels_all = sorted(d['name'] for d in diff_all['deletes'])
+assert dels_all == ['--brand-stale', '--color-blue-500', '--legacy-bg'], dels_all
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "reconcile: diff CLI honors --owned-prefix for delete scoping" {
+    echo '[{"name":"--brand-x","type":"color","value":"#111111"}]' > "$BATS_TMPDIR/od_desired.json"
+    echo '[{"name":"--brand-x","type":"color","value":"#111111"},{"name":"--brand-old","type":"color","value":"#222222"},{"name":"--color-native","type":"color","value":"#333333"}]' > "$BATS_TMPDIR/od_live.json"
+    run python3 "$LIB" diff --desired "$BATS_TMPDIR/od_desired.json" --live "$BATS_TMPDIR/od_live.json" --owned-prefix=--brand-
+    [ "$status" -eq 0 ]
+    dels=$(echo "$output" | jq -r '.deletes[].name' | sort | tr '\n' ' ')
+    [ "$dels" = "--brand-old " ]
+}
