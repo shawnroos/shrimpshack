@@ -1,0 +1,9 @@
+{
+  "name": "scoped-build",
+  "version": "1",
+  "description": "A scoped build preset — runs the `do_step` backend op with a tightly-scoped build prompt. Fire it one-shot to implement one well-bounded change against a target, no flow armed.",
+  "invokes": {
+    "backend_op": "do_step",
+    "prompt_template": "presets/scoped-build.prompt.md"
+  }
+}
