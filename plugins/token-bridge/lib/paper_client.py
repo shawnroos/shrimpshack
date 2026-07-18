@@ -48,6 +48,10 @@ import urllib.request
 DEFAULT_URL = "http://127.0.0.1:29979/mcp"
 DEFAULT_TIMEOUT = 10  # seconds
 
+# The config file every bridged codebase carries at its root. The tool is
+# pointed at a codebase with --repo <path> and loads <path>/CONFIG_FILENAME.
+CONFIG_FILENAME = "token-bridge.config.json"
+
 # Exit codes for the CLI — kept distinct so callers/tests can tell failure kinds
 # apart without parsing the envelope.
 EXIT_OK = 0
@@ -84,26 +88,98 @@ def error_envelope(error: str, note: str | None = None, **extra) -> dict:
 # --- shared config -----------------------------------------------------------
 
 
-def read_config(config_path: str) -> tuple:
-    """Read wcs-paper.config.json and resolve the target fileId.
+def _validate_config(cfg: dict) -> str | None:
+    """Structurally validate a token-bridge config. Returns an actionable error
+    note, or None when the shape is sound.
 
-    Returns (file_id, config_dict, error_envelope_or_None). Both the sync and
-    refresh commands read the target file the same way through this helper, so a
-    trailing-newline or non-string fileId behaves identically in both. A
-    missing/empty/non-string fileId yields a no_target_file error envelope —
-    the destructive-reconcile refuse guard both commands depend on.
+    This validates only the shape the loader guarantees to callers — the parser
+    owns theme-scope *semantics* (which selector matches which scope). It exists
+    so a malformed prefix/themeConventions is rejected with a clear message
+    rather than surfacing as a traceback deep in the parser or emitter.
     """
+    src = cfg.get("source")
+    if src is not None:
+        if not isinstance(src, dict):
+            return "'source' must be an object with a 'path' (plus optional 'ref', 'prefix')."
+        if src.get("path") is not None and not isinstance(src.get("path"), str):
+            return "'source.path' must be a string relative to --repo."
+        prefix = src.get("prefix")
+        if prefix is not None and not isinstance(prefix, str):
+            return "'source.prefix' must be a string, or null/\"\" to take all custom properties."
+        ref = src.get("ref")
+        if ref is not None and not isinstance(ref, str):
+            return "'source.ref' must be a git ref string (e.g. 'origin/develop') or null."
+
+    if cfg.get("emitTarget") is not None and not isinstance(cfg.get("emitTarget"), str):
+        return "'emitTarget' must be a string path relative to --repo."
+
+    conventions = cfg.get("themeConventions")
+    if conventions is not None:
+        if not isinstance(conventions, list):
+            return "'themeConventions' must be an array of convention objects."
+        primaries = 0
+        for i, conv in enumerate(conventions):
+            if not isinstance(conv, dict):
+                return f"themeConventions[{i}] must be an object."
+            ctype = conv.get("type")
+            if ctype == "data-attribute":
+                if not (isinstance(conv.get("attr"), str) and isinstance(conv.get("value"), str)):
+                    return f"themeConventions[{i}] (data-attribute) needs string 'attr' and 'value'."
+            elif ctype == "media-query":
+                if not isinstance(conv.get("query"), str):
+                    return f"themeConventions[{i}] (media-query) needs a string 'query'."
+            else:
+                return (
+                    f"themeConventions[{i}].type must be 'data-attribute' or "
+                    f"'media-query', got {ctype!r}."
+                )
+            if conv.get("primary"):
+                primaries += 1
+        if len(conventions) > 1 and primaries != 1:
+            return (
+                "with more than one themeConvention, exactly one must set "
+                f'"primary": true (found {primaries}).'
+            )
+    return None
+
+
+def read_config(repo: str) -> tuple:
+    """Load the target codebase's token-bridge config from <repo>/CONFIG_FILENAME.
+
+    `repo` is the target codebase root (the --repo argument, KTD8). Returns
+    (file_id, config_dict, error_envelope_or_None). On success the returned cfg
+    carries the resolved absolute repo root under cfg["_repo"], so callers can
+    resolve source/emitTarget paths relative to it via resolve_repo_path().
+
+    Error envelopes (each a distinct failure the caller/tests can branch on):
+      no_config       — no CONFIG_FILENAME under <repo>
+      bad_config      — unreadable/invalid JSON, or a malformed field
+      no_target_file  — config present but fileId empty/absent (the refuse guard
+                        every destructive command depends on)
+    """
+    repo_abs = os.path.abspath(os.path.expanduser(repo))
+    config_path = os.path.join(repo_abs, CONFIG_FILENAME)
     try:
         with open(config_path, "r", encoding="utf-8") as fh:
             cfg = json.load(fh)
     except FileNotFoundError:
         return None, {}, error_envelope(
-            "no_target_file", note=f"config not found: {config_path}"
+            "no_config",
+            note=f"no {CONFIG_FILENAME} found under --repo {repo_abs}",
         )
     except (OSError, json.JSONDecodeError) as exc:
         return None, {}, error_envelope(
             "bad_config", note=f"could not read {config_path}: {exc}"
         )
+    if not isinstance(cfg, dict):
+        return None, {}, error_envelope(
+            "bad_config", note=f"{config_path} must contain a JSON object."
+        )
+    verr = _validate_config(cfg)
+    if verr is not None:
+        return None, cfg, error_envelope("bad_config", note=verr)
+
+    cfg["_repo"] = repo_abs
     raw = cfg.get("fileId", "")
     file_id = raw.strip() if isinstance(raw, str) else ""
     if not file_id:
@@ -113,6 +189,17 @@ def read_config(config_path: str) -> tuple:
             "target whatever Paper file is currently open.",
         )
     return file_id, cfg, None
+
+
+def resolve_repo_path(cfg: dict, rel: str | None) -> str | None:
+    """Resolve a config-relative path (source.path, emitTarget) against the repo
+    root read_config stored under cfg["_repo"]. Returns None for a falsy rel.
+    An absolute rel is returned unchanged."""
+    if not rel:
+        return None
+    if os.path.isabs(rel):
+        return rel
+    return os.path.join(cfg.get("_repo", ""), rel)
 
 
 # --- pure parsing (unit-testable, no daemon) ---------------------------------
@@ -285,7 +372,7 @@ class PaperClient:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "wcs-paper-client", "version": "0.1.0"},
+                "clientInfo": {"name": "token-bridge-client", "version": "0.1.0"},
             },
         )
 
@@ -384,6 +471,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_sse.add_argument("file", nargs="?", default=None, help="SSE body file, or - for stdin")
 
+    # Offline: load + validate <repo>/token-bridge.config.json — no daemon needed.
+    p_cfg = sub.add_parser(
+        "read-config",
+        help="Load and validate <repo>/token-bridge.config.json (the --repo bootstrap).",
+    )
+    p_cfg.add_argument("--repo", required=True, help="Target codebase root holding the config.")
+
     p_init = sub.add_parser("initialize", help="Send the JSON-RPC initialize handshake.")
 
     p_get = sub.add_parser("get-tokens", help="get_tokens for a fileId.")
@@ -420,6 +514,25 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             return _emit(error_envelope("bad_sse", note=str(exc)))
         return _emit(interpret_rpc_response(resp))
+
+    if args.cmd == "read-config":
+        file_id, cfg, err = read_config(args.repo)
+        if err is not None:
+            return _emit(err)
+        src = cfg.get("source") or {}
+        return _emit(
+            ok_envelope(
+                {
+                    "fileId": file_id,
+                    "repo": cfg.get("_repo"),
+                    "source": resolve_repo_path(cfg, src.get("path")),
+                    "ref": src.get("ref"),
+                    "prefix": src.get("prefix"),
+                    "emitTarget": resolve_repo_path(cfg, cfg.get("emitTarget")),
+                    "themeConventions": cfg.get("themeConventions"),
+                }
+            )
+        )
 
     client = PaperClient(url=args.url, timeout=args.timeout)
 

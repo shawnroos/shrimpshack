@@ -172,3 +172,95 @@ SSE
     err=$(echo "$output" | jq -r '.error')
     [ "$err" = "no_target_file" ]
 }
+
+# ============================================================================
+# read-config — the --repo bootstrap (KTD8): load <repo>/token-bridge.config.json,
+# resolve source/emitTarget relative to <repo>, and refuse without a fileId.
+# ============================================================================
+
+@test "read-config: happy path loads config, resolves paths relative to --repo" {
+    # The fixtures dir doubles as a --repo (it holds token-bridge.config.json).
+    run python3 "$CLIENT" read-config --repo "$FIXTURE_DIR"
+    [ "$status" -eq 0 ]
+
+    ok=$(echo "$output" | jq -r '.ok')
+    [ "$ok" = "true" ]
+
+    fid=$(echo "$output" | jq -r '.result.fileId')
+    [ "$fid" = "FIXTUREFILEID123" ]
+
+    # source + emitTarget are resolved absolute, under the repo root.
+    src=$(echo "$output" | jq -r '.result.source')
+    [ "$src" = "$FIXTURE_DIR/src/styles/tokens.css" ]
+
+    emit=$(echo "$output" | jq -r '.result.emitTarget')
+    [ "$emit" = "$FIXTURE_DIR/src/styles/tokens.generated.css" ]
+
+    prefix=$(echo "$output" | jq -r '.result.prefix')
+    [ "$prefix" = "--brand-" ]
+}
+
+@test "read-config: --repo with no config file returns no_config, not a crash" {
+    empty="$BATS_TMPDIR/empty_repo"
+    mkdir -p "$empty"
+    run python3 "$CLIENT" read-config --repo "$empty"
+    [ "$status" -eq 4 ]
+    err=$(echo "$output" | jq -r '.error')
+    [ "$err" = "no_config" ]
+}
+
+@test "read-config: config present but empty fileId refuses with no_target_file" {
+    repo="$BATS_TMPDIR/no_fileid_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "", "source": { "path": "a.css" } }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    err=$(echo "$output" | jq -r '.error')
+    [ "$err" = "no_target_file" ]
+}
+
+@test "read-config: a non-string prefix is rejected with an actionable bad_config" {
+    repo="$BATS_TMPDIR/bad_prefix_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "source": { "path": "a.css", "prefix": 42 } }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    err=$(echo "$output" | jq -r '.error')
+    [ "$err" = "bad_config" ]
+    note=$(echo "$output" | jq -r '.note')
+    [[ "$note" == *"prefix"* ]]
+}
+
+@test "read-config: a malformed themeConventions entry is rejected with bad_config" {
+    repo="$BATS_TMPDIR/bad_conv_repo"
+    mkdir -p "$repo"
+    # data-attribute missing its required 'value'
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "themeConventions": [ { "type": "data-attribute", "attr": "data-theme" } ] }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    err=$(echo "$output" | jq -r '.error')
+    [ "$err" = "bad_config" ]
+}
+
+@test "read-config: two conventions without exactly one primary is rejected" {
+    repo="$BATS_TMPDIR/dual_no_primary_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "themeConventions": [
+  { "type": "data-attribute", "attr": "data-theme", "value": "dark" },
+  { "type": "media-query", "query": "(prefers-color-scheme: dark)" }
+] }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    err=$(echo "$output" | jq -r '.error')
+    [ "$err" = "bad_config" ]
+    note=$(echo "$output" | jq -r '.note')
+    [[ "$note" == *"primary"* ]]
+}

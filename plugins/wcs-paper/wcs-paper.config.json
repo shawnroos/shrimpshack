@@ -1,5 +1,0 @@
-{
-  "_comment": "Target Paper file for wcs-paper sync/refresh. Set fileId to the Paper file you want tokens and components written into (from its URL: app.paper.design/file/<fileId>). Both commands REFUSE to run while fileId is empty — a destructive reconcile must never fall back to whatever file is currently open.",
-  "fileId": "",
-  "paperDaemonUrl": "http://127.0.0.1:29979/mcp"
-}

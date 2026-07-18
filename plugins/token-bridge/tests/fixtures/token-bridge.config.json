@@ -1,0 +1,27 @@
+{
+  "_comment": "Fixture config for read_config tests. The fixtures dir doubles as a --repo. fileId is a placeholder so read-config's happy path resolves; no real Paper file is targeted (offline test).",
+  "fileId": "FIXTUREFILEID123",
+  "paperDaemonUrl": "http://127.0.0.1:29979/mcp",
+  "source": {
+    "path": "src/styles/tokens.css",
+    "ref": null,
+    "prefix": "--brand-"
+  },
+  "emitTarget": "src/styles/tokens.generated.css",
+  "themeConventions": [
+    {
+      "type": "data-attribute",
+      "attr": "data-theme",
+      "value": "dark",
+      "primary": true
+    }
+  ],
+  "harvest": {
+    "themeSignal": {
+      "type": "data-attribute",
+      "attr": "data-theme",
+      "value": "dark"
+    },
+    "batch": []
+  }
+}
