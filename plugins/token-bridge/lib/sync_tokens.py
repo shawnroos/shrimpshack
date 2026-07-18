@@ -1,53 +1,57 @@
 #!/usr/bin/env python3
-"""Idempotent WCS token-sync — reconcile the merged develop SCSS into a Paper file.
+"""Idempotent token-sync — reconcile a codebase's CSS tokens into a Paper file.
 
-This is U5's end-to-end command. It reads the two source SCSS files from the
-merged `develop` ref, parses + classifies them (via the sibling lib modules),
-builds the *desired* Paper token set, diffs it against the *live* Paper file,
-and applies the minimal reconcile (create / update / delete / recreate). Re-run
-against an unchanged source, it writes nothing (R7).
+This is token-bridge's code -> Paper command. It reads the CSS source declared
+by the target codebase's config, parses + classifies it (via the sibling lib
+modules), builds the *desired* Paper token set, diffs it against the *live*
+Paper file, and applies the minimal reconcile (create / update / delete /
+recreate). Re-run against an unchanged source, it writes nothing (R3).
+
+The source, custom-property prefix, and theme conventions all come from the
+config found under `--repo <path>` (paper_client.read_config) — nothing about a
+particular codebase is hardcoded here.
 
 --------------------------------------------------------------------------------
-LIGHT / DARK NAMING SCHEME (the deferred R3 decision, resolved here)
+LIGHT / DARK NAMING SCHEME (KTD2 — frozen)
 --------------------------------------------------------------------------------
-Paper has no per-file "theme mode" for tokens, so the two WCS themes are written
-as two *separately named* Paper tokens rather than two modes of one token:
+Paper has no per-file "theme mode" for tokens, so v1's base + one "dark" theme
+are written as two *separately named* Paper tokens rather than two modes of one
+token:
 
-  * The LIGHT value keeps the token's own name:      --wcs-accent
-  * The DARK value gets a "-dark" suffixed twin:      --wcs-accent-dark
+  * The BASE (light) value keeps the token's own name:   --accent
+  * The DARK value gets a "-dark" suffixed twin:          --accent-dark
 
 Only theme-VARYING tokens (parse_tokens gives them a non-null `dark`) get a dark
 twin. Mode-invariant tokens (dark == null) are written exactly once, under their
 own name, with no twin.
 
 Aliases follow the same scheme *within their theme* (R2 + R3):
-  * A LIGHT alias references the plain (light) name:   var(--wcs-green-500)
-  * A DARK alias references the DARK counterpart —      var(--wcs-accent-dark)
+  * A LIGHT alias references the plain (light) name:   var(--green-500)
+  * A DARK alias references the DARK counterpart —      var(--accent-dark)
     but ONLY when that referent is itself theme-varying (and therefore has a
     "-dark" twin). If the referent is mode-invariant it has no twin, so the dark
     alias references its plain name.
 
-Worked example (from the real source):
-    --wcs-timeline-playhead        = var(--wcs-accent)        # light twin
-    --wcs-timeline-playhead-dark   = var(--wcs-accent-dark)   # dark twin,
-                                                              # NOT var(--wcs-accent)
+Worked example:
+    --nav-active-fg        = var(--accent)        # light twin
+    --nav-active-fg-dark   = var(--accent-dark)   # dark twin,
+                                                  # NOT var(--accent)
 
-Tier-2 aliases are written as var(--wcs-*) references, never resolved to their
+Tier-2 aliases are written as var(--*) references, never resolved to their
 literal hex (R2) — parse_tokens' light_alias/dark_alias metadata drives this.
 
 --------------------------------------------------------------------------------
 Architecture
 --------------------------------------------------------------------------------
 The DIFF ENGINE is a pure function (desired, live) -> {creates, updates, deletes,
-recreates} with no git and no daemon, so it is unit-testable against fixtures.
+recreates} with no config and no daemon, so it is unit-testable against fixtures.
 Only apply_diff() touches the live daemon. build_desired() is likewise pure over
-classified records. read_source() is the only git-touching step and its ref /
-paths are all injectable so tests can feed fixture text instead.
+classified records. Reading the source (parse_tokens.load_source) is the only
+file/git-touching step, and it is driven entirely by the config.
 
 CLI:
-  python3 sync_tokens.py                      # full pipeline (git + daemon)
-  python3 sync_tokens.py run --config C       # explicit config; refuses if empty
-  python3 sync_tokens.py build-desired --token-file F --general-file G
+  python3 sync_tokens.py run --repo PATH        # full pipeline (config + daemon)
+  python3 sync_tokens.py build-desired --source-file F --conventions JSON [--prefix P]
   python3 sync_tokens.py diff --desired D --live L
   python3 sync_tokens.py simulate-apply --live L --diff D
 """
@@ -58,7 +62,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 
 # Sibling lib modules — READ/import only (never modified by this unit).
@@ -66,23 +69,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import classify_tokens  # noqa: E402
 import map_to_tokens  # noqa: E402
 import parse_tokens  # noqa: E402
-from paper_client import PaperClient  # noqa: E402
+from paper_client import PaperClient, read_config  # noqa: E402
 
 # --- configuration -----------------------------------------------------------
-
-_HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CONFIG = os.path.normpath(os.path.join(_HERE, "..", "wcs-paper.config.json"))
-DEFAULT_REPO = os.path.expanduser("~/projects/Slate/web-app")
-DEFAULT_REF = "origin/develop"
-DEFAULT_TOKEN_PATH = "src/styles/themes/_wcs-design-tokens.scss"
-DEFAULT_GENERAL_PATH = "src/styles/_general.scss"
 
 DARK_SUFFIX = "-dark"
 
 # Exit codes — distinct so callers/tests can tell failure kinds apart.
 EXIT_OK = 0
-EXIT_REFUSED = 2  # safety guard: no fileId configured
-EXIT_ERROR = 4  # git / daemon / apply failure
+EXIT_REFUSED = 2  # safety guard: no fileId / no config / bad config
+EXIT_ERROR = 4  # source read / daemon / apply failure
+
 
 def _log(msg: str) -> None:
     print(f"[sync_tokens] {msg}", file=sys.stderr)
@@ -94,7 +91,7 @@ def _log(msg: str) -> None:
 def _norm_value(v):
     """Normalize a token value for comparison: strip, then uppercase every hex
     run via parse_tokens' own normalizer — one definition of "same value" feeds
-    the diff whose emptiness is the R7 idempotency contract. Non-hex values
+    the diff whose emptiness is the R3 idempotency contract. Non-hex values
     (var(...), rgba(...), 8px) are unaffected beyond a strip."""
     if v is None:
         return None
@@ -114,10 +111,10 @@ def order_for_create(tokens):
     Paper's create_tokens processes the array in order and a var(--x) whose
     referent does not exist YET fails silently — so an alphabetically-sorted
     batch drops every Tier-2 alias whose Tier-1 referent sorts later (e.g.
-    --wcs-accent = var(--wcs-green-500)), and any alias chaining through it.
-    Topological sort on the in-batch var() dependency; tokens with no in-batch
-    referent keep their relative order and come first. Cycles (none exist in the
-    WCS source) are broken by emitting in encounter order."""
+    --accent = var(--green-500)), and any alias chaining through it. Topological
+    sort on the in-batch var() dependency; tokens with no in-batch referent keep
+    their relative order and come first. Cycles are broken by emitting in
+    encounter order."""
     by_name = {t["name"]: t for t in tokens}
     ordered = []
     placed = set()
@@ -170,7 +167,7 @@ def _dark_value(rec, theme_varying, dark_literals):
          redeclared in dark. Detected by the referent's resolved dark literal
          equalling this token's dark literal. -> the referent's dark twin.
       3. otherwise the resolved dark literal (an independent dark declaration,
-         e.g. --wcs-accent aliases a primitive in light but is a literal in dark).
+         e.g. --accent aliases a primitive in light but is a literal in dark).
     """
     if rec.get("dark_alias"):
         return "var(%s)" % _alias_ref(rec["dark_alias"], "dark", theme_varying)
@@ -213,8 +210,7 @@ def build_desired(classified):
         ptype = rec["paper_type"]
         # Light twin (or the sole token for a mode-invariant value). A token
         # declared only in the dark block would resolve light=None; skip the
-        # light twin rather than send value:None to create_tokens. (No such
-        # token exists in today's source — the dark block is a strict subset.)
+        # light twin rather than send value:None to create_tokens.
         light_val = _light_value(rec, theme_varying)
         if light_val is not None:
             desired.append({"name": rec["name"], "type": ptype, "value": light_val})
@@ -237,7 +233,7 @@ def _same_value(live_val, desired_val):
     """True when the live (Paper-stored) value equals the desired value AFTER
     canonicalizing for Paper's own serialization. Paper rewrites on store —
     `transparent` -> `#00000000`, `rgba(r,g,b,a)` -> `rgb(r g b / a%)`, `0` ->
-    `0px` — so a raw string compare churns those tokens on every sync (R7). A
+    `0px` — so a raw string compare churns those tokens on every sync (R3). A
     var() alias has no color/length to canonicalize; it compares as a normalized
     string. map_to_tokens.normalize_value owns the canonical color/length form
     (shared with the harvest path)."""
@@ -246,14 +242,14 @@ def _same_value(live_val, desired_val):
     return a == b
 
 
-# --- the diff engine (PURE — no git, no daemon) ------------------------------
+# --- the diff engine (PURE — no config, no daemon) ---------------------------
 
 
 def diff_tokens(desired, live):
     """Diff the desired Paper token set against the live one (pure function).
 
     Compares with NORMALIZED name (lowercase) and value (uppercased hex) so an
-    unchanged source yields an EMPTY diff (R7).
+    unchanged source yields an EMPTY diff (R3).
 
     Returns {creates, updates, deletes, recreates}:
       creates    tokens present in desired, absent from live         -> create
@@ -394,121 +390,55 @@ def apply_diff(client, file_id, diff):
     return {"ok": True, "steps": steps}
 
 
-# --- source reading (the only git-touching step) -----------------------------
+# --- desired-set construction from source text (pure) ------------------------
 
 
-def _git_show(repo, ref, path):
-    """Return the text of `path` at `ref` from `repo` via `git show`."""
-    proc = subprocess.run(
-        ["git", "-C", repo, "show", f"{ref}:{path}"],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"git show {ref}:{path} failed: {proc.stderr.strip()}"
-        )
-    return proc.stdout
+def desired_from_source(text, conventions, prefix=None):
+    """Full pure source pipeline: parse -> classify -> build_desired.
 
-
-def read_source(
-    repo=DEFAULT_REPO,
-    ref=DEFAULT_REF,
-    token_path=DEFAULT_TOKEN_PATH,
-    general_path=DEFAULT_GENERAL_PATH,
-    token_text=None,
-    general_text=None,
-):
-    """Read the two source SCSS texts. If token_text/general_text are provided
-    they are used verbatim (test injection); otherwise both are read from git."""
-    if token_text is None:
-        token_text = _git_show(repo, ref, token_path)
-    if general_text is None:
-        general_text = _git_show(repo, ref, general_path)
-    return token_text, general_text
-
-
-def desired_from_source(token_text, general_text):
-    """Full pure source pipeline: parse -> classify -> build_desired."""
-    token_records = parse_tokens.parse_tokens(token_text)
-    general_record = parse_tokens.parse_general(general_text)
-    classified = classify_tokens.classify_tokens(token_records + [general_record])
+    `conventions` is the config `themeConventions` list; `prefix` restricts
+    output to custom properties with that prefix (None/"" takes all)."""
+    records = parse_tokens.parse_tokens(text, conventions, prefix)
+    classified = classify_tokens.classify_tokens(records)
     return build_desired(classified)
-
-
-# --- config ------------------------------------------------------------------
-
-
-def read_file_id(config_path):
-    """Return the (stripped) configured fileId and daemon URL, or raise on
-    unreadable. A non-string or whitespace-only fileId resolves to "" so the
-    refuse guard fires — the stripped value is what actually reaches get_tokens,
-    so a trailing newline in the config can't silently target a nonexistent
-    file (matching write_component's guard)."""
-    with open(config_path, "r", encoding="utf-8") as fh:
-        cfg = json.load(fh)
-    raw = cfg.get("fileId", "")
-    file_id = raw.strip() if isinstance(raw, str) else ""
-    return file_id, cfg.get("paperDaemonUrl")
 
 
 # --- top-level orchestration -------------------------------------------------
 
 
-def run(
-    config_path=DEFAULT_CONFIG,
-    repo=DEFAULT_REPO,
-    ref=DEFAULT_REF,
-    token_path=DEFAULT_TOKEN_PATH,
-    general_path=DEFAULT_GENERAL_PATH,
-    token_text=None,
-    general_text=None,
-    url=None,
-    apply=True,
-):
+def run(repo=".", url=None, apply=True):
     """The end-to-end reconcile. Returns (report_dict, exit_code).
 
-    Refuses (writes NOTHING) when no fileId is configured — the destructive-
-    reconcile safety guard. This runs BEFORE any git read or daemon call."""
-    try:
-        file_id, cfg_url = read_file_id(config_path)
-    except (OSError, json.JSONDecodeError) as exc:
+    Reads everything it needs (fileId, source, prefix, theme conventions, daemon
+    URL) from the config found under `--repo`. Refuses (writes NOTHING) when the
+    config is missing/invalid or carries no fileId — the destructive-reconcile
+    safety guard. This runs BEFORE any source read or daemon call."""
+    file_id, cfg, err = read_config(repo)
+    if err is not None:
+        # no_config / bad_config / no_target_file — all refuse before any write.
         return (
             {
                 "ok": False,
                 "refused": True,
-                "error": f"cannot read config {config_path}: {exc}",
+                "error": err.get("error"),
+                "note": err.get("note"),
             },
             EXIT_REFUSED,
         )
 
-    if not file_id.strip():
-        return (
-            {
-                "ok": False,
-                "refused": True,
-                "error": (
-                    "no fileId configured — set fileId in wcs-paper.config.json "
-                    "(from the Paper file URL: app.paper.design/file/<fileId>). "
-                    "Refusing: a destructive reconcile must never target the "
-                    "wrong file."
-                ),
-            },
-            EXIT_REFUSED,
-        )
-
-    # Source (git or injected fixture text).
+    # Source (config working-tree path by default; the git-ref mode when
+    # source.ref is set — both handled inside parse_tokens.load_source).
     try:
-        token_text, general_text = read_source(
-            repo, ref, token_path, general_path, token_text, general_text
-        )
+        text = parse_tokens.load_source(cfg)
     except RuntimeError as exc:
         return ({"ok": False, "error": str(exc)}, EXIT_ERROR)
 
-    desired, declined = desired_from_source(token_text, general_text)
+    conventions = cfg.get("themeConventions") or []
+    prefix = (cfg.get("source") or {}).get("prefix")
+    desired, declined = desired_from_source(text, conventions, prefix)
 
     # Live Paper tokens.
-    client = PaperClient(url=url or cfg_url)
+    client = PaperClient(url=url or cfg.get("paperDaemonUrl"))
     live_env = client.get_tokens(file_id)
     if not live_env.get("ok"):
         return (
@@ -555,20 +485,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="sync_tokens.py", description=__doc__)
     sub = parser.add_subparsers(dest="cmd")
 
-    p_run = sub.add_parser("run", help="Full reconcile (git source + live daemon).")
-    p_run.add_argument("--config", default=DEFAULT_CONFIG)
-    p_run.add_argument("--repo", default=DEFAULT_REPO)
-    p_run.add_argument("--ref", default=DEFAULT_REF)
-    p_run.add_argument("--token-path", default=DEFAULT_TOKEN_PATH)
-    p_run.add_argument("--general-path", default=DEFAULT_GENERAL_PATH)
-    p_run.add_argument("--token-file", default=None, help="Inject token SCSS (skip git)")
-    p_run.add_argument("--general-file", default=None, help="Inject general SCSS (skip git)")
+    p_run = sub.add_parser("run", help="Full reconcile (config source + live daemon).")
+    p_run.add_argument("--repo", default=".", help="Target codebase root holding token-bridge.config.json")
     p_run.add_argument("--url", default=None, help="Paper daemon URL override")
     p_run.add_argument("--no-apply", action="store_true", help="Diff + report only")
 
-    p_bd = sub.add_parser("build-desired", help="Build the desired set from source files.")
-    p_bd.add_argument("--token-file", required=True)
-    p_bd.add_argument("--general-file", required=True)
+    p_bd = sub.add_parser("build-desired", help="Build the desired set from one CSS source + conventions.")
+    p_bd.add_argument("--source-file", required=True, help="CSS/SCSS source file to parse")
+    p_bd.add_argument("--conventions", required=True, help="JSON array of themeConventions")
+    p_bd.add_argument("--prefix", default=None, help="Only include custom properties with this prefix")
 
     p_diff = sub.add_parser("diff", help="Pure diff of desired vs live JSON files.")
     p_diff.add_argument("--desired", required=True)
@@ -583,37 +508,28 @@ def main(argv=None):
 
     if cmd == "run":
         # `run` is also the bare-invocation default.
-        cfg = getattr(args, "config", DEFAULT_CONFIG)
-        token_text = None
-        general_text = None
-        if getattr(args, "token_file", None):
-            with open(args.token_file, encoding="utf-8") as fh:
-                token_text = fh.read()
-        if getattr(args, "general_file", None):
-            with open(args.general_file, encoding="utf-8") as fh:
-                general_text = fh.read()
         report, code = run(
-            config_path=cfg,
-            repo=getattr(args, "repo", DEFAULT_REPO),
-            ref=getattr(args, "ref", DEFAULT_REF),
-            token_path=getattr(args, "token_path", DEFAULT_TOKEN_PATH),
-            general_path=getattr(args, "general_path", DEFAULT_GENERAL_PATH),
-            token_text=token_text,
-            general_text=general_text,
+            repo=getattr(args, "repo", "."),
             url=getattr(args, "url", None),
             apply=not getattr(args, "no_apply", False),
         )
         print(json.dumps(report, indent=2))
         if report.get("refused"):
-            _log(report.get("error", "refused"))
+            _log(report.get("note") or report.get("error", "refused"))
         return code
 
     if cmd == "build-desired":
-        with open(args.token_file, encoding="utf-8") as fh:
-            token_text = fh.read()
-        with open(args.general_file, encoding="utf-8") as fh:
-            general_text = fh.read()
-        desired, declined = desired_from_source(token_text, general_text)
+        try:
+            conventions = json.loads(args.conventions)
+        except json.JSONDecodeError as exc:
+            _log(f"--conventions is not valid JSON: {exc}")
+            return EXIT_REFUSED
+        if not isinstance(conventions, list):
+            _log("--conventions must be a JSON array of convention objects")
+            return EXIT_REFUSED
+        with open(args.source_file, encoding="utf-8") as fh:
+            text = fh.read()
+        desired, declined = desired_from_source(text, conventions, args.prefix)
         print(json.dumps({"desired": desired, "declined": declined}, indent=2))
         return EXIT_OK
 
