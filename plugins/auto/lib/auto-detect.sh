@@ -13,13 +13,13 @@
 #
 # U15 (plan 2026-07-01-001): the ~590-line Python implementation moved out of a
 # single-quoted bash heredoc into the sibling `lib/auto-detect.py`, following
-# the shipped `adapter-ce.sh`/`adapter-ce.py` precedent (KTD-3). This file is now
+# the shipped `backend-ce.sh`/`backend-ce.py` precedent (KTD-3). This file is now
 # a thin shim; the JSON-envelope contract below is still authored here.
 #
 # JSON envelope (one line, machine-parseable):
 #   {
 #     "situation": "in-flight" | "ambiguous-runs" | "reviewed-plan"
-#                | "multi-plan" | "conversation-context" | "raw",
+#                | "multi-plan" | "raw",   (conversation-context RETIRED — U4)
 #     "summary":   "one-line operator-facing description",
 #     "ambiguity": null | { "kind": "choice"|"open",
 #                           "question": "...",
@@ -39,11 +39,16 @@
 #                       transcript access so it always emits null. The DRIVER
 #                       computes the real recommendation in U2/U3 — see
 #                       skills/auto-driver + lib/recommender.py.)
+#     "plans": [ {"path":"...", "freshness":"fresh"|"stale", "sort_ts":N}* ]
+#                       (U4 — the full freshness-ranked plan list; the DRIVER
+#                       weighs it against the transcript. [] when none / on error.)
+#     "git":   { "branch": "..."|null, "dirty": true|false,
+#                "diff_summary": "..."|null }   (U4 — raw branch/dirty facts.)
 #   }
 #
 # Situations:
 #   in-flight       — exactly ONE run with exit_predicate_result.met == false.
-#                     `in_flight.run_id` carries the run. FRESH run (ledger
+#                     `in_flight.run_id` carries the run. FRESH run (run-record
 #                     touched within CLAUDE_AUTO_INFLIGHT_TTL_SECONDS, default
 #                     1 day) → ambiguity null → driver resumes silently. STALE
 #                     run (idle past the TTL) → ambiguity is a choice (resume vs
@@ -62,21 +67,17 @@
 #                     sets `ambiguity` (a choice: run one plan, or fan out all)
 #                     and the driver CONFIRMS before spawning. situation stays
 #                     multi-plan and paths are preserved for a confirmed fanout.
-#   conversation-context (v0.6.0 U1; v0.7.x U3) — no in-flight run and no LIVE
-#                     plan (no plan at all, OR every discovered plan is STALE),
-#                     but the DRIVER has signalled a rich current conversation
-#                     worth routing on (env var CLAUDE_AUTO_CONVERSATION_SIGNAL
-#                     set). A stale plan set no longer blocks it — but a FRESH
-#                     plan (reviewed-plan) still wins over conversation.
-#                     The detector has no transcript access (single-quote
-#                     heredoc), so it cannot self-detect the conversation — it
-#                     only honours the driver's signal. It emits the situation
-#                     with an EMPTY (null) recommendation + ambiguity null; the
-#                     driver classifies state + calls lib/recommender.py to fill
-#                     in the recommendation, then dispatches or pre-dispatch
-#                     escalates (skills/auto-driver, KTD-2/3/7). Without the
-#                     signal this branch is skipped entirely and the engine
-#                     falls through to `raw` (byte-unchanged from v0.4.x).
+#   conversation-context — RETIRED as a detector situation (U4). The detector has
+#                     no transcript access (single-quote heredoc), so it never
+#                     could self-detect the conversation — v0.6.0/v0.7.x had it
+#                     honour a CLAUDE_AUTO_CONVERSATION_SIGNAL env backchannel the
+#                     driver set. U4 removes that backchannel: the detector emits
+#                     deterministic FACTS only (see `plans`/`git` below), and the
+#                     DRIVER — which HAS the transcript — owns the
+#                     conversation-vs-stale-plan decision. When the facts show no
+#                     run and only stale/absent plans, the driver may run the
+#                     conversation-context flow itself (classify → recommender.py →
+#                     author goal → dispatch); a FRESH plan still wins.
 #   raw             — no run, no plan (clean OR dirty tree). ambiguity is an
 #                     open "what should we work on?" question so the driver
 #                     can route to /ce-plan or a freeform handoff. When the
@@ -85,7 +86,7 @@
 #                     but the situation is still raw because there's no
 #                     deterministic dispatch from a diff alone.
 #
-# READ-ONLY: scans the ledger dir + plan dirs + git status; never writes.
+# READ-ONLY: scans the run-record dir + plan dirs + git status; never writes.
 # Repo root resolved by the Python (CLAUDE_AUTO_REPO or walk-up).
 #
 # Hypothesis-shape stability (NO TSV legacy): the previous TSV consumer was
@@ -99,12 +100,12 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 # ──────────────────────────────────────────────────────────────────────────
 # DELEGATION (no inline logic). U15 moved the ~590-line detector body out of a
 # single-quoted `<<'PYEOF'` heredoc into the sibling `auto-detect.py` — the
-# shipped `adapter-ce.sh`/`adapter-ce.py` precedent (KTD-3). This shim pins the
+# shipped `backend-ce.sh`/`backend-ce.py` precedent (KTD-3). This shim pins the
 # interpreter, resolves `script_dir`, and execs the `.py`, forwarding the script
 # dir as argv[1]. The `.py` reached back through `_bootstrap` for the three
 # formerly-inlined duplications: `_repo_root` → `resolve_repo`; the twice-inlined
 # importlib sibling-load (auto-workspace.py + plan-rank.py) → `load_lib_module`;
-# `_read_in_flight`'s inline json.load+dict-guard → `load_ledger_safe`.
+# `_read_in_flight`'s inline json.load+dict-guard → `load_run_record_safe`.
 #
 # The `script_dir` argv passing is load-bearing: `auto-detect.py` reads it as
 # argv[1] (the P0 fix from the plan 004 round-1 review — a single-quoted heredoc

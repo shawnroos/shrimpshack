@@ -3,12 +3,12 @@
 #
 # v0.4.0 KTD-1: auto-detect.sh emits a JSON HYPOTHESIS envelope (not a TSV
 # verdict). This test pins:
-#   1. one of the six valid situations,
+#   1. one of the five valid situations (conversation-context retired — U4),
 #   2. the envelope shape (every slot present, even when null),
 #   3. discriminated-union population (single_plan vs multi_plan vs in_flight),
 #   4. ambiguity-array shape on the ambiguous-runs branch,
 #   5. dirty-tree triggers on uncommitted changes,
-#   6. goal_intent (when present on the ledger) feeds the in-flight summary +
+#   6. goal_intent (when present on the run-record) feeds the in-flight summary +
 #      ambiguous-runs option descriptions,
 #   7. exit 0 on every path (rel-001 / hook-safety).
 #
@@ -200,7 +200,7 @@ EOF
 }
 
 setup_inflight_stale() {
-  # A single not-met run whose ledger has not been touched in months — well
+  # A single not-met run whose run-record has not been touched in months — well
   # beyond the default staleness TTL (1 day). Backdating mtime exercises the
   # real default, not a test-only env knob.
   cat > "$1/.claude/auto/runStale.json" <<'EOF'
@@ -363,7 +363,7 @@ assert_eq "in-flight" "$(json_field setup_inflight_one 'H["situation"]')"
 it "in-flight: in_flight.run_id is the single run-id"
 assert_eq "runA" "$(json_field setup_inflight_one 'H["in_flight"]["run_id"]')"
 
-it "in-flight: summary surfaces the goal_intent from the ledger"
+it "in-flight: summary surfaces the goal_intent from the run_record"
 # The exact phrasing is operator-friendly — we just assert goal_intent appears.
 assert_eq "True" "$(json_field setup_inflight_one '"Ship the login fix" in H["summary"]')"
 
@@ -459,22 +459,30 @@ assert_eq "open" "$(json_field setup_dirty_tree 'H["ambiguity"]["kind"]')"
 it "dirty-tree: summary surfaces git context (branch + diff)"
 assert_eq "True" "$(json_field setup_dirty_tree '"branch" in H["summary"]')"
 
-# ── Scenario 9: malformed ledger is skipped (parity with v0.2.x) ───────────
-it "malformed ledger: skipped silently → falls through to raw"
+# ── Scenario 9: malformed run-record is skipped (parity with v0.2.x) ───────────
+it "malformed run_record: skipped silently → falls through to raw"
 assert_eq "raw" "$(json_field setup_malformed 'H["situation"]')"
 
 # ── Scenario 10: every envelope has the canonical key set (shape invariant)
 # v0.4.1 (plan 004): adds `workspace` + `workspace_action` to the envelope
 # so the skill can route project-workspace handling from one read.
 # v0.6.0 (U1): adds `recommendation` — present on EVERY envelope (the detector
-# always emits null; the driver fills it via lib/recommender.py). The key-set
-# grew from eight to nine in lockstep with the U1 contract change.
-it "envelope shape: every emitted JSON has all nine top-level keys (incl. v0.6.0 recommendation)"
+# always emits null; the driver fills it via lib/recommender.py).
+# U4: adds `plans` (the full freshness-ranked list) + `git` (branch/dirty) — the
+# raw FACTS the driver decides the route on, since the detector has no transcript.
+# The key-set grew to eleven in lockstep with the U4 contract change.
+it "envelope shape: every emitted JSON has all eleven top-level keys (incl. U4 plans+git)"
 shape_setup() {
   setup_inflight_one "$1"
 }
 keys="$(json_field shape_setup 'sorted(H.keys())')"
-assert_eq "['ambiguity', 'in_flight', 'multi_plan', 'recommendation', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" "$keys"
+assert_eq "['ambiguity', 'git', 'in_flight', 'multi_plan', 'plans', 'recommendation', 'single_plan', 'situation', 'summary', 'workspace', 'workspace_action']" "$keys"
+
+# Assert the U4 facts are correctly SHAPED, not merely present: `plans` is a list
+# and `git` carries exactly {branch, dirty, diff_summary} with a boolean `dirty`.
+it "envelope shape: U4 facts are typed — plans is a list; git is {branch,dirty,diff_summary}"
+shape_ok="$(json_field shape_setup 'isinstance(H["plans"], list) and sorted(H["git"].keys()) == ["branch", "diff_summary", "dirty"] and isinstance(H["git"]["dirty"], bool)')"
+assert_eq "True" "$shape_ok"
 
 # ── Scenario 10b: workspace_action correctly derived
 # v0.4.1 (plan 004): action routing rules per KTD-4
