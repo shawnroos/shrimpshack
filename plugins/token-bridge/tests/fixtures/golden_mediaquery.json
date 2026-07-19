@@ -1,0 +1,23 @@
+[
+  {
+    "name": "--brand-accent",
+    "light": "#37D895",
+    "dark": "#00B72B",
+    "light_alias": "--brand-green-500",
+    "dark_alias": null
+  },
+  {
+    "name": "--brand-green-500",
+    "light": "#37D895",
+    "dark": null,
+    "light_alias": null,
+    "dark_alias": null
+  },
+  {
+    "name": "--brand-space-2",
+    "light": "8px",
+    "dark": null,
+    "light_alias": null,
+    "dark_alias": null
+  }
+]

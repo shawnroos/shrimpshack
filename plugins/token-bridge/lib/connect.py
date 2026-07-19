@@ -55,12 +55,18 @@ def extract_file_id(ref: str) -> str:
     return ref
 
 
-def _convention(kind, attr, value, query):
-    """Build the single primary themeConvention from the CLI flags."""
+def _convention(kind, attr, value, query, class_name=None):
+    """Build the single primary themeConvention from the CLI flags.
+
+    `class_name` is defaulted so existing positional callers keep working."""
     if kind == "media-query":
         if not query:
             raise ValueError("--convention media-query requires --query")
         return {"type": "media-query", "query": query, "primary": True}
+    if kind == "class":
+        if not class_name:
+            raise ValueError("--convention class requires --class")
+        return {"type": "class", "class": class_name, "primary": True}
     # default / data-attribute
     return {
         "type": "data-attribute",
@@ -70,6 +76,71 @@ def _convention(kind, attr, value, query):
     }
 
 
+# A custom-property declaration: `--brand-accent:` anywhere in the source text.
+_CUSTOM_PROP = re.compile(r"(--[A-Za-z0-9_-]+)\s*:")
+
+# Share of a source's custom properties a leading segment must cover to be the
+# "dominant" prefix. Below this we refuse to guess — under-claiming ownership is
+# recoverable, over-claiming the whole Paper file is not.
+_DOMINANCE = 0.6
+
+WHOLE_FILE_WARNING = (
+    "no dominant custom-property prefix could be inferred from the source, so "
+    'this config was scaffolded with "prefix": null — which makes token-bridge '
+    "OWN THE ENTIRE Paper file and delete any token in it that the source does "
+    "not define, including Paper-native and hand-authored tokens. Re-run with an "
+    "explicit --prefix (e.g. --prefix=--brand-) to scope ownership to your own "
+    "namespace."
+)
+
+
+def infer_prefix(css_text):
+    """Infer the dominant leading segment of a source's custom properties.
+
+    `--brand-bg` / `--brand-fg` / `--brand-accent` -> `--brand-`. Returns None
+    when no single segment covers _DOMINANCE of the declared properties (a
+    grab-bag source), or when the source declares none at all. Deliberately
+    conservative: a wrong guess silently narrows what syncs, whereas returning
+    None surfaces a warning the operator can act on."""
+    names = _CUSTOM_PROP.findall(css_text or "")
+    if not names:
+        return None
+
+    counts = {}
+    for name in names:
+        # `--brand-bg` -> segment `brand`; a bare `--brand` has no prefix to take.
+        body = name[2:]
+        head, sep, _rest = body.partition("-")
+        if not sep or not head:
+            continue
+        counts[f"--{head}-"] = counts.get(f"--{head}-", 0) + 1
+
+    if not counts:
+        return None
+    best, hits = max(counts.items(), key=lambda kv: kv[1])
+    return best if hits / len(names) >= _DOMINANCE else None
+
+
+def resolve_prefix(repo_abs, source_path, explicit):
+    """Decide the prefix a NEW config is scaffolded with (R13).
+
+    Returns (prefix, source_label, warning_or_None) where source_label is
+    "explicit" | "inferred" | "none". Only ever called at scaffold time —
+    existing configs are never rewritten, and a null prefix stays legal at read
+    time so 1.0.0 configs keep working."""
+    if explicit:
+        return explicit, "explicit", None
+    try:
+        with open(os.path.join(repo_abs, source_path), "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None, "none", WHOLE_FILE_WARNING
+    inferred = infer_prefix(text)
+    if inferred:
+        return inferred, "inferred", None
+    return None, "none", WHOLE_FILE_WARNING
+
+
 def _default_emit_target(source_path):
     """Derive a sane emitTarget beside the source: `tokens.css` -> `tokens.generated.css`."""
     root, ext = os.path.splitext(source_path)
@@ -77,9 +148,15 @@ def _default_emit_target(source_path):
 
 
 def _theme_signal(conv):
-    """The harvest theme signal mirrors the primary convention (minus `primary`)."""
+    """The harvest theme signal mirrors the primary convention (minus `primary`).
+
+    Every convention type MUST have a branch here: falling through to the
+    data-attribute return for another type raises KeyError while writing the
+    config (a class convention carries no `attr`)."""
     if conv["type"] == "media-query":
         return {"type": "media-query", "query": conv["query"]}
+    if conv["type"] == "class":
+        return {"type": "class", "class": conv["class"]}
     return {"type": "data-attribute", "attr": conv["attr"], "value": conv["value"]}
 
 
@@ -180,6 +257,8 @@ def run(
                 EXIT_BAD_ARGS,
             )
 
+    # R13: never scaffold whole-file ownership silently.
+    prefix, prefix_source, prefix_warning = resolve_prefix(repo_abs, source_path, prefix)
     cfg = build_config(file_id, source_path, prefix, convention, emit_target, daemon_url)
 
     try:
@@ -189,30 +268,42 @@ def run(
     except OSError as exc:
         return ({"ok": False, "error": "write_failed", "note": str(exc)}, EXIT_ERROR)
 
-    return (
-        {
-            "ok": True,
-            "configPath": config_path,
-            "fileId": file_id,
-            "created": created,
-            "source": cfg["source"]["path"],
-            "emitTarget": cfg["emitTarget"],
-            "convention": convention["type"],
-        },
-        EXIT_OK,
-    )
+    report = {
+        "ok": True,
+        "configPath": config_path,
+        "fileId": file_id,
+        "created": created,
+        "source": cfg["source"]["path"],
+        "prefix": prefix,
+        "prefixSource": prefix_source,
+        "emitTarget": cfg["emitTarget"],
+        "convention": convention["type"],
+    }
+    if prefix_warning:
+        report["prefixWarning"] = prefix_warning
+    return (report, EXIT_OK)
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="connect.py", description=__doc__)
     p.add_argument("--repo", required=True, help="Target codebase root (config is written here).")
     p.add_argument("--source", required=True, help="CSS/SCSS source path, relative to --repo.")
-    p.add_argument("--prefix", default=None, help="Custom-property prefix (omit for all).")
+    p.add_argument(
+        "--prefix",
+        default=None,
+        help="Custom-property prefix scoping what this config OWNS. Omit to infer "
+        "the source's dominant prefix; when none is inferable it falls back to "
+        "whole-file ownership with a warning.",
+    )
     p.add_argument("--emit-target", default=None, help="Paper->CSS output path (default: <source>.generated.<ext>).")
-    p.add_argument("--convention", choices=["data-attribute", "media-query"], default="data-attribute")
+    p.add_argument(
+        "--convention", choices=["data-attribute", "media-query", "class"], default="data-attribute"
+    )
     p.add_argument("--attr", default="data-theme", help="data-attribute name (data-attribute convention).")
     p.add_argument("--value", default="dark", help="data-attribute value (data-attribute convention).")
     p.add_argument("--query", default=None, help="media query (media-query convention).")
+    # `class` is a Python keyword, so the parsed attribute needs an explicit dest.
+    p.add_argument("--class", dest="class_name", default=None, help="theme class name (class convention).")
     p.add_argument("--file", dest="file_ref", default=None, help="Existing Paper file id or URL to bind.")
     p.add_argument("--create-file", dest="create", action="store_true", help="Create a new Paper file to bind.")
     p.add_argument("--name", default=None, help="Display name for --create-file.")
@@ -221,7 +312,9 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     try:
-        convention = _convention(args.convention, args.attr, args.value, args.query)
+        convention = _convention(
+            args.convention, args.attr, args.value, args.query, args.class_name
+        )
     except ValueError as exc:
         print(json.dumps({"ok": False, "error": "bad_convention", "note": str(exc)}))
         return EXIT_BAD_ARGS
@@ -241,6 +334,8 @@ def main(argv=None):
     print(json.dumps(report, indent=2))
     if not report.get("ok"):
         _log(report.get("note") or report.get("error", "failed"))
+    elif report.get("prefixWarning"):
+        _log(f"WARNING: {report['prefixWarning']}")
     return code
 
 

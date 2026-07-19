@@ -248,6 +248,155 @@ JSON
     [ "$err" = "bad_config" ]
 }
 
+# ============================================================================
+# themeConventions: the three named types are the whole public surface (KTD2a).
+# The predicate `match:[…]` form is internal — what the named types desugar to,
+# never something a user authors — so the validator must refuse it.
+# ============================================================================
+
+@test "read-config: a class convention validates" {
+    repo="$BATS_TMPDIR/class_conv_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "themeConventions": [ { "type": "class", "class": "wcs-dark" } ] }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 0 ]
+    ok=$(echo "$output" | jq -r '.ok')
+    [ "$ok" = "true" ]
+    cls=$(echo "$output" | jq -r '.result.themeConventions[0].class')
+    [ "$cls" = "wcs-dark" ]
+}
+
+@test "read-config: a class convention desugars to a one-predicate match" {
+    run python3 -c "
+import json, sys
+sys.path.insert(0, '$SCRIPT_DIR/lib')
+from parse_tokens import desugar_convention
+print(json.dumps(desugar_convention({'type': 'class', 'class': 'wcs-dark'})))
+"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.[0].class')" = "wcs-dark" ]
+}
+
+@test "read-config: a class convention with no 'class' is rejected, naming the field" {
+    repo="$BATS_TMPDIR/class_noclass_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "themeConventions": [ { "type": "class" } ] }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    err=$(echo "$output" | jq -r '.error')
+    [ "$err" = "bad_config" ]
+    note=$(echo "$output" | jq -r '.note')
+    [[ "$note" == *"class"* ]]
+}
+
+@test "read-config: a class convention with an empty 'class' is rejected" {
+    repo="$BATS_TMPDIR/class_emptyclass_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "themeConventions": [ { "type": "class", "class": "" } ] }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    err=$(echo "$output" | jq -r '.error')
+    [ "$err" = "bad_config" ]
+    note=$(echo "$output" | jq -r '.note')
+    [[ "$note" == *"class"* ]]
+}
+
+@test "read-config: a user-authored predicate 'match' is rejected (internal form stays internal)" {
+    repo="$BATS_TMPDIR/user_match_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "themeConventions": [ { "match": [ { "class": "wcs-theme" }, { "class": "wcs-dark" } ] } ] }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    err=$(echo "$output" | jq -r '.error')
+    [ "$err" = "bad_config" ]
+    note=$(echo "$output" | jq -r '.note')
+    # Names the three accepted types...
+    [[ "$note" == *"class"* ]]
+    [[ "$note" == *"data-attribute"* ]]
+    [[ "$note" == *"media-query"* ]]
+    # ...and names 'match' as the thing to remove. Someone who WROTE match
+    # already knows it exists; withholding it just sends them to the wrong fix.
+    # What the message must not do is document match's shape or present it as a
+    # supported alternative.
+    [[ "$note" == *"match"* ]]
+    [[ "$note" == *"not user-authorable"* ]]
+}
+
+@test "read-config: a 'match' smuggled alongside a valid type is still rejected" {
+    # desugar_convention checks 'match' FIRST, so a match riding along with a
+    # named type would silently win — the named type is not enough of a gate.
+    repo="$BATS_TMPDIR/smuggled_match_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "themeConventions": [ { "type": "class", "class": "wcs-dark", "match": [ { "attr": "data-x", "value": "y" } ] } ] }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    err=$(echo "$output" | jq -r '.error')
+    [ "$err" = "bad_config" ]
+    # The message must point at 'match', not at the type — reporting
+    # "type must be … 'class', got 'class'" is self-contradictory and sends the
+    # reader to the wrong fix.
+    note=$(echo "$output" | jq -r '.note')
+    [[ "$note" == *"internal 'match' form"* ]]
+    [[ "$note" != *"got 'class'"* ]]
+}
+
+@test "read-config: backward compat — data-attribute and media-query configs still validate" {
+    repo="$BATS_TMPDIR/backcompat_conv_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "themeConventions": [
+  { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true },
+  { "type": "media-query", "query": "(prefers-color-scheme: dark)" }
+] }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 0 ]
+    ok=$(echo "$output" | jq -r '.ok')
+    [ "$ok" = "true" ]
+    [ "$(echo "$output" | jq -r '.result.themeConventions[0].type')" = "data-attribute" ]
+    [ "$(echo "$output" | jq -r '.result.themeConventions[1].type')" = "media-query" ]
+}
+
+@test "read-config: a media-query desugars to a two-predicate conjunction with the :root anchor" {
+    # Conjunction machinery ships and runs on every media-query config even
+    # though no user can author a conjunction directly (KTD2a).
+    run python3 -c "
+import json, sys
+sys.path.insert(0, '$SCRIPT_DIR/lib')
+from parse_tokens import desugar_convention
+print(json.dumps(desugar_convention({'type': 'media-query', 'query': '(prefers-color-scheme: dark)'})))
+"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq 'length')" = "2" ]
+    [ "$(echo "$output" | jq -r '.[0].media')" = "(prefers-color-scheme: dark)" ]
+    [ "$(echo "$output" | jq -r '.[1].selector')" = ":root" ]
+}
+
+@test "read-config: an unknown convention type is rejected naming all three accepted types" {
+    repo="$BATS_TMPDIR/unknown_conv_repo"
+    mkdir -p "$repo"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "themeConventions": [ { "type": "attribute-selector", "sel": "[dark]" } ] }
+JSON
+    run python3 "$CLIENT" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    note=$(echo "$output" | jq -r '.note')
+    [[ "$note" == *"data-attribute"* ]]
+    [[ "$note" == *"media-query"* ]]
+    [[ "$note" == *"class"* ]]
+}
+
 @test "read-config: two conventions without exactly one primary is rejected" {
     repo="$BATS_TMPDIR/dual_no_primary_repo"
     mkdir -p "$repo"

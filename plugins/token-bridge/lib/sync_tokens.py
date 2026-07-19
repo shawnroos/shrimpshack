@@ -69,7 +69,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import classify_tokens  # noqa: E402
 import map_to_tokens  # noqa: E402
 import parse_tokens  # noqa: E402
-from paper_client import PaperClient, read_config  # noqa: E402
+from paper_client import PaperClient, read_config, resolve_repo_path  # noqa: E402
 
 # --- configuration -----------------------------------------------------------
 
@@ -77,7 +77,7 @@ DARK_SUFFIX = "-dark"
 
 # Exit codes — distinct so callers/tests can tell failure kinds apart.
 EXIT_OK = 0
-EXIT_REFUSED = 2  # safety guard: no fileId / no config / bad config
+EXIT_REFUSED = 2  # safety guard: no fileId / no config / bad config / empty parse
 EXIT_ERROR = 4  # source read / daemon / apply failure
 
 
@@ -414,6 +414,40 @@ def apply_diff(client, file_id, diff):
 # --- desired-set construction from source text (pure) ------------------------
 
 
+def empty_parse_refusal(text, parsed_count, source_path):
+    """The empty-parse backstop (R7) — pure. Returns a refusal report, or None.
+
+    A source that parses to zero tokens is indistinguishable, downstream, from a
+    codebase that deleted every token: the desired set is empty, so the diff
+    turns the whole live set into deletes. That is almost never what happened.
+    The usual cause is a scope shape the parser cannot read — a `:root` wrapped
+    in `@layer` (standard in Tailwind v4 and Open Props), `@media`, or
+    `@supports`, or a class-scoped theme.
+
+    So a source with CONTENT but no tokens refuses. A source that is genuinely
+    empty (blank, or comments only) is a legitimate no-op and returns None —
+    the reconcile proceeds and its deletes, if any, are real.
+
+    `parsed_count` is every record the pipeline produced — desired PLUS
+    declined. Tokens that parsed and were only declined downstream are evidence
+    the parse worked; only a total blank is the unparseable-scope signature."""
+    if parsed_count > 0:
+        return None
+    if not parse_tokens.strip_comments(text or "").strip():
+        return None
+    return {
+        "ok": False,
+        "refused": True,
+        "error": "empty_parse",
+        "note": (
+            f"{source_path} has content but parsed to zero tokens. Syncing would "
+            "delete every live token in the target file, so nothing was written. "
+            "The usual cause is a scope shape the parser cannot read — a :root "
+            "wrapped in @layer/@media/@supports, or a class-scoped theme."
+        ),
+    }
+
+
 def desired_from_source(text, conventions, prefix=None):
     """Full pure source pipeline: parse -> classify -> build_desired.
 
@@ -433,7 +467,11 @@ def run(repo=".", url=None, apply=True):
     Reads everything it needs (fileId, source, prefix, theme conventions, daemon
     URL) from the config found under `--repo`. Refuses (writes NOTHING) when the
     config is missing/invalid or carries no fileId — the destructive-reconcile
-    safety guard. This runs BEFORE any source read or daemon call."""
+    safety guard. This runs BEFORE any source read or daemon call.
+
+    Refuses a second time (R7) when the source has content but parses to zero
+    tokens, which the diff would otherwise read as "delete everything". That
+    check runs after the source read but still before any daemon call."""
     file_id, cfg, err = read_config(repo)
     if err is not None:
         # no_config / bad_config / no_target_file — all refuse before any write.
@@ -458,6 +496,17 @@ def run(repo=".", url=None, apply=True):
     prefix = (cfg.get("source") or {}).get("prefix")
     desired, declined = desired_from_source(text, conventions, prefix)
 
+    # Empty-parse backstop (R7): a source with content that yields no tokens is
+    # a parse failure, not a mass deletion. Refuse BEFORE the daemon is touched.
+    refusal = empty_parse_refusal(
+        text,
+        len(desired) + len(declined),
+        resolve_repo_path(cfg, (cfg.get("source") or {}).get("path")),
+    )
+    if refusal is not None:
+        _log(refusal["note"])
+        return (refusal, EXIT_REFUSED)
+
     # Live Paper tokens.
     client = PaperClient(url=url or cfg.get("paperDaemonUrl"))
     live_env = client.get_tokens(file_id)
@@ -471,6 +520,31 @@ def run(repo=".", url=None, apply=True):
     # Scope deletes to the owned prefix so a prefixed sync never wipes
     # Paper-native or other-namespace tokens sharing the target file.
     diff = diff_tokens(desired, live, owned_prefix=prefix)
+
+    # Blank-source backstop (R7, second arm). The pre-daemon check above cannot
+    # fire on a BLANK source — a truncated or emptied file is legitimately
+    # "no content", so it falls through — but the consequence is identical and
+    # worse: zero desired against a populated owned set turns the whole live set
+    # into deletes. Under connect's `prefix: null` default that is the entire
+    # Paper file, silently, with ok:true and exit 0.
+    #
+    # "Don't ERROR on an empty source" is not "don't DELETE on an empty source".
+    # This arm lives here because it needs the live set, and this is still a
+    # read-only point — get_tokens is a read, nothing has been written yet.
+    # Deliberately emptying a Paper file must be explicit, never a side effect.
+    if not desired and diff["deletes"]:
+        note = (
+            f"{resolve_repo_path(cfg, (cfg.get('source') or {}).get('path'))} parsed to zero "
+            f"tokens while {len(diff['deletes'])} owned token(s) are live. Syncing would delete "
+            "all of them, so nothing was written. If the source was truncated or emptied by "
+            "mistake, restore it. To empty the target deliberately, delete the tokens in Paper "
+            "directly rather than via an empty sync."
+        )
+        _log(note)
+        return (
+            {"ok": False, "refused": True, "error": "empty_parse", "note": note},
+            EXIT_REFUSED,
+        )
 
     report = {
         "ok": True,

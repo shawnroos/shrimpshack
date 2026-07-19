@@ -1,0 +1,37 @@
+/* class theme convention: :root base + .wcs-dark override.
+   Carries KTD4 boundary decoys — .wcs-darker and .wcs-dark-alt must NOT match
+   the class `wcs-dark` — alongside compound selector forms that MUST match
+   (html.wcs-dark, :root.wcs-dark, .wcs-dark:hover, and a group member). */
+
+:root {
+  --brand-green-500: #37d895;
+  --brand-accent: var(--brand-green-500);
+  --brand-bg: #ffffff;
+  --brand-fg: #111111;
+  --brand-ring: #cccccc;
+  --brand-space-2: 8px;
+}
+
+/* Boundary decoys: the class token does not end at `wcs-dark` here. */
+.wcs-darker {
+  --brand-accent: #ff0000;
+}
+.wcs-dark-alt {
+  --brand-bg: #ff0000;
+}
+
+.wcs-dark {
+  --brand-accent: #00b72b;
+}
+
+html.wcs-dark {
+  --brand-bg: #101010;
+}
+
+.wcs-dark:hover {
+  --brand-fg: #eeeeee;
+}
+
+.wcs-dark, .other-scope {
+  --brand-ring: #444444;
+}

@@ -79,7 +79,7 @@
     {
       "name": "token-bridge",
       "description": "A config-driven bridge between one codebase's CSS design tokens and one Paper file. Sync custom-property tokens code \u2192 Paper (idempotent reconcile) and Paper \u2192 CSS (round-trip stable), and harvest rendered components code \u2192 Paper. Pointed at any codebase via --repo; theme scopes (data-attribute, media-query) and paths come from a codebase-local config, not hardcoded paths",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": {
         "name": "Shawn Roos"
       },

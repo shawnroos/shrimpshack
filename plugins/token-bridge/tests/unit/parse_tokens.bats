@@ -14,10 +14,14 @@ setup() {
     MEDIAQUERY="$FIXTURE_DIR/tokens_mediaquery.css"
     BOTH="$FIXTURE_DIR/tokens_both.css"
     MULTIROOT="$FIXTURE_DIR/tokens_multiroot.css"
+    CLASS="$FIXTURE_DIR/tokens_class.css"
+    NESTED_SCOPE="$FIXTURE_DIR/tokens_nested_scope.css"
+    NESTED="$FIXTURE_DIR/tokens_nested.css"
 
     CONV_DATAATTR='[{"type":"data-attribute","attr":"data-theme","value":"dark"}]'
     CONV_MEDIAQUERY='[{"type":"media-query","query":"(prefers-color-scheme: dark)"}]'
     CONV_BOTH='[{"type":"data-attribute","attr":"data-theme","value":"dark","primary":true},{"type":"media-query","query":"(prefers-color-scheme: dark)"}]'
+    CONV_CLASS='[{"type":"class","class":"wcs-dark"}]'
 }
 
 # helper: field of the record with a given name (reads $output)
@@ -30,6 +34,16 @@ run_parse() { # <fixture> <conventions-json> [--prefix <p>]
     local fixture="$1" conv="$2"
     shift 2
     run bash -c "cat '$fixture' | python3 '$LIB' --conventions '$conv' $*"
+}
+
+# helper: run_parse with stderr dropped, so $output is pure JSON. Needed for a
+# fixture that deliberately WARNS (bats merges stderr into $output, and the
+# merged text is not valid JSON for jq). A redirect cannot be passed as an
+# argument to run_parse — the shell would apply it to the function call itself.
+run_parse_quiet() { # <fixture> <conventions-json> [--prefix <p>]
+    local fixture="$1" conv="$2"
+    shift 2
+    run bash -c "cat '$fixture' | python3 '$LIB' --conventions '$conv' $* 2>/dev/null"
 }
 
 # ============================================================================
@@ -261,6 +275,296 @@ CSS
 # Public seam — sibling modules depend on these re-exported names.
 # ============================================================================
 
+# ============================================================================
+# U2 — scope-context predicate engine.
+#
+# The parser walks the stylesheet recursively, carrying the enclosing at-rule
+# chain as context, and accumulates EVERY block whose context satisfies a
+# convention's predicates. Covers: the class predicate and its boundary rule
+# (KTD4), conjunction, at-rule descent, at-rule conditionality (KTD5), and
+# multi-block accumulation.
+# ============================================================================
+
+# --- class predicate (R1, KTD4) ---------------------------------------------
+
+@test "class: .wcs-dark resolves the dark scope; base stays the bare :root" {
+    run_parse "$CLASS" "$CONV_CLASS"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-accent light)" = "#37D895" ]
+    [ "$(field --brand-accent dark)" = "#00B72B" ]
+    [ "$(field --brand-accent light_alias)" = "--brand-green-500" ]
+}
+
+@test "class boundary: .wcs-darker and .wcs-dark-alt do NOT match .wcs-dark" {
+    run_parse "$CLASS" "$CONV_CLASS"
+    [ "$status" -eq 0 ]
+    # #FF0000 lives only in the two boundary decoys; neither may be read.
+    [[ "$output" != *"#FF0000"* ]]
+    [ "$(field --brand-accent dark)" = "#00B72B" ]
+}
+
+@test "class boundary: an escaped-identifier selector (.dark\\:x) does NOT match .dark" {
+    # Tailwind v4's default darkMode class IS literally `dark`, so a bundled
+    # stylesheet is full of `.dark\:*` utilities. A CSS identifier escape
+    # continues the same identifier — matching it would read every one of those
+    # utility rules as the dark scope.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+assert pt._match_selector_predicate({'class': 'dark'}, r'.dark\:text-white') is False
+assert pt._match_selector_predicate({'class': 'dark'}, r'.foo\.dark') is False
+assert pt._match_selector_predicate({'class': 'dark'}, '.dark') is True
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "class boundary: the class string inside a quoted attribute value does NOT match" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+assert pt._match_selector_predicate({'class': 'dark'}, 'a[href\$=\".dark\"]') is False
+# ...but a REAL class alongside a decoy attribute value still matches.
+assert pt._match_selector_predicate({'class': 'dark'}, '[data-x=\".dark\"].dark') is True
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "class compound forms: html.wcs-dark, .wcs-dark:hover, and a group member match" {
+    run_parse "$CLASS" "$CONV_CLASS"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-bg dark)" = "#101010" ]    # html.wcs-dark
+    [ "$(field --brand-fg dark)" = "#EEEEEE" ]    # .wcs-dark:hover
+    [ "$(field --brand-ring dark)" = "#444444" ]  # `.wcs-dark, .other-scope`
+}
+
+@test "class: :root.wcs-dark matches the class but is NOT mistaken for the base" {
+    src="$BATS_TMPDIR/rootclass.css"
+    cat > "$src" <<'CSS'
+:root { --brand-bg: #ffffff; }
+:root.wcs-dark { --brand-bg: #101010; }
+CSS
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_CLASS'"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-bg light)" = "#FFFFFF" ]
+    [ "$(field --brand-bg dark)" = "#101010" ]
+}
+
+# --- conjunction (R2, KTD2) --------------------------------------------------
+# The `match:[…]` form is INTERNAL (KTD2a) — exercised here at the engine level,
+# not as a user-authored config surface.
+
+@test "conjunction: two class predicates match body.wcs-theme.wcs-dark only when BOTH hold" {
+    run python3 -c "
+import sys, json
+sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as p
+conv = [{'match': [{'class': 'wcs-theme'}, {'class': 'wcs-dark'}]}]
+
+def dark_of(css):
+    recs = p.parse_tokens(css, conv)
+    return [r for r in recs if r['name'] == '--brand-bg'][0]['dark']
+
+both = ':root { --brand-bg: #ffffff; } body.wcs-theme.wcs-dark { --brand-bg: #101010; }'
+assert dark_of(both) == '#101010', dark_of(both)
+# Neither half alone satisfies the conjunction.
+theme_only = ':root { --brand-bg: #ffffff; } body.wcs-theme { --brand-bg: #ff0000; }'
+assert dark_of(theme_only) is None, dark_of(theme_only)
+dark_only = ':root { --brand-bg: #ffffff; } body.wcs-dark { --brand-bg: #ff0000; }'
+assert dark_of(dark_only) is None, dark_of(dark_only)
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "conjunction: predicates must hold on the SAME selector group member" {
+    run python3 -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as p
+conv = [{'match': [{'class': 'wcs-theme'}, {'class': 'wcs-dark'}]}]
+# Each member carries one class; no single member carries both.
+css = ':root { --brand-bg: #ffffff; } .wcs-theme, .wcs-dark { --brand-bg: #ff0000; }'
+rec = [r for r in p.parse_tokens(css, conv) if r['name'] == '--brand-bg'][0]
+assert rec['dark'] is None, rec
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "desugar: media-query becomes a two-predicate conjunction with the :root anchor" {
+    run python3 -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as p
+preds = p.desugar_convention({'type': 'media-query', 'query': '(prefers-color-scheme: dark)'})
+assert len(preds) == 2, preds
+assert {'media': '(prefers-color-scheme: dark)'} in preds, preds
+assert {'selector': ':root'} in preds, preds
+assert p.desugar_convention({'type': 'class', 'class': 'wcs-dark'}) == [{'class': 'wcs-dark'}]
+assert p.desugar_convention(
+    {'type': 'data-attribute', 'attr': 'data-theme', 'value': 'dark'}
+) == [{'attr': 'data-theme', 'value': 'dark'}]
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+# --- at-rule descent (R4, KTD5) ---------------------------------------------
+
+@test "@layer is transparent: a bare :root inside @layer IS the base" {
+    src="$BATS_TMPDIR/layer.css"
+    cat > "$src" <<'CSS'
+@layer tokens {
+  :root { --brand-bg: #ffffff; }
+}
+[data-theme="dark"] { --brand-bg: #101010; }
+CSS
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_DATAATTR'"
+    [ "$status" -eq 0 ]
+    # Today this parses to a base of {} — the light value is silently lost.
+    [ "$(field --brand-bg light)" = "#FFFFFF" ]
+    [ "$(field --brand-bg dark)" = "#101010" ]
+}
+
+@test "@layer: a dark scope nested inside @layer resolves" {
+    src="$BATS_TMPDIR/layer_dark.css"
+    cat > "$src" <<'CSS'
+:root { --brand-bg: #ffffff; }
+@layer theme {
+  .wcs-dark { --brand-bg: #101010; }
+}
+CSS
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_CLASS'"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-bg dark)" = "#101010" ]
+}
+
+@test "@media wrapping a class dark scope resolves" {
+    run_parse "$NESTED_SCOPE" "$CONV_CLASS"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-bg dark)" = "#101010" ]
+}
+
+@test "@supports wrapping a class dark scope resolves" {
+    run_parse "$NESTED_SCOPE" "$CONV_CLASS"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-fg dark)" = "#EEEEEE" ]
+}
+
+# --- at-rule conditionality: the base guard (KTD5) --------------------------
+
+@test "conditional at-rule base guard: a :root inside @media is never the base" {
+    src="$BATS_TMPDIR/condbase.css"
+    cat > "$src" <<'CSS'
+:root { --brand-a: #ffffff; }
+@media (prefers-color-scheme: dark) {
+  :root { --brand-a: #000000; }
+}
+CSS
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_DATAATTR'"
+    [ "$status" -eq 0 ]
+    # The light/dark inversion this plan exists to fix: base must stay #FFFFFF.
+    [ "$(field --brand-a light)" = "#FFFFFF" ]
+    [ "$(field --brand-a light)" != "#000000" ]
+}
+
+@test "conditional at-rule base guard holds on tokens_multiroot under BOTH conventions" {
+    run_parse "$MULTIROOT" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-x light)" = "#AAAAAA" ]
+    [ "$(field --brand-x dark)" = "#CCCCCC" ]
+
+    run_parse "$MULTIROOT" "$CONV_MEDIAQUERY"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-x light)" = "#AAAAAA" ]
+    [ "$(field --brand-x dark)" = "#BBBBBB" ]
+}
+
+@test ":root anchor holds under a media convention: the .foo decoy is not the dark scope" {
+    run_parse "$MEDIAQUERY" "$CONV_MEDIAQUERY"
+    [ "$status" -eq 0 ]
+    # .foo inside the dark @media declares --brand-accent: #ff0000. Without the
+    # :root anchor in the desugared conjunction it would win as the dark scope.
+    [ "$(field --brand-accent dark)" = "#00B72B" ]
+    [[ "$output" != *"#FF0000"* ]]
+}
+
+# --- accumulation (R6) ------------------------------------------------------
+
+@test "accumulate: two top-level :root blocks both contribute to the base" {
+    src="$BATS_TMPDIR/tworoot.css"
+    cat > "$src" <<'CSS'
+:root { --brand-a: #ffffff; }
+:root { --brand-b: #eeeeee; }
+CSS
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_DATAATTR'"
+    [ "$status" -eq 0 ]
+    # Today the second :root is silently dropped and --brand-b never appears.
+    [ "$(echo "$output" | jq 'length')" -eq 2 ]
+    [ "$(field --brand-a light)" = "#FFFFFF" ]
+    [ "$(field --brand-b light)" = "#EEEEEE" ]
+}
+
+@test "accumulate: on a conflict across two base blocks the later declaration wins" {
+    src="$BATS_TMPDIR/tworoot_conflict.css"
+    cat > "$src" <<'CSS'
+:root { --brand-a: #ffffff; }
+:root { --brand-a: #dddddd; }
+CSS
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_DATAATTR'"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#DDDDDD" ]
+}
+
+@test "accumulate: two matching dark blocks both contribute" {
+    run_parse "$CLASS" "$CONV_CLASS"
+    [ "$status" -eq 0 ]
+    # .wcs-dark, html.wcs-dark and .wcs-dark:hover are three separate blocks.
+    [ "$(field --brand-accent dark)" = "#00B72B" ]
+    [ "$(field --brand-bg dark)" = "#101010" ]
+    [ "$(field --brand-fg dark)" = "#EEEEEE" ]
+}
+
+@test "accumulate: a base :root inside @layer merges with a top-level :root" {
+    run_parse "$NESTED_SCOPE" "$CONV_CLASS"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-bg light)" = "#FFFFFF" ]    # from @layer tokens
+    [ "$(field --brand-accent light)" = "#37D895" ] # from the top-level :root
+}
+
+# --- backward compatibility (the top risk — 1.0.0 is published) -------------
+
+@test "regression: existing fixtures parse byte-identically to the pre-change goldens" {
+    run bash -c "cat '$DATAATTR' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(cat "$FIXTURE_DIR/golden_dataattr.json")" ]
+
+    run bash -c "cat '$MEDIAQUERY' | python3 '$LIB' --conventions '$CONV_MEDIAQUERY' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(cat "$FIXTURE_DIR/golden_mediaquery.json")" ]
+
+    run bash -c "cat '$MULTIROOT' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(cat "$FIXTURE_DIR/golden_multiroot.json")" ]
+
+    run bash -c "cat '$BOTH' | python3 '$LIB' --conventions '$CONV_BOTH' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(cat "$FIXTURE_DIR/golden_both.json")" ]
+}
+
+@test "unknown convention type is still a loud ValueError" {
+    run bash -c "cat '$DATAATTR' | python3 '$LIB' --conventions '[{\"type\":\"nonsense\"}]'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"nonsense"* ]]
+}
+
 @test "public seam: VAR_ALIAS_RE / normalize_hex / primary_convention are exported" {
     run python3 -c "
 import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
@@ -273,4 +577,326 @@ print('OK')
 "
     [ "$status" -eq 0 ]
     [[ "$output" == OK* ]]
+}
+
+# ============================================================================
+# U4 / KTD6 — block-local declaration parsing under CSS/SCSS nesting.
+#
+# The inversion below is the headline defect: a wrong VALUE, not a missing one,
+# so it sails past any smoke test that only checks the token exists.
+# ============================================================================
+
+@test "KTD6 inversion: a nested &[data-theme=dark] child does NOT overwrite the base value" {
+    run_parse_quiet "$NESTED" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    # pre-U4 this returned light="#000000" — the DARK value — and dark=null
+    [ "$(field --brand-bg light)" = "#FFFFFF" ]
+    [ "$(field --brand-bg dark)" = "#000000" ]
+}
+
+@test "KTD6: a nested child block's declarations never appear in the parent's set" {
+    run_parse_quiet "$NESTED" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    # `.brand-card` is neither the base nor the dark scope, so its declaration
+    # is not a token at all — it used to leak into :root.
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--brand-card-only")] | length')" = "0" ]
+}
+
+@test "R9: the last declaration in a block with no trailing semicolon is captured" {
+    run_parse_quiet "$NESTED" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-last light)" = "4px" ]
+}
+
+@test "R9: fully minified CSS parses to exactly the same tokens as its pretty form" {
+    pretty="$BATS_TMPDIR/u4_pretty.css"
+    minified="$BATS_TMPDIR/u4_min.css"
+    cat > "$pretty" <<'CSS'
+:root {
+  --brand-bg: #ffffff;
+  --brand-fg: #111111;
+}
+[data-theme="dark"] {
+  --brand-bg: #101010
+}
+CSS
+    printf ':root{--brand-bg:#ffffff;--brand-fg:#111111}[data-theme="dark"]{--brand-bg:#101010}' > "$minified"
+
+    run_parse "$pretty" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    pretty_out="$output"
+
+    run_parse "$minified" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$pretty_out" ]
+    # and it is not the trivially-equal empty parse
+    [ "$(echo "$output" | jq 'length')" = "2" ]
+}
+
+@test "R9: an underscore in a custom-property name is captured" {
+    run_parse_quiet "$NESTED" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand_accent light)" = "#37D895" ]
+}
+
+@test "R9: a brace inside a quoted value is data, not a nested rule" {
+    # A `{` in a string is legal CSS — an inline-SVG data URI carrying
+    # `<style>.a{fill:red}</style>` is the realistic case. Treating it as the
+    # start of a child block made the enclosing declaration VANISH from the
+    # parse, and a token missing from a parse becomes a DELETE downstream.
+    run bash -c "printf ':root{--template:\"{not a rule}\";--a:red;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--template")] | length')" = "1" ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--a")] | length')" = "1" ]
+}
+
+@test "R9: an inline-SVG data URI containing braces keeps its token" {
+    run bash -c "printf ':root{--icon:url(\"data:image/svg+xml,<svg><style>.a{fill:red}</style></svg>\");--b:blue;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--icon")] | length')" = "1" ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--b")] | length')" = "1" ]
+}
+
+@test "R9: a stray ')' does NOT swallow later declarations (depth clamped at 0)" {
+    # An unmatched `)` — `--a: red);` or the very ordinary `calc(100% - 10px))`
+    # typo — drove paren depth negative, after which `;` stopped terminating the
+    # value and every following declaration was eaten with NO warning. A token
+    # missing from a parse becomes a DELETE downstream.
+    run bash -c "printf ':root{--a:red);--b:blue;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--b")] | length')" = "1" ]
+
+    run bash -c "printf ':root{--x:calc(100%% - 10px));--y:#fff;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--y")] | length')" = "1" ]
+}
+
+@test "R9: a stray ')' still WARNS even though the boundary is recovered" {
+    run bash -c "printf ':root{--a:red);--b:blue;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>&1 >/dev/null"
+    [[ "$output" == *"unmatched ')'"* ]]
+}
+
+@test "R9: legitimately nested parens are unaffected by the clamp" {
+    run bash -c "printf ':root{--g:linear-gradient(rgba(0,0,0,.5),rgba(1,1,1,.5));--z:#000;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --g light)" = "linear-gradient(rgba(0,0,0,.5),rgba(1,1,1,.5))" ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--z")] | length')" = "1" ]
+}
+
+@test "U5: a NESTED light-dark() warns rather than syncing a literal silently" {
+    run bash -c "printf ':root{--n:light-dark(light-dark(#fff,#eee),#000);}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>&1 >/dev/null"
+    [[ "$output" == *"nested light-dark"* ]]
+}
+
+@test "R9: an unterminated string WARNS rather than silently eating later decls" {
+    run bash -c "printf ':root{--a:\"unterminated\n--b:red;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>&1 >/dev/null"
+    [[ "$output" == *"unterminated string"* ]]
+    [[ "$output" == *"not read"* ]]
+}
+
+@test "R9: a data-URI value survives its internal semicolon intact" {
+    run_parse_quiet "$NESTED" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-icon light)" = 'url("data:image/svg+xml;utf8,<svg/>")' ]
+}
+
+@test "R9: !important is stripped from the value, so the token still classifies" {
+    run_parse_quiet "$NESTED" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-important light)" = "#FFF" ]
+    # the point of stripping: classify_tokens must still see a clean color
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens
+t, why = classify_tokens.classify_value('--brand-important', '#FFF')
+assert t == 'color', (t, why)
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "R9: var(--x, fallback) is recognized as an alias to --x" {
+    run_parse_quiet "$NESTED" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-alias light_alias)" = "--brand_accent" ]
+    [ "$(field --brand-alias light)" = "#37D895" ]
+}
+
+@test "R9: the alias-flip invariant holds through a var() fallback form" {
+    run_parse_quiet "$NESTED" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    # --brand-flip aliases --brand-bg, which flips; so it flips too
+    [ "$(field --brand-flip light)" = "#FFFFFF" ]
+    [ "$(field --brand-flip dark)" = "#000000" ]
+}
+
+@test "R9: a discarded var() fallback WARNS rather than vanishing silently" {
+    run bash -c "cat '$NESTED' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>&1 >/dev/null"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--brand-alias"* ]]
+    [[ "$output" == *"#eee"* ]]
+    [[ "$output" == *"fallback"* ]]
+}
+
+@test "R9: a var() alias with no fallback does NOT warn" {
+    run bash -c "cat '$DATAATTR' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>&1 >/dev/null"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"fallback"* ]]
+}
+
+@test "R9: a non-alias value containing var() is not mistaken for an alias" {
+    src="$BATS_TMPDIR/u4_notalias.css"
+    cat > "$src" <<'CSS'
+:root {
+  --brand-pair: var(--brand-a, #eee) var(--brand-b, #fff);
+  --brand-a: #111111;
+  --brand-b: #222222;
+}
+CSS
+    run_parse_quiet "$src" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    # two var()s side by side is a composite value, not an alias
+    [ "$(field --brand-pair light_alias)" = "null" ]
+    # kept whole (hex runs uppercased by the usual normalization)
+    [ "$(field --brand-pair light)" = "var(--brand-a, #EEE) var(--brand-b, #FFF)" ]
+}
+
+# ============================================================================
+# U5 / R10 / KTD9 — light-dark() resolves at parse into both record fields
+# ============================================================================
+
+@test "U5: light-dark() in base fills light AND dark with no dark scope declared" {
+    src="$BATS_TEST_TMPDIR/u5_basic.css"
+    cat > "$src" <<'CSS'
+:root {
+  --brand-bg: light-dark(#fff, #000);
+}
+CSS
+    run_parse_quiet "$src" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-bg light)" = "#FFF" ]
+    [ "$(field --brand-bg dark)" = "#000" ]
+}
+
+@test "U5: light-dark() with nested functions splits on the TOP-LEVEL comma" {
+    src="$BATS_TEST_TMPDIR/u5_nested_fn.css"
+    cat > "$src" <<'CSS'
+:root {
+  --brand-veil: light-dark(rgba(0,0,0,.5), rgba(255,255,255,.5));
+}
+CSS
+    run_parse_quiet "$src" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-veil light)" = "rgba(0,0,0,.5)" ]
+    [ "$(field --brand-veil dark)" = "rgba(255,255,255,.5)" ]
+}
+
+@test "U5: light-dark(var(), var()) populates the alias fields on BOTH sides" {
+    src="$BATS_TEST_TMPDIR/u5_aliases.css"
+    cat > "$src" <<'CSS'
+:root {
+  --brand-l: #111111;
+  --brand-d: #eeeeee;
+  --brand-fg: light-dark(var(--brand-l), var(--brand-d));
+}
+CSS
+    run_parse_quiet "$src" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-fg light_alias)" = "--brand-l" ]
+    [ "$(field --brand-fg dark_alias)" = "--brand-d" ]
+    # and the aliases are chased through to their literals
+    [ "$(field --brand-fg light)" = "#111111" ]
+    [ "$(field --brand-fg dark)" = "#EEEEEE" ]
+}
+
+@test "U5: a dark scope overriding a light-dark() base WINS and WARNS" {
+    src="$BATS_TEST_TMPDIR/u5_override.css"
+    cat > "$src" <<'CSS'
+:root {
+  --brand-bg: light-dark(#fff, #000);
+}
+:root[data-theme="dark"] {
+  --brand-bg: #123456;
+}
+CSS
+    run_parse_quiet "$src" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-bg light)" = "#FFF" ]
+    # the more specific signal wins over the light-dark() second argument
+    [ "$(field --brand-bg dark)" = "#123456" ]
+
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>&1 >/dev/null"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--brand-bg"* ]]
+    [[ "$output" == *"light-dark"* ]]
+    [[ "$output" == *"#000"* ]]
+}
+
+@test "U5: malformed one-argument light-dark() is left literal, WARNED, not crashed" {
+    src="$BATS_TEST_TMPDIR/u5_malformed.css"
+    cat > "$src" <<'CSS'
+:root {
+  --brand-oops: light-dark(#fff);
+}
+CSS
+    run_parse_quiet "$src" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-oops light)" = "light-dark(#FFF)" ]
+    # both sides are the same literal, so the token is not theme-varying
+    [ "$(field --brand-oops dark)" = "null" ]
+
+    run bash -c "cat '$src' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>&1 >/dev/null"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--brand-oops"* ]]
+    [[ "$output" == *"light-dark"* ]]
+    [[ "$output" == *"argument"* ]]
+}
+
+@test "U5: whitespace variants inside light-dark() are tolerated" {
+    src="$BATS_TEST_TMPDIR/u5_ws.css"
+    cat > "$src" <<'CSS'
+:root {
+  --brand-a: light-dark( #fff , #000 );
+  --brand-b: LIGHT-DARK(#fff,#000);
+}
+CSS
+    run_parse_quiet "$src" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#FFF" ]
+    [ "$(field --brand-a dark)" = "#000" ]
+    # CSS function names are case-insensitive
+    [ "$(field --brand-b light)" = "#FFF" ]
+    [ "$(field --brand-b dark)" = "#000" ]
+}
+
+@test "U5: light-dark() reached THROUGH an alias still splits both sides" {
+    src="$BATS_TEST_TMPDIR/u5_via_alias.css"
+    cat > "$src" <<'CSS'
+:root {
+  --brand-base: light-dark(#fff, #000);
+  --brand-surface: var(--brand-base);
+}
+CSS
+    run_parse_quiet "$src" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-surface light)" = "#FFF" ]
+    [ "$(field --brand-surface dark)" = "#000" ]
+    [ "$(field --brand-surface light_alias)" = "--brand-base" ]
+}
+
+@test "U5: a value that merely CONTAINS light-dark() is not split" {
+    src="$BATS_TEST_TMPDIR/u5_composite.css"
+    cat > "$src" <<'CSS'
+:root {
+  --brand-border: 1px solid light-dark(#fff, #000);
+  --brand-two: light-dark(#fff,#000) light-dark(#111,#222);
+}
+CSS
+    run_parse_quiet "$src" "$CONV_DATAATTR"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-border light)" = "1px solid light-dark(#FFF, #000)" ]
+    [ "$(field --brand-border dark)" = "null" ]
+    [ "$(field --brand-two light)" = "light-dark(#FFF,#000) light-dark(#111,#222)" ]
+    [ "$(field --brand-two dark)" = "null" ]
 }
