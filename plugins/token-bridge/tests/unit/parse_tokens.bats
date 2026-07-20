@@ -900,3 +900,105 @@ CSS
     [ "$(field --brand-two light)" = "light-dark(#FFF,#000) light-dark(#111,#222)" ]
     [ "$(field --brand-two dark)" = "null" ]
 }
+
+# ============================================================================
+# SCSS: interpolation is a value, and @use/@import build a file graph
+# ============================================================================
+
+@test "SCSS: an interpolation #{…} is a value, not the start of a nested rule" {
+    # `#{$x}` opens an UNQUOTED brace, so the quote guard doesn't cover it. The
+    # block splitter read it as a child block and dropped the declaration —
+    # silent token loss, which downstream reads as a DELETE.
+    run bash -c "printf ':root{--a:#{\$x};--b:#fff;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--a")] | length')" = "1" ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--b")] | length')" = "1" ]
+}
+
+@test "SCSS: a hex colour is not mistaken for an interpolation" {
+    run bash -c "printf ':root{--c:#fff;--d:#0066ff;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --c light)" = "#FFF" ]
+    [ "$(field --d light)" = "#0066FF" ]
+}
+
+@test "SCSS: nested interpolation with a quoted brace inside survives" {
+    run bash -c "printf ':root{--a:#{if(\$t, \"{\", \"}\")};--b:#fff;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '[.[] | select(.name=="--b")] | length')" = "1" ]
+}
+
+@test "SCSS graph: @use pulls dependencies in, and the importer WINS on conflict" {
+    run python3 -c "
+import sys, os; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+entry = '$FIXTURE_DIR/scss_graph/tokens.scss'
+text, loaded, missing = pt.resolve_source_graph(entry)
+
+# Concatenation order is dependency-first; later-wins must agree with the cascade.
+assert [os.path.basename(f) for f in loaded] == ['_palette.scss', '_dark.scss', 'tokens.scss'], loaded
+assert not missing, missing
+
+recs = pt.parse_tokens(text, [{'type': 'class', 'class': 'dark', 'primary': True}])
+by = {r['name']: r for r in recs}
+assert by['--brand-accent']['light'] == '#0066FF', by['--brand-accent']   # from a dependency
+assert by['--brand-accent']['dark']  == '#66AAFF', by['--brand-accent']   # dark scope from another
+assert by['--brand-bg']['light']     == '#FAFAFA', by['--brand-bg']       # ENTRY overrides dependency
+assert by['--brand-radius']['light'] == '4px', by['--brand-radius']
+assert not any('sass' in f for f in loaded), loaded   # sass: built-in skipped, not loaded
+assert not missing, 'a sass: built-in must not be reported missing'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "SCSS graph: an import cycle terminates and still yields both files' tokens" {
+    tmp="$BATS_TMPDIR/cycle"; mkdir -p "$tmp"
+    printf '@use "./b";\n:root { --brand-a: 1px; }\n' > "$tmp/a.scss"
+    printf '@use "./a";\n:root { --brand-b: 2px; }\n' > "$tmp/b.scss"
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+text, loaded, missing = pt.resolve_source_graph('$tmp/a.scss')
+recs = pt.parse_tokens(text, [{'type': 'class', 'class': 'dark', 'primary': True}])
+names = sorted(r['name'] for r in recs)
+assert names == ['--brand-a', '--brand-b'], names
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "SCSS graph: an unresolved import is reported, never silently skipped" {
+    tmp="$BATS_TMPDIR/missing"; mkdir -p "$tmp"
+    printf '@import "./nope";\n:root { --brand-a: 1px; }\n' > "$tmp/entry.scss"
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+text, loaded, missing = pt.resolve_source_graph('$tmp/entry.scss')
+assert missing and missing[0][0] == './nope', missing
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "SCSS graph: followImports is OPT-IN — default reads exactly one file" {
+    tmp="$BATS_TMPDIR/optin"; mkdir -p "$tmp"
+    printf '@use "./dep";\n:root { --brand-a: 1px; }\n' > "$tmp/entry.scss"
+    printf ':root { --brand-dep: 9px; }\n' > "$tmp/dep.scss"
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$tmp', 'source': {'path': 'entry.scss'}}
+one = pt.parse_tokens(pt.load_source(cfg), [{'type':'class','class':'dark','primary':True}])
+assert [r['name'] for r in one] == ['--brand-a'], one          # dependency NOT pulled in
+cfg['source']['followImports'] = True
+many = pt.parse_tokens(pt.load_source(cfg), [{'type':'class','class':'dark','primary':True}])
+assert sorted(r['name'] for r in many) == ['--brand-a', '--brand-dep'], many
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

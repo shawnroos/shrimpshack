@@ -86,7 +86,7 @@ Each bridged codebase carries a `token-bridge.config.json` at its root. The plug
 ```
 
 - **`fileId`** — the segment after `/file/` in the Paper URL. **The token commands refuse to run while `fileId` is empty** — a destructive reconcile must never fall back to whatever file happens to be open.
-- **`source.path`** — the CSS/SCSS file, relative to `--repo`. **`source.ref`** (optional) reads the file from a git ref (e.g. `origin/main`) instead of the working tree. **`source.prefix`** filters custom properties.
+- **`source.path`** — the CSS or SCSS file, relative to `--repo`. **`source.followImports`** (optional, default off) follows `@use`/`@import`/`@forward` from that entry file and parses the whole graph — see **Sass** below. **`source.ref`** (optional) reads the file from a git ref (e.g. `origin/main`) instead of the working tree. **`source.prefix`** filters custom properties.
 
   **`prefix` also decides what the bridge OWNS**, which is why `connect` no longer
   scaffolds it as `null`. Ownership is what makes a token eligible for deletion:
@@ -99,7 +99,7 @@ Each bridged codebase carries a `token-bridge.config.json` at its root. The plug
 - **`emitTarget`** — where `normalize-to-design` writes. It refuses to write in place over a source that declares more than one convention (it would drop the non-primary block).
 - **`primitivePattern`** (optional) — a regex overriding how the component-harvest mapper distinguishes a Tier-1 primitive (`--green-500`) from a semantic token in the value-collision tie-break (semantic wins). Default (`null`) treats a trailing `-<digits>` scale step as primitive; set e.g. `"-base$"` when your primitives are named `--blue-base`.
 - **`themeConventions`** — one or more (see above). With more than one, exactly one must be `"primary": true`; parse reads the primary's dark scope and emit writes only the primary's block, warning if the conventions disagree.
-- **`harvest.themeSignal`** — how the live page reports dark (a data-attribute read off the root, or a media query via `matchMedia`). **`harvest.batch`** — the components to harvest, each `{ name, selector, route, trigger? }`.
+- **`harvest.themeSignal`** — how the live page reports dark: a data-attribute read off the root, a media query via `matchMedia`, or a class checked with `classList.contains` on `<html>`/`<body>` (whole-token, so `dark` is not satisfied by `darker`). **`harvest.batch`** — the components to harvest, each `{ name, selector, route, trigger? }`.
 
 ## Prerequisites
 
@@ -107,13 +107,67 @@ Each bridged codebase carries a `token-bridge.config.json` at its root. The plug
 - `python3`, `jq`, `bats` (tests), `agent-browser` (harvest).
 - For `refresh-components`: a running, logged-in dev server for the target codebase.
 
+## Sass
+
+Nesting and interpolation are handled: `:root { &[data-theme="dark"] { … } }`
+resolves correctly, and `--accent: #{$brand-blue}` is read as a value rather than
+mistaken for a nested rule.
+
+**Sass variables and mixins are not evaluated, and deliberately so.** `$brand-blue`
+is a build-time construct — it has no runtime existence and no CSS scope, so the
+base/dark model has nothing to attach it to, and it can't round-trip (Paper → Sass
+would have to invent variable placement and mixin structure). A repo with a live
+theme toggle is already using custom properties for the theme layer, because Sass
+has no runtime and can't switch themes on its own. That layer is what this reads.
+
+So a token whose value is still uncompiled Sass is **declined**, with the reason
+shown — never guessed at and never synced:
+
+```
+--brand-accent -> value '#{$brand-blue}' matches no Paper token type
+```
+
+If you want those values in Paper, compile first and point at the output:
+
+```
+sass src/tokens.scss build/tokens.css
+"source": { "path": "build/tokens.css", "prefix": "--brand-" }
+```
+
+dart-sass resolves variables, mixins, `@use` namespaces and `color.adjust`
+correctly; re-implementing that here would be a large surface for values the
+compiler already computes.
+
+Two limits found testing this against a real Angular/Bootstrap SCSS app:
+
+- **Sass load paths are not resolved** — only paths relative to the importing
+  file. `@import 'bootstrap/scss/bootstrap'` (a `node_modules` package) and
+  anything relying on `loadPaths`/`includePaths` won't resolve. Each one warns by
+  name rather than being skipped quietly.
+- **The base scope is a bare `:root`.** A codebase that declares its custom
+  properties on `html`, `html, body`, or a component class has no base scope as
+  far as this is concerned, and parses to zero tokens. That is a *refusal*, not a
+  wipe — the empty-parse backstop catches it — but it does mean token-bridge
+  currently can't read such a codebase at all.
+
+**`followImports`** is the exception worth having, for a source split across files
+without a build step. It follows `@use`/`@import`/`@forward` from the entry file,
+resolving Sass partials (`_name.scss`, `name/_index.scss`) and skipping `sass:*`
+built-ins and remote URLs. Dependencies are concatenated **before** the file that
+imports them, so an importing file overriding a token it pulled in wins — matching
+the cascade. Cycles terminate; an unresolved import warns loudly rather than
+quietly shrinking the token set, because a token missing from a parse looks like a
+deletion to sync. It is **opt-in** so an existing config keeps reading exactly one
+file — silently widening the token set would change what sync owns, and therefore
+what it can delete.
+
 ## Honest about what it doesn't do
 
+- **Sass variables, mixins and functions are not evaluated.** Compile first and point at the output (see **Sass** above). Uncompiled values are declined, not guessed.
 - **One codebase ↔ one Paper file.** No many-to-one or one-to-many; the config binds a single codebase to a single `fileId`.
 - **No Paper → component code-gen.** The reverse direction is tokens only. Components stay a one-way harvest — faithful code-gen from a canvas is fuzzy and fights the "Paper is the derived side" invariant.
 - **No motion, no shadows as tokens.** Paper has no transition/easing type (it drops `transition`) and silently corrupts a shadow written as a token (stores `#000000`), so both are excluded from token sync with a reason. Shadows still work as component styles.
 - **One base + one dark theme.** Multiple named themes and multi-file (`light.css`/`dark.css`) inputs are deferred.
-- **`@import` is not followed.** The source is the one file you point at; tokens declared in an imported sheet are not seen.
 - **Compound-class scopes are not user-declarable.** A convention takes one class. A dark scope requiring two classes together (`body.theme.theme-dark`) can't be expressed yet — the engine supports it internally, but the config surface deliberately does not, so it isn't frozen before a real repo needs it.
 - **`-dark` is a reserved suffix.** A genuine `--border-dark` in your source is read as the dark twin of `--border` and round-trips lossily. Rename it if you have one.
 - **`light-dark()` is split, but not nested.** `light-dark(#fff, #000)` resolves into both themes; a nested `light-dark(light-dark(…), …)` is not split and warns. A malformed call (not exactly two arguments) is left as a literal, which classify then declines — check the `declined` list, because a declined token that is already live in Paper gets deleted on the next sync.

@@ -1,0 +1,10 @@
+// Entry file. Overrides --brand-bg that _palette declares, which only resolves
+// correctly if dependency text is concatenated BEFORE this file's own.
+@use "./theme/palette";
+@use "./theme/dark";
+@use "sass:color";
+:root {
+  --brand-radius: 4px;
+  --brand-bg: #fafafa;
+  --brand-interp: #{$ignored};
+}

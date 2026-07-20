@@ -1,33 +1,28 @@
 {
-  "_comment": "token-bridge config. Lives at the ROOT of the TARGET codebase (not the plugin). The plugin is pointed at a codebase with --repo <path> and loads <path>/token-bridge.config.json. All paths below (source.path, emitTarget) resolve relative to <path>. Both token commands REFUSE to run while fileId is empty — a destructive reconcile must never fall back to whatever Paper file is currently open.",
-
+  "_comment": "token-bridge config. Lives at the ROOT of the TARGET codebase (not the plugin). The plugin is pointed at a codebase with --repo <path> and loads <path>/token-bridge.config.json. All paths below (source.path, emitTarget) resolve relative to <path>. Both token commands REFUSE to run while fileId is empty \u2014 a destructive reconcile must never fall back to whatever Paper file is currently open.",
   "fileId": "",
   "paperDaemonUrl": "http://127.0.0.1:29979/mcp",
-
   "source": {
-    "_comment": "The CSS/SCSS file tokens are read from. 'path' is relative to --repo. 'ref' is optional: when set (e.g. 'origin/main') the file is read from that git ref via `git show <ref>:<path>` instead of the working tree. 'prefix' filters custom properties (e.g. '--brand-'); null or '' takes ALL custom properties.",
+    "_comment": "The token source. 'path' is a CSS or SCSS file relative to the repo root. 'followImports' (optional, default false) follows @use/@import/@forward from it and parses the whole graph, dependencies first so an importing file's overrides win; Sass partials and directory _index files resolve, sass:* built-ins and remote URLs are skipped, cycles terminate, and an unresolved import warns loudly. 'ref' (optional) reads from a git ref instead of the working tree. 'prefix' filters custom properties AND decides what sync owns \u2014 a null prefix owns the entire Paper file.",
     "path": "src/styles/tokens.css",
     "ref": null,
-    "prefix": null
+    "prefix": "--brand-",
+    "followImports": false
   },
-
   "emitTarget": "src/styles/tokens.generated.css",
-
-  "_primitivePattern_comment": "Optional regex overriding how the component-harvest mapper tells a Tier-1 primitive (e.g. --green-500) from a semantic token, for the value-collision tie-break (semantic wins). Default (null) treats a numbered scale step — trailing -<digits> — as primitive. Set it when your primitives are named differently, e.g. '-base$' for --blue-base.",
+  "_primitivePattern_comment": "Optional regex overriding how the component-harvest mapper tells a Tier-1 primitive (e.g. --green-500) from a semantic token, for the value-collision tie-break (semantic wins). Default (null) treats a numbered scale step \u2014 trailing -<digits> \u2014 as primitive. Set it when your primitives are named differently, e.g. '-base$' for --blue-base.",
   "primitivePattern": null,
-
   "themeConventions": [
     {
-      "_comment": "How the dark scope is expressed in the source CSS. Supported: 'data-attribute' (needs attr+value), 'media-query' (needs query), 'class' (needs class). Class matching is class-token-boundary anchored, so '.dark' does not match '.darker'. When MORE THAN ONE is declared, exactly one must set primary:true — parse reads the primary's dark scope, emit writes only the primary's block; a single convention is primary by default. Scopes are found at any depth: @layer is transparent (a bare :root inside one IS the base), while @media/@supports/@container are conditional (a :root inside one is never the base).",
+      "_comment": "How the dark scope is expressed in the source CSS. Supported: 'data-attribute' (needs attr+value), 'media-query' (needs query), 'class' (needs class). Class matching is class-token-boundary anchored, so '.dark' does not match '.darker'. When MORE THAN ONE is declared, exactly one must set primary:true \u2014 parse reads the primary's dark scope, emit writes only the primary's block; a single convention is primary by default. Scopes are found at any depth: @layer is transparent (a bare :root inside one IS the base), while @media/@supports/@container are conditional (a :root inside one is never the base).",
       "type": "data-attribute",
       "attr": "data-theme",
       "value": "dark",
       "primary": true
     }
   ],
-
   "harvest": {
-    "_comment": "Component harvest (code → Paper). 'themeSignal' tells the live-page extractor how the rendered page reports dark: a data-attribute is read off the scope element; a media-query is read via matchMedia; a class is read via classList.contains on <html> or <body> (whole-token, so 'dark' is not satisfied by 'darker'). Shape mirrors the primary convention minus 'primary'. 'batch' lists the components to harvest — each {name, selector, route, trigger?}.",
+    "_comment": "Component harvest (code \u2192 Paper). 'themeSignal' tells the live-page extractor how the rendered page reports dark: a data-attribute is read off the scope element; a media-query is read via matchMedia; a class is read via classList.contains on <html> or <body> (whole-token, so 'dark' is not satisfied by 'darker'). Shape mirrors the primary convention minus 'primary'. 'batch' lists the components to harvest \u2014 each {name, selector, route, trigger?}.",
     "themeSignal": {
       "type": "data-attribute",
       "attr": "data-theme",
