@@ -532,7 +532,20 @@ def _match_selector_predicate(pred, member):
     if "attr" in pred:
         return bool(_attr_pattern(pred["attr"], pred["value"]).search(member))
     if "selector" in pred:
-        return member == _norm_ws(pred["selector"])
+        target = _norm_ws(pred["selector"])
+        # A document-scope anchor (the `:root` a media-query convention
+        # desugars to) must accept the same specificity-boosted compounds the
+        # BASE scope accepts. Widening only the base read light and dropped
+        # dark for `:root:root`, which is worse than not supporting the idiom
+        # at all: the base still yields a token, so the empty-parse backstop
+        # stops firing and the -dark twin goes missing silently.
+        #
+        # Widened on the MATCH side deliberately. The desugared predicate is a
+        # shared contract — emit_tokens reads pred["selector"] to write the
+        # dark block back out — so changing the desugar breaks the emit path.
+        if _document_scope_specificity(target) is not None:
+            return _document_scope_specificity(member) is not None
+        return member == target
     raise ValueError(f"unrecognized scope predicate: {pred!r}")
 
 

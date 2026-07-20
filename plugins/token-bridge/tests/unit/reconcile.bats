@@ -1248,3 +1248,22 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "stillDeclared discloses a -dark twin deletion (twins are never in source)" {
+    # The disclosure that compensates for removing the text sweep was void for
+    # exactly the token class this file's defects live in: twin names are
+    # synthesized, so a raw membership test could never match one.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt, sync_tokens as st
+assert '--brand-bg-dark' not in pt.declared_names(':root{--brand-bg:#FFF}', '--brand-')
+d = [{'name':'--brand-bg','type':'color','value':'#FFFFFF'}]
+live = [{'name':'--brand-bg','type':'color','value':'#FFFFFF'},
+        {'name':'--brand-bg-dark','type':'color','value':'#000000'}]
+dels = [t['name'] for t in st.diff_tokens(d, live, owned_prefix='--brand-', unreadable=set())['deletes']]
+assert dels == ['--brand-bg-dark'], dels
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

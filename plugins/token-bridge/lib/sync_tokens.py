@@ -693,8 +693,15 @@ def run(repo=".", url=None, apply=True, prune=False):
     declared_anywhere = parse_tokens.declared_names(text, prefix)
     for dark_text in (dark_texts or {}).values():
         declared_anywhere |= parse_tokens.declared_names(dark_text, prefix)
+    # `-dark` twins are synthesized by the token model and NEVER appear in the
+    # source text, so a raw membership test could not disclose a twin deletion
+    # by construction — void for exactly the token class this file's defects
+    # live in. Match a twin by its base name.
     still_declared = sorted(
-        t["name"] for t in diff["deletes"] if t["name"] in declared_anywhere
+        t["name"] for t in diff["deletes"]
+        if t["name"] in declared_anywhere
+        or (t["name"].endswith(DARK_SUFFIX)
+            and t["name"][: -len(DARK_SUFFIX)] in declared_anywhere)
     )
     if still_declared and prune:
         _log(

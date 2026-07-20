@@ -1397,3 +1397,26 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "a boosted document scope resolves in BOTH themes, not just the base" {
+    # Regression: widening admission for the base while leaving the dark-scope
+    # anchor an exact string compare read light and dropped dark. Worse than no
+    # support — the base still yielded a token, so the empty-parse backstop
+    # stopped firing and --prune deleted the -dark twin silently.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+CONV=[{'type':'media-query','query':'(prefers-color-scheme: dark)'}]
+for sel in (':root', ':root:root', 'html:root'):
+    css = sel + '{--brand-bg:#FFFFFF}\n@media (prefers-color-scheme: dark){' + sel + '{--brand-bg:#000000}}'
+    t = pt.parse_tokens(css, CONV, '--brand-')[0]
+    assert t['light'].upper() == '#FFFFFF', (sel, t)
+    assert t['dark'] and t['dark'].upper() == '#000000', (sel, t)
+# a CONDITIONAL qualifier in the dark block is still not the media anchor
+css = ':root{--brand-bg:#FFFFFF}\n@media (prefers-color-scheme: dark){:root[data-theme=\"x\"]{--brand-bg:#000000}}'
+assert pt.parse_tokens(css, CONV, '--brand-')[0]['dark'] is None
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
