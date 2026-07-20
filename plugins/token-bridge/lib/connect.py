@@ -55,10 +55,20 @@ def extract_file_id(ref: str) -> str:
     return ref
 
 
-def _convention(kind, attr, value, query, class_name=None):
+def _convention(kind, attr, value, query, class_name=None, path=None, emit_target=None):
     """Build the single primary themeConvention from the CLI flags.
 
     `class_name` is defaulted so existing positional callers keep working."""
+    if kind == "file":
+        # The dark theme is a separate FILE. Documented in the skills since
+        # 1.3.0 but never implemented — argparse rejected the value outright,
+        # and _theme_signal would have raised KeyError past that.
+        if not path:
+            raise ValueError("--convention file requires --path")
+        conv = {"type": "file", "path": path, "primary": True}
+        if emit_target:
+            conv["emitTarget"] = emit_target
+        return conv
     if kind == "media-query":
         if not query:
             raise ValueError("--convention media-query requires --query")
@@ -153,6 +163,14 @@ def _theme_signal(conv):
     Every convention type MUST have a branch here: falling through to the
     data-attribute return for another type raises KeyError while writing the
     config (a class convention carries no `attr`)."""
+    if conv["type"] == "file":
+        # A file convention has no live-page signal of its own — the page still
+        # reports dark by class or attribute. Default to the class shape named
+        # after the theme file, which the operator can correct; guessing an
+        # attribute would be worse, since a wrong signal mislabels every
+        # harvested component as light with no error.
+        stem = os.path.basename(conv["path"]).split(".")[0]
+        return {"type": "class", "class": stem}
     if conv["type"] == "media-query":
         return {"type": "media-query", "query": conv["query"]}
     if conv["type"] == "class":
@@ -297,13 +315,18 @@ def main(argv=None):
     )
     p.add_argument("--emit-target", default=None, help="Paper->CSS output path (default: <source>.generated.<ext>).")
     p.add_argument(
-        "--convention", choices=["data-attribute", "media-query", "class"], default="data-attribute"
+        "--convention", choices=["data-attribute", "media-query", "class", "file"],
+        default="data-attribute"
     )
     p.add_argument("--attr", default="data-theme", help="data-attribute name (data-attribute convention).")
     p.add_argument("--value", default="dark", help="data-attribute value (data-attribute convention).")
     p.add_argument("--query", default=None, help="media query (media-query convention).")
     # `class` is a Python keyword, so the parsed attribute needs an explicit dest.
     p.add_argument("--class", dest="class_name", default=None, help="theme class name (class convention).")
+    p.add_argument("--path", dest="theme_path", default=None,
+                   help="dark theme file, relative to --repo (file convention).")
+    p.add_argument("--dark-emit-target", dest="dark_emit_target", default=None,
+                   help="where normalize-to-design writes the dark half (file convention).")
     p.add_argument("--file", dest="file_ref", default=None, help="Existing Paper file id or URL to bind.")
     p.add_argument("--create-file", dest="create", action="store_true", help="Create a new Paper file to bind.")
     p.add_argument("--name", default=None, help="Display name for --create-file.")
@@ -313,7 +336,8 @@ def main(argv=None):
 
     try:
         convention = _convention(
-            args.convention, args.attr, args.value, args.query, args.class_name
+            args.convention, args.attr, args.value, args.query, args.class_name,
+            args.theme_path, args.dark_emit_target,
         )
     except ValueError as exc:
         print(json.dumps({"ok": False, "error": "bad_convention", "note": str(exc)}))

@@ -14,11 +14,34 @@ A config-driven bridge between one codebase's CSS custom-property design tokens 
 
 - **`connect`** scaffolds the codebase's `token-bridge.config.json`, binding it to one Paper file — reference an existing file (by id or URL) or create a fresh one. The one-time setup the rest depends on.
 - **`status`** reports the drift between code and design in both directions (tokens only in code, only in design, or differing), writing nothing, then offers the two normalize directions. This is the "which way should I reconcile?" view.
-- **`normalize-to-code`** (code is source of truth) reconciles the codebase's CSS tokens into the Paper file: new tokens created, changed values updated, removed tokens deleted (within the prefix), retyped tokens recreated. Idempotent — an unchanged source writes nothing.
+- **`normalize-to-code`** (code is source of truth) reconciles the codebase's CSS tokens into the Paper file: new tokens created, changed values updated, retyped tokens recreated. Idempotent — an unchanged source writes nothing. **It does not delete.** A live token absent from the parse is reported as `prunable` and left alone; `--prune` removes them.
 - **`normalize-to-design`** (design is source of truth) reads the Paper file's tokens and writes a CSS file at `emitTarget` — a base `:root` block plus a dark override block in your declared theme convention. The round-trip is stable: CSS emitted from a file already in sync re-parses to the same token model.
 - **`refresh-components`** harvests a component's rendered structure and computed styles from a running dev server, maps the values back to token references, and writes it into Paper — replacing any prior copy.
 
 The two `normalize-*` verbs are the same token engine pointed in opposite directions; `status` shows you which way you need it before you commit to one.
+
+## Why sync doesn't delete
+
+A live token missing from the parse could mean two things — you removed it, or
+the parser failed to read it — and those are indistinguishable from inside. Every
+CSS shape the parser hasn't met yet looks exactly like a deletion: `@layer`,
+nesting, a base64 `//` inside a data URI, a class-scoped theme file, an
+unresolved `@import`, an unterminated string. Twelve separate data-loss defects
+in this codebase were all that one ambiguity, and each fix guarded a symptom
+rather than the inference.
+
+So the inference is gone. `normalize-to-code` creates and updates; removal is
+`--prune`, which reports exactly what it will remove first:
+
+```
+$ token-bridge normalize-to-code          # prunable: ["--brand-legacy"] — nothing removed
+$ token-bridge normalize-to-code --prune  # removes them
+```
+
+The parser can be as incomplete as CSS demands and the worst outcome is a stale
+token, which you can see in `status` and clear whenever you like. A deleted one
+is not recoverable. `--prune` still refuses to remove anything the tool merely
+failed to read.
 
 ## The theme model
 

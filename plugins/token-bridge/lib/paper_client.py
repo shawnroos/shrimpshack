@@ -88,6 +88,15 @@ def error_envelope(error: str, note: str | None = None, **extra) -> dict:
 # --- shared config -----------------------------------------------------------
 
 
+def _same_path(a, b) -> bool:
+    """True when two config-relative paths denote the same file. Lexical
+    normalization is enough here — both are relative to the same repo root, and
+    a realpath compare would need the repo, which validation does not have."""
+    if not a or not b:
+        return False
+    return os.path.normpath(a) == os.path.normpath(b)
+
+
 def _bad_convention_type(i: int, ctype) -> str:
     """The rejection message for a themeConvention that is not one of the three
     named types. It enumerates the accepted surface without naming the internal
@@ -165,6 +174,19 @@ def _validate_config(cfg: dict) -> str | None:
                 # loading by a key it will never use.
                 if not (isinstance(conv.get("path"), str) and conv.get("path")):
                     return f"themeConventions[{i}] (file) needs a non-empty string 'path'."
+                # The dark theme cannot BE the base file. If it is, dark decls
+                # == base decls, every token resolves theme-invariant, and every
+                # -dark twin is absent from the desired set. emit already
+                # refuses this exact pair; config level is the right layer
+                # because it covers sync, status, emit and harvest at once.
+                src_path = (src or {}).get("path")
+                if src_path and _same_path(conv.get("path"), src_path):
+                    return (
+                        f"themeConventions[{i}] (file) 'path' is the same file as "
+                        "'source.path'. The dark theme cannot be the base file — every "
+                        "token would resolve theme-invariant and every -dark twin would "
+                        "be dropped."
+                    )
                 if conv.get("emitTarget") is not None and not isinstance(
                     conv.get("emitTarget"), str
                 ):

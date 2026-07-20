@@ -278,3 +278,30 @@ print('OK')
     [ "$(echo "$output" | head -1)" = '{"primary":true,"query":"(prefers-color-scheme: dark)","type":"media-query"}' ]
     [ "$(echo "$output" | tail -1)" = '{"query":"(prefers-color-scheme: dark)","type":"media-query"}' ]
 }
+
+@test "connect: --convention file scaffolds a file convention" {
+    # The skills and commands advertised this since 1.3.0 and connect never
+    # implemented it — argparse rejected the value outright, so the documented
+    # setup path for the headline feature failed.
+    repo="$BATS_TMPDIR/connfileconv"; rm -rf "$repo"; mkdir -p "$repo/themes"
+    printf ':root{--brand-a:#fff;}' > "$repo/themes/light.scss"
+    printf ':root{--brand-a:#000;}' > "$repo/themes/dark.scss"
+    run python3 "$SCRIPT_DIR/lib/connect.py" --repo "$repo" --source themes/light.scss \
+        --file 01ABC --convention file --path themes/dark.scss \
+        --dark-emit-target themes/dark.generated.scss --prefix=--brand-
+    [ "$status" -eq 0 ]
+    conv=$(jq -c '.themeConventions[0]' "$repo/token-bridge.config.json")
+    [ "$(echo "$conv" | jq -r '.type')" = "file" ]
+    [ "$(echo "$conv" | jq -r '.path')" = "themes/dark.scss" ]
+    [ "$(echo "$conv" | jq -r '.emitTarget')" = "themes/dark.generated.scss" ]
+    # the harvest signal must be a usable shape, not a KeyError
+    [ "$(jq -r '.harvest.themeSignal.type' "$repo/token-bridge.config.json")" = "class" ]
+}
+
+@test "connect: --convention file without --path exits 2" {
+    repo="$BATS_TMPDIR/connfilenopath"; rm -rf "$repo"; mkdir -p "$repo"
+    printf ':root{--brand-a:#fff;}' > "$repo/t.css"
+    run python3 "$SCRIPT_DIR/lib/connect.py" --repo "$repo" --source t.css --file 01ABC --convention file
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"requires --path"* ]]
+}

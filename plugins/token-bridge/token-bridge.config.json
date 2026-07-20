@@ -1,5 +1,5 @@
 {
-  "_comment": "token-bridge config. Lives at the ROOT of the TARGET codebase (not the plugin). The plugin is pointed at a codebase with --repo <path> and loads <path>/token-bridge.config.json. All paths below (source.path, emitTarget) resolve relative to <path>. Both token commands REFUSE to run while fileId is empty \u2014 a destructive reconcile must never fall back to whatever Paper file is currently open.",
+  "_comment": "token-bridge config. Lives at the ROOT of the TARGET codebase (not the plugin). The plugin is pointed at a codebase with --repo <path> and loads <path>/token-bridge.config.json. All paths below (source.path, emitTarget) resolve relative to <path>. normalize-to-code never deletes: a live token absent from the parse is reported as 'prunable' and removed only with --prune, because absence is indistinguishable from a parse gap. Both token commands REFUSE to run while fileId is empty \u2014 a destructive reconcile must never fall back to whatever Paper file is currently open.",
   "fileId": "",
   "paperDaemonUrl": "http://127.0.0.1:29979/mcp",
   "source": {

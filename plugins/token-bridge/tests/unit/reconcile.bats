@@ -951,3 +951,76 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "deletion is EXPLICIT: default reports prunable, --prune removes" {
+    # Seven review rounds produced twelve data-loss defects and every one was
+    # the same sentence: sync inferred "the user removed this" from "absent from
+    # my parse". That inference is only sound if the parse is COMPLETE, and it
+    # never is. Removing the inference kills the class; guards only narrowed it.
+    repo=$(make_repo pruneexplicit ':root{--brand-keep:#ffffff;}')
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+calls = []
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-keep','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-gone','type':'color','value':'#000000'}]}}
+    def __getattr__(s, n):
+        def rec(*a, **k): calls.append(n); return {'ok': True}
+        return rec
+st.PaperClient = Fake
+r, _ = st.run(repo='$repo', apply=True)
+assert r['deleted'] == [], r['deleted']
+assert r['prunable'] == ['--brand-gone'], r['prunable']
+assert calls == [], calls
+calls.clear()
+r, _ = st.run(repo='$repo', apply=True, prune=True)
+assert r['deleted'] == ['--brand-gone'], r['deleted']
+assert r['prunable'] == [], r['prunable']
+assert calls, 'prune should have written'
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "guard: even an explicit --prune spares a token we could not read" {
+    # Mutation-verified load-bearing but untested: dropping the declined union
+    # from the unreadable derivation deletes a live -dark twin in the degrade
+    # case. The text sweep cannot cover it — the base IS in desired.
+    repo=$(make_repo declunion ':root{--brand-a:#ffffff;}[data-theme="dark"]{--brand-a:#{$sass};}')
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-a-dark','type':'color','value':'#111111'}]}}
+st.PaperClient = Fake
+r, _ = st.run(repo='$repo', apply=False, prune=True)
+assert r['deleted'] == [], r['deleted']
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "config: a file convention pointed at source.path is rejected" {
+    # emit already refused this exact pair; sync did not. One typo wiped every
+    # dark twin, so the guard belongs at config level where it covers sync,
+    # status, emit and harvest at once.
+    repo="$BATS_TMPDIR/samepathcfg"; mkdir -p "$repo"
+    printf ':root{--brand-a:#fff;}' > "$repo/t.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "source": { "path": "t.css", "prefix": "--brand-" },
+  "themeConventions": [ { "type": "file", "path": "./t.css", "primary": true } ] }
+JSON
+    run python3 "$SCRIPT_DIR/lib/paper_client.py" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    [[ "$output" == *"same file as 'source.path'"* ]]
+}

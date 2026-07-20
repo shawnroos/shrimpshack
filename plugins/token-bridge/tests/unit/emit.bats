@@ -579,3 +579,20 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "guard: _color_args_ok REJECTS bogus arguments (survived mutation)" {
+    # The anti-uncompiled-Sass guard had coverage only on its positive side:
+    # stubbing _color_args_ok to return True let color(bogus) type as a colour
+    # with the whole suite still green.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct
+for bad in ['color(bogus)', 'lab(nonsense here)', 'hsl()', 'hsl(#{\$shade})', 'hsl(\$brand)']:
+    assert ct.classify_value('--brand-bg', bad)[0] is None, (bad, ct.classify_value('--brand-bg', bad))
+for good in ['hsl(210 40% 12%)', 'oklch(0.2 0.03 250)', 'color-mix(in srgb, #000 80%, #fff)']:
+    assert ct.classify_value('--brand-bg', good)[0] == 'color', good
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

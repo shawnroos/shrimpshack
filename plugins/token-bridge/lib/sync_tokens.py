@@ -502,8 +502,27 @@ def desired_from_source(text, conventions, prefix=None, dark_texts=None):
 # --- top-level orchestration -------------------------------------------------
 
 
-def run(repo=".", url=None, apply=True):
+def run(repo=".", url=None, apply=True, prune=False):
     """The end-to-end reconcile. Returns (report_dict, exit_code).
+
+    DELETION IS EXPLICIT (`prune=True`). By default this creates and updates
+    only; a live token absent from the parse is reported as `prunable` and left
+    alone.
+
+    Why: a sync that deletes on absence is inferring "the user removed this"
+    from "this is missing from my parse", and that inference is only sound if
+    the parse is COMPLETE. It never is — CSS keeps producing shapes the parser
+    has not met (@layer, nesting, a base64 // in a data URI, a class-scoped
+    theme file, an unresolved import, an unterminated string). Twelve separate
+    data-loss defects across seven review rounds were all that one sentence,
+    and each round's guard checked something merely correlated with "did we
+    read this correctly" rather than the thing itself.
+
+    Making removal explicit does not guard the inference — it removes it. The
+    parser may be as incomplete as CSS demands and the worst outcome is a stale
+    token, which is recoverable. A deleted one is not. The `unreadable`
+    machinery is kept as defence-in-depth so even an explicit prune will not
+    remove something we merely failed to read.
 
     Reads everything it needs (fileId, source, prefix, theme conventions, daemon
     URL) from the config found under `--repo`. Refuses (writes NOTHING) when the
@@ -655,12 +674,26 @@ def run(repo=".", url=None, apply=True):
         "fileId": file_id,
         "created": [t["name"] for t in diff["creates"]],
         "updated": [t["name"] for t in diff["updates"]],
-        "deleted": [t["name"] for t in diff["deletes"]],
+        # Split by whether it actually happened. `prunable` is what a sync
+        # would once have destroyed silently.
+        "deleted": [t["name"] for t in diff["deletes"]] if prune else [],
+        "prunable": [] if prune else [t["name"] for t in diff["deletes"]],
+        "pruned": prune,
         "recreated": [t["name"] for t in diff["recreates"]],
         "declined": declined,
         "pinnedByComment": pinned,
         "empty": is_empty_diff(diff),
     }
+
+    if not prune and diff["deletes"]:
+        names = ", ".join(t["name"] for t in diff["deletes"][:8])
+        _log(
+            f"{len(diff['deletes'])} live token(s) are absent from this parse and were "
+            f"NOT removed: {names}. Absence is not proof of removal — a parse gap looks "
+            "identical to a deletion. Re-run with --prune to remove them."
+        )
+        # Drop them from the applied diff entirely; they stay reported.
+        diff = dict(diff, deletes=[])
 
     if apply and not is_empty_diff(diff):
         apply_result = apply_diff(client, file_id, diff)
@@ -691,6 +724,12 @@ def main(argv=None):
     p_run.add_argument("--repo", default=".", help="Target codebase root holding token-bridge.config.json")
     p_run.add_argument("--url", default=None, help="Paper daemon URL override")
     p_run.add_argument("--no-apply", action="store_true", help="Diff + report only")
+    p_run.add_argument(
+        "--prune", action="store_true",
+        help=("Also REMOVE live tokens absent from the parse. OFF by default — absence "
+              "is not proof of removal, because a parse gap looks identical to a "
+              "deletion. Run without it first and read `prunable`."),
+    )
 
     p_bd = sub.add_parser("build-desired", help="Build the desired set from one CSS source + conventions.")
     p_bd.add_argument("--source-file", required=True, help="CSS/SCSS source file to parse")
@@ -716,6 +755,7 @@ def main(argv=None):
             repo=getattr(args, "repo", "."),
             url=getattr(args, "url", None),
             apply=not getattr(args, "no_apply", False),
+            prune=getattr(args, "prune", False),
         )
         print(json.dumps(report, indent=2))
         if report.get("refused"):
