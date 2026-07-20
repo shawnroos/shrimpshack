@@ -335,7 +335,7 @@ css = emit_tokens.emit_css(tokens, conventions, "--brand-")
 layered = "@layer tokens {\n%s\n}\n" % textwrap.indent(css.rstrip("\n"), "  ")
 records = parse_tokens.parse_tokens(layered, conventions, "--brand-")
 desired, _ = sync_tokens.build_desired(classify_tokens.classify_tokens(records))
-diff = sync_tokens.diff_tokens(desired, tokens)
+diff = sync_tokens.diff_tokens(desired, tokens, unreadable=set())
 print("EMPTY" if sync_tokens.is_empty_diff(diff) else json.dumps(diff, indent=2))
 PY
     [ "$status" -eq 0 ]
@@ -357,7 +357,7 @@ paper = [{'name':'--b-a','type':'color','value':'#FFF'},
 base, dark = et.emit_pair(paper, conv)
 recs = pt.parse_tokens(base, conv, dark_texts={0: dark})
 again, _ = st.build_desired(ct.classify_tokens(recs))
-d = st.diff_tokens(again, paper, owned_prefix='--b-')
+d = st.diff_tokens(again, paper, owned_prefix='--b-', unreadable=set())
 assert st.is_empty_diff(d), d
 print('OK')
 "

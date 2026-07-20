@@ -226,11 +226,11 @@ live = [
   {'name':'--brand-space-0','type':'spacing','value':'0px'},
   {'name':'--brand-accent','type':'color','value':'var(--brand-green-500)'},
 ]
-diff = sync_tokens.diff_tokens(desired, live)
+diff = sync_tokens.diff_tokens(desired, live, unreadable=set())
 assert sync_tokens.is_empty_diff(diff), diff
 # but a genuine change is still caught
 live2 = [dict(live[1], value='rgb(1 2 3 / 50%)')] + live[:1] + live[2:]
-diff2 = sync_tokens.diff_tokens(desired, live2)
+diff2 = sync_tokens.diff_tokens(desired, live2, unreadable=set())
 assert any(u['name']=='--brand-lasso-fill' for u in diff2['updates']), diff2
 print('OK')
 "
@@ -260,11 +260,11 @@ live = [
   {'name':'--legacy-bg','type':'color','value':'#EEEEEE'},
 ]
 # Prefixed sync: only the stale OWNED token is deleted.
-diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-')
+diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-', unreadable=set())
 dels = sorted(d['name'] for d in diff['deletes'])
 assert dels == ['--brand-stale'], dels
 # No-prefix sync owns everything: both foreign tokens ARE deleted.
-diff_all = sync_tokens.diff_tokens(desired, live)
+diff_all = sync_tokens.diff_tokens(desired, live, unreadable=set())
 dels_all = sorted(d['name'] for d in diff_all['deletes'])
 assert dels_all == ['--brand-stale', '--color-blue-500', '--legacy-bg'], dels_all
 print('OK')
@@ -316,7 +316,7 @@ live = [
   {'name':'--brand-accent','type':'color','value':'#37D895'},
   {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
 ]
-diff = sync_tokens.diff_tokens([], live, owned_prefix='--brand-')
+diff = sync_tokens.diff_tokens([], live, owned_prefix='--brand-', unreadable=set())
 dels = sorted(d['name'] for d in diff['deletes'])
 assert dels == ['--brand-accent', '--brand-bg'], dels
 print('OK')
@@ -368,7 +368,7 @@ live = [
   {'name':'--brand-accent','type':'color','value':'#37D895'},
   {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
 ]
-diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-')
+diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-', unreadable=set())
 assert diff['deletes'] == [], diff['deletes']
 print('OK')
 "
@@ -503,7 +503,7 @@ live = [
   {'name':'--brand-accent','type':'color','value':'#37D895'},
   {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
 ]
-dels = sorted(d['name'] for d in sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-')['deletes'])
+dels = sorted(d['name'] for d in sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-', unreadable=set())['deletes'])
 assert dels == ['--brand-bg'], dels
 print('OK')
 "
@@ -548,16 +548,16 @@ assert names == ['--brand-normal', '--brand-onlydark-dark'], names   # orphan tw
 
 # idempotent: syncing the same source again is a no-op
 again, _ = st.build_desired(ct.classify_tokens(pt.parse_tokens(src, conv)))
-assert st.is_empty_diff(st.diff_tokens(again, desired, owned_prefix='--brand-'))
+assert st.is_empty_diff(st.diff_tokens(again, desired, owned_prefix='--brand-', unreadable=set()))
 
 # emit -> parse -> diff is a fixed point
 back, _ = st.build_desired(ct.classify_tokens(pt.parse_tokens(et.emit_css(desired, conv), conv)))
-assert st.is_empty_diff(st.diff_tokens(back, desired, owned_prefix='--brand-'))
+assert st.is_empty_diff(st.diff_tokens(back, desired, owned_prefix='--brand-', unreadable=set()))
 
 # and a later base declaration just creates the base token
 src2 = src.replace('--brand-normal: #ffffff;', '--brand-normal: #ffffff; --brand-onlydark: #333333;')
 grown, _ = st.build_desired(ct.classify_tokens(pt.parse_tokens(src2, conv)))
-d = st.diff_tokens(grown, desired, owned_prefix='--brand-')
+d = st.diff_tokens(grown, desired, owned_prefix='--brand-', unreadable=set())
 assert [t['name'] for t in d['creates']] == ['--brand-onlydark'], d['creates']
 assert not d['deletes'], d['deletes']
 print('OK')
@@ -669,7 +669,7 @@ assert [d['name'] for d in desired] == ['--brand-a'], desired      # base SURVIV
 assert [d['name'] for d in declined] == ['--brand-a-dark'], declined
 live = [{'name':'--brand-a','type':'color','value':'#FFFFFF'},
         {'name':'--brand-a-dark','type':'color','value':'#101010'}]
-dels = [d['name'] for d in st.diff_tokens(desired, live, owned_prefix='--brand-')['deletes']]
+dels = [d['name'] for d in st.diff_tokens(desired, live, owned_prefix='--brand-', unreadable=set())['deletes']]
 assert dels == ['--brand-a-dark'], dels                            # only the twin
 print('OK')
 "
@@ -760,21 +760,64 @@ print('OK')
     [[ "$output" == *OK* ]]
 }
 
-@test "no desired token references a -dark twin that was never created" {
-    # A declined twin left theme_varying unchanged, so a sibling emitted
-    # var(--x-dark) pointing at a token that is never created — and Paper fails
-    # such a reference silently.
+@test "a declined twin makes a flip-through alias reference the PLAIN name" {
+    # Replaces a test that could NOT fail: its fixture declined both twins, so
+    # the alias-closure loop iterated an empty set and passed vacuously — the
+    # guard could be reverted with the suite still green.
+    #
+    # The reachable case is a FLIP-THROUGH alias: --b-user aliases --b-ref in
+    # light with no independent dark declaration, so its dark value is the
+    # referent's flipped literal. Without the guard that emits var(--b-ref-dark),
+    # pointing at a twin that is never created — which Paper fails silently.
+    # Verified mutation-sensitive: dropping `and not r.get("dark_excluded_reason")`
+    # from theme_varying flips this assertion to var(--b-ref-dark).
     run python3 -c "
-import sys, re; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import parse_tokens as pt, classify_tokens as ct, sync_tokens as st
-light = ':root{--b-font-size:16px;--b-gap:var(--b-font-size);}'
-dark  = ':root{--b-font-size:clamp(1rem,2vw,2rem);}'
-conv = [{'type':'file','path':'d.scss','primary':True}]
-d, dec = st.build_desired(ct.classify_tokens(pt.parse_tokens(light, conv, '--b-', {0: dark})))
-names = {x['name'] for x in d}
-for tok in d:
-    for ref in re.findall(r'var\(\s*(--[A-Za-z0-9_-]+)\s*\)', str(tok.get('value') or '')):
-        assert ref in names, f\"{tok['name']} references {ref}, which is never created\"
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+classified = [
+  {'name':'--b-ref','light':'#ffffff','dark':'clamp(1px,1vw,2px)','light_alias':None,
+   'dark_alias':None,'paper_type':'color','writable':True,
+   'dark_excluded_reason':'dark value not typable'},
+  {'name':'--b-user','light':'#ffffff','dark':'clamp(1px,1vw,2px)','light_alias':'--b-ref',
+   'dark_alias':None,'paper_type':'color','writable':True,'dark_excluded_reason':None},
+]
+desired, _ = st.build_desired(classified)
+by = {d['name']: d['value'] for d in desired}
+assert '--b-ref-dark' not in by, by
+assert by['--b-user-dark'] == 'var(--b-ref)', by['--b-user-dark']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "INVARIANT: protection is derived from the SOURCE TEXT, not surviving records" {
+    # `unreadable` used to come from `declined`, which only ever holds names that
+    # PARSED — so a name the parser never saw (a declined base's twin, a scope
+    # predicate miss) was protected by nothing. Deriving it from a flat name
+    # sweep of the source covers parse-level gaps of shapes nobody anticipated.
+    run python3 -c "
+import sys, os, json; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-fs','type':'fontSize','value':'16px'},
+            {'name':'--brand-fs-dark','type':'fontSize','value':'14px'}]}}
+st.PaperClient = Fake
+repo = os.path.join('$BATS_TMPDIR', 'twinprot'); os.makedirs(repo, exist_ok=True)
+open(repo+'/t.css','w').write(
+  ':root{--brand-fs:clamp(1rem,2vw,2rem);}[data-theme=\"dark\"]{--brand-fs:clamp(.9rem,2vw,1.8rem);}')
+json.dump({'fileId':'F1','paperDaemonUrl':'http://x',
+  'source':{'path':'t.css','ref':None,'prefix':'--brand-'},
+  'emitTarget':'o.css','primitivePattern':None,
+  'themeConventions':[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}],
+  'harvest':{'themeSignal':{'type':'data-attribute','attr':'data-theme','value':'dark'},'batch':[]}},
+  open(repo+'/token-bridge.config.json','w'))
+report, code = st.run(repo=repo, apply=False)
+# the base is untypable AND its live twin must survive
+assert report['deleted'] == [], report['deleted']
 print('OK')
 "
     [ "$status" -eq 0 ]

@@ -47,11 +47,13 @@ def _log(msg: str) -> None:
     print(f"[status] {msg}", file=sys.stderr)
 
 
-def drift(desired, live, owned_prefix=None):
+def drift(desired, live, owned_prefix=None, *, unreadable):
     """Re-frame the reconcile diff as bidirectional drift (pure, read-only).
 
     Returns {inSync, onlyInCode, onlyInDesign, differ} — name lists, sorted."""
-    d = sync_tokens.diff_tokens(desired, live, owned_prefix=owned_prefix)
+    d = sync_tokens.diff_tokens(
+        desired, live, owned_prefix=owned_prefix, unreadable=unreadable
+    )
     only_in_code = sorted(t["name"] for t in d["creates"])
     only_in_design = sorted(t["name"] for t in d["deletes"])
     # value change (update) or type change (recreate) — both are "same name, differs"
@@ -101,7 +103,23 @@ def run(repo=".", url=None, client=None):
     # array) rather than a dict-only access on the daemon-controlled payload.
     live = _tokens_from(env.get("result")) or []
 
-    d = drift(desired, live, owned_prefix=prefix)
+    # Same text-derived protection as sync — status must agree with what sync
+    # would actually do, or it reports drift that no normalize can ever clear.
+    declared = parse_tokens.declared_names(source_text, prefix)
+    for dark_text in (dark_texts or {}).values():
+        declared |= parse_tokens.declared_names(dark_text, prefix)
+    desired_names = {x["name"] for x in desired}
+    # Two sources, because neither alone is complete:
+    #   - declared in the source text but absent from `desired` (and its twin):
+    #     covers parse-level loss, where no record exists to inspect;
+    #   - everything explicitly declined: covers the degrade, where the BASE
+    #     succeeded and only the twin was dropped, so the base is in `desired`
+    #     and the text sweep sees nothing wrong.
+    unreadable = {n for n in declared if n not in desired_names}
+    unreadable |= {n + "-dark" for n in unreadable}
+    unreadable |= {x["name"] for x in declined}
+
+    d = drift(desired, live, owned_prefix=prefix, unreadable=unreadable)
     report = {
         "ok": True,
         "fileId": file_id,
@@ -159,7 +177,13 @@ def main(argv=None):
             return EXIT_REFUSED
         desired, _declined = desired_from_text(source_text, conventions, args.prefix)
         live = _tokens_from(_load_json_file(args.live_file))
-        print(json.dumps(drift(desired, live, owned_prefix=args.prefix), indent=2))
+        declared = parse_tokens.declared_names(source_text, args.prefix)
+        desired_names = {x["name"] for x in desired}
+        unreadable = {n for n in declared if n not in desired_names}
+        unreadable |= {n + "-dark" for n in unreadable}
+        print(json.dumps(
+            drift(desired, live, owned_prefix=args.prefix, unreadable=unreadable), indent=2
+        ))
         return EXIT_OK
 
     parser.print_usage(sys.stderr)

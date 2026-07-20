@@ -277,7 +277,9 @@ def roundtrip(paper_tokens, conventions, prefix=None):
         records = parse_tokens.parse_tokens(css, conventions, prefix)
     classified = classify_tokens.classify_tokens(records)
     desired, _declined = sync_tokens.build_desired(classified)
-    diff = sync_tokens.diff_tokens(desired, paper_tokens)
+    # Emitted CSS is the only input here, so nothing can be 'declared but
+    # unread' — an empty set is the honest value, not a defaulted one.
+    diff = sync_tokens.diff_tokens(desired, paper_tokens, unreadable=set())
     return {"css": css, "diff": diff, "empty": sync_tokens.is_empty_diff(diff)}
 
 

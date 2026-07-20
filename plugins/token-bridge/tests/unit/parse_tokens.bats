@@ -1161,3 +1161,31 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "source.ref composes with followImports in BOTH loaders" {
+    # ref returned before the followImports branch in load_source (dropping every
+    # imported partial's tokens) and followImports returned before the ref check
+    # in resolve_dark_texts (reading the theme from the working tree). Each
+    # option silently disabled the other, in opposite directions.
+    repo="$BATS_TMPDIR/refimports"; rm -rf "$repo"; mkdir -p "$repo/css"
+    ( cd "$repo" && git init -q . \
+      && printf '@use "palette";\n:root{--brand-fg:#111111;}' > css/tokens.scss \
+      && printf ':root{--brand-accent:#00b72b;--brand-bg:#ffffff;}' > css/_palette.scss \
+      && printf ':root{--brand-accent:#222222;}' > css/dark.scss \
+      && git add -A && git -c user.email=t@t -c user.name=t commit -qm init \
+      && printf ':root{--brand-accent:#999999;}' > css/dark.scss )
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo',
+       'source': {'path':'css/tokens.scss','prefix':'--brand-','ref':'HEAD','followImports':True},
+       'themeConventions': [{'type':'file','path':'css/dark.scss','primary':True}]}
+base = pt.load_source(cfg)
+assert '--brand-accent' in base and '--brand-bg' in base, 'imported partial dropped under ref'
+dark = pt.resolve_dark_texts(cfg)[0]
+assert '#222222' in dark and '#999999' not in dark, 'theme read from working tree, not ref'
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

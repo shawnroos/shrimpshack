@@ -28,7 +28,7 @@ live = [
   {'name':'--brand-gone','type':'color','value':'#222222'},     # only in design (owned)
   {'name':'--color-native','type':'color','value':'#333333'},   # FOREIGN, must be ignored
 ]
-d = status.drift(desired, live, owned_prefix='--brand-')
+d = status.drift(desired, live, owned_prefix='--brand-', unreadable=set())
 assert d['onlyInCode'] == ['--brand-new'], d
 assert d['onlyInDesign'] == ['--brand-gone'], d
 assert d['differ'] == ['--brand-accent'], d
@@ -44,7 +44,7 @@ print('OK')
 import sys; sys.path.insert(0, '$LIB_DIR')
 import status
 toks = [{'name':'--brand-accent','type':'color','value':'#37D895'}]
-d = status.drift(toks, toks, owned_prefix='--brand-')
+d = status.drift(toks, toks, owned_prefix='--brand-', unreadable=set())
 assert d['inSync'] is True, d
 assert d['onlyInCode'] == [] and d['onlyInDesign'] == [] and d['differ'] == [], d
 print('OK')
@@ -159,4 +159,33 @@ print('OK')
         --conventions '[{"type":"file","path":"dark.scss","primary":true}]'
     [ "$status" -ne 0 ]
     [[ "$output" == *"run --repo"* ]]
+}
+
+@test "status: a declined-but-live token is not reported as permanent drift" {
+    # status omitted `unreadable`, so it read absence-from-desired as "the code
+    # dropped it" — reporting drift that no normalize could ever clear, while
+    # sync (correctly) did nothing.
+    run python3 -c "
+import sys, os, json; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import status, sync_tokens
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-accent','type':'color','value':'#FF0000'},
+            {'name':'--brand-accent-dark','type':'color','value':'#111111'}]}}
+repo = os.path.join('$BATS_TMPDIR', 'statusdecl'); os.makedirs(repo, exist_ok=True)
+open(repo+'/t.css','w').write(':root{--brand-accent:#ff0000;}[data-theme=\"dark\"]{--brand-accent:#{\$shade};}')
+json.dump({'fileId':'F1','paperDaemonUrl':'http://x',
+  'source':{'path':'t.css','ref':None,'prefix':'--brand-'},
+  'emitTarget':'o.css','primitivePattern':None,
+  'themeConventions':[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}],
+  'harvest':{'themeSignal':{'type':'data-attribute','attr':'data-theme','value':'dark'},'batch':[]}},
+  open(repo+'/token-bridge.config.json','w'))
+report, code = status.run(repo=repo, client=Fake())
+assert report['onlyInDesign'] == [], report
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
 }

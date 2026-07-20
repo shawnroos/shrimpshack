@@ -1243,6 +1243,7 @@ def resolve_dark_texts(cfg):
     from paper_client import resolve_repo_path  # noqa: E402
 
     follow = bool((cfg.get("source") or {}).get("followImports"))
+    ref = (cfg.get("source") or {}).get("ref")
     out = {}
     for i, conv in enumerate(cfg.get("themeConventions") or []):
         if conv.get("type") != "file":
@@ -1250,7 +1251,19 @@ def resolve_dark_texts(cfg):
         rel = conv.get("path")
         abs_path = resolve_repo_path(cfg, rel)
         if follow:
-            text, loaded, missing = resolve_source_graph(abs_path)
+            # ref must compose with followImports, not be shadowed by it. The
+            # graph walk already accepts an injectable reader for exactly this;
+            # without it the base came from the pinned revision and the theme
+            # from the working tree — the cross-revision diff this whole ref
+            # handling exists to prevent.
+            reader = None
+            if ref:
+                repo_root = cfg.get("_repo") or ""
+
+                def reader(path, _ref=ref, _root=repo_root):
+                    return _read_at_ref(cfg, os.path.relpath(path, _root), _ref)
+
+            text, loaded, missing = resolve_source_graph(abs_path, read_file=reader)
             for spec, whence in missing:
                 _log(
                     f"unresolved import {spec!r} (from {whence}) in theme file {rel!r} — "
@@ -1269,7 +1282,6 @@ def resolve_dark_texts(cfg):
             # surface as theme variance against a pinned base, and sync writes
             # those phantom twins. source.ref exists to sync a known revision;
             # reading only half of it at that revision defeats the point.
-            ref = (cfg.get("source") or {}).get("ref")
             if ref:
                 out[i] = _read_at_ref(cfg, rel, ref)
                 continue
@@ -1282,6 +1294,24 @@ def resolve_dark_texts(cfg):
                 "scope would delete every -dark twin in the Paper file."
             ) from exc
     return out
+
+
+def declared_names(text, prefix=None):
+    """Every custom-property name the source TEXT declares, found by a flat sweep
+    that does not depend on the block walk succeeding.
+
+    This exists because absence from the desired set is ambiguous: the source may
+    have dropped the token, or we may simply have failed to read it — and only
+    the first meaning may delete. Deriving that distinction from records that
+    SURVIVED parsing cannot work, because a token the parser never saw leaves no
+    record to inspect. A textual sweep sees it regardless of whether the block
+    walk, the classifier, or a scope predicate handled it correctly, so a future
+    parser gap of a shape nobody anticipated is protected by construction rather
+    than by another guard."""
+    names = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(strip_comments(text or ""))}
+    if prefix:
+        names = {n for n in names if n.startswith(prefix)}
+    return names
 
 
 def load_source(cfg):
@@ -1305,7 +1335,7 @@ def load_source(cfg):
         raise RuntimeError("config 'source.path' is required to load the CSS source")
 
     ref = source.get("ref")
-    if ref:
+    if ref and not source.get("followImports"):
         repo = cfg.get("_repo")
         if not repo:
             raise RuntimeError(
@@ -1335,7 +1365,18 @@ def load_source(cfg):
     # silently widening the token set under an existing config would change what
     # sync owns — and therefore what it can delete.
     if source.get("followImports"):
-        text, loaded, missing = resolve_source_graph(abs_path)
+        # Compose with ref rather than letting either silently win. Reading the
+        # entry file at a ref while dropping every partial it imports deleted
+        # those partials' tokens — they reach neither `desired` nor the
+        # protected set, because the parser never saw them.
+        reader = None
+        if ref:
+            repo_root = cfg.get("_repo") or ""
+
+            def reader(path, _ref=ref, _root=repo_root):
+                return _read_at_ref(cfg, os.path.relpath(path, _root), _ref)
+
+        text, loaded, missing = resolve_source_graph(abs_path, read_file=reader)
         for spec, whence in missing:
             _log(
                 f"unresolved import {spec!r} (from {whence}) — its tokens are NOT in "

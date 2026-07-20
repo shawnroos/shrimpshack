@@ -275,14 +275,20 @@ def _owns(name, owned_prefix):
     return _norm_name(name).startswith(_norm_name(owned_prefix))
 
 
-def diff_tokens(desired, live, owned_prefix=None, unreadable=None):
+def diff_tokens(desired, live, owned_prefix=None, *, unreadable):
     """Diff the desired Paper token set against the live one (pure function).
 
     Compares with NORMALIZED name (lowercase) and value (uppercased hex) so an
     unchanged source yields an EMPTY diff (R3).
 
-    `unreadable` is the INVARIANT that makes classify's incompleteness harmless:
-    names the source declared but this tool could not type. "I cannot type this
+    `unreadable` is REQUIRED, not optional — an optional kwarg let a caller
+    silently inherit the destructive behaviour by doing nothing, which is exactly
+    how `status` kept deleting after the invariant landed. Pass `set()` only when
+    you genuinely have no source to compare against.
+
+    It is the INVARIANT that makes our incompleteness harmless: names the source
+    DECLARED but that did not reach the desired set — whether classify could not
+    type them, the block walk missed them, or a scope predicate did not match. "I cannot type this
     value" must mean "do not write it" — it must NEVER also mean "delete it".
     Conflating those two is what turned every gap in the recognisers into data
     loss: an unrecognised font size in `rem`, a dark half using `clamp()`, a
@@ -564,12 +570,26 @@ def run(repo=".", url=None, apply=True):
 
     # Scope deletes to the owned prefix so a prefixed sync never wipes
     # Paper-native or other-namespace tokens sharing the target file.
-    # Everything classify could not type is protected from deletion, not just
-    # skipped. See diff_tokens' `unreadable` contract.
-    diff = diff_tokens(
-        desired, live, owned_prefix=prefix,
-        unreadable=[d["name"] for d in declined],
-    )
+    # Protect everything the SOURCE TEXT declares that did not reach `desired`,
+    # plus its `-dark` twin. Derived from the text rather than from the parsed
+    # records so a token the parser never saw is protected too — a declined
+    # base's twin, or a name lost to a scope predicate, leaves no record to
+    # inspect but is plainly there in the source.
+    declared = parse_tokens.declared_names(text, prefix)
+    for dark_text in (dark_texts or {}).values():
+        declared |= parse_tokens.declared_names(dark_text, prefix)
+    desired_names = {d["name"] for d in desired}
+    # Two sources, because neither alone is complete:
+    #   - declared in the source text but absent from `desired` (and its twin):
+    #     covers parse-level loss, where no record exists to inspect;
+    #   - everything explicitly declined: covers the degrade, where the BASE
+    #     succeeded and only the twin was dropped, so the base is in `desired`
+    #     and the text sweep sees nothing wrong.
+    unreadable = {n for n in declared if n not in desired_names}
+    unreadable |= {n + DARK_SUFFIX for n in unreadable}
+    unreadable |= {d["name"] for d in declined}
+
+    diff = diff_tokens(desired, live, owned_prefix=prefix, unreadable=unreadable)
 
     # Blank-source backstop (R7, second arm). The pre-daemon check above cannot
     # fire on a BLANK source — a truncated or emptied file is legitimately
@@ -693,7 +713,12 @@ def main(argv=None):
         live = _load_json_file(args.live)
         if isinstance(live, dict):  # accept a get_tokens result envelope too
             live = live.get("tokens", live.get("result", {}).get("tokens", []))
-        print(json.dumps(diff_tokens(desired, live, owned_prefix=args.owned_prefix), indent=2))
+        # No source text here — this subcommand diffs two given token sets — so
+        # there is nothing we "declared but could not read". Stated, not defaulted.
+        print(json.dumps(
+            diff_tokens(desired, live, owned_prefix=args.owned_prefix, unreadable=set()),
+            indent=2,
+        ))
         return EXIT_OK
 
     if cmd == "simulate-apply":
