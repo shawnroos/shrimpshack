@@ -138,6 +138,18 @@ dart-sass resolves variables, mixins, `@use` namespaces and `color.adjust`
 correctly; re-implementing that here would be a large surface for values the
 compiler already computes.
 
+Two limits found testing this against a real Angular/Bootstrap SCSS app:
+
+- **Sass load paths are not resolved** — only paths relative to the importing
+  file. `@import 'bootstrap/scss/bootstrap'` (a `node_modules` package) and
+  anything relying on `loadPaths`/`includePaths` won't resolve. Each one warns by
+  name rather than being skipped quietly.
+- **The base scope is a bare `:root`.** A codebase that declares its custom
+  properties on `html`, `html, body`, or a component class has no base scope as
+  far as this is concerned, and parses to zero tokens. That is a *refusal*, not a
+  wipe — the empty-parse backstop catches it — but it does mean token-bridge
+  currently can't read such a codebase at all.
+
 **`followImports`** is the exception worth having, for a source split across files
 without a build step. It follows `@use`/`@import`/`@forward` from the entry file,
 resolving Sass partials (`_name.scss`, `name/_index.scss`) and skipping `sass:*`
