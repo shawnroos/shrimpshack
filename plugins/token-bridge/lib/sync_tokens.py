@@ -448,12 +448,14 @@ def empty_parse_refusal(text, parsed_count, source_path):
     }
 
 
-def desired_from_source(text, conventions, prefix=None):
+def desired_from_source(text, conventions, prefix=None, dark_texts=None):
     """Full pure source pipeline: parse -> classify -> build_desired.
 
     `conventions` is the config `themeConventions` list; `prefix` restricts
-    output to custom properties with that prefix (None/"" takes all)."""
-    records = parse_tokens.parse_tokens(text, conventions, prefix)
+    output to custom properties with that prefix (None/"" takes all).
+    `dark_texts` carries the theme text of any `file` convention, keyed by its
+    index in `conventions` — see parse_tokens.resolve_dark_texts."""
+    records = parse_tokens.parse_tokens(text, conventions, prefix, dark_texts)
     classified = classify_tokens.classify_tokens(records)
     return build_desired(classified)
 
@@ -494,7 +496,17 @@ def run(repo=".", url=None, apply=True):
 
     conventions = cfg.get("themeConventions") or []
     prefix = (cfg.get("source") or {}).get("prefix")
-    desired, declined = desired_from_source(text, conventions, prefix)
+    # A `file` convention's dark theme lives in another file, so it has to be
+    # read here — parse cannot reach outside the text it is given. Sharing the
+    # load_source try/except: both are "could not read the source" failures and
+    # both must refuse rather than proceed with a partial view.
+    try:
+        dark_texts = parse_tokens.resolve_dark_texts(cfg)
+    except RuntimeError as exc:
+        return ({"ok": False, "refused": True, "error": "theme_file_unreadable",
+                 "note": str(exc)}, EXIT_REFUSED)
+
+    desired, declined = desired_from_source(text, conventions, prefix, dark_texts)
 
     # Empty-parse backstop (R7): a source with content that yields no tokens is
     # a parse failure, not a mass deletion. Refuse BEFORE the daemon is touched.

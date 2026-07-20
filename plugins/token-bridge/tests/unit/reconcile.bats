@@ -565,3 +565,92 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "reconcile: END-TO-END run() works with a 'file' themeConvention" {
+    # The gap this guards: resolve_dark_texts existed but nothing in production
+    # called it, so every file-convention config crashed with an uncaught
+    # ValueError through the real CLI. Every other file-convention test called
+    # parse_tokens(..., dark_texts=...) directly and sailed past the wiring.
+    repo="$BATS_TMPDIR/fileconv_e2e"; mkdir -p "$repo/themes"
+    printf ':root{--brand-a:#ffffff;--brand-b:#eeeeee;}' > "$repo/themes/light.scss"
+    printf ':root{--brand-a:#000000;}' > "$repo/themes/dark.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "out.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok': True, 'result': {'tokens': []}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=False)
+assert code == 0, (code, report)
+created = sorted(report['created'])
+assert created == ['--brand-a', '--brand-a-dark', '--brand-b'], created
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "reconcile: an unreadable theme file REFUSES through run(), not a traceback" {
+    repo="$BATS_TMPDIR/fileconv_missing"; mkdir -p "$repo/themes"
+    printf ':root{--brand-a:#ffffff;}' > "$repo/themes/light.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "out.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/NOPE.scss", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok': True, 'result': {'tokens': []}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=True)
+assert report.get('refused') is True and code != 0, (code, report)
+assert report.get('error') == 'theme_file_unreadable', report
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: a unitless-zero radius dark value still syncs (no over-decline)" {
+    # The both-halves check met a pre-existing asymmetry: spacing accepted a bare
+    # '0' but radius required px. '--card-radius: 8px' light / '0' dark declined
+    # the whole token, which DELETES the live pair on the next sync.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct, sync_tokens as st
+recs = [{'name':'--card-radius','light':'8px','dark':'0','light_alias':None,'dark_alias':None}]
+desired, declined = st.build_desired(ct.classify_tokens(recs))
+names = sorted(d['name'] for d in desired)
+assert names == ['--card-radius', '--card-radius-dark'], (names, declined)
+assert not declined, declined
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: the decline reason names the real type, not 'usable'" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct, sync_tokens as st
+recs = [{'name':'--c','light':'#ffffff','dark':'#{\$x}','light_alias':None,'dark_alias':None}]
+_, declined = st.build_desired(ct.classify_tokens(recs))
+assert 'is not a color value' in declined[0]['reason'], declined[0]['reason']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

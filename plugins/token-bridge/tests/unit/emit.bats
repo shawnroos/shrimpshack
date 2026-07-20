@@ -446,3 +446,67 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "emit file convention: colliding emit targets REFUSE and write nothing" {
+    repo="$BATS_TMPDIR/emitcollide"; mkdir -p "$repo/themes"
+    printf ':root{--b-a:#fff;}' > "$repo/themes/light.scss"
+    printf ':root{--b-a:#000;}' > "$repo/themes/dark.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--b-" },
+  "emitTarget": "same.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "emitTarget": "same.css", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys, os; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--b-a','type':'color','value':'#FFF'},
+            {'name':'--b-a-dark','type':'color','value':'#000'}]}}
+et.PaperClient = Fake
+report, code = et.run(repo='$repo')
+assert report.get('error') == 'emit_targets_collide', report
+assert code != 0, code
+assert not os.path.exists('$repo/same.css'), 'wrote a file despite refusing'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit file convention: a failed second write leaves BOTH files untouched" {
+    repo="$BATS_TMPDIR/emitatomic"; mkdir -p "$repo/themes"
+    printf ':root{--b-a:#fff;}' > "$repo/themes/light.scss"
+    printf ':root{--b-a:#000;}' > "$repo/themes/dark.scss"
+    printf 'ORIGINAL-BASE' > "$repo/base.css"
+    mkdir -p "$repo/dark.css"     # a DIRECTORY at the dark target -> write fails
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--b-" },
+  "emitTarget": "base.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "emitTarget": "dark.css", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--b-a','type':'color','value':'#FFF'},
+            {'name':'--b-a-dark','type':'color','value':'#000'}]}}
+et.PaperClient = Fake
+report, code = et.run(repo='$repo')
+assert code != 0 and not report.get('ok'), (code, report)
+# the load-bearing assertion: the BASE file must be untouched, not half-updated
+assert open('$repo/base.css').read() == 'ORIGINAL-BASE', 'base was overwritten despite the pair failing'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

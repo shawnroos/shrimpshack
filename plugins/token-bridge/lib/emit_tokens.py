@@ -325,14 +325,74 @@ def run(repo=".", url=None):
                 },
                 EXIT_ERROR,
             )
+        # Both halves to the SAME path is silent data loss, not a no-op: the
+        # loop would write base then overwrite it with dark, report ok:true, and
+        # leave a file whose content is dark while the report describes base.
+        if os.path.abspath(emit_target) == os.path.abspath(dark_target):
+            return (
+                {
+                    "ok": False,
+                    "refused": True,
+                    "error": "emit_targets_collide",
+                    "note": (
+                        f"emitTarget and the file convention's emitTarget both resolve to "
+                        f"{os.path.abspath(emit_target)}. Nothing was written — one would "
+                        "silently overwrite the other. Point them at distinct files."
+                    ),
+                },
+                EXIT_ERROR,
+            )
+
+        # PRE-FLIGHT both targets before touching either. Two files cannot be
+        # renamed atomically on POSIX — os.replace is atomic per file, so a
+        # staged write still replaces base, then dark, and a failure on the
+        # second leaves the pair drifted. Staging alone does not deliver KTD4's
+        # both-or-neither; catching the predictable failures up front does.
+        # (An unstaged write is strictly worse — it fails mid-content.)
+        for label, path in (("emitTarget", emit_target),
+                            ("the file convention's emitTarget", dark_target)):
+            ap = os.path.abspath(path)
+            if os.path.isdir(ap):
+                return (
+                    {"ok": False, "refused": True, "error": "emit_target_is_a_directory",
+                     "note": f"{label} ({ap}) is a directory. Nothing was written."},
+                    EXIT_ERROR,
+                )
+            try:
+                os.makedirs(os.path.dirname(ap), exist_ok=True)
+            except OSError as exc:
+                return (
+                    {"ok": False, "refused": True, "error": "emit_target_unwritable",
+                     "note": f"cannot create the directory for {label} ({ap}): {exc}. "
+                             "Nothing was written."},
+                    EXIT_ERROR,
+                )
+
         base_css, dark_css = emit_pair(tokens, conventions, prefix)
+
+        # Stage both, then replace both. The residual window (a failure between
+        # the two replaces) is not closable with POSIX renames; the pre-flight
+        # above removes the reachable causes.
+        tmps = []
         try:
             for path, body in ((emit_target, base_css), (dark_target, dark_css)):
-                os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-                with open(path, "w", encoding="utf-8") as fh:
+                tmp = os.path.abspath(path) + ".tb-tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
                     fh.write(body)
+                tmps.append((tmp, path))
+            for tmp, path in tmps:
+                os.replace(tmp, path)
         except OSError as exc:
-            return ({"ok": False, "error": f"could not write the theme pair: {exc}"}, EXIT_ERROR)
+            for tmp, _ in tmps:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            return (
+                {"ok": False, "error": f"could not write the theme pair: {exc}. "
+                 "Neither file was modified."},
+                EXIT_ERROR,
+            )
         css = base_css
     else:
         css = emit_css(tokens, conventions, prefix)

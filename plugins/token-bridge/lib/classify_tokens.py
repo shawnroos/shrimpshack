@@ -128,7 +128,12 @@ def classify_value(name, value):
         return "color", None
 
     # 5. radius — a px length named as a radius.
-    if _is_px(v) and "radius" in name:
+    # Unitless `0` is idiomatic, spec-legal CSS and the spacing branch below
+    # already accepts it. Radius omitting it was an asymmetry, not a rule —
+    # and once classify validates BOTH halves, `--card-radius: 8px` in light
+    # with `0` in dark declined the whole token, which DELETES the live pair
+    # from the design file on the next sync.
+    if (_is_px(v) or v == "0") and "radius" in name:
         return "radius", None
 
     # 6. spacing — a px length or bare 0 named as spacing.
@@ -167,9 +172,10 @@ def classify_tokens(records):
             if dark is not None and dark != value:
                 dark_type, dark_reason = classify_value(rec["name"], dark)
                 if dark_type != paper_type:
-                    paper_type = None
+                    light_type = paper_type   # rec has no paper_type yet — that
+                    paper_type = None         # key is only set on `annotated`
                     reason = (
-                        f"dark value {dark!r} is not a {rec.get('paper_type') or 'usable'} "
+                        f"dark value {dark!r} is not a {light_type} "
                         f"value ({dark_reason or 'type mismatch'}); declining rather than "
                         "writing it into Paper untyped"
                     )

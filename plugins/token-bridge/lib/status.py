@@ -64,8 +64,8 @@ def drift(desired, live, owned_prefix=None):
     }
 
 
-def desired_from_text(source_text, conventions, prefix=None):
-    records = parse_tokens.parse_tokens(source_text, conventions, prefix)
+def desired_from_text(source_text, conventions, prefix=None, dark_texts=None):
+    records = parse_tokens.parse_tokens(source_text, conventions, prefix, dark_texts)
     classified = classify_tokens.classify_tokens(records)
     desired, declined = sync_tokens.build_desired(classified)
     return desired, declined
