@@ -661,6 +661,23 @@ def _conv_label(conv):
 # --- declaration parsing + effective-value resolution ------------------------
 
 
+# Declarations the parser KNOWS it failed to read — an unterminated string or an
+# unclosed paren swallows the rest of its block, and which names were lost is
+# precisely what we cannot determine. Recorded rather than only logged, because
+# the pipeline used to print "any declaration after it was not read" and then
+# delete exactly that token.
+_PARSE_LOSS = []
+
+
+def parse_loss():
+    """Malformed-source events from the last parse, as (token, reason)."""
+    return list(_PARSE_LOSS)
+
+
+def clear_parse_loss():
+    _PARSE_LOSS.clear()
+
+
 def _iter_decls(body):
     """Yield (name, raw_value) for each custom-property declaration in a body.
 
@@ -721,6 +738,7 @@ def _iter_decls(body):
         # is still worth naming, since the value itself is now suspect.
         if i >= n and (quote is not None or depth > 0):
             what = "unterminated string" if quote is not None else "unbalanced parentheses"
+            _PARSE_LOSS.append((f"--{m.group(1)}", what))
             _log(
                 f"--{m.group(1)}: {what} — the value ran to the end of its block, so any "
                 "declaration after it was not read. Check the source for a missing "
@@ -933,6 +951,9 @@ def parse_with_diagnostics(text, conventions, prefix=None, dark_texts=None):
     `conventions` is the config `themeConventions` list. `prefix`, when a
     non-empty string, restricts output to custom properties whose name starts
     with it; None/"" includes all."""
+    # Per-parse, not cumulative — a stale entry from an earlier call would
+    # refuse a prune on a source that is perfectly readable.
+    _PARSE_LOSS.clear()
     text = strip_comments(text)
     blocks = _collect_blocks(text)
     base = _base_decls(blocks)

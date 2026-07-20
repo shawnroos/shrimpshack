@@ -189,3 +189,30 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "guard: status refuses on an unresolved import (survived mutation)" {
+    # Without it, status reports an unresolvable partial's token as design-only
+    # drift AND points the user at the command that would remove it.
+    repo="$BATS_TMPDIR/statusmissimport"; mkdir -p "$repo"
+    printf '@import "gone.css";\n:root{--brand-a:#fff;}' > "$repo/t.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "t.css", "ref": null, "prefix": "--brand-", "followImports": true },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import status
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok': True, 'result': {'tokens': []}}
+report, code = status.run(repo='$repo', client=Fake())
+assert report.get('error') == 'unresolved_imports', report
+assert code != 0, code
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

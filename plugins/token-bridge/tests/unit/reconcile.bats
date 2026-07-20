@@ -1024,3 +1024,90 @@ JSON
     [ "$status" -eq 4 ]
     [[ "$output" == *"same file as 'source.path'"* ]]
 }
+
+@test "prune REFUSES when the parser reported it could not read the source" {
+    # The parser printed "any declaration after it was not read" and the pipeline
+    # deleted exactly that token. Pruning is the only destructive operation left,
+    # so it requires a parse we can trust — and which declarations were swallowed
+    # is precisely what the parser cannot determine.
+    repo=$(make_repo parseloss ':root{--brand-a:#ffffff;--brand-b:#eeeeee;}
+[data-theme="dark"]{--brand-a:"unterminated ;
+--brand-b:#222222;}')
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-a-dark','type':'color','value':'#111111'},
+            {'name':'--brand-b','type':'color','value':'#EEEEEE'},
+            {'name':'--brand-b-dark','type':'color','value':'#222222'}]}}
+st.PaperClient = Fake
+r, code = st.run(repo='$repo', apply=True, prune=True)
+assert r.get('error') == 'prune_on_unreliable_parse', r
+assert code != 0, code
+assert 'deleted' not in r, r
+# without --prune it still reports, just does not act
+r2, code2 = st.run(repo='$repo', apply=True)
+assert r2['ok'] is True and code2 == 0, (code2, r2)
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "prune still works on a source the parser read cleanly" {
+    # The guard must not become a blanket no-prune.
+    repo=$(make_repo cleanprune ':root{--brand-keep:#ffffff;}')
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-keep','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-gone','type':'color','value':'#000000'}]}}
+    def __getattr__(s, n):
+        def rec(*a, **k): return {'ok': True}
+        return rec
+st.PaperClient = Fake
+r, code = st.run(repo='$repo', apply=True, prune=True)
+assert r['deleted'] == ['--brand-gone'], r['deleted']
+assert code == 0, code
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "guard: the theme-file text sweep protects its tokens (survived mutation)" {
+    repo="$BATS_TMPDIR/themesweepguard"; mkdir -p "$repo"
+    printf ':root{--brand-a:#ffffff;}' > "$repo/l.css"
+    printf ':root{--brand-a:#111111;--brand-onlydark:#222222;}' > "$repo/d.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "l.css", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "d.css", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-onlydark-dark','type':'color','value':'#222222'}]}}
+st.PaperClient = Fake
+r, _ = st.run(repo='$repo', apply=False, prune=True)
+assert '--brand-onlydark-dark' not in r['deleted'], r['deleted']
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

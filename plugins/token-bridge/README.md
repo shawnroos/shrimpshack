@@ -40,8 +40,14 @@ $ token-bridge normalize-to-code --prune  # removes them
 
 The parser can be as incomplete as CSS demands and the worst outcome is a stale
 token, which you can see in `status` and clear whenever you like. A deleted one
-is not recoverable. `--prune` still refuses to remove anything the tool merely
-failed to read.
+is not recoverable.
+
+`--prune` has two further guards, because it is now the only destructive path:
+it never removes something the tool merely failed to type, and it **refuses
+outright when the parser reported it could not read the source** — an
+unterminated string or unclosed paren swallows the rest of its block, and which
+declarations were lost is exactly what the parser cannot determine. Fix the
+source, then prune.
 
 ## The theme model
 

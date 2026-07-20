@@ -613,6 +613,25 @@ def run(repo=".", url=None, apply=True, prune=False):
     # records so a token the parser never saw is protected too — a declined
     # base's twin, or a name lost to a scope predicate, leaves no record to
     # inspect but is plainly there in the source.
+    # Pruning is the only destructive operation left, so it requires a parse we
+    # can TRUST. When the parser reported malformed source it also told us it
+    # swallowed declarations — and which ones is exactly what it cannot know.
+    # Deleting on that basis is the whole class this release removed.
+    loss = parse_tokens.parse_loss()
+    if prune and loss:
+        listed = ", ".join(f"{tok} ({why})" for tok, why in loss[:5])
+        return (
+            {
+                "ok": False, "refused": True, "error": "prune_on_unreliable_parse",
+                "note": (
+                    f"the parser could not fully read this source: {listed}. Nothing was "
+                    "removed — it reported swallowing declarations, and which ones is "
+                    "exactly what it cannot determine. Fix the source, then prune."
+                ),
+            },
+            EXIT_REFUSED,
+        )
+
     declared = parse_tokens.declared_names(text, prefix)
     for dark_text in (dark_texts or {}).values():
         declared |= parse_tokens.declared_names(dark_text, prefix)
