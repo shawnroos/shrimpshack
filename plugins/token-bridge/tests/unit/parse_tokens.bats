@@ -1272,3 +1272,47 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "R7: a theme file whose tokens are OUT OF SCOPE refuses (not just an empty one)" {
+    # The first version of this guard asked "does the text declare anything" —
+    # a PROXY for the hazard. A theme file scoped by class declares plenty and
+    # still resolves to an empty dark scope, so the guard went green while the
+    # thing it guards was red and every -dark twin was deleted at exit 0.
+    repo="$BATS_TMPDIR/scopedtheme"; mkdir -p "$repo"
+    printf ':root{--brand-a:#37D895;}' > "$repo/l.css"
+    printf 'html.dark{--brand-a:#00B72B;}' > "$repo/d.css"
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo', 'source': {'path': 'l.css', 'prefix': '--brand-'},
+       'themeConventions': [{'type': 'file', 'path': 'd.css', 'primary': True}]}
+try:
+    pt.resolve_dark_texts(cfg)
+except RuntimeError as e:
+    assert 'none at document scope' in str(e), e
+    assert 'html.dark' in str(e), 'must name the selectors it found'
+    assert \"use a 'class'\" in str(e), 'must say what to do instead'
+    print('OK')
+else:
+    raise AssertionError('an out-of-scope theme file must refuse')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "non-relative package specs are 'not followed', bare specs still refuse" {
+    # ~pkg / @scope/pkg cannot be resolved relatively and are expected; a bare
+    # spec is indistinguishable from a renamed local partial, so it must keep
+    # refusing rather than be waved through.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+for s in ['~bootstrap/scss/variables', '@material/theme', 'pkg:foo']:
+    assert pt._is_non_relative(s), s
+for s in ['palette', 'theme/palette', './dark', 'dark-partial.css']:
+    assert not pt._is_non_relative(s), s
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

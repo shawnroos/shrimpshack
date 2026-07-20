@@ -1119,6 +1119,26 @@ _AT_LOAD = re.compile(
 # built-in modules, and remote CSS.
 _BUILTIN_LOAD = re.compile(r"^(sass:|https?://|//)", re.I)
 
+# Specs a relative resolver can never find: Sass load-path / package imports.
+# Reporting these as "missing" turned any SCSS entry that pulls in a package
+# into a hard refusal whose only remedy was allowMissingImports — which reopens
+# the deletion hole for genuinely renamed LOCAL partials at the same time. They
+# are not followed, and that is expected, not an error.
+_NON_RELATIVE_LOAD = re.compile(r"^(~|pkg:|@[A-Za-z0-9_-]+/)", re.I)
+
+
+def _is_non_relative(spec):
+    """True only when `spec` is UNAMBIGUOUSLY a load-path/package import.
+
+    Deliberately narrow. Sass lets a relative spec omit `./`, so `@use "palette"`
+    and `@use "theme/palette"` are relative — treating every non-dotted spec as
+    a package made those "not followed", which silently reopened the hole the
+    unresolved-import refusal exists to close. A bare multi-segment spec like
+    `bootstrap/scss/variables` is genuinely indistinguishable from a local
+    partial, so it stays in the refusing path: a renamed local partial and a
+    package import look identical, and the safe reading is the one that refuses."""
+    return bool(_NON_RELATIVE_LOAD.match(spec))
+
 
 def _import_candidates(spec, from_dir):
     """Sass/CSS resolution order for one load spec, relative to `from_dir`.
@@ -1176,6 +1196,7 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32, exists=None):
     seen = set()
     loaded = []
     missing = []
+    not_followed = []
     chunks = []
 
     def visit(path, depth):
@@ -1197,6 +1218,11 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32, exists=None):
         for _kw, spec in _AT_LOAD.findall(strip_comments(text)):
             if _BUILTIN_LOAD.match(spec):
                 continue
+            if _is_non_relative(spec):
+                # A build tool's load path resolves these; a relative walk never
+                # can. Not an error — just not followed.
+                not_followed.append((spec, real))
+                continue
             for cand in _import_candidates(spec, here):
                 if exists(cand):
                     visit(cand, depth + 1)
@@ -1211,6 +1237,12 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32, exists=None):
         loaded.append(real)
 
     visit(entry_path, 0)
+    if not_followed:
+        specs = sorted({s for s, _ in not_followed})
+        _log(
+            f"not followed (resolved by your build tool's load path, not relatively): "
+            f"{', '.join(specs)}. Tokens they declare are not in this parse."
+        )
     return "\n".join(chunks), loaded, missing
 
 
@@ -1259,19 +1291,41 @@ def _read_at_ref(cfg, rel, ref):
 
 
 def _guard_theme_not_empty(txt, index, whence):
-    """A theme file that READS but declares no custom property is the same
-    hazard as one that cannot be read: the dark scope resolves empty, every
-    token looks theme-invariant, and sync deletes every `-dark` twin. The
-    unreadable case already raises; this one used to exit 0 with ok:true.
-    Truncation, a fully commented-out file, or `path` pointed at something with
-    no declarations all land here."""
+    """Refuse a theme file that yields an EMPTY DARK SCOPE, for any reason.
+
+    The first version of this guard asked "does the text declare any custom
+    property", which is a PROXY for the hazard rather than the hazard itself.
+    A theme file scoped by class — `html.dark { --accent: … }` — declares plenty
+    and still resolves to nothing, because a file convention reads the DOCUMENT
+    scope (`:root`/`html`/`body`). The guard went green while the thing it
+    guards was red, and every `-dark` twin was deleted at exit 0.
+
+    So assert on the resolution the parse will actually perform. The two arms
+    give different advice, because the fixes differ: nothing declared at all is
+    a wrong path or a truncated file; declared-but-out-of-scope means the theme
+    is scoped by a selector, which is what the `class` convention is for."""
+    blocks = _collect_blocks(strip_comments(txt))
+    if _document_scope_decls(blocks):
+        return txt
+
     if not declared_names(txt):
         raise RuntimeError(
             f"themeConventions[{index}] (file): {whence} declares no custom "
             "properties. Refusing rather than treating the dark theme as empty — "
             "an empty dark scope would delete every -dark twin in the target file."
         )
-    return txt
+
+    selectors = sorted({
+        sel.strip() for ctx, sel, _ in blocks if not ctx and sel.strip()
+    })[:4]
+    raise RuntimeError(
+        f"themeConventions[{index}] (file): {whence} declares custom properties, but "
+        f"none at document scope (:root/html/body) — they are under {selectors}. A "
+        "'file' convention reads the document scope, so the dark theme would resolve "
+        "EMPTY and every -dark twin in the target file would be deleted. If the theme "
+        "is scoped by a selector, use a 'class' or 'data-attribute' convention instead "
+        "of 'file'."
+    )
 
 
 def resolve_dark_texts(cfg):
@@ -1316,6 +1370,12 @@ def resolve_dark_texts(cfg):
                     f"unresolved import {spec!r} (from {whence}) in theme file {rel!r} — "
                     "its tokens are NOT in this parse."
                 )
+            # Record, don't just log — round 5 made this a refusal for the BASE
+            # graph and the theme graph kept the old log-and-drop behaviour, so
+            # a renamed partial under the dark theme still deleted its twins.
+            # Extend rather than clear: load_source ran first and its misses
+            # must survive to the same check.
+            _MISSING_IMPORTS.extend(missing)
             if not loaded:
                 raise RuntimeError(
                     f"themeConventions[{i}] (file): could not read theme file {abs_path}"
@@ -1376,6 +1436,22 @@ def _ref_readers(cfg, ref, repo_root):
             return False
 
     return read_file, exists
+
+
+def commented_only_names(text, prefix=None):
+    """Names that appear ONLY inside comments — protected, but possibly retired.
+
+    Over-protection is the right default (see declared_names), but it must not
+    be silent: commenting a declaration out is a normal way to retire a token,
+    and the raw sweep pins it in the target file forever with no signal."""
+    raw = text or ""
+    stripped = strip_comments(raw)
+    in_raw = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(raw)}
+    in_stripped = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(stripped)}
+    names = in_raw - in_stripped
+    if prefix:
+        names = {n for n in names if n.startswith(prefix)}
+    return names
 
 
 def declared_names(text, prefix=None):

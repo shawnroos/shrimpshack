@@ -886,3 +886,68 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "a THEME file's unresolved import refuses too, not just the base graph" {
+    # Round 5 made this a refusal for the base source graph only; the theme
+    # graph kept log-and-drop, so a renamed partial under the dark theme still
+    # deleted its twins.
+    repo="$BATS_TMPDIR/darkmissimport"; mkdir -p "$repo"
+    printf ':root{--brand-a:#37D895;}' > "$repo/l.css"
+    printf '@import "gone-partial.css";\n:root{--brand-a:#00B72B;}' > "$repo/d.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "l.css", "ref": null, "prefix": "--brand-", "followImports": true },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "d.css", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#37D895'},
+            {'name':'--brand-a-dark','type':'color','value':'#00B72B'}]}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=True)
+assert report.get('error') == 'unresolved_imports', report
+assert code != 0, code
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "a commented-out declaration pins a live token, and SAYS so" {
+    # Over-protection is right, but it must not be silent: commenting a
+    # declaration out is a normal way to retire a token, and the raw sweep pins
+    # it in the target file forever with no signal.
+    repo="$BATS_TMPDIR/commentpin"; mkdir -p "$repo"
+    printf ':root{--brand-a:#ffffff;}\n/* --brand-legacy: #CCCCCC;  retired */' > "$repo/t.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "t.css", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-legacy','type':'color','value':'#CCCCCC'}]}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=False)
+assert report['deleted'] == [], report['deleted']          # protected
+assert report['pinnedByComment'] == ['--brand-legacy'], report  # and SAID
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

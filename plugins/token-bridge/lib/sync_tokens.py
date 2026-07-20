@@ -539,12 +539,15 @@ def run(repo=".", url=None, apply=True):
     # read here — parse cannot reach outside the text it is given. Sharing the
     # load_source try/except: both are "could not read the source" failures and
     # both must refuse rather than proceed with a partial view.
-    # An unresolved import makes the parse untrustworthy in a way no protection
-    # set can cover: the partial's names are not in any text we read, so
-    # declared_names cannot see them and they look like a deliberate removal.
-    # A renamed partial is an ordinary refactor. Refuse, matching the posture
-    # for an unreadable theme file — the log line alone predicted the deletion
-    # and prevented nothing.
+    try:
+        dark_texts = parse_tokens.resolve_dark_texts(cfg)
+    except RuntimeError as exc:
+        return ({"ok": False, "refused": True, "error": "theme_file_unreadable",
+                 "note": str(exc)}, EXIT_REFUSED)
+
+    # Checked AFTER resolve_dark_texts so the THEME graph's unresolved imports
+    # are covered by the same refusal — round 5 checked before it ran, so the
+    # dark half's misses could not be seen even once they were recorded.
     missing = parse_tokens.missing_imports()
     if missing and not (cfg.get("source") or {}).get("allowMissingImports"):
         listed = ", ".join(f"{spec!r} (from {whence})" for spec, whence in missing[:5])
@@ -560,12 +563,6 @@ def run(repo=".", url=None, apply=True):
             },
             EXIT_REFUSED,
         )
-
-    try:
-        dark_texts = parse_tokens.resolve_dark_texts(cfg)
-    except RuntimeError as exc:
-        return ({"ok": False, "refused": True, "error": "theme_file_unreadable",
-                 "note": str(exc)}, EXIT_REFUSED)
 
     desired, declined = desired_from_source(text, conventions, prefix, dark_texts)
 
@@ -611,6 +608,21 @@ def run(repo=".", url=None, apply=True):
     unreadable |= {n + DARK_SUFFIX for n in unreadable}
     unreadable |= {d["name"] for d in declined}
 
+    # A live token whose declaration is only commented out is PROTECTED, which
+    # is safe but silent — the user commented it out to retire it and nothing
+    # says why that had no effect. Name them.
+    commented = parse_tokens.commented_only_names(text, prefix)
+    for dark_text in (dark_texts or {}).values():
+        commented |= parse_tokens.commented_only_names(dark_text, prefix)
+    live_names = {t["name"] for t in live}
+    pinned = sorted(n for n in commented if n in live_names)
+    for n in pinned:
+        _log(
+            f"{n} is live in the target file but only appears inside a comment in the "
+            "source. It is protected from deletion, so commenting the declaration out "
+            "did NOT retire it — delete the line to remove the token."
+        )
+
     diff = diff_tokens(desired, live, owned_prefix=prefix, unreadable=unreadable)
 
     # Blank-source backstop (R7, second arm). The pre-daemon check above cannot
@@ -646,6 +658,7 @@ def run(repo=".", url=None, apply=True):
         "deleted": [t["name"] for t in diff["deletes"]],
         "recreated": [t["name"] for t in diff["recreates"]],
         "declined": declined,
+        "pinnedByComment": pinned,
         "empty": is_empty_diff(diff),
     }
 
