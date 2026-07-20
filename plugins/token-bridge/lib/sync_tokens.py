@@ -186,8 +186,14 @@ def build_desired(classified):
       desired  = sorted list of {name, type, value} Paper tokens
       declined = sorted list of {name, reason} for non-writable tokens
     """
+    # A referent whose twin was dropped has no `-dark` counterpart, so a dark
+    # alias must fall back to its plain name — otherwise we emit
+    # var(--x-dark) pointing at a token that is never created, and Paper fails
+    # that reference silently.
     theme_varying = {
-        r["name"] for r in classified if r.get("dark") is not None
+        r["name"]
+        for r in classified
+        if r.get("dark") is not None and not r.get("dark_excluded_reason")
     }
     # Each token's effective dark literal (dark value, or light when invariant),
     # keyed by name — used to detect pure flip-through aliases in _dark_value.
@@ -269,11 +275,25 @@ def _owns(name, owned_prefix):
     return _norm_name(name).startswith(_norm_name(owned_prefix))
 
 
-def diff_tokens(desired, live, owned_prefix=None):
+def diff_tokens(desired, live, owned_prefix=None, unreadable=None):
     """Diff the desired Paper token set against the live one (pure function).
 
     Compares with NORMALIZED name (lowercase) and value (uppercased hex) so an
     unchanged source yields an EMPTY diff (R3).
+
+    `unreadable` is the INVARIANT that makes classify's incompleteness harmless:
+    names the source declared but this tool could not type. "I cannot type this
+    value" must mean "do not write it" — it must NEVER also mean "delete it".
+    Conflating those two is what turned every gap in the recognisers into data
+    loss: an unrecognised font size in `rem`, a dark half using `clamp()`, a
+    colour function the allowlist had not met yet. Absence from `desired` is
+    ambiguous (the source dropped it, OR we failed to read it); this set
+    disambiguates, and only the first meaning may delete.
+
+    The recognisers will always be incomplete — CSS keeps adding value syntax.
+    This is what makes being incomplete survivable rather than destructive, and
+    it is why they can stay STRICT: a false negative now costs a skipped write,
+    not a deleted token.
 
     `owned_prefix` scopes deletions: a live token absent from the desired set is
     deleted only when the plugin OWNS it (see `_owns`). This stops a prefixed
@@ -284,7 +304,8 @@ def diff_tokens(desired, live, owned_prefix=None):
     Returns {creates, updates, deletes, recreates}:
       creates    tokens present in desired, absent from live         -> create
       updates    same name+type, value changed                       -> set value
-      deletes    OWNED, present in live, absent from desired          -> delete
+      deletes    OWNED, present in live, absent from desired, and NOT
+                 unreadable                                          -> delete
       recreates  same name, TYPE changed (Paper cannot retype)       -> delete+create
     """
     live_by_name = {}
@@ -308,10 +329,13 @@ def diff_tokens(desired, live, owned_prefix=None):
         if not _same_value(cur.get("value"), d.get("value")):
             updates.append(d)
 
+    protected = {_norm_name(n) for n in (unreadable or ())}
     deletes = [
         {"name": t["name"]}
         for t in live
-        if _norm_name(t["name"]) not in desired_names and _owns(t["name"], owned_prefix)
+        if _norm_name(t["name"]) not in desired_names
+        and _norm_name(t["name"]) not in protected
+        and _owns(t["name"], owned_prefix)
     ]
 
     return {
@@ -540,7 +564,12 @@ def run(repo=".", url=None, apply=True):
 
     # Scope deletes to the owned prefix so a prefixed sync never wipes
     # Paper-native or other-namespace tokens sharing the target file.
-    diff = diff_tokens(desired, live, owned_prefix=prefix)
+    # Everything classify could not type is protected from deletion, not just
+    # skipped. See diff_tokens' `unreadable` contract.
+    diff = diff_tokens(
+        desired, live, owned_prefix=prefix,
+        unreadable=[d["name"] for d in declined],
+    )
 
     # Blank-source backstop (R7, second arm). The pre-daemon check above cannot
     # fire on a BLANK source — a truncated or emptied file is legitimately

@@ -68,6 +68,43 @@ _LEN_FULL = re.compile(
 )
 
 
+# A preprocessor sigil anywhere in a value means it was never compiled —
+# `#{…}` (Sass interpolation), a bare `$var`, a Less `@var`.
+_PREPROCESSOR = re.compile(r"#\{|\$[A-Za-z_]|@[A-Za-z_]")
+
+# Keywords that legitimately appear INSIDE a colour function. Anything else
+# alphabetic is an unknown identifier, so the value is not a colour we can
+# vouch for.
+_COLOR_ARG_WORDS = frozenset({
+    "in", "from", "none", "calc", "var", "srgb", "srgb-linear", "display-p3",
+    "a98-rgb", "prophoto-rgb", "rec2020", "xyz", "xyz-d50", "xyz-d65",
+    "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "shorter", "longer",
+    "increasing", "decreasing", "hue", "transparent", "currentcolor",
+})
+
+# Any alphabetic run in the argument text.
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
+
+# A numeric or hex component — a colour function must contain at least one, so
+# `color(bogus)` and `lab(nonsense here)` cannot pass on keywords alone.
+_HAS_COMPONENT = re.compile(r"#[0-9A-Fa-f]{3,8}|\d")
+
+
+def _color_args_ok(args):
+    """True when a colour function's arguments look like colour components.
+
+    Validating only the function name and paren balance accepted
+    `hsl(#{$shade100})`, `color(bogus)` and `lab(nonsense here)` — reopening the
+    uncompiled-Sass hole. Require a real component AND no unknown identifier."""
+    if not _HAS_COMPONENT.search(args):
+        return False
+    # Mask hex literals first — `#fff`'s digits are a valid identifier shape, so
+    # an unmasked word scan reads it as the unknown keyword "fff" and rejects a
+    # perfectly good `color-mix(in srgb, #000 80%, #fff)`.
+    masked = re.sub(r"#[0-9A-Fa-f]{3,8}", " ", args)
+    return all(w.lower() in _COLOR_ARG_WORDS for w in _WORD.findall(masked))
+
+
 def _balanced(v):
     """True when every paren in `v` closes — so a colour FUNCTION is the whole
     value rather than the head of a layered one."""
@@ -93,7 +130,22 @@ def _is_color(v):
     # A colour function must START the value, END it, and balance — otherwise
     # it is one layer of something larger.
     m = _COLOR_FN.match(v)
-    return bool(m) and v.endswith(")") and _balanced(v) and not _has_top_level_comma(v)
+    if not (m and v.endswith(")") and _balanced(v) and not _has_top_level_comma(v)):
+        return False
+    # Validate the ARGUMENTS too. Checking only the function name and paren
+    # balance accepted `hsl(#{$shade100})`, `color(bogus)` and `hsl()` as
+    # colours — re-opening the exact uncompiled-Sass-into-Paper hole the dark
+    # validation exists to close. `_RGB_FULL` has always validated components;
+    # the function path needs the same bar. Being strict is now cheap: an
+    # unrecognised value is skipped AND protected from deletion (see
+    # sync_tokens.diff_tokens' `unreadable` contract), so a false negative costs
+    # a missed write, never a destroyed token.
+    args = v[m.end():-1].strip()
+    if not args:
+        return False
+    if _PREPROCESSOR.search(args):
+        return False
+    return _color_args_ok(args)
 
 
 def _is_px(v):
@@ -179,7 +231,7 @@ def classify_value(name, value):
         return "fontWeight", None
 
     # 8. fontSize — a px length named as a font/title/text size.
-    if _is_px(v) and "size" in name:
+    if _is_len(v) and "size" in name:
         return "fontSize", None
 
     # 9. Nothing matched — exclude rather than guess.
@@ -222,7 +274,9 @@ def classify_tokens(records):
                     dark_excluded_reason = (
                         f"dark value {dark!r} is not a {paper_type} value "
                         f"({dark_reason or 'type mismatch'}); the base token still syncs, "
-                        "but its -dark twin is omitted rather than written untyped"
+                        "but its -dark twin is NOT written. An existing twin in the target "
+                        "file is left alone, not deleted — compile or simplify the dark "
+                        "value to have it written again."
                     )
 
         annotated = dict(rec)

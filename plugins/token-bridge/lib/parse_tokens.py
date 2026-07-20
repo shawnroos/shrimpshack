@@ -525,23 +525,32 @@ def _document_scope_decls(blocks):
 
     Shared by the base scope and by a `file` convention's dark scope, so
     "the scope of a theme file" has exactly one definition (KTD2)."""
-    # Merge in SPECIFICITY order, not source order. `:root` and `html` select the
-    # same element, but `:root` is (0,1,0) and `html` is (0,0,1) — so `:root`
-    # wins no matter which appears later. A pure source-order merge let a later
-    # `html` block override a `:root` declaration, syncing a value the browser
-    # never renders. `body` is a different element that inherits, so it sits in
-    # the lower tier with `html` and a later `:root` correctly beats it.
-    lower, root = {}, {}
+    # Merge in three tiers: html < :root < body. Two different rules are at
+    # work and neither source order nor specificity alone gets both right.
+    #   html vs :root — the SAME element. `:root` is (0,1,0), `html` is
+    #     (0,0,1), so `:root` wins whichever appears later.
+    #   body vs either — a DIFFERENT, deeper element. Custom properties
+    #     inherit, so a declaration on `body` shadows the root value for every
+    #     rendered descendant. Specificity never enters into it; body wins.
+    # Getting the second one backwards synced the one value the page never
+    # displays. Source order still breaks ties WITHIN a tier.
+    html_t, root_t, body_t = {}, {}, {}
     for context, selector, body in blocks:
         if context:
             continue
         if not _is_document_scope(selector):
             continue
         parts = [p.strip() for p in selector.split(",")]
-        target = root if any(p == ":root" for p in parts) else lower
+        if any(p == "body" for p in parts):
+            target = body_t
+        elif any(p == ":root" for p in parts):
+            target = root_t
+        else:
+            target = html_t
         target.update(_parse_decls(body))
-    decls = dict(lower)
-    decls.update(root)   # :root tier wins the same property
+    decls = dict(html_t)
+    decls.update(root_t)
+    decls.update(body_t)
     return decls
 
 
@@ -550,9 +559,8 @@ def _base_decls(blocks):
 
     The base is a bare document scope (`:root`/`html`/`body`) with no CONDITIONAL
     at-rule in its context — one inside `@layer` qualifies, one inside `@media`
-    does not. Multiple base blocks merge in SPECIFICITY order — a `:root`
-    declaration beats an `html`/`body` one for the same property regardless of
-    position, as the cascade resolves it — with source order breaking ties
+    does not. Multiple base blocks merge in tiers — `html` < `:root` < `body`,
+    matching how a browser resolves them — with source order breaking ties
     within a tier."""
     return _document_scope_decls(blocks)
 
@@ -1193,6 +1201,32 @@ def file_convention_needs_repo(conventions):
     return None
 
 
+def _read_at_ref(cfg, rel, ref):
+    """Read `rel` at git `ref` from the config's repo. Shared by load_source and
+    resolve_dark_texts so both halves of a theme come from ONE revision."""
+    import subprocess
+
+    repo = cfg.get("_repo")
+    if not repo:
+        raise RuntimeError(
+            "config is missing '_repo'; load it via read_config before reading at a ref"
+        )
+    spec = f"{ref}:{rel}"
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, "show", spec],
+            capture_output=True, text=True, check=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"git is not available to read {spec}: {exc}") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip() or (exc.stdout or "").strip()
+        raise RuntimeError(
+            f"could not read source at ref '{spec}' in {repo}: {detail}"
+        ) from exc
+    return result.stdout
+
+
 def resolve_dark_texts(cfg):
     """Read the text of every `file` convention's theme file.
 
@@ -1229,6 +1263,16 @@ def resolve_dark_texts(cfg):
             out[i] = text
             continue
         try:
+            # Honour source.ref for the theme file too. Reading the base at a
+            # pinned revision and its dark half from the working tree computes
+            # every theme delta ACROSS TWO REVISIONS — uncommitted dark edits
+            # surface as theme variance against a pinned base, and sync writes
+            # those phantom twins. source.ref exists to sync a known revision;
+            # reading only half of it at that revision defeats the point.
+            ref = (cfg.get("source") or {}).get("ref")
+            if ref:
+                out[i] = _read_at_ref(cfg, rel, ref)
+                continue
             with open(abs_path, "r", encoding="utf-8") as fh:
                 out[i] = fh.read()
         except OSError as exc:

@@ -1096,13 +1096,14 @@ print('OK')
     [[ "$output" == *OK* ]]
 }
 
-@test "base scope: :root beats html/body for the same property (specificity)" {
+@test "base scope: a group containing body wins — it applies ON body" {
     run bash -c "printf ':root{--brand-a:#111;}\nhtml, body{--brand-b:#222;--brand-a:#333;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
     [ "$status" -eq 0 ]
     [ "$(field --brand-b light)" = "#222" ]
-    # :root (0,1,0) beats html/body (0,0,1) for the SAME property regardless of
-    # order — a source-order merge synced a value no browser renders.
-    [ "$(field --brand-a light)" = "#111" ]
+    # `html, body { … }` sets the property ON body, and body's own declaration
+    # shadows the inherited :root value for body and everything under it — i.e.
+    # for all rendered content. So the group wins, whatever the order.
+    [ "$(field --brand-a light)" = "#333" ]
 }
 
 @test "base merge: :root beats html for the same property, whatever the order" {
@@ -1121,4 +1122,42 @@ print('OK')
     run bash -c "printf 'html{--brand-a:#BBBBBB;}body{--brand-a:#CCCCCC;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
     [ "$status" -eq 0 ]
     [ "$(field --brand-a light)" = "#CCCCCC" ]
+}
+
+@test "base scope: body beats :root regardless of order (inheritance, not specificity)" {
+    # body is a DIFFERENT, deeper element — its declaration shadows the
+    # inherited :root value for every rendered descendant. Ordering it below
+    # :root synced the one value the page never displays.
+    run bash -c "printf ':root{--brand-a:#AAAAAA;}body{--brand-a:#CCCCCC;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#CCCCCC" ]
+
+    run bash -c "printf 'body{--brand-a:#CCCCCC;}:root{--brand-a:#AAAAAA;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#CCCCCC" ]
+}
+
+@test "file convention: source.ref pins BOTH halves to one revision" {
+    # Reading the base at a pinned ref and the dark half from the working tree
+    # computes theme deltas across two revisions — uncommitted dark edits look
+    # like theme variance and sync writes phantom twins.
+    repo="$BATS_TMPDIR/refpair"; rm -rf "$repo"; mkdir -p "$repo"
+    ( cd "$repo" && git init -q . \
+      && printf ':root{--brand-x:#ffffff;}' > light.css \
+      && printf ':root{--brand-x:#111111;}' > dark.css \
+      && git add -A && git -c user.email=t@t -c user.name=t commit -qm init \
+      && printf ':root{--brand-x:#999999;}' > dark.css )
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo',
+       'source': {'path': 'light.css', 'prefix': '--brand-', 'ref': 'HEAD'},
+       'themeConventions': [{'type': 'file', 'path': 'dark.css', 'primary': True}]}
+dark = pt.resolve_dark_texts(cfg)[0]
+assert '#111111' in dark, dark          # the COMMITTED dark
+assert '#999999' not in dark, dark      # not the working-tree edit
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
 }

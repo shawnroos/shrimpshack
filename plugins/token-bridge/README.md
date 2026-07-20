@@ -48,7 +48,7 @@ value.
 The base is a top-level, unscoped **document scope** — `:root`, `html`, or `body`
 (`html, body` counts). A component selector is never the base, however many custom
 properties it declares: `.tooltip { --bs-tooltip-bg: … }` is component-local, not a
-design token. Multiple base blocks merge in source order. Scopes are found at any nesting
+design token. Multiple base blocks merge in tiers (html < :root < body, as a browser resolves them). Scopes are found at any nesting
 depth: `@layer` is transparent, so a bare `:root` inside one **is** the base,
 while `@media`/`@supports`/`@container` are conditional — a `:root` inside one is
 never the base, only a dark candidate. Declarations are read block-locally, so
@@ -88,7 +88,7 @@ things it refuses rather than guessing:
 
 **It does not make uncompiled Sass syncable.** A dark file interpolating Sass
 (`#{$shade100}`) still needs a compile step — those tokens are declined with a
-reason, and both halves of a token must be valid for it to sync at all.
+reason, and a token whose dark half can't be typed still syncs its base — only the twin is skipped.
 
 ## Configuration
 

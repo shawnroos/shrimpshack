@@ -721,3 +721,62 @@ print('OK')
         [[ "$output" == *"run --repo"* ]]
     done
 }
+
+@test "INVARIANT: a value we cannot type is never written AND never deleted" {
+    # The class fix. "I cannot type this" must mean "do not write it" and must
+    # NEVER also mean "delete it" — conflating those turned every gap in the
+    # recognisers into data loss across three review rounds.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct, sync_tokens as st
+live = [{'name':'--b-font-size','type':'fontSize','value':'16px'},
+        {'name':'--b-radius','type':'radius','value':'8px'},
+        {'name':'--b-radius-dark','type':'radius','value':'4px'}]
+
+# untypable LIGHT half -> base protected
+recs = [{'name':'--b-font-size','light':'clamp(1rem,2vw,2rem)','dark':None,'light_alias':None,'dark_alias':None},
+        {'name':'--b-radius','light':'8px','dark':'4px','light_alias':None,'dark_alias':None}]
+d, dec = st.build_desired(ct.classify_tokens(recs))
+dels = [x['name'] for x in st.diff_tokens(d, live, owned_prefix='--b-', unreadable=[x['name'] for x in dec])['deletes']]
+assert dels == [], dels
+
+# untypable DARK half -> twin protected, base still written
+recs = [{'name':'--b-font-size','light':'16px','dark':None,'light_alias':None,'dark_alias':None},
+        {'name':'--b-radius','light':'8px','dark':'clamp(4px,1vw,12px)','light_alias':None,'dark_alias':None}]
+d, dec = st.build_desired(ct.classify_tokens(recs))
+dels = [x['name'] for x in st.diff_tokens(d, live, owned_prefix='--b-', unreadable=[x['name'] for x in dec])['deletes']]
+assert dels == [], dels
+assert '--b-radius' in [x['name'] for x in d], d
+
+# a token the SOURCE genuinely removed must STILL delete — the guard must not
+# turn into a blanket no-delete
+d, dec = st.build_desired(ct.classify_tokens(
+    [{'name':'--b-radius','light':'8px','dark':'4px','light_alias':None,'dark_alias':None}]))
+dels = [x['name'] for x in st.diff_tokens(d, live, owned_prefix='--b-', unreadable=[x['name'] for x in dec])['deletes']]
+assert dels == ['--b-font-size'], dels
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "no desired token references a -dark twin that was never created" {
+    # A declined twin left theme_varying unchanged, so a sibling emitted
+    # var(--x-dark) pointing at a token that is never created — and Paper fails
+    # such a reference silently.
+    run python3 -c "
+import sys, re; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt, classify_tokens as ct, sync_tokens as st
+light = ':root{--b-font-size:16px;--b-gap:var(--b-font-size);}'
+dark  = ':root{--b-font-size:clamp(1rem,2vw,2rem);}'
+conv = [{'type':'file','path':'d.scss','primary':True}]
+d, dec = st.build_desired(ct.classify_tokens(pt.parse_tokens(light, conv, '--b-', {0: dark})))
+names = {x['name'] for x in d}
+for tok in d:
+    for ref in re.findall(r'var\(\s*(--[A-Za-z0-9_-]+)\s*\)', str(tok.get('value') or '')):
+        assert ref in names, f\"{tok['name']} references {ref}, which is never created\"
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
