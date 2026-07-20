@@ -1155,7 +1155,8 @@ def parse_with_diagnostics(text, conventions, prefix=None, dark_texts=None):
                 "guessed at, so classify will almost certainly DECLINE it (a "
                 "light-dark(...) string matches no Paper token type). Check the "
                 "'declined' list — if this token is already live in Paper, being "
-                "declined drops it from the desired set and the next sync deletes it."
+                "declined drops it from the desired set, so it will show up under "
+                "'prunable'. It is not removed; leave it or fix the source value."
             )
             warnings.append(msg)
             _log("WARNING: " + msg)

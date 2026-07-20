@@ -689,14 +689,31 @@ def run(repo=".", url=None, apply=True):
             EXIT_REFUSED,
         )
 
+    # A `prunable` name that is STILL declared somewhere the sync does not read
+    # — a component rule, a print media block — is one the user must NOT remove
+    # by hand: it is in use, just outside the theme scope. This is the safety
+    # signal that matters most now that pruning is a manual step. Twins are
+    # matched by their base name, since a `-dark` twin never appears in source.
+    declared_anywhere = parse_tokens.declared_names(text, prefix)
+    for dark_text in (dark_texts or {}).values():
+        declared_anywhere |= parse_tokens.declared_names(dark_text, prefix)
+
+    def _in_source(name):
+        if name in declared_anywhere:
+            return True
+        return name.endswith(DARK_SUFFIX) and name[: -len(DARK_SUFFIX)] in declared_anywhere
+
+    still_declared = sorted(t["name"] for t in diff["deletes"] if _in_source(t["name"]))
+
     report = {
         "ok": True,
         "fileId": file_id,
         "created": [t["name"] for t in diff["creates"]],
         "updated": [t["name"] for t in diff["updates"]],
-        # Split by whether it actually happened. `prunable` is what a sync
-        # would once have destroyed silently.
+        # A live token absent from the parse. Reported, never removed.
         "prunable": [t["name"] for t in diff["deletes"]],
+        # `prunable` names still in use elsewhere — a hand-delete would break them.
+        "stillDeclared": still_declared,
         "parseComplete": complete,
         "recreated": [t["name"] for t in diff["recreates"]],
         "declined": declined,
@@ -721,6 +738,14 @@ def run(repo=".", url=None, apply=True):
             f"NOT removed: {names}. Absence is not proof of removal — a parse gap looks "
             "identical to a deletion. Remove them in Paper if you meant to retire them."
         )
+    if still_declared:
+        _log(
+            f"{len(still_declared)} prunable token(s) are still declared in the source, "
+            f"outside any scope this sync reads: {', '.join(still_declared[:8])}. Do NOT "
+            "remove these by hand — they are in use (likely a component rule), not retired."
+        )
+
+    if diff["deletes"]:
         # Drop them from the applied diff entirely; they stay reported.
         diff = dict(diff, deletes=[])
 

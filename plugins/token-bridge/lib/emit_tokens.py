@@ -368,7 +368,8 @@ def run(repo=".", url=None):
         # Every output must differ from every INPUT as well as from each other.
         # Guarding only the two outputs left the worse case open: writing base
         # content over the dark THEME SOURCE makes the next parse see dark ==
-        # base, so no token varies by theme and sync deletes every -dark twin.
+        # base, so no token varies by theme and every -dark twin would then be
+        # reported as prunable — a spurious removal list for tokens still in use.
         source_rel = (source or {}).get("path")
         collisions = [
             ("emitTarget", emit_target, "the file convention's emitTarget", dark_target),

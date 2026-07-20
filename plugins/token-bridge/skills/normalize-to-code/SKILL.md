@@ -24,7 +24,7 @@ The script owns the reconcile end-to-end. Your job is to run it and relay its JS
    python3 "${CLAUDE_PLUGIN_ROOT}/lib/sync_tokens.py" run --repo /path/to/codebase
    ```
 
-   To preview the reconcile without writing anything, pass `--no-apply`: it reports the same `created`/`updated`/`deleted`/`recreated`/`declined` diff but makes no changes. Pass `--url` to override the daemon URL from config.
+   To preview the reconcile without writing anything, pass `--no-apply`: it reports the same `created`/`updated`/`recreated`/`prunable`/`declined` diff but makes no changes. Pass `--url` to override the daemon URL from config.
 
 2. Read the exit code and the JSON report on stdout:
    - **Exit 2 (refused):** the report's `error` field carries the machine code and `note` an actionable message — surface `note` verbatim and stop. Codes: `no_config` / `bad_config` / `no_target_file` (config problems); `unresolved_imports`; `theme_file_unreadable`; `empty_parse` (the source parsed to zero tokens while owned tokens are live — reported so a truncated source cannot produce a whole-file `prunable` list). Never guess or substitute a target file.
@@ -37,7 +37,7 @@ The script owns the reconcile end-to-end. Your job is to run it and relay its JS
    - `created`, `updated`, `recreated` (token names). A `recreated` entry is a delete-then-create pair, because Paper cannot retype in place — any Paper-side field this tool does not model (a hand-written description) does not survive it.
    - **`prunable`** — live tokens absent from this parse. **These were NOT removed.** Surface them so the user can decide, and tell them removal is a manual step in Paper. Never call them deleted.
    - `parseComplete` — false when the parser could not read the whole source (an unresolved or not-followed import). When false, warn that `prunable` may list tokens the user did not remove, and that values may be stale — do not encourage acting on `prunable` until it reads whole.
-   - `stillDeclared` — a `prunable` name still declared somewhere the sync does not read, such as a component rule. This looks like a move, not a retirement; surfacing it prevents a user removing something still in use.
+   - `stillDeclared` — `prunable` names still declared somewhere the sync does not read, such as a component rule. **Warn the user NOT to hand-delete these** — they are in use (a move, not a retirement), and removing them in Paper would break the component that still references them.
    - `declined` — tokens Paper cannot represent (shadows, motion, filters), each with a `reason`.
    - `pinnedByComment` — a `prunable` name whose declaration exists only inside a comment. Commenting a token out does NOT retire it; say so.
    - `empty` — true when the source already matched the file (a no-op re-run).

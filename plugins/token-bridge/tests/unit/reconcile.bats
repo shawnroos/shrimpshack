@@ -1017,3 +1017,45 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "parseComplete is False on an actually-incomplete parse (the ledger's diagnostic value)" {
+    # The completeness ledger survived the deletion cut as a DIAGNOSTIC: the
+    # skill uses parseComplete to warn a user not to hand-delete from `prunable`
+    # when the parse was partial. A read path that affirms but forgets to
+    # register a swallowed declaration flips parseComplete wrongly True and the
+    # warning vanishes silently — the "trust an incomplete parse" class behind
+    # every prior data-loss defect, now surfacing as bad advice. Guard it.
+    run python3 -c "
+import sys, os, json, tempfile, importlib; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st, parse_tokens as pt
+
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok':True,'result':{'tokens':[
+        {'type':'color','name':'--brand-a','value':'#FFFFFF'}]}}
+    def set_tokens(s,t,f): return {'ok':True,'result':{}}
+    def create_tokens(s,t,f): return {'ok':True,'result':{}}
+
+def run_on(css, follow=False):
+    repo = tempfile.mkdtemp()
+    open(os.path.join(repo,'tokens.css'),'w').write(css)
+    json.dump({'fileId':'F1','source':{'path':'tokens.css','prefix':'--brand-','followImports':follow},
+               'themeConventions':[{'type':'media-query','query':'(prefers-color-scheme: dark)','primary':True}]},
+              open(os.path.join(repo,'token-bridge.config.json'),'w'))
+    importlib.reload(pt); importlib.reload(st); st.PaperClient = Fake
+    return st.run(repo=repo, apply=False)[0]
+
+# malformed source: a swallowed declaration is a KIND_MALFORMED entry
+r = run_on(':root{--brand-a:\"unterminated ;\n--brand-b:#222;}')
+assert r['parseComplete'] is False, r
+# a not-followed package import: KIND_NOT_FOLLOWED
+r = run_on('@use \"@acme/palette\";\n:root{--brand-a:#fff;}', follow=True)
+assert r['parseComplete'] is False, r
+# a clean, fully-read source: True
+r = run_on(':root{--brand-a:#fff;}')
+assert r['parseComplete'] is True, r
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
