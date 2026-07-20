@@ -38,18 +38,57 @@ You declare **how the dark scope is expressed** in your source, via `themeConven
 | `data-attribute` | `:root[data-theme="dark"] { … }`                      | supported |
 | `media-query`    | `@media (prefers-color-scheme: dark) { :root { … } }` | supported |
 | `class`          | `.wcs-dark { … }`, `html.wcs-dark`, `:root.wcs-dark`  | supported |
+| `file`           | dark lives in a **separate file**, same selector       | supported |
 
 `class` matches on class-token boundaries, so `.wcs-dark` does **not** match
 `.wcs-darker`, a `.wcs-dark\:*` escaped utility (Tailwind's `dark` toggle class
 generates a lot of these), or the string appearing inside a quoted attribute
 value.
 
-The base is the top-level, unscoped `:root`. Scopes are found at any nesting
+The base is a top-level, unscoped **document scope** — `:root`, `html`, or `body`
+(`html, body` counts). A component selector is never the base, however many custom
+properties it declares: `.tooltip { --bs-tooltip-bg: … }` is component-local, not a
+design token. Multiple base blocks merge in source order. Scopes are found at any nesting
 depth: `@layer` is transparent, so a bare `:root` inside one **is** the base,
 while `@media`/`@supports`/`@container` are conditional — a `:root` inside one is
 never the base, only a dark candidate. Declarations are read block-locally, so
 CSS/SCSS nesting (`:root { &[data-theme="dark"] { … } }`) resolves correctly
 rather than folding the child's values into the parent.
+
+### When dark is a separate file
+
+Some codebases don't put the dark theme in a scope at all — they put it in another
+file, with the *same* selector:
+
+```
+themes/light.scss    :root { --primary-text-color: #21242e;      … }
+themes/dark.scss     :root { --primary-text-color: #{$shade100}; … }
+```
+
+No selector predicate can tell those apart, because the distinguishing fact is the
+filename. That's what `file` is for:
+
+```json
+"source":           { "path": "src/styles/themes/light.scss", "prefix": "--" },
+"emitTarget":       "src/styles/themes/light.generated.scss",
+"themeConventions": [ { "type": "file",
+                        "path": "src/styles/themes/dark.scss",
+                        "emitTarget": "src/styles/themes/dark.generated.scss",
+                        "primary": true } ]
+```
+
+The dark scope is that file's own document scope, the same rule as the base. Two
+things it refuses rather than guessing:
+
+- **A missing or unreadable theme file refuses.** An empty dark scope would read as
+  "no token varies by theme", and sync applies that by deleting every `-dark` twin.
+- **Emit writes both halves or neither.** A `file` convention needs its own
+  `emitTarget`; without one, emit refuses and writes nothing. Emitting just the base
+  would leave the dark file stale and drift the pair apart.
+
+**It does not make uncompiled Sass syncable.** A dark file interpolating Sass
+(`#{$shade100}`) still needs a compile step — those tokens are declined with a
+reason, and both halves of a token must be valid for it to sync at all.
 
 ## Configuration
 
@@ -167,7 +206,7 @@ what it can delete.
 - **One codebase ↔ one Paper file.** No many-to-one or one-to-many; the config binds a single codebase to a single `fileId`.
 - **No Paper → component code-gen.** The reverse direction is tokens only. Components stay a one-way harvest — faithful code-gen from a canvas is fuzzy and fights the "Paper is the derived side" invariant.
 - **No motion, no shadows as tokens.** Paper has no transition/easing type (it drops `transition`) and silently corrupts a shadow written as a token (stores `#000000`), so both are excluded from token sync with a reason. Shadows still work as component styles.
-- **One base + one dark theme.** Multiple named themes and multi-file (`light.css`/`dark.css`) inputs are deferred.
+- **One base + one dark theme.** Multiple named themes are deferred. Two-file light/dark IS supported — see `file` above.
 - **Compound-class scopes are not user-declarable.** A convention takes one class. A dark scope requiring two classes together (`body.theme.theme-dark`) can't be expressed yet — the engine supports it internally, but the config surface deliberately does not, so it isn't frozen before a real repo needs it.
 - **`-dark` is a reserved suffix.** A genuine `--border-dark` in your source is read as the dark twin of `--border` and round-trips lossily. Rename it if you have one.
 - **`light-dark()` is split, but not nested.** `light-dark(#fff, #000)` resolves into both themes; a nested `light-dark(light-dark(…), …)` is not split and warns. A malformed call (not exactly two arguments) is left as a literal, which classify then declines — check the `declined` list, because a declined token that is already live in Paper gets deleted on the next sync.

@@ -37,9 +37,11 @@ Theme-scope resolution:
   recursively, and EVERY block whose context satisfies a convention's
   predicates contributes its declarations, merged in source order.
 
-  - The BASE scope is a bare, unscoped `:root { … }` with no conditional
-    at-rule in its context. `:root[data-theme="dark"]` and `:root.wcs-dark` are
-    not the base; neither is a `:root` inside `@media`.
+  - The BASE scope is a bare, unscoped DOCUMENT scope — `:root`, `html`, or
+    `body` — with no conditional at-rule in its context. `:root[data-theme="dark"]`
+    and `html.wcs-dark` are not the base; neither is a `:root` inside `@media`.
+    Component selectors are never the base, however many custom properties
+    they declare.
   - At-rules split by conditionality. `@layer` (and other grouping wrappers)
     are TRANSPARENT: a bare `:root` inside one IS the base. `@media`,
     `@supports` and `@container` are CONDITIONAL: they stay in the context, so
@@ -285,12 +287,32 @@ def _canon_media(q):
     return re.sub(r"\s+", "", q)
 
 
-def _is_bare_root(selector):
-    """True when `selector` is (or contains as a group member) a bare `:root` —
-    NOT `:root[…]` and NOT an at-rule."""
+# The document-level scopes. `:root` and `html` select the SAME element (`:root`
+# just has higher specificity); `body` is the other element custom properties are
+# conventionally hung on, and they inherit from it to everything rendered.
+#
+# Nothing beyond these three. A component selector like `.tooltip { --bs-tooltip-bg: … }`
+# also declares custom properties, but those are component-local, not theme
+# tokens — pulling them into the base would sync a component's internals into
+# Paper as though they were design tokens.
+_DOCUMENT_SCOPES = frozenset({":root", "html", "body"})
+
+
+def _is_document_scope(selector):
+    """True when `selector` is (or contains as a group member) a bare document
+    scope — `:root`, `html`, or `body` — carrying no further qualification.
+
+    A group member must match EXACTLY. `html.dark`, `:root[data-theme="dark"]`
+    and `body.theme-dark` are theme scopes, not the base, and a descendant form
+    like `html body` is deliberately excluded as too loose to assume."""
     if selector.startswith("@"):
         return False
-    return any(part.strip() == ":root" for part in selector.split(","))
+    return any(part.strip() in _DOCUMENT_SCOPES for part in selector.split(","))
+
+
+# Back-compat alias: the old name said `:root` only, which is no longer what it
+# means. Kept so any external caller keeps working.
+_is_bare_root = _is_document_scope
 
 
 # --- the scope walk (KTD5) ----------------------------------------------------
@@ -392,6 +414,15 @@ def desugar_convention(conv):
     if "match" in conv:
         return list(conv["match"])
     ctype = conv.get("type")
+    if ctype == "file":
+        # A file convention names a DIFFERENT text; there is nothing in this
+        # text's block context to predicate on (KTD3). It is resolved at load
+        # and never reaches the predicate walk, so desugaring it would be a
+        # category error — returning [] here would silently match nothing,
+        # which reads downstream as "no token varies by theme".
+        raise ValueError(
+            "a 'file' convention is resolved at load, not desugared into predicates"
+        )
     if ctype == "class":
         return [{"class": conv.get("class")}]
     if ctype == "data-attribute":
@@ -489,23 +520,48 @@ def _matches(preds, context, selector):
     )
 
 
-def _base_decls(blocks):
-    """Merge the declarations of every base block, in source order.
+def _document_scope_decls(blocks):
+    """Merge every unconditional document-scope block's declarations.
 
-    The base is a bare `:root` with no CONDITIONAL at-rule in its context — a
-    `:root` inside `@layer` qualifies, one inside `@media` does not."""
+    Shared by the base scope and by a `file` convention's dark scope, so
+    "the scope of a theme file" has exactly one definition (KTD2)."""
     decls = {}
     for context, selector, body in blocks:
         if context:
             continue
-        if _is_bare_root(selector):
+        if _is_document_scope(selector):
             decls.update(_parse_decls(body))
     return decls
 
 
-def _scope_decls(blocks, conv):
+def _base_decls(blocks):
+    """Merge the declarations of every base block, in source order.
+
+    The base is a bare document scope (`:root`/`html`/`body`) with no CONDITIONAL
+    at-rule in its context — one inside `@layer` qualifies, one inside `@media`
+    does not. Multiple base blocks merge in source order, so a repo splitting
+    tokens across `:root` and `html, body` resolves as the cascade would."""
+    return _document_scope_decls(blocks)
+
+
+def _scope_decls(blocks, conv, dark_blocks=None):
     """Merge the declarations of every block matching one convention's scope,
-    in source order. Later declarations win, as they do in CSS."""
+    in source order. Later declarations win, as they do in CSS.
+
+    A `file` convention names a DIFFERENT text (KTD3), so its declarations come
+    from `dark_blocks` — that file's own blocks — and its scope within that file
+    is the DOCUMENT scope, the same rule as the base (KTD2). Everything else is a
+    predicate over the blocks of the text being parsed."""
+    if conv.get("type") == "file":
+        if dark_blocks is None:
+            # Never fall through to "no blocks matched". An empty dark scope
+            # reads downstream as "no token varies by theme", which sync applies
+            # by DELETING every -dark twin.
+            raise ValueError(
+                "a 'file' convention needs its file's blocks; load_source must "
+                "supply them (see resolve_dark_texts)"
+            )
+        return _document_scope_decls(dark_blocks)
     preds = desugar_convention(conv)
     decls = {}
     for context, selector, body in blocks:
@@ -822,7 +878,7 @@ normalize_hex = _normalize_hex  # uppercase every hex run in a value (idempotent
 primary_convention = _primary_convention  # the primary themeConvention resolver
 
 
-def parse_with_diagnostics(text, conventions, prefix=None):
+def parse_with_diagnostics(text, conventions, prefix=None, dark_texts=None):
     """Parse `text` into the base+dark token model, returning both the token
     records and any warnings.
 
@@ -835,8 +891,22 @@ def parse_with_diagnostics(text, conventions, prefix=None):
     blocks = _collect_blocks(text)
     base = _base_decls(blocks)
 
+    # A `file` convention's dark scope lives in its own text (KTD3). Collect
+    # those blocks once, keyed by the convention's index in the array.
+    dark_texts = dark_texts or {}
+    # strip_comments FIRST, exactly as the base text is treated at the top of
+    # this function. Without it a `// note` line above a rule is swallowed into
+    # that rule's selector ("//ground surface\n\n:root"), which then matches no
+    # scope — and a file convention that matches nothing is an empty dark scope,
+    # i.e. every -dark twin looks deleted.
+    dark_blocks = {i: _collect_blocks(strip_comments(txt)) for i, txt in dark_texts.items()}
+
+    def _decls_for(conv):
+        i = conventions.index(conv)
+        return _scope_decls(blocks, conv, dark_blocks.get(i))
+
     primary = _primary_convention(conventions)
-    dark = _scope_decls(blocks, primary)
+    dark = _decls_for(primary)
 
     warnings = []
     # Cross-check every non-primary convention against the primary (KTD3): for a
@@ -844,7 +914,7 @@ def parse_with_diagnostics(text, conventions, prefix=None):
     for conv in conventions:
         if conv is primary:
             continue
-        other = _scope_decls(blocks, conv)
+        other = _decls_for(conv)
         for name in sorted(set(dark) & set(other)):
             pv = _normalize_hex(_resolve(name, dark, base, "dark"))
             ov = _normalize_hex(_resolve(name, other, base, "dark"))
@@ -978,13 +1048,13 @@ def parse_with_diagnostics(text, conventions, prefix=None):
     return {"tokens": records, "warnings": warnings}
 
 
-def parse_tokens(text, conventions, prefix=None):
+def parse_tokens(text, conventions, prefix=None, dark_texts=None):
     """Parse `text` into the base+dark token model (the records only).
 
     See parse_with_diagnostics for the record shape and semantics; this is the
     thin wrapper the deterministic-diff callers use when they don't need the
     warnings list (warnings still reach stderr)."""
-    return parse_with_diagnostics(text, conventions, prefix)["tokens"]
+    return parse_with_diagnostics(text, conventions, prefix, dark_texts)["tokens"]
 
 
 # --- source loading ----------------------------------------------------------
@@ -1090,6 +1160,53 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32):
 
     visit(entry_path, 0)
     return "\n".join(chunks), loaded, missing
+
+
+def resolve_dark_texts(cfg):
+    """Read the text of every `file` convention's theme file.
+
+    Returns {convention_index: text}. Honors `source.followImports` for each, so
+    a dark theme split across partials resolves the same way the base does.
+
+    A missing or unreadable file RAISES (R7). Returning an empty string would
+    give the convention an empty dark scope, which reads as "no token varies by
+    theme" — and sync applies that by deleting every `-dark` twin in the Paper
+    file. A loud failure is the only safe direction here."""
+    import os
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from paper_client import resolve_repo_path  # noqa: E402
+
+    follow = bool((cfg.get("source") or {}).get("followImports"))
+    out = {}
+    for i, conv in enumerate(cfg.get("themeConventions") or []):
+        if conv.get("type") != "file":
+            continue
+        rel = conv.get("path")
+        abs_path = resolve_repo_path(cfg, rel)
+        if follow:
+            text, loaded, missing = resolve_source_graph(abs_path)
+            for spec, whence in missing:
+                _log(
+                    f"unresolved import {spec!r} (from {whence}) in theme file {rel!r} — "
+                    "its tokens are NOT in this parse."
+                )
+            if not loaded:
+                raise RuntimeError(
+                    f"themeConventions[{i}] (file): could not read theme file {abs_path}"
+                )
+            out[i] = text
+            continue
+        try:
+            with open(abs_path, "r", encoding="utf-8") as fh:
+                out[i] = fh.read()
+        except OSError as exc:
+            raise RuntimeError(
+                f"themeConventions[{i}] (file): could not read theme file {abs_path}: {exc}. "
+                "Refusing rather than treating the dark theme as empty — an empty dark "
+                "scope would delete every -dark twin in the Paper file."
+            ) from exc
+    return out
 
 
 def load_source(cfg):

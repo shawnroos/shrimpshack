@@ -14,7 +14,7 @@
   "primitivePattern": null,
   "themeConventions": [
     {
-      "_comment": "How the dark scope is expressed in the source CSS. Supported: 'data-attribute' (needs attr+value), 'media-query' (needs query), 'class' (needs class). Class matching is class-token-boundary anchored, so '.dark' does not match '.darker'. When MORE THAN ONE is declared, exactly one must set primary:true \u2014 parse reads the primary's dark scope, emit writes only the primary's block; a single convention is primary by default. Scopes are found at any depth: @layer is transparent (a bare :root inside one IS the base), while @media/@supports/@container are conditional (a :root inside one is never the base).",
+      "_comment": "How the dark scope is expressed. Supported: 'data-attribute' (needs attr+value), 'media-query' (needs query), 'class' (needs class), and 'file' (needs path \u2014 the dark theme is a SEPARATE FILE whose own document scope carries the overrides; add its 'emitTarget' if you emit). Class matching is class-token-boundary anchored, so '.dark' does not match '.darker'. When MORE THAN ONE is declared, exactly one must set primary:true. The base is a document scope (:root/html/body), never a component selector. Scopes are found at any depth: @layer is transparent, while @media/@supports/@container are conditional.",
       "type": "data-attribute",
       "attr": "data-theme",
       "value": "dark",

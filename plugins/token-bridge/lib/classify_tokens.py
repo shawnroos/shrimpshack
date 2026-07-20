@@ -155,6 +155,25 @@ def classify_tokens(records):
         if value is None:
             value = rec.get("dark")
         paper_type, reason = classify_value(rec["name"], value)
+
+        # BOTH halves must be representable, not just the one the type came
+        # from. The `-dark` twin is written with the type derived here, so a
+        # dark value that isn't a valid instance of that type would ride into
+        # Paper unchecked — `--x-dark: #{$shade100}` stored as a *color*. That
+        # is the silent-wrong-value class this codebase keeps closing, and it
+        # is exactly what an uncompiled Sass dark scope produces.
+        if paper_type is not None:
+            dark = rec.get("dark")
+            if dark is not None and dark != value:
+                dark_type, dark_reason = classify_value(rec["name"], dark)
+                if dark_type != paper_type:
+                    paper_type = None
+                    reason = (
+                        f"dark value {dark!r} is not a {rec.get('paper_type') or 'usable'} "
+                        f"value ({dark_reason or 'type mismatch'}); declining rather than "
+                        "writing it into Paper untyped"
+                    )
+
         annotated = dict(rec)
         annotated["paper_type"] = paper_type
         annotated["writable"] = paper_type is not None

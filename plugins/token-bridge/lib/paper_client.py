@@ -95,7 +95,7 @@ def _bad_convention_type(i: int, ctype) -> str:
     """
     return (
         f"themeConventions[{i}].type must be 'data-attribute', 'media-query', "
-        f"or 'class', got {ctype!r}."
+        f"'class', or 'file', got {ctype!r}."
     )
 
 
@@ -145,8 +145,8 @@ def _validate_config(cfg: dict) -> str | None:
                 # actual fix is to delete the 'match' key.
                 return (
                     f"themeConventions[{i}] uses the internal 'match' form, which is not "
-                    "user-authorable. Declare one of 'data-attribute', 'media-query', or "
-                    "'class' instead."
+                    "user-authorable. Declare one of 'data-attribute', 'media-query', "
+                    "'class', or 'file' instead."
                 )
             ctype = conv.get("type")
             if ctype == "class":
@@ -158,6 +158,17 @@ def _validate_config(cfg: dict) -> str | None:
             elif ctype == "media-query":
                 if not isinstance(conv.get("query"), str):
                     return f"themeConventions[{i}] (media-query) needs a string 'query'."
+            elif ctype == "file":
+                # The dark theme is a separate FILE, not a scope in this one.
+                # `emitTarget` is optional here: emit enforces it at write time
+                # (KTD4) so a parse-only / sync-only config isn't blocked from
+                # loading by a key it will never use.
+                if not (isinstance(conv.get("path"), str) and conv.get("path")):
+                    return f"themeConventions[{i}] (file) needs a non-empty string 'path'."
+                if conv.get("emitTarget") is not None and not isinstance(
+                    conv.get("emitTarget"), str
+                ):
+                    return f"themeConventions[{i}] (file) 'emitTarget' must be a string."
             else:
                 return _bad_convention_type(i, ctype)
             if conv.get("primary"):

@@ -1002,3 +1002,103 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+# ============================================================================
+# file convention — the dark theme is a separate FILE, not a scope
+# ============================================================================
+
+@test "file convention: light + dark files resolve to one merged record set" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+light = open('$FIXTURE_DIR/theme_files/light.scss').read()
+dark  = open('$FIXTURE_DIR/theme_files/dark.scss').read()
+conv = [{'type': 'file', 'path': 'theme_files/dark.scss', 'primary': True}]
+by = {r['name']: r for r in pt.parse_tokens(light, conv, dark_texts={0: dark})}
+
+assert by['--brand-text']['light'] == '#21242E' and by['--brand-text']['dark'] == '#E8E8E7', by['--brand-text']
+assert by['--brand-bg']['light']   == '#FCFCFC' and by['--brand-bg']['dark']   == '#0D0D0D', by['--brand-bg']
+# declared only in light -> theme-invariant
+assert by['--brand-only-light']['dark'] is None, by['--brand-only-light']
+# declared only in dark -> the orphan-twin shape
+assert by['--brand-sass']['light'] is None, by['--brand-sass']
+# a component selector INSIDE the dark file is not the theme scope
+assert '--brand-not-a-theme-token' not in by, sorted(by)
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "file convention: a line comment above the rule does not swallow its selector" {
+    # The real dark.scss opens with `//Helpers` above `:root {`. Without
+    # strip_comments the selector becomes '//Helpers\n\n:root', matches nothing,
+    # and the dark scope silently reads as empty — i.e. every -dark twin deleted.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+light = open('$FIXTURE_DIR/theme_files/light.scss').read()
+dark  = open('$FIXTURE_DIR/theme_files/dark.scss').read()
+recs = pt.parse_tokens(light, [{'type':'file','path':'d','primary':True}], dark_texts={0: dark})
+assert any(r['dark'] is not None for r in recs), 'dark scope resolved EMPTY'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "file convention: a missing theme file REFUSES, never an empty dark scope" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$FIXTURE_DIR', 'source': {'path': 'theme_files/light.scss'},
+       'themeConventions': [{'type': 'file', 'path': 'theme_files/NOPE.scss', 'primary': True}]}
+try:
+    pt.resolve_dark_texts(cfg)
+except RuntimeError as e:
+    assert 'could not read theme file' in str(e), e
+    assert 'delete every -dark twin' in str(e), 'the refusal must say WHY it refuses'
+    print('OK')
+else:
+    raise AssertionError('a missing theme file must refuse, not yield an empty dark scope')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "file convention: desugaring one is a category error, not a silent no-match" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+try:
+    pt.desugar_convention({'type': 'file', 'path': 'd.scss'})
+except ValueError as e:
+    assert 'resolved at load' in str(e), e
+    print('OK')
+else:
+    raise AssertionError('desugaring a file convention must raise, not return []')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "base scope: :root, html and body are base; component selectors never are" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+yes = [':root', 'html', 'body', 'html, body', '  body  ']
+no  = ['html.dark', ':root[data-theme=\"dark\"]', 'body.theme-dark', '.tooltip', 'html body', '.dark, .dark *']
+for s in yes: assert pt._is_document_scope(s), s
+for s in no:  assert not pt._is_document_scope(s), s
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "base scope: tokens split across :root and html, body merge in source order" {
+    run bash -c "printf ':root{--brand-a:#111;}\nhtml, body{--brand-b:#222;--brand-a:#333;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-b light)" = "#222" ]
+    [ "$(field --brand-a light)" = "#333" ]   # later block wins, as the cascade would
+}

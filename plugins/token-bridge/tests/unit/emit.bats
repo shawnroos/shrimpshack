@@ -341,3 +341,108 @@ PY
     [ "$status" -eq 0 ]
     [[ "$output" == *"EMPTY"* ]]
 }
+
+# ============================================================================
+# file convention — emit writes BOTH halves or neither (KTD4)
+# ============================================================================
+
+@test "emit file convention: emit_pair round-trips across the pair" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et, parse_tokens as pt, classify_tokens as ct, sync_tokens as st
+conv = [{'type':'file','path':'themes/dark.scss','emitTarget':'themes/dark.gen.scss','primary':True}]
+paper = [{'name':'--b-a','type':'color','value':'#FFF'},
+         {'name':'--b-a-dark','type':'color','value':'#000'},
+         {'name':'--b-x','type':'color','value':'#EEE'}]
+base, dark = et.emit_pair(paper, conv)
+recs = pt.parse_tokens(base, conv, dark_texts={0: dark})
+again, _ = st.build_desired(ct.classify_tokens(recs))
+d = st.diff_tokens(again, paper, owned_prefix='--b-')
+assert st.is_empty_diff(d), d
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit file convention: emit_css refuses rather than emitting base-only" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+conv = [{'type':'file','path':'d.scss','primary':True}]
+try:
+    et.emit_css([{'name':'--b-a','type':'color','value':'#FFF'}], conv)
+except ValueError as e:
+    assert 'emit_pair' in str(e), e
+    print('OK')
+else:
+    raise AssertionError('emit_css must refuse a file convention, not emit base-only')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit file convention: no dark emitTarget -> refuses and writes NOTHING" {
+    repo="$BATS_TMPDIR/emitpair"; mkdir -p "$repo/themes"
+    printf ':root{--b-a:#fff;}' > "$repo/themes/light.scss"
+    printf ':root{--b-a:#000;}' > "$repo/themes/dark.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--b-" },
+  "emitTarget": "themes/light.gen.scss", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "primary": true } ],
+  "harvest": { "themeSignal": { "type": "data-attribute", "attr": "data-theme", "value": "dark" }, "batch": [] } }
+JSON
+    run python3 -c "
+import sys, os, json; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+class Fake:
+    def __init__(self,*a,**k): pass
+    def get_tokens(self, fid):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--b-a','type':'color','value':'#FFF'},
+            {'name':'--b-a-dark','type':'color','value':'#000'}]}}
+et.PaperClient = Fake
+report, code = et.run(repo='$repo')
+assert report.get('error') == 'no_dark_emit_target', report
+assert code != 0, code
+# the load-bearing part: a refusal must not leave a HALF-updated pair on disk
+assert not os.path.exists('$repo/themes/light.gen.scss'), 'base was written despite refusing'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: a dark value that is not a valid instance of the type is DECLINED" {
+    # Pre-existing: the type came from the LIGHT value and the dark twin rode
+    # along unchecked, so '--x-dark: #{\$shade100}' was stored in Paper as a color.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt, classify_tokens as ct, sync_tokens as st
+src = ':root{--brand-a:#ffffff;}[data-theme=\"dark\"]{--brand-a:#{\$junk};}'
+recs = pt.parse_tokens(src, [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}])
+desired, declined = st.build_desired(ct.classify_tokens(recs))
+assert desired == [], desired
+assert declined and '#{\$junk}' in declined[0]['reason'], declined
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: a matching dark value still syncs (the fix is not over-broad)" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt, classify_tokens as ct, sync_tokens as st
+src = ':root{--brand-a:#ffffff;}[data-theme=\"dark\"]{--brand-a:#000000;}'
+recs = pt.parse_tokens(src, [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}])
+desired, declined = st.build_desired(ct.classify_tokens(recs))
+names = sorted(d['name'] for d in desired)
+assert names == ['--brand-a', '--brand-a-dark'], names
+assert not declined, declined
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

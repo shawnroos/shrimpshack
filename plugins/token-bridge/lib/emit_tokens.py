@@ -191,10 +191,45 @@ def emit_css(paper_tokens, conventions, prefix=None):
         if t["name"].endswith(DARK_SUFFIX) and keep(t["name"])
     )
 
+    if primary.get("type") == "file":
+        # A file convention's two halves are two FILES, so one string cannot
+        # represent them. emit_pair() is the entry point for that shape; a
+        # caller reaching here would silently get a base-only emit, which
+        # leaves the dark file stale and drifts the pair apart (KTD4).
+        raise ValueError(
+            "a 'file' convention emits two files — call emit_pair(), not emit_css()"
+        )
+
     blocks = [_root_block(base_pairs)]
     if dark_pairs:
         blocks.append(_dark_block(primary, dark_pairs))
     return "\n\n".join(blocks) + "\n"
+
+
+def emit_pair(paper_tokens, conventions, prefix=None):
+    """Emit (base_css, dark_css) for a primary `file` convention (KTD4).
+
+    The dark half is a whole file whose own document scope carries the overrides,
+    mirroring how parse reads it — so emit and parse stay inverses and the
+    round-trip closes across the pair (KTD5)."""
+    primary = parse_tokens.primary_convention(conventions)
+    if primary.get("type") != "file":
+        raise ValueError("emit_pair() is only for a primary 'file' convention")
+
+    def keep(name):
+        return (not prefix) or name.startswith(prefix)
+
+    base_pairs = sorted(
+        (t["name"], t.get("value"))
+        for t in paper_tokens
+        if not t["name"].endswith(DARK_SUFFIX) and keep(t["name"])
+    )
+    dark_pairs = sorted(
+        (t["name"][: -len(DARK_SUFFIX)], _strip_dark_alias(t.get("value")))
+        for t in paper_tokens
+        if t["name"].endswith(DARK_SUFFIX) and keep(t["name"])
+    )
+    return _root_block(base_pairs) + "\n", _root_block(dark_pairs) + "\n"
 
 
 # --- round-trip proof (R5), no daemon ----------------------------------------
@@ -268,13 +303,45 @@ def run(repo=".", url=None):
         )
     tokens = env.get("result", {}).get("tokens", []) or []
 
-    css = emit_css(tokens, conventions, prefix)
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(emit_target)), exist_ok=True)
-        with open(emit_target, "w", encoding="utf-8") as fh:
-            fh.write(css)
-    except OSError as exc:
-        return ({"ok": False, "error": f"could not write {emit_target}: {exc}"}, EXIT_ERROR)
+    primary = parse_tokens.primary_convention(conventions)
+
+    # KTD4: a file convention's theme is two FILES. Write both or write neither —
+    # emitting only the base leaves the dark file stale and silently drifts the
+    # pair apart, which is worse than not emitting at all. The check runs BEFORE
+    # any write so a refusal never leaves a half-updated pair on disk.
+    if primary.get("type") == "file":
+        dark_target = resolve_repo_path(cfg, primary.get("emitTarget"))
+        if not dark_target:
+            return (
+                {
+                    "ok": False,
+                    "error": "no_dark_emit_target",
+                    "note": (
+                        "the primary themeConvention is type 'file', so emit writes TWO "
+                        "files, but that convention has no 'emitTarget'. Nothing was "
+                        "written — emitting only the base would leave the dark theme "
+                        "file stale. Add an 'emitTarget' to the file convention."
+                    ),
+                },
+                EXIT_ERROR,
+            )
+        base_css, dark_css = emit_pair(tokens, conventions, prefix)
+        try:
+            for path, body in ((emit_target, base_css), (dark_target, dark_css)):
+                os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+        except OSError as exc:
+            return ({"ok": False, "error": f"could not write the theme pair: {exc}"}, EXIT_ERROR)
+        css = base_css
+    else:
+        css = emit_css(tokens, conventions, prefix)
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(emit_target)), exist_ok=True)
+            with open(emit_target, "w", encoding="utf-8") as fh:
+                fh.write(css)
+        except OSError as exc:
+            return ({"ok": False, "error": f"could not write {emit_target}: {exc}"}, EXIT_ERROR)
 
     return (
         {
