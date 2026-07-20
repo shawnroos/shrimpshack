@@ -323,16 +323,45 @@ def _canon_media(q):
 _DOCUMENT_SCOPES = frozenset({":root", "html", "body"})
 
 
-def _is_document_scope(selector):
-    """True when `selector` is (or contains as a group member) a bare document
-    scope — `:root`, `html`, or `body` — carrying no further qualification.
+# A compound made ENTIRELY of document-scope tokens: `:root:root`, `html:root`.
+# This is the mainstream idiom for raising specificity when overriding a
+# third-party design system's custom properties — which is very close to a
+# description of this tool's users. Requiring an exact match dropped these
+# blocks completely, so the tool synced the value the browser never renders,
+# with ok:true and no warning.
+#
+# Deliberately narrow: every token must itself be a document scope. A qualifier
+# that matches CONDITIONALLY (`html.dark`, `:root[data-theme="dark"]`) is a
+# theme scope handled by the conventions, and must keep falling through here.
+_DOC_TOKEN = re.compile(r":root|html|body")
 
-    A group member must match EXACTLY. `html.dark`, `:root[data-theme="dark"]`
-    and `body.theme-dark` are theme scopes, not the base, and a descendant form
-    like `html body` is deliberately excluded as too loose to assume."""
+
+def _document_scope_specificity(part):
+    """(classes, elements) for an admissible document-scope compound, else None.
+
+    `:root` is a pseudo-class (0,1,0); `html`/`body` are type selectors (0,0,1).
+    Used to order WITHIN a tier, so `:root:root` (0,2,0) beats `:root` (0,1,0)
+    regardless of source order."""
+    part = part.strip()
+    toks = _DOC_TOKEN.findall(part)
+    if not toks or "".join(toks) != part:
+        return None
+    return (sum(t == ":root" for t in toks), sum(t != ":root" for t in toks))
+
+
+def _is_document_scope(selector):
+    """True when `selector` has a group member that is a document scope —
+    `:root`, `html`, `body`, or a compound made only of those.
+
+    `html.dark`, `:root[data-theme="dark"]` and `body.theme-dark` are theme
+    scopes, not the base; a descendant form like `html body` is deliberately
+    excluded as too loose to assume."""
     if selector.startswith("@"):
         return False
-    return any(part.strip() in _DOCUMENT_SCOPES for part in selector.split(","))
+    return any(
+        _document_scope_specificity(part) is not None
+        for part in selector.split(",")
+    )
 
 
 # Back-compat alias: the old name said `:root` only, which is no longer what it
@@ -559,23 +588,38 @@ def _document_scope_decls(blocks):
     #     rendered descendant. Specificity never enters into it; body wins.
     # Getting the second one backwards synced the one value the page never
     # displays. Source order still breaks ties WITHIN a tier.
-    html_t, root_t, body_t = {}, {}, {}
-    for context, selector, body in blocks:
+    # Within a tier, a higher-specificity compound wins regardless of source
+    # order: `:root:root` (0,2,0) beats a later plain `:root` (0,1,0). Ties fall
+    # back to source order, which is the plain-CSS rule.
+    html_t, root_t, body_t = [], [], []
+    for order, (context, selector, body) in enumerate(blocks):
         if context:
             continue
-        if not _is_document_scope(selector):
+        specs = [
+            (p.strip(), _document_scope_specificity(p))
+            for p in selector.split(",")
+        ]
+        admissible = [(p, s) for p, s in specs if s is not None]
+        if not admissible:
+            # A selector whose subject is root-ish but which carries a
+            # conditional qualifier is a THEME scope, handled elsewhere — not a
+            # silent drop. Nothing to warn about here.
             continue
-        parts = [p.strip() for p in selector.split(",")]
-        if any(p == "body" for p in parts):
+        # A group applies to every member; take its strongest member for rank,
+        # and route by the deepest ELEMENT it names (body shadows root by
+        # inheritance, which specificity never expresses).
+        if any("body" in p for p, _ in admissible):
             target = body_t
-        elif any(p == ":root" for p in parts):
+        elif any(":root" in p for p, _ in admissible):
             target = root_t
         else:
             target = html_t
-        target.update(_parse_decls(body))
-    decls = dict(html_t)
-    decls.update(root_t)
-    decls.update(body_t)
+        target.append((max(s for _, s in admissible), order, _parse_decls(body)))
+
+    decls = {}
+    for tier in (html_t, root_t, body_t):
+        for _spec, _order, d in sorted(tier, key=lambda x: (x[0], x[1])):
+            decls.update(d)
     return decls
 
 

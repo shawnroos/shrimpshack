@@ -1352,3 +1352,48 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "specificity-boosted document scopes are the base, ordered by specificity" {
+    # `:root:root` is the mainstream idiom for out-specifying a third-party
+    # design system's custom properties — i.e. exactly this tool's users. An
+    # exact-match admission gate dropped those blocks entirely, so the tool
+    # synced the value the browser never renders, with ok:true and no warning.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+CONV=[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}]
+def v(css): return pt.parse_tokens(css, CONV)[0]['light'].lower()
+# specificity beats source order WITHIN a tier
+assert v(':root{--a:blue;}\n:root:root{--a:red;}') == 'red'
+assert v(':root:root{--a:red;}\n:root{--a:blue;}') == 'red'
+assert v(':root{--a:blue;}\nhtml:root{--a:red;}') == 'red'
+# and the pre-existing rules are untouched
+assert v(':root{--a:blue;}\n:root{--a:red;}') == 'red'      # order within a tier
+assert v('html{--a:red;}\n:root{--a:blue;}') == 'blue'      # :root beats html
+assert v('html{--a:white;}\nbody{--a:black;}') == 'black'   # body shadows root
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "a CONDITIONAL qualifier on a document scope is still a theme scope" {
+    # The admission widening must not swallow theme scopes: those are matched by
+    # the conventions, and pulling them into the base reintroduces the
+    # light/dark inversion the tier logic exists to prevent.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+CONV=[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}]
+t = pt.parse_tokens(':root{--a:blue;}\n:root[data-theme=\"dark\"]{--a:red;}', CONV)[0]
+assert t['light'].lower() == 'blue', t   # base unchanged
+assert t['dark'].lower() == 'red', t     # and the theme scope still resolves
+for sel in ('html.dark', 'body.theme-dark', ':root.dark'):
+    assert pt._document_scope_specificity(sel) is None, sel
+for sel in (':root', 'html', 'body', ':root:root', 'html:root'):
+    assert pt._document_scope_specificity(sel) is not None, sel
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
