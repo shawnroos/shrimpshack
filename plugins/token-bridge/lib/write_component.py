@@ -404,10 +404,15 @@ def _parse_token_set(config: dict) -> str:
     `source.ref` is set) and parses it into the base+dark token records the mapper
     consumes — no hardcoded token path."""
     text = parse_tokens.load_source(config)
+    # A `file` convention's dark theme lives in another file (see
+    # parse_tokens.resolve_dark_texts) — without this the mapper raises on any
+    # config using one.
+    dark_texts = parse_tokens.resolve_dark_texts(config)
     records = parse_tokens.parse_tokens(
         text,
         config.get("themeConventions") or [],
         (config.get("source") or {}).get("prefix"),
+        dark_texts,
     )
     return json.dumps(records)
 

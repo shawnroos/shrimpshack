@@ -84,10 +84,14 @@ def run(repo=".", url=None, client=None):
     prefix = (cfg.get("source") or {}).get("prefix")
     try:
         source_text = parse_tokens.load_source(cfg)
+        # A `file` convention's dark theme is a separate file; parse cannot reach
+        # outside the text it is handed. Same read-failure class as load_source,
+        # so it shares the refusal path.
+        dark_texts = parse_tokens.resolve_dark_texts(cfg)
     except RuntimeError as exc:
         return {"ok": False, "error": "source_read_failed", "note": str(exc)}, EXIT_ERROR
 
-    desired, declined = desired_from_text(source_text, conventions, prefix)
+    desired, declined = desired_from_text(source_text, conventions, prefix, dark_texts)
 
     client = client or PaperClient(url=url or cfg.get("paperDaemonUrl"))
     env = client.get_tokens(file_id)
@@ -149,6 +153,13 @@ def main(argv=None):
         with open(args.source_file, encoding="utf-8") as fh:
             source_text = fh.read()
         conventions = json.loads(args.conventions)
+        if any(c.get("type") == "file" for c in conventions):
+            _log(
+                "the 'drift' subcommand reads a single --source-file and has no repo "
+                "to resolve a 'file' convention's theme file against. Use "
+                "`status.py run --repo PATH` instead."
+            )
+            return EXIT_REFUSED
         desired, _declined = desired_from_text(source_text, conventions, args.prefix)
         live = _tokens_from(_load_json_file(args.live_file))
         print(json.dumps(drift(desired, live, owned_prefix=args.prefix), indent=2))

@@ -510,3 +510,19 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "emit file convention: roundtrip proves the fixed point across BOTH files" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+conv = [{'type':'file','path':'d.scss','emitTarget':'d.gen.scss','primary':True}]
+toks = [{'name':'--b-a','type':'color','value':'#FFF'},
+        {'name':'--b-a-dark','type':'color','value':'#000'},
+        {'name':'--b-x','type':'color','value':'#EEE'}]
+r = et.roundtrip(toks, conv, prefix='--b-')
+assert r['empty'] is True, r['diff']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

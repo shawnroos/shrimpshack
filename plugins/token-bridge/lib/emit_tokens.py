@@ -238,8 +238,18 @@ def emit_pair(paper_tokens, conventions, prefix=None):
 def roundtrip(paper_tokens, conventions, prefix=None):
     """Prove the R5 fixed point: emit -> parse -> build_desired -> diff vs the
     Paper set. Returns {css, diff, empty}. `empty` True == round-trip stable."""
-    css = emit_css(paper_tokens, conventions, prefix)
-    records = parse_tokens.parse_tokens(css, conventions, prefix)
+    primary = parse_tokens.primary_convention(conventions)
+    if primary.get("type") == "file":
+        # The pair IS the artifact for a file convention, so the fixed point has
+        # to be proven across both halves — emit_css refuses this shape anyway.
+        base_css, dark_css = emit_pair(paper_tokens, conventions, prefix)
+        css = base_css
+        records = parse_tokens.parse_tokens(css, conventions, prefix, {
+            conventions.index(primary): dark_css
+        })
+    else:
+        css = emit_css(paper_tokens, conventions, prefix)
+        records = parse_tokens.parse_tokens(css, conventions, prefix)
     classified = classify_tokens.classify_tokens(records)
     desired, _declined = sync_tokens.build_desired(classified)
     diff = sync_tokens.diff_tokens(desired, paper_tokens)

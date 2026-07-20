@@ -118,3 +118,45 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *"OK"* ]]
 }
+
+@test "status: END-TO-END run() works with a 'file' themeConvention" {
+    # The wiring gap was a CLASS, not one call site: sync_tokens, status,
+    # write_component and roundtrip all called parse_tokens without dark_texts.
+    # Fixing only the cited one left status crashing.
+    repo="$BATS_TMPDIR/status_fileconv"; mkdir -p "$repo/themes"
+    printf ':root{--brand-a:#ffffff;}' > "$repo/themes/light.scss"
+    printf ':root{--brand-a:#000000;}' > "$repo/themes/dark.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "out.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import status
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok': True, 'result': {'tokens': []}}
+report, code = status.run(repo='$repo', client=Fake())
+assert code == 0, (code, report)
+names = sorted(report['onlyInCode'])
+assert names == ['--brand-a', '--brand-a-dark'], names
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "status: the drift subcommand refuses a file convention it cannot resolve" {
+    # drift takes a bare --source-file with no repo, so it has nothing to resolve
+    # a theme file against. Refuse clearly rather than raise.
+    src="$BATS_TMPDIR/drift_src.css"; printf ':root{--brand-a:#fff;}' > "$src"
+    echo '[]' > "$BATS_TMPDIR/drift_live.json"
+    run python3 "$SCRIPT_DIR/lib/status.py" drift \
+        --source-file "$src" --live-file "$BATS_TMPDIR/drift_live.json" \
+        --conventions '[{"type":"file","path":"dark.scss","primary":true}]'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"status.py run --repo"* ]]
+}
