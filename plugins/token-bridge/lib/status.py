@@ -90,6 +90,16 @@ def run(repo=".", url=None, client=None):
         # outside the text it is handed. Same read-failure class as load_source,
         # so it shares the refusal path.
         dark_texts = parse_tokens.resolve_dark_texts(cfg)
+        missing = parse_tokens.missing_imports()
+        if missing and not (cfg.get("source") or {}).get("allowMissingImports"):
+            listed = ", ".join(f"{spec!r}" for spec, _ in missing[:5])
+            return (
+                {"ok": False, "error": "unresolved_imports",
+                 "note": (f"{len(missing)} import(s) could not be resolved: {listed}. "
+                          "Their tokens are invisible to this parse, so any drift "
+                          "reported here would be wrong.")},
+                EXIT_ERROR,
+            )
     except RuntimeError as exc:
         return {"ok": False, "error": "source_read_failed", "note": str(exc)}, EXIT_ERROR
 
@@ -181,6 +191,7 @@ def main(argv=None):
         desired_names = {x["name"] for x in desired}
         unreadable = {n for n in declared if n not in desired_names}
         unreadable |= {n + "-dark" for n in unreadable}
+        unreadable |= {x["name"] for x in _declined}   # match run()'s derivation
         print(json.dumps(
             drift(desired, live, owned_prefix=args.prefix, unreadable=unreadable), indent=2
         ))

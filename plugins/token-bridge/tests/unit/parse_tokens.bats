@@ -1189,3 +1189,86 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "R7: a theme file that READS but declares nothing refuses" {
+    # The unreadable-file case already raised. A file that opens fine and yields
+    # no declarations — truncated, fully commented out — took the silent path:
+    # the dark scope resolved empty, every token looked theme-invariant, and
+    # sync deleted every -dark twin at exit 0.
+    repo="$BATS_TMPDIR/emptytheme"; mkdir -p "$repo"
+    printf ':root{--brand-a:#ffffff;}' > "$repo/l.css"
+    printf '/* every declaration commented out */' > "$repo/d.css"
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo', 'source': {'path': 'l.css', 'prefix': '--brand-'},
+       'themeConventions': [{'type': 'file', 'path': 'd.css', 'primary': True}]}
+try:
+    pt.resolve_dark_texts(cfg)
+except RuntimeError as e:
+    assert 'declares no custom properties' in str(e), e
+    assert 'delete every -dark twin' in str(e), 'the refusal must say WHY'
+    print('OK')
+else:
+    raise AssertionError('an empty theme file must refuse, not yield an empty dark scope')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "strip_comments: a // inside url() or a data URI does not truncate the line" {
+    # declared_names shared strip_comments with the block walk, so a base64 '//'
+    # made a declaration invisible to the parse AND to the protection at once —
+    # a guard failing together with the thing it guards.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+conv = [{'type': 'class', 'class': 'd', 'primary': True}]
+for src in [
+    ':root{--brand-a:#37D895;--brand-i:url(\"data:image/png;base64,iVB//NSUhEUg==\");--brand-bg:#FFF;--brand-fg:#111}',
+    ':root{--brand-a:#37D895;--brand-l:url(//cdn.example.com/l.png);--brand-bg:#FFF;--brand-fg:#111}',
+]:
+    parsed = {r['name'] for r in pt.parse_tokens(src, conv, '--brand-')}
+    swept  = pt.declared_names(src, '--brand-')
+    assert '--brand-bg' in parsed and '--brand-fg' in parsed, parsed
+    assert '--brand-bg' in swept and '--brand-fg' in swept, swept
+# The sweep unions RAW and comment-stripped text on purpose, so a name that
+# appears only in a comment IS protected. That is the safe direction: it can
+# never have reached `desired`, so it was never created in the target file, and
+# protecting it costs nothing. The alternative — sharing strip_comments with the
+# walk — is what let a base64 // delete real tokens.
+assert '--brand-x' in pt.declared_names(':root{--brand-a:#fff;}\n// --brand-x: #000;', '--brand-')
+# ...but the PARSE still ignores it, so nothing bogus is ever written.
+parsed = {r['name'] for r in pt.parse_tokens(':root{--brand-a:#fff;}\n// --brand-x: #000;', conv, '--brand-')}
+assert parsed == {'--brand-a'}, parsed
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "ref resolves import EDGES too, not just file content" {
+    # Round 4 injected a git-blob reader but left edge discovery on
+    # os.path.isfile, so a partial present at the ref but renamed in the working
+    # tree was dropped and its tokens deleted — defeating source.ref in the one
+    # case it exists for.
+    repo="$BATS_TMPDIR/refedges"; rm -rf "$repo"; mkdir -p "$repo/css/theme"
+    ( cd "$repo" && git init -q . \
+      && printf '@use "theme/palette";\n:root{--brand-accent:#37D895;}' > css/tokens.scss \
+      && printf ':root{--brand-green-500:#0F0;}' > css/theme/_palette.scss \
+      && git add -A && git -c user.email=t@t -c user.name=t commit -qm init \
+      && mv css/theme/_palette.scss css/theme/_colors.scss )
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo',
+       'source': {'path':'css/tokens.scss','prefix':'--brand-','ref':'HEAD','followImports':True},
+       'themeConventions': []}
+base = pt.load_source(cfg)
+assert '--brand-green-500' in base, 'partial dropped despite existing at the ref'
+assert pt.missing_imports() == [], pt.missing_imports()
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

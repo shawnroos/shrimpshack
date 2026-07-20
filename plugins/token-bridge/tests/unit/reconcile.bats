@@ -823,3 +823,66 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "an unresolved import REFUSES rather than deleting the partial's tokens" {
+    # `missing` was logged and never acted on — the log line even predicted the
+    # deletion. A partial's names are in no text we read, so declared_names
+    # cannot protect them by construction; refusing is the only safe answer.
+    repo="$BATS_TMPDIR/missimport"; mkdir -p "$repo/css"
+    printf '@use "theme/palette";\n:root{--brand-accent:#37D895;}' > "$repo/css/tokens.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "css/tokens.scss", "ref": null, "prefix": "--brand-", "followImports": true },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-accent','type':'color','value':'#37D895'},
+            {'name':'--brand-green-500','type':'color','value':'#0F0'}]}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=True)
+assert report.get('error') == 'unresolved_imports', report
+assert code != 0, code
+assert 'deleted' not in report, report
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "delete scoping is prefix-bound — a foreign live token is never removed" {
+    # This guard survived mutation in round 5: removing owned_prefix from run()
+    # deletes a live Paper-native token. Load-bearing but untested until now.
+    repo="$BATS_TMPDIR/ownedscope"; mkdir -p "$repo"
+    printf ':root{--brand-a:#ffffff;}' > "$repo/t.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "t.css", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+            {'name':'--paper-native','type':'color','value':'#123456'}]}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=False)
+assert report['deleted'] == [], report['deleted']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

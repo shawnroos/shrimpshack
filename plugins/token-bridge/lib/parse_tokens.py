@@ -114,15 +114,40 @@ def strip_comments(text):
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     out = []
     for line in text.splitlines():
-        idx = line.find("//")
-        while idx != -1:
-            if idx > 0 and line[idx - 1] == ":":
-                idx = line.find("//", idx + 2)
-                continue
-            line = line[:idx]
-            break
-        out.append(line)
+        out.append(_strip_line_comment(line))
     return "\n".join(out)
+
+
+def _strip_line_comment(line):
+    """Drop a `//` line comment, treating strings and url() as data.
+
+    The old guard was `the char before // is not ':'`, which covers `https://`
+    and nothing else. A base64 data URI containing `//`, or a protocol-relative
+    `url(//cdn…)`, truncated the line — and since `declared_names` shares this
+    pre-pass, every declaration after that point became invisible to the PARSE
+    and to the PROTECTION at once. A guard that fails together with the thing it
+    guards protects nothing, which is the one shape "safe by construction" does
+    not cover. Scan with the same string awareness the value scanner already
+    uses."""
+    i, n = 0, len(line)
+    depth_url = 0
+    while i < n:
+        c = line[i]
+        if c in "\"'":
+            j = _skip_quoted(line, i)
+            if j != i:
+                i = j
+                continue
+        if line.startswith("url(", i):
+            depth_url += 1
+            i += 4
+            continue
+        if c == ")" and depth_url:
+            depth_url -= 1
+        elif c == "/" and line.startswith("//", i) and not depth_url:
+            return line[:i]
+        i += 1
+    return line
 
 
 # --- brace-aware block scanning ----------------------------------------------
@@ -1115,7 +1140,7 @@ def _import_candidates(spec, from_dir):
     return out
 
 
-def resolve_source_graph(entry_path, read_file=None, max_depth=32):
+def resolve_source_graph(entry_path, read_file=None, max_depth=32, exists=None):
     """Read `entry_path` and everything it @use/@import/@forwards, depth-first.
 
     Returns (text, loaded, missing): the concatenated source with DEPENDENCIES
@@ -1133,14 +1158,20 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32):
     remote URLs are skipped, not treated as missing — they carry no custom
     properties we could read, and reporting them as missing would be noise.
 
-    `read_file` is injectable so a git-ref source can supply blobs instead of
-    working-tree reads."""
+    `read_file` and `exists` are both injectable so a git-ref source resolves
+    the WHOLE graph at that ref. Injecting only the reader was not enough:
+    which imports exist was still decided by the working tree, so a partial
+    present at the pinned ref but renamed in the working tree was dropped from
+    the graph — and its tokens deleted. `source.ref` exists precisely to
+    decouple a sync from working-tree state."""
     import os
 
     if read_file is None:
         def read_file(path):
             with open(path, "r", encoding="utf-8") as fh:
                 return fh.read()
+    if exists is None:
+        exists = os.path.isfile
 
     seen = set()
     loaded = []
@@ -1167,7 +1198,7 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32):
             if _BUILTIN_LOAD.match(spec):
                 continue
             for cand in _import_candidates(spec, here):
-                if os.path.isfile(cand):
+                if exists(cand):
                     visit(cand, depth + 1)
                     break
             else:
@@ -1227,6 +1258,22 @@ def _read_at_ref(cfg, rel, ref):
     return result.stdout
 
 
+def _guard_theme_not_empty(txt, index, whence):
+    """A theme file that READS but declares no custom property is the same
+    hazard as one that cannot be read: the dark scope resolves empty, every
+    token looks theme-invariant, and sync deletes every `-dark` twin. The
+    unreadable case already raises; this one used to exit 0 with ok:true.
+    Truncation, a fully commented-out file, or `path` pointed at something with
+    no declarations all land here."""
+    if not declared_names(txt):
+        raise RuntimeError(
+            f"themeConventions[{index}] (file): {whence} declares no custom "
+            "properties. Refusing rather than treating the dark theme as empty — "
+            "an empty dark scope would delete every -dark twin in the target file."
+        )
+    return txt
+
+
 def resolve_dark_texts(cfg):
     """Read the text of every `file` convention's theme file.
 
@@ -1256,14 +1303,14 @@ def resolve_dark_texts(cfg):
             # without it the base came from the pinned revision and the theme
             # from the working tree — the cross-revision diff this whole ref
             # handling exists to prevent.
-            reader = None
+            reader, exists = None, None
             if ref:
                 repo_root = cfg.get("_repo") or ""
+                reader, exists = _ref_readers(cfg, ref, repo_root)
 
-                def reader(path, _ref=ref, _root=repo_root):
-                    return _read_at_ref(cfg, os.path.relpath(path, _root), _ref)
-
-            text, loaded, missing = resolve_source_graph(abs_path, read_file=reader)
+            text, loaded, missing = resolve_source_graph(
+                abs_path, read_file=reader, exists=exists
+            )
             for spec, whence in missing:
                 _log(
                     f"unresolved import {spec!r} (from {whence}) in theme file {rel!r} — "
@@ -1273,7 +1320,7 @@ def resolve_dark_texts(cfg):
                 raise RuntimeError(
                     f"themeConventions[{i}] (file): could not read theme file {abs_path}"
                 )
-            out[i] = text
+            out[i] = _guard_theme_not_empty(text, i, f"the theme graph rooted at {rel!r}")
             continue
         try:
             # Honour source.ref for the theme file too. Reading the base at a
@@ -1283,10 +1330,10 @@ def resolve_dark_texts(cfg):
             # those phantom twins. source.ref exists to sync a known revision;
             # reading only half of it at that revision defeats the point.
             if ref:
-                out[i] = _read_at_ref(cfg, rel, ref)
+                out[i] = _guard_theme_not_empty(_read_at_ref(cfg, rel, ref), i, f"{rel!r} at ref {ref!r}")
                 continue
             with open(abs_path, "r", encoding="utf-8") as fh:
-                out[i] = fh.read()
+                out[i] = _guard_theme_not_empty(fh.read(), i, repr(rel))
         except OSError as exc:
             raise RuntimeError(
                 f"themeConventions[{i}] (file): could not read theme file {abs_path}: {exc}. "
@@ -1294,6 +1341,41 @@ def resolve_dark_texts(cfg):
                 "scope would delete every -dark twin in the Paper file."
             ) from exc
     return out
+
+
+# Unresolved imports from the most recent load_source call. `missing` used to be
+# logged and dropped, so a renamed partial's tokens reached neither the parse nor
+# the protection set and were DELETED — the log line even predicted it. Callers
+# read this and refuse.
+_MISSING_IMPORTS = []
+
+
+def missing_imports():
+    """Unresolved import specs from the last load_source call, as (spec, from)."""
+    return list(_MISSING_IMPORTS)
+
+
+def _ref_readers(cfg, ref, repo_root):
+    """(read_file, exists) that resolve against a git ref instead of the tree."""
+    import os
+    import subprocess
+
+    def _rel(path):
+        return os.path.relpath(path, repo_root)
+
+    def read_file(path):
+        return _read_at_ref(cfg, _rel(path), ref)
+
+    def exists(path):
+        try:
+            return subprocess.run(
+                ["git", "-C", repo_root, "cat-file", "-e", f"{ref}:{_rel(path)}"],
+                capture_output=True,
+            ).returncode == 0
+        except OSError:
+            return False
+
+    return read_file, exists
 
 
 def declared_names(text, prefix=None):
@@ -1308,7 +1390,15 @@ def declared_names(text, prefix=None):
     walk, the classifier, or a scope predicate handled it correctly, so a future
     parser gap of a shape nobody anticipated is protected by construction rather
     than by another guard."""
-    names = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(strip_comments(text or ""))}
+    # Union the RAW text with the comment-stripped text. If strip_comments ever
+    # truncates wrongly again, the raw sweep still sees the declaration, so the
+    # failure lands on the OVER-protect side (a stale token) instead of the
+    # destructive one (a deleted token). The cost is that a name appearing only
+    # inside a comment is protected — harmless, since it can never have reached
+    # `desired` and so was never created in the target file.
+    raw = text or ""
+    names = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(raw)}
+    names |= {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(strip_comments(raw))}
     if prefix:
         names = {n for n in names if n.startswith(prefix)}
     return names
@@ -1369,14 +1459,16 @@ def load_source(cfg):
         # entry file at a ref while dropping every partial it imports deleted
         # those partials' tokens — they reach neither `desired` nor the
         # protected set, because the parser never saw them.
-        reader = None
+        reader, exists = None, None
         if ref:
             repo_root = cfg.get("_repo") or ""
+            reader, exists = _ref_readers(cfg, ref, repo_root)
 
-            def reader(path, _ref=ref, _root=repo_root):
-                return _read_at_ref(cfg, os.path.relpath(path, _root), _ref)
-
-        text, loaded, missing = resolve_source_graph(abs_path, read_file=reader)
+        text, loaded, missing = resolve_source_graph(
+            abs_path, read_file=reader, exists=exists
+        )
+        _MISSING_IMPORTS.clear()
+        _MISSING_IMPORTS.extend(missing)
         for spec, whence in missing:
             _log(
                 f"unresolved import {spec!r} (from {whence}) — its tokens are NOT in "

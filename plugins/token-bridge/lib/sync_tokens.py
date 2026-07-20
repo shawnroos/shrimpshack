@@ -539,6 +539,28 @@ def run(repo=".", url=None, apply=True):
     # read here — parse cannot reach outside the text it is given. Sharing the
     # load_source try/except: both are "could not read the source" failures and
     # both must refuse rather than proceed with a partial view.
+    # An unresolved import makes the parse untrustworthy in a way no protection
+    # set can cover: the partial's names are not in any text we read, so
+    # declared_names cannot see them and they look like a deliberate removal.
+    # A renamed partial is an ordinary refactor. Refuse, matching the posture
+    # for an unreadable theme file — the log line alone predicted the deletion
+    # and prevented nothing.
+    missing = parse_tokens.missing_imports()
+    if missing and not (cfg.get("source") or {}).get("allowMissingImports"):
+        listed = ", ".join(f"{spec!r} (from {whence})" for spec, whence in missing[:5])
+        return (
+            {
+                "ok": False, "refused": True, "error": "unresolved_imports",
+                "note": (
+                    f"{len(missing)} import(s) could not be resolved: {listed}. Nothing was "
+                    "written — tokens declared in an unresolved file are invisible to this "
+                    "parse and would look deleted. Fix the path, or set "
+                    "source.allowMissingImports: true to accept the risk."
+                ),
+            },
+            EXIT_REFUSED,
+        )
+
     try:
         dark_texts = parse_tokens.resolve_dark_texts(cfg)
     except RuntimeError as exc:
