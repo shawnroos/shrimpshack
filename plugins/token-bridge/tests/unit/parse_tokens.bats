@@ -1316,3 +1316,39 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "guard: _is_balanced rejects a composite that only LOOKS like one var()" {
+    # Mutation testing found this guard load-bearing but untested: replacing it
+    # with `return True` left all 294 tests green while a two-value composite
+    # was silently truncated to its first alias and half the value discarded.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+assert pt.var_alias('var(--brand-a, #eee) var(--brand-b, #fff)') == (None, None), \
+    pt.var_alias('var(--brand-a, #eee) var(--brand-b, #fff)')
+assert pt.var_alias('var(--brand-a)') == ('--brand-a', None), pt.var_alias('var(--brand-a)')
+assert pt._is_balanced('var(--a, #eee) var(--b, #fff)') is True
+assert pt._is_balanced('var(--a, \"unterminated') is False
+assert pt._is_balanced('calc(1px') is False
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "a CSS escape outside a string does not swallow the rest of the block" {
+    # \\\" is a valid one-character value. Reading it as a quote-open swallowed
+    # every later declaration AND recorded a false malformed event, which under
+    # the 2.0 contract refuses --prune on perfectly valid CSS.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+CONV=[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}]
+names = sorted(t['name'] for t in pt.parse_tokens(r':root{--sep: \\\"; --brand-accent:#000;}', CONV))
+assert names == ['--brand-accent', '--sep'], names
+assert pt.parse_loss() == [], pt.parse_loss()
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

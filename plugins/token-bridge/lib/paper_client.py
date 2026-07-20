@@ -88,13 +88,33 @@ def error_envelope(error: str, note: str | None = None, **extra) -> dict:
 # --- shared config -----------------------------------------------------------
 
 
-def _same_path(a, b) -> bool:
-    """True when two config-relative paths denote the same file. Lexical
-    normalization is enough here — both are relative to the same repo root, and
-    a realpath compare would need the repo, which validation does not have."""
+def _same_path(a, b, repo=None) -> bool:
+    """True when two config-relative paths denote the same file.
+
+    Lexical normalization is NOT enough, and the claim that it was is what let
+    this through: `themes/light.scss` and `themes/Light.scss` compared unequal
+    while naming one file on a case-insensitive filesystem (APFS by default), so
+    a config could point the dark convention at the base file, both halves would
+    parse identical text, and every -dark twin would have nothing to distinguish
+    it. The sibling comparator in emit_tokens (`_same_file`) already resolved
+    symlinks and case for exactly this reason; this one did not, which is the
+    same defect surviving in the file next door.
+
+    `repo` is optional only so the pure-lexical callers keep working; pass it
+    whenever it is in scope (read_config has it as `repo_abs`)."""
     if not a or not b:
         return False
-    return os.path.normpath(a) == os.path.normpath(b)
+    if os.path.normpath(a) == os.path.normpath(b):
+        return True
+    if not repo:
+        return False
+    ra, rb = (os.path.realpath(os.path.join(repo, x)) for x in (a, b))
+    if ra == rb:
+        return True
+    try:
+        return os.path.exists(ra) and os.path.exists(rb) and os.path.samefile(ra, rb)
+    except OSError:
+        return False
 
 
 def _bad_convention_type(i: int, ctype) -> str:
@@ -108,7 +128,7 @@ def _bad_convention_type(i: int, ctype) -> str:
     )
 
 
-def _validate_config(cfg: dict) -> str | None:
+def _validate_config(cfg: dict, repo: str | None = None) -> str | None:
     """Structurally validate a token-bridge config. Returns an actionable error
     note, or None when the shape is sound.
 
@@ -180,7 +200,7 @@ def _validate_config(cfg: dict) -> str | None:
                 # refuses this exact pair; config level is the right layer
                 # because it covers sync, status, emit and harvest at once.
                 src_path = (src or {}).get("path")
-                if src_path and _same_path(conv.get("path"), src_path):
+                if src_path and _same_path(conv.get("path"), src_path, repo):
                     return (
                         f"themeConventions[{i}] (file) 'path' is the same file as "
                         "'source.path'. The dark theme cannot be the base file — every "
@@ -235,7 +255,7 @@ def read_config(repo: str) -> tuple:
         return None, {}, error_envelope(
             "bad_config", note=f"{config_path} must contain a JSON object."
         )
-    verr = _validate_config(cfg)
+    verr = _validate_config(cfg, repo_abs)
     if verr is not None:
         return None, cfg, error_envelope("bad_config", note=verr)
 

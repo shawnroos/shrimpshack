@@ -42,12 +42,30 @@ The parser can be as incomplete as CSS demands and the worst outcome is a stale
 token, which you can see in `status` and clear whenever you like. A deleted one
 is not recoverable.
 
-`--prune` has two further guards, because it is now the only destructive path:
-it never removes something the tool merely failed to type, and it **refuses
-outright when the parser reported it could not read the source** — an
-unterminated string or unclosed paren swallows the rest of its block, and which
-declarations were lost is exactly what the parser cannot determine. Fix the
-source, then prune.
+`--prune` is the only destructive path, so it requires a parse it can trust —
+and trust here is a positive assertion, not the absence of known problems. The
+parser affirms that it read the whole source graph it was pointed at; `--prune`
+refuses unless it did.
+
+That inversion matters more than it sounds. The earlier design asked "did
+anything go wrong?" against a hand-kept list of ways a parse can be incomplete,
+and the list was never finished: a package import that the tool deliberately
+does not follow was logged ("tokens they declare are not in this parse") and
+then dropped, so a prune deleted exactly those tokens. Under the affirmation
+model, a channel nobody has thought of yet leaves the parse unaffirmed, and an
+unaffirmed parse does not prune.
+
+You will hit this if you `@use "@scope/pkg"`, use a `~`-prefixed spec, or have
+an import the tool cannot resolve — none of which it can walk. If those declare
+nothing you sync (vendor CSS you do not own), set `source.allowIncompleteParse:
+true` and prune anyway.
+
+Two things `--prune` still does not do. It will not remove a token Paper cannot
+represent (a shadow, a motion value) — those parsed fine and are reported under
+`declined`. And when it removes a token whose name is still declared somewhere
+the sync does not read, such as a component rule, it says so under
+`stillDeclared`: that is a refactor rather than a retirement, and it would
+otherwise come back as a new token on the next sync.
 
 ## The theme model
 

@@ -617,34 +617,56 @@ def run(repo=".", url=None, apply=True, prune=False):
     # can TRUST. When the parser reported malformed source it also told us it
     # swallowed declarations — and which ones is exactly what it cannot know.
     # Deleting on that basis is the whole class this release removed.
-    loss = parse_tokens.parse_loss()
-    if prune and loss:
-        listed = ", ".join(f"{tok} ({why})" for tok, why in loss[:5])
+    # Pruning is the only destructive operation, so it requires a parse we can
+    # TRUST — and trust is a positive assertion, not the absence of known-bad
+    # signals. Four review rounds asked "is this parse trustworthy?" by checking
+    # a hand-maintained list of ways it might not be, and the list was still
+    # incomplete when it shipped: a deliberately not-followed package import was
+    # logged ("tokens they declare are not in this parse") and then thrown away,
+    # so --prune deleted precisely those tokens. Enumerating the bad cases fails
+    # every round. Ask the parser to affirm it read everything instead; a channel
+    # nobody has thought of yet leaves the parse unaffirmed, which fails closed.
+    complete, reasons = parse_tokens.source_completeness()
+    allow_incomplete = (cfg.get("source") or {}).get("allowIncompleteParse")
+    if prune and not complete and not allow_incomplete:
+        listed = "; ".join(
+            f"{what}{f' (from {where})' if where else ''} [{kind}]"
+            for kind, what, where in reasons[:5]
+        )
+        more = f" and {len(reasons) - 5} more" if len(reasons) > 5 else ""
         return (
             {
-                "ok": False, "refused": True, "error": "prune_on_unreliable_parse",
+                "ok": False, "refused": True, "error": "incomplete_parse",
+                "reasons": [
+                    {"kind": k, "what": w, "where": p} for k, w, p in reasons
+                ],
                 "note": (
-                    f"the parser could not fully read this source: {listed}. Nothing was "
-                    "removed — it reported swallowing declarations, and which ones is "
-                    "exactly what it cannot determine. Fix the source, then prune."
+                    f"nothing was removed: this parse did not read the whole source. "
+                    f"{listed}{more}. Pruning decides what to delete from what is "
+                    "absent, which is only sound when the parse is complete. Fix or "
+                    "follow the source above — or, if those declare nothing you sync "
+                    "(vendor CSS you do not own), set source.allowIncompleteParse: "
+                    "true to prune anyway."
                 ),
             },
             EXIT_REFUSED,
         )
 
-    declared = parse_tokens.declared_names(text, prefix)
-    for dark_text in (dark_texts or {}).values():
-        declared |= parse_tokens.declared_names(dark_text, prefix)
-    desired_names = {d["name"] for d in desired}
-    # Two sources, because neither alone is complete:
-    #   - declared in the source text but absent from `desired` (and its twin):
-    #     covers parse-level loss, where no record exists to inspect;
-    #   - everything explicitly declined: covers the degrade, where the BASE
-    #     succeeded and only the twin was dropped, so the base is in `desired`
-    #     and the text sweep sees nothing wrong.
-    unreadable = {n for n in declared if n not in desired_names}
-    unreadable |= {n + DARK_SUFFIX for n in unreadable}
-    unreadable |= {d["name"] for d in declined}
+    # Declined tokens parsed FINE — Paper simply cannot represent them (shadows,
+    # motion, filters). They are in the source, so they must not be deleted, and
+    # they are disclosed in the `declined` report field rather than silently
+    # suppressed. This is the whole of the protection now.
+    #
+    # The old text-sweep protection is gone. It existed because sync used to
+    # delete automatically, so it had to guess at what the parser might have
+    # missed; with a complete parse there is nothing unread to protect, and with
+    # an incomplete one we refused above. Keeping it only ever suppressed
+    # deletions the user explicitly asked for: a token moved from `:root` into a
+    # component rule became permanently unprunable, reported as ok/pruned with
+    # an empty `deleted` and no log line at all.
+    protected = {d["name"] for d in declined}
+    protected |= {n + DARK_SUFFIX for n in protected}
+    unreadable = protected
 
     # A live token whose declaration is only commented out is PROTECTED, which
     # is safe but silent — the user commented it out to retire it and nothing
@@ -662,6 +684,25 @@ def run(repo=".", url=None, apply=True, prune=False):
         )
 
     diff = diff_tokens(desired, live, owned_prefix=prefix, unreadable=unreadable)
+
+    # A name can be absent from `desired` yet still present in the source, when
+    # it was moved somewhere the sync does not read — a component rule, a print
+    # media block. With a complete parse that is a real removal from the theme
+    # and prune deletes it, which is what was asked. But it is an ordinary
+    # refactor, not an obvious deletion, so it is never silent.
+    declared_anywhere = parse_tokens.declared_names(text, prefix)
+    for dark_text in (dark_texts or {}).values():
+        declared_anywhere |= parse_tokens.declared_names(dark_text, prefix)
+    still_declared = sorted(
+        t["name"] for t in diff["deletes"] if t["name"] in declared_anywhere
+    )
+    if still_declared and prune:
+        _log(
+            f"{len(still_declared)} token(s) being removed are still declared in the "
+            f"source, outside any scope this sync reads: {', '.join(still_declared[:8])}. "
+            "If you moved them into a component rule rather than retiring them, they "
+            "will come back on the next sync as new tokens."
+        )
 
     # Blank-source backstop (R7, second arm). The pre-daemon check above cannot
     # fire on a BLANK source — a truncated or emptied file is legitimately
@@ -699,10 +740,23 @@ def run(repo=".", url=None, apply=True, prune=False):
         "prunable": [] if prune else [t["name"] for t in diff["deletes"]],
         "pruned": prune,
         "recreated": [t["name"] for t in diff["recreates"]],
+        # Deletes that the source still declares somewhere unread — moved, not
+        # retired. Empty unless prune actually removed them.
+        "stillDeclared": still_declared if prune else [],
         "declined": declined,
         "pinnedByComment": pinned,
         "empty": is_empty_diff(diff),
     }
+
+    if diff["recreates"]:
+        names = ", ".join(t["name"] for t in diff["recreates"][:8])
+        _log(
+            f"{len(diff['recreates'])} token(s) changed Paper type and are being "
+            f"recreated: {names}. Paper cannot retype in place, so each is a delete "
+            "followed by a create — this happens with or without --prune, and any "
+            "Paper-side field this tool does not model (a hand-written description) "
+            "does not survive it."
+        )
 
     if not prune and diff["deletes"]:
         names = ", ".join(t["name"] for t in diff["deletes"][:8])

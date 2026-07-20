@@ -1025,7 +1025,7 @@ JSON
     [[ "$output" == *"same file as 'source.path'"* ]]
 }
 
-@test "prune REFUSES when the parser reported it could not read the source" {
+@test "prune REFUSES when the parse was not complete (malformed source)" {
     # The parser printed "any declaration after it was not read" and the pipeline
     # deleted exactly that token. Pruning is the only destructive operation left,
     # so it requires a parse we can trust — and which declarations were swallowed
@@ -1046,7 +1046,7 @@ class Fake:
             {'name':'--brand-b-dark','type':'color','value':'#222222'}]}}
 st.PaperClient = Fake
 r, code = st.run(repo='$repo', apply=True, prune=True)
-assert r.get('error') == 'prune_on_unreliable_parse', r
+assert r.get('error') == 'incomplete_parse', r
 assert code != 0, code
 assert 'deleted' not in r, r
 # without --prune it still reports, just does not act
@@ -1106,6 +1106,143 @@ class Fake:
 st.PaperClient = Fake
 r, _ = st.run(repo='$repo', apply=False, prune=True)
 assert '--brand-onlydark-dark' not in r['deleted'], r['deleted']
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "completeness fails CLOSED: an unaffirmed parse is not complete" {
+    # The property that makes a future unregistered channel safe. No read has
+    # happened, so nothing has affirmed anything, so pruning must not proceed.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+complete, reasons = pt.source_completeness()
+assert complete is False, complete
+assert reasons[0][0] == 'unaffirmed', reasons
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "prune REFUSES on a not-followed package import (the round-8 P0)" {
+    # The tool logged 'tokens they declare are not in this parse' and then
+    # deleted exactly those tokens: the channel was a local variable that got
+    # printed and thrown away.
+    repo=$(make_repo notfollowed '@use "@acme/palette";
+
+:root{--brand-radius:4px;}')
+    python3 - "$repo" <<'PY'
+import json, sys
+c = sys.argv[1] + "/token-bridge.config.json"
+cfg = json.load(open(c)); cfg["source"]["followImports"] = True
+json.dump(cfg, open(c, "w"))
+PY
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+CALLS=[]
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-fg','type':'color','value':'#000000'},
+            {'name':'--brand-radius','type':'radius','value':'4px'}]}}
+    def set_tokens(s,f,t): CALLS.append(t); return {'ok': True, 'result': {}}
+    def create_tokens(s,f,t): return {'ok': True, 'result': {}}
+st.PaperClient = Fake
+r, code = st.run(repo='$repo', apply=True, prune=True)
+assert r.get('error') == 'incomplete_parse', r
+assert code != 0, code
+assert CALLS == [], CALLS   # nothing was sent to the daemon
+kinds = {x['kind'] for x in r['reasons']}
+assert 'not_followed' in kinds, r['reasons']
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "allowIncompleteParse is the escape hatch for source you do not own" {
+    repo=$(make_repo allowinc '@use "@acme/palette";
+
+:root{--brand-radius:4px;}')
+    python3 - "$repo" <<'PY'
+import json, sys
+c = sys.argv[1] + "/token-bridge.config.json"
+cfg = json.load(open(c))
+cfg["source"]["followImports"] = True
+cfg["source"]["allowIncompleteParse"] = True
+json.dump(cfg, open(c, "w"))
+PY
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-gone','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-radius','type':'radius','value':'4px'}]}}
+    def set_tokens(s,f,t): return {'ok': True, 'result': {}}
+    def create_tokens(s,f,t): return {'ok': True, 'result': {}}
+st.PaperClient = Fake
+r, code = st.run(repo='$repo', apply=True, prune=True)
+assert r['ok'] is True and code == 0, (code, r)
+assert r['deleted'] == ['--brand-gone'], r
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "prune is no longer silently suppressed by a name declared out of scope" {
+    # The P1 the redesign removed: moving a token into a component rule made it
+    # permanently unprunable, reported ok/pruned with an empty deleted and NO log.
+    repo=$(make_repo outofscope ':root{--brand-primary:#0055ff;}
+.legacy-card{--brand-retired:#123456;}')
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-primary','type':'color','value':'#0055FF'},
+            {'name':'--brand-retired','type':'color','value':'#123456'}]}}
+    def set_tokens(s,f,t): return {'ok': True, 'result': {}}
+    def create_tokens(s,f,t): return {'ok': True, 'result': {}}
+st.PaperClient = Fake
+r, code = st.run(repo='$repo', apply=True, prune=True)
+assert r['deleted'] == ['--brand-retired'], r
+# and it is DISCLOSED as moved-not-retired, never silent
+assert r['stillDeclared'] == ['--brand-retired'], r
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "declined tokens are still protected from prune (they parsed fine)" {
+    repo=$(make_repo declprot ':root{--brand-a:#ffffff;--brand-shadow:0 1px 2px rgba(0,0,0,.2);}')
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-shadow','type':'color','value':'#000000'}]}}
+    def set_tokens(s,f,t): return {'ok': True, 'result': {}}
+    def create_tokens(s,f,t): return {'ok': True, 'result': {}}
+st.PaperClient = Fake
+r, code = st.run(repo='$repo', apply=True, prune=True)
+assert '--brand-shadow' not in r['deleted'], r
+assert any(d['name'] == '--brand-shadow' for d in r['declined']), r
 print('OK')
 " 2>/dev/null
     [ "$status" -eq 0 ]

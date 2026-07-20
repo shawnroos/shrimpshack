@@ -668,6 +668,66 @@ def _conv_label(conv):
 # delete exactly that token.
 _PARSE_LOSS = []
 
+# --- the completeness ledger -------------------------------------------------
+#
+# Rounds 4 through 8 each asked "is this parse trustworthy?" and answered by
+# checking a hand-maintained list of ways it might not be. Round 8's review
+# found the list was already incomplete when it shipped: malformed source and
+# unresolved imports were wired to the prune refusal, but a DELIBERATELY
+# not-followed package import was a local variable that got printed and thrown
+# away — so the tool logged "tokens they declare are not in this parse" and
+# then deleted exactly those tokens.
+#
+# Enumerating the bad cases fails every round, because the list is only as
+# complete as the last review. So the question is inverted here: a parse is
+# incomplete UNTIL a read path affirms it read everything it was pointed at.
+# A future fourth channel that forgets to register still fails closed, because
+# the affirmation is what grants trust, not the absence of known-bad signals.
+#
+# `_record_incomplete` is the ONE way to register a read failure. Route every
+# new one through it; `parse_loss()` and `missing_imports()` are views over it.
+_INCOMPLETE = []
+_READ_AFFIRMED = False
+
+# Ledger kinds. `malformed` and `unresolved_import` predate the ledger;
+# `not_followed` is the channel whose absence was the round-8 P0.
+KIND_MALFORMED = "malformed"
+KIND_UNRESOLVED_IMPORT = "unresolved_import"
+KIND_NOT_FOLLOWED = "not_followed"
+
+
+def _begin_read():
+    """Open a completeness ledger. Until a read path affirms, nothing is trusted."""
+    global _READ_AFFIRMED
+    _INCOMPLETE.clear()
+    _PARSE_LOSS.clear()
+    _MISSING_IMPORTS.clear()
+    _READ_AFFIRMED = False
+
+
+def _affirm_read():
+    """Called by a read path that walked the whole source graph it was given."""
+    global _READ_AFFIRMED
+    _READ_AFFIRMED = True
+
+
+def _record_incomplete(kind, what, where=""):
+    """Register something the parse could not read. The ONLY way to do so."""
+    _INCOMPLETE.append((kind, what, where))
+
+
+def source_completeness():
+    """(complete, reasons) for the last read. Fail closed.
+
+    `complete` is True only when a read path affirmed it walked the whole graph
+    AND registered nothing it could not read. An unaffirmed parse is NOT
+    complete — that is the property that makes a future unregistered channel
+    safe by default rather than silently destructive.
+    """
+    if not _READ_AFFIRMED:
+        return False, [("unaffirmed", "no read path affirmed it walked the source", "")]
+    return (not _INCOMPLETE), list(_INCOMPLETE)
+
 
 def parse_loss():
     """Malformed-source events from the last parse, as (token, reason)."""
@@ -705,6 +765,12 @@ def _iter_decls(body):
         stray_close = False
         while i < n:
             c = body[i]
+            if c == "\\" and quote is None:
+                # Valid CSS escape outside a string: the next character is data,
+                # never a quote-open or a paren. `--sep: \";` is a value of one
+                # double-quote character.
+                i += 2
+                continue
             if quote is not None:
                 if c == "\\":
                     i += 2
@@ -739,6 +805,7 @@ def _iter_decls(body):
         if i >= n and (quote is not None or depth > 0):
             what = "unterminated string" if quote is not None else "unbalanced parentheses"
             _PARSE_LOSS.append((f"--{m.group(1)}", what))
+            _record_incomplete(KIND_MALFORMED, f"--{m.group(1)}", what)
             _log(
                 f"--{m.group(1)}: {what} — the value ran to the end of its block, so any "
                 "declaration after it was not read. Check the source for a missing "
@@ -782,6 +849,8 @@ def _is_balanced(s):
                 esc = True
             elif c == quote:
                 quote = None
+        elif c == "\\":
+            esc = True          # escape outside a string: next char is data
         elif c in "\"'":
             quote = c
         elif c == "(":
@@ -954,6 +1023,7 @@ def parse_with_diagnostics(text, conventions, prefix=None, dark_texts=None):
     # Per-parse, not cumulative — a stale entry from an earlier call would
     # refuse a prune on a source that is perfectly readable.
     _PARSE_LOSS.clear()
+    _INCOMPLETE[:] = [e for e in _INCOMPLETE if e[0] != KIND_MALFORMED]
     text = strip_comments(text)
     blocks = _collect_blocks(text)
     base = _base_decls(blocks)
@@ -1243,6 +1313,10 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32, exists=None):
                 # A build tool's load path resolves these; a relative walk never
                 # can. Not an error — just not followed.
                 not_followed.append((spec, real))
+                # Registered, not just logged. This exact channel was printed
+                # ("tokens they declare are not in this parse") and then thrown
+                # away, so --prune deleted precisely those tokens.
+                _record_incomplete(KIND_NOT_FOLLOWED, spec, real)
                 continue
             for cand in _import_candidates(spec, here):
                 if exists(cand):
@@ -1397,6 +1471,8 @@ def resolve_dark_texts(cfg):
             # Extend rather than clear: load_source ran first and its misses
             # must survive to the same check.
             _MISSING_IMPORTS.extend(missing)
+            for _spec, _from in missing:
+                _record_incomplete(KIND_UNRESOLVED_IMPORT, _spec, _from)
             if not loaded:
                 raise RuntimeError(
                     f"themeConventions[{i}] (file): could not read theme file {abs_path}"
@@ -1521,6 +1597,10 @@ def load_source(cfg):
     if not rel:
         raise RuntimeError("config 'source.path' is required to load the CSS source")
 
+    # Open the completeness ledger. Everything below either affirms a full read
+    # or leaves it unaffirmed, and unaffirmed is not complete.
+    _begin_read()
+
     ref = source.get("ref")
     if ref and not source.get("followImports"):
         repo = cfg.get("_repo")
@@ -1543,6 +1623,7 @@ def load_source(cfg):
             raise RuntimeError(
                 f"could not read source at ref '{spec}' in {repo}: {detail}"
             ) from exc
+        _affirm_read()
         return result.stdout
 
     abs_path = resolve_repo_path(cfg, rel)
@@ -1564,8 +1645,9 @@ def load_source(cfg):
         text, loaded, missing = resolve_source_graph(
             abs_path, read_file=reader, exists=exists
         )
-        _MISSING_IMPORTS.clear()
         _MISSING_IMPORTS.extend(missing)
+        for _spec, _from in missing:
+            _record_incomplete(KIND_UNRESOLVED_IMPORT, _spec, _from)
         for spec, whence in missing:
             _log(
                 f"unresolved import {spec!r} (from {whence}) — its tokens are NOT in "
@@ -1575,11 +1657,14 @@ def load_source(cfg):
             _log(f"followImports: read {len(loaded)} files, dependencies first")
         if not loaded:
             raise RuntimeError(f"could not read source file {abs_path}")
+        _affirm_read()
         return text
 
     try:
         with open(abs_path, "r", encoding="utf-8") as fh:
-            return fh.read()
+            text = fh.read()
+        _affirm_read()
+        return text
     except OSError as exc:
         raise RuntimeError(f"could not read source file {abs_path}: {exc}") from exc
 
