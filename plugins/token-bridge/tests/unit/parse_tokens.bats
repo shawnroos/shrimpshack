@@ -1096,9 +1096,29 @@ print('OK')
     [[ "$output" == *OK* ]]
 }
 
-@test "base scope: tokens split across :root and html, body merge in source order" {
+@test "base scope: :root beats html/body for the same property (specificity)" {
     run bash -c "printf ':root{--brand-a:#111;}\nhtml, body{--brand-b:#222;--brand-a:#333;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
     [ "$status" -eq 0 ]
     [ "$(field --brand-b light)" = "#222" ]
-    [ "$(field --brand-a light)" = "#333" ]   # later block wins, as the cascade would
+    # :root (0,1,0) beats html/body (0,0,1) for the SAME property regardless of
+    # order — a source-order merge synced a value no browser renders.
+    [ "$(field --brand-a light)" = "#111" ]
+}
+
+@test "base merge: :root beats html for the same property, whatever the order" {
+    # :root is (0,1,0), html is (0,0,1) — both select the same element, so a
+    # source-order merge synced a value no browser renders.
+    run bash -c "printf ':root{--brand-a:#AAAAAA;}html{--brand-a:#BBBBBB;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#AAAAAA" ]
+
+    run bash -c "printf 'html{--brand-a:#BBBBBB;}:root{--brand-a:#AAAAAA;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#AAAAAA" ]
+}
+
+@test "base merge: html and body share a tier, so source order still decides" {
+    run bash -c "printf 'html{--brand-a:#BBBBBB;}body{--brand-a:#CCCCCC;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#CCCCCC" ]
 }

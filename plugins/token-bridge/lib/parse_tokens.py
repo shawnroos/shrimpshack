@@ -525,12 +525,23 @@ def _document_scope_decls(blocks):
 
     Shared by the base scope and by a `file` convention's dark scope, so
     "the scope of a theme file" has exactly one definition (KTD2)."""
-    decls = {}
+    # Merge in SPECIFICITY order, not source order. `:root` and `html` select the
+    # same element, but `:root` is (0,1,0) and `html` is (0,0,1) — so `:root`
+    # wins no matter which appears later. A pure source-order merge let a later
+    # `html` block override a `:root` declaration, syncing a value the browser
+    # never renders. `body` is a different element that inherits, so it sits in
+    # the lower tier with `html` and a later `:root` correctly beats it.
+    lower, root = {}, {}
     for context, selector, body in blocks:
         if context:
             continue
-        if _is_document_scope(selector):
-            decls.update(_parse_decls(body))
+        if not _is_document_scope(selector):
+            continue
+        parts = [p.strip() for p in selector.split(",")]
+        target = root if any(p == ":root" for p in parts) else lower
+        target.update(_parse_decls(body))
+    decls = dict(lower)
+    decls.update(root)   # :root tier wins the same property
     return decls
 
 
@@ -539,8 +550,10 @@ def _base_decls(blocks):
 
     The base is a bare document scope (`:root`/`html`/`body`) with no CONDITIONAL
     at-rule in its context — one inside `@layer` qualifies, one inside `@media`
-    does not. Multiple base blocks merge in source order, so a repo splitting
-    tokens across `:root` and `html, body` resolves as the cascade would."""
+    does not. Multiple base blocks merge in SPECIFICITY order — a `:root`
+    declaration beats an `html`/`body` one for the same property regardless of
+    position, as the cascade resolves it — with source order breaking ties
+    within a tier."""
     return _document_scope_decls(blocks)
 
 
@@ -1160,6 +1173,24 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32):
 
     visit(entry_path, 0)
     return "\n".join(chunks), loaded, missing
+
+
+def file_convention_needs_repo(conventions):
+    """A message when `conventions` contains a `file` type but the caller has no
+    repo to resolve its theme file against — else None.
+
+    Shared by every single-file CLI entry point (`sync build-desired`,
+    `status drift`, `emit-from-file`, `emit roundtrip`, this module's own CLI).
+    Each of those was fixed one at a time as it was reported, and each fix
+    missed the siblings; one predicate is what stops the class regrowing."""
+    for i, conv in enumerate(conventions or []):
+        if isinstance(conv, dict) and conv.get("type") == "file":
+            return (
+                f"themeConventions[{i}] is a 'file' convention, whose dark theme lives in "
+                f"{conv.get('path')!r} — but this subcommand reads a single file and has no "
+                "repo to resolve that against. Use the `run --repo PATH` form instead."
+            )
+    return None
 
 
 def resolve_dark_texts(cfg):

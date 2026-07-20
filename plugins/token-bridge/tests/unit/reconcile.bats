@@ -654,3 +654,70 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+@test "classify: an unrecognised dark half drops ONLY the twin, never the base" {
+    # The over-decline fix caused a worse bug than it fixed: declining the pair
+    # deleted a LIVE base token over a dark value classify merely failed to
+    # recognise. Degrade instead — the base is never collateral.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt, classify_tokens as ct, sync_tokens as st
+src = ':root{--brand-a:#ffffff;}[data-theme=\"dark\"]{--brand-a:#{\$sass};}'
+conv = [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}]
+desired, declined = st.build_desired(ct.classify_tokens(pt.parse_tokens(src, conv, '--brand-')))
+assert [d['name'] for d in desired] == ['--brand-a'], desired      # base SURVIVES
+assert [d['name'] for d in declined] == ['--brand-a-dark'], declined
+live = [{'name':'--brand-a','type':'color','value':'#FFFFFF'},
+        {'name':'--brand-a-dark','type':'color','value':'#101010'}]
+dels = [d['name'] for d in st.diff_tokens(desired, live, owned_prefix='--brand-')['deletes']]
+assert dels == ['--brand-a-dark'], dels                            # only the twin
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: modern colour functions and rem lengths are recognised" {
+    # hsl() is what Tailwind, shadcn and Bootstrap ship by default; treating it
+    # as untypable made the degrade fire on ordinary CSS.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct
+for v in ['hsl(210 40% 12%)', 'oklch(0.2 0.03 250)', 'color-mix(in srgb, #000 80%, #fff)']:
+    assert ct.classify_value('--brand-bg', v)[0] == 'color', (v, ct.classify_value('--brand-bg', v))
+assert ct.classify_value('--brand-radius', '0.5rem')[0] == 'radius'
+assert ct.classify_value('--brand-gap', '1.5rem')[0] == 'spacing'
+# still NOT colours — a layered/partial value must never be mis-typed
+for v in ['linear-gradient(hsl(1 2% 3%), #fff)', '0 0 4px hsl(1 2% 3%)']:
+    assert ct.classify_value('--brand-bg', v)[0] is None, v
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "every single-file CLI refuses a file convention cleanly, never a traceback" {
+    # One shared predicate, because fixing these one at a time kept missing
+    # siblings: sync build-desired, status drift, emit-from-file, emit
+    # roundtrip, and parse_tokens' own CLI.
+    src="$BATS_TMPDIR/cli_guard.css"; printf ':root{--brand-a:#fff;}' > "$src"
+    echo '[]' > "$BATS_TMPDIR/cli_guard.json"
+    conv='[{"type":"file","path":"dark.scss","primary":true}]'
+    L="$SCRIPT_DIR/lib"
+    J="$BATS_TMPDIR/cli_guard.json"
+    # Build the command as ONE string and let bash -c word-split it. An earlier
+    # version quoted "$L/"$inv, making the whole invocation a single filename —
+    # python then exited 2 ("can't open file"), silently satisfying the exit
+    # assertion for entirely the wrong reason.
+    for inv in \
+        "$L/sync_tokens.py build-desired --source-file $src --conventions '$conv'" \
+        "$L/status.py drift --source-file $src --live-file $J --conventions '$conv'" \
+        "$L/emit_tokens.py emit-from-file --tokens $J --conventions '$conv'" \
+        "$L/emit_tokens.py roundtrip --tokens $J --conventions '$conv'" ; do
+        run bash -c "printf ':root{--brand-a:#fff;}' | python3 $inv 2>&1"
+        [ "$status" -eq 2 ]
+        [[ "$output" != *Traceback* ]]
+        [[ "$output" != *"can't open file"* ]]
+        [[ "$output" == *"run --repo"* ]]
+    done
+}

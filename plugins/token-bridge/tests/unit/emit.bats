@@ -414,17 +414,18 @@ print('OK')
     [[ "$output" == *OK* ]]
 }
 
-@test "classify: a dark value that is not a valid instance of the type is DECLINED" {
-    # Pre-existing: the type came from the LIGHT value and the dark twin rode
-    # along unchecked, so '--x-dark: #{\$shade100}' was stored in Paper as a color.
+@test "classify: an untypable dark value omits the TWIN, and the base still syncs" {
+    # The type came from the LIGHT value and the dark twin rode along unchecked,
+    # so '--x-dark: #{\$shade100}' reached Paper as a color. Declining the PAIR
+    # was a worse cure than the disease — it deleted the live base token.
     run python3 -c "
 import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
 import parse_tokens as pt, classify_tokens as ct, sync_tokens as st
 src = ':root{--brand-a:#ffffff;}[data-theme=\"dark\"]{--brand-a:#{\$junk};}'
 recs = pt.parse_tokens(src, [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}])
 desired, declined = st.build_desired(ct.classify_tokens(recs))
-assert desired == [], desired
-assert declined and '#{\$junk}' in declined[0]['reason'], declined
+assert [d['name'] for d in desired] == ['--brand-a'], desired
+assert [d['name'] for d in declined] == ['--brand-a-dark'], declined
 print('OK')
 "
     [ "$status" -eq 0 ]
@@ -521,6 +522,58 @@ toks = [{'name':'--b-a','type':'color','value':'#FFF'},
         {'name':'--b-x','type':'color','value':'#EEE'}]
 r = et.roundtrip(toks, conv, prefix='--b-')
 assert r['empty'] is True, r['diff']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit: aliased targets are caught by identity, not by string compare" {
+    # abspath is lexical: it folds neither case (APFS is case-insensitive) nor
+    # symlinks, so two 'different' targets were one file and the base ended up
+    # holding dark content while the report claimed nothing was written.
+    run python3 -c "
+import sys, os, json, shutil; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok':True,'result':{'tokens':[{'name':'--brand-a','type':'color','value':'#FFF'},
+                                              {'name':'--brand-a-dark','type':'color','value':'#000'}]}}
+et.PaperClient = Fake
+
+def build(name, emit_t, dark_t, link=False):
+    R = os.path.join('$BATS_TMPDIR', 'alias_' + name)
+    shutil.rmtree(R, ignore_errors=True)
+    os.makedirs(R + '/src'); os.makedirs(R + '/out')
+    open(R+'/src/light.scss','w').write(':root{--brand-a:#fff;}')
+    open(R+'/src/dark.scss','w').write(':root{--brand-a:#000;}')
+    if link: os.symlink(R+'/out', R+'/link')
+    json.dump({'fileId':'F1','paperDaemonUrl':'http://x',
+      'source':{'path':'src/light.scss','ref':None,'prefix':'--brand-'},
+      'emitTarget':emit_t,'primitivePattern':None,
+      'themeConventions':[{'type':'file','path':'src/dark.scss','emitTarget':dark_t,'primary':True}],
+      'harvest':{'themeSignal':{'type':'data-attribute','attr':'data-theme','value':'dark'},'batch':[]}},
+      open(R+'/token-bridge.config.json','w'))
+    return R
+
+# every aliasing shape, plus output-over-input, must REFUSE and touch nothing
+for name, e, d, link in [('case','out/t.css','out/T.CSS',False),
+                         ('symlink','out/l.css','link/l.css',True),
+                         ('over_darksrc','src/dark.scss','out/d.css',False),
+                         ('over_source','out/l.css','src/light.scss',False)]:
+    R = build(name, e, d, link)
+    before = open(R+'/src/dark.scss').read(), open(R+'/src/light.scss').read()
+    report, code = et.run(repo=R)
+    assert report.get('refused') is True, (name, report)
+    assert code != 0, (name, code)
+    assert (open(R+'/src/dark.scss').read(), open(R+'/src/light.scss').read()) == before, name
+
+# and a genuinely distinct pair still writes both
+R = build('ok', 'out/l.css', 'out/d.css')
+report, code = et.run(repo=R)
+assert report.get('ok') is True and code == 0, report
+assert os.path.exists(R+'/out/l.css') and os.path.exists(R+'/out/d.css')
 print('OK')
 "
     [ "$status" -eq 0 ]

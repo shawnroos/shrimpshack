@@ -216,13 +216,22 @@ def build_desired(classified):
             desired.append({"name": rec["name"], "type": ptype, "value": light_val})
         # Dark twin — only for theme-varying tokens.
         if rec.get("dark") is not None:
-            desired.append(
-                {
-                    "name": rec["name"] + DARK_SUFFIX,
-                    "type": ptype,
-                    "value": _dark_value(rec, theme_varying, dark_literals),
-                }
-            )
+            # A dark half classify could not type is omitted as a TWIN only —
+            # the base above still syncs. Dropping the base too would delete a
+            # live token over a value classify merely failed to recognise.
+            dark_reason = rec.get("dark_excluded_reason")
+            if dark_reason:
+                declined.append(
+                    {"name": rec["name"] + DARK_SUFFIX, "reason": dark_reason}
+                )
+            else:
+                desired.append(
+                    {
+                        "name": rec["name"] + DARK_SUFFIX,
+                        "type": ptype,
+                        "value": _dark_value(rec, theme_varying, dark_literals),
+                    }
+                )
 
     desired.sort(key=lambda t: t["name"])
     declined.sort(key=lambda t: t["name"])
@@ -637,6 +646,10 @@ def main(argv=None):
             return EXIT_REFUSED
         if not isinstance(conventions, list):
             _log("--conventions must be a JSON array of convention objects")
+            return EXIT_REFUSED
+        needs_repo = parse_tokens.file_convention_needs_repo(conventions)
+        if needs_repo:
+            _log(needs_repo)
             return EXIT_REFUSED
         with open(args.source_file, encoding="utf-8") as fh:
             text = fh.read()

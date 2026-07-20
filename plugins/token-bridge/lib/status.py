@@ -153,12 +153,9 @@ def main(argv=None):
         with open(args.source_file, encoding="utf-8") as fh:
             source_text = fh.read()
         conventions = json.loads(args.conventions)
-        if any(c.get("type") == "file" for c in conventions):
-            _log(
-                "the 'drift' subcommand reads a single --source-file and has no repo "
-                "to resolve a 'file' convention's theme file against. Use "
-                "`status.py run --repo PATH` instead."
-            )
+        needs_repo = parse_tokens.file_convention_needs_repo(conventions)
+        if needs_repo:
+            _log(needs_repo)
             return EXIT_REFUSED
         desired, _declined = desired_from_text(source_text, conventions, args.prefix)
         live = _tokens_from(_load_json_file(args.live_file))

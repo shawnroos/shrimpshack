@@ -158,5 +158,5 @@ print('OK')
         --source-file "$src" --live-file "$BATS_TMPDIR/drift_live.json" \
         --conventions '[{"type":"file","path":"dark.scss","primary":true}]'
     [ "$status" -ne 0 ]
-    [[ "$output" == *"status.py run --repo"* ]]
+    [[ "$output" == *"run --repo"* ]]
 }

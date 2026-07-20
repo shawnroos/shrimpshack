@@ -206,6 +206,31 @@ def emit_css(paper_tokens, conventions, prefix=None):
     return "\n\n".join(blocks) + "\n"
 
 
+def _same_file(a, b):
+    """True when two paths denote the SAME file, resolving symlinks and
+    case-insensitive filesystems — os.path.abspath does neither.
+
+    abspath is purely lexical, so it passed two targets that differ only by
+    case (APFS is case-insensitive by default) or by a symlinked parent. Both
+    then staged to one temp, and the base file ended up holding the dark theme
+    while the report claimed nothing was written."""
+    import os as _os
+
+    if not a or not b:
+        return False
+    ra, rb = _os.path.realpath(a), _os.path.realpath(b)
+    if ra == rb:
+        return True
+    try:
+        if _os.path.exists(ra) and _os.path.exists(rb):
+            return _os.path.samefile(ra, rb)
+    except OSError:
+        pass
+    # Neither exists yet (or one is missing): fall back to a case-folded compare
+    # so a case-insensitive mount is still caught before we write.
+    return ra.lower() == rb.lower()
+
+
 def emit_pair(paper_tokens, conventions, prefix=None):
     """Emit (base_css, dark_css) for a primary `file` convention (KTD4).
 
@@ -338,20 +363,36 @@ def run(repo=".", url=None):
         # Both halves to the SAME path is silent data loss, not a no-op: the
         # loop would write base then overwrite it with dark, report ok:true, and
         # leave a file whose content is dark while the report describes base.
-        if os.path.abspath(emit_target) == os.path.abspath(dark_target):
-            return (
-                {
-                    "ok": False,
-                    "refused": True,
-                    "error": "emit_targets_collide",
-                    "note": (
-                        f"emitTarget and the file convention's emitTarget both resolve to "
-                        f"{os.path.abspath(emit_target)}. Nothing was written — one would "
-                        "silently overwrite the other. Point them at distinct files."
-                    ),
-                },
-                EXIT_ERROR,
-            )
+        # Every output must differ from every INPUT as well as from each other.
+        # Guarding only the two outputs left the worse case open: writing base
+        # content over the dark THEME SOURCE makes the next parse see dark ==
+        # base, so no token varies by theme and sync deletes every -dark twin.
+        source_rel = (source or {}).get("path")
+        collisions = [
+            ("emitTarget", emit_target, "the file convention's emitTarget", dark_target),
+            ("emitTarget", emit_target, "source.path", resolve_repo_path(cfg, source_rel)),
+            ("emitTarget", emit_target, "the theme file it reads",
+             resolve_repo_path(cfg, primary.get("path"))),
+            ("the file convention's emitTarget", dark_target, "source.path",
+             resolve_repo_path(cfg, source_rel)),
+            ("the file convention's emitTarget", dark_target, "the theme file it reads",
+             resolve_repo_path(cfg, primary.get("path"))),
+        ]
+        for a_label, a_path, b_label, b_path in collisions:
+            if _same_file(a_path, b_path):
+                return (
+                    {
+                        "ok": False,
+                        "refused": True,
+                        "error": "emit_targets_collide",
+                        "note": (
+                            f"{a_label} and {b_label} resolve to the same file "
+                            f"({os.path.realpath(a_path)}). Nothing was written — emitting "
+                            "would destroy one of them. Point them at distinct files."
+                        ),
+                    },
+                    EXIT_ERROR,
+                )
 
         # PRE-FLIGHT both targets before touching either. Two files cannot be
         # renamed atomically on POSIX — os.replace is atomic per file, so a
@@ -384,14 +425,16 @@ def run(repo=".", url=None):
         # the two replaces) is not closable with POSIX renames; the pre-flight
         # above removes the reachable causes.
         tmps = []
+        replaced = []
         try:
             for path, body in ((emit_target, base_css), (dark_target, dark_css)):
-                tmp = os.path.abspath(path) + ".tb-tmp"
+                tmp = os.path.realpath(path) + ".tb-tmp"
                 with open(tmp, "w", encoding="utf-8") as fh:
                     fh.write(body)
                 tmps.append((tmp, path))
             for tmp, path in tmps:
                 os.replace(tmp, path)
+                replaced.append(path)
         except OSError as exc:
             for tmp, _ in tmps:
                 try:
@@ -399,8 +442,12 @@ def run(repo=".", url=None):
                 except OSError:
                     pass
             return (
-                {"ok": False, "error": f"could not write the theme pair: {exc}. "
-                 "Neither file was modified."},
+                {"ok": False, "error": f"could not write the theme pair: {exc}",
+                 "note": (
+                     f"{len(replaced)} of 2 files were replaced before the failure"
+                     + (f" ({', '.join(replaced)})" if replaced else "")
+                     + ". Re-run once the cause is fixed; emit is idempotent."
+                 )},
                 EXIT_ERROR,
             )
         css = base_css
@@ -472,12 +519,20 @@ def main(argv=None):
     if cmd == "emit-from-file":
         tokens = _tokens_from(_load_json_file(args.tokens))
         conventions = json.loads(args.conventions)
+        needs_repo = parse_tokens.file_convention_needs_repo(conventions)
+        if needs_repo:
+            _log(needs_repo)
+            return EXIT_REFUSED
         sys.stdout.write(emit_css(tokens, conventions, args.prefix))
         return EXIT_OK
 
     if cmd == "roundtrip":
         tokens = _tokens_from(_load_json_file(args.tokens))
         conventions = json.loads(args.conventions)
+        needs_repo = parse_tokens.file_convention_needs_repo(conventions)
+        if needs_repo:
+            _log(needs_repo)
+            return EXIT_REFUSED
         result = roundtrip(tokens, conventions, args.prefix)
         print(json.dumps(result, indent=2))
         return EXIT_OK if result["empty"] else EXIT_ERROR
