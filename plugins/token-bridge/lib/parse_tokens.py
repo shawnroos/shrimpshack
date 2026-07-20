@@ -126,6 +126,40 @@ def strip_comments(text):
 # --- brace-aware block scanning ----------------------------------------------
 
 
+def _skip_interpolation(text, i):
+    """If `text[i:i+2]` opens a SCSS interpolation `#{`, return the index just
+    PAST its matching `}`; otherwise return `i` unchanged.
+
+    `#{$brand-blue}` is a value, not a nested rule — but its brace is UNQUOTED,
+    so the quote-skipping guard doesn't cover it. Left unhandled, the block
+    splitter read `--accent: #{$x};` as the start of a child block and dropped
+    the declaration entirely: exactly the same silent-token-loss (and therefore
+    silent-DELETE) path as a brace inside a string, through a different door.
+    Interpolations nest and can contain strings, so track depth and step over
+    quotes while scanning. `#fff` is not interpolation — the `{` must be the
+    very next character."""
+    if not text.startswith("#{", i):
+        return i
+    n = len(text)
+    depth = 0
+    j = i + 1  # sits on the '{'
+    while j < n:
+        c = text[j]
+        if c in "\"'":
+            k = _skip_quoted(text, j)
+            if k != j:
+                j = k
+                continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return n
+
+
 def _skip_quoted(text, i):
     """If `text[i]` opens a quoted string, return the index just PAST its closing
     quote; otherwise return `i` unchanged. Backslash escapes are honored, and an
@@ -170,6 +204,11 @@ def _match_brace(text, open_idx):
             if j != i:
                 i = j
                 continue
+        if c == "#":
+            j = _skip_interpolation(text, i)
+            if j != i:
+                i = j
+                continue
         if c == "{":
             depth += 1
         elif c == "}":
@@ -209,6 +248,13 @@ def _split_body(text):
             # _skip_quoted). Stepping over the string keeps the enclosing
             # declaration intact instead of silently dropping it.
             j = _skip_quoted(text, i)
+            if j != i:
+                i = j
+                continue
+        if text[i] == "#":
+            # Same for a SCSS interpolation `#{…}` — its brace is unquoted, so
+            # the guard above does not cover it (see _skip_interpolation).
+            j = _skip_interpolation(text, i)
             if j != i:
                 i = j
                 continue
@@ -944,6 +990,108 @@ def parse_tokens(text, conventions, prefix=None):
 # --- source loading ----------------------------------------------------------
 
 
+# --- @use / @import following (multi-file sources) ----------------------------
+
+# A module-loading at-statement: @use / @forward / @import "path" [as x] [with (…)];
+# Only the quoted path matters here; everything after it is Sass semantics we
+# deliberately do not implement (see the module docstring).
+_AT_LOAD = re.compile(
+    r"""@(use|forward|import)\s+(?:url\()?["']([^"']+)["']\)?[^;{]*;""", re.I
+)
+
+# Loads that reach outside the file graph and can't be read as text: Sass's
+# built-in modules, and remote CSS.
+_BUILTIN_LOAD = re.compile(r"^(sass:|https?://|//)", re.I)
+
+
+def _import_candidates(spec, from_dir):
+    """Sass/CSS resolution order for one load spec, relative to `from_dir`.
+
+    Sass allows the extension and a leading underscore (a "partial") to be
+    omitted, and a directory to stand in for its `_index` file. Try the literal
+    path first so an explicit `foo.css` is never shadowed by a `_foo.scss`."""
+    import os
+
+    base = os.path.normpath(os.path.join(from_dir, spec))
+    head, tail = os.path.split(base)
+    out = [base]
+    for ext in (".scss", ".sass", ".css"):
+        out.append(base + ext)
+        out.append(os.path.join(head, "_" + tail + ext))
+    for ext in (".scss", ".sass", ".css"):
+        out.append(os.path.join(base, "_index" + ext))
+        out.append(os.path.join(base, "index" + ext))
+    return out
+
+
+def resolve_source_graph(entry_path, read_file=None, max_depth=32):
+    """Read `entry_path` and everything it @use/@import/@forwards, depth-first.
+
+    Returns (text, loaded, missing): the concatenated source with DEPENDENCIES
+    FIRST, the list of files read in order, and the list of (spec, from_file)
+    that could not be resolved.
+
+    Dependency-first ordering is the load-bearing part. The merge is
+    later-declaration-wins, and that has to agree with the cascade: an importing
+    file overriding a token it pulled in must win, which it only does if its own
+    text comes after its dependencies'. Reversing this silently inverts an
+    override — the same wrong-value class the parser has been closing.
+
+    A file is read at most once (Sass's own `@use` semantics, and it makes an
+    import cycle terminate rather than recurse forever). `sass:*` built-ins and
+    remote URLs are skipped, not treated as missing — they carry no custom
+    properties we could read, and reporting them as missing would be noise.
+
+    `read_file` is injectable so a git-ref source can supply blobs instead of
+    working-tree reads."""
+    import os
+
+    if read_file is None:
+        def read_file(path):
+            with open(path, "r", encoding="utf-8") as fh:
+                return fh.read()
+
+    seen = set()
+    loaded = []
+    missing = []
+    chunks = []
+
+    def visit(path, depth):
+        real = os.path.normpath(path)
+        if real in seen:
+            return
+        seen.add(real)
+        if depth > max_depth:
+            missing.append((real, f"exceeded max import depth {max_depth}"))
+            return
+        try:
+            text = read_file(real)
+        except OSError as exc:
+            missing.append((real, str(exc)))
+            return
+        here = os.path.dirname(real)
+        # Comments are stripped before scanning so a commented-out @use is not
+        # followed, and so a `//`-commented path can't inject a phantom edge.
+        for _kw, spec in _AT_LOAD.findall(strip_comments(text)):
+            if _BUILTIN_LOAD.match(spec):
+                continue
+            for cand in _import_candidates(spec, here):
+                if os.path.isfile(cand):
+                    visit(cand, depth + 1)
+                    break
+            else:
+                missing.append((spec, real))
+        # AFTER the recursion: dependencies first, this file's own text last.
+        # `loaded` is appended here too so it reports the CONCATENATION order,
+        # not the visit order — a diagnostic that says "dependencies first" and
+        # then lists the entry file first is worse than no diagnostic.
+        chunks.append(text)
+        loaded.append(real)
+
+    visit(entry_path, 0)
+    return "\n".join(chunks), loaded, missing
+
+
 def load_source(cfg):
     """Read the config's source CSS text.
 
@@ -989,6 +1137,24 @@ def load_source(cfg):
         return result.stdout
 
     abs_path = resolve_repo_path(cfg, rel)
+
+    # Multi-file sources are OPT-IN via `source.followImports`. Default off: a
+    # config written against 1.1.x must keep reading exactly one file, and
+    # silently widening the token set under an existing config would change what
+    # sync owns — and therefore what it can delete.
+    if source.get("followImports"):
+        text, loaded, missing = resolve_source_graph(abs_path)
+        for spec, whence in missing:
+            _log(
+                f"unresolved import {spec!r} (from {whence}) — its tokens are NOT in "
+                "this parse. If it declares any, they will look deleted to sync."
+            )
+        if len(loaded) > 1:
+            _log(f"followImports: read {len(loaded)} files, dependencies first")
+        if not loaded:
+            raise RuntimeError(f"could not read source file {abs_path}")
+        return text
+
     try:
         with open(abs_path, "r", encoding="utf-8") as fh:
             return fh.read()
