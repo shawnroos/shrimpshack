@@ -35,7 +35,7 @@ The script owns the reconcile end-to-end. Your job is to run it and relay its JS
 
 ## What the script writes
 
-v1 is base + a single "dark" theme (its dark scope declared by the config's `themeConventions` — a `data-attribute` or `media-query` convention). Each theme is written as a separately named Paper token (Paper has no per-file theme mode):
+v1 is base + a single "dark" theme (its dark scope declared by the config's `themeConventions` — a `data-attribute`, `media-query`, or `class` convention). Each theme is written as a separately named Paper token (Paper has no per-file theme mode):
 
 - The **base** (light) value keeps the token's own name (`--accent`).
 - The **dark** value of a theme-varying token gets a `-dark` twin (`--accent-dark`). Mode-invariant tokens are written once, with no twin.

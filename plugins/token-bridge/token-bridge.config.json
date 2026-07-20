@@ -18,7 +18,7 @@
 
   "themeConventions": [
     {
-      "_comment": "How the dark scope is expressed in the source CSS. v1 supports 'data-attribute' and 'media-query'. When BOTH are declared, exactly one must set primary:true — parse reads the primary's dark scope, emit writes only the primary's block; a single convention is primary by default. data-attribute needs attr+value; media-query needs query.",
+      "_comment": "How the dark scope is expressed in the source CSS. Supported: 'data-attribute' (needs attr+value), 'media-query' (needs query), 'class' (needs class). Class matching is class-token-boundary anchored, so '.dark' does not match '.darker'. When MORE THAN ONE is declared, exactly one must set primary:true — parse reads the primary's dark scope, emit writes only the primary's block; a single convention is primary by default. Scopes are found at any depth: @layer is transparent (a bare :root inside one IS the base), while @media/@supports/@container are conditional (a :root inside one is never the base).",
       "type": "data-attribute",
       "attr": "data-theme",
       "value": "dark",
@@ -27,7 +27,7 @@
   ],
 
   "harvest": {
-    "_comment": "Component harvest (code → Paper). 'themeSignal' tells the live-page extractor how the rendered page reports dark: a data-attribute is read off the scope element; a media-query is read via matchMedia. 'batch' lists the components to harvest — each {name, selector, route, trigger?}.",
+    "_comment": "Component harvest (code → Paper). 'themeSignal' tells the live-page extractor how the rendered page reports dark: a data-attribute is read off the scope element; a media-query is read via matchMedia; a class is read via classList.contains on <html> or <body> (whole-token, so 'dark' is not satisfied by 'darker'). Shape mirrors the primary convention minus 'primary'. 'batch' lists the components to harvest — each {name, selector, route, trigger?}.",
     "themeSignal": {
       "type": "data-attribute",
       "attr": "data-theme",

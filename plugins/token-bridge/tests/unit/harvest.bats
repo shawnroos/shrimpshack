@@ -232,6 +232,115 @@ print('OK')
     [[ "$output" == *"OK"* ]]
 }
 
+@test "harvest: build_extract_js injects a class theme signal" {
+    run python3 -c "
+import json, sys
+sys.path.insert(0, '$LIB_DIR')
+import harvest
+tpl = 'const T = __TB_THEME_SIGNAL__;'
+signal = {'type': 'class', 'class': 'wcs-dark'}
+out = harvest.build_extract_js(tpl, 'app-x', signal)
+assert '__TB_THEME_SIGNAL__' not in out, out
+assert json.dumps(signal) in out, out
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK"* ]]
+}
+
+# ============================================================================
+# The extractor's class signal branch, EXECUTED against a stub DOM
+# ============================================================================
+#
+# A missing class branch fails silently — theme stays "light" and every harvested
+# component is mislabelled with no error anywhere — so these tests actually RUN
+# harvest_extract.js under node instead of only asserting injection.
+#
+# The DOM is a stub, not jsdom (no dependency): documentElement/body carry a real
+# whitespace-tokenised classList.contains, which is what the boundary case
+# (.wcs-darker present, .wcs-dark absent) turns on.
+
+# Usage: run_extract '<html classes>' '<body classes>' '<theme-signal JSON>'
+# Prints the resolved theme.
+run_extract() {
+    local html_classes="$1" body_classes="$2" signal_json="$3"
+    local dir="$BATS_TEST_TMPDIR/extract"
+    mkdir -p "$dir"
+
+    # Inject the signal through the REAL production path (harvest.build_extract_js).
+    python3 -c "
+import sys, json
+sys.path.insert(0, '$LIB_DIR')
+import harvest
+tpl = open('$LIB_DIR/harvest_extract.js').read()
+js = harvest.build_extract_js(tpl, 'div.target', json.loads('''$signal_json'''))
+open('$dir/injected.js', 'w').write(js)
+" || return 1
+
+    cat > "$dir/harness.js" <<'JS'
+const fs = require("fs");
+const [jsPath, htmlClasses, bodyClasses] = process.argv.slice(2);
+
+const makeEl = (classStr) => {
+  const tokens = new Set(String(classStr).split(/\s+/).filter(Boolean));
+  return {
+    tagName: "DIV",
+    classList: { contains: (c) => tokens.has(c) },
+    getAttribute: () => null,
+    childNodes: [],
+    children: [],
+  };
+};
+
+const target = makeEl("target");
+global.document = {
+  documentElement: makeEl(htmlClasses),
+  body: makeEl(bodyClasses),
+  querySelector: () => target,
+};
+global.getComputedStyle = () => ({ getPropertyValue: () => "", color: "rgb(0, 0, 0)" });
+global.window = { matchMedia: () => ({ matches: false }) };
+
+const result = eval(fs.readFileSync(jsPath, "utf8"));
+process.stdout.write(String(result.theme));
+JS
+
+    node "$dir/harness.js" "$dir/injected.js" "$html_classes" "$body_classes"
+}
+
+@test "harvest extract: class on <html> resolves theme dark" {
+    run run_extract "wcs-dark" "" '{"type":"class","class":"wcs-dark"}'
+    [ "$status" -eq 0 ]
+    [ "$output" = "dark" ]
+}
+
+@test "harvest extract: class on <body> resolves theme dark" {
+    run run_extract "" "app wcs-dark" '{"type":"class","class":"wcs-dark"}'
+    [ "$status" -eq 0 ]
+    [ "$output" = "dark" ]
+}
+
+@test "harvest extract: class absent resolves theme light" {
+    run run_extract "app" "shell" '{"type":"class","class":"wcs-dark"}'
+    [ "$status" -eq 0 ]
+    [ "$output" = "light" ]
+}
+
+# Boundary: a class whose name merely STARTS WITH the signal class must not match.
+@test "harvest extract: .wcs-darker does not satisfy a .wcs-dark signal" {
+    run run_extract "wcs-darker" "wcs-darker" '{"type":"class","class":"wcs-dark"}'
+    [ "$status" -eq 0 ]
+    [ "$output" = "light" ]
+}
+
+# Regression guard: the data-attribute and media-query branches still work when
+# executed, not just when injected.
+@test "harvest extract: a data-attribute signal still resolves (regression)" {
+    run run_extract "" "" '{"type":"data-attribute","attr":"data-theme","value":"dark"}'
+    [ "$status" -eq 0 ]
+    [ "$output" = "light" ]
+}
+
 @test "harvest: build_extract_js injects null when no theme signal is configured" {
     run python3 -c "
 import sys

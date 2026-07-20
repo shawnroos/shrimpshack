@@ -26,15 +26,30 @@ selectors. v1 is base + exactly one "dark" theme.
       flips). This alias-flip invariant is theme-convention agnostic — only the
       block-finding is driven by config.
 
-Theme-scope resolution (KTD2):
-  - The BASE scope is the top-level, unscoped `:root { … }` (brace-depth 0). A
-    `:root` nested inside an `@media` block, and a `:root[data-theme="dark"]`
-    attribute-scoped block, are NOT the base.
-  - A data-attribute convention `{attr, value}` resolves the CSS rule whose
-    selector targets `[attr="value"]` (both `[data-theme="dark"]` and
-    `:root[data-theme="dark"]` match).
-  - A media-query convention `{query}` descends the `@media <query> { … }` block
-    (brace-aware) and reads its inner `:root`.
+      A base declaration of `light-dark(A, B)` fills BOTH fields on its own, so
+      such a token needs no dark-scope entry at all (KTD9). A dark scope that
+      also declares it wins — it is the more specific signal — and parse warns
+      rather than silently picking between the two.
+
+Theme-scope resolution:
+  A scope is a PREDICATE over a declaration block's context — the chain of
+  enclosing at-rules plus the block's own selector. The stylesheet is walked
+  recursively, and EVERY block whose context satisfies a convention's
+  predicates contributes its declarations, merged in source order.
+
+  - The BASE scope is a bare, unscoped `:root { … }` with no conditional
+    at-rule in its context. `:root[data-theme="dark"]` and `:root.wcs-dark` are
+    not the base; neither is a `:root` inside `@media`.
+  - At-rules split by conditionality. `@layer` (and other grouping wrappers)
+    are TRANSPARENT: a bare `:root` inside one IS the base. `@media`,
+    `@supports` and `@container` are CONDITIONAL: they stay in the context, so
+    a `:root` inside one is never the base, only a dark candidate.
+  - The three named convention types are sugar over predicates (see
+    desugar_convention): `class` → a boundary-anchored class match,
+    `data-attribute` → an `[attr="value"]` match, `media-query` → a two-
+    predicate conjunction of the media query AND a `:root` selector anchor.
+  - Predicates within one convention compose with AND; the conventions array
+    composes with OR, with `primary` as the tiebreak.
 
 When more than one convention is configured, one is `primary`. Parsing reads the
 primary's dark scope; if the primary and a non-primary convention BOTH declare a
@@ -56,16 +71,32 @@ import json
 import re
 import sys
 
-# A custom-property declaration inside a block body: `--name: value;`
-# Values never contain a semicolon, so `[^;]+` is a safe value grab (box-shadows,
-# rgba() with internal commas, cubic-bezier(), etc. all lack `;`).
-_DECL = re.compile(r"--([A-Za-z0-9-]+)\s*:\s*([^;]+);")
+# The NAME half of a custom-property declaration: `--name:`. The value half is
+# scanned character-wise (see _iter_decls) rather than matched, because a value
+# CAN contain a semicolon — `url("data:image/svg+xml;utf8,…")` is the case that
+# proves it, and a `[^;]+` grab truncates it mid-URI.
+_DECL_NAME = re.compile(r"--([A-Za-z0-9_-]+)\s*:")
 
-# A pure `var(--other)` alias (no fallbacks are used anywhere in the source).
-_VAR = re.compile(r"^var\(\s*(--[A-Za-z0-9-]+)\s*\)$")
+# `!important` is a CSS-level priority marker, not part of the token's value.
+# Left in, it rides into Paper as literal text and classify_tokens declines the
+# token (`#fff !important` is not a clean color full-match).
+_IMPORTANT = re.compile(r"\s*!\s*important\s*$", re.I)
+
+# A `var(--other)` alias, with an OPTIONAL fallback: `var(--other, #eee)`.
+# The fallback group is deliberately loose (a fallback can be any value, nested
+# functions included); `var_alias` balance-checks it so a composite value like
+# `var(--a, #eee) var(--b, #fff)` is not mistaken for a single alias.
+_VAR = re.compile(r"^var\(\s*(--[A-Za-z0-9_-]+)\s*(?:,\s*(.*?)\s*)?\)$", re.S)
 
 # Hex color literals (3/4/6/8 digit). Uppercased for stable output.
 _HEX = re.compile(r"#[0-9a-fA-F]+")
+
+# A `light-dark(A, B)` call occupying the WHOLE value. The inner group is
+# deliberately greedy-to-the-last-`)` and balance-checked by light_dark_args, so
+# a composite like `light-dark(a,b) light-dark(c,d)` is rejected rather than
+# read as one call with a mangled argument. CSS function names are
+# case-insensitive, hence re.I.
+_LIGHT_DARK = re.compile(r"^light-dark\((.*)\)$", re.S | re.I)
 
 
 def _log(msg):
@@ -95,16 +126,50 @@ def strip_comments(text):
 # --- brace-aware block scanning ----------------------------------------------
 
 
+def _skip_quoted(text, i):
+    """If `text[i]` opens a quoted string, return the index just PAST its closing
+    quote; otherwise return `i` unchanged. Backslash escapes are honored, and an
+    unterminated string stops at end-of-text rather than running away.
+
+    Braces are structural in CSS *except* inside a string, where they are data.
+    A `{` in a quoted value is entirely legal and not rare — an inline-SVG data
+    URI carrying `<style>.a{fill:red}</style>` is the realistic case. Treating
+    that `{` as the start of a nested rule made the enclosing declaration vanish
+    from the parse with no error, and a token missing from a parse becomes a
+    DELETE in the sync diff — the same silent-wipe class the empty-parse
+    backstop exists to stop, reached through a different door. Both scanners
+    below must therefore step over strings, not through them."""
+    q = text[i]
+    if q not in "\"'":
+        return i
+    n = len(text)
+    j = i + 1
+    while j < n:
+        if text[j] == "\\":
+            j += 2
+            continue
+        if text[j] == q:
+            return j + 1
+        j += 1
+    return n
+
+
 def _match_brace(text, open_idx):
     """Given the index of a `{` at text[open_idx], return (body, close_idx):
     the substring between the matched braces (exclusive) and the index of the
-    matching `}`. Brace-aware, so nested blocks (e.g. inside @media) are handled.
+    matching `}`. Brace-aware and STRING-aware (see _skip_quoted), so nested
+    blocks are handled and a brace inside a quoted value is treated as data.
     On an unbalanced source, returns the remainder and len(text)."""
     depth = 0
     n = len(text)
     i = open_idx
     while i < n:
         c = text[i]
+        if c in "\"'":
+            j = _skip_quoted(text, i)
+            if j != i:
+                i = j
+                continue
         if c == "{":
             depth += 1
         elif c == "}":
@@ -115,28 +180,50 @@ def _match_brace(text, open_idx):
     return text[open_idx + 1 :], n
 
 
-def _top_level_rules(text):
-    """Yield (selector, body) for each `selector { … }` rule at brace-depth 0.
+def _split_body(text):
+    """Partition a block body into (own_text, rules) — KTD6.
 
-    Nested blocks are consumed whole by _match_brace, so a rule nested inside an
-    @media block does NOT appear here — call _top_level_rules again on an
-    @media body to reach its inner rules. At-statements without a block (e.g.
-    `@import "x";`) carry no braces; any such prefix is trimmed from the next
-    rule's selector via the trailing-`;` split."""
+    `own_text` is the text belonging to THIS block: its declarations, with every
+    nested child block excised. `rules` is [(selector, body), …] for each direct
+    child, in source order; nested blocks are consumed whole by _match_brace, so
+    a rule inside an @media block does NOT appear here — the walk recurses to
+    reach it.
+
+    The split point before a child's `{` is that child's SELECTOR, and it starts
+    after the last `;` — everything before that terminator is a declaration of
+    the enclosing block. This also trims a blockless at-statement prefix
+    (`@import "x";`) off the next rule's selector.
+
+    Excising children is what makes declaration reads block-local. Scanning a
+    parent body that still contained its children read a nested dark override as
+    if it were the parent's own last declaration, which INVERTED light and dark
+    under CSS/SCSS nesting."""
+    own = []
     rules = []
     n = len(text)
     i = 0
-    sel_start = 0
+    seg_start = 0
     while i < n:
+        if text[i] in "\"'":
+            # A brace inside a string is data, not a nested rule (see
+            # _skip_quoted). Stepping over the string keeps the enclosing
+            # declaration intact instead of silently dropping it.
+            j = _skip_quoted(text, i)
+            if j != i:
+                i = j
+                continue
         if text[i] == "{":
-            selector = text[sel_start:i].split(";")[-1].strip()
+            head = text[seg_start:i]
+            cut = head.rfind(";")
+            own.append(head[: cut + 1])
             body, close_idx = _match_brace(text, i)
-            rules.append((selector, body))
+            rules.append((head[cut + 1 :].strip(), body))
             i = close_idx + 1
-            sel_start = i
+            seg_start = i
             continue
         i += 1
-    return rules
+    own.append(text[seg_start:])
+    return "".join(own), rules
 
 
 def _norm_ws(s):
@@ -160,55 +247,225 @@ def _is_bare_root(selector):
     return any(part.strip() == ":root" for part in selector.split(","))
 
 
-def _base_block(text):
-    """Return the body of the top-level unscoped `:root { … }` block, or ''."""
-    for selector, body in _top_level_rules(text):
-        if _is_bare_root(selector):
-            return body
-    return ""
+# --- the scope walk (KTD5) ----------------------------------------------------
+
+# At-rules that constrain WHEN a block applies. They stay in a block's context,
+# and a bare `:root` inside one is therefore NEVER the base — only a dark-scope
+# candidate when a matching media predicate holds. Every other at-rule (@layer
+# and friends) is a grouping wrapper: transparent, so a `:root` inside one IS
+# the base. Getting this backwards reintroduces the light/dark inversion this
+# module exists to avoid, for every media-query user.
+_CONDITIONAL_AT_RULES = ("media", "supports", "container")
+
+_AT_NAME = re.compile(r"^@([A-Za-z-]+)")
 
 
-def _data_attribute_block(text, attr, value):
-    """Return the body of the top-level rule whose selector targets
-    [attr="value"] (matching both `[attr="value"]` and `:root[attr="value"]`),
-    or ''."""
-    pat = re.compile(
+def _split_at_rule(selector):
+    """('media', '(prefers-color-scheme: dark)') for an at-rule selector, else
+    (None, None)."""
+    m = _AT_NAME.match(selector)
+    if not m:
+        return None, None
+    name = m.group(1).lower()
+    return name, selector[m.end() :].strip()
+
+
+def _nest_selector(parent, child):
+    """Resolve a nested child selector against its parent (CSS Nesting / SCSS).
+
+    `&` is replaced by the parent selector; without an `&` the nesting is a
+    DESCENDANT relationship, so the resolved selector is `parent child`. Both
+    sides may be comma groups, so this is a cross product — matching the cascade
+    rather than approximating it.
+
+    Resolving rather than passing the raw child through is what lets the
+    ordinary predicates work unchanged at depth: `&[data-theme="dark"]` inside
+    `:root` becomes `:root[data-theme="dark"]`, which the attribute predicate
+    already matches, while `.card` inside `:root` becomes `:root .card` — a
+    descendant, correctly matching NEITHER the base nor a theme scope."""
+    if not parent:
+        return child
+    parts = []
+    for c in (m.strip() for m in child.split(",")):
+        if not c:
+            continue
+        for p in (m.strip() for m in parent.split(",")):
+            if not p:
+                continue
+            parts.append(c.replace("&", p) if "&" in c else p + " " + c)
+    return ", ".join(parts)
+
+
+def _walk(text, context, blocks, parent=None):
+    """Collect (context, selector, own_body) for every selector block in `text`,
+    at any depth, in source order.
+
+    `context` is the chain of enclosing CONDITIONAL at-rules as (name, prelude)
+    tuples; grouping at-rules are descended without extending it. `parent` is the
+    enclosing selector, carried so nested blocks resolve against it.
+
+    `own_body` is block-LOCAL (KTD6): each block's own declarations only. Child
+    blocks are not left in it — they are walked as blocks in their own right,
+    under their own resolved selector."""
+    _own, rules = _split_body(text)
+    for selector, body in rules:
+        name, prelude = _split_at_rule(selector)
+        if name is not None:
+            nxt = context + [(name, prelude)] if name in _CONDITIONAL_AT_RULES else context
+            _walk(body, nxt, blocks, parent)
+            continue
+        resolved = _nest_selector(parent, selector)
+        own, _child_rules = _split_body(body)
+        blocks.append((context, resolved, own))
+        _walk(body, context, blocks, resolved)
+    return blocks
+
+
+def _collect_blocks(text):
+    """Every selector block in the stylesheet, at any depth, in source order."""
+    return _walk(text, [], [])
+
+
+# --- predicates (KTD1-KTD4) ---------------------------------------------------
+
+
+def desugar_convention(conv):
+    """Desugar one themeConvention entry into its list of predicates.
+
+    The named types are sugar over the predicate model (KTD3); the `match` form
+    is what they desugar TO, and is internal — `paper_client._validate_config`
+    is what keeps it out of user-authored config (KTD2a).
+
+      {type:'class',          class:C}         -> [{class: C}]
+      {type:'data-attribute', attr:A, value:V} -> [{attr: A, value: V}]
+      {type:'media-query',    query:Q}         -> [{media: Q}, {selector: ':root'}]
+
+    The `:root` anchor on media-query is load-bearing: a media predicate
+    constrains only the enclosing at-rule chain, never which block inside it is
+    selected, so without it every rule in the dark @media would match."""
+    if "match" in conv:
+        return list(conv["match"])
+    ctype = conv.get("type")
+    if ctype == "class":
+        return [{"class": conv.get("class")}]
+    if ctype == "data-attribute":
+        return [{"attr": conv.get("attr"), "value": conv.get("value")}]
+    if ctype == "media-query":
+        return [{"media": conv.get("query")}, {"selector": ":root"}]
+    raise ValueError(f"unknown themeConvention type: {ctype!r}")
+
+
+def _class_pattern(cls):
+    """A boundary-anchored matcher for `.cls` (KTD4): the class token must end
+    at a non-identifier character, so `.wcs-dark` does not match `.wcs-darker`
+    or `.wcs-dark-alt`.
+
+    Two boundaries beyond the trailing-identifier one, both real false positives:
+
+    - A CSS identifier ESCAPE (`\\:`) continues the same identifier, so a bare
+      trailing-char check reads `.dark\\:text-white` as `.dark`. That matters a
+      lot: Tailwind v4's default `darkMode: 'class'` token is literally `dark`,
+      so in a bundled stylesheet every `.dark\\:*` utility would be mistaken for
+      the dark scope. Reject a `\\` immediately after the class token.
+    - A LEADING `\\` means the dot itself is escaped (part of an identifier, not
+      a class delimiter), so require the `.` not be preceded by a backslash."""
+    return re.compile(r"(?<!\\)\." + re.escape(cls) + r"(?![A-Za-z0-9_-])(?!\\)")
+
+
+def _attr_pattern(attr, value):
+    """A matcher for `[attr="value"]` — quoting-tolerant. The brackets give this
+    one boundary safety for free."""
+    return re.compile(
         r"\[\s*" + re.escape(attr) + r"\s*=\s*[\"']?" + re.escape(value) + r"[\"']?\s*\]"
     )
-    for selector, body in _top_level_rules(text):
-        if selector.startswith("@"):
+
+
+_QUOTED = re.compile(r"""(['"])(?:\\.|(?!\1).)*\1""")
+
+
+def _mask_quoted(member):
+    """Blank out quoted attribute VALUES, preserving length and the quotes.
+
+    A class token that appears inside a quoted attribute value is text, not a
+    class selector — `a[href$=".dark"]` must not satisfy a `{class: "dark"}`
+    predicate. Masking the value (rather than deleting it) keeps offsets stable
+    so the surrounding selector still matches normally."""
+    return _QUOTED.sub(lambda m: m.group(1) + " " * (len(m.group(0)) - 2) + m.group(1), member)
+
+
+def _match_selector_predicate(pred, member):
+    """Does one selector-level predicate hold for a single selector group
+    member (`member` is one comma-separated part, already whitespace-normal)?"""
+    if "class" in pred:
+        return bool(_class_pattern(pred["class"]).search(_mask_quoted(member)))
+    if "attr" in pred:
+        return bool(_attr_pattern(pred["attr"], pred["value"]).search(member))
+    if "selector" in pred:
+        return member == _norm_ws(pred["selector"])
+    raise ValueError(f"unrecognized scope predicate: {pred!r}")
+
+
+def _match_media_predicate(pred, context):
+    """Does an enclosing @media in `context` match this predicate's query?
+
+    EXACT (whitespace-insensitive) comparison — a compound query that merely
+    CONTAINS the target (`… and (min-width: 800px)`) is a different scope and
+    must not be grabbed as the dark scope."""
+    target = _canon_media(pred["media"])
+    return any(
+        name == "media" and _canon_media(prelude) == target for name, prelude in context
+    )
+
+
+def _matches(preds, context, selector):
+    """True when every predicate holds for this block's context.
+
+    At-rule predicates are tested against the enclosing chain; selector-level
+    predicates must all hold for the SAME selector group member, so
+    `.wcs-theme, .wcs-dark` does not satisfy a two-class conjunction."""
+    sel_preds = [p for p in preds if "media" not in p]
+    for pred in preds:
+        if "media" in pred and not _match_media_predicate(pred, context):
+            return False
+    # A match list with no selector-level predicate would select every block
+    # inside the at-rule; desugaring guarantees an anchor, so this is a
+    # malformed internal predicate list rather than a "matches everything".
+    if not sel_preds:
+        raise ValueError(
+            "a scope match list needs at least one selector-level predicate: "
+            f"{preds!r}"
+        )
+    if selector.startswith("@"):
+        return False
+    return any(
+        all(_match_selector_predicate(p, _norm_ws(member)) for p in sel_preds)
+        for member in selector.split(",")
+    )
+
+
+def _base_decls(blocks):
+    """Merge the declarations of every base block, in source order.
+
+    The base is a bare `:root` with no CONDITIONAL at-rule in its context — a
+    `:root` inside `@layer` qualifies, one inside `@media` does not."""
+    decls = {}
+    for context, selector, body in blocks:
+        if context:
             continue
-        if pat.search(selector):
-            return body
-    return ""
+        if _is_bare_root(selector):
+            decls.update(_parse_decls(body))
+    return decls
 
 
-def _media_query_block(text, query):
-    """Descend the top-level `@media <query> { … }` block and return its inner
-    `:root` body, or ''. Brace-aware: the @media body may contain sibling rules
-    alongside the :root."""
-    target = _canon_media(query)
-    for selector, body in _top_level_rules(text):
-        if not selector.startswith("@media"):
-            continue
-        # EXACT match (whitespace-insensitive) — a compound query that merely
-        # CONTAINS the target (`… and (min-width: 800px)`) is a different scope
-        # and must not be grabbed as the dark scope.
-        if _canon_media(selector[len("@media") :]) == target:
-            return _base_block(body)
-    return ""
-
-
-def _scope_decls(text, conv):
-    """Resolve one convention's dark-scope declarations into a raw decl dict."""
-    ctype = conv.get("type")
-    if ctype == "data-attribute":
-        body = _data_attribute_block(text, conv.get("attr"), conv.get("value"))
-    elif ctype == "media-query":
-        body = _media_query_block(text, conv.get("query"))
-    else:
-        raise ValueError(f"unknown themeConvention type: {ctype!r}")
-    return _parse_decls(body)
+def _scope_decls(blocks, conv):
+    """Merge the declarations of every block matching one convention's scope,
+    in source order. Later declarations win, as they do in CSS."""
+    preds = desugar_convention(conv)
+    decls = {}
+    for context, selector, body in blocks:
+        if _matches(preds, context, selector):
+            decls.update(_parse_decls(body))
+    return decls
 
 
 def _primary_convention(conventions):
@@ -227,40 +484,254 @@ def _primary_convention(conventions):
 
 
 def _conv_label(conv):
-    """A short human label for a convention, used in warning text."""
-    ctype = conv.get("type")
-    if ctype == "data-attribute":
-        return f'[{conv.get("attr")}="{conv.get("value")}"]'
-    if ctype == "media-query":
-        return f'@media {conv.get("query")}'
-    return str(ctype)
+    """A short human label for a convention's predicate conjunction, used in
+    warning text (origin KTD3's disagreement warning).
+
+    The `:root` anchor a media-query desugars to is dropped from the label when
+    an at-rule part is present — it is machinery, not something the user wrote,
+    and keeping it out holds the existing warning text unchanged."""
+    try:
+        preds = desugar_convention(conv)
+    except ValueError:
+        return str(conv.get("type"))
+    at_parts = []
+    sel_parts = []
+    for pred in preds:
+        if "media" in pred:
+            at_parts.append(f'@media {pred["media"]}')
+        elif "class" in pred:
+            sel_parts.append(f'.{pred["class"]}')
+        elif "attr" in pred:
+            sel_parts.append(f'[{pred["attr"]}="{pred["value"]}"]')
+        elif "selector" in pred:
+            sel_parts.append(pred["selector"])
+    if at_parts and sel_parts == [":root"]:
+        sel_parts = []
+    return " ".join(at_parts + ["".join(sel_parts)]).strip()
 
 
 # --- declaration parsing + effective-value resolution ------------------------
 
 
+def _iter_decls(body):
+    """Yield (name, raw_value) for each custom-property declaration in a body.
+
+    The value is scanned character-wise rather than regex-matched, which buys
+    three real-world robustness properties a `[^;]+;` grab cannot have (R9):
+
+      - A `;` inside a quoted string or inside `url()` does NOT end the value,
+        so a data URI survives whole instead of truncating mid-string.
+      - The trailing `;` is OPTIONAL at end of body, so the last declaration in
+        a block is captured. This is also why minified CSS used to parse to
+        nothing: a minifier drops exactly that terminator.
+      - Parens nest to any depth, so `linear-gradient(rgba(…), …)` is one value.
+
+    Scanning resumes PAST each value, so a `var(--x)` inside a value is never
+    re-read as a declaration of its own."""
+    pos = 0
+    n = len(body)
+    while True:
+        m = _DECL_NAME.search(body, pos)
+        if not m:
+            return
+        i = start = m.end()
+        depth = 0
+        quote = None
+        stray_close = False
+        while i < n:
+            c = body[i]
+            if quote is not None:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == quote:
+                    quote = None
+            elif c in "\"'":
+                quote = c
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                # CLAMPED at zero. An unmatched extra `)` — `--a: red);`, or the
+                # very ordinary `calc(100% - 10px))` typo — would otherwise drive
+                # depth negative, and once negative the `depth == 0` test below
+                # never fires again, so the value swallows every following
+                # declaration to end-of-block. Those tokens then vanish from the
+                # parse, and a token missing from a parse becomes a DELETE in the
+                # sync diff. Clamping keeps `;` working as a boundary, so the
+                # rest of the block still parses; `stray_close` remembers that
+                # the source was malformed so it can be reported.
+                if depth == 0:
+                    stray_close = True
+                else:
+                    depth -= 1
+            elif c == ";" and depth == 0:
+                break
+            i += 1
+        # Malformed source — report it rather than losing declarations quietly.
+        # An unterminated string or an unclosed `(` still swallows to end-of-body
+        # (there is no safe recovery point); a stray `)` is recovered above but
+        # is still worth naming, since the value itself is now suspect.
+        if i >= n and (quote is not None or depth > 0):
+            what = "unterminated string" if quote is not None else "unbalanced parentheses"
+            _log(
+                f"--{m.group(1)}: {what} — the value ran to the end of its block, so any "
+                "declaration after it was not read. Check the source for a missing "
+                f"{'quote' if quote is not None else ')'}."
+            )
+        elif stray_close:
+            _log(
+                f"--{m.group(1)}: unmatched ')' in the value. The declaration boundary was "
+                "recovered so later declarations still parse, but check this value."
+            )
+        yield m.group(1), body[start:i]
+        pos = i + 1
+
+
 def _parse_decls(body):
-    """Return an ordered dict of `--name` -> raw value (names lowercased)."""
+    """Return an ordered dict of `--name` -> raw value (names lowercased).
+
+    `body` must already be block-local (children excised by _split_body).
+    `!important` is stripped from the value; a declaration whose value is empty
+    after stripping is not a token and is skipped."""
     decls = {}
-    for name, val in _DECL.findall(body):
-        decls["--" + name.lower()] = val.strip()
+    for name, val in _iter_decls(body):
+        val = _IMPORTANT.sub("", val.strip()).strip()
+        if not val:
+            continue
+        decls["--" + name.lower()] = val
     return decls
 
 
+def _is_balanced(s):
+    """True when every paren and quote in `s` closes. Used to reject a composite
+    value that merely LOOKS like one aliased var() — see var_alias."""
+    depth = 0
+    quote = None
+    esc = False
+    for c in s:
+        if esc:
+            esc = False
+        elif quote is not None:
+            if c == "\\":
+                esc = True
+            elif c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0 and quote is None
+
+
+def var_alias(value):
+    """Split a pure `var()` alias into (referent, fallback); (None, None) if the
+    value is not a single alias. `fallback` is None when none was written.
+
+    The balance check is load-bearing. `_VAR`'s fallback group is loose enough
+    that `var(--a, #eee) var(--b, #fff)` would otherwise match with a fallback
+    of `#eee) var(--b, #fff` — reading a two-value composite as an alias to
+    `--a` and silently discarding the second half."""
+    if value is None:
+        return None, None
+    m = _VAR.match(value.strip())
+    if not m:
+        return None, None
+    fallback = m.group(2)
+    if fallback is not None and not _is_balanced(fallback):
+        return None, None
+    return m.group(1).lower(), fallback
+
+
 def _alias_of(raw):
-    """Referent (`--other`) when raw is a `var(--other)` alias, else None."""
-    if raw is None:
+    """Referent (`--other`) when raw is a `var(--other[, fallback])` alias."""
+    return var_alias(raw)[0]
+
+
+def light_dark_args(value):
+    """Top-level arguments of a whole-value `light-dark(…)` call, or None when
+    `value` is not such a call (KTD9).
+
+    Splitting is PAREN- and STRING-aware, so either side may itself be a
+    function: `light-dark(rgba(0,0,0,.5), rgba(255,255,255,.5))` is TWO
+    arguments, not four. A naive `split(",")` here would hand the caller
+    `rgba(0` as the light value — a plausible-looking wrong color, which is
+    exactly the silent-failure class this module exists to avoid.
+
+    Arity is NOT enforced here: a well-formed call has two arguments, but the
+    caller is the one that can name the offending token in a warning, so this
+    returns whatever it found and lets the caller judge."""
+    if value is None:
         return None
-    m = _VAR.match(raw)
-    return m.group(1).lower() if m else None
+    m = _LIGHT_DARK.match(value.strip())
+    if not m:
+        return None
+    inner = m.group(1)
+    # `light-dark(a,b) light-dark(c,d)` matches the regex (it ends in `)`) with
+    # an unbalanced inner; it is a composite value, not one call.
+    if not _is_balanced(inner):
+        return None
+    args = []
+    depth = 0
+    quote = None
+    start = 0
+    i = 0
+    n = len(inner)
+    while i < n:
+        c = inner[i]
+        if quote is not None:
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append(inner[start:i].strip())
+            start = i + 1
+        i += 1
+    args.append(inner[start:].strip())
+    return args
 
 
-def _resolve(name, primary, fallback):
+def _light_dark_pair(value):
+    """(light, dark) for a well-formed `light-dark(A, B)`, else None.
+
+    None covers both "not a light-dark() call" and "malformed one" — callers
+    that need to WARN about the malformed case ask light_dark_args directly."""
+    args = light_dark_args(value)
+    if args is None or len(args) != 2 or not all(args):
+        return None
+    return args[0], args[1]
+
+
+def _resolve(name, primary, fallback, side="light", malformed=None):
     """Resolve a token to its effective literal in one scope.
 
     `primary` is the scope's own dict; `fallback` (base) is consulted when the
     token/referent is absent from `primary` (dark falls through to base).
-    Chases var() aliases until a literal is reached. Cycle-guarded."""
+    Chases var() aliases until a literal is reached. Cycle-guarded.
+
+    `side` selects which half of a `light-dark(A, B)` value is taken (KTD9).
+    The split happens INSIDE the chase loop, not after it, for two reasons: a
+    light-dark() can be reached through an alias (`--surface: var(--base)` where
+    `--base` is the light-dark), and either half can itself be a var() that
+    still needs chasing (`light-dark(var(--x), var(--y))`).
+
+    `malformed`, when given, is a set that collects (token, value) for any
+    light-dark() call that did not have exactly two non-empty arguments. Such a
+    value is left ALONE — passed through as an opaque literal — rather than
+    guessed at, and the caller warns about it. Guessing here (taking the single
+    argument for both sides) would produce a token that looks correctly parsed
+    and syncs a wrong value into Paper with nothing to notice."""
     seen = set()
     cur = name
     while cur not in seen:
@@ -270,9 +741,14 @@ def _resolve(name, primary, fallback):
             raw = fallback.get(cur)
         if raw is None:
             return None
-        m = _VAR.match(raw)
-        if m:
-            cur = m.group(1).lower()
+        pair = _light_dark_pair(raw)
+        if pair is not None:
+            raw = pair[0] if side == "light" else pair[1]
+        elif malformed is not None and light_dark_args(raw) is not None:
+            malformed.add((cur, _norm_ws(raw)))
+        ref, _fallback = var_alias(raw)
+        if ref is not None:
+            cur = ref
             continue
         return raw
     return None
@@ -291,7 +767,11 @@ def _normalize_hex(value):
 # underscore-prefixed originals must keep these public aliases pointing at the
 # equivalent behavior. Do NOT reach past this seam into other `_`-prefixed
 # helpers from another module.
-VAR_ALIAS_RE = _VAR  # compiled regex matching a bare `var(--x)` alias
+VAR_ALIAS_RE = _VAR  # compiled regex matching a `var(--x[, fallback])` alias
+# Prefer var_alias() over VAR_ALIAS_RE: the regex ALONE over-matches a composite
+# value (see var_alias), and it hands back a fallback the caller must decide
+# what to do with. Both halves are seam contract — emit_tokens consumes them.
+split_var_alias = var_alias  # (referent, fallback) | (None, None)
 normalize_hex = _normalize_hex  # uppercase every hex run in a value (idempotent)
 primary_convention = _primary_convention  # the primary themeConvention resolver
 
@@ -306,10 +786,11 @@ def parse_with_diagnostics(text, conventions, prefix=None):
     non-empty string, restricts output to custom properties whose name starts
     with it; None/"" includes all."""
     text = strip_comments(text)
-    base = _parse_decls(_base_block(text))
+    blocks = _collect_blocks(text)
+    base = _base_decls(blocks)
 
     primary = _primary_convention(conventions)
-    dark = _scope_decls(text, primary)
+    dark = _scope_decls(blocks, primary)
 
     warnings = []
     # Cross-check every non-primary convention against the primary (KTD3): for a
@@ -317,10 +798,10 @@ def parse_with_diagnostics(text, conventions, prefix=None):
     for conv in conventions:
         if conv is primary:
             continue
-        other = _scope_decls(text, conv)
+        other = _scope_decls(blocks, conv)
         for name in sorted(set(dark) & set(other)):
-            pv = _normalize_hex(_resolve(name, dark, base))
-            ov = _normalize_hex(_resolve(name, other, base))
+            pv = _normalize_hex(_resolve(name, dark, base, "dark"))
+            ov = _normalize_hex(_resolve(name, other, base, "dark"))
             if pv != ov:
                 msg = (
                     f"{name}: dark value differs between conventions "
@@ -335,10 +816,87 @@ def parse_with_diagnostics(text, conventions, prefix=None):
     for name in sorted(set(base) | set(dark)):
         if prefix and not name.startswith(prefix):
             continue
-        light_val = _normalize_hex(_resolve(name, base, None))
-        dark_val = _normalize_hex(_resolve(name, dark, base))
-        light_alias = _alias_of(base.get(name))
-        dark_alias = _alias_of(dark.get(name))
+        malformed = set()
+        light_val = _normalize_hex(_resolve(name, base, None, "light", malformed))
+        dark_val = _normalize_hex(_resolve(name, dark, base, "dark", malformed))
+
+        # KTD9 alias fields. A light-dark() in the BASE declaration carries both
+        # sides, so its second argument is where the dark alias comes from when
+        # no dark scope declares the token. The `name in dark` branch keeps this
+        # backward-compatible: absent a light-dark(), dark_alias is read from the
+        # dark scope alone, exactly as before.
+        base_raw = base.get(name)
+        base_pair = _light_dark_pair(base_raw)
+        light_alias, light_fb = var_alias(base_pair[0] if base_pair else base_raw)
+        if name in dark:
+            dark_alias, dark_fb = var_alias(dark.get(name))
+        elif base_pair:
+            dark_alias, dark_fb = var_alias(base_pair[1])
+        else:
+            dark_alias, dark_fb = None, None
+
+        # A malformed light-dark() is passed through as an opaque literal (see
+        # _resolve). Say so: the token still appears in the parse, so without
+        # this the only symptom is a nonsense value syncing into Paper.
+        for token, value in sorted(malformed):
+            msg = (
+                f"{token}: {value} is not a valid light-dark() — it needs exactly "
+                "two non-empty arguments. It is left as an opaque literal rather than "
+                "guessed at, so classify will almost certainly DECLINE it (a "
+                "light-dark(...) string matches no Paper token type). Check the "
+                "'declined' list — if this token is already live in Paper, being "
+                "declined drops it from the desired set and the next sync deletes it."
+            )
+            warnings.append(msg)
+            _log("WARNING: " + msg)
+
+        # A NESTED light-dark() — `light-dark(light-dark(#fff,#eee), #000)`. The
+        # split runs once, so an inner call survives verbatim into the resolved
+        # value and syncs as the literal string "light-dark(#fff,#eee)". Nesting
+        # expresses nothing CSS can act on (there is no third mode), so this is
+        # a source mistake rather than a shape to support — but it resolves to a
+        # plausible-looking record, which is exactly the silent-wrong-answer
+        # shape worth naming instead of passing through.
+        for fld, val in (("light", light_val), ("dark", dark_val)):
+            if isinstance(val, str) and _LIGHT_DARK.match(val.strip()):
+                msg = (
+                    f"{name}: the resolved {fld} value is still a light-dark() call "
+                    f"({val}) — nested light-dark() is not split and will sync as a "
+                    "literal string. Flatten it in the source."
+                )
+                warnings.append(msg)
+                _log("WARNING: " + msg)
+
+        # Two sources of dark truth for one token. The dark scope is the more
+        # specific signal so it wins, but the light-dark()'s second argument is
+        # now dead code in the source — the author almost certainly expects one
+        # of the two to apply and cannot tell which from reading the CSS.
+        if base_pair and name in dark:
+            msg = (
+                f"{name}: declared as light-dark(…, {base_pair[1]}) in the base scope "
+                f"AND overridden in the dark scope ({_conv_label(primary)}) — the dark "
+                f"scope wins, so {base_pair[1]!r} is ignored. Drop one of the two."
+            )
+            warnings.append(msg)
+            _log("WARNING: " + msg)
+        # Discarded-fallback warning: the record keeps only the referent, and
+        # build_desired writes the alias back as a bare `var(--referent)`, so a
+        # `var(--x, #eee)` loses its `#eee`. That fallback is what renders when
+        # the referent is undefined, so dropping it CHANGES rendered output —
+        # name it rather than letting it vanish silently.
+        for scope, ref, fallback in (
+            ("base", light_alias, light_fb),
+            ("dark", dark_alias, dark_fb),
+        ):
+            if not ref or fallback is None:
+                continue
+            msg = (
+                f"{name}: the {scope} alias var({ref}, {fallback}) is synced as "
+                f"var({ref}) — its fallback {fallback!r} is discarded. Inline the "
+                f"fallback or ensure {ref} is always defined."
+            )
+            warnings.append(msg)
+            _log("WARNING: " + msg)
         # Dangling-alias warning: an included token that aliases a referent the
         # prefix filter EXCLUDED. build_desired keeps the alias as var(--referent),
         # but that referent is never synced, so Paper drops the dangling reference.
@@ -452,7 +1010,7 @@ def main(argv=None):
     parser.add_argument(
         "--conventions",
         required=True,
-        help="JSON array of themeConventions (data-attribute / media-query).",
+        help="JSON array of themeConventions (data-attribute / media-query / class).",
     )
     parser.add_argument(
         "--prefix",

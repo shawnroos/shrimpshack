@@ -24,15 +24,32 @@ The two `normalize-*` verbs are the same token engine pointed in opposite direct
 
 v1 is **base + one "dark" theme**. Paper has no per-token theme mode, so the two themes are written as two separately named Paper tokens: the base value keeps the token's name (`--accent`), and a theme-varying token's dark value gets a `-dark` twin (`--accent-dark`). `emit` inverts this exactly.
 
+A property declared **only** in the dark scope (no base declaration) is legal and
+common — Tailwind's typography plugin does it for `--prose-*`. It lands in Paper
+as a `-dark` twin with no base token beside it, which looks odd in the Paper file
+but is correct and stable: re-syncing an unchanged source is a no-op, the
+round-trip is a fixed point, and if the source later gains a base declaration the
+base token is simply created.
+
 You declare **how the dark scope is expressed** in your source, via `themeConventions`:
 
 | Convention       | Source shape it matches                               | Status    |
 | ---------------- | ----------------------------------------------------- | --------- |
 | `data-attribute` | `:root[data-theme="dark"] { … }`                      | supported |
 | `media-query`    | `@media (prefers-color-scheme: dark) { :root { … } }` | supported |
-| scoped-class     | `.dark { … }`                                         | deferred  |
+| `class`          | `.wcs-dark { … }`, `html.wcs-dark`, `:root.wcs-dark`  | supported |
 
-The base is always the top-level, unscoped `:root`.
+`class` matches on class-token boundaries, so `.wcs-dark` does **not** match
+`.wcs-darker`, a `.wcs-dark\:*` escaped utility (Tailwind's `dark` toggle class
+generates a lot of these), or the string appearing inside a quoted attribute
+value.
+
+The base is the top-level, unscoped `:root`. Scopes are found at any nesting
+depth: `@layer` is transparent, so a bare `:root` inside one **is** the base,
+while `@media`/`@supports`/`@container` are conditional — a `:root` inside one is
+never the base, only a dark candidate. Declarations are read block-locally, so
+CSS/SCSS nesting (`:root { &[data-theme="dark"] { … } }`) resolves correctly
+rather than folding the child's values into the parent.
 
 ## Configuration
 
@@ -69,7 +86,16 @@ Each bridged codebase carries a `token-bridge.config.json` at its root. The plug
 ```
 
 - **`fileId`** — the segment after `/file/` in the Paper URL. **The token commands refuse to run while `fileId` is empty** — a destructive reconcile must never fall back to whatever file happens to be open.
-- **`source.path`** — the CSS/SCSS file, relative to `--repo`. **`source.ref`** (optional) reads the file from a git ref (e.g. `origin/main`) instead of the working tree. **`source.prefix`** filters custom properties; `null`/`""` takes all of them.
+- **`source.path`** — the CSS/SCSS file, relative to `--repo`. **`source.ref`** (optional) reads the file from a git ref (e.g. `origin/main`) instead of the working tree. **`source.prefix`** filters custom properties.
+
+  **`prefix` also decides what the bridge OWNS**, which is why `connect` no longer
+  scaffolds it as `null`. Ownership is what makes a token eligible for deletion:
+  with a prefix, a sync only ever deletes tokens in that namespace; with
+  `null`/`""` it takes — and can delete — every token in the Paper file, including
+  ones you created by hand there. `connect` now infers a prefix from your source's
+  own properties, and if it can't find a dominant one it says so loudly instead of
+  quietly claiming the whole file. `null` remains legal to read, so configs written
+  before this keep working unchanged.
 - **`emitTarget`** — where `normalize-to-design` writes. It refuses to write in place over a source that declares more than one convention (it would drop the non-primary block).
 - **`primitivePattern`** (optional) — a regex overriding how the component-harvest mapper distinguishes a Tier-1 primitive (`--green-500`) from a semantic token in the value-collision tie-break (semantic wins). Default (`null`) treats a trailing `-<digits>` scale step as primitive; set e.g. `"-base$"` when your primitives are named `--blue-base`.
 - **`themeConventions`** — one or more (see above). With more than one, exactly one must be `"primary": true`; parse reads the primary's dark scope and emit writes only the primary's block, warning if the conventions disagree.
@@ -86,7 +112,11 @@ Each bridged codebase carries a `token-bridge.config.json` at its root. The plug
 - **One codebase ↔ one Paper file.** No many-to-one or one-to-many; the config binds a single codebase to a single `fileId`.
 - **No Paper → component code-gen.** The reverse direction is tokens only. Components stay a one-way harvest — faithful code-gen from a canvas is fuzzy and fights the "Paper is the derived side" invariant.
 - **No motion, no shadows as tokens.** Paper has no transition/easing type (it drops `transition`) and silently corrupts a shadow written as a token (stores `#000000`), so both are excluded from token sync with a reason. Shadows still work as component styles.
-- **One base + one dark theme.** Multiple named themes, scoped-class conventions, and multi-file (`light.css`/`dark.css`) inputs are deferred.
+- **One base + one dark theme.** Multiple named themes and multi-file (`light.css`/`dark.css`) inputs are deferred.
+- **`@import` is not followed.** The source is the one file you point at; tokens declared in an imported sheet are not seen.
+- **Compound-class scopes are not user-declarable.** A convention takes one class. A dark scope requiring two classes together (`body.theme.theme-dark`) can't be expressed yet — the engine supports it internally, but the config surface deliberately does not, so it isn't frozen before a real repo needs it.
+- **`-dark` is a reserved suffix.** A genuine `--border-dark` in your source is read as the dark twin of `--border` and round-trips lossily. Rename it if you have one.
+- **`light-dark()` is split, but not nested.** `light-dark(#fff, #000)` resolves into both themes; a nested `light-dark(light-dark(…), …)` is not split and warns. A malformed call (not exactly two arguments) is left as a literal, which classify then declines — check the `declined` list, because a declined token that is already live in Paper gets deleted on the next sync.
 - **Harvest needs a live server.** Token sync and emit work from the daemon (and the source file/git ref); component harvest requires a running, logged-in dev server.
 - **No auto-sync.** No hook, watcher, or CI job — you run the commands.
 

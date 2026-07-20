@@ -1,0 +1,37 @@
+/* Scopes at depth (KTD5). At-rules split by conditionality:
+
+     @layer   — grouping, TRANSPARENT: the bare :root inside it IS the base.
+     @media   — conditional: stays in the context; a bare :root inside one is
+                never the base, only a dark candidate under a media predicate.
+     @supports — conditional, same as @media.
+
+   Also carries a SECOND top-level :root, which must accumulate into the base
+   rather than being dropped, and a second .wcs-dark block so dark accumulation
+   is exercised too. */
+
+@layer tokens {
+  :root {
+    --brand-bg: #ffffff;
+    --brand-fg: #111111;
+  }
+}
+
+:root {
+  --brand-accent: #37d895;
+}
+
+@media (min-width: 800px) {
+  .wcs-dark {
+    --brand-bg: #101010;
+  }
+}
+
+@supports (color: color-mix(in srgb, red, blue)) {
+  .wcs-dark {
+    --brand-fg: #eeeeee;
+  }
+}
+
+.wcs-dark {
+  --brand-accent: #00b72b;
+}

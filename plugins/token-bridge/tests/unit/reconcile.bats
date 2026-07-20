@@ -281,3 +281,287 @@ print('OK')
     dels=$(echo "$output" | jq -r '.deletes[].name' | sort | tr '\n' ' ')
     [ "$dels" = "--brand-old " ]
 }
+
+# ============================================================================
+# R7 empty-parse backstop — a source that parses to zero tokens must NOT be
+# read as "the codebase deleted everything". Without the guard, a shape the
+# parser can't read (a :root wrapped in @layer, standard in Tailwind v4 and
+# Open Props) produces an empty desired set, and the diff turns that into a
+# delete of every live token — a silent wipe of the Paper file.
+# ============================================================================
+
+# helper: write a config + CSS source into a throwaway repo, echo the repo path.
+# The daemon URL points at a dead port on purpose — the guard must fire BEFORE
+# any daemon call, so reaching the daemon is itself a failure signal.
+make_repo() { # <name> <css-source-text>
+    local repo="$BATS_TMPDIR/$1"
+    mkdir -p "$repo"
+    printf '%s' "$2" > "$repo/tokens.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "file-abc", "paperDaemonUrl": "http://127.0.0.1:1/mcp",
+  "source": { "path": "tokens.css", "prefix": "--brand-" },
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark" } ] }
+JSON
+    echo "$repo"
+}
+
+@test "reconcile: an empty desired set against a populated live file produces deletes (the hazard)" {
+    # This is what the backstop exists to intercept — asserted directly so the
+    # guard's value is visible, and so a future change that quietly stops
+    # producing these deletes doesn't leave the guard looking redundant.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens
+live = [
+  {'name':'--brand-accent','type':'color','value':'#37D895'},
+  {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
+]
+diff = sync_tokens.diff_tokens([], live, owned_prefix='--brand-')
+dels = sorted(d['name'] for d in diff['deletes'])
+assert dels == ['--brand-accent', '--brand-bg'], dels
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "reconcile: R7 refuses end-to-end when a source with content parses to zero tokens" {
+    # Vehicle: a real stylesheet with no custom properties at all — a config
+    # pointed at the wrong file. Deliberately NOT @layer: U2 taught the parser
+    # to read @layer, so it is no longer a zero-token shape (see the @layer test
+    # below). This shape stays unparseable by construction, so the guard's
+    # end-to-end path keeps being exercised as the parser grows.
+    repo=$(make_repo repo_zero '.button { color: red; }
+.card { padding: 8px; }')
+    run bash -c "python3 '$LIB' run --repo '$repo' 2>/dev/null"
+    [ "$status" -ne 0 ]
+    [ "$(echo "$output" | jq -r '.ok')" = "false" ]
+    [ "$(echo "$output" | jq -r '.refused')" = "true" ]
+    [ "$(echo "$output" | jq -r '.error')" = "empty_parse" ]
+
+    # The message names the source path and the likely cause.
+    note=$(echo "$output" | jq -r '.note')
+    [[ "$note" == *"$repo/tokens.css"* ]]
+    [[ "$note" == *"zero tokens"* ]]
+
+    # Applied nothing, and never reached the daemon (a dead port would have
+    # reported a get_tokens failure instead of this refusal).
+    [ "$(echo "$output" | jq -r '.applied')" = "null" ]
+    [[ "$note" != *"get_tokens"* ]]
+}
+
+@test "reconcile: the reproduced @layer wipe deletes nothing — it parses, so the guard never has to fire" {
+    # The Problem Frame's headline failure: @layer tokens { :root {…} } used to
+    # yield [] and turn into a full delete set. Two independent things now stop
+    # that, and this asserts the outcome rather than which one did it: the
+    # source parses (U2), so the desired set is populated and no delete is
+    # produced. Were the parse to regress to zero, R7's guard catches it before
+    # the daemon — that path is covered by the end-to-end refusal test above.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens
+src = '@layer tokens {\n  :root { --brand-accent: #37D895; --brand-bg: #FFFFFF; }\n}'
+conv = [{'type':'data-attribute','attr':'data-theme','value':'dark'}]
+desired, declined = sync_tokens.desired_from_source(src, conv, '--brand-')
+assert len(desired) == 2, desired
+live = [
+  {'name':'--brand-accent','type':'color','value':'#37D895'},
+  {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
+]
+diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-')
+assert diff['deletes'] == [], diff['deletes']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "reconcile: R7 refuses when the configured prefix matches nothing in the source" {
+    # A misconfigured prefix parses tokens but keeps none of them — the desired
+    # set is empty and every OWNED live token would be deleted. Same hazard,
+    # same refusal.
+    repo=$(make_repo repo_prefix ':root { --other-accent: #37D895; }')
+    run bash -c "python3 '$LIB' run --repo '$repo' 2>/dev/null"
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -r '.error')" = "empty_parse" ]
+}
+
+@test "reconcile: R7 second arm — a BLANK source against a populated live set refuses, deletes nothing" {
+    # The pre-daemon arm cannot fire here: a truncated/emptied file is
+    # legitimately "no content", so it falls through. The consequence is the
+    # same wipe, and worse under connect's `prefix: null` default (whole-file
+    # ownership). Asserted END-TO-END through run() — the earlier tests only
+    # checked the pure guard's return value, which is exactly why this slipped.
+    run python3 -c "
+import sys, json, tempfile, os; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens
+
+repo = tempfile.mkdtemp()
+src = os.path.join(repo, 'tokens.css')
+open(src, 'w').write('   \n\t\n  ')            # blank — the truncated-file case
+json.dump({
+  'fileId': 'F1', 'paperDaemonUrl': 'http://x',
+  'source': {'path': 'tokens.css', 'ref': None, 'prefix': None},   # null = whole-file ownership
+  'emitTarget': 'out.css', 'primitivePattern': None,
+  'themeConventions': [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}],
+  'harvest': {'themeSignal': {'type':'data-attribute','attr':'data-theme','value':'dark'}, 'batch': []},
+}, open(os.path.join(repo, 'token-bridge.config.json'), 'w'))
+
+applied = []
+class FakeClient:
+    def __init__(self, *a, **k): pass
+    def get_tokens(self, fid):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-accent','type':'color','value':'#37D895'},
+            {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
+        ]}}
+    def __getattr__(self, n):
+        def _rec(*a, **k): applied.append(n); return {'ok': True}
+        return _rec
+sync_tokens.PaperClient = FakeClient
+
+report, code = sync_tokens.run(repo=repo, apply=True)
+assert report.get('refused') is True, report
+assert report.get('ok') is False, report
+assert code != 0, code
+assert report.get('deleted') is None, report          # never even built a delete list
+assert applied == [], applied                          # NOTHING was written
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    # `run` folds stderr into $output and the guard logs its refusal there, so
+    # match anywhere rather than at the start.
+    [[ "$output" == *OK* ]]
+    # The refusal must actually be reported, not just silently skipped.
+    [[ "$output" == *"parsed to zero tokens while 2 owned token(s) are live"* ]]
+}
+
+@test "reconcile: R7 second arm does NOT fire when live is also empty (a true no-op)" {
+    run python3 -c "
+import sys, json, tempfile, os; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens
+repo = tempfile.mkdtemp()
+open(os.path.join(repo, 'tokens.css'), 'w').write('')
+json.dump({
+  'fileId': 'F1', 'paperDaemonUrl': 'http://x',
+  'source': {'path': 'tokens.css', 'ref': None, 'prefix': None},
+  'emitTarget': 'out.css', 'primitivePattern': None,
+  'themeConventions': [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}],
+  'harvest': {'themeSignal': {'type':'data-attribute','attr':'data-theme','value':'dark'}, 'batch': []},
+}, open(os.path.join(repo, 'token-bridge.config.json'), 'w'))
+class FakeClient:
+    def __init__(self, *a, **k): pass
+    def get_tokens(self, fid): return {'ok': True, 'result': {'tokens': []}}
+sync_tokens.PaperClient = FakeClient
+report, code = sync_tokens.run(repo=repo, apply=True)
+assert report.get('ok') is True, report
+assert code == 0, code
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "reconcile: R7 does not fire on a genuinely empty source (no-op, not an error)" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens
+assert sync_tokens.empty_parse_refusal('', 0, '/x/tokens.css') is None
+assert sync_tokens.empty_parse_refusal('   \n\t\n  ', 0, '/x/tokens.css') is None
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "reconcile: R7 treats a comments-only source as empty (no-op, not an error)" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens
+src = '/* just a header comment */\n// and a line comment\n'
+assert sync_tokens.empty_parse_refusal(src, 0, '/x/tokens.css') is None
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "reconcile: R7 does not block a legitimate deletion (source parses to a subset)" {
+    # A real deletion — the source still parses, it just has fewer tokens than
+    # live. The guard keys on a ZERO-token parse, so this must sail through and
+    # still produce its delete.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens
+src = ':root { --brand-accent: #37D895; }'
+# One token parsed => the guard stays quiet.
+assert sync_tokens.empty_parse_refusal(src, 1, '/x/tokens.css') is None
+# ...and the legitimate delete is still produced.
+desired, declined = sync_tokens.desired_from_source(
+    src, [{'type':'data-attribute','attr':'data-theme','value':'dark'}], '--brand-')
+live = [
+  {'name':'--brand-accent','type':'color','value':'#37D895'},
+  {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
+]
+dels = sorted(d['name'] for d in sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-')['deletes'])
+assert dels == ['--brand-bg'], dels
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "reconcile: R7 counts declined tokens as parsed (a declined-only source is not an empty parse)" {
+    # Tokens that parsed but were declined downstream are evidence the parse
+    # worked. Only a total blank is the unparseable-scope signature.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens
+assert sync_tokens.empty_parse_refusal(':root { --brand-a: #fff; }', 1, '/x/t.css') is None
+r = sync_tokens.empty_parse_refusal(':root { --brand-a: #fff; }', 0, '/x/t.css')
+assert r is not None and r['error'] == 'empty_parse', r
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == OK* ]]
+}
+
+@test "reconcile: a dark-only token round-trips as an orphan -dark twin, idempotently" {
+    # A property declared ONLY in the dark scope is legal and common (Tailwind's
+    # typography plugin does it for --prose-*). Found against real minified
+    # tailwindcss.com CSS. It lands in Paper as a `-dark` twin with no base
+    # beside it — correct, but odd enough to pin.
+    run python3 -c "
+import sys, json; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct, sync_tokens as st, emit_tokens as et, parse_tokens as pt
+
+conv = [{'type': 'class', 'class': 'dark', 'primary': True}]
+src = ':root { --brand-normal: #ffffff; }\n.dark, .dark * { --brand-onlydark: #d1d5dc; }'
+
+recs = pt.parse_tokens(src, conv)
+od = [t for t in recs if t['name'] == '--brand-onlydark'][0]
+assert od['light'] is None and od['dark'] == '#D1D5DC', od
+
+desired, _ = st.build_desired(ct.classify_tokens(recs))
+names = sorted(t['name'] for t in desired)
+assert names == ['--brand-normal', '--brand-onlydark-dark'], names   # orphan twin, no base
+
+# idempotent: syncing the same source again is a no-op
+again, _ = st.build_desired(ct.classify_tokens(pt.parse_tokens(src, conv)))
+assert st.is_empty_diff(st.diff_tokens(again, desired, owned_prefix='--brand-'))
+
+# emit -> parse -> diff is a fixed point
+back, _ = st.build_desired(ct.classify_tokens(pt.parse_tokens(et.emit_css(desired, conv), conv)))
+assert st.is_empty_diff(st.diff_tokens(back, desired, owned_prefix='--brand-'))
+
+# and a later base declaration just creates the base token
+src2 = src.replace('--brand-normal: #ffffff;', '--brand-normal: #ffffff; --brand-onlydark: #333333;')
+grown, _ = st.build_desired(ct.classify_tokens(pt.parse_tokens(src2, conv)))
+d = st.diff_tokens(grown, desired, owned_prefix='--brand-')
+assert [t['name'] for t in d['creates']] == ['--brand-onlydark'], d['creates']
+assert not d['deletes'], d['deletes']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

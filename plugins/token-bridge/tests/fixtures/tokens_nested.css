@@ -1,0 +1,46 @@
+/* CSS/SCSS nesting + real-world declaration shapes (U4 / KTD6, R5 + R9).
+
+   Every construct here is a separately reproduced defect against the pre-U4
+   parser:
+
+     - The `&[data-theme="dark"]` child INSIDE `:root`. Scanning the parent body
+       including its children read the dark `#000000` as the LAST `--brand-bg`
+       declaration in the `:root` body, so light and dark came out INVERTED.
+     - `.brand-card`'s declaration must stay with `.brand-card` — it is neither
+       the base nor the dark scope, so it must not appear in the token set at
+       all. It leaked into `:root` before.
+     - `--brand_accent` — an underscore in a custom-property name.
+     - `--brand-icon` — a data URI whose `;` used to truncate the value.
+     - `--brand-important` — `!important` used to leak into the token value and
+       get silently declined by classify_tokens.
+     - `--brand-alias` / `--brand-flip` — `var(--x, fallback)`, which the
+       pre-U4 `_VAR` did not recognize as an alias at all.
+     - `--brand-last` — the final declaration in a block with NO trailing `;`,
+       which used to be dropped (and which is why minified CSS parsed to
+       nothing).
+
+   Parsed with the data-attribute convention. */
+
+:root {
+  --brand-bg: #ffffff;
+  --brand_accent: #37d895;
+  --brand-icon: url("data:image/svg+xml;utf8,<svg/>");
+  --brand-important: #fff !important;
+
+  /* alias with a fallback to a token that does NOT flip */
+  --brand-alias: var(--brand_accent, #eee);
+  /* alias with a fallback to a token that DOES flip in dark */
+  --brand-flip: var(--brand-bg, #eee);
+
+  &[data-theme="dark"] {
+    --brand-bg: #000000;
+  }
+
+  /* a nested child block — its declaration belongs to `.brand-card`, not to
+     `:root`, and `.brand-card` is neither scope, so it is not a token */
+  .brand-card {
+    --brand-card-only: #abcdef;
+  }
+
+  --brand-last: 4px
+}

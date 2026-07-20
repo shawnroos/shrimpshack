@@ -115,6 +115,15 @@
       document.body.getAttribute(attr) === value
         ? "dark"
         : "light";
+  } else if (THEME_SIGNAL && THEME_SIGNAL.type === "class") {
+    // classList.contains matches a whole class token, so `.wcs-darker` does NOT
+    // satisfy a `.wcs-dark` signal — which a substring test on className would.
+    const cls = THEME_SIGNAL.class;
+    theme =
+      document.documentElement.classList.contains(cls) ||
+      document.body.classList.contains(cls)
+        ? "dark"
+        : "light";
   } else if (THEME_SIGNAL && THEME_SIGNAL.type === "media-query") {
     theme = window.matchMedia(THEME_SIGNAL.query).matches ? "dark" : "light";
   }

@@ -88,6 +88,17 @@ def error_envelope(error: str, note: str | None = None, **extra) -> dict:
 # --- shared config -----------------------------------------------------------
 
 
+def _bad_convention_type(i: int, ctype) -> str:
+    """The rejection message for a themeConvention that is not one of the three
+    named types. It enumerates the accepted surface without naming the internal
+    predicate form — describing that form here would advertise it as authorable.
+    """
+    return (
+        f"themeConventions[{i}].type must be 'data-attribute', 'media-query', "
+        f"or 'class', got {ctype!r}."
+    )
+
+
 def _validate_config(cfg: dict) -> str | None:
     """Structurally validate a token-bridge config. Returns an actionable error
     note, or None when the shape is sound.
@@ -121,18 +132,34 @@ def _validate_config(cfg: dict) -> str | None:
         for i, conv in enumerate(conventions):
             if not isinstance(conv, dict):
                 return f"themeConventions[{i}] must be an object."
+            # The predicate form is internal — it is what the named types
+            # desugar to, not something a user writes. Refuse it wherever it
+            # appears, including alongside a valid type: desugar_convention
+            # reads 'match' first, so a named type is not a gate on its own.
+            # Accepting it here would publish it by accident and freeze it.
+            if "match" in conv:
+                # Its OWN message, not the generic bad-type one. Routing this
+                # through _bad_convention_type produced a self-contradiction on
+                # `{"type": "class", "match": [...]}` — "type must be … 'class',
+                # got 'class'" — which points the reader at the type when the
+                # actual fix is to delete the 'match' key.
+                return (
+                    f"themeConventions[{i}] uses the internal 'match' form, which is not "
+                    "user-authorable. Declare one of 'data-attribute', 'media-query', or "
+                    "'class' instead."
+                )
             ctype = conv.get("type")
-            if ctype == "data-attribute":
+            if ctype == "class":
+                if not (isinstance(conv.get("class"), str) and conv.get("class")):
+                    return f"themeConventions[{i}] (class) needs a non-empty string 'class'."
+            elif ctype == "data-attribute":
                 if not (isinstance(conv.get("attr"), str) and isinstance(conv.get("value"), str)):
                     return f"themeConventions[{i}] (data-attribute) needs string 'attr' and 'value'."
             elif ctype == "media-query":
                 if not isinstance(conv.get("query"), str):
                     return f"themeConventions[{i}] (media-query) needs a string 'query'."
             else:
-                return (
-                    f"themeConventions[{i}].type must be 'data-attribute' or "
-                    f"'media-query', got {ctype!r}."
-                )
+                return _bad_convention_type(i, ctype)
             if conv.get("primary"):
                 primaries += 1
         if len(conventions) > 1 and primaries != 1:

@@ -34,7 +34,7 @@ The script owns the inversion end-to-end. Your job is to run it and relay its JS
 ## What the script writes
 
 - A base `:root { … }` block from the base tokens (values kept as-is, including `var(--*)` aliases — never resolved to a literal).
-- A dark override block for the `-dark` twins, in the config's **primary** convention: `:root[data-theme="dark"] { … }` for a data-attribute convention, or `@media (query) { :root { … } }` for a media-query one. The `-dark` suffix is stripped from both the property name and any `var(--…-dark)` alias referent.
+- A dark override block for the `-dark` twins, in the config's **primary** convention: `:root[data-theme="dark"] { … }` for a data-attribute convention, `@media (query) { :root { … } }` for a media-query one, or `:root.wcs-dark { … }` for a class one. The `-dark` suffix is stripped from both the property name and any `var(--…-dark)` alias referent.
 - A token with no `-dark` twin is emitted base-only.
 
 ## Round-trip stability

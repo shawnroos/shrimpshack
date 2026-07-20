@@ -70,34 +70,101 @@ def _strip_dark_alias(value):
 
     A dark twin references another theme-varying token's dark twin; the emitted
     dark scope redeclares the plain name, so the referent must lose `-dark` too.
-    A non-twin referent (`var(--y)`) or a literal is returned unchanged."""
+    A non-twin referent (`var(--y)`) or a literal is returned unchanged.
+
+    This shares parse_tokens' alias seam, so it inherited the widening that
+    taught that seam about `var(--x, fallback)` — a form this function did not
+    previously match at all. It now rewrites `var(--y-dark, #eee)` to
+    `var(--y)`, which drops the fallback. Emitting the fallback through is not
+    an option (its referent name would still be the dangling `--y-dark`), so
+    warn: a silently dropped fallback changes what renders when the referent is
+    undefined."""
     if value is None:
         return value
-    m = parse_tokens.VAR_ALIAS_RE.match(value.strip())
-    if not m:
+    ref, fallback = parse_tokens.split_var_alias(value)
+    if ref is None or not ref.endswith(DARK_SUFFIX):
         return value
-    ref = m.group(1)
-    if ref.endswith(DARK_SUFFIX):
-        return "var(%s)" % ref[: -len(DARK_SUFFIX)]
-    return value
+    stripped = ref[: -len(DARK_SUFFIX)]
+    if fallback is not None:
+        _log(
+            "WARNING: %s de-suffixes to var(%s) — its fallback %r is discarded. "
+            "Inline the fallback or ensure %s is always defined."
+            % (value.strip(), stripped, fallback, stripped)
+        )
+    return "var(%s)" % stripped
+
+
+def _decls(pairs, depth):
+    """Render declarations at `depth` nesting levels — two spaces per level."""
+    pad = "  " * depth
+    return "\n".join("%s%s: %s;" % (pad, name, val) for name, val in pairs)
 
 
 def _root_block(pairs):
-    body = "\n".join("  %s: %s;" % (name, val) for name, val in pairs)
-    return ":root {\n%s\n}" % body
+    return ":root {\n%s\n}" % _decls(pairs, 1)
+
+
+def _invert_selector(preds):
+    """Invert the selector-level predicates of a conjunction into one selector.
+
+    The inverse of `parse_tokens._match_selector_predicate`, and coupled to it:
+    whatever this builds, that matcher must accept. Only the round-trip test
+    proves they still agree (KTD8).
+
+      {selector: S}       -> S, used as the anchor (media-query's `:root`)
+      {class: C}          -> `.C`   appended
+      {attr: A, value: V} -> `[A="V"]` appended
+
+    With no explicit anchor the selector is anchored at `:root` — so a lone
+    class predicate emits `:root.wcs-dark`, not a bare `.wcs-dark`. That keeps
+    the dark block anchored at the same element the base block declares on."""
+    anchor = None
+    parts = []
+    for pred in preds:
+        if "media" in pred:
+            continue
+        if "selector" in pred:
+            if anchor is not None:
+                raise ValueError(
+                    "cannot invert two selector anchors in one conjunction: %r" % (preds,)
+                )
+            anchor = pred["selector"]
+        elif "class" in pred:
+            parts.append(".%s" % pred["class"])
+        elif "attr" in pred:
+            parts.append('[%s="%s"]' % (pred["attr"], pred["value"]))
+        else:
+            raise ValueError("unrecognized scope predicate: %r" % (pred,))
+    if anchor is not None and parts:
+        # `{selector: S}` is an EXACT-match predicate in the parser, so appending
+        # to it emits a selector the matcher would reject — the round-trip would
+        # break silently. Refuse instead.
+        raise ValueError(
+            "cannot invert an exact selector anchor combined with other selector "
+            "predicates: %r" % (preds,)
+        )
+    if anchor is None and not parts:
+        raise ValueError("no selector-level predicate to invert: %r" % (preds,))
+    return (anchor or ":root") + "".join(parts)
 
 
 def _dark_block(conv, pairs):
-    """Wrap the dark declarations in the primary convention's scope."""
-    ctype = conv.get("type")
-    if ctype == "data-attribute":
-        selector = ':root[%s="%s"]' % (conv.get("attr"), conv.get("value"))
-        body = "\n".join("  %s: %s;" % (name, val) for name, val in pairs)
-        return "%s {\n%s\n}" % (selector, body)
-    if ctype == "media-query":
-        body = "\n".join("    %s: %s;" % (name, val) for name, val in pairs)
-        return "@media %s {\n  :root {\n%s\n  }\n}" % (conv.get("query"), body)
-    raise ValueError("unknown themeConvention type: %r" % ctype)
+    """Wrap the dark declarations in the primary convention's scope (KTD8).
+
+    Selector predicates become the rule's selector; a media predicate becomes an
+    `@media` wrapper around it. Indentation is two spaces per nesting level, so
+    the unwrapped form indents declarations by 2 and the wrapped form by 4 —
+    byte-identical to what the pre-predicate type dispatch emitted."""
+    preds = parse_tokens.desugar_convention(conv)
+    selector = _invert_selector(preds)
+    medias = [p["media"] for p in preds if "media" in p]
+    if not medias:
+        return "%s {\n%s\n}" % (selector, _decls(pairs, 1))
+    if len(medias) > 1:
+        raise ValueError(
+            "cannot invert more than one media predicate in a conjunction: %r" % (preds,)
+        )
+    return "@media %s {\n  %s {\n%s\n  }\n}" % (medias[0], selector, _decls(pairs, 2))
 
 
 def emit_css(paper_tokens, conventions, prefix=None):
