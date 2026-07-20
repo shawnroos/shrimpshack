@@ -791,39 +791,6 @@ print('OK')
     [[ "$output" == *OK* ]]
 }
 
-@test "INVARIANT: protection is derived from the SOURCE TEXT, not surviving records" {
-    # `unreadable` used to come from `declined`, which only ever holds names that
-    # PARSED — so a name the parser never saw (a declined base's twin, a scope
-    # predicate miss) was protected by nothing. Deriving it from a flat name
-    # sweep of the source covers parse-level gaps of shapes nobody anticipated.
-    run python3 -c "
-import sys, os, json; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import sync_tokens as st
-class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-fs','type':'fontSize','value':'16px'},
-            {'name':'--brand-fs-dark','type':'fontSize','value':'14px'}]}}
-st.PaperClient = Fake
-repo = os.path.join('$BATS_TMPDIR', 'twinprot'); os.makedirs(repo, exist_ok=True)
-open(repo+'/t.css','w').write(
-  ':root{--brand-fs:clamp(1rem,2vw,2rem);}[data-theme=\"dark\"]{--brand-fs:clamp(.9rem,2vw,1.8rem);}')
-json.dump({'fileId':'F1','paperDaemonUrl':'http://x',
-  'source':{'path':'t.css','ref':None,'prefix':'--brand-'},
-  'emitTarget':'o.css','primitivePattern':None,
-  'themeConventions':[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}],
-  'harvest':{'themeSignal':{'type':'data-attribute','attr':'data-theme','value':'dark'},'batch':[]}},
-  open(repo+'/token-bridge.config.json','w'))
-report, code = st.run(repo=repo, apply=False)
-# the base is untypable AND its live twin must survive
-assert report['deleted'] == [], report['deleted']
-print('OK')
-"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
 @test "an unresolved import REFUSES rather than deleting the partial's tokens" {
     # `missing` was logged and never acted on — the log line even predicted the
     # deletion. A partial's names are in no text we read, so declared_names
@@ -880,7 +847,7 @@ class Fake:
             {'name':'--paper-native','type':'color','value':'#123456'}]}}
 st.PaperClient = Fake
 report, code = st.run(repo='$repo', apply=False)
-assert report['deleted'] == [], report['deleted']
+assert report['prunable'] == [], report['prunable']
 print('OK')
 "
     [ "$status" -eq 0 ]
@@ -920,7 +887,7 @@ print('OK')
     [[ "$output" == *OK* ]]
 }
 
-@test "a commented-out declaration pins a live token, and SAYS so" {
+@test "a commented-out declaration surfaces as prunable, WITH the reason" {
     # Over-protection is right, but it must not be silent: commenting a
     # declaration out is a normal way to retire a token, and the raw sweep pins
     # it in the target file forever with no signal.
@@ -944,66 +911,8 @@ class Fake:
             {'name':'--brand-legacy','type':'color','value':'#CCCCCC'}]}}
 st.PaperClient = Fake
 report, code = st.run(repo='$repo', apply=False)
-assert report['deleted'] == [], report['deleted']          # protected
-assert report['pinnedByComment'] == ['--brand-legacy'], report  # and SAID
-print('OK')
-" 2>/dev/null
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
-@test "deletion is EXPLICIT: default reports prunable, --prune removes" {
-    # Seven review rounds produced twelve data-loss defects and every one was
-    # the same sentence: sync inferred "the user removed this" from "absent from
-    # my parse". That inference is only sound if the parse is COMPLETE, and it
-    # never is. Removing the inference kills the class; guards only narrowed it.
-    repo=$(make_repo pruneexplicit ':root{--brand-keep:#ffffff;}')
-    run python3 -c "
-import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import sync_tokens as st
-calls = []
-class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-keep','type':'color','value':'#FFFFFF'},
-            {'name':'--brand-gone','type':'color','value':'#000000'}]}}
-    def __getattr__(s, n):
-        def rec(*a, **k): calls.append(n); return {'ok': True}
-        return rec
-st.PaperClient = Fake
-r, _ = st.run(repo='$repo', apply=True)
-assert r['deleted'] == [], r['deleted']
-assert r['prunable'] == ['--brand-gone'], r['prunable']
-assert calls == [], calls
-calls.clear()
-r, _ = st.run(repo='$repo', apply=True, prune=True)
-assert r['deleted'] == ['--brand-gone'], r['deleted']
-assert r['prunable'] == [], r['prunable']
-assert calls, 'prune should have written'
-print('OK')
-" 2>/dev/null
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
-@test "guard: even an explicit --prune spares a token we could not read" {
-    # Mutation-verified load-bearing but untested: dropping the declined union
-    # from the unreadable derivation deletes a live -dark twin in the degrade
-    # case. The text sweep cannot cover it — the base IS in desired.
-    repo=$(make_repo declunion ':root{--brand-a:#ffffff;}[data-theme="dark"]{--brand-a:#{$sass};}')
-    run python3 -c "
-import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import sync_tokens as st
-class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
-            {'name':'--brand-a-dark','type':'color','value':'#111111'}]}}
-st.PaperClient = Fake
-r, _ = st.run(repo='$repo', apply=False, prune=True)
-assert r['deleted'] == [], r['deleted']
+assert report['prunable'] == ['--brand-legacy'], report['prunable']   # surfaced, not hidden
+assert report['pinnedByComment'] == ['--brand-legacy'], report        # with the reason why
 print('OK')
 " 2>/dev/null
     [ "$status" -eq 0 ]
@@ -1025,93 +934,6 @@ JSON
     [[ "$output" == *"same file as 'source.path'"* ]]
 }
 
-@test "prune REFUSES when the parse was not complete (malformed source)" {
-    # The parser printed "any declaration after it was not read" and the pipeline
-    # deleted exactly that token. Pruning is the only destructive operation left,
-    # so it requires a parse we can trust — and which declarations were swallowed
-    # is precisely what the parser cannot determine.
-    repo=$(make_repo parseloss ':root{--brand-a:#ffffff;--brand-b:#eeeeee;}
-[data-theme="dark"]{--brand-a:"unterminated ;
---brand-b:#222222;}')
-    run python3 -c "
-import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import sync_tokens as st
-class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
-            {'name':'--brand-a-dark','type':'color','value':'#111111'},
-            {'name':'--brand-b','type':'color','value':'#EEEEEE'},
-            {'name':'--brand-b-dark','type':'color','value':'#222222'}]}}
-st.PaperClient = Fake
-r, code = st.run(repo='$repo', apply=True, prune=True)
-assert r.get('error') == 'incomplete_parse', r
-assert code != 0, code
-assert 'deleted' not in r, r
-# without --prune it still reports, just does not act
-r2, code2 = st.run(repo='$repo', apply=True)
-assert r2['ok'] is True and code2 == 0, (code2, r2)
-print('OK')
-" 2>/dev/null
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
-@test "prune still works on a source the parser read cleanly" {
-    # The guard must not become a blanket no-prune.
-    repo=$(make_repo cleanprune ':root{--brand-keep:#ffffff;}')
-    run python3 -c "
-import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import sync_tokens as st
-class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-keep','type':'color','value':'#FFFFFF'},
-            {'name':'--brand-gone','type':'color','value':'#000000'}]}}
-    def __getattr__(s, n):
-        def rec(*a, **k): return {'ok': True}
-        return rec
-st.PaperClient = Fake
-r, code = st.run(repo='$repo', apply=True, prune=True)
-assert r['deleted'] == ['--brand-gone'], r['deleted']
-assert code == 0, code
-print('OK')
-" 2>/dev/null
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
-@test "guard: the theme-file text sweep protects its tokens (survived mutation)" {
-    repo="$BATS_TMPDIR/themesweepguard"; mkdir -p "$repo"
-    printf ':root{--brand-a:#ffffff;}' > "$repo/l.css"
-    printf ':root{--brand-a:#111111;--brand-onlydark:#222222;}' > "$repo/d.css"
-    cat > "$repo/token-bridge.config.json" <<'JSON'
-{ "fileId": "F1", "paperDaemonUrl": "http://x",
-  "source": { "path": "l.css", "ref": null, "prefix": "--brand-" },
-  "emitTarget": "o.css", "primitivePattern": null,
-  "themeConventions": [ { "type": "file", "path": "d.css", "primary": true } ],
-  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
-JSON
-    run python3 -c "
-import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import sync_tokens as st
-class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
-            {'name':'--brand-onlydark-dark','type':'color','value':'#222222'}]}}
-st.PaperClient = Fake
-r, _ = st.run(repo='$repo', apply=False, prune=True)
-assert '--brand-onlydark-dark' not in r['deleted'], r['deleted']
-print('OK')
-" 2>/dev/null
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
 @test "completeness fails CLOSED: an unaffirmed parse is not complete" {
     # The property that makes a future unregistered channel safe. No read has
     # happened, so nothing has affirmed anything, so pruning must not proceed.
@@ -1127,143 +949,71 @@ print('OK')
     [[ "$output" == *OK* ]]
 }
 
-@test "prune REFUSES on a not-followed package import (the round-8 P0)" {
-    # The tool logged 'tokens they declare are not in this parse' and then
-    # deleted exactly those tokens: the channel was a local variable that got
-    # printed and thrown away.
-    repo=$(make_repo notfollowed '@use "@acme/palette";
 
-:root{--brand-radius:4px;}')
-    python3 - "$repo" <<'PY'
-import json, sys
-c = sys.argv[1] + "/token-bridge.config.json"
-cfg = json.load(open(c)); cfg["source"]["followImports"] = True
-json.dump(cfg, open(c, "w"))
-PY
+@test "INVARIANT: apply_diff cannot remove a stale token — it raises" {
+    # The load-bearing assertion of this release. Nine review rounds and
+    # fourteen data-loss defects all reduced to deciding "the user removed
+    # this" from "this is absent from my parse". The capability is gone, not
+    # defaulted off: a future caller that constructs a diff with deletes gets
+    # an exception, not a silent deletion.
     run python3 -c "
 import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
 import sync_tokens as st
-CALLS=[]
+calls = []
 class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
-            {'name':'--brand-fg','type':'color','value':'#000000'},
-            {'name':'--brand-radius','type':'radius','value':'4px'}]}}
-    def set_tokens(s,f,t): CALLS.append(t); return {'ok': True, 'result': {}}
-    def create_tokens(s,f,t): return {'ok': True, 'result': {}}
-st.PaperClient = Fake
-r, code = st.run(repo='$repo', apply=True, prune=True)
-assert r.get('error') == 'incomplete_parse', r
-assert code != 0, code
-assert CALLS == [], CALLS   # nothing was sent to the daemon
-kinds = {x['kind'] for x in r['reasons']}
-assert 'not_followed' in kinds, r['reasons']
-print('OK')
-" 2>/dev/null
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
-@test "allowIncompleteParse is the escape hatch for source you do not own" {
-    repo=$(make_repo allowinc '@use "@acme/palette";
-
-:root{--brand-radius:4px;}')
-    python3 - "$repo" <<'PY'
-import json, sys
-c = sys.argv[1] + "/token-bridge.config.json"
-cfg = json.load(open(c))
-cfg["source"]["followImports"] = True
-cfg["source"]["allowIncompleteParse"] = True
-json.dump(cfg, open(c, "w"))
-PY
-    run python3 -c "
-import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import sync_tokens as st
-class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-gone','type':'color','value':'#FFFFFF'},
-            {'name':'--brand-radius','type':'radius','value':'4px'}]}}
-    def set_tokens(s,f,t): return {'ok': True, 'result': {}}
-    def create_tokens(s,f,t): return {'ok': True, 'result': {}}
-st.PaperClient = Fake
-r, code = st.run(repo='$repo', apply=True, prune=True)
-assert r['ok'] is True and code == 0, (code, r)
-assert r['deleted'] == ['--brand-gone'], r
-print('OK')
-" 2>/dev/null
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
-@test "prune is no longer silently suppressed by a name declared out of scope" {
-    # The P1 the redesign removed: moving a token into a component rule made it
-    # permanently unprunable, reported ok/pruned with an empty deleted and NO log.
-    repo=$(make_repo outofscope ':root{--brand-primary:#0055ff;}
-.legacy-card{--brand-retired:#123456;}')
-    run python3 -c "
-import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import sync_tokens as st
-class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-primary','type':'color','value':'#0055FF'},
-            {'name':'--brand-retired','type':'color','value':'#123456'}]}}
-    def set_tokens(s,f,t): return {'ok': True, 'result': {}}
-    def create_tokens(s,f,t): return {'ok': True, 'result': {}}
-st.PaperClient = Fake
-r, code = st.run(repo='$repo', apply=True, prune=True)
-assert r['deleted'] == ['--brand-retired'], r
-# and it is DISCLOSED as moved-not-retired, never silent
-assert r['stillDeclared'] == ['--brand-retired'], r
-print('OK')
-" 2>/dev/null
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
-@test "declined tokens are still protected from prune (they parsed fine)" {
-    repo=$(make_repo declprot ':root{--brand-a:#ffffff;--brand-shadow:0 1px 2px rgba(0,0,0,.2);}')
-    run python3 -c "
-import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import sync_tokens as st
-class Fake:
-    def __init__(s,*a,**k): pass
-    def get_tokens(s,f):
-        return {'ok': True, 'result': {'tokens': [
-            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
-            {'name':'--brand-shadow','type':'color','value':'#000000'}]}}
-    def set_tokens(s,f,t): return {'ok': True, 'result': {}}
-    def create_tokens(s,f,t): return {'ok': True, 'result': {}}
-st.PaperClient = Fake
-r, code = st.run(repo='$repo', apply=True, prune=True)
-assert '--brand-shadow' not in r['deleted'], r
-assert any(d['name'] == '--brand-shadow' for d in r['declined']), r
-print('OK')
-" 2>/dev/null
-    [ "$status" -eq 0 ]
-    [[ "$output" == *OK* ]]
-}
-
-@test "stillDeclared discloses a -dark twin deletion (twins are never in source)" {
-    # The disclosure that compensates for removing the text sweep was void for
-    # exactly the token class this file's defects live in: twin names are
-    # synthesized, so a raw membership test could never match one.
-    run python3 -c "
-import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
-import parse_tokens as pt, sync_tokens as st
-assert '--brand-bg-dark' not in pt.declared_names(':root{--brand-bg:#FFF}', '--brand-')
-d = [{'name':'--brand-bg','type':'color','value':'#FFFFFF'}]
-live = [{'name':'--brand-bg','type':'color','value':'#FFFFFF'},
-        {'name':'--brand-bg-dark','type':'color','value':'#000000'}]
-dels = [t['name'] for t in st.diff_tokens(d, live, owned_prefix='--brand-', unreadable=set())['deletes']]
-assert dels == ['--brand-bg-dark'], dels
+    def set_tokens(s, t, f): calls.append(('set', t)); return {'ok': True}
+    def create_tokens(s, t, f): calls.append(('create', t)); return {'ok': True}
+diff = {'creates': [], 'updates': [], 'recreates': [],
+        'deletes': [{'name': '--brand-gone', 'type': 'color', 'value': '#000'}]}
+try:
+    st.apply_diff(Fake(), 'F1', diff)
+    raise AssertionError('apply_diff accepted stale deletes')
+except ValueError as e:
+    assert 'does not remove tokens' in str(e), str(e)
+assert calls == [], calls   # nothing reached the daemon
 print('OK')
 "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "INVARIANT: no run() reaches the daemon with a delete, whatever the source" {
+    # Drives the real pipeline over the shapes that produced P0s in rounds 4-9:
+    # a not-followed package import, an unresolved import, malformed source, a
+    # name moved out of scope, a commented-out declaration. Every one of them
+    # used to end in a deletion under some configuration.
+    run python3 -c "
+import sys, os, json, tempfile; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st, parse_tokens as pt, importlib
+
+SOURCES = {
+  'not_followed':  '@use \"@acme/palette\";\n:root{--brand-radius:4px;}',
+  'moved_scope':   ':root{--brand-a:#fff;}\n.card{--brand-gone:#123456;}',
+  'commented':     ':root{--brand-a:#fff;}\n/* --brand-gone: #123456; */',
+  'malformed':     ':root{--brand-a:\"unterminated ;\n--brand-gone:#222;}',
+}
+for label, css in SOURCES.items():
+    for follow in (False, True):
+        repo = tempfile.mkdtemp()
+        open(os.path.join(repo,'tokens.css'),'w').write(css)
+        json.dump({'fileId':'F1','source':{'path':'tokens.css','prefix':'--brand-','followImports':follow},
+                   'themeConventions':[{'type':'media-query','query':'(prefers-color-scheme: dark)','primary':True}]},
+                  open(os.path.join(repo,'token-bridge.config.json'),'w'))
+        sent = []
+        class Fake:
+            def __init__(s,*a,**k): pass
+            def get_tokens(s,f):
+                return {'ok':True,'result':{'tokens':[
+                    {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+                    {'name':'--brand-gone','type':'color','value':'#123456'}]}}
+            def set_tokens(s,t,f): sent.extend(t); return {'ok':True,'result':{}}
+            def create_tokens(s,t,f): return {'ok':True,'result':{}}
+        importlib.reload(pt); importlib.reload(st); st.PaperClient = Fake
+        st.run(repo=repo, apply=True)
+        deletes = [x for x in sent if x.get('delete')]
+        assert deletes == [], (label, follow, deletes)
+print('OK')
+" 2>/dev/null
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }

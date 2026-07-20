@@ -14,58 +14,45 @@ A config-driven bridge between one codebase's CSS custom-property design tokens 
 
 - **`connect`** scaffolds the codebase's `token-bridge.config.json`, binding it to one Paper file — reference an existing file (by id or URL) or create a fresh one. The one-time setup the rest depends on.
 - **`status`** reports the drift between code and design in both directions (tokens only in code, only in design, or differing), writing nothing, then offers the two normalize directions. This is the "which way should I reconcile?" view.
-- **`normalize-to-code`** (code is source of truth) reconciles the codebase's CSS tokens into the Paper file: new tokens created, changed values updated, retyped tokens recreated. Idempotent — an unchanged source writes nothing. **It does not delete.** A live token absent from the parse is reported as `prunable` and left alone; `--prune` removes them.
+- **`normalize-to-code`** (code is source of truth) reconciles the codebase's CSS tokens into the Paper file: new tokens created, changed values updated, retyped tokens recreated. Idempotent — an unchanged source writes nothing. **It never deletes.** A live token absent from the parse is reported under `prunable` and left in place; removing it is a manual step you take in Paper.
 - **`normalize-to-design`** (design is source of truth) reads the Paper file's tokens and writes a CSS file at `emitTarget` — a base `:root` block plus a dark override block in your declared theme convention. The round-trip is stable: CSS emitted from a file already in sync re-parses to the same token model.
 - **`refresh-components`** harvests a component's rendered structure and computed styles from a running dev server, maps the values back to token references, and writes it into Paper — replacing any prior copy.
 
 The two `normalize-*` verbs are the same token engine pointed in opposite directions; `status` shows you which way you need it before you commit to one.
 
-## Why sync doesn't delete
+## Why sync never deletes
 
 A live token missing from the parse could mean two things — you removed it, or
-the parser failed to read it — and those are indistinguishable from inside. Every
-CSS shape the parser hasn't met yet looks exactly like a deletion: `@layer`,
-nesting, a base64 `//` inside a data URI, a class-scoped theme file, an
-unresolved `@import`, an unterminated string. Twelve separate data-loss defects
-in this codebase were all that one ambiguity, and each fix guarded a symptom
-rather than the inference.
+the parser failed to read it — and from inside the tool those are
+indistinguishable. Every CSS shape the parser hasn't met yet looks exactly like
+a deletion: `@layer`, nesting, a base64 `//` in a data URI, a class-scoped theme
+file, an unresolved `@import`, a not-followed `@use "@scope/pkg"`, an
+unterminated string.
 
-So the inference is gone. `normalize-to-code` creates and updates; removal is
-`--prune`, which reports exactly what it will remove first:
+`normalize-to-code` **creates, updates, and recreates retyped tokens. It does
+not remove anything.** A live token with no matching declaration in the parse is
+reported under `prunable` — a list, not an action — and you delete those in
+Paper, where you can see what you are removing before you do.
 
-```
-$ token-bridge normalize-to-code          # prunable: ["--brand-legacy"] — nothing removed
-$ token-bridge normalize-to-code --prune  # removes them
-```
+That is the settled answer after a long argument with the alternative. Earlier
+versions tried to delete safely: scope the deletion to a prefix, then guard it
+behind a completeness check, then make it an explicit `--prune`, then gate prune
+on the parser affirming it read the whole source. Every one of those was a real
+improvement and every one still shipped a way to delete a token the user had not
+removed — fourteen such defects across nine reviews, each new guard defeated by
+a source shape it did not anticipate. The inference "absent means removed" is
+only sound when the parse is complete, a parse over real-world CSS is never
+provably complete, and so the safe number of automatic deletions is zero.
 
-The parser can be as incomplete as CSS demands and the worst outcome is a stale
-token, which you can see in `status` and clear whenever you like. A deleted one
-is not recoverable.
+The cost is one manual step, occasionally. A stale token you can see in `status`
+and remove when you choose; a wrongly deleted one is gone. `prunable` gives you
+the exact list either way.
 
-`--prune` is the only destructive path, so it requires a parse it can trust —
-and trust here is a positive assertion, not the absence of known problems. The
-parser affirms that it read the whole source graph it was pointed at; `--prune`
-refuses unless it did.
-
-That inversion matters more than it sounds. The earlier design asked "did
-anything go wrong?" against a hand-kept list of ways a parse can be incomplete,
-and the list was never finished: a package import that the tool deliberately
-does not follow was logged ("tokens they declare are not in this parse") and
-then dropped, so a prune deleted exactly those tokens. Under the affirmation
-model, a channel nobody has thought of yet leaves the parse unaffirmed, and an
-unaffirmed parse does not prune.
-
-You will hit this if you `@use "@scope/pkg"`, use a `~`-prefixed spec, or have
-an import the tool cannot resolve — none of which it can walk. If those declare
-nothing you sync (vendor CSS you do not own), set `source.allowIncompleteParse:
-true` and prune anyway.
-
-Two things `--prune` still does not do. It will not remove a token Paper cannot
-represent (a shadow, a motion value) — those parsed fine and are reported under
-`declined`. And when it removes a token whose name is still declared somewhere
-the sync does not read, such as a component rule, it says so under
-`stillDeclared`: that is a refactor rather than a retirement, and it would
-otherwise come back as a new token on the next sync.
+(One honest caveat: a token whose Paper *type* changes — a color that becomes a
+dimension — is recreated, which Paper implements as a delete plus a create under
+the same name. It is bounded, driven by your source rather than by absence, and
+any Paper-side field this tool does not model does not survive it. The report
+names every recreate.)
 
 ## The theme model
 

@@ -400,10 +400,28 @@ def apply_diff(client, file_id, diff):
     first non-ok envelope short-circuits with ok:false."""
     steps = []
 
-    # 1. Deletions: stale deletes + the delete half of every recreate.
-    delete_names = [t["name"] for t in diff["deletes"]] + [
-        t["name"] for t in diff["recreates"]
-    ]
+    # 1. Deletions: the delete half of every recreate. NOTHING ELSE.
+    #
+    # This function cannot remove a stale token, and that is deliberate rather
+    # than a default. Deciding "the user removed this" from "this is absent
+    # from my parse" produced fourteen data-loss defects across nine review
+    # rounds; every attempt to make the inference safe — four completeness
+    # guards, an explicit --prune flag, a fail-closed affirmation model —
+    # introduced a new deletion path within one round. The capability is gone,
+    # so the class is gone with it. `diff["deletes"]` is still computed and
+    # still reported as `prunable`; removing those is the user's job, in Paper,
+    # where they can see what they are removing.
+    #
+    # A recreate is a different animal: same name, deleted and immediately
+    # recreated because Paper cannot retype in place. It is bounded and driven
+    # by the desired set, not by absence. It is still not free — a Paper-side
+    # field this tool does not model does not survive it — and run() says so.
+    if diff.get("deletes"):
+        raise ValueError(
+            "apply_diff was given stale deletes; this tool does not remove "
+            "tokens. Report them as `prunable` instead."
+        )
+    delete_names = [t["name"] for t in diff["recreates"]]
     if delete_names:
         env = client.set_tokens(
             [{"name": n, "delete": True} for n in delete_names], file_id
@@ -502,36 +520,20 @@ def desired_from_source(text, conventions, prefix=None, dark_texts=None):
 # --- top-level orchestration -------------------------------------------------
 
 
-def run(repo=".", url=None, apply=True, prune=False):
+def run(repo=".", url=None, apply=True):
     """The end-to-end reconcile. Returns (report_dict, exit_code).
 
-    DELETION IS EXPLICIT (`prune=True`). By default this creates and updates
-    only; a live token absent from the parse is reported as `prunable` and left
-    alone.
+    THIS DOES NOT DELETE. It creates, updates, and recreates retyped tokens.
+    A live token absent from the parse is reported under `prunable` and left
+    alone; removing it is the user's job, in Paper.
 
-    Why: a sync that deletes on absence is inferring "the user removed this"
-    from "this is missing from my parse", and that inference is only sound if
-    the parse is COMPLETE. It never is — CSS keeps producing shapes the parser
-    has not met (@layer, nesting, a base64 // in a data URI, a class-scoped
-    theme file, an unresolved import, an unterminated string). Twelve separate
-    data-loss defects across seven review rounds were all that one sentence,
-    and each round's guard checked something merely correlated with "did we
-    read this correctly" rather than the thing itself.
-
-    Making removal explicit does not guard the inference — it removes it. The
-    parser may be as incomplete as CSS demands and the worst outcome is a stale
-    token, which is recoverable. A deleted one is not. The `unreadable`
-    machinery is kept as defence-in-depth so even an explicit prune will not
-    remove something we merely failed to read.
-
-    Reads everything it needs (fileId, source, prefix, theme conventions, daemon
-    URL) from the config found under `--repo`. Refuses (writes NOTHING) when the
-    config is missing/invalid or carries no fileId — the destructive-reconcile
-    safety guard. This runs BEFORE any source read or daemon call.
-
-    Refuses a second time (R7) when the source has content but parses to zero
-    tokens, which the diff would otherwise read as "delete everything". That
-    check runs after the source read but still before any daemon call."""
+    That is not caution, it is the conclusion of nine review rounds. Deciding
+    "the user removed this" from "this is absent from my parse" produced
+    fourteen data-loss defects, and every attempt to make the inference safe
+    introduced a new deletion path within one round. The inference is gone.
+    `apply_diff` raises if handed stale deletes, so this is a missing
+    capability rather than a default someone can flip back on.
+    """
     file_id, cfg, err = read_config(repo)
     if err is not None:
         # no_config / bad_config / no_target_file — all refuse before any write.
@@ -613,43 +615,22 @@ def run(repo=".", url=None, apply=True, prune=False):
     # records so a token the parser never saw is protected too — a declined
     # base's twin, or a name lost to a scope predicate, leaves no record to
     # inspect but is plainly there in the source.
-    # Pruning is the only destructive operation left, so it requires a parse we
-    # can TRUST. When the parser reported malformed source it also told us it
-    # swallowed declarations — and which ones is exactly what it cannot know.
-    # Deleting on that basis is the whole class this release removed.
-    # Pruning is the only destructive operation, so it requires a parse we can
-    # TRUST — and trust is a positive assertion, not the absence of known-bad
-    # signals. Four review rounds asked "is this parse trustworthy?" by checking
-    # a hand-maintained list of ways it might not be, and the list was still
-    # incomplete when it shipped: a deliberately not-followed package import was
-    # logged ("tokens they declare are not in this parse") and then thrown away,
-    # so --prune deleted precisely those tokens. Enumerating the bad cases fails
-    # every round. Ask the parser to affirm it read everything instead; a channel
-    # nobody has thought of yet leaves the parse unaffirmed, which fails closed.
+    # An incomplete parse no longer decides anything destructive — nothing
+    # deletes — so this reports rather than refuses. The information still
+    # matters: an unread import means stale values and missing tokens, and a
+    # user who sees `prunable` should know whether the parse was whole before
+    # acting on it in Paper.
     complete, reasons = parse_tokens.source_completeness()
-    allow_incomplete = (cfg.get("source") or {}).get("allowIncompleteParse")
-    if prune and not complete and not allow_incomplete:
+    if not complete:
         listed = "; ".join(
-            f"{what}{f' (from {where})' if where else ''} [{kind}]"
-            for kind, what, where in reasons[:5]
+            f"{what}{f' (from {where})' if where else ''}"
+            for _kind, what, where in reasons[:5]
         )
-        more = f" and {len(reasons) - 5} more" if len(reasons) > 5 else ""
-        return (
-            {
-                "ok": False, "refused": True, "error": "incomplete_parse",
-                "reasons": [
-                    {"kind": k, "what": w, "where": p} for k, w, p in reasons
-                ],
-                "note": (
-                    f"nothing was removed: this parse did not read the whole source. "
-                    f"{listed}{more}. Pruning decides what to delete from what is "
-                    "absent, which is only sound when the parse is complete. Fix or "
-                    "follow the source above — or, if those declare nothing you sync "
-                    "(vendor CSS you do not own), set source.allowIncompleteParse: "
-                    "true to prune anyway."
-                ),
-            },
-            EXIT_REFUSED,
+        _log(
+            f"this parse did not read the whole source: {listed}. Values from "
+            "those may be stale, and tokens they declare will appear under "
+            "`prunable` even though you have not removed them — do not act on "
+            "that list until the source reads whole."
         )
 
     # Declined tokens parsed FINE — Paper simply cannot represent them (shadows,
@@ -662,15 +643,15 @@ def run(repo=".", url=None, apply=True, prune=False):
     # missed; with a complete parse there is nothing unread to protect, and with
     # an incomplete one we refused above. Keeping it only ever suppressed
     # deletions the user explicitly asked for: a token moved from `:root` into a
-    # component rule became permanently unprunable, reported as ok/pruned with
-    # an empty `deleted` and no log line at all.
+    # component rule became permanently unprunable and silently so.
     protected = {d["name"] for d in declined}
     protected |= {n + DARK_SUFFIX for n in protected}
     unreadable = protected
 
-    # A live token whose declaration is only commented out is PROTECTED, which
-    # is safe but silent — the user commented it out to retire it and nothing
-    # says why that had no effect. Name them.
+    # A live token whose declaration is only commented out shows up as
+    # `prunable` like any other absent name — but its absence has a specific,
+    # recoverable cause worth naming, because the user may think commenting the
+    # line out already retired it.
     commented = parse_tokens.commented_only_names(text, prefix)
     for dark_text in (dark_texts or {}).values():
         commented |= parse_tokens.commented_only_names(dark_text, prefix)
@@ -679,56 +660,28 @@ def run(repo=".", url=None, apply=True, prune=False):
     for n in pinned:
         _log(
             f"{n} is live in the target file but only appears inside a comment in the "
-            "source. It is protected from deletion, so commenting the declaration out "
-            "did NOT retire it — delete the line to remove the token."
+            "source, which is why it is listed as prunable. Commenting the declaration "
+            "out does not remove the token — delete the line, then remove it in Paper."
         )
 
     diff = diff_tokens(desired, live, owned_prefix=prefix, unreadable=unreadable)
 
-    # A name can be absent from `desired` yet still present in the source, when
-    # it was moved somewhere the sync does not read — a component rule, a print
-    # media block. With a complete parse that is a real removal from the theme
-    # and prune deletes it, which is what was asked. But it is an ordinary
-    # refactor, not an obvious deletion, so it is never silent.
-    declared_anywhere = parse_tokens.declared_names(text, prefix)
-    for dark_text in (dark_texts or {}).values():
-        declared_anywhere |= parse_tokens.declared_names(dark_text, prefix)
-    # `-dark` twins are synthesized by the token model and NEVER appear in the
-    # source text, so a raw membership test could not disclose a twin deletion
-    # by construction — void for exactly the token class this file's defects
-    # live in. Match a twin by its base name.
-    still_declared = sorted(
-        t["name"] for t in diff["deletes"]
-        if t["name"] in declared_anywhere
-        or (t["name"].endswith(DARK_SUFFIX)
-            and t["name"][: -len(DARK_SUFFIX)] in declared_anywhere)
-    )
-    if still_declared and prune:
-        _log(
-            f"{len(still_declared)} token(s) being removed are still declared in the "
-            f"source, outside any scope this sync reads: {', '.join(still_declared[:8])}. "
-            "If you moved them into a component rule rather than retiring them, they "
-            "will come back on the next sync as new tokens."
-        )
-
     # Blank-source backstop (R7, second arm). The pre-daemon check above cannot
-    # fire on a BLANK source — a truncated or emptied file is legitimately
-    # "no content", so it falls through — but the consequence is identical and
-    # worse: zero desired against a populated owned set turns the whole live set
-    # into deletes. Under connect's `prefix: null` default that is the entire
-    # Paper file, silently, with ok:true and exit 0.
+    # fire on a BLANK source — a truncated or emptied file is legitimately "no
+    # content", so it falls through — and this arm needs the live set, which
+    # that one does not have.
     #
-    # "Don't ERROR on an empty source" is not "don't DELETE on an empty source".
-    # This arm lives here because it needs the live set, and this is still a
-    # read-only point — get_tokens is a read, nothing has been written yet.
-    # Deliberately emptying a Paper file must be explicit, never a side effect.
+    # Nothing deletes any more, so this no longer prevents a wipe. It prevents
+    # the ADVICE to wipe: zero desired against a populated owned set reports
+    # every live token as `prunable`, and a user acting on that list deletes
+    # their whole file by hand. A truncated source must not produce a
+    # confident-looking removal list.
     if not desired and diff["deletes"]:
         note = (
             f"{resolve_repo_path(cfg, (cfg.get('source') or {}).get('path'))} parsed to zero "
-            f"tokens while {len(diff['deletes'])} owned token(s) are live. Syncing would delete "
-            "all of them, so nothing was written. If the source was truncated or emptied by "
-            "mistake, restore it. To empty the target deliberately, delete the tokens in Paper "
-            "directly rather than via an empty sync."
+            f"tokens while {len(diff['deletes'])} owned token(s) are live. Every one of them "
+            "would be listed as prunable, which is almost certainly wrong — if the source was "
+            "truncated or emptied by mistake, restore it. Nothing was written either way."
         )
         _log(note)
         return (
@@ -743,13 +696,9 @@ def run(repo=".", url=None, apply=True, prune=False):
         "updated": [t["name"] for t in diff["updates"]],
         # Split by whether it actually happened. `prunable` is what a sync
         # would once have destroyed silently.
-        "deleted": [t["name"] for t in diff["deletes"]] if prune else [],
-        "prunable": [] if prune else [t["name"] for t in diff["deletes"]],
-        "pruned": prune,
+        "prunable": [t["name"] for t in diff["deletes"]],
+        "parseComplete": complete,
         "recreated": [t["name"] for t in diff["recreates"]],
-        # Deletes that the source still declares somewhere unread — moved, not
-        # retired. Empty unless prune actually removed them.
-        "stillDeclared": still_declared if prune else [],
         "declined": declined,
         "pinnedByComment": pinned,
         "empty": is_empty_diff(diff),
@@ -760,17 +709,17 @@ def run(repo=".", url=None, apply=True, prune=False):
         _log(
             f"{len(diff['recreates'])} token(s) changed Paper type and are being "
             f"recreated: {names}. Paper cannot retype in place, so each is a delete "
-            "followed by a create — this happens with or without --prune, and any "
+            "followed by a create — and any "
             "Paper-side field this tool does not model (a hand-written description) "
             "does not survive it."
         )
 
-    if not prune and diff["deletes"]:
+    if diff["deletes"]:
         names = ", ".join(t["name"] for t in diff["deletes"][:8])
         _log(
             f"{len(diff['deletes'])} live token(s) are absent from this parse and were "
             f"NOT removed: {names}. Absence is not proof of removal — a parse gap looks "
-            "identical to a deletion. Re-run with --prune to remove them."
+            "identical to a deletion. Remove them in Paper if you meant to retire them."
         )
         # Drop them from the applied diff entirely; they stay reported.
         diff = dict(diff, deletes=[])
@@ -804,12 +753,6 @@ def main(argv=None):
     p_run.add_argument("--repo", default=".", help="Target codebase root holding token-bridge.config.json")
     p_run.add_argument("--url", default=None, help="Paper daemon URL override")
     p_run.add_argument("--no-apply", action="store_true", help="Diff + report only")
-    p_run.add_argument(
-        "--prune", action="store_true",
-        help=("Also REMOVE live tokens absent from the parse. OFF by default — absence "
-              "is not proof of removal, because a parse gap looks identical to a "
-              "deletion. Run without it first and read `prunable`."),
-    )
 
     p_bd = sub.add_parser("build-desired", help="Build the desired set from one CSS source + conventions.")
     p_bd.add_argument("--source-file", required=True, help="CSS/SCSS source file to parse")
@@ -835,7 +778,6 @@ def main(argv=None):
             repo=getattr(args, "repo", "."),
             url=getattr(args, "url", None),
             apply=not getattr(args, "no_apply", False),
-            prune=getattr(args, "prune", False),
         )
         print(json.dumps(report, indent=2))
         if report.get("refused"):

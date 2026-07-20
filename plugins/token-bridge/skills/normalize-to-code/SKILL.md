@@ -27,22 +27,22 @@ The script owns the reconcile end-to-end. Your job is to run it and relay its JS
    To preview the reconcile without writing anything, pass `--no-apply`: it reports the same `created`/`updated`/`deleted`/`recreated`/`declined` diff but makes no changes. Pass `--url` to override the daemon URL from config.
 
 2. Read the exit code and the JSON report on stdout:
-   - **Exit 2 (refused):** the report's `error` field carries the machine code and `note` an actionable message — surface `note` verbatim and stop. Codes: `no_config` / `bad_config` / `no_target_file` (config problems); `incomplete_parse` (only with `--prune` — the parse did not read the whole source, so what is "absent" is not knowable; `reasons[]` names each unread thing, and `source.allowIncompleteParse: true` is the escape hatch when they declare nothing the user syncs); `unresolved_imports`; `theme_file_unreadable`; `empty_parse` (the source parsed to zero tokens while owned tokens are live). Never guess or substitute a target file.
+   - **Exit 2 (refused):** the report's `error` field carries the machine code and `note` an actionable message — surface `note` verbatim and stop. Codes: `no_config` / `bad_config` / `no_target_file` (config problems); `unresolved_imports`; `theme_file_unreadable`; `empty_parse` (the source parsed to zero tokens while owned tokens are live — reported so a truncated source cannot produce a whole-file `prunable` list). Never guess or substitute a target file.
    - **Exit 4 (error):** the source read (file or git ref), the Paper daemon, or an apply step failed. Relay the `error` / `envelope` so the cause is visible (e.g. daemon not running, source path wrong).
    - **Exit 0 (ok):** report the outcome from the fields below.
 
-3. **Deletion is explicit.** A plain run creates, updates, and recreates; it never removes. A live token absent from the source is reported under `prunable` and left in place, because a gap in the parse looks identical to a deletion. Only `--prune` removes, and only when the parser affirms it read the whole source.
+3. **This never deletes.** A run creates, updates, and recreates retyped tokens — nothing is removed. A live token absent from the source is reported under `prunable`: a list for the user to act on in Paper, never an action this tool takes.
 
    Relay these report fields:
-   - `created`, `updated`, `recreated` (token names). A `recreated` entry is a delete-then-create pair, because Paper cannot retype in place — this happens with or without `--prune`, and any Paper-side field this tool does not model (a hand-written description) does not survive it.
-   - **`prunable`** — live tokens absent from this parse that were NOT removed. Always surface these; they are the reason a user reruns with `--prune`. Do not describe them as deleted.
-   - `deleted` — non-empty only when `--prune` ran.
-   - `stillDeclared` — pruned tokens whose name is still declared somewhere the sync does not read (a component rule). Tell the user: this looks like a move, not a retirement, and they will reappear as new tokens next sync.
-   - `declined` — tokens Paper cannot represent (shadows, motion, filters), each with a `reason`. These are never pruned; they parsed fine.
-   - `pinnedByComment` — live tokens whose declaration exists only inside a comment. Commenting a token out does NOT retire it; say so.
+   - `created`, `updated`, `recreated` (token names). A `recreated` entry is a delete-then-create pair, because Paper cannot retype in place — any Paper-side field this tool does not model (a hand-written description) does not survive it.
+   - **`prunable`** — live tokens absent from this parse. **These were NOT removed.** Surface them so the user can decide, and tell them removal is a manual step in Paper. Never call them deleted.
+   - `parseComplete` — false when the parser could not read the whole source (an unresolved or not-followed import). When false, warn that `prunable` may list tokens the user did not remove, and that values may be stale — do not encourage acting on `prunable` until it reads whole.
+   - `stillDeclared` — a `prunable` name still declared somewhere the sync does not read, such as a component rule. This looks like a move, not a retirement; surfacing it prevents a user removing something still in use.
+   - `declined` — tokens Paper cannot represent (shadows, motion, filters), each with a `reason`.
+   - `pinnedByComment` — a `prunable` name whose declaration exists only inside a comment. Commenting a token out does NOT retire it; say so.
    - `empty` — true when the source already matched the file (a no-op re-run).
 
-   **Never run `--prune` on your own initiative.** Report `prunable` and let the user ask for it.
+   **You cannot delete tokens through this tool. Do not offer to.** If the user wants a token gone, tell them to remove it in Paper; `prunable` is the list.
 
 ## What the script writes
 
