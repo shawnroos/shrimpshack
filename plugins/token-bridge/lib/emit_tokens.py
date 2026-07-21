@@ -214,21 +214,21 @@ def _same_file(a, b):
     case (APFS is case-insensitive by default) or by a symlinked parent. Both
     then staged to one temp, and the base file ended up holding the dark theme
     while the report claimed nothing was written."""
-    import os as _os
-
     if not a or not b:
         return False
-    ra, rb = _os.path.realpath(a), _os.path.realpath(b)
+    ra, rb = os.path.realpath(a), os.path.realpath(b)
     if ra == rb:
         return True
+    # When both paths exist, samefile is authoritative (it resolves case and
+    # symlinks). It raises only when a path is MISSING — which is the normal
+    # case for emit, since it writes new files — and there we fall back to a
+    # case-folded compare so a case-insensitive mount is still caught before we
+    # write. The fallback must stay gated on that raise: if samefile can decide
+    # and says "different", two case-equal but distinct files must NOT collide.
     try:
-        if _os.path.exists(ra) and _os.path.exists(rb):
-            return _os.path.samefile(ra, rb)
+        return os.path.samefile(ra, rb)
     except OSError:
-        pass
-    # Neither exists yet (or one is missing): fall back to a case-folded compare
-    # so a case-insensitive mount is still caught before we write.
-    return ra.lower() == rb.lower()
+        return ra.lower() == rb.lower()
 
 
 def emit_pair(paper_tokens, conventions, prefix=None):

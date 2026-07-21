@@ -364,9 +364,6 @@ def _is_document_scope(selector):
     )
 
 
-# Back-compat alias: the old name said `:root` only, which is no longer what it
-# means. Kept so any external caller keeps working.
-_is_bare_root = _is_document_scope
 
 
 # --- the scope walk (KTD5) ----------------------------------------------------
@@ -718,13 +715,6 @@ def _conv_label(conv):
 # --- declaration parsing + effective-value resolution ------------------------
 
 
-# Declarations the parser KNOWS it failed to read — an unterminated string or an
-# unclosed paren swallows the rest of its block, and which names were lost is
-# precisely what we cannot determine. Recorded rather than only logged, because
-# the pipeline used to print "any declaration after it was not read" and then
-# delete exactly that token.
-_PARSE_LOSS = []
-
 # --- the completeness ledger -------------------------------------------------
 #
 # Rounds 4 through 8 each asked "is this parse trustworthy?" and answered by
@@ -757,8 +747,6 @@ def _begin_read():
     """Open a completeness ledger. Until a read path affirms, nothing is trusted."""
     global _READ_AFFIRMED
     _INCOMPLETE.clear()
-    _PARSE_LOSS.clear()
-    _MISSING_IMPORTS.clear()
     _READ_AFFIRMED = False
 
 
@@ -787,12 +775,11 @@ def source_completeness():
 
 
 def parse_loss():
-    """Malformed-source events from the last parse, as (token, reason)."""
-    return list(_PARSE_LOSS)
+    """Malformed-source events from the last parse, as (token, reason).
 
-
-def clear_parse_loss():
-    _PARSE_LOSS.clear()
+    A view over the ledger's KIND_MALFORMED entries — the ledger is the single
+    source of truth, so this cannot drift from what source_completeness() sees."""
+    return [(what, where) for kind, what, where in _INCOMPLETE if kind == KIND_MALFORMED]
 
 
 def _iter_decls(body):
@@ -861,7 +848,6 @@ def _iter_decls(body):
         # is still worth naming, since the value itself is now suspect.
         if i >= n and (quote is not None or depth > 0):
             what = "unterminated string" if quote is not None else "unbalanced parentheses"
-            _PARSE_LOSS.append((f"--{m.group(1)}", what))
             _record_incomplete(KIND_MALFORMED, f"--{m.group(1)}", what)
             _log(
                 f"--{m.group(1)}: {what} — the value ran to the end of its block, so any "
@@ -1077,9 +1063,8 @@ def parse_with_diagnostics(text, conventions, prefix=None, dark_texts=None):
     `conventions` is the config `themeConventions` list. `prefix`, when a
     non-empty string, restricts output to custom properties whose name starts
     with it; None/"" includes all."""
-    # Per-parse, not cumulative — a stale entry from an earlier call would
-    # refuse a prune on a source that is perfectly readable.
-    _PARSE_LOSS.clear()
+    # Per-parse, not cumulative — a stale malformed entry from an earlier call
+    # would report a source as incomplete that is perfectly readable.
     _INCOMPLETE[:] = [e for e in _INCOMPLETE if e[0] != KIND_MALFORMED]
     text = strip_comments(text)
     blocks = _collect_blocks(text)
@@ -1526,9 +1511,8 @@ def resolve_dark_texts(cfg):
             # Record, don't just log — round 5 made this a refusal for the BASE
             # graph and the theme graph kept the old log-and-drop behaviour, so
             # a renamed partial under the dark theme still deleted its twins.
-            # Extend rather than clear: load_source ran first and its misses
-            # must survive to the same check.
-            _MISSING_IMPORTS.extend(missing)
+            # The ledger is not cleared here: load_source ran first and its
+            # misses must survive to the same completeness check.
             for _spec, _from in missing:
                 _record_incomplete(KIND_UNRESOLVED_IMPORT, _spec, _from)
             if not loaded:
@@ -1558,16 +1542,16 @@ def resolve_dark_texts(cfg):
     return out
 
 
-# Unresolved imports from the most recent load_source call. `missing` used to be
-# logged and dropped, so a renamed partial's tokens reached neither the parse nor
-# the protection set and were DELETED — the log line even predicted it. Callers
-# read this and refuse.
-_MISSING_IMPORTS = []
-
-
 def missing_imports():
-    """Unresolved import specs from the last load_source call, as (spec, from)."""
-    return list(_MISSING_IMPORTS)
+    """Unresolved import specs from the last load_source call, as (spec, from).
+
+    A view over the ledger's KIND_UNRESOLVED_IMPORT entries. `missing` used to be
+    logged and dropped, so a renamed partial's tokens reached neither the parse
+    nor the protection set and were DELETED — the log line even predicted it."""
+    return [
+        (what, where) for kind, what, where in _INCOMPLETE
+        if kind == KIND_UNRESOLVED_IMPORT
+    ]
 
 
 def _ref_readers(cfg, ref, repo_root):
@@ -1593,20 +1577,28 @@ def _ref_readers(cfg, ref, repo_root):
     return read_file, exists
 
 
+def _raw_and_stripped_names(text, prefix=None):
+    """Custom-property names swept from the RAW text and from the
+    comment-stripped text, as a (in_raw, in_stripped) pair. The two name
+    functions below combine these differently — union vs difference — but the
+    sweep itself is identical, so it lives here once."""
+    raw = text or ""
+    in_raw = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(raw)}
+    in_stripped = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(strip_comments(raw))}
+    if prefix:
+        in_raw = {n for n in in_raw if n.startswith(prefix)}
+        in_stripped = {n for n in in_stripped if n.startswith(prefix)}
+    return in_raw, in_stripped
+
+
 def commented_only_names(text, prefix=None):
     """Names that appear ONLY inside comments — protected, but possibly retired.
 
     Over-protection is the right default (see declared_names), but it must not
     be silent: commenting a declaration out is a normal way to retire a token,
     and the raw sweep pins it in the target file forever with no signal."""
-    raw = text or ""
-    stripped = strip_comments(raw)
-    in_raw = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(raw)}
-    in_stripped = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(stripped)}
-    names = in_raw - in_stripped
-    if prefix:
-        names = {n for n in names if n.startswith(prefix)}
-    return names
+    in_raw, in_stripped = _raw_and_stripped_names(text, prefix)
+    return in_raw - in_stripped
 
 
 def declared_names(text, prefix=None):
@@ -1627,12 +1619,8 @@ def declared_names(text, prefix=None):
     # destructive one (a deleted token). The cost is that a name appearing only
     # inside a comment is protected — harmless, since it can never have reached
     # `desired` and so was never created in the target file.
-    raw = text or ""
-    names = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(raw)}
-    names |= {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(strip_comments(raw))}
-    if prefix:
-        names = {n for n in names if n.startswith(prefix)}
-    return names
+    in_raw, in_stripped = _raw_and_stripped_names(text, prefix)
+    return in_raw | in_stripped
 
 
 def load_source(cfg):
@@ -1644,7 +1632,6 @@ def load_source(cfg):
     `git show <ref>:<relative-path>`; otherwise the working-tree file is read.
     Raises RuntimeError on a git failure or a missing/unreadable file."""
     import os
-    import subprocess
 
     # Sibling lib module — resolve_repo_path lives beside this file.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1661,28 +1648,10 @@ def load_source(cfg):
 
     ref = source.get("ref")
     if ref and not source.get("followImports"):
-        repo = cfg.get("_repo")
-        if not repo:
-            raise RuntimeError(
-                "config is missing '_repo'; load it via read_config before load_source"
-            )
-        spec = f"{ref}:{rel}"
-        try:
-            result = subprocess.run(
-                ["git", "-C", repo, "show", spec],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except FileNotFoundError as exc:  # git not installed
-            raise RuntimeError(f"git is not available to read {spec}: {exc}") from exc
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or "").strip() or (exc.stdout or "").strip()
-            raise RuntimeError(
-                f"could not read source at ref '{spec}' in {repo}: {detail}"
-            ) from exc
+        # Single file at a ref — the same git-show read resolve_dark_texts uses.
+        text = _read_at_ref(cfg, rel, ref)
         _affirm_read()
-        return result.stdout
+        return text
 
     abs_path = resolve_repo_path(cfg, rel)
 
@@ -1703,7 +1672,6 @@ def load_source(cfg):
         text, loaded, missing = resolve_source_graph(
             abs_path, read_file=reader, exists=exists
         )
-        _MISSING_IMPORTS.extend(missing)
         for _spec, _from in missing:
             _record_incomplete(KIND_UNRESOLVED_IMPORT, _spec, _from)
         for spec, whence in missing:

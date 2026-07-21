@@ -111,8 +111,11 @@ def _same_path(a, b, repo=None) -> bool:
     ra, rb = (os.path.realpath(os.path.join(repo, x)) for x in (a, b))
     if ra == rb:
         return True
+    # samefile resolves case-insensitive mounts and symlinks a lexical == misses;
+    # it raises when either path is missing, which for config validation (both
+    # are real source files) means "not the same".
     try:
-        return os.path.exists(ra) and os.path.exists(rb) and os.path.samefile(ra, rb)
+        return os.path.samefile(ra, rb)
     except OSError:
         return False
 
