@@ -17,12 +17,24 @@ export const DEFECT_CATEGORIES = Object.freeze([
   'ordering',
 ]);
 
+// The LENS vocabulary — kept in sync with rubric.sh (signal-core). classKey
+// validates BOTH lens and defectCategory (symmetric guard) so a drifted/typo'd
+// lens can't silently split the count-by-class escalation across variants.
+export const LENSES = Object.freeze([
+  'correctness', 'adversarial', 'security', 'reliability', 'api-contract',
+]);
+
+const SEVERITIES = Object.freeze(['P0', 'P1', 'P2', 'P3']);
+
 const SEP = '|';
 
 // A finding's escalation CLASS — deliberately NOT its literal identity.
 // (A literal same-finding check never trips: each round's defect is "new".
 // Counting by class is what catches one machinery generating fresh P1s.)
 export function classKey(f) {
+  if (!LENSES.includes(f.lens)) {
+    throw new Error('unknown lens: ' + f.lens);
+  }
   if (!DEFECT_CATEGORIES.includes(f.defectCategory)) {
     throw new Error('unknown defect-category: ' + f.defectCategory);
   }
@@ -31,8 +43,14 @@ export function classKey(f) {
 
 // A finding's dedup identity — full enough that a genuinely new finding of the
 // same class is NOT dropped, but an unfixed recurrence of the same one IS.
+// Includes the title (content), because finding ids are per-round-local and get
+// reused across rounds — id alone would collapse two different findings that
+// happen to share a round-number id. id and title are both required, so an
+// id-less finding can't silently collapse the whole set to one key.
 export function findingKey(f) {
-  return [f.slice, f.lens, f.defectCategory, f.id].join(SEP);
+  if (!f.id) throw new Error('finding is missing an id');
+  if (!f.title) throw new Error('finding is missing a title');
+  return [f.slice, f.lens, f.defectCategory, f.id, f.title].join(SEP);
 }
 
 // Exit = an EMPTY round across all lenses — not a shrinking one. Keys only on
@@ -82,6 +100,14 @@ export function escalates(history, threshold = 3) {
 // Build the per-round new-P1 class list from a round's fresh findings — the
 // input escalates() consumes. Only P0/P1 count toward escalation.
 export function newP1Classes(freshFindings) {
+  // Validate severity against the closed set (fail-closed): a malformed severity
+  // must be rejected loudly, not silently skipped — else a real P1 recurrence
+  // fails to escalate.
+  for (const f of freshFindings) {
+    if (!SEVERITIES.includes(f.severity)) {
+      throw new Error('unknown severity: ' + f.severity);
+    }
+  }
   return freshFindings
     .filter((f) => f.severity === 'P0' || f.severity === 'P1')
     .map(classKey);

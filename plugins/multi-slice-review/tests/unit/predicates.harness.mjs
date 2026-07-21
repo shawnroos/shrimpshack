@@ -9,10 +9,12 @@ import {
   newP1Classes,
 } from '../../workflows/predicates.js';
 
-const f = (id, defectCategory = 'correctness', severity = 'P1', slice = 's1', lens = 'correctness') =>
-  ({ id, slice, lens, defectCategory, severity });
+// title defaults to `finding <id>` so a finding always has content identity.
+const f = (id, defectCategory = 'correctness', severity = 'P1', slice = 's1', lens = 'correctness', title) =>
+  ({ id, slice, lens, defectCategory, severity, title: title ?? `finding ${id}` });
 
 const assert = (cond, msg) => { if (!cond) { console.error('FAIL: ' + msg); process.exit(1); } };
+const throws = (fn) => { try { fn(); return false; } catch { return true; } };
 
 const A = ['x'], B = ['y'], C = ['z'];
 
@@ -36,14 +38,8 @@ const cases = {
     assert(classKey(kept[0]) === classKey(kept[1]), 'they share a class');
   },
 
-  enum_reject: () => {
-    let threw = false;
-    try { classKey(f('a', 'not-a-category')); } catch { threw = true; }
-    assert(threw, 'unknown defect-category is rejected');
-  },
+  enum_reject: () => assert(throws(() => classKey(f('a', 'not-a-category'))), 'unknown defect-category is rejected'),
 
-  // Pipeline: the SAME finding recurring unfixed must NOT escalate — dedup drops
-  // it after round 1, so it never reaches the class history 3x.
   pipeline_identical_no_escalate: () => {
     let seen = [];
     const history = [];
@@ -54,7 +50,6 @@ const cases = {
     }
     assert(escalates(history) === false, 'identical recurring finding does not escalate');
   },
-  // Pipeline: genuinely NEW findings of the same class 3 rounds running DO escalate.
   pipeline_newsameclass_escalate: () => {
     let seen = [];
     const history = [];
@@ -66,6 +61,27 @@ const cases = {
     }
     assert(escalates(history) === true, 'new findings of same class 3 rounds escalate');
   },
+
+  // --- U6-review regressions (added test-first) ---
+
+  // P1 #4: two DIFFERENT findings (different title) that reuse the SAME id must
+  // both survive dedup — ids are per-round-local, not globally unique.
+  dedup_reused_id_kept: () => {
+    const a = f('1', 'correctness', 'P1', 's1', 'correctness', 'the lock is never released');
+    const b = f('1', 'correctness', 'P1', 's1', 'correctness', 'the socket is never closed');
+    const { kept } = dedupeVsSeen([a], []);
+    const round2 = dedupeVsSeen([b], kept.map(findingKey));
+    assert(round2.kept.length === 1, 'a genuinely-new finding reusing an id is NOT dropped');
+  },
+  // P1 #4b: an id-less finding must not silently collapse all id-less findings to one key.
+  finding_requires_id: () => assert(throws(() => findingKey(f(undefined, 'correctness', 'P1', 's1', 'correctness', 't'))), 'id-less finding is rejected'),
+
+  // P1 #5: a malformed severity must be rejected, not silently skipped (which would
+  // let a real P1 recurrence fail to escalate).
+  severity_malformed_rejected: () => assert(throws(() => newP1Classes([f('a', 'correctness', 'p1')])), 'malformed severity rejected'),
+
+  // Seam P2: classKey must validate lens too (asymmetric guard was the seam defect).
+  classkey_validates_lens: () => assert(throws(() => classKey(f('a', 'correctness', 'P1', 's1', 'not-a-lens'))), 'unknown lens is rejected'),
 };
 
 const name = process.argv[2];

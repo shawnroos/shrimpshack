@@ -24,16 +24,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Read signals from stdin.
-F=0; D=0; L=0; RS=""
+# Read signals from stdin. Default to EMPTY (not 0) so an empty/partial stream
+# fails the numeric check below rather than failing OPEN to a valid 'small' sizing
+# — that would nullify prepass's fail-loud guard one stage downstream.
+F=""; D=""; L=""; RS=""
 while IFS='=' read -r k v; do
     case "$k" in
         F) F="$v" ;; D) D="$v" ;; L) L="$v" ;; RS) RS="$v" ;;
     esac
 done
 
-[[ "$F" =~ ^[0-9]+$ ]] || { echo "rubric: missing/invalid F signal" >&2; exit 2; }
-[[ "$D" =~ ^[0-9]+$ ]] || { echo "rubric: missing/invalid D signal" >&2; exit 2; }
+[[ "$F" =~ ^[0-9]+$ ]] || { echo "rubric: missing or invalid F signal (empty/partial input?)" >&2; exit 2; }
+[[ "$D" =~ ^[0-9]+$ ]] || { echo "rubric: missing or invalid D signal (empty/partial input?)" >&2; exit 2; }
 
 # --- Tier + slice target (soft) ---
 if [ "$D" -ge 5 ] || [ "$F" -ge 30 ]; then
@@ -54,9 +56,11 @@ RISK_LENSES=""
 
 # --- Skip-with-reason for un-added risk lenses (§3) ---
 declare -a SKIPPED=()
-case ",$RISK_LENSES," in *,security,*) ;; *) SKIPPED+=("security: no destructive/untrusted/credential surface");; esac
-case ",$RISK_LENSES," in *,reliability,*) ;; *) SKIPPED+=("reliability: no concurrency/io surface");; esac
-case ",$RISK_LENSES," in *,api-contract,*) ;; *) SKIPPED+=("api-contract: no changed signature detected");; esac
+# Skip reasons are PATTERN-based, not guarantees — a consumer must not read
+# "no ... matched" as "safe to skip security review" (the RS patterns can miss forms).
+case ",$RISK_LENSES," in *,security,*) ;; *) SKIPPED+=("security: no destructive/untrusted/credential pattern matched (pattern-based, not a guarantee)");; esac
+case ",$RISK_LENSES," in *,reliability,*) ;; *) SKIPPED+=("reliability: no concurrency/io pattern matched");; esac
+case ",$RISK_LENSES," in *,api-contract,*) ;; *) SKIPPED+=("api-contract: no changed-signature pattern matched");; esac
 LENS_SKIPPED=""
 [ "${#SKIPPED[@]}" -gt 0 ] && LENS_SKIPPED="$(printf '%s; ' "${SKIPPED[@]}" | sed 's/; $//')"
 
@@ -64,6 +68,7 @@ LENS_SKIPPED=""
 if [ -z "$CORES" ]; then
     CORES="$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu 2>/dev/null || echo 4 )"
 fi
+[[ "$CORES" =~ ^[0-9]+$ ]] || { echo "rubric: --cores must be a number, got '$CORES'" >&2; exit 2; }
 avail=$((CORES - 2)); [ "$avail" -lt 1 ] && avail=1
 WAVE_CAP=$avail; [ "$WAVE_CAP" -gt 16 ] && WAVE_CAP=16
 

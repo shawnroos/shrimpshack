@@ -27,8 +27,6 @@
 //     ],
 //   }
 
-import { DEFECT_CATEGORIES } from './predicates.js';
-
 export const meta = {
   name: 'multi-slice-review-round',
   description: 'One seam-aware review round: slices → lens reviewers, seam reviewers, mutation proof, synthesis.',
@@ -39,6 +37,15 @@ export const meta = {
     { title: 'Synthesize', detail: 'collect capped findings by slice/seam' },
   ],
 };
+
+// Defect-category enum, INLINED (not imported): the Workflow loader requires
+// `export const meta` to be the FIRST statement, so review.js cannot `import`
+// from predicates.js. SEAM — keep this list identical to DEFECT_CATEGORIES in
+// workflows/predicates.js; they must stay in sync.
+const DEFECT_CATEGORIES = [
+  'correctness', 'contract-mismatch', 'resource-safety', 'concurrency',
+  'security', 'missing-validation', 'ordering',
+];
 
 // Capped structured returns (KTD5): ~8 findings, detail to an artifact file.
 const FINDINGS_SCHEMA = {
@@ -135,16 +142,19 @@ function mutationPrompt(slice, args) {
 }
 
 // ── one round ──────────────────────────────────────────────────────────────
+// The Workflow tool delivers `args` as a JSON STRING in this runtime — parse it.
+const input = typeof args === 'string' ? JSON.parse(args) : (args || {});
+
 phase('Slices');
-log(`Round ${args.round}: ${args.slices.length} slices, ${args.seams.length} seams.`);
+log(`Round ${input.round}: ${input.slices.length} slices, ${input.seams.length} seams.`);
 
 // Each slice: its lens reviewers in parallel (Slices), then a mutation proof (Mutation).
 const perSlice = await pipeline(
-  args.slices,
+  input.slices,
   (slice) =>
     parallel(
       slice.lenses.map((lens) => () =>
-        agent(lensPrompt(slice, lens, args), {
+        agent(lensPrompt(slice, lens, input), {
           schema: FINDINGS_SCHEMA,
           phase: 'Slices',
           label: `${slice.id}:${lens}`,
@@ -152,7 +162,7 @@ const perSlice = await pipeline(
       ),
     ),
   (lensResults, slice) =>
-    agent(mutationPrompt(slice, args), {
+    agent(mutationPrompt(slice, input), {
       schema: MUTATION_SCHEMA,
       phase: 'Mutation',
       label: `mutate:${slice.id}`,
@@ -167,8 +177,8 @@ const perSlice = await pipeline(
 // Seams: one reviewer each, in parallel (Seams).
 phase('Seams');
 const seamResults = await parallel(
-  args.seams.map((seam) => () =>
-    agent(seamPrompt(seam, args), { schema: FINDINGS_SCHEMA, phase: 'Seams', label: `seam:${seam.id}` }),
+  input.seams.map((seam) => () =>
+    agent(seamPrompt(seam, input), { schema: FINDINGS_SCHEMA, phase: 'Seams', label: `seam:${seam.id}` }),
   ),
 );
 
@@ -180,8 +190,8 @@ const mutationReports = perSlice.filter(Boolean).map((s) => s.mutation).filter(B
 // This round's output. The round command feeds `findings` through predicates.js
 // (dedupeVsSeen → isEmptyRound → escalates) and persists round-state.
 return {
-  round: args.round,
-  base: args.base,
+  round: input.round,
+  base: input.base,
   findings: [...sliceFindings, ...seamFindings],
   mutationReports,
   weakAssertions: mutationReports.filter((m) => !m.assertionsLoadBearing),

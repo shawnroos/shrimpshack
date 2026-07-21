@@ -1,6 +1,15 @@
 # Workflow-contract preflight (U1) — recorded evidence
 
-Status: **PARTIAL — documented contract confirmed; live wiring test pending opt-in.**
+Status: **PASSED — documented contract confirmed AND proven by execution.**
+
+Live wiring check (2026-07-21, run wf_5b842e77-e51): a tiny 2-slice/1-seam inline
+Workflow (`export const meta` + `pipeline`→`parallel`→`agent` + per-agent `schema`
++ synthesis) ran with 5 agents, 0 errors, and returned exactly the expected shape:
+`{ slicesProcessed: 2, sliceFindings: 4, seamFindings: 1, schemaValidated: true }`.
+So hand-authored `.js` is accepted, the primitives work, and schema-validated
+structured returns work. GO on the Workflow substrate — no KTD8 fallback needed.
+Cost note: 5 *trivial* agents burned ~203k tokens (~40k/agent just to spawn a
+reviewer) — reprices U6/U7 fan-outs significantly.
 
 ## Step 1 — Availability probe
 

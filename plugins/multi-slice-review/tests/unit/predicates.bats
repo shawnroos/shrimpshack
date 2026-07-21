@@ -20,3 +20,9 @@ run_case() { ( cd "$BATS_TEST_DIRNAME" && node "$H" "$1" ); }
 
 @test "pipeline: identical recurring finding does NOT escalate" { run_case pipeline_identical_no_escalate; }
 @test "pipeline: new findings of same class 3 rounds DO escalate" { run_case pipeline_newsameclass_escalate; }
+
+# U6-review regressions (P1 #4, #5, seam P2)
+@test "dedup: a new finding reusing an id is NOT dropped" { run_case dedup_reused_id_kept; }
+@test "findingKey: id-less finding rejected (no silent collapse)" { run_case finding_requires_id; }
+@test "newP1Classes: malformed severity rejected" { run_case severity_malformed_rejected; }
+@test "classKey: unknown lens rejected (symmetric guard)" { run_case classkey_validates_lens; }

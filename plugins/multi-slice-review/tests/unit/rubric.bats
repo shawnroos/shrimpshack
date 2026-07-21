@@ -72,3 +72,21 @@ val() { grep "^$1=" | cut -d= -f2-; }
     out="$(run_rubric 5 3 100 '')"
     [ "$(printf '%s' "$out" | val CLAMP_NOTICE)" = "" ]
 }
+
+# P1 #3: rubric must NOT fail open to a valid 'small' sizing on empty/partial input
+# (that would nullify prepass's fail-loud guard one stage downstream).
+@test "P1 #3: empty signal stream is rejected (no fail-open to small)" {
+    run bash -c "printf '' | bash '$RUBRIC' --cores 8"
+    [ "$status" -ne 0 ]
+}
+
+@test "P1 #3: missing D signal is rejected" {
+    run bash -c "printf 'F=5\n' | bash '$RUBRIC' --cores 8"
+    [ "$status" -ne 0 ]
+}
+
+@test "P3: non-numeric --cores is rejected, not an unbound-variable crash" {
+    run bash -c "printf 'F=5\nD=3\nL=10\nRS=\n' | bash '$RUBRIC' --cores abc"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -qiv 'unbound variable'
+}

@@ -81,6 +81,22 @@ sig() { # sig <KEY> -> value from prepass output
     [ "$output" = "1" ]
 }
 
+@test "P1 #1: RS survives git color.ui=always (prepass forces --no-color)" {
+    git config color.ui always
+    git config color.diff always
+    run bash -c "bash '$PREPASS' '$BASE' | grep '^RS=' | cut -d= -f2-"
+    [ -n "$output" ]
+    echo "$output" | grep -q destructive
+}
+
+@test "P1 #2: destructive long-flags / DROP DATABASE / ORM delete are detected" {
+    printf 'os.system("rm --recursive --force /data")\ncursor.execute("DROP DATABASE prod")\nUser.objects.all().delete()\n' > src/storage/wipe.py
+    git add -A && git commit -qm wipe
+    base_one="$(git rev-parse HEAD~1)"
+    run bash -c "bash '$PREPASS' '$base_one' | grep '^RS=' | cut -d= -f2-"
+    echo "$output" | grep -q destructive
+}
+
 @test "benign diff → RS empty" {
     printf 'plain text line\n' >> README.md
     git add -A && git commit -qm doc

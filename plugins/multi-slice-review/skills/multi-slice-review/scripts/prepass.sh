@@ -19,8 +19,9 @@ BASE="${1:-}"
 [ -n "$BASE" ] || die "no base ref given (usage: prepass.sh <base-ref>). Refusing to silently diff HEAD."
 git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null 2>&1 || die "base ref '$BASE' is not a resolvable commit."
 
-# --no-color, rename-aware (-M) so a moved file counts once.
-numstat="$(git diff -M --numstat "$BASE" -- 2>/dev/null || true)"
+# --no-color (git colorizes even to a pipe under color.ui=always, which would make
+# the RS grep below match nothing), rename-aware (-M) so a moved file counts once.
+numstat="$(git diff --no-color -M --numstat "$BASE" -- 2>/dev/null || true)"
 [ -n "$numstat" ] || die "empty diff against '$BASE' — nothing to review."
 
 # Resolve a numstat path field to its effective (new) path, handling rename forms
@@ -57,10 +58,13 @@ done <<< "$numstat"
 D=${#seen_sub[@]}
 
 # Risk surfaces — matched over added/removed content lines only (exclude diff headers).
-content="$(git diff -M "$BASE" -- | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' || true)"
+content="$(git diff --no-color -M "$BASE" -- | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' || true)"
 declare -a RS=()
 has() { printf '%s' "$content" | grep -qiE "$1"; }
-has '(\bDELETE[[:space:]]+FROM\b|\bDROP[[:space:]]+TABLE\b|\brm[[:space:]]+-[rf]|\bunlink\b|shutil\.rmtree|os\.remove|fs\.unlink|\btruncate\b)' && RS+=("destructive")
+# Destructive: fail-CLOSED — broad on purpose (a missed destructive form is a
+# fail-open on the security gate). Covers long rm flags, DROP DATABASE/SCHEMA,
+# TRUNCATE, and common ORM deletes in addition to the basics.
+has '(\bDELETE[[:space:]]+FROM\b|\bDROP[[:space:]]+(TABLE|DATABASE|SCHEMA)\b|\bTRUNCATE\b|\brm[[:space:]]+-[a-z]*[rf]|\brm[[:space:]]+--(recursive|force)|\bunlink\b|shutil\.rmtree|os\.remove|fs\.unlink|\.delete\(|\.deleteMany\b|\.destroy_all\b)' && RS+=("destructive")
 has '(password|secret|api[_-]?key|\btoken\b|credential|authorization|bearer)' && RS+=("credentials")
 has '(\bthreading\b|\bmutex\b|\bLock\(|goroutine|\bsync\.|\batomic\b|Promise\.all|asyncio|\basync\b|\bawait\b)' && RS+=("concurrency")
 has '(requests\.|urllib|\bsocket\b|fetch\(|https?://|readFile|writeFile|\bfs\.|\bopen\()' && RS+=("io")
