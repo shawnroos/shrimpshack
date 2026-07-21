@@ -1,0 +1,18 @@
+{
+  "name": "multi-slice-review",
+  "description": "Review a change too large for one reviewer — many files, several subsystems, or work built incrementally. A deterministic pre-pass measures the diff, a rubric the agent applies slices it by invariant and staffs the seams between slices, and a native Workflow fans out lens reviewers per slice, proves load-bearing assertions by mutation on an isolated worktree, and loops to an empty round with a three-rounds-same-class escalation. Companion to /ce-code-review and /code-review for large, seam-focused reviews — it reviews, it does not auto-fix.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Shawn Roos",
+    "email": "shawn@slateteams.com"
+  },
+  "keywords": [
+    "code-review",
+    "seam-coverage",
+    "multi-slice",
+    "mutation-testing",
+    "workflow"
+  ],
+  "skills": "./skills",
+  "commands": "./commands"
+}

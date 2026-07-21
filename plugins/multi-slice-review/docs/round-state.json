@@ -1,0 +1,27 @@
+{
+  "_comment": "Example/shape of the loop state persisted across /loop iterations (U8). The round command reads this, runs one review.js round primed with priorFixes, calls predicates.js (dedupeVsSeen -> isEmptyRound -> escalates), then writes the updated state. `seen` is the dedup set (findingKey strings); `historyByClass` is one entry per round of the NEW-P1 classKeys that round (escalates() input).",
+  "base": "origin/main",
+  "round": 2,
+  "status": "in-progress",
+  "seen": [
+    "storage|correctness|resource-safety|F-101",
+    "net|reliability|concurrency|F-114"
+  ],
+  "historyByClass": [
+    ["storage|correctness|resource-safety", "api|api-contract|contract-mismatch"],
+    ["storage|correctness|resource-safety"]
+  ],
+  "priorFixes": [
+    "U-fix: added the missing lock release in storage/db.py (round-1 finding F-101)"
+  ],
+  "lastRound": {
+    "round": 1,
+    "freshCount": 3,
+    "empty": false,
+    "escalated": false
+  },
+  "exit": {
+    "reason": null,
+    "_options": "empty-round | escalate:<classKey> | max-rounds"
+  }
+}
