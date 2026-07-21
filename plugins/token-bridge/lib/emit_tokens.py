@@ -191,10 +191,70 @@ def emit_css(paper_tokens, conventions, prefix=None):
         if t["name"].endswith(DARK_SUFFIX) and keep(t["name"])
     )
 
+    if primary.get("type") == "file":
+        # A file convention's two halves are two FILES, so one string cannot
+        # represent them. emit_pair() is the entry point for that shape; a
+        # caller reaching here would silently get a base-only emit, which
+        # leaves the dark file stale and drifts the pair apart (KTD4).
+        raise ValueError(
+            "a 'file' convention emits two files — call emit_pair(), not emit_css()"
+        )
+
     blocks = [_root_block(base_pairs)]
     if dark_pairs:
         blocks.append(_dark_block(primary, dark_pairs))
     return "\n\n".join(blocks) + "\n"
+
+
+def _same_file(a, b):
+    """True when two paths denote the SAME file, resolving symlinks and
+    case-insensitive filesystems — os.path.abspath does neither.
+
+    abspath is purely lexical, so it passed two targets that differ only by
+    case (APFS is case-insensitive by default) or by a symlinked parent. Both
+    then staged to one temp, and the base file ended up holding the dark theme
+    while the report claimed nothing was written."""
+    if not a or not b:
+        return False
+    ra, rb = os.path.realpath(a), os.path.realpath(b)
+    if ra == rb:
+        return True
+    # When both paths exist, samefile is authoritative (it resolves case and
+    # symlinks). It raises only when a path is MISSING — which is the normal
+    # case for emit, since it writes new files — and there we fall back to a
+    # case-folded compare so a case-insensitive mount is still caught before we
+    # write. The fallback must stay gated on that raise: if samefile can decide
+    # and says "different", two case-equal but distinct files must NOT collide.
+    try:
+        return os.path.samefile(ra, rb)
+    except OSError:
+        return ra.lower() == rb.lower()
+
+
+def emit_pair(paper_tokens, conventions, prefix=None):
+    """Emit (base_css, dark_css) for a primary `file` convention (KTD4).
+
+    The dark half is a whole file whose own document scope carries the overrides,
+    mirroring how parse reads it — so emit and parse stay inverses and the
+    round-trip closes across the pair (KTD5)."""
+    primary = parse_tokens.primary_convention(conventions)
+    if primary.get("type") != "file":
+        raise ValueError("emit_pair() is only for a primary 'file' convention")
+
+    def keep(name):
+        return (not prefix) or name.startswith(prefix)
+
+    base_pairs = sorted(
+        (t["name"], t.get("value"))
+        for t in paper_tokens
+        if not t["name"].endswith(DARK_SUFFIX) and keep(t["name"])
+    )
+    dark_pairs = sorted(
+        (t["name"][: -len(DARK_SUFFIX)], _strip_dark_alias(t.get("value")))
+        for t in paper_tokens
+        if t["name"].endswith(DARK_SUFFIX) and keep(t["name"])
+    )
+    return _root_block(base_pairs) + "\n", _root_block(dark_pairs) + "\n"
 
 
 # --- round-trip proof (R5), no daemon ----------------------------------------
@@ -203,11 +263,23 @@ def emit_css(paper_tokens, conventions, prefix=None):
 def roundtrip(paper_tokens, conventions, prefix=None):
     """Prove the R5 fixed point: emit -> parse -> build_desired -> diff vs the
     Paper set. Returns {css, diff, empty}. `empty` True == round-trip stable."""
-    css = emit_css(paper_tokens, conventions, prefix)
-    records = parse_tokens.parse_tokens(css, conventions, prefix)
+    primary = parse_tokens.primary_convention(conventions)
+    if primary.get("type") == "file":
+        # The pair IS the artifact for a file convention, so the fixed point has
+        # to be proven across both halves — emit_css refuses this shape anyway.
+        base_css, dark_css = emit_pair(paper_tokens, conventions, prefix)
+        css = base_css
+        records = parse_tokens.parse_tokens(css, conventions, prefix, {
+            conventions.index(primary): dark_css
+        })
+    else:
+        css = emit_css(paper_tokens, conventions, prefix)
+        records = parse_tokens.parse_tokens(css, conventions, prefix)
     classified = classify_tokens.classify_tokens(records)
     desired, _declined = sync_tokens.build_desired(classified)
-    diff = sync_tokens.diff_tokens(desired, paper_tokens)
+    # Emitted CSS is the only input here, so nothing can be 'declared but
+    # unread' — an empty set is the honest value, not a defaulted one.
+    diff = sync_tokens.diff_tokens(desired, paper_tokens, unreadable=set())
     return {"css": css, "diff": diff, "empty": sync_tokens.is_empty_diff(diff)}
 
 
@@ -268,13 +340,128 @@ def run(repo=".", url=None):
         )
     tokens = env.get("result", {}).get("tokens", []) or []
 
-    css = emit_css(tokens, conventions, prefix)
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(emit_target)), exist_ok=True)
-        with open(emit_target, "w", encoding="utf-8") as fh:
-            fh.write(css)
-    except OSError as exc:
-        return ({"ok": False, "error": f"could not write {emit_target}: {exc}"}, EXIT_ERROR)
+    primary = parse_tokens.primary_convention(conventions)
+
+    # KTD4: a file convention's theme is two FILES. Write both or write neither —
+    # emitting only the base leaves the dark file stale and silently drifts the
+    # pair apart, which is worse than not emitting at all. The check runs BEFORE
+    # any write so a refusal never leaves a half-updated pair on disk.
+    if primary.get("type") == "file":
+        dark_target = resolve_repo_path(cfg, primary.get("emitTarget"))
+        if not dark_target:
+            return (
+                {
+                    "ok": False,
+                    "error": "no_dark_emit_target",
+                    "note": (
+                        "the primary themeConvention is type 'file', so emit writes TWO "
+                        "files, but that convention has no 'emitTarget'. Nothing was "
+                        "written — emitting only the base would leave the dark theme "
+                        "file stale. Add an 'emitTarget' to the file convention."
+                    ),
+                },
+                EXIT_ERROR,
+            )
+        # Both halves to the SAME path is silent data loss, not a no-op: the
+        # loop would write base then overwrite it with dark, report ok:true, and
+        # leave a file whose content is dark while the report describes base.
+        # Every output must differ from every INPUT as well as from each other.
+        # Guarding only the two outputs left the worse case open: writing base
+        # content over the dark THEME SOURCE makes the next parse see dark ==
+        # base, so no token varies by theme and every -dark twin would then be
+        # reported as prunable — a spurious removal list for tokens still in use.
+        source_rel = (source or {}).get("path")
+        collisions = [
+            ("emitTarget", emit_target, "the file convention's emitTarget", dark_target),
+            ("emitTarget", emit_target, "source.path", resolve_repo_path(cfg, source_rel)),
+            ("emitTarget", emit_target, "the theme file it reads",
+             resolve_repo_path(cfg, primary.get("path"))),
+            ("the file convention's emitTarget", dark_target, "source.path",
+             resolve_repo_path(cfg, source_rel)),
+            ("the file convention's emitTarget", dark_target, "the theme file it reads",
+             resolve_repo_path(cfg, primary.get("path"))),
+        ]
+        for a_label, a_path, b_label, b_path in collisions:
+            if _same_file(a_path, b_path):
+                return (
+                    {
+                        "ok": False,
+                        "refused": True,
+                        "error": "emit_targets_collide",
+                        "note": (
+                            f"{a_label} and {b_label} resolve to the same file "
+                            f"({os.path.realpath(a_path)}). Nothing was written — emitting "
+                            "would destroy one of them. Point them at distinct files."
+                        ),
+                    },
+                    EXIT_ERROR,
+                )
+
+        # PRE-FLIGHT both targets before touching either. Two files cannot be
+        # renamed atomically on POSIX — os.replace is atomic per file, so a
+        # staged write still replaces base, then dark, and a failure on the
+        # second leaves the pair drifted. Staging alone does not deliver KTD4's
+        # both-or-neither; catching the predictable failures up front does.
+        # (An unstaged write is strictly worse — it fails mid-content.)
+        for label, path in (("emitTarget", emit_target),
+                            ("the file convention's emitTarget", dark_target)):
+            ap = os.path.abspath(path)
+            if os.path.isdir(ap):
+                return (
+                    {"ok": False, "refused": True, "error": "emit_target_is_a_directory",
+                     "note": f"{label} ({ap}) is a directory. Nothing was written."},
+                    EXIT_ERROR,
+                )
+            try:
+                os.makedirs(os.path.dirname(ap), exist_ok=True)
+            except OSError as exc:
+                return (
+                    {"ok": False, "refused": True, "error": "emit_target_unwritable",
+                     "note": f"cannot create the directory for {label} ({ap}): {exc}. "
+                             "Nothing was written."},
+                    EXIT_ERROR,
+                )
+
+        base_css, dark_css = emit_pair(tokens, conventions, prefix)
+
+        # Stage both, then replace both. The residual window (a failure between
+        # the two replaces) is not closable with POSIX renames; the pre-flight
+        # above removes the reachable causes.
+        tmps = []
+        replaced = []
+        try:
+            for path, body in ((emit_target, base_css), (dark_target, dark_css)):
+                tmp = os.path.realpath(path) + ".tb-tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+                tmps.append((tmp, path))
+            for tmp, path in tmps:
+                os.replace(tmp, path)
+                replaced.append(path)
+        except OSError as exc:
+            for tmp, _ in tmps:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            return (
+                {"ok": False, "error": f"could not write the theme pair: {exc}",
+                 "note": (
+                     f"{len(replaced)} of 2 files were replaced before the failure"
+                     + (f" ({', '.join(replaced)})" if replaced else "")
+                     + ". Re-run once the cause is fixed; emit is idempotent."
+                 )},
+                EXIT_ERROR,
+            )
+        css = base_css
+    else:
+        css = emit_css(tokens, conventions, prefix)
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(emit_target)), exist_ok=True)
+            with open(emit_target, "w", encoding="utf-8") as fh:
+                fh.write(css)
+        except OSError as exc:
+            return ({"ok": False, "error": f"could not write {emit_target}: {exc}"}, EXIT_ERROR)
 
     return (
         {
@@ -335,12 +522,20 @@ def main(argv=None):
     if cmd == "emit-from-file":
         tokens = _tokens_from(_load_json_file(args.tokens))
         conventions = json.loads(args.conventions)
+        needs_repo = parse_tokens.file_convention_needs_repo(conventions)
+        if needs_repo:
+            _log(needs_repo)
+            return EXIT_REFUSED
         sys.stdout.write(emit_css(tokens, conventions, args.prefix))
         return EXIT_OK
 
     if cmd == "roundtrip":
         tokens = _tokens_from(_load_json_file(args.tokens))
         conventions = json.loads(args.conventions)
+        needs_repo = parse_tokens.file_convention_needs_repo(conventions)
+        if needs_repo:
+            _log(needs_repo)
+            return EXIT_REFUSED
         result = roundtrip(tokens, conventions, args.prefix)
         print(json.dumps(result, indent=2))
         return EXIT_OK if result["empty"] else EXIT_ERROR

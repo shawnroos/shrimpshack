@@ -14,11 +14,45 @@ A config-driven bridge between one codebase's CSS custom-property design tokens 
 
 - **`connect`** scaffolds the codebase's `token-bridge.config.json`, binding it to one Paper file — reference an existing file (by id or URL) or create a fresh one. The one-time setup the rest depends on.
 - **`status`** reports the drift between code and design in both directions (tokens only in code, only in design, or differing), writing nothing, then offers the two normalize directions. This is the "which way should I reconcile?" view.
-- **`normalize-to-code`** (code is source of truth) reconciles the codebase's CSS tokens into the Paper file: new tokens created, changed values updated, removed tokens deleted (within the prefix), retyped tokens recreated. Idempotent — an unchanged source writes nothing.
+- **`normalize-to-code`** (code is source of truth) reconciles the codebase's CSS tokens into the Paper file: new tokens created, changed values updated, retyped tokens recreated. Idempotent — an unchanged source writes nothing. **It never deletes.** A live token absent from the parse is reported under `prunable` and left in place; removing it is a manual step you take in Paper.
 - **`normalize-to-design`** (design is source of truth) reads the Paper file's tokens and writes a CSS file at `emitTarget` — a base `:root` block plus a dark override block in your declared theme convention. The round-trip is stable: CSS emitted from a file already in sync re-parses to the same token model.
 - **`refresh-components`** harvests a component's rendered structure and computed styles from a running dev server, maps the values back to token references, and writes it into Paper — replacing any prior copy.
 
 The two `normalize-*` verbs are the same token engine pointed in opposite directions; `status` shows you which way you need it before you commit to one.
+
+## Why sync never deletes
+
+A live token missing from the parse could mean two things — you removed it, or
+the parser failed to read it — and from inside the tool those are
+indistinguishable. Every CSS shape the parser hasn't met yet looks exactly like
+a deletion: `@layer`, nesting, a base64 `//` in a data URI, a class-scoped theme
+file, an unresolved `@import`, a not-followed `@use "@scope/pkg"`, an
+unterminated string.
+
+`normalize-to-code` **creates, updates, and recreates retyped tokens. It does
+not remove anything.** A live token with no matching declaration in the parse is
+reported under `prunable` — a list, not an action — and you delete those in
+Paper, where you can see what you are removing before you do.
+
+That is the settled answer after a long argument with the alternative. Earlier
+versions tried to delete safely: scope the deletion to a prefix, then guard it
+behind a completeness check, then make it an explicit `--prune`, then gate prune
+on the parser affirming it read the whole source. Every one of those was a real
+improvement and every one still shipped a way to delete a token the user had not
+removed — fourteen such defects across nine reviews, each new guard defeated by
+a source shape it did not anticipate. The inference "absent means removed" is
+only sound when the parse is complete, a parse over real-world CSS is never
+provably complete, and so the safe number of automatic deletions is zero.
+
+The cost is one manual step, occasionally. A stale token you can see in `status`
+and remove when you choose; a wrongly deleted one is gone. `prunable` gives you
+the exact list either way.
+
+(One honest caveat: a token whose Paper *type* changes — a color that becomes a
+dimension — is recreated, which Paper implements as a delete plus a create under
+the same name. It is bounded, driven by your source rather than by absence, and
+any Paper-side field this tool does not model does not survive it. The report
+names every recreate.)
 
 ## The theme model
 
@@ -38,18 +72,57 @@ You declare **how the dark scope is expressed** in your source, via `themeConven
 | `data-attribute` | `:root[data-theme="dark"] { … }`                      | supported |
 | `media-query`    | `@media (prefers-color-scheme: dark) { :root { … } }` | supported |
 | `class`          | `.wcs-dark { … }`, `html.wcs-dark`, `:root.wcs-dark`  | supported |
+| `file`           | dark lives in a **separate file**, same selector       | supported |
 
 `class` matches on class-token boundaries, so `.wcs-dark` does **not** match
 `.wcs-darker`, a `.wcs-dark\:*` escaped utility (Tailwind's `dark` toggle class
 generates a lot of these), or the string appearing inside a quoted attribute
 value.
 
-The base is the top-level, unscoped `:root`. Scopes are found at any nesting
+The base is a top-level, unscoped **document scope** — `:root`, `html`, or `body`
+(`html, body` counts). A component selector is never the base, however many custom
+properties it declares: `.tooltip { --bs-tooltip-bg: … }` is component-local, not a
+design token. Multiple base blocks merge in tiers (html < :root < body, as a browser resolves them). Scopes are found at any nesting
 depth: `@layer` is transparent, so a bare `:root` inside one **is** the base,
 while `@media`/`@supports`/`@container` are conditional — a `:root` inside one is
 never the base, only a dark candidate. Declarations are read block-locally, so
 CSS/SCSS nesting (`:root { &[data-theme="dark"] { … } }`) resolves correctly
 rather than folding the child's values into the parent.
+
+### When dark is a separate file
+
+Some codebases don't put the dark theme in a scope at all — they put it in another
+file, with the *same* selector:
+
+```
+themes/light.scss    :root { --primary-text-color: #21242e;      … }
+themes/dark.scss     :root { --primary-text-color: #{$shade100}; … }
+```
+
+No selector predicate can tell those apart, because the distinguishing fact is the
+filename. That's what `file` is for:
+
+```json
+"source":           { "path": "src/styles/themes/light.scss", "prefix": "--" },
+"emitTarget":       "src/styles/themes/light.generated.scss",
+"themeConventions": [ { "type": "file",
+                        "path": "src/styles/themes/dark.scss",
+                        "emitTarget": "src/styles/themes/dark.generated.scss",
+                        "primary": true } ]
+```
+
+The dark scope is that file's own document scope, the same rule as the base. Two
+things it refuses rather than guessing:
+
+- **A missing or unreadable theme file refuses.** An empty dark scope would read as
+  "no token varies by theme", and sync applies that by deleting every `-dark` twin.
+- **Emit writes both halves or neither.** A `file` convention needs its own
+  `emitTarget`; without one, emit refuses and writes nothing. Emitting just the base
+  would leave the dark file stale and drift the pair apart.
+
+**It does not make uncompiled Sass syncable.** A dark file interpolating Sass
+(`#{$shade100}`) still needs a compile step — those tokens are declined with a
+reason, and a token whose dark half can't be typed still syncs its base — only the twin is skipped.
 
 ## Configuration
 
@@ -167,7 +240,7 @@ what it can delete.
 - **One codebase ↔ one Paper file.** No many-to-one or one-to-many; the config binds a single codebase to a single `fileId`.
 - **No Paper → component code-gen.** The reverse direction is tokens only. Components stay a one-way harvest — faithful code-gen from a canvas is fuzzy and fights the "Paper is the derived side" invariant.
 - **No motion, no shadows as tokens.** Paper has no transition/easing type (it drops `transition`) and silently corrupts a shadow written as a token (stores `#000000`), so both are excluded from token sync with a reason. Shadows still work as component styles.
-- **One base + one dark theme.** Multiple named themes and multi-file (`light.css`/`dark.css`) inputs are deferred.
+- **One base + one dark theme.** Multiple named themes are deferred. Two-file light/dark IS supported — see `file` above.
 - **Compound-class scopes are not user-declarable.** A convention takes one class. A dark scope requiring two classes together (`body.theme.theme-dark`) can't be expressed yet — the engine supports it internally, but the config surface deliberately does not, so it isn't frozen before a real repo needs it.
 - **`-dark` is a reserved suffix.** A genuine `--border-dark` in your source is read as the dark twin of `--border` and round-trips lossily. Rename it if you have one.
 - **`light-dark()` is split, but not nested.** `light-dark(#fff, #000)` resolves into both themes; a nested `light-dark(light-dark(…), …)` is not split and warns. A malformed call (not exactly two arguments) is left as a literal, which classify then declines — check the `declined` list, because a declined token that is already live in Paper gets deleted on the next sync.

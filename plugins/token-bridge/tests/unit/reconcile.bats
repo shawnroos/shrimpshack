@@ -226,11 +226,11 @@ live = [
   {'name':'--brand-space-0','type':'spacing','value':'0px'},
   {'name':'--brand-accent','type':'color','value':'var(--brand-green-500)'},
 ]
-diff = sync_tokens.diff_tokens(desired, live)
+diff = sync_tokens.diff_tokens(desired, live, unreadable=set())
 assert sync_tokens.is_empty_diff(diff), diff
 # but a genuine change is still caught
 live2 = [dict(live[1], value='rgb(1 2 3 / 50%)')] + live[:1] + live[2:]
-diff2 = sync_tokens.diff_tokens(desired, live2)
+diff2 = sync_tokens.diff_tokens(desired, live2, unreadable=set())
 assert any(u['name']=='--brand-lasso-fill' for u in diff2['updates']), diff2
 print('OK')
 "
@@ -260,11 +260,11 @@ live = [
   {'name':'--legacy-bg','type':'color','value':'#EEEEEE'},
 ]
 # Prefixed sync: only the stale OWNED token is deleted.
-diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-')
+diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-', unreadable=set())
 dels = sorted(d['name'] for d in diff['deletes'])
 assert dels == ['--brand-stale'], dels
 # No-prefix sync owns everything: both foreign tokens ARE deleted.
-diff_all = sync_tokens.diff_tokens(desired, live)
+diff_all = sync_tokens.diff_tokens(desired, live, unreadable=set())
 dels_all = sorted(d['name'] for d in diff_all['deletes'])
 assert dels_all == ['--brand-stale', '--color-blue-500', '--legacy-bg'], dels_all
 print('OK')
@@ -316,7 +316,7 @@ live = [
   {'name':'--brand-accent','type':'color','value':'#37D895'},
   {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
 ]
-diff = sync_tokens.diff_tokens([], live, owned_prefix='--brand-')
+diff = sync_tokens.diff_tokens([], live, owned_prefix='--brand-', unreadable=set())
 dels = sorted(d['name'] for d in diff['deletes'])
 assert dels == ['--brand-accent', '--brand-bg'], dels
 print('OK')
@@ -368,7 +368,7 @@ live = [
   {'name':'--brand-accent','type':'color','value':'#37D895'},
   {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
 ]
-diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-')
+diff = sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-', unreadable=set())
 assert diff['deletes'] == [], diff['deletes']
 print('OK')
 "
@@ -503,7 +503,7 @@ live = [
   {'name':'--brand-accent','type':'color','value':'#37D895'},
   {'name':'--brand-bg','type':'color','value':'#FFFFFF'},
 ]
-dels = sorted(d['name'] for d in sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-')['deletes'])
+dels = sorted(d['name'] for d in sync_tokens.diff_tokens(desired, live, owned_prefix='--brand-', unreadable=set())['deletes'])
 assert dels == ['--brand-bg'], dels
 print('OK')
 "
@@ -548,20 +548,514 @@ assert names == ['--brand-normal', '--brand-onlydark-dark'], names   # orphan tw
 
 # idempotent: syncing the same source again is a no-op
 again, _ = st.build_desired(ct.classify_tokens(pt.parse_tokens(src, conv)))
-assert st.is_empty_diff(st.diff_tokens(again, desired, owned_prefix='--brand-'))
+assert st.is_empty_diff(st.diff_tokens(again, desired, owned_prefix='--brand-', unreadable=set()))
 
 # emit -> parse -> diff is a fixed point
 back, _ = st.build_desired(ct.classify_tokens(pt.parse_tokens(et.emit_css(desired, conv), conv)))
-assert st.is_empty_diff(st.diff_tokens(back, desired, owned_prefix='--brand-'))
+assert st.is_empty_diff(st.diff_tokens(back, desired, owned_prefix='--brand-', unreadable=set()))
 
 # and a later base declaration just creates the base token
 src2 = src.replace('--brand-normal: #ffffff;', '--brand-normal: #ffffff; --brand-onlydark: #333333;')
 grown, _ = st.build_desired(ct.classify_tokens(pt.parse_tokens(src2, conv)))
-d = st.diff_tokens(grown, desired, owned_prefix='--brand-')
+d = st.diff_tokens(grown, desired, owned_prefix='--brand-', unreadable=set())
 assert [t['name'] for t in d['creates']] == ['--brand-onlydark'], d['creates']
 assert not d['deletes'], d['deletes']
 print('OK')
 "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "reconcile: END-TO-END run() works with a 'file' themeConvention" {
+    # The gap this guards: resolve_dark_texts existed but nothing in production
+    # called it, so every file-convention config crashed with an uncaught
+    # ValueError through the real CLI. Every other file-convention test called
+    # parse_tokens(..., dark_texts=...) directly and sailed past the wiring.
+    repo="$BATS_TMPDIR/fileconv_e2e"; mkdir -p "$repo/themes"
+    printf ':root{--brand-a:#ffffff;--brand-b:#eeeeee;}' > "$repo/themes/light.scss"
+    printf ':root{--brand-a:#000000;}' > "$repo/themes/dark.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "out.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok': True, 'result': {'tokens': []}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=False)
+assert code == 0, (code, report)
+created = sorted(report['created'])
+assert created == ['--brand-a', '--brand-a-dark', '--brand-b'], created
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "reconcile: an unreadable theme file REFUSES through run(), not a traceback" {
+    repo="$BATS_TMPDIR/fileconv_missing"; mkdir -p "$repo/themes"
+    printf ':root{--brand-a:#ffffff;}' > "$repo/themes/light.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "out.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/NOPE.scss", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok': True, 'result': {'tokens': []}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=True)
+assert report.get('refused') is True and code != 0, (code, report)
+assert report.get('error') == 'theme_file_unreadable', report
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: a unitless-zero radius dark value still syncs (no over-decline)" {
+    # The both-halves check met a pre-existing asymmetry: spacing accepted a bare
+    # '0' but radius required px. '--card-radius: 8px' light / '0' dark declined
+    # the whole token, which DELETES the live pair on the next sync.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct, sync_tokens as st
+recs = [{'name':'--card-radius','light':'8px','dark':'0','light_alias':None,'dark_alias':None}]
+desired, declined = st.build_desired(ct.classify_tokens(recs))
+names = sorted(d['name'] for d in desired)
+assert names == ['--card-radius', '--card-radius-dark'], (names, declined)
+assert not declined, declined
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: the decline reason names the real type, not 'usable'" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct, sync_tokens as st
+recs = [{'name':'--c','light':'#ffffff','dark':'#{\$x}','light_alias':None,'dark_alias':None}]
+_, declined = st.build_desired(ct.classify_tokens(recs))
+assert 'is not a color value' in declined[0]['reason'], declined[0]['reason']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: an unrecognised dark half drops ONLY the twin, never the base" {
+    # The over-decline fix caused a worse bug than it fixed: declining the pair
+    # deleted a LIVE base token over a dark value classify merely failed to
+    # recognise. Degrade instead — the base is never collateral.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt, classify_tokens as ct, sync_tokens as st
+src = ':root{--brand-a:#ffffff;}[data-theme=\"dark\"]{--brand-a:#{\$sass};}'
+conv = [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}]
+desired, declined = st.build_desired(ct.classify_tokens(pt.parse_tokens(src, conv, '--brand-')))
+assert [d['name'] for d in desired] == ['--brand-a'], desired      # base SURVIVES
+assert [d['name'] for d in declined] == ['--brand-a-dark'], declined
+live = [{'name':'--brand-a','type':'color','value':'#FFFFFF'},
+        {'name':'--brand-a-dark','type':'color','value':'#101010'}]
+dels = [d['name'] for d in st.diff_tokens(desired, live, owned_prefix='--brand-', unreadable=set())['deletes']]
+assert dels == ['--brand-a-dark'], dels                            # only the twin
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: modern colour functions and rem lengths are recognised" {
+    # hsl() is what Tailwind, shadcn and Bootstrap ship by default; treating it
+    # as untypable made the degrade fire on ordinary CSS.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct
+for v in ['hsl(210 40% 12%)', 'oklch(0.2 0.03 250)', 'color-mix(in srgb, #000 80%, #fff)']:
+    assert ct.classify_value('--brand-bg', v)[0] == 'color', (v, ct.classify_value('--brand-bg', v))
+assert ct.classify_value('--brand-radius', '0.5rem')[0] == 'radius'
+assert ct.classify_value('--brand-gap', '1.5rem')[0] == 'spacing'
+# still NOT colours — a layered/partial value must never be mis-typed
+for v in ['linear-gradient(hsl(1 2% 3%), #fff)', '0 0 4px hsl(1 2% 3%)']:
+    assert ct.classify_value('--brand-bg', v)[0] is None, v
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "every single-file CLI refuses a file convention cleanly, never a traceback" {
+    # One shared predicate, because fixing these one at a time kept missing
+    # siblings: sync build-desired, status drift, emit-from-file, emit
+    # roundtrip, and parse_tokens' own CLI.
+    src="$BATS_TMPDIR/cli_guard.css"; printf ':root{--brand-a:#fff;}' > "$src"
+    echo '[]' > "$BATS_TMPDIR/cli_guard.json"
+    conv='[{"type":"file","path":"dark.scss","primary":true}]'
+    L="$SCRIPT_DIR/lib"
+    J="$BATS_TMPDIR/cli_guard.json"
+    # Build the command as ONE string and let bash -c word-split it. An earlier
+    # version quoted "$L/"$inv, making the whole invocation a single filename —
+    # python then exited 2 ("can't open file"), silently satisfying the exit
+    # assertion for entirely the wrong reason.
+    for inv in \
+        "$L/sync_tokens.py build-desired --source-file $src --conventions '$conv'" \
+        "$L/status.py drift --source-file $src --live-file $J --conventions '$conv'" \
+        "$L/emit_tokens.py emit-from-file --tokens $J --conventions '$conv'" \
+        "$L/emit_tokens.py roundtrip --tokens $J --conventions '$conv'" ; do
+        run bash -c "printf ':root{--brand-a:#fff;}' | python3 $inv 2>&1"
+        [ "$status" -eq 2 ]
+        [[ "$output" != *Traceback* ]]
+        [[ "$output" != *"can't open file"* ]]
+        [[ "$output" == *"run --repo"* ]]
+    done
+}
+
+@test "INVARIANT: a value we cannot type is never written AND never deleted" {
+    # The class fix. "I cannot type this" must mean "do not write it" and must
+    # NEVER also mean "delete it" — conflating those turned every gap in the
+    # recognisers into data loss across three review rounds.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct, sync_tokens as st
+live = [{'name':'--b-font-size','type':'fontSize','value':'16px'},
+        {'name':'--b-radius','type':'radius','value':'8px'},
+        {'name':'--b-radius-dark','type':'radius','value':'4px'}]
+
+# untypable LIGHT half -> base protected
+recs = [{'name':'--b-font-size','light':'clamp(1rem,2vw,2rem)','dark':None,'light_alias':None,'dark_alias':None},
+        {'name':'--b-radius','light':'8px','dark':'4px','light_alias':None,'dark_alias':None}]
+d, dec = st.build_desired(ct.classify_tokens(recs))
+dels = [x['name'] for x in st.diff_tokens(d, live, owned_prefix='--b-', unreadable=[x['name'] for x in dec])['deletes']]
+assert dels == [], dels
+
+# untypable DARK half -> twin protected, base still written
+recs = [{'name':'--b-font-size','light':'16px','dark':None,'light_alias':None,'dark_alias':None},
+        {'name':'--b-radius','light':'8px','dark':'clamp(4px,1vw,12px)','light_alias':None,'dark_alias':None}]
+d, dec = st.build_desired(ct.classify_tokens(recs))
+dels = [x['name'] for x in st.diff_tokens(d, live, owned_prefix='--b-', unreadable=[x['name'] for x in dec])['deletes']]
+assert dels == [], dels
+assert '--b-radius' in [x['name'] for x in d], d
+
+# a token the SOURCE genuinely removed must STILL delete — the guard must not
+# turn into a blanket no-delete
+d, dec = st.build_desired(ct.classify_tokens(
+    [{'name':'--b-radius','light':'8px','dark':'4px','light_alias':None,'dark_alias':None}]))
+dels = [x['name'] for x in st.diff_tokens(d, live, owned_prefix='--b-', unreadable=[x['name'] for x in dec])['deletes']]
+assert dels == ['--b-font-size'], dels
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "a declined twin makes a flip-through alias reference the PLAIN name" {
+    # Replaces a test that could NOT fail: its fixture declined both twins, so
+    # the alias-closure loop iterated an empty set and passed vacuously — the
+    # guard could be reverted with the suite still green.
+    #
+    # The reachable case is a FLIP-THROUGH alias: --b-user aliases --b-ref in
+    # light with no independent dark declaration, so its dark value is the
+    # referent's flipped literal. Without the guard that emits var(--b-ref-dark),
+    # pointing at a twin that is never created — which Paper fails silently.
+    # Verified mutation-sensitive: dropping `and not r.get("dark_excluded_reason")`
+    # from theme_varying flips this assertion to var(--b-ref-dark).
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+classified = [
+  {'name':'--b-ref','light':'#ffffff','dark':'clamp(1px,1vw,2px)','light_alias':None,
+   'dark_alias':None,'paper_type':'color','writable':True,
+   'dark_excluded_reason':'dark value not typable'},
+  {'name':'--b-user','light':'#ffffff','dark':'clamp(1px,1vw,2px)','light_alias':'--b-ref',
+   'dark_alias':None,'paper_type':'color','writable':True,'dark_excluded_reason':None},
+]
+desired, _ = st.build_desired(classified)
+by = {d['name']: d['value'] for d in desired}
+assert '--b-ref-dark' not in by, by
+assert by['--b-user-dark'] == 'var(--b-ref)', by['--b-user-dark']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "an unresolved import REFUSES rather than deleting the partial's tokens" {
+    # `missing` was logged and never acted on — the log line even predicted the
+    # deletion. A partial's names are in no text we read, so declared_names
+    # cannot protect them by construction; refusing is the only safe answer.
+    repo="$BATS_TMPDIR/missimport"; mkdir -p "$repo/css"
+    printf '@use "theme/palette";\n:root{--brand-accent:#37D895;}' > "$repo/css/tokens.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "css/tokens.scss", "ref": null, "prefix": "--brand-", "followImports": true },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-accent','type':'color','value':'#37D895'},
+            {'name':'--brand-green-500','type':'color','value':'#0F0'}]}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=True)
+assert report.get('error') == 'unresolved_imports', report
+assert code != 0, code
+assert 'deleted' not in report, report
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "delete scoping is prefix-bound — a foreign live token is never removed" {
+    # This guard survived mutation in round 5: removing owned_prefix from run()
+    # deletes a live Paper-native token. Load-bearing but untested until now.
+    repo="$BATS_TMPDIR/ownedscope"; mkdir -p "$repo"
+    printf ':root{--brand-a:#ffffff;}' > "$repo/t.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "t.css", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+            {'name':'--paper-native','type':'color','value':'#123456'}]}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=False)
+assert report['prunable'] == [], report['prunable']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "a THEME file's unresolved import refuses too, not just the base graph" {
+    # Round 5 made this a refusal for the base source graph only; the theme
+    # graph kept log-and-drop, so a renamed partial under the dark theme still
+    # deleted its twins.
+    repo="$BATS_TMPDIR/darkmissimport"; mkdir -p "$repo"
+    printf ':root{--brand-a:#37D895;}' > "$repo/l.css"
+    printf '@import "gone-partial.css";\n:root{--brand-a:#00B72B;}' > "$repo/d.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "l.css", "ref": null, "prefix": "--brand-", "followImports": true },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "d.css", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#37D895'},
+            {'name':'--brand-a-dark','type':'color','value':'#00B72B'}]}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=True)
+assert report.get('error') == 'unresolved_imports', report
+assert code != 0, code
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "a commented-out declaration surfaces as prunable, WITH the reason" {
+    # Over-protection is right, but it must not be silent: commenting a
+    # declaration out is a normal way to retire a token, and the raw sweep pins
+    # it in the target file forever with no signal.
+    repo="$BATS_TMPDIR/commentpin"; mkdir -p "$repo"
+    printf ':root{--brand-a:#ffffff;}\n/* --brand-legacy: #CCCCCC;  retired */' > "$repo/t.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "t.css", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+            {'name':'--brand-legacy','type':'color','value':'#CCCCCC'}]}}
+st.PaperClient = Fake
+report, code = st.run(repo='$repo', apply=False)
+assert report['prunable'] == ['--brand-legacy'], report['prunable']   # surfaced, not hidden
+assert report['pinnedByComment'] == ['--brand-legacy'], report        # with the reason why
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "config: a file convention pointed at source.path is rejected" {
+    # emit already refused this exact pair; sync did not. One typo wiped every
+    # dark twin, so the guard belongs at config level where it covers sync,
+    # status, emit and harvest at once.
+    repo="$BATS_TMPDIR/samepathcfg"; mkdir -p "$repo"
+    printf ':root{--brand-a:#fff;}' > "$repo/t.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "x", "source": { "path": "t.css", "prefix": "--brand-" },
+  "themeConventions": [ { "type": "file", "path": "./t.css", "primary": true } ] }
+JSON
+    run python3 "$SCRIPT_DIR/lib/paper_client.py" read-config --repo "$repo"
+    [ "$status" -eq 4 ]
+    [[ "$output" == *"same file as 'source.path'"* ]]
+}
+
+@test "completeness fails CLOSED: an unaffirmed parse is not complete" {
+    # The property that makes a future unregistered channel safe. No read has
+    # happened, so nothing has affirmed anything, so pruning must not proceed.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+complete, reasons = pt.source_completeness()
+assert complete is False, complete
+assert reasons[0][0] == 'unaffirmed', reasons
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+
+@test "INVARIANT: apply_diff cannot remove a stale token — it raises" {
+    # The load-bearing assertion of this release. Nine review rounds and
+    # fourteen data-loss defects all reduced to deciding "the user removed
+    # this" from "this is absent from my parse". The capability is gone, not
+    # defaulted off: a future caller that constructs a diff with deletes gets
+    # an exception, not a silent deletion.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st
+calls = []
+class Fake:
+    def set_tokens(s, t, f): calls.append(('set', t)); return {'ok': True}
+    def create_tokens(s, t, f): calls.append(('create', t)); return {'ok': True}
+diff = {'creates': [], 'updates': [], 'recreates': [],
+        'deletes': [{'name': '--brand-gone', 'type': 'color', 'value': '#000'}]}
+try:
+    st.apply_diff(Fake(), 'F1', diff)
+    raise AssertionError('apply_diff accepted stale deletes')
+except ValueError as e:
+    assert 'does not remove tokens' in str(e), str(e)
+assert calls == [], calls   # nothing reached the daemon
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "INVARIANT: no run() reaches the daemon with a delete, whatever the source" {
+    # Drives the real pipeline over the shapes that produced P0s in rounds 4-9:
+    # a not-followed package import, an unresolved import, malformed source, a
+    # name moved out of scope, a commented-out declaration. Every one of them
+    # used to end in a deletion under some configuration.
+    run python3 -c "
+import sys, os, json, tempfile; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st, parse_tokens as pt, importlib
+
+SOURCES = {
+  'not_followed':  '@use \"@acme/palette\";\n:root{--brand-radius:4px;}',
+  'moved_scope':   ':root{--brand-a:#fff;}\n.card{--brand-gone:#123456;}',
+  'commented':     ':root{--brand-a:#fff;}\n/* --brand-gone: #123456; */',
+  'malformed':     ':root{--brand-a:\"unterminated ;\n--brand-gone:#222;}',
+}
+for label, css in SOURCES.items():
+    for follow in (False, True):
+        repo = tempfile.mkdtemp()
+        open(os.path.join(repo,'tokens.css'),'w').write(css)
+        json.dump({'fileId':'F1','source':{'path':'tokens.css','prefix':'--brand-','followImports':follow},
+                   'themeConventions':[{'type':'media-query','query':'(prefers-color-scheme: dark)','primary':True}]},
+                  open(os.path.join(repo,'token-bridge.config.json'),'w'))
+        sent = []
+        class Fake:
+            def __init__(s,*a,**k): pass
+            def get_tokens(s,f):
+                return {'ok':True,'result':{'tokens':[
+                    {'name':'--brand-a','type':'color','value':'#FFFFFF'},
+                    {'name':'--brand-gone','type':'color','value':'#123456'}]}}
+            def set_tokens(s,t,f): sent.extend(t); return {'ok':True,'result':{}}
+            def create_tokens(s,t,f): return {'ok':True,'result':{}}
+        importlib.reload(pt); importlib.reload(st); st.PaperClient = Fake
+        st.run(repo=repo, apply=True)
+        deletes = [x for x in sent if x.get('delete')]
+        assert deletes == [], (label, follow, deletes)
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "parseComplete is False on an actually-incomplete parse (the ledger's diagnostic value)" {
+    # The completeness ledger survived the deletion cut as a DIAGNOSTIC: the
+    # skill uses parseComplete to warn a user not to hand-delete from `prunable`
+    # when the parse was partial. A read path that affirms but forgets to
+    # register a swallowed declaration flips parseComplete wrongly True and the
+    # warning vanishes silently — the "trust an incomplete parse" class behind
+    # every prior data-loss defect, now surfacing as bad advice. Guard it.
+    run python3 -c "
+import sys, os, json, tempfile, importlib; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import sync_tokens as st, parse_tokens as pt
+
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok':True,'result':{'tokens':[
+        {'type':'color','name':'--brand-a','value':'#FFFFFF'}]}}
+    def set_tokens(s,t,f): return {'ok':True,'result':{}}
+    def create_tokens(s,t,f): return {'ok':True,'result':{}}
+
+def run_on(css, follow=False):
+    repo = tempfile.mkdtemp()
+    open(os.path.join(repo,'tokens.css'),'w').write(css)
+    json.dump({'fileId':'F1','source':{'path':'tokens.css','prefix':'--brand-','followImports':follow},
+               'themeConventions':[{'type':'media-query','query':'(prefers-color-scheme: dark)','primary':True}]},
+              open(os.path.join(repo,'token-bridge.config.json'),'w'))
+    importlib.reload(pt); importlib.reload(st); st.PaperClient = Fake
+    return st.run(repo=repo, apply=False)[0]
+
+# malformed source: a swallowed declaration is a KIND_MALFORMED entry
+r = run_on(':root{--brand-a:\"unterminated ;\n--brand-b:#222;}')
+assert r['parseComplete'] is False, r
+# a not-followed package import: KIND_NOT_FOLLOWED
+r = run_on('@use \"@acme/palette\";\n:root{--brand-a:#fff;}', follow=True)
+assert r['parseComplete'] is False, r
+# a clean, fully-read source: True
+r = run_on(':root{--brand-a:#fff;}')
+assert r['parseComplete'] is True, r
+print('OK')
+" 2>/dev/null
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }

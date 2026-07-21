@@ -1,6 +1,6 @@
 ---
 description: "Connect a codebase to a Paper file — scaffold its token-bridge.config.json (reference an existing file or create a new one)"
-argument-hint: "--repo <path> --source <css-path> (--file <id|URL> | --create-file [--name <n>]) [--prefix <p>] [--convention data-attribute|media-query|class ...]"
+argument-hint: "--repo <path> --source <css-path> (--file <id|URL> | --create-file [--name <n>]) [--prefix <p>] [--convention data-attribute|media-query|class|file ...]"
 ---
 
 # Connect a repo to a Paper file

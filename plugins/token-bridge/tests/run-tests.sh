@@ -4,6 +4,23 @@
 
 set -euo pipefail
 
+# Give this run its own TMPDIR, so BATS_TMPDIR is per-run rather than
+# machine-global. The suite writes fixed filenames into it (emit_da, cli_guard,
+# d1 …), so two concurrent runs — parallel CI shards, or a mutation-testing
+# harness running copies side by side — silently overwrite each other's
+# fixtures. That surfaced as nonsense-correlated failures during a mutation
+# pass: a colour-classification mutation "killing" a source.ref test. A
+# contaminated run reports failures that have nothing to do with the change,
+# which is worse than a red suite because it looks like signal.
+TB_RUN_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/token-bridge-tests.XXXXXX")"
+# Resolve to the PHYSICAL path. On macOS /tmp is a symlink to /private/tmp, so
+# bash would hold the symlinked path while python reports the real one, and any
+# assertion comparing a path from one against the other fails for a reason that
+# has nothing to do with the code.
+TB_RUN_TMPDIR="$(cd "$TB_RUN_TMPDIR" && pwd -P)"
+export TMPDIR="$TB_RUN_TMPDIR"
+trap 'rm -rf "$TB_RUN_TMPDIR"' EXIT
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RED='\033[0;31m'

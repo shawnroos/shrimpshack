@@ -186,8 +186,14 @@ def build_desired(classified):
       desired  = sorted list of {name, type, value} Paper tokens
       declined = sorted list of {name, reason} for non-writable tokens
     """
+    # A referent whose twin was dropped has no `-dark` counterpart, so a dark
+    # alias must fall back to its plain name — otherwise we emit
+    # var(--x-dark) pointing at a token that is never created, and Paper fails
+    # that reference silently.
     theme_varying = {
-        r["name"] for r in classified if r.get("dark") is not None
+        r["name"]
+        for r in classified
+        if r.get("dark") is not None and not r.get("dark_excluded_reason")
     }
     # Each token's effective dark literal (dark value, or light when invariant),
     # keyed by name — used to detect pure flip-through aliases in _dark_value.
@@ -216,13 +222,22 @@ def build_desired(classified):
             desired.append({"name": rec["name"], "type": ptype, "value": light_val})
         # Dark twin — only for theme-varying tokens.
         if rec.get("dark") is not None:
-            desired.append(
-                {
-                    "name": rec["name"] + DARK_SUFFIX,
-                    "type": ptype,
-                    "value": _dark_value(rec, theme_varying, dark_literals),
-                }
-            )
+            # A dark half classify could not type is omitted as a TWIN only —
+            # the base above still syncs. Dropping the base too would delete a
+            # live token over a value classify merely failed to recognise.
+            dark_reason = rec.get("dark_excluded_reason")
+            if dark_reason:
+                declined.append(
+                    {"name": rec["name"] + DARK_SUFFIX, "reason": dark_reason}
+                )
+            else:
+                desired.append(
+                    {
+                        "name": rec["name"] + DARK_SUFFIX,
+                        "type": ptype,
+                        "value": _dark_value(rec, theme_varying, dark_literals),
+                    }
+                )
 
     desired.sort(key=lambda t: t["name"])
     declined.sort(key=lambda t: t["name"])
@@ -260,11 +275,31 @@ def _owns(name, owned_prefix):
     return _norm_name(name).startswith(_norm_name(owned_prefix))
 
 
-def diff_tokens(desired, live, owned_prefix=None):
+def diff_tokens(desired, live, owned_prefix=None, *, unreadable):
     """Diff the desired Paper token set against the live one (pure function).
 
     Compares with NORMALIZED name (lowercase) and value (uppercased hex) so an
     unchanged source yields an EMPTY diff (R3).
+
+    `unreadable` is REQUIRED, not optional — an optional kwarg let a caller
+    silently inherit the destructive behaviour by doing nothing, which is exactly
+    how `status` kept deleting after the invariant landed. Pass `set()` only when
+    you genuinely have no source to compare against.
+
+    It is the INVARIANT that makes our incompleteness harmless: names the source
+    DECLARED but that did not reach the desired set — whether classify could not
+    type them, the block walk missed them, or a scope predicate did not match. "I cannot type this
+    value" must mean "do not write it" — it must NEVER also mean "delete it".
+    Conflating those two is what turned every gap in the recognisers into data
+    loss: an unrecognised font size in `rem`, a dark half using `clamp()`, a
+    colour function the allowlist had not met yet. Absence from `desired` is
+    ambiguous (the source dropped it, OR we failed to read it); this set
+    disambiguates, and only the first meaning may delete.
+
+    The recognisers will always be incomplete — CSS keeps adding value syntax.
+    This is what makes being incomplete survivable rather than destructive, and
+    it is why they can stay STRICT: a false negative now costs a skipped write,
+    not a deleted token.
 
     `owned_prefix` scopes deletions: a live token absent from the desired set is
     deleted only when the plugin OWNS it (see `_owns`). This stops a prefixed
@@ -275,7 +310,8 @@ def diff_tokens(desired, live, owned_prefix=None):
     Returns {creates, updates, deletes, recreates}:
       creates    tokens present in desired, absent from live         -> create
       updates    same name+type, value changed                       -> set value
-      deletes    OWNED, present in live, absent from desired          -> delete
+      deletes    OWNED, present in live, absent from desired, and NOT
+                 unreadable                                          -> delete
       recreates  same name, TYPE changed (Paper cannot retype)       -> delete+create
     """
     live_by_name = {}
@@ -299,10 +335,13 @@ def diff_tokens(desired, live, owned_prefix=None):
         if not _same_value(cur.get("value"), d.get("value")):
             updates.append(d)
 
+    protected = {_norm_name(n) for n in (unreadable or ())}
     deletes = [
         {"name": t["name"]}
         for t in live
-        if _norm_name(t["name"]) not in desired_names and _owns(t["name"], owned_prefix)
+        if _norm_name(t["name"]) not in desired_names
+        and _norm_name(t["name"]) not in protected
+        and _owns(t["name"], owned_prefix)
     ]
 
     return {
@@ -361,10 +400,28 @@ def apply_diff(client, file_id, diff):
     first non-ok envelope short-circuits with ok:false."""
     steps = []
 
-    # 1. Deletions: stale deletes + the delete half of every recreate.
-    delete_names = [t["name"] for t in diff["deletes"]] + [
-        t["name"] for t in diff["recreates"]
-    ]
+    # 1. Deletions: the delete half of every recreate. NOTHING ELSE.
+    #
+    # This function cannot remove a stale token, and that is deliberate rather
+    # than a default. Deciding "the user removed this" from "this is absent
+    # from my parse" produced fourteen data-loss defects across nine review
+    # rounds; every attempt to make the inference safe — four completeness
+    # guards, an explicit --prune flag, a fail-closed affirmation model —
+    # introduced a new deletion path within one round. The capability is gone,
+    # so the class is gone with it. `diff["deletes"]` is still computed and
+    # still reported as `prunable`; removing those is the user's job, in Paper,
+    # where they can see what they are removing.
+    #
+    # A recreate is a different animal: same name, deleted and immediately
+    # recreated because Paper cannot retype in place. It is bounded and driven
+    # by the desired set, not by absence. It is still not free — a Paper-side
+    # field this tool does not model does not survive it — and run() says so.
+    if diff.get("deletes"):
+        raise ValueError(
+            "apply_diff was given stale deletes; this tool does not remove "
+            "tokens. Report them as `prunable` instead."
+        )
+    delete_names = [t["name"] for t in diff["recreates"]]
     if delete_names:
         env = client.set_tokens(
             [{"name": n, "delete": True} for n in delete_names], file_id
@@ -448,12 +505,14 @@ def empty_parse_refusal(text, parsed_count, source_path):
     }
 
 
-def desired_from_source(text, conventions, prefix=None):
+def desired_from_source(text, conventions, prefix=None, dark_texts=None):
     """Full pure source pipeline: parse -> classify -> build_desired.
 
     `conventions` is the config `themeConventions` list; `prefix` restricts
-    output to custom properties with that prefix (None/"" takes all)."""
-    records = parse_tokens.parse_tokens(text, conventions, prefix)
+    output to custom properties with that prefix (None/"" takes all).
+    `dark_texts` carries the theme text of any `file` convention, keyed by its
+    index in `conventions` — see parse_tokens.resolve_dark_texts."""
+    records = parse_tokens.parse_tokens(text, conventions, prefix, dark_texts)
     classified = classify_tokens.classify_tokens(records)
     return build_desired(classified)
 
@@ -464,14 +523,17 @@ def desired_from_source(text, conventions, prefix=None):
 def run(repo=".", url=None, apply=True):
     """The end-to-end reconcile. Returns (report_dict, exit_code).
 
-    Reads everything it needs (fileId, source, prefix, theme conventions, daemon
-    URL) from the config found under `--repo`. Refuses (writes NOTHING) when the
-    config is missing/invalid or carries no fileId — the destructive-reconcile
-    safety guard. This runs BEFORE any source read or daemon call.
+    THIS DOES NOT DELETE. It creates, updates, and recreates retyped tokens.
+    A live token absent from the parse is reported under `prunable` and left
+    alone; removing it is the user's job, in Paper.
 
-    Refuses a second time (R7) when the source has content but parses to zero
-    tokens, which the diff would otherwise read as "delete everything". That
-    check runs after the source read but still before any daemon call."""
+    That is not caution, it is the conclusion of nine review rounds. Deciding
+    "the user removed this" from "this is absent from my parse" produced
+    fourteen data-loss defects, and every attempt to make the inference safe
+    introduced a new deletion path within one round. The inference is gone.
+    `apply_diff` raises if handed stale deletes, so this is a missing
+    capability rather than a default someone can flip back on.
+    """
     file_id, cfg, err = read_config(repo)
     if err is not None:
         # no_config / bad_config / no_target_file — all refuse before any write.
@@ -494,7 +556,36 @@ def run(repo=".", url=None, apply=True):
 
     conventions = cfg.get("themeConventions") or []
     prefix = (cfg.get("source") or {}).get("prefix")
-    desired, declined = desired_from_source(text, conventions, prefix)
+    # A `file` convention's dark theme lives in another file, so it has to be
+    # read here — parse cannot reach outside the text it is given. Sharing the
+    # load_source try/except: both are "could not read the source" failures and
+    # both must refuse rather than proceed with a partial view.
+    try:
+        dark_texts = parse_tokens.resolve_dark_texts(cfg)
+    except RuntimeError as exc:
+        return ({"ok": False, "refused": True, "error": "theme_file_unreadable",
+                 "note": str(exc)}, EXIT_REFUSED)
+
+    # Checked AFTER resolve_dark_texts so the THEME graph's unresolved imports
+    # are covered by the same refusal — round 5 checked before it ran, so the
+    # dark half's misses could not be seen even once they were recorded.
+    missing = parse_tokens.missing_imports()
+    if missing and not (cfg.get("source") or {}).get("allowMissingImports"):
+        listed = ", ".join(f"{spec!r} (from {whence})" for spec, whence in missing[:5])
+        return (
+            {
+                "ok": False, "refused": True, "error": "unresolved_imports",
+                "note": (
+                    f"{len(missing)} import(s) could not be resolved: {listed}. Nothing was "
+                    "written — tokens declared in an unresolved file are invisible to this "
+                    "parse and would look deleted. Fix the path, or set "
+                    "source.allowMissingImports: true to accept the risk."
+                ),
+            },
+            EXIT_REFUSED,
+        )
+
+    desired, declined = desired_from_source(text, conventions, prefix, dark_texts)
 
     # Empty-parse backstop (R7): a source with content that yields no tokens is
     # a parse failure, not a mass deletion. Refuse BEFORE the daemon is touched.
@@ -519,26 +610,78 @@ def run(repo=".", url=None, apply=True):
 
     # Scope deletes to the owned prefix so a prefixed sync never wipes
     # Paper-native or other-namespace tokens sharing the target file.
-    diff = diff_tokens(desired, live, owned_prefix=prefix)
+    # Protect everything the SOURCE TEXT declares that did not reach `desired`,
+    # plus its `-dark` twin. Derived from the text rather than from the parsed
+    # records so a token the parser never saw is protected too — a declined
+    # base's twin, or a name lost to a scope predicate, leaves no record to
+    # inspect but is plainly there in the source.
+    # An incomplete parse no longer decides anything destructive — nothing
+    # deletes — so this reports rather than refuses. The information still
+    # matters: an unread import means stale values and missing tokens, and a
+    # user who sees `prunable` should know whether the parse was whole before
+    # acting on it in Paper.
+    complete, reasons = parse_tokens.source_completeness()
+    if not complete:
+        listed = "; ".join(
+            f"{what}{f' (from {where})' if where else ''}"
+            for _kind, what, where in reasons[:5]
+        )
+        _log(
+            f"this parse did not read the whole source: {listed}. Values from "
+            "those may be stale, and tokens they declare will appear under "
+            "`prunable` even though you have not removed them — do not act on "
+            "that list until the source reads whole."
+        )
+
+    # Declined tokens parsed FINE — Paper simply cannot represent them (shadows,
+    # motion, filters). They are in the source, so they must not be deleted, and
+    # they are disclosed in the `declined` report field rather than silently
+    # suppressed. This is the whole of the protection now.
+    #
+    # The old text-sweep protection is gone. It existed because sync used to
+    # delete automatically, so it had to guess at what the parser might have
+    # missed; with a complete parse there is nothing unread to protect, and with
+    # an incomplete one we refused above. Keeping it only ever suppressed
+    # deletions the user explicitly asked for: a token moved from `:root` into a
+    # component rule became permanently unprunable and silently so.
+    protected = {d["name"] for d in declined}
+    protected |= {n + DARK_SUFFIX for n in protected}
+    unreadable = protected
+
+    # A live token whose declaration is only commented out shows up as
+    # `prunable` like any other absent name — but its absence has a specific,
+    # recoverable cause worth naming, because the user may think commenting the
+    # line out already retired it.
+    commented = parse_tokens.commented_only_names(text, prefix)
+    for dark_text in (dark_texts or {}).values():
+        commented |= parse_tokens.commented_only_names(dark_text, prefix)
+    live_names = {t["name"] for t in live}
+    pinned = sorted(n for n in commented if n in live_names)
+    for n in pinned:
+        _log(
+            f"{n} is live in the target file but only appears inside a comment in the "
+            "source, which is why it is listed as prunable. Commenting the declaration "
+            "out does not remove the token — delete the line, then remove it in Paper."
+        )
+
+    diff = diff_tokens(desired, live, owned_prefix=prefix, unreadable=unreadable)
 
     # Blank-source backstop (R7, second arm). The pre-daemon check above cannot
-    # fire on a BLANK source — a truncated or emptied file is legitimately
-    # "no content", so it falls through — but the consequence is identical and
-    # worse: zero desired against a populated owned set turns the whole live set
-    # into deletes. Under connect's `prefix: null` default that is the entire
-    # Paper file, silently, with ok:true and exit 0.
+    # fire on a BLANK source — a truncated or emptied file is legitimately "no
+    # content", so it falls through — and this arm needs the live set, which
+    # that one does not have.
     #
-    # "Don't ERROR on an empty source" is not "don't DELETE on an empty source".
-    # This arm lives here because it needs the live set, and this is still a
-    # read-only point — get_tokens is a read, nothing has been written yet.
-    # Deliberately emptying a Paper file must be explicit, never a side effect.
+    # Nothing deletes any more, so this no longer prevents a wipe. It prevents
+    # the ADVICE to wipe: zero desired against a populated owned set reports
+    # every live token as `prunable`, and a user acting on that list deletes
+    # their whole file by hand. A truncated source must not produce a
+    # confident-looking removal list.
     if not desired and diff["deletes"]:
         note = (
             f"{resolve_repo_path(cfg, (cfg.get('source') or {}).get('path'))} parsed to zero "
-            f"tokens while {len(diff['deletes'])} owned token(s) are live. Syncing would delete "
-            "all of them, so nothing was written. If the source was truncated or emptied by "
-            "mistake, restore it. To empty the target deliberately, delete the tokens in Paper "
-            "directly rather than via an empty sync."
+            f"tokens while {len(diff['deletes'])} owned token(s) are live. Every one of them "
+            "would be listed as prunable, which is almost certainly wrong — if the source was "
+            "truncated or emptied by mistake, restore it. Nothing was written either way."
         )
         _log(note)
         return (
@@ -546,16 +689,65 @@ def run(repo=".", url=None, apply=True):
             EXIT_REFUSED,
         )
 
+    # A `prunable` name that is STILL declared somewhere the sync does not read
+    # — a component rule, a print media block — is one the user must NOT remove
+    # by hand: it is in use, just outside the theme scope. This is the safety
+    # signal that matters most now that pruning is a manual step. Twins are
+    # matched by their base name, since a `-dark` twin never appears in source.
+    declared_anywhere = parse_tokens.declared_names(text, prefix)
+    for dark_text in (dark_texts or {}).values():
+        declared_anywhere |= parse_tokens.declared_names(dark_text, prefix)
+
+    def _in_source(name):
+        if name in declared_anywhere:
+            return True
+        return name.endswith(DARK_SUFFIX) and name[: -len(DARK_SUFFIX)] in declared_anywhere
+
+    still_declared = sorted(t["name"] for t in diff["deletes"] if _in_source(t["name"]))
+
     report = {
         "ok": True,
         "fileId": file_id,
         "created": [t["name"] for t in diff["creates"]],
         "updated": [t["name"] for t in diff["updates"]],
-        "deleted": [t["name"] for t in diff["deletes"]],
+        # A live token absent from the parse. Reported, never removed.
+        "prunable": [t["name"] for t in diff["deletes"]],
+        # `prunable` names still in use elsewhere — a hand-delete would break them.
+        "stillDeclared": still_declared,
+        "parseComplete": complete,
         "recreated": [t["name"] for t in diff["recreates"]],
         "declined": declined,
+        "pinnedByComment": pinned,
         "empty": is_empty_diff(diff),
     }
+
+    if diff["recreates"]:
+        names = ", ".join(t["name"] for t in diff["recreates"][:8])
+        _log(
+            f"{len(diff['recreates'])} token(s) changed Paper type and are being "
+            f"recreated: {names}. Paper cannot retype in place, so each is a delete "
+            "followed by a create — and any "
+            "Paper-side field this tool does not model (a hand-written description) "
+            "does not survive it."
+        )
+
+    if diff["deletes"]:
+        names = ", ".join(t["name"] for t in diff["deletes"][:8])
+        _log(
+            f"{len(diff['deletes'])} live token(s) are absent from this parse and were "
+            f"NOT removed: {names}. Absence is not proof of removal — a parse gap looks "
+            "identical to a deletion. Remove them in Paper if you meant to retire them."
+        )
+    if still_declared:
+        _log(
+            f"{len(still_declared)} prunable token(s) are still declared in the source, "
+            f"outside any scope this sync reads: {', '.join(still_declared[:8])}. Do NOT "
+            "remove these by hand — they are in use (likely a component rule), not retired."
+        )
+
+    if diff["deletes"]:
+        # Drop them from the applied diff entirely; they stay reported.
+        diff = dict(diff, deletes=[])
 
     if apply and not is_empty_diff(diff):
         apply_result = apply_diff(client, file_id, diff)
@@ -626,6 +818,10 @@ def main(argv=None):
         if not isinstance(conventions, list):
             _log("--conventions must be a JSON array of convention objects")
             return EXIT_REFUSED
+        needs_repo = parse_tokens.file_convention_needs_repo(conventions)
+        if needs_repo:
+            _log(needs_repo)
+            return EXIT_REFUSED
         with open(args.source_file, encoding="utf-8") as fh:
             text = fh.read()
         desired, declined = desired_from_source(text, conventions, args.prefix)
@@ -639,7 +835,12 @@ def main(argv=None):
         live = _load_json_file(args.live)
         if isinstance(live, dict):  # accept a get_tokens result envelope too
             live = live.get("tokens", live.get("result", {}).get("tokens", []))
-        print(json.dumps(diff_tokens(desired, live, owned_prefix=args.owned_prefix), indent=2))
+        # No source text here — this subcommand diffs two given token sets — so
+        # there is nothing we "declared but could not read". Stated, not defaulted.
+        print(json.dumps(
+            diff_tokens(desired, live, owned_prefix=args.owned_prefix, unreadable=set()),
+            indent=2,
+        ))
         return EXIT_OK
 
     if cmd == "simulate-apply":

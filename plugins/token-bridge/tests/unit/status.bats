@@ -28,7 +28,7 @@ live = [
   {'name':'--brand-gone','type':'color','value':'#222222'},     # only in design (owned)
   {'name':'--color-native','type':'color','value':'#333333'},   # FOREIGN, must be ignored
 ]
-d = status.drift(desired, live, owned_prefix='--brand-')
+d = status.drift(desired, live, owned_prefix='--brand-', unreadable=set())
 assert d['onlyInCode'] == ['--brand-new'], d
 assert d['onlyInDesign'] == ['--brand-gone'], d
 assert d['differ'] == ['--brand-accent'], d
@@ -44,7 +44,7 @@ print('OK')
 import sys; sys.path.insert(0, '$LIB_DIR')
 import status
 toks = [{'name':'--brand-accent','type':'color','value':'#37D895'}]
-d = status.drift(toks, toks, owned_prefix='--brand-')
+d = status.drift(toks, toks, owned_prefix='--brand-', unreadable=set())
 assert d['inSync'] is True, d
 assert d['onlyInCode'] == [] and d['onlyInDesign'] == [] and d['differ'] == [], d
 print('OK')
@@ -117,4 +117,102 @@ print('OK')
 "
     [ "$status" -eq 0 ]
     [[ "$output" == *"OK"* ]]
+}
+
+@test "status: END-TO-END run() works with a 'file' themeConvention" {
+    # The wiring gap was a CLASS, not one call site: sync_tokens, status,
+    # write_component and roundtrip all called parse_tokens without dark_texts.
+    # Fixing only the cited one left status crashing.
+    repo="$BATS_TMPDIR/status_fileconv"; mkdir -p "$repo/themes"
+    printf ':root{--brand-a:#ffffff;}' > "$repo/themes/light.scss"
+    printf ':root{--brand-a:#000000;}' > "$repo/themes/dark.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--brand-" },
+  "emitTarget": "out.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import status
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok': True, 'result': {'tokens': []}}
+report, code = status.run(repo='$repo', client=Fake())
+assert code == 0, (code, report)
+names = sorted(report['onlyInCode'])
+assert names == ['--brand-a', '--brand-a-dark'], names
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "status: the drift subcommand refuses a file convention it cannot resolve" {
+    # drift takes a bare --source-file with no repo, so it has nothing to resolve
+    # a theme file against. Refuse clearly rather than raise.
+    src="$BATS_TMPDIR/drift_src.css"; printf ':root{--brand-a:#fff;}' > "$src"
+    echo '[]' > "$BATS_TMPDIR/drift_live.json"
+    run python3 "$SCRIPT_DIR/lib/status.py" drift \
+        --source-file "$src" --live-file "$BATS_TMPDIR/drift_live.json" \
+        --conventions '[{"type":"file","path":"dark.scss","primary":true}]'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"run --repo"* ]]
+}
+
+@test "status: a declined-but-live token is not reported as permanent drift" {
+    # status omitted `unreadable`, so it read absence-from-desired as "the code
+    # dropped it" — reporting drift that no normalize could ever clear, while
+    # sync (correctly) did nothing.
+    run python3 -c "
+import sys, os, json; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import status, sync_tokens
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--brand-accent','type':'color','value':'#FF0000'},
+            {'name':'--brand-accent-dark','type':'color','value':'#111111'}]}}
+repo = os.path.join('$BATS_TMPDIR', 'statusdecl'); os.makedirs(repo, exist_ok=True)
+open(repo+'/t.css','w').write(':root{--brand-accent:#ff0000;}[data-theme=\"dark\"]{--brand-accent:#{\$shade};}')
+json.dump({'fileId':'F1','paperDaemonUrl':'http://x',
+  'source':{'path':'t.css','ref':None,'prefix':'--brand-'},
+  'emitTarget':'o.css','primitivePattern':None,
+  'themeConventions':[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}],
+  'harvest':{'themeSignal':{'type':'data-attribute','attr':'data-theme','value':'dark'},'batch':[]}},
+  open(repo+'/token-bridge.config.json','w'))
+report, code = status.run(repo=repo, client=Fake())
+assert report['onlyInDesign'] == [], report
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "guard: status refuses on an unresolved import (survived mutation)" {
+    # Without it, status reports an unresolvable partial's token as design-only
+    # drift AND points the user at the command that would remove it.
+    repo="$BATS_TMPDIR/statusmissimport"; mkdir -p "$repo"
+    printf '@import "gone.css";\n:root{--brand-a:#fff;}' > "$repo/t.css"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "t.css", "ref": null, "prefix": "--brand-", "followImports": true },
+  "emitTarget": "o.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "data-attribute", "attr": "data-theme", "value": "dark", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import status
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f): return {'ok': True, 'result': {'tokens': []}}
+report, code = status.run(repo='$repo', client=Fake())
+assert report.get('error') == 'unresolved_imports', report
+assert code != 0, code
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
 }

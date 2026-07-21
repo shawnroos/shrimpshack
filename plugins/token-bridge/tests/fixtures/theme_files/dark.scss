@@ -1,0 +1,10 @@
+//Helpers — a leading line comment above the rule, as in the real repo
+$shade100: #e8e8e7;
+
+:root {
+  --brand-text: #e8e8e7;
+  --brand-bg: #0d0d0d;
+  --brand-sass: #{$shade100};
+}
+
+.some-component { --brand-not-a-theme-token: 4px; }

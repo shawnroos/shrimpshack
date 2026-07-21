@@ -1002,3 +1002,421 @@ print('OK')
     [ "$status" -eq 0 ]
     [[ "$output" == *OK* ]]
 }
+
+# ============================================================================
+# file convention — the dark theme is a separate FILE, not a scope
+# ============================================================================
+
+@test "file convention: light + dark files resolve to one merged record set" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+light = open('$FIXTURE_DIR/theme_files/light.scss').read()
+dark  = open('$FIXTURE_DIR/theme_files/dark.scss').read()
+conv = [{'type': 'file', 'path': 'theme_files/dark.scss', 'primary': True}]
+by = {r['name']: r for r in pt.parse_tokens(light, conv, dark_texts={0: dark})}
+
+assert by['--brand-text']['light'] == '#21242E' and by['--brand-text']['dark'] == '#E8E8E7', by['--brand-text']
+assert by['--brand-bg']['light']   == '#FCFCFC' and by['--brand-bg']['dark']   == '#0D0D0D', by['--brand-bg']
+# declared only in light -> theme-invariant
+assert by['--brand-only-light']['dark'] is None, by['--brand-only-light']
+# declared only in dark -> the orphan-twin shape
+assert by['--brand-sass']['light'] is None, by['--brand-sass']
+# a component selector INSIDE the dark file is not the theme scope
+assert '--brand-not-a-theme-token' not in by, sorted(by)
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "file convention: a line comment above the rule does not swallow its selector" {
+    # The real dark.scss opens with `//Helpers` above `:root {`. Without
+    # strip_comments the selector becomes '//Helpers\n\n:root', matches nothing,
+    # and the dark scope silently reads as empty — i.e. every -dark twin deleted.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+light = open('$FIXTURE_DIR/theme_files/light.scss').read()
+dark  = open('$FIXTURE_DIR/theme_files/dark.scss').read()
+recs = pt.parse_tokens(light, [{'type':'file','path':'d','primary':True}], dark_texts={0: dark})
+assert any(r['dark'] is not None for r in recs), 'dark scope resolved EMPTY'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "file convention: a missing theme file REFUSES, never an empty dark scope" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$FIXTURE_DIR', 'source': {'path': 'theme_files/light.scss'},
+       'themeConventions': [{'type': 'file', 'path': 'theme_files/NOPE.scss', 'primary': True}]}
+try:
+    pt.resolve_dark_texts(cfg)
+except RuntimeError as e:
+    assert 'could not read theme file' in str(e), e
+    assert 'delete every -dark twin' in str(e), 'the refusal must say WHY it refuses'
+    print('OK')
+else:
+    raise AssertionError('a missing theme file must refuse, not yield an empty dark scope')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "file convention: desugaring one is a category error, not a silent no-match" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+try:
+    pt.desugar_convention({'type': 'file', 'path': 'd.scss'})
+except ValueError as e:
+    assert 'resolved at load' in str(e), e
+    print('OK')
+else:
+    raise AssertionError('desugaring a file convention must raise, not return []')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "base scope: :root, html and body are base; component selectors never are" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+yes = [':root', 'html', 'body', 'html, body', '  body  ']
+no  = ['html.dark', ':root[data-theme=\"dark\"]', 'body.theme-dark', '.tooltip', 'html body', '.dark, .dark *']
+for s in yes: assert pt._is_document_scope(s), s
+for s in no:  assert not pt._is_document_scope(s), s
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "base scope: a group containing body wins — it applies ON body" {
+    run bash -c "printf ':root{--brand-a:#111;}\nhtml, body{--brand-b:#222;--brand-a:#333;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-b light)" = "#222" ]
+    # `html, body { … }` sets the property ON body, and body's own declaration
+    # shadows the inherited :root value for body and everything under it — i.e.
+    # for all rendered content. So the group wins, whatever the order.
+    [ "$(field --brand-a light)" = "#333" ]
+}
+
+@test "base merge: :root beats html for the same property, whatever the order" {
+    # :root is (0,1,0), html is (0,0,1) — both select the same element, so a
+    # source-order merge synced a value no browser renders.
+    run bash -c "printf ':root{--brand-a:#AAAAAA;}html{--brand-a:#BBBBBB;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#AAAAAA" ]
+
+    run bash -c "printf 'html{--brand-a:#BBBBBB;}:root{--brand-a:#AAAAAA;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#AAAAAA" ]
+}
+
+@test "base merge: html and body share a tier, so source order still decides" {
+    run bash -c "printf 'html{--brand-a:#BBBBBB;}body{--brand-a:#CCCCCC;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#CCCCCC" ]
+}
+
+@test "base scope: body beats :root regardless of order (inheritance, not specificity)" {
+    # body is a DIFFERENT, deeper element — its declaration shadows the
+    # inherited :root value for every rendered descendant. Ordering it below
+    # :root synced the one value the page never displays.
+    run bash -c "printf ':root{--brand-a:#AAAAAA;}body{--brand-a:#CCCCCC;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#CCCCCC" ]
+
+    run bash -c "printf 'body{--brand-a:#CCCCCC;}:root{--brand-a:#AAAAAA;}' | python3 '$LIB' --conventions '$CONV_DATAATTR' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(field --brand-a light)" = "#CCCCCC" ]
+}
+
+@test "file convention: source.ref pins BOTH halves to one revision" {
+    # Reading the base at a pinned ref and the dark half from the working tree
+    # computes theme deltas across two revisions — uncommitted dark edits look
+    # like theme variance and sync writes phantom twins.
+    repo="$BATS_TMPDIR/refpair"; rm -rf "$repo"; mkdir -p "$repo"
+    ( cd "$repo" && git init -q . \
+      && printf ':root{--brand-x:#ffffff;}' > light.css \
+      && printf ':root{--brand-x:#111111;}' > dark.css \
+      && git add -A && git -c user.email=t@t -c user.name=t commit -qm init \
+      && printf ':root{--brand-x:#999999;}' > dark.css )
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo',
+       'source': {'path': 'light.css', 'prefix': '--brand-', 'ref': 'HEAD'},
+       'themeConventions': [{'type': 'file', 'path': 'dark.css', 'primary': True}]}
+dark = pt.resolve_dark_texts(cfg)[0]
+assert '#111111' in dark, dark          # the COMMITTED dark
+assert '#999999' not in dark, dark      # not the working-tree edit
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "source.ref composes with followImports in BOTH loaders" {
+    # ref returned before the followImports branch in load_source (dropping every
+    # imported partial's tokens) and followImports returned before the ref check
+    # in resolve_dark_texts (reading the theme from the working tree). Each
+    # option silently disabled the other, in opposite directions.
+    repo="$BATS_TMPDIR/refimports"; rm -rf "$repo"; mkdir -p "$repo/css"
+    ( cd "$repo" && git init -q . \
+      && printf '@use "palette";\n:root{--brand-fg:#111111;}' > css/tokens.scss \
+      && printf ':root{--brand-accent:#00b72b;--brand-bg:#ffffff;}' > css/_palette.scss \
+      && printf ':root{--brand-accent:#222222;}' > css/dark.scss \
+      && git add -A && git -c user.email=t@t -c user.name=t commit -qm init \
+      && printf ':root{--brand-accent:#999999;}' > css/dark.scss )
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo',
+       'source': {'path':'css/tokens.scss','prefix':'--brand-','ref':'HEAD','followImports':True},
+       'themeConventions': [{'type':'file','path':'css/dark.scss','primary':True}]}
+base = pt.load_source(cfg)
+assert '--brand-accent' in base and '--brand-bg' in base, 'imported partial dropped under ref'
+dark = pt.resolve_dark_texts(cfg)[0]
+assert '#222222' in dark and '#999999' not in dark, 'theme read from working tree, not ref'
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "R7: a theme file that READS but declares nothing refuses" {
+    # The unreadable-file case already raised. A file that opens fine and yields
+    # no declarations — truncated, fully commented out — took the silent path:
+    # the dark scope resolved empty, every token looked theme-invariant, and
+    # sync deleted every -dark twin at exit 0.
+    repo="$BATS_TMPDIR/emptytheme"; mkdir -p "$repo"
+    printf ':root{--brand-a:#ffffff;}' > "$repo/l.css"
+    printf '/* every declaration commented out */' > "$repo/d.css"
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo', 'source': {'path': 'l.css', 'prefix': '--brand-'},
+       'themeConventions': [{'type': 'file', 'path': 'd.css', 'primary': True}]}
+try:
+    pt.resolve_dark_texts(cfg)
+except RuntimeError as e:
+    assert 'declares no custom properties' in str(e), e
+    assert 'delete every -dark twin' in str(e), 'the refusal must say WHY'
+    print('OK')
+else:
+    raise AssertionError('an empty theme file must refuse, not yield an empty dark scope')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "strip_comments: a // inside url() or a data URI does not truncate the line" {
+    # declared_names shared strip_comments with the block walk, so a base64 '//'
+    # made a declaration invisible to the parse AND to the protection at once —
+    # a guard failing together with the thing it guards.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+conv = [{'type': 'class', 'class': 'd', 'primary': True}]
+for src in [
+    ':root{--brand-a:#37D895;--brand-i:url(\"data:image/png;base64,iVB//NSUhEUg==\");--brand-bg:#FFF;--brand-fg:#111}',
+    ':root{--brand-a:#37D895;--brand-l:url(//cdn.example.com/l.png);--brand-bg:#FFF;--brand-fg:#111}',
+]:
+    parsed = {r['name'] for r in pt.parse_tokens(src, conv, '--brand-')}
+    swept  = pt.declared_names(src, '--brand-')
+    assert '--brand-bg' in parsed and '--brand-fg' in parsed, parsed
+    assert '--brand-bg' in swept and '--brand-fg' in swept, swept
+# The sweep unions RAW and comment-stripped text on purpose, so a name that
+# appears only in a comment IS protected. That is the safe direction: it can
+# never have reached `desired`, so it was never created in the target file, and
+# protecting it costs nothing. The alternative — sharing strip_comments with the
+# walk — is what let a base64 // delete real tokens.
+assert '--brand-x' in pt.declared_names(':root{--brand-a:#fff;}\n// --brand-x: #000;', '--brand-')
+# ...but the PARSE still ignores it, so nothing bogus is ever written.
+parsed = {r['name'] for r in pt.parse_tokens(':root{--brand-a:#fff;}\n// --brand-x: #000;', conv, '--brand-')}
+assert parsed == {'--brand-a'}, parsed
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "ref resolves import EDGES too, not just file content" {
+    # Round 4 injected a git-blob reader but left edge discovery on
+    # os.path.isfile, so a partial present at the ref but renamed in the working
+    # tree was dropped and its tokens deleted — defeating source.ref in the one
+    # case it exists for.
+    repo="$BATS_TMPDIR/refedges"; rm -rf "$repo"; mkdir -p "$repo/css/theme"
+    ( cd "$repo" && git init -q . \
+      && printf '@use "theme/palette";\n:root{--brand-accent:#37D895;}' > css/tokens.scss \
+      && printf ':root{--brand-green-500:#0F0;}' > css/theme/_palette.scss \
+      && git add -A && git -c user.email=t@t -c user.name=t commit -qm init \
+      && mv css/theme/_palette.scss css/theme/_colors.scss )
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo',
+       'source': {'path':'css/tokens.scss','prefix':'--brand-','ref':'HEAD','followImports':True},
+       'themeConventions': []}
+base = pt.load_source(cfg)
+assert '--brand-green-500' in base, 'partial dropped despite existing at the ref'
+assert pt.missing_imports() == [], pt.missing_imports()
+print('OK')
+" 2>/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "R7: a theme file whose tokens are OUT OF SCOPE refuses (not just an empty one)" {
+    # The first version of this guard asked "does the text declare anything" —
+    # a PROXY for the hazard. A theme file scoped by class declares plenty and
+    # still resolves to an empty dark scope, so the guard went green while the
+    # thing it guards was red and every -dark twin was deleted at exit 0.
+    repo="$BATS_TMPDIR/scopedtheme"; mkdir -p "$repo"
+    printf ':root{--brand-a:#37D895;}' > "$repo/l.css"
+    printf 'html.dark{--brand-a:#00B72B;}' > "$repo/d.css"
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+cfg = {'_repo': '$repo', 'source': {'path': 'l.css', 'prefix': '--brand-'},
+       'themeConventions': [{'type': 'file', 'path': 'd.css', 'primary': True}]}
+try:
+    pt.resolve_dark_texts(cfg)
+except RuntimeError as e:
+    assert 'none at document scope' in str(e), e
+    assert 'html.dark' in str(e), 'must name the selectors it found'
+    assert \"use a 'class'\" in str(e), 'must say what to do instead'
+    print('OK')
+else:
+    raise AssertionError('an out-of-scope theme file must refuse')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "non-relative package specs are 'not followed', bare specs still refuse" {
+    # ~pkg / @scope/pkg cannot be resolved relatively and are expected; a bare
+    # spec is indistinguishable from a renamed local partial, so it must keep
+    # refusing rather than be waved through.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+for s in ['~bootstrap/scss/variables', '@material/theme', 'pkg:foo']:
+    assert pt._is_non_relative(s), s
+for s in ['palette', 'theme/palette', './dark', 'dark-partial.css']:
+    assert not pt._is_non_relative(s), s
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "guard: _is_balanced rejects a composite that only LOOKS like one var()" {
+    # Mutation testing found this guard load-bearing but untested: replacing it
+    # with `return True` left all 294 tests green while a two-value composite
+    # was silently truncated to its first alias and half the value discarded.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+assert pt.var_alias('var(--brand-a, #eee) var(--brand-b, #fff)') == (None, None), \
+    pt.var_alias('var(--brand-a, #eee) var(--brand-b, #fff)')
+assert pt.var_alias('var(--brand-a)') == ('--brand-a', None), pt.var_alias('var(--brand-a)')
+assert pt._is_balanced('var(--a, #eee) var(--b, #fff)') is True
+assert pt._is_balanced('var(--a, \"unterminated') is False
+assert pt._is_balanced('calc(1px') is False
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "a CSS escape outside a string does not swallow the rest of the block" {
+    # \\\" is a valid one-character value. Reading it as a quote-open swallowed
+    # every later declaration AND recorded a false malformed event, which under
+    # the 2.0 contract refuses --prune on perfectly valid CSS.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+CONV=[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}]
+names = sorted(t['name'] for t in pt.parse_tokens(r':root{--sep: \\\"; --brand-accent:#000;}', CONV))
+assert names == ['--brand-accent', '--sep'], names
+assert pt.parse_loss() == [], pt.parse_loss()
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "specificity-boosted document scopes are the base, ordered by specificity" {
+    # `:root:root` is the mainstream idiom for out-specifying a third-party
+    # design system's custom properties — i.e. exactly this tool's users. An
+    # exact-match admission gate dropped those blocks entirely, so the tool
+    # synced the value the browser never renders, with ok:true and no warning.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+CONV=[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}]
+def v(css): return pt.parse_tokens(css, CONV)[0]['light'].lower()
+# specificity beats source order WITHIN a tier
+assert v(':root{--a:blue;}\n:root:root{--a:red;}') == 'red'
+assert v(':root:root{--a:red;}\n:root{--a:blue;}') == 'red'
+assert v(':root{--a:blue;}\nhtml:root{--a:red;}') == 'red'
+# and the pre-existing rules are untouched
+assert v(':root{--a:blue;}\n:root{--a:red;}') == 'red'      # order within a tier
+assert v('html{--a:red;}\n:root{--a:blue;}') == 'blue'      # :root beats html
+assert v('html{--a:white;}\nbody{--a:black;}') == 'black'   # body shadows root
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "a CONDITIONAL qualifier on a document scope is still a theme scope" {
+    # The admission widening must not swallow theme scopes: those are matched by
+    # the conventions, and pulling them into the base reintroduces the
+    # light/dark inversion the tier logic exists to prevent.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+CONV=[{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}]
+t = pt.parse_tokens(':root{--a:blue;}\n:root[data-theme=\"dark\"]{--a:red;}', CONV)[0]
+assert t['light'].lower() == 'blue', t   # base unchanged
+assert t['dark'].lower() == 'red', t     # and the theme scope still resolves
+for sel in ('html.dark', 'body.theme-dark', ':root.dark'):
+    assert pt._document_scope_specificity(sel) is None, sel
+for sel in (':root', 'html', 'body', ':root:root', 'html:root'):
+    assert pt._document_scope_specificity(sel) is not None, sel
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "a boosted document scope resolves in BOTH themes, not just the base" {
+    # Regression: widening admission for the base while leaving the dark-scope
+    # anchor an exact string compare read light and dropped dark. Worse than no
+    # support — the base still yielded a token, so the empty-parse backstop
+    # stopped firing and --prune deleted the -dark twin silently.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt
+CONV=[{'type':'media-query','query':'(prefers-color-scheme: dark)'}]
+for sel in (':root', ':root:root', 'html:root'):
+    css = sel + '{--brand-bg:#FFFFFF}\n@media (prefers-color-scheme: dark){' + sel + '{--brand-bg:#000000}}'
+    t = pt.parse_tokens(css, CONV, '--brand-')[0]
+    assert t['light'].upper() == '#FFFFFF', (sel, t)
+    assert t['dark'] and t['dark'].upper() == '#000000', (sel, t)
+# a CONDITIONAL qualifier in the dark block is still not the media anchor
+css = ':root{--brand-bg:#FFFFFF}\n@media (prefers-color-scheme: dark){:root[data-theme=\"x\"]{--brand-bg:#000000}}'
+assert pt.parse_tokens(css, CONV, '--brand-')[0]['dark'] is None
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}

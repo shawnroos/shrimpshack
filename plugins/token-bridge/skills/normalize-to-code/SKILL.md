@@ -24,18 +24,29 @@ The script owns the reconcile end-to-end. Your job is to run it and relay its JS
    python3 "${CLAUDE_PLUGIN_ROOT}/lib/sync_tokens.py" run --repo /path/to/codebase
    ```
 
-   To preview the reconcile without writing anything — worth doing before the first sync into a file, since the reconcile is destructive — pass `--no-apply`: it reports the same `created`/`updated`/`deleted`/`recreated`/`declined` diff but makes no changes. Pass `--url` to override the daemon URL from config.
+   To preview the reconcile without writing anything, pass `--no-apply`: it reports the same `created`/`updated`/`recreated`/`prunable`/`declined` diff but makes no changes. Pass `--url` to override the daemon URL from config.
 
 2. Read the exit code and the JSON report on stdout:
-   - **Exit 2 (refused):** the config is missing, invalid, or has no `fileId`. The report's `error` field carries the machine code (`no_config` / `bad_config` / `no_target_file`) and `note` an actionable message — surface `note` verbatim and stop. Never guess or substitute a target file; the reconcile deletes tokens absent from source, so targeting the wrong file is destructive.
+   - **Exit 2 (refused):** the report's `error` field carries the machine code and `note` an actionable message — surface `note` verbatim and stop. Codes: `no_config` / `bad_config` / `no_target_file` (config problems); `unresolved_imports`; `theme_file_unreadable`; `empty_parse` (the source parsed to zero tokens while owned tokens are live — reported so a truncated source cannot produce a whole-file `prunable` list). Never guess or substitute a target file.
    - **Exit 4 (error):** the source read (file or git ref), the Paper daemon, or an apply step failed. Relay the `error` / `envelope` so the cause is visible (e.g. daemon not running, source path wrong).
    - **Exit 0 (ok):** report the outcome from the fields below.
 
-3. Relay the report fields: `created`, `updated`, `deleted`, `recreated` (token names), `declined` (tokens Paper cannot represent — shadows, motion, filters — each with a `reason`), and `empty` (true when the source already matched the file, i.e. a no-op re-run). A `recreated` entry is a delete-then-create pair because Paper cannot change a token's type in place.
+3. **This never deletes.** A run creates, updates, and recreates retyped tokens — nothing is removed. A live token absent from the source is reported under `prunable`: a list for the user to act on in Paper, never an action this tool takes.
+
+   Relay these report fields:
+   - `created`, `updated`, `recreated` (token names). A `recreated` entry is a delete-then-create pair, because Paper cannot retype in place — any Paper-side field this tool does not model (a hand-written description) does not survive it.
+   - **`prunable`** — live tokens absent from this parse. **These were NOT removed.** Surface them so the user can decide, and tell them removal is a manual step in Paper. Never call them deleted.
+   - `parseComplete` — false when the parser could not read the whole source (an unresolved or not-followed import). When false, warn that `prunable` may list tokens the user did not remove, and that values may be stale — do not encourage acting on `prunable` until it reads whole.
+   - `stillDeclared` — `prunable` names still declared somewhere the sync does not read, such as a component rule. **Warn the user NOT to hand-delete these** — they are in use (a move, not a retirement), and removing them in Paper would break the component that still references them.
+   - `declined` — tokens Paper cannot represent (shadows, motion, filters), each with a `reason`.
+   - `pinnedByComment` — a `prunable` name whose declaration exists only inside a comment. Commenting a token out does NOT retire it; say so.
+   - `empty` — true when the source already matched the file (a no-op re-run).
+
+   **You cannot delete tokens through this tool. Do not offer to.** If the user wants a token gone, tell them to remove it in Paper; `prunable` is the list.
 
 ## What the script writes
 
-v1 is base + a single "dark" theme (its dark scope declared by the config's `themeConventions` — a `data-attribute`, `media-query`, or `class` convention). Each theme is written as a separately named Paper token (Paper has no per-file theme mode):
+v1 is base + a single "dark" theme (its dark scope declared by the config's `themeConventions` — a `data-attribute`, `media-query`, `class`, or `file` convention (the last reads the dark theme from a separate file)). Each theme is written as a separately named Paper token (Paper has no per-file theme mode):
 
 - The **base** (light) value keeps the token's own name (`--accent`).
 - The **dark** value of a theme-varying token gets a `-dark` twin (`--accent-dark`). Mode-invariant tokens are written once, with no twin.

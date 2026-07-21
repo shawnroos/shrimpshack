@@ -88,6 +88,38 @@ def error_envelope(error: str, note: str | None = None, **extra) -> dict:
 # --- shared config -----------------------------------------------------------
 
 
+def _same_path(a, b, repo=None) -> bool:
+    """True when two config-relative paths denote the same file.
+
+    Lexical normalization is NOT enough, and the claim that it was is what let
+    this through: `themes/light.scss` and `themes/Light.scss` compared unequal
+    while naming one file on a case-insensitive filesystem (APFS by default), so
+    a config could point the dark convention at the base file, both halves would
+    parse identical text, and every -dark twin would have nothing to distinguish
+    it. The sibling comparator in emit_tokens (`_same_file`) already resolved
+    symlinks and case for exactly this reason; this one did not, which is the
+    same defect surviving in the file next door.
+
+    `repo` is optional only so the pure-lexical callers keep working; pass it
+    whenever it is in scope (read_config has it as `repo_abs`)."""
+    if not a or not b:
+        return False
+    if os.path.normpath(a) == os.path.normpath(b):
+        return True
+    if not repo:
+        return False
+    ra, rb = (os.path.realpath(os.path.join(repo, x)) for x in (a, b))
+    if ra == rb:
+        return True
+    # samefile resolves case-insensitive mounts and symlinks a lexical == misses;
+    # it raises when either path is missing, which for config validation (both
+    # are real source files) means "not the same".
+    try:
+        return os.path.samefile(ra, rb)
+    except OSError:
+        return False
+
+
 def _bad_convention_type(i: int, ctype) -> str:
     """The rejection message for a themeConvention that is not one of the three
     named types. It enumerates the accepted surface without naming the internal
@@ -95,11 +127,11 @@ def _bad_convention_type(i: int, ctype) -> str:
     """
     return (
         f"themeConventions[{i}].type must be 'data-attribute', 'media-query', "
-        f"or 'class', got {ctype!r}."
+        f"'class', or 'file', got {ctype!r}."
     )
 
 
-def _validate_config(cfg: dict) -> str | None:
+def _validate_config(cfg: dict, repo: str | None = None) -> str | None:
     """Structurally validate a token-bridge config. Returns an actionable error
     note, or None when the shape is sound.
 
@@ -145,8 +177,8 @@ def _validate_config(cfg: dict) -> str | None:
                 # actual fix is to delete the 'match' key.
                 return (
                     f"themeConventions[{i}] uses the internal 'match' form, which is not "
-                    "user-authorable. Declare one of 'data-attribute', 'media-query', or "
-                    "'class' instead."
+                    "user-authorable. Declare one of 'data-attribute', 'media-query', "
+                    "'class', or 'file' instead."
                 )
             ctype = conv.get("type")
             if ctype == "class":
@@ -158,6 +190,30 @@ def _validate_config(cfg: dict) -> str | None:
             elif ctype == "media-query":
                 if not isinstance(conv.get("query"), str):
                     return f"themeConventions[{i}] (media-query) needs a string 'query'."
+            elif ctype == "file":
+                # The dark theme is a separate FILE, not a scope in this one.
+                # `emitTarget` is optional here: emit enforces it at write time
+                # (KTD4) so a parse-only / sync-only config isn't blocked from
+                # loading by a key it will never use.
+                if not (isinstance(conv.get("path"), str) and conv.get("path")):
+                    return f"themeConventions[{i}] (file) needs a non-empty string 'path'."
+                # The dark theme cannot BE the base file. If it is, dark decls
+                # == base decls, every token resolves theme-invariant, and every
+                # -dark twin is absent from the desired set. emit already
+                # refuses this exact pair; config level is the right layer
+                # because it covers sync, status, emit and harvest at once.
+                src_path = (src or {}).get("path")
+                if src_path and _same_path(conv.get("path"), src_path, repo):
+                    return (
+                        f"themeConventions[{i}] (file) 'path' is the same file as "
+                        "'source.path'. The dark theme cannot be the base file — every "
+                        "token would resolve theme-invariant and every -dark twin would "
+                        "be dropped."
+                    )
+                if conv.get("emitTarget") is not None and not isinstance(
+                    conv.get("emitTarget"), str
+                ):
+                    return f"themeConventions[{i}] (file) 'emitTarget' must be a string."
             else:
                 return _bad_convention_type(i, ctype)
             if conv.get("primary"):
@@ -202,7 +258,7 @@ def read_config(repo: str) -> tuple:
         return None, {}, error_envelope(
             "bad_config", note=f"{config_path} must contain a JSON object."
         )
-    verr = _validate_config(cfg)
+    verr = _validate_config(cfg, repo_abs)
     if verr is not None:
         return None, cfg, error_envelope("bad_config", note=verr)
 

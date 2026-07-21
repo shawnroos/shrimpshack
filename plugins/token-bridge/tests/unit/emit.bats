@@ -335,9 +335,264 @@ css = emit_tokens.emit_css(tokens, conventions, "--brand-")
 layered = "@layer tokens {\n%s\n}\n" % textwrap.indent(css.rstrip("\n"), "  ")
 records = parse_tokens.parse_tokens(layered, conventions, "--brand-")
 desired, _ = sync_tokens.build_desired(classify_tokens.classify_tokens(records))
-diff = sync_tokens.diff_tokens(desired, tokens)
+diff = sync_tokens.diff_tokens(desired, tokens, unreadable=set())
 print("EMPTY" if sync_tokens.is_empty_diff(diff) else json.dumps(diff, indent=2))
 PY
     [ "$status" -eq 0 ]
     [[ "$output" == *"EMPTY"* ]]
+}
+
+# ============================================================================
+# file convention — emit writes BOTH halves or neither (KTD4)
+# ============================================================================
+
+@test "emit file convention: emit_pair round-trips across the pair" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et, parse_tokens as pt, classify_tokens as ct, sync_tokens as st
+conv = [{'type':'file','path':'themes/dark.scss','emitTarget':'themes/dark.gen.scss','primary':True}]
+paper = [{'name':'--b-a','type':'color','value':'#FFF'},
+         {'name':'--b-a-dark','type':'color','value':'#000'},
+         {'name':'--b-x','type':'color','value':'#EEE'}]
+base, dark = et.emit_pair(paper, conv)
+recs = pt.parse_tokens(base, conv, dark_texts={0: dark})
+again, _ = st.build_desired(ct.classify_tokens(recs))
+d = st.diff_tokens(again, paper, owned_prefix='--b-', unreadable=set())
+assert st.is_empty_diff(d), d
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit file convention: emit_css refuses rather than emitting base-only" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+conv = [{'type':'file','path':'d.scss','primary':True}]
+try:
+    et.emit_css([{'name':'--b-a','type':'color','value':'#FFF'}], conv)
+except ValueError as e:
+    assert 'emit_pair' in str(e), e
+    print('OK')
+else:
+    raise AssertionError('emit_css must refuse a file convention, not emit base-only')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit file convention: no dark emitTarget -> refuses and writes NOTHING" {
+    repo="$BATS_TMPDIR/emitpair"; mkdir -p "$repo/themes"
+    printf ':root{--b-a:#fff;}' > "$repo/themes/light.scss"
+    printf ':root{--b-a:#000;}' > "$repo/themes/dark.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--b-" },
+  "emitTarget": "themes/light.gen.scss", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "primary": true } ],
+  "harvest": { "themeSignal": { "type": "data-attribute", "attr": "data-theme", "value": "dark" }, "batch": [] } }
+JSON
+    run python3 -c "
+import sys, os, json; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+class Fake:
+    def __init__(self,*a,**k): pass
+    def get_tokens(self, fid):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--b-a','type':'color','value':'#FFF'},
+            {'name':'--b-a-dark','type':'color','value':'#000'}]}}
+et.PaperClient = Fake
+report, code = et.run(repo='$repo')
+assert report.get('error') == 'no_dark_emit_target', report
+assert code != 0, code
+# the load-bearing part: a refusal must not leave a HALF-updated pair on disk
+assert not os.path.exists('$repo/themes/light.gen.scss'), 'base was written despite refusing'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: an untypable dark value omits the TWIN, and the base still syncs" {
+    # The type came from the LIGHT value and the dark twin rode along unchecked,
+    # so '--x-dark: #{\$shade100}' reached Paper as a color. Declining the PAIR
+    # was a worse cure than the disease — it deleted the live base token.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt, classify_tokens as ct, sync_tokens as st
+src = ':root{--brand-a:#ffffff;}[data-theme=\"dark\"]{--brand-a:#{\$junk};}'
+recs = pt.parse_tokens(src, [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}])
+desired, declined = st.build_desired(ct.classify_tokens(recs))
+assert [d['name'] for d in desired] == ['--brand-a'], desired
+assert [d['name'] for d in declined] == ['--brand-a-dark'], declined
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "classify: a matching dark value still syncs (the fix is not over-broad)" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import parse_tokens as pt, classify_tokens as ct, sync_tokens as st
+src = ':root{--brand-a:#ffffff;}[data-theme=\"dark\"]{--brand-a:#000000;}'
+recs = pt.parse_tokens(src, [{'type':'data-attribute','attr':'data-theme','value':'dark','primary':True}])
+desired, declined = st.build_desired(ct.classify_tokens(recs))
+names = sorted(d['name'] for d in desired)
+assert names == ['--brand-a', '--brand-a-dark'], names
+assert not declined, declined
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit file convention: colliding emit targets REFUSE and write nothing" {
+    repo="$BATS_TMPDIR/emitcollide"; mkdir -p "$repo/themes"
+    printf ':root{--b-a:#fff;}' > "$repo/themes/light.scss"
+    printf ':root{--b-a:#000;}' > "$repo/themes/dark.scss"
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--b-" },
+  "emitTarget": "same.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "emitTarget": "same.css", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys, os; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--b-a','type':'color','value':'#FFF'},
+            {'name':'--b-a-dark','type':'color','value':'#000'}]}}
+et.PaperClient = Fake
+report, code = et.run(repo='$repo')
+assert report.get('error') == 'emit_targets_collide', report
+assert code != 0, code
+assert not os.path.exists('$repo/same.css'), 'wrote a file despite refusing'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit file convention: a failed second write leaves BOTH files untouched" {
+    repo="$BATS_TMPDIR/emitatomic"; mkdir -p "$repo/themes"
+    printf ':root{--b-a:#fff;}' > "$repo/themes/light.scss"
+    printf ':root{--b-a:#000;}' > "$repo/themes/dark.scss"
+    printf 'ORIGINAL-BASE' > "$repo/base.css"
+    mkdir -p "$repo/dark.css"     # a DIRECTORY at the dark target -> write fails
+    cat > "$repo/token-bridge.config.json" <<'JSON'
+{ "fileId": "F1", "paperDaemonUrl": "http://x",
+  "source": { "path": "themes/light.scss", "ref": null, "prefix": "--b-" },
+  "emitTarget": "base.css", "primitivePattern": null,
+  "themeConventions": [ { "type": "file", "path": "themes/dark.scss", "emitTarget": "dark.css", "primary": true } ],
+  "harvest": { "themeSignal": {"type":"data-attribute","attr":"data-theme","value":"dark"}, "batch": [] } }
+JSON
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok': True, 'result': {'tokens': [
+            {'name':'--b-a','type':'color','value':'#FFF'},
+            {'name':'--b-a-dark','type':'color','value':'#000'}]}}
+et.PaperClient = Fake
+report, code = et.run(repo='$repo')
+assert code != 0 and not report.get('ok'), (code, report)
+# the load-bearing assertion: the BASE file must be untouched, not half-updated
+assert open('$repo/base.css').read() == 'ORIGINAL-BASE', 'base was overwritten despite the pair failing'
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit file convention: roundtrip proves the fixed point across BOTH files" {
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+conv = [{'type':'file','path':'d.scss','emitTarget':'d.gen.scss','primary':True}]
+toks = [{'name':'--b-a','type':'color','value':'#FFF'},
+        {'name':'--b-a-dark','type':'color','value':'#000'},
+        {'name':'--b-x','type':'color','value':'#EEE'}]
+r = et.roundtrip(toks, conv, prefix='--b-')
+assert r['empty'] is True, r['diff']
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "emit: aliased targets are caught by identity, not by string compare" {
+    # abspath is lexical: it folds neither case (APFS is case-insensitive) nor
+    # symlinks, so two 'different' targets were one file and the base ended up
+    # holding dark content while the report claimed nothing was written.
+    run python3 -c "
+import sys, os, json, shutil; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import emit_tokens as et
+class Fake:
+    def __init__(s,*a,**k): pass
+    def get_tokens(s,f):
+        return {'ok':True,'result':{'tokens':[{'name':'--brand-a','type':'color','value':'#FFF'},
+                                              {'name':'--brand-a-dark','type':'color','value':'#000'}]}}
+et.PaperClient = Fake
+
+def build(name, emit_t, dark_t, link=False):
+    R = os.path.join('$BATS_TMPDIR', 'alias_' + name)
+    shutil.rmtree(R, ignore_errors=True)
+    os.makedirs(R + '/src'); os.makedirs(R + '/out')
+    open(R+'/src/light.scss','w').write(':root{--brand-a:#fff;}')
+    open(R+'/src/dark.scss','w').write(':root{--brand-a:#000;}')
+    if link: os.symlink(R+'/out', R+'/link')
+    json.dump({'fileId':'F1','paperDaemonUrl':'http://x',
+      'source':{'path':'src/light.scss','ref':None,'prefix':'--brand-'},
+      'emitTarget':emit_t,'primitivePattern':None,
+      'themeConventions':[{'type':'file','path':'src/dark.scss','emitTarget':dark_t,'primary':True}],
+      'harvest':{'themeSignal':{'type':'data-attribute','attr':'data-theme','value':'dark'},'batch':[]}},
+      open(R+'/token-bridge.config.json','w'))
+    return R
+
+# every aliasing shape, plus output-over-input, must REFUSE and touch nothing
+for name, e, d, link in [('case','out/t.css','out/T.CSS',False),
+                         ('symlink','out/l.css','link/l.css',True),
+                         ('over_darksrc','src/dark.scss','out/d.css',False),
+                         ('over_source','out/l.css','src/light.scss',False)]:
+    R = build(name, e, d, link)
+    before = open(R+'/src/dark.scss').read(), open(R+'/src/light.scss').read()
+    report, code = et.run(repo=R)
+    assert report.get('refused') is True, (name, report)
+    assert code != 0, (name, code)
+    assert (open(R+'/src/dark.scss').read(), open(R+'/src/light.scss').read()) == before, name
+
+# and a genuinely distinct pair still writes both
+R = build('ok', 'out/l.css', 'out/d.css')
+report, code = et.run(repo=R)
+assert report.get('ok') is True and code == 0, report
+assert os.path.exists(R+'/out/l.css') and os.path.exists(R+'/out/d.css')
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "guard: _color_args_ok REJECTS bogus arguments (survived mutation)" {
+    # The anti-uncompiled-Sass guard had coverage only on its positive side:
+    # stubbing _color_args_ok to return True let color(bogus) type as a colour
+    # with the whole suite still green.
+    run python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR/lib')
+import classify_tokens as ct
+for bad in ['color(bogus)', 'lab(nonsense here)', 'hsl()', 'hsl(#{\$shade})', 'hsl(\$brand)']:
+    assert ct.classify_value('--brand-bg', bad)[0] is None, (bad, ct.classify_value('--brand-bg', bad))
+for good in ['hsl(210 40% 12%)', 'oklch(0.2 0.03 250)', 'color-mix(in srgb, #000 80%, #fff)']:
+    assert ct.classify_value('--brand-bg', good)[0] == 'color', good
+print('OK')
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
 }

@@ -37,9 +37,11 @@ Theme-scope resolution:
   recursively, and EVERY block whose context satisfies a convention's
   predicates contributes its declarations, merged in source order.
 
-  - The BASE scope is a bare, unscoped `:root { … }` with no conditional
-    at-rule in its context. `:root[data-theme="dark"]` and `:root.wcs-dark` are
-    not the base; neither is a `:root` inside `@media`.
+  - The BASE scope is a bare, unscoped DOCUMENT scope — `:root`, `html`, or
+    `body` — with no conditional at-rule in its context. `:root[data-theme="dark"]`
+    and `html.wcs-dark` are not the base; neither is a `:root` inside `@media`.
+    Component selectors are never the base, however many custom properties
+    they declare.
   - At-rules split by conditionality. `@layer` (and other grouping wrappers)
     are TRANSPARENT: a bare `:root` inside one IS the base. `@media`,
     `@supports` and `@container` are CONDITIONAL: they stay in the context, so
@@ -112,15 +114,40 @@ def strip_comments(text):
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     out = []
     for line in text.splitlines():
-        idx = line.find("//")
-        while idx != -1:
-            if idx > 0 and line[idx - 1] == ":":
-                idx = line.find("//", idx + 2)
-                continue
-            line = line[:idx]
-            break
-        out.append(line)
+        out.append(_strip_line_comment(line))
     return "\n".join(out)
+
+
+def _strip_line_comment(line):
+    """Drop a `//` line comment, treating strings and url() as data.
+
+    The old guard was `the char before // is not ':'`, which covers `https://`
+    and nothing else. A base64 data URI containing `//`, or a protocol-relative
+    `url(//cdn…)`, truncated the line — and since `declared_names` shares this
+    pre-pass, every declaration after that point became invisible to the PARSE
+    and to the PROTECTION at once. A guard that fails together with the thing it
+    guards protects nothing, which is the one shape "safe by construction" does
+    not cover. Scan with the same string awareness the value scanner already
+    uses."""
+    i, n = 0, len(line)
+    depth_url = 0
+    while i < n:
+        c = line[i]
+        if c in "\"'":
+            j = _skip_quoted(line, i)
+            if j != i:
+                i = j
+                continue
+        if line.startswith("url(", i):
+            depth_url += 1
+            i += 4
+            continue
+        if c == ")" and depth_url:
+            depth_url -= 1
+        elif c == "/" and line.startswith("//", i) and not depth_url:
+            return line[:i]
+        i += 1
+    return line
 
 
 # --- brace-aware block scanning ----------------------------------------------
@@ -285,12 +312,58 @@ def _canon_media(q):
     return re.sub(r"\s+", "", q)
 
 
-def _is_bare_root(selector):
-    """True when `selector` is (or contains as a group member) a bare `:root` —
-    NOT `:root[…]` and NOT an at-rule."""
+# The document-level scopes. `:root` and `html` select the SAME element (`:root`
+# just has higher specificity); `body` is the other element custom properties are
+# conventionally hung on, and they inherit from it to everything rendered.
+#
+# Nothing beyond these three. A component selector like `.tooltip { --bs-tooltip-bg: … }`
+# also declares custom properties, but those are component-local, not theme
+# tokens — pulling them into the base would sync a component's internals into
+# Paper as though they were design tokens.
+_DOCUMENT_SCOPES = frozenset({":root", "html", "body"})
+
+
+# A compound made ENTIRELY of document-scope tokens: `:root:root`, `html:root`.
+# This is the mainstream idiom for raising specificity when overriding a
+# third-party design system's custom properties — which is very close to a
+# description of this tool's users. Requiring an exact match dropped these
+# blocks completely, so the tool synced the value the browser never renders,
+# with ok:true and no warning.
+#
+# Deliberately narrow: every token must itself be a document scope. A qualifier
+# that matches CONDITIONALLY (`html.dark`, `:root[data-theme="dark"]`) is a
+# theme scope handled by the conventions, and must keep falling through here.
+_DOC_TOKEN = re.compile(r":root|html|body")
+
+
+def _document_scope_specificity(part):
+    """(classes, elements) for an admissible document-scope compound, else None.
+
+    `:root` is a pseudo-class (0,1,0); `html`/`body` are type selectors (0,0,1).
+    Used to order WITHIN a tier, so `:root:root` (0,2,0) beats `:root` (0,1,0)
+    regardless of source order."""
+    part = part.strip()
+    toks = _DOC_TOKEN.findall(part)
+    if not toks or "".join(toks) != part:
+        return None
+    return (sum(t == ":root" for t in toks), sum(t != ":root" for t in toks))
+
+
+def _is_document_scope(selector):
+    """True when `selector` has a group member that is a document scope —
+    `:root`, `html`, `body`, or a compound made only of those.
+
+    `html.dark`, `:root[data-theme="dark"]` and `body.theme-dark` are theme
+    scopes, not the base; a descendant form like `html body` is deliberately
+    excluded as too loose to assume."""
     if selector.startswith("@"):
         return False
-    return any(part.strip() == ":root" for part in selector.split(","))
+    return any(
+        _document_scope_specificity(part) is not None
+        for part in selector.split(",")
+    )
+
+
 
 
 # --- the scope walk (KTD5) ----------------------------------------------------
@@ -392,6 +465,15 @@ def desugar_convention(conv):
     if "match" in conv:
         return list(conv["match"])
     ctype = conv.get("type")
+    if ctype == "file":
+        # A file convention names a DIFFERENT text; there is nothing in this
+        # text's block context to predicate on (KTD3). It is resolved at load
+        # and never reaches the predicate walk, so desugaring it would be a
+        # category error — returning [] here would silently match nothing,
+        # which reads downstream as "no token varies by theme".
+        raise ValueError(
+            "a 'file' convention is resolved at load, not desugared into predicates"
+        )
     if ctype == "class":
         return [{"class": conv.get("class")}]
     if ctype == "data-attribute":
@@ -447,7 +529,20 @@ def _match_selector_predicate(pred, member):
     if "attr" in pred:
         return bool(_attr_pattern(pred["attr"], pred["value"]).search(member))
     if "selector" in pred:
-        return member == _norm_ws(pred["selector"])
+        target = _norm_ws(pred["selector"])
+        # A document-scope anchor (the `:root` a media-query convention
+        # desugars to) must accept the same specificity-boosted compounds the
+        # BASE scope accepts. Widening only the base read light and dropped
+        # dark for `:root:root`, which is worse than not supporting the idiom
+        # at all: the base still yields a token, so the empty-parse backstop
+        # stops firing and the -dark twin goes missing silently.
+        #
+        # Widened on the MATCH side deliberately. The desugared predicate is a
+        # shared contract — emit_tokens reads pred["selector"] to write the
+        # dark block back out — so changing the desugar breaks the emit path.
+        if _document_scope_specificity(target) is not None:
+            return _document_scope_specificity(member) is not None
+        return member == target
     raise ValueError(f"unrecognized scope predicate: {pred!r}")
 
 
@@ -489,23 +584,84 @@ def _matches(preds, context, selector):
     )
 
 
-def _base_decls(blocks):
-    """Merge the declarations of every base block, in source order.
+def _document_scope_decls(blocks):
+    """Merge every unconditional document-scope block's declarations.
 
-    The base is a bare `:root` with no CONDITIONAL at-rule in its context — a
-    `:root` inside `@layer` qualifies, one inside `@media` does not."""
-    decls = {}
-    for context, selector, body in blocks:
+    Shared by the base scope and by a `file` convention's dark scope, so
+    "the scope of a theme file" has exactly one definition (KTD2)."""
+    # Merge in three tiers: html < :root < body. Two different rules are at
+    # work and neither source order nor specificity alone gets both right.
+    #   html vs :root — the SAME element. `:root` is (0,1,0), `html` is
+    #     (0,0,1), so `:root` wins whichever appears later.
+    #   body vs either — a DIFFERENT, deeper element. Custom properties
+    #     inherit, so a declaration on `body` shadows the root value for every
+    #     rendered descendant. Specificity never enters into it; body wins.
+    # Getting the second one backwards synced the one value the page never
+    # displays. Source order still breaks ties WITHIN a tier.
+    # Within a tier, a higher-specificity compound wins regardless of source
+    # order: `:root:root` (0,2,0) beats a later plain `:root` (0,1,0). Ties fall
+    # back to source order, which is the plain-CSS rule.
+    html_t, root_t, body_t = [], [], []
+    for order, (context, selector, body) in enumerate(blocks):
         if context:
             continue
-        if _is_bare_root(selector):
-            decls.update(_parse_decls(body))
+        specs = [
+            (p.strip(), _document_scope_specificity(p))
+            for p in selector.split(",")
+        ]
+        admissible = [(p, s) for p, s in specs if s is not None]
+        if not admissible:
+            # A selector whose subject is root-ish but which carries a
+            # conditional qualifier is a THEME scope, handled elsewhere — not a
+            # silent drop. Nothing to warn about here.
+            continue
+        # A group applies to every member; take its strongest member for rank,
+        # and route by the deepest ELEMENT it names (body shadows root by
+        # inheritance, which specificity never expresses).
+        if any("body" in p for p, _ in admissible):
+            target = body_t
+        elif any(":root" in p for p, _ in admissible):
+            target = root_t
+        else:
+            target = html_t
+        target.append((max(s for _, s in admissible), order, _parse_decls(body)))
+
+    decls = {}
+    for tier in (html_t, root_t, body_t):
+        for _spec, _order, d in sorted(tier, key=lambda x: (x[0], x[1])):
+            decls.update(d)
     return decls
 
 
-def _scope_decls(blocks, conv):
+def _base_decls(blocks):
+    """Merge the declarations of every base block, in source order.
+
+    The base is a bare document scope (`:root`/`html`/`body`) with no CONDITIONAL
+    at-rule in its context — one inside `@layer` qualifies, one inside `@media`
+    does not. Multiple base blocks merge in tiers — `html` < `:root` < `body`,
+    matching how a browser resolves them — with source order breaking ties
+    within a tier."""
+    return _document_scope_decls(blocks)
+
+
+def _scope_decls(blocks, conv, dark_blocks=None):
     """Merge the declarations of every block matching one convention's scope,
-    in source order. Later declarations win, as they do in CSS."""
+    in source order. Later declarations win, as they do in CSS.
+
+    A `file` convention names a DIFFERENT text (KTD3), so its declarations come
+    from `dark_blocks` — that file's own blocks — and its scope within that file
+    is the DOCUMENT scope, the same rule as the base (KTD2). Everything else is a
+    predicate over the blocks of the text being parsed."""
+    if conv.get("type") == "file":
+        if dark_blocks is None:
+            # Never fall through to "no blocks matched". An empty dark scope
+            # reads downstream as "no token varies by theme", which sync applies
+            # by DELETING every -dark twin.
+            raise ValueError(
+                "a 'file' convention needs its file's blocks; load_source must "
+                "supply them (see resolve_dark_texts)"
+            )
+        return _document_scope_decls(dark_blocks)
     preds = desugar_convention(conv)
     decls = {}
     for context, selector, body in blocks:
@@ -559,6 +715,73 @@ def _conv_label(conv):
 # --- declaration parsing + effective-value resolution ------------------------
 
 
+# --- the completeness ledger -------------------------------------------------
+#
+# Rounds 4 through 8 each asked "is this parse trustworthy?" and answered by
+# checking a hand-maintained list of ways it might not be. Round 8's review
+# found the list was already incomplete when it shipped: malformed source and
+# unresolved imports were wired to the prune refusal, but a DELIBERATELY
+# not-followed package import was a local variable that got printed and thrown
+# away — so the tool logged "tokens they declare are not in this parse" and
+# then deleted exactly those tokens.
+#
+# Enumerating the bad cases fails every round, because the list is only as
+# complete as the last review. So the question is inverted here: a parse is
+# incomplete UNTIL a read path affirms it read everything it was pointed at.
+# A future fourth channel that forgets to register still fails closed, because
+# the affirmation is what grants trust, not the absence of known-bad signals.
+#
+# `_record_incomplete` is the ONE way to register a read failure. Route every
+# new one through it; `parse_loss()` and `missing_imports()` are views over it.
+_INCOMPLETE = []
+_READ_AFFIRMED = False
+
+# Ledger kinds. `malformed` and `unresolved_import` predate the ledger;
+# `not_followed` is the channel whose absence was the round-8 P0.
+KIND_MALFORMED = "malformed"
+KIND_UNRESOLVED_IMPORT = "unresolved_import"
+KIND_NOT_FOLLOWED = "not_followed"
+
+
+def _begin_read():
+    """Open a completeness ledger. Until a read path affirms, nothing is trusted."""
+    global _READ_AFFIRMED
+    _INCOMPLETE.clear()
+    _READ_AFFIRMED = False
+
+
+def _affirm_read():
+    """Called by a read path that walked the whole source graph it was given."""
+    global _READ_AFFIRMED
+    _READ_AFFIRMED = True
+
+
+def _record_incomplete(kind, what, where=""):
+    """Register something the parse could not read. The ONLY way to do so."""
+    _INCOMPLETE.append((kind, what, where))
+
+
+def source_completeness():
+    """(complete, reasons) for the last read. Fail closed.
+
+    `complete` is True only when a read path affirmed it walked the whole graph
+    AND registered nothing it could not read. An unaffirmed parse is NOT
+    complete — that is the property that makes a future unregistered channel
+    safe by default rather than silently destructive.
+    """
+    if not _READ_AFFIRMED:
+        return False, [("unaffirmed", "no read path affirmed it walked the source", "")]
+    return (not _INCOMPLETE), list(_INCOMPLETE)
+
+
+def parse_loss():
+    """Malformed-source events from the last parse, as (token, reason).
+
+    A view over the ledger's KIND_MALFORMED entries — the ledger is the single
+    source of truth, so this cannot drift from what source_completeness() sees."""
+    return [(what, where) for kind, what, where in _INCOMPLETE if kind == KIND_MALFORMED]
+
+
 def _iter_decls(body):
     """Yield (name, raw_value) for each custom-property declaration in a body.
 
@@ -586,6 +809,12 @@ def _iter_decls(body):
         stray_close = False
         while i < n:
             c = body[i]
+            if c == "\\" and quote is None:
+                # Valid CSS escape outside a string: the next character is data,
+                # never a quote-open or a paren. `--sep: \";` is a value of one
+                # double-quote character.
+                i += 2
+                continue
             if quote is not None:
                 if c == "\\":
                     i += 2
@@ -619,6 +848,7 @@ def _iter_decls(body):
         # is still worth naming, since the value itself is now suspect.
         if i >= n and (quote is not None or depth > 0):
             what = "unterminated string" if quote is not None else "unbalanced parentheses"
+            _record_incomplete(KIND_MALFORMED, f"--{m.group(1)}", what)
             _log(
                 f"--{m.group(1)}: {what} — the value ran to the end of its block, so any "
                 "declaration after it was not read. Check the source for a missing "
@@ -662,6 +892,8 @@ def _is_balanced(s):
                 esc = True
             elif c == quote:
                 quote = None
+        elif c == "\\":
+            esc = True          # escape outside a string: next char is data
         elif c in "\"'":
             quote = c
         elif c == "(":
@@ -822,7 +1054,7 @@ normalize_hex = _normalize_hex  # uppercase every hex run in a value (idempotent
 primary_convention = _primary_convention  # the primary themeConvention resolver
 
 
-def parse_with_diagnostics(text, conventions, prefix=None):
+def parse_with_diagnostics(text, conventions, prefix=None, dark_texts=None):
     """Parse `text` into the base+dark token model, returning both the token
     records and any warnings.
 
@@ -831,12 +1063,29 @@ def parse_with_diagnostics(text, conventions, prefix=None):
     `conventions` is the config `themeConventions` list. `prefix`, when a
     non-empty string, restricts output to custom properties whose name starts
     with it; None/"" includes all."""
+    # Per-parse, not cumulative — a stale malformed entry from an earlier call
+    # would report a source as incomplete that is perfectly readable.
+    _INCOMPLETE[:] = [e for e in _INCOMPLETE if e[0] != KIND_MALFORMED]
     text = strip_comments(text)
     blocks = _collect_blocks(text)
     base = _base_decls(blocks)
 
+    # A `file` convention's dark scope lives in its own text (KTD3). Collect
+    # those blocks once, keyed by the convention's index in the array.
+    dark_texts = dark_texts or {}
+    # strip_comments FIRST, exactly as the base text is treated at the top of
+    # this function. Without it a `// note` line above a rule is swallowed into
+    # that rule's selector ("//ground surface\n\n:root"), which then matches no
+    # scope — and a file convention that matches nothing is an empty dark scope,
+    # i.e. every -dark twin looks deleted.
+    dark_blocks = {i: _collect_blocks(strip_comments(txt)) for i, txt in dark_texts.items()}
+
+    def _decls_for(conv):
+        i = conventions.index(conv)
+        return _scope_decls(blocks, conv, dark_blocks.get(i))
+
     primary = _primary_convention(conventions)
-    dark = _scope_decls(blocks, primary)
+    dark = _decls_for(primary)
 
     warnings = []
     # Cross-check every non-primary convention against the primary (KTD3): for a
@@ -844,7 +1093,7 @@ def parse_with_diagnostics(text, conventions, prefix=None):
     for conv in conventions:
         if conv is primary:
             continue
-        other = _scope_decls(blocks, conv)
+        other = _decls_for(conv)
         for name in sorted(set(dark) & set(other)):
             pv = _normalize_hex(_resolve(name, dark, base, "dark"))
             ov = _normalize_hex(_resolve(name, other, base, "dark"))
@@ -891,7 +1140,8 @@ def parse_with_diagnostics(text, conventions, prefix=None):
                 "guessed at, so classify will almost certainly DECLINE it (a "
                 "light-dark(...) string matches no Paper token type). Check the "
                 "'declined' list — if this token is already live in Paper, being "
-                "declined drops it from the desired set and the next sync deletes it."
+                "declined drops it from the desired set, so it will show up under "
+                "'prunable'. It is not removed; leave it or fix the source value."
             )
             warnings.append(msg)
             _log("WARNING: " + msg)
@@ -978,13 +1228,13 @@ def parse_with_diagnostics(text, conventions, prefix=None):
     return {"tokens": records, "warnings": warnings}
 
 
-def parse_tokens(text, conventions, prefix=None):
+def parse_tokens(text, conventions, prefix=None, dark_texts=None):
     """Parse `text` into the base+dark token model (the records only).
 
     See parse_with_diagnostics for the record shape and semantics; this is the
     thin wrapper the deterministic-diff callers use when they don't need the
     warnings list (warnings still reach stderr)."""
-    return parse_with_diagnostics(text, conventions, prefix)["tokens"]
+    return parse_with_diagnostics(text, conventions, prefix, dark_texts)["tokens"]
 
 
 # --- source loading ----------------------------------------------------------
@@ -1002,6 +1252,26 @@ _AT_LOAD = re.compile(
 # Loads that reach outside the file graph and can't be read as text: Sass's
 # built-in modules, and remote CSS.
 _BUILTIN_LOAD = re.compile(r"^(sass:|https?://|//)", re.I)
+
+# Specs a relative resolver can never find: Sass load-path / package imports.
+# Reporting these as "missing" turned any SCSS entry that pulls in a package
+# into a hard refusal whose only remedy was allowMissingImports — which reopens
+# the deletion hole for genuinely renamed LOCAL partials at the same time. They
+# are not followed, and that is expected, not an error.
+_NON_RELATIVE_LOAD = re.compile(r"^(~|pkg:|@[A-Za-z0-9_-]+/)", re.I)
+
+
+def _is_non_relative(spec):
+    """True only when `spec` is UNAMBIGUOUSLY a load-path/package import.
+
+    Deliberately narrow. Sass lets a relative spec omit `./`, so `@use "palette"`
+    and `@use "theme/palette"` are relative — treating every non-dotted spec as
+    a package made those "not followed", which silently reopened the hole the
+    unresolved-import refusal exists to close. A bare multi-segment spec like
+    `bootstrap/scss/variables` is genuinely indistinguishable from a local
+    partial, so it stays in the refusing path: a renamed local partial and a
+    package import look identical, and the safe reading is the one that refuses."""
+    return bool(_NON_RELATIVE_LOAD.match(spec))
 
 
 def _import_candidates(spec, from_dir):
@@ -1024,7 +1294,7 @@ def _import_candidates(spec, from_dir):
     return out
 
 
-def resolve_source_graph(entry_path, read_file=None, max_depth=32):
+def resolve_source_graph(entry_path, read_file=None, max_depth=32, exists=None):
     """Read `entry_path` and everything it @use/@import/@forwards, depth-first.
 
     Returns (text, loaded, missing): the concatenated source with DEPENDENCIES
@@ -1042,18 +1312,25 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32):
     remote URLs are skipped, not treated as missing — they carry no custom
     properties we could read, and reporting them as missing would be noise.
 
-    `read_file` is injectable so a git-ref source can supply blobs instead of
-    working-tree reads."""
+    `read_file` and `exists` are both injectable so a git-ref source resolves
+    the WHOLE graph at that ref. Injecting only the reader was not enough:
+    which imports exist was still decided by the working tree, so a partial
+    present at the pinned ref but renamed in the working tree was dropped from
+    the graph — and its tokens deleted. `source.ref` exists precisely to
+    decouple a sync from working-tree state."""
     import os
 
     if read_file is None:
         def read_file(path):
             with open(path, "r", encoding="utf-8") as fh:
                 return fh.read()
+    if exists is None:
+        exists = os.path.isfile
 
     seen = set()
     loaded = []
     missing = []
+    not_followed = []
     chunks = []
 
     def visit(path, depth):
@@ -1075,8 +1352,17 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32):
         for _kw, spec in _AT_LOAD.findall(strip_comments(text)):
             if _BUILTIN_LOAD.match(spec):
                 continue
+            if _is_non_relative(spec):
+                # A build tool's load path resolves these; a relative walk never
+                # can. Not an error — just not followed.
+                not_followed.append((spec, real))
+                # Registered, not just logged. This exact channel was printed
+                # ("tokens they declare are not in this parse") and then thrown
+                # away, so --prune deleted precisely those tokens.
+                _record_incomplete(KIND_NOT_FOLLOWED, spec, real)
+                continue
             for cand in _import_candidates(spec, here):
-                if os.path.isfile(cand):
+                if exists(cand):
                     visit(cand, depth + 1)
                     break
             else:
@@ -1089,7 +1375,252 @@ def resolve_source_graph(entry_path, read_file=None, max_depth=32):
         loaded.append(real)
 
     visit(entry_path, 0)
+    if not_followed:
+        specs = sorted({s for s, _ in not_followed})
+        _log(
+            f"not followed (resolved by your build tool's load path, not relatively): "
+            f"{', '.join(specs)}. Tokens they declare are not in this parse."
+        )
     return "\n".join(chunks), loaded, missing
+
+
+def file_convention_needs_repo(conventions):
+    """A message when `conventions` contains a `file` type but the caller has no
+    repo to resolve its theme file against — else None.
+
+    Shared by every single-file CLI entry point (`sync build-desired`,
+    `status drift`, `emit-from-file`, `emit roundtrip`, this module's own CLI).
+    Each of those was fixed one at a time as it was reported, and each fix
+    missed the siblings; one predicate is what stops the class regrowing."""
+    for i, conv in enumerate(conventions or []):
+        if isinstance(conv, dict) and conv.get("type") == "file":
+            return (
+                f"themeConventions[{i}] is a 'file' convention, whose dark theme lives in "
+                f"{conv.get('path')!r} — but this subcommand reads a single file and has no "
+                "repo to resolve that against. Use the `run --repo PATH` form instead."
+            )
+    return None
+
+
+def _read_at_ref(cfg, rel, ref):
+    """Read `rel` at git `ref` from the config's repo. Shared by load_source and
+    resolve_dark_texts so both halves of a theme come from ONE revision."""
+    import subprocess
+
+    repo = cfg.get("_repo")
+    if not repo:
+        raise RuntimeError(
+            "config is missing '_repo'; load it via read_config before reading at a ref"
+        )
+    spec = f"{ref}:{rel}"
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, "show", spec],
+            capture_output=True, text=True, check=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"git is not available to read {spec}: {exc}") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip() or (exc.stdout or "").strip()
+        raise RuntimeError(
+            f"could not read source at ref '{spec}' in {repo}: {detail}"
+        ) from exc
+    return result.stdout
+
+
+def _guard_theme_not_empty(txt, index, whence):
+    """Refuse a theme file that yields an EMPTY DARK SCOPE, for any reason.
+
+    The first version of this guard asked "does the text declare any custom
+    property", which is a PROXY for the hazard rather than the hazard itself.
+    A theme file scoped by class — `html.dark { --accent: … }` — declares plenty
+    and still resolves to nothing, because a file convention reads the DOCUMENT
+    scope (`:root`/`html`/`body`). The guard went green while the thing it
+    guards was red, and every `-dark` twin was deleted at exit 0.
+
+    So assert on the resolution the parse will actually perform. The two arms
+    give different advice, because the fixes differ: nothing declared at all is
+    a wrong path or a truncated file; declared-but-out-of-scope means the theme
+    is scoped by a selector, which is what the `class` convention is for."""
+    blocks = _collect_blocks(strip_comments(txt))
+    if _document_scope_decls(blocks):
+        return txt
+
+    if not declared_names(txt):
+        raise RuntimeError(
+            f"themeConventions[{index}] (file): {whence} declares no custom "
+            "properties. Refusing rather than treating the dark theme as empty — "
+            "an empty dark scope would delete every -dark twin in the target file."
+        )
+
+    selectors = sorted({
+        sel.strip() for ctx, sel, _ in blocks if not ctx and sel.strip()
+    })[:4]
+    raise RuntimeError(
+        f"themeConventions[{index}] (file): {whence} declares custom properties, but "
+        f"none at document scope (:root/html/body) — they are under {selectors}. A "
+        "'file' convention reads the document scope, so the dark theme would resolve "
+        "EMPTY and every -dark twin in the target file would be deleted. If the theme "
+        "is scoped by a selector, use a 'class' or 'data-attribute' convention instead "
+        "of 'file'."
+    )
+
+
+def resolve_dark_texts(cfg):
+    """Read the text of every `file` convention's theme file.
+
+    Returns {convention_index: text}. Honors `source.followImports` for each, so
+    a dark theme split across partials resolves the same way the base does.
+
+    A missing or unreadable file RAISES (R7). Returning an empty string would
+    give the convention an empty dark scope, which reads as "no token varies by
+    theme" — and sync applies that by deleting every `-dark` twin in the Paper
+    file. A loud failure is the only safe direction here."""
+    import os
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from paper_client import resolve_repo_path  # noqa: E402
+
+    follow = bool((cfg.get("source") or {}).get("followImports"))
+    ref = (cfg.get("source") or {}).get("ref")
+    out = {}
+    for i, conv in enumerate(cfg.get("themeConventions") or []):
+        if conv.get("type") != "file":
+            continue
+        rel = conv.get("path")
+        abs_path = resolve_repo_path(cfg, rel)
+        if follow:
+            # ref must compose with followImports, not be shadowed by it. The
+            # graph walk already accepts an injectable reader for exactly this;
+            # without it the base came from the pinned revision and the theme
+            # from the working tree — the cross-revision diff this whole ref
+            # handling exists to prevent.
+            reader, exists = None, None
+            if ref:
+                repo_root = cfg.get("_repo") or ""
+                reader, exists = _ref_readers(cfg, ref, repo_root)
+
+            text, loaded, missing = resolve_source_graph(
+                abs_path, read_file=reader, exists=exists
+            )
+            for spec, whence in missing:
+                _log(
+                    f"unresolved import {spec!r} (from {whence}) in theme file {rel!r} — "
+                    "its tokens are NOT in this parse."
+                )
+            # Record, don't just log — round 5 made this a refusal for the BASE
+            # graph and the theme graph kept the old log-and-drop behaviour, so
+            # a renamed partial under the dark theme still deleted its twins.
+            # The ledger is not cleared here: load_source ran first and its
+            # misses must survive to the same completeness check.
+            for _spec, _from in missing:
+                _record_incomplete(KIND_UNRESOLVED_IMPORT, _spec, _from)
+            if not loaded:
+                raise RuntimeError(
+                    f"themeConventions[{i}] (file): could not read theme file {abs_path}"
+                )
+            out[i] = _guard_theme_not_empty(text, i, f"the theme graph rooted at {rel!r}")
+            continue
+        try:
+            # Honour source.ref for the theme file too. Reading the base at a
+            # pinned revision and its dark half from the working tree computes
+            # every theme delta ACROSS TWO REVISIONS — uncommitted dark edits
+            # surface as theme variance against a pinned base, and sync writes
+            # those phantom twins. source.ref exists to sync a known revision;
+            # reading only half of it at that revision defeats the point.
+            if ref:
+                out[i] = _guard_theme_not_empty(_read_at_ref(cfg, rel, ref), i, f"{rel!r} at ref {ref!r}")
+                continue
+            with open(abs_path, "r", encoding="utf-8") as fh:
+                out[i] = _guard_theme_not_empty(fh.read(), i, repr(rel))
+        except OSError as exc:
+            raise RuntimeError(
+                f"themeConventions[{i}] (file): could not read theme file {abs_path}: {exc}. "
+                "Refusing rather than treating the dark theme as empty — an empty dark "
+                "scope would delete every -dark twin in the Paper file."
+            ) from exc
+    return out
+
+
+def missing_imports():
+    """Unresolved import specs from the last load_source call, as (spec, from).
+
+    A view over the ledger's KIND_UNRESOLVED_IMPORT entries. `missing` used to be
+    logged and dropped, so a renamed partial's tokens reached neither the parse
+    nor the protection set and were DELETED — the log line even predicted it."""
+    return [
+        (what, where) for kind, what, where in _INCOMPLETE
+        if kind == KIND_UNRESOLVED_IMPORT
+    ]
+
+
+def _ref_readers(cfg, ref, repo_root):
+    """(read_file, exists) that resolve against a git ref instead of the tree."""
+    import os
+    import subprocess
+
+    def _rel(path):
+        return os.path.relpath(path, repo_root)
+
+    def read_file(path):
+        return _read_at_ref(cfg, _rel(path), ref)
+
+    def exists(path):
+        try:
+            return subprocess.run(
+                ["git", "-C", repo_root, "cat-file", "-e", f"{ref}:{_rel(path)}"],
+                capture_output=True,
+            ).returncode == 0
+        except OSError:
+            return False
+
+    return read_file, exists
+
+
+def _raw_and_stripped_names(text, prefix=None):
+    """Custom-property names swept from the RAW text and from the
+    comment-stripped text, as a (in_raw, in_stripped) pair. The two name
+    functions below combine these differently — union vs difference — but the
+    sweep itself is identical, so it lives here once."""
+    raw = text or ""
+    in_raw = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(raw)}
+    in_stripped = {"--" + m.group(1).lower() for m in _DECL_NAME.finditer(strip_comments(raw))}
+    if prefix:
+        in_raw = {n for n in in_raw if n.startswith(prefix)}
+        in_stripped = {n for n in in_stripped if n.startswith(prefix)}
+    return in_raw, in_stripped
+
+
+def commented_only_names(text, prefix=None):
+    """Names that appear ONLY inside comments — protected, but possibly retired.
+
+    Over-protection is the right default (see declared_names), but it must not
+    be silent: commenting a declaration out is a normal way to retire a token,
+    and the raw sweep pins it in the target file forever with no signal."""
+    in_raw, in_stripped = _raw_and_stripped_names(text, prefix)
+    return in_raw - in_stripped
+
+
+def declared_names(text, prefix=None):
+    """Every custom-property name the source TEXT declares, found by a flat sweep
+    that does not depend on the block walk succeeding.
+
+    This exists because absence from the desired set is ambiguous: the source may
+    have dropped the token, or we may simply have failed to read it — and only
+    the first meaning may delete. Deriving that distinction from records that
+    SURVIVED parsing cannot work, because a token the parser never saw leaves no
+    record to inspect. A textual sweep sees it regardless of whether the block
+    walk, the classifier, or a scope predicate handled it correctly, so a future
+    parser gap of a shape nobody anticipated is protected by construction rather
+    than by another guard."""
+    # Union the RAW text with the comment-stripped text. If strip_comments ever
+    # truncates wrongly again, the raw sweep still sees the declaration, so the
+    # failure lands on the OVER-protect side (a stale token) instead of the
+    # destructive one (a deleted token). The cost is that a name appearing only
+    # inside a comment is protected — harmless, since it can never have reached
+    # `desired` and so was never created in the target file.
+    in_raw, in_stripped = _raw_and_stripped_names(text, prefix)
+    return in_raw | in_stripped
 
 
 def load_source(cfg):
@@ -1101,7 +1632,6 @@ def load_source(cfg):
     `git show <ref>:<relative-path>`; otherwise the working-tree file is read.
     Raises RuntimeError on a git failure or a missing/unreadable file."""
     import os
-    import subprocess
 
     # Sibling lib module — resolve_repo_path lives beside this file.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1112,29 +1642,16 @@ def load_source(cfg):
     if not rel:
         raise RuntimeError("config 'source.path' is required to load the CSS source")
 
+    # Open the completeness ledger. Everything below either affirms a full read
+    # or leaves it unaffirmed, and unaffirmed is not complete.
+    _begin_read()
+
     ref = source.get("ref")
-    if ref:
-        repo = cfg.get("_repo")
-        if not repo:
-            raise RuntimeError(
-                "config is missing '_repo'; load it via read_config before load_source"
-            )
-        spec = f"{ref}:{rel}"
-        try:
-            result = subprocess.run(
-                ["git", "-C", repo, "show", spec],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except FileNotFoundError as exc:  # git not installed
-            raise RuntimeError(f"git is not available to read {spec}: {exc}") from exc
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or "").strip() or (exc.stdout or "").strip()
-            raise RuntimeError(
-                f"could not read source at ref '{spec}' in {repo}: {detail}"
-            ) from exc
-        return result.stdout
+    if ref and not source.get("followImports"):
+        # Single file at a ref — the same git-show read resolve_dark_texts uses.
+        text = _read_at_ref(cfg, rel, ref)
+        _affirm_read()
+        return text
 
     abs_path = resolve_repo_path(cfg, rel)
 
@@ -1143,7 +1660,20 @@ def load_source(cfg):
     # silently widening the token set under an existing config would change what
     # sync owns — and therefore what it can delete.
     if source.get("followImports"):
-        text, loaded, missing = resolve_source_graph(abs_path)
+        # Compose with ref rather than letting either silently win. Reading the
+        # entry file at a ref while dropping every partial it imports deleted
+        # those partials' tokens — they reach neither `desired` nor the
+        # protected set, because the parser never saw them.
+        reader, exists = None, None
+        if ref:
+            repo_root = cfg.get("_repo") or ""
+            reader, exists = _ref_readers(cfg, ref, repo_root)
+
+        text, loaded, missing = resolve_source_graph(
+            abs_path, read_file=reader, exists=exists
+        )
+        for _spec, _from in missing:
+            _record_incomplete(KIND_UNRESOLVED_IMPORT, _spec, _from)
         for spec, whence in missing:
             _log(
                 f"unresolved import {spec!r} (from {whence}) — its tokens are NOT in "
@@ -1153,11 +1683,14 @@ def load_source(cfg):
             _log(f"followImports: read {len(loaded)} files, dependencies first")
         if not loaded:
             raise RuntimeError(f"could not read source file {abs_path}")
+        _affirm_read()
         return text
 
     try:
         with open(abs_path, "r", encoding="utf-8") as fh:
-            return fh.read()
+            text = fh.read()
+        _affirm_read()
+        return text
     except OSError as exc:
         raise RuntimeError(f"could not read source file {abs_path}: {exc}") from exc
 

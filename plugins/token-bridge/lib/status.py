@@ -47,11 +47,13 @@ def _log(msg: str) -> None:
     print(f"[status] {msg}", file=sys.stderr)
 
 
-def drift(desired, live, owned_prefix=None):
+def drift(desired, live, owned_prefix=None, *, unreadable):
     """Re-frame the reconcile diff as bidirectional drift (pure, read-only).
 
     Returns {inSync, onlyInCode, onlyInDesign, differ} — name lists, sorted."""
-    d = sync_tokens.diff_tokens(desired, live, owned_prefix=owned_prefix)
+    d = sync_tokens.diff_tokens(
+        desired, live, owned_prefix=owned_prefix, unreadable=unreadable
+    )
     only_in_code = sorted(t["name"] for t in d["creates"])
     only_in_design = sorted(t["name"] for t in d["deletes"])
     # value change (update) or type change (recreate) — both are "same name, differs"
@@ -64,8 +66,27 @@ def drift(desired, live, owned_prefix=None):
     }
 
 
-def desired_from_text(source_text, conventions, prefix=None):
-    records = parse_tokens.parse_tokens(source_text, conventions, prefix)
+def _derive_unreadable(source_text, dark_texts, prefix, desired, declined):
+    """The protection set status must agree with, or it reports drift no
+    normalize can clear. Two sources, because neither alone is complete:
+      - declared in the source text but absent from `desired` (and its twin):
+        covers parse-level loss, where no record exists to inspect;
+      - everything explicitly declined: covers the degrade, where the BASE
+        succeeded and only the twin was dropped, so the base is in `desired`
+        and the text sweep sees nothing wrong.
+    Kept identical to sync_tokens by deriving it in one place both call sites use."""
+    declared = parse_tokens.declared_names(source_text, prefix)
+    for dark_text in (dark_texts or {}).values():
+        declared |= parse_tokens.declared_names(dark_text, prefix)
+    desired_names = {x["name"] for x in desired}
+    unreadable = {n for n in declared if n not in desired_names}
+    unreadable |= {n + sync_tokens.DARK_SUFFIX for n in unreadable}
+    unreadable |= {x["name"] for x in declined}
+    return unreadable
+
+
+def desired_from_text(source_text, conventions, prefix=None, dark_texts=None):
+    records = parse_tokens.parse_tokens(source_text, conventions, prefix, dark_texts)
     classified = classify_tokens.classify_tokens(records)
     desired, declined = sync_tokens.build_desired(classified)
     return desired, declined
@@ -84,10 +105,24 @@ def run(repo=".", url=None, client=None):
     prefix = (cfg.get("source") or {}).get("prefix")
     try:
         source_text = parse_tokens.load_source(cfg)
+        # A `file` convention's dark theme is a separate file; parse cannot reach
+        # outside the text it is handed. Same read-failure class as load_source,
+        # so it shares the refusal path.
+        dark_texts = parse_tokens.resolve_dark_texts(cfg)
+        missing = parse_tokens.missing_imports()
+        if missing and not (cfg.get("source") or {}).get("allowMissingImports"):
+            listed = ", ".join(f"{spec!r}" for spec, _ in missing[:5])
+            return (
+                {"ok": False, "error": "unresolved_imports",
+                 "note": (f"{len(missing)} import(s) could not be resolved: {listed}. "
+                          "Their tokens are invisible to this parse, so any drift "
+                          "reported here would be wrong.")},
+                EXIT_ERROR,
+            )
     except RuntimeError as exc:
         return {"ok": False, "error": "source_read_failed", "note": str(exc)}, EXIT_ERROR
 
-    desired, declined = desired_from_text(source_text, conventions, prefix)
+    desired, declined = desired_from_text(source_text, conventions, prefix, dark_texts)
 
     client = client or PaperClient(url=url or cfg.get("paperDaemonUrl"))
     env = client.get_tokens(file_id)
@@ -97,7 +132,8 @@ def run(repo=".", url=None, client=None):
     # array) rather than a dict-only access on the daemon-controlled payload.
     live = _tokens_from(env.get("result")) or []
 
-    d = drift(desired, live, owned_prefix=prefix)
+    unreadable = _derive_unreadable(source_text, dark_texts, prefix, desired, declined)
+    d = drift(desired, live, owned_prefix=prefix, unreadable=unreadable)
     report = {
         "ok": True,
         "fileId": file_id,
@@ -149,9 +185,16 @@ def main(argv=None):
         with open(args.source_file, encoding="utf-8") as fh:
             source_text = fh.read()
         conventions = json.loads(args.conventions)
+        needs_repo = parse_tokens.file_convention_needs_repo(conventions)
+        if needs_repo:
+            _log(needs_repo)
+            return EXIT_REFUSED
         desired, _declined = desired_from_text(source_text, conventions, args.prefix)
         live = _tokens_from(_load_json_file(args.live_file))
-        print(json.dumps(drift(desired, live, owned_prefix=args.prefix), indent=2))
+        unreadable = _derive_unreadable(source_text, None, args.prefix, desired, _declined)
+        print(json.dumps(
+            drift(desired, live, owned_prefix=args.prefix, unreadable=unreadable), indent=2
+        ))
         return EXIT_OK
 
     parser.print_usage(sys.stderr)
