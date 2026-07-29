@@ -81,12 +81,26 @@ Retire by deleting the file — the same way Pass 3 deletes an absorbed memory. 
 
 Tally: `retired=N`.
 
-### 5. Compound pass
-- Did any technical learnings emerge that belong in `docs/solutions/` for the current project?
-- If yes and a project context applies, run `/ce-compound` for those
-- Skip if the session was meta-work (no project-scoped technical learning)
+### 5. Compound pass — always fires when there is a repo
 
-Tally: `compounded=N`.
+**Run `/ce-compound`. The only skip is mechanical: there is no git repo to write into.**
+
+- If the session cwd is inside a git repo → **run `/ce-compound`, every time, unconditionally.**
+- If it is not (bare `~`, a scratch dir) → skip; `docs/solutions/` has no home. Tally `compounded=0` and move on.
+
+Do **not** gate this on your own judgment of whether a learning "counts." That gate was the
+previous wording ("did any technical learnings emerge… skip if the session was meta-work")
+and it fired **3 times in 148 runs** — the judgment call collapsed to "no" almost always,
+so solution docs never accumulated. `/ce-compound` is itself the thing that decides what is
+worth writing; reflect's job is to *invoke* it, not to pre-screen for it. An invocation that
+finds nothing worth recording is cheap and correct. A skipped invocation is a silent loss.
+
+Meta-work is **not** a skip reason. Plugin, harness, and tooling work done inside a repo is
+project-scoped technical work like any other, and its learnings belong in that repo's
+`docs/solutions/`.
+
+Tally: `compounded=N` (count invocations that produced or updated a doc; a run that found
+nothing is still a run — note it as `compounded=0`, not as a skip).
 
 ### 6. Index render pass — silent, automatic
 
