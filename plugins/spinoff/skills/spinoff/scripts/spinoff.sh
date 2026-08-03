@@ -20,41 +20,64 @@ abspath() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd -P)
 
 # ---- launcher seam (KTD-1 / KTD-2) ------------------------------------------
 # The launch region near the bottom is backend-neutral: it calls launcher_*
-# verbs that dispatch on the resolved $LAUNCHER. cmux is the only implemented
-# backend today — its *_cmux verbs issue byte-identical CLI calls to the pre-seam
-# script (a herdr-absent run behaves exactly as before). herdr verbs are stubs
-# that later units (U3/U4) fill in. LAUNCHER=none reproduces today's
-# "not inside cmux" manual-line fallback.
+# verbs that dispatch on the resolved $LAUNCHER. Three backends implement them —
+# cmux and herdr through their CLIs, ghostty through its AppleScript dictionary.
+# The *_cmux verbs still issue byte-identical CLI calls to the pre-seam script (a
+# herdr-absent run behaves exactly as before). LAUNCHER=none reproduces the
+# original "not inside cmux" manual-line fallback: worktree and handoff are still
+# produced, only the launch is skipped.
 
 # Liveness probes. herdr: the binary resolves AND `status server` reports running
 # (a stale HERDR_ENV=1 must not win — R8). cmux: the binary is executable.
+# ghostty: it has NO scripting CLI, so the thing that has to exist is the .app
+# bundle AppleScript targets plus osascript to talk to it. Deliberately asks
+# osascript NOTHING — a probe must never be what raises the macOS Automation
+# dialog. $GHOSTTY_APP is resolved next to $HERDR / $CMUX, below.
 _herdr_probe() { [ -n "${HERDR:-}" ] && "$HERDR" status server 2>/dev/null | grep -qi 'running'; }
 _cmux_probe()  { [ -n "${CMUX:-}" ] && [ -x "$CMUX" ]; }
+_ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && command -v osascript >/dev/null 2>&1; }
 
 # resolve_launcher — collapse env + flag into a single $LAUNCHER (KTD-2).
-# Precedence for `auto`: herdr (live) > cmux > none. A forced --launcher
-# herdr|cmux skips the env-keyed detection but STILL probes the chosen backend,
-# falling back to auto-detection (never hard-erroring) on probe failure (R8).
+# Precedence for `auto`: herdr (live) > cmux > ghostty > none. A forced --launcher
+# herdr|cmux|ghostty skips the env-keyed detection but STILL probes the chosen
+# backend, falling back to auto-detection (never hard-erroring) on probe failure (R8).
 resolve_launcher() {
   case "$LAUNCHER" in
     herdr) if _herdr_probe; then LAUNCHER=herdr; return; fi
            echo "  ⚠ --launcher herdr requested but the herdr server isn't reachable — falling back to auto-detection" >&2 ;;
     cmux)  if _cmux_probe; then LAUNCHER=cmux; return; fi
            echo "  ⚠ --launcher cmux requested but the cmux CLI isn't available — falling back to auto-detection" >&2 ;;
+    ghostty) if _ghostty_probe; then LAUNCHER=ghostty; return; fi
+           echo "  ⚠ --launcher ghostty requested but Ghostty.app / osascript isn't available — falling back to auto-detection" >&2 ;;
   esac
   if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
   elif [ -n "${CMUX_WORKSPACE_ID:-}" ] && _cmux_probe;    then LAUNCHER=cmux
+  # ghostty is checked LAST, and only when NO multiplexer announced itself in the
+  # environment at all. Two separate reasons, both load-bearing:
+  #  * ghostty's own vars are set even when a multiplexer owns the session —
+  #    verified live: HERDR_ENV=1 and GHOSTTY_SURFACE_ID are BOTH present inside
+  #    herdr-running-in-ghostty. Probing ghostty any earlier steals every
+  #    multiplexer session and opens bare windows beside the user's layout (R6).
+  #  * an announcement that is PRESENT but switched off (HERDR_ENV=0) still means
+  #    this session belongs to a multiplexer whose server merely isn't up. A bare
+  #    new ghostty window is the wrong recovery there, so that resolves to `none`
+  #    (worktree + manual line). `--launcher ghostty` forces it when that
+  #    conservative call is wrong.
+  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] \
+       && { [ -n "${GHOSTTY_SURFACE_ID:-}" ] || [ "${TERM_PROGRAM:-}" = ghostty ] || [ -n "${GHOSTTY_RESOURCES_DIR:-}" ]; } \
+       && _ghostty_probe;                                  then LAUNCHER=ghostty
   else                                                         LAUNCHER=none
   fi
 }
 
 # --- neutral verb dispatchers (case-on-$LAUNCHER, KTD-1) ----------------------
-launcher_new_tab()        { case "$LAUNCHER" in cmux) launcher_new_tab_cmux ;;        herdr) launcher_new_tab_herdr ;; esac; }
-launcher_new_workspace()  { case "$LAUNCHER" in cmux) launcher_new_workspace_cmux ;;  herdr) launcher_new_workspace_herdr ;; esac; }
-launcher_find_left_pane() { case "$LAUNCHER" in cmux) launcher_find_left_pane_cmux ;; herdr) launcher_find_left_pane_herdr ;; esac; }
-launcher_launch_agent()   { case "$LAUNCHER" in cmux) launcher_launch_agent_cmux ;;   herdr) launcher_launch_agent_herdr ;; esac; }
-launcher_wait_ready()     { case "$LAUNCHER" in cmux) launcher_wait_ready_cmux ;;     herdr) launcher_wait_ready_herdr ;; esac; }
-launcher_open_viewer()    { case "$LAUNCHER" in cmux) launcher_open_viewer_cmux ;;    herdr) launcher_open_viewer_herdr ;; esac; }
+launcher_new_tab()        { case "$LAUNCHER" in cmux) launcher_new_tab_cmux ;;        herdr) launcher_new_tab_herdr ;;        ghostty) launcher_new_tab_ghostty ;;        esac; }
+launcher_new_workspace()  { case "$LAUNCHER" in cmux) launcher_new_workspace_cmux ;;  herdr) launcher_new_workspace_herdr ;;  ghostty) launcher_new_workspace_ghostty ;;  esac; }
+launcher_new_split()      { case "$LAUNCHER" in cmux) launcher_new_split_cmux ;;      herdr) launcher_new_split_herdr ;;      ghostty) launcher_new_split_ghostty ;;      esac; }
+launcher_find_left_pane() { case "$LAUNCHER" in cmux) launcher_find_left_pane_cmux ;; herdr) launcher_find_left_pane_herdr ;; ghostty) launcher_find_left_pane_ghostty ;; esac; }
+launcher_launch_agent()   { case "$LAUNCHER" in cmux) launcher_launch_agent_cmux ;;   herdr) launcher_launch_agent_herdr ;;   ghostty) launcher_launch_agent_ghostty ;;   esac; }
+launcher_wait_ready()     { case "$LAUNCHER" in cmux) launcher_wait_ready_cmux ;;     herdr) launcher_wait_ready_herdr ;;     ghostty) launcher_wait_ready_ghostty ;;     esac; }
+launcher_open_viewer()    { case "$LAUNCHER" in cmux) launcher_open_viewer_cmux ;;    herdr) launcher_open_viewer_herdr ;;    ghostty) launcher_open_viewer_ghostty ;;    esac; }
 
 # --- cmux backend (BEHAVIOR-PRESERVING: exact pre-seam CLI calls) -------------
 # Identify the left-hand agent pane: the lowest-indexed pane in this workspace
@@ -115,6 +138,34 @@ launcher_new_workspace_cmux() {
   # Surface exists — now safe to switch the user into the new workspace.
   "$CMUX" select-workspace --workspace "$WORKSPACE_REF" >/dev/null 2>&1
   LAUNCH_WS="$WORKSPACE_REF"; LAUNCH_SFC="$SURFACE_REF"; LAUNCH_LABEL="agent surface"; LAUNCH_WHERE="workspace"
+}
+
+# Split target: a new surface split off the ORIGINATING surface, which arrives as
+# --from-surface. It is NOT read from the environment: the skill runs this script
+# through a background agent that no longer holds CMUX_SURFACE_ID, so reading it
+# there would split whatever happened to be focused (KTD-2).
+# `new-split` is the verb for this — it takes an explicit `--surface` to split FROM,
+# where `new-pane` can only split the focused pane. Direction is passed as a
+# variable positional (cmux supports left natively — KTD-5), and --focus false
+# keeps the user where they are until the launch is confirmed.
+launcher_new_split_cmux() {
+  step "splitting the originating cmux surface ($SPLIT_DIRECTION of $FROM_SURFACE)…"
+  local out
+  WS="${CMUX_WORKSPACE_ID:-}"
+  # Two explicit call lines rather than one array-built call: the CLI-drift test
+  # reads this file statically, and a call assembled in an array is invisible to it.
+  if [ -n "$WS" ]; then
+    out="$("$CMUX" new-split "$SPLIT_DIRECTION" --surface "$FROM_SURFACE" --workspace "$WS" --focus false 2>&1)"
+  else
+    echo "  ⚠ CMUX_WORKSPACE_ID is not set — splitting against cmux's current workspace" >&2
+    out="$("$CMUX" new-split "$SPLIT_DIRECTION" --surface "$FROM_SURFACE" --focus false 2>&1)"
+  fi
+  SURFACE_REF="$(printf '%s' "$out" | grep -oE 'surface:[0-9]+' | head -1)"
+  if [ -z "$SURFACE_REF" ]; then
+    echo "  ⚠ could not parse the new split's surface ref; cmux output was:" >&2
+    echo "$out" >&2
+  fi
+  LAUNCH_WS="$WS"; LAUNCH_SFC="$SURFACE_REF"; LAUNCH_LABEL="split surface"; LAUNCH_WHERE="split"
 }
 
 # Rename the tab, launch Claude in the worktree, submit. --title (not a bare
@@ -346,6 +397,42 @@ launcher_new_workspace_herdr() {
   "$HERDR" workspace focus "$ws" >/dev/null 2>&1 || true
 }
 
+# Split target: a new pane beside the ORIGINATING pane, which arrives as
+# --from-surface (never from the env — the background agent the skill runs this in
+# has no HERDR_PANE_ID; KTD-2). Two constraints straight off `herdr pane --help`:
+#
+#  * `pane split --direction` accepts ONLY right|down. There is no left. A left
+#    split is therefore split-right-then-swap: `pane swap` exchanges the two panes'
+#    positions, putting the new one on the left (KTD-5). The swap is the only step
+#    here inferred from --help rather than measured live, so its failure is reported
+#    and NON-fatal: a session on the wrong side still beats no session.
+#  * --no-focus, so the user stays in their pane until the launch is confirmed.
+#
+# LAUNCH_WS is deliberately left empty: every herdr launch verb addresses a PANE id,
+# and resolving a workspace here would call `pane get` on a HERDR_PANE_ID the
+# background agent doesn't have — a warning about a value nothing reads.
+launcher_new_split_herdr() {
+  step "splitting the originating herdr pane ($SPLIT_DIRECTION of $FROM_SURFACE)…"
+  local out pane err
+  out="$("$HERDR" pane split "$FROM_SURFACE" --direction right --no-focus 2>&1)"
+  pane="$(printf '%s' "$out" | _herdr_json 'result.pane.pane_id')"
+  if [ -z "$pane" ]; then
+    echo "  ⚠ could not split the herdr pane '$FROM_SURFACE'; pane split output was:" >&2
+    echo "$out" >&2
+    LAUNCH_SFC=""; return
+  fi
+  if [ "$SPLIT_DIRECTION" = left ]; then
+    if ! err="$("$HERDR" pane swap --source-pane "$pane" --target-pane "$FROM_SURFACE" 2>&1)"; then
+      echo "  ⚠ the split succeeded but the swap that puts it on the LEFT failed: $err" >&2
+      echo "    continuing — the briefed session lands on the right instead." >&2
+    fi
+  fi
+  LAUNCH_RUN_PANE="$pane"      # the pane claude runs in (no further split)
+  LAUNCH_SFC="$pane"           # real pane id — satisfies the shared launch guard
+  LAUNCH_LABEL="agent split"; LAUNCH_WHERE="split"
+  step "  new herdr pane: $pane (split off $FROM_SURFACE)"
+}
+
 launcher_find_left_pane_herdr() { _launcher_herdr_todo find_left_pane; }
 
 # Launch claude by running it INTO the pre-created pane (the new tab's root, or the
@@ -466,6 +553,340 @@ launcher_open_viewer_herdr() {
   fi
 }
 
+# --- ghostty backend ---------------------------------------------------------
+# Ghostty has NO scripting CLI (the `ghostty` binary only launches the app), so this
+# backend is driven entirely through its AppleScript dictionary (Ghostty.sdef) —
+# KTD-3. That is strictly better than keystroke driving for this job because every
+# creation verb RETURNS a handle: `new window` → window, `new tab in <window>` → tab,
+# `split <terminal> direction …` → terminal, and a terminal reports its own `pid` and
+# `tty`. Nothing has to be scraped or guessed.
+#
+# Two rules below are load-bearing, both established by live testing (2026-08-03,
+# Ghostty on macOS 15) rather than reasoning:
+#
+# 1. AppleScript text is passed as ARGV, never interpolated. The dictionary script is
+#    staged verbatim into a temp file from a QUOTED heredoc (bash expands nothing in
+#    it) and invoked as `osascript <file> <verb> <args…>`, where the script reads
+#    `item N of argv`. Verified: text containing apostrophes, double quotes,
+#    backticks, `$`, backslashes and newlines crosses that boundary byte-identically.
+#    Interpolating $LAUNCH_CMD into `osascript -e` puts the worktree path, the label
+#    and a `$(cat …)` through AppleScript's own string escaping instead, which is
+#    exactly the class of quoting failure this design removes.
+# 2. `command:` REPLACES the shell, so the surface configuration carries
+#    `sh -lc '<LAUNCH_CMD>'` — $LAUNCH_CMD contains `&&` and `$(cat …)`, which need a
+#    shell to mean anything. _ghostty_sh_c re-escapes the payload's own single quotes
+#    so the wrapper survives however ghostty tokenizes the string.
+#
+# Also measured, so nobody re-derives it:
+#   * a terminal's `id` is a UUID; the ghostty-exported GHOSTTY_SURFACE_ID is a hex
+#     pointer and does NOT match it. So --from-surface is resolved against BOTH `id`
+#     and `tty` — `$(tty)` from the originating session is the reliable handle.
+#   * `working directory of <terminal>` reads back EMPTY once `command:` is set; it
+#     confirms nothing.
+#   * `close` works on a terminal, not on a window (a window doesn't understand it).
+#   * there is no read-screen verb at all — see launcher_wait_ready_ghostty for what
+#     that costs.
+GHOSTTY_SCPT=""          # staged AppleScript path (see _ghostty_stage)
+GHOSTTY_SCPT_DIR=""      # its temp dir, removed on exit
+GHOSTTY_TERM=""          # terminal id of the launched agent surface
+GHOSTTY_PLACE=""         # where launch_agent should create it: window | tab | split
+
+# Stage the dictionary script once per run. Quoted heredoc: NOTHING in it is expanded
+# by bash — every value the script needs arrives in argv.
+#
+# MUST be called from the MAIN shell, never from inside a `$(…)`. Every _ghostty_run
+# call is a command substitution, so a subshell's assignments to GHOSTTY_SCPT* would
+# vanish AND the EXIT trap registered there would delete the staged file the instant
+# that subshell returned — measured, not theorised: the first live run failed with
+# "No such file or directory" on a path it had just written. So the three verbs stage
+# up front, in the main shell, and _ghostty_run only ever READS the path.
+_ghostty_stage() {
+  [ -n "$GHOSTTY_SCPT" ] && [ -f "$GHOSTTY_SCPT" ] && return 0
+  GHOSTTY_SCPT_DIR="$(mktemp -d 2>/dev/null)" || { echo "  ⚠ could not stage the ghostty AppleScript (mktemp failed)" >&2; return 1; }
+  trap 'rm -rf "$GHOSTTY_SCPT_DIR"' EXIT
+  GHOSTTY_SCPT="$GHOSTTY_SCPT_DIR/spinoff-ghostty.applescript"
+  cat > "$GHOSTTY_SCPT" <<'APPLESCRIPT'
+-- Resolve a terminal from the handle the caller passed. Accepts either the
+-- terminal's own id (a UUID) or its tty path, because the env var ghostty exports
+-- (GHOSTTY_SURFACE_ID) matches NEITHER — it is a hex pointer. Comparisons are
+-- wrapped in try because a terminal can die between the list and the read.
+on findTerminal(theRef)
+	tell application "Ghostty"
+		repeat with tt in terminals
+			try
+				if (id of tt as text) is theRef then return tt
+			end try
+			try
+				if (tty of tt as text) is theRef then return tt
+			end try
+		end repeat
+	end tell
+	return missing value
+end findTerminal
+
+-- Every verb reports the new terminal the same way, one key=value per line, so the
+-- shell side parses one shape. pid is the started-signal (KTD-7).
+on describe(t)
+	tell application "Ghostty"
+		return "terminal=" & (id of t as text) & linefeed & "pid=" & (pid of t as text) & linefeed & "tty=" & (tty of t as text)
+	end tell
+end describe
+
+on run argv
+	set verb to item 1 of argv
+	tell application "Ghostty"
+		if verb is "new-window" then
+			set w to new window with configuration {command:(item 2 of argv), initial working directory:(item 3 of argv)}
+			set t to focused terminal of selected tab of w
+			return "window=" & (id of w as text) & linefeed & my describe(t)
+
+		else if verb is "new-tab" then
+			-- No window to put a tab in (every ghostty window closed) → make one.
+			if (count of windows) is 0 then
+				set w to new window with configuration {command:(item 2 of argv), initial working directory:(item 3 of argv)}
+				set t to focused terminal of selected tab of w
+				return "window=" & (id of w as text) & linefeed & my describe(t)
+			end if
+			set w to front window
+			set tb to new tab in w with configuration {command:(item 2 of argv), initial working directory:(item 3 of argv)}
+			set t to focused terminal of tb
+			return "window=" & (id of w as text) & linefeed & "tab=" & (id of tb as text) & linefeed & my describe(t)
+
+		else if verb is "split" then
+			set t0 to my findTerminal(item 2 of argv)
+			if t0 is missing value then return "error=surface-not-found"
+			set cfg to {command:(item 4 of argv), initial working directory:(item 5 of argv)}
+			-- direction is an enumerated constant, not a string, so it can't come
+			-- straight from argv. left is native here (unlike herdr) — KTD-5.
+			if (item 3 of argv) is "left" then
+				set t to split t0 direction left with configuration cfg
+			else
+				set t to split t0 direction right with configuration cfg
+			end if
+			-- Focus is NOT restored here. Measured: ghostty focuses a new split
+			-- asynchronously, AFTER the Apple event that created it returns, so a
+			-- `focus t0` in this same tell block is silently overridden (it worked
+			-- as a separate event, and not once inside this one — with or without a
+			-- delay). The caller issues the `focus` verb below as its own event.
+			return my describe(t)
+
+		else if verb is "focus" then
+			set t to my findTerminal(item 2 of argv)
+			if t is missing value then return "error=surface-not-found"
+			focus t
+			return "focused=" & (id of t as text)
+
+		else if verb is "pid" then
+			set t to my findTerminal(item 2 of argv)
+			if t is missing value then return "error=surface-not-found"
+			return my describe(t)
+		end if
+		return "error=unknown-verb"
+	end tell
+end run
+APPLESCRIPT
+  [ -s "$GHOSTTY_SCPT" ] || { echo "  ⚠ staged ghostty AppleScript is empty: $GHOSTTY_SCPT" >&2; return 1; }
+  return 0
+}
+
+# The Automation-denial latch. macOS remembers a denial, so once -1743 comes back
+# there is nothing to retry — but _ghostty_run always executes inside a command
+# substitution, so it cannot set a shell variable the caller would see. The latch is
+# therefore a FILE beside the staged script: written in the subshell, read by anyone.
+_ghostty_deny_flag() { printf '%s' "${GHOSTTY_SCPT_DIR:-}/tcc-denied"; }
+_ghostty_denied()    { [ -n "${GHOSTTY_SCPT_DIR:-}" ] && [ -f "$(_ghostty_deny_flag)" ]; }
+
+# Wrap a shell command line for the surface configuration's `command:` key, which
+# replaces the shell outright. The payload's own single quotes are re-escaped the
+# POSIX way ('\'') so the wrapper stays a single argument.
+_ghostty_sh_c() { local s=${1//\'/\'\\\'\'}; printf "sh -lc '%s'" "$s"; }
+
+# Read one key=value line out of a verb's output.
+_ghostty_field() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1; }
+
+# Invoke one verb against the already-staged script. Failures are REPORTED, never
+# discarded (KD-4) — swallowing backend errors is how a deleted subcommand shipped as
+# success for weeks. A denied Automation permission is named with its remedy and
+# latched, and every later verb short-circuits instead of retrying into the same wall.
+_ghostty_run() {
+  local out
+  _ghostty_denied && return 1
+  [ -n "$GHOSTTY_SCPT" ] && [ -f "$GHOSTTY_SCPT" ] || { echo "  ⚠ ghostty AppleScript was not staged — cannot run verb '$1'" >&2; return 1; }
+  if ! out="$(osascript "$GHOSTTY_SCPT" "$@" 2>&1)"; then
+    case "$out" in
+      *-1743*|*"Not authorized to send Apple events"*)
+        : > "$(_ghostty_deny_flag)" 2>/dev/null || true
+        echo "  ⚠ macOS blocked this process from controlling Ghostty (Apple event error -1743, 'Not authorized to send Apple events')." >&2
+        echo "    Fix: System Settings → Privacy & Security → Automation → allow this app to control Ghostty, then re-run." >&2
+        echo "    Not retrying: a denial is remembered until you change it." >&2 ;;
+      *)
+        echo "  ⚠ ghostty AppleScript verb '$1' failed: $out" >&2 ;;
+    esac
+    return 1
+  fi
+  printf '%s' "$out"
+  # The script reports its own recoverable failures in-band (an unresolvable
+  # surface, an unknown verb) — pass them to the caller AND fail, so no caller
+  # mistakes an error payload for a handle.
+  case "$out" in error=*) return 1 ;; esac
+  return 0
+}
+
+# ghostty has no pane tree to walk: a terminal is addressed by its own handle, so
+# there is no "find the left pane" step. A documented no-op, like the herdr one —
+# the dispatcher stays uniform across backends.
+launcher_find_left_pane_ghostty() { : ; }
+
+# The three placement verbs create NOTHING. On ghostty the surface and the launch are
+# the same act — the window/tab/split is born running $LAUNCH_CMD from its surface
+# configuration — so creating anything here would open a window BEFORE the shared
+# launch region's "is the brief file non-empty?" guard has had its say, which is the
+# exact "session exists but is unbriefed" window this design removes. They record the
+# placement and hand back a sentinel that satisfies the region's did-a-surface-appear
+# gate; launcher_launch_agent_ghostty replaces it with the real terminal id.
+launcher_new_workspace_ghostty() {
+  step "new ghostty window queued (the briefed launch creates it)…"
+  GHOSTTY_PLACE=window
+  LAUNCH_WS=""; LAUNCH_SFC="ghostty:pending"
+  LAUNCH_LABEL="agent surface"; LAUNCH_WHERE="workspace"
+}
+
+launcher_new_tab_ghostty() {
+  step "new ghostty tab queued (the briefed launch creates it)…"
+  GHOSTTY_PLACE=tab
+  LAUNCH_WS=""; LAUNCH_SFC="ghostty:pending"
+  LAUNCH_LABEL="agent tab"; LAUNCH_WHERE="tab"
+}
+
+launcher_new_split_ghostty() {
+  step "ghostty split queued ($SPLIT_DIRECTION of $FROM_SURFACE)…"
+  GHOSTTY_PLACE=split
+  LAUNCH_WS=""; LAUNCH_SFC="ghostty:pending"
+  LAUNCH_LABEL="agent split"; LAUNCH_WHERE="split"
+}
+
+# The launch: create the recorded placement with $LAUNCH_CMD in its surface
+# configuration. Creating IS briefing here, so KICKOFF_OK is set from whether a
+# terminal handle came back — there is no separate send to fail silently.
+launcher_launch_agent_ghostty() {
+  LB_READY=0
+  local cmd out win pid
+  # Staged HERE, in the main shell — see _ghostty_stage. A staging failure is a
+  # launch failure, and it must leave LAUNCH_SFC alone (below) so the run reports
+  # itself unbriefed rather than as a clean worktree-only spinoff.
+  if ! _ghostty_stage; then
+    KICKOFF_OK=0
+    SURFACE_REF=""
+    return
+  fi
+  cmd="$(_ghostty_sh_c "$LAUNCH_CMD")"
+  case "$GHOSTTY_PLACE" in
+    window) out="$(_ghostty_run new-window "$cmd" "$WORKTREE")" ;;
+    tab)    out="$(_ghostty_run new-tab "$cmd" "$WORKTREE")" ;;
+    split)
+      out="$(_ghostty_run split "$FROM_SURFACE" "$SPLIT_DIRECTION" "$cmd" "$WORKTREE")"
+      # A handle that matches no live terminal is a wrong handle, not a missing one —
+      # so say which one failed and what a working one looks like, then open a TAB
+      # rather than guessing at some other terminal. LAUNCH_WHERE is corrected so the
+      # summary reports the tab it actually opened.
+      case "$out" in
+        *error=surface-not-found*)
+          echo "  ⚠ --from-surface '$FROM_SURFACE' matches no live ghostty terminal (expected a terminal id or its tty, e.g. /dev/ttys004) — opening a new TAB instead of a split" >&2
+          LAUNCH_LABEL="agent tab"; LAUNCH_WHERE="tab"
+          out="$(_ghostty_run new-tab "$cmd" "$WORKTREE")" ;;
+        *)
+          # Put the user back in the pane they started from. The dictionary has no
+          # unfocused split, and restoring focus inside the split's own Apple event
+          # does nothing (ghostty focuses the new surface after that event returns),
+          # so this has to be a SECOND event — verified live. Best-effort: a session
+          # that lands focused is a nuisance, not a failure.
+          _ghostty_run focus "$FROM_SURFACE" >/dev/null || \
+            echo "  ⚠ split created but focus could not be returned to '$FROM_SURFACE' — the new pane has focus" >&2 ;;
+      esac ;;
+    *) echo "  ⚠ no ghostty placement was recorded — nothing to launch" >&2; out="" ;;
+  esac
+  GHOSTTY_TERM="$(_ghostty_field "$out" terminal)"
+  if [ -z "$GHOSTTY_TERM" ]; then
+    KICKOFF_OK=0
+    echo "  ⚠ ghostty returned no terminal handle — the briefed session did not launch" >&2
+    # LAUNCH_SFC deliberately keeps its sentinel. Clearing it would make
+    # BRIEF_ATTEMPTED=0, and the summary would then print "✓ Spinoff complete" for a
+    # run that failed to brief anything — the exact false-success this script exists
+    # to refuse. SURFACE_REF stays empty so the summary prints the manual recovery.
+    SURFACE_REF=""
+    return
+  fi
+  LAUNCH_SFC="$GHOSTTY_TERM"; SURFACE_REF="$GHOSTTY_TERM"
+  win="$(_ghostty_field "$out" window)"
+  # Only the workspace target owns its window; a tab/split lands in one the user
+  # already had, and claiming it in the summary would read as "we made you a window".
+  if [ "$LAUNCH_WHERE" = workspace ] && [ -n "$win" ]; then WORKSPACE_REF="$win"; LAUNCH_WS="$win"; fi
+  pid="$(_ghostty_field "$out" pid)"
+  KICKOFF_OK=1
+  step "  $LAUNCH_LABEL: $GHOSTTY_TERM (pid ${pid:-unknown}, launched with the brief)"
+}
+
+# Readiness on ghostty is the pid the terminal reports (KTD-7) — the started signal.
+# It normally resolves on the first poll, since the creation verb already returned one.
+#
+# There is deliberately no screen read here, and that has a cost worth stating: the
+# dictionary exposes NO way to read a terminal's contents, so R12's MCP-trust-modal
+# handling — the thing that answers "N new MCP servers found in this project" on a
+# fresh worktree path — cannot run on this backend. The brief is unaffected (it rode
+# the launch), so what's lost is MCP servers, not the briefing: the session sits on
+# the trust prompt until the user answers it. When the pid never appears, LB_READY
+# stays 0 and the summary's "prompt never confirmed — MCP servers may not be enabled"
+# line is the honest report.
+launcher_wait_ready_ghostty() {
+  LB_READY=0
+  [ -n "$GHOSTTY_TERM" ] || return
+  _ghostty_stage || return
+  local deadline out pid
+  deadline=$(( $(date +%s) + SPINOFF_READY_TIMEOUT_MS / 1000 ))
+  while :; do
+    out="$(_ghostty_run pid "$GHOSTTY_TERM")"
+    _ghostty_denied && return                  # permission denial: reported already, no retry
+    pid="$(_ghostty_field "$out" pid)"
+    case "$pid" in
+      ''|0|"missing value") ;;
+      *) LB_READY=1; return ;;
+    esac
+    [ "$(date +%s)" -ge "$deadline" ] && return
+    sleep 1
+  done
+}
+
+# Right-hand handoff viewer (workspace target only). Same shape as the herdr one:
+# ghostty has no markdown viewer either, so split a terminal off the agent's and
+# render the handoff with a pager (glow, then bat). BEST-EFFORT — VIEWER_OK=1 only
+# when a pager actually runs; the launch has already succeeded by this point and must
+# never be failed by a missing viewer.
+launcher_open_viewer_ghostty() {
+  local pager out view
+  [ -n "$GHOSTTY_TERM" ] || return
+  _ghostty_stage || return
+  if command -v glow >/dev/null 2>&1; then
+    pager="glow '$HANDOFF_DST'"
+  elif command -v bat >/dev/null 2>&1; then
+    pager="bat --paging=always '$HANDOFF_DST'"
+  else
+    echo "  ⚠ no markdown pager (glow/bat) available — skipping the handoff viewer" >&2
+    return
+  fi
+  out="$(_ghostty_run split "$GHOSTTY_TERM" right "$(_ghostty_sh_c "$pager")" "$WORKTREE")" || return
+  view="$(_ghostty_field "$out" terminal)"
+  if [ -n "$view" ]; then
+    VIEWER_OK=1
+    # Leave the user in the agent, not in the pager — the equivalent of the other
+    # backends' --no-focus on the viewer split. Separate Apple event, for the reason
+    # given in the split verb. Best-effort.
+    _ghostty_run focus "$GHOSTTY_TERM" >/dev/null || true
+    step "  handoff viewer: $view"
+  else
+    echo "  ⚠ split a viewer terminal but ghostty returned no handle for it — continuing without the handoff render" >&2
+  fi
+}
+
 # ---- test hook --------------------------------------------------------------
 # When sourced by the bats suite (SPINOFF_TEST_SOURCE=1), stop here: load the
 # functions above so they can be exercised in isolation, but run none of the
@@ -479,8 +900,10 @@ HANDOFF_SRC=""
 REPO=""                      # explicit target repo (when the originating cwd isn't inside it)
 BASE=""                      # empty => current HEAD
 PREFIX="feature"
-TARGET="tab"                 # tab => surface in current workspace; workspace => new workspace
-LAUNCHER="auto"              # launch backend: herdr | cmux | auto (auto => detect, see resolve_launcher)
+TARGET="tab"                 # tab => surface in current workspace; workspace => new workspace; split => beside --from-surface
+LAUNCHER="auto"              # launch backend: herdr | cmux | ghostty | auto (auto => detect, see resolve_launcher)
+SPLIT_DIRECTION="right"      # --target split only: which side of --from-surface (right | left)
+FROM_SURFACE=""              # the ORIGINATING pane/surface to split off (see the validation note below)
 SESSION_TRANSCRIPT=""        # explicit originating-session transcript (set by the skill when backgrounded)
 SESSION_CWD=""               # cwd of the originating session, for the resume one-liner
 while [ $# -gt 0 ]; do
@@ -492,6 +915,8 @@ while [ $# -gt 0 ]; do
     --base) BASE="$2"; shift 2 ;;
     --branch-prefix) PREFIX="$2"; shift 2 ;;
     --target) TARGET="$2"; shift 2 ;;
+    --split-direction) SPLIT_DIRECTION="$2"; shift 2 ;;
+    --from-surface) FROM_SURFACE="$2"; shift 2 ;;
     --launcher) LAUNCHER="$2"; shift 2 ;;
     --session-transcript) SESSION_TRANSCRIPT="$2"; shift 2 ;;
     --session-cwd) SESSION_CWD="$2"; shift 2 ;;
@@ -501,8 +926,8 @@ done
 
 # ---- validate --launcher ----------------------------------------------------
 case "$LAUNCHER" in
-  herdr|cmux|auto) ;;
-  *) die "invalid --launcher '$LAUNCHER' (expected: herdr | cmux | auto)" ;;
+  herdr|cmux|ghostty|auto) ;;
+  *) die "invalid --launcher '$LAUNCHER' (expected: herdr | cmux | ghostty | auto)" ;;
 esac
 
 [ -n "$NAME" ] || die "missing --name <kebab-feature-name>"
@@ -515,9 +940,24 @@ case "$LABEL" in -*) die "--label must not start with '-' (got: $LABEL)" ;; esac
 [ -n "$HANDOFF_SRC" ] || die "missing --handoff <path-to-handoff.md>"
 [ -f "$HANDOFF_SRC" ] || die "handoff file not found: $HANDOFF_SRC"
 case "$TARGET" in
-  tab|workspace) ;;
-  *) die "invalid --target '$TARGET' (expected: tab | workspace)" ;;
+  tab|workspace|split) ;;
+  *) die "invalid --target '$TARGET' (expected: tab | workspace | split)" ;;
 esac
+case "$SPLIT_DIRECTION" in
+  right|left) ;;
+  *) die "invalid --split-direction '$SPLIT_DIRECTION' (expected: right | left)" ;;
+esac
+# A split has to know WHAT to split, and that can only arrive as --from-surface: the
+# skill runs this script through a background agent, which no longer holds
+# HERDR_PANE_ID / CMUX_SURFACE_ID / GHOSTTY_SURFACE_ID, so reading the originating
+# surface from the environment splits whatever happened to be focused — or nothing
+# (KTD-2). Rather than guess a surface, fall back to the tab target, LOUDLY: the user
+# asked for a pane beside theirs and is going to go looking for it.
+if [ "$TARGET" = split ] && [ -z "$FROM_SURFACE" ]; then
+  echo "  ⚠ --target split needs --from-surface <id>, and nothing was passed — opening a TAB instead of a split." >&2
+  echo "    The originating surface cannot be inherited from the environment here; pass it explicitly." >&2
+  TARGET=tab
+fi
 
 # Prefer cmux on PATH (Homebrew, Linux); fall back to the macOS app bundle path.
 CMUX="$(command -v cmux 2>/dev/null)"
@@ -526,6 +966,22 @@ CMUX="$(command -v cmux 2>/dev/null)"
 # Resolve herdr the same way (KTD-2): a missing binary means the herdr backend is
 # unavailable regardless of HERDR_ENV. No app-bundle fallback — herdr is PATH-only.
 HERDR="$(command -v herdr 2>/dev/null)"
+
+# Resolve ghostty the same way — except ghostty ships no scripting CLI, so the thing
+# that has to resolve is the .app bundle AppleScript targets. Prefer the bundle
+# GHOSTTY_RESOURCES_DIR points INTO (correct even for a non-standard install
+# location), then the two standard ones. Empty => the ghostty backend is unavailable,
+# whatever TERM_PROGRAM says.
+GHOSTTY_APP=""
+case "${GHOSTTY_RESOURCES_DIR:-}" in
+  */Ghostty.app/*) _g="${GHOSTTY_RESOURCES_DIR%%/Ghostty.app/*}/Ghostty.app"
+                   [ -d "$_g" ] && GHOSTTY_APP="$_g" ;;
+esac
+if [ -z "$GHOSTTY_APP" ]; then
+  for _g in /Applications/Ghostty.app "$HOME/Applications/Ghostty.app"; do
+    [ -d "$_g" ] && { GHOSTTY_APP="$_g"; break; }
+  done
+fi
 
 # ---- resolve target repo (--repo) before any cwd-relative git/IO ------------
 # The originating /start session's cwd is often NOT inside the target repo (e.g.
@@ -824,11 +1280,11 @@ if [ "$LAUNCHER" = "none" ]; then
   step "not inside cmux/herdr (or the CLI is missing) — skipping launch automation"
 else
   step "launcher:    $LAUNCHER"
-  if [ "$TARGET" = "workspace" ]; then
-    launcher_new_workspace     # sets WORKSPACE_REF + LAUNCH_SFC (workspace target)
-  else
-    launcher_new_tab           # sets SURFACE_REF + LAUNCH_SFC (tab target)
-  fi
+  case "$TARGET" in
+    workspace) launcher_new_workspace ;;   # sets WORKSPACE_REF + LAUNCH_SFC
+    split)     launcher_new_split ;;       # sets SURFACE_REF + LAUNCH_SFC beside --from-surface
+    *)         launcher_new_tab ;;         # sets SURFACE_REF + LAUNCH_SFC
+  esac
   # Only launch once a surface actually materialized. The viewer is workspace-only,
   # best-effort.
   if [ -n "$LAUNCH_SFC" ]; then
@@ -887,7 +1343,10 @@ VIEWER_NOTE=""; [ "$VIEWER_OK" = "1" ] && VIEWER_NOTE=" (handoff viewer alongsid
 if [ -n "$SURFACE_REF" ] && [ -n "$WORKSPACE_REF" ]; then
   echo "  $LAUNCHER:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session $SESS_STATE$VIEWER_NOTE"
 elif [ -n "$SURFACE_REF" ]; then
-  echo "  $LAUNCHER tab:  $SURFACE_REF — new Claude session $SESS_STATE"
+  # Name the target that was actually used, not always "tab": a split reports a
+  # split, and a split that FELL BACK to a tab reports the tab it really opened
+  # (the verbs correct LAUNCH_WHERE when they fall back).
+  echo "  $LAUNCHER ${LAUNCH_WHERE:-tab}:  $SURFACE_REF — new Claude session $SESS_STATE"
 elif [ -n "$WORKSPACE_REF" ]; then
   # Workspace was created (and focused) but no agent surface launched — don't claim
   # "not created" and strand the user in an empty focused workspace.

@@ -41,13 +41,30 @@ extract_calls() {                     # $1 = binary var name (HERDR|CMUX)
   grep -oE "\"\\\$$1\" [a-z][a-z-]*( [a-z][a-z-]*)?" "$SPINOFF" \
     | sed -E "s/\"\\\$$1\" //" | sort -u
 }
-# Flags belonging to the BACKEND call only. Quoted segments are stripped first,
-# because a call like `pane run "$view" "bat --paging=always ..."` carries the inner
-# command's flags too — counting those produced false failures, which is worse than
-# missing a bug: a noisy drift check gets ignored.
+# Flags belonging to the BACKEND call only.
+#
+# Two things must be excluded, and the order matters:
+#  1. quoted variable references ("$pane", "$LAUNCH_CMD") — noise, no flags inside
+#  2. quoted strings containing a space — these are INNER commands, e.g.
+#     `pane run "$view" "bat --paging=always ..."`. Their flags belong to bat, not
+#     herdr; counting them produced false failures, and a noisy drift check gets
+#     ignored, which is worse than a missing one.
+#
+# Stripping all quote PAIRS instead (the obvious approach) silently loses real
+# flags on calls wrapped in command substitution — `err="$("$HERDR" pane run ...)"`
+# mis-pairs the quotes and swallows the flag text. That shape is the common one
+# here, so the naive rule verified almost nothing while still reporting passes.
+# Order is load-bearing and each step is here because the previous rule broke:
+#  1. unwrap command substitution first. `err="$("$HERDR" pane run … )"` otherwise
+#     leaves a quoted-with-spaces blob that step 3 eats, flag and all.
+#  2. drop quoted variable references ("$pane") — noise, never contain flags.
+#  3. drop quoted strings containing a space — these are INNER commands, e.g.
+#     `pane run "$view" "bat --paging=always …"`. Those flags belong to bat.
 extract_flags() {                     # $1 = binary var, $2 = subcommand (space-separated)
   grep -E "\"\\\$$1\" $2( |\$)" "$SPINOFF" \
-    | sed -E 's/"[^"]*"/ /g' \
+    | sed -E 's/"\$\(/ /g; s/\)"/ /g' \
+    | sed -E 's/"\$[A-Za-z_][A-Za-z0-9_]*"/ /g' \
+    | sed -E 's/"[^"]*[[:space:]][^"]*"/ /g' \
     | grep -oE '(^| )--[a-z][a-z-]*' | tr -d ' ' | sort -u
 }
 
