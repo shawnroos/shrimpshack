@@ -54,7 +54,6 @@ launcher_new_workspace()  { case "$LAUNCHER" in cmux) launcher_new_workspace_cmu
 launcher_find_left_pane() { case "$LAUNCHER" in cmux) launcher_find_left_pane_cmux ;; herdr) launcher_find_left_pane_herdr ;; esac; }
 launcher_launch_agent()   { case "$LAUNCHER" in cmux) launcher_launch_agent_cmux ;;   herdr) launcher_launch_agent_herdr ;; esac; }
 launcher_wait_ready()     { case "$LAUNCHER" in cmux) launcher_wait_ready_cmux ;;     herdr) launcher_wait_ready_herdr ;; esac; }
-launcher_send_kickoff()   { case "$LAUNCHER" in cmux) launcher_send_kickoff_cmux ;;   herdr) launcher_send_kickoff_herdr ;; esac; }
 launcher_open_viewer()    { case "$LAUNCHER" in cmux) launcher_open_viewer_cmux ;;    herdr) launcher_open_viewer_herdr ;; esac; }
 
 # --- cmux backend (BEHAVIOR-PRESERVING: exact pre-seam CLI calls) -------------
@@ -120,11 +119,26 @@ launcher_new_workspace_cmux() {
 
 # Rename the tab, launch Claude in the worktree, submit. --title (not a bare
 # positional) so a $LABEL starting with '-' can't be misparsed as a flag.
+# The launch carries the brief, so a successful launch IS a successful briefing —
+# KICKOFF_OK is set here rather than by a later submit step. Errors are NOT
+# discarded: swallowing them is why a deleted herdr subcommand went unnoticed for
+# weeks while every run still reported success.
 launcher_launch_agent_cmux() {
   LB_READY=0
+  local err
   "$CMUX" rename-tab --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" --title "$LABEL" >/dev/null 2>&1
-  "$CMUX" send --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" "$LAUNCH_CMD" >/dev/null 2>&1
-  "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1
+  if ! err="$("$CMUX" send --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" "$LAUNCH_CMD" 2>&1)"; then
+    KICKOFF_OK=0
+    echo "  ⚠ cmux send failed while launching the briefed session: $err" >&2
+    return
+  fi
+  if ! err="$("$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter 2>&1)"; then
+    KICKOFF_OK=0
+    echo "  ⚠ cmux send-key failed while launching the briefed session: $err" >&2
+    return
+  fi
+  KICKOFF_OK=1
+  step "  $LAUNCH_LABEL: $LAUNCH_SFC (launched with the brief)"
 }
 
 # Wait for the input prompt to be ready (a fixed sleep is unreliable — a fresh
@@ -143,32 +157,6 @@ launcher_wait_ready_cmux() {
       *"❯"*|*"bypass permissions"*|*"shift+tab to cycle"*) LB_READY=1; break ;;
     esac
   done
-}
-
-# Send + submit the kickoff, then verify it actually submitted (input line should
-# no longer hold it); retry one Enter if it's still sitting there. Reports
-# readiness honestly using the LAUNCH_LABEL / LAUNCH_WHERE set by new_tab/new_workspace.
-# Same readiness GATE as the herdr path: never submit into a session that never
-# reached a ready prompt (the Enter is swallowed and the brief is left staged).
-launcher_send_kickoff_cmux() {
-  local after
-  if [ "$LB_READY" != "1" ]; then
-    KICKOFF_OK=0
-    step "  $LAUNCH_LABEL: $LAUNCH_SFC (NOT briefed — Claude never reached a ready prompt; kickoff withheld)"
-    return
-  fi
-  "$CMUX" send --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" "$KICKOFF" >/dev/null 2>&1
-  sleep 1
-  "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1
-  sleep 2
-  after="$("$CMUX" read-screen --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" 2>/dev/null)"
-  case "$after" in
-    *"Read docs/handoff.md"*)
-      # Still sitting on the input line un-submitted → retry one Enter.
-      "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1 ;;
-  esac
-  KICKOFF_OK=1
-  step "  $LAUNCH_LABEL: $LAUNCH_SFC (Claude ready, briefed)"
 }
 
 # Right pane (workspace target only): render the handoff in cmux's live-reload
@@ -373,9 +361,19 @@ launcher_launch_agent_herdr() {
     echo "  ⚠ no herdr pane resolved to launch claude into" >&2
     HERDR_PANE=""; LAUNCH_SFC=""; SURFACE_REF=""; return
   fi
-  "$HERDR" pane run "$pane" "cd '$WORKTREE' && claude --name '$LABEL'" >/dev/null 2>&1
+  # The brief rides this command as claude's positional prompt (read from the brief
+  # file), so a successful run IS a successful briefing. Errors are surfaced, not
+  # discarded — silent failure here is what shipped unbriefed sessions as successes.
+  local err
+  if ! err="$("$HERDR" pane run "$pane" "$LAUNCH_CMD" 2>&1)"; then
+    KICKOFF_OK=0
+    echo "  ⚠ herdr pane run failed while launching the briefed session: $err" >&2
+    HERDR_PANE="$pane"; LAUNCH_SFC="$pane"; SURFACE_REF="$pane"
+    return
+  fi
   HERDR_PANE="$pane"; LAUNCH_SFC="$pane"; SURFACE_REF="$pane"
-  step "  herdr agent pane: $pane"
+  KICKOFF_OK=1
+  step "  herdr agent pane: $pane (launched with the brief)"
 }
 
 # Readiness for the herdr path. Sets LB_READY=1 only when claude's input prompt is
@@ -433,46 +431,6 @@ launcher_wait_ready_herdr() {
     [ "$(date +%s)" -ge "$deadline" ] && return
     sleep 1
   done
-}
-
-# Fire the kickoff with EXACTLY ONE submit (KTD-4 / R7): `agent send` STAGES the
-# literal text (does NOT press Enter), then a single `pane send-keys … Enter`
-# submits. This stage-only behavior of `agent send` was verified LIVE against
-# herdr 0.7.1 twice (U1 spike + a standalone probe on 2026-07-05: sent text to a
-# `read`-blocked pane with no Enter → the read did NOT complete), overriding older
-# lore that `agent send` auto-submits. Safety net (adapted from the cmux path): if
-# a read shows the kickoff still staged, retry one Enter — never a second send.
-#
-# GATE (the fix for "staged but unsubmitted"): readiness is a CONTROL signal, not
-# a narration variable. If the session never came up ready, DO NOT fire — an Enter
-# into a booting TUI is swallowed, and firing anyway is what produced a correctly
-# branched tab holding an unsubmitted brief, reported as success. Sets KICKOFF_OK=1
-# only when the kickoff was submitted into a confirmed-ready session.
-launcher_send_kickoff_herdr() {
-  local after
-  [ -n "${HERDR_PANE:-}" ] || return
-  # Never send blind. wait_ready already burned the full ceiling; a second wait
-  # would just re-pay it, so treat not-ready as terminal and report loudly.
-  if [ "$LB_READY" != "1" ]; then
-    KICKOFF_OK=0
-    step "  $LAUNCH_LABEL: $HERDR_PANE (NOT briefed — Claude never reached a ready prompt; kickoff withheld)"
-    return
-  fi
-  "$HERDR" agent send "$HERDR_PANE" "$KICKOFF" >/dev/null 2>&1     # stage literal text
-  "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1      # single submit
-  # Readiness-aware retry: re-wait for idle rather than a blind fixed sleep, so the
-  # retry Enter can't land inside the same swallow window as the first.
-  "$HERDR" agent wait "$HERDR_PANE" --status idle --timeout "$SPINOFF_RETRY_TIMEOUT_MS" >/dev/null 2>&1 || true
-  # Raw text, not JSON — see the note in launcher_wait_ready_herdr.
-  after="$("$HERDR" pane read "$HERDR_PANE" --source recent --lines 20 2>/dev/null)"
-  case "$after" in
-    *"Read docs/handoff.md"*)
-      # Still staged on the input line → retry one Enter (no extra `agent send`,
-      # preserving the EXACTLY-ONE-submit invariant: send stages, Enter submits).
-      "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1 ;;
-  esac
-  KICKOFF_OK=1
-  step "  $LAUNCH_LABEL: $HERDR_PANE (Claude ready, briefed)"
 }
 
 # Right-pane handoff viewer (workspace target only). herdr has NO native markdown
@@ -817,7 +775,7 @@ WORKSPACE_REF=""
 SURFACE_REF=""
 VIEWER_OK=0          # set when the handoff markdown viewer actually renders
 LB_READY=0           # set to 1 when the input prompt was confirmed ready
-KICKOFF_OK=0         # set to 1 ONLY when the kickoff was submitted into a ready session
+KICKOFF_OK=0         # set to 1 ONLY when the launch carrying the brief actually succeeded
 # Readiness ceiling. A boot slower than this is a hard failure (kickoff withheld,
 # reported loudly, non-zero exit) rather than a silently-unbriefed tab. Generous by
 # design: herdr's `agent wait` returns the instant the agent is idle, so a fast boot
@@ -828,14 +786,34 @@ LEFT_PANE=""; WS=""  # cmux discovery scratch (set by the cmux verbs)
 HERDR_PANE=""        # herdr agent pane id (set by launcher_launch_agent_herdr)
 # Backend-neutral refs the launch verbs hand off to each other:
 LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""; LAUNCH_RUN_PANE=""; HERDR_WS_SOURCE=""
-LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
-# Short pointer, not the full directional prose. A ~1080-char single-line paste
-# overruns the TUI input line and the launched session gets a truncated kickoff.
-# The "treat the handoff as directional" framing already lives authoritatively in
-# every generated handoff (the banner injected above + the handoff body), so the
-# kickoff only needs to point at it. Keep the first line's "Read docs/handoff.md"
-# substring in sync with the resubmit-guard match below.
+# Short pointer, not the full directional prose. The "treat the handoff as
+# directional" framing already lives authoritatively in every generated handoff
+# (the banner injected above + the handoff body), so the brief only points at it.
 KICKOFF="Read docs/handoff.md — it's the brief for this worktree (treat it as directional: orient and validate against the code, don't execute literally). Get oriented, then recommend the next compound-engineering step (/ce-brainstorm if ambiguous, /ce-plan if clear) with a one-line rationale, and wait for my direction."
+
+# The brief rides the LAUNCH itself as claude's positional prompt, instead of being
+# typed into an already-running TUI afterward. That removes the whole staged-send
+# failure class: there is no window in which a session exists but is unbriefed, and
+# no Enter to be swallowed by a booting app.
+#
+# It travels as a FILE PATH, never inline. The brief contains apostrophes, quotes and
+# punctuation, and the command string is re-parsed by a shell (cmux `send`, herdr
+# `pane run`) and, for ghostty, by AppleScript first. Passing the path means only the
+# path crosses those boundaries — verified byte-identical against hostile input.
+#
+# The file lives in the worktree, which is freshly created per run, so the path is
+# unique per spinoff without a random suffix, and it PERSISTS: the manual-recovery
+# line printed on failure has to stay runnable after the script exits.
+BRIEF_FILE="$WORKTREE/.spinoff-brief"
+printf '%s\n' "$KICKOFF" > "$BRIEF_FILE" 2>/dev/null || true
+# Keep it out of git the same way carried dotfiles are (root-anchored, shared exclude).
+_brief_excl="$(git -C "$WORKTREE" rev-parse --git-path info/exclude 2>/dev/null)"
+[ -n "$_brief_excl" ] && { grep -qxF '/.spinoff-brief' "$_brief_excl" 2>/dev/null || printf '/.spinoff-brief\n' >> "$_brief_excl"; }
+
+LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL' \"\$(cat .spinoff-brief)\""
+# Recovery line for the summary: never references the brief file, so it stays
+# runnable even if that file is gone.
+MANUAL_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
 
 # Detect the backend once (KTD-2), then drive the launch through the neutral
 # verbs. resolve_launcher's precedence (herdr live > cmux > none) subsumes the old
@@ -851,13 +829,24 @@ else
   else
     launcher_new_tab           # sets SURFACE_REF + LAUNCH_SFC (tab target)
   fi
-  # Only brief once a surface actually materialized (byte-identical to the old
-  # "if [ -n "$SURFACE_REF" ]" guards). The viewer is workspace-only, best-effort.
+  # Only launch once a surface actually materialized. The viewer is workspace-only,
+  # best-effort.
   if [ -n "$LAUNCH_SFC" ]; then
-    launcher_launch_agent
-    launcher_wait_ready
-    launcher_send_kickoff
-    [ "$TARGET" = "workspace" ] && launcher_open_viewer
+    # Refuse to launch an unbriefable session. An unreadable or empty brief file
+    # would produce `claude ""` — a session that opens with no idea why it exists,
+    # which is precisely the outcome this design removes. Fail before launching.
+    if [ ! -s "$BRIEF_FILE" ]; then
+      KICKOFF_OK=0
+      echo "  ⚠ brief file is missing or empty ($BRIEF_FILE) — refusing to launch an unbriefed session" >&2
+    else
+      launcher_launch_agent
+      # Readiness is no longer a briefing gate — the brief is already submitted by
+      # the launch. It still runs because it is what dismisses the MCP trust modal
+      # a fresh project path raises, which is what gets MCP servers enabled for the
+      # new session. A session that never draws is now a WARNING, not a failure.
+      launcher_wait_ready
+      [ "$TARGET" = "workspace" ] && launcher_open_viewer
+    fi
   fi
 fi
 
@@ -890,7 +879,10 @@ echo "  launcher:  $LAUNCHER"
 # only claim "briefed" when readiness was confirmed, and only claim the viewer
 # when it actually rendered (R9). The label is driven by $LAUNCHER / $TARGET —
 # never hard-code "cmux" here (a herdr run must not report itself as cmux).
-if [ "$KICKOFF_OK" = "1" ]; then SESS_STATE="open + briefed"; else SESS_STATE="launched but NOT briefed — kickoff withheld (never reached a ready prompt)"; fi
+if [ "$KICKOFF_OK" = "1" ]; then SESS_STATE="open + briefed"; else SESS_STATE="NOT briefed — the launch did not carry the brief"; fi
+# Readiness is now advisory: the brief is submitted by the launch, so a session that
+# never drew is briefed but may not have had its MCP trust modal answered.
+[ "$KICKOFF_OK" = "1" ] && [ "$LB_READY" != "1" ] && SESS_STATE="$SESS_STATE (prompt never confirmed — MCP servers may not be enabled)"
 VIEWER_NOTE=""; [ "$VIEWER_OK" = "1" ] && VIEWER_NOTE=" (handoff viewer alongside)"
 if [ -n "$SURFACE_REF" ] && [ -n "$WORKSPACE_REF" ]; then
   echo "  $LAUNCHER:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session $SESS_STATE$VIEWER_NOTE"
@@ -900,13 +892,13 @@ elif [ -n "$WORKSPACE_REF" ]; then
   # Workspace was created (and focused) but no agent surface launched — don't claim
   # "not created" and strand the user in an empty focused workspace.
   echo "  $LAUNCHER:      workspace $WORKSPACE_REF created, but no agent surface launched — start Claude in it manually:"
-  echo "             $LAUNCH_CMD"
+  echo "             $MANUAL_CMD"
 elif [ "$LAUNCHER" = none ]; then
   echo "  launch:    not automated (not inside cmux/herdr) — start manually:"
-  echo "             $LAUNCH_CMD"
+  echo "             $MANUAL_CMD"
 else
   echo "  $LAUNCHER:      not created — start manually:"
-  echo "             $LAUNCH_CMD"
+  echo "             $MANUAL_CMD"
 fi
 echo "════════════════════════════════════════════════════════"
 
@@ -917,14 +909,10 @@ echo "════════════════════════�
 if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
   echo
   echo "⚠ THE NEW SESSION WAS NOT BRIEFED." >&2
-  echo "  Claude never reached a ready prompt within ${SPINOFF_READY_TIMEOUT_MS}ms, so the kickoff was" >&2
-  echo "  withheld rather than fired blind into a booting TUI (an early Enter is swallowed," >&2
-  echo "  which silently leaves the brief staged and unsubmitted)." >&2
+  echo "  The brief travels as an argument to the launch command, so this means the launch" >&2
+  echo "  itself did not complete — the failure is reported above, not swallowed." >&2
   echo "  The worktree, branch and handoff are intact. To brief it by hand, run this in the tab:" >&2
   echo >&2
   echo "    Read docs/handoff.md and get oriented, then recommend the next step." >&2
-  echo >&2
-  echo "  A slow boot (e.g. MCP servers still loading) is the usual cause — retrying, or raising" >&2
-  echo "  SPINOFF_READY_TIMEOUT_MS, generally clears it." >&2
   exit 3
 fi

@@ -94,52 +94,62 @@ run() {  # run <screen> <name>
        bash "$SPINOFF" --name "$2" --handoff "$HANDOFF" --target tab --base origin/main 2>&1 )
 }
 
-echo "kickoff readiness-gate checks ($(basename "$(dirname "$SPINOFF")")/$(basename "$SPINOFF")):"
+echo "brief-at-launch checks ($(basename "$(dirname "$SPINOFF")")/$(basename "$SPINOFF")):"
 
-# ---- 1. SLOW BOOT (claude never draws) → must WITHHOLD the kickoff ------------
+# The brief is now claude's positional prompt, carried by the launch command itself.
+# There is no post-launch text injection, so the old "withhold the kickoff until the
+# prompt is ready" gate no longer exists — a slow boot is briefed like any other.
+# What readiness still buys is the trust-modal answer, which is what enables MCP
+# servers for a session opened on a new project path.
+
+# ---- 1. SLOW BOOT (claude never draws) → still briefed, MCP caveat reported ----
 out="$(run booting slow-boot)"; rc=$?
 
-grep -q 'agent send' "$CALLS" \
-  && bad "slow boot: kickoff was SENT into a non-ready session (the 0.8.2 bug)" \
-  || ok  "slow boot: kickoff withheld — no 'agent send'"
+grep -qE 'pane run .*cat \.spinoff-brief' "$CALLS" \
+  && ok  "slow boot: the launch carried the brief" \
+  || bad "slow boot: launch did not carry the brief"
+
+grep -qE '^(agent send|agent prompt|pane send-text)' "$CALLS" \
+  && bad "slow boot: text was injected after launch — that path should be gone" \
+  || ok  "slow boot: nothing injected after launch"
 
 echo "$out" | grep -q '✓ Spinoff complete' \
-  && bad "slow boot: reported '✓ Spinoff complete' for an unbriefed session" \
-  || ok  "slow boot: did not claim completion"
+  && ok  "slow boot: reported complete — a slow boot is no longer a failure" \
+  || bad "slow boot: reported incomplete for a session that WAS briefed"
 
-echo "$out" | grep -q 'Spinoff INCOMPLETE' \
-  && ok  "slow boot: reported INCOMPLETE" \
-  || bad "slow boot: no INCOMPLETE header"
+[ "$rc" -eq 0 ] \
+  && ok  "slow boot: exited 0" \
+  || bad "slow boot: exited $rc"
 
-[ "$rc" -ne 0 ] \
-  && ok  "slow boot: exited non-zero (rc=$rc)" \
-  || bad "slow boot: exited 0 — a caller checking status sees success"
+echo "$out" | grep -q 'MCP servers may not be enabled' \
+  && ok  "slow boot: disclosed that the prompt never confirmed" \
+  || bad "slow boot: silently hid the unconfirmed prompt"
 
-echo "$out" | grep -q 'Read docs/handoff.md' \
-  && ok  "slow boot: printed the manual recovery one-liner" \
-  || bad "slow boot: no recovery instructions"
-
-# The worktree is still real work — it must survive the failure.
+# The worktree is still real work — it must survive regardless.
 [ -f "$REPO/worktrees/slow-boot/docs/handoff.md" ] \
   && ok  "slow boot: worktree + handoff preserved" \
   || bad "slow boot: worktree/handoff missing"
 
-# The shell prompt must NOT be mistaken for readiness. `booting` shows a bare "❯",
-# so if the ready-match ever regresses to matching it, check 1 goes red.
-echo "$out" | grep -q 'Spinoff INCOMPLETE' \
+# A bare "❯" must still not be mistaken for claude being ready — the MCP caveat
+# above is the observable proof the ready-match rejected the shell prompt.
+echo "$out" | grep -q 'MCP servers may not be enabled' \
   && ok  "slow boot: a bare shell '❯' is not treated as claude being ready" \
   || bad "slow boot: shell prompt accepted as ready (false-positive ready match)"
 
-# ---- 2. FAST BOOT (prompt drawn) → must brief, with EXACTLY ONE submit --------
+# ---- 2. FAST BOOT (prompt drawn) → briefed, no injection, no caveat -----------
 out="$(run ready fast-boot)"; rc=$?
 
-grep -q 'agent send' "$CALLS" \
-  && ok  "fast boot: kickoff sent" \
-  || bad "fast boot: kickoff never sent — the gate is too strict"
+grep -qE 'pane run .*cat \.spinoff-brief' "$CALLS" \
+  && ok  "fast boot: the launch carried the brief" \
+  || bad "fast boot: launch did not carry the brief"
 
-[ "$(grep -c 'agent send' "$CALLS")" = "1" ] \
-  && ok  "fast boot: exactly one 'agent send' (stage-once invariant held)" \
-  || bad "fast boot: $(grep -c 'agent send' "$CALLS") sends — duplicate kickoff"
+[ "$(grep -cE 'pane run .*claude --name' "$CALLS")" = "1" ] \
+  && ok  "fast boot: exactly one launch (no duplicate briefing)" \
+  || bad "fast boot: $(grep -cE 'pane run .*claude --name' "$CALLS") launches"
+
+echo "$out" | grep -q 'MCP servers may not be enabled' \
+  && bad "fast boot: reported the MCP caveat despite a confirmed prompt" \
+  || ok  "fast boot: no MCP caveat — prompt confirmed"
 
 echo "$out" | grep -q '✓ Spinoff complete' \
   && ok  "fast boot: reported complete" \
@@ -149,23 +159,23 @@ echo "$out" | grep -q '✓ Spinoff complete' \
   && ok  "fast boot: exited 0" \
   || bad "fast boot: exited $rc"
 
-# ---- 3. MCP TRUST MODAL → dismiss it, THEN brief -----------------------------
+# ---- 3. MCP TRUST MODAL → still dismissed (this is why readiness survives) ----
 # A spinoff worktree is a new project path, so a repo with .mcp.json always greets
-# a fresh claude with this modal — and the agent reports "idle" behind it. This is
-# the case that actually broke every real spinoff.
+# a fresh claude with this modal. The brief is already in by then, but the modal
+# still has to be answered or the session runs without its MCP servers.
 out="$(run modal mcp-modal)"; rc=$?
 
 grep -q 'pane send-keys' "$CALLS" \
   && ok  "mcp modal: dismissed (send-keys issued)" \
-  || bad "mcp modal: never dismissed — a real spinoff would hang here"
+  || bad "mcp modal: never dismissed — the session would run without MCP servers"
 
 echo "$out" | grep -qi 'MCP trust modal' \
   && ok  "mcp modal: disclosed the auto-accept in the output" \
   || bad "mcp modal: silently accepted a trust prompt"
 
-grep -q 'agent send' "$CALLS" \
-  && ok  "mcp modal: briefed after dismissal" \
-  || bad "mcp modal: kickoff never sent"
+grep -qE 'pane run .*cat \.spinoff-brief' "$CALLS" \
+  && ok  "mcp modal: brief still rode the launch" \
+  || bad "mcp modal: launch did not carry the brief"
 
 echo "$out" | grep -q '✓ Spinoff complete' && [ "$rc" -eq 0 ] \
   && ok  "mcp modal: reported complete" \
