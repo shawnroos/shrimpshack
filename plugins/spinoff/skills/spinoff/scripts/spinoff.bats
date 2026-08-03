@@ -555,6 +555,24 @@ run_unresolvable() {
   git -C "$UREPO" worktree list | grep -q "worktrees/uh"
 }
 
+@test "override: a valid HERDR_BIN launches with no herdr on PATH at all (R2)" {
+  # The main session resolves the binary and passes it down (SKILL.md Step 4), so a
+  # SET, VALID override is the PRIMARY path now, not a break-glass knob — and the whole
+  # point is that it works when PATH cannot answer. run_unresolvable's stub dir holds
+  # no herdr, so PATH resolution genuinely cannot succeed here; only the override can.
+  LOUD_STUBS=
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=1 \
+                   HERDR_BIN="$STUBDIR/herdr"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" != *"INCOMPLETE"* ]]
+  [[ "$output" == *"launcher:  herdr"* ]]
+  # and it really launched rather than falling back to a quiet none
+  [[ "$output" == *"✓ Spinoff complete"* ]]
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+}
+
 @test "loud: announced cmux that cannot be resolved warns and exits 4 (R5, R6)" {
   # cmux is made unresolvable through a SET-but-invalid CMUX_BIN rather than a bare
   # empty PATH, and that is deliberate: resolve_bin's extra candidate for cmux is
