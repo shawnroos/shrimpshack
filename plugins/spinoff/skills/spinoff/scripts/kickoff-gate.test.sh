@@ -121,7 +121,7 @@ echo "$out" | grep -q '✓ Spinoff complete' \
   && ok  "slow boot: exited 0" \
   || bad "slow boot: exited $rc"
 
-echo "$out" | grep -q 'MCP servers may not be enabled' \
+echo "$out" | grep -q 'a dialog may still be up' \
   && ok  "slow boot: disclosed that the prompt never confirmed" \
   || bad "slow boot: silently hid the unconfirmed prompt"
 
@@ -132,7 +132,7 @@ echo "$out" | grep -q 'MCP servers may not be enabled' \
 
 # A bare "❯" must still not be mistaken for claude being ready — the MCP caveat
 # above is the observable proof the ready-match rejected the shell prompt.
-echo "$out" | grep -q 'MCP servers may not be enabled' \
+echo "$out" | grep -q 'a dialog may still be up' \
   && ok  "slow boot: a bare shell '❯' is not treated as claude being ready" \
   || bad "slow boot: shell prompt accepted as ready (false-positive ready match)"
 
@@ -147,7 +147,7 @@ grep -qE 'pane run .*\.spinoff-brief' "$CALLS" \
   && ok  "fast boot: exactly one launch (no duplicate briefing)" \
   || bad "fast boot: $(grep -cE 'pane run .*claude --name' "$CALLS") launches"
 
-echo "$out" | grep -q 'MCP servers may not be enabled' \
+echo "$out" | grep -q 'a dialog may still be up' \
   && bad "fast boot: reported the MCP caveat despite a confirmed prompt" \
   || ok  "fast boot: no MCP caveat — prompt confirmed"
 

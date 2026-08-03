@@ -7,14 +7,17 @@ of work, spin it into a **fresh git worktree** with a **new, already-briefed
 Claude session** — so the current session stays focused and the new one picks up
 exactly where this one left off.
 
-Two flavours:
+Three flavours:
 
-- **`/start-session`** (and the `/start` alias) — a new **tab** on the current
-  cmux workspace's left agent pane.
-- **`/start-workspace`** — a **brand-new cmux workspace**, two panes: briefed
-  Claude on the left, the handoff in a live-reload markdown viewer on the right.
+- **`/start-session`** (and the `/start` alias) — a new **tab** where you are now.
+- **`/start-split`** — a **split beside the pane you're in**, in the same tab.
+- **`/start-workspace`** — a **brand-new workspace**, two panes: briefed Claude on
+  the left, the handoff rendered on the right.
 
-The mechanical work (worktree, handoff, cmux launch, readiness polling) runs in a
+It launches through whichever terminal you're actually in — **herdr**, **cmux** or
+**ghostty**, auto-detected, no flag needed.
+
+The mechanical work (worktree, handoff, the launch, readiness polling) runs in a
 **background agent**, so it doesn't eat the context of the session you ran it from.
 
 ## Install
@@ -30,7 +33,9 @@ It's **command-invoked only** — it never fires on its own from how you phrase
 something. Run:
 
 ```
-/start-session              # new tab on the current workspace (alias: /start)
+/start-session              # new tab where you are (alias: /start)
+/start-split                # split beside the current pane
+/start-split left           # …on the left instead
 /start-workspace            # brand-new two-pane workspace
 /start-session crop snapping  # seeds the feature name + handoff focus
 ```
@@ -47,16 +52,31 @@ What happens:
    - writes `docs/handoff.md` with a link back to the originating session
      (transcript path + `claude -r <uuid>` resume one-liner),
    - carries over recent `docs/` plan/brainstorm files,
-   - launches a briefed Claude — a new tab on the current workspace
-     (`/start-session`), or a new two-pane workspace with the handoff viewer
-     alongside (`/start-workspace`) — and sends a "read the handoff" kickoff.
-4. Claude relays the summary; you continue in the new tab/workspace.
+   - **launches Claude with the brief already attached** — as its opening prompt on
+     the launch command, so the new session is briefed the moment it exists. It
+     lands in a new tab (`/start-session`), a split beside your pane
+     (`/start-split`), or a new two-pane workspace with the handoff alongside
+     (`/start-workspace`).
+4. Claude relays the summary; you continue in the new tab, split or workspace.
 
 ## Requirements
 
-- [cmux](https://cmux.io) (for the tab automation; without it the script still
-  creates the worktree + handoff and prints the manual `cd … && claude` command).
+- A terminal it can drive: [herdr](https://herdr.dev), [cmux](https://cmux.io), or
+  [Ghostty](https://ghostty.org) on macOS. Without one the script still creates the
+  worktree + handoff and prints the manual `cd … && claude` command.
 - A git repo. Worktrees nest under `<repo>/worktrees/`.
+
+Two things to know about the Ghostty path specifically, since it's driven by
+AppleScript rather than a CLI:
+
+- **macOS will ask for Automation permission** the first time. If you deny it, grant
+  it in System Settings → Privacy & Security → Automation before trying again — macOS
+  remembers a denial, so the script won't retry into it.
+- **Claude's startup prompts aren't auto-answered.** A fresh worktree path makes
+  Claude ask things like "N new MCP servers found in this project"; herdr and cmux read
+  the screen and answer them, Ghostty has no way to read a surface at all, so the new
+  session waits on the prompt and may start without its MCP servers. The brief itself
+  is unaffected.
 
 ## Optional: per-repo bootstrap
 

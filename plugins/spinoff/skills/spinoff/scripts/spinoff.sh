@@ -205,7 +205,18 @@ launcher_wait_ready_cmux() {
     sleep 1
     screen="$("$CMUX" read-screen --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" 2>/dev/null)"
     case "$screen" in
-      *"❯"*|*"bypass permissions"*|*"shift+tab to cycle"*) LB_READY=1; break ;;
+      *"trust this folder"*|*"Is this a project you created"*)
+        # See the herdr path: the folder-trust prompt blocks a fresh worktree before
+        # claude will process a command-line prompt.
+        case "${SPINOFF_FOLDER_TRUST:-accept}" in
+          reject) "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" escape >/dev/null 2>&1
+                  step "  … folder-trust prompt: declined (SPINOFF_FOLDER_TRUST=reject)" ;;
+          abort)  step "  … folder-trust prompt is up and SPINOFF_FOLDER_TRUST=abort — leaving it for you"; return ;;
+          *)      "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1
+                  step "  … folder-trust prompt: accepted for this worktree" ;;
+        esac
+        ;;
+      *"bypass permissions"*|*"shift+tab to cycle"*|*"? for shortcuts"*) LB_READY=1; break ;;
     esac
   done
 }
@@ -500,6 +511,22 @@ launcher_wait_ready_herdr() {
     screen="$("$HERDR" pane read "$HERDR_PANE" --source visible 2>/dev/null)"
     case "$screen" in
       *"shift+tab to cycle"*|*"bypass permissions"*|*"? for shortcuts"*) LB_READY=1; return ;;
+      *"trust this folder"*|*"Is this a project you created"*)
+        # DIFFERENT modal from the MCP one below, and the one that actually blocks a
+        # fresh worktree: claude asks whether it trusts the FOLDER before it will
+        # process anything, including a prompt supplied on the command line. Found by
+        # a real end-to-end run — every stub in the suite emits a ready footer, so no
+        # test could have surfaced it. The default option is "Yes, I trust this
+        # folder"; a worktree of a repo the user already works in is the same trust
+        # they have already given, but it IS a trust prompt, so it is disclosed.
+        case "${SPINOFF_FOLDER_TRUST:-accept}" in
+          reject) "$HERDR" pane send-keys "$HERDR_PANE" Escape >/dev/null 2>&1
+                  step "  … folder-trust prompt: declined (SPINOFF_FOLDER_TRUST=reject) — session will not run here" ;;
+          abort)  step "  … folder-trust prompt is up and SPINOFF_FOLDER_TRUST=abort — leaving it for you"; return ;;
+          *)      "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1
+                  step "  … folder-trust prompt: accepted for this worktree (same trust as the parent repo)" ;;
+        esac
+        sleep 2 ;;
       *"new MCP servers found"*|*"Select any you wish to enable"*)
         # Confirm the pre-checked default (Enter). The spinoff is a worktree of a repo
         # the user already works in, so this reproduces the parent repo's state rather
@@ -1335,10 +1362,18 @@ echo "  launcher:  $LAUNCHER"
 # only claim "briefed" when readiness was confirmed, and only claim the viewer
 # when it actually rendered (R9). The label is driven by $LAUNCHER / $TARGET —
 # never hard-code "cmux" here (a herdr run must not report itself as cmux).
-if [ "$KICKOFF_OK" = "1" ]; then SESS_STATE="open + briefed"; else SESS_STATE="NOT briefed — the launch did not carry the brief"; fi
-# Readiness is now advisory: the brief is submitted by the launch, so a session that
-# never drew is briefed but may not have had its MCP trust modal answered.
-[ "$KICKOFF_OK" = "1" ] && [ "$LB_READY" != "1" ] && SESS_STATE="$SESS_STATE (prompt never confirmed — MCP servers may not be enabled)"
+if [ "$KICKOFF_OK" != "1" ]; then
+  SESS_STATE="NOT briefed — the launch did not carry the brief"
+elif [ "$LB_READY" != "1" ]; then
+  # The launch succeeded, but claude never drew a usable prompt. A real end-to-end
+  # run showed exactly what that means: a modal (folder-trust) can sit in front of
+  # the session, and claude does not process its command-line prompt until answered.
+  # So an unconfirmed prompt is UNVERIFIED, never a success — claiming "briefed"
+  # here is the same false-success class this change set out to remove.
+  SESS_STATE="open + briefed (a dialog may still be up — answer it and the brief runs)"
+else
+  SESS_STATE="open + briefed"
+fi
 VIEWER_NOTE=""; [ "$VIEWER_OK" = "1" ] && VIEWER_NOTE=" (handoff viewer alongside)"
 if [ -n "$SURFACE_REF" ] && [ -n "$WORKSPACE_REF" ]; then
   echo "  $LAUNCHER:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session $SESS_STATE$VIEWER_NOTE"
@@ -1368,8 +1403,7 @@ echo "════════════════════════�
 if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
   echo
   echo "⚠ THE NEW SESSION WAS NOT BRIEFED." >&2
-  echo "  The brief travels as an argument to the launch command, so this means the launch" >&2
-  echo "  itself did not complete — the failure is reported above, not swallowed." >&2
+  echo "  The launch itself did not complete — the failure is reported above, not swallowed." >&2
   echo "  The worktree, branch and handoff are intact. To brief it by hand, run this in the tab:" >&2
   echo >&2
   echo "    Read docs/handoff.md and get oriented, then recommend the next step." >&2

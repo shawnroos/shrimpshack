@@ -1,24 +1,26 @@
 ---
 name: spinoff
 description: >-
-  Command-invoked only (via /start-session, /start-workspace, or the /start alias)
-  — do NOT trigger this skill from conversational phrasing on your own. It forks the
-  current thread of work into its own place: takes the topic/plan/idea just discussed
-  and moves it into a fresh git worktree with a new, already-briefed Claude session,
-  so this session stays focused and the new one picks up the context. Branches a
-  worktree (from current HEAD or develop), writes a handoff doc linking back to this
-  session's transcript, carries over recent plan/brainstorm docs, and boots a briefed
-  Claude — either in a new tab on the current workspace (/start-session) or in a
-  brand-new two-pane workspace with the handoff alongside (/start-workspace), using
-  whichever launcher backend is live (cmux or herdr, auto-detected). The
-  mechanical work runs in a background agent so it doesn't consume this session's
-  context. Only run when the user explicitly invokes one of the commands — if they
-  merely describe wanting to fork work, suggest the command rather than acting.
+  Command-invoked only (via /start-session, /start-split, /start-workspace, or the
+  /start alias) — do NOT trigger this skill from conversational phrasing on your own.
+  It forks the current thread of work into its own place: takes the topic/plan/idea
+  just discussed and moves it into a fresh git worktree with a new, already-briefed
+  Claude session, so this session stays focused and the new one picks up the context.
+  Branches a worktree (from current HEAD or develop), writes a handoff doc linking
+  back to this session's transcript, carries over recent plan/brainstorm docs, and
+  boots a briefed Claude — in a new tab on the current workspace (/start-session),
+  beside the pane you're in (/start-split), or in a brand-new two-pane workspace with
+  the handoff alongside (/start-workspace) — using whichever launcher backend is live
+  (herdr, cmux or ghostty, auto-detected). The mechanical work runs in a background
+  agent so it doesn't consume this session's context. Only run when the user
+  explicitly invokes one of the commands — if they merely describe wanting to fork
+  work, suggest the command rather than acting.
 ---
 
 # Spinoff
 
-**Invoked only via `/start-session`, `/start-workspace`, or the `/start` alias.**
+**Invoked only via `/start-session`, `/start-split`, `/start-workspace`, or the
+`/start` alias.**
 This skill has real side effects (creates a worktree, opens a tab or workspace,
 launches a Claude session) so it runs only on those explicit commands — never
 auto-triggered from how the user happens to phrase something. If the user
@@ -34,42 +36,66 @@ the why, the dead-ends, the decisions. A spinoff that just makes a branch loses
 all of that. So the heart of this skill is writing a genuinely useful handoff,
 not the mechanical git/terminal plumbing (which the bundled script handles).
 
-## Two commands, one skill
+## Three commands, one skill
 
 | Command | Where the new Claude lands |
 | --- | --- |
 | `/start-session` (and the `/start` alias) | A new **tab** on the current workspace's left agent pane — `--target tab`. |
+| `/start-split` | **Beside the pane you're in**, in the current tab — `--target split`, plus `--split-direction right|left` (default right). |
 | `/start-workspace` | A **brand-new workspace**: briefed Claude on the left, the handoff markdown rendered alongside on the right — `--target workspace`. |
 
-Both run the same `spinoff.sh`; they differ only in the `--target` they pass.
+All three run the same `spinoff.sh`; they differ only in the `--target` they pass
+(and, for split, the direction and the originating surface).
 
-## Two backends: cmux or herdr (auto-detected)
+## Three backends: herdr, cmux or ghostty (auto-detected)
 
-The launch is driven through a backend the script picks at run time — **cmux** or
-**herdr** — so `/start` works under whichever terminal multiplexer this session is
+The launch is driven through a backend the script picks at run time — **herdr**,
+**cmux** or **ghostty** — so `/start` works in whichever terminal this session is
 running in. You don't choose it; the script detects it. The `--launcher` flag
-(`herdr | cmux | auto`, default `auto`) forces a backend or leaves it to detection:
+(`herdr | cmux | ghostty | auto`, default `auto`) forces a backend or leaves it to
+detection:
 
 - **`auto`** (default) — pick **herdr** when `HERDR_ENV=1` *and* the herdr server is
   live (a `herdr status server` probe — a stale `HERDR_ENV` never wins); else **cmux**
-  when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **none** (worktree +
-  handoff still produced, plus a manual `cd … && claude` line). Both env sets can be
-  present at once, so precedence is explicit: **herdr (live) > cmux > none**.
-- **`--launcher herdr` / `--launcher cmux`** — force that backend, but it's *still*
+  when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **ghostty** when
+  Ghostty is the terminal *and* no multiplexer announced itself at all; else **none**
+  (worktree + handoff still produced, plus a manual `cd … && claude` line).
+  Precedence is explicit: **herdr (live) > cmux > ghostty > none**.
+- Ghostty is deliberately suppressed whenever `HERDR_ENV` or `CMUX_WORKSPACE_ID` is
+  set, even if the multiplexer's own probe then fails. Those vars are both present
+  inside herdr-running-in-ghostty, and a multiplexer that announced itself owns the
+  session — opening a bare ghostty window would be the wrong recovery. Use
+  `--launcher ghostty` when you actually want that.
+- **`--launcher herdr` / `cmux` / `ghostty`** — force that backend, but it's *still*
   probed; if the probe fails it falls back to auto-detection rather than hard-erroring.
 
-The two backends differ in one load-bearing way worth knowing: on the **herdr** path
-the readiness wait is a real blocking primitive (`agent wait --status idle`), not the
-cmux path's 30× screen-scrape poll for the prompt glyph — so the kickoff lands on a
-genuinely-ready session. Everything else (worktree, handoff, doc carry-over, the
-single-submit kickoff, the honest summary) is identical across backends.
+Where the backends differ, in the parts worth knowing:
+
+- **Readiness.** On herdr it's a real blocking primitive (`agent wait --status idle`);
+  on cmux it's a screen-scrape poll for the prompt glyph; on ghostty it's just the
+  terminal's pid, because the AppleScript dictionary has no way to read a surface's
+  contents.
+- **Claude's startup prompts on a fresh worktree** — most notably "N new MCP servers
+  found in this project". herdr and cmux read the screen and answer them, so the new
+  session gets its MCP servers. **Ghostty can't**: with no screen-read verb it can't
+  see a prompt, let alone answer one, so the session sits there until someone does —
+  and may end up running without its MCP servers. The brief is unaffected either way
+  (it rides the launch command).
+- **Ghostty needs macOS Automation permission.** First use raises a system dialog;
+  a denial has to be granted in System Settings → Privacy & Security → Automation
+  before a launch works. The script names the remedy and stops retrying.
+- **Ghostty's `tab` target lands in the front window**, not in some remembered one,
+  and its `workspace` target is a new ghostty window.
+
+Everything else (worktree, handoff, doc carry-over, the brief riding the launch, the
+honest summary) is identical across backends.
 
 ## The context model: synthesis here, mechanics in the background
 
 Only **handoff synthesis** needs this conversation, so it stays in the main
 session. Everything mechanical — running the script, watching ~40 lines of step
-output, waiting until the new Claude's prompt is ready (a herdr blocking wait or a
-cmux screen-scrape poll), verifying the kickoff submitted — is noise the main
+output, waiting until the new Claude has drawn its prompt (a herdr blocking wait, a
+cmux screen-scrape poll, or a ghostty pid check) — is noise the main
 session never needs to keep. So after you
 synthesize the handoff and get the branch base, you **dispatch a background agent
 to run the script** and report back a short summary. The verbose output lives in
@@ -83,7 +109,7 @@ the background agent's context; the main session stays light.
    in the main session, because the background agent can't prompt him).
 3. **Resolve this session's transcript + cwd** so the resume link is correct.
 4. **Dispatch a background agent** to run `spinoff.sh` with the resolved args.
-5. **Relay** the agent's summary (branch, worktree, tab/workspace, link).
+5. **Relay** the agent's summary (branch, worktree, tab/split/workspace, link).
 
 ## Step 1 — Synthesize the handoff (do this first, before any commands)
 
@@ -138,7 +164,7 @@ tests as the source of truth — not a definitive blueprint to execute literally
 That's why the template opens with the directional banner above. If you omit the
 banner, `spinoff.sh` injects it when it finalizes the handoff (idempotently — it
 won't double up), so the stance is carried even for a workspace viewer or a human
-reader who never sees the kickoff message. Don't over-rotate into "treat this as
+reader who never sees the launch brief. Don't over-rotate into "treat this as
 unreliable": the decisions and facts are still worth trusting — the stance is
 orient-and-validate.
 
@@ -204,8 +230,8 @@ them explicitly whenever `--repo` is set.
 
 ## Step 3.5 — Confirm the target workspace (when it differs)
 
-A `--target tab` spinoff opens in the **current** workspace (cmux or herdr).
-Usually that's right — but if the workspace you're in is anchored on a *different*
+A `--target tab` or `--target split` spinoff opens in the **current** workspace or
+window (herdr, cmux or ghostty). Usually that's right — but if the workspace you're in is anchored on a *different*
 repo than the one you're forking (`--repo`), the new tab would land somewhere
 surprising. Catch that here, before dispatch (the background agent can't ask):
 
@@ -215,8 +241,9 @@ surprising. Catch that here, before dispatch (the background agent can't ask):
   is the low-confidence case, so don't proceed silently.
 - *How to read the current workspace's repo (execution-time detail):* the current
   workspace is `CMUX_WORKSPACE_ID` (cmux) or `HERDR_WORKSPACE_ID` (herdr); read its
-  primary terminal pane's cwd and run `git -C <cwd> rev-parse --show-toplevel`. If
-  neither backend exposes the cwd cleanly, treat the repo as *undetectable* →
+  primary terminal pane's cwd and run `git -C <cwd> rev-parse --show-toplevel`. On
+  ghostty there is no workspace to query — use this session's own cwd. If the
+  backend doesn't expose the cwd cleanly, treat the repo as *undetectable* →
   confirm (the fail-safe above). Don't block the common same-workspace path on a
   perfect query.
 - This is moot for `--target workspace` (a brand-new workspace is the intent).
@@ -226,15 +253,34 @@ surprising. Catch that here, before dispatch (the background agent can't ask):
 Pick `--name` from the workstream's topic (kebab-case, e.g. `crop-snapping`,
 `ai-audio-defaults`). It becomes both the worktree dir name and the branch
 suffix. Pick `--target` from the command: `tab` for `/start-session` (or
-`/start`), `workspace` for `/start-workspace`.
+`/start`), `split` for `/start-split`, `workspace` for `/start-workspace`.
 
-Also pass `--label` — the **short display name** for the new tab/workspace.
+Also pass `--label` — the **short display name** for the new tab/split/workspace.
 It should capture both the **workspace** (where this forked from) and the **work**,
 at a glance, e.g. `slate·crop-snap` or `auto·recipes`. Keep it short (~24 chars):
 a short workspace token (usually the repo, abbreviated if long) + a `·`/`/`/`:`
 separator + a tight form of the work. If you omit `--label`, the script defaults
 to `<repo-basename>/<name>`, which is correct but often longer than ideal — prefer
 passing a curated short one.
+
+**For `--target split`, you MUST also pass `--from-surface <id>` — resolved here, in
+the main session.** The script splits off *that* surface, and it can't read it from
+the environment: the background agent running the script no longer holds the
+originating pane's env, so without `--from-surface` the script warns and opens a tab
+instead of a split. Resolve it before dispatch, per backend:
+
+| Backend | What to pass | How to get it |
+| --- | --- | --- |
+| herdr | the pane id | `$HERDR_PANE_ID` from this session's env |
+| cmux | the surface ref | `$CMUX_SURFACE_ID` from this session's env |
+| ghostty | a terminal UUID **or its tty** | `$(tty)` — run it in this session |
+
+On ghostty, do **not** pass `$GHOSTTY_SURFACE_ID`. It's a hex pointer that matches
+neither a terminal's id nor its tty, so the split fails to find a surface and falls
+back to a tab. Pass `$(tty)` (e.g. `/dev/ttys004`).
+
+Pass `--split-direction left` only when the user asked for the left side; the default
+is right.
 
 **You MUST run the script through a background `Agent` (`run_in_background: true`) —
 never inline in this session.** This is not optional and not a "trivial bash
@@ -245,13 +291,14 @@ background — see "The context model" above). Running it inline defeats the who
 design. So: after Steps 1–3.5 are resolved here, hand the finished args to a
 background agent and let it run the command; do not execute `spinoff.sh` yourself.
 
-**NEVER hand-roll the launch with `herdr`/`cmux` commands.** Do not run `herdr
-tab create`, `herdr agent start`, `herdr pane run`, `herdr workspace create`,
-`cmux new-surface`, `cmux send`, or any other multiplexer command yourself — not
-to "place the tab", not to launch Claude, not to send the kickoff. `spinoff.sh`
+**NEVER hand-roll the launch with `herdr`/`cmux`/`osascript` commands.** Do not run
+`herdr tab create`, `herdr agent start`, `herdr pane run`, `herdr workspace create`,
+`cmux new-surface`, `cmux send`, an `osascript` against Ghostty, or any other
+terminal command yourself — not to "place the tab", not to launch Claude, not to
+deliver the brief. `spinoff.sh`
 owns ALL of that and does it deterministically: it resolves the session's live
-workspace, creates one correctly-placed named tab (no split), launches Claude, and
-sends the kickoff. Hand-walking those steps is exactly what produces the wrong
+workspace, creates one correctly-placed named surface, and launches Claude with the
+brief already attached. Hand-walking those steps is exactly what produces the wrong
 workspace and split-pane bugs — the script exists so the sequence is deterministic,
 not improvised. Your only mechanical job is to invoke the script (via the bg agent);
 if the script does the wrong thing, FIX THE SCRIPT, don't work around it by hand.
@@ -266,21 +313,25 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   --name "<kebab-feature-name>" \
   --label "<short workspace·work label>" \
   --handoff /tmp/spinoff-handoff.md \
-  --target <tab|workspace> \
+  --target <tab|workspace|split> \
   --session-transcript "<resolved transcript path>" \
   --session-cwd "<resolved cwd>" \
   --repo "<resolved target repo path>" \      # when the originating cwd isn't inside it
   --base "origin/<default-branch>" \           # fresh base (Step 2); omit only to carry local HEAD
+  [--from-surface "<originating pane/surface id>"] \  # REQUIRED for --target split (see above)
+  [--split-direction right|left] \                   # --target split only; default right
   [--branch-prefix feature] \    # default: feature/
-  [--launcher auto]              # default: auto (herdr-live > cmux > none); force with herdr|cmux
+  [--launcher auto]              # default: auto (herdr-live > cmux > ghostty > none);
+                                 # force with herdr|cmux|ghostty
 ```
 
 `--launcher` almost never needs setting — `auto` picks the right backend (see
-*Two backends* above). Pass `herdr` or `cmux` only to force one, e.g. to reproduce a
-cmux launch while herdr is also live.
+*Three backends* above). Force one only for a reason, e.g. to reproduce a cmux launch
+while herdr is also live, or `ghostty` to open a plain ghostty window from inside a
+multiplexer (auto-detection suppresses ghostty there on purpose).
 
 Tell the background agent to return: the branch, the worktree path, the launcher
-backend + tab/workspace + agent pane ref, and the source-session resume line — i.e.
+backend + tab/split/workspace + agent pane ref, and the source-session resume line — i.e.
 the contents of the script's `✓ Spinoff complete` summary block, plus any `⚠` lines.
 
 The script is safe to read top-to-bottom; it prints each step. What it does, in
@@ -294,38 +345,61 @@ order:
    session transcript + `claude -r <uuid>` resume one-liner into `<!-- SESSION -->`.
 5. Copies recent `docs/` plan/brainstorm/notes files (modified in the last ~6h)
    into the new worktree's `docs/`.
-6. **Launches a briefed Claude** via the auto-detected backend (cmux or herdr —
-   see *Two backends*), per `--target`:
-   - `tab` — opens a new agent tab/surface in the current workspace, in the
-     worktree, and launches `claude`. (cmux adds a surface to the left agent pane
-     and `send`s the launch; herdr `agent start`s the agent directly in the worktree.)
-   - `workspace` — creates a new workspace rooted at the worktree, launches `claude`
-     on the left, then splits a right pane and renders `docs/handoff.md` alongside
-     (cmux uses its live-reload markdown viewer; herdr has no native viewer, so it
-     renders the handoff statically with a pager — best-effort either way).
-7. Waits for the new Claude's input prompt to be ready — a **herdr** blocking wait
-   (`agent wait --status idle`) or the **cmux** screen-scrape poll — then sends the
-   kickoff
-   (read `docs/handoff.md`, **treat the whole handoff as directional** — author
-   intent and a starting point, with the code/tests as the source of truth, not a
-   spec to execute literally — get oriented, **then recommend the next
-   compound-engineering step** — `/ce-brainstorm` vs `/ce-plan` vs a more specific
-   CE command — and wait for direction) and verifies it submitted. The
-   tab/workspace is named with `--label`, not the bare `--name`.
+6. Writes the brief to a per-run file in the worktree (`.spinoff-brief`) and
+   **launches a briefed Claude** via the auto-detected backend (herdr, cmux or
+   ghostty — see *Three backends*), per `--target`. The brief is `claude`'s
+   positional prompt at launch, read from that file — so a successful launch *is* a
+   successful briefing, and there's no separate step that types it in afterwards.
+   The brief says: read `docs/handoff.md`, treat it as directional (author intent and
+   a starting point, with the code/tests as the source of truth, not a spec to
+   execute literally), get oriented, then recommend the next compound-engineering
+   step — `/ce-brainstorm` vs `/ce-plan` vs a more specific CE command — and wait for
+   direction. The new surface is named with `--label`, not the bare `--name`.
+   - `tab` — a new agent tab/surface in the current workspace, in the worktree.
+     (cmux adds a surface to the left agent pane; herdr starts the agent directly in
+     the worktree; ghostty opens a tab in its front window.)
+   - `split` — a new pane beside `--from-surface`, in the current tab, on the side
+     `--split-direction` names. cmux and ghostty split left natively; herdr splits
+     right and then swaps for a left split. The new pane is created unfocused, so
+     you stay where you are until the launch succeeds. With no `--from-surface`, the
+     script warns and opens a `tab` instead.
+   - `workspace` — a new workspace (a new window on ghostty) rooted at the worktree,
+     briefed `claude` on the left, then a right pane rendering `docs/handoff.md`
+     alongside (cmux uses its live-reload markdown viewer; herdr and ghostty have no
+     native viewer, so they render it statically with a pager — best-effort either way).
+7. Waits until the new Claude has drawn — a **herdr** blocking wait
+   (`agent wait --status idle`), the **cmux** screen-scrape poll, or the **ghostty**
+   pid check. This is no longer a briefing gate (the brief already went with the
+   launch); what it buys is answering the startup prompts a fresh worktree path
+   raises, chiefly the MCP-servers one. On ghostty there's no way to read the screen,
+   so those prompts are left for you and the session may start without its MCP
+   servers. A session that never draws is reported as a warning, not a failure.
 
 ## Step 5 — Relay
 
 Once the background agent reports back, tell Shawn concisely: branch name,
-worktree path, whether a tab or a new workspace was opened, that a briefed Claude
+worktree path, whether a tab, a split, or a new workspace was opened, that a briefed Claude
 is running there, and that the handoff links back to this session. He then
-continues in the new tab/workspace.
+continues in the new surface.
 
 ## When the script can't do something
 
-- **Not inside cmux or herdr** (no live backend — `CMUX_WORKSPACE_ID` unset *and*
-  herdr not running, so detection resolves to `none`): the script still creates the
+- **No live backend** (detection resolves to `none` — herdr not running, no
+  `CMUX_WORKSPACE_ID`, and not a plain Ghostty session): the script still creates the
   worktree + handoff and prints the manual `cd <worktree> && claude` command, so
-  the spinoff isn't lost — only the tab/workspace automation is skipped. Tell Shawn.
+  the spinoff isn't lost — only the surface automation is skipped. Tell Shawn.
+  This also covers the case where a multiplexer announced itself but its probe
+  failed: ghostty is deliberately not used as the recovery there.
+- **macOS blocked Ghostty automation** (Apple event error -1743): the script names
+  the fix — System Settings → Privacy & Security → Automation, allow this app to
+  control Ghostty — and stops retrying, because macOS remembers a denial. The
+  worktree + handoff still exist. Relay the fix.
+- **`--target split` with no `--from-surface`**: the script warns and opens a tab
+  instead. That's a skill bug, not a user problem — resolve the surface in the main
+  session (Step 4) and pass it.
+- **`--from-surface` matches no live surface**: the script says which handle failed,
+  shows what a working one looks like, and opens a tab. On ghostty this is almost
+  always `GHOSTTY_SURFACE_ID` passed where a tty was needed.
 - **No repo resolves**: if neither `--repo` nor the cwd lands in a git repo, the
   script fails with a message naming `--repo` — resolve the target repo (Step 2)
   and pass it, don't paper over it.
@@ -334,7 +408,7 @@ continues in the new tab/workspace.
 - **Ambiguous left pane** (tab target, e.g. a single-pane workspace): the script
   falls back to adding the surface to the focused pane and notes it. Usually fine.
 - **Can't parse the new workspace/surface ref** (workspace target): the script
-  prints the raw backend (cmux/herdr) output and degrades gracefully — the worktree
+  prints the raw backend output and degrades gracefully — the worktree
   + handoff still exist. Surface the warning and the manual launch command.
 - **Right-pane handoff viewer fails** (workspace target): the briefed Claude is
   still launched on the left; only the markdown viewer is missing. Non-fatal.

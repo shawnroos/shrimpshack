@@ -26,7 +26,7 @@ case "$1" in
   new-surface)   printf 'created surface:42\n' ;;
   new-workspace) printf 'created workspace:7\n' ;;
   new-pane)      printf 'created pane:5\n' ;;
-  read-screen)   printf '%s\n' '❯' ;;
+  read-screen)   printf '%s\n' '  ? for shortcuts · shift+tab to cycle' ;;
   *)             : ;;
 esac
 exit 0
@@ -386,7 +386,7 @@ run_resolve() {
   [[ "$output" == *"open + briefed"* ]]
 }
 
-@test "herdr tab: a never-ready screen is still briefed, and says MCP may be unset" {
+@test "herdr tab: a never-ready screen is still briefed, and says a dialog may be up" {
   # The brief is submitted BY the launch, so a session that never draws is briefed
   # regardless. What an unconfirmed prompt now costs is the trust-modal answer, so
   # the run reports that instead of withholding the brief.
@@ -394,7 +394,7 @@ run_resolve() {
   run_herdr_tab
   [ "$status" -eq 0 ]
   [[ "$output" == *"open + briefed"* ]]
-  [[ "$output" == *"MCP servers may not be enabled"* ]]
+  [[ "$output" == *"a dialog may still be up"* ]]
 }
 
 @test "herdr tab: no Enter is sent to submit the brief (the launch already did)" {
@@ -480,5 +480,5 @@ run_resolve() {
   run_herdr_workspace
   [ "$status" -eq 0 ]
   [[ "$output" == *"open + briefed"* ]]
-  [[ "$output" == *"MCP servers may not be enabled"* ]]
+  [[ "$output" == *"a dialog may still be up"* ]]
 }
