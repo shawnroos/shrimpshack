@@ -524,7 +524,13 @@ run_unresolvable() {
   local s
   for s in ${LOUD_STUBS:-}; do cp "$STUBDIR/$s" "$NOSTUB/"; done
 
+  # Also scrub the host's GHOSTTY identity. Those vars are exported by every real
+  # Ghostty window, so an unannounced-session test run from one inherits them, the
+  # ghostty branch wins (its .app and /usr/bin/osascript both resolve), and the case
+  # under test never happens — it drives a REAL AppleScript launch instead. A test
+  # that wants ghostty passes the vars back explicitly (they follow "$@", so they win).
   run env -u HERDR_BIN -u CMUX_BIN \
+          -u TERM_PROGRAM -u GHOSTTY_RESOURCES_DIR -u GHOSTTY_SURFACE_ID \
           PATH="$NOSTUB:/usr/bin:/bin" \
           SPINOFF_BIN_PATHS="$EMPTYBIN" \
           SPINOFF_READY_TIMEOUT_MS=3000 \
@@ -619,6 +625,20 @@ run_unresolvable() {
   [ "$status" -eq 0 ]
   [[ "$output" != *"could not resolve"* ]]
   [[ "$output" == *"launcher:  none"* ]]
+  # ...and it must not LIE about why. This session DID announce herdr; the binary was
+  # found and the server was down. Saying "no multiplexer announced" here is the same
+  # lying-message defect the whole change exists to remove, so pin the honest wording.
+  [[ "$output" == *"herdr announced this session"* ]]
+  [[ "$output" != *"no multiplexer announced"* ]]
+}
+
+@test "silent: unannounced session says nothing announced, not a backend name (R7)" {
+  # The counterpart to the R9 test above: with nothing announced, the benign wording is
+  # the correct one. Pinning both directions is what stops the two from re-collapsing.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID=
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no multiplexer announced"* ]]
+  [[ "$output" != *"announced this session ("* ]]
 }
 
 @test "silent: ghostty vars + unresolvable osascript stay quiet (R14, KTD-9)" {
@@ -656,7 +676,10 @@ run_unresolvable() {
   local handoff="$repo/handoff.md"
   printf '# Handoff\n\nbrief body\n' > "$handoff"
 
-  run env PATH="$STUBDIR:$PATH" \
+  # -u HERDR_BIN -u CMUX_BIN for the same reason the loud tests do it: setup() assigns
+  # those names as stub pointers, and the moment one is exported this test would honor
+  # it as a production override instead of exercising PATH resolution.
+  run env -u HERDR_BIN -u CMUX_BIN PATH="$STUBDIR:$PATH" \
           HERDR_STUB_LIVE=1 HERDR_ENV=1 HERDR_WORKSPACE_ID=wS HERDR_PANE_ID=wS:p1 \
           CMUX_WORKSPACE_ID= SPINOFF_READY_TIMEOUT_MS=3000 \
           SPINOFF_BRIEF_FILE=/nonexistent-dir/brief.txt \

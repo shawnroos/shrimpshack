@@ -143,6 +143,18 @@ check_backend() {                     # $1 = label, $2 = binary var, $3 = binary
 # herdr` comes back empty, both backends report SKIPPED, and PASS=0 exits 2 — a
 # FAILURE — in exactly the environment the launcher-resolution bug lives in. Now the
 # caller can point the gate at the real binary and get a verification instead.
+# An inherited override that isn't usable is worse than none: check_backend SKIPs an
+# unusable binary, and a skip that leaves at least one other backend passing exits 0 —
+# so a stale HERDR_BIN would quietly downgrade this gate to "herdr UNVERIFIED" while
+# still reporting success. Drop an unusable override loudly, then fall back to PATH.
+for _v in HERDR_BIN CMUX_BIN; do
+  eval "_p=\${$_v:-}"
+  if [ -n "$_p" ] && { [ ! -f "$_p" ] || [ ! -x "$_p" ]; }; then
+    echo "  — ignoring unusable $_v='$_p' (not an executable file); falling back to \$PATH" >&2
+    eval "$_v=''"
+  fi
+done
+unset _v _p
 HERDR_BIN="${HERDR_BIN:-$(command -v herdr 2>/dev/null)}"
 CMUX_BIN="${CMUX_BIN:-$(command -v cmux 2>/dev/null)}"
 [ -n "$CMUX_BIN" ] || { [ -x /Applications/cmux.app/Contents/Resources/bin/cmux ] && CMUX_BIN=/Applications/cmux.app/Contents/Resources/bin/cmux; }
