@@ -37,14 +37,17 @@ configured for this repo, so this file is the durable record.
   may get the less actionable of two diagnoses. Needs a call on printing all records
   versus preferring the one with a concrete fix.
 
-## Not applied — from the plan's doc review
+## Applied after review
 
 - **Have the skill resolve the launcher in the main session and pass `HERDR_BIN` into
-  the background agent.** Strictly better than a candidate list: the dispatching session
-  *does* have a working PATH, so this turns a guess into a fact and covers cargo, nix,
-  `~/bin`, and dev builds that the three hardcoded directories miss. Held out because it
-  expands the blast radius to `SKILL.md`'s dispatch block, which the settled
-  launcher-binaries-only decision excludes. Worth revisiting as its own change.
+  the background agent.** Landed in `fb5da6c` on the user's explicit call, which
+  overrode the settled launcher-binaries-only scope. `SKILL.md` Step 4 now resolves
+  `herdr`/`cmux` with `command -v` before dispatch and passes the absolute path down;
+  the script's own resolution stays as the fallback. Closed the "no full-run test with a
+  set, valid `*_BIN`" gap listed below at the same time, since the override went from
+  break-glass to primary path.
+
+## Not applied — from the plan's doc review
 
 - **Print the resolved path and how it was found on the success line**
   (`launcher: herdr (/opt/homebrew/bin/herdr — known location, not on PATH)`). The
@@ -61,6 +64,4 @@ configured for this repo, so this file is the durable record.
   suite green).
 - No test covers a resolvable-but-wrong-binary override — the shape the warning's own
   remedy invites.
-- No full-run test with a set, valid `*_BIN` override; that path is covered only at the
-  resolver level.
 - `cli-drift.test.sh`'s new override branch has no test of its own.
