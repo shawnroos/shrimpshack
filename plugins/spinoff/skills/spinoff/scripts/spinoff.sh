@@ -184,16 +184,20 @@ launcher_new_split_cmux() {
 # KICKOFF_OK is set here rather than by a later submit step. Errors are NOT
 # discarded: swallowing them is why a deleted herdr subcommand went unnoticed for
 # weeks while every run still reported success.
+# Workspace flag as an array: the split fallback runs with no workspace (cmux
+# resolves "current"), and passing `--workspace ""` instead of omitting it made the
+# fallback apply to one of four calls.
 launcher_launch_agent_cmux() {
   LB_READY=0
   local err
-  "$CMUX" rename-tab --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" --title "$LABEL" >/dev/null 2>&1
-  if ! err="$("$CMUX" send --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" "$LAUNCH_CMD" 2>&1)"; then
+  local -a WSA=(); [ -n "${LAUNCH_WS:-}" ] && WSA=(--workspace "$LAUNCH_WS")
+  "$CMUX" rename-tab --surface "$LAUNCH_SFC" "${WSA[@]}" --title "$LABEL" >/dev/null 2>&1
+  if ! err="$("$CMUX" send --surface "$LAUNCH_SFC" "${WSA[@]}" "$LAUNCH_CMD" 2>&1)"; then
     KICKOFF_OK=0
     echo "  ⚠ cmux send failed while launching the briefed session: $err" >&2
     return
   fi
-  if ! err="$("$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter 2>&1)"; then
+  if ! err="$("$CMUX" send-key --surface "$LAUNCH_SFC" "${WSA[@]}" enter 2>&1)"; then
     KICKOFF_OK=0
     echo "  ⚠ cmux send-key failed while launching the briefed session: $err" >&2
     return
@@ -210,23 +214,36 @@ launcher_launch_agent_cmux() {
 # wait this does pay ~1s per iteration, but it breaks the instant the prompt shows —
 # a fast boot still exits after a second or two.
 launcher_wait_ready_cmux() {
+  local -a WSR=(); [ -n "${LAUNCH_WS:-}" ] && WSR=(--workspace "$LAUNCH_WS")
   local screen
   for _ in $(seq 1 "$(( SPINOFF_READY_TIMEOUT_MS / 1000 + 1 ))"); do
     sleep 1
-    screen="$("$CMUX" read-screen --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" 2>/dev/null)"
+    screen="$("$CMUX" read-screen --surface "$LAUNCH_SFC" "${WSR[@]}" 2>/dev/null)"
     case "$screen" in
       *"trust this folder"*|*"Is this a project you created"*)
         # See the herdr path: the folder-trust prompt blocks a fresh worktree before
         # claude will process a command-line prompt.
         case "${SPINOFF_FOLDER_TRUST:-accept}" in
-          reject) "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" escape >/dev/null 2>&1
+          reject) "$CMUX" send-key --surface "$LAUNCH_SFC" "${WSR[@]}" escape >/dev/null 2>&1
                   step "  … folder-trust prompt: declined (SPINOFF_FOLDER_TRUST=reject)" ;;
           abort)  step "  … folder-trust prompt is up and SPINOFF_FOLDER_TRUST=abort — leaving it for you"; return ;;
-          *)      "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1
+          *)      "$CMUX" send-key --surface "$LAUNCH_SFC" "${WSR[@]}" enter >/dev/null 2>&1
                   step "  … folder-trust prompt: accepted for this worktree" ;;
         esac
         # Let the screen redraw before the next poll, or the same prompt is re-read
         # and a second Enter lands in the session.
+        sleep 2 ;;
+      *"new MCP servers found"*|*"Select any you wish to enable"*)
+        # Mirrors the herdr arm. cmux previously had no MCP handling at all, while the
+        # launch region's comment claimed readiness is what enables MCP servers — true
+        # of herdr, false here, so an MCP modal burned the full ceiling on cmux.
+        case "${SPINOFF_MCP_MODAL:-accept}" in
+          reject) "$CMUX" send-key --surface "$LAUNCH_SFC" "${WSR[@]}" escape >/dev/null 2>&1
+                  step "  … MCP trust modal: rejected all (SPINOFF_MCP_MODAL=reject)" ;;
+          abort)  step "  … MCP trust modal is up and SPINOFF_MCP_MODAL=abort — leaving it"; return ;;
+          *)      "$CMUX" send-key --surface "$LAUNCH_SFC" "${WSR[@]}" enter >/dev/null 2>&1
+                  step "  … MCP trust modal: accepted the pre-checked default (new worktree = new project path)" ;;
+        esac
         sleep 2 ;;
       *"bypass permissions"*|*"shift+tab to cycle"*|*"? for shortcuts"*) LB_READY=1; break ;;
     esac
