@@ -37,7 +37,8 @@ STUB
   # emits the LIVE-VERIFIED JSON shapes from the plan's ## Spike Findings:
   #   - `agent start`  -> {"result":{"agent":{"pane_id":"wS:p2",...}}}
   #   - `agent wait`   -> success (idle event) unless HERDR_STUB_WAIT_FAIL=1
-  #   - `pane read`    -> a marker line WITHOUT the kickoff text (no retry fires)
+  #   - `pane read`    -> claude's real footer (ready) unless HERDR_STUB_NOT_READY=1,
+  #                       which returns a bare shell prompt instead (never ready)
   # Every call still logs its argv to $HERDR_ARGV_LOG for capture assertions.
   cat > "$STUBDIR/herdr" <<'STUB'
 #!/usr/bin/env bash
@@ -68,7 +69,15 @@ case "$1 $2" in
     if [ "${HERDR_STUB_SPLIT_FAIL:-0}" = 1 ]; then echo '{"result":{}}'; exit 0; fi
     echo '{"result":{"pane":{"pane_id":"wS:pB","tab_id":"wS:t1"}}}' ;;
   "pane read"|"agent read")
-    echo '{"result":{"read":{"text":"❯ ready — awaiting input"}}}' ;;
+    # RAW TEXT, not JSON — `pane read` emits the screen verbatim (see the note in
+    # launcher_wait_ready_herdr). Emit claude's actual footer, because the readiness
+    # gate deliberately matches that and NOT a bare "❯" (also the shell prompt).
+    # HERDR_STUB_NOT_READY=1 returns a bare shell prompt instead, i.e. never ready.
+    if [ "${HERDR_STUB_NOT_READY:-0}" = 1 ]; then
+      printf '%s\n' '❯ '
+    else
+      printf '%s\n' '╭─────────╮' '  ? for shortcuts · shift+tab to cycle'
+    fi ;;
   *) : ;;  # pane run / pane close / workspace focus / agent send / pane send-keys → ok
 esac
 exit 0
@@ -121,6 +130,8 @@ run_herdr_tab() {
   HERDR_ARGV_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
   : > "$HERDR_ARGV_LOG"
 
+  # Cap the readiness ceiling: the 180s default means a NOT-ready case hangs three
+  # minutes per test before failing, which is why this suite was unrunnable.
   run env PATH="$STUBDIR:$PATH" \
           HERDR_ARGV_LOG="$HERDR_ARGV_LOG" \
           HERDR_STUB_LIVE=1 \
@@ -128,6 +139,7 @@ run_herdr_tab() {
           HERDR_WORKSPACE_ID=wS \
           HERDR_PANE_ID=wS:p1 \
           CMUX_WORKSPACE_ID= \
+          SPINOFF_READY_TIMEOUT_MS=3000 \
       bash "$SCRIPT" --name htab --label testlabel --handoff "$handoff" \
                      --repo "$repo" --target tab --launcher herdr
 }
@@ -158,6 +170,7 @@ run_herdr_workspace() {
           HERDR_STUB_LIVE=1 \
           HERDR_ENV=1 \
           CMUX_WORKSPACE_ID= \
+          SPINOFF_READY_TIMEOUT_MS=3000 \
       bash "$SCRIPT" --name hws --label testlabel --handoff "$handoff" \
                      --repo "$repo" --target workspace --launcher herdr
 }
@@ -309,11 +322,13 @@ run_resolve() {
   ! grep -qE "tab create --workspace wS " "$HERDR_ARGV_LOG"
 }
 
-@test "herdr tab: readiness blocks on 'agent wait --status idle' with a timeout (KTD-3)" {
+@test "herdr tab: readiness is read off the SCREEN, not from an agent-status wait" {
+  # 0.8.3 moved readiness from `agent wait` to reading the pane, because an agent
+  # can register idle while a trust modal still blocks the prompt.
   run_herdr_tab
   [ "$status" -eq 0 ]
-  grep -qxF "agent wait wS:p2 --status idle --timeout 30000" "$HERDR_ARGV_LOG"
-  # the 30× read-screen poll must NOT be on the herdr path
+  grep -qE "^pane read wS:p2 --source visible$" "$HERDR_ARGV_LOG"
+  # the cmux 30x read-screen poll must NOT be on the herdr path
   ! grep -q "read-screen" "$HERDR_ARGV_LOG"
 }
 
@@ -335,13 +350,16 @@ run_resolve() {
   [[ "$output" == *"open + briefed"* ]]
 }
 
-@test "herdr tab: LB_READY=0 (readiness not confirmed) when the wait times out" {
-  export HERDR_STUB_WAIT_FAIL=1
+@test "herdr tab: never-ready screen WITHHOLDS the kickoff and fails loudly" {
+  # 0.8.3 reversed the old behaviour: an unconfirmed prompt must NOT be briefed,
+  # because an Enter into a booting TUI is swallowed and produced a correctly
+  # branched tab holding an unsubmitted brief, reported as success.
+  export HERDR_STUB_NOT_READY=1
   run_herdr_tab
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"readiness not confirmed"* ]]
-  # still fires the kickoff exactly once even when readiness is unconfirmed
-  [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 1 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"NOT briefed"* ]]
+  # withheld means withheld — no submit of any kind
+  [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 0 ]
 }
 
 @test "herdr tab: verify-submitted does not double-fire when the kickoff already landed" {
@@ -375,8 +393,8 @@ run_resolve() {
   # claude is RUN INTO the workspace's root pane (shared verb), never `agent start`.
   grep -qE "^pane run wS:p2 cd '.*/worktrees/hws' && claude --name 'testlabel'$" "$HERDR_ARGV_LOG"
   ! grep -q "^agent start" "$HERDR_ARGV_LOG"
-  # readiness still uses the blocking wait — no read-screen poll on the herdr path.
-  grep -qxF "agent wait wS:p2 --status idle --timeout 30000" "$HERDR_ARGV_LOG"
+  # readiness is read off the screen — no cmux read-screen poll on the herdr path.
+  grep -qE "^pane read wS:p2 --source visible$" "$HERDR_ARGV_LOG"
   ! grep -q "read-screen" "$HERDR_ARGV_LOG"
 }
 
@@ -421,11 +439,11 @@ run_resolve() {
   [[ "$output" != *cmux* ]]
 }
 
-@test "herdr workspace: readiness timeout -> launch still reports (readiness not confirmed)" {
-  export HERDR_STUB_WAIT_FAIL=1
+@test "herdr workspace: never-ready screen WITHHOLDS the kickoff but still builds the worktree" {
+  export HERDR_STUB_NOT_READY=1
   run_herdr_workspace
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"readiness not confirmed"* ]]
-  # the agent pane still launched and the kickoff still fired exactly once.
-  [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 1 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"NOT briefed"* ]]
+  # withheld, and no submit fired
+  [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 0 ]
 }
