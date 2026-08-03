@@ -667,3 +667,221 @@ run_unresolvable() {
   [[ "$output" == *"THE NEW SESSION WAS NOT BRIEFED"* ]]
   [[ "$output" != *"could not resolve"* ]]
 }
+
+# ---- resolver-level coverage (U3): resolve_bin precedence + the R15 rejections ----
+#
+# The six `resolve_launcher` tests above enter one layer too high (they inject $HERDR /
+# $CMUX by hand), and the loud/silent tests one layer too low (they assert on a whole
+# run's output). Neither pins resolve_bin's OWN contract, so "simplify" `-f && -x` to a
+# bare `-x`, or let a set-but-invalid override fall through to $PATH, and the suite
+# stays green. These tests call resolve_bin directly through the SPINOFF_TEST_SOURCE
+# hook (R12) and assert on its echoed path.
+#
+# Every test sets BOTH search inputs explicitly — $RB_PATH and $RB_BIN_PATHS — so no
+# real install location on the host can satisfy a lookup and make a test pass for the
+# wrong reason. Note $SPINOFF_BIN_PATHS is read with `:-`, so an EMPTY string means
+# "use the built-in defaults": "nothing in the known locations" has to be spelled as a
+# real but empty DIRECTORY, never as "".
+
+# A tiny executable at $1.
+mkbin() { mkdir -p "${1%/*}"; printf '#!/usr/bin/env bash\nexit 0\n' > "$1"; chmod +x "$1"; }
+
+# resolve_bin <name> <override> [extra-candidates], echoed for assertion on $output.
+# PATH is assigned INSIDE the spawned shell rather than through `env`, because
+# `env PATH=... bash` resolves `bash` itself through the PATH it is setting — an empty
+# one means env cannot find bash at all and the test dies before reaching the resolver.
+run_resolve_bin() {
+  run env SPINOFF_TEST_SOURCE=1 SPINOFF_BIN_PATHS="${RB_BIN_PATHS-}" \
+      bash -c 'PATH="$5"; source "$1"; resolve_bin "$2" "$3" "$4"' \
+      _ "$SCRIPT" "$1" "${2-}" "${3-}" "${RB_PATH-}"
+}
+
+# Same seam, but echoes resolve_bin_rejected's verdict for the same inputs.
+run_resolve_bin_rejected() {
+  run env SPINOFF_TEST_SOURCE=1 SPINOFF_BIN_PATHS="${RB_BIN_PATHS-}" \
+      bash -c 'PATH="$4"; source "$1"
+               r="$(resolve_bin "$2" "$3")"
+               resolve_bin_rejected "$r" "$3"' \
+      _ "$SCRIPT" "$1" "${2-}" "${RB_PATH-}"
+}
+
+@test "resolve_bin: an explicit override wins over a different binary on \$PATH (R2, R3)" {
+  local pathdir="$BATS_TEST_TMPDIR/rb-ovr/path" ovrdir="$BATS_TEST_TMPDIR/rb-ovr/ovr"
+  mkbin "$pathdir/tool"
+  mkbin "$ovrdir/tool"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$BATS_TEST_TMPDIR/rb-ovr/empty"
+  mkdir -p "$RB_BIN_PATHS"
+
+  run_resolve_bin tool "$ovrdir/tool"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$ovrdir/tool" ]
+}
+
+@test "resolve_bin: the override wins even when \$PATH holds no candidate (R2)" {
+  local ovrdir="$BATS_TEST_TMPDIR/rb-ovr2/ovr" empty="$BATS_TEST_TMPDIR/rb-ovr2/empty"
+  mkbin "$ovrdir/tool"
+  mkdir -p "$empty"
+  RB_PATH="$empty" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "$ovrdir/tool"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$ovrdir/tool" ]
+}
+
+@test "resolve_bin: no override -> a stub on \$PATH resolves to its absolute path (R1, R3)" {
+  local pathdir="$BATS_TEST_TMPDIR/rb-path/bin" empty="$BATS_TEST_TMPDIR/rb-path/empty"
+  mkbin "$pathdir/tool"
+  mkdir -p "$empty"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "$pathdir/tool" ]
+}
+
+@test "resolve_bin: nothing on \$PATH -> a stub in \$SPINOFF_BIN_PATHS resolves (R3, R16)" {
+  local known="$BATS_TEST_TMPDIR/rb-known/known" empty="$BATS_TEST_TMPDIR/rb-known/empty"
+  mkbin "$known/tool"
+  mkdir -p "$empty"
+  RB_PATH="$empty" RB_BIN_PATHS="$empty:$known"
+
+  run_resolve_bin tool ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "$known/tool" ]
+}
+
+@test "resolve_bin: nothing anywhere -> empty, no error, exit 0 (R3)" {
+  # resolve_bin never fails and never writes to stderr: deciding what an empty result
+  # MEANS belongs to the caller, which is what the loud/silent split above depends on.
+  local empty="$BATS_TEST_TMPDIR/rb-none/empty"
+  mkdir -p "$empty"
+  RB_PATH="$empty" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool ""
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "resolve_bin: an override pointing at a DIRECTORY is empty and does NOT fall through to \$PATH (R15)" {
+  # The highest-value test in this file. `-x` alone is TRUE of a directory, so a bare
+  # `-x` check "resolves" HERDR_BIN=/opt/homebrew/bin and reproduces the original bug
+  # one layer down with a launch that execs a directory — this pins the `-f` half.
+  # The usable stub on $PATH is the second half: a SET override that fails the test
+  # resolves to EMPTY on purpose. Someone who named a binary meant THAT binary, and
+  # quietly driving a different one is worse than not launching at all.
+  local pathdir="$BATS_TEST_TMPDIR/rb-dir/bin" dir="$BATS_TEST_TMPDIR/rb-dir/adir"
+  local empty="$BATS_TEST_TMPDIR/rb-dir/empty"
+  mkbin "$pathdir/tool"
+  mkdir -p "$dir" "$empty"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "$dir"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                    # the directory was rejected…
+  [ "$output" != "$pathdir/tool" ]    # …and did not silently become the PATH stub
+}
+
+@test "resolve_bin: an override pointing at a nonexistent path is empty (R15)" {
+  local pathdir="$BATS_TEST_TMPDIR/rb-missing/bin" empty="$BATS_TEST_TMPDIR/rb-missing/empty"
+  mkbin "$pathdir/tool"
+  mkdir -p "$empty"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "$BATS_TEST_TMPDIR/rb-missing/nope/tool"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "resolve_bin: an override pointing at a non-executable regular file is empty (R15)" {
+  local pathdir="$BATS_TEST_TMPDIR/rb-noexec/bin" empty="$BATS_TEST_TMPDIR/rb-noexec/empty"
+  local plain="$BATS_TEST_TMPDIR/rb-noexec/plain-file"
+  mkbin "$pathdir/tool"
+  mkdir -p "$empty"
+  printf 'not a program\n' > "$plain"
+  chmod 644 "$plain"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "$plain"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "resolve_bin_rejected: names the thrown-out override for each rejection shape, and nothing on success (R15)" {
+  # This is what lets the ⚠ say "CMUX_BIN is set to '…'" instead of telling someone to
+  # set a variable they already set — so all three rejection shapes must report, and a
+  # successful resolution must report nothing.
+  local base="$BATS_TEST_TMPDIR/rb-rej"
+  local pathdir="$base/bin" dir="$base/adir" empty="$base/empty" plain="$base/plain-file"
+  mkbin "$pathdir/tool"
+  mkdir -p "$dir" "$empty"
+  printf 'not a program\n' > "$plain"
+  chmod 644 "$plain"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin_rejected tool "$dir"
+  [ "$output" = "$dir" ]
+
+  run_resolve_bin_rejected tool "$base/nope/tool"
+  [ "$output" = "$base/nope/tool" ]
+
+  run_resolve_bin_rejected tool "$plain"
+  [ "$output" = "$plain" ]
+
+  # resolved via the override -> nothing was rejected
+  run_resolve_bin_rejected tool "$pathdir/tool"
+  [ -z "$output" ]
+
+  # resolved via PATH with no override at all -> likewise nothing
+  run_resolve_bin_rejected tool ""
+  [ -z "$output" ]
+}
+
+@test "resolve_bin: a full path passed as an extra candidate resolves last (R3)" {
+  # The non-PATH installs: the cmux app bundle and /usr/bin/osascript.
+  local extra="$BATS_TEST_TMPDIR/rb-extra/App.app/Contents/Resources/bin/tool"
+  local empty="$BATS_TEST_TMPDIR/rb-extra/empty"
+  mkbin "$extra"
+  mkdir -p "$empty"
+  RB_PATH="$empty" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "" "$extra"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$extra" ]
+}
+
+@test "resolve_bin: a RELATIVE override resolves to an ABSOLUTE path (R1)" {
+  # Resolution runs BEFORE the `--repo` cd, so a relative result silently stops
+  # resolving the moment the cwd moves — abspath() is what prevents that.
+  local dir="$BATS_TEST_TMPDIR/rb-rel" empty="$BATS_TEST_TMPDIR/rb-rel/empty"
+  mkbin "$dir/tool"
+  mkdir -p "$empty"
+  # abspath() PREFIXES `pwd -P` — it does not normalize, so "./tool" comes back as
+  # "<physical-cwd>/./tool". That is fine and is what the test asserts: the leading
+  # slash (the property that survives a cd) plus the same file on disk. `pwd -P` also
+  # means the prefix is symlink-resolved, and $BATS_TEST_TMPDIR sits under
+  # /var -> /private/var on macOS, so the physical dir is what to compare against.
+  local dirp
+  dirp="$(cd "$dir" && pwd -P)"
+
+  run env SPINOFF_TEST_SOURCE=1 SPINOFF_BIN_PATHS="$empty" \
+      bash -c 'cd "$3"; PATH="$4"; source "$1"; resolve_bin tool "$2"' \
+      _ "$SCRIPT" ./tool "$dir" "$empty"
+  [ "$status" -eq 0 ]
+  [[ "$output" == /* ]]                 # absolute, not "./tool"
+  [[ "$output" == "$dirp"/* ]]          # anchored at the physical cwd
+  [ "$output" -ef "$dir/tool" ]         # and still the same file on disk
+}
+
+@test "resolve_bin: resolution does not depend on \$PATH for its own internals (R1)" {
+  # U1's first draft split $SPINOFF_BIN_PATHS with `tr`, and under a scrubbed PATH it
+  # died with "tr: command not found" and resolved nothing — the exact failure the
+  # resolver exists to prevent, one level down. The split is now pure parameter
+  # expansion, and this is what stops that regression coming back.
+  local known="$BATS_TEST_TMPDIR/rb-nopath/known"
+  mkbin "$known/tool"
+  RB_PATH="" RB_BIN_PATHS="$known"
+
+  run_resolve_bin tool ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "$known/tool" ]
+}
