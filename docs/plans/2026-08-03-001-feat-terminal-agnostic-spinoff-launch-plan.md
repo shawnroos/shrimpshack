@@ -84,7 +84,7 @@ This plan owns one of four outcomes bundled into spinoff 0.9.0. The breakdown is
 
 **Release hygiene**
 
-- R10. A regression test fails when the script invokes a backend subcommand the installed CLI does not expose.
+- R10. A regression test fails when the script invokes a backend subcommand or flag the installed CLI does not expose.
 - R11. Tests that assert the staged-send sequence are rewritten to assert brief-at-launch.
 
 Target availability per backend:
@@ -123,7 +123,7 @@ Target availability per backend:
 - AE1. **Covers R1.** Given a fresh worktree never opened before, when spinoff launches the session, then the brief is already submitted and the session has begun acting on it with no typing.
 - AE2. **Covers R2, R3.** Given a launcher command that fails mid-launch, when the run finishes, then it names the session un-briefed and shows the underlying failure.
 - AE3. **Covers R13.** Given a brief file that is empty, when the run reaches launch, then it does not launch and reports un-briefed.
-- AE4. **Covers R10.** Given the script calls a backend subcommand the installed CLI does not expose, when the suite runs, then a test fails and names the missing subcommand.
+- AE4. **Covers R10.** Given the script calls a backend subcommand or flag the installed CLI does not expose, when the suite runs, then a test fails and names the missing subcommand.
 - AE5. **Covers R4, R6.** Given a plain ghostty window with no multiplexer active, when the workspace target is used, then a new ghostty window opens with a briefed session.
 - AE6. **Covers R7, R9.** Given the user asks for a split with no direction, when the session opens, then it sits to the right of the pane they ran the command from, in the same tab.
 - AE7. **Covers R7.** Given the user asks for a left split on herdr, when the session opens, then it sits to the left of the originating pane.
