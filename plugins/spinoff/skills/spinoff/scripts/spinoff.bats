@@ -26,7 +26,7 @@ case "$1" in
   new-surface)   printf 'created surface:42\n' ;;
   new-workspace) printf 'created workspace:7\n' ;;
   new-pane)      printf 'created pane:5\n' ;;
-  read-screen)   printf '%s\n' '❯' ;;
+  read-screen)   printf '%s\n' '  ? for shortcuts · shift+tab to cycle' ;;
   *)             : ;;
 esac
 exit 0
@@ -37,7 +37,8 @@ STUB
   # emits the LIVE-VERIFIED JSON shapes from the plan's ## Spike Findings:
   #   - `agent start`  -> {"result":{"agent":{"pane_id":"wS:p2",...}}}
   #   - `agent wait`   -> success (idle event) unless HERDR_STUB_WAIT_FAIL=1
-  #   - `pane read`    -> a marker line WITHOUT the kickoff text (no retry fires)
+  #   - `pane read`    -> claude's real footer (ready) unless HERDR_STUB_NOT_READY=1,
+  #                       which returns a bare shell prompt instead (never ready)
   # Every call still logs its argv to $HERDR_ARGV_LOG for capture assertions.
   cat > "$STUBDIR/herdr" <<'STUB'
 #!/usr/bin/env bash
@@ -68,7 +69,15 @@ case "$1 $2" in
     if [ "${HERDR_STUB_SPLIT_FAIL:-0}" = 1 ]; then echo '{"result":{}}'; exit 0; fi
     echo '{"result":{"pane":{"pane_id":"wS:pB","tab_id":"wS:t1"}}}' ;;
   "pane read"|"agent read")
-    echo '{"result":{"read":{"text":"❯ ready — awaiting input"}}}' ;;
+    # RAW TEXT, not JSON — `pane read` emits the screen verbatim (see the note in
+    # launcher_wait_ready_herdr). Emit claude's actual footer, because the readiness
+    # gate deliberately matches that and NOT a bare "❯" (also the shell prompt).
+    # HERDR_STUB_NOT_READY=1 returns a bare shell prompt instead, i.e. never ready.
+    if [ "${HERDR_STUB_NOT_READY:-0}" = 1 ]; then
+      printf '%s\n' '❯ '
+    else
+      printf '%s\n' '╭─────────╮' '  ? for shortcuts · shift+tab to cycle'
+    fi ;;
   *) : ;;  # pane run / pane close / workspace focus / agent send / pane send-keys → ok
 esac
 exit 0
@@ -121,6 +130,8 @@ run_herdr_tab() {
   HERDR_ARGV_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
   : > "$HERDR_ARGV_LOG"
 
+  # Cap the readiness ceiling: the 180s default means a NOT-ready case hangs three
+  # minutes per test before failing, which is why this suite was unrunnable.
   run env PATH="$STUBDIR:$PATH" \
           HERDR_ARGV_LOG="$HERDR_ARGV_LOG" \
           HERDR_STUB_LIVE=1 \
@@ -128,6 +139,7 @@ run_herdr_tab() {
           HERDR_WORKSPACE_ID=wS \
           HERDR_PANE_ID=wS:p1 \
           CMUX_WORKSPACE_ID= \
+          SPINOFF_READY_TIMEOUT_MS=3000 \
       bash "$SCRIPT" --name htab --label testlabel --handoff "$handoff" \
                      --repo "$repo" --target tab --launcher herdr
 }
@@ -158,6 +170,7 @@ run_herdr_workspace() {
           HERDR_STUB_LIVE=1 \
           HERDR_ENV=1 \
           CMUX_WORKSPACE_ID= \
+          SPINOFF_READY_TIMEOUT_MS=3000 \
       bash "$SCRIPT" --name hws --label testlabel --handoff "$handoff" \
                      --repo "$repo" --target workspace --launcher herdr
 }
@@ -262,7 +275,9 @@ run_resolve() {
 
   # 1) Exact ordered sequence of cmux subcommands (the "call shape").
   mapfile -t verbs < <(awk '{print $1}' "$log")
-  local expected=(tree new-surface rename-tab send send-key read-screen send send-key read-screen)
+  # The brief now rides the launch, so the trailing kickoff send/submit/verify
+  # triple is gone: one send (the launch), one Enter, one readiness read.
+  local expected=(tree new-surface rename-tab send send-key read-screen)
   [ "${#verbs[@]}" -eq "${#expected[@]}" ]
   local i
   for i in "${!expected[@]}"; do
@@ -274,10 +289,11 @@ run_resolve() {
   grep -qxF "new-surface --type terminal --pane pane:1 --workspace workspace:99 --focus true" "$log"
   grep -qxF "rename-tab --surface surface:42 --workspace workspace:99 --title testlabel" "$log"
   # launch command carries the worktree path + label, unchanged.
-  grep -qxF "send --surface surface:42 --workspace workspace:99 cd '$rrepo/worktrees/testx' && claude --name 'testlabel'" "$log"
-  # kickoff is sent (pointer to the handoff), then submitted.
-  grep -qE "^send --surface surface:42 --workspace workspace:99 Read docs/handoff.md" "$log"
+  # the launch command carries the brief as claude's positional prompt
+  grep -qE "^send --surface surface:42 --workspace workspace:99 cd '.*/worktrees/testx' && claude --name 'testlabel' " "$log"
   grep -qxF "send-key --surface surface:42 --workspace workspace:99 enter" "$log"
+  # and NO separate kickoff send exists any more
+  ! grep -qE "^send --surface .* Read docs/handoff.md" "$log"
 
   # 3) Summary names the cmux backend for the tab target (R9).
   [[ "$output" == *"launcher:  cmux"* ]]
@@ -294,7 +310,7 @@ run_resolve() {
   grep -qxF "tab create --workspace wS --label testlabel --no-focus" "$HERDR_ARGV_LOG"
   # …and claude is RUN INTO its root pane (cd + claude), never `agent start`
   # (which splits a pane in the CURRENT tab — the bug this replaces).
-  grep -qE "^pane run wS:p2 cd '.*/worktrees/htab' && claude --name 'testlabel'$" "$HERDR_ARGV_LOG"
+  grep -qE "^pane run wS:p2 cd '.*/worktrees/htab' && claude --name 'testlabel' \"\\\$\(cat '.*\.spinoff-brief'\)\"$" "$HERDR_ARGV_LOG"
   ! grep -q "^agent start" "$HERDR_ARGV_LOG"
 }
 
@@ -309,24 +325,59 @@ run_resolve() {
   ! grep -qE "tab create --workspace wS " "$HERDR_ARGV_LOG"
 }
 
-@test "herdr tab: readiness blocks on 'agent wait --status idle' with a timeout (KTD-3)" {
+@test "herdr tab: readiness is read off the SCREEN, not from an agent-status wait" {
+  # 0.8.3 moved readiness from `agent wait` to reading the pane, because an agent
+  # can register idle while a trust modal still blocks the prompt.
   run_herdr_tab
   [ "$status" -eq 0 ]
-  grep -qxF "agent wait wS:p2 --status idle --timeout 30000" "$HERDR_ARGV_LOG"
-  # the 30× read-screen poll must NOT be on the herdr path
+  grep -qE "^pane read wS:p2 --source visible$" "$HERDR_ARGV_LOG"
+  # the cmux 30x read-screen poll must NOT be on the herdr path
   ! grep -q "read-screen" "$HERDR_ARGV_LOG"
 }
 
-@test "herdr tab: kickoff is EXACTLY ONE submit — one 'agent send' + one 'pane send-keys Enter' (R7)" {
+@test "herdr tab: an unwritable brief file REFUSES to launch (R13)" {
+  # Guards against the degenerate `claude ""` — a session that opens with no idea
+  # why it exists, which is the exact outcome brief-at-launch is meant to remove.
+  local repo="$BATS_TEST_TMPDIR/norepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+  HERDR_ARGV_LOG="$BATS_TEST_TMPDIR/herdr-nobrief.log"
+  : > "$HERDR_ARGV_LOG"
+
+  run env PATH="$STUBDIR:$PATH" \
+          HERDR_ARGV_LOG="$HERDR_ARGV_LOG" \
+          HERDR_STUB_LIVE=1 HERDR_ENV=1 HERDR_WORKSPACE_ID=wS HERDR_PANE_ID=wS:p1 \
+          CMUX_WORKSPACE_ID= SPINOFF_READY_TIMEOUT_MS=3000 \
+          SPINOFF_BRIEF_FILE=/nonexistent-dir/brief.txt \
+      bash "$SCRIPT" --name nobrief --label testlabel --handoff "$handoff" \
+                     --repo "$repo" --target tab --launcher herdr
+
+  # refused, said why, and exited non-zero
+  [[ "$output" == *"refusing to launch an unbriefed session"* ]]
+  [ "$status" -ne 0 ]
+  # and crucially: claude was never started
+  [ "$(grep -c 'claude --name' "$HERDR_ARGV_LOG")" -eq 0 ]
+  # the worktree is still real work and survives
+  [ -f "$repo/worktrees/nobrief/docs/handoff.md" ]
+}
+
+@test "herdr tab: the brief rides the launch — nothing is sent to the session afterward" {
   run_herdr_tab
   [ "$status" -eq 0 ]
-  # exactly one stage (agent send) and exactly one submit (send-keys Enter)
-  [ "$(grep -c '^agent send wS:p2 ' "$HERDR_ARGV_LOG")" -eq 1 ]
-  [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 1 ]
-  # no second send of ANY kind (auto-fire-cascade guard)
-  [ "$(grep -c '^agent send ' "$HERDR_ARGV_LOG")" -eq 1 ]
-  # the only pane run is the single launch (cd + claude), not a kickoff send
+  # exactly one launch, and it carries the brief
   [ "$(grep -c '^pane run wS:p2 cd ' "$HERDR_ARGV_LOG")" -eq 1 ]
+  grep -qF '.spinoff-brief' "$HERDR_ARGV_LOG"
+  # no post-launch text injection of any kind — that whole path is gone
+  [ "$(grep -c '^agent send' "$HERDR_ARGV_LOG")" -eq 0 ]
+  [ "$(grep -c '^agent prompt' "$HERDR_ARGV_LOG")" -eq 0 ]
+  [ "$(grep -c '^pane send-text' "$HERDR_ARGV_LOG")" -eq 0 ]
 }
 
 @test "herdr tab: LB_READY=1 (open + briefed) when the wait succeeds" {
@@ -335,20 +386,23 @@ run_resolve() {
   [[ "$output" == *"open + briefed"* ]]
 }
 
-@test "herdr tab: LB_READY=0 (readiness not confirmed) when the wait times out" {
-  export HERDR_STUB_WAIT_FAIL=1
+@test "herdr tab: a never-ready screen is still briefed, and says a dialog may be up" {
+  # The brief is submitted BY the launch, so a session that never draws is briefed
+  # regardless. What an unconfirmed prompt now costs is the trust-modal answer, so
+  # the run reports that instead of withholding the brief.
+  export HERDR_STUB_NOT_READY=1
   run_herdr_tab
   [ "$status" -eq 0 ]
-  [[ "$output" == *"readiness not confirmed"* ]]
-  # still fires the kickoff exactly once even when readiness is unconfirmed
-  [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 1 ]
+  [[ "$output" == *"open + briefed"* ]]
+  [[ "$output" == *"a dialog may still be up"* ]]
 }
 
-@test "herdr tab: verify-submitted does not double-fire when the kickoff already landed" {
-  # the pane-read stub returns a marker WITHOUT the kickoff text → no retry Enter
+@test "herdr tab: no Enter is sent to submit the brief (the launch already did)" {
   run_herdr_tab
   [ "$status" -eq 0 ]
-  [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 1 ]
+  # the only send-keys allowed on a ready screen is none: readiness confirmed
+  # without a modal, so nothing needs dismissing and nothing needs submitting.
+  [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 0 ]
 }
 
 @test "herdr tab: summary names the herdr backend, never cmux (R9)" {
@@ -373,10 +427,10 @@ run_resolve() {
   grep -qxF "pane list --workspace wS" "$HERDR_ARGV_LOG"
   grep -qxF "workspace focus wS" "$HERDR_ARGV_LOG"
   # claude is RUN INTO the workspace's root pane (shared verb), never `agent start`.
-  grep -qE "^pane run wS:p2 cd '.*/worktrees/hws' && claude --name 'testlabel'$" "$HERDR_ARGV_LOG"
+  grep -qE "^pane run wS:p2 cd '.*/worktrees/hws' && claude --name 'testlabel' " "$HERDR_ARGV_LOG"
   ! grep -q "^agent start" "$HERDR_ARGV_LOG"
-  # readiness still uses the blocking wait — no read-screen poll on the herdr path.
-  grep -qxF "agent wait wS:p2 --status idle --timeout 30000" "$HERDR_ARGV_LOG"
+  # readiness is read off the screen — no cmux read-screen poll on the herdr path.
+  grep -qE "^pane read wS:p2 --source visible$" "$HERDR_ARGV_LOG"
   ! grep -q "read-screen" "$HERDR_ARGV_LOG"
 }
 
@@ -421,11 +475,10 @@ run_resolve() {
   [[ "$output" != *cmux* ]]
 }
 
-@test "herdr workspace: readiness timeout -> launch still reports (readiness not confirmed)" {
-  export HERDR_STUB_WAIT_FAIL=1
+@test "herdr workspace: a never-ready screen is still briefed by the launch" {
+  export HERDR_STUB_NOT_READY=1
   run_herdr_workspace
   [ "$status" -eq 0 ]
-  [[ "$output" == *"readiness not confirmed"* ]]
-  # the agent pane still launched and the kickoff still fired exactly once.
-  [ "$(grep -c '^pane send-keys wS:p2 Enter$' "$HERDR_ARGV_LOG")" -eq 1 ]
+  [[ "$output" == *"open + briefed"* ]]
+  [[ "$output" == *"a dialog may still be up"* ]]
 }

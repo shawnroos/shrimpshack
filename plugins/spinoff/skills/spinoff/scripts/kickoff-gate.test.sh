@@ -40,6 +40,8 @@ printf '# Spinoff: gate\n## Source session\n<!-- SESSION -->\n' > "$HANDOFF"
 # Stub herdr. HERDR_SCREEN picks what `pane read` shows, i.e. which boot the run sees:
 #   booting → only a shell prompt; claude never draws (readiness must never pass)
 #   ready   → claude's prompt footer is up
+#   trust   → claude's FOLDER-trust prompt, which blocks a fresh worktree before
+#             claude will process its command-line prompt; flips to `ready` on Enter
 #   modal   → the first-run MCP trust modal, which flips to `ready` once an Enter
 #             (or Escape) is delivered — mirroring the real dismissal.
 # The stub records every call, which is how the negatives are asserted.
@@ -59,12 +61,19 @@ case "$1 ${2:-}" in
   "agent send")    exit 0 ;;
   "pane send-keys")
      # An Enter/Escape against the modal dismisses it → subsequent reads are ready.
-     [ "$SCREEN" = modal ] && [ -n "${MODAL_FLAG:-}" ] && touch "$MODAL_FLAG"
+     case "$SCREEN" in modal|trust) [ -n "${MODAL_FLAG:-}" ] && touch "$MODAL_FLAG" ;; esac
      exit 0 ;;
   "pane read")
      case "$SCREEN" in
        booting) _emit '~ $ cd /repo && claude
 ❯ ' ;;
+       trust)   if [ -n "${MODAL_FLAG:-}" ] && [ -f "$MODAL_FLAG" ]; then
+                  _emit '  ? for shortcuts Â· shift+tab to cycle'
+                else
+                  _emit ' Quick safety check: Is this a project you created or one you trust?
+ â¯ 1. Yes, I trust this folder
+   2. No, exit'
+                fi ;;
        modal)   if [ -n "${MODAL_FLAG:-}" ] && [ -f "$MODAL_FLAG" ]; then
                   _emit '  📁 repo
   ⏵⏵ auto mode on (shift+tab to cycle)'
@@ -94,52 +103,62 @@ run() {  # run <screen> <name>
        bash "$SPINOFF" --name "$2" --handoff "$HANDOFF" --target tab --base origin/main 2>&1 )
 }
 
-echo "kickoff readiness-gate checks ($(basename "$(dirname "$SPINOFF")")/$(basename "$SPINOFF")):"
+echo "brief-at-launch checks ($(basename "$(dirname "$SPINOFF")")/$(basename "$SPINOFF")):"
 
-# ---- 1. SLOW BOOT (claude never draws) → must WITHHOLD the kickoff ------------
+# The brief is now claude's positional prompt, carried by the launch command itself.
+# There is no post-launch text injection, so the old "withhold the kickoff until the
+# prompt is ready" gate no longer exists — a slow boot is briefed like any other.
+# What readiness still buys is the trust-modal answer, which is what enables MCP
+# servers for a session opened on a new project path.
+
+# ---- 1. SLOW BOOT (claude never draws) → still briefed, MCP caveat reported ----
 out="$(run booting slow-boot)"; rc=$?
 
-grep -q 'agent send' "$CALLS" \
-  && bad "slow boot: kickoff was SENT into a non-ready session (the 0.8.2 bug)" \
-  || ok  "slow boot: kickoff withheld — no 'agent send'"
+grep -qE 'pane run .*\.spinoff-brief' "$CALLS" \
+  && ok  "slow boot: the launch carried the brief" \
+  || bad "slow boot: launch did not carry the brief"
+
+grep -qE '^(agent send|agent prompt|pane send-text)' "$CALLS" \
+  && bad "slow boot: text was injected after launch — that path should be gone" \
+  || ok  "slow boot: nothing injected after launch"
 
 echo "$out" | grep -q '✓ Spinoff complete' \
-  && bad "slow boot: reported '✓ Spinoff complete' for an unbriefed session" \
-  || ok  "slow boot: did not claim completion"
+  && ok  "slow boot: reported complete — a slow boot is no longer a failure" \
+  || bad "slow boot: reported incomplete for a session that WAS briefed"
 
-echo "$out" | grep -q 'Spinoff INCOMPLETE' \
-  && ok  "slow boot: reported INCOMPLETE" \
-  || bad "slow boot: no INCOMPLETE header"
+[ "$rc" -eq 0 ] \
+  && ok  "slow boot: exited 0" \
+  || bad "slow boot: exited $rc"
 
-[ "$rc" -ne 0 ] \
-  && ok  "slow boot: exited non-zero (rc=$rc)" \
-  || bad "slow boot: exited 0 — a caller checking status sees success"
+echo "$out" | grep -q 'a dialog may still be up' \
+  && ok  "slow boot: disclosed that the prompt never confirmed" \
+  || bad "slow boot: silently hid the unconfirmed prompt"
 
-echo "$out" | grep -q 'Read docs/handoff.md' \
-  && ok  "slow boot: printed the manual recovery one-liner" \
-  || bad "slow boot: no recovery instructions"
-
-# The worktree is still real work — it must survive the failure.
+# The worktree is still real work — it must survive regardless.
 [ -f "$REPO/worktrees/slow-boot/docs/handoff.md" ] \
   && ok  "slow boot: worktree + handoff preserved" \
   || bad "slow boot: worktree/handoff missing"
 
-# The shell prompt must NOT be mistaken for readiness. `booting` shows a bare "❯",
-# so if the ready-match ever regresses to matching it, check 1 goes red.
-echo "$out" | grep -q 'Spinoff INCOMPLETE' \
+# A bare "❯" must still not be mistaken for claude being ready — the MCP caveat
+# above is the observable proof the ready-match rejected the shell prompt.
+echo "$out" | grep -q 'a dialog may still be up' \
   && ok  "slow boot: a bare shell '❯' is not treated as claude being ready" \
   || bad "slow boot: shell prompt accepted as ready (false-positive ready match)"
 
-# ---- 2. FAST BOOT (prompt drawn) → must brief, with EXACTLY ONE submit --------
+# ---- 2. FAST BOOT (prompt drawn) → briefed, no injection, no caveat -----------
 out="$(run ready fast-boot)"; rc=$?
 
-grep -q 'agent send' "$CALLS" \
-  && ok  "fast boot: kickoff sent" \
-  || bad "fast boot: kickoff never sent — the gate is too strict"
+grep -qE 'pane run .*\.spinoff-brief' "$CALLS" \
+  && ok  "fast boot: the launch carried the brief" \
+  || bad "fast boot: launch did not carry the brief"
 
-[ "$(grep -c 'agent send' "$CALLS")" = "1" ] \
-  && ok  "fast boot: exactly one 'agent send' (stage-once invariant held)" \
-  || bad "fast boot: $(grep -c 'agent send' "$CALLS") sends — duplicate kickoff"
+[ "$(grep -cE 'pane run .*claude --name' "$CALLS")" = "1" ] \
+  && ok  "fast boot: exactly one launch (no duplicate briefing)" \
+  || bad "fast boot: $(grep -cE 'pane run .*claude --name' "$CALLS") launches"
+
+echo "$out" | grep -q 'a dialog may still be up' \
+  && bad "fast boot: reported the MCP caveat despite a confirmed prompt" \
+  || ok  "fast boot: no MCP caveat — prompt confirmed"
 
 echo "$out" | grep -q '✓ Spinoff complete' \
   && ok  "fast boot: reported complete" \
@@ -149,27 +168,49 @@ echo "$out" | grep -q '✓ Spinoff complete' \
   && ok  "fast boot: exited 0" \
   || bad "fast boot: exited $rc"
 
-# ---- 3. MCP TRUST MODAL → dismiss it, THEN brief -----------------------------
+# ---- 3. MCP TRUST MODAL → still dismissed (this is why readiness survives) ----
 # A spinoff worktree is a new project path, so a repo with .mcp.json always greets
-# a fresh claude with this modal — and the agent reports "idle" behind it. This is
-# the case that actually broke every real spinoff.
+# a fresh claude with this modal. The brief is already in by then, but the modal
+# still has to be answered or the session runs without its MCP servers.
 out="$(run modal mcp-modal)"; rc=$?
 
 grep -q 'pane send-keys' "$CALLS" \
   && ok  "mcp modal: dismissed (send-keys issued)" \
-  || bad "mcp modal: never dismissed — a real spinoff would hang here"
+  || bad "mcp modal: never dismissed — the session would run without MCP servers"
 
 echo "$out" | grep -qi 'MCP trust modal' \
   && ok  "mcp modal: disclosed the auto-accept in the output" \
   || bad "mcp modal: silently accepted a trust prompt"
 
-grep -q 'agent send' "$CALLS" \
-  && ok  "mcp modal: briefed after dismissal" \
-  || bad "mcp modal: kickoff never sent"
+grep -qE 'pane run .*\.spinoff-brief' "$CALLS" \
+  && ok  "mcp modal: brief still rode the launch" \
+  || bad "mcp modal: launch did not carry the brief"
 
 echo "$out" | grep -q '✓ Spinoff complete' && [ "$rc" -eq 0 ] \
   && ok  "mcp modal: reported complete" \
   || bad "mcp modal: did not complete (rc=$rc)"
+
+# ---- 4. FOLDER-TRUST PROMPT -> answered, then the session is usable -----------
+# A fresh worktree is a new folder, so claude asks whether it trusts it before it
+# will process anything — including a prompt supplied on the command line. Found by
+# a real end-to-end run; every stub here emits a ready footer, so nothing caught it.
+out="$(run trust folder-trust)"; rc=$?
+
+grep -q 'pane send-keys' "$CALLS" \
+  && ok  "folder trust: answered (send-keys issued)" \
+  || bad "folder trust: never answered — a real spinoff sits there untouched"
+
+echo "$out" | grep -qi 'folder-trust prompt' \
+  && ok  "folder trust: disclosed rather than answered silently" \
+  || bad "folder trust: silently accepted a trust prompt"
+
+echo "$out" | grep -q '✓ Spinoff complete' && [ "$rc" -eq 0 ] \
+  && ok  "folder trust: reported complete once answered" \
+  || bad "folder trust: did not complete (rc=$rc)"
+
+echo "$out" | grep -q 'a dialog may still be up' \
+  && bad "folder trust: still warns about a dialog after answering it" \
+  || ok  "folder trust: no stale dialog warning after answering"
 
 echo
 echo "  $PASS passed, $FAIL failed"
