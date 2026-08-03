@@ -17,6 +17,13 @@ die()  { echo "✗ $*" >&2; exit 1; }
 # (handoff, transcript) BEFORE a `--repo` cd changes cwd out from under them —
 # they're read later (post-cd), so a relative path would otherwise be lost.
 abspath() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd -P)" "$1" ;; esac; }
+# Single-quote a value for safe re-parsing by ANOTHER shell. $LAUNCH_CMD is a string
+# that cmux/herdr type into a live shell (and ghostty runs via sh -lc), so a naked
+# apostrophe in a label or a repo path — "Shawn's spinoff", /Users/x/Shawn's projects/
+# — terminated the quoting and made the whole command a syntax error. The CLI accepted
+# the text, so the run reported "✓ complete … briefed" while the pane sat on a
+# continuation prompt with no claude at all. Escape, never trust the input.
+shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # ---- launcher seam (KTD-1 / KTD-2) ------------------------------------------
 # The launch region near the bottom is backend-neutral: it calls launcher_*
@@ -92,7 +99,10 @@ launcher_find_left_pane_cmux() {
 # and the LAUNCH_* refs the later verbs consume.
 launcher_new_tab_cmux() {
   step "opening cmux tab on the left agent surface…"
-  WS="$CMUX_WORKSPACE_ID"
+  # Guarded: --launcher cmux only probes the BINARY, so this is reachable with the
+  # env var unset, and `set -u` would abort mid-run leaving an orphan worktree and
+  # no summary block for the skill to relay.
+  WS="${CMUX_WORKSPACE_ID:-}"
   launcher_find_left_pane_cmux
   CREATE_ARGS=(--type terminal --workspace "$WS" --focus true)
   if [ -n "$LEFT_PANE" ]; then
@@ -215,7 +225,9 @@ launcher_wait_ready_cmux() {
           *)      "$CMUX" send-key --surface "$LAUNCH_SFC" --workspace "$LAUNCH_WS" enter >/dev/null 2>&1
                   step "  … folder-trust prompt: accepted for this worktree" ;;
         esac
-        ;;
+        # Let the screen redraw before the next poll, or the same prompt is re-read
+        # and a second Enter lands in the session.
+        sleep 2 ;;
       *"bypass permissions"*|*"shift+tab to cycle"*|*"? for shortcuts"*) LB_READY=1; break ;;
     esac
   done
@@ -334,6 +346,9 @@ launcher_new_tab_herdr() {
   step "opening a herdr agent tab…"
   local ws out tab pane
   ws="$(_herdr_current_workspace)"
+  # Recover the live/frozen label: the helper runs in a subshell, so its own
+  # assignment cannot escape. Derive it here instead of always reporting "frozen".
+  if [ -n "$ws" ] && [ "$ws" != "${HERDR_WORKSPACE_ID:-}" ]; then HERDR_WS_SOURCE=live; else HERDR_WS_SOURCE="${HERDR_WS_SOURCE:-frozen}"; fi
   if [ -z "$ws" ]; then
     echo "  ⚠ could not resolve the current herdr workspace (no live pane, no HERDR_WORKSPACE_ID)" >&2
     LAUNCH_WS=""; LAUNCH_SFC=""; return
@@ -1293,10 +1308,10 @@ printf '%s\n' "$KICKOFF" > "$BRIEF_FILE" 2>/dev/null || true
 _brief_excl="$(git -C "$WORKTREE" rev-parse --git-path info/exclude 2>/dev/null)"
 [ -n "$_brief_excl" ] && { grep -qxF '/.spinoff-brief' "$_brief_excl" 2>/dev/null || printf '/.spinoff-brief\n' >> "$_brief_excl"; }
 
-LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL' \"\$(cat '$BRIEF_FILE')\""
+LAUNCH_CMD="cd $(shq "$WORKTREE") && claude --name $(shq "$LABEL") \"\$(cat $(shq "$BRIEF_FILE"))\""
 # Recovery line for the summary: never references the brief file, so it stays
 # runnable even if that file is gone.
-MANUAL_CMD="cd '$WORKTREE' && claude --name '$LABEL'"
+MANUAL_CMD="cd $(shq "$WORKTREE") && claude --name $(shq "$LABEL")"
 
 # Detect the backend once (KTD-2), then drive the launch through the neutral
 # verbs. resolve_launcher's precedence (herdr live > cmux > none) subsumes the old
@@ -1338,7 +1353,12 @@ fi
 # Only then can an unsubmitted kickoff be a failure — a LAUNCHER=none run is a
 # legitimate worktree-only spinoff and still "complete".
 BRIEF_ATTEMPTED=0
-[ "$LAUNCHER" != "none" ] && [ -n "$LAUNCH_SFC" ] && BRIEF_ATTEMPTED=1
+# Attempted means "a backend was resolved and we tried to launch", NOT "a surface
+# came up". Gating on $LAUNCH_SFC meant every surface-creation failure — cmux
+# new-surface, herdr tab create, a workspace whose pane never registers, a dead
+# --from-surface — skipped the not-briefed gate and printed a tick. LAUNCHER=none
+# is still a legitimate worktree-only spinoff and stays complete.
+[ "$LAUNCHER" != "none" ] && BRIEF_ATTEMPTED=1
 
 # NEVER render an unbriefed session as success. The skill mandates relaying this
 # block verbatim, so a failure formatted as a success line inside a ✓ block is a

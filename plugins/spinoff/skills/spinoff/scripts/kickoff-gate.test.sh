@@ -40,6 +40,8 @@ printf '# Spinoff: gate\n## Source session\n<!-- SESSION -->\n' > "$HANDOFF"
 # Stub herdr. HERDR_SCREEN picks what `pane read` shows, i.e. which boot the run sees:
 #   booting → only a shell prompt; claude never draws (readiness must never pass)
 #   ready   → claude's prompt footer is up
+#   trust   → claude's FOLDER-trust prompt, which blocks a fresh worktree before
+#             claude will process its command-line prompt; flips to `ready` on Enter
 #   modal   → the first-run MCP trust modal, which flips to `ready` once an Enter
 #             (or Escape) is delivered — mirroring the real dismissal.
 # The stub records every call, which is how the negatives are asserted.
@@ -59,12 +61,19 @@ case "$1 ${2:-}" in
   "agent send")    exit 0 ;;
   "pane send-keys")
      # An Enter/Escape against the modal dismisses it → subsequent reads are ready.
-     [ "$SCREEN" = modal ] && [ -n "${MODAL_FLAG:-}" ] && touch "$MODAL_FLAG"
+     case "$SCREEN" in modal|trust) [ -n "${MODAL_FLAG:-}" ] && touch "$MODAL_FLAG" ;; esac
      exit 0 ;;
   "pane read")
      case "$SCREEN" in
        booting) _emit '~ $ cd /repo && claude
 ❯ ' ;;
+       trust)   if [ -n "${MODAL_FLAG:-}" ] && [ -f "$MODAL_FLAG" ]; then
+                  _emit '  ? for shortcuts Â· shift+tab to cycle'
+                else
+                  _emit ' Quick safety check: Is this a project you created or one you trust?
+ â¯ 1. Yes, I trust this folder
+   2. No, exit'
+                fi ;;
        modal)   if [ -n "${MODAL_FLAG:-}" ] && [ -f "$MODAL_FLAG" ]; then
                   _emit '  📁 repo
   ⏵⏵ auto mode on (shift+tab to cycle)'
@@ -180,6 +189,28 @@ grep -qE 'pane run .*\.spinoff-brief' "$CALLS" \
 echo "$out" | grep -q '✓ Spinoff complete' && [ "$rc" -eq 0 ] \
   && ok  "mcp modal: reported complete" \
   || bad "mcp modal: did not complete (rc=$rc)"
+
+# ---- 4. FOLDER-TRUST PROMPT -> answered, then the session is usable -----------
+# A fresh worktree is a new folder, so claude asks whether it trusts it before it
+# will process anything — including a prompt supplied on the command line. Found by
+# a real end-to-end run; every stub here emits a ready footer, so nothing caught it.
+out="$(run trust folder-trust)"; rc=$?
+
+grep -q 'pane send-keys' "$CALLS" \
+  && ok  "folder trust: answered (send-keys issued)" \
+  || bad "folder trust: never answered — a real spinoff sits there untouched"
+
+echo "$out" | grep -qi 'folder-trust prompt' \
+  && ok  "folder trust: disclosed rather than answered silently" \
+  || bad "folder trust: silently accepted a trust prompt"
+
+echo "$out" | grep -q '✓ Spinoff complete' && [ "$rc" -eq 0 ] \
+  && ok  "folder trust: reported complete once answered" \
+  || bad "folder trust: did not complete (rc=$rc)"
+
+echo "$out" | grep -q 'a dialog may still be up' \
+  && bad "folder trust: still warns about a dialog after answering it" \
+  || ok  "folder trust: no stale dialog warning after answering"
 
 echo
 echo "  $PASS passed, $FAIL failed"

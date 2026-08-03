@@ -99,9 +99,20 @@ check_backend() {                     # $1 = label, $2 = binary var, $3 = binary
       continue
     fi
 
-    # Single-word call (no verb) — group presence is all we can check.
+    # Single-word call (no group/verb split). Still check its flags — every cmux
+    # call is single-word, so returning early here skipped ALL cmux flag
+    # verification, which is exactly the drift class this file exists to catch.
     if [ "$group" = "$verb" ]; then
       ok "$label: '$group' exists"
+      local g_help g_flag
+      g_help="$("$bin" "$group" --help 2>&1)"
+      for g_flag in $(extract_flags "$var" "$group"); do
+        if printf '%s\n' "$g_help" | grep -qE -- "(^|[[:space:]])${g_flag}([[:space:]=,|]|$)"; then
+          ok "$label: '$group $g_flag' exists"
+        else
+          bad "$label: '$group' does not accept '$g_flag'"
+        fi
+      done
       continue
     fi
 
@@ -136,4 +147,10 @@ echo
 echo "  $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$SKIP" -gt 0 ] && echo "  NOTE: a skipped backend is UNVERIFIED, not passing."
 [ "$FAIL" -eq 0 ] || exit 1
+# Nothing verified at all (no backend installed) is not a pass. Exiting 0 here made
+# the check a green no-op on any machine without the CLIs.
+if [ "$PASS" -eq 0 ]; then
+  echo "  ✗ no backend was available — this check verified NOTHING" >&2
+  exit 2
+fi
 exit 0
