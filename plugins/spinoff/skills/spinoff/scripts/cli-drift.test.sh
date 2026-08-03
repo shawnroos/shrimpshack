@@ -136,8 +136,15 @@ check_backend() {                     # $1 = label, $2 = binary var, $3 = binary
   done <<< "$calls"
 }
 
-HERDR_BIN="$(command -v herdr 2>/dev/null)"
-CMUX_BIN="$(command -v cmux 2>/dev/null)"
+# Honor an inherited HERDR_BIN / CMUX_BIN before falling back to PATH — the same
+# override vocabulary spinoff.sh resolves through. These used to be assigned
+# unconditionally, which made the gate unsteerable: in a PATH-less environment (a
+# background agent inherits the bare system PATH, not the login shell's) `command -v
+# herdr` comes back empty, both backends report SKIPPED, and PASS=0 exits 2 — a
+# FAILURE — in exactly the environment the launcher-resolution bug lives in. Now the
+# caller can point the gate at the real binary and get a verification instead.
+HERDR_BIN="${HERDR_BIN:-$(command -v herdr 2>/dev/null)}"
+CMUX_BIN="${CMUX_BIN:-$(command -v cmux 2>/dev/null)}"
 [ -n "$CMUX_BIN" ] || { [ -x /Applications/cmux.app/Contents/Resources/bin/cmux ] && CMUX_BIN=/Applications/cmux.app/Contents/Resources/bin/cmux; }
 
 check_backend herdr HERDR "${HERDR_BIN:-}"

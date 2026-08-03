@@ -34,15 +34,101 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # original "not inside cmux" manual-line fallback: worktree and handoff are still
 # produced, only the launch is skipped.
 
+# ---- binary resolution (R1-R3, R15, KTD-2) -----------------------------------
+# Every tool this script shells out to resolves to an ABSOLUTE path, and never to
+# "whatever the caller's PATH happened to hold". The spinoff skill runs this script
+# from a BACKGROUND agent, and a detached agent shell does not inherit the login
+# shell's PATH — so on a machine where herdr is installed and its server is live,
+# `command -v herdr` came back empty, $HERDR was empty, the herdr probe failed, and
+# the run silently resolved LAUNCHER=none: worktree created, session never launched.
+#
+# Mirror image of the R8 decision recorded below. That one keeps a STALE HERDR_ENV=1
+# from winning (announced but dead). This one keeps a LIVE HERDR_ENV=1 from LOSING to
+# a binary we merely failed to find. Both are the same principle: the environment's
+# announcement and the binary's reachability are separate facts, and neither one alone
+# is allowed to decide.
+#
+# Order (R3): explicit override, then PATH, then a list of known install locations.
+#
+# Every candidate — the override included — must be a regular file AND executable
+# (R15). `-x` alone is true of a DIRECTORY, so HERDR_BIN=/opt/homebrew/bin would have
+# "resolved" and reproduced the original bug one layer down, with a launch that runs a
+# directory. A SET override that fails the test resolves to EMPTY and deliberately
+# does NOT fall through to PATH: someone who named a binary meant that binary, and
+# quietly driving a different one is worse than not launching. The rejected value is
+# recovered by resolve_bin_rejected below so a diagnostic can name it.
+#
+# The candidate directory list is read from $SPINOFF_BIN_PATHS (colon-separated), in
+# the same spirit as $SPINOFF_READY_TIMEOUT_MS further down: an env knob whose reason
+# to exist is that the behavior is otherwise untestable. Without it a stripped-PATH
+# regression test still finds /opt/homebrew/bin/herdr on this machine, never reaches
+# the unresolvable path, and passes for the wrong reason (KTD-10).
+_bin_usable() { [ -n "${1:-}" ] && [ -f "$1" ] && [ -x "$1" ]; }
+
+# _resolve_bin_scan <colon-list> <suffix> — echo the first usable candidate, or fail.
+# Splitting is pure parameter expansion, deliberately: a resolver whose whole purpose
+# is to not depend on PATH must not itself shell out to `tr`/`sed` to do the splitting.
+# (Measured: with PATH scrubbed, a tr-based split died with "tr: command not found" and
+# resolved nothing — the failure it exists to prevent, one level down.) Every test it
+# uses is a shell builtin.
+_resolve_bin_scan() {
+  local rest="${1:-}" suffix="${2:-}" head
+  while [ -n "$rest" ]; do
+    head="${rest%%:*}"
+    if [ "$head" = "$rest" ]; then rest=""; else rest="${rest#*:}"; fi
+    [ -n "$head" ] || continue
+    head="${head%/}$suffix"
+    if _bin_usable "$head"; then printf '%s' "$head"; return 0; fi
+  done
+  return 1
+}
+
+# resolve_bin <name> <override> [extra-candidates]
+#   <override>         explicit path from the env (may be empty); wins outright (R2)
+#   [extra-candidates] colon-separated FULL paths tried after the standard dirs, for
+#                      the non-PATH installs (the cmux app bundle, /usr/bin/osascript)
+# Echoes a validated ABSOLUTE path, or nothing. Never fails, never writes to stderr —
+# deciding what an empty result MEANS belongs to the caller, not to resolution.
+# The result is pinned absolute through abspath() for the same reason the handoff and
+# transcript args are: resolution happens BEFORE the `--repo` cd below, so a relative
+# candidate (a relative PATH entry, a relative override) would silently stop resolving
+# the moment the cwd moves.
+resolve_bin() {
+  local name="$1" override="${2:-}" extra="${3:-}"
+  local cand
+  if [ -n "$override" ]; then
+    _bin_usable "$override" && abspath "$override"
+    return 0
+  fi
+  cand="$(command -v "$name" 2>/dev/null)"
+  if _bin_usable "${cand:-}"; then abspath "$cand"; return 0; fi
+  if cand="$(_resolve_bin_scan \
+      "${SPINOFF_BIN_PATHS:-/opt/homebrew/bin:/usr/local/bin:${HOME:-}/.local/bin}" "/$name")"; then
+    abspath "$cand"; return 0
+  fi
+  if cand="$(_resolve_bin_scan "$extra" "")"; then abspath "$cand"; return 0; fi
+  return 0
+}
+
+# resolve_bin_rejected <resolved> <override> — echo the override that was thrown out.
+# The caller derives this rather than resolve_bin exporting it, because resolve_bin is
+# consumed through command substitution and a subshell cannot set a variable its caller
+# would see. The contract makes the derivation exact: a set override that passed the
+# R15 test yields a non-empty path, so "override set AND result empty" is precisely the
+# rejected case.
+resolve_bin_rejected() { [ -n "${2:-}" ] && [ -z "${1:-}" ] && printf '%s' "$2"; return 0; }
+
 # Liveness probes. herdr: the binary resolves AND `status server` reports running
 # (a stale HERDR_ENV=1 must not win — R8). cmux: the binary is executable.
 # ghostty: it has NO scripting CLI, so the thing that has to exist is the .app
 # bundle AppleScript targets plus osascript to talk to it. Deliberately asks
 # osascript NOTHING — a probe must never be what raises the macOS Automation
-# dialog. $GHOSTTY_APP is resolved next to $HERDR / $CMUX, below.
+# dialog, which is why this checks the RESOLVED $OSASCRIPT (already validated as a
+# regular executable file by resolve_bin) instead of running it. $GHOSTTY_APP and
+# $OSASCRIPT are resolved next to $HERDR / $CMUX, below.
 _herdr_probe() { [ -n "${HERDR:-}" ] && "$HERDR" status server 2>/dev/null | grep -qi 'running'; }
 _cmux_probe()  { [ -n "${CMUX:-}" ] && [ -x "$CMUX" ]; }
-_ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && command -v osascript >/dev/null 2>&1; }
+_ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
 
 # resolve_launcher — collapse env + flag into a single $LAUNCHER (KTD-2).
 # Precedence for `auto`: herdr (live) > cmux > ghostty > none. A forced --launcher
@@ -771,7 +857,11 @@ _ghostty_run() {
   local out
   _ghostty_denied && return 1
   [ -n "$GHOSTTY_SCPT" ] && [ -f "$GHOSTTY_SCPT" ] || { echo "  ⚠ ghostty AppleScript was not staged — cannot run verb '$1'" >&2; return 1; }
-  if ! out="$(osascript "$GHOSTTY_SCPT" "$@" 2>&1)"; then
+  # The RESOLVED osascript, not a bare `osascript` — see the resolver note at the top:
+  # a background agent's PATH may not contain /usr/bin. `${OSASCRIPT:-}` because this
+  # function is also reachable when the script is SOURCED for tests, where the
+  # resolution region below never runs and `set -u` would abort on a bare read.
+  if ! out="$("${OSASCRIPT:-}" "$GHOSTTY_SCPT" "$@" 2>&1)"; then
     case "$out" in
       *-1743*|*"Not authorized to send Apple events"*)
         : > "$(_ghostty_deny_flag)" 2>/dev/null || true
@@ -1018,13 +1108,32 @@ if [ "$TARGET" = split ] && [ -z "$FROM_SURFACE" ]; then
   TARGET=tab
 fi
 
-# Prefer cmux on PATH (Homebrew, Linux); fall back to the macOS app bundle path.
-CMUX="$(command -v cmux 2>/dev/null)"
-[ -n "$CMUX" ] || CMUX="/Applications/cmux.app/Contents/Resources/bin/cmux"
+# ---- resolve the launcher binaries (R1-R3, R15) ------------------------------
+# All three go through resolve_bin: $*_BIN override, then PATH, then $SPINOFF_BIN_PATHS,
+# then the tool's own non-PATH install location. See the long note at the resolver
+# itself for WHY absolute resolution is mandatory here (a background agent's PATH is
+# not the login shell's) and why a set-but-invalid override resolves to empty.
+#
+# The scalar `CMUX="…"` / `HERDR="…"` spelling is load-bearing, not style:
+# cli-drift.test.sh extracts every backend call site by grepping for the literal
+# spellings ("$CMUX", "$HERDR"), so array-ifying these silently zeroes that extraction
+# and the drift gate stops protecting anything (KTD-6 — already cost 4 verified calls
+# once, see the f0b5d35 commit message).
 
-# Resolve herdr the same way (KTD-2): a missing binary means the herdr backend is
-# unavailable regardless of HERDR_ENV. No app-bundle fallback — herdr is PATH-only.
-HERDR="$(command -v herdr 2>/dev/null)"
+# cmux: PATH (Homebrew, Linux), then the macOS app bundle path.
+CMUX="$(resolve_bin cmux "${CMUX_BIN:-}" /Applications/cmux.app/Contents/Resources/bin/cmux)"
+CMUX_REJECTED="$(resolve_bin_rejected "$CMUX" "${CMUX_BIN:-}")"
+
+# herdr: a missing binary means the herdr backend is unavailable regardless of
+# HERDR_ENV (KTD-2). No app-bundle fallback — herdr installs onto PATH only.
+HERDR="$(resolve_bin herdr "${HERDR_BIN:-}")"
+HERDR_REJECTED="$(resolve_bin_rejected "$HERDR" "${HERDR_BIN:-}")"
+
+# osascript: the ghostty backend's only transport (R4). /usr/bin/osascript is where
+# macOS ships it, but it is resolved rather than hardcoded so the override and the
+# rejection diagnostic work the same way as for the other two.
+OSASCRIPT="$(resolve_bin osascript "${OSASCRIPT_BIN:-}" /usr/bin/osascript)"
+OSASCRIPT_REJECTED="$(resolve_bin_rejected "$OSASCRIPT" "${OSASCRIPT_BIN:-}")"
 
 # Resolve ghostty the same way — except ghostty ships no scripting CLI, so the thing
 # that has to resolve is the .app bundle AppleScript targets. Prefer the bundle
