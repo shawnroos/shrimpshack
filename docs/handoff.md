@@ -1,116 +1,119 @@
-# Spinoff: spinoff v0.9.0 — kickoff + handoff-refs fixes, ghostty backend, split target
+# Spinoff: spinoff — launcher binary resolution is PATH-fragile and the failure message lies
 
 > This handoff is directional — author intent and a starting point, not a spec.
 > The code and tests are the source of truth; validate against them and refine.
 
 ## Goal
 
-Ship spinoff v0.9.0: two real bug fixes (the kickoff never fires; handoff doc
-references dangle) plus two features (a third launcher backend for **ghostty** via
-AppleScript, and a **split** target that opens in the current tab instead of a new one).
+Make `spinoff.sh` resolve its launcher binaries (`herdr`, `cmux`) robustly instead of
+depending on the caller's `PATH`, and make the fallback message tell the truth about
+*which* of two very different failures occurred. Live bug in shipped **v0.9.0**.
 
 ## Why now / context
 
-Shawn hit both bugs repeatedly in daily use:
+A `/start` spinoff ran, created the branch + worktree + handoff correctly, and then
+**silently skipped the launch**, reporting:
 
-1. *"The first message in the new spinoff session is not being entered into the chat —
-   the session starts empty and I'm having to tell the agent to read the handoff."*
-2. *"Agents are continually telling me the docs being referenced in the handoff are
-   not there."*
+```
+▸ not inside cmux/herdr (or the CLI is missing) — skipping launch automation
+```
 
-Both were diagnosed at runtime in the originating session — see below. **These are
-findings, not hypotheses.** Don't re-derive them; do re-verify cheaply before building.
+Exit code `0`. Zero `⚠` lines. It read as a clean run that simply wasn't in a
+multiplexer — but the session *was* inside a live herdr, and `HERDR_ENV=1` had been
+exported into the background agent explicitly.
+
+**The worst part: it's non-deterministic.** An earlier spinoff the same hour, from the
+same session with the identical export block, resolved `herdr` and launched fine. Same
+command, different outcome, depending on what `PATH` the background agent happened to
+inherit.
 
 ## Key decisions already made
 
-- **Fix 1 root cause (VERIFIED).** `spinoff.sh:461` calls `herdr agent send <pane> <text>`.
-  **That subcommand no longer exists in herdr 0.7.5.** Confirmed against `herdr agent --help`:
-  the verbs are `list get read send-keys prompt rename focus wait attach start explain`.
-  The call is wrapped in `>/dev/null 2>&1`, so it fails silently; line 462 then fires a bare
-  `Enter` into an empty prompt → empty session.
-- **Fix 1 direction.** Replace with `herdr agent prompt <target> <text> --wait --until idle
-  --timeout <ms>`, which submits directly. This collapses the stage→Enter→retry dance
-  (lines 461–473) into one call and makes the "EXACTLY ONE submit" invariant *structural*
-  rather than hand-maintained. Delete the `"Read docs/handoff.md"` screen-scrape retry guard —
-  `--wait` supersedes it.
-- **Stop swallowing stderr.** `>/dev/null 2>&1` is *why* a removed subcommand went unnoticed.
-  A non-zero exit must set `KICKOFF_OK=0` and surface. This is the real lesson, not the one-liner.
-- **RULED OUT for fix 1:** the readiness markers. `shift+tab to cycle` still appears in live
-  Claude panes (checked directly), so `launcher_wait_ready_herdr` is fine. Don't touch it.
-- **Fix 2 root cause.** NOT gitignore. `spinoff.sh:749-767` already copies the whole `docs/`
-  tree with `find`+`cp`, so git status is irrelevant to it — and `docs/` isn't even ignored in
-  Slate web-app (checked). The actual bug: the handoff is authored from the ORIGIN session and
-  cites docs at ORIGIN paths, but (a) the copy is scoped to `$REPO_ROOT/docs` only, so any
-  referenced doc outside that dir is never carried, (b) references are never rewritten to
-  worktree-relative paths, and (c) nothing verifies references resolve before reporting success.
-- **Fix 2 direction.** Invert it: derive the copy set FROM the handoff's own references — parse
-  paths out of the handoff, resolve against origin, copy into the worktree, rewrite each
-  reference to its worktree path, then **gate on "every referenced path resolves."** A dangling
-  reference must fail loudly, not silently. Keep the existing `docs/` sweep as a cheap superset.
-- **Update 0 — the seam already exists.** `resolve_launcher()` + 7 neutral verbs
-  (`new_tab`, `new_workspace`, `find_left_pane`, `launch_agent`, `wait_ready`, `send_kickoff`,
-  `open_viewer`) dispatch on `$LAUNCHER`. cmux + herdr implemented, `none` is the fallback.
-  ghostty is a third backend implementing the same verbs. **Research the API before coding** —
-  there's a `ghostty-applescript` skill on this machine; consult it.
-- **Update 1 — split target.** Same behavior as `--target tab` but splits the current tab.
-  Needs a new verb (`launcher_new_split`) + a `--target split` value + a command surface.
-- **Sequencing.** Fix 1 first and alone: until the kickoff fires, nothing downstream is
-  observable end-to-end (including whether fix 2 worked), and it rewrites the exact region
-  Update 0 must reimplement. Then Fix 2 ∥ ghostty research (disjoint — handoff/filesystem vs
-  read-only research). Then the ghostty backend. Then split last (needs ghostty to exist, or
-  it ships 2-of-3).
+- **Root cause (VERIFIED).** `spinoff.sh:1027` (v0.9.0; `:581` in 0.8.3):
+  ```bash
+  HERDR="$(command -v herdr 2>/dev/null)"
+  ```
+  `herdr` lives at `/opt/homebrew/bin/herdr`. If that dir isn't on `PATH`, `HERDR` is
+  empty → `_herdr_probe()` (`:43`) short-circuits on `[ -n "${HERDR:-}" ]` → 
+  `resolve_launcher()` falls through to `LAUNCHER=none`.
+- **Proven both directions, not inferred:**
+  - `env -i PATH=/usr/bin:/bin … command -v herdr` → not found
+  - `env -i PATH=/opt/homebrew/bin:/usr/bin:/bin …` → `/opt/homebrew/bin/herdr`,
+    `status: running`, `version: 0.7.5`
+- **v0.9.0 does NOT fix this.** Confirmed against `origin/main` — still the bare
+  `command -v herdr` at `:1027`, and `grep` finds no PATH guard anywhere in the script.
+- **The message conflates two unrelated conditions**, and that's arguably the worse bug:
+  - *"not in a multiplexer"* → correct, benign, silent fallback is right.
+  - *"multiplexer env says we ARE in one, but the binary isn't findable"* → a **broken
+    environment**. That deserves a loud `⚠`, not a silent degrade to `none`.
+  `HERDR_ENV=1` with no resolvable `herdr` is never a legitimate steady state.
+- **Direction.** Two parts, both needed:
+  1. **Resolve robustly** — honor an explicit override (`HERDR_BIN` / `CMUX_BIN`), then
+     `command -v`, then a small list of known install locations (`/opt/homebrew/bin`,
+     `/usr/local/bin`, `~/.local/bin`). Don't just prepend to `PATH` blindly; resolve to
+     an absolute path and use it.
+  2. **Split the diagnostics** — when the env indicates a backend but its binary can't be
+     resolved, emit a `⚠` naming the binary and where it looked, and make the exit code
+     reflect an incomplete launch. Silence + exit 0 is what let this look like success.
+- **Applies to BOTH backends.** `_cmux_probe()` has the same shape (`[ -n "${CMUX:-}" ]`);
+  fix them symmetrically. Ghostty (new in v0.9.0) likely has the same exposure — check it.
+- **The deeper lesson worth encoding:** background agents do NOT inherit the login shell's
+  `PATH`. Any script the plugin expects to run from a subagent must resolve its tools
+  absolutely rather than assume an interactive-shell environment.
 
 ## Open questions / not yet decided
 
-- **Can ghostty reach parity at all?** Ghostty's AppleScript support is thin — largely
-  `System Events` keystroke driving, not a real scripting dictionary. If it can't return a
-  tab/pane identifier, `wait_ready` and `send_kickoff` can't work the way cmux/herdr do, and
-  the backend may land as "opens a briefed tab, best-effort" rather than full parity.
-  **Decide this in research, before building on it, and tell Shawn.**
-- Split + ghostty is the hardest combination: cmux and herdr split natively and return a pane
-  id; a ghostty split is a keystroke with no handle back. May need a different readiness strategy.
-- Does `--target split` deserve its own command (`/start-split`) or just a flag on `/start`?
-- Version: 0.8.3 → 0.9.0 assumed. Confirm before the release commit.
+- Should an unresolvable-but-expected backend be **fatal** (non-zero exit, no worktree
+  churn) or **degrade loudly** (worktree + handoff still produced, `⚠`, non-zero exit)?
+  Leaning: degrade loudly with a non-zero exit — the worktree is still valuable, but the
+  run must not report success.
+- Is `HERDR_BIN`/`CMUX_BIN` the right override name, or should it read herdr's own
+  conventions? (`HERDR_SOCKET_PATH` etc. already exist — match that family.)
+- Does the same fragility affect other tools the script shells out to (`git`, `glow`,
+  `bat`, `python3`)? `glow`/`bat` are already best-effort, but worth an audit pass.
+- Should there be a `--launcher-bin <path>` flag for testing, or is env enough?
 
 ## Starting point
 
-- `plugins/spinoff/skills/spinoff/scripts/spinoff.sh` — 930 lines, heavily commented with
-  prior-decision rationale. **Preserve that commenting style; do not strip the "why" comments.**
-  - `:38` `resolve_launcher`  ·  `:52-58` the neutral verb dispatchers
-  - `:405` `launcher_wait_ready_herdr`  ·  `:451` `launcher_send_kickoff_herdr` ← **fix 1 here**
-  - `:749` docs carry-over  ·  `:769` dotfile allowlist ← **fix 2 here**
-- Tests to keep green and extend: `skills/spinoff/scripts/spinoff.bats`,
-  `kickoff-gate.test.sh`, `smoke.sh`.
-- `plugins/spinoff/SKILL.md` + `commands/*.md` need updating for any new target/backend.
-- **Add a regression test that fails if the script invokes a herdr subcommand absent from
-  `herdr agent --help`.** That is the test that would have caught this bug.
+- `plugins/spinoff/skills/spinoff/scripts/spinoff.sh` (v0.9.0 on `origin/main`):
+  - `:43` `_herdr_probe` / `_cmux_probe` — the `[ -n "${HERDR:-}" ]` short-circuit
+  - `:1027` `HERDR="$(command -v herdr 2>/dev/null)"` — the actual resolution
+  - `resolve_launcher()` — where the fallthrough to `none` happens and where the
+    misleading message originates
+- Tests: `skills/spinoff/scripts/spinoff.bats`, `kickoff-gate.test.sh`, `smoke.sh`.
+  **Add a case that runs `resolve_launcher` under a stripped `PATH` with `HERDR_ENV=1`
+  set** and asserts a loud failure rather than a silent `none`. That is the test that
+  would have caught this.
+- The script is heavily commented with prior-decision rationale — preserve that style,
+  and note that the existing comment at `:30` ("a stale `HERDR_ENV=1` must not win — R8")
+  shows the *opposite* case was already considered. This is its mirror image: a live
+  `HERDR_ENV=1` that loses to an unfindable binary. Worth calling out in the comment.
 
-## Known traps (from memory + this session)
+## Known traps
 
-- `~/.claude/plugins/cache/shrimpshack/spinoff/<ver>/` is a CACHE — plugin updates overwrite it.
-  Source of truth is `~/projects/shrimpshack/plugins/spinoff`. (The originating session applied a
-  temporary one-line `agent prompt` patch to the CACHE so this very spinoff could launch — it is
-  throwaway; do the real fix in the repo.)
-- Memory `reference_herdr_stage_command_pane_send_text` documents the removed `agent send` and is
-  **STALE** — update it as part of this work.
-- `/tmp/spinoff-handoff.md` is a SHARED path; concurrent spinoffs clobber it
-  (memory `spinoff_handoff_shared_tmp_collision`). This handoff was written to a
-  session-isolated path instead. Consider making the script default to that.
-- herdr env does not propagate into background agents
-  (`reference_spinoff_bg_agent_loses_herdr_env`, `feedback_spinoff_bg_agent_herdr_env_propagation`).
-- `timeout` (coreutil) does not exist on this box; `cp`/`mv` are aliased `-i` interactively.
-- `/ce-plan`, `/ce-doc-review`, `/ce-code-review` were NOT loading in the originating session —
-  compound-engineering 3.21.0 registered zero skills after a reload. Check `/plugin` before
-  relying on the CE review loop.
+- Source of truth is `~/projects/shrimpshack/plugins/spinoff`. The copy under
+  `~/.claude/plugins/cache/shrimpshack/spinoff/<ver>/` is a CACHE that plugin updates
+  overwrite. (The originating session hand-patched the 0.8.3 cache for an unrelated
+  kickoff bug — that patch is throwaway and irrelevant here.)
+- **This very spinoff had to work around the bug it is fixing** — the dispatching agent
+  exported `PATH=/opt/homebrew/bin:…` explicitly so the launch would succeed. Don't
+  mistake that workaround for the fix.
+- Reproducing needs a deliberately stripped `PATH`; it will not reproduce from an
+  interactive shell where homebrew is already on `PATH`.
+- `/ce-plan`, `/ce-doc-review`, `/ce-code-review` were NOT loading in the originating
+  session — compound-engineering 3.21.0 registered zero skills after `/reload-plugins`.
+  Check `/plugin` before relying on the CE loop.
+- Related memories: [[reference_spinoff_bg_agent_loses_herdr_env]],
+  [[feedback_spinoff_bg_agent_herdr_env_propagation]] — this is the same family
+  (background-agent environment is not the main session's environment), but a distinct
+  failure: those are about *env vars*, this is about the *binary path*.
 
 ## Recommended next step
 
-`/ce-plan`. Scope and approach are settled — two root causes are verified with file:line, the
-sequencing is decided, and the only genuine unknown (ghostty's automation surface) is a bounded
-research task rather than an open design question. That's a plan, not a brainstorm.
-
-**Caveat:** confirm `/ce-plan` actually loads first (see traps). If compound-engineering is still
-dark, plan directly and don't block on it.
+`/ce-plan`. The root cause is verified with file:line and reproduced both directions,
+and the design has two clear parts (robust resolution + honest diagnostics). The open
+questions are implementation choices, not scope questions — that's a plan, not a
+brainstorm. It's a small, well-bounded fix; don't over-orchestrate it.
 
 ## Source session
 
