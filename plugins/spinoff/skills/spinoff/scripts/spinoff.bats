@@ -482,3 +482,188 @@ run_resolve() {
   [[ "$output" == *"open + briefed"* ]]
   [[ "$output" == *"a dialog may still be up"* ]]
 }
+
+# ---- U2: the loud path for an announced-but-unresolvable backend ------------
+#
+# These runs deliberately keep herdr and cmux OFF the PATH. The bug they pin: a
+# background agent's PATH does not hold the login shell's, so an environment that
+# announced herdr (HERDR_ENV=1) resolved LAUNCHER=none and the run printed
+# "skipping launch automation" at exit 0 — a silent skip the relaying agent read as
+# success.
+#
+# Two knobs make that reachable under test at all:
+#   * $SPINOFF_BIN_PATHS points at an EMPTY dir, so the standard-install scan can't
+#     find this machine's real /opt/homebrew/bin/herdr and pass for the wrong reason.
+#   * PATH keeps /usr/bin:/bin. A PATH of only the stub dir dies at `git rev-parse`
+#     in the --repo region, long before the launch gate — which would look like the
+#     bug and prove nothing.
+# HERDR_BIN / CMUX_BIN are explicitly `env -u`'d: setup() sets them without
+# exporting, and a future change that exports them would otherwise silently disarm
+# every test in this section by resolving the very binary they need missing.
+run_unresolvable() {
+  local repo="$BATS_TEST_TMPDIR/urepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  UREPO="$(cd "$repo" && pwd -P)"
+
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  # A launcher-free stub dir: claude/sleep/glow only. $LOUD_STUBS adds back exactly
+  # the launcher binaries a given case wants resolvable (e.g. "cmux" for the KTD-8
+  # proof, "herdr" for the server-down case).
+  NOSTUB="$BATS_TEST_TMPDIR/nostubs"
+  EMPTYBIN="$BATS_TEST_TMPDIR/emptybin"
+  mkdir -p "$NOSTUB" "$EMPTYBIN"
+  cp "$STUBDIR/claude" "$STUBDIR/sleep" "$STUBDIR/glow" "$NOSTUB/"
+  local s
+  for s in ${LOUD_STUBS:-}; do cp "$STUBDIR/$s" "$NOSTUB/"; done
+
+  run env -u HERDR_BIN -u CMUX_BIN \
+          PATH="$NOSTUB:/usr/bin:/bin" \
+          SPINOFF_BIN_PATHS="$EMPTYBIN" \
+          SPINOFF_READY_TIMEOUT_MS=3000 \
+          "$@" \
+      bash "$SCRIPT" --name uh --label testlabel --handoff "$handoff" \
+                     --repo "$repo" --target tab ${LOUD_ARGS:-}
+}
+
+@test "loud: announced herdr that cannot be resolved warns and exits 4 (R5, R6)" {
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=
+
+  # names the binary, every place it looked, and the override that fixes it
+  [[ "$output" == *"could not resolve"* ]]
+  [[ "$output" == *"herdr"* ]]
+  [[ "$output" == *"HERDR_BIN"* ]]
+  [[ "$output" == *"$EMPTYBIN"* ]]
+  # incomplete, with the code reserved for this cause
+  [ "$status" -eq 4 ]
+  # …and the real work survives: branch, worktree, handoff
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+  git -C "$UREPO" rev-parse --verify feature/uh
+  git -C "$UREPO" worktree list | grep -q "worktrees/uh"
+}
+
+@test "loud: announced cmux that cannot be resolved warns and exits 4 (R5, R6)" {
+  # cmux is made unresolvable through a SET-but-invalid CMUX_BIN rather than a bare
+  # empty PATH, and that is deliberate: resolve_bin's extra candidate for cmux is
+  # /Applications/cmux.app/Contents/Resources/bin/cmux, which EXISTS on a developer
+  # machine that has cmux installed — so "cmux is not on PATH" resolves anyway there
+  # and the test would pass or fail depending on whose laptop ran it. A set override
+  # that fails the R15 file+executable test resolves to empty on every machine, and
+  # deliberately does not fall through, which is exactly the state the record reads.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID=workspace:1 \
+                   CMUX_BIN=/nonexistent/dir/cmux
+
+  [[ "$output" == *"could not resolve"* ]]
+  [[ "$output" == *"cmux"* ]]
+  [[ "$output" == *"CMUX_WORKSPACE_ID"* ]]
+  # the rejected-override branch diagnoses the value that was thrown out, and does NOT
+  # tell someone to set a variable they already set
+  [[ "$output" == *"CMUX_BIN is set to '/nonexistent/dir/cmux'"* ]]
+  [[ "$output" != *"fix: set CMUX_BIN"* ]]
+  [ "$status" -eq 4 ]
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+}
+
+@test "loud: the summary block says INCOMPLETE and never prints a tick (KTD-5)" {
+  # Teaching only the tail exit would print "✓ Spinoff complete" alongside exit 4, and
+  # the skill relays this block verbatim — so the header has to learn the flag too.
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"Spinoff INCOMPLETE"* ]]
+  [[ "$output" != *"✓ Spinoff complete"* ]]
+  # and the launch line names the real cause, not "not inside cmux/herdr"
+  [[ "$output" != *"not automated (not inside cmux/herdr)"* ]]
+}
+
+@test "silent: another announced backend launches -> exit 0, no warning (R17, KTD-8)" {
+  # THE KTD-8 proof. herdr is announced and unresolvable, cmux is announced and
+  # resolvable: recording happens, acting must not, because resolution settled on cmux.
+  LOUD_STUBS=cmux
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=workspace:1
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" == *"launcher:  cmux"* ]]
+  [[ "$output" == *"✓ Spinoff complete"* ]]
+}
+
+@test "silent: no announcement at all -> exit 0, LAUNCHER=none, worktree made (R7)" {
+  # OSASCRIPT_BIN is deliberately bogus so this machine's real Ghostty.app +
+  # /usr/bin/osascript can't resolve the ghostty backend and steal the case.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" == *"launcher:  none"* ]]
+  [[ "$output" == *"no multiplexer announced this session"* ]]
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+}
+
+@test "silent: HERDR_ENV=0 keeps its existing quiet fallback to none (R8)" {
+  run_unresolvable HERDR_ENV=0 CMUX_WORKSPACE_ID=
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" == *"launcher:  none"* ]]
+}
+
+@test "silent: resolvable herdr whose server is down falls back quietly (R9)" {
+  # The binary RESOLVES here, so the record is never taken — a dead server is a
+  # different fact from a missing binary, and only the second one is loud.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" == *"launcher:  none"* ]]
+}
+
+@test "silent: ghostty vars + unresolvable osascript stay quiet (R14, KTD-9)" {
+  # Ghostty's vars are passive terminal identity, set for every window. Keying the
+  # loud path on them would turn ordinary sessions into exit-4 failures.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= \
+                   TERM_PROGRAM=ghostty OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" != *osascript* ]]
+  [[ "$output" == *"launcher:  none"* ]]
+}
+
+@test "forced --launcher herdr with the binary missing still falls back, not dies (R10)" {
+  LOUD_STUBS=cmux
+  LOUD_ARGS="--launcher herdr"
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=workspace:1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"falling back to auto-detection"* ]]
+  [[ "$output" == *"launcher:  cmux"* ]]
+  [[ "$output" != *"could not resolve"* ]]
+}
+
+@test "exit codes stay distinct: the unbriefed-session path still exits 3 (KTD-4)" {
+  # 3 and 4 are mutually exclusive by construction: 3 needs BRIEF_ATTEMPTED=1 (so
+  # LAUNCHER != none), 4 needs LAUNCHER = none. This pins 3 against a drift to 4.
+  local repo="$BATS_TEST_TMPDIR/e3repo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  run env PATH="$STUBDIR:$PATH" \
+          HERDR_STUB_LIVE=1 HERDR_ENV=1 HERDR_WORKSPACE_ID=wS HERDR_PANE_ID=wS:p1 \
+          CMUX_WORKSPACE_ID= SPINOFF_READY_TIMEOUT_MS=3000 \
+          SPINOFF_BRIEF_FILE=/nonexistent-dir/brief.txt \
+      bash "$SCRIPT" --name e3 --label testlabel --handoff "$handoff" \
+                     --repo "$repo" --target tab --launcher herdr
+
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"THE NEW SESSION WAS NOT BRIEFED"* ]]
+  [[ "$output" != *"could not resolve"* ]]
+}

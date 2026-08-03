@@ -83,6 +83,12 @@ _resolve_bin_scan() {
   return 1
 }
 
+# The default candidate directories, in ONE place. Both resolve_bin (which walks them)
+# and _bin_search_locations (which names them in the ⚠) read this: two copies of the
+# literal would let the diagnostic claim it searched somewhere resolution never looked
+# the moment the default changes.
+_bin_paths() { printf '%s' "${SPINOFF_BIN_PATHS:-/opt/homebrew/bin:/usr/local/bin:${HOME:-}/.local/bin}"; }
+
 # resolve_bin <name> <override> [extra-candidates]
 #   <override>         explicit path from the env (may be empty); wins outright (R2)
 #   [extra-candidates] colon-separated FULL paths tried after the standard dirs, for
@@ -102,8 +108,7 @@ resolve_bin() {
   fi
   cand="$(command -v "$name" 2>/dev/null)"
   if _bin_usable "${cand:-}"; then abspath "$cand"; return 0; fi
-  if cand="$(_resolve_bin_scan \
-      "${SPINOFF_BIN_PATHS:-/opt/homebrew/bin:/usr/local/bin:${HOME:-}/.local/bin}" "/$name")"; then
+  if cand="$(_resolve_bin_scan "$(_bin_paths)" "/$name")"; then
     abspath "$cand"; return 0
   fi
   if cand="$(_resolve_bin_scan "$extra" "")"; then abspath "$cand"; return 0; fi
@@ -130,6 +135,63 @@ _herdr_probe() { [ -n "${HERDR:-}" ] && "$HERDR" status server 2>/dev/null | gre
 _cmux_probe()  { [ -n "${CMUX:-}" ] && [ -x "$CMUX" ]; }
 _ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
 
+# ---- announced-but-unresolvable record (R5, R6, R17, KTD-3, KTD-8, KTD-9) ----
+# An environment that DELIBERATELY announces a multiplexer, plus a binary we could not
+# find, is a FAILED launch — not the "you're not in a multiplexer" skip. The two used
+# to collapse into one line ("not inside cmux/herdr (or the CLI is missing) — skipping
+# launch automation") at exit 0, so a background agent relaying the run said "done"
+# for a spinoff that never launched anything. Splitting them is the whole point of
+# this change: the unannounced session stays quiet and successful (R7), the announced
+# one gets a named binary, the places searched, the override that fixes it, and a
+# non-zero exit (R5/R6).
+#
+# Three deliberate restrictions, each one a case that MUST stay silent:
+#  * KTD-3 — the check reads the RESOLVED variable ($HERDR / $CMUX), never the
+#    resolution attempt. Under SPINOFF_TEST_SOURCE the resolver tests inject those
+#    values directly, so the check is inert there and those six tests keep passing.
+#  * KTD-9 — only HERDR_ENV=1 and CMUX_WORKSPACE_ID count as announcements. A process
+#    sets those to say a multiplexer OWNS this session. Ghostty's TERM_PROGRAM /
+#    GHOSTTY_RESOURCES_DIR / GHOSTTY_SURFACE_ID are set for every Ghostty window
+#    whether or not a launch is wanted, and osascript does not exist off macOS at all
+#    — keying a loud failure on either would turn ordinary sessions into exit-4
+#    failures (R14).
+#  * KTD-8 — recording is NOT acting. Resolution only records WHICH announced backend
+#    was unresolvable; the warning, the INCOMPLETE header and exit 4 fire later, and
+#    only once resolve_launcher has settled on `none`. Without that split, a session
+#    announcing both herdr and cmux where only cmux resolves would launch perfectly
+#    and still exit 4 (R17) — the herdr→cmux fallthrough right below is pinned as
+#    correct by the "HERDR_ENV set but server dead + cmux present -> cmux" test.
+# HERDR_ENV=0 (R8) and a resolvable binary whose probe merely failed (R9) never reach
+# the recorder at all: the first isn't `=1`, the second resolved.
+LOUD_BIN=""        # binary an announcement asked for that resolution could not find
+LOUD_ANNOUNCE=""   # the env var that announced it, rendered for a human
+LOUD_OVERRIDE=""   # the env var that pins it explicitly
+LOUD_REJECTED=""   # a SET override that was thrown out by the R15 test (different fix)
+LOUD_SEARCHED=""   # every location resolution tried, in order
+
+# _bin_search_locations [extra-candidates] — the list resolve_bin walks, rendered for
+# a human. It lives here rather than inside resolve_bin because resolve_bin is consumed
+# through command substitution and must stay silent: deciding what an empty result
+# MEANS, and how to describe it, belongs to the caller (R3).
+_bin_search_locations() {
+  printf '$PATH (%s), then $SPINOFF_BIN_PATHS (%s)' \
+    "${PATH:-<empty>}" \
+    "$(_bin_paths)"
+  [ -n "${1:-}" ] && printf ', then %s' "$1"
+  return 0
+}
+
+# _record_loud <name> <resolved> <announce-text> <override-var> <rejected> [extras]
+# Records nothing when the binary resolved. First announcement wins: precedence runs
+# herdr → cmux, so the diagnostic names the backend the environment asked for first.
+_record_loud() {
+  [ -z "${2:-}" ] || return 0      # it resolved — not an announced-and-missing case
+  [ -z "$LOUD_BIN" ] || return 0   # already recorded a higher-precedence announcement
+  LOUD_BIN="$1"; LOUD_ANNOUNCE="$3"; LOUD_OVERRIDE="$4"; LOUD_REJECTED="${5:-}"
+  LOUD_SEARCHED="$(_bin_search_locations "${6:-}")"
+  return 0
+}
+
 # resolve_launcher — collapse env + flag into a single $LAUNCHER (KTD-2).
 # Precedence for `auto`: herdr (live) > cmux > ghostty > none. A forced --launcher
 # herdr|cmux|ghostty skips the env-keyed detection but STILL probes the chosen
@@ -143,6 +205,15 @@ resolve_launcher() {
     ghostty) if _ghostty_probe; then LAUNCHER=ghostty; return; fi
            echo "  ⚠ --launcher ghostty requested but Ghostty.app / osascript isn't available — falling back to auto-detection" >&2 ;;
   esac
+  # Record, don't act (KTD-8). This runs BEFORE the detection below so the record is
+  # taken from the announcements as they stand, and is read only after $LAUNCHER has
+  # settled — a run that goes on to launch through another announced backend never
+  # looks at it (R17).
+  [ "${HERDR_ENV:-}" = 1 ] \
+    && _record_loud herdr "${HERDR:-}" 'HERDR_ENV=1' HERDR_BIN "${HERDR_REJECTED:-}"
+  [ -n "${CMUX_WORKSPACE_ID:-}" ] \
+    && _record_loud cmux "${CMUX:-}" 'CMUX_WORKSPACE_ID' CMUX_BIN "${CMUX_REJECTED:-}" \
+                    /Applications/cmux.app/Contents/Resources/bin/cmux
   if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
   elif [ -n "${CMUX_WORKSPACE_ID:-}" ] && _cmux_probe;    then LAUNCHER=cmux
   # ghostty is checked LAST, and only when NO multiplexer announced itself in the
@@ -1444,8 +1515,39 @@ MANUAL_CMD="cd $(shq "$WORKTREE") && claude --name $(shq "$LABEL")"
 # CMUX_WORKSPACE_ID gate; LAUNCHER=none reproduces the previous no-op fallback
 # (worktree + handoff still produced, summary prints the manual line).
 resolve_launcher
+
+# Now — and only now — is the recorded announcement actually a failure (KTD-8). Four
+# cases reach this line with $LAUNCHER = none and MUST stay silent at exit 0: an
+# HERDR_ENV=0 session (R8, never recorded — it isn't `=1`), a resolvable herdr whose
+# server is down (R9, never recorded — it resolved), a ghostty-only session (R14,
+# never recorded — ghostty vars aren't announcements), and a session in no multiplexer
+# at all (R7, nothing to record). A fifth case reaches it with $LAUNCHER set: a run
+# that launched through a DIFFERENT announced backend, which never reads the record
+# (R17). What's left is exactly the bug: the environment named a backend and the
+# binary wasn't there.
+LAUNCH_UNRESOLVED=0
+if [ "$LAUNCHER" = "none" ] && [ -n "$LOUD_BIN" ]; then
+  LAUNCH_UNRESOLVED=1
+  echo "  ⚠ could not resolve \`$LOUD_BIN\`, and this session announced it ($LOUD_ANNOUNCE) —" >&2
+  echo "    NOT launching, and NOT calling that a skip. The worktree and handoff are still made." >&2
+  echo "    searched: $LOUD_SEARCHED" >&2
+  if [ -n "$LOUD_REJECTED" ]; then
+    # A SET override that failed the R15 file+executable test. Different diagnosis,
+    # different fix: don't tell someone to set a variable they already set.
+    echo "    $LOUD_OVERRIDE is set to '$LOUD_REJECTED', which is not an executable file — fix or unset it." >&2
+  else
+    echo "    fix: set $LOUD_OVERRIDE to the binary's absolute path (e.g. $LOUD_OVERRIDE=/opt/homebrew/bin/$LOUD_BIN)," >&2
+    echo "         or add its directory to \$SPINOFF_BIN_PATHS." >&2
+  fi
+fi
+
 if [ "$LAUNCHER" = "none" ]; then
-  step "not inside cmux/herdr (or the CLI is missing) — skipping launch automation"
+  # Benign wording, for a genuinely UNANNOUNCED session only (R7). The loud case has
+  # already said its piece above with a named cause; repeating "or the CLI is missing"
+  # here is what let the two outcomes read as one, and it is the reason a relay of
+  # this run said "done" when nothing launched.
+  [ "$LAUNCH_UNRESOLVED" = 1 ] \
+    || step "no multiplexer announced this session — skipping launch automation"
 else
   step "launcher:    $LAUNCHER"
   case "$TARGET" in
@@ -1494,6 +1596,12 @@ echo
 echo "════════════════════════════════════════════════════════"
 if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
   echo "⚠ Spinoff INCOMPLETE — worktree is ready, session is NOT briefed"
+elif [ "${LAUNCH_UNRESOLVED:-0}" = "1" ]; then
+  # The header has to learn this flag too, not just the exit at the tail (KTD-5): in
+  # the loud case $LAUNCHER is none, so BRIEF_ATTEMPTED stays 0, and teaching only the
+  # tail would print "✓ Spinoff complete" alongside exit 4 — a block the skill relays
+  # verbatim, claiming success for a run that launched nothing.
+  echo "⚠ Spinoff INCOMPLETE — worktree is ready, no session was launched"
 else
   echo "✓ Spinoff complete"
 fi
@@ -1534,7 +1642,13 @@ elif [ -n "$WORKSPACE_REF" ]; then
   echo "  $LAUNCHER:      workspace $WORKSPACE_REF created, but no agent surface launched — start Claude in it manually:"
   echo "             $MANUAL_CMD"
 elif [ "$LAUNCHER" = none ]; then
-  echo "  launch:    not automated (not inside cmux/herdr) — start manually:"
+  # Name the REAL cause. "not inside cmux/herdr" was a lie in the loud case — the
+  # session was inside one and said so; what failed was finding the binary.
+  if [ "${LAUNCH_UNRESOLVED:-0}" = "1" ]; then
+    echo "  launch:    NOT automated — \`$LOUD_BIN\` could not be resolved (see the ⚠ above) — start manually:"
+  else
+    echo "  launch:    not automated (no multiplexer announced this session) — start manually:"
+  fi
   echo "             $MANUAL_CMD"
 else
   echo "  $LAUNCHER:      not created — start manually:"
@@ -1554,4 +1668,23 @@ if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
   echo >&2
   echo "    Read docs/handoff.md and get oriented, then recommend the next step." >&2
   exit 3
+fi
+
+# The other way a run can fail to launch, and the reason this file grew a resolver:
+# the environment named a backend and its binary wasn't reachable. Same contract as
+# above — say it OUTSIDE the block so it survives a summary relay, hand over the exact
+# recovery, exit non-zero so a caller that only checks status can't read it as success.
+# A distinct code (4) because the recovery is distinct: nothing is wrong with the new
+# session, the PATH is. Codes 3 and 4 are mutually exclusive by construction (KTD-4):
+# 3 requires BRIEF_ATTEMPTED=1, which requires LAUNCHER != none, while 4 requires
+# LAUNCHER = none.
+if [ "${LAUNCH_UNRESOLVED:-0}" = "1" ]; then
+  echo
+  echo "⚠ NO SESSION WAS LAUNCHED — \`$LOUD_BIN\` could not be resolved." >&2
+  echo "  This session announced it ($LOUD_ANNOUNCE), so this is a failure, not a skip." >&2
+  echo "  The worktree, branch and handoff are intact. Fix the resolution (the ⚠ above names" >&2
+  echo "  the paths searched and $LOUD_OVERRIDE) and re-run, or start the session by hand:" >&2
+  echo >&2
+  echo "    $MANUAL_CMD" >&2
+  exit 4
 fi
