@@ -804,13 +804,13 @@ KICKOFF="Read docs/handoff.md — it's the brief for this worktree (treat it as 
 # The file lives in the worktree, which is freshly created per run, so the path is
 # unique per spinoff without a random suffix, and it PERSISTS: the manual-recovery
 # line printed on failure has to stay runnable after the script exits.
-BRIEF_FILE="$WORKTREE/.spinoff-brief"
+BRIEF_FILE="${SPINOFF_BRIEF_FILE:-$WORKTREE/.spinoff-brief}"
 printf '%s\n' "$KICKOFF" > "$BRIEF_FILE" 2>/dev/null || true
 # Keep it out of git the same way carried dotfiles are (root-anchored, shared exclude).
 _brief_excl="$(git -C "$WORKTREE" rev-parse --git-path info/exclude 2>/dev/null)"
 [ -n "$_brief_excl" ] && { grep -qxF '/.spinoff-brief' "$_brief_excl" 2>/dev/null || printf '/.spinoff-brief\n' >> "$_brief_excl"; }
 
-LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL' \"\$(cat .spinoff-brief)\""
+LAUNCH_CMD="cd '$WORKTREE' && claude --name '$LABEL' \"\$(cat '$BRIEF_FILE')\""
 # Recovery line for the summary: never references the brief file, so it stays
 # runnable even if that file is gone.
 MANUAL_CMD="cd '$WORKTREE' && claude --name '$LABEL'"

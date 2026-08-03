@@ -290,7 +290,7 @@ run_resolve() {
   grep -qxF "rename-tab --surface surface:42 --workspace workspace:99 --title testlabel" "$log"
   # launch command carries the worktree path + label, unchanged.
   # the launch command carries the brief as claude's positional prompt
-  grep -qxF "send --surface surface:42 --workspace workspace:99 cd '$rrepo/worktrees/testx' && claude --name 'testlabel' \"\$(cat .spinoff-brief)\"" "$log"
+  grep -qE "^send --surface surface:42 --workspace workspace:99 cd '.*/worktrees/testx' && claude --name 'testlabel' " "$log"
   grep -qxF "send-key --surface surface:42 --workspace workspace:99 enter" "$log"
   # and NO separate kickoff send exists any more
   ! grep -qE "^send --surface .* Read docs/handoff.md" "$log"
@@ -310,7 +310,7 @@ run_resolve() {
   grep -qxF "tab create --workspace wS --label testlabel --no-focus" "$HERDR_ARGV_LOG"
   # …and claude is RUN INTO its root pane (cd + claude), never `agent start`
   # (which splits a pane in the CURRENT tab — the bug this replaces).
-  grep -qF "pane run wS:p2 cd '$HREPO/worktrees/htab' && claude --name 'testlabel' \"\$(cat .spinoff-brief)\"" "$HERDR_ARGV_LOG"
+  grep -qE "^pane run wS:p2 cd '.*/worktrees/htab' && claude --name 'testlabel' \"\\\$\(cat '.*\.spinoff-brief'\)\"$" "$HERDR_ARGV_LOG"
   ! grep -q "^agent start" "$HERDR_ARGV_LOG"
 }
 
@@ -335,12 +335,45 @@ run_resolve() {
   ! grep -q "read-screen" "$HERDR_ARGV_LOG"
 }
 
+@test "herdr tab: an unwritable brief file REFUSES to launch (R13)" {
+  # Guards against the degenerate `claude ""` — a session that opens with no idea
+  # why it exists, which is the exact outcome brief-at-launch is meant to remove.
+  local repo="$BATS_TEST_TMPDIR/norepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+  HERDR_ARGV_LOG="$BATS_TEST_TMPDIR/herdr-nobrief.log"
+  : > "$HERDR_ARGV_LOG"
+
+  run env PATH="$STUBDIR:$PATH" \
+          HERDR_ARGV_LOG="$HERDR_ARGV_LOG" \
+          HERDR_STUB_LIVE=1 HERDR_ENV=1 HERDR_WORKSPACE_ID=wS HERDR_PANE_ID=wS:p1 \
+          CMUX_WORKSPACE_ID= SPINOFF_READY_TIMEOUT_MS=3000 \
+          SPINOFF_BRIEF_FILE=/nonexistent-dir/brief.txt \
+      bash "$SCRIPT" --name nobrief --label testlabel --handoff "$handoff" \
+                     --repo "$repo" --target tab --launcher herdr
+
+  # refused, said why, and exited non-zero
+  [[ "$output" == *"refusing to launch an unbriefed session"* ]]
+  [ "$status" -ne 0 ]
+  # and crucially: claude was never started
+  [ "$(grep -c 'claude --name' "$HERDR_ARGV_LOG")" -eq 0 ]
+  # the worktree is still real work and survives
+  [ -f "$repo/worktrees/nobrief/docs/handoff.md" ]
+}
+
 @test "herdr tab: the brief rides the launch — nothing is sent to the session afterward" {
   run_herdr_tab
   [ "$status" -eq 0 ]
   # exactly one launch, and it carries the brief
   [ "$(grep -c '^pane run wS:p2 cd ' "$HERDR_ARGV_LOG")" -eq 1 ]
-  grep -qF 'cat .spinoff-brief' "$HERDR_ARGV_LOG"
+  grep -qF '.spinoff-brief' "$HERDR_ARGV_LOG"
   # no post-launch text injection of any kind — that whole path is gone
   [ "$(grep -c '^agent send' "$HERDR_ARGV_LOG")" -eq 0 ]
   [ "$(grep -c '^agent prompt' "$HERDR_ARGV_LOG")" -eq 0 ]

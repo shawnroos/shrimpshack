@@ -105,7 +105,7 @@ echo "brief-at-launch checks ($(basename "$(dirname "$SPINOFF")")/$(basename "$S
 # ---- 1. SLOW BOOT (claude never draws) → still briefed, MCP caveat reported ----
 out="$(run booting slow-boot)"; rc=$?
 
-grep -qE 'pane run .*cat \.spinoff-brief' "$CALLS" \
+grep -qE 'pane run .*\.spinoff-brief' "$CALLS" \
   && ok  "slow boot: the launch carried the brief" \
   || bad "slow boot: launch did not carry the brief"
 
@@ -139,7 +139,7 @@ echo "$out" | grep -q 'MCP servers may not be enabled' \
 # ---- 2. FAST BOOT (prompt drawn) → briefed, no injection, no caveat -----------
 out="$(run ready fast-boot)"; rc=$?
 
-grep -qE 'pane run .*cat \.spinoff-brief' "$CALLS" \
+grep -qE 'pane run .*\.spinoff-brief' "$CALLS" \
   && ok  "fast boot: the launch carried the brief" \
   || bad "fast boot: launch did not carry the brief"
 
@@ -173,7 +173,7 @@ echo "$out" | grep -qi 'MCP trust modal' \
   && ok  "mcp modal: disclosed the auto-accept in the output" \
   || bad "mcp modal: silently accepted a trust prompt"
 
-grep -qE 'pane run .*cat \.spinoff-brief' "$CALLS" \
+grep -qE 'pane run .*\.spinoff-brief' "$CALLS" \
   && ok  "mcp modal: brief still rode the launch" \
   || bad "mcp modal: launch did not carry the brief"
 
