@@ -90,6 +90,48 @@ Where the backends differ, in the parts worth knowing:
 Everything else (worktree, handoff, doc carry-over, the brief riding the launch, the
 honest summary) is identical across backends.
 
+## Exit codes and where the launcher binaries come from
+
+**Read the exit code, not just the summary text.** A background agent relays this
+script's outcome to Shawn, and a non-zero exit it doesn't recognise reaches him as an
+unactionable "something went wrong" — which is the whole problem the resolver below
+exists to remove. Every non-zero code here has a named cause and a named fix.
+
+| Exit | Meaning | What to do |
+| --- | --- | --- |
+| `0` | Worktree, branch and handoff made, and either a briefed session launched or nothing announced a multiplexer. | Relay normally. `launcher: none` at exit 0 is a legitimate worktree-only spinoff — give Shawn the manual `cd … && claude` line. |
+| `1` | `die` — a precondition failed (no repo resolves, `git worktree add` refused, a bad `--label`). The message names it. | Surface the message verbatim; fix the input and re-run. |
+| `2` | Unknown argument. | A skill bug. Fix the invocation. |
+| `3` | A session **launched but was not briefed** — the launch itself failed partway. | Worktree survives. Relay the recovery line the script prints and brief the tab by hand. |
+| `4` | The environment **announced a backend** (`HERDR_ENV=1` or `CMUX_WORKSPACE_ID`) whose **binary could not be resolved** — nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN` and re-run. |
+
+Codes 3 and 4 can't both apply: 3 means a backend resolved and the launch broke, 4
+means no announced backend resolved at all.
+
+Every launcher binary is resolved to an **absolute path** first — `$*_BIN` override,
+then `PATH`, then `$SPINOFF_BIN_PATHS`, then the tool's own install location. This
+matters because the script runs from a **background agent**, whose shell does not
+inherit the login shell's `PATH`: `herdr` was installed and live, `command -v herdr`
+still came back empty, and the run silently skipped the launch at exit 0.
+
+**The main session resolves the binary and passes it down (Step 4).** You have a working
+`PATH`; the background agent does not. So the override is not a break-glass knob — it is
+the normal path, and the fallbacks below are the safety net for when it is absent. This
+is the difference between knowing where `herdr` is and guessing: the candidate list only
+covers Homebrew-shaped installs, while resolving here also covers cargo, nix, `~/bin`,
+and a dev build, because it asks the shell that actually has them.
+
+| Variable | Effect |
+| --- | --- |
+| `HERDR_BIN` | Absolute path to `herdr`. Wins outright; if it's set and isn't an executable file, resolution fails there rather than quietly running a different binary. |
+| `CMUX_BIN` | Same, for `cmux` (otherwise found on `PATH` or in `/Applications/cmux.app/Contents/Resources/bin/cmux`). |
+| `OSASCRIPT_BIN` | Same, for the ghostty backend's `osascript` (default `/usr/bin/osascript`). |
+| `SPINOFF_BIN_PATHS` | Colon-separated install directories searched after `PATH`. Default `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin`. |
+
+An unresolvable `osascript` is **never** an exit-4 failure: Ghostty's environment
+variables are passive terminal identity, not a request to launch, and `osascript`
+doesn't exist off macOS at all.
+
 ## The context model: synthesis here, mechanics in the background
 
 Only **handoff synthesis** needs this conversation, so it stays in the main
@@ -282,6 +324,33 @@ back to a tab. Pass `$(tty)` (e.g. `/dev/ttys004`).
 Pass `--split-direction left` only when the user asked for the left side; the default
 is right.
 
+**Resolve the launcher binary here too, in the main session, and pass it as
+`HERDR_BIN` / `CMUX_BIN`.** Same reason as `--from-surface`: this session has a working
+`PATH` and the background agent does not, so the one place that can answer "where is
+`herdr`?" is *here*. Run the lookup for whichever backend the environment announced:
+
+| Announced by | Resolve | Pass |
+| --- | --- | --- |
+| `HERDR_ENV=1` | `command -v herdr` | `HERDR_BIN=<that absolute path>` |
+| `CMUX_WORKSPACE_ID` | `command -v cmux` | `CMUX_BIN=<that absolute path>` |
+
+Rules that keep this honest:
+
+- **Omit the variable when the lookup finds nothing.** Do not pass a guess, a
+  directory, or a path you did not just verify. An absent variable falls through to the
+  script's own resolution; a *wrong* one is worse than none, because the script honors a
+  set override outright rather than second-guessing it (that is what makes the override
+  trustworthy).
+- **Resolving both when both are present is fine** — the script uses whichever backend
+  `--launcher` selects.
+- **This does not replace the script's resolution.** The script still resolves
+  independently, so a run dispatched some other way, or one where this lookup came back
+  empty, still works. Passing it down just means the common case stops depending on
+  whatever `PATH` the agent happened to inherit.
+- **Exit 4 becomes a real signal.** With the binary passed down, exit 4 no longer means
+  "the agent had a thin `PATH`" — it means the binary genuinely is not installed, or the
+  path you passed is not an executable file. Relay it as such.
+
 **You MUST run the script through a background `Agent` (`run_in_background: true`) —
 never inline in this session.** This is not optional and not a "trivial bash
 command" exception: `spinoff.sh` prints ~40 lines of step output and polls the
@@ -309,6 +378,11 @@ re-synthesize anything or do extra work — it runs the script, waits, and retur
 the summary fields.
 
 ```bash
+# Env prefix, not flags: these are the same overrides documented in "Binary resolution"
+# above. Include a line ONLY for a path you resolved in this session and verified is
+# non-empty — omit the line entirely otherwise.
+HERDR_BIN="<absolute path from `command -v herdr` here>" \
+CMUX_BIN="<absolute path from `command -v cmux` here>" \
 bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   --name "<kebab-feature-name>" \
   --label "<short workspace·work label>" \
@@ -387,9 +461,19 @@ continues in the new surface.
 - **No live backend** (detection resolves to `none` — herdr not running, no
   `CMUX_WORKSPACE_ID`, and not a plain Ghostty session): the script still creates the
   worktree + handoff and prints the manual `cd <worktree> && claude` command, so
-  the spinoff isn't lost — only the surface automation is skipped. Tell Shawn.
-  This also covers the case where a multiplexer announced itself but its probe
-  failed: ghostty is deliberately not used as the recovery there.
+  the spinoff isn't lost — only the surface automation is skipped. **Exit 0.** Tell
+  Shawn. This also covers the case where a multiplexer announced itself but its probe
+  failed (a dead herdr server, `HERDR_ENV=0`): ghostty is deliberately not used as the
+  recovery there.
+- **An announced backend whose binary can't be found** (`HERDR_ENV=1` or
+  `CMUX_WORKSPACE_ID` set, but `herdr`/`cmux` doesn't resolve): a different outcome
+  from the one above, and deliberately not silent. The summary block says
+  `⚠ Spinoff INCOMPLETE`, the `⚠` names the binary, the paths searched and the
+  override that fixes it, and the run **exits 4**. Worktree, branch and handoff are
+  intact. Because Step 4 already passes the binary down from this session, this now
+  means the binary genuinely isn't installed — or the path passed wasn't an executable
+  file — not that the agent inherited a thin `PATH`. Check your own `command -v herdr`
+  before relaying `HERDR_BIN` as the fix, and don't report "done".
 - **macOS blocked Ghostty automation** (Apple event error -1743): the script names
   the fix — System Settings → Privacy & Security → Automation, allow this app to
   control Ghostty — and stops retrying, because macOS remembers a denial. The

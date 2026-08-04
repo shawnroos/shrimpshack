@@ -482,3 +482,447 @@ run_resolve() {
   [[ "$output" == *"open + briefed"* ]]
   [[ "$output" == *"a dialog may still be up"* ]]
 }
+
+# ---- U2: the loud path for an announced-but-unresolvable backend ------------
+#
+# These runs deliberately keep herdr and cmux OFF the PATH. The bug they pin: a
+# background agent's PATH does not hold the login shell's, so an environment that
+# announced herdr (HERDR_ENV=1) resolved LAUNCHER=none and the run printed
+# "skipping launch automation" at exit 0 — a silent skip the relaying agent read as
+# success.
+#
+# Two knobs make that reachable under test at all:
+#   * $SPINOFF_BIN_PATHS points at an EMPTY dir, so the standard-install scan can't
+#     find this machine's real /opt/homebrew/bin/herdr and pass for the wrong reason.
+#   * PATH keeps /usr/bin:/bin. A PATH of only the stub dir dies at `git rev-parse`
+#     in the --repo region, long before the launch gate — which would look like the
+#     bug and prove nothing.
+# HERDR_BIN / CMUX_BIN are explicitly `env -u`'d: setup() sets them without
+# exporting, and a future change that exports them would otherwise silently disarm
+# every test in this section by resolving the very binary they need missing.
+run_unresolvable() {
+  local repo="$BATS_TEST_TMPDIR/urepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  UREPO="$(cd "$repo" && pwd -P)"
+
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  # A launcher-free stub dir: claude/sleep/glow only. $LOUD_STUBS adds back exactly
+  # the launcher binaries a given case wants resolvable (e.g. "cmux" for the KTD-8
+  # proof, "herdr" for the server-down case).
+  NOSTUB="$BATS_TEST_TMPDIR/nostubs"
+  EMPTYBIN="$BATS_TEST_TMPDIR/emptybin"
+  mkdir -p "$NOSTUB" "$EMPTYBIN"
+  cp "$STUBDIR/claude" "$STUBDIR/sleep" "$STUBDIR/glow" "$NOSTUB/"
+  local s
+  for s in ${LOUD_STUBS:-}; do cp "$STUBDIR/$s" "$NOSTUB/"; done
+
+  # Also scrub the host's GHOSTTY identity. Those vars are exported by every real
+  # Ghostty window, so an unannounced-session test run from one inherits them, the
+  # ghostty branch wins (its .app and /usr/bin/osascript both resolve), and the case
+  # under test never happens — it drives a REAL AppleScript launch instead. A test
+  # that wants ghostty passes the vars back explicitly (they follow "$@", so they win).
+  run env -u HERDR_BIN -u CMUX_BIN \
+          -u TERM_PROGRAM -u GHOSTTY_RESOURCES_DIR -u GHOSTTY_SURFACE_ID \
+          PATH="$NOSTUB:/usr/bin:/bin" \
+          SPINOFF_BIN_PATHS="$EMPTYBIN" \
+          SPINOFF_READY_TIMEOUT_MS=3000 \
+          "$@" \
+      bash "$SCRIPT" --name uh --label testlabel --handoff "$handoff" \
+                     --repo "$repo" --target tab ${LOUD_ARGS:-}
+}
+
+@test "loud: announced herdr that cannot be resolved warns and exits 4 (R5, R6)" {
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=
+
+  # names the binary, every place it looked, and the override that fixes it
+  [[ "$output" == *"could not resolve"* ]]
+  [[ "$output" == *"herdr"* ]]
+  [[ "$output" == *"HERDR_BIN"* ]]
+  [[ "$output" == *"$EMPTYBIN"* ]]
+  # incomplete, with the code reserved for this cause
+  [ "$status" -eq 4 ]
+  # …and the real work survives: branch, worktree, handoff
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+  git -C "$UREPO" rev-parse --verify feature/uh
+  git -C "$UREPO" worktree list | grep -q "worktrees/uh"
+}
+
+@test "override: a valid HERDR_BIN launches with no herdr on PATH at all (R2)" {
+  # The main session resolves the binary and passes it down (SKILL.md Step 4), so a
+  # SET, VALID override is the PRIMARY path now, not a break-glass knob — and the whole
+  # point is that it works when PATH cannot answer. run_unresolvable's stub dir holds
+  # no herdr, so PATH resolution genuinely cannot succeed here; only the override can.
+  LOUD_STUBS=
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=1 \
+                   HERDR_BIN="$STUBDIR/herdr"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" != *"INCOMPLETE"* ]]
+  [[ "$output" == *"launcher:  herdr"* ]]
+  # and it really launched rather than falling back to a quiet none
+  [[ "$output" == *"✓ Spinoff complete"* ]]
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+}
+
+@test "loud: announced cmux that cannot be resolved warns and exits 4 (R5, R6)" {
+  # cmux is made unresolvable through a SET-but-invalid CMUX_BIN rather than a bare
+  # empty PATH, and that is deliberate: resolve_bin's extra candidate for cmux is
+  # /Applications/cmux.app/Contents/Resources/bin/cmux, which EXISTS on a developer
+  # machine that has cmux installed — so "cmux is not on PATH" resolves anyway there
+  # and the test would pass or fail depending on whose laptop ran it. A set override
+  # that fails the R15 file+executable test resolves to empty on every machine, and
+  # deliberately does not fall through, which is exactly the state the record reads.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID=workspace:1 \
+                   CMUX_BIN=/nonexistent/dir/cmux
+
+  [[ "$output" == *"could not resolve"* ]]
+  [[ "$output" == *"cmux"* ]]
+  [[ "$output" == *"CMUX_WORKSPACE_ID"* ]]
+  # the rejected-override branch diagnoses the value that was thrown out, and does NOT
+  # tell someone to set a variable they already set
+  [[ "$output" == *"CMUX_BIN is set to '/nonexistent/dir/cmux'"* ]]
+  [[ "$output" != *"fix: set CMUX_BIN"* ]]
+  [ "$status" -eq 4 ]
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+}
+
+@test "loud: the summary block says INCOMPLETE and never prints a tick (KTD-5)" {
+  # Teaching only the tail exit would print "✓ Spinoff complete" alongside exit 4, and
+  # the skill relays this block verbatim — so the header has to learn the flag too.
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"Spinoff INCOMPLETE"* ]]
+  [[ "$output" != *"✓ Spinoff complete"* ]]
+  # and the launch line names the real cause, not "not inside cmux/herdr"
+  [[ "$output" != *"not automated (not inside cmux/herdr)"* ]]
+}
+
+@test "silent: another announced backend launches -> exit 0, no warning (R17, KTD-8)" {
+  # THE KTD-8 proof. herdr is announced and unresolvable, cmux is announced and
+  # resolvable: recording happens, acting must not, because resolution settled on cmux.
+  LOUD_STUBS=cmux
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=workspace:1
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" == *"launcher:  cmux"* ]]
+  [[ "$output" == *"✓ Spinoff complete"* ]]
+}
+
+@test "silent: no announcement at all -> exit 0, LAUNCHER=none, worktree made (R7)" {
+  # OSASCRIPT_BIN is deliberately bogus so this machine's real Ghostty.app +
+  # /usr/bin/osascript can't resolve the ghostty backend and steal the case.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" == *"launcher:  none"* ]]
+  [[ "$output" == *"no multiplexer announced this session"* ]]
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+}
+
+@test "silent: HERDR_ENV=0 keeps its existing quiet fallback to none (R8)" {
+  run_unresolvable HERDR_ENV=0 CMUX_WORKSPACE_ID=
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" == *"launcher:  none"* ]]
+}
+
+@test "silent: resolvable herdr whose server is down falls back quietly (R9)" {
+  # The binary RESOLVES here, so the record is never taken — a dead server is a
+  # different fact from a missing binary, and only the second one is loud.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" == *"launcher:  none"* ]]
+  # ...and it must not LIE about why. This session DID announce herdr; the binary was
+  # found and the server was down. Saying "no multiplexer announced" here is the same
+  # lying-message defect the whole change exists to remove, so pin the honest wording.
+  [[ "$output" == *"herdr announced this session"* ]]
+  [[ "$output" != *"no multiplexer announced"* ]]
+}
+
+@test "silent: unannounced session says nothing announced, not a backend name (R7)" {
+  # The counterpart to the R9 test above: with nothing announced, the benign wording is
+  # the correct one. Pinning both directions is what stops the two from re-collapsing.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID=
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no multiplexer announced"* ]]
+  [[ "$output" != *"announced this session ("* ]]
+}
+
+@test "silent: ghostty vars + unresolvable osascript stay quiet (R14, KTD-9)" {
+  # Ghostty's vars are passive terminal identity, set for every window. Keying the
+  # loud path on them would turn ordinary sessions into exit-4 failures.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= \
+                   TERM_PROGRAM=ghostty OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" != *osascript* ]]
+  [[ "$output" == *"launcher:  none"* ]]
+}
+
+@test "forced --launcher herdr with the binary missing still falls back, not dies (R10)" {
+  LOUD_STUBS=cmux
+  LOUD_ARGS="--launcher herdr"
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=workspace:1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"falling back to auto-detection"* ]]
+  [[ "$output" == *"launcher:  cmux"* ]]
+  [[ "$output" != *"could not resolve"* ]]
+}
+
+@test "exit codes stay distinct: the unbriefed-session path still exits 3 (KTD-4)" {
+  # 3 and 4 are mutually exclusive by construction: 3 needs BRIEF_ATTEMPTED=1 (so
+  # LAUNCHER != none), 4 needs LAUNCHER = none. This pins 3 against a drift to 4.
+  local repo="$BATS_TEST_TMPDIR/e3repo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  # -u HERDR_BIN -u CMUX_BIN for the same reason the loud tests do it: setup() assigns
+  # those names as stub pointers, and the moment one is exported this test would honor
+  # it as a production override instead of exercising PATH resolution.
+  run env -u HERDR_BIN -u CMUX_BIN PATH="$STUBDIR:$PATH" \
+          HERDR_STUB_LIVE=1 HERDR_ENV=1 HERDR_WORKSPACE_ID=wS HERDR_PANE_ID=wS:p1 \
+          CMUX_WORKSPACE_ID= SPINOFF_READY_TIMEOUT_MS=3000 \
+          SPINOFF_BRIEF_FILE=/nonexistent-dir/brief.txt \
+      bash "$SCRIPT" --name e3 --label testlabel --handoff "$handoff" \
+                     --repo "$repo" --target tab --launcher herdr
+
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"THE NEW SESSION WAS NOT BRIEFED"* ]]
+  [[ "$output" != *"could not resolve"* ]]
+}
+
+# ---- resolver-level coverage (U3): resolve_bin precedence + the R15 rejections ----
+#
+# The six `resolve_launcher` tests above enter one layer too high (they inject $HERDR /
+# $CMUX by hand), and the loud/silent tests one layer too low (they assert on a whole
+# run's output). Neither pins resolve_bin's OWN contract, so "simplify" `-f && -x` to a
+# bare `-x`, or let a set-but-invalid override fall through to $PATH, and the suite
+# stays green. These tests call resolve_bin directly through the SPINOFF_TEST_SOURCE
+# hook (R12) and assert on its echoed path.
+#
+# Every test sets BOTH search inputs explicitly — $RB_PATH and $RB_BIN_PATHS — so no
+# real install location on the host can satisfy a lookup and make a test pass for the
+# wrong reason. Note $SPINOFF_BIN_PATHS is read with `:-`, so an EMPTY string means
+# "use the built-in defaults": "nothing in the known locations" has to be spelled as a
+# real but empty DIRECTORY, never as "".
+
+# A tiny executable at $1.
+mkbin() { mkdir -p "${1%/*}"; printf '#!/usr/bin/env bash\nexit 0\n' > "$1"; chmod +x "$1"; }
+
+# resolve_bin <name> <override> [extra-candidates], echoed for assertion on $output.
+# PATH is assigned INSIDE the spawned shell rather than through `env`, because
+# `env PATH=... bash` resolves `bash` itself through the PATH it is setting — an empty
+# one means env cannot find bash at all and the test dies before reaching the resolver.
+run_resolve_bin() {
+  run env SPINOFF_TEST_SOURCE=1 SPINOFF_BIN_PATHS="${RB_BIN_PATHS-}" \
+      bash -c 'PATH="$5"; source "$1"; resolve_bin "$2" "$3" "$4"' \
+      _ "$SCRIPT" "$1" "${2-}" "${3-}" "${RB_PATH-}"
+}
+
+# Same seam, but echoes resolve_bin_rejected's verdict for the same inputs.
+run_resolve_bin_rejected() {
+  run env SPINOFF_TEST_SOURCE=1 SPINOFF_BIN_PATHS="${RB_BIN_PATHS-}" \
+      bash -c 'PATH="$4"; source "$1"
+               r="$(resolve_bin "$2" "$3")"
+               resolve_bin_rejected "$r" "$3"' \
+      _ "$SCRIPT" "$1" "${2-}" "${RB_PATH-}"
+}
+
+@test "resolve_bin: an explicit override wins over a different binary on \$PATH (R2, R3)" {
+  local pathdir="$BATS_TEST_TMPDIR/rb-ovr/path" ovrdir="$BATS_TEST_TMPDIR/rb-ovr/ovr"
+  mkbin "$pathdir/tool"
+  mkbin "$ovrdir/tool"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$BATS_TEST_TMPDIR/rb-ovr/empty"
+  mkdir -p "$RB_BIN_PATHS"
+
+  run_resolve_bin tool "$ovrdir/tool"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$ovrdir/tool" ]
+}
+
+@test "resolve_bin: the override wins even when \$PATH holds no candidate (R2)" {
+  local ovrdir="$BATS_TEST_TMPDIR/rb-ovr2/ovr" empty="$BATS_TEST_TMPDIR/rb-ovr2/empty"
+  mkbin "$ovrdir/tool"
+  mkdir -p "$empty"
+  RB_PATH="$empty" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "$ovrdir/tool"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$ovrdir/tool" ]
+}
+
+@test "resolve_bin: no override -> a stub on \$PATH resolves to its absolute path (R1, R3)" {
+  local pathdir="$BATS_TEST_TMPDIR/rb-path/bin" empty="$BATS_TEST_TMPDIR/rb-path/empty"
+  mkbin "$pathdir/tool"
+  mkdir -p "$empty"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "$pathdir/tool" ]
+}
+
+@test "resolve_bin: nothing on \$PATH -> a stub in \$SPINOFF_BIN_PATHS resolves (R3, R16)" {
+  local known="$BATS_TEST_TMPDIR/rb-known/known" empty="$BATS_TEST_TMPDIR/rb-known/empty"
+  mkbin "$known/tool"
+  mkdir -p "$empty"
+  RB_PATH="$empty" RB_BIN_PATHS="$empty:$known"
+
+  run_resolve_bin tool ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "$known/tool" ]
+}
+
+@test "resolve_bin: nothing anywhere -> empty, no error, exit 0 (R3)" {
+  # resolve_bin never fails and never writes to stderr: deciding what an empty result
+  # MEANS belongs to the caller, which is what the loud/silent split above depends on.
+  local empty="$BATS_TEST_TMPDIR/rb-none/empty"
+  mkdir -p "$empty"
+  RB_PATH="$empty" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool ""
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "resolve_bin: an override pointing at a DIRECTORY is empty and does NOT fall through to \$PATH (R15)" {
+  # The highest-value test in this file. `-x` alone is TRUE of a directory, so a bare
+  # `-x` check "resolves" HERDR_BIN=/opt/homebrew/bin and reproduces the original bug
+  # one layer down with a launch that execs a directory — this pins the `-f` half.
+  # The usable stub on $PATH is the second half: a SET override that fails the test
+  # resolves to EMPTY on purpose. Someone who named a binary meant THAT binary, and
+  # quietly driving a different one is worse than not launching at all.
+  local pathdir="$BATS_TEST_TMPDIR/rb-dir/bin" dir="$BATS_TEST_TMPDIR/rb-dir/adir"
+  local empty="$BATS_TEST_TMPDIR/rb-dir/empty"
+  mkbin "$pathdir/tool"
+  mkdir -p "$dir" "$empty"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "$dir"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                    # the directory was rejected…
+  [ "$output" != "$pathdir/tool" ]    # …and did not silently become the PATH stub
+}
+
+@test "resolve_bin: an override pointing at a nonexistent path is empty (R15)" {
+  local pathdir="$BATS_TEST_TMPDIR/rb-missing/bin" empty="$BATS_TEST_TMPDIR/rb-missing/empty"
+  mkbin "$pathdir/tool"
+  mkdir -p "$empty"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "$BATS_TEST_TMPDIR/rb-missing/nope/tool"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "resolve_bin: an override pointing at a non-executable regular file is empty (R15)" {
+  local pathdir="$BATS_TEST_TMPDIR/rb-noexec/bin" empty="$BATS_TEST_TMPDIR/rb-noexec/empty"
+  local plain="$BATS_TEST_TMPDIR/rb-noexec/plain-file"
+  mkbin "$pathdir/tool"
+  mkdir -p "$empty"
+  printf 'not a program\n' > "$plain"
+  chmod 644 "$plain"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "$plain"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "resolve_bin_rejected: names the thrown-out override for each rejection shape, and nothing on success (R15)" {
+  # This is what lets the ⚠ say "CMUX_BIN is set to '…'" instead of telling someone to
+  # set a variable they already set — so all three rejection shapes must report, and a
+  # successful resolution must report nothing.
+  local base="$BATS_TEST_TMPDIR/rb-rej"
+  local pathdir="$base/bin" dir="$base/adir" empty="$base/empty" plain="$base/plain-file"
+  mkbin "$pathdir/tool"
+  mkdir -p "$dir" "$empty"
+  printf 'not a program\n' > "$plain"
+  chmod 644 "$plain"
+  RB_PATH="$pathdir" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin_rejected tool "$dir"
+  [ "$output" = "$dir" ]
+
+  run_resolve_bin_rejected tool "$base/nope/tool"
+  [ "$output" = "$base/nope/tool" ]
+
+  run_resolve_bin_rejected tool "$plain"
+  [ "$output" = "$plain" ]
+
+  # resolved via the override -> nothing was rejected
+  run_resolve_bin_rejected tool "$pathdir/tool"
+  [ -z "$output" ]
+
+  # resolved via PATH with no override at all -> likewise nothing
+  run_resolve_bin_rejected tool ""
+  [ -z "$output" ]
+}
+
+@test "resolve_bin: a full path passed as an extra candidate resolves last (R3)" {
+  # The non-PATH installs: the cmux app bundle and /usr/bin/osascript.
+  local extra="$BATS_TEST_TMPDIR/rb-extra/App.app/Contents/Resources/bin/tool"
+  local empty="$BATS_TEST_TMPDIR/rb-extra/empty"
+  mkbin "$extra"
+  mkdir -p "$empty"
+  RB_PATH="$empty" RB_BIN_PATHS="$empty"
+
+  run_resolve_bin tool "" "$extra"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$extra" ]
+}
+
+@test "resolve_bin: a RELATIVE override resolves to an ABSOLUTE path (R1)" {
+  # Resolution runs BEFORE the `--repo` cd, so a relative result silently stops
+  # resolving the moment the cwd moves — abspath() is what prevents that.
+  local dir="$BATS_TEST_TMPDIR/rb-rel" empty="$BATS_TEST_TMPDIR/rb-rel/empty"
+  mkbin "$dir/tool"
+  mkdir -p "$empty"
+  # abspath() PREFIXES `pwd -P` — it does not normalize, so "./tool" comes back as
+  # "<physical-cwd>/./tool". That is fine and is what the test asserts: the leading
+  # slash (the property that survives a cd) plus the same file on disk. `pwd -P` also
+  # means the prefix is symlink-resolved, and $BATS_TEST_TMPDIR sits under
+  # /var -> /private/var on macOS, so the physical dir is what to compare against.
+  local dirp
+  dirp="$(cd "$dir" && pwd -P)"
+
+  run env SPINOFF_TEST_SOURCE=1 SPINOFF_BIN_PATHS="$empty" \
+      bash -c 'cd "$3"; PATH="$4"; source "$1"; resolve_bin tool "$2"' \
+      _ "$SCRIPT" ./tool "$dir" "$empty"
+  [ "$status" -eq 0 ]
+  [[ "$output" == /* ]]                 # absolute, not "./tool"
+  [[ "$output" == "$dirp"/* ]]          # anchored at the physical cwd
+  [ "$output" -ef "$dir/tool" ]         # and still the same file on disk
+}
+
+@test "resolve_bin: resolution does not depend on \$PATH for its own internals (R1)" {
+  # U1's first draft split $SPINOFF_BIN_PATHS with `tr`, and under a scrubbed PATH it
+  # died with "tr: command not found" and resolved nothing — the exact failure the
+  # resolver exists to prevent, one level down. The split is now pure parameter
+  # expansion, and this is what stops that regression coming back.
+  local known="$BATS_TEST_TMPDIR/rb-nopath/known"
+  mkbin "$known/tool"
+  RB_PATH="" RB_BIN_PATHS="$known"
+
+  run_resolve_bin tool ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "$known/tool" ]
+}
