@@ -31,6 +31,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CTL="$SCRIPT_DIR/gatewayctl.sh"
 
+# KTD5. Sourced, not re-implemented. NOTE the split this file lives on both
+# sides of: the model's prose in `text` (and in the spill file) stays RAW by
+# design — it is data, and the consumer owns that sink — while every DIAGNOSTIC
+# this script prints, including the upstream error body it quotes back, is
+# sanitized. See README.md for the source x sink matrix.
+# shellcheck source=./sanitize.sh
+. "$SCRIPT_DIR/sanitize.sh"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -68,7 +76,12 @@ DEFAULT_MAX_TOKENS="${GATEWAY_LENS_MAX_TOKENS:-8192}"
 # ---------------------------------------------------------------------------
 # Plumbing
 # ---------------------------------------------------------------------------
-say() { printf '▸ %s\n' "$*" >&2; }
+# Every human-readable diagnostic goes through say() or die(), and both
+# sanitize (KTD5). The chokepoint is the point: the upstream error body
+# ($ERR_MSG) reaches the terminal only through die(), so provider prose cannot
+# rewrite the statusline no matter which classification branch quotes it — and
+# a message nobody has written yet is closed the same way.
+say() { printf '▸ %s\n' "$(gateway::sanitize_for_display "$*")" >&2; }
 
 # The single stdout write. Every path funnels through here so "exactly one JSON
 # object, always" is a property of the code shape rather than of discipline.
@@ -84,8 +97,18 @@ emit_error() {
     # $1 = exit code, $2 = machine-readable error value, rest = human detail.
     local code="$1" err="$2"; shift 2
     [ "$EMITTED" -eq 1 ] && return 0
+    # `detail` is human-readable diagnostic text — a consumer prints it — and it
+    # can quote the upstream error body, so it is sanitized. `text` is NOT: that
+    # is the raw-by-design data field (KTD5), and it is emitted elsewhere.
+    local detail alias_d
+    detail="$(gateway::sanitize_for_display "$*")"
+    # The alias is display text on THIS path and only here: emit_error is the
+    # one place it can be an alias the grammar REFUSED, so it has not been
+    # closed by construction yet. jq escapes a control byte in transit but
+    # emits a Unicode bidi override literally, so the field is sanitized.
+    alias_d="$(gateway::sanitize_for_display "$ALIAS")"
     if command -v jq >/dev/null 2>&1; then
-        emit "$(jq -nc --arg a "$ALIAS" --arg e "$err" --arg d "$*" --argjson c "$code" \
+        emit "$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" --argjson c "$code" \
             '{ok:false, alias:(if $a == "" then null else $a end), text:null,
               usage:null, error:$e, detail:$d, exit_code:$c}')"
     else
@@ -96,7 +119,7 @@ emit_error() {
 
 die() {
     local code="$1" err="$2"; shift 2
-    printf '✗ %s\n' "$*" >&2
+    printf '✗ %s\n' "$(gateway::sanitize_for_display "$*")" >&2
     emit_error "$code" "$err" "$*"
     exit "$code"
 }

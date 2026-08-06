@@ -20,6 +20,12 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# KTD5. Sourced, not re-implemented: three copies of a sanitizer is how one of
+# them silently drifts, which is precisely the failure the escape-audit
+# precedent records. See README.md for the source x sink matrix.
+# shellcheck source=./sanitize.sh
+. "$SCRIPT_DIR/sanitize.sh"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -69,13 +75,24 @@ BIN_CANDIDATES=("target/release/gateway" "target/debug/gateway" "bin/gateway" "g
 # ---------------------------------------------------------------------------
 # Plumbing
 # ---------------------------------------------------------------------------
-say() { printf '▸ %s\n' "$*" >&2; }
+# EVERY human-readable diagnostic in this script goes through say() or die(),
+# and both sanitize (KTD5). Sanitizing at the CHOKEPOINT rather than at each
+# call site is deliberate: the escape-audit precedent's whole lesson is that
+# per-site discipline leaks a new sibling sink every review round, while a
+# chokepoint is closed for messages nobody has written yet. Interpolating an
+# attacker-controlled value into a raw `printf ... >&2` bypasses this and is
+# what the lint in tests/unit/escapes.bats exists to catch.
+say() { printf '▸ %s\n' "$(gateway::sanitize_for_display "$*")" >&2; }
 die() {
     # $1 = exit code, rest = message. Stderr only — stdout belongs to the one
     # JSON object, and a diagnostic printed there is how a consumer's `jq`
     # blows up on output it was promised it could parse whole.
+    # The sanitize call is INLINE at the printf rather than hidden behind a
+    # local: the lint in tests/unit/escapes.bats reads these lines, and a
+    # defence it cannot see is a defence the next reviewer cannot verify either.
+    # emit_error sanitizes the same message for the JSON `error` field.
     local code="$1"; shift
-    printf '✗ %s\n' "$*" >&2
+    printf '✗ %s\n' "$(gateway::sanitize_for_display "$*")" >&2
     emit_error "$code" "$*"
     exit "$code"
 }
@@ -122,12 +139,20 @@ emit() {
 emit_error() {
     local code="$1" msg="$2"
     [ "$EMITTED" -eq 1 ] && return 0
+    # Sanitized here as well as in die(): idempotent on an already-clean string,
+    # and it means a future caller that reaches emit_error directly cannot open
+    # a hole in the `error` field, which is display text a consumer prints.
+    msg="$(gateway::sanitize_for_display "$msg")"
     if command -v jq >/dev/null 2>&1; then
         emit "$(jq -nc --arg verb "${VERB:-}" --arg m "$msg" --argjson c "$code" \
             '{ok:false, verb:$verb, error:$m, exit_code:$c}')"
     else
         EMITTED=1
-        printf '{"ok":false,"verb":"%s","error":"internal","exit_code":%s}\n' "${VERB:-}" "$code"
+        # No jq means no encoder, and VERB is raw argv: an unsanitized verb here
+        # would put a quote (breaking the object) or an escape byte into stdout.
+        # Reduced to the verb enum's own charset in pure bash — closed by
+        # construction, since that is the only defence available with no jq.
+        printf '{"ok":false,"verb":"%s","error":"internal","exit_code":%s}\n' "${VERB//[^a-z]/}" "$code"
     fi
 }
 
@@ -217,26 +242,37 @@ resolve_config() {
         done < <(yaml_scan "$CONFIG_PATH")
 
         if [ "${#models_lines[@]}" -gt 0 ]; then
+            # Built with jq, and sanitized (KTD5) on the way in.
+            #
+            # This used to be an awk program interpolating the config's values
+            # straight between quote characters. That is not a style question:
+            # gateway.yaml is user-editable, so a model string carrying an ESC
+            # byte (or a plain double quote) produced INVALID JSON here, which
+            # made every --argjson consuming it fail, which made `status` print
+            # NOTHING on stdout while still exiting 0 — a KTD2 violation
+            # triggered by a character in a config file.
+            #
+            # jq owns the encoding, and strip_display_controls runs BEFORE the
+            # split so the alias and model strings are display-clean at the
+            # boundary where they enter the script. It keeps tab and newline,
+            # which are the record and field separators, so the split is intact.
             CONFIG_MODELS_JSON="$(
-                printf '%s\n' "${models_lines[@]}" | awk -F'\t' '
-                    BEGIN { printf "{" ; first = 1 }
-                    {
-                        alias = $1; kind = $2
-                        if (!first) printf ","
-                        first = 0
-                        printf "\"%s\":{\"chain\":%s,\"model\":", alias, (kind == "chain" ? "true" : "false")
-                        if (kind == "chain") {
-                            printf "["
-                            for (i = 3; i <= NF; i++) printf "%s\"%s\"", (i > 3 ? "," : ""), $i
-                            printf "]"
-                        } else {
-                            printf "\"%s\"", $3
-                        }
-                        printf "}"
-                    }
-                    END { printf "}\n" }
-                '
+                printf '%s\n' "${models_lines[@]}" | jq -Rsc "$GATEWAY_SANITIZE_JQ_DEF"'
+                    strip_display_controls
+                    | split("\n")
+                    | map(select(length > 0) | split("\t"))
+                    | map(select(length >= 3))
+                    | map({key: .[0],
+                           value: {chain: (.[1] == "chain"),
+                                   model: (if .[1] == "chain" then .[2:] else .[2] end)}})
+                    | from_entries'
             )"
+            # Fail SAFE, not open: an unparseable config models block becomes an
+            # empty table (drift class 3 reports nothing) rather than an empty
+            # string that would blow up the --argjson consuming it.
+            case "$CONFIG_MODELS_JSON" in
+                "" | null) CONFIG_MODELS_JSON="{}" ;;
+            esac
         fi
     fi
     CONFIG_LOADED=1
@@ -408,7 +444,14 @@ probe() {
     fi
 
     local aliases
-    aliases="$(jq -c '[.data[]?.id // empty]' < "$body" 2>/dev/null)"
+    # KTD5: the served list is free-form text off the wire, and it is display
+    # text in every consumer (status prints it, ensure returns it for a human to
+    # read). Sanitized here, at the one place it enters the script, so no
+    # downstream emit has to remember. The membership check below is unaffected:
+    # a caller's alias has already passed the [A-Za-z0-9._-]+ grammar, and
+    # sanitizing only removes bytes that grammar cannot contain — so a served
+    # alias that could ever match is byte-identical before and after.
+    aliases="$(jq -c "$GATEWAY_SANITIZE_JQ_DEF"' [.data[]?.id // empty] | strip_display_deep' < "$body" 2>/dev/null)"
     if [ -z "$aliases" ]; then
         PROBE_DETAIL="model-list probe returned HTTP 200 but the body is not the expected JSON model list"
         PROBE_STATUS=$EX_UNREACHABLE
@@ -536,7 +579,11 @@ do_start_locked() {
         if [ "$waited" -gt $((START_TIMEOUT * 5)) ]; then
             say "started $GATEWAY_BIN but it never answered the model-list probe within ${START_TIMEOUT}s"
             say "last 10 log lines from $LOGFILE:"
-            tail -10 "$LOGFILE" >&2 2>/dev/null
+            # KTD5 free-form sink: the gateway's own log carries upstream error
+            # bodies and provider prose, so these bytes are as untrusted as a
+            # model response. Piped through the sanitizer, never straight to the
+            # terminal.
+            tail -10 "$LOGFILE" 2>/dev/null | gateway::sanitize_stream >&2
             return $EX_UNREACHABLE
         fi
     done
@@ -685,7 +732,9 @@ stop)
     # Report, do not kill.
     if ! pid_is_gateway "$pid"; then
         say "pid $pid is live but its argv does not name $GATEWAY_BIN — recycled pid, refusing to signal it"
-        emit "$(jq -nc --argjson pid "$pid" --arg bin "$GATEWAY_BIN" --arg argv "$(pid_argv "$pid")" --argjson c $EX_USAGE \
+        # actual_argv is another process's command line — free-form, unrelated to
+        # us, and printed by anyone diagnosing the mismatch. Sanitized (KTD5).
+        emit "$(jq -nc --argjson pid "$pid" --arg bin "$GATEWAY_BIN" --arg argv "$(gateway::sanitize_for_display "$(pid_argv "$pid")")" --argjson c $EX_USAGE \
             '{ok:false, verb:"stop", result:"pid_mismatch", pid:$pid, expected_binary:$bin, actual_argv:$argv,
               error:"pidfile pid belongs to an unrelated process; not signalled", exit_code:$c}')"
         exit $EX_USAGE
@@ -749,10 +798,17 @@ status)
     fi
 
     tbl="$(table_json)"
+    # KTD5, and the promise skills/status/SKILL.md already makes: everything the
+    # config and the alias table supply as DISPLAY text is sanitized before it is
+    # printed. Both blocks below are display-only — a consumer reads them to show
+    # a human what drifted; nothing parses them back into a path or a URL — so a
+    # deep strip cannot break a functional value the way sanitizing `config` or
+    # `base_url` would.
     drift="$(jq -nc \
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson table "$tbl" \
-        --argjson cfg "$CONFIG_MODELS_JSON" '
+        --argjson cfg "$CONFIG_MODELS_JSON" \
+        "$GATEWAY_SANITIZE_JQ_DEF"'
         ($table.aliases // {}) as $t | {
           missing_from_table: [ $served[] as $a | select(($t | has($a)) | not) | $a ],
           missing_window: [ $t | to_entries[]
@@ -763,15 +819,16 @@ status)
                          | select(. != null)
                          | select(.model != $e.value.model)
                          | {alias: $e.key, recorded: $e.value.model, current: .model} ]
-        }')"
+        } | strip_display_deep')"
 
-    models_view="$(jq -nc --argjson table "$tbl" '
+    models_view="$(jq -nc --argjson table "$tbl" "$GATEWAY_SANITIZE_JQ_DEF"'
         [ ($table.aliases // {}) | to_entries[]
           | {alias: .key,
              context_window: (.value.context_window // null),
              source: (.value.source // null),
              model: (.value.model // null),
-             chain: (.value.chain // false)} ]')"
+             chain: (.value.chain // false)} ]
+        | strip_display_deep')"
 
     running=false
     [ $prc -eq $EX_OK ] && running=true
@@ -787,10 +844,10 @@ status)
         --arg pidfile "$PIDFILE" \
         --arg pid "${pid:-}" \
         --argjson pid_verified "$pid_ok" \
-        --arg install_error "${install_note:-}" \
+        --arg install_error "$(gateway::sanitize_for_display "${install_note:-}")" \
         --argjson drift "$drift" \
         --argjson models "$models_view" \
-        --arg detail "${PROBE_DETAIL:-}" \
+        --arg detail "$(gateway::sanitize_for_display "${PROBE_DETAIL:-}")" \
         --argjson c "$prc" \
         '{ok: ($c == 0), verb:"status", running:$running, base_url:$base,
           install_dir:(if $install == "" then null else $install end),

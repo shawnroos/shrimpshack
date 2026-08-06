@@ -44,6 +44,13 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CTL="$SCRIPT_DIR/gatewayctl.sh"
 
+# KTD5. Sourced, not re-implemented. Two untrusted sources reach this script's
+# terminal output: the seed child's stderr (piped through the stream filter) and
+# the session id the child reports (an identifier, so it is closed by the same
+# grammar the alias uses rather than filtered). See README.md for the matrix.
+# shellcheck source=./sanitize.sh
+. "$SCRIPT_DIR/sanitize.sh"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -70,7 +77,10 @@ PROJECTS_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
 # ---------------------------------------------------------------------------
 # Plumbing
 # ---------------------------------------------------------------------------
-say() { printf '▸ %s\n' "$*" >&2; }
+# Every human-readable diagnostic goes through say() or die(), and both
+# sanitize (KTD5) — a chokepoint rather than per-site discipline, so a message
+# nobody has written yet is closed too.
+say() { printf '▸ %s\n' "$(gateway::sanitize_for_display "$*")" >&2; }
 
 # The single stdout write. Every path funnels through here so "exactly one JSON
 # object, always" is a property of the code shape rather than of discipline.
@@ -86,8 +96,17 @@ emit_error() {
     # $1 = exit code, $2 = machine-readable error value, rest = human detail.
     local code="$1" err="$2"; shift 2
     [ "$EMITTED" -eq 1 ] && return 0
+    # `detail` is human-readable diagnostic text a consumer prints, so it is
+    # sanitized (KTD5).
+    local detail alias_d
+    detail="$(gateway::sanitize_for_display "$*")"
+    # The alias is display text on THIS path and only here: emit_error is the
+    # one place it can be an alias the grammar REFUSED, so it has not been
+    # closed by construction yet. jq escapes a control byte in transit but
+    # emits a Unicode bidi override literally, so the field is sanitized.
+    alias_d="$(gateway::sanitize_for_display "$ALIAS")"
     if command -v jq >/dev/null 2>&1; then
-        emit "$(jq -nc --arg a "$ALIAS" --arg e "$err" --arg d "$*" --argjson c "$code" \
+        emit "$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" --argjson c "$code" \
             '{ok:false, alias:(if $a == "" then null else $a end), session_id:null,
               transcript_path:null, cwd:null, base_url:null, context_window:null,
               attach_command:null, error:$e, detail:$d, exit_code:$c}')"
@@ -99,7 +118,7 @@ emit_error() {
 
 die() {
     local code="$1" err="$2"; shift 2
-    printf '✗ %s\n' "$*" >&2
+    printf '✗ %s\n' "$(gateway::sanitize_for_display "$*")" >&2
     emit_error "$code" "$err" "$*"
     exit "$code"
 }
@@ -284,6 +303,17 @@ CONTEXT_WINDOW=""
 if [ -f "$MODELS_JSON" ]; then
     CONTEXT_WINDOW="$(jq -r --arg a "$ALIAS" '.aliases[$a].context_window // empty' < "$MODELS_JSON" 2>/dev/null)"
 fi
+# The table is a file on disk, so its value is a SOURCE, not a constant. A
+# non-numeric context_window used to reach `$win|tonumber` in the final emit,
+# where jq errors, emit prints an empty line and the script still exits 0 — a
+# silent contract violation (no JSON object at all) for a typo in a JSON file.
+# Constrained to digits here instead, which also keeps it out of the exported
+# env var and the attach command; a bad value is treated exactly as an absent
+# one, which KTD7 already defines as "launch anyway, name the drift".
+if [ -n "$CONTEXT_WINDOW" ] && ! [[ "$CONTEXT_WINDOW" =~ ^[0-9]+$ ]]; then
+    say "drift: alias '$ALIAS' has a non-numeric context_window in $MODELS_JSON — ignoring it and launching without CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+    CONTEXT_WINDOW=""
+fi
 if [ -z "$CONTEXT_WINDOW" ]; then
     say "drift: alias '$ALIAS' has no context_window in $MODELS_JSON — launching without CLAUDE_CODE_MAX_CONTEXT_TOKENS, so this session uses Claude Code's default window"
 fi
@@ -319,7 +349,10 @@ if [ "$SEED_RC" -ne 0 ]; then
     # "Announced-but-broken is never success." A handle to a session that does
     # not exist is worse than a failure: Shawn would attach to nothing.
     say "the seed run exited $SEED_RC; last stderr from $CLAUDE_BIN:"
-    tail -5 "$SEED_ERR" >&2 2>/dev/null
+    # KTD5 free-form sink: this is a child process's stderr, and on a gateway
+    # session that child is relaying a non-Anthropic model's output. Piped
+    # through the sanitizer, never straight to the terminal.
+    tail -5 "$SEED_ERR" 2>/dev/null | gateway::sanitize_stream >&2
     die "$EX_UPSTREAM" "seed_failed" "the seed run through '$CLAUDE_BIN' exited $SEED_RC — no session was materialized, so there is no handle to print"
 fi
 
@@ -334,6 +367,16 @@ fi
 SESSION_ID="$(jq -r '.session_id // empty' < "$SEED_OUT" 2>/dev/null)"
 if [ -z "$SESSION_ID" ]; then
     die "$EX_UPSTREAM" "no_session_id" "the seed run exited 0 but its JSON carried no .session_id — the CLI's output shape has drifted from what this script reads"
+fi
+# KTD5, identifier half: the session id is an IDENTIFIER that arrives from a
+# child process, and it is interpolated into the transcript path, the printed
+# handle and the attach command. Held to the same grammar as the alias, so an
+# escape byte in it is impossible rather than filtered. A real session id is a
+# uuid and passes; anything that does not is the same class as a missing id —
+# the CLI's output shape has drifted — so it reuses that code (5), inventing no
+# new one.
+if ! [[ "$SESSION_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    die "$EX_UPSTREAM" "no_session_id" "the seed run reported a .session_id that fails the identifier grammar [A-Za-z0-9._-]+ — the CLI's output shape has drifted, and no handle is built from an identifier we cannot vouch for"
 fi
 if [ "$(jq -r '.is_error // false' < "$SEED_OUT" 2>/dev/null)" = "true" ]; then
     die "$EX_UPSTREAM" "seed_failed" "the seed run reported is_error=true (session $SESSION_ID) — refusing to hand back a handle to a failed turn"
