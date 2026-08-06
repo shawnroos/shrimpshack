@@ -26,6 +26,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./sanitize.sh
 . "$SCRIPT_DIR/sanitize.sh"
 
+# Same reason, applied to the plain helpers: expand_env_refs, emit and the curl
+# --config escaper were byte-identical copies across the three scripts.
+# shellcheck source=./common.sh
+. "$SCRIPT_DIR/common.sh"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -124,18 +129,21 @@ tmpwork() {
 need_jq() {
     command -v jq >/dev/null 2>&1 || {
         printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
+        # "exactly one JSON object on stdout, ALWAYS" includes the path where
+        # the encoder itself is missing. This used to exit 2 printing nothing,
+        # which is the contract violation a consumer cannot distinguish from a
+        # crash. Same pure-bash fallback emit_error's non-jq branch uses: VERB
+        # is raw argv, so it is reduced to the verb enum's own charset —
+        # unsanitized, it could put a quote or an escape byte into stdout.
+        printf '{"ok":false,"verb":"%s","error":"internal","exit_code":2}\n' "${VERB//[^a-z]/}"
         exit 2
     }
 }
 
-# The single stdout write. Every verb funnels through here so "exactly one JSON
-# object, always" is a property of the code shape rather than of discipline.
+# The single stdout write lives in common.sh (emit); EMITTED is this script's
+# own state, so it stays declared here — a bash function reads the caller's
+# globals dynamically.
 EMITTED=0
-emit() {
-    [ "$EMITTED" -eq 1 ] && return 0
-    EMITTED=1
-    printf '%s\n' "$1"
-}
 emit_error() {
     local code="$1" msg="$2"
     [ "$EMITTED" -eq 1 ] && return 0
@@ -154,22 +162,6 @@ emit_error() {
         # construction, since that is the only defence available with no jq.
         printf '{"ok":false,"verb":"%s","error":"internal","exit_code":%s}\n' "${VERB//[^a-z]/}" "$code"
     fi
-}
-
-# ---------------------------------------------------------------------------
-# ${VAR} expansion. The gateway expands env references in server.token, so a
-# probe that used the literal "${GATEWAY_TOKEN}" text would present a token the
-# gateway never issued and read the resulting 401 as "down" (KTD3).
-# ---------------------------------------------------------------------------
-expand_env_refs() {
-    local s="$1" out="" name val
-    while [[ "$s" =~ ^([^$]*)\$\{([A-Za-z_][A-Za-z0-9_]*)\}(.*)$ ]]; do
-        name="${BASH_REMATCH[2]}"
-        val="${!name-}"
-        out+="${BASH_REMATCH[1]}${val}"
-        s="${BASH_REMATCH[3]}"
-    done
-    printf '%s' "${out}${s}"
 }
 
 # ---------------------------------------------------------------------------
@@ -241,7 +233,12 @@ resolve_config() {
             esac
         done < <(yaml_scan "$CONFIG_PATH")
 
-        if [ "${#models_lines[@]}" -gt 0 ]; then
+        # Only `status` ever reads CONFIG_MODELS_JSON (drift class 3). `ensure`
+        # resolves the config on EVERY lens and launch call, so building the
+        # table there was a jq process spawned per call for a value nothing
+        # reads. The read loop above still runs — it is where server.token
+        # comes from, and that every verb needs.
+        if [ "${VERB:-}" = "status" ] && [ "${#models_lines[@]}" -gt 0 ]; then
             # Built with jq, and sanitized (KTD5) on the way in.
             #
             # This used to be an awk program interpolating the config's values
@@ -390,9 +387,7 @@ resolve_install_dir() {
 # gateway serving -> up) and AE2 (dead gateway, recycled pid -> down) both come
 # out right.
 # ---------------------------------------------------------------------------
-PROBE_STATUS=0
 PROBE_ALIASES_JSON="[]"
-PROBE_HTTP=""
 PROBE_DETAIL=""
 
 probe() {
@@ -412,8 +407,8 @@ probe() {
     # here would expose it on the lens path too.
     curlrc="$work/probe.curlrc"
     local esc_url esc_tok
-    esc_url="$(printf '%s' "$BASE_URL/v1/models" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
-    esc_tok="$(printf '%s' "$GATEWAY_TOKEN_VALUE" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    esc_url="$(esc "$BASE_URL/v1/models")"
+    esc_tok="$(esc "$GATEWAY_TOKEN_VALUE")"
     {
         printf 'url = "%s"\n' "$esc_url"
         printf 'header = "x-api-key: %s"\n' "$esc_tok"
@@ -425,21 +420,17 @@ probe() {
         --connect-timeout "$CONNECT_TIMEOUT" --max-time "$PROBE_TIMEOUT" \
         --config "$curlrc" 2>/dev/null)"
     local rc=$?
-    PROBE_HTTP="$code"
 
     if [ $rc -ne 0 ] || [ -z "$code" ] || [ "$code" = "000" ]; then
         PROBE_DETAIL="no HTTP response from $BASE_URL/v1/models (curl rc=$rc)"
-        PROBE_STATUS=$EX_UNREACHABLE
         return $EX_UNREACHABLE
     fi
     if [ "$code" = "401" ] || [ "$code" = "403" ]; then
         PROBE_DETAIL="gateway is up at $BASE_URL but rejected our token (HTTP $code); token came from ${CONFIG_PATH:-<no config resolved>}"
-        PROBE_STATUS=$EX_AUTH
         return $EX_AUTH
     fi
     if [ "$code" != "200" ]; then
         PROBE_DETAIL="model-list probe returned HTTP $code from $BASE_URL/v1/models"
-        PROBE_STATUS=$EX_UNREACHABLE
         return $EX_UNREACHABLE
     fi
 
@@ -454,12 +445,10 @@ probe() {
     aliases="$(jq -c "$GATEWAY_SANITIZE_JQ_DEF"' [.data[]?.id // empty] | strip_display_deep' < "$body" 2>/dev/null)"
     if [ -z "$aliases" ]; then
         PROBE_DETAIL="model-list probe returned HTTP 200 but the body is not the expected JSON model list"
-        PROBE_STATUS=$EX_UNREACHABLE
         return $EX_UNREACHABLE
     fi
     PROBE_ALIASES_JSON="$aliases"
     PROBE_DETAIL=""
-    PROBE_STATUS=$EX_OK
     return $EX_OK
 }
 
@@ -670,13 +659,22 @@ ensure)
         fi
     fi
 
+    # `config` is reported here for the same reason `status` reports it, and in
+    # the same field with the same shape. Without it, lens.sh and launch.sh had
+    # to spawn a SECOND gatewayctl running `status` purely to read this path —
+    # and `status` re-resolves the install dir, re-parses the config and fires
+    # another live curl probe, on the fan-out hot path, for one string this
+    # process already holds. It is a filesystem path, not a credential; the
+    # token stays where it is, resolved locally in each process (KTD6).
     emit "$(jq -nc \
         --arg base "$BASE_URL" \
         --arg alias "$ALIAS" \
+        --arg cfg "${CONFIG_PATH:-}" \
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson started "$([ $STARTED -eq 1 ] && echo true || echo false)" \
         '{ok:true, verb:"ensure", running:true, started:$started, base_url:$base,
           alias:(if $alias == "" then null else $alias end),
+          config:(if $cfg == "" then null else $cfg end),
           served_aliases:$served, error:null, exit_code:0}')"
     exit $EX_OK
     ;;

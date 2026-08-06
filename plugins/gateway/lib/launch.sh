@@ -51,6 +51,11 @@ CTL="$SCRIPT_DIR/gatewayctl.sh"
 # shellcheck source=./sanitize.sh
 . "$SCRIPT_DIR/sanitize.sh"
 
+# Same reason, applied to the plain helpers: expand_env_refs and emit were
+# byte-identical copies across the three scripts.
+# shellcheck source=./common.sh
+. "$SCRIPT_DIR/common.sh"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -82,14 +87,10 @@ PROJECTS_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
 # nobody has written yet is closed too.
 say() { printf '▸ %s\n' "$(gateway::sanitize_for_display "$*")" >&2; }
 
-# The single stdout write. Every path funnels through here so "exactly one JSON
-# object, always" is a property of the code shape rather than of discipline.
+# The single stdout write lives in common.sh (emit); EMITTED is this script's
+# own state, so it stays declared here — a bash function reads the caller's
+# globals dynamically.
 EMITTED=0
-emit() {
-    [ "$EMITTED" -eq 1 ] && return 0
-    EMITTED=1
-    printf '%s\n' "$1"
-}
 
 ALIAS=""
 emit_error() {
@@ -260,18 +261,13 @@ BASE_URL="${BASE_URL%/}"
 # authenticated with a different token than the probe would pass preflight and
 # then 401, and that divergence is undebuggable from the outside. gateway.yaml
 # is READ ONLY; nothing here writes to it (R12).
+#
+# When GATEWAY_CONFIG is unset, the config path is read out of the `ensure`
+# response above rather than from a SECOND gatewayctl process running `status`,
+# which cost a redundant install-dir resolve, config re-parse and live HTTP
+# probe on every launch. Only the path crosses; the token is still read locally,
+# from the file, in this process (KTD6).
 # ---------------------------------------------------------------------------
-expand_env_refs() {
-    local s="$1" out="" name val
-    while [[ "$s" =~ ^([^$]*)\$\{([A-Za-z_][A-Za-z0-9_]*)\}(.*)$ ]]; do
-        name="${BASH_REMATCH[2]}"
-        val="${!name-}"
-        out+="${BASH_REMATCH[1]}${val}"
-        s="${BASH_REMATCH[3]}"
-    done
-    printf '%s' "${out}${s}"
-}
-
 # The awk program that reads server.token. Written with OCTAL escapes for the
 # quote characters (\042 = " and \047 = ') so the program itself contains no
 # quote byte — that is what lets it be embedded, single-quoted and unmangled,
@@ -282,7 +278,7 @@ TOKEN_AWK='/^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); next } 
 
 CONFIG_PATH="${GATEWAY_CONFIG:-}"
 if [ -z "$CONFIG_PATH" ]; then
-    CONFIG_PATH="$(bash "$CTL" status 2>/dev/null | jq -r '.config // empty')"
+    CONFIG_PATH="$(printf '%s' "$ENSURE_OUT" | jq -r '.config // empty')"
 fi
 TOKEN=""
 if [ -n "$CONFIG_PATH" ] && [ -f "$CONFIG_PATH" ]; then

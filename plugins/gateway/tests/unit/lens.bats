@@ -217,6 +217,46 @@ EOF
     [ "$(echo "$output" | jq -r '.text')" = "same everywhere" ]
 }
 
+@test "config resolution: with GATEWAY_CONFIG unset the path comes out of ensure, and the call still succeeds" {
+    # Every other test in this file exports GATEWAY_CONFIG, which short-circuits
+    # lens.sh's config resolution entirely — so the branch that actually runs in
+    # production (read `.config` out of ensure's JSON) was never exercised. It
+    # was verified that replacing ensure's `config` field with null left the
+    # whole suite green while breaking the lens at runtime: no config, no token,
+    # 401, exit 7.
+    start_fixture healthy "alpha" --response-text "resolved through ensure"
+
+    # start_fixture exports GATEWAY_CONFIG. Production does not have it set.
+    unset GATEWAY_CONFIG
+    [ -z "${GATEWAY_CONFIG:-}" ]
+
+    # A resolvable install: gateway.yaml beside a REGULAR, EXECUTABLE binary at
+    # the canonical path. resolve_install_dir hard-fails a set-but-invalid
+    # override even in soft mode, so the binary has to exist — it is never
+    # executed here, because the fixture is already up and no start is attempted.
+    mkdir -p "$WORK/install/target/release"
+    printf '#!/bin/sh\nexit 1\n' > "$WORK/install/target/release/gateway"
+    chmod +x "$WORK/install/target/release/gateway"
+    make_config "$WORK/install/gateway.yaml" "$TOKEN" "alpha=up/alpha"
+    export GATEWAY_INSTALL_DIR="$WORK/install"
+
+    # PRECONDITION: ensure really emits the install dir's config path. Without
+    # this, the success below could be explained by anything.
+    run bash -c 'bash "$1" ensure alpha 2>/dev/null' _ "$CTL"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.config')" = "$WORK/install/gateway.yaml" ]
+
+    # CONSEQUENCE: the token was read from that file. The fixture 401s anything
+    # that is not its token, and an unresolved config yields an EMPTY token —
+    # so exit 0 with the canned text is only reachable if resolution worked.
+    lens "what is 2+2?" --alias alpha
+    [ "$status" -eq 0 ]
+    [ "$status" -ne 7 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.text')" = "resolved through ensure" ]
+    [ "$(echo "$output" | jq -r '.error')" = "null" ]
+}
+
 # --- input discipline (KTD8) -----------------------------------------------
 
 @test "KTD8: an argv prompt is refused with code 2 and never sent" {

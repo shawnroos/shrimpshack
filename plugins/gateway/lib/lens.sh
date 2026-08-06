@@ -39,6 +39,11 @@ CTL="$SCRIPT_DIR/gatewayctl.sh"
 # shellcheck source=./sanitize.sh
 . "$SCRIPT_DIR/sanitize.sh"
 
+# Same reason, applied to the plain helpers: expand_env_refs, emit and the curl
+# --config escaper were byte-identical copies across the three scripts.
+# shellcheck source=./common.sh
+. "$SCRIPT_DIR/common.sh"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -83,14 +88,10 @@ DEFAULT_MAX_TOKENS="${GATEWAY_LENS_MAX_TOKENS:-8192}"
 # a message nobody has written yet is closed the same way.
 say() { printf '▸ %s\n' "$(gateway::sanitize_for_display "$*")" >&2; }
 
-# The single stdout write. Every path funnels through here so "exactly one JSON
-# object, always" is a property of the code shape rather than of discipline.
+# The single stdout write lives in common.sh (emit); EMITTED is this script's
+# own state, so it stays declared here — a bash function reads the caller's
+# globals dynamically.
 EMITTED=0
-emit() {
-    [ "$EMITTED" -eq 1 ] && return 0
-    EMITTED=1
-    printf '%s\n' "$1"
-}
 
 ALIAS=""
 emit_error() {
@@ -280,20 +281,13 @@ BASE_URL="${BASE_URL%/}"
 # in the resolved gateway.yaml, with ${VAR} expansion — because a lens that
 # authenticated with a different token than the probe would pass preflight and
 # then 401, and that divergence is undebuggable from the outside. When
-# GATEWAY_CONFIG is unset, the config path is taken from `status`, which already
-# owns install-dir resolution (KTD4), rather than re-deriving it here.
+# GATEWAY_CONFIG is unset, the config path is read out of the `ensure` response
+# above — `ensure` already owns install-dir resolution (KTD4), so this script
+# never re-derives it. It used to come from a SECOND gatewayctl process running
+# `status`, which meant a redundant install-dir resolve, config re-parse and
+# live HTTP probe on every lens call. The path is all that crosses; the token is
+# still read locally, from the file, in this process (KTD6).
 # ---------------------------------------------------------------------------
-expand_env_refs() {
-    local s="$1" out="" name val
-    while [[ "$s" =~ ^([^$]*)\$\{([A-Za-z_][A-Za-z0-9_]*)\}(.*)$ ]]; do
-        name="${BASH_REMATCH[2]}"
-        val="${!name-}"
-        out+="${BASH_REMATCH[1]}${val}"
-        s="${BASH_REMATCH[3]}"
-    done
-    printf '%s' "${out}${s}"
-}
-
 read_server_token() {
     local cfg="$1"
     [ -f "$cfg" ] || return 1
@@ -311,7 +305,7 @@ read_server_token() {
 
 CONFIG_PATH="${GATEWAY_CONFIG:-}"
 if [ -z "$CONFIG_PATH" ]; then
-    CONFIG_PATH="$(bash "$CTL" status 2>/dev/null | jq -r '.config // empty')"
+    CONFIG_PATH="$(printf '%s' "$ENSURE_OUT" | jq -r '.config // empty')"
 fi
 TOKEN=""
 if [ -n "$CONFIG_PATH" ]; then
@@ -349,7 +343,6 @@ jq -n --arg model "$ALIAS" --argjson mt "$MAX_TOKENS" --rawfile p "$PROMPT_PATH"
 # significant inside a quoted value.
 # ---------------------------------------------------------------------------
 CURLRC="$WORK/curlrc"
-esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 {
     printf 'url = "%s"\n' "$(esc "$BASE_URL/v1/messages")"
     printf 'header = "content-type: application/json"\n'

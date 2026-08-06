@@ -568,16 +568,27 @@ terminal_sink_lint() {
         # reason — an unannotated one re-opens the silent-gap hole.
         [ "$base" = "sanitize.sh" ] && continue
 
-        # Every script must source the shared sanitizer rather than grow its own.
-        if ! grep -q '\. "\$SCRIPT_DIR/sanitize.sh"' "$f"; then
-            printf 'LINT %s: does not source sanitize.sh\n' "$base"
-            found=1
+        # common.sh is a pure-helper library: no diagnostics, no say(), no
+        # terminal sink of any kind. The three STRUCTURAL checks below ask a
+        # script to own the chokepoints it prints through, and a file that
+        # prints nothing has none to own — demanding a say() there would be
+        # satisfied by dead code, which is worse than not asking. The SINK SCAN
+        # below is deliberately NOT skipped: it still runs on common.sh, so the
+        # moment a helper grows a `>&2` print of an interpolated value this
+        # lint goes red. That is the property the test is named for, and it
+        # stays whole. (The self-test plants exactly that sink to prove it.)
+        if [ "$base" != "common.sh" ]; then
+            # Every script must source the shared sanitizer rather than grow its own.
+            if ! grep -q '\. "\$SCRIPT_DIR/sanitize.sh"' "$f"; then
+                printf 'LINT %s: does not source sanitize.sh\n' "$base"
+                found=1
+            fi
+            # ...and its two chokepoints must actually sanitize.
+            grep -q 'say() { printf .* "\$(gateway::sanitize_for_display "\$\*")" >&2; }' "$f" \
+                || { printf 'LINT %s: say() does not sanitize\n' "$base"; found=1; }
+            grep -q 'gateway::sanitize_for_display' "$f" \
+                || { printf 'LINT %s: no sanitize call at all\n' "$base"; found=1; }
         fi
-        # ...and its two chokepoints must actually sanitize.
-        grep -q 'say() { printf .* "\$(gateway::sanitize_for_display "\$\*")" >&2; }' "$f" \
-            || { printf 'LINT %s: say() does not sanitize\n' "$base"; found=1; }
-        grep -q 'gateway::sanitize_for_display' "$f" \
-            || { printf 'LINT %s: no sanitize call at all\n' "$base"; found=1; }
 
         # The sink scan: any line that writes to stderr (or a tty) AND
         # interpolates a shell variable must go through a defence — either it IS
@@ -623,4 +634,17 @@ terminal_sink_lint() {
     run terminal_sink_lint "$WORK/liblint"
     [ "$status" -ne 0 ]
     echo "$output" | grep -q 'does not source sanitize.sh'
+
+    # A third plant, on the ONE file the structural checks skip: common.sh is
+    # exempt from "must own a say()", NOT from the sink scan. If that carve-out
+    # ever widened into a full exclusion this assertion goes green-when-broken,
+    # which is precisely the silent gap the computed scope exists to prevent.
+    mkdir -p "$WORK/liblint2"
+    cp "$LIB"/*.sh "$WORK/liblint2/"
+    run terminal_sink_lint "$WORK/liblint2"
+    [ "$status" -eq 0 ]
+    printf 'printf "helper leak: %%s\\n" "$SOME_UNTRUSTED_VALUE" >&2\n' >> "$WORK/liblint2/common.sh"
+    run terminal_sink_lint "$WORK/liblint2"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -q 'LINT common.sh: raw interpolated stderr sink'
 }

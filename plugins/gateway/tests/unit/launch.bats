@@ -220,6 +220,50 @@ invocation() {
     [ "$(head -1 "$FAKE_CLAUDE_RECORD_DIR/cwd")" = "$PROJ" ]
 }
 
+@test "config resolution: with GATEWAY_CONFIG unset the path comes out of ensure, and the resolved token reaches the child" {
+    # Every other test in this file exports GATEWAY_CONFIG, which short-circuits
+    # launch.sh's config resolution entirely — so the branch that actually runs
+    # in production (read `.config` out of ensure's JSON) was never exercised.
+    start_fixture healthy "alpha"
+    make_table "alpha:262144"
+
+    # start_fixture exports GATEWAY_CONFIG. Production does not have it set.
+    unset GATEWAY_CONFIG
+    [ -z "${GATEWAY_CONFIG:-}" ]
+
+    # A resolvable install: gateway.yaml beside a REGULAR, EXECUTABLE binary at
+    # the canonical path. resolve_install_dir hard-fails a set-but-invalid
+    # override even in soft mode, so the binary has to exist — it is never
+    # executed here, because the fixture is already up and no start is attempted.
+    mkdir -p "$WORK/install/target/release"
+    printf '#!/bin/sh\nexit 1\n' > "$WORK/install/target/release/gateway"
+    chmod +x "$WORK/install/target/release/gateway"
+    make_config "$WORK/install/gateway.yaml" "$TOKEN" "alpha=up/alpha"
+    export GATEWAY_INSTALL_DIR="$WORK/install"
+
+    # PRECONDITION: ensure really emits the install dir's config path.
+    run bash -c 'bash "$1" ensure alpha 2>/dev/null' _ "$LIB/gatewayctl.sh"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.config')" = "$WORK/install/gateway.yaml" ]
+
+    launch --alias alpha
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.ok')" = "true" ]
+
+    # THE load-bearing assertion. launch.sh treats an EMPTY token as non-fatal
+    # (ensure already proved the gateway accepts us), so exit 0 on its own stays
+    # green with no config resolved at all. What proves resolution happened is
+    # that the child was handed the token that only gateway.yaml holds.
+    [ -n "$TOKEN" ]
+    grep -qx -- "ANTHROPIC_AUTH_TOKEN=$TOKEN" "$FAKE_CLAUDE_RECORD_DIR/env"
+    grep -qx -- "ANTHROPIC_API_KEY=$TOKEN" "$FAKE_CLAUDE_RECORD_DIR/env"
+
+    # And the handle reads the token back from the SAME resolved path, so a
+    # later attach does not depend on GATEWAY_CONFIG either.
+    echo "$output" | jq -r '.attach_command' | grep -qF -- "$WORK/install/gateway.yaml"
+    echo "$output" | jq -r '.attach_command' | refute_stdin_match "$TOKEN"
+}
+
 # --- AE3 -------------------------------------------------------------------
 
 @test "AE3: the printed attach command, run from a different directory, resumes on the same alias and endpoint" {
