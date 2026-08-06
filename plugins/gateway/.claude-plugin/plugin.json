@@ -1,0 +1,16 @@
+{
+  "name": "gateway",
+  "description": "Run Claude on any model the local Superagent Gateway serves. A headless lens gives a skill a different-vendor answer as one JSON object on stdout, with failure classes distinguishable by exit code; an interactive launch materializes an attachable session on a named alias and prints a resume handle that never carries the token. The plugin owns its own gateway control layer (liveness by probing the model-list endpoint, idempotent locked start, append-only log, runtime install-dir resolution) and leaves the existing gw wrapper untouched.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Shawn Roos",
+    "email": "shawn@slateteams.com"
+  },
+  "keywords": [
+    "gateway",
+    "superagent",
+    "headless",
+    "multi-model",
+    "lens"
+  ]
+}
