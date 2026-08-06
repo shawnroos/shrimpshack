@@ -400,8 +400,10 @@ count_gateway_procs() {
     ctl status
     [ "$status" -eq 2 ]
     echo "$output" | grep -q 'not a directory'
-    # The fall-through it must NOT have taken:
-    ! echo "$output" | grep -q 'gateway-9.9.9'
+    # The fall-through it must NOT have taken. Asserted via status: `! ... |` is
+    # exempt from `set -e` under POSIX, so that form never fails a bats test.
+    run bash -c "printf '%s' \"\$1\" | grep -q 'gateway-9.9.9'" _ "$output"
+    [ "$status" -ne 0 ]
 }
 
 @test "install dir: an override with no gateway binary fails hard" {
@@ -671,4 +673,42 @@ write_table() {
     [ "$status" -eq 0 ]
     [ "$(echo "$output" | jq -r '.running')" = "true" ]
     [ "$(echo "$output" | jq -r '.pid')" = "null" ]
+}
+
+@test "KTD6: the probe never puts the token in curl's argv" {
+    # Regression guard for a real defect. The first implementation passed the
+    # token as -H "x-api-key: $TOK", which is readable from the process table by
+    # anything on the box — and lens.sh spawns this probe as a child on EVERY
+    # call, so the leak rode the lens path too. The fix delivers it through a
+    # mode-0600 curl --config file instead.
+    #
+    # Asserted at runtime rather than by grepping the source, so a future
+    # rewrite that reintroduces an argv token in some other shape still fails.
+    # A resolvable config is load-bearing for this test, not scaffolding: with
+    # no config the token resolves EMPTY, an argv leak has nothing to leak, and
+    # the assertion passes against broken code. That false green was observed.
+    make_config "$WORK/gw.yaml" 4321 "$TOKEN" alpha=m1
+    export GATEWAY_CONFIG="$WORK/gw.yaml"
+
+    local shim="$WORK/shim"
+    mkdir -p "$shim"
+    cat > "$shim/curl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$WORK/curl-argv.txt"
+printf '000'
+exit 7
+EOF
+    chmod +x "$shim/curl"
+    : > "$WORK/curl-argv.txt"
+
+    PATH="$shim:$PATH" run bash "$CTL" status
+    [ -s "$WORK/curl-argv.txt" ]        # the shim was actually reached
+    # Guard the guard: the token must actually be in play, or the leak
+    # assertion below is vacuous.
+    grep -q "$TOKEN" "$WORK/gw.yaml"
+
+    run grep -q "$TOKEN" "$WORK/curl-argv.txt"
+    [ "$status" -ne 0 ]
+    run grep -q -- '--config' "$WORK/curl-argv.txt"
+    [ "$status" -eq 0 ]
 }

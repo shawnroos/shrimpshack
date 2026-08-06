@@ -213,7 +213,11 @@ msg_body() {
         bash "$FIX/fake-claude.sh" --model alpha --output-format json -p "seed"
     [ "$status" -eq 0 ]
     grep -q -- '--model' "$WORK/rec/argv"
-    ! grep -q "$TOKEN" "$WORK/rec/argv"
+    # NOT a `! grep` — bats runs under `set -e`, but POSIX exempts a pipeline
+    # beginning with `!` from it, so `! grep ...` never fails the test. That form
+    # silently passed while the token WAS in argv. Run it and assert the status.
+    run grep -q "$TOKEN" "$WORK/rec/argv"
+    [ "$status" -ne 0 ]
     grep -q "$TOKEN" "$WORK/rec/env"
 }
 
@@ -231,7 +235,9 @@ msg_body() {
         bash "$FIX/fake-claude.sh" --model alpha --output-format json -p "seed"
     [ "$status" -ne 0 ]
     echo "$output" | grep -q 'seed run failed'
-    ! echo "$output" | jq -e '.session_id' >/dev/null 2>&1
+    # Asserted via status, not `! ... |` — see the argv test above for why.
+    run bash -c "printf '%s' \"\$1\" | jq -e '.session_id'" _ "$output"
+    [ "$status" -ne 0 ]
 }
 
 @test "fake-claude --resume reuses the handed session id" {

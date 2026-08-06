@@ -89,12 +89,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Sets TMPWORK; it does NOT print the path. A `work="$(tmpwork)"` form would run
+# this in a command substitution, so the assignment would land in the subshell
+# and the parent's TMPWORK would stay empty — leaving the EXIT trap with nothing
+# to remove and leaking a temp dir on every single invocation. Callers read
+# "$TMPWORK" after calling.
+#
+# umask 077 because the probe's curl --config file lands in here carrying the
+# gateway token (KTD6).
 tmpwork() {
     if [ -z "$TMPWORK" ]; then
-        TMPWORK="$(mktemp -d "${TMPDIR:-/tmp}/gatewayctl.XXXXXX")" || {
+        TMPWORK="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/gatewayctl.XXXXXX")" || {
             printf '✗ cannot create a temp dir\n' >&2; exit 2; }
     fi
-    printf '%s' "$TMPWORK"
 }
 
 need_jq() {
@@ -356,16 +363,31 @@ probe() {
     resolve_config
     PROBE_ALIASES_JSON="[]"
     PROBE_DETAIL=""
-    local work body code
-    work="$(tmpwork)"
+    local work body code curlrc
+    tmpwork
+    work="$TMPWORK"
     body="$work/probe.body"
     : > "$body"
 
+    # Credential delivery (KTD6): a mode-0600 curl --config file, never an argv
+    # token. `-H "x-api-key: $TOK"` is the tempting one-liner and it is exactly
+    # the leak — argv is readable from the process table by anything on the box,
+    # and lens.sh spawns this probe as a child on every call, so an argv token
+    # here would expose it on the lens path too.
+    curlrc="$work/probe.curlrc"
+    local esc_url esc_tok
+    esc_url="$(printf '%s' "$BASE_URL/v1/models" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    esc_tok="$(printf '%s' "$GATEWAY_TOKEN_VALUE" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    {
+        printf 'url = "%s"\n' "$esc_url"
+        printf 'header = "x-api-key: %s"\n' "$esc_tok"
+        printf 'header = "authorization: Bearer %s"\n' "$esc_tok"
+    } > "$curlrc"
+    chmod 600 "$curlrc" 2>/dev/null
+
     code="$(curl -s -o "$body" -w '%{http_code}' \
         --connect-timeout "$CONNECT_TIMEOUT" --max-time "$PROBE_TIMEOUT" \
-        -H "x-api-key: $GATEWAY_TOKEN_VALUE" \
-        -H "authorization: Bearer $GATEWAY_TOKEN_VALUE" \
-        "$BASE_URL/v1/models" 2>/dev/null)"
+        --config "$curlrc" 2>/dev/null)"
     local rc=$?
     PROBE_HTTP="$code"
 
