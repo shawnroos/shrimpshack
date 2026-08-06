@@ -1,0 +1,394 @@
+#!/usr/bin/env bash
+# launch.sh — materialize a Claude Code session on a gateway alias (plan U4).
+#
+#   printf 'review this design' | launch.sh --alias gpt-sol
+#   launch.sh --alias kimi --prompt-file ./seed.md --cwd ~/projects/thing
+#
+# The plugin NEVER opens a terminal. It runs the seed prompt headlessly through
+# `claude`, which materializes the session on disk, and then prints a handle
+# Shawn can attach with on his own terms (F2, R8, R9).
+#
+# CONTRACT (KTD2 owns it; this file implements it, it does not redefine it):
+#   exactly one JSON object on stdout, ALWAYS, including every failure path;
+#   diagnostics on stderr only.
+#   exit 0 ok · 2 usage/refusal · 3 unreachable · 4 alias unknown ·
+#        5 upstream provider error · 6 deadline exceeded · 7 token rejected.
+#
+# Codes 3, 4 and 7 are NOT re-derived here. They come from
+# `gatewayctl.sh ensure <alias>`, whose JSON this script re-emits verbatim, so
+# the served-list check and the auth classification have exactly one owner
+# (KTD3). A seed run that fails is code 5.
+#
+# There is deliberately NO code-6 deadline on the seed run. `timeout(1)` does
+# not exist on macOS, and a watchdog that backgrounds `claude` and signals it
+# leaves a window in which an orphaned agent process outlives this script — a
+# worse failure than no deadline. Documented rather than implemented badly.
+#
+# KTD6 — the token never prints and never appears in a process argument:
+#   * the seed child receives it through the ENVIRONMENT, never argv;
+#   * the printed attach command carries a token REFERENCE (a command
+#     substitution that reads the same config at attach time), never the
+#     literal. Nothing this script writes to stdout or stderr contains it.
+#
+# KTD7 — the context window comes from the plugin-local models.json table and is
+# applied via CLAUDE_CODE_MAX_CONTEXT_TOKENS. An alias absent from the table
+# still launches; the drift is a stderr warning naming the alias, because
+# refusing to launch on an unlisted alias would make the table a gate rather
+# than metadata.
+#
+# set -e is deliberately OFF (only -u -o pipefail). Every failure path here is
+# an exit code the contract names; letting bash exit on the first non-zero
+# command would turn a classified 5 into an unclassified 1 with no JSON.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CTL="$SCRIPT_DIR/gatewayctl.sh"
+
+# ---------------------------------------------------------------------------
+# Contract constants
+# ---------------------------------------------------------------------------
+EX_OK=0
+EX_USAGE=2
+EX_UNREACHABLE=3
+# EX_ALIAS=4 and EX_AUTH=7 are propagated from `ensure`, never produced here.
+EX_UPSTREAM=5
+
+# ---------------------------------------------------------------------------
+# Configuration surface. Every knob is env-overridable so a test can point the
+# whole script at fixtures; a test that had to reach the real gateway or spawn
+# the real `claude` would either fight a live process or spend real money, and
+# both of those are how a "passing" suite stops meaning anything.
+# ---------------------------------------------------------------------------
+CLAUDE_BIN="${GATEWAY_CLAUDE_BIN:-claude}"
+MODELS_JSON="${GATEWAY_MODELS_JSON:-$SCRIPT_DIR/models.json}"
+
+# Claude Code keys sessions by project directory. This is the root it encodes
+# them under; CLAUDE_CONFIG_DIR is Claude Code's own knob, so honouring it is
+# what makes the derived transcript path agree with the one the CLI wrote.
+PROJECTS_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
+
+# ---------------------------------------------------------------------------
+# Plumbing
+# ---------------------------------------------------------------------------
+say() { printf '▸ %s\n' "$*" >&2; }
+
+# The single stdout write. Every path funnels through here so "exactly one JSON
+# object, always" is a property of the code shape rather than of discipline.
+EMITTED=0
+emit() {
+    [ "$EMITTED" -eq 1 ] && return 0
+    EMITTED=1
+    printf '%s\n' "$1"
+}
+
+ALIAS=""
+emit_error() {
+    # $1 = exit code, $2 = machine-readable error value, rest = human detail.
+    local code="$1" err="$2"; shift 2
+    [ "$EMITTED" -eq 1 ] && return 0
+    if command -v jq >/dev/null 2>&1; then
+        emit "$(jq -nc --arg a "$ALIAS" --arg e "$err" --arg d "$*" --argjson c "$code" \
+            '{ok:false, alias:(if $a == "" then null else $a end), session_id:null,
+              transcript_path:null, cwd:null, base_url:null, context_window:null,
+              attach_command:null, error:$e, detail:$d, exit_code:$c}')"
+    else
+        EMITTED=1
+        printf '{"ok":false,"alias":null,"session_id":null,"transcript_path":null,"attach_command":null,"error":"%s","exit_code":%s}\n' "$err" "$code"
+    fi
+}
+
+die() {
+    local code="$1" err="$2"; shift 2
+    printf '✗ %s\n' "$*" >&2
+    emit_error "$code" "$err" "$*"
+    exit "$code"
+}
+
+# TMPWORK holds scratch that must not outlive the call — the captured child
+# stdout above all, because that is the one place the session id lives before
+# it reaches the handle.
+TMPWORK=""
+cleanup() {
+    [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
+    return 0
+}
+trap cleanup EXIT
+
+# Sets $TMPWORK. Deliberately NOT "prints the path": called as $(tmpwork) the
+# assignment would happen in a command-substitution SUBSHELL, the parent's
+# TMPWORK would stay empty, and the EXIT trap would remove nothing — leaking a
+# scratch dir on every single invocation.
+tmpwork() {
+    if [ -z "$TMPWORK" ]; then
+        TMPWORK="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/gwlaunch.XXXXXX")" || {
+            printf '✗ cannot create a temp dir\n' >&2; exit 2; }
+    fi
+}
+
+need_jq() {
+    command -v jq >/dev/null 2>&1 || {
+        printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
+        printf '{"ok":false,"alias":null,"session_id":null,"attach_command":null,"error":"usage","exit_code":2}\n'
+        exit 2
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Alias grammar (KTD5). Checked BEFORE any network call and before the alias is
+# ever interpolated into the attach command, so an escape byte or a shell
+# metacharacter in an identifier is impossible rather than filtered.
+# ---------------------------------------------------------------------------
+validate_alias() {
+    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
+        || die "$EX_USAGE" "usage" "alias failed the grammar [A-Za-z0-9._-]+ — refused before any network call"
+}
+
+usage() {
+    cat >&2 <<'EOF'
+usage: launch.sh --alias <alias> [--prompt-file <path>] [--cwd <dir>]
+
+The seed prompt is read from STDIN by default, or from --prompt-file.
+--cwd pins the session's project directory (default: the current directory).
+Prints one JSON handle: attach_command, session_id, transcript_path, alias,
+context_window, cwd, base_url. The gateway token appears in none of them.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+PROMPT_FILE=""
+CWD_ARG=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --alias)         ALIAS="${2:-}"; shift; shift 2>/dev/null || true ;;
+        --alias=*)       ALIAS="${1#*=}"; shift ;;
+        --prompt-file)   PROMPT_FILE="${2:-}"; shift; shift 2>/dev/null || true ;;
+        --prompt-file=*) PROMPT_FILE="${1#*=}"; shift ;;
+        --cwd)           CWD_ARG="${2:-}"; shift; shift 2>/dev/null || true ;;
+        --cwd=*)         CWD_ARG="${1#*=}"; shift ;;
+        -h|--help)       usage; need_jq; die "$EX_USAGE" "usage" "help requested" ;;
+        *)
+            need_jq
+            die "$EX_USAGE" "usage" "unexpected argument '$1' — the seed prompt is piped on stdin or passed with --prompt-file"
+            ;;
+    esac
+done
+
+need_jq
+
+[ -n "$ALIAS" ] || { usage; die "$EX_USAGE" "usage" "--alias is required"; }
+validate_alias "$ALIAS"
+
+# ---------------------------------------------------------------------------
+# Pin the working directory (U4 step 3).
+#
+# Resolved to the PHYSICAL path before anything uses it. On macOS /tmp is a
+# symlink to /private/tmp, so a logical path would encode to a projects/
+# subdirectory that Claude Code never writes — the transcript would be "missing"
+# for a reason that has nothing to do with the session. Pinning it also makes
+# the handle reproducible from anywhere else, which is what AE3 tests.
+# ---------------------------------------------------------------------------
+PIN_CWD="$(cd "${CWD_ARG:-$PWD}" 2>/dev/null && pwd -P)"
+[ -n "$PIN_CWD" ] || die "$EX_USAGE" "usage" "--cwd '${CWD_ARG:-$PWD}' is not a directory we can enter"
+
+# ---------------------------------------------------------------------------
+# Seed prompt intake. Same discipline as the lens (KTD8): stdin or a file, never
+# argv on OUR command line. It is handed to `claude` after -p, which is fine —
+# the prompt is not a secret; only the token carries the argv prohibition.
+# ---------------------------------------------------------------------------
+if [ -n "$PROMPT_FILE" ]; then
+    [ -f "$PROMPT_FILE" ] || die "$EX_USAGE" "usage" "--prompt-file '$PROMPT_FILE' is not a readable file"
+    PROMPT="$(cat "$PROMPT_FILE")" || die "$EX_USAGE" "usage" "could not read --prompt-file '$PROMPT_FILE'"
+else
+    if [ -t 0 ]; then
+        usage
+        die "$EX_USAGE" "usage" "no seed prompt: stdin is a terminal and --prompt-file was not given"
+    fi
+    PROMPT="$(cat)"
+fi
+[ -n "$PROMPT" ] || die "$EX_USAGE" "usage" "the seed prompt is empty — a session seeded with nothing is not worth a handle"
+
+# ---------------------------------------------------------------------------
+# Preflight (U4 step 1): gatewayctl.sh ensure <alias>.
+#
+# The alias is passed so the served-list check and its exit 4 come from ONE
+# place (KTD3). On failure this script re-emits ensure's object verbatim and
+# propagates the code unchanged; printing our own object on top of it would put
+# two objects on stdout — the exact bug KTD2 exists to stop.
+# ---------------------------------------------------------------------------
+ENSURE_OUT="$(bash "$CTL" ensure "$ALIAS")"
+ENSURE_RC=$?
+if [ "$ENSURE_RC" -ne 0 ]; then
+    if [ -n "$ENSURE_OUT" ]; then
+        emit "$ENSURE_OUT"
+    else
+        emit_error "$ENSURE_RC" "preflight_failed" "gatewayctl ensure failed with code $ENSURE_RC and printed nothing"
+    fi
+    exit "$ENSURE_RC"
+fi
+
+BASE_URL="$(printf '%s' "$ENSURE_OUT" | jq -r '.base_url // empty')"
+[ -n "$BASE_URL" ] || die "$EX_UNREACHABLE" "preflight_failed" "gatewayctl ensure returned no base_url"
+BASE_URL="${BASE_URL%/}"
+
+# ---------------------------------------------------------------------------
+# Token resolution (U4 step 5).
+#
+# Read from the SAME place gatewayctl's probe reads it — server.token in the
+# resolved gateway.yaml, with ${VAR} expansion — because a session that
+# authenticated with a different token than the probe would pass preflight and
+# then 401, and that divergence is undebuggable from the outside. gateway.yaml
+# is READ ONLY; nothing here writes to it (R12).
+# ---------------------------------------------------------------------------
+expand_env_refs() {
+    local s="$1" out="" name val
+    while [[ "$s" =~ ^([^$]*)\$\{([A-Za-z_][A-Za-z0-9_]*)\}(.*)$ ]]; do
+        name="${BASH_REMATCH[2]}"
+        val="${!name-}"
+        out+="${BASH_REMATCH[1]}${val}"
+        s="${BASH_REMATCH[3]}"
+    done
+    printf '%s' "${out}${s}"
+}
+
+# The awk program that reads server.token. Written with OCTAL escapes for the
+# quote characters (\042 = " and \047 = ') so the program itself contains no
+# quote byte — that is what lets it be embedded, single-quoted and unmangled,
+# inside the attach command below.
+# Kept to ONE line: it is embedded verbatim in the attach command, and a
+# multi-line program there would make a handle nobody can paste.
+TOKEN_AWK='/^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); next } sec == "server" && /^[ \t]+token:/ { v = $0; sub(/^[ \t]*token:[ \t]*/, "", v); sub(/[ \t]+#.*$/, "", v); sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); gsub(/^[\042\047]|[\042\047]$/, "", v); print v; exit }'
+
+CONFIG_PATH="${GATEWAY_CONFIG:-}"
+if [ -z "$CONFIG_PATH" ]; then
+    CONFIG_PATH="$(bash "$CTL" status 2>/dev/null | jq -r '.config // empty')"
+fi
+TOKEN=""
+if [ -n "$CONFIG_PATH" ] && [ -f "$CONFIG_PATH" ]; then
+    TOKEN="$(expand_env_refs "$(awk "$TOKEN_AWK" "$CONFIG_PATH")")"
+fi
+# An empty token is not fatal here: `ensure` already proved the gateway accepts
+# whatever this config holds. Guessing a failure before the wire would invent
+# one the gateway never reported.
+
+# ---------------------------------------------------------------------------
+# Context window (KTD7 / R10).
+#
+# An alias absent from the table launches anyway, with the drift named on
+# stderr. The table is metadata, not an allowlist — the gateway's served list is
+# the allowlist, and it was already checked by `ensure`.
+# ---------------------------------------------------------------------------
+CONTEXT_WINDOW=""
+if [ -f "$MODELS_JSON" ]; then
+    CONTEXT_WINDOW="$(jq -r --arg a "$ALIAS" '.aliases[$a].context_window // empty' < "$MODELS_JSON" 2>/dev/null)"
+fi
+if [ -z "$CONTEXT_WINDOW" ]; then
+    say "drift: alias '$ALIAS' has no context_window in $MODELS_JSON — launching without CLAUDE_CODE_MAX_CONTEXT_TOKENS, so this session uses Claude Code's default window"
+fi
+
+# ---------------------------------------------------------------------------
+# The seed run (U4 step 2).
+#
+# The child's stdout is captured to a FILE, never inherited: `claude -p
+# --output-format json` writes a JSON object of its own, and letting it through
+# would put two objects on our stdout — KTD2's one bug.
+#
+# The gateway environment is exported inside the subshell rather than passed as
+# an `env VAR=value` prefix, because `env`'s own argv would then carry the token
+# and be readable from the process table (KTD6). The subshell is also where the
+# cwd is pinned, so the session is keyed to the directory we encode below.
+# ---------------------------------------------------------------------------
+tmpwork
+WORK="$TMPWORK"
+SEED_OUT="$WORK/seed.json"
+SEED_ERR="$WORK/seed.err"
+
+(
+    cd "$PIN_CWD" || exit 127
+    export ANTHROPIC_BASE_URL="$BASE_URL"
+    export ANTHROPIC_AUTH_TOKEN="$TOKEN"
+    export ANTHROPIC_API_KEY="$TOKEN"
+    [ -n "$CONTEXT_WINDOW" ] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CONTEXT_WINDOW"
+    exec "$CLAUDE_BIN" --model "$ALIAS" --output-format json -p "$PROMPT"
+) > "$SEED_OUT" 2> "$SEED_ERR"
+SEED_RC=$?
+
+if [ "$SEED_RC" -ne 0 ]; then
+    # "Announced-but-broken is never success." A handle to a session that does
+    # not exist is worse than a failure: Shawn would attach to nothing.
+    say "the seed run exited $SEED_RC; last stderr from $CLAUDE_BIN:"
+    tail -5 "$SEED_ERR" >&2 2>/dev/null
+    die "$EX_UPSTREAM" "seed_failed" "the seed run through '$CLAUDE_BIN' exited $SEED_RC — no session was materialized, so there is no handle to print"
+fi
+
+# ---------------------------------------------------------------------------
+# Session-id capture — the unit's named unknown.
+#
+# The shape below is what `claude -p --output-format json` emits today and what
+# tests/fixtures/fake-claude.sh pins. Treat it as an OBSERVED contract, not a
+# guarantee: if the real CLI moves the field, this read fails loudly (code 5,
+# no handle) instead of printing a handle built on a guess.
+# ---------------------------------------------------------------------------
+SESSION_ID="$(jq -r '.session_id // empty' < "$SEED_OUT" 2>/dev/null)"
+if [ -z "$SESSION_ID" ]; then
+    die "$EX_UPSTREAM" "no_session_id" "the seed run exited 0 but its JSON carried no .session_id — the CLI's output shape has drifted from what this script reads"
+fi
+if [ "$(jq -r '.is_error // false' < "$SEED_OUT" 2>/dev/null)" = "true" ]; then
+    die "$EX_UPSTREAM" "seed_failed" "the seed run reported is_error=true (session $SESSION_ID) — refusing to hand back a handle to a failed turn"
+fi
+
+# ---------------------------------------------------------------------------
+# Transcript resolution (U4 step 3).
+#
+# Claude Code encodes the project directory into ~/.claude/projects/ by
+# replacing every non-alphanumeric byte with '-'. Deriving it from the PINNED
+# cwd — not from $PWD, and not from wherever the caller happened to be — is what
+# makes the path reproducible.
+#
+# The file must EXIST. This is the round-trip honesty check: a handle whose
+# transcript is absent is a handle to a session that is not on disk.
+# ---------------------------------------------------------------------------
+ENCODED_CWD="$(printf '%s' "$PIN_CWD" | sed 's/[^A-Za-z0-9]/-/g')"
+TRANSCRIPT="$PROJECTS_ROOT/$ENCODED_CWD/$SESSION_ID.jsonl"
+if [ ! -f "$TRANSCRIPT" ]; then
+    die "$EX_UPSTREAM" "transcript_missing" "the seed run reported session $SESSION_ID but no transcript exists at $TRANSCRIPT — refusing to print a handle to a session that is not on disk"
+fi
+
+# ---------------------------------------------------------------------------
+# The attach command (U4 step 4, KTD6).
+#
+# Token BY REFERENCE. The command re-reads server.token from the config at
+# attach time, so the literal is in neither this script's output nor the
+# command string nor, at attach time, any child's argv — awk's argv carries the
+# config PATH, and the value reaches `claude` through the environment.
+#
+# It is a bash command string (the ${!name} indirection for a `${VAR}` token is
+# bash-only) and it is self-contained: it cds to the pinned directory itself, so
+# it resolves the same session from anywhere.
+# ---------------------------------------------------------------------------
+shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+ATTACH="cd $(shq "$PIN_CWD") && "
+ATTACH+="GW_TOK=\"\$(awk $(shq "$TOKEN_AWK") $(shq "$CONFIG_PATH"))\" && "
+# Expand a whole-value ${VAR} reference the same way the gateway itself does.
+ATTACH+="case \"\$GW_TOK\" in '\${'*'}') GW_N=\"\${GW_TOK#\\\$\\{}\"; GW_N=\"\${GW_N%\\}}\"; GW_TOK=\"\${!GW_N-}\";; esac; "
+ATTACH+="ANTHROPIC_BASE_URL=$(shq "$BASE_URL") "
+ATTACH+="ANTHROPIC_AUTH_TOKEN=\"\$GW_TOK\" ANTHROPIC_API_KEY=\"\$GW_TOK\" "
+[ -n "$CONTEXT_WINDOW" ] && ATTACH+="CLAUDE_CODE_MAX_CONTEXT_TOKENS=$(shq "$CONTEXT_WINDOW") "
+ATTACH+="$(shq "$CLAUDE_BIN") --model $(shq "$ALIAS") --resume $(shq "$SESSION_ID")"
+
+emit "$(jq -nc \
+    --arg alias "$ALIAS" \
+    --arg sid "$SESSION_ID" \
+    --arg tr "$TRANSCRIPT" \
+    --arg cwd "$PIN_CWD" \
+    --arg base "$BASE_URL" \
+    --arg attach "$ATTACH" \
+    --arg win "$CONTEXT_WINDOW" \
+    '{ok:true, alias:$alias, session_id:$sid, transcript_path:$tr, cwd:$cwd,
+      base_url:$base,
+      context_window:(if $win == "" then null else ($win|tonumber) end),
+      attach_command:$attach, error:null, exit_code:0}')"
+exit $EX_OK
