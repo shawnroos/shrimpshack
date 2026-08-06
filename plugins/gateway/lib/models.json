@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "note": "Per-alias context windows (KTD7). The gateway has no window field to extend, so this table is the plugin's own. `model` records the upstream model string the alias pointed at when the entry was written — gatewayctl status compares it against gateway.yaml, because the model-list endpoint returns only id and display_name and a repointed alias would otherwise drift silently. A chain alias takes the SMALLEST window across its routes, so a mid-session fallback can only under-declare rather than overflow.",
+  "seeded_from": "~/gateway-0.1.1/gateway.yaml",
+  "seeded_on": "2026-08-06",
+  "aliases": {
+    "kimi": {
+      "context_window": 262144,
+      "source": "upstream model card — OpenRouter listing for moonshotai/kimi-k2.7-code reports context_length 262144, read 2026-08-06. gateway.yaml carries no window comment for this alias.",
+      "model": "openrouter/moonshotai/kimi-k2.7-code",
+      "chain": false
+    },
+    "k3": {
+      "context_window": 1048576,
+      "source": "gateway.yaml comment above the alias: \"1M context, but ~4x the price of K2.7 Code\"; the OpenRouter listing for moonshotai/kimi-k3 pins that 1M at context_length 1048576, read 2026-08-06.",
+      "model": "openrouter/moonshotai/kimi-k3",
+      "chain": false
+    },
+    "glm": {
+      "context_window": 1048576,
+      "source": "upstream model card — OpenRouter listing for z-ai/glm-5.2 reports context_length 1048576, read 2026-08-06. gateway.yaml carries no window comment for this alias.",
+      "model": "openrouter/z-ai/glm-5.2",
+      "chain": false
+    },
+    "gpt-luna": {
+      "context_window": 1050000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\".",
+      "model": "openrouter/openai/gpt-5.6-luna",
+      "chain": false
+    },
+    "gpt-terra": {
+      "context_window": 1050000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\".",
+      "model": "openrouter/openai/gpt-5.6-terra",
+      "chain": false
+    },
+    "gpt-sol": {
+      "context_window": 1050000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\".",
+      "model": "openrouter/openai/gpt-5.6-sol",
+      "chain": false
+    },
+    "gpt-sol-pro": {
+      "context_window": 1050000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\"; gpt-sol-pro is the same model as gpt-sol served with reasoning.mode=pro, so it inherits the tier's window.",
+      "model": "openrouter/openai/gpt-5.6-sol-pro",
+      "chain": false
+    },
+    "gpt": {
+      "context_window": 1050000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\"; `gpt` is the back-compat alias pointing at the same gpt-5.6-sol model as gpt-sol.",
+      "model": "openrouter/openai/gpt-5.6-sol",
+      "chain": false
+    },
+    "default": {
+      "context_window": 262144,
+      "source": "chain — the smallest window across its routes: kimi (262144) and glm (1048576), both from the OpenRouter listing read 2026-08-06. Under-declaring is the safe direction for a mid-session fallback.",
+      "model": [
+        "openrouter/moonshotai/kimi-k2.7-code",
+        "openrouter/z-ai/glm-5.2"
+      ],
+      "chain": true
+    }
+  }
+}
