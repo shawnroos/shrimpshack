@@ -5,9 +5,205 @@ skills that need a different-vendor answer (`lib/lens.sh`), or as an attachable
 session (`lib/launch.sh`), over a control layer that owns liveness and startup
 (`lib/gatewayctl.sh`).
 
-> The rest of this README — install, the two surfaces, the exit-code contract by
-> citation, and the settings allowlist entry — is written in U7. What follows is
-> the terminal-escape audit from U6, which U7 keeps in place.
+The gateway is a local process that fronts OpenRouter (and anything else its
+config carries) behind an Anthropic-shaped API. This plugin is the control
+surface for it: it decides whether the gateway is up, starts it if not, and then
+either asks a model a question or hands you a session on one.
+
+**Requirements:** `bash`, `curl`, `jq`. `python3` and `bats` only for the tests.
+Nothing else — no other shrimpshack plugin, no node (R11).
+
+---
+
+## The two surfaces
+
+### Headless lens — `lib/lens.sh` (the default)
+
+A prompt in, one JSON object out, no terminal involved. This is what a skill
+calls when it wants a different vendor's read on something.
+
+```bash
+printf '%s' "$PROMPT" | bash "${CLAUDE_PLUGIN_ROOT}/lib/lens.sh" --alias gpt-sol
+bash "${CLAUDE_PLUGIN_ROOT}/lib/lens.sh" --alias kimi --prompt-file ./diff.txt
+```
+
+The prompt goes on **stdin or `--prompt-file`, never argv** (KTD8) — argv hits
+quoting and length limits first, and silently. A response above ~16 KB spills to
+a file and the JSON carries `output_file` instead of `text`.
+
+There is no Claude Code agent loop on the far side (KTD1). It is a plain
+completion against the gateway's messages endpoint, so the model cannot read a
+file, run a command, or edit the code it is reviewing — in any configuration.
+There is also no spend cap, warning, or counter anywhere in this path (R7), by
+decision.
+
+**The script is the real surface, not the skill.** The lens's primary consumers
+run with `allowed-tools: Bash, Read` and cannot invoke a skill or a slash
+command at all. `skills/lens/SKILL.md` is the human front door and the field
+reference.
+
+Full flag list and field-by-field JSON reference: `skills/lens/SKILL.md`.
+
+### Interactive launch — `lib/launch.sh` (explicit invocation only)
+
+Materializes a session on a named alias, seeded with an opening prompt, and
+prints a resume handle. **The plugin never opens a terminal.** The seed turn
+runs headlessly through `claude`, which puts the session on disk; you attach on
+your own terms.
+
+```bash
+printf '%s' "$SEED" | bash "${CLAUDE_PLUGIN_ROOT}/lib/launch.sh" --alias gpt-sol
+```
+
+The handle carries `attach_command`, `session_id`, `transcript_path`, `cwd`,
+`base_url`, and the declared `context_window`. **The gateway token appears in
+none of them** (KTD6): the attach command carries the token *by reference* and
+re-reads it from the gateway config at attach time. Do not resolve it into a
+literal.
+
+Full reference: `skills/launch/SKILL.md`.
+
+### Control layer — `lib/gatewayctl.sh`
+
+`start | stop | restart | status | ensure [alias]`. Liveness is a token-bearing
+probe of the model-list endpoint (KTD3), never a pidfile read. `status` lists
+what the gateway is actually serving and flags drift against the plugin's
+context-window table. `ensure` is the shared preflight both surfaces call.
+
+Full reference: `skills/status/SKILL.md`.
+
+Every path between components goes through `${CLAUDE_PLUGIN_ROOT}`. Nothing is
+invoked by PATH lookup — see *The `gw` note* below for why that matters.
+
+---
+
+## Exit codes
+
+The enum is defined once, in the plan's **KTD2**
+([`docs/plans/2026-08-06-001-feat-gateway-plugin-plan.md`](../../docs/plans/2026-08-06-001-feat-gateway-plugin-plan.md),
+*Key Technical Decisions*). Every script, SKILL.md, and test in this plugin
+cites it rather than restating it as an independent rule. Reproduced here as a
+lookup table only:
+
+| Code | Class |
+|---|---|
+| `0` | ok |
+| `2` | usage or refusal |
+| `3` | gateway unreachable and could not be started |
+| `4` | alias unknown to the gateway |
+| `5` | upstream provider error — the JSON's `error` field distinguishes `rate_limited` and `context_overflow` from other upstream failures |
+| `6` | deadline exceeded |
+| `7` | gateway reachable but rejected the plugin's token |
+
+Two properties KTD2 owns that are easy to lose: **every script prints exactly
+one JSON object on stdout, on every path including every failure**, and
+diagnostics go to stderr only. And **7 is deliberately not 3** — an auth failure
+means the gateway is *up*, so treating it as unreachable would send `ensure`
+into a start that collides with the running process.
+
+Failure-class tests in `tests/unit/` assert on the numeric code, never on a
+message.
+
+---
+
+## Allowlist entry for unattended fan-out
+
+A fan-out of lens calls stalls on a Bash permission prompt unless the caller's
+settings allowlist the script. Add this to `permissions.allow` in
+`~/.claude/settings.json`:
+
+```json
+"Bash(bash ~/.claude/plugins/marketplaces/shrimpshack/plugins/gateway/lib/lens.sh:*)"
+```
+
+Notes on that string:
+
+- It is the **installed** path. `${CLAUDE_PLUGIN_ROOT}` does not expand inside
+  settings, and the marketplace checkout is where an installed plugin actually
+  lives — not this repo. If your marketplace is registered under another name,
+  substitute it (`ls ~/.claude/plugins/marketplaces/`).
+- The entry matches the `bash <script>` invocation form the skills document. If
+  you invoke it another way, the rule will not match it.
+- Allowlist the **lens** only. `launch.sh` starts a real session and
+  `gatewayctl.sh` starts and stops a process; both are worth a prompt.
+
+**This plugin cannot write that entry for you.** A plugin ships files inside its
+own tree; it has no ability to modify user settings, and nothing here tries to.
+Adding it is a manual, opt-in step, and rollout beyond this paragraph is
+deliberately deferred.
+
+---
+
+## What a gateway-pointed session does not have
+
+Verified live on 2026-08-06 (see `skills/launch/SKILL.md`, which says the same
+thing at the point of handover). These are expected, not breakage:
+
+- **claude.ai MCP connectors do not load.** The gateway auth token takes
+  precedence over the claude.ai login, so the connectors that login would carry
+  are absent.
+- **The advisor tool is disabled.** Gateway aliases carry no advisor rank in the
+  model catalog.
+- **Claude Code warns that the model is unrecognized** unless a context window
+  is declared. That is what `lib/models.json` and
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` are for (KTD7). An alias with no table entry
+  still launches — the gateway's served list is the allowlist, the table is only
+  metadata — but it launches without a declared window and draws the warning.
+  `gatewayctl.sh status` reports exactly that as `drift.missing_from_table`.
+
+Two caveats on the attach command, both inherent to carrying the token by
+reference rather than bugs: it is **bash-specific**, and it assumes the config
+path captured at launch still exists at attach time.
+
+---
+
+## The `gw` note
+
+`~/.local/bin/gw` is a **separate, unrelated binary**. This plugin deliberately
+leaves it untouched (KTD4) — a plugin cannot ship a file outside its repo, so
+"fix `gw`" became "replace what `gw` does" inside the plugin's own control
+layer.
+
+If you use both, know that they are not the same control surface, and that `gw`
+still carries the defects `gatewayctl.sh` exists to fix:
+
+| | `gw` | `lib/gatewayctl.sh` |
+|---|---|---|
+| **Liveness** | `kill -0` on the pidfile's pid — wrong when the pidfile is stale, and wrong again when that pid has been recycled onto an unrelated process | a token-bearing `GET /v1/models` probe (KTD3, R1) |
+| **Logging** | `> "$LOG"` — **truncates** the log on every start, so the history that would explain a crash-restart loop is gone | `>> "$LOG"`, append-only, never truncated (R3) |
+| **Install path** | `DIR="$HOME/gateway-0.1.1"` — pinned to one version; the next release silently breaks it | resolved at runtime: explicit env override, else the newest `~/gateway-*`, else a distinct failure (R4) |
+| **Concurrent start** | none — five callers against a down gateway race five starts | locked, re-probe under the lock, exactly one process |
+| **Token** | hardcoded in the script | read from the resolved config, never printed, never in argv (KTD6) |
+
+The two surfaces share `~/.gateway.pid` and `~/.gateway.log` on purpose, so
+neither double-starts against the other and both see the same gateway. But `gw`
+truncating that shared log will still discard whatever the plugin appended.
+
+---
+
+## Tests
+
+No CI exists in this repo, so the local harness is the entire automated
+verification contract.
+
+```bash
+bash plugins/gateway/tests/run-tests.sh all         # release gate
+bash plugins/gateway/tests/run-tests.sh unit        # per-unit iteration
+bash plugins/gateway/tests/run-tests.sh self-check  # prove the harness can fail
+bash plugins/gateway/tests/run-tests.sh smoke       # wire-up + agent-consumer + secret scan
+```
+
+Everything runs against `tests/fixtures/` — a stdlib-Python fake gateway and a
+fake `claude`. **The real gateway on port 4000 and OpenRouter are out of the
+test path by decision.** A suite that reached either would fight a live process
+or spend real money, and both turn green into noise.
+
+`smoke` covers four things: plugin/marketplace version parity, the
+agent-consumer invocation (the lens driven exactly the way a tool-restricted
+subagent drives it — Bash, prompt on stdin, stdout captured), a secret scan over
+every shipped file (R12), and `claude plugin validate` — judged by grepping its
+output for `Validation passed`, **never by its exit code**, which is 0 even when
+validation fails.
 
 ---
 

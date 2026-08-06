@@ -8,7 +8,8 @@
 #   unit        per-unit iteration during U2-U6
 #   self-check  proves the harness can fail; a suite is trusted only after it
 #               has been seen to fail
-#   smoke       version sync + `claude plugin validate`
+#   smoke       version sync, the agent-consumer invocation, the R12 secret
+#               scan, and `claude plugin validate`
 #
 # Dependencies are bats, jq and python3 — deliberately NOT node. R11 says the
 # plugin installs and runs from a clean checkout with no other shrimpshack
@@ -116,6 +117,10 @@ EOF
 # Wire-up smoke: the plugin is only installable if plugin.json and the
 # marketplace entry agree on a version, so assert that here rather than
 # discovering it after a merge (merging to main is publishing).
+#
+# It also owns the two release-gate checks that are not about any one unit:
+# agent_consumer_smoke (the plugin is actually consumable by the caller it was
+# built for) and secret_scan (R12 — merging publishes this tree).
 wire_smoke() {
     echo -e "${YELLOW}Wire-up smoke...${NC}"
     local plugin_root repo_root rc=0
@@ -143,6 +148,198 @@ wire_smoke() {
     else
         echo -e "  ${YELLOW}(claude CLI not on PATH — skipping plugin validate)${NC}"
     fi
+
+    agent_consumer_smoke "$plugin_root" || rc=1
+    secret_scan "$plugin_root" || rc=1
+
+    return $rc
+}
+
+# The parity check that actually matters. The lens's primary consumer is a skill
+# holding `allowed-tools: Bash, Read` — it cannot invoke a slash command or a
+# skill, so the ONLY thing that proves the plugin is consumable is driving the
+# script the way that consumer drives it: Bash invocation, prompt on stdin,
+# stdout captured, no terminal and no interaction anywhere in the path.
+#
+# A passing human-path test proves nothing about this. That is the whole reason
+# it lives here rather than being assumed from the unit suite.
+#
+# Entirely fixture-backed. The live gateway on port 4000 is never in this path —
+# a smoke that reached it would fight a running process and spend real money.
+agent_consumer_smoke() {
+    local plugin_root="$1"
+    local work rc=0
+    work="$(mktemp -d "${TMPDIR:-/tmp}/gw-smoke.XXXXXX")"
+    work="$(cd "$work" && pwd -P)"
+
+    # NOTE: no RETURN trap here. A RETURN trap set inside a function is not
+    # cleared when that function returns — it stays armed in the caller's scope
+    # and fires again on the CALLER's return, where the local it references no
+    # longer exists ("work: unbound variable" under set -u). Observed, not
+    # theorised. Cleanup is explicit below instead.
+    (
+        # Subshell so these exports cannot leak into the secret scan or into a
+        # later smoke step, and so nothing here can reach ~/.gateway.pid,
+        # ~/.gateway.log, ~/.gateway.lock or discover the real ~/gateway-*.
+        # Same redirections lens.bats setup() uses.
+        export GATEWAY_STATE_HOME="$work"
+        export GATEWAY_SEARCH_ROOT="$work/searchroot"
+        export TMPDIR="$work/tmp"
+        mkdir -p "$GATEWAY_SEARCH_ROOT" "$TMPDIR"
+        export GATEWAY_CONNECT_TIMEOUT=2
+        export GATEWAY_PROBE_TIMEOUT=5
+        unset GATEWAY_INSTALL_DIR GATEWAY_MODELS_JSON
+        unset GATEWAY_LENS_TIMEOUT GATEWAY_SPILL_BYTES GATEWAY_LENS_MAX_TOKENS
+
+        local token="smoke-tok-a1b2c3" portfile="$work/port" port
+        rm -f "$portfile"
+        python3 "$SCRIPT_DIR/fixtures/fake-gateway.py" \
+            --token "$token" --aliases smoke-alias --scenario healthy \
+            --port-file "$portfile" >"$work/gw.out" 2>"$work/gw.err" &
+        local gw_pid=$!
+        # The fixture is a child of THIS subshell, so its cleanup belongs here.
+        # An outer-function trap would never see this pid and would leave an
+        # orphaned python server bound to a port after every smoke run.
+        # NO `wait` in this trap. `wait` on a job we just TERMed makes the
+        # SUBSHELL exit 143 no matter what follows it — a trailing `true` does
+        # not clear it — so a passing smoke reported red. Observed on bash 5.3
+        # here, and reduced to a one-liner before being believed. Reap with a
+        # bounded kill -0 poll instead.
+        trap 'kill "$gw_pid" 2>/dev/null; for _r in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$gw_pid" 2>/dev/null || break; sleep 0.05; done; true' EXIT
+
+        # BOUNDED wait. An unbounded until-loop is one of this box's documented
+        # false-green shapes: it hangs forever instead of failing.
+        local i
+        for i in $(seq 1 100); do
+            [ -s "$portfile" ] && break
+            sleep 0.05
+        done
+        port="$(cat "$portfile" 2>/dev/null || true)"
+        if [ -z "$port" ]; then
+            echo -e "  ${RED}agent-consumer smoke FAIL${NC}: the fake gateway never reported a port"
+            exit 1
+        fi
+        export GATEWAY_BASE_URL="http://127.0.0.1:$port/anthropic"
+
+        # Minimal gateway.yaml: the control layer reads the token from it.
+        {
+            printf 'server:\n'
+            printf '  bind: "127.0.0.1:4000"\n'
+            printf '  token: %s\n' "$token"
+            printf '\nmodels:\n'
+            printf '  smoke-alias:\n'
+            printf '    model: up/smoke-alias\n'
+        } > "$work/gateway.yaml"
+        export GATEWAY_CONFIG="$work/gateway.yaml"
+
+        # THE INVOCATION UNDER TEST. Nothing clever: this is the literal shape a
+        # tool-restricted subagent's Bash call takes. stderr is dropped, exactly
+        # as a consumer capturing stdout would drop it — so a diagnostic that
+        # leaked onto stdout breaks the parse rather than hiding.
+        local out code=0
+        out="$(printf '%s' 'Summarize this diff in one line.' \
+            | bash "$plugin_root/lib/lens.sh" --alias smoke-alias 2>/dev/null)" || code=$?
+
+        if [ "$code" -ne 0 ]; then
+            echo -e "  ${RED}agent-consumer smoke FAIL${NC}: exit $code (expected 0)"
+            printf '%s\n' "$out" | head -5
+            exit 1
+        fi
+        # ONE JSON object, parseable whole — not "some JSON somewhere in the
+        # stream". jq -e fails on a trailing diagnostic or a second object.
+        if ! printf '%s' "$out" | jq -e '.ok == true and .alias == "smoke-alias" and (.text | type) == "string" and (.text | length) > 0' >/dev/null 2>&1; then
+            echo -e "  ${RED}agent-consumer smoke FAIL${NC}: stdout was not one parseable JSON object carrying the answer"
+            printf '%s\n' "$out" | head -5
+            exit 1
+        fi
+        # Exactly one line on stdout is the structural half of "exactly one
+        # object": a second object would parse individually but not as a whole.
+        if [ "$(printf '%s\n' "$out" | grep -c .)" -ne 1 ]; then
+            echo -e "  ${RED}agent-consumer smoke FAIL${NC}: stdout carried more than one line"
+            exit 1
+        fi
+        exit 0
+    ) || rc=1
+    rm -rf "$work"
+
+    if [ $rc -eq 0 ]; then
+        echo -e "  ${GREEN}agent-consumer smoke${NC}: stdin prompt via Bash returned exit 0 and one parseable JSON answer"
+    fi
+    return $rc
+}
+
+# R12: no file the plugin SHIPS contains the gateway token or a credential.
+# Merging to main publishes this tree, and models.json is seeded from the very
+# config that holds the token — so this is the enforcement point, not a nicety.
+#
+# Two layers, because one is not enough:
+#   1. the EXACT token, resolved the way the plugin resolves it. The real token
+#      on this box is a low-entropy word-shaped string; no entropy heuristic
+#      would ever flag it.
+#   2. known credential PREFIXES, not an entropy score. An entropy heuristic
+#      false-positives on the fixture tokens that legitimately live in
+#      tests/unit/*.bats — shipped files, and correct as they stand.
+#
+# On a hit this prints the FILENAME ONLY. A scan that echoes the matched bytes
+# into a transcript is itself the leak it was written to prevent.
+secret_scan() {
+    local plugin_root="$1" rc=0
+
+    # Layer 1 — exact token.
+    local cfg="" token=""
+    if [ -n "${GATEWAY_CONFIG:-}" ] && [ -f "${GATEWAY_CONFIG}" ]; then
+        cfg="$GATEWAY_CONFIG"
+    else
+        # Newest ~/gateway-*/gateway.yaml, matching the control layer's
+        # resolution order (KTD4). Absent on a clean checkout — see below.
+        # A bash glob, not `ls`: `ls` emits OSC-8 hyperlink escapes on this box
+        # that corrupt any path captured from it.
+        local d
+        local -a cand=()
+        for d in "$HOME"/gateway-*/; do
+            [ -f "$d/gateway.yaml" ] && cand+=("$d/gateway.yaml")
+        done
+        if [ "${#cand[@]}" -gt 0 ]; then
+            cfg="$(printf '%s\n' "${cand[@]}" | sort -V | tail -1)"
+        fi
+    fi
+    if [ -n "$cfg" ]; then
+        token="$(sed -n 's/^[[:space:]]*token:[[:space:]]*//p' "$cfg" 2>/dev/null \
+            | head -1 | sed -e 's/[[:space:]]*#.*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+    fi
+
+    if [ -n "$token" ]; then
+        # FALSE-GREEN GUARD. "the token never appears" is vacuously true when
+        # the token resolved to an empty string — that exact shape has already
+        # passed green over leaking code in this repo. Assert the secret EXISTS
+        # before asserting it is absent, and say which mode this run is in.
+        echo -e "  ${GREEN}secret scan${NC}: exact-token layer ACTIVE (token resolved from a gateway config)"
+        # -F: the token is a literal, not a pattern.
+        local hits
+        hits="$(grep -rlF -- "$token" "$plugin_root" 2>/dev/null || true)"
+        if [ -n "$hits" ]; then
+            echo -e "  ${RED}secret scan FAIL${NC}: the gateway token appears in shipped file(s):"
+            printf '%s\n' "$hits" | sed 's/^/      /'
+            rc=1
+        fi
+    else
+        # R11: the suite must pass from a clean checkout with no gateway
+        # installed. Skip WITH NOTICE — a silent skip is how this layer would
+        # quietly stop running.
+        echo -e "  ${YELLOW}secret scan${NC}: exact-token layer SKIPPED (no gateway config resolved on this box)"
+    fi
+
+    # Layer 2 — credential-shaped strings, by known prefix.
+    local pat='sk-ant-[A-Za-z0-9_-]{16,}|sk-or-v1-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+    local phits
+    phits="$(grep -rlE -- "$pat" "$plugin_root" 2>/dev/null || true)"
+    if [ -n "$phits" ]; then
+        echo -e "  ${RED}secret scan FAIL${NC}: credential-shaped string in shipped file(s):"
+        printf '%s\n' "$phits" | sed 's/^/      /'
+        rc=1
+    fi
+
+    [ $rc -eq 0 ] && echo -e "  ${GREEN}secret scan${NC}: no token and no credential-shaped string in the shipped tree"
     return $rc
 }
 
