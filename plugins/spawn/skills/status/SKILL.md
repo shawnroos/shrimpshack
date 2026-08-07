@@ -53,12 +53,15 @@ One script owns liveness, start/stop, and reporting. Liveness is a real probe of
    - **`pid`** and **`pid_verified`** — the pidfile's pid, and whether a live process with that pid actually has the gateway binary in its argv. `pid_verified: false` alongside `running: true` means something else is serving, or the pidfile is stale — worth saying out loud, but it does not change the liveness answer.
    - **`log`** / **`pidfile`** — the runtime state paths. The log is append-only; it is never truncated.
 
-4. Report drift if there is any. `models` lists the plugin's per-alias context-window table (`alias`, `context_window`, `source`, `model`, `chain`), and `drift` has three classes (KTD7):
+4. Report drift if there is any. `models` lists the plugin's per-alias context-window table (`alias`, `context_window`, `source`, `model`, `chain`), and `drift` has four classes (KTD7):
 
-   - **`missing_from_table`** — the gateway serves an alias the plugin has no window for. A session on it launches without a declared window and draws Claude Code's unrecognized-model warning.
+   - **`missing_from_table`** — the gateway serves an alias the plugin has no window for, *and* the gateway says it resolves to something no table entry already covers. A session on it launches without a declared window and draws Claude Code's unrecognized-model warning.
+   - **`unknown_resolution`** — the gateway serves an alias the table does not list and says nothing about what it resolves to: no entry in the config's `models:` block, and no display name matching one the table already carries. It is not called drift, because it may be a second name for something already listed; it is not hidden either, because it may be a new model. Say plainly that its resolution could not be determined.
    - **`missing_window`** — a table entry with no window recorded.
    - **`model_drift`** — an alias whose upstream model string in the gateway's config no longer matches the one recorded when the window was written, with `recorded` and `current` both shown. This is the one that matters most: the alias keeps its name, so a repointed model would otherwise drift silently, and the recorded window may no longer be the right number.
 
-   Empty arrays in all three means no drift — say so plainly rather than listing them.
+   Sameness is decided from what the gateway says an alias resolves to — the model string in its config, or the display name it serves — never from one name being a prefix of another. Two aliases resolving to the same model are one model served twice, not drift; a new model served under a prefixed name is real drift and is still reported.
+
+   Empty arrays in all four means no drift — say so plainly rather than listing them.
 
 Anything the gateway's config supplies as display text is sanitized before it is printed. Do not re-render raw config-derived text through another sink.

@@ -451,6 +451,15 @@ resolve_install_dir() {
 # ---------------------------------------------------------------------------
 PROBE_ALIASES_JSON="[]"
 PROBE_DETAIL=""
+# alias -> display_name, straight off the model list. The gateway serves a
+# display_name per served id, and two ids carrying the SAME display_name is the
+# gateway itself saying they present as one model. That is the only statement
+# the gateway makes about aliases it generates rather than reads out of the
+# config's `models:` block (the claude-* twins), so drift class 1 needs it.
+# Built only for `status`, the one verb that reads it — the same reason
+# CONFIG_MODELS_JSON is guarded, and for the same hot path (lens and launch
+# probe on every call).
+PROBE_DISPLAY_JSON="{}"
 # Set to 1 the moment curl comes back with ANY http status. rc=0 with a status
 # PROVES a process holds the port, whatever it answered — only the
 # connect-failure branch establishes that nothing is there. start_if_down
@@ -461,6 +470,7 @@ PROBE_LISTENING=0
 probe() {
     resolve_config
     PROBE_ALIASES_JSON="[]"
+    PROBE_DISPLAY_JSON="{}"
     PROBE_DETAIL=""
     PROBE_LISTENING=0
     local work body code curlrc
@@ -518,6 +528,22 @@ probe() {
         return $EX_UNREACHABLE
     fi
     PROBE_ALIASES_JSON="$aliases"
+
+    if [ "${VERB:-}" = "status" ]; then
+        local disp
+        # Keys go through the SAME strip as PROBE_ALIASES_JSON's values (the
+        # whole object is walked after from_entries), so a lookup by served
+        # alias cannot miss on a byte the other path removed. An id with no
+        # display_name becomes "" — which the drift program reads as "the
+        # gateway said nothing", never as a match.
+        disp="$(jq -c "$SPAWN_SANITIZE_JQ_DEF"'
+            [ .data[]? | select((.id // null) != null)
+              | {key: (.id | tostring),
+                 value: ((.display_name // "") | tostring)} ]
+            | from_entries | strip_display_deep' < "$body" 2>/dev/null)"
+        [ -n "$disp" ] && PROBE_DISPLAY_JSON="$disp"
+    fi
+
     PROBE_DETAIL=""
     return $EX_OK
 }
@@ -883,11 +909,12 @@ emit_describe() {
             {name:"started",          always:false, note:"ensure only: did this call start the gateway"},
             {name:"result",           always:false, note:"stop only: stopped, not_running, stale_pidfile, unmanaged or pid_mismatch"},
             {name:"models",           always:false, note:"status only: the plugin table, as data"},
-            {name:"drift",            always:false, note:"status only: the three drift classes below"},
+            {name:"drift",            always:false, note:"status only: the four drift classes below"},
             {name:"help_requested",   always:false, note:"true only for --help; present on every error response"}
           ],
           drift_kinds:[
-            {name:"missing_from_table", note:"a served alias the plugin table does not list"},
+            {name:"missing_from_table", note:"a served alias the plugin table does not list, and which the gateway says resolves to something the table does not already carry"},
+            {name:"unknown_resolution", note:"a served alias the plugin table does not list and whose resolution the gateway does not state; not assumed equivalent to anything"},
             {name:"missing_window",     note:"a table entry with no declared context window"},
             {name:"model_drift",        note:"an alias whose upstream model string moved; each entry carries alias, recorded and current"}
           ],
@@ -1185,13 +1212,63 @@ status)
     # a human what drifted; nothing parses them back into a path or a URL — so a
     # deep strip cannot break a functional value the way sanitizing `config` or
     # `base_url` would.
+    # R17/KD8. A served alias the table does not list is only drift if it is a
+    # DIFFERENT thing from something the table already lists, and that is decided
+    # from what the gateway says each alias resolves to — never from one name
+    # being a prefix of another. Prefix-stripping would hide a genuinely new
+    # model served as `claude-<new>`, which is the worse error in the other
+    # direction.
+    #
+    # Two sources say what an alias resolves to, and they are not equal in
+    # strength:
+    #
+    #   * the config's `models:` block ($cfg[a].model) — the model string
+    #     itself. Authoritative BOTH ways: equal strings mean the same model,
+    #     different strings mean different models.
+    #   * the model list's display_name ($disp[a]) — the gateway's own label.
+    #     Authoritative only for SAMENESS: the gateway generates the claude-*
+    #     aliases itself, so they never appear in `models:`, and an identical
+    #     display_name is the gateway stating they present as one model. Two
+    #     DIFFERENT labels prove nothing — a label is prose, and one model can
+    #     be labelled twice.
+    #
+    # So: the model string decides when we have it; display equality may only
+    # suppress; and an alias with neither a config entry nor a matching label is
+    # reported as unknown_resolution rather than being assumed equivalent.
+    # Assuming equivalence there is the same class of error as the false alarm
+    # this replaces, just pointing the other way.
     drift="$(jq -nc \
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson table "$tbl" \
         --argjson cfg "$CONFIG_MODELS_JSON" \
+        --argjson disp "$PROBE_DISPLAY_JSON" \
         "$SPAWN_SANITIZE_JQ_DEF"'
-        ($table.aliases // {}) as $t | {
-          missing_from_table: [ $served[] as $a | select(($t | has($a)) | not) | $a ],
+        ($table.aliases // {}) as $t |
+        # What the aliases the table DOES list resolve to. The config wins where
+        # it knows; the recorded model string in the table stands in where it
+        # does not, so a table entry for an alias absent from the models block
+        # still anchors its twins.
+        ([ $t | keys[] | (($cfg[.].model) // ($t[.].model) // empty) ]) as $known_models |
+        ([ $t | keys[] | (($disp[.]) // "") | select(. != "") ]) as $known_labels |
+        ([ $served[] as $a | select(($t | has($a)) | not)
+           | { alias: $a,
+               model: (($cfg[$a].model) // null),
+               label: (($disp[$a]) // "") } ]) as $unlisted |
+        # map/any, not index: a chain alias resolves to an ARRAY of model
+        # strings, and index() on an array argument searches for a subsequence
+        # rather than testing membership.
+        ([ $unlisted[] | . as $u
+           | $u + { verdict:
+                   (if $u.model != null then
+                        (if ($known_models | map(. == $u.model) | any)
+                         then "twin" else "drift" end)
+                    elif $u.label != ""
+                         and ($known_labels | map(. == $u.label) | any) then
+                        "twin"
+                    else "unknown" end) } ]) as $judged |
+        {
+          missing_from_table: [ $judged[] | select(.verdict == "drift") | .alias ],
+          unknown_resolution: [ $judged[] | select(.verdict == "unknown") | .alias ],
           missing_window: [ $t | to_entries[]
                             | select((.value.context_window // null) == null)
                             | .key ],

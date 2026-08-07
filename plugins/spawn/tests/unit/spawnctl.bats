@@ -627,6 +627,82 @@ write_table() {
     [ "$(echo "$output" | jq -r '.drift.model_drift[0].current')" = "openrouter/vendor/NEW-model" ]
 }
 
+# --- R17: equivalence comes from what the gateway resolves to (KD8) ---------
+#
+# The gateway serves every model twice — once under its configured name and
+# once under a `claude-` prefixed name for the Anthropic-shaped route. Treating
+# each prefixed twin as a missing table entry made drift 100% false alarms on
+# the live gateway, and a surface that cries wolf gets ignored. Stripping the
+# prefix would be the other error: a genuinely NEW model served as
+# `claude-<new>` would vanish. So equivalence is read off the gateway.
+
+@test "drift 4 (AE7): two aliases resolving to the same model are not drift" {
+    start_fixture healthy "alpha,alpha-mirror,claude-alpha"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" \
+        "alpha=up/alpha" "alpha-mirror=up/alpha" "claude-alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    write_table '{"aliases":{"alpha":{"context_window":1000,"source":"test","model":"up/alpha","chain":false}}}'
+
+    ctl status
+    [ "$status" -eq 0 ]
+    # Neither the differently-spelled twin nor the prefixed one is drift: the
+    # config says all three are up/alpha, which the table already carries.
+    [ "$(echo "$output" | jq -r '.drift.missing_from_table|length')" = "0" ]
+    [ "$(echo "$output" | jq -r '.drift.unknown_resolution|length')" = "0" ]
+}
+
+@test "drift 4b (AE7): a prefixed alias resolving to a DIFFERENT model is reported" {
+    start_fixture healthy "alpha,claude-alpha"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" \
+        "alpha=up/alpha" "claude-alpha=up/something-else"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    write_table '{"aliases":{"alpha":{"context_window":1000,"source":"test","model":"up/alpha","chain":false}}}'
+
+    ctl status
+    [ "$status" -eq 0 ]
+    # The name is prefixed, the model is new — that is real drift, and hiding it
+    # is worse than the false alarm this rule replaced.
+    [ "$(echo "$output" | jq -r '.drift.missing_from_table|join(",")')" = "claude-alpha" ]
+    [ "$(echo "$output" | jq -r '.drift.unknown_resolution|length')" = "0" ]
+}
+
+@test "drift 5: a served alias whose resolution is unavailable is reported unknown" {
+    # `mystery` is served but absent from the config's models: block, and the
+    # model list gives it a display name matching nothing the table carries. So
+    # the gateway states nothing about what it resolves to. Reporting it as a
+    # twin would be the same wrong-suppression the prefix rule would have been.
+    start_fixture healthy "alpha,mystery"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    write_table '{"aliases":{"alpha":{"context_window":1000,"source":"test","model":"up/alpha","chain":false}}}'
+
+    ctl status
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.drift.unknown_resolution|join(",")')" = "mystery" ]
+    # Not silently equivalent, and not asserted to be new either.
+    [ "$(echo "$output" | jq -r '.drift.missing_from_table|length')" = "0" ]
+}
+
+@test "drift: the prose rendering still has one machine-readable object under it" {
+    # R18. The command body renders prose FROM this object; a Bash-only consumer
+    # still parses the object itself, so the response stays one JSON object with
+    # the envelope and every drift class present.
+    start_fixture healthy "alpha,claude-alpha,mystery"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" \
+        "alpha=up/alpha" "claude-alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    write_table '{"aliases":{"alpha":{"context_window":1000,"source":"test","model":"up/alpha","chain":false}}}'
+
+    ctl status
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '[.schema,.ok,.error,.exit_code]|length')" = "4" ]
+    [ "$(echo "$output" | jq -r '.exit_code')" = "0" ]
+    [ "$(echo "$output" | jq -r '.drift|keys|sort|join(",")')" \
+        = "missing_from_table,missing_window,model_drift,unknown_resolution" ]
+    [ "$(echo "$output" | jq -r '.served_aliases|length')" = "3" ]
+}
+
 @test "no drift: the shipped models.json matches the config it was seeded from" {
     start_fixture healthy "alpha"
     make_config "$WORK/gateway.yaml" 4000 "$TOKEN" \
