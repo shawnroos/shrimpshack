@@ -697,6 +697,15 @@ config_write_lint() {   # <script>
     # quietly skipping the file it was added to cover.
     run config_write_lint "$LIB/jobs.sh"
     [ "$status" -ne 0 ]
+    # U8's ceiling machinery and its two entry points join it too. These read
+    # the gateway config for the token exactly as this script does, which is
+    # precisely the shape that could grow a write to it.
+    run config_write_lint "$LIB/ceilings.sh"
+    [ "$status" -ne 0 ]
+    run config_write_lint "$LIB/bg-operator.sh"
+    [ "$status" -ne 0 ]
+    run config_write_lint "$LIB/bg-repo.sh"
+    [ "$status" -ne 0 ]
 }
 
 @test "KTD3: the no-write invariant covers the three runtime scripts, and the setup family is exempt BY NAME" {
