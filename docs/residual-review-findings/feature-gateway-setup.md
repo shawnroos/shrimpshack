@@ -12,6 +12,47 @@ limit rather than an outage. Independent adversarial coverage of this diff is
 therefore missing — the one lens specifically aimed at wrong-success paths, on a
 change whose entire purpose is refusing unearned success.
 
+## Found live during the G4 smoke run
+
+- **P1 · retiring the config token can leave a RUNNING gateway open, and nothing
+  owns the transition.** Observed on a real machine. Run 1 retired the token out
+  of `gateway.yaml` and stored a generated one in the Keychain, then stopped at
+  the `gw` consent gate before reaching the start step. Run 2 found nothing left
+  to retire, so `needs_restart` stayed 0 and the gateway was started rather than
+  restarted — and it came up reading an `.env.local` that carried
+  `OPENROUTER_API_KEY` but no `GATEWAY_TOKEN`, so its auth list was **empty**.
+  The gateway treats an empty list as "no auth required": an open proxy on
+  127.0.0.1:4000 forwarding to a paid account, reachable by anything on the box.
+  Verified after the fact: `GET /anthropic/v1/models` with no credential returned
+  200.
+
+  The authenticated round-trip **passed** on that same run, which is the whole
+  point — with an empty auth list every request returns 200, so a green
+  round-trip proves nothing on its own. Only the unauthenticated reject probe
+  caught it, and setup correctly refused to report success with
+  `failure_class: "open-proxy"`. That probe is the single most valuable thing
+  in the verification contract and it earned its place on the first live run.
+
+  Fix direction: the restart trigger must be a property of *state*, not of what
+  this run happened to do. Before start, compare what the running gateway can
+  authenticate against what is now stored — or simply treat "config carries no
+  token and a credential is stored" as requiring a restart, since a
+  already-running process cannot have loaded a token that was minted after it
+  started. The narrower flag-and-action triggers keep missing the case where a
+  prior run did the mutating.
+
+- **P2 · the 401 diagnostic names the wrong token source.** On the preceding run
+  the failure read `token came from /Users/shawnroos/gateway-0.1.1/gateway.yaml`
+  while that file had zero token lines — the value came from the Keychain. An
+  operator following that message goes to edit an empty file. The source label
+  is reported from the wrong variable somewhere on the probe's failure path.
+
+- **P3 · setup truncates a pre-existing `.env.local` in the install dir.** The
+  delivery path replaces that file rather than merging into it, so an operator
+  who kept provider keys there loses them on the first start. On this machine
+  the original survived only because delivery never wrote. Either merge, or back
+  it up and say so in `changed`.
+
 ## Wrong-success paths — the highest-value residuals
 
 - **RESOLVED in `02c150f`.** ~~**P1 · setup does not restart an already-running gateway after installing a new
