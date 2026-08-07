@@ -4,7 +4,7 @@ type: feat
 date: 2026-08-07
 topic: spawn-surfaces
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: requirements-only
+artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
 execution: code
 ---
@@ -13,9 +13,9 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** Re-cut the `spawn` plugin's front door around three verbs — `agent`, `bg-agent`, `session` — add an unattended background agent, move the plugin's contract into the data where a Bash-only caller can reach it, keep the scripts reachable without a version-pinned path, and keep the human-facing status surface honest.
+- **Objective:** Re-cut the `spawn` plugin's front door around four verbs — `agent`, `bg-agent`, `session`, `report` — add an unattended background agent, move the plugin's contract into the data where a Bash-only caller can reach it, keep the scripts reachable without a version-pinned path, and keep the report surface honest.
 - **Product authority:** This plan owns the surfaces and the new background capability. It does not own the plugin rename (landed in `21f4d56` on `feature/gateway-plugin`) or the install flow (`feature/gateway-setup`).
-- **Open blockers:** none that gate planning. OQ4's remaining half — what owns a job's process across shell exit, and whether jobs may run concurrently in one worktree — is the last resolve-before-planning item, and it is a design question a planner can answer rather than a product decision. OQ2 and OQ6 are deferred.
+- **Open blockers:** none. Every question that gated planning is answered: the ceiling mechanism is measured (`docs/spike-bg-agent-mechanism.md`), detachment costs no new dependency (KTD5), concurrency is settled at one job per worktree (KTD2), and the family→tier table is declared rather than inferred (KTD3). OQ2, OQ6 and OQ7 are deferred and named.
 
 ---
 
@@ -23,7 +23,7 @@ execution: code
 
 ### Summary
 
-Replace the `lens`/`launch`/`status` command names with `/spawn:agent`, `/spawn:bg-agent` and `/spawn:session`, each taking a model family and an optional tier. Add `bg-agent`: a real agent loop with tools that works unattended in a scratchpad, with a permission ceiling set by who invoked it. Move the plugin's machine-readable contract into its JSON output so a caller that cannot load a skill or a command can still discover it.
+Replace the `lens`/`launch`/`status` command names with `/spawn:agent`, `/spawn:bg-agent`, `/spawn:session` and `/spawn:report`, each taking prose the reading agent resolves to one alias. Add `bg-agent`: a real agent loop with tools that works unattended against a contract, with a permission ceiling set by who invoked it and enforced by the harness. Move the plugin's machine-readable contract into its JSON output so a caller that cannot load a skill or a command can still discover it.
 
 ### Problem Frame
 
@@ -186,3 +186,318 @@ flowchart TB
 - `docs/plans/2026-08-06-001-feat-gateway-plugin-plan.md` — KD1, KD3, KTD2 (the frozen exit enum), and U5, which specified the command-fronts-skill shape this plan replaces.
 - `plugins/spawn/README.md` — the allowlist section, including the version-in-path stall and the note that the plugin cannot write the entry for the user.
 - `plugins/spinoff/` — the sibling that avoids the name collision; `plugins/token-bridge/` — the template that carries it.
+- `docs/spike-bg-agent-mechanism.md` — measured evidence for R25 and the detachment mechanism; also the record that a fully-denied child returns success.
+
+**Product Contract preservation:** unchanged in meaning. Requirements added this session by user direction (R19–R26 and the caller-aware ceiling), no requirement weakened or removed, all stable IDs intact.
+
+---
+
+## Planning Contract
+
+### Key Technical Decisions
+
+- KTD1. **Two stages, independently landable.** The command re-cut, the contract-into-data work, the invocation path and the report surface ship first; `bg-agent` follows. The first group is evidenced and low-risk, `bg-agent` carries every remaining unknown, and coupling them delays all of it. Governs the unit ordering, not a requirement.
+- KTD2. **One `bg-agent` job at a time per worktree, enforced by a lock.** A second spawn is refused and returns the running job's handle. Answers OQ4's concurrency half deterministically instead of building path leases against a hypothesis, and makes attribution free — only one job could have made the changes. Different worktrees hold different locks and run freely. Reuses `spawnctl.sh`'s idempotent-locked-start idiom. Governs R7, R22.
+- KTD3. **Families and tiers are declared in `lib/models.json`, not inferred.** Today the table is flat and `k3` is only relatable to `kimi` through the upstream model string `moonshotai/kimi-k3`; `gpt` matching `gpt-sol` is coincidence. A new declared block names each family, its tiers and its default. Resolves OQ5. Governs R4.
+- KTD4. **`bg-agent` refuses a chain alias.** `default` is a chain, so a long-running job could change model on fallback, and the table deliberately under-declares a chain's context window to its smallest route. Acceptable for one turn, not for an hour holding tools. Governs R4, R6.
+- KTD5. **Detach with `set -m` plus `nohup`; no new runtime interpreter.** Job control gives the job its own process group in pure bash, verified under `/bin/bash` 3.2. `setsid(1)` is absent on macOS and the alternative needs python or perl at runtime, which the project has already rejected for Node. Governs R6.
+- KTD6. **Liveness is probed; the status file is a claim.** After a kill the file still read `running`, because the writer was what died. State is established by `kill -0` plus an argv identity check, the same way `spawnctl.sh` probes the gateway rather than trusting its pidfile. Governs R21, R22.
+- KTD7. **The envelope lives in `lib/common.sh` and covers all three encoder tiers.** Each script currently hand-rolls its own field set in `emit_error`, plus a jq-less pure-bash fallback, plus a hardcoded string inside `need_jq`. Any envelope missing a tier drifts. Governs R23.
+- KTD8. **Terminal states are a closed set:** `done`, `degraded`, `failed`, `cancelled`. `done` requires the contract's deliverables present; a job that ran clean but produced nothing named is `degraded`, not `done`. Governs R9, R21, R22, R26.
+- KTD9. **A contract's deliverables are file-shaped, plus an optional verification command the supervisor runs itself.** The supervisor can check a path exists; it cannot judge "the suite is green" without running something, and KD9 bars the model from witnessing it. Deliverables are captured against a pre-job baseline so a pre-existing file cannot satisfy a contract. Governs R21, R26.
+- KTD10. **Every new script joins the existing computed-scope lints.** The terminal-sink lint iterates `lib/*.sh`, so a new entry point is covered automatically; the no-spend and no-write lints are enumerated and must be extended by hand. Governs R14.
+
+### High-Level Technical Design
+
+```mermaid
+flowchart TB
+  subgraph human[human surfaces]
+    C1["/spawn:agent"] --> S1[skills: lens]
+    C2["/spawn:bg-agent"] --> S2[skills: launch]
+    C3["/spawn:session"] --> S2
+    C4["/spawn:report"] --> S3[skills: status]
+  end
+  subgraph resolve[command layer: comprehend]
+    P[prose in] --> F["family + tier -> one alias"]
+  end
+  C1 --> P
+  C2 --> P
+  C3 --> P
+  subgraph scripts[script layer: strict]
+    L[lens.sh]
+    LA[launch.sh]
+    BG[bg-agent entry points]
+    CTL[spawnctl.sh]
+  end
+  F --> L
+  F --> LA
+  F --> BG
+  BG --> SUP[supervisor: detach, probe, reap]
+  SUP --> JOB[".spawn/&lt;id&gt;/ contract, status, log"]
+  CTL --> JOB
+  L --> ENV[common.sh envelope]
+  LA --> ENV
+  BG --> ENV
+  CTL --> ENV
+```
+
+The two entry points for `bg-agent` are the whole of R8: one is allowlisted for a
+person, one for an agent, and each hands its child a different permission
+configuration. Nothing downstream asks who called.
+
+---
+
+## Implementation Units
+
+### Stage 1 — the evidenced work
+
+### U1. Re-cut the command surface
+
+- **Goal:** four commands, none sharing a skill name, each carrying its own instructions.
+- **Requirements:** R1, R2, R3, R20. Covers KD1, KD3.
+- **Dependencies:** none.
+- **Files:** create `plugins/spawn/commands/{agent,bg-agent,session,report}.md`; delete `plugins/spawn/commands/{lens,launch,status}.md`; edit `plugins/spawn/skills/spinoff`-style guard into `plugins/spawn/skills/{lens,launch,status}/SKILL.md`; `plugins/spawn/tests/unit/surfaces.bats` (new).
+- **Approach:**
+  1. Each command body states what its verb does, names the script it runs, and names its branch conditions — the shape of `plugins/multi-slice-review/commands/multi-slice-review-round.md`, not a redirect.
+  2. Delete every `Use the Skill tool to invoke:` line.
+  3. Add the `plugins/spinoff/skills/spinoff/SKILL.md` command-invoked-only clause to each SKILL.md so the skills stay reachable by name without re-colliding.
+- **Patterns to follow:** `plugins/multi-slice-review/commands/multi-slice-review-round.md` for an inline body; `plugins/spinoff/skills/spinoff/SKILL.md:2-5` for the guard clause.
+- **Test scenarios:**
+  - No command filename matches any skill directory name.
+  - No command body contains the string `Use the Skill tool to invoke`.
+  - Each command's frontmatter carries a `description`, and each body names the script it runs.
+  - `claude plugin validate` output contains `Validation passed` (its exit code lies).
+- **Verification:** the four commands resolve under the `spawn:` namespace and the three skills still resolve by their own names.
+
+### U2. Declare families and tiers; comprehend prose
+
+- **Goal:** prose in, one alias out, with families and tiers declared rather than inferred.
+- **Requirements:** R4, R5, R24. Covers KD6, KTD3, KTD4.
+- **Dependencies:** U1.
+- **Files:** `plugins/spawn/lib/models.json`, `plugins/spawn/lib/spawnctl.sh` (table normalization), `plugins/spawn/commands/*.md`, `plugins/spawn/tests/unit/models.bats` (new).
+- **Approach:**
+  1. Add a declared families block to `models.json` naming each family, its tiers and its default alias. Keep the existing flat `aliases` map as the metadata table it already is.
+  2. `table_json()` normalizes the new block's shape the way it already normalizes `aliases` — a malformed block collapses to empty rather than erroring inside a downstream jq program.
+  3. Command bodies instruct the reading agent to resolve prose to one alias and to fail loudly, naming the served aliases, when a family or tier is unserved.
+  4. `bg-agent` refuses a chain alias.
+- **Patterns to follow:** `plugins/spawn/lib/spawnctl.sh:759-768` (`table_json` shape normalization); `plugins/spawn/lib/launch.sh:368-385` (reading the table, warning rather than failing when metadata is absent).
+- **Test scenarios:**
+  - Covers AE1. `kimi k3` resolves to the `k3` alias.
+  - Covers AE2. A bare family resolves to its declared default.
+  - Covers AE3. An unserved family fails with the served aliases named, and does not fall back to the default.
+  - Covers AE8. Task text containing a tier name does not change the resolved alias, and prose containing quotes, newlines and a leading dash reaches the model unchanged.
+  - A malformed families block leaves the drift computation working rather than erroring.
+  - A chain alias passed to `bg-agent` is refused; the same alias to `agent` is accepted.
+- **Verification:** every alias the gateway serves is reachable through the declared grammar, hyphenated tiers included.
+
+### U3. One envelope in `common.sh`
+
+- **Goal:** every response from every script shares one shape.
+- **Requirements:** R23. Covers KD2, KTD7.
+- **Dependencies:** none (can land before or after U1).
+- **Files:** `plugins/spawn/lib/common.sh`, `plugins/spawn/lib/{lens,launch,spawnctl}.sh`, `plugins/spawn/tests/unit/envelope.bats` (new).
+- **Approach:**
+  1. Add the envelope to `common.sh` alongside `emit()`: schema version, `ok`, `error`, `remedy`, trust marking, and an operation payload.
+  2. Convert all three tiers in each script — the jq success emit, the jq `emit_error`, and the pure-bash fallback — plus the hardcoded string in `need_jq`.
+  3. Reconcile `spawnctl.sh`'s prose `error` field to the enum shape lens and launch use, and re-check the preflight rewrapping at `lens.sh:312-335` and `launch.sh:299-320` now that forwarding is safe.
+- **Patterns to follow:** `plugins/spawn/lib/common.sh:47-53` (`emit` and its empty-payload guard); the three-tier encoders at `lens.sh:97-119`, `:117`, `:175-181`.
+- **Execution note:** the pure-bash fallback exists for the no-jq case; test it by making `jq` unavailable rather than by reading the code.
+- **Test scenarios:**
+  - Every script's success, error, help and describe responses parse and carry the same required fields.
+  - With `jq` absent, the fallback still emits one parseable object with the envelope's required fields.
+  - `EMITTED` is honoured — no script emits twice.
+  - A preflight failure surfaces one enum value the caller can switch on, not prose.
+- **Verification:** a Bash-only consumer can branch on the same field names regardless of which script it called.
+
+### U4. Make the contract answerable at runtime
+
+- **Goal:** a caller can ask the script what it supports instead of hard-coding it.
+- **Requirements:** R10, R11, R12, R13, R14. Covers KD2, KTD10.
+- **Dependencies:** U3.
+- **Files:** `plugins/spawn/lib/{lens,launch,spawnctl}.sh`, `plugins/spawn/tests/unit/describe.bats` (new), `plugins/spawn/tests/unit/lens.bats`.
+- **Approach:**
+  1. Add a `--describe` arm to each parser emitting flags, the exit enum and the response fields at exit 0.
+  2. Give help its own discriminator field so it is distinguishable from a usage error without changing either exit code — the enum stays frozen.
+  3. Audit every `die` site for a remedy, extending the `no_text_truncated` standard, and keep the no-spend vocabulary in mind while wording them.
+  4. Add the lens's no-tools, prompt-is-everything statement to its response.
+  5. Add the agreement test: `--describe` and the command bodies name the same fields.
+- **Patterns to follow:** the `-h|--help` arm at `lens.sh:222` and `launch.sh:237`; the remedy wording at `lens.sh:528-533`, including its comment about bending the wording rather than the lint.
+- **Test scenarios:**
+  - Covers AE6. `--help` and a usage error are distinguishable by a response field; both still exit 2.
+  - `--describe` exits 0 and its declared exit enum matches the constants the script actually defines.
+  - `--describe` answers with the gateway down and with no config present.
+  - Every error value carries a non-empty remedy.
+  - The no-spend lint still passes over the new prose.
+  - The agreement test fails when a field is renamed in one surface only — verify by mutating one.
+- **Verification:** a caller reconciles against the running version rather than a copied table.
+
+### U5. A stable path to allowlist
+
+- **Goal:** an allowlist rule that survives a version upgrade.
+- **Requirements:** R15, R16. Covers KD2, KD7.
+- **Dependencies:** none.
+- **Files:** `plugins/spawn/README.md`, `plugins/spawn/tests/unit/lens.bats`, plus whatever shim the approach lands on.
+- **Approach:**
+  1. Provide a stable, narrowly scoped entry point whose path carries no version component, and document deriving the rule from it.
+  2. Rewrite the README allowlist section — it still names `gateway` at lines 142, 148 and 154 after the rename.
+  3. **Update `tests/unit/lens.bats:674-676` in the same commit.** It asserts the README contains `plugins/cache/*/gateway/*/lib/lens.sh`; rewriting the prose alone turns the suite red for the wrong reason.
+  4. Do not solve the version problem by wildcarding a cache directory — that authorizes whatever else lands there.
+- **Patterns to follow:** the existing allowlist lint at `plugins/spawn/tests/unit/lens.bats:644-677`, which already forbids any executable reference under `marketplaces/`.
+- **Test scenarios:**
+  - The README contains no executable reference to a version-pinned path, and none to `marketplaces/`.
+  - The documented rule matches the documented invocation byte-for-byte.
+  - The lint catches a reintroduced version-pinned rule — verify by planting one.
+- **Verification:** the documented rule still matches after a version bump.
+
+### U6. Make the report honest and readable
+
+- **Goal:** drift that is real, in prose a person can read.
+- **Requirements:** R17, R18. Covers KD8.
+- **Dependencies:** U1, U3.
+- **Files:** `plugins/spawn/lib/spawnctl.sh`, `plugins/spawn/commands/report.md`, `plugins/spawn/tests/unit/gatewayctl.bats`.
+- **Approach:**
+  1. Decide alias equivalence from what the gateway says each alias resolves to. `$cfg[alias].model` is already in scope in the same jq program as the drift computation.
+  2. Keep the machine-readable response intact; the command body renders it.
+- **Patterns to follow:** `plugins/spawn/lib/spawnctl.sh:1003-1018` (the three drift classes) and `:284-300` (the config-model reducer that fails safe to empty).
+- **Test scenarios:**
+  - Covers AE7. Two aliases resolving to the same model are not drift; a prefixed alias resolving to a different model is.
+  - An alias the gateway serves but whose resolution is unavailable is reported as unknown, not silently as equivalent.
+  - The response still parses as one object with the machine-readable fields present.
+- **Verification:** against the live gateway's 18 aliases, the drift block is empty.
+
+### Stage 2 — the background agent
+
+### U7. The job record
+
+- **Goal:** a job that outlives the session that started it, and can be found again.
+- **Requirements:** R7. Covers KD5, KD13, KTD2, KTD6.
+- **Dependencies:** U3.
+- **Files:** `plugins/spawn/lib/` (new job-record helpers), `plugins/spawn/tests/unit/jobs.bats` (new).
+- **Approach:**
+  1. A job directory per job holding the contract, an append-only log, and a status file.
+  2. A per-worktree lock; a second spawn is refused and returns the running job's handle.
+  3. Liveness by probe — `kill -0` plus an argv identity check — never by reading the status file.
+- **Patterns to follow:** `plugins/spawn/lib/spawnctl.sh:601-638` (`pid_is_gateway` argv verification), `:863-938` (stale and recycled-pid refusals), `:692-702` (pidfile beside its binary record).
+- **Test scenarios:**
+  - A job directory is created 0700 and its log is append-only and readable while the job runs.
+  - A second spawn in the same worktree is refused and names the running handle.
+  - A spawn in a different worktree is not refused.
+  - A status file saying `running` for a dead pid resolves to a terminal state, not `running`.
+  - A recycled pid whose argv does not match is not treated as the job.
+- **Verification:** a job is discoverable and correctly classified after the launching shell has exited.
+
+### U8. Two entry points, two ceilings
+
+- **Goal:** the ceiling a job runs under is decided by which door it came through.
+- **Requirements:** R8, R25. Covers KD4, KD10.
+- **Dependencies:** U7.
+- **Files:** `plugins/spawn/lib/` (two entry points), shipped permission configs, `plugins/spawn/tests/unit/ceilings.bats` (new), `plugins/spawn/README.md`.
+- **Approach:**
+  1. Two entry points, separately allowlistable, each handing the child a different permission configuration.
+  2. The repo-bounded configuration drops `user` from the child's setting sources and denies version-control hooks, agent configuration and symlinks resolving outside the tree.
+  3. The child runs in a mode where a prompt cannot park it.
+- **Patterns to follow:** `plugins/spawn/lib/launch.sh:415-423` (the child invocation, and why env is exported inside the subshell rather than prefixed).
+- **Execution note:** assert by file side-effect, never on the model's prose — a text assertion passed in both arms during the spike because the model quotes the command back.
+- **Test scenarios:**
+  - Covers AE4. A job through the operator entry point runs at the operator's ceiling; through the agent entry point, repo-bounded.
+  - Covers AE10. Under the repo-bounded ceiling, writing a version-control hook, an agent-configuration file, or through an escaping symlink is denied.
+  - A child launched from a session that allows shell access cannot run one when `user` is dropped from its sources — and the control arm, same prompt, can.
+  - No permission prompt is ever waited on.
+- **Verification:** the denied arm produces no side effect while the control arm does.
+
+### U9. The supervisor
+
+- **Goal:** a job that is detached, watched, classified honestly, and reapable.
+- **Requirements:** R6, R9, R21, R26. Covers KD9, KD11, KTD5, KTD8, KTD9.
+- **Dependencies:** U7, U8.
+- **Files:** `plugins/spawn/lib/` (supervisor), `plugins/spawn/tests/unit/supervisor.bats` (new), `plugins/spawn/tests/fixtures/fake-claude.sh`.
+- **Approach:**
+  1. Detach with `set -m` plus `nohup` so the job holds its own process group; redirect all three streams.
+  2. Capture a pre-job baseline so deliverables are measured against it and a pre-existing file cannot satisfy a contract.
+  3. On completion, establish the trusted fields — times, terminal state, exit status, denials, changed files, deliverables present — and classify per the terminal-state set. Never take the child's exit status as evidence of work.
+  4. Run the contract's optional verification command and record its exit code.
+  5. Reap with TERM, a bounded poll, then KILL.
+- **Patterns to follow:** `plugins/spawn/lib/launch.sh:404-437` (the poll-and-reap loop, and why a detached watchdog was rejected — this unit deliberately revisits that, which is why the process group matters), `:148-160` (`reap_child`), `:476-491` (announced-but-broken is never success).
+- **Execution note:** `FAKE_CLAUDE_MODE=hang` already writes its pid then sleeps; it is the instrument for the deadline and reap assertions. A new fixture mode needs a test in `tests/unit/fixtures.bats`.
+- **Test scenarios:**
+  - Covers AE5. A job whose calls are denied is reported degraded, not done; no job waits on a prompt.
+  - Covers AE9. Changed files, terminal state and deliverable presence come from the supervisor and are trusted; a job whose contract names an absent deliverable is not done however the model describes it.
+  - A job survives a TERM aimed at the launcher's process group.
+  - A deliverable that already existed before the job does not satisfy the contract.
+  - A job cancelled mid-flight is reaped, reaches `cancelled`, and leaves no orphan.
+  - Cancel after a terminal state is a no-op, not an error.
+  - A verification command that fails leaves the job not-done, with its exit code recorded.
+  - `wait -n` appears nowhere — the harness must run under `/bin/bash` 3.2.
+- **Verification:** every terminal state is reachable in tests, and no test leaves a stray process.
+
+### U10. The handle is usable
+
+- **Goal:** a holder can do something with what they were given.
+- **Requirements:** R22. Covers KTD2, KTD6, KTD8.
+- **Dependencies:** U9.
+- **Files:** `plugins/spawn/lib/` (handle operations), `plugins/spawn/tests/unit/handle.bats` (new).
+- **Approach:** query state, await completion with a bound, retrieve the result against its contract, cancel. An unknown or expired handle is a named error with a remedy, not a crash.
+- **Test scenarios:**
+  - Each operation on a running, a finished, and an unknown handle.
+  - Await returns on completion and on its own bound, distinguishably.
+  - An expired handle is distinguishable from one that never existed.
+  - Every operation's response carries the envelope.
+- **Verification:** a Bash-only caller can poll a job to completion using only `--describe` and the handle.
+
+### U11. The model narrates; the plugin reports
+
+- **Goal:** nothing a third-party model wrote is presented as fact or followed as instruction.
+- **Requirements:** R19. Covers KD9.
+- **Dependencies:** U9.
+- **Files:** `plugins/spawn/lib/` (job result and notification), `plugins/spawn/tests/unit/supervisor.bats`.
+- **Approach:** the model's account carries the same trust marking the lens's response already carries, and the notification travels in the envelope rather than as bare text.
+- **Patterns to follow:** `plugins/spawn/lib/lens.sh:566-598` — the trust constants are literals inside the jq program so the far side cannot forge or suppress them.
+- **Test scenarios:**
+  - The narrative field carries the untrusted marking; the supervisor's fields do not.
+  - A narrative containing an instruction is still returned as data, and no consumer path executes it.
+  - The completion notification parses as the envelope.
+- **Verification:** a consumer can tell, per field, what the plugin established from what the model claimed.
+
+### U12. Jobs appear in the report
+
+- **Goal:** a running job is perceptible without knowing its handle.
+- **Requirements:** R18 (extended to jobs). Covers KD8, KD12-in-spirit.
+- **Dependencies:** U6, U7.
+- **Files:** `plugins/spawn/lib/spawnctl.sh`, `plugins/spawn/commands/report.md`, `plugins/spawn/tests/unit/gatewayctl.bats`.
+- **Approach:** the report lists jobs with their alias, age, state and last activity, read from the job records and classified by probe rather than by trusting a status file.
+- **Test scenarios:**
+  - A running job appears; a finished one appears with its terminal state.
+  - A job whose process is gone but whose status file says running is reported by its probed state.
+  - With no jobs, the report is unchanged from today's shape.
+- **Verification:** `/spawn:report` answers "what is running" without a handle in hand.
+
+---
+
+## Verification Contract
+
+| gate | command | applies to |
+|---|---|---|
+| unit suites | `plugins/spawn/tests/run-tests.sh unit` | U1–U12 |
+| harness self-check | `plugins/spawn/tests/run-tests.sh self-check` | all — proves a suite can fail |
+| wire smoke | `plugins/spawn/tests/run-tests.sh smoke` | version sync, `claude plugin validate`, agent-consumer parity, secret scan |
+| everything | `plugins/spawn/tests/run-tests.sh all` | before any PR |
+| live lens | prose through `/spawn:agent` against a served alias | U2, U4 |
+| live job | a `bg-agent` job to a terminal state, then `/spawn:report` | U7–U12 |
+
+There is no CI in this repo — `run-tests.sh` is the whole verification contract.
+New suites are auto-discovered by glob, so no registration is needed. Each new
+entry point must be added to the enumerated no-spend and no-write lints; the
+terminal-sink lint picks it up automatically.
+
+---
+
+## Definition of Done
+
+- All 26 requirements are implemented or explicitly deferred in this document.
+- `run-tests.sh all` passes, including the self-check and the secret scan reporting ACTIVE.
+- No command filename matches a skill directory name, and no command body redirects to a skill.
+- Every script answers `--describe` at exit 0, and its declared enum matches its constants.
+- A `bg-agent` job reaches each terminal state in tests, leaves no stray process, and its trusted fields come from the supervisor.
+- A repo-bounded job cannot write a version-control hook, agent configuration, or through an escaping symlink — proven by side-effect, with a passing control arm.
+- The README's allowlist section and the test that pins it agree, and neither names a version-pinned path.
+- `/spawn:report` shows the live gateway with an empty drift block and lists jobs.
