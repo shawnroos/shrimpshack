@@ -594,15 +594,54 @@ terminal_sink_lint() {
         # interpolates a shell variable must go through a defence — either it IS
         # a chokepoint definition (it calls sanitize_for_display) or it pipes
         # through the stream filter.
+        #
+        # NOT line-scoped (R6). The original grep pipeline demanded the print,
+        # the `$` and the `>&2` on ONE line, so two real shapes slipped past:
+        #   * a multi-line block redirect — `{ printf ... "$X" ... } >&2`,
+        #     where the print line has no sink and the sink line has no print;
+        #   * `> /dev/stderr`, the same terminal by another name.
+        # awk holds the whole file: it records every { ... } group whose
+        # CLOSING line carries a terminal redirect, then flags any undefended
+        # interpolated print that either carries its own terminal redirect or
+        # sits inside such a group. Brace tracking is a trimmed-line heuristic
+        # (push on trailing `{`, pop on leading `}`), which is exact for the
+        # shell-level groups these scripts use; awk/jq program text inside
+        # quotes can transiently unbalance it, but a recorded range only exists
+        # where a closing line REDIRECTS TO A TERMINAL, and the self-test
+        # plants prove both directions.
         while IFS= read -r line; do
-            case "$line" in
-                *gateway::sanitize_for_display*|*gateway::sanitize_stream*) continue ;;
-            esac
             printf 'LINT %s: raw interpolated stderr sink: %s\n' "$base" "$line"
             found=1
-        done < <(grep -nE '(>&2|/dev/tty)' "$f" \
-                 | grep -E '(printf|echo|cat|tail|head|sed|awk)' \
-                 | grep -F '$')
+        done < <(awk '
+            function is_sink(s)  { return s ~ /(>&2|>>?[ \t]*\/dev\/(stderr|tty))/ }
+            function is_print(s) { return s ~ /(printf|echo|cat|tail|head|sed|awk)/ }
+            function defended(s) { return s ~ /gateway::sanitize_(for_display|stream)/ }
+            { lines[NR] = $0 }
+            END {
+                sp = 0; nblk = 0
+                for (i = 1; i <= NR; i++) {
+                    t = lines[i]
+                    sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
+                    if (t ~ /^\}/) {
+                        if (sp > 0) {
+                            if (is_sink(t)) { nblk++; bs[nblk] = open[sp]; be[nblk] = i }
+                            sp--
+                        }
+                    }
+                    if (t ~ /\{$/) { sp++; open[sp] = i }
+                }
+                for (i = 1; i <= NR; i++) {
+                    l = lines[i]
+                    if (!is_print(l) || index(l, "$") == 0 || defended(l)) continue
+                    hit = is_sink(l)
+                    if (!hit) {
+                        for (j = 1; j <= nblk; j++) {
+                            if (i > bs[j] && i < be[j]) { hit = 1; break }
+                        }
+                    }
+                    if (hit) print i ": " l
+                }
+            }' "$f")
     done
     return $found
 }
@@ -647,4 +686,34 @@ terminal_sink_lint() {
     run terminal_sink_lint "$WORK/liblint2"
     [ "$status" -ne 0 ]
     echo "$output" | grep -q 'LINT common.sh: raw interpolated stderr sink'
+
+    # Fourth plant (R6): a MULTI-LINE block redirect. The print line carries no
+    # sink and the sink line carries no print, which is exactly what the old
+    # line-scoped scan could not see — verified slipping past it.
+    mkdir -p "$WORK/liblint3"
+    cp "$LIB"/*.sh "$WORK/liblint3/"
+    run terminal_sink_lint "$WORK/liblint3"
+    [ "$status" -eq 0 ]
+    printf '{\n    printf "block leak: %%s\\n" "$SOME_UNTRUSTED_VALUE"\n} >&2\n' >> "$WORK/liblint3/gatewayctl.sh"
+    run terminal_sink_lint "$WORK/liblint3"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -q 'raw interpolated stderr sink'
+
+    # Fifth plant (R6): /dev/stderr is the same terminal by another name.
+    mkdir -p "$WORK/liblint4"
+    cp "$LIB"/*.sh "$WORK/liblint4/"
+    run terminal_sink_lint "$WORK/liblint4"
+    [ "$status" -eq 0 ]
+    printf 'printf "dev leak: %%s\\n" "$SOME_UNTRUSTED_VALUE" > /dev/stderr\n' >> "$WORK/liblint4/lens.sh"
+    run terminal_sink_lint "$WORK/liblint4"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -q 'raw interpolated stderr sink'
+
+    # And the block scan does not fire on a block redirected to a plain FILE —
+    # a lint that cries wolf on every curlrc heredoc gets deleted, not fixed.
+    mkdir -p "$WORK/liblint5"
+    cp "$LIB"/*.sh "$WORK/liblint5/"
+    printf '{\n    printf "file write: %%s\\n" "$SOME_VALUE"\n} > "$WORK/somefile"\n' >> "$WORK/liblint5/common.sh"
+    run terminal_sink_lint "$WORK/liblint5"
+    [ "$status" -eq 0 ]
 }
