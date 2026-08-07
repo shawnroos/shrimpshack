@@ -51,11 +51,22 @@ This is handoff Q2 (command/skill name collision) with evidence: the collision i
 not merely confusing, it appears to make one of the two surfaces unreachable by
 its own name.
 
-Hedge on mechanism: what is observed is that **name resolution went to the command
-in all three invocations**. That is not proof the skill can never load — autonomous
-model-triggered selection (the description matching, rather than an explicit
-`gateway:lens` call) is a separate path and was not tested. But the explicit path a
-command body itself instructs a caller to take does not reach the skill.
+**Mechanism confirmed independently** by the `feature/gateway-plugin` session
+(commit `937579b`, `docs/residual-review-findings/feature-gateway-plugin.md`): the
+returned text carried `$ARGUMENTS` expansion, which is a command-only feature. Two
+sessions, two worktrees, same result — the command wins the name.
+
+Their write-up adds the consequence I missed: each command body says "Use the Skill
+tool to invoke: `gateway:<name>`", which resolves back to the command. **An agent
+following that instruction literally loops.** It only appears to work because each
+command also names the script path, which is enough to finish the task.
+
+It already bit: `commands/launch.md` says "say what a gateway-pointed session does
+not have — the skill lists those." That list is in `skills/launch/SKILL.md` under a
+heading of exactly that name, and it was never in context.
+
+Still untested: autonomous description-matched selection, rather than an explicit
+`gateway:lens` call. That is a separate path.
 
 ## F2 — `lens.sh` is mode 644; the other two entry points are 755
 
