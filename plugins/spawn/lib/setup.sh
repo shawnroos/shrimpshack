@@ -1120,20 +1120,70 @@ launcher_stored_argv() {
     printf '%s' "$line"
 }
 
-# detect_supervisor <binary> — the sweep. Answers in two globals rather than on
-# stdout for the reason stated at resolve_latest_tag: this function calls die(),
-# and a die inside a command substitution writes the contract's one JSON object
-# into a variable instead of to the consumer.
+# sibling_install_of <arg0> <resolved-install> — the gateway install directory
+# that an agent's ProgramArguments[0] names, when that path is a `gateway-*`
+# install sitting BESIDE the resolved one. Nothing, non-zero, when it is not.
 #
-# An agent matches when its ProgramArguments[0] is EITHER the resolved gateway
-# binary (the first-adoption shape) OR this script's own launcher (the re-run
-# shape, where the original command comes back out of the launcher). Counting
-# finishes BEFORE anything is written, so the zero-match and two-match paths
-# write neither file.
+# WHY THIS EXISTS: matching only the RESOLVED binary makes the whole step
+# silently no-op on the upgrade path. `acquire` installs gateway-<newer> beside
+# the version the operator wrote into the plist, the exact comparison fails, the
+# step reports "not supervised", and setup reports success while launchd keeps
+# starting the OLD binary — which, after token retirement, comes up with an
+# empty auth list. That is the wrong-success shape R28 exists to prevent.
+#
+# PURELY A PATH TEST — no `-e`, no stat. By the time this runs, the install the
+# plist names is routinely GONE: promote() moves a replaced same-version install
+# aside and deletes it. A detector that required the old path to still exist
+# would go blind on exactly the upgrade it is here to catch.
+#
+# The suffix is stripped candidate by candidate rather than matched with a
+# `case` glob because `*` in a case pattern crosses `/`, so `root/gateway-*/bin`
+# would also match `root/gateway-x/anything/deeper/bin`.
+sibling_install_of() {
+    local arg0="$1" install="${2%/}" cand stale
+    [ -n "$arg0" ] && [ -n "$install" ] || return 1
+    for cand in "${BIN_CANDIDATES[@]}"; do
+        stale="${arg0%/"$cand"}"
+        [ "$stale" = "$arg0" ] && continue
+        [ -n "$stale" ] || continue
+        [ "$(dirname "$stale")" = "$(dirname "$install")" ] || continue
+        case "$(basename "$stale")" in
+            gateway-*) printf '%s' "$stale"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# rebase_argv <argv-json> <resolved-bin> <stale-install> <install> — the command
+# the launcher should EXEC, with the install it was written against swapped for
+# the one this run resolved.
+#
+# arg0 comes from find_binary_in rather than from a prefix substitution: an
+# install built --release and one built --debug hold the binary at different
+# paths inside the tree, so substituting the directory would name a file that
+# does not exist. Every later argument that lived under the old install (the
+# `--config .../gateway.yaml` the operator wrote) is prefix-rebased; anything
+# else is passed through untouched.
+rebase_argv() {
+    printf '%s' "$1" | jq -c --arg b "$2" --arg s "${3%/}/" --arg i "${4%/}/" \
+        '[$b] + (.[1:] | map(if type == "string" and startswith($s) then $i + .[($s | length):] else . end))' 2>/dev/null
+}
+
+# detect_supervisor <binary> <install> — the sweep. Answers in two globals rather
+# than on stdout for the reason stated at resolve_latest_tag: this function calls
+# die(), and a die inside a command substitution writes the contract's one JSON
+# object into a variable instead of to the consumer.
+#
+# An agent matches when its ProgramArguments[0] is the resolved gateway binary
+# (the first-adoption shape), ANY `gateway-*` sibling install's binary beside it
+# (the upgrade shape — see sibling_install_of), or this script's own launcher
+# (the re-run shape, where the original command comes back out of the launcher).
+# Counting finishes BEFORE anything is written, so the zero-match and two-match
+# paths write neither file.
 SUPERVISOR_PLIST=""
 SUPERVISOR_ARGV=""
 detect_supervisor() {
-    local bin="$1" plist json arg0 args stored matches=0 found_plist="" found_args=""
+    local bin="$1" install="$2" plist json arg0 args stored matches=0 found_plist="" found_args=""
     SUPERVISOR_PLIST=""
     SUPERVISOR_ARGV=""
     [ -d "$LAUNCH_AGENTS_DIR" ] || return 0
@@ -1143,7 +1193,7 @@ detect_supervisor() {
         [ -n "$json" ] || continue
         arg0="$(printf '%s' "$json" | jq -r '.ProgramArguments[0]? // empty' 2>/dev/null)"
         [ -n "$arg0" ] || continue
-        if [ "$arg0" = "$bin" ]; then
+        if [ "$arg0" = "$bin" ] || sibling_install_of "$arg0" "$install" >/dev/null; then
             args="$(printf '%s' "$json" | jq -c '.ProgramArguments' 2>/dev/null)"
             [ -n "$args" ] || continue
         elif [ "$arg0" = "$GATEWAY_LAUNCHER" ]; then
@@ -1221,12 +1271,20 @@ EOF
     printf 'exec %s\n' "$cmd"
 }
 
-# write_launcher <argv-json> <install-dir> — assemble and land it in one rename.
+# write_launcher <recorded-argv-json> <exec-argv-json> <install-dir> — assemble
+# and land it in one rename.
+#
+# TWO ARGVS, AND THE DIFFERENCE IS DELIBERATE. The RECORDED one is the argv this
+# setup FIRST adopted, and it never moves: it is the only surviving copy of the
+# command the operator wrote, and a re-run recovers the agent from it. The
+# EXECUTED one is that command rebased onto the install this run resolved, so an
+# upgrade is followed rather than pinned. On a machine with no upgrade the two
+# are identical and the file is byte-identical across re-runs.
 write_launcher() {
-    local argv="$1" install="$2" dir tmp body
+    local argv="$1" exec_argv="$2" install="$3" dir tmp body
     dir="$(dirname "$GATEWAY_LAUNCHER")"
     mkdir -p "$dir" || return 1
-    body="$(launcher_body "$argv" "$install")" || return 1
+    body="$(launcher_body "$exec_argv" "$install")" || return 1
     [ -n "$body" ] || return 1
     tmp="$GATEWAY_LAUNCHER.spawn-setup.$$"
     rm -f "$tmp" 2>/dev/null
@@ -1275,7 +1333,7 @@ repoint_plist() {
 # which is the opposite of what the design promises.
 # ---------------------------------------------------------------------------
 do_supervisor() {
-    local install="$1" bin name path
+    local install="$1" bin name path arg0 stale exec_argv rebased=0
 
     # R4's shape, applied to this verb's two seams: a missing binary is exit 9
     # naming it, never a silent "not supervised".
@@ -1294,12 +1352,15 @@ do_supervisor() {
 
     [ -n "$install" ] \
         || die "$EX_USAGE" "step 'supervisor': no gateway install directory was given (pass --install-dir, or set SPAWN_INSTALL_DIR); nothing was written"
+    # A trailing slash would break both the sibling comparison (dirname of
+    # "$d/" is "$d") and the prefix rebase, so it is dropped once, here.
+    install="${install%/}"
     [ -d "$install" ] \
         || die "$EX_USAGE" "step 'supervisor': '$install' is not a directory, so there is no install a launchd agent could be supervising; nothing was written"
     bin="$(find_binary_in "$install")" \
         || die "$EX_USAGE" "step 'supervisor': '$install' holds no executable gateway binary (looked for: ${BIN_CANDIDATES[*]}); nothing was written"
 
-    detect_supervisor "$bin"
+    detect_supervisor "$bin" "$install"
 
     if [ -z "$SUPERVISOR_PLIST" ]; then
         # NEVER CREATES ONE. A machine with no supervising agent has nothing to
@@ -1315,7 +1376,26 @@ do_supervisor() {
         exit "$EX_OK"
     fi
 
-    write_launcher "$SUPERVISOR_ARGV" "$install" \
+    # THE REBASE. The adopted argv may name an install this run did not resolve —
+    # the operator wrote gateway-0.1.1 into the plist and acquire has since
+    # installed gateway-0.2.0 beside it. The recorded argv keeps naming what it
+    # first adopted (that record is the only surviving copy of the operators own
+    # command), and the launcher EXECS the resolved binary and config instead.
+    arg0="$(printf '%s' "$SUPERVISOR_ARGV" | jq -r '.[0] // empty' 2>/dev/null)"
+    stale="$(sibling_install_of "$arg0" "$install")" || stale=""
+    exec_argv="$SUPERVISOR_ARGV"
+    if [ -n "$stale" ]; then
+        exec_argv="$(rebase_argv "$SUPERVISOR_ARGV" "$bin" "$stale" "$install")"
+        [ -n "$exec_argv" ] \
+            || die "$EX_USAGE" "step 'supervisor': could not rebase the launchd agents recorded command from '$stale' onto '$install'; nothing was written and the agent at '$SUPERVISOR_PLIST' is untouched"
+        [ "$exec_argv" = "$SUPERVISOR_ARGV" ] || rebased=1
+    fi
+
+    if [ "$rebased" -eq 1 ]; then
+        say "the launchd agent at $SUPERVISOR_PLIST still names the install at $stale, and this run resolved $install — the launcher will start the RESOLVED binary and config, so the agent follows the upgrade instead of pinning to the version it was written against"
+    fi
+
+    write_launcher "$SUPERVISOR_ARGV" "$exec_argv" "$install" \
         || die "$EX_USAGE" "step 'supervisor': could not write the launcher at '$GATEWAY_LAUNCHER'; the launchd agent at '$SUPERVISOR_PLIST' is untouched"
 
     repoint_plist "$SUPERVISOR_PLIST" "$GATEWAY_LAUNCHER" \
@@ -1334,9 +1414,13 @@ do_supervisor() {
     # — which is how every test in the supervisor suite went red at once, once.
     emit "$(jq -nc --arg p "$SUPERVISOR_PLIST" --arg l "$GATEWAY_LAUNCHER" --arg b "$bin" \
         --arg d "$LAUNCH_AGENTS_DIR" --arg i "$install" --argjson argv "$SUPERVISOR_ARGV" \
+        --argjson xargv "$exec_argv" --argjson reb "$rebased" --arg from "$stale" \
         '{ok:true, verb:"supervisor", action:"repointed", plist:$p, launcher:$l,
           program:$b, agents_dir:$d, install_dir:$i, original_program_arguments:$argv,
-          detail:"the agent now starts the gateway through a launcher setup owns, which reads the token from the Keychain at start; no credential was written to the plist, and every other key in it is unchanged. SETUP NOW OWNS A STEP IN THE STARTUP PATH of this machine: the gateway starts through a file this plugin writes.",
+          program_arguments:$xargv,
+          rebased:($reb == 1), rebased_from:(if $reb == 1 then $from else null end),
+          detail:("the agent now starts the gateway through a launcher setup owns, which reads the token from the Keychain at start; no credential was written to the plist, and every other key in it is unchanged. SETUP NOW OWNS A STEP IN THE STARTUP PATH of this machine: the gateway starts through a file this plugin writes."
+            + (if $reb == 1 then " REBASED: the agent named the install at \($from), which is not the install this run resolved, so the launcher now execs the resolved binary and config at \($i) — the agent follows the upgrade instead of starting the older build. The recorded original command still names what was first adopted." else "" end)),
           error:null, exit_code:0}')" \
         || die "$EX_USAGE" "could not encode the supervisor object"
     exit "$EX_OK"
@@ -2275,16 +2359,26 @@ do_setup() {
         || die "$SUB_RC" "step 'supervisor': $(printf '%s' "$SUB_JSON" | jq -r '.error // "the supervising launchd agent could not be adopted"' 2>/dev/null)"
     case "$(printf '%s' "$SUB_JSON" | jq -r '.action // empty' 2>/dev/null)" in
         repointed)
-            local sv_plist sv_launcher
+            local sv_plist sv_launcher sv_rebased sv_from sv_note=""
             sv_plist="$(printf '%s' "$SUB_JSON" | jq -r '.plist // empty' 2>/dev/null)"
             sv_launcher="$(printf '%s' "$SUB_JSON" | jq -r '.launcher // empty' 2>/dev/null)"
+            sv_rebased="$(printf '%s' "$SUB_JSON" | jq -r '.rebased // false' 2>/dev/null)"
+            sv_from="$(printf '%s' "$SUB_JSON" | jq -r '.rebased_from // empty' 2>/dev/null)"
             record_change "launcher" "$sv_launcher" \
                 "a start-time launcher that reads the gateway token from the Keychain and execs the gateway; it carries no credential value"
             record_change "launch-agent" "$sv_plist" \
                 "its ProgramArguments now name that launcher; every other key in the plist is unchanged and no credential was written into it"
+            # An agent that was following a DIFFERENT install than the one this
+            # run resolved is not a detail to absorb: until now it was starting
+            # an older build, and the operator is entitled to be told which one.
+            if [ "$sv_rebased" = "true" ]; then
+                sv_note=" It was pointing at the install at $sv_from, and now follows the one this run resolved ($SETUP_INSTALL_DIR)."
+                record_change "launch-agent-rebase" "$sv_plist" \
+                    "the agent was still starting the gateway installed at $sv_from; the launcher now execs the binary and config in $SETUP_INSTALL_DIR, so the supervised gateway follows this upgrade. The recorded original command is unchanged."
+            fi
             # KTD21's stated cost, in the report rather than absorbed.
             step_done "supervisor" "adopted" \
-                "the launchd agent at $sv_plist now starts the gateway through $sv_launcher, so its own starts authenticate — which means SETUP NOW OWNS A STEP IN THIS MACHINE'S STARTUP PATH: the gateway starts through a file this plugin writes." ;;
+                "the launchd agent at $sv_plist now starts the gateway through $sv_launcher, so its own starts authenticate — which means SETUP NOW OWNS A STEP IN THIS MACHINE'S STARTUP PATH: the gateway starts through a file this plugin writes.$sv_note" ;;
         *)
             step_done "supervisor" "not-supervised" \
                 "no launchd agent starts this gateway, so nothing was adopted and no plist was created — this step never creates one" ;;

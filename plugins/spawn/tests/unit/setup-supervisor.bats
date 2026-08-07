@@ -123,11 +123,19 @@ assert_one_json() {
     jq -e 'has("ok") and has("error") and has("exit_code")' "$OUT" >/dev/null
 }
 
-# plant_agent <basename> [program-path] — an agent plist in the shape the build
-# machine's really is in: KeepAlive, RunAtLoad, a WorkingDirectory, both log
-# paths and a Label, all of which must survive.
+# plant_agent <basename> [program-path] [install-dir] — an agent plist in the
+# shape the build machine's really is in: KeepAlive, RunAtLoad, a
+# WorkingDirectory, both log paths and a Label, all of which must survive.
+#
+# The third argument is the install the plist NAMES, which is the resolved one
+# on every path except the upgrade tests: there it is an older sibling, so the
+# --config argument and the WorkingDirectory point at that older tree the way a
+# real operator-written plist would.
 plant_agent() {
-    local name="$1" prog="${2:-$BIN}"
+    local name="$1" prog="${2:-$BIN}" inst="${3:-}"
+    # NOT `local INSTALL="${3:-$INSTALL}"`: bash creates the local first and the
+    # right-hand side then reads the EMPTY local, not the caller's value.
+    [ -n "$inst" ] || inst="$INSTALL"
     cat > "$SPAWN_LAUNCH_AGENTS_DIR/$name.plist" <<EOP
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -139,14 +147,14 @@ plant_agent() {
 	<array>
 		<string>$prog</string>
 		<string>--config</string>
-		<string>$INSTALL/gateway.yaml</string>
+		<string>$inst/gateway.yaml</string>
 	</array>
 	<key>KeepAlive</key>
 	<true/>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>WorkingDirectory</key>
-	<string>$INSTALL</string>
+	<string>$inst</string>
 	<key>StandardOutPath</key>
 	<string>$WORK/agent.out.log</string>
 	<key>StandardErrorPath</key>
@@ -458,6 +466,113 @@ EOP
     [ "$(sha_of "$plist")" = "$sha" ]
 }
 
+# --- the upgrade path ------------------------------------------------------
+#
+# THE DEFECT THESE ARE WRITTEN AGAINST. Matching only the RESOLVED binary makes
+# this whole step silently no-op the moment `acquire` installs a version newer
+# than the one the operator wrote into the plist: the step reports
+# "not-supervised", setup reports success, and launchd goes on starting the OLD
+# binary — which, after token retirement, comes up with an empty auth list and
+# serves as an open proxy. Every test below plants a plist naming a sibling
+# install that DOES NOT EXIST, because promote() deletes a replaced install: a
+# detector that stat'ed the path would go blind on exactly this case.
+
+@test "R28: an agent naming an OLDER sibling install is adopted, and the launcher execs the RESOLVED build" {
+    local old plist
+    old="$WORK/gateway-0.1.0"
+    plist="$(plant_agent gateway "$old/target/release/gateway" "$old")"
+    # Non-vacuous in both directions: the plist really names the older tree, and
+    # that tree really is gone.
+    [ "$(/usr/bin/plutil -convert json -o - "$plist" | jq -r '.ProgramArguments[0]')" = "$old/target/release/gateway" ]
+    [ ! -e "$old" ]
+
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+    [ "$(jq -r '.rebased' "$OUT")" = "true" ]
+    [ "$(jq -r '.rebased_from' "$OUT")" = "$old" ]
+    jq -e '.detail | test("REBASED")' "$OUT" >/dev/null
+    [ "$(/usr/bin/plutil -convert json -o - "$plist" | jq -r '.ProgramArguments[0]')" = "$SPAWN_GATEWAY_LAUNCHER" ]
+
+    # FUNCTIONAL, not textual. The binary the plist named does not exist, so a
+    # launcher that failed to rebase cannot produce this record at all — and the
+    # config it is handed is the resolved one, not the retired install's.
+    run bash "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+    grep -qx "args=--config $INSTALL/gateway.yaml" "$BIN_RECORD"
+    grep -qx "cwd=$INSTALL" "$BIN_RECORD"
+    grep -qx "token=$STORED_TOKEN" "$BIN_RECORD"
+    run grep -F -- "$old" "$BIN_RECORD"
+    [ "$status" -ne 0 ]
+}
+
+@test "R28: a rebase keeps the argv it FIRST adopted, and a re-run rebases from that record again" {
+    local old
+    old="$WORK/gateway-0.1.0"
+    plant_agent gateway "$old/target/release/gateway" "$old" >/dev/null
+
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    # The recorded original is the only surviving copy of the command the
+    # operator wrote, so it keeps naming what it first adopted...
+    grep -q '^# spawn-setup-original-argv: ' "$SPAWN_GATEWAY_LAUNCHER"
+    grep -qF -- "$old/target/release/gateway" "$SPAWN_GATEWAY_LAUNCHER"
+    # ...while the line that RUNS names the install this run resolved.
+    grep -qF -- "exec '$BIN'" "$SPAWN_GATEWAY_LAUNCHER"
+
+    # The re-run sees a plist naming the LAUNCHER, recovers the original out of
+    # it, and rebases again from that record — stable, not drifting.
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.rebased' "$OUT")" = "true" ]
+    [ "$(jq -r '.rebased_from' "$OUT")" = "$old" ]
+    [ "$(jq -r '.original_program_arguments[0]' "$OUT")" = "$old/target/release/gateway" ]
+    [ "$(jq -r '.program_arguments[0]' "$OUT")" = "$BIN" ]
+    grep -qF -- "$old/target/release/gateway" "$SPAWN_GATEWAY_LAUNCHER"
+
+    run bash "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+    grep -qx "args=--config $INSTALL/gateway.yaml" "$BIN_RECORD"
+}
+
+@test "R28: only a gateway-* SIBLING of the resolved install matches — three lookalikes are not adopted" {
+    # A different directory family; a deeper path under a gateway-* directory
+    # (the trap a `case` glob would fall into, since * crosses /); and a
+    # gateway-* install one directory level up.
+    plant_agent family "$WORK/notgateway-0.1.0/target/release/gateway" "$WORK/notgateway-0.1.0" >/dev/null
+    plant_agent nested "$WORK/gateway-0.1.0/vendor/target/release/gateway" "$WORK/gateway-0.1.0" >/dev/null
+    plant_agent higher "$(dirname "$WORK")/gateway-0.1.0/target/release/gateway" "$(dirname "$WORK")/gateway-0.1.0" >/dev/null
+    local before
+    before="$(file_list)"
+
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.action' "$OUT")" = "not-supervised" ]
+    [ ! -e "$SPAWN_GATEWAY_LAUNCHER" ]
+    [ "$(file_list)" = "$before" ]
+    [ ! -f "$CTL_RECORD" ]
+}
+
+@test "R28: a stale sibling AND the resolved install both matching is still the two-agent refusal" {
+    local a b sha_a sha_b old="$WORK/gateway-0.1.0"
+    a="$(plant_agent gateway)"
+    b="$(plant_agent gateway-old "$old/target/release/gateway" "$old")"
+    sha_a="$(sha_of "$a")"
+    sha_b="$(sha_of "$b")"
+
+    run_supervisor
+    [ "$RC" -eq 2 ]
+    assert_one_json
+    jq -e '.error | test("2 launchd agents")' "$OUT" >/dev/null
+    [ "$(sha_of "$a")" = "$sha_a" ]
+    [ "$(sha_of "$b")" = "$sha_b" ]
+    [ ! -e "$SPAWN_GATEWAY_LAUNCHER" ]
+    [ ! -f "$CTL_RECORD" ]
+}
+
 # --- G3: the assertions are proven by mutating the code ---------------------
 
 @test "G3 self-test: a step that CREATES a plist when none matched makes the no-match assertion go red" {
@@ -509,4 +624,58 @@ EOP
     [ "$RC" -eq 0 ]
     [ "$(grep -c . "$CTL_RECORD")" -eq 1 ]
     [ "$(sed -n '1p' "$CTL_RECORD")" = "load $SPAWN_LAUNCH_AGENTS_DIR/gateway.plist" ]
+}
+
+@test "G3 self-test: reverting the match to exact-binary makes the upgrade adoption go red" {
+    # The regression this closes, reintroduced deliberately: match only the
+    # RESOLVED binary and the upgrade path becomes invisible again.
+    local script old="$WORK/gateway-0.1.0"
+    script="$(mutant setup.sh 's, || sibling_install_of "$arg0" "$install" >/dev/null,,')"
+    run grep -c 'sibling_install_of "\$arg0" "\$install" >' "$script"
+    [ "$output" = "0" ]
+
+    plant_agent gateway "$old/target/release/gateway" "$old" >/dev/null
+    run_supervisor --script "$script"
+    [ "$RC" -eq 0 ]
+    # The mutation is live: the supervising agent is no longer seen at all...
+    [ "$(jq -r '.action' "$OUT")" = "not-supervised" ]
+    # ...so the healthy suite's adoption assertions are now false, and launchd
+    # is left starting a binary that is gone.
+    [ ! -e "$SPAWN_GATEWAY_LAUNCHER" ]
+}
+
+@test "G3 self-test: a launcher that execs the argv UNREBASED makes the launcher-run assertion go red" {
+    local script old="$WORK/gateway-0.1.0"
+    script="$(mutant setup.sh 's,write_launcher "\$SUPERVISOR_ARGV" "\$exec_argv",write_launcher "$SUPERVISOR_ARGV" "$SUPERVISOR_ARGV",')"
+    grep -q 'write_launcher "\$SUPERVISOR_ARGV" "\$SUPERVISOR_ARGV"' "$script"
+
+    plant_agent gateway "$old/target/release/gateway" "$old" >/dev/null
+    run_supervisor --script "$script"
+    [ "$RC" -eq 0 ]
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+    # The mutation is live: the launcher execs the install that is GONE...
+    grep -qF -- "exec '$old/target/release/gateway'" "$SPAWN_GATEWAY_LAUNCHER"
+    # ...so the healthy suite's functional assertion is now false — the gateway
+    # never starts, which is what "adopted" would have been claiming. `run !`
+    # rather than a bare `run`, because the failure here is the POINT and bats
+    # would otherwise warn about the 127 as though it were an accident.
+    run ! bash "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -ne 0 ]
+    [ ! -f "$BIN_RECORD" ]
+}
+
+@test "G3 self-test: recording the REBASED argv makes the original-command assertion go red" {
+    local script old="$WORK/gateway-0.1.0"
+    script="$(mutant setup.sh 's,write_launcher "\$SUPERVISOR_ARGV" "\$exec_argv",write_launcher "$exec_argv" "$exec_argv",')"
+    grep -q 'write_launcher "\$exec_argv" "\$exec_argv"' "$script"
+
+    plant_agent gateway "$old/target/release/gateway" "$old" >/dev/null
+    run_supervisor --script "$script"
+    [ "$RC" -eq 0 ]
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+    # The mutation is live: the recorded command has been overwritten with the
+    # rebased one, so the only surviving copy of what the operator wrote is
+    # lost — and the healthy suite's preservation assertion is now false.
+    run grep -F -- "$old/target/release/gateway" "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -ne 0 ]
 }

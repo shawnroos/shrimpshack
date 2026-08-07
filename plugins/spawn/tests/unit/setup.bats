@@ -718,3 +718,106 @@ mutant() {
     [ "$RC" -eq "$EX_UNREACHABLE_T" ]
     [ "$(jq -r '.failed_step' "$OUT")" = "start" ]
 }
+
+# ---------------------------------------------------------------------------
+# R28, ORCHESTRATED. The supervisor verb is covered twenty-six ways in
+# setup-supervisor.bats; what these two cover is the seam BETWEEN the verb and
+# the run — the arm of do_setup that turns an "adopted" answer into the two
+# `changed` entries and the step status. That arm ran in no test, so a report
+# that silently stopped mentioning the startup path it now owns would have been
+# green.
+#
+# The agents directory is this suite's own sandbox (SPAWN_LAUNCH_AGENTS_DIR),
+# and the operator's real ~/Library/LaunchAgents is never read or written.
+# ---------------------------------------------------------------------------
+
+# plant_agent <basename> <program-path> <install-dir> — an operator-written
+# agent in the shape the build machine's really is in.
+plant_agent() {
+    cat > "$SPAWN_LAUNCH_AGENTS_DIR/$1.plist" <<EOP
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.example.$1</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>$2</string>
+		<string>--config</string>
+		<string>$3/gateway.yaml</string>
+	</array>
+	<key>KeepAlive</key>
+	<true/>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>WorkingDirectory</key>
+	<string>$3</string>
+</dict>
+</plist>
+EOP
+    printf '%s' "$SPAWN_LAUNCH_AGENTS_DIR/$1.plist"
+}
+
+@test "R28: an orchestrated run ADOPTS a supervising agent, records both files, and still verifies" {
+    local plist
+    plist="$(plant_agent gateway "$INSTALL/target/release/gateway" "$INSTALL")"
+    install_claude
+
+    run_setup --consent-shell-rc
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.ok' "$OUT")" = "true" ]
+
+    # The arm this test exists for.
+    [ "$(step_status supervisor)" = "adopted" ]
+    jq -e '[.changed[] | select(.what == "launcher")] | length == 1' "$OUT" >/dev/null
+    jq -e '[.changed[] | select(.what == "launch-agent")] | length == 1' "$OUT" >/dev/null
+    [ "$(jq -r '.changed[] | select(.what == "launcher") | .target' "$OUT")" = "$SPAWN_GATEWAY_LAUNCHER" ]
+    [ "$(jq -r '.changed[] | select(.what == "launch-agent") | .target' "$OUT")" = "$plist" ]
+    # KTD21's stated cost reaches the operator's report, not just the verb's.
+    jq -e '.steps[] | select(.step == "supervisor") | .detail | test("STARTUP PATH")' "$OUT" >/dev/null
+
+    # ...and it really happened on disk: the agent starts through the launcher,
+    # which carries a Keychain read and no credential value.
+    [ -x "$SPAWN_GATEWAY_LAUNCHER" ]
+    [ "$(/usr/bin/plutil -convert json -o - "$plist" | jq -r '.ProgramArguments | join(" ")')" = "$SPAWN_GATEWAY_LAUNCHER" ]
+    grep -qF 'find-generic-password' "$SPAWN_GATEWAY_LAUNCHER"
+    run grep -F -- "$(stored_value gateway-token)" "$SPAWN_GATEWAY_LAUNCHER" "$OUT"
+    [ "$status" -ne 0 ]
+
+    # The run still reaches its normal outcome — adoption is not a detour.
+    [ "$(jq -r '.verification.round_trip[0].http_status' "$OUT")" = "200" ]
+    [ "$(jq -r '.verification.unauthenticated_probe.rejected' "$OUT")" = "true" ]
+}
+
+@test "R28: an agent still following a RETIRED install is rebased, and the run says so" {
+    # The upgrade shape: the operator wrote gateway-1.0.0 into the plist, this
+    # run resolves gateway-9.9.9, and the older tree no longer exists. Without
+    # the rebase the step reports not-supervised and the run reports success
+    # while launchd goes on starting a binary that is gone.
+    local old plist
+    old="$SPAWN_SEARCH_ROOT/gateway-1.0.0"
+    plist="$(plant_agent gateway "$old/target/release/gateway" "$old")"
+    [ ! -e "$old" ]
+    install_claude
+
+    run_setup --consent-shell-rc
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(step_status supervisor)" = "adopted" ]
+
+    # The rebase is REPORTED, not absorbed: an operator whose agent silently
+    # started following a different install is told which one it left.
+    jq -e '[.changed[] | select(.what == "launch-agent-rebase")] | length == 1' "$OUT" >/dev/null
+    jq -e --arg o "$old" '.changed[] | select(.what == "launch-agent-rebase") | .detail | test($o)' "$OUT" >/dev/null
+    jq -e --arg i "$INSTALL" '.steps[] | select(.step == "supervisor") | .detail | test($i)' "$OUT" >/dev/null
+
+    # And the launcher execs the RESOLVED build, not the retired one.
+    grep -qF -- "exec '$INSTALL/target/release/gateway'" "$SPAWN_GATEWAY_LAUNCHER"
+    run grep -F -- "exec '$old" "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -ne 0 ]
+    # ...while the recorded original still names what was first adopted.
+    grep -qF -- "# spawn-setup-original-argv: " "$SPAWN_GATEWAY_LAUNCHER"
+    grep -qF -- "$old/target/release/gateway" "$SPAWN_GATEWAY_LAUNCHER"
+}
