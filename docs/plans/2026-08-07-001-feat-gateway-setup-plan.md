@@ -98,6 +98,7 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 - R17. Verification exercises the gateway's HTTP surface directly. Setup does not treat its own config parsing as evidence that a credential is valid.
 - R25. Every config setup writes is validated by the owning harness's own loader before success is reported, and setup states which harnesses that check cannot fully cover.
 - R26. Setup's command is complete on its own. It carries its own exit-code meanings and consent handling, shares its name with no skill, and instructs no caller to invoke another surface.
+- R27. Every plugin command that authenticates to the gateway resolves its token from the stored credential when the config carries none, so the post-setup steady state works for `status`, `lens` and `launch` and not only for `start`.
 - R18. On failure, setup names the step that failed and what it had already changed, so the operator knows the machine's state.
 
 **Re-running and coexisting**
@@ -370,14 +371,15 @@ KTD6 first: rebase onto `origin/feature/gateway-plugin`. Then U1 and U2 in paral
 ### U4. Config migration and token retirement
 
 - **Goal:** The promoted install's `gateway.yaml` carries no token entry of any shape, and setup is its only sanctioned writer.
-- **Requirements:** R9, R10, R23; F1, F2.
-- **Dependencies:** U2.
+- **Requirements:** R9, R10, R23, R27; F1, F2.
+- **Dependencies:** U2, U3.
 - **Files:** `plugins/spawn/lib/setup.sh`, `plugins/spawn/tests/unit/setup-config.bats`, `plugins/spawn/tests/unit/launch.bats` (the `config_write_lint` scope change and its self-test).
 - **Approach:**
   1. Forward-migrate per KTD18: copy the previous install's `gateway.yaml` into staging with the `server.token`/`server.tokens` entry removed by line edit; never read the literal's value.
   2. Bare machine: emit the upstream template as shipped.
   3. Static R9 half: the migrated config now has no token, so token delivery becomes mandatory — checked before promotion; the live half is U3's start guard.
   4. Narrow the `config_write_lint`'s stated invariant per KTD3; its assertions over the three runtime scripts and its seven-shape self-test stay.
+  5. Close the steady-state gap this unit creates (R27). Stripping the token from the config leaves `SPAWN_TOKEN_VALUE` empty for every command that is not `start`, because it is populated from the config alone and U3's Keychain fallback lives only inside `do_start_locked`. Move the fallback to the shared token-resolution path so `status`, `lens` and `launch` authenticate against an already-running gateway: prefer an inherited `GATEWAY_TOKEN` from the environment when present, else read the stored credential. Without this, a successful setup leaves every other plugin command exiting 7 against the gateway it just configured.
 - **Patterns to follow:** the lint's existing comment style (states whose invariant it enforces); secret-scan expectations from `plugins/spawn/tests/run-tests.sh`.
 - **Test scenarios:**
   - A fixture config with `server.token: "<literal>"` migrates to a copy with no token line and every other line byte-identical.
