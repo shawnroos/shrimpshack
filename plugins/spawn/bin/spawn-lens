@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# bin/spawn-lens — the stable entry point for the lens (plan U5; R15, R16).
+#
+# WHY THIS FILE EXISTS. An installed plugin lives at
+#   ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/lib/lens.sh
+# so the version is a real path component. A `permissions.allow` rule pinned to
+# that path stops matching the moment you upgrade — and it stops matching
+# SILENTLY: an unattended fan-out parks on a permission prompt forever instead
+# of failing with a code. `${CLAUDE_PLUGIN_ROOT}` does not expand inside
+# settings, so the rule has to be a literal path.
+#
+# The fix is NOT a wildcard in the rule. `cache/*/spawn/*/lib/lens.sh` in
+# permissions.allow would authorize whatever else ever lands under that path.
+# The wildcard belongs here instead, behind one file at a stable path the user
+# owns: copy this to ~/.claude/bin/spawn-lens once, allowlist that one path, and
+# the version stops being part of the rule. README.md, "Allowlist entry for
+# unattended fan-out", has the two commands.
+#
+# Narrowly scoped by construction: it resolves the lens and nothing else, takes
+# no path from its caller, passes argv through as an array with no `eval`, and
+# leaves stdin alone so the prompt still travels on stdin or --prompt-file
+# (KTD8). Everything else about the call — flags, JSON response, the frozen exit
+# enum, --describe, --help — is lens.sh's, unchanged, because this execs it.
+#
+# There is no spend logic here and nothing here writes a file. Both are asserted
+# in tests/unit/lens.bats rather than by the lib/*.sh computed-scope lints, which
+# do not reach this directory.
+#
+# Verified under /bin/bash 3.2.57 as well as bash 5 — the allowlisted command is
+# `bash <this file>`, and on a stock Mac that `bash` is 3.2 (KTD5's reason).
+set -uo pipefail
+
+SPAWN_SHIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+LENS=""
+# Running from a checkout (or from inside an install), the lens is a sibling
+# directory away — prefer it, so a developer's copy tests their own tree.
+if [ -f "$SPAWN_SHIM_DIR/../lib/lens.sh" ]; then
+    LENS="$SPAWN_SHIM_DIR/../lib/lens.sh"
+else
+    # Installed. A bash glob, never `ls` — `ls` decorates its output with OSC-8
+    # hyperlink escapes on some shells and corrupts any path captured from it.
+    # Newest version wins via `sort -V`, the same resolution idiom the test
+    # harness uses for ~/gateway-*. If the plugin is installed from more than
+    # one marketplace the tie breaks on the sorted path, which is arbitrary but
+    # deterministic; install the shim from the one you want and it stays put.
+    declare -a SPAWN_CANDIDATES=()
+    for f in "$HOME"/.claude/plugins/cache/*/spawn/*/lib/lens.sh; do
+        [ -f "$f" ] && SPAWN_CANDIDATES+=("$f")
+    done
+    if [ "${#SPAWN_CANDIDATES[@]}" -gt 0 ]; then
+        LENS="$(printf '%s\n' "${SPAWN_CANDIDATES[@]}" | sort -V | tail -1)"
+    fi
+fi
+
+# Exit 3 for "not installed", matching the foreign-consumer recipe in README.md
+# rather than inventing a second convention for the same condition. One JSON
+# object on stdout on this path too, and the detail names the remedy (R12).
+if [ -z "$LENS" ]; then
+    printf '{"ok":false,"alias":null,"text":null,"usage":null,"error":"not_installed","detail":"no lens.sh under ~/.claude/plugins/cache/*/spawn/*/lib/ — the spawn plugin does not appear to be installed; add it, then re-copy this shim from its bin/spawn-lens","exit_code":3}\n'
+    exit 3
+fi
+
+exec bash "$LENS" "$@"

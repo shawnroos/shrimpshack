@@ -133,35 +133,44 @@ message.
 ## Allowlist entry for unattended fan-out
 
 A fan-out of lens calls stalls on a Bash permission prompt unless the caller's
-settings allowlist the script.
+settings allowlist the script. The path an install puts the lens at has the
+**version in it**, so a rule naming it directly stops matching on the next
+upgrade — silently, as a stalled fan-out rather than an error. Two steps, once:
 
-**Do not copy a path from this document — read it off your own install**, then
-put it in `permissions.allow` in `~/.claude/settings.json`:
+**1. Install the shim.** The plugin ships `bin/spawn-lens`, a wrapper that
+resolves the installed lens at run time and execs it. Copy it to a path of your
+own that has no version in it:
 
 ```bash
-ls -d ~/.claude/plugins/cache/*/gateway/*/lib/lens.sh
+mkdir -p ~/.claude/bin
+for f in ~/.claude/plugins/cache/*/spawn/*/bin/spawn-lens; do
+    [ -f "$f" ] && install -m 0755 "$f" ~/.claude/bin/spawn-lens && break
+done
 ```
 
-On the box this was verified on, that prints:
-
-```
-/Users/<you>/.claude/plugins/cache/shrimpshack/gateway/0.1.0/lib/lens.sh
-```
-
-giving a rule of the shape:
+**2. Add one rule** to `permissions.allow` in `~/.claude/settings.json`:
 
 ```json
-"Bash(bash ~/.claude/plugins/cache/shrimpshack/gateway/0.1.0/lib/lens.sh:*)"
+"Bash(bash ~/.claude/bin/spawn-lens:*)"
+```
+
+Then call the lens through that same path, spelled the same way:
+
+```bash
+bash ~/.claude/bin/spawn-lens --alias gpt-sol --prompt-file ./diff.txt
 ```
 
 Notes on that string:
 
-- **The version is IN the path.** `0.1.0` is a real directory component, so a
-  rule pinned to it stops matching the moment you upgrade — and it stops
-  matching *silently*, as a stalled fan-out rather than an error. Re-read the
-  path after every upgrade, or write the rule against a stable absolute path you
-  control (a symlink, or a wrapper script of your own that execs the versioned
-  one).
+- **The version is not in it, and the wildcard is not in the rule.** The shim
+  globs the cache and picks the newest install, so the rule survives an upgrade
+  without `permissions.allow` ever naming a cache directory — a rule containing
+  a wildcarded cache path would authorize whatever else ever lands under it.
+  The shim resolves the lens and nothing else, and takes no path from its
+  caller, so allowlisting it authorizes exactly one thing.
+- **Re-copy the shim after a plugin upgrade only if this section says to.** The
+  shim's own resolution logic carries no version, so an existing copy keeps
+  working across upgrades; the rule never changes.
 - **An earlier version of this document named
   `~/.claude/plugins/marketplaces/<marketplace>/plugins/<plugin>/lib/lens.sh`.
   That path does not exist.** Installed plugins live under `cache/`, and on a
@@ -172,19 +181,23 @@ Notes on that string:
   to be a literal path at all.
 - **The rule matches literal command text, so the rule and the invocation must
   be spelled to agree.** A command that reaches Bash as an unexpanded
-  `${CLAUDE_PLUGIN_ROOT}` path, or as the absolute `/Users/...` path the
-  resolution recipe above produces, is a *different string* from the `~/...`
-  spelling in this rule. Pick one spelling, use it in both the rule and the
-  invocation — if your consumer resolves an absolute path, write the rule with
-  that same absolute path. A mismatched rule does not error: it shows up as a
-  fan-out silently stalled on a permission prompt.
+  `${CLAUDE_PLUGIN_ROOT}` path, or as the absolute `/Users/you/...` path the
+  foreign-consumer recipe above resolves, is a *different string* from the
+  `~/...` spelling in this rule. Pick one spelling, use it in both the rule and
+  the invocation — if your consumer resolves an absolute path, write the rule
+  with that same absolute path. A mismatched rule does not error: it shows up as
+  a fan-out silently stalled on a permission prompt.
 - Allowlist the **lens** only. `launch.sh` starts a real session and
-  `spawnctl.sh` starts and stops a process; both are worth a prompt.
+  `spawnctl.sh` starts and stops a process; both are worth a prompt. The shim
+  reaches the lens and only the lens, which is what makes one rule enough.
+- With no install to resolve, the shim prints one JSON object with
+  `error: "not_installed"` and exits `3` — the same code the foreign-consumer
+  recipe uses for the same condition. It never falls through to a prompt.
 
-**This plugin cannot write that entry for you.** A plugin ships files inside its
-own tree; it has no ability to modify user settings, and nothing here tries to.
-Adding it is a manual, opt-in step, and rollout beyond this paragraph is
-deliberately deferred.
+**This plugin can do neither step for you.** A plugin ships files inside its own
+tree: it cannot copy the shim to `~/.claude/bin` and it cannot modify user
+settings, and nothing here tries to. Both steps are manual and opt-in, and
+rollout beyond this paragraph is deliberately deferred.
 
 ---
 

@@ -641,39 +641,197 @@ EOF
     done
 }
 
-@test "the README's allowlist path is not the one that does not exist" {
-    # VERIFIED ON A REAL INSTALL, 2026-08-07. The README used to tell people to
-    # allowlist
-    #   ~/.claude/plugins/marketplaces/<mkt>/plugins/gateway/lib/lens.sh
-    # That path does not exist. Installing the plugin puts it at
-    #   ~/.claude/plugins/cache/<mkt>/gateway/<version>/lib/lens.sh
-    # and ~/.claude/plugins/marketplaces/<mkt>/ was EMPTY.
-    #
-    # This is the worst failure shape in the plugin: an allowlist rule that
-    # matches nothing does not error, it leaves an unattended fan-out parked on
-    # a permission prompt forever — no exit code, no JSON, nothing to branch on.
-    # Everything else here fails loudly; this one fails silently.
-    # Matched as an allowlist RULE, not as prose: the document deliberately
-    # names the bad path in order to warn about it, and a lint that cannot tell
-    # a warning from a recommendation would force the warning to be deleted.
+# allowlist_lint <readme> — prints every offending line and returns grep's
+# sense: 0 means a violation WAS found, so the tests below assert non-zero.
+# Same shape as launch.bats' config_write_lint, and a function rather than
+# inline greps so the self-test below can run it against a planted copy.
+#
+# Every pattern is anchored on a RULE (`Bash(bash …`) or on an executable verb,
+# never on bare prose. The README deliberately NAMES the wrong paths in order to
+# warn about them, and a lint that cannot tell a warning from a recommendation
+# would force the warning to be deleted.
+allowlist_lint() {  # <readme>
+    local readme="$1" found=0 hits
+    # 1. VERIFIED ON A REAL INSTALL, 2026-08-07. The README used to tell people
+    #    to allowlist ~/.claude/plugins/marketplaces/<mkt>/plugins/<plugin>/lib/
+    #    lens.sh. That path does not exist — installs land under
+    #    cache/<mkt>/<plugin>/<version>/ and marketplaces/<mkt>/ was EMPTY.
+    #    Worst failure shape in the plugin: a rule that matches nothing does not
+    #    error, it parks an unattended fan-out on a permission prompt forever —
+    #    no exit code, no JSON, nothing to branch on.
+    if hits="$(grep -n 'Bash(bash [^)]*plugins/marketplaces' "$readme")"; then
+        printf 'LINT: allowlist rule names the marketplaces path, which does not exist:\n%s\n' "$hits"
+        found=1
+    fi
+    # 2. THE CLASS, not just the allowlist instance. The same fictional path was
+    #    ALSO in the foreign-consumer resolution recipe and survived the first
+    #    fix because only the allowlist section was corrected. Any EXECUTABLE
+    #    reference (a glob, a for-loop, a bash or install invocation) to a plugin
+    #    path under marketplaces/ is wrong.
+    if hits="$(grep -nE '(for |ls |bash |cp |install |\[ -f )[^#]*plugins/marketplaces/[^ ]*/plugins/' "$readme")"; then
+        printf 'LINT: executable reference to a plugin path under marketplaces/:\n%s\n' "$hits"
+        found=1
+    fi
+    # 3. R16: the rule must not be version-pinned. The version is a real path
+    #    component of an install, so a rule carrying one stops matching on the
+    #    next upgrade — silently, as a stalled fan-out.
+    if hits="$(grep -nE 'Bash\(bash [^)]*/[0-9]+\.[0-9]+(\.[0-9]+)?/' "$readme")"; then
+        printf 'LINT: allowlist rule is version-pinned and dies on the next upgrade:\n%s\n' "$hits"
+        found=1
+    fi
+    # 4. R16 again, the other half: the fix for (3) is NOT a wildcarded cache
+    #    path in permissions.allow — that authorizes whatever else ever lands
+    #    under it. No rule may name the cache at all; the wildcard belongs
+    #    inside bin/spawn-lens, behind one stable path the user owns.
+    if hits="$(grep -nE 'Bash\(bash [^)]*plugins/cache' "$readme")"; then
+        printf 'LINT: allowlist rule names a cache path; use the stable shim instead:\n%s\n' "$hits"
+        found=1
+    fi
+    # 5. THE CLASS on the version axis, not just the rule instance. (3) guards
+    #    what a reader is told to ALLOWLIST; this guards what a reader is told to
+    #    RUN. The recipe this section used to open with was
+    #    `ls -d ~/.claude/plugins/cache/*/<plugin>/*/lib/lens.sh`, and a copy of
+    #    it with a real version pasted in is an executable reference that goes
+    #    stale on the same upgrade. Anchored on plugins/cache/ so the contrast
+    #    table's `DIR="$HOME/gateway-0.1.1"` warning stays legal, and verb-
+    #    anchored so warning prose does too.
+    if hits="$(grep -nE '(for |ls |bash |cp |install |\[ -f )[^#]*plugins/cache/[^ ]*/[0-9]+\.[0-9]+(\.[0-9]+)?/' "$readme")"; then
+        printf 'LINT: executable reference to a version-pinned install path:\n%s\n' "$hits"
+        found=1
+    fi
+    if [ "$found" -eq 1 ]; then return 0; fi
+    return 1
+}
+
+@test "R15/R16: the README's allowlist rule is stable, narrow, and spelled like its invocation" {
     local readme="$BATS_TEST_DIRNAME/../../README.md"
-    run grep -n 'Bash(bash [^)]*plugins/marketplaces' "$readme"
+
+    run allowlist_lint "$readme"
+    if [ "$status" -eq 0 ]; then
+        printf '%s\n' "$output" >&2
+    fi
     [ "$status" -ne 0 ]
 
-    # THE CLASS, not just the allowlist instance. The same fictional path was
-    # ALSO in the foreign-consumer resolution recipe, and survived the first fix
-    # because only the allowlist section was corrected — the exact
-    # fixed-the-instance-not-the-class pattern that produced this change set's
-    # seven P1s. Any EXECUTABLE reference (a glob, a for-loop, a bash
-    # invocation) to a plugin path under marketplaces/ is wrong: installs live
-    # under cache/<marketplace>/<plugin>/<version>/.
-    run grep -nE '(for |ls |bash |\[ -f )[^#]*plugins/marketplaces/[^ ]*/plugins/' "$readme"
+    # The rule the README actually tells people to add, and the ONE path it
+    # names. Extracted rather than hardcoded: the lint above owns what the path
+    # may not be, and this owns that rule and invocation agree.
+    local rule path
+    rule="$(grep -o 'Bash(bash [^:)]*:\*)' "$readme" | head -1)"
+    [ -n "$rule" ]
+    path="${rule#Bash(bash }"
+    path="${path%:\*)}"
+    [ -n "$path" ]
+
+    # THE SILENT FAILURE THIS UNIT EXISTS FOR. The rule matches literal command
+    # text, so a documented invocation spelled differently from the documented
+    # rule is not a refusal — it is a fan-out parked on a prompt. Trailing space
+    # so the rule line itself cannot satisfy this.
+    grep -qF -- "bash $path " "$readme"
+
+    # The shim the reader is told to copy has to be a file this plugin ships,
+    # and executable — the README's install step uses install(1), not chmod.
+    local shim="$BATS_TEST_DIRNAME/../../bin/spawn-lens"
+    [ -f "$shim" ]
+    [ -x "$shim" ]
+    grep -qF 'bin/spawn-lens' "$readme"
+
+    # And it must still tell a foreign consumer to derive the installed path from
+    # its own box rather than copying one, since the version is a real path
+    # component. Plugin name from plugin.json, never hardcoded: a hardcoded name
+    # survives the next rename as a stale check (the gateway -> spawn rename left
+    # exactly this assertion asserting the old name). -F because the pattern
+    # contains literal asterisks.
+    local pn
+    pn="$(jq -r '.name // empty' "$BATS_TEST_DIRNAME/../../.claude-plugin/plugin.json")"
+    [ -n "$pn" ]
+    grep -qF "plugins/cache/*/$pn/*/lib/lens.sh" "$readme"
+}
+
+@test "R16 lint self-test: a reintroduced version-pinned, wildcarded-cache or marketplaces rule each turns the lint red" {
+    # Baseline clean, plant one violation, assert red — the shape launch.bats'
+    # config_write_lint self-test uses. A detector never seen firing is vacuous
+    # green, and this particular detector guards the one failure in the plugin
+    # that presents as a hang rather than an error.
+    local readme="$BATS_TEST_DIRNAME/../../README.md"
+    cp "$readme" "$WORK/readme-base.md"
+    run allowlist_lint "$WORK/readme-base.md"
     [ "$status" -ne 0 ]
 
-    # And it must still tell the reader to derive the path from their own box
-    # rather than copying one, since the version is a real path component.
-    run grep -q 'plugins/cache/\*/gateway/\*/lib/lens.sh' "$readme"
+    local plant
+    for plant in \
+        '"Bash(bash ~/.claude/plugins/cache/shrimpshack/spawn/9.9.9/lib/lens.sh:*)"' \
+        '"Bash(bash ~/.claude/plugins/cache/*/spawn/*/lib/lens.sh:*)"' \
+        '"Bash(bash ~/.claude/plugins/marketplaces/shrimpshack/plugins/spawn/lib/lens.sh:*)"' \
+        'for f in ~/.claude/plugins/marketplaces/*/plugins/spawn/lib/lens.sh; do :; done' \
+        'ls -d ~/.claude/plugins/cache/shrimpshack/spawn/0.2.0/lib/lens.sh' ; do
+        cp "$readme" "$WORK/readme-plant.md"
+        printf '%s\n' "$plant" >> "$WORK/readme-plant.md"
+        run allowlist_lint "$WORK/readme-plant.md"
+        if [ "$status" -ne 0 ]; then
+            printf 'allowlist_lint stayed green on plant: %s\n' "$plant" >&2
+        fi
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "R16: the shim resolves the lens by version-free path, and refuses distinctly when nothing is installed" {
+    # Coverage for bin/spawn-lens lives HERE, not in the lib/*.sh computed-scope
+    # lints (escapes.bats' terminal-sink lint and launch.bats' config-write
+    # lint), which glob lib/*.sh and cannot reach this directory. Those files
+    # belong to other units in this change set; duplicating their scope was the
+    # wrong trade against editing them.
+    local shim="$BATS_TEST_DIRNAME/../../bin/spawn-lens"
+
+    # No spend logic (R7) and nothing that writes the gateway config (R12),
+    # asserted on the source with comments stripped.
+    run bash -c "sed 's/#.*//' '$shim' | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
+    [ "$status" -ne 0 ]
+    run bash -c "sed 's/#.*//' '$shim' | grep -nE '(^|[^-A-Za-z0-9_])(cp|mv|tee|dd|truncate|sponge|install)[[:space:]]'"
+    [ "$status" -ne 0 ]
+    run bash -c "sed 's/#.*//' '$shim' | grep -nE '>[[:space:]]*[\"'\''\$/~A-Za-z]'"
+    [ "$status" -ne 0 ]
+
+    # Nothing installed: HOME points at an empty tree and the sibling lib/ is
+    # absent, so resolution has nowhere to look. One JSON object, exit 3 — the
+    # code the README's foreign-consumer recipe already uses for this condition —
+    # and never a fall-through that could reach a prompt.
+    mkdir -p "$WORK/emptyhome" "$WORK/lonely"
+    cp "$shim" "$WORK/lonely/spawn-lens"
+    run env HOME="$WORK/emptyhome" bash "$WORK/lonely/spawn-lens" --alias alpha
+    [ "$status" -eq 3 ]
+    [ "$(printf '%s' "$output" | jq -s 'length')" = "1" ]
+    [ "$(printf '%s' "$output" | jq -r '.ok')" = "false" ]
+    [ "$(printf '%s' "$output" | jq -r '.exit_code')" = "3" ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "not_installed" ]
+    # R12: the error names its remedy.
+    [ -n "$(printf '%s' "$output" | jq -r '.detail')" ]
+
+    # Installed shape, stubbed: cache/<mkt>/<plugin>/<version>/lib/lens.sh. The
+    # shim must find it with no version in its own configuration, hand over argv
+    # as given, and leave stdin alone (KTD8 — the prompt never travels in argv).
+    local pn stub
+    pn="$(jq -r '.name // empty' "$BATS_TEST_DIRNAME/../../.claude-plugin/plugin.json")"
+    stub="$WORK/emptyhome/.claude/plugins/cache/mkt/$pn/0.9.9/lib"
+    mkdir -p "$stub"
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'printf "argv:%%s\\n" "$*"\n'
+        printf 'printf "stdin:%%s\\n" "$(cat)"\n'
+    } > "$stub/lens.sh"
+    run env HOME="$WORK/emptyhome" bash -c \
+        "printf '%s' 'a prompt with \"quotes\" and --dashes' | bash '$WORK/lonely/spawn-lens' --alias alpha --max-tokens 16"
     [ "$status" -eq 0 ]
+    [[ "$output" == *'argv:--alias alpha --max-tokens 16'* ]]
+    [[ "$output" == *'stdin:a prompt with "quotes" and --dashes'* ]]
+
+    # A NEWER install wins, which is the whole point: the resolution carries no
+    # version, so an upgrade needs no change to the rule or to the shim.
+    local newer="$WORK/emptyhome/.claude/plugins/cache/mkt/$pn/0.10.0/lib"
+    mkdir -p "$newer"
+    printf '#!/usr/bin/env bash\nprintf "newer\\n"\n' > "$newer/lens.sh"
+    run env HOME="$WORK/emptyhome" bash "$WORK/lonely/spawn-lens" --alias alpha
+    [ "$status" -eq 0 ]
+    [ "$output" = "newer" ]
 }
 
 @test "R7: the lens source contains no spend logic at all" {
