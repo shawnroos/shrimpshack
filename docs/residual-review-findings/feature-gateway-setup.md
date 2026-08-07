@@ -88,6 +88,32 @@ pidfile the supervisor does not write cannot be made to work.
   the original survived only because delivery never wrote. Either merge, or back
   it up and say so in `changed`.
 
+## Open after the G4 run — setup's own start competes with the supervisor
+
+- **P1 · after adopting a supervisor, setup still starts the gateway itself, and
+  the two fight over the port.** Observed live. The `supervisor` step reloads the
+  agent, so launchd immediately tries to start the gateway through the new
+  launcher — but `spawnctl`'s start path holds `127.0.0.1:4000` with the process
+  from before adoption. launchd's `KeepAlive` retries and loses every time
+  (`Error: Os { code: 48, kind: AddrInUse }`, repeatedly, in `~/.gateway.log`),
+  the `start` step sees "a gateway is up" and reports ok without restarting, and
+  `verify` then correctly fails on the still-unauthenticated old process.
+
+  So the run cannot reach a clean pass on a supervised machine, even though
+  every individual piece works: killing the competing process by hand let
+  launchd win the port, and the launcher then produced exactly the wanted state
+  — unauthenticated 401, bogus token 401, real token 200, and no
+  `OPENROUTER_API_KEY` in the process environment.
+
+  The launcher is not at fault; the ownership model is. On a supervised install
+  launchd owns the lifecycle, so setup must not start the gateway itself: after
+  adoption the `start` step should stop any process it started, let the reload
+  bring the gateway up through the launcher, and wait for that to answer —
+  rather than racing it. The narrower restart triggers added twice already
+  (rotation, install, token retirement, and now adoption) keep missing cases
+  because they ask "did this run change something?" instead of "is the process
+  currently serving the one that would be started now?".
+
 ## Known gaps in the supervisor adoption (R28) — both CLOSED
 
 - **CLOSED.** ~~P2 · detection is exact-binary-match, so it silently no-ops on the upgrade
