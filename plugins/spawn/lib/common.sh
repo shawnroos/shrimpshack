@@ -226,3 +226,21 @@ spawn::envelope_bash() {
     printf '{"schema":"%s","ok":false,"error":"%s","remedy":%s,"detail":null,"content_trust":"%s","content_notice":"%s","exit_code":%s%s}' \
         "$SPAWN_SCHEMA" "$err" "$remfield" "$trust" "$notice" "${code:-2}" "${4:-}"
 }
+# models.json alias-table shape guard, shared because both readers need the
+# SAME predicate and a second copy drifts silently.
+#
+# `jq .` succeeds on any valid JSON, so a table that is an array — or whose
+# aliases map to scalars — passes a syntax check and then errors inside the
+# program that consumes it, yielding an empty --argjson and an exit-0 run with
+# nothing on stdout. That is the one failure a consumer cannot tell from
+# success. models.json is hand-maintained metadata (KTD7), so a typo here is
+# the expected input, not an exotic one.
+#
+# Returns the alias map with non-object entries dropped, or {} when the file's
+# top-level shape is wrong. Callers wrap it in whatever shape they need.
+SPAWN_MODELS_ALIASES_JQ_DEF='
+def spawn_aliases:
+  if (type == "object" and ((.aliases // {}) | type) == "object")
+  then ((.aliases // {}) | map_values(select(type == "object")))
+  else {} end;
+'

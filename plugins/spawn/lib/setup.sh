@@ -393,24 +393,13 @@ emit_setup_failure() {
 # every machine. The bound matters because the thing being run is an arbitrary
 # file found on disk: a binary that ignores --version and starts serving would
 # otherwise hang setup forever, and a hang is worse than a named failure.
+#
+# The bound itself lives in run_bounded_out below; this is the discard-stdout
+# case of the same thing. One copy of the kill/wait sequencing, so a fix to it
+# cannot land in only half the callers.
 # ---------------------------------------------------------------------------
 run_bounded() {
-    local secs="$1"; shift
-    local pid i rc
-    "$@" </dev/null >/dev/null 2>&1 &
-    pid=$!
-    for ((i = 0; i < secs * 10; i++)); do
-        kill -0 "$pid" 2>/dev/null || break
-        sleep 0.1
-    done
-    if kill -0 "$pid" 2>/dev/null; then
-        kill -9 "$pid" 2>/dev/null
-        wait "$pid" 2>/dev/null
-        return 124
-    fi
-    wait "$pid"
-    rc=$?
-    return "$rc"
+    run_bounded_out "$1" /dev/null "${@:2}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1143,15 +1132,12 @@ resolve_wire_models() {
     names="$(config_aliases "$cfg")"
     [ -n "$names" ] || die "$EX_USAGE" "step 'wire': '$cfg' declares no model aliases, so there is nothing to wire either harness to; nothing has been written."
 
-    # Same shape guard spawnctl.sh's table_json applies: `jq .` succeeds on any
-    # valid JSON, so a table that is an array — or whose aliases map to scalars
-    # — would reach the program below and error there, yielding an empty
-    # --argjson and an exit-0 run with nothing to parse.
+    # The shape guard is common.sh's spawn_aliases — the same predicate
+    # spawnctl.sh's table_json uses, shared rather than copied so the two
+    # readers of this file cannot drift apart.
     WIRE_MODELS_JSON="$(printf '%s\n' "$names" | jq -Rsc --slurpfile t "$MODELS_JSON" \
-        "$SPAWN_SANITIZE_JQ_DEF"'
-        (($t[0] // {}) | if (type == "object" and ((.aliases // {}) | type) == "object")
-                         then (.aliases | map_values(select(type == "object")))
-                         else {} end) as $tbl
+        "$SPAWN_SANITIZE_JQ_DEF$SPAWN_MODELS_ALIASES_JQ_DEF"'
+        (($t[0] // {}) | spawn_aliases) as $tbl
         | strip_display_controls
         | split("\n")
         | map(select(length > 0))

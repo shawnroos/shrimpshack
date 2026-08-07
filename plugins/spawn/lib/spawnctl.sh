@@ -847,7 +847,14 @@ deliver_secrets() {
         kc_key="$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_OPENROUTER")"
         [ -n "$kc_key" ] && have_key=1
     fi
-    if spawn::keychain_exists "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
+    # resolve_token_fallback may already have read this same item earlier in
+    # this process. Reuse its value rather than spawning `security` twice for
+    # one answer — a credential read is worth doing once. The unresolved and
+    # config/env-sourced cases still take the read below.
+    if [ "$SPAWN_TOKEN_SOURCE" = "keychain" ] && [ -n "$SPAWN_TOKEN_VALUE" ]; then
+        kc_tok="$SPAWN_TOKEN_VALUE"
+        have_tok=1
+    elif spawn::keychain_exists "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
         kc_tok="$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN")"
         [ -n "$kc_tok" ] && have_tok=1
     fi
@@ -1061,7 +1068,7 @@ start_if_down() {
 table_json() {
     local empty='{"aliases":{},"families":{},"no_family_alias":null,"chain_policy":{}}'
     if [ -f "$MODELS_JSON" ]; then
-        jq -c '
+        jq -c "$SPAWN_MODELS_ALIASES_JQ_DEF"'
             def safeobj: if type == "object" then . else {} end;
             def safe_families:
                 ((.families // {}) | safeobj)
@@ -1079,7 +1086,7 @@ table_json() {
                 ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
             if (type == "object" and ((.aliases // {}) | type) == "object")
             then {
-                aliases: (.aliases // {} | map_values(select(type == "object"))),
+                aliases: spawn_aliases,
                 families: safe_families,
                 no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
                 chain_policy: safe_chain_policy
