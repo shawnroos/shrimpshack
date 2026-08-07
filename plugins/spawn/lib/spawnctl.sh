@@ -1001,7 +1001,8 @@ ensure)
                 --arg rem "$(remedy_for alias_unknown)" \
                 "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"ensure",
                   error:"alias_unknown", alias:$a, served_aliases:$served,
-                  remedy:$rem, exit_code:$c}')"
+                  remedy:$rem, exit_code:$c}')" \
+        || die "$EX_USAGE" "could not encode the alias_unknown object"
             exit $EX_ALIAS
         fi
     fi
@@ -1066,13 +1067,15 @@ stop)
                 "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
                   result:"unmanaged", error:"usage",
                   detail:"a gateway is serving but the pidfile is empty or absent",
-                  remedy:$rem, pidfile:$p, exit_code:$c}')"
+                  remedy:$rem, pidfile:$p, exit_code:$c}')" \
+        || die "$EX_USAGE" "could not encode the stop refusal object"
             exit $EX_USAGE
         fi
         emit "$(jq -nc --arg p "$PIDFILE" \
             "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
               result:"not_running", pid:null, pidfile:$p, error:null,
-              exit_code:0}')"
+              exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the stop not_running object"
         exit $EX_OK
     fi
 
@@ -1094,13 +1097,15 @@ stop)
                 "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
                   result:"unmanaged", pid:$pid, pidfile:$p, error:"usage",
                   detail:"the recorded pid is dead but a gateway is still serving; not stopped",
-                  remedy:$rem, exit_code:$c}')"
+                  remedy:$rem, exit_code:$c}')" \
+        || die "$EX_USAGE" "could not encode the stop refusal object"
             exit $EX_USAGE
         fi
         rm -f "$PIDFILE" "$PIDFILE.bin"
         emit "$(jq -nc --argjson pid "$pid" \
             "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
-              result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')"
+              result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the stop stale_pidfile object"
         exit $EX_OK
     fi
 
@@ -1124,7 +1129,8 @@ stop)
               result:"pid_mismatch", pid:$pid, expected_binary:$bin,
               actual_command:$cmd, error:"usage",
               detail:"pidfile pid belongs to an unrelated process; not signalled",
-              remedy:$rem, exit_code:$c}')"
+              remedy:$rem, exit_code:$c}')" \
+        || die "$EX_USAGE" "could not encode the stop pid_mismatch object"
         exit $EX_USAGE
     fi
 
@@ -1142,7 +1148,8 @@ stop)
     rm -f "$PIDFILE" "$PIDFILE.bin"
     emit "$(jq -nc --argjson pid "$pid" \
         "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
-          result:"stopped", pid:$pid, error:null, exit_code:0}')"
+          result:"stopped", pid:$pid, error:null, exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the stop stopped object"
     exit $EX_OK
     ;;
 
