@@ -31,6 +31,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./common.sh
 . "$SCRIPT_DIR/common.sh"
 
+# The Keychain primitives (U1). Sourced for the START path only: nothing else in
+# this script reads a credential store, and the read happens inside
+# do_start_locked rather than at load time, so `status`, `ensure` against a live
+# gateway and every probe path touch the Keychain zero times.
+# shellcheck source=./secrets.sh
+. "$SCRIPT_DIR/secrets.sh"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -78,6 +85,24 @@ LOCK_TIMEOUT="${SPAWN_LOCK_TIMEOUT:-60}"
 BIN_CANDIDATES=("target/release/gateway" "target/debug/gateway" "bin/gateway" "gateway")
 
 # ---------------------------------------------------------------------------
+# Keychain item identity (KTD1, U1's primitives).
+#
+# THIS IS A CROSS-FILE CONTRACT: setup.sh writes these exact items and this
+# script reads them. They are one service with two accounts rather than two
+# services, so a single `security` service name identifies everything this
+# plugin stores. Env-overridable for the same reason every other knob is — a
+# test points them at the fake store instead of this machine's login keychain.
+# ---------------------------------------------------------------------------
+KEYCHAIN_SERVICE="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
+KEYCHAIN_ACCOUNT_OPENROUTER="${SPAWN_KEYCHAIN_ACCOUNT_OPENROUTER:-openrouter-api-key}"
+KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
+
+# The transient delivery file (KTD1). `.env.local` is the gateway's own
+# CWD-relative dotenv name, and do_start_locked already runs the child with the
+# install dir as its CWD, so no start-path restructuring is needed.
+DELIVERY_NAME=".env.local"
+
+# ---------------------------------------------------------------------------
 # Plumbing
 # ---------------------------------------------------------------------------
 # EVERY human-readable diagnostic in this script goes through say() or die(),
@@ -104,6 +129,18 @@ die() {
 
 TMPWORK=""
 LOCK_HELD=0
+# The delivery file this process wrote, and only this process. Removal is gated
+# on the flag rather than on the path existing: a departing process must never
+# delete a delivery file some other start is mid-flight with — the same
+# ownership rule the lock release already follows.
+DELIVERY_FILE=""
+DELIVERY_WRITTEN=0
+remove_delivery() {
+    [ "$DELIVERY_WRITTEN" -eq 1 ] || return 0
+    rm -f "$DELIVERY_FILE" 2>/dev/null
+    DELIVERY_WRITTEN=0
+    return 0
+}
 cleanup() {
     # Ownership-checked, same reason release_lock is: an unconditional rm here
     # lets an exiting process delete a lock another process now holds.
@@ -111,6 +148,11 @@ cleanup() {
         rm -rf "$LOCKDIR" 2>/dev/null
     fi
     [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
+    # The backstop for KTD1's "removed on every exit path". do_start_locked
+    # removes it explicitly as soon as the start probe settles; this catches the
+    # paths that never get there — a die() mid-start, and the INT/TERM/HUP traps
+    # below, which is where the lens path's own temp-file leak was found.
+    remove_delivery
     return 0
 }
 trap cleanup EXIT
@@ -715,6 +757,113 @@ validate_alias() {
 }
 
 # ---------------------------------------------------------------------------
+# Start-time secret delivery (KTD1; R7, R9).
+#
+# WHY A FILE AND NOT THE ENVIRONMENT
+# ----------------------------------
+# A variable present in a process's environment AT EXEC is readable by any
+# same-user process through `ps -Eww` (verified this session: exec-time hit
+# count 1). A variable the process assigns to ITSELF at runtime is not (hit
+# count 0). The gateway loads `./.env.local` relative to its CWD and assigns
+# with runtime set_var (upstream src/main.rs:26-45), so delivering through the
+# file is the difference between the key being visible in the process table and
+# not. Putting it in the child's exec environment is precisely the exposure R7
+# forbids, which is why it is never done here.
+#
+# WHY AN INHERITED KEY IS CLEARED RATHER THAN WARNED ABOUT (AE9)
+# --------------------------------------------------------------
+# That dotenv load sets only variables that are currently UNSET. So an
+# inherited `OPENROUTER_API_KEY` export does two bad things at once: it
+# SUPPRESSES the delivered value, and it lands in the child's exec-time
+# environment where `ps` can read it. A warning changes neither. The child's
+# copy is therefore cleared before exec, and the operator is told the inherited
+# value was ignored.
+#
+# The file is in-flight delivery for the duration of startup, not storage at
+# rest: it is replaced on entry (never appended to) and removed the moment the
+# start probe settles, on success and on failure, with cleanup() as the backstop
+# for the paths that never get there.
+# ---------------------------------------------------------------------------
+KEY_DELIVERED=0
+TOKEN_DELIVERED=0
+deliver_secrets() {
+    local kc_key="" kc_tok="" have_key=0 have_tok=0
+
+    # keychain_exists never produces the value; the read that follows is the
+    # only place it is held, and it is held in a local that never reaches a
+    # diagnostic, an argv or the JSON object.
+    if spawn::keychain_exists "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_OPENROUTER"; then
+        kc_key="$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_OPENROUTER")"
+        [ -n "$kc_key" ] && have_key=1
+    fi
+    if spawn::keychain_exists "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
+        kc_tok="$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN")"
+        [ -n "$kc_tok" ] && have_tok=1
+    fi
+
+    # R9. The gateway's auth check returns success IMMEDIATELY when its token
+    # list is empty, so a config with no token and nothing to deliver does not
+    # produce a gateway that rejects callers — it produces an open proxy on
+    # 127.0.0.1 that forwards anything to a paid provider. Refused before the
+    # spawn, so nothing is started and no delivery file is written.
+    if [ -z "$SPAWN_TOKEN_VALUE" ] && [ "$have_tok" -eq 0 ]; then
+        die "$EX_USAGE" "refusing to start an unauthenticated gateway: ${CONFIG_PATH:-<no config resolved>} declares no server.token and no gateway token is stored (Keychain service '$KEYCHAIN_SERVICE', account '$KEYCHAIN_ACCOUNT_TOKEN') — an empty auth token list makes the gateway an open proxy; run the setup command to store one"
+    fi
+
+    if [ "$have_key" -eq 0 ] && [ "$have_tok" -eq 0 ]; then
+        # Degrade: a pre-setup machine whose config carries its own token starts
+        # exactly as it did before any of this existed.
+        return 0
+    fi
+
+    DELIVERY_FILE="$INSTALL_DIR/$DELIVERY_NAME"
+    # REPLACE, never append. A crashed prior start can leave one behind, and an
+    # appended file would hand the gateway a stale first assignment — dotenv
+    # takes the first value it sees for a name.
+    #
+    # `rm` and not just the truncating `: >` below, and the difference is not
+    # stylistic: `: >` FOLLOWS A SYMLINK. A stale `.env.local` that is a link
+    # would take the OpenRouter key straight to wherever it points — outside
+    # the install dir, at whatever mode that file already has. Removing the
+    # name first means the create below always makes a fresh regular file.
+    # (Measured: with the rm dropped, the append/mode assertions still pass —
+    # truncation covers those — and only the symlink test goes red. That test
+    # is what makes this line load-bearing.)
+    rm -f "$DELIVERY_FILE" 2>/dev/null
+    if ! (umask 077; : > "$DELIVERY_FILE") 2>/dev/null; then
+        die "$EX_UNREACHABLE" "cannot write the start-time delivery file in $INSTALL_DIR"
+    fi
+    DELIVERY_WRITTEN=1
+    # chmod as well as umask: umask only governs CREATION, and this file is
+    # replaced rather than created when a stale one survived a crash.
+    chmod 600 "$DELIVERY_FILE" 2>/dev/null
+    {
+        # SHELL BUILTIN printf, for the reason secrets.sh spells out: a builtin
+        # never execs, so neither value ever reaches the process table.
+        [ "$have_key" -eq 1 ] && printf 'OPENROUTER_API_KEY=%s\n' "$kc_key"
+        [ "$have_tok" -eq 1 ] && printf 'GATEWAY_TOKEN=%s\n' "$kc_tok"
+    } >> "$DELIVERY_FILE"
+    KEY_DELIVERED="$have_key"
+    TOKEN_DELIVERED="$have_tok"
+
+    # The probe has to authenticate against the gateway it just started. When
+    # the config carries no token of its own, the delivered one is the only
+    # credential in play. A config token that IS present stays authoritative —
+    # the gateway merges rather than substitutes, so both are valid, and
+    # today's behaviour is left alone.
+    if [ -z "$SPAWN_TOKEN_VALUE" ] && [ "$have_tok" -eq 1 ]; then
+        SPAWN_TOKEN_VALUE="$kc_tok"
+    fi
+
+    if [ "$have_key" -eq 1 ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
+        say "an OPENROUTER_API_KEY was already exported here — it is IGNORED and cleared from the gateway's environment, and the stored key is delivered through a mode-0600 file instead (an inherited export would both suppress it and expose it in the process table)"
+    fi
+    kc_key=""
+    kc_tok=""
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # start (locked, idempotent)
 #
 # Returns the contract code. Sets STARTED=1 only when THIS call spawned the
@@ -744,6 +893,9 @@ do_start_locked() {
 
     resolve_install_dir hard
 
+    # Both secrets, and the R9 refusal, before anything is spawned.
+    deliver_secrets
+
     # R3: append, never truncate. `gw` truncates on every start and that
     # destroyed the only evidence of why a previous start died.
     mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null
@@ -751,6 +903,16 @@ do_start_locked() {
 
     (
         cd "$INSTALL_DIR" || exit 1
+        # AE9 / R7. Cleared in the SUBSHELL, so the parent's own environment is
+        # untouched and only the child loses it. Without this an inherited
+        # export would suppress the delivered value (dotenv sets unset
+        # variables only) AND ride into the child's exec-time environment,
+        # where any same-user process reads it out of the process table.
+        # The token is cleared on the same reasoning when it too is delivered:
+        # the Keychain is the source of truth, and an open shell holding a
+        # pre-rotation value must not out-rank it.
+        [ "$KEY_DELIVERED" -eq 1 ] && unset OPENROUTER_API_KEY
+        [ "$TOKEN_DELIVERED" -eq 1 ] && unset GATEWAY_TOKEN
         nohup "$SPAWN_BIN" --config "$CONFIG_PATH" >> "$LOGFILE" 2>&1 &
         printf '%s\n' "$!" > "$PIDFILE"
         # Record WHICH binary this pid was launched from, beside the pidfile.
@@ -766,11 +928,17 @@ do_start_locked() {
     while :; do
         probe
         rc=$?
-        [ $rc -eq $EX_OK ] && return $EX_OK
-        [ $rc -eq $EX_AUTH ] && return $EX_AUTH
+        # The delivery file's whole life is this window: the gateway has read it
+        # by the time it answers a probe, and a start that never answers is not
+        # going to read it either. Removed on BOTH settled outcomes, not only
+        # the happy one — a failure that leaves a key on disk is the exact state
+        # KTD1 says must not exist.
+        [ $rc -eq $EX_OK ] && { remove_delivery; return $EX_OK; }
+        [ $rc -eq $EX_AUTH ] && { remove_delivery; return $EX_AUTH; }
         sleep 0.2
         waited=$((waited + 1))
         if [ "$waited" -gt $((START_TIMEOUT * 5)) ]; then
+            remove_delivery
             say "started $SPAWN_BIN but it never answered the model-list probe within ${START_TIMEOUT}s"
             say "last 10 log lines from $LOGFILE:"
             # KTD5 free-form sink: the gateway's own log carries upstream error

@@ -41,6 +41,24 @@ setup() {
     # Default the base URL at a port nothing serves. Without this a test that
     # forgets to point somewhere would probe the REAL gateway on 4000.
     export SPAWN_BASE_URL="http://127.0.0.1:1/anthropic"
+
+    # --- U3 isolation ------------------------------------------------------
+    # The start path now reads the Keychain, so EVERY test in this file needs a
+    # fake one — including the ones that predate U3, which would otherwise
+    # query this machine's login keychain the moment they call `start`. Same
+    # env-override discipline as the state and search roots above.
+    export SPAWN_SECURITY_BIN="$FIX/fake-security.sh"
+    export FAKE_SECURITY_STORE_DIR="$WORK/kc-store"
+    export FAKE_SECURITY_RECORD_DIR="$WORK/kc-record"
+    mkdir -p "$FAKE_SECURITY_STORE_DIR" "$FAKE_SECURITY_RECORD_DIR"
+    # The fixture's own defaults are shared $TMPDIR paths that survive between
+    # tests and between runs; pointing them under $WORK is what stops a seeded
+    # item leaking into the "empty Keychain" test.
+    export SPAWN_KEYCHAIN_SERVICE="spawn-gateway-test"
+    export FAKE_GATEWAY_RECORD_DIR="$WORK/gwbin-record"
+    # An operator running this suite with their own key exported would other-
+    # wise decide the AE9 assertions for it.
+    unset OPENROUTER_API_KEY GATEWAY_TOKEN
 }
 
 teardown() {
@@ -153,6 +171,47 @@ ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
 PYEOF
     chmod +x "$dir/target/release/gateway"
 }
+
+# make_config_tokenless <path> <port> [alias=model ...] — a config carrying NO
+# server.token entry at all. This is the shape R9 is about: without a delivered
+# GATEWAY_TOKEN the gateway's auth list would be empty, and an empty list makes
+# its auth check pass everything.
+make_config_tokenless() {
+    local path="$1" port="$2"; shift 2
+    {
+        printf 'server:\n'
+        printf '  bind: "127.0.0.1:%s"\n' "$port"
+        printf '\n'
+        printf 'models:\n'
+        local spec alias model
+        for spec in "$@"; do
+            alias="${spec%%=*}"
+            model="${spec#*=}"
+            printf '  %s:\n' "$alias"
+            printf '    model: %s\n' "$model"
+            printf '    display_name: "%s"\n' "$alias"
+        done
+    } > "$path"
+}
+
+# make_stub_install <dir> — an install whose binary is the U3 stub: it records
+# its exec-time environment and what the delivery file looked like at exec,
+# then serves like the generated fixture above.
+make_stub_install() {
+    local dir="$1"
+    mkdir -p "$dir/target/release"
+    cp "$FIX/fake-gateway-bin.sh" "$dir/target/release/gateway"
+    chmod +x "$dir/target/release/gateway"
+}
+
+# seed_keychain <account> <value> — through the fake `security` binary, fed the
+# same way secrets.sh feeds it (twice, on stdin, to a trailing bare -w).
+seed_keychain() {
+    printf '%s\n%s\n' "$2" "$2" \
+        | "$SPAWN_SECURITY_BIN" add-generic-password -a "$1" -s "$SPAWN_KEYCHAIN_SERVICE" -U -w
+}
+
+sha_of() { printf '%s' "$1" | shasum | cut -d' ' -f1; }
 
 # start_fixture <scenario> <aliases> — the U1 server; sets $PORT and $GW_PID.
 start_fixture() {
@@ -864,4 +923,230 @@ EOF
     [ "$(echo "$output" | jq -r '.result')" = "unmanaged" ]
     # The record survives: deleting it while a gateway serves is the bug.
     [ -s "$WORK/.gateway.pid" ]
+# --- U3: start-time secret delivery (KTD1; R7, R9) --------------------------
+#
+# Every assertion below is made from the CHILD's point of view, through the
+# stub binary's records, because that is the only place the claims are
+# observable: what was in its environment at exec, and what the delivery file
+# looked like in its CWD at exec. Asserting from the parent would prove only
+# what the start path intended.
+
+@test "R7/AE2: the key reaches the gateway through a mode-0600 delivery file, never its exec-time environment" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_stub_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    local key="sk-or-v1-fixture-key-not-real"
+    seed_keychain openrouter-api-key "$key"
+    seed_keychain gateway-token "delivered-tok-abc"
+
+    ctl start
+    [ "$status" -eq 0 ]
+
+    local rec="$WORK/gwbin-record"
+    # The delivery file existed AT EXEC, in the CWD the gateway reads from,
+    # mode 0600, carrying both names.
+    grep -q '^delivery_present=yes$' "$rec/delivery"
+    grep -q '^delivery_mode=600$' "$rec/delivery"
+    grep -q '^delivery_vars=OPENROUTER_API_KEY,GATEWAY_TOKEN,$' "$rec/delivery"
+    grep -q "^cwd=$WORK/install\$" "$rec/delivery"
+
+    # ...and the key was NOT in the environment the child was exec'd with,
+    # which is the copy `ps -Eww` would print.
+    run grep -q '^OPENROUTER_API_KEY=' "$rec/env"
+    [ "$status" -ne 0 ]
+    run grep -q "$key" "$rec/env"
+    [ "$status" -ne 0 ]
+
+    # The child ended up holding the delivered value, and it came from the file.
+    grep -q '^openrouter_source=file$' "$rec/effective"
+    grep -q "^openrouter_sha=$(sha_of "$key")\$" "$rec/effective"
+}
+
+@test "the delivery file is gone after a healthy start" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_stub_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+    seed_keychain openrouter-api-key "sk-or-v1-gone-after"
+    seed_keychain gateway-token "delivered-tok-abc"
+
+    ctl start
+    [ "$status" -eq 0 ]
+    # It was really delivered — otherwise "it is gone" is vacuous.
+    grep -q '^delivery_present=yes$' "$WORK/gwbin-record/delivery"
+    [ ! -f "$WORK/install/.env.local" ]
+}
+
+@test "the delivery file is gone after a FAILED start too" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_stub_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+    seed_keychain openrouter-api-key "sk-or-v1-failed-start"
+    seed_keychain gateway-token "delivered-tok-abc"
+    # The stub records, then exits 1 without serving.
+    export FAKE_GATEWAY_FAIL=1
+    export SPAWN_START_TIMEOUT=2
+
+    ctl start
+    [ "$status" -eq 3 ]
+    # The child did exec and did see the file, so this is the failure path and
+    # not a start that never happened.
+    grep -q '^delivery_present=yes$' "$WORK/gwbin-record/delivery"
+    # A failure that leaves a key on disk is the state KTD1 says cannot exist.
+    [ ! -f "$WORK/install/.env.local" ]
+}
+
+@test "AE1/R9: a config with no token and an empty Keychain refuses to start, and nothing is exec'd" {
+    local port; port="$(free_port)"
+    make_config_tokenless "$WORK/gateway.yaml" "$port" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_stub_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+    # Keychain deliberately empty.
+
+    ctl start
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    echo "$output" | jq -r '.error' | grep -q 'open proxy'
+    # The refusal is BEFORE the spawn: the stub records every exec, and there
+    # is no record at all.
+    [ ! -f "$WORK/gwbin-record/execs" ]
+    [ ! -f "$WORK/install/.env.local" ]
+    [ "$(count_gateway_procs "$WORK/install")" -eq 0 ]
+}
+
+@test "R9: a config with no token starts when the Keychain supplies one, and the probe authenticates with it" {
+    local port; port="$(free_port)"
+    make_config_tokenless "$WORK/gateway.yaml" "$port" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_stub_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    local tok="delivered-only-token-777"
+    seed_keychain openrouter-api-key "sk-or-v1-with-token"
+    seed_keychain gateway-token "$tok"
+
+    # The stub rejects any presented token that is not on its list, and its
+    # list here can only come from the delivery file — the config carries none.
+    # So exit 0 IS the proof that the probe authenticated with the delivered
+    # token; a start that silently dropped it would come back 7.
+    ctl start
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.started')" = "true" ]
+    [ "$(echo "$output" | jq -r '.served_aliases|join(",")')" = "alpha" ]
+    grep -q '^gateway_token_source=file$' "$WORK/gwbin-record/effective"
+    grep -q "^gateway_token_sha=$(sha_of "$tok")\$" "$WORK/gwbin-record/effective"
+    run grep -q "$tok" "$WORK/gwbin-record/env"
+    [ "$status" -ne 0 ]
+}
+
+@test "a stale delivery file from a crashed start is REPLACED, never appended to" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_stub_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    local fresh="sk-or-v1-fresh-value"
+    seed_keychain openrouter-api-key "$fresh"
+    seed_keychain gateway-token "delivered-tok-abc"
+
+    # What a crash leaves behind: a stale key, a stray name, and a mode the
+    # replace has to fix rather than inherit.
+    printf 'OPENROUTER_API_KEY=sk-or-v1-STALE-value\nJUNK_FROM_A_CRASH=1\n' > "$WORK/install/.env.local"
+    chmod 644 "$WORK/install/.env.local"
+
+    ctl start
+    [ "$status" -eq 0 ]
+
+    local rec="$WORK/gwbin-record"
+    # Two lines, two names, no survivor of the stale file. An APPEND would show
+    # three or four lines here and JUNK_FROM_A_CRASH among the names — and
+    # because dotenv takes the FIRST value it sees for a name, the gateway
+    # would have read the stale key.
+    grep -q '^delivery_lines=2$' "$rec/delivery"
+    grep -q '^delivery_vars=OPENROUTER_API_KEY,GATEWAY_TOKEN,$' "$rec/delivery"
+    grep -q '^delivery_mode=600$' "$rec/delivery"
+    grep -q "^openrouter_sha=$(sha_of "$fresh")\$" "$rec/effective"
+}
+
+@test "AE9: an inherited OPENROUTER_API_KEY is cleared from the child, not merely warned about" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_stub_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    local delivered="sk-or-v1-the-delivered-one"
+    local canary="canary-inherited-value-9f3a"
+    seed_keychain openrouter-api-key "$delivered"
+    seed_keychain gateway-token "delivered-tok-abc"
+    export OPENROUTER_API_KEY="$canary"
+
+    # stdout is dropped so the capture is the STDERR notice; the exit status is
+    # still the start's own.
+    run bash -c 'bash "$1" start 2>&1 1>/dev/null' _ "$CTL"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q 'IGNORED'
+    echo "$output" | grep -q 'OPENROUTER_API_KEY'
+    # The notice must not carry either value.
+    run bash -c "printf '%s' \"\$1\" | grep -q -e '$canary' -e '$delivered'" _ "$output"
+    [ "$status" -ne 0 ]
+
+    local rec="$WORK/gwbin-record"
+    # The point of AE9: the canary is not in the child's exec-time environment,
+    # under its own name or any other.
+    run grep -q "$canary" "$rec/env"
+    [ "$status" -ne 0 ]
+    run grep -q '^OPENROUTER_API_KEY=' "$rec/env"
+    [ "$status" -ne 0 ]
+    # ...and the value the gateway actually ended up holding is the delivered
+    # one, read from the file. Without the clearing step the inherited value
+    # would win, because the dotenv load only sets UNSET variables.
+    grep -q '^openrouter_source=file$' "$rec/effective"
+    grep -q "^openrouter_sha=$(sha_of "$delivered")\$" "$rec/effective"
+    run grep -q "^openrouter_sha=$(sha_of "$canary")\$" "$rec/effective"
+    [ "$status" -ne 0 ]
+}
+
+@test "a stale delivery file that is a SYMLINK does not carry the key outside the install dir" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_stub_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    local key="sk-or-v1-must-not-escape"
+    seed_keychain openrouter-api-key "$key"
+    seed_keychain gateway-token "delivered-tok-abc"
+
+    # The shape a truncating write cannot defend against: an existing name that
+    # is a link somewhere else, at a mode the delivery would inherit. `: >`
+    # follows it and writes the key through; only removing the name first does
+    # not.
+    printf 'pre-existing\n' > "$WORK/outside.txt"
+    chmod 644 "$WORK/outside.txt"
+    ln -s "$WORK/outside.txt" "$WORK/install/.env.local"
+
+    ctl start
+    [ "$status" -eq 0 ]
+
+    run grep -q "$key" "$WORK/outside.txt"
+    [ "$status" -ne 0 ]
+    grep -q 'pre-existing' "$WORK/outside.txt"
+    grep -q '^delivery_mode=600$' "$WORK/gwbin-record/delivery"
 }
