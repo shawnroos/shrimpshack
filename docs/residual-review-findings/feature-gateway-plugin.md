@@ -45,6 +45,47 @@ verified by reading, with the one unverified point named in the table.
 | R9 | `README.md` | The `${CLAUDE_PLUGIN_ROOT}` invocation form is scoped to this plugin's own skills; a glob-based resolution recipe covers foreign-plugin consumers; the allowlist paragraph now states the real mechanism — the rule matches literal command text, so rule and invocation must be spelled identically — instead of asserting a match that was not there. | documentation. **Not verified:** the allowlist matcher's expansion semantics (e.g. how `~` in a rule compares against an absolute path) were not empirically tested; the doc deliberately pins "spell them identically" rather than any expansion behaviour |
 | R10 | `skills/launch/SKILL.md`, `README.md` | The handover section now leads with the trust-posture difference: unlike the lens, launch runs a **full agent loop** under the user's normal permissions in the pinned cwd, driven by a third-party model. No permission restriction was added — that stays a product decision. | documentation |
 
+## FOUND BY INVOKING THE SURFACES (2026-08-07) — the skills are unreachable
+
+The plugin was installed and all six surfaces driven for the first time. One
+defect, and it is structural rather than cosmetic.
+
+**`Skill(gateway:<name>)` resolves to the COMMAND, not the skill.** Commands and
+skills share all three names (`lens`, `launch`, `status`), and the command wins.
+
+Proof, not inference: the text returned for `gateway:lens` and `gateway:launch`
+had my invocation arguments appended at the bottom — that is `$ARGUMENTS`
+expansion, which is a command-only feature. The bodies also matched
+`commands/*.md` verbatim.
+
+Two consequences:
+
+1. **The SKILL.md files never load.** They are 51, 76 and 68 lines against
+   commands of 10, 13 and 10 — so the exit-code table, the untrusted-output
+   rules, the spill handling and the workflow are all bypassed. The plugin pays
+   ~140 tokens/session per skill to advertise guidance that cannot be reached
+   this way.
+2. **The command bodies are self-referential.** Each says "Use the Skill tool to
+   invoke: `gateway:<name>`" — which resolves back to the command. An agent
+   following that literally loops.
+
+It *appears* to work only because each command also names the script path, which
+is enough to complete the task. The failure is silent: richer guidance is
+skipped with no error.
+
+It bit concretely during the sweep. `commands/launch.md` says "say what a
+gateway-pointed session does not have — the skill lists those." That list lives
+in `skills/launch/SKILL.md` under a heading of exactly that name, and it was not
+in context, because invoking the skill returned the command.
+
+Compare `spinoff`, which deliberately avoids the collision: commands are
+`start-session` / `start-split` / `start-workspace`, the skill is `spinoff`.
+
+**Owner:** this is squarely the `feature/gateway-surfaces` workstream — it is
+open question #2 in that handoff ("do commands and skills share names?"),
+now answered with evidence rather than speculation. Do not fix it here without
+coordinating; the naming decision shapes that whole branch.
+
 ## Open — accepted or judgement calls
 
 - **Spill files are never reaped.** `gwlens-response.*` is deliberately outside
