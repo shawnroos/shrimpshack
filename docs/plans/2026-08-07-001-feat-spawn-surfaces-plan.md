@@ -48,6 +48,7 @@ The plugin also has exactly one silent failure. A wrong Bash-allowlist rule does
 - KD7. **The allowlist fix (R15, R16) ships before or with `bg-agent`.** An unattended job that hits a wrong rule fails with nobody watching, and the absent result is the only symptom. Governs R9.
 - KD8. **The status surface must not cry wolf.** The first drive produced drift false alarms a human had to debunk (F4 in the surface-drive findings); a status surface that over-reports gets ignored, so it reports only genuine drift and answers in prose a human can read. Governs R17, R18.
 - KD9. **What the plugin knows, the plugin says; what the model says is quoted.** Job lifecycle, permission denials and observed effects are facts the plugin can establish itself; only narrative is model-authored. A model whose calls were denied cannot be the witness to its own denial. Governs R19, R21.
+- KD13. **A background job edits the working tree; the scratchpad holds its own artifacts.** The contract, the log, the supervisor's record and any produced deliverables live in the job directory; the work itself lands in the repository where it is useful. (session-settled: user-directed — chosen over writing only to a scratchpad and over giving each job its own git worktree: the motivating example, fixing failing tests, is not expressible under scratchpad-only.) Governs R7.
 
 ### Actors
 
