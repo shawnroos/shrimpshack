@@ -118,15 +118,24 @@ emit_error() {
     # closed by construction yet. jq escapes a control byte in transit but
     # emits a Unicode bidi override literally, so the field is sanitized.
     alias_d="$(spawn::sanitize_for_display "$ALIAS")"
+    # R23: the envelope comes from common.sh, so this tier cannot drift from the
+    # success emit below or from the no-jq tier under it. REMEDY is the optional
+    # per-site remedy (R12) — a caller sets it as a prefix assignment on die.
+    local obj=""
     if command -v jq >/dev/null 2>&1; then
-        emit "$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" --argjson c "$code" \
-            '{ok:false, alias:(if $a == "" then null else $a end), session_id:null,
+        obj="$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" \
+            --arg r "${REMEDY:-}" --argjson c "$code" \
+            "$(spawn::envelope_jq plugin)"' + {ok:false,
+              alias:(if $a == "" then null else $a end), session_id:null,
               transcript_path:null, cwd:null, base_url:null, context_window:null,
-              attach_command:null, error:$e, detail:$d, exit_code:$c}')"
-    else
-        EMITTED=1
-        printf '{"ok":false,"alias":null,"session_id":null,"transcript_path":null,"attach_command":null,"error":"%s","exit_code":%s}\n' "$err" "$code"
+              attach_command:null, error:$e, detail:$d,
+              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
     fi
+    # Falls through to the pure-bash tier when jq is ABSENT and also when jq is
+    # present but errored: that yielded the empty string, emit refused it, and
+    # the script exited with nothing on stdout at all.
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ',"alias":null,"session_id":null,"transcript_path":null,"attach_command":null')"
+    emit "$obj"
 }
 
 die() {
@@ -194,7 +203,10 @@ tmpwork() {
 need_jq() {
     command -v jq >/dev/null 2>&1 || {
         printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
-        printf '{"ok":false,"alias":null,"session_id":null,"attach_command":null,"error":"usage","exit_code":2}\n'
+        # Same envelope, same constants, no encoder (R23 / KTD7): this is the
+        # tier that used to be a hand-written string and drifted from the other
+        # two the moment either changed.
+        emit "$(spawn::envelope_bash plugin "usage" 2 ',"alias":null,"session_id":null,"transcript_path":null,"attach_command":null')"
         exit 2
     }
 }
@@ -297,24 +309,23 @@ fi
 ENSURE_OUT="$(bash "$CTL" ensure "$ALIAS")"
 ENSURE_RC=$?
 if [ "$ENSURE_RC" -ne 0 ]; then
-    # Enum from the CODE, which KTD2 defines — never re-parsed out of prose.
-    case "$ENSURE_RC" in
-        2) PRE_ENUM="usage" ;;
-        3) PRE_ENUM="unreachable" ;;
-        4) PRE_ENUM="alias_unknown" ;;
-        7) PRE_ENUM="auth_rejected" ;;
-        *) PRE_ENUM="preflight_failed" ;;
-    esac
+    # Enum from the CODE, which KTD2 defines — never re-parsed out of prose. The
+    # table lives in common.sh (R23), and spawnctl derives its own `error` from
+    # the same one, so the two sides agree by construction.
+    PRE_ENUM="$(spawn::enum_for_code "$ENSURE_RC")"
+    [ -n "$PRE_ENUM" ] || PRE_ENUM="preflight_failed"
     PRE_JSON="$(printf '%s' "$ENSURE_OUT" | jq -c '.' 2>/dev/null)" || PRE_JSON=""
     [ -n "$PRE_JSON" ] || PRE_JSON="null"
-    PRE_DETAIL="$(printf '%s' "$ENSURE_OUT" | jq -r '.error // empty' 2>/dev/null)"
+    # `detail` first, `error` second: since the enum reconciliation ensure's
+    # `error` IS the enum and its prose moved to `detail`.
+    PRE_DETAIL="$(printf '%s' "$ENSURE_OUT" | jq -r '.detail // .error // empty' 2>/dev/null)"
     [ -n "$PRE_DETAIL" ] || PRE_DETAIL="spawnctl ensure failed with code $ENSURE_RC and printed nothing"
     emit "$(jq -nc --arg a "$ALIAS" --arg e "$PRE_ENUM" \
         --arg d "$(spawn::sanitize_for_display "$PRE_DETAIL")" \
         --argjson p "$PRE_JSON" --argjson c "$ENSURE_RC" \
-        '{ok:false, alias:$a, session_id:null, transcript_path:null, cwd:null,
-          base_url:null, context_window:null, attach_command:null,
-          error:$e, detail:$d, preflight:$p, exit_code:$c}')" \
+        "$(spawn::envelope_jq plugin)"' + {ok:false, alias:$a, session_id:null,
+          transcript_path:null, cwd:null, base_url:null, context_window:null,
+          attach_command:null, error:$e, detail:$d, preflight:$p, exit_code:$c}')" \
         || emit_error "$ENSURE_RC" "$PRE_ENUM" "$PRE_DETAIL"
     exit "$ENSURE_RC"
 fi
@@ -521,8 +532,9 @@ emit "$(jq -nc \
     --arg base "$BASE_URL" \
     --arg attach "$ATTACH" \
     --arg win "$CONTEXT_WINDOW" \
-    '{ok:true, alias:$alias, session_id:$sid, transcript_path:$tr, cwd:$cwd,
-      base_url:$base,
+    "$(spawn::envelope_jq plugin)"' + {ok:true, alias:$alias, session_id:$sid,
+      transcript_path:$tr, cwd:$cwd, base_url:$base,
       context_window:(if $win == "" then null else ($win|tonumber) end),
-      attach_command:$attach, error:null, exit_code:0}')"
+      attach_command:$attach, error:null, exit_code:0}')" \
+    || die "$EX_USAGE" "usage" "could not encode the response object"
 exit $EX_OK

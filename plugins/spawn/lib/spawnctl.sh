@@ -156,7 +156,9 @@ need_jq() {
         # crash. Same pure-bash fallback emit_error's non-jq branch uses: VERB
         # is raw argv, so it is reduced to the verb enum's own charset —
         # unsanitized, it could put a quote or an escape byte into stdout.
-        printf '{"ok":false,"verb":"%s","error":"internal","exit_code":2}\n' "${VERB//[^a-z]/}"
+        # The envelope comes from common.sh (R23) rather than being written out
+        # here, so this tier cannot drift from the other two.
+        emit "$(spawn::envelope_bash plugin "internal" 2 ",\"verb\":\"${VERB//[^a-z]/}\"")"
         exit 2
     }
 }
@@ -168,10 +170,20 @@ EMITTED=0
 emit_error() {
     local code="$1" msg="$2"
     [ "$EMITTED" -eq 1 ] && return 0
+    # R23: `error` carries the ENUM and the prose moves to `detail`. This script
+    # used to put English in `error` while lens.sh and launch.sh put an enum
+    # there — the divergence that made forwarding a preflight object unsafe and
+    # broke every fan-out caller's `.error` switch at once. The enum comes from
+    # the exit code through the one table in common.sh, which is the same table
+    # the two lenses classify a preflight failure with.
+    local err
+    err="$(spawn::enum_for_code "$code")"
+    [ -n "$err" ] || err="internal"
     # Sanitized here as well as in die(): idempotent on an already-clean string,
     # and it means a future caller that reaches emit_error directly cannot open
-    # a hole in the `error` field, which is display text a consumer prints.
+    # a hole in the `detail` field, which is display text a consumer prints.
     msg="$(spawn::sanitize_for_display "$msg")"
+    local obj=""
     if command -v jq >/dev/null 2>&1; then
         # VERB is raw argv on the unknown-verb path, and jq's --arg escapes
         # control bytes but emits Unicode format characters (e.g. a U+202E bidi
@@ -180,16 +192,19 @@ emit_error() {
         # raw, which made the jq path weaker than the pure-bash fallback below.
         local verb_d
         verb_d="$(spawn::sanitize_for_display "${VERB:-}")"
-        emit "$(jq -nc --arg verb "$verb_d" --arg m "$msg" --argjson c "$code" \
-            '{ok:false, verb:$verb, error:$m, exit_code:$c}')"
-    else
-        EMITTED=1
-        # No jq means no encoder, and VERB is raw argv: an unsanitized verb here
-        # would put a quote (breaking the object) or an escape byte into stdout.
-        # Reduced to the verb enum's own charset in pure bash — closed by
-        # construction, since that is the only defence available with no jq.
-        printf '{"ok":false,"verb":"%s","error":"internal","exit_code":%s}\n' "${VERB//[^a-z]/}" "$code"
+        obj="$(jq -nc --arg verb "$verb_d" --arg e "$err" --arg m "$msg" \
+            --arg r "${REMEDY:-}" --argjson c "$code" \
+            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:$verb, error:$e,
+              detail:$m, remedy:(if $r == "" then null else $r end),
+              exit_code:$c}')"
     fi
+    # No jq means no encoder, and VERB is raw argv: an unsanitized verb here
+    # would put a quote (breaking the object) or an escape byte into stdout.
+    # Reduced to the verb enum's own charset in pure bash — closed by
+    # construction, since that is the only defence available with no jq. Also
+    # reached when jq is present but ERRORED, which used to print nothing at all.
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"verb\":\"${VERB//[^a-z]/}\"")"
+    emit "$obj"
 }
 
 # ---------------------------------------------------------------------------
@@ -811,7 +826,9 @@ ensure)
         if ! printf '%s' "$PROBE_ALIASES_JSON" | jq -e --arg a "$ALIAS" 'index($a) != null' >/dev/null 2>&1; then
             say "alias '$ALIAS' is not in the gateway's served list"
             emit "$(jq -nc --arg a "$ALIAS" --argjson served "$PROBE_ALIASES_JSON" --argjson c $EX_ALIAS \
-                '{ok:false, verb:"ensure", error:"alias_unknown", alias:$a, served_aliases:$served, exit_code:$c}')"
+                "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"ensure",
+                  error:"alias_unknown", alias:$a, served_aliases:$served,
+                  exit_code:$c}')"
             exit $EX_ALIAS
         fi
     fi
@@ -829,10 +846,12 @@ ensure)
         --arg cfg "${CONFIG_PATH:-}" \
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson started "$([ $STARTED -eq 1 ] && echo true || echo false)" \
-        '{ok:true, verb:"ensure", running:true, started:$started, base_url:$base,
+        "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"ensure", running:true,
+          started:$started, base_url:$base,
           alias:(if $alias == "" then null else $alias end),
           config:(if $cfg == "" then null else $cfg end),
-          served_aliases:$served, error:null, exit_code:0}')"
+          served_aliases:$served, error:null, exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the ensure object"
     exit $EX_OK
     ;;
 
@@ -854,9 +873,11 @@ start)
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson started "$([ $STARTED -eq 1 ] && echo true || echo false)" \
         --arg pid "${pid:-}" \
-        '{ok:true, verb:"start", running:true, started:$started, base_url:$base,
+        "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"start", running:true,
+          started:$started, base_url:$base,
           pid:(if $pid == "" then null else ($pid|tonumber) end),
-          log:$log, served_aliases:$served, error:null, exit_code:0}')"
+          log:$log, served_aliases:$served, error:null, exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the start object"
     exit $EX_OK
     ;;
 
@@ -868,11 +889,16 @@ stop)
         if [ $? -eq $EX_OK ]; then
             say "a gateway is serving at $BASE_URL but $PIDFILE names no pid — refusing to guess which process to signal"
             emit "$(jq -nc --arg p "$PIDFILE" --argjson c $EX_USAGE \
-                '{ok:false, verb:"stop", result:"unmanaged", error:"a gateway is serving but the pidfile is empty or absent", pidfile:$p, exit_code:$c}')"
+                "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
+                  result:"unmanaged", error:"usage",
+                  detail:"a gateway is serving but the pidfile is empty or absent",
+                  pidfile:$p, exit_code:$c}')"
             exit $EX_USAGE
         fi
         emit "$(jq -nc --arg p "$PIDFILE" \
-            '{ok:true, verb:"stop", result:"not_running", pid:null, pidfile:$p, error:null, exit_code:0}')"
+            "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
+              result:"not_running", pid:null, pidfile:$p, error:null,
+              exit_code:0}')"
         exit $EX_OK
     fi
 
@@ -890,13 +916,16 @@ stop)
         if [ $? -eq $EX_OK ]; then
             say "pid $pid is dead but a gateway is still serving at $BASE_URL — refusing to report a stop that did not happen, and leaving $PIDFILE alone"
             emit "$(jq -nc --argjson pid "$pid" --arg p "$PIDFILE" --argjson c $EX_USAGE \
-                '{ok:false, verb:"stop", result:"unmanaged", pid:$pid, pidfile:$p,
-                  error:"the recorded pid is dead but a gateway is still serving; not stopped", exit_code:$c}')"
+                "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
+                  result:"unmanaged", pid:$pid, pidfile:$p, error:"usage",
+                  detail:"the recorded pid is dead but a gateway is still serving; not stopped",
+                  exit_code:$c}')"
             exit $EX_USAGE
         fi
         rm -f "$PIDFILE" "$PIDFILE.bin"
         emit "$(jq -nc --argjson pid "$pid" \
-            '{ok:true, verb:"stop", result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')"
+            "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
+              result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')"
         exit $EX_OK
     fi
 
@@ -915,8 +944,11 @@ stop)
         # without the copy. Sanitized as display text (KTD5).
         emit "$(jq -nc --argjson pid "$pid" --arg bin "$SPAWN_BIN" \
             --arg cmd "$(spawn::sanitize_for_display "$(pid_argv "$pid" | awk '{print $1}')")" --argjson c $EX_USAGE \
-            '{ok:false, verb:"stop", result:"pid_mismatch", pid:$pid, expected_binary:$bin, actual_command:$cmd,
-              error:"pidfile pid belongs to an unrelated process; not signalled", exit_code:$c}')"
+            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
+              result:"pid_mismatch", pid:$pid, expected_binary:$bin,
+              actual_command:$cmd, error:"usage",
+              detail:"pidfile pid belongs to an unrelated process; not signalled",
+              exit_code:$c}')"
         exit $EX_USAGE
     fi
 
@@ -933,7 +965,8 @@ stop)
     done
     rm -f "$PIDFILE" "$PIDFILE.bin"
     emit "$(jq -nc --argjson pid "$pid" \
-        '{ok:true, verb:"stop", result:"stopped", pid:$pid, error:null, exit_code:0}')"
+        "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
+          result:"stopped", pid:$pid, error:null, exit_code:0}')"
     exit $EX_OK
     ;;
 
@@ -970,9 +1003,12 @@ restart)
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson stop_rc "$stop_rc" \
         --arg pid "${pid:-}" \
-        '{ok:true, verb:"restart", running:true, base_url:$base,
+        "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"restart", running:true,
+          base_url:$base,
           pid:(if $pid == "" then null else ($pid|tonumber) end),
-          stop_exit_code:$stop_rc, served_aliases:$served, error:null, exit_code:0}')"
+          stop_exit_code:$stop_rc, served_aliases:$served, error:null,
+          exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the restart object"
     exit $EX_OK
     ;;
 
@@ -1029,6 +1065,13 @@ status)
     running=false
     [ $prc -eq $EX_OK ] && running=true
 
+    # R23: `error` is the enum, and the probe's prose — which is a real answer
+    # here, not a malfunction: exit 3 from `status` means "the gateway is down"
+    # — travels in `detail`. This emit used to put that prose straight into
+    # `error`, which is exactly the divergence a consumer's `.error` switch
+    # tripped over.
+    status_enum="$(spawn::enum_for_code "$prc")"
+
     # `|| die` because emit now refuses an empty payload: if either jq program
     # above ever errors again, this must become an honest non-zero failure rather
     # than a silent exit-0 with no object on stdout.
@@ -1047,8 +1090,9 @@ status)
         --argjson drift "$drift" \
         --argjson models "$models_view" \
         --arg detail "$(spawn::sanitize_for_display "${PROBE_DETAIL:-}")" \
+        --arg errenum "$status_enum" \
         --argjson c "$prc" \
-        '{ok: ($c == 0), verb:"status", running:$running, base_url:$base,
+        "$(spawn::envelope_jq plugin)"' + {ok: ($c == 0), verb:"status", running:$running, base_url:$base,
           install_dir:(if $install == "" then null else $install end),
           binary:(if $bin == "" then null else $bin end),
           config:(if $cfg == "" then null else $cfg end),
@@ -1057,7 +1101,8 @@ status)
           pid:(if $pid == "" then null else ($pid|tonumber) end),
           pid_verified:$pid_verified,
           served_aliases:$served, models:$models, drift:$drift,
-          error:(if $detail == "" then null else $detail end),
+          error:(if $errenum == "" then null else $errenum end),
+          detail:(if $detail == "" then null else $detail end),
           exit_code:$c}')" \
         || die "$EX_USAGE" "could not encode the status object (models table at $MODELS_JSON may be malformed)"
     exit $prc

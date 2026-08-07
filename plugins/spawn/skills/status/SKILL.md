@@ -37,7 +37,7 @@ One script owns liveness, start/stop, and reporting. Liveness is a real probe of
 
    - **Exit 0 (ok):** the gateway is up and answered the probe. For `stop`, it also covers "was not running" and "the pidfile was stale" — both are successful outcomes.
    - **Exit 2 (usage/refusal):** an unknown or missing verb. On `stop` it also means the script refused to signal: either a gateway is serving but the pidfile is empty (it will not guess which process to kill), or the pidfile's pid belongs to a live but unrelated process — a recycled pid, reported with its actual argv rather than killed.
-   - **Exit 3 (gateway unreachable):** for `status`, this is **a normal answer, not an error.** It means the gateway is down. The JSON is still complete, with `running: false` and `error` naming what the probe saw — report it and stop; do not retry. For `start` and `restart` it means the start did not produce a serving gateway.
+   - **Exit 3 (gateway unreachable):** for `status`, this is **a normal answer, not an error.** It means the gateway is down. The JSON is still complete, with `running: false`, `error` carrying the enum value you branch on and `detail` naming what the probe saw — report it and stop; do not retry. For `start` and `restart` it means the start did not produce a serving gateway.
    - **Exit 4 (alias unknown):** only from `ensure <alias>` — the gateway is up but does not serve that alias. The JSON carries `served_aliases`.
    - **Exit 7 (token rejected):** the gateway is up and answering but refused the plugin's token. This is deliberately not exit 3: the process is running, so treating it as "down" would send a start into a collision with the live gateway. The fix is the token in the resolved config, not a restart.
 

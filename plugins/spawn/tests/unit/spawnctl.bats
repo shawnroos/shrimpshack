@@ -363,8 +363,14 @@ count_gateway_procs() {
     ctl ensure alpha
     [ "$status" -eq 3 ]
     [ "$(echo "$output" | jq -s 'length')" = "1" ]
-    # The refusal is named, and nothing was spawned.
-    echo "$output" | jq -r '.error' | grep -q 'refusing to start'
+    # The refusal is named, and nothing was spawned. Since U3's envelope (R23)
+    # `error` carries the ENUM a caller switches on and the prose lives in
+    # `detail` — this script used to put English in `error` while lens.sh and
+    # launch.sh put an enum there, which is what made forwarding a preflight
+    # object unsafe. Both halves are asserted: the enum a machine reads, and
+    # the sentence a human reads.
+    [ "$(echo "$output" | jq -r '.error')" = "unreachable" ]
+    echo "$output" | jq -r '.detail' | grep -q 'refusing to start'
     [ "$(count_gateway_procs "$WORK/install")" -eq 0 ]
 }
 
