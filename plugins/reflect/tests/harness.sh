@@ -535,8 +535,12 @@ check "scope: flat-root (global) body does not match a repo slug" \
   "scope_py \"sys.exit(0 if not scope.scope_matches('qmd://fa/global.md','-Users-shawnroos-projects-slate-web-app') else 1)\""
 check "scope: parses scope slug from a _scope path too (unmangled)" \
   "scope_py \"sys.exit(0 if scope.scope_of_qmd_file('mem/_scope/-Users-x-proj/a.md')=='-Users-x-proj' else 1)\""
-check "scope: resolver folds this worktree to its parent repo (reflect)" \
-  "scope_py \"sys.exit(0 if scope.repo_root('$REPO').endswith('/projects/reflect') and 'worktrees' not in scope.repo_root('$REPO') else 1)\""
+# The expected root is DERIVED, not hardcoded: `worktree list --porcelain`'s first
+# entry is the MAIN checkout, which is what a worktree must fold to. Deriving it via
+# --git-common-dir (what repo_root itself uses) would be tautological.
+MAIN_CHECKOUT="$(git -C "$REPO" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
+check "scope: resolver folds this checkout to the main repo root (derived)" \
+  "scope_py \"sys.exit(0 if scope.repo_root('$REPO')=='$MAIN_CHECKOUT' and '/worktrees/' not in scope.repo_root('$REPO') else 1)\""
 check "scope: outside a git repo resolves to global" \
   "scope_py \"sys.exit(0 if scope.resolve_repo_slug('/tmp')=='global' else 1)\""
 check "scope: home slug is an ancestor of a repo slug; siblings are not" \
@@ -633,6 +637,67 @@ BF_A="$(find "$BF/store" -name '*.md' | wc -l | tr -d ' ')"
 python3 "$REPO/scripts/scoped-memory/backfill.py" "$BF/store" "$BF/projects" --home-slug "$HSLUG" --apply >/dev/null 2>&1
 BF_B="$(find "$BF/store" -name '*.md' | wc -l | tr -d ' ')"
 check "backfill: idempotent (file count stable on re-run)" '[ "$BF_A" = "$BF_B" ]'
+
+# ------------------------------------------- hook input contract (U0, plan 004)
+# Claude Code delivers hook input as JSON on STDIN; no CLAUDE_TOOL*/$TOOL_INPUT env
+# var exists. These assertions run the SHIPPED command extracted straight out of
+# hooks.json (never copy-pasted) so they bind to what the harness actually executes.
+# reflect-trigger.sh writes to $HOME/.claude/.reflect-pending, so HOME is stubbed.
+echo "== hook input contract =="
+HKJSON="$REPO/.claude/hooks/hooks.json"
+HKHOME="$ROOT/hookhome"; mkdir -p "$HKHOME/.claude"
+HKFLAG="$HKHOME/.claude/.reflect-pending"
+# $1 = event (PostToolUse/PreToolUse), $2 = matcher -> the command string as shipped
+hk_cmd() {
+  python3 - "$HKJSON" "$1" "$2" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for entry in cfg["hooks"][sys.argv[2]]:
+    if entry.get("matcher") == sys.argv[3]:
+        print(entry["hooks"][0]["command"])
+        break
+PY
+}
+# $1 = command, $2 = stdin payload, $3 = PATH override ("" keeps the current PATH).
+# /bin/bash is spelled absolutely so a stripped PATH can't make the shell itself
+# unfindable — that would fake a pass on the fail-open assertion.
+hk_run() {
+  rm -f "$HKFLAG"
+  printf '%s' "$2" | env HOME="$HKHOME" CLAUDE_PLUGIN_ROOT="$REPO" \
+    ${3:+PATH="$3"} /bin/bash -c "$1" >/dev/null 2>&1
+  echo "$?"
+}
+HK_BASH="$(hk_cmd PostToolUse Bash)"
+HK_TODO="$(hk_cmd PreToolUse TodoWrite)"
+check "hook: matchers no longer read the nonexistent \$TOOL_INPUT env var" \
+  '! printf "%s%s" "$HK_BASH" "$HK_TODO" | grep -q "TOOL_INPUT"'
+
+HK_E1="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"gh pr merge 29 --squash"},"tool_response":{"stdout":""},"tool_use_id":"t1","duration_ms":12}')"
+check "hook: Bash matcher fires PR_event on a 'gh pr merge' stdin payload" \
+  '[ -f "$HKFLAG" ] && grep -q PR_event "$HKFLAG" && [ "$HK_E1" = "0" ]'
+
+HK_E2="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"git status --short"},"tool_response":{"stdout":""},"tool_use_id":"t2"}')"
+check "hook: Bash matcher writes no flag on a non-matching command (exit 0)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E2" = "0" ]'
+
+# jq is installed in BOTH /opt/homebrew/bin and /usr/bin here, so the usual
+# PATH="/usr/bin:/bin" idiom does not strip it — point PATH at an empty dir instead
+# and verify jq really is unreachable before trusting the assertion.
+HKNOJQ="$ROOT/nojq-bin"; mkdir -p "$HKNOJQ"
+check "hook: jq-absent fixture actually hides jq (guards the next assertion)" \
+  '! PATH="$HKNOJQ" command -v jq >/dev/null 2>&1'
+HK_E3="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"gh pr merge 29 --squash"}}' "$HKNOJQ")"
+check "hook: jq absent -> fail-open (exit 0, no flag written)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E3" = "0" ]'
+
+# TodoWrite gates in jq, not on raw-JSON grep, so pretty-printed stdin still parses.
+HK_E4="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{"todos":[{"content":"a","status": "completed"},{"content":"b","status": "completed"}]}}')"
+check "hook: TodoWrite fires when every todo is completed (whitespace-tolerant)" \
+  '[ -f "$HKFLAG" ] && grep -q TodoWrite_all_done "$HKFLAG" && [ "$HK_E4" = "0" ]'
+
+HK_E5="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{"todos":[{"content":"a","status":"completed"},{"content":"b","status":"in_progress"}]}}')"
+check "hook: TodoWrite stays silent while a todo is still open (exit 0)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E5" = "0" ]'
 
 # ---------------------------------------------------------------------- report
 echo
