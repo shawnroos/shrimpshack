@@ -15,7 +15,7 @@ execution: code
 
 - **Objective:** Re-cut the `spawn` plugin's front door around three verbs — `agent`, `bg-agent`, `session` — add an unattended background agent, move the plugin's contract into the data where a Bash-only caller can reach it, keep the scripts reachable without a version-pinned path, and keep the human-facing status surface honest.
 - **Product authority:** This plan owns the surfaces and the new background capability. It does not own the plugin rename (landed in `21f4d56` on `feature/gateway-plugin`) or the install flow (`feature/gateway-setup`).
-- **Open blockers:** OQ1 (status command naming), OQ3 (default versus enforced permission ceiling), OQ4 (job lifecycle and result delivery) and OQ5 (the family→tier table) must resolve before planning. OQ3 and OQ4 gate the background agent (R6–R9, R19, R21, R22); OQ1 gates R1 and R2; OQ5 gates R4. OQ2 alone is deferred.
+- **Open blockers:** none that gate planning. OQ4's remaining half — what owns a job's process across shell exit, and whether jobs may run concurrently in one worktree — is the last resolve-before-planning item, and it is a design question a planner can answer rather than a product decision. OQ2 and OQ6 are deferred.
 
 ---
 
@@ -41,8 +41,10 @@ The plugin also has exactly one silent failure. A wrong Bash-allowlist rule does
 - KD2. **The machine-readable contract lives in the data, not the markdown.** The only consumer that matters cannot load either markdown surface; the `content_trust` precedent already proved a Bash-only caller will derive a contract from JSON. Reachability is part of the same contract: the JSON is useless to a consumer that cannot resolve and run the scripts in the first place. Governs R10, R11, R12, R13, R15, R16, R23.
 - KD3. **Every surface stands alone.** No surface instructs a caller to reach another; each is complete for its own audience, which means each states what its verb actually does rather than pointing at whatever does it. (session-settled: user-directed — approach C + A chosen over keeping thin redirects that would now resolve.) Governs R3, R14, R20.
 - KD4. **The permission ceiling is set by the caller, not the command.** A person typing a slash command is present and accountable; an agent spawning one autonomously is not, so absence of a human is what tightens the ceiling. (session-settled: user-directed.) Governs R7, R8.
+- KD10. **The ceiling is a permission config the spawned session runs under, not a rule the plugin polices.** A spawned session is itself a Claude Code session with its own permission settings, so the harness enforces the bound and the plugin only chooses which config to hand down. The plugin ships defaults; a user overrides them in config, through the harness's own agent defaults, or by editing the file. (session-settled: user-directed — chosen over the plugin inventing its own sandbox.) Governs R7, R8, R25.
 - KD5. **A background agent works in a scratchpad inside the current worktree.** (session-settled: user-directed — chosen over a separate git worktree and over inheriting the caller's full permissions unchanged.) Governs R6, R7.
-- KD6. **Family-and-tier is a plugin-side mapping over the gateway's flat aliases.** The gateway keeps `kimi` and `k3` as peers; the plugin resolves `kimi k3` to `k3` and a bare family to that family's default, and hands the scripts one alias. (session-settled: user-approved — the user chose this knowing the gateway's aliases are flat.) Governs R4, R5.
+- KD6. **The command layer comprehends; the script layer parses.** Everything after the command is prose. The agent reading the command works out the family and tier from it and hands the script exactly one resolved alias, so the scripts keep their strict single-alias interface and no argument grammar has to distinguish a tier from the first word of a task. (session-settled: user-directed — chosen over a positional or flag grammar.) Governs R4, R5.
+- KD11. **A background job is given a contract before it starts.** Definition of done and deliverables are stated up front, so completion is checked against something rather than accepted on the model's account of itself. Pairs with KD9: the supervisor checks the deliverables, the model narrates. (session-settled: user-directed.) Governs R6, R21, R22, R26.
 - KD7. **The allowlist fix (R15, R16) ships before or with `bg-agent`.** An unattended job that hits a wrong rule fails with nobody watching, and the absent result is the only symptom. Governs R9.
 - KD8. **The status surface must not cry wolf.** The first drive produced drift false alarms a human had to debunk (F4 in the surface-drive findings); a status surface that over-reports gets ignored, so it reports only genuine drift and answers in prose a human can read. Governs R17, R18.
 - KD9. **What the plugin knows, the plugin says; what the model says is quoted.** Job lifecycle, permission denials and observed effects are facts the plugin can establish itself; only narrative is model-authored. A model whose calls were denied cannot be the witness to its own denial. Governs R19, R21.
@@ -58,23 +60,25 @@ The plugin also has exactly one silent failure. A wrong Bash-allowlist rule does
 
 **Command surface**
 
-- R1. The plugin exposes commands named `agent`, `bg-agent` and `session`, none of which matches any skill name.
+- R1. The plugin exposes commands named `agent`, `bg-agent`, `session` and `report`, none of which matches any skill name.
 - R2. The skills keep the names `lens`, `launch` and `status`, and remain reachable by those names.
 - R3. No command body instructs the caller to invoke a skill or another command; each body is sufficient on its own.
-- R4. A command accepts a model family and an optional tier, resolves them to exactly one gateway alias, and passes that single alias to the script — the scripts keep their one-alias, no-fan-out interface. The grammar separates the tier from the task payload unambiguously, so the first word of a task can never be read as a tier, and it covers every served alias including hyphenated tiers (`gpt sol-pro`). An unknown family or tier fails with a message naming the aliases available. The concrete family→tier table is OQ5.
-- R5. A command invoked with no family runs against the default alias. Where its prompt comes from is stated in the command's own contract rather than left to the caller to infer.
-- R20. Each verb's behavior is stated normatively: `agent` runs one tool-less turn and returns the answer as data; `session` creates and seeds a resumable session and returns a handle; `bg-agent` starts a supervised asynchronous loop and returns a job handle.
-- R24. The task payload reaches the model byte-for-byte. Arguments are passed as an array without `eval`, a `--` delimiter ends option parsing, and quotes, newlines, leading dashes and shell metacharacters survive intact.
+- R4. Everything after the command is prose. The agent reading the command derives the model family and tier from it — including hyphenated tiers such as `gpt sol-pro` — and invokes the script with exactly one resolved alias; the scripts keep their one-alias, no-fan-out interface. Prose naming no family runs against the default alias. Prose naming a family or tier the gateway does not serve fails with a message naming the aliases available, rather than silently falling back.
+- R5. Prose that names a model but asks for nothing, or asks for something but names no model, is answerable: the command states what it does in each case rather than leaving the caller to infer it.
+- R20. Each verb's behavior is stated normatively: `agent` runs one tool-less turn and returns the answer as data; `session` creates and seeds a resumable session and returns a handle; `bg-agent` starts a supervised asynchronous loop against a contract and returns a job handle; `report` answers whether the gateway is up and what it serves.
+- R24. Whatever prose the agent passes on reaches the model byte-for-byte. It travels by stdin or a file, never argv; arguments are passed as an array without `eval`; and quotes, newlines, leading dashes and shell metacharacters survive intact.
 
 **Background agent**
 
-- R6. `bg-agent` runs a full agent loop with tools against a named alias, returns control immediately with a job handle, and notifies on completion. The executable that provides it is named in the plan's implementation, and appears in the `--describe` contract alongside the existing scripts.
-- R7. A `bg-agent` job writes inside a scratchpad directory in the current worktree. The plan states the scratchpad's location, which roots the job may write to, whether its output is applied to the repository or staged for review, and when it is cleaned up. Under the repo-bounded ceiling — the default for an agent-invoked spawn (R8) — the job is confined to the repository; an operator-invoked job runs at the operator's ceiling per R8. Wider access is granted only by the operator, explicitly. Whether either bound is enforced or merely honored is OQ3; until it resolves, this requirement promises no containment against the spawned model.
+- R6. `bg-agent` runs a full agent loop with tools against a named alias and a contract (R26), returns control immediately with a job handle, and notifies on completion. The executable that provides it is named in the plan's implementation, and appears in the `--describe` contract alongside the existing scripts.
+- R7. A `bg-agent` job writes inside a scratchpad directory in the current worktree. The plan states the scratchpad's location, which roots the job may write to, whether its output is applied to the repository or staged for review, and when it is cleaned up.
 - R8. The permission ceiling for a spawn is set by its caller: an operator-invoked spawn gets the operator's full permissions by default; an agent-invoked spawn gets the repo-bounded ceiling. The two ceilings are reached through separately permissioned entry points, so the distinction is one the harness can enforce, not a flag the caller asserts about itself.
+- R25. A ceiling is expressed as the permission configuration the spawned session runs under, and the harness enforces it. The plugin ships a default configuration per ceiling and does not police the bound itself. A user overrides the defaults in configuration, through the harness's agent defaults, or by editing the file directly; the plugin never edits a user's own settings to do it. The repo-bounded default denies the paths that are inside a repository yet outside any sane ceiling — version-control internals and hooks, agent configuration, and symlinks resolving outside the tree.
+- R26. A `bg-agent` job is given a contract before it starts: what done means, and what it must hand back. The supervisor checks the deliverables against that contract, and a job whose deliverables are absent is not reported as done however the model describes its own work.
 - R9. A `bg-agent` job that stops making progress — parked on a permission decision, or running with its tool calls denied by its ceiling — is reported as stalled or degraded, rather than waiting indefinitely or finishing as a silent success. What counts as stalled or degraded is defined observably: the signals watched, the thresholds applied, and which component classifies them (OQ4).
 - R19. Narrative a `bg-agent` job hands back — the model's account of what it did or wants — is model-authored and carries the same untrusted-content marking the lens's response already carries (`content_trust`); it is never relayed as an instruction. This holds for the completion notification as well as the result, which means the notification travels in a structured envelope rather than as bare text.
-- R21. Job lifecycle and observed effect are established by the supervisor, not the model: start and end time, terminal state, exit status, permission denials, and which files changed. These are trusted fields alongside the untrusted narrative of R19.
-- R22. A job handle is usable. The plan defines the operations a holder can perform on it — at least query state, await completion, retrieve the result, and cancel — including terminal states and the behavior for an unknown or expired handle.
+- R21. Job lifecycle and observed effect are established by the supervisor, not the model: start and end time, terminal state, exit status, permission denials, which files changed, and which of the contract's deliverables are present. These are trusted fields alongside the untrusted narrative of R19.
+- R22. A job handle is usable. The plan defines the operations a holder can perform on it — at least query state, await completion, retrieve the result against its contract, and cancel — including terminal states and the behavior for an unknown or expired handle.
 
 **Agent-facing contract**
 
@@ -90,26 +94,26 @@ The plugin also has exactly one silent failure. A wrong Bash-allowlist rule does
 - R15. A consumer in another plugin can resolve and run the plugin's scripts without hard-coding a version-pinned path.
 - R16. The allowlist entry a user must add names a stable, narrowly scoped entry point that survives a version upgrade. Solving the version problem by wildcarding a cache directory is not acceptable — it would authorize whatever else lands under that path. No such stable path exists today (see Dependencies and Assumptions).
 
-**Human-facing status**
+**Human-facing report**
 
-- R17. The status surface reports only genuine drift. Whether two aliases are the same thing is decided from what the gateway says they resolve to, not from one name being a prefix of another — a new model served under a prefixed name is real drift and must still be reported.
-- R18. The status surface answers in prose a human can read, and keeps the machine-readable response intact underneath it. The prose is a rendering of the data, not a replacement for it.
+- R17. `/spawn:report` reports only genuine drift. Whether two aliases are the same thing is decided from what the gateway says they resolve to, not from one name being a prefix of another — a new model served under a prefixed name is real drift and must still be reported.
+- R18. `/spawn:report` answers in prose a human can read, and keeps the machine-readable response intact underneath it. The prose is a rendering of the data, not a replacement for it.
 
 ### Key Flows
 
 - F1. Operator runs a background agent
-  - **Trigger:** A1 types `/spawn:bg-agent kimi k3 -- fix the failing tests in lib/`.
+  - **Trigger:** A1 types `/spawn:bg-agent have kimi k3 fix the failing tests in lib/ and leave the suite green`.
   - **Actors:** A1, A3, A4
-  - **Steps:** The family and tier resolve to one alias; a scratchpad is prepared in the current worktree; the job starts at A1's ceiling through the operator entry point; a job handle returns immediately; A1 is notified on completion.
-  - **Outcome:** A1 holds a handle, a supervisor-authored account of what changed, and the model's own narrative marked as untrusted.
-  - **Covered by:** R1, R4, R6, R7, R8, R19, R21, R22
+  - **Steps:** The agent reads the prose, resolves `kimi k3` to one alias and the rest to a contract; a scratchpad is prepared in the current worktree; the job starts at A1's ceiling through the operator entry point, under that ceiling's permission configuration; a job handle returns immediately; A1 is notified on completion.
+  - **Outcome:** A1 holds a handle, a supervisor-authored account of what changed and which deliverables are present, and the model's own narrative marked as untrusted.
+  - **Covered by:** R1, R4, R6, R7, R8, R19, R21, R22, R25, R26
 
 - F2. A skill spawns an agent autonomously
   - **Trigger:** A2 shells out to the background-agent entry point during its own run.
   - **Actors:** A2, A3
-  - **Steps:** The script resolves the alias, runs at the repo-bounded ceiling because A2 reached it through the agent entry point, and returns a job handle in the standard envelope.
-  - **Outcome:** A2 holds a handle it can query, await, or cancel, and the job is held to the repo-bounded ceiling — enforced or honored per OQ3.
-  - **Covered by:** R6, R7, R8, R22, R23
+  - **Steps:** The script runs the job at the repo-bounded ceiling, because A2 reached it through the agent entry point and that entry point hands the child the repo-bounded permission configuration; a job handle returns in the standard envelope.
+  - **Outcome:** A2 holds a handle it can query, await, or cancel, and the harness holds the job to the repo-bounded ceiling.
+  - **Covered by:** R6, R7, R8, R22, R23, R25
 
 - F3. A Bash-only caller learns the contract
   - **Trigger:** A2 needs to know what exit 5 means and which response fields exist.
@@ -120,13 +124,14 @@ The plugin also has exactly one silent failure. A wrong Bash-allowlist rule does
 
 ### Acceptance Examples
 
-- AE1. **Covers R4.** Given the gateway serves `kimi` and `k3` as peers, when a caller passes `kimi k3`, then the request goes to the `k3` alias.
-- AE2. **Covers R4.** Given a caller passes `kimi` alone, then the request goes to the family's default alias, not to an error.
-- AE3. **Covers R4.** Given a caller passes a family the gateway does not serve, then the call fails with a message listing the served aliases.
-- AE8. **Covers R4, R24.** Given a task whose first word matches a tier name, then it is treated as task text and not as a tier; given a task containing quotes, newlines and a leading dash, then the model receives it unchanged.
-- AE4. **Covers R8.** Given a spawn reaching the operator entry point, then it runs at the operator's ceiling; given a spawn reaching the agent entry point, then it runs repo-bounded.
+- AE1. **Covers R4.** Given the gateway serves `kimi` and `k3` as peers, when prose names `kimi k3`, then the request goes to the `k3` alias.
+- AE2. **Covers R4.** Given prose naming `kimi` and no tier, then the request goes to the family's default alias, not to an error.
+- AE3. **Covers R4.** Given prose naming a family the gateway does not serve, then the call fails with a message listing the served aliases rather than falling back to the default.
+- AE8. **Covers R4, R24.** Given prose whose task text happens to contain a tier name (`review the sol-pro migration`), then the alias is taken from what the prose asks for, not from the token matching; given prose containing quotes, newlines and a leading dash, then the model receives it unchanged.
+- AE4. **Covers R8, R25.** Given a spawn reaching the operator entry point, then the child runs under the operator's permission configuration; given a spawn reaching the agent entry point, then the child runs under the repo-bounded configuration.
+- AE10. **Covers R25.** Given a job at the repo-bounded ceiling attempting to write a version-control hook, an agent-configuration file, or through a symlink resolving outside the tree, then the harness denies it.
 - AE5. **Covers R9.** Given a background job that blocks on a permission decision, then it is reported stalled rather than remaining silently pending; given a job whose tool calls are denied by its ceiling, then it is reported degraded rather than completing as a clean success.
-- AE9. **Covers R19, R21.** Given a completed job, then the changed-file list and terminal state come from the supervisor and are marked trusted, while the model's account of its own work is marked untrusted; given a job whose calls were all denied, then it is not reported as successful on the model's say-so.
+- AE9. **Covers R19, R21, R26.** Given a completed job, then the changed-file list, terminal state and which deliverables are present come from the supervisor and are marked trusted, while the model's account of its own work is marked untrusted; given a job whose contract names a deliverable that is absent, then it is not reported done however the model describes it.
 - AE6. **Covers R11.** Given a caller runs `--help` and separately makes a usage error, then the two are distinguishable by a response field, both still exiting 2.
 - AE7. **Covers R17.** Given the gateway serves `claude-gpt` and `gpt` resolving to the same model and the table carries `gpt`, then `claude-gpt` is not reported as drift; given a `claude-gpt` that resolves to a different model, then it is reported.
 
@@ -135,14 +140,14 @@ The plugin also has exactly one silent failure. A wrong Bash-allowlist rule does
 ```mermaid
 flowchart TB
   A[spawn invoked] --> B{which entry point}
-  B -->|operator| C[operator's ceiling]
-  B -->|agent| D[repo-bounded ceiling]
-  C --> E{operator narrows?}
-  D --> F{operator grants wider?}
-  E -->|yes| D
-  E -->|no| G[run]
-  F -->|yes| C
-  F -->|no| G
+  B -->|operator| C[operator permission config]
+  B -->|agent| D[repo-bounded permission config]
+  C --> E{user override in config?}
+  D --> E
+  E -->|yes| F[the overriding config]
+  E -->|no| G[the shipped default]
+  F --> H[child session runs under it; harness enforces]
+  G --> H
 ```
 
 ### Scope Boundaries
@@ -155,25 +160,23 @@ flowchart TB
 ### Dependencies and Assumptions
 
 - Depends on the rename in `21f4d56` being merged or rebased under this work.
-- Assumes the status capability survives as a fourth command; the operator's stated command list did not include it, and the naming is open (OQ1).
-- The caller-derived ceiling is only as strong as the mechanism that derives it. R8 routes the two ceilings through separately permissioned entry points precisely so the harness decides which one a caller may reach, rather than the caller asserting its own identity in argv — a flag would be self-declared and any agent able to run the script could claim to be the operator. Whether the entry-point split is sufficient, and what enforces the repo bound against the spawned model, is OQ3.
-- The caller is only one of two parties. A2 invoking the script is a self-shoot risk; A3, the spawned model, is a third party by definition. "Self-shoot" therefore covers who invokes the script, not what the model does with tools once it runs — and under the repo-bounded ceiling that model can read whatever the worktree contains, secrets included.
+- Depends on a spawned session being able to run under a permission configuration the launcher hands it, distinct from the launching session's own. R25 rests on this entirely, and it is unverified — confirm it before planning commits to the mechanism.
+- The caller-derived ceiling is only as strong as the mechanism that derives it. R8 routes the two ceilings through separately permissioned entry points precisely so the harness decides which one a caller may reach, rather than the caller asserting its own identity in argv — a flag would be self-declared and any agent able to run the script could claim to be the operator.
+- The caller is only one of two parties. A2 invoking the script is a self-shoot risk; A3, the spawned model, is a third party by definition. R25 is what covers the second party: the bound on A3 is a permission configuration the harness enforces, not a rule the plugin asks the model to respect. Within that bound the model still reads whatever the worktree contains, secrets included — R25 denies execution-bearing paths, not readable ones.
 - No stable install path exists yet: installed plugin files live under version-embedded cache directories, and the plugin cannot write outside its own tree (the README says as much about the allowlist entry). R16 is therefore satisfied either by the install flow owned by `feature/gateway-setup` or by this plan claiming that one slice of the install surface; which, is settled at planning, and it is a single owner either way.
-- Assumes the R4 family-and-tier mapping is maintained by hand as the gateway's aliases change. R17's drift discipline covers the status table, not this mapping; whether it should extend there is part of OQ5.
+- Prose comprehension at the command layer (R4) is judgement, not parsing. Naming a family the gateway does not serve fails loudly rather than falling back, which keeps the failure visible; but a caller whose prose is ambiguous between two served aliases gets whichever the reading agent picked. The determinism lives one layer down, where the script takes one resolved alias and nothing else.
 
 ### Outstanding Questions
 
 **Resolve before planning**
 
-- OQ1. What is the status command called? Keeping `/spawn:status` is not available — a `status` command alongside the retained `status` skill recreates the exact collision KD1 exists to remove. So either the command is renamed toward what it reports (`gateway`, `models`), or there is no status command and the capability stays with the skill.
-- OQ3. Is the permission ceiling enforced or merely honored? Two independent halves. The caller-facing half (which entry point a caller may reach, and who may grant wider access) is plausibly settled by the entry-point split in R8. The model-facing half — what actually confines A3 to the repository — is not, and the party being confined is a third-party model holding tools. Resolving "enforced" for the second half also means saying what repo-bounded excludes: execution-bearing paths like `.git/hooks`, agent-configuration files, symlinks pointing out of the tree, and shell access that reaches around any of it are inside the repository yet outside any sane ceiling. Enforcement is cheap to specify now and expensive to retrofit after planning.
-- OQ4. The background job's lifecycle. What a finished job returns and how the result reaches an operator versus a polling Bash-only caller; what owns the child process once the invoking shell exits, and whether a job survives terminal close, plugin reload or a gateway restart; where job state is stored and how it is recovered; what observes a job and classifies it stalled or degraded, on what signals and thresholds; and whether concurrent jobs in one worktree are permitted, how their changes are attributed, and what happens when two of them — or a job and the operator — touch the same file. R6, R9, R21 and R22 cannot be planned until this is answered.
-- OQ5. The concrete family→tier table behind R4: how each served alias decomposes, how hyphenated tiers like `sol-pro` are expressed, whether the `default` chain is reachable through the grammar, and whether the R17 drift standard extends to this mapping as the gateway's aliases change. R4's grammar cannot be specified without it.
+- OQ4. What owns a background job's process once the invoking shell exits — whether a job survives terminal close, plugin reload or a gateway restart, where its state lives and how it is recovered, and whether concurrent jobs in one worktree are permitted, how their changes are attributed, and what happens when two of them (or a job and the operator) touch the same file. The rest of OQ4 is settled: a job carries a contract (R26), and what it returns is measured against that contract by the supervisor (R21).
 
 **Deferred to planning**
 
 - OQ2. Does the surface-naming rule in KD1 become a repo-wide convention, and do `token-bridge` and `multi-slice-review` get fixed to match? Answering it does not block this plan; leaving it unanswered leaves two siblings with the same fault.
 - OQ6. What bounds an unattended job: maximum runtime, resource ceilings, how long results and scratchpads are retained, and what collects an abandoned job.
+- OQ7. Where a user's ceiling override lives and what it can express (R25) — a file the plugin reads, the harness's own agent defaults, or both — and what happens when an override widens a ceiling the plugin shipped narrow.
 
 ### Sources
 
