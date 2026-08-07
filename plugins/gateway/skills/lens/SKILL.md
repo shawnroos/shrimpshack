@@ -54,8 +54,14 @@ There is no Claude Code agent loop on the far side of this call (KTD1). It is a 
    - **Exit 5 (upstream provider error):** the request reached the provider and the provider failed. Branch on `error`:
      - `rate_limited` — throttled upstream. Retrying later is reasonable.
      - `context_overflow` — the prompt does not fit this alias's window. Retrying the same prompt can never work; shrink it or pick a wider alias.
+     - `no_text_truncated` — the model spent its whole `--max-tokens` budget before writing any answer (it reasons in `thinking` blocks and never reached a `text` block). **Raise `--max-tokens` and retry** — the same budget will fail the same way. Reasoning models hit this on small budgets; measured on a real alias at 40 tokens, three runs out of three.
+     - `no_text_in_response` — a 200 carrying no answer text and no truncation. Raising the budget will NOT help; this is the model saying nothing.
      - `upstream_error` — anything else the provider returned.
      Exit 5 also covers a 200 whose body was not a parseable messages response.
+
+     The two `no_text_*` values exist because an empty answer used to arrive as
+     **exit 0 with `text: ""`** — billed, green, and empty. If you are branching
+     on exit 0 alone, you were reading that as a successful review.
    - **Exit 6 (deadline exceeded):** no response within the timeout. The request was aborted — nothing is still running, so a retry does not stack a second call.
    - **Exit 7 (token rejected):** the gateway is up and answering but refused the plugin's token; `error` is `auth_rejected` whether the rejection came from the preflight or the messages call. Distinct from exit 3 on purpose: the gateway is running, so restarting it is the wrong move — the token in the resolved `gateway.yaml` is the thing to look at.
 

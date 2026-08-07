@@ -287,6 +287,38 @@ EOF
     [ "$status" -eq 2 ]
 }
 
+@test "a 200 with no text block is exit 5, not a green empty answer" {
+    # FOUND BY DRIVING THE REAL GATEWAY, not by a fixture. kimi at
+    # --max-tokens 40 returned stop_reason=max_tokens with content types
+    # ["thinking"] and no text block, three runs out of three. The extraction
+    # selects `.type == "text"`, so the lens reported ok:true / bytes:0 /
+    # exit 0 — the caller paid for 40 output tokens and got a green empty
+    # answer. A fan-out orchestrator reads that as a successful empty review.
+    start_fixture thinking-only "alpha"
+
+    lens "explain something" --alias alpha --max-tokens 40
+    [ "$status" -eq 5 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.ok')" = "false" ]
+    [ "$(echo "$output" | jq -r '.error')" = "no_text_truncated" ]
+    # The detail must name the remedy — the whole point of splitting this from
+    # the generic empty case is that raising the budget fixes THIS one.
+    run grep -q 'raise --max-tokens' <<< "$(echo "$output" | jq -r '.detail')"
+    [ "$status" -eq 0 ]
+}
+
+@test "a 200 with no text and no truncation is a distinct error value" {
+    # stop_reason end_turn: the model simply said nothing. Raising the budget
+    # would not help, so it must not claim that it would.
+    start_fixture empty-text "alpha"
+
+    lens "explain something" --alias alpha
+    [ "$status" -eq 5 ]
+    [ "$(echo "$output" | jq -r '.error')" = "no_text_in_response" ]
+    run grep -q 'raise --max-tokens' <<< "$(echo "$output" | jq -r '.detail')"
+    [ "$status" -ne 0 ]
+}
+
 @test "R1: --timeout 0 is refused with code 2, not accepted as 'no deadline'" {
     # `curl --max-time 0` does NOT mean "no cap" — it DISABLES the deadline, so
     # the value a caller reads as "don't impose an artificial limit" would be an

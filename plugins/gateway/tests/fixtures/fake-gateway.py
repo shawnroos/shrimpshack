@@ -178,6 +178,25 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, self._message(model))
 
     def _message(self, model):
+        # A 200 whose content carries NO text block. Found by driving the real
+        # gateway: a reasoning model can spend its entire output budget inside
+        # `thinking` and return nothing else. The lens extracts `.type == "text"`
+        # blocks, so this used to surface as ok:true / bytes:0 / exit 0 — a green
+        # empty answer the caller had already paid for.
+        #   thinking-only  stop_reason max_tokens (the measured shape)
+        #   empty-text     stop_reason end_turn   (no text, not truncation)
+        if CFG["scenario"] in ("thinking-only", "empty-text"):
+            return {
+                "id": "msg_fake_0001",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [{"type": "thinking", "thinking": "...reasoning..."}],
+                "stop_reason": ("max_tokens" if CFG["scenario"] == "thinking-only"
+                                else "end_turn"),
+                "stop_sequence": None,
+                "usage": {"input_tokens": 11, "output_tokens": 40},
+            }
         text = CFG["response_text"]
         if CFG["response_bytes"] > 0:
             # Deterministic filler for the KTD8 spill test: a body big enough
@@ -202,7 +221,8 @@ def main():
     ap.add_argument(
         "--scenario",
         default="healthy",
-        choices=["down", "healthy", "upstream-5xx", "throttle-429", "context-length", "slow"],
+        choices=["down", "healthy", "upstream-5xx", "throttle-429", "context-length", "slow",
+            "thinking-only", "empty-text"],
     )
     ap.add_argument("--delay", type=float, default=5.0, help="seconds the slow scenario sleeps")
     ap.add_argument("--response-text", default="fixture response text")

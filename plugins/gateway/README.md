@@ -115,7 +115,7 @@ lookup table only:
 | `2` | usage or refusal |
 | `3` | gateway unreachable and could not be started |
 | `4` | alias unknown to the gateway |
-| `5` | upstream provider error — the JSON's `error` field distinguishes `rate_limited` and `context_overflow` from other upstream failures |
+| `5` | upstream provider error — the JSON's `error` field distinguishes `rate_limited`, `context_overflow`, `no_text_truncated` (the model spent its whole token budget reasoning and never wrote an answer — raise `--max-tokens`) and `no_text_in_response` from other upstream failures |
 | `6` | deadline exceeded |
 | `7` | gateway reachable but rejected the plugin's token |
 

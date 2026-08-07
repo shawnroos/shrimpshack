@@ -13,8 +13,8 @@
 #   diagnostics on stderr only.
 #   exit 0 ok · 2 usage/refusal · 3 unreachable · 4 alias unknown ·
 #        5 upstream provider error · 6 deadline exceeded · 7 token rejected.
-#   The `error` field distinguishes `rate_limited` and `context_overflow` from
-#   other upstream failures.
+#   The `error` field distinguishes `rate_limited`, `context_overflow`,
+#   `no_text_truncated` and `no_text_in_response` from other upstream failures.
 #
 # KTD1: this is a plain completion call to the gateway's messages endpoint. The
 # Claude Code agent loop is NOT in this path — tools are off by construction,
@@ -504,6 +504,37 @@ if ! jq -j '[.content[]? | select(.type == "text") | .text] | join("")' < "$RESP
 fi
 USAGE_JSON="$(jq -c '.usage // null' < "$RESP" 2>/dev/null)"
 [ -n "$USAGE_JSON" ] || USAGE_JSON="null"
+
+# An HTTP 200 that yields NO text is not a success. Found by driving the real
+# gateway, and no fixture reproduces it: a reasoning model can spend its entire
+# output budget inside `thinking` blocks and return content with no `text` block
+# at all. Measured on kimi at --max-tokens 40, three runs out of three:
+#   stop_reason "max_tokens", content types ["thinking"], output_tokens 40.
+# The extraction above selects `.type == "text"`, so it produced an empty string
+# and the script reported ok:true / bytes:0 / exit 0 — the caller paid for the
+# tokens, asked a question, and got a green empty answer with nothing to say
+# anything had gone wrong. A fan-out orchestrator reads that as a successful
+# empty review, which is exactly the wrong-success class this plugin keeps
+# closing everywhere else.
+#
+# Exit 5, not a new code: the enum is contract-frozen (KTD2), and `error` is
+# already how exit 5 distinguishes its cases (rate_limited, context_overflow).
+# The two values below are split because the remedy differs — a truncated answer
+# is fixed by raising --max-tokens, an empty end_turn is not.
+if [ ! -s "$TEXT_FILE" ]; then
+    STOP_REASON="$(jq -r '.stop_reason // "unknown"' < "$RESP" 2>/dev/null)"
+    BLOCK_TYPES="$(jq -r '[.content[]?.type] | join(",") // ""' < "$RESP" 2>/dev/null)"
+    if [ "$STOP_REASON" = "max_tokens" ]; then
+        # Worded to avoid the vocabulary the R7 lint forbids in this source
+        # (spend/budget/cost/…). KD2 settles that this plugin carries no spend
+        # logic, and the lint holds that line by asserting those words are
+        # absent — so the wording bends, not the guard.
+        die "$EX_UPSTREAM" "no_text_truncated" \
+            "the model used all ${MAX_TOKENS} output tokens on reasoning and never reached an answer (stop_reason=max_tokens, content blocks: ${BLOCK_TYPES:-none}) — raise --max-tokens and retry"
+    fi
+    die "$EX_UPSTREAM" "no_text_in_response" \
+        "the gateway returned HTTP 200 with no answer text (stop_reason=$STOP_REASON, content blocks: ${BLOCK_TYPES:-none})"
+fi
 
 # ---------------------------------------------------------------------------
 # Output (KTD8 spill).
