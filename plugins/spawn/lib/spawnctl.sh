@@ -158,7 +158,7 @@ need_jq() {
         # unsanitized, it could put a quote or an escape byte into stdout.
         # The envelope comes from common.sh (R23) rather than being written out
         # here, so this tier cannot drift from the other two.
-        emit "$(spawn::envelope_bash plugin "internal" 2 ",\"verb\":\"${VERB//[^a-z]/}\"")"
+        emit "$(spawn::envelope_bash plugin "internal" 2 ",\"verb\":\"${VERB//[^a-z]/}\",\"help_requested\":$HELP_REQUESTED")"
         exit 2
     }
 }
@@ -167,6 +167,20 @@ need_jq() {
 # own state, so it stays declared here — a bash function reads the caller's
 # globals dynamically.
 EMITTED=0
+
+# R11 — the help discriminator. `--help` and an unknown or missing verb are all
+# exit 2 with error:"usage" because the enum is contract-frozen (KTD2), and they
+# were separated only by the English in `detail`. This field is that distinction
+# as data, and it rides every error response on both encoder tiers.
+HELP_REQUESTED=false
+
+# R12 — this script's error vocabulary is exactly the shared one (its enums all
+# come from the exit code through spawn::enum_for_code), so the table in
+# common.sh answers every value. The wrapper exists so a site can be given a
+# narrower repair here without moving the shared table, and so the three scripts
+# read the same way.
+remedy_for() { spawn::remedy_for "$1"; }
+
 emit_error() {
     local code="$1" msg="$2"
     [ "$EMITTED" -eq 1 ] && return 0
@@ -183,6 +197,11 @@ emit_error() {
     # and it means a future caller that reaches emit_error directly cannot open
     # a hole in the `detail` field, which is display text a consumer prints.
     msg="$(spawn::sanitize_for_display "$msg")"
+    # R12: the site's own REMEDY wins, otherwise the enum's default from the one
+    # table. Defaulted here rather than at every die site, so "every error names
+    # its remedy" holds for die sites nobody has written yet.
+    local rem="${REMEDY:-}"
+    [ -n "$rem" ] || rem="$(remedy_for "$err")"
     local obj=""
     if command -v jq >/dev/null 2>&1; then
         # VERB is raw argv on the unknown-verb path, and jq's --arg escapes
@@ -193,17 +212,17 @@ emit_error() {
         local verb_d
         verb_d="$(spawn::sanitize_for_display "${VERB:-}")"
         obj="$(jq -nc --arg verb "$verb_d" --arg e "$err" --arg m "$msg" \
-            --arg r "${REMEDY:-}" --argjson c "$code" \
+            --arg r "$rem" --argjson c "$code" --argjson h "$HELP_REQUESTED" \
             "$(spawn::envelope_jq plugin)"' + {ok:false, verb:$verb, error:$e,
               detail:$m, remedy:(if $r == "" then null else $r end),
-              exit_code:$c}')"
+              help_requested:$h, exit_code:$c}')"
     fi
     # No jq means no encoder, and VERB is raw argv: an unsanitized verb here
     # would put a quote (breaking the object) or an escape byte into stdout.
     # Reduced to the verb enum's own charset in pure bash — closed by
     # construction, since that is the only defence available with no jq. Also
     # reached when jq is present but ERRORED, which used to print nothing at all.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"verb\":\"${VERB//[^a-z]/}\"")"
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"verb\":\"${VERB//[^a-z]/}\",\"help_requested\":$HELP_REQUESTED")"
     emit "$obj"
 }
 
@@ -783,6 +802,101 @@ table_json() {
 }
 
 # ---------------------------------------------------------------------------
+# --describe (R10, R14, KD2) — the control layer's contract as data.
+#
+# Every value is projected from what this script actually runs on: the EX_*
+# constants, the verb list the case below accepts, the shared enum table and the
+# shared remedy table. A caller reconciles against the running version instead of
+# a table it copied once and now hard-codes.
+# ---------------------------------------------------------------------------
+emit_describe() {
+    local ev
+    ev="$(jq -n \
+        --arg r_usage "$(remedy_for usage)" \
+        --arg r_unreach "$(remedy_for unreachable)" \
+        --arg r_alias "$(remedy_for alias_unknown)" \
+        --arg r_auth "$(remedy_for auth_rejected)" \
+        --arg r_int "$(remedy_for internal)" \
+        '[{value:"usage",         exit_code:2, remedy:$r_usage},
+          {value:"unreachable",   exit_code:3, remedy:$r_unreach},
+          {value:"alias_unknown", exit_code:4, remedy:$r_alias},
+          {value:"auth_rejected", exit_code:7, remedy:$r_auth},
+          {value:"internal",      exit_code:2, remedy:$r_int}]')" || return 1
+
+    emit "$(jq -nc --argjson errors "$ev" --arg base "$BASE_URL" \
+        "$(spawn::envelope_jq plugin)"' + {
+          ok:true, error:null, exit_code:0,
+          response_kind:"describe",
+          surface:"spawnctl.sh",
+          summary:"Start, stop and report on the local gateway process, and answer the one preflight question the other two scripts ask.",
+          base_url:$base,
+          verbs:[
+            {name:"status",  argument:null,
+             note:"never starts anything; exit 3 is a normal answer meaning the gateway is down"},
+            {name:"ensure",  argument:"alias (optional)",
+             note:"starts the gateway if it is down, then checks the alias against the served list; the single owner of exit 4"},
+            {name:"start",   argument:null,  note:"idempotent; a start that does not serve exits non-zero"},
+            {name:"stop",    argument:null,
+             note:"exits 0 for stopped, not_running and stale_pidfile; refuses to signal an unmanaged or recycled pid"},
+            {name:"restart", argument:null,  note:"a refused stop is a failed restart, never a green one"}
+          ],
+          flags:[
+            {name:"--help",     value:null, required:false, default:null,
+             note:"exit 2 with help_requested:true — not a usage error"},
+            {name:"--describe", value:null, required:false, default:null,
+             note:"this document; exit 0; needs no running gateway, no install and no config"}
+          ],
+          exit_codes:[
+            {code:0, error:null,            origin:"own", meaning:"the verb did what it says"},
+            {code:2, error:"usage",         origin:"own",
+             meaning:"unknown or missing verb, help, or a stop that refused to signal; branch on help_requested"},
+            {code:3, error:"unreachable",   origin:"own",
+             meaning:"the gateway is not answering; for status this is an answer, not a malfunction"},
+            {code:4, error:"alias_unknown", origin:"own",
+             meaning:"ensure only: the gateway is up but does not serve that alias"},
+            {code:7, error:"auth_rejected", origin:"own",
+             meaning:"the gateway answered and refused our token; deliberately not exit 3"}
+          ],
+          error_values:$errors,
+          response_fields:[
+            {name:"schema",           always:true,  note:"the version of this contract"},
+            {name:"ok",               always:true,  note:"boolean; agrees with exit_code"},
+            {name:"error",            always:true,  note:"enum value or null, never prose"},
+            {name:"remedy",           always:true,  note:"what to do about it; null only on success"},
+            {name:"detail",           always:true,  note:"human-readable diagnostic; the only prose field"},
+            {name:"content_trust",    always:true,  note:"how far the payload may be trusted"},
+            {name:"content_notice",   always:true,  note:"the rule that follows from content_trust"},
+            {name:"exit_code",        always:true,  note:"the process exit status, restated in the data"},
+            {name:"verb",             always:false, note:"which verb answered"},
+            {name:"running",          always:false, note:"did the probe reach a serving gateway"},
+            {name:"base_url",         always:false, note:"where the probe looked"},
+            {name:"served_aliases",   always:false, note:"the aliases the gateway reports; the real allowlist"},
+            {name:"alias",            always:false, note:"ensure only: the alias that was checked"},
+            {name:"config",           always:false, note:"the resolved gateway.yaml path; a path, never a token"},
+            {name:"install_dir",      always:false, note:"the resolved install directory"},
+            {name:"install_dir_error",always:false, note:"why resolution failed, when it did"},
+            {name:"binary",           always:false, note:"the gateway executable this script would run"},
+            {name:"log",              always:false, note:"where a started gateway writes"},
+            {name:"pidfile",          always:false, note:"where the managed pid is recorded"},
+            {name:"pid",              always:false, note:"the recorded pid"},
+            {name:"pid_verified",     always:false, note:"true only when that pid is live AND its argv names our binary"},
+            {name:"started",          always:false, note:"ensure only: did this call start the gateway"},
+            {name:"result",           always:false, note:"stop only: stopped, not_running, stale_pidfile, unmanaged or pid_mismatch"},
+            {name:"models",           always:false, note:"status only: the plugin table, as data"},
+            {name:"drift",            always:false, note:"status only: the three drift classes below"},
+            {name:"help_requested",   always:false, note:"true only for --help; present on every error response"}
+          ],
+          drift_kinds:[
+            {name:"missing_from_table", note:"a served alias the plugin table does not list"},
+            {name:"missing_window",     note:"a table entry with no declared context window"},
+            {name:"model_drift",        note:"an alias whose upstream model string moved; each entry carries alias, recorded and current"}
+          ],
+          drift_entry_fields:["alias","recorded","current"]
+        }')" || return 1
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Verbs
 # ---------------------------------------------------------------------------
 VERB="${1:-}"
@@ -790,14 +904,45 @@ VERB="${1:-}"
 
 case "$VERB" in
     start|stop|restart|status|ensure) ;;
-    ""|-h|--help|help)
-        printf 'usage: spawnctl.sh {start|stop|restart|status|ensure [alias]}\n' >&2
+    --describe)
+        # R10. Answered HERE — before resolve_config, before resolve_install_dir
+        # and before any probe — so the contract is readable with the gateway
+        # down, with no install found and with no gateway.yaml on the box. A
+        # caller reads it in order to interpret a failure, so it must not need
+        # the thing that failed.
+        #
+        # It requires jq, like every other success-shaped response in this
+        # plugin: the pure-bash tier encodes failures only, because building a
+        # payload with no encoder means hand-writing the envelope, and that is
+        # the drift R23 exists to close. With no jq, need_jq answers with the
+        # standard no-encoder object at exit 2.
         need_jq
-        die "$EX_USAGE" "no verb given"
+        emit_describe || die "$EX_USAGE" "could not encode the describe object"
+        exit $EX_OK
+        ;;
+    -h|--help|help)
+        # R11: help is exit 2 like a usage error — the enum is frozen — but it
+        # is NOT the same event, and the difference is now a field rather than
+        # the English in `detail`. Split from the ""-arm below on purpose: "you
+        # asked me to explain myself" and "you forgot the verb" were previously
+        # the same branch, which is precisely the pair a machine has to tell
+        # apart.
+        HELP_REQUESTED=true
+        printf 'usage: spawnctl.sh {start|stop|restart|status|ensure [alias]} | --describe | --help\n' >&2
+        need_jq
+        REMEDY="Nothing is broken — this was a help request, and exit 2 is what the frozen enum has for it. Branch on help_requested, not on the code. Call --describe for the same contract as data." \
+            die "$EX_USAGE" "help requested"
+        ;;
+    "")
+        printf 'usage: spawnctl.sh {start|stop|restart|status|ensure [alias]} | --describe | --help\n' >&2
+        need_jq
+        REMEDY="Call again with one of the verbs: start, stop, restart, status, ensure. Run --describe for the machine-readable list." \
+            die "$EX_USAGE" "no verb given"
         ;;
     *)
         need_jq
-        die "$EX_USAGE" "unknown verb '$VERB' (expected start|stop|restart|status|ensure)"
+        REMEDY="Call again with one of the verbs: start, stop, restart, status, ensure. Run --describe for the machine-readable list." \
+            die "$EX_USAGE" "unknown verb '$VERB' (expected start|stop|restart|status|ensure)"
         ;;
 esac
 
@@ -826,9 +971,10 @@ ensure)
         if ! printf '%s' "$PROBE_ALIASES_JSON" | jq -e --arg a "$ALIAS" 'index($a) != null' >/dev/null 2>&1; then
             say "alias '$ALIAS' is not in the gateway's served list"
             emit "$(jq -nc --arg a "$ALIAS" --argjson served "$PROBE_ALIASES_JSON" --argjson c $EX_ALIAS \
+                --arg rem "$(remedy_for alias_unknown)" \
                 "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"ensure",
                   error:"alias_unknown", alias:$a, served_aliases:$served,
-                  exit_code:$c}')"
+                  remedy:$rem, exit_code:$c}')"
             exit $EX_ALIAS
         fi
     fi
@@ -889,10 +1035,11 @@ stop)
         if [ $? -eq $EX_OK ]; then
             say "a gateway is serving at $BASE_URL but $PIDFILE names no pid — refusing to guess which process to signal"
             emit "$(jq -nc --arg p "$PIDFILE" --argjson c $EX_USAGE \
+                --arg rem "Find the serving process yourself and stop it, or restart the box's gateway by hand; this script refuses to guess which pid to signal." \
                 "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
                   result:"unmanaged", error:"usage",
                   detail:"a gateway is serving but the pidfile is empty or absent",
-                  pidfile:$p, exit_code:$c}')"
+                  remedy:$rem, pidfile:$p, exit_code:$c}')"
             exit $EX_USAGE
         fi
         emit "$(jq -nc --arg p "$PIDFILE" \
@@ -916,10 +1063,11 @@ stop)
         if [ $? -eq $EX_OK ]; then
             say "pid $pid is dead but a gateway is still serving at $BASE_URL — refusing to report a stop that did not happen, and leaving $PIDFILE alone"
             emit "$(jq -nc --argjson pid "$pid" --arg p "$PIDFILE" --argjson c $EX_USAGE \
+                --arg rem "A gateway is still serving under a pid this script did not record, so the pidfile was left alone. Stop that process yourself, then run start." \
                 "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
                   result:"unmanaged", pid:$pid, pidfile:$p, error:"usage",
                   detail:"the recorded pid is dead but a gateway is still serving; not stopped",
-                  exit_code:$c}')"
+                  remedy:$rem, exit_code:$c}')"
             exit $EX_USAGE
         fi
         rm -f "$PIDFILE" "$PIDFILE.bin"
@@ -943,12 +1091,13 @@ stop)
         # diagnostic question ("this pid is /usr/bin/foo, not the gateway")
         # without the copy. Sanitized as display text (KTD5).
         emit "$(jq -nc --argjson pid "$pid" --arg bin "$SPAWN_BIN" \
+            --arg rem "The recorded pid was recycled by an unrelated process, so nothing was signalled. Delete the stale pidfile named in this response, then run start." \
             --arg cmd "$(spawn::sanitize_for_display "$(pid_argv "$pid" | awk '{print $1}')")" --argjson c $EX_USAGE \
             "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
               result:"pid_mismatch", pid:$pid, expected_binary:$bin,
               actual_command:$cmd, error:"usage",
               detail:"pidfile pid belongs to an unrelated process; not signalled",
-              exit_code:$c}')"
+              remedy:$rem, exit_code:$c}')"
         exit $EX_USAGE
     fi
 
@@ -1091,6 +1240,7 @@ status)
         --argjson models "$models_view" \
         --arg detail "$(spawn::sanitize_for_display "${PROBE_DETAIL:-}")" \
         --arg errenum "$status_enum" \
+        --arg rem "$(remedy_for "$status_enum")" \
         --argjson c "$prc" \
         "$(spawn::envelope_jq plugin)"' + {ok: ($c == 0), verb:"status", running:$running, base_url:$base,
           install_dir:(if $install == "" then null else $install end),
@@ -1103,6 +1253,7 @@ status)
           served_aliases:$served, models:$models, drift:$drift,
           error:(if $errenum == "" then null else $errenum end),
           detail:(if $detail == "" then null else $detail end),
+          remedy:(if $rem == "" then null else $rem end),
           exit_code:$c}')" \
         || die "$EX_USAGE" "could not encode the status object (models table at $MODELS_JSON may be malformed)"
     exit $prc

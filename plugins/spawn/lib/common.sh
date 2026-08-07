@@ -130,6 +130,50 @@ spawn::enum_for_code() {
     esac
 }
 
+# ---------------------------------------------------------------------------
+# THE REMEDY TABLE (R12).
+#
+# `remedy` was plumbed through every encoder tier and left null. Populating it
+# per die site would have produced ~40 hand-written strings and the same drift
+# the envelope exists to prevent: two sites sharing an enum value would tell a
+# caller two different things about the same failure class.
+#
+# So the DEFAULT remedy is keyed on the ERROR ENUM, in one table, and each
+# script's emit_error consults it when the site set no REMEDY of its own. A site
+# whose fix is genuinely narrower than its class (an unreadable --prompt-file is
+# not the same repair as a malformed --timeout, though both are `usage`) still
+# overrides with a `REMEDY=... die ...` prefix assignment.
+#
+# The values below are the ones every script shares — the exit-code enums from
+# spawn::enum_for_code plus the two cross-script classes. A script's own
+# vocabulary (no_text_truncated, seed_failed, …) is answered by its local
+# remedy_for, which falls through to this.
+#
+# An unknown value returns the EMPTY STRING rather than inventing advice: the
+# caller decides whether to leave `remedy` null, and a wrong instruction is
+# worse than an absent one.
+spawn::remedy_for() {
+    case "$1" in
+        usage)
+            printf 'Fix the invocation and call again; `detail` names the argument at fault. Run the script with --describe for the flags it accepts. Retrying the same call cannot succeed.' ;;
+        unreachable)
+            printf 'The gateway is not answering. Run `spawnctl.sh status` for what the probe saw, then `spawnctl.sh start`. This is not a per-alias problem, so trying another alias will not help.' ;;
+        alias_unknown)
+            printf 'The gateway does not serve that alias. Read `served_aliases` (or `preflight.served_aliases`) in this response and call again with one of those names.' ;;
+        auth_rejected)
+            printf 'The gateway is running and refused our token, so restarting it is the wrong move. Check `server.token` in the resolved gateway.yaml — the config path is in the `config` field of `spawnctl.sh status`.' ;;
+        upstream_error)
+            printf 'The provider behind the alias failed. Read `detail` for what it said; retry once, and if it repeats, try a different alias rather than the same one.' ;;
+        deadline_exceeded)
+            printf 'The request was aborted, so nothing is still running and a retry does not stack a second call. Raise the timeout knob named in `detail`, or send a smaller prompt.' ;;
+        preflight_failed)
+            printf 'The failure happened before the call reached a model. Run `spawnctl.sh status` and read `detail`; nothing was sent, so no work was lost.' ;;
+        internal)
+            printf 'The script failed in a way its own contract does not classify. Re-run with stderr visible and read `detail`; if it repeats, this is a plugin bug, not a caller mistake.' ;;
+        *) printf '' ;;
+    esac
+}
+
 # The envelope as jq PROGRAM TEXT, to be merged under a response object:
 #
 #   jq -nc ... "$(spawn::envelope_jq model)"' + {ok:true, text:$t, exit_code:0}'
