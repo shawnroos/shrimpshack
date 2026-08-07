@@ -1,8 +1,8 @@
 # Residual review findings — feature/gateway-setup
 
 Code review ran three local reviewers (correctness, security, reliability) at
-`5b6f6c0`. Thirteen findings. Four were applied in `030b788`; the nine below
-were not, and this file is their durable record. No tracker is configured for
+`5b6f6c0`. Thirteen findings. Four were applied in `030b788` and a fifth — the P1
+below — in `02c150f`; the remaining eight were not, and this file is their durable record. No tracker is configured for
 this repo, so the findings are inlined here in full rather than linked.
 
 The adversarial lens did **not** run. The cross-model route (GPT-5.6 Sol through
@@ -14,7 +14,7 @@ change whose entire purpose is refusing unearned success.
 
 ## Wrong-success paths — the highest-value residuals
 
-- **P1 · setup does not restart an already-running gateway after installing a new
+- **RESOLVED in `02c150f`.** ~~**P1 · setup does not restart an already-running gateway after installing a new
   release** (`plugins/spawn/lib/setup.sh`, `do_setup`). `start_verb` becomes
   `restart` only when a credential was rotated; an acquire reporting
   `action:"installed"` does not set it. On the steady-state upgrade path the
@@ -26,7 +26,10 @@ change whose entire purpose is refusing unearned success.
   run collected. Fix direction: set a `needs_restart` flag when acquire installs
   or when `retire_installed_token` rewrote the live config, or have the start
   step compare the serving process's binary against the one just promoted.
-  *(correctness, confidence 90)*
+  *(correctness, confidence 90)*~~ The restart decision now keys on what the run
+  changed — a rotated credential, a promoted install, or the token retired out
+  of the live config — and `setup.bats` asserts the observable (a restart stops
+  the process that was serving) with a mutation proof.
 
 - **P2 · Codex wired without Claude Code references a `GATEWAY_TOKEN` nothing
   sets** (`do_wire`). The KTD15 shell snippet is the only thing that exports
