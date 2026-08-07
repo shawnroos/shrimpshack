@@ -3,6 +3,38 @@
   "note": "Per-alias context windows (KTD7). The gateway has no window field to extend, so this table is the plugin's own. `model` records the upstream model string the alias pointed at when the entry was written — spawnctl status compares it against gateway.yaml, because the model-list endpoint returns only id and display_name and a repointed alias would otherwise drift silently. A chain alias takes the SMALLEST window across its routes, so a mid-session fallback can only under-declare rather than overflow.",
   "seeded_from": "~/gateway-0.1.1/gateway.yaml",
   "seeded_on": "2026-08-06",
+  "families_note": "The grammar the command layer reads prose against (KTD3). Everything after a command is prose; the reading agent derives a family and an optional tier from it and hands a script exactly ONE resolved alias (KD6). That derivation needs the family -> tier -> alias relation DECLARED, because it is not recoverable from the flat `aliases` map below: `k3` is relatable to `kimi` only through the upstream string `moonshotai/kimi-k3`, and `gpt` pointing at the same model as `gpt-sol` is a coincidence of how the gateway was configured, not a stated default. Inferring either is how an unserved tier silently becomes the default instead of failing loudly. `tiers` maps the tier name AS PROSE SPELLS IT (hyphens included, e.g. `sol-pro`) to the served alias; `default` is the alias a bare family name resolves to; `no_family_alias` is what prose naming no family at all resolves to. A family or tier absent from this block is UNSERVED: the command layer fails and names the served aliases rather than falling back. This block is the grammar; `aliases` stays the metadata table it already was.",
+  "families": {
+    "kimi": {
+      "default": "kimi",
+      "tiers": {
+        "k2.7-code": "kimi",
+        "k3": "k3"
+      }
+    },
+    "glm": {
+      "default": "glm",
+      "tiers": {
+        "5.2": "glm"
+      }
+    },
+    "gpt": {
+      "default": "gpt",
+      "tiers": {
+        "luna": "gpt-luna",
+        "terra": "gpt-terra",
+        "sol": "gpt-sol",
+        "sol-pro": "gpt-sol-pro"
+      }
+    }
+  },
+  "no_family_alias": "default",
+  "chain_policy_note": "Which surfaces may resolve to a chain alias (an `aliases` entry with chain:true, whose `model` is a list of routes). A chain can change model mid-flight on fallback, and this table deliberately under-declares a chain's context window to its smallest route — tolerable for one tool-less turn, wrong for an hour-long job holding tools (KTD4). `refuse` means the surface must reject the alias before any network call and say which non-chain aliases it will take.",
+  "chain_policy": {
+    "agent": "allow",
+    "session": "allow",
+    "bg-agent": "refuse"
+  },
   "aliases": {
     "kimi": {
       "context_window": 262144,
@@ -48,7 +80,7 @@
     },
     "gpt": {
       "context_window": 1050000,
-      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\"; `gpt` is the back-compat alias pointing at the same gpt-5.6-sol model as gpt-sol.",
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\"; `gpt` is the back-compat alias pointing at the same gpt-5.6-sol model as gpt-sol. It is also the DECLARED default of the `gpt` family (see `families`) — that it happens to serve the sol tier's model is no longer what makes it the default.",
       "model": "openrouter/openai/gpt-5.6-sol",
       "chain": false
     },
