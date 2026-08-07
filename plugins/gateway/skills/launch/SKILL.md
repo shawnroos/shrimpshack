@@ -42,14 +42,14 @@ The plugin never opens a terminal. It runs the seed prompt headlessly through `c
    - **Exit 0 (ok):** the session exists on disk and the handle is real. Go to step 4.
    - **Exit 2 (usage/refusal):** bad arguments — no `--alias`, an alias that failed the grammar, an empty or missing seed prompt, an unreadable `--prompt-file`, a `--cwd` that is not a directory.
    - **Exit 3 (gateway unreachable):** the gateway was down and could not be started. Propagated from the preflight, not decided here.
-   - **Exit 4 (alias unknown):** the gateway does not serve that alias. Also propagated — the JSON is the preflight's own object and carries `served_aliases`.
+   - **Exit 4 (alias unknown):** the gateway does not serve that alias. The code is propagated from the preflight; the JSON is in launch's own shape (`error` is `alias_unknown`, the handle fields null), with the preflight's full object — including `served_aliases` — under `preflight`. Every preflight failure (exit 2/3/4/7) carries that key.
    - **Exit 5 (upstream provider error):** the launch got past preflight and then failed. Branch on `error`:
      - `seed_failed` — the `claude` run exited non-zero, or reported `is_error`. No session was materialized.
      - `no_session_id` — the run succeeded but its JSON carried no session id; the CLI's output shape has drifted from what the script reads.
      - `transcript_missing` — a session id came back but no transcript is on disk at the derived path.
      In all three the script refuses to print a handle. That is deliberate: a handle to a session that does not exist is worse than a failure, because you would attach to nothing.
+   - **Exit 6 (deadline exceeded):** the seed run outlived `GATEWAY_LAUNCH_TIMEOUT` (default 600 seconds). The child was TERMed, KILLed if it ignored that, and reaped — nothing is still running, and no session handle exists. Seeds are full agent turns, so raise the knob for long seeds rather than retrying.
    - **Exit 7 (token rejected):** the gateway is up but refused the plugin's token. Propagated from the preflight; restarting the gateway is the wrong move.
-   - **Exit 6 does not occur here.** There is no deadline on the seed run: `timeout(1)` does not exist on macOS, and a watchdog that backgrounds `claude` and signals it leaves a window where an orphaned agent outlives the script. Documented rather than implemented badly.
 
 4. On exit 0, present the handle plainly. The fields:
 

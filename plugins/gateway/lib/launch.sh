@@ -15,14 +15,19 @@
 #        5 upstream provider error · 6 deadline exceeded · 7 token rejected.
 #
 # Codes 3, 4 and 7 are NOT re-derived here. They come from
-# `gatewayctl.sh ensure <alias>`, whose JSON this script re-emits verbatim, so
-# the served-list check and the auth classification have exactly one owner
-# (KTD3). A seed run that fails is code 5.
+# `gatewayctl.sh ensure <alias>`, so the served-list check and the auth
+# classification have exactly one owner (KTD3). The failure OBJECT is rewrapped
+# onto this script's own vocabulary with ensure's object under `preflight`
+# (R3); the code propagates unchanged. A seed run that fails is code 5.
 #
-# There is deliberately NO code-6 deadline on the seed run. `timeout(1)` does
-# not exist on macOS, and a watchdog that backgrounds `claude` and signals it
-# leaves a window in which an orphaned agent process outlives this script — a
-# worse failure than no deadline. Documented rather than implemented badly.
+# The seed run has a code-6 DEADLINE, owned by this process (R2): the child
+# runs in the background, the parent polls with the deadline and, on expiry or
+# on cancellation, escalates TERM → poll → KILL and REAPS it — the same
+# escalation gatewayctl's stop uses. The earlier "no deadline" rationale argued
+# against a DETACHED watchdog, which leaves a window where an orphaned agent
+# outlives the script; a parent that waits and reaps has no such window,
+# whereas no deadline at all meant a caller-imposed timeout orphaned `claude`
+# on init still holding the gateway token in its environment.
 #
 # KTD6 — the token never prints and never appears in a process argument:
 #   * the seed child receives it through the ENVIRONMENT, never argv;
@@ -64,6 +69,7 @@ EX_USAGE=2
 EX_UNREACHABLE=3
 # EX_ALIAS=4 and EX_AUTH=7 are propagated from `ensure`, never produced here.
 EX_UPSTREAM=5
+EX_DEADLINE=6
 
 # ---------------------------------------------------------------------------
 # Configuration surface. Every knob is env-overridable so a test can point the
@@ -73,6 +79,12 @@ EX_UPSTREAM=5
 # ---------------------------------------------------------------------------
 CLAUDE_BIN="${GATEWAY_CLAUDE_BIN:-claude}"
 MODELS_JSON="${GATEWAY_MODELS_JSON:-$SCRIPT_DIR/models.json}"
+
+# Deadline for the seed run (R2). Generous, because a seed turn is a full agent
+# turn on a review-sized prompt — but never absent: an unbounded seed run under
+# a caller-imposed timeout is how `claude` ended up orphaned on init with the
+# gateway token in its environment. Validated below like the lens's --timeout.
+SEED_TIMEOUT="${GATEWAY_LAUNCH_TIMEOUT:-600}"
 
 # Claude Code keys sessions by project directory. This is the root it encodes
 # them under; CLAUDE_CONFIG_DIR is Claude Code's own knob, so honouring it is
@@ -128,7 +140,30 @@ die() {
 # stdout above all, because that is the one place the session id lives before
 # it reaches the handle.
 TMPWORK=""
+CHILD_PID=""
+
+# TERM → bounded poll → KILL → reap (the escalation gatewayctl's stop uses).
+# Reaping matters as much as signalling: an unreaped `claude` re-parented to
+# init keeps the gateway token in its environment for as long as it lives.
+reap_child() {
+    [ -n "$CHILD_PID" ] || return 0
+    kill -TERM "$CHILD_PID" 2>/dev/null
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        kill -0 "$CHILD_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -0 "$CHILD_PID" 2>/dev/null && kill -KILL "$CHILD_PID" 2>/dev/null
+    wait "$CHILD_PID" 2>/dev/null
+    CHILD_PID=""
+    return 0
+}
+
 cleanup() {
+    # Kill and reap the seed child before removing the scratch its output is
+    # captured to. This is what makes a caller-imposed timeout on THIS script
+    # (or a Ctrl-C) end the `claude` underneath instead of orphaning it (R2).
+    reap_child
     [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
     return 0
 }
@@ -212,6 +247,12 @@ need_jq
 [ -n "$ALIAS" ] || { usage; die "$EX_USAGE" "usage" "--alias is required"; }
 validate_alias "$ALIAS"
 
+# Positive, not merely numeric — same reasoning as the lens's --timeout (R1):
+# 0 would read as "no artificial limit" and mean an unbounded seed run, which
+# under an unattended caller looks like work in progress forever.
+[[ "$SEED_TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [ "$(awk -v v="$SEED_TIMEOUT" 'BEGIN{print (v > 0)}')" = "1" ] \
+    || die "$EX_USAGE" "usage" "GATEWAY_LAUNCH_TIMEOUT must be a POSITIVE number of seconds, got '$SEED_TIMEOUT'"
+
 # ---------------------------------------------------------------------------
 # Pin the working directory (U4 step 3).
 #
@@ -245,18 +286,36 @@ fi
 # Preflight (U4 step 1): gatewayctl.sh ensure <alias>.
 #
 # The alias is passed so the served-list check and its exit 4 come from ONE
-# place (KTD3). On failure this script re-emits ensure's object verbatim and
-# propagates the code unchanged; printing our own object on top of it would put
-# two objects on stdout — the exact bug KTD2 exists to stop.
+# place (KTD3): the CODE is ensure's decision and propagates unchanged.
+#
+# The OBJECT is not forwarded verbatim (R3). ensure's failure object is
+# {verb, error:<prose>} — no `attach_command`, no `session_id`, and prose where
+# this script's consumers branch on an enum. It is rewrapped onto the launch
+# vocabulary (error enum + detail + the null handle fields), with ensure's full
+# object under `preflight` so nothing is lost. One object on stdout (KTD2).
 # ---------------------------------------------------------------------------
 ENSURE_OUT="$(bash "$CTL" ensure "$ALIAS")"
 ENSURE_RC=$?
 if [ "$ENSURE_RC" -ne 0 ]; then
-    if [ -n "$ENSURE_OUT" ]; then
-        emit "$ENSURE_OUT"
-    else
-        emit_error "$ENSURE_RC" "preflight_failed" "gatewayctl ensure failed with code $ENSURE_RC and printed nothing"
-    fi
+    # Enum from the CODE, which KTD2 defines — never re-parsed out of prose.
+    case "$ENSURE_RC" in
+        2) PRE_ENUM="usage" ;;
+        3) PRE_ENUM="unreachable" ;;
+        4) PRE_ENUM="alias_unknown" ;;
+        7) PRE_ENUM="auth_rejected" ;;
+        *) PRE_ENUM="preflight_failed" ;;
+    esac
+    PRE_JSON="$(printf '%s' "$ENSURE_OUT" | jq -c '.' 2>/dev/null)" || PRE_JSON=""
+    [ -n "$PRE_JSON" ] || PRE_JSON="null"
+    PRE_DETAIL="$(printf '%s' "$ENSURE_OUT" | jq -r '.error // empty' 2>/dev/null)"
+    [ -n "$PRE_DETAIL" ] || PRE_DETAIL="gatewayctl ensure failed with code $ENSURE_RC and printed nothing"
+    emit "$(jq -nc --arg a "$ALIAS" --arg e "$PRE_ENUM" \
+        --arg d "$(gateway::sanitize_for_display "$PRE_DETAIL")" \
+        --argjson p "$PRE_JSON" --argjson c "$ENSURE_RC" \
+        '{ok:false, alias:$a, session_id:null, transcript_path:null, cwd:null,
+          base_url:null, context_window:null, attach_command:null,
+          error:$e, detail:$d, preflight:$p, exit_code:$c}')" \
+        || emit_error "$ENSURE_RC" "$PRE_ENUM" "$PRE_DETAIL"
     exit "$ENSURE_RC"
 fi
 
@@ -342,6 +401,17 @@ WORK="$TMPWORK"
 SEED_OUT="$WORK/seed.json"
 SEED_ERR="$WORK/seed.err"
 
+# The child runs in the BACKGROUND and the parent polls (R2). Two reasons:
+#   * the deadline. `timeout(1)` does not exist on macOS; the parent's kill -0
+#     poll is the deadline, and on expiry the child is TERMed, given time,
+#     KILLed if it ignores that, and REAPED. A detached watchdog would leave a
+#     window where an orphaned agent outlives this script; a parent that waits
+#     and reaps has no such window.
+#   * cancellation. bash defers traps while blocked on a FOREGROUND child, so
+#     with the seed run in the foreground a TERM to this script was ignored
+#     until `claude` finished — or forever. The poll's `sleep 0.2` defers a
+#     trap by at most 0.2s, and cleanup then reaps the child (KTD6: nothing is
+#     left alive holding the token in its environment).
 (
     cd "$PIN_CWD" || exit 127
     export ANTHROPIC_BASE_URL="$BASE_URL"
@@ -349,8 +419,22 @@ SEED_ERR="$WORK/seed.err"
     export ANTHROPIC_API_KEY="$TOKEN"
     [ -n "$CONTEXT_WINDOW" ] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CONTEXT_WINDOW"
     exec "$CLAUDE_BIN" --model "$ALIAS" --output-format json -p "$PROMPT"
-) > "$SEED_OUT" 2> "$SEED_ERR"
+) > "$SEED_OUT" 2> "$SEED_ERR" &
+CHILD_PID=$!
+
+SEED_TICKS="$(awk -v t="$SEED_TIMEOUT" 'BEGIN{print int(t * 5)}')"
+waited=0
+while kill -0 "$CHILD_PID" 2>/dev/null; do
+    if [ "$waited" -ge "$SEED_TICKS" ]; then
+        reap_child
+        die "$EX_DEADLINE" "deadline_exceeded" "the seed run through '$CLAUDE_BIN' exceeded ${SEED_TIMEOUT}s (GATEWAY_LAUNCH_TIMEOUT) — it was stopped and reaped, nothing is still running, and no session handle exists"
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+done
+wait "$CHILD_PID"
 SEED_RC=$?
+CHILD_PID=""
 
 if [ "$SEED_RC" -ne 0 ]; then
     # "Announced-but-broken is never success." A handle to a session that does

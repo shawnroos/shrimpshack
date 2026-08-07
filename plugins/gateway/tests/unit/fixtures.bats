@@ -240,6 +240,35 @@ msg_body() {
     [ "$status" -ne 0 ]
 }
 
+@test "fake-claude in error mode exits 0 but reports is_error=true (R8's reachable shape)" {
+    run env FAKE_CLAUDE_MODE=error FAKE_CLAUDE_RECORD_DIR="$WORK/rec" \
+        FAKE_CLAUDE_PROJECTS_ROOT="$WORK/projects" FAKE_CLAUDE_SESSION_ID="sess-err" \
+        bash "$FIX/fake-claude.sh" --model alpha --output-format json -p "seed"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.is_error')" = "true" ]
+    [ "$(echo "$output" | jq -r '.session_id')" = "sess-err" ]
+}
+
+@test "fake-claude in hang mode records its pid and stays alive until signalled (R2's instrument)" {
+    mkdir -p "$WORK/rec"
+    env FAKE_CLAUDE_MODE=hang FAKE_CLAUDE_RECORD_DIR="$WORK/rec" \
+        bash "$FIX/fake-claude.sh" --model alpha --output-format json -p "seed" &
+    local fpid=$!
+    local i
+    for i in $(seq 1 100); do
+        [ -s "$WORK/rec/pid" ] && break
+        sleep 0.05
+    done
+    [ -s "$WORK/rec/pid" ]
+    # The recorded pid IS the live process (exec, so no orphanable child sleep).
+    kill -0 "$(head -1 "$WORK/rec/pid")"
+    kill -TERM "$fpid" 2>/dev/null
+    wait "$fpid" 2>/dev/null || true
+    # And the TERM actually ended it.
+    run kill -0 "$(head -1 "$WORK/rec/pid")"
+    [ "$status" -ne 0 ]
+}
+
 @test "fake-claude --resume reuses the handed session id" {
     run env FAKE_CLAUDE_RECORD_DIR="$WORK/rec" FAKE_CLAUDE_PROJECTS_ROOT="$WORK/projects" \
         bash "$FIX/fake-claude.sh" --model alpha --output-format json --resume "sess-9999" -p "again"

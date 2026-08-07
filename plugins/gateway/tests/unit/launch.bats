@@ -429,6 +429,89 @@ invocation() {
     [ "$(echo "$output" | jq -r '.error')" = "seed_failed" ]
 }
 
+@test "R8: a seed run that exits 0 but reports is_error=true is code 5, seed_failed, and no handle" {
+    # The CLI can exit 0 while its result object says the turn FAILED. Before
+    # this branch was reachable in tests, deleting it left the suite green
+    # while launch handed back handles to failed sessions.
+    start_fixture healthy "alpha"
+    make_table "alpha:262144"
+    export FAKE_CLAUDE_MODE=error
+
+    launch --alias alpha
+    [ "$status" -eq 5 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.error')" = "seed_failed" ]
+    [ "$(echo "$output" | jq -r '.attach_command')" = "null" ]
+    [ "$(echo "$output" | jq -r '.session_id')" = "null" ]
+}
+
+@test "R2: a hung seed run hits the deadline — exit 6, one object, and the child is dead and reaped" {
+    start_fixture healthy "alpha"
+    make_table "alpha:262144"
+    export FAKE_CLAUDE_MODE=hang
+    export GATEWAY_LAUNCH_TIMEOUT=1
+
+    launch --alias alpha
+    [ "$status" -eq 6 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.error')" = "deadline_exceeded" ]
+    [ "$(echo "$output" | jq -r '.attach_command')" = "null" ]
+
+    # The child was stopped, not orphaned holding the token in its environment.
+    local cpid
+    cpid="$(head -1 "$FAKE_CLAUDE_RECORD_DIR/pid")"
+    [ -n "$cpid" ]
+    run kill -0 "$cpid"
+    [ "$status" -ne 0 ]
+}
+
+@test "R2: TERMing launch mid-seed kills the claude child instead of orphaning it" {
+    # The finding's actual scenario: a caller-imposed timeout TERMs launch.sh
+    # while the seed runs. Before the fix the child pid was never retained, so
+    # `claude` was re-parented to init still holding the token in its env.
+    start_fixture healthy "alpha"
+    make_table "alpha:262144"
+    export FAKE_CLAUDE_MODE=hang
+    printf 'seed me' > "$WORK/seed.txt"
+
+    # No pipeline wrapper: $! must be launch.sh's own bash so the TERM lands on
+    # the process whose trap and cleanup are under test. All three fds are
+    # redirected so the hung child cannot hold bats' output pipe open.
+    bash "$LAUNCH" --cwd "$PROJ" --prompt-file "$WORK/seed.txt" --alias alpha \
+        < /dev/null > "$WORK/out" 2> "$WORK/err" &
+    local lpid=$!
+
+    local i cpid=""
+    for i in $(seq 1 200); do
+        [ -s "$FAKE_CLAUDE_RECORD_DIR/pid" ] && break
+        sleep 0.05
+    done
+    cpid="$(head -1 "$FAKE_CLAUDE_RECORD_DIR/pid")"
+    [ -n "$cpid" ]
+    kill -0 "$cpid"
+
+    kill -TERM "$lpid"
+    # BOUNDED poll for launch's exit, then reap. Not `run wait` — run captures
+    # in a subshell, where $lpid is not a child and wait returns instantly.
+    # And not a bare `wait` first — if the trap ever regressed, that would hang
+    # the whole suite instead of failing this test.
+    for i in $(seq 1 100); do
+        kill -0 "$lpid" 2>/dev/null || break
+        sleep 0.1
+    done
+    run kill -0 "$lpid"
+    [ "$status" -ne 0 ]
+    local rc=0
+    wait "$lpid" || rc=$?
+    [ "$rc" -eq 143 ]
+
+    # The child is gone (cleanup escalates TERM → KILL and reaps)...
+    run kill -0 "$cpid"
+    [ "$status" -ne 0 ]
+    # ...and so is the scratch dir the trap owns.
+    [ -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'gwlaunch.*' 2>/dev/null)" ]
+}
+
 @test "a seed run that reports a session with no transcript on disk is a failure, not a handle" {
     start_fixture healthy "alpha"
     make_table "alpha:262144"
@@ -465,6 +548,10 @@ invocation() {
     [ "$(echo "$output" | jq -s 'length')" = "1" ]
     [ "$(echo "$output" | jq -r '.error')" = "alias_unknown" ]
     [ "$(echo "$output" | jq -r '.alias')" = "gamma" ]
+    # R3: launch vocabulary even on a preflight failure — the handle fields a
+    # consumer branches on exist (null), and ensure's object is whole underneath.
+    [ "$(echo "$output" | jq 'has("attach_command") and has("session_id") and has("detail")')" = "true" ]
+    [ "$(echo "$output" | jq -r '.preflight.served_aliases|sort|join(",")')" = "alpha,beta" ]
     [ ! -f "$FAKE_CLAUDE_RECORD_DIR/argv" ]
 }
 
@@ -478,6 +565,10 @@ invocation() {
     [ "$status" -eq 7 ]
     [ "$status" -ne 3 ]
     [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    # R3: the enum where the enum belongs; ensure's prose is in detail/preflight.
+    [ "$(echo "$output" | jq -r '.error')" = "auth_rejected" ]
+    [ "$(echo "$output" | jq -r '.attach_command')" = "null" ]
+    [ "$(echo "$output" | jq -r '.preflight.verb')" = "ensure" ]
     [ ! -f "$FAKE_CLAUDE_RECORD_DIR/argv" ]
 }
 

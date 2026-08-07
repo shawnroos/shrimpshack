@@ -22,10 +22,17 @@
 #   FAKE_CLAUDE_PROJECTS_ROOT  test-controlled stand-in for ~/.claude/projects
 #                            (default: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects)
 #   FAKE_CLAUDE_SESSION_ID   session id to emit (default: a deterministic fake)
-#   FAKE_CLAUDE_MODE         ok | fail   (default: ok)
+#   FAKE_CLAUDE_MODE         ok | fail | error | hang   (default: ok)
 #                            fail exits 1 with stderr, for the "seed run failed,
 #                            never print a handle to a session that does not
 #                            exist" case
+#                            error exits 0 but reports is_error=true in the
+#                            result JSON — the CLI's own "this turn failed"
+#                            shape, which launch.sh must refuse to print a
+#                            handle for (R8)
+#                            hang writes its pid to $REC_DIR/pid, then execs a
+#                            long sleep — for the R2 deadline/reap tests, whose
+#                            assertions need the pid of the thing that must die
 #   FAKE_CLAUDE_RESULT_TEXT  the assistant text in the result JSON
 #
 # Transcript path encoding mirrors Claude Code: the session's project directory
@@ -76,6 +83,13 @@ if [[ "$MODE" == "fail" ]]; then
   exit 1
 fi
 
+if [[ "$MODE" == "hang" ]]; then
+  # exec, so the recorded pid IS the sleeping process — a TERM to it ends the
+  # hang directly instead of orphaning a child sleep.
+  printf '%s\n' "$$" >> "$REC_DIR/pid"
+  exec sleep 600
+fi
+
 # A resume run reuses the session it was handed rather than minting a new one —
 # that is what makes the handle's promise ("this resumes the same session")
 # assertable end to end.
@@ -102,13 +116,16 @@ transcript="$transcript_dir/$SESSION_ID.jsonl"
 # observed contract, not a guarantee: the fixture pins what launch.sh relies on
 # so real-CLI drift surfaces as a test failure instead of a silent miss.
 if [[ "$output_format" == "json" ]]; then
-  python3 - "$SESSION_ID" "$RESULT_TEXT" "$model" <<'PY'
+  # In error mode the CLI exits 0 but the result object says the turn FAILED —
+  # a real shape (`claude -p` reports tool/turn failures this way), and the one
+  # launch.sh's is_error branch exists for (R8).
+  python3 - "$SESSION_ID" "$RESULT_TEXT" "$model" "$MODE" <<'PY'
 import json, sys
-session_id, result, model = sys.argv[1], sys.argv[2], sys.argv[3]
+session_id, result, model, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 print(json.dumps({
     "type": "result",
-    "subtype": "success",
-    "is_error": False,
+    "subtype": "error_during_execution" if mode == "error" else "success",
+    "is_error": mode == "error",
     "num_turns": 1,
     "session_id": session_id,
     "result": result,
