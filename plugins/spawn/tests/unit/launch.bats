@@ -690,6 +690,13 @@ config_write_lint() {   # <script>
     [ "$status" -ne 0 ]
     run config_write_lint "$LIB/spawnctl.sh"
     [ "$status" -ne 0 ]
+    # U7's job record joins the same enumeration. This lint is enumerated rather
+    # than computed, so a new script is covered by hand or is silently
+    # uncovered — and "silently uncovered" reads exactly like green. Unguarded
+    # for that reason: if jobs.sh is renamed or lost, this goes RED rather than
+    # quietly skipping the file it was added to cover.
+    run config_write_lint "$LIB/jobs.sh"
+    [ "$status" -ne 0 ]
 }
 
 @test "KTD3: the no-write invariant covers the three runtime scripts, and the setup family is exempt BY NAME" {

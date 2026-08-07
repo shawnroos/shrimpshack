@@ -868,6 +868,16 @@ allowlist_lint() {  # <readme>
     # requirement, so the only way to hold it is to assert the absence.
     run bash -c "sed 's/#.*//' '$LENS' | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
     [ "$status" -ne 0 ]
+    # The finding cites the lens, but the invariant is repo-wide, and this lint
+    # is ENUMERATED per file — a new script joins it here or is silently
+    # uncovered. U7's job record is the first addition, and it is asserted
+    # unguarded: a jobs.sh that is renamed or lost must turn this RED rather
+    # than skip the file the line was added to cover.
+    local extra
+    for extra in "$LIB/jobs.sh"; do
+        run bash -c "sed 's/#.*//' '$extra' | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
+        [ "$status" -ne 0 ]
+    done
 }
 
 # --- R27: the token fallback reaches THIS surface, not just spawnctl ---------
