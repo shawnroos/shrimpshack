@@ -13,7 +13,7 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** One command takes a Mac from nothing to a working gateway-backed agent session — the gateway acquired and running, credentials captured into Keychain, Claude Code / Codex / opencode wired, and a real model round-trip proving it before success is reported.
+- **Objective:** One command takes a Mac from nothing to a working gateway-backed agent session — the gateway acquired and running, credentials captured into Keychain, Claude Code and Codex wired, and a real model round-trip proving it before success is reported.
 - **Product authority:** This plan owns the setup path. It does not own the gateway's own behavior, config schema, or routes — those are upstream in `superagent-ai/gateway`. It does not own the runtime behavior of the existing `launch` / `status` / `lens` commands, which are covered by `docs/plans/2026-08-06-001-feat-gateway-plugin-plan.md`.
 - **Open blockers:** None.
 
@@ -62,7 +62,7 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 - A1. Operator — the person running setup on their own Mac.
 - A2. Setup — the `/spawn:setup` command and `lib/setup.sh`.
 - A3. Gateway process — the running gateway, the only holder of the OpenRouter key.
-- A4. Agent harnesses — Claude Code, Codex, opencode.
+- A4. Agent harnesses — Claude Code and Codex.
 - A5. Keychain — the macOS credential store.
 
 ### Requirements
@@ -88,7 +88,7 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 
 - R11. Setup wires every supported harness it finds installed. An installed harness it cannot wire is a setup failure, not a skip; `skipped` is reserved for harnesses that are not installed.
 - R12. Emitted harness config references the credential by environment-variable name. No config file setup writes contains a credential value.
-- R13. The opencode config uses the Anthropic-shaped provider path against the gateway's `/anthropic` routes, not the OpenAI-compatible provider that opencode's documentation suggests by default.
+- R13. *(Withdrawn — opencode is out of v1 scope. The ID is retained rather than reused so existing citations stay meaningful.)*
 - R14. Setup declares each alias's context and output window to harnesses that need them, sourced from `plugins/spawn/lib/models.json` rather than hand-entered.
 - R15. Setup states what a gateway-pointed session loses before the operator discovers it mid-task.
 
@@ -96,7 +96,7 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 
 - R16. Setup does not report success until a live completion round-trip through the gateway has succeeded in each wired harness's wire shape.
 - R17. Verification exercises the gateway's HTTP surface directly. Setup does not treat its own config parsing as evidence that a credential is valid.
-- R25. Every config setup writes is validated by the owning harness's own loader before success is reported, and setup states which harnesses that check cannot fully cover.
+- R25. Every config setup writes is validated by the owning harness's own loader before success is reported, and setup states what that check cannot cover.
 - R26. Setup's command is complete on its own. It carries its own exit-code meanings and consent handling, shares its name with no skill, and instructs no caller to invoke another surface.
 - R27. Every plugin command that authenticates to the gateway resolves its token from the stored credential when the config carries none, so the post-setup steady state works for `status`, `lens` and `launch` and not only for `start`.
 - R18. On failure, setup names the step that failed and what it had already changed, so the operator knows the machine's state.
@@ -137,13 +137,13 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 - AE1. **Covers R9.** Given setup is configuring the gateway, when it would produce a config whose auth token list is empty, then setup treats that as a failure and does not start or report success — an unauthenticated gateway is an open proxy, not a convenience.
 - AE2. **Covers R7.** Given a configured machine, when the operator inspects their own shell environment, then the OpenRouter key is absent and only the gateway token is present.
 - AE3. **Covers R16, R17.** Given setup has written every config file correctly but the stored credential is wrong, then setup reports failure — writing files is not evidence, and the plugin's own parser would resolve the unset case to an empty string rather than an error.
-- AE4. **Covers R11.** Given a machine with Claude Code and opencode installed but not Codex, when setup runs, then it wires two harnesses, verifies two round-trips, and names Codex as skipped rather than silently omitting it.
+- AE4. **Covers R11.** Given a machine with Claude Code installed but not Codex, when setup runs, then it wires Claude Code, verifies its round-trip, and names Codex as skipped rather than silently omitting it.
 - AE5. **Covers R18.** Given the build succeeds and the credential is stored but the round-trip fails, then setup reports which step failed and that the gateway is installed and the key is stored, so the operator can re-run without redoing that work.
 - AE6. **Covers R20.** Given `~/.local/bin/gw` has been hand-edited since setup last wrote it, when setup runs again, then it asks before overwriting rather than discarding the operator's changes.
 - AE7. **Covers R5.** Given the OpenRouter key is rejected by the provider, when setup surfaces the error, then the error text does not contain the key.
 - AE8. **Covers R21, R22.** Given a configured machine, when setup is re-run without asking for rotation, then both stored credentials are reused and shells that were already open keep authenticating. When rotation is asked for, setup states that open shells will stop authenticating before it replaces the token.
 - AE9. **Covers R7.** Given `OPENROUTER_API_KEY` is already exported in the shell that starts the gateway, when the gateway is launched, then it does not inherit that value — the start path clears it so the Keychain-derived delivery file is what the gateway reads, and says the inherited value was ignored.
-- AE10. **Covers R11.** Given opencode is installed but its existing config cannot be loaded, when setup runs, then setup fails naming opencode and the reason, leaves the file byte-identical, and does not report success with opencode marked skipped.
+- AE10. **Covers R11.** Given Codex is installed but its existing config cannot be loaded, when setup runs, then setup fails naming Codex and the loader's own reason, leaves the file byte-identical, and does not report success with Codex marked skipped.
 - AE11. **Covers R24.** Given a first run in a fresh terminal, when setup finishes, then it prints the one activation line for that terminal and states that terminals opened later need nothing — and a harness launched in that same terminal without activating fails on authentication rather than appearing to work.
 
 ### Scope Boundaries
@@ -155,6 +155,8 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 - Changing the runtime behavior of the existing `launch`, `status`, and `lens` commands beyond what credential sourcing requires.
 
 #### Deferred to Follow-Up Work
+
+- **opencode wiring (R13, withdrawn).** Cut from v1 by user direction. The research stands and the path is short when it returns: an `@ai-sdk/anthropic` provider against `/anthropic/v1` — the documented `@ai-sdk/openai-compatible` default posts to `/chat/completions`, which this gateway does not serve — plus per-model `limit.context` / `limit.output` from `models.json`. It is also the only harness measured to have a real offline validator (`opencode debug config`, exit 0/1 with field-level errors), so restoring it restores provable wiring.
 
 - `plugins/spawn/lib/models.json` and `gateway.yaml`'s `models:` block duplicate the alias list. That predates this work and stays as-is; note that R14's window emission makes the duplication load-bearing, so a future consolidation must keep `models.json` authoritative for windows.
 - Closing the Keychain's same-user read hole with a code-signed reader binary plus a partition list (KTD9 documents the limitation instead).
@@ -180,7 +182,7 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 - How setup detects a `gw` it previously wrote → KTD11 (marker plus content hash).
 - How harnesses are detected → KTD12 (executable lookup).
 - How the live round-trip is performed per harness → KTD13 (two layers: wire-shape probe plus KTD20 config validation).
-- Whether each harness exposes a non-interactive config validator → KTD20 (opencode does and it is used; Codex does not, and the `doctor --json` check plus its named gap is the substitute).
+- Whether each harness exposes a non-interactive config validator → KTD20 (Codex does not; the `doctor --json` `config.load` check plus its named gaps is the substitute).
 - Whether first-run success covers the invoking shell → R24 (it does not; setup prints the activation line and says so).
 
 **Open — carried, not blocking**
@@ -219,9 +221,9 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 - KTD9. **The Keychain's limitation is documented, not solved.** (session-settled: user-directed.) The default ACL authenticates the binary `/usr/bin/security`, not the caller, so any same-user process reads the secret silently — roughly a mode-0600 file against same-user agents. Its real wins are encryption at rest, protection while the keychain is locked, cross-user isolation, and staying out of dotfile backups. A code-signed reader binary plus a partition list would close the hole and is out of scope. Setup's docs state this plainly.
 - KTD10. **Keychain writes feed the secret twice on stdin to a trailing bare `-w`, and every write is read back and byte-compared.** `-w <value>` puts the secret in argv (verified via `ps -o args=`), and bare `-w` with insufficient stdin stores an empty password while exiting 0 (verified) — exit status is worthless, so read-back comparison is the only proof of a write. Reads use `find-generic-password -w`; `-g` is forbidden because it prints the value to stderr. Deletes loop until exit 44 because duplicate items are possible. Governs R5, R6.
 - KTD11. **Setup recognizes its own `gw` by a marker line plus a hash of the file body.** The generator embeds a marker comment and a content hash; marker present with matching hash → rewrite freely; marker with mismatched hash (hand-edited) or no marker at all → operator confirmation required before overwrite. The current wrapper carries no marker, so the first run takes the confirmation path exactly once. Governs R20; the mechanism behind AE6.
-- KTD12. **Harness detection is by executable lookup, not config presence and not asking.** `command -v` for `claude`, `codex`, `opencode`. A harness's config file may not exist before its first run, and asking is interaction the lib layer cannot do (KTD2's reasoning). Governs R11.
-- KTD13. **Verification has two layers, because the HTTP probe alone proves the gateway rather than the wiring.** Layer one is the round-trip: one request per wired harness in that harness's wire shape — Claude Code and opencode hit `POST /anthropic/v1/messages` with a Bearer header, Codex hits `POST /v1/responses` — plus one unauthenticated request that must be rejected, which enforces R9 against the live process rather than the config. The test alias is chosen from the gateway's served list at runtime, since a bare-machine install from the upstream template does not serve this machine's nine aliases, and requests are bounded to a minimal `max_tokens`. Layer two is KTD20's config validation. Neither layer alone is sufficient: the probe can pass over a config written to the wrong path, and validation can pass over a gateway that is down. Governs R16, R17.
-- KTD20. **Each emitted config is validated by the harness that owns it, and the one gap is named rather than hidden.** (session-settled: user-directed — chosen over narrowing R16's claim and over a setup-side parse-back: the owning loader is the only thing whose acceptance actually predicts the harness working.) opencode exposes a real validator — `opencode debug config` exits 0 on a valid config and 1 with field-level errors on an invalid one, needs no network, and enforces its schema itself rather than relying on the `$schema` key. Because `OPENCODE_CONFIG` validates the *merged* layer stack rather than one file, isolated validation in tests also sets `XDG_CONFIG_HOME` to an empty directory and `OPENCODE_DISABLE_PROJECT_CONFIG=1`; validating the merged stack is the correct check against the operator's real machine. Codex exposes no config subcommand: `codex doctor --json` carries a `config.load` check but its process exit is contaminated by network reachability failures, so setup reads that check's status from the JSON and ignores the exit code. **The gap:** Codex's `strict_config` defaults false, so a typo'd key name is silently ignored by every available check — setup states this rather than implying full coverage. Claude Code has no setup-written config file to validate; its wiring is the env token plus the plugin's own launch path, so the round-trip is the whole proof. Governs R25.
+- KTD12. **Harness detection is by executable lookup, not config presence and not asking.** `command -v` for `claude` and `codex`. A harness's config file may not exist before its first run, and asking is interaction the lib layer cannot do (KTD2's reasoning). Governs R11.
+- KTD13. **Verification has two layers, because the HTTP probe alone proves the gateway rather than the wiring.** Layer one is the round-trip: one request per wired harness in that harness's wire shape — Claude Code hits `POST /anthropic/v1/messages` with a Bearer header, Codex hits `POST /v1/responses` — plus one unauthenticated request that must be rejected, which enforces R9 against the live process rather than the config. The test alias is chosen from the gateway's served list at runtime, since a bare-machine install from the upstream template does not serve this machine's nine aliases, and requests are bounded to a minimal `max_tokens`. Layer two is KTD20's config validation. Neither layer alone is sufficient: the probe can pass over a config written to the wrong path, and validation can pass over a gateway that is down. Governs R16, R17.
+- KTD20. **The one emitted config is validated by the harness that owns it, and what the check cannot cover is named rather than hidden.** (session-settled: user-directed — chosen over narrowing R16's claim and over a setup-side parse-back: the owning loader is the only thing whose acceptance actually predicts the harness working.) Codex is the only harness with a setup-written config file. It exposes no config subcommand: `codex doctor --json` carries a `config.load` check, but its process exit is contaminated by network reachability failures, so setup reads that check's status from the JSON and ignores the exit code. **Two gaps, both stated:** Codex's `strict_config` defaults false, so a typo'd key name is silently ignored by every available check; and Codex is not installed on this machine, so the whole path ships fixture-proven with no live confirmation. Claude Code has no setup-written config file to validate — its wiring is the env token plus the plugin's own launch path, so the round-trip is its whole proof. **Consequence of the two-harness scope:** no config validation is provable on this machine at all, because the harness that had a real offline validator is out of scope and the one that remains is absent. G4 confirms the Claude Code round-trip only. Governs R25.
 - KTD14. **The rewritten `gw` delegates `start|stop|restart|status` to `spawnctl.sh` and keeps `log` and `claude` local.** Duplicated control logic is a named defect class in this repo (three `server.token` parsers already exist and a fourth is forbidden), and `gw`'s own liveness, truncating-log, and racing-start defects are already fixed in `spawnctl.sh` — delegation retires them instead of reimplementing them. The plugin lib path is baked absolute at write time; a setup re-run re-bakes it. The `claude` verb sources both env values by Keychain reference at run time; no value appears in the file. Governs R19, R23.
 - KTD15. **R8's shell export is a by-reference sourced snippet, not a stored value, and it reaches new shells only.** Setup writes `~/.gateway/env.sh` containing a Keychain read (`export GATEWAY_TOKEN="$(security find-generic-password … -w)"` — a reference, not a value) and appends one marker-guarded `source` line to the operator's shell rc, confirmation-gated through KTD17. New shells resolve the token at init, so rotation reaches them automatically and R22's warning is scoped to already-open ones. A process cannot modify its parent's environment, so the invoking shell is reached by printing its activation line, never by setup exporting into it (R24) — and setup's success message says which shells work now and which need the line. Governs R8, R12, R24.
 - KTD16. **Release resolution and fetch use `curl` against the public GitHub API, pinning the tag and recording the commit SHA — never a tarball checksum.** GitHub source tarballs are generated on demand and are not byte-stable (verified), so a checksum pin would break spuriously; the tag plus its commit SHA is the reproducible identity. Setup already requires `curl`, so no `gh` dependency is added. Governs R1, R3.
@@ -248,7 +250,7 @@ flowchart TB
     G2 --> G3[Keychain write: stdin twice,<br/>read back and compare]
     G3 --> H
     H --> I[Rewrite gw<br/>marker + hash gate, exit 8 if unrecognized]
-    I --> J[Wire harnesses found by command -v<br/>codex toml, opencode jsonc, rc snippet]
+    I --> J[Wire harnesses found by command -v<br/>codex toml, rc snippet]
     J --> K[Start gateway via spawnctl]
     K --> L[Verify: per-harness wire-shape round-trips<br/>+ unauthenticated request must be rejected]
     L -->|pass| M[Report success, wired/skipped lists,<br/>R15 losses]
@@ -414,24 +416,23 @@ KTD6 first: rebase onto `origin/feature/gateway-plugin`. Then U1 and U2 in paral
 ### U6. Harness wiring emission
 
 - **Goal:** Every harness found gets a working, credential-free config, validated by that harness's own loader before setup moves on.
-- **Requirements:** R8, R11, R12, R13, R14, R15, R24, R25; F1.
+- **Requirements:** R8, R11, R12, R14, R15, R24, R25; F1.
 - **Dependencies:** U1.
-- **Files:** `plugins/spawn/lib/setup.sh`, `plugins/spawn/lib/models.json`, `plugins/spawn/tests/unit/setup-wiring.bats`, `plugins/spawn/tests/fixtures/fake-opencode.sh`, `plugins/spawn/tests/fixtures/fake-codex.sh` (each stands in for its harness at both the detection and validation seams, with modes for valid, invalid, and — for codex — a `doctor --json` payload whose process exit is non-zero for network reasons while `config.load` passes).
+- **Files:** `plugins/spawn/lib/setup.sh`, `plugins/spawn/lib/models.json`, `plugins/spawn/tests/unit/setup-wiring.bats`, `plugins/spawn/tests/fixtures/fake-codex.sh` (stands in for Codex at both the detection and validation seams, with modes for valid, invalid, and a `doctor --json` payload whose process exit is non-zero for network reasons while `config.load` passes).
 - **Approach:**
   1. Detect per KTD12; report wired and skipped by name (R11).
   2. Extend `models.json` per KTD19.
   3. Codex: a marker-delimited managed block in `~/.codex/config.toml` — provider with `base_url` ending `/v1`, `env_key = "GATEWAY_TOKEN"`, default `responses` wire API, per-alias windows where Codex accepts them. Idempotent on re-run.
-  4. opencode: provider on `@ai-sdk/anthropic` against the `/anthropic/v1` base (R13), `apiKey` by env interpolation, per-model `limit` context and output from `models.json` (R14). An existing config that cannot be loaded leaves the file byte-identical and **fails** setup naming opencode and the loader's error (R11) — the file is never rewritten on a parse failure, because setup cannot know what it would be discarding.
+  4. An existing Codex config that cannot be loaded leaves the file byte-identical and **fails** setup, naming Codex and the loader's error (R11) — the file is never rewritten on a load failure, because setup cannot know what it would be discarding.
   5. Claude Code: wiring is the plugin's own launch path plus the shell token; setup emits the KTD15 snippet and rc line (consent via KTD17), then prints R24's activation line for the invoking shell.
   6. Emitted model entries are the intersection of the gateway's configured aliases and `models.json`.
   7. The R15 losses statement is carried in setup's own output JSON as data, not by pointing at prose. Its content is sourced once at authoring time from the verified list in `plugins/spawn/skills/launch/SKILL.md` plus the Codex `/responses/compact` gap — that `SKILL.md` never loads at runtime (KD9), so referencing it instead of copying its content would reproduce the exact gap that bit during the surface drive.
-  8. Validate each written config through its owning loader per KTD20 before setup proceeds: opencode by `debug config` exit status, Codex by the `config.load` check inside `doctor --json`. A validation failure is a setup failure (R11), reported with the loader's own message rather than a paraphrase.
+  8. Validate the written Codex config through its owning loader per KTD20 before setup proceeds, reading the `config.load` check inside `doctor --json` and never the process exit. A validation failure is a setup failure (R11), reported with the loader's own message rather than a paraphrase.
 - **Patterns to follow:** provenance-string style of existing `models.json` entries; `emit`-funneled JSON output.
 - **Test scenarios:**
-  - Covers AE4. A PATH fixture holding `claude` and `opencode` but no `codex` yields two wired entries and Codex named as skipped.
+  - Covers AE4. A PATH fixture holding `claude` but no `codex` wires Claude Code and names Codex as skipped.
   - The emitted Codex block contains `GATEWAY_TOKEN` as a name, no credential value, and a base URL ending `/v1`; a second run leaves the file byte-identical.
-  - The emitted opencode provider uses `@ai-sdk/anthropic`, a base URL containing `/anthropic/v1`, and every model entry carries `limit.context` and `limit.output` equal to the `models.json` values.
-  - Covers AE10. An existing unloadable opencode config makes setup fail naming opencode and carrying the loader's error; the file is byte-identical afterwards and opencode is absent from `skipped`.
+  - Covers AE10. An existing unloadable Codex config makes setup fail naming Codex and carrying the loader's error; the file is byte-identical afterwards and Codex is absent from `skipped`.
   - A validator fixture reporting invalid on a config setup just wrote fails the run rather than proceeding to the round-trip.
   - Covers AE11. The success output names which shells authenticate now and prints exactly one activation line for the invoking shell.
   - The env snippet contains a `security` invocation and no token value; the rc source line appears exactly once after two consecutive runs.
@@ -512,6 +513,7 @@ Fakery summary (KTD8): `fake-security.sh` and `fake-osascript.sh` (U1) stand in 
 - The live round-trip is not fakeable; G4 is the only proof of R16 and it spends real money.
 - The Keychain does not defend against same-user processes (KTD9); this plan documents that, it does not fix it.
 - **Codex config validation has a hole no available check closes.** Its `strict_config` defaults false, so a typo'd key name in `~/.codex/config.toml` is silently ignored — KTD20's check catches syntax and type errors, not misspelled option names. Setup states this rather than implying full coverage.
+- **No harness config validation is provable on this machine.** The two-harness scope leaves Codex as the only harness with a setup-written config, and Codex is not installed here — so its detection, wiring and validation paths ship fixture-proven only. Claude Code has no config file to validate. G4 therefore confirms the Claude Code round-trip and nothing about config validation. opencode, the one harness with a measured offline validator, is deferred (see Scope Boundaries).
 - **The delivery file survives an untrappable death.** SIGKILL or power loss during startup leaves the mode-0600 file on disk until a later start replaces it. The trap covers every path the shell can see; nothing covers SIGKILL.
 - Codex is not installed on this machine, so its detection and validation paths ship fixture-proven only.
 - Three upstream behaviors remain unverified: Codex's `/responses/compact` 404 handling, reads against a locked login keychain, and whether `codex doctor` performs auth I/O on a machine with no credentials. All are carried open and probed or surfaced rather than closed.
