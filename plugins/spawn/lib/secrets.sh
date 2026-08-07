@@ -82,20 +82,20 @@ SPAWN_TOKEN_LEN="${SPAWN_TOKEN_LEN:-43}"
 # ---------------------------------------------------------------------------
 # xtrace guard. A caller running with `set -x` would echo every secret-bearing
 # command — including the builtin printf whose entire purpose is keeping the
-# value out of sight. These two helpers bracket every region that touches a
-# value; they are paired at a SINGLE exit point per function so an early return
-# can never leave tracing off.
+# value out of sight. `bash -x lib/setup.sh` while debugging, or a parent that
+# exported SHELLOPTS=xtrace, is enough to spray a pasted API key across stderr,
+# which in an agent harness is a transcript.
+#
+# Every secret-touching function opens with `local -`, which snapshots the
+# shell options and lets bash restore them on return — including on an early
+# return, with no paired call to forget. The obvious hand-rolled version,
+#
+#     xt="$(spawn::xtrace_off)"      # WRONG
+#
+# does nothing at all: command substitution forks a subshell, so the `set +x`
+# applies to that subshell and dies with it while the caller keeps tracing.
+# That shape shipped here once and traced the secret five times over.
 # ---------------------------------------------------------------------------
-spawn::xtrace_off() {
-    case "$-" in
-        *x*) set +x; printf '1' ;;
-        *)   printf '0' ;;
-    esac
-}
-spawn::xtrace_restore() {
-    [ "${1:-0}" = "1" ] && set -x
-    return 0
-}
 
 # ---------------------------------------------------------------------------
 # spawn::keychain_read <service> <account>
@@ -107,14 +107,14 @@ spawn::xtrace_restore() {
 # that against this source.
 # ---------------------------------------------------------------------------
 spawn::keychain_read() {
-    local service="$1" account="$2" xt out rc
-    xt="$(spawn::xtrace_off)"
+    local -
+    set +x
+    local service="$1" account="$2" out rc
     out="$("$SPAWN_SECURITY_BIN" find-generic-password -a "$account" -s "$service" -w 2>/dev/null)"
     rc=$?
     if [ "$rc" -eq 0 ]; then
         printf '%s' "$out"
     fi
-    spawn::xtrace_restore "$xt"
     [ "$rc" -eq 0 ] && return "$SPAWN_SECRET_OK"
     return "$SPAWN_SECRET_FAIL"
 }
@@ -148,11 +148,14 @@ spawn::keychain_exists() {
 # indistinguishable on the next read.
 # ---------------------------------------------------------------------------
 spawn::keychain_write() {
-    local service="$1" account="$2" secret="$3" xt rc back rc_back
+    local -
+    set +x
+    local service="$1" account="$2" secret="$3" rc back rc_back
 
     [ -n "$secret" ] || return "$SPAWN_SECRET_EMPTY"
 
-    xt="$(spawn::xtrace_off)"
+    local -
+    set +x
     # Builtin printf, twice, newline-terminated. No external command, so the
     # value never reaches an argv anywhere in this pipeline.
     printf '%s\n%s\n' "$secret" "$secret" \
@@ -169,7 +172,6 @@ spawn::keychain_write() {
         rc=1
     fi
     back=""
-    spawn::xtrace_restore "$xt"
 
     [ "$rc" -eq 0 ] && return "$SPAWN_SECRET_OK"
     return "$SPAWN_SECRET_FAIL"
@@ -219,11 +221,14 @@ spawn::keychain_delete() {
 #          the caller owns diagnostics and must not echo the value.
 # ---------------------------------------------------------------------------
 spawn::prompt_secret() {
-    local title="$1" prompt="$2" xt errfile answer rc ret
+    local -
+    set +x
+    local title="$1" prompt="$2" errfile answer rc ret
 
     errfile="$(umask 077; mktemp "${TMPDIR:-/tmp}/gwdlg.XXXXXX")" || return "$SPAWN_SECRET_FAIL"
 
-    xt="$(spawn::xtrace_off)"
+    local -
+    set +x
     answer="$("$SPAWN_OSASCRIPT_BIN" \
         -e 'on run argv' \
         -e 'set d to display dialog (item 1 of argv) with title (item 2 of argv) default answer "" with hidden answer buttons {"Cancel", "OK"} default button "OK"' \
@@ -246,7 +251,6 @@ spawn::prompt_secret() {
     fi
     answer=""
     rm -f "$errfile" 2>/dev/null
-    spawn::xtrace_restore "$xt"
     return "$ret"
 }
 

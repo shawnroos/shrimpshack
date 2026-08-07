@@ -235,6 +235,11 @@ VERB="${1:-}"
 STAGING_ROOT=""
 ASIDE=""
 ASIDE_DEST=""
+# Per-call scratch that can hold a CREDENTIAL. round_trip writes a curl config
+# carrying the bearer token here, so it must be reachable from cleanup: a
+# Ctrl-C during the verify step is an ordinary thing to do, and the local
+# `rm -rf` at the end of that function is only reached on the normal path.
+RT_WORK=""
 cleanup() {
     if [ -n "$ASIDE" ] && [ -d "$ASIDE" ]; then
         if [ -n "$ASIDE_DEST" ] && [ ! -e "$ASIDE_DEST" ]; then
@@ -243,7 +248,18 @@ cleanup() {
             rm -rf "$ASIDE" 2>/dev/null
         fi
     fi
+    [ -n "$RT_WORK" ] && rm -rf "$RT_WORK" 2>/dev/null
     [ -n "$STAGING_ROOT" ] && rm -rf "$STAGING_ROOT" 2>/dev/null
+    # The contract is one JSON object on stdout on EVERY path, and a cancelled
+    # orchestrated run is the path that used to break it: by the time verify
+    # runs, two Keychain items exist, an install is promoted, gw is rewritten
+    # and the rc file has a line appended — and the accumulator naming all of
+    # that would have been discarded in silence. Guarded on EMITTED so the
+    # single verbs and every normal exit are untouched.
+    if [ "${ORCHESTRATING:-0}" -eq 1 ] && [ "${EMITTED:-0}" -eq 0 ]; then
+        emit_setup_failure "$EX_UNREACHABLE" \
+            "interrupted during step '${CURRENT_STEP:-unknown}' — nothing was rolled back; see 'changed' for what this run had already done"
+    fi
     return 0
 }
 trap cleanup EXIT
@@ -479,7 +495,7 @@ COMMIT_SHA=""
 
 resolve_latest_tag() {
     local body
-    body="$("$SPAWN_CURL_BIN" -fsSL --max-time "$API_TIMEOUT" \
+    body="$("$SPAWN_CURL_BIN" -fsSL --proto '=https' --proto-redir '=https' --max-time "$API_TIMEOUT" \
         "https://api.github.com/repos/$GATEWAY_REPO/releases/latest" 2>/dev/null)" \
         || die "$EX_UNREACHABLE" "step 'resolve release': could not reach the GitHub API for $GATEWAY_REPO (nothing has been changed on this machine)"
     LATEST_TAG="$(printf '%s' "$body" | jq -r '.tag_name // empty' 2>/dev/null)"
@@ -492,7 +508,7 @@ resolve_latest_tag() {
 
 resolve_commit_sha() {
     local tag="$1" body
-    body="$("$SPAWN_CURL_BIN" -fsSL --max-time "$API_TIMEOUT" \
+    body="$("$SPAWN_CURL_BIN" -fsSL --proto '=https' --proto-redir '=https' --max-time "$API_TIMEOUT" \
         "https://api.github.com/repos/$GATEWAY_REPO/commits/$tag" 2>/dev/null)" \
         || die "$EX_UNREACHABLE" "step 'resolve commit': could not resolve tag '$tag' to a commit (nothing has been changed on this machine)"
     COMMIT_SHA="$(printf '%s' "$body" | jq -r '.sha // empty' 2>/dev/null)"
@@ -1570,6 +1586,7 @@ round_trip() {   # round_trip <url> <body-file> <token|"">  → RT_CODE
     local url="$1" body="$2" tok="$3" work curlrc code rc
     RT_CODE=""
     work="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/spawn-rt.XXXXXX")" || return 1
+    RT_WORK="$work"
     curlrc="$work/rt.curlrc"
     {
         printf 'url = "%s"\n' "$(esc "$url")"
@@ -1773,6 +1790,11 @@ pass_consent() {
 # fact that an item was written.
 # ---------------------------------------------------------------------------
 do_key_step() {
+    # The value passes through this function as an argument, so the guard has
+    # to live HERE too: `local -` inside secrets.sh cannot suppress the CALLER's
+    # trace of the invocation line, which carries the secret verbatim.
+    local -
+    set +x
     local rotate="$1" key rc
     step_start "openrouter-key"
     if [ "$rotate" -ne 1 ] && spawn::keychain_exists "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_OPENROUTER"; then
@@ -1813,6 +1835,10 @@ do_key_step() {
 }
 
 do_token_step() {
+    # Same reason as do_key_step: the generated token passes through here as an
+    # argument, and the caller's xtrace would print the invocation line.
+    local -
+    set +x
     local rotate="$1" tok rc
     step_start "gateway-token"
     if [ "$rotate" -ne 1 ] && spawn::keychain_exists "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
@@ -2096,7 +2122,7 @@ do_acquire() {
 
     url="https://github.com/$GATEWAY_REPO/archive/refs/tags/$tag.tar.gz"
     say "fetching $GATEWAY_REPO $tag ($sha)"
-    "$SPAWN_CURL_BIN" -fsSL --max-time "$DOWNLOAD_TIMEOUT" -o "$archive" "$url" \
+    "$SPAWN_CURL_BIN" -fsSL --proto '=https' --proto-redir '=https' --max-time "$DOWNLOAD_TIMEOUT" -o "$archive" "$url" \
         || die "$EX_UNREACHABLE" "step 'fetch': could not download the source archive for $tag; the staging directory was removed and no install was changed"
 
     # --strip-components=1 drops GitHub's generated top-level <owner>-<repo>-<sha>
