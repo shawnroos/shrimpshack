@@ -711,6 +711,11 @@ config_write_lint() {   # <script>
     # which is the shape that could grow a write to it.
     run config_write_lint "$LIB/bg-agent.sh"
     [ "$status" -ne 0 ]
+    # U10's handle operations join it too. They read the job record and the
+    # supervisor's result and write NOTHING at all, which is exactly the shape
+    # that could quietly grow a write to the gateway config later.
+    run config_write_lint "$LIB/handle.sh"
+    [ "$status" -ne 0 ]
 }
 
 @test "KTD3: the no-write invariant covers the three runtime scripts, and the setup family is exempt BY NAME" {
