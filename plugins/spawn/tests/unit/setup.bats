@@ -29,6 +29,8 @@
 # NO REAL CREDENTIAL IS USED OR NEEDED, and no synthetic value here carries a
 # credential-shaped prefix — the repo-wide secret scan reads this file.
 
+EX_UNREACHABLE_T=3
+
 setup() {
     FIX="$(cd "$BATS_TEST_DIRNAME/../fixtures" && pwd)"
     LIB="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
@@ -664,4 +666,38 @@ mutant() {
     # machine already has is gone from the report, which is the half R18 is for.
     [ "$(jq -r '.failed_step' "$OUT")" = "verify" ]
     [ "$(jq -r '.changed | length' "$OUT")" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# The restart decision. This is the residual the code review found: start_verb
+# was chosen from the ROTATION FLAGS, so a run that installed a new release
+# while a gateway was already serving probed the OLD process, verified the OLD
+# process, and reported success naming the NEW tag. Every claim the success
+# object made about the new release was unsupported by the evidence collected.
+# ---------------------------------------------------------------------------
+@test "a run that installs a new release RESTARTS, so the old process cannot be what gets verified" {
+    install_claude
+    run_setup --consent-shell-rc
+    [ "$RC" -eq 0 ]
+    local first_pid
+    first_pid="$(cat "$SPAWN_STATE_HOME/.gateway.pid" 2>/dev/null)"
+    [ -n "$first_pid" ]
+    kill -0 "$first_pid" 2>/dev/null
+
+    # Publish a NEWER release so the second run installs rather than skips.
+    export FAKE_CURL_TAG="v9.9.10"
+    run_setup --consent-shell-rc
+
+    # The property: a restart STOPS the process that was serving. A plain start
+    # finds it alive and leaves it, which is how the old code came to verify a
+    # gateway running the PREVIOUS binary while reporting the new tag.
+    [ "$(step_status acquire)" = "installed" ]
+    ! kill -0 "$first_pid" 2>/dev/null
+
+    # The run does not reach a green round-trip here, and that is the fixture's
+    # limit rather than the code's: fake-cargo's stub answers --version but does
+    # not serve, so nothing can come up from a fixture-built install. G4 is
+    # where a real build proves the rest.
+    [ "$RC" -eq "$EX_UNREACHABLE_T" ]
+    [ "$(jq -r '.failed_step' "$OUT")" = "start" ]
 }

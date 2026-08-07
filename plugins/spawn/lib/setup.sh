@@ -727,9 +727,14 @@ require_token_delivery() {
 # a temp file and one rename: the config is being read by concurrent status and
 # lens calls, and rename is the only way it is never seen half-written.
 # ---------------------------------------------------------------------------
+# Sets TOKEN_RETIRED=1 when it actually rewrote the file. The caller needs to
+# know: editing the config a RUNNING gateway loaded changes what that process
+# would serve on its next start, which is a restart trigger.
+TOKEN_RETIRED=0
 retire_installed_token() {
     local cfg="$1" tmp
     config_has_server_token "$cfg" || return 0
+    TOKEN_RETIRED=1
     require_stored_token
     tmp="$cfg.retiring.$$"
     rm -f "$tmp" 2>/dev/null
@@ -1879,7 +1884,12 @@ do_token_step() {
 # ---------------------------------------------------------------------------
 do_setup() {
     local rotate_key="$1" rotate_token="$2" consent_gw="$3" consent_rc="$4"
-    local rotated=0 base_url alias served tok start_verb
+    # Restart is decided by what this run CHANGED about what the gateway would
+    # load, not by which flags were passed. A rotation is one such change; so is
+    # installing a new release, and so is retiring the token out of the live
+    # config. Keying on the flags alone let the round-trip verify a
+    # still-running OLD process while the success object named the new release.
+    local needs_restart=0 base_url alias served tok start_verb
 
     ORCHESTRATING=1
 
@@ -1888,9 +1898,9 @@ do_setup() {
     step_done "prereqs" "ok" "curl, cargo and tar are all present"
 
     do_key_step "$rotate_key"
-    [ "$rotate_key" -eq 1 ] && rotated=1
+    [ "$rotate_key" -eq 1 ] && needs_restart=1
     do_token_step "$rotate_token"
-    [ "$rotate_token" -eq 1 ] && rotated=1
+    [ "$rotate_token" -eq 1 ] && needs_restart=1
 
     # --- acquire ------------------------------------------------------------
     step_start "acquire"
@@ -1902,9 +1912,17 @@ do_setup() {
     fi
     case "$(printf '%s' "$SUB_JSON" | jq -r '.action // empty' 2>/dev/null)" in
         installed)
+            # A newly promoted binary and a freshly migrated config are only
+            # proven by a process that actually loaded them.
+            needs_restart=1
             record_change "gateway-install" "$SETUP_INSTALL_DIR" "gateway $SETUP_TAG was built and installed here"
             step_done "acquire" "installed" "built and promoted $SETUP_TAG" ;;
         *)
+            # The skip path still retires the token out of the LIVE config when
+            # it finds one, which changes what a running gateway would load.
+            if [ "$(printf '%s' "$SUB_JSON" | jq -r '.token_retired // false' 2>/dev/null)" = "true" ]; then
+                needs_restart=1
+            fi
             step_done "acquire" "skipped" "$SETUP_TAG was already installed and runnable at $SETUP_INSTALL_DIR" ;;
     esac
 
@@ -1955,7 +1973,7 @@ EOF
     # that still has the old key in memory.
     step_start "start"
     start_verb="start"
-    [ "$rotated" -eq 1 ] && start_verb="restart"
+    [ "$needs_restart" -eq 1 ] && start_verb="restart"
     local ctl_out ctl_rc=0
     ctl_out="$(bash "$SPAWNCTL_PATH" "$start_verb")" || ctl_rc=$?
     if [ "$ctl_rc" -ne 0 ]; then
@@ -2104,8 +2122,9 @@ do_acquire() {
         require_token_delivery "$dest/$CONFIG_NAME"
         say "gateway $tag is already installed and runnable at $dest — nothing to build"
         emit "$(jq -nc --arg tag "$tag" --arg dir "$dest" --arg bin "$bin" --arg cfg "$dest/$CONFIG_NAME" \
+            --argjson retired "$([ "$TOKEN_RETIRED" -eq 1 ] && printf 'true' || printf 'false')" \
             '{ok:true, verb:"acquire", action:"skipped", tag:$tag, commit:null,
-              install_dir:$dir, binary:$bin, config:$cfg,
+              install_dir:$dir, binary:$bin, config:$cfg, token_retired:$retired,
               error:null, exit_code:0}')" \
             || die "$EX_USAGE" "could not encode the acquire object"
         exit "$EX_OK"
