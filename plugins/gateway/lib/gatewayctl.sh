@@ -563,15 +563,70 @@ pid_argv() {
     ps -o args= -p "$1" 2>/dev/null | head -1
 }
 
+# Anchored to argv[0], NOT a substring of the whole command line. The substring
+# form failed open in the direction that kills: any unrelated process whose argv
+# merely MENTIONS the binary path — `less ~/gateway-0.1.1/target/release/gateway`,
+# a tail on its log, another gatewayctl — was "verified as ours" and would take
+# SIGTERM then SIGKILL.
+#
+# It also failed closed after an upgrade. resolve_install_dir always picks the
+# NEWEST ~/gateway-*, but a running process keeps the argv of the version it was
+# launched from, so the moment a newer directory appeared, stop stopped
+# recognizing the gateway it legitimately owns — permanently. R4 explicitly lets
+# the install dir move between releases, so this is expected, not exotic.
+#
+# The recorded path (written beside the pidfile at start) is therefore the
+# primary check; argv[0] under the versioned install root is the fallback for a
+# gateway this plugin did not start.
+#
+# The match is on a WHOLE argv element at position 0 or 1, never a substring of
+# the command line, and an executable position is not enough on its own:
+#   * position 0 is a compiled binary launched directly (the real gateway)
+#   * position 1 is an interpreter-launched one — for a shebang script `ps`
+#     reports the INTERPRETER as argv[0] and the script as argv[1]. Verified on
+#     this box; the test fixture is exactly this shape, which is why a strict
+#     argv[0] rule looks correct and silently stops recognizing it.
+# `--config` must also be present, because a pager or editor holding the binary
+# path (`less .../gateway`) puts that path in an executable-looking position too.
+# Every gateway launch carries --config; nothing else that merely names the file
+# does.
+_argv_names_binary() {
+    local args="$1" cand="$2"
+    [ -n "$cand" ] || return 1
+    awk -v a="$args" -v c="$cand" 'BEGIN{
+        n = split(a, f, " ")
+        if (f[1] == c) exit 0
+        if (n >= 2 && f[2] == c) {
+            for (i = 1; i <= n; i++) if (f[i] == "--config") exit 0
+        }
+        exit 1
+    }'
+}
+
 pid_is_gateway() {
-    local pid="$1" args
+    local pid="$1" args recorded
     kill -0 "$pid" 2>/dev/null || return 1
     args="$(pid_argv "$pid")"
     [ -n "$args" ] || return 1
-    case "$args" in
-        *"$GATEWAY_BIN"*) return 0 ;;
-        *) return 1 ;;
-    esac
+
+    # 1. the binary this plugin recorded when it started that pid — survives an
+    #    upgrade that moves the install dir underneath a running process.
+    recorded="$(cat "$PIDFILE.bin" 2>/dev/null)"
+    _argv_names_binary "$args" "$recorded" && return 0
+    # 2. the binary we resolve today
+    _argv_names_binary "$args" "${GATEWAY_BIN:-}" && return 0
+    # 3. any gateway binary under the versioned install root — still a positive
+    #    identification, just not pinned to whichever version is newest today.
+    awk -v a="$args" -v root="$SEARCH_ROOT" 'BEGIN{
+        n = split(a, f, " ")
+        pat = "^" root "/gateway-[^/]+/target/release/gateway$"
+        if (f[1] ~ pat) exit 0
+        if (n >= 2 && f[2] ~ pat) {
+            for (i = 1; i <= n; i++) if (f[i] == "--config") exit 0
+        }
+        exit 1
+    }' && return 0
+    return 1
 }
 
 read_pidfile() {
@@ -618,6 +673,12 @@ do_start_locked() {
         cd "$INSTALL_DIR" || exit 1
         nohup "$GATEWAY_BIN" --config "$CONFIG_PATH" >> "$LOGFILE" 2>&1 &
         printf '%s\n' "$!" > "$PIDFILE"
+        # Record WHICH binary this pid was launched from, beside the pidfile.
+        # pid_is_gateway verifies argv[0] against this rather than against
+        # whatever resolve_install_dir picks today, so unpacking a newer
+        # ~/gateway-* release cannot make stop stop recognizing a gateway it
+        # legitimately owns (R4 lets the install dir move between releases).
+        printf '%s\n' "$GATEWAY_BIN" > "$PIDFILE.bin"
     )
     STARTED=1
 
@@ -813,7 +874,7 @@ stop)
                   error:"the recorded pid is dead but a gateway is still serving; not stopped", exit_code:$c}')"
             exit $EX_USAGE
         fi
-        rm -f "$PIDFILE"
+        rm -f "$PIDFILE" "$PIDFILE.bin"
         emit "$(jq -nc --argjson pid "$pid" \
             '{ok:true, verb:"stop", result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')"
         exit $EX_OK
@@ -850,7 +911,7 @@ stop)
             break
         fi
     done
-    rm -f "$PIDFILE"
+    rm -f "$PIDFILE" "$PIDFILE.bin"
     emit "$(jq -nc --argjson pid "$pid" \
         '{ok:true, verb:"stop", result:"stopped", pid:$pid, error:null, exit_code:0}')"
     exit $EX_OK

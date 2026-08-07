@@ -241,8 +241,19 @@ need_jq
 [ -n "$ALIAS" ] || { usage; die "$EX_USAGE" "usage" "--alias is required"; }
 validate_alias "$ALIAS"
 
-[[ "$TOTAL_TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
-    || die "$EX_USAGE" "usage" "--timeout must be a number of seconds, got '$TOTAL_TIMEOUT'"
+# Positive, not merely numeric. `curl --max-time 0` does not mean "no limit" — it
+# DISABLES the deadline, so the value a caller would naturally read as "don't
+# impose an artificial cap" produces an unbounded hang, which is the worst
+# failure mode for an unattended fan-out because it looks like work in progress.
+# Measured: --max-time 0 against an accept-and-never-reply socket ran until the
+# peer died and exited rc=56, not 28 — so it would also be misreported as exit 3
+# (unreachable) rather than exit 6 (deadline), breaking the promise
+# skills/lens/SKILL.md makes to consumers.
+[[ "$TOTAL_TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [ "$(awk -v v="$TOTAL_TIMEOUT" 'BEGIN{print (v > 0)}')" = "1" ] \
+    || die "$EX_USAGE" "usage" "--timeout must be a POSITIVE number of seconds (0 disables curl's deadline entirely), got '$TOTAL_TIMEOUT'"
+# Same for the connect timeout, which reached --connect-timeout unvalidated.
+[[ "$CONNECT_TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [ "$(awk -v v="$CONNECT_TIMEOUT" 'BEGIN{print (v > 0)}')" = "1" ] \
+    || die "$EX_USAGE" "usage" "GATEWAY_CONNECT_TIMEOUT must be a POSITIVE number of seconds, got '$CONNECT_TIMEOUT'"
 MAX_TOKENS="${MAX_TOKENS:-$DEFAULT_MAX_TOKENS}"
 [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] \
     || die "$EX_USAGE" "usage" "--max-tokens must be a positive integer, got '$MAX_TOKENS'"
