@@ -477,7 +477,7 @@ KTD6 first: rebase onto `origin/feature/gateway-plugin`. Then U1 and U2 in paral
   3. Version bump in both manifests in this same commit.
 - **Patterns to follow:** `commands/status.md` for frontmatter and length discipline; `skills/status/SKILL.md` for the exit-code-table and field-reading *content* now folded into the command — the shape is borrowed, the file is not created.
 - **Test scenarios:**
-  - A grep asserts no skill directory shares a name with any command in this plugin, so the collision cannot be reintroduced silently.
+  - A grep asserts no *new* skill directory shares a name with a command. The three legacy pairs — `launch`, `lens`, `status` — are pinned as an annotated allowed set rather than asserted away: that collision is KD9's own evidence, and retiring it belongs to `docs/plans/2026-08-07-001-feat-spawn-surfaces-plan.md` KD1. A blanket assertion would be red on arrival and would claim ownership of another plan's work.
   - `commands/setup.md` contains no instruction to invoke a skill or another command (R26).
   - The command's exit-code table lists every code `setup.sh` can return, checked against the script's `EX_*` constants.
 - **Verification:** Gate G2.

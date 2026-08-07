@@ -87,6 +87,68 @@ literal.
 
 Full reference: `skills/launch/SKILL.md`.
 
+### Setup — `lib/setup.sh` (the `/spawn:setup` command)
+
+Takes a bare Mac to a working gateway-backed session in one run: resolve the
+latest published gateway release, fetch and build it, promote it to
+`~/gateway-<version>` in one atomic move, capture the OpenRouter key and a
+generated gateway token into the macOS Keychain, rewrite `~/.local/bin/gw`,
+wire every installed harness (Claude Code and Codex), start the gateway, and
+only then claim success — after a live completion round-trip in each wired
+harness's own wire shape *and* an unauthenticated request that the gateway must
+reject.
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/lib/setup.sh"                          # the whole path
+bash "${CLAUDE_PLUGIN_ROOT}/lib/setup.sh" --rotate-gateway-token   # replace the token
+bash "${CLAUDE_PLUGIN_ROOT}/lib/setup.sh" acquire                  # just fetch/build/promote
+```
+
+Two properties worth knowing before you read the output:
+
+- **Writing the config files is not evidence.** The plugin's expander resolves
+  an unset `${VAR}` to an empty string while the gateway's own expander
+  hard-errors on it, so plugin-side parsing can report a healthy-looking
+  credential for a config the gateway would refuse to boot on. That is why
+  success is a round-trip and never a file write (KD10).
+- **An empty auth-token list is not "no auth" — it is an open proxy.** The
+  gateway's auth check returns success immediately when its token list is
+  empty, forwarding to a paid account for anything on the box. Setup refuses to
+  leave that state and proves the refusal with a request that carries no
+  credential at all.
+
+`setup.sh` is **non-interactive**. Where it needs the operator's say-so —
+overwriting a `gw` it did not write, appending a line to your shell rc — it
+exits **8** with a `consent_required` field naming the flag to come back with
+(`--consent-overwrite-gw`, `--consent-shell-rc`). Exit **9** is a missing
+prerequisite. Both codes join the enum below and belong to setup only.
+
+**Setup deliberately ships no skill.** A command and a same-named skill collide
+and the command wins — which is why the three `SKILL.md` files in this plugin
+never load on the installed plugin. `commands/setup.md` therefore carries the
+whole contract itself: the flag list, the exit-code table, the consent loop, and
+the field-by-field JSON guide. Adding `skills/setup/SKILL.md` would shadow
+nothing useful and silently strand the text inside it; `tests/unit/surfaces.bats`
+fails if that directory appears.
+
+#### What the Keychain does and does not buy you (KTD9)
+
+Both secrets live in the macOS login keychain and neither is written to disk in
+plaintext. **The limitation is documented here, not solved:** the default ACL
+authenticates the *binary* `/usr/bin/security`, not the caller, so **any
+same-user process can read either secret silently** — roughly the protection of
+a mode-0600 file against same-user agents.
+
+Its real wins, which are the reasons it is still the floor here:
+
+- encryption at rest,
+- protection while the keychain is locked,
+- cross-user isolation,
+- staying out of dotfile backups and Time Machine copies of your home directory.
+
+A code-signed reader binary plus a partition list would close the hole. It is
+out of scope and nothing here pretends otherwise.
+
 ### Control layer — `lib/spawnctl.sh`
 
 `start | stop | restart | status | ensure [alias]`. Liveness is a token-bearing
@@ -118,6 +180,13 @@ lookup table only:
 | `5` | upstream provider error — the JSON's `error` field distinguishes `rate_limited`, `context_overflow`, `no_text_truncated` (the model spent its whole token budget reasoning and never wrote an answer — raise `--max-tokens`) and `no_text_in_response` from other upstream failures |
 | `6` | deadline exceeded |
 | `7` | gateway reachable but rejected the plugin's token |
+| `8` | operator confirmation required — `setup.sh` only; nothing was changed on that path |
+| `9` | missing prerequisite — `setup.sh` only; nothing was changed |
+
+`setup.sh` returns 0, 2, 3, 8 and 9 and nothing else; 4 through 7 belong to the
+lens and the control layer. `tests/unit/surfaces.bats` reads the `EX_*`
+constants out of `lib/setup.sh` and fails if the table in `commands/setup.md`
+misses one, so the command's table cannot drift away from the code.
 
 Two properties KTD2 owns that are easy to lose: **every script prints exactly
 one JSON object on stdout, on every path including every failure**, and
@@ -272,10 +341,32 @@ bash plugins/spawn/tests/run-tests.sh self-check  # prove the harness can fail
 bash plugins/spawn/tests/run-tests.sh smoke       # wire-up + agent-consumer + secret scan
 ```
 
-Everything runs against `tests/fixtures/` — a stdlib-Python fake gateway and a
-fake `claude`. **The real gateway on port 4000 and OpenRouter are out of the
-test path by decision.** A suite that reached either would fight a live process
-or spend real money, and both turn green into noise.
+Suites in `tests/unit/`:
+
+| Suite | What it holds |
+|---|---|
+| `fixtures.bats` | the fixtures themselves — a fake gateway that stops requiring auth would turn every later suite into noise |
+| `spawnctl.bats`, `lens.bats`, `launch.bats` | the three runtime surfaces |
+| `escapes.bats` | the escape matrix below, plus the computed-scope lint over every `lib/*.sh` |
+| `regressions.bats` | defects that came back once |
+| `secrets.bats` | the Keychain primitives — argv leakage, the silent-empty write, read-back proof |
+| `setup-acquire.bats` | release resolution, fetch, build, staging invisibility, atomic promotion |
+| `setup-config.bats` | config migration and token retirement (the token entry is deleted, never parsed) |
+| `setup-gw.bats` | the `gw` recognition matrix and the emitted wrapper |
+| `setup-wiring.bats` | harness detection, the Codex managed block, the shell snippet and rc line |
+| `setup.bats` | orchestration, rotation, and the two-layer round-trip proof |
+| `surfaces.bats` | the shipped surfaces — no skill directory shares a command's name, `commands/setup.md` reaches no other surface, and its exit-code table matches `setup.sh`'s `EX_*` constants |
+
+Everything runs against `tests/fixtures/` — a stdlib-Python fake gateway
+(`fake-gateway.py`) and fakes for every external the setup path touches:
+`fake-security.sh` and `fake-osascript.sh` stand in for the credential store and
+the key dialog, `fake-curl.sh` and `fake-cargo.sh` for the fetch and the build,
+`fake-gateway-bin.sh` for the built binary at exec time, and `fake-claude.sh` /
+`fake-codex.sh` for the two harnesses. **The real gateway on port 4000 and
+OpenRouter are out of the test path by decision.** A suite that reached either
+would fight a live process or spend real money, and both turn green into noise.
+Nothing fakes the live completion — that is the one thing only a real run
+proves, and setup's round-trip is the only place it happens.
 
 `smoke` covers four things: plugin/marketplace version parity, the
 agent-consumer invocation (the lens driven exactly the way a tool-restricted
@@ -338,6 +429,16 @@ NFKC / homoglyph defence — see *Known limits*.
 | S7 | the `claude` CLI's reported session id | the seed run's JSON (`launch.sh`) |
 | S8 | an unrelated process's argv | `ps -o args=` on a recycled pid (`spawnctl.sh stop`) |
 | S9 | the environment / filesystem (install dirs, state paths, base URL) | `SPAWN_*` overrides and `~/gateway-*` resolution |
+| S10 | GitHub release metadata — tag names, commit shas | the release/commit lookups in `setup.sh` acquire |
+| S11 | a harness's own loader output | `codex doctor --json` → `CODEX_LOAD_DETAIL` (`setup.sh` wire) |
+| S12 | files on disk setup did not write — an existing `gw`, `~/.codex/config.toml`, a previous `gateway.yaml` | the `gw` recognition matrix, the managed-block scan, config migration (`setup.sh`) |
+| S13 | build tool output — `cargo`, `tar`, `curl` failures | the acquire step's failure messages (`setup.sh`) |
+
+**Not a source, deliberately.** Neither credential is ever a display value.
+`secrets.sh` returns them to a caller's local and prints nothing at all; the
+round-trip drops the HTTP response body rather than reporting it, because a 401
+body can quote the credential that was presented (AE7). Only the status code and
+the route reach the output.
 
 ### Sinks, part 1 — everything written to stderr
 
@@ -356,6 +457,10 @@ Terminal sinks, per script. "Fixed" means the line interpolates nothing.
 | `launch.sh` · `die()` | S6, S7, S9 | **sanitized** — chokepoint | `argv:` …, `KTD5 grammar: a session id …` |
 | `launch.sh` · seed-run stderr tail | **S1** | **sanitized** — `spawn::sanitize_stream` | `seed-run stderr tail: a poisoned child stderr …` |
 | `launch.sh` · `tmpwork` / `need_jq` / `usage` | — | **fixed string** | — |
+| `setup.sh` · `say()` | S6, S9, S10, S11, S12, S13 | **sanitized** — chokepoint, byte-identical to the sibling scripts' so the lint can read it | the `lib/*.sh` sink lint (computed scope — `setup.sh` is in it) |
+| `setup.sh` · `die()` | S6, S9, S10, S11, S12, S13 | **sanitized** — chokepoint, inline at the `printf` | the `lib/*.sh` sink lint |
+| `setup.sh` · `usage()` / `need_jq` | — | **fixed string** | (nothing to test — no interpolation) |
+| `secrets.sh` · — | — | **no terminal sink at all**; it prints nothing and returns values to the caller's local. Callers own their own diagnostics and must not print a returned value. | exempt from the three structural lint checks by an annotated carve-out; still scanned for raw sinks |
 
 ### Sinks, part 2 — the one JSON object on stdout
 
@@ -375,6 +480,12 @@ object is a mixed channel, so the disposition is **per field**, not per script:
 | `actual_argv` (stop, pid mismatch) | spawnctl | S8 | **sanitized** — another process's command line, printed by whoever is diagnosing | (chokepoint-level; covered by the `argv:` sanitize tests and the lint) |
 | `verb` in the **no-jq** fallback line | spawnctl | S6 | **closed by construction** — reduced in pure bash to the verb enum's charset, because with no jq there is no encoder and a quote would break the object | (structural; enforced by reading — see *Known limits*) |
 | `session_id`, `transcript_path`, `attach_command` | launch | S7 | **closed by grammar** — the session id is held to `[A-Za-z0-9._-]+`; the path and the attach command are derived from it plus shell-quoted values | `KTD5 grammar: a session id that fails the grammar …` |
+| `steps[].detail`, `failed_step` | setup | S6, S9, S10, S11, S12, S13 | **sanitized** — every entry is either an authored fixed string or a `die()` message, and `die()` sanitizes before the failure object is built | (chokepoint-level; the `lib/*.sh` sink lint) |
+| `changed[]` (`what`, `target`, `detail`) | setup | S9 | **authored fixed strings plus functional paths** — the paths are the same raw-by-design class as the last row: they are what the operator has to go look at | — |
+| `losses`, `validation_gaps` | setup | — | **authored fixed strings**, copied into `setup.sh` at authoring time rather than read from a `SKILL.md` that never loads (KD9). No external input reaches them. | — |
+| `wired[]` / `skipped[]` (`validation_detail`) | setup | **S11 (another program's output)** | **sanitized** — `CODEX_LOAD_DETAIL` is `codex doctor`'s own text, encoded by `jq` and relayed as display only | — |
+| `verification.round_trip[]` | setup | — | **status code and route only.** The HTTP response body is **dropped, never relayed** — a 401 body can quote the credential that was presented (AE7). | `setup.bats` (the auth-class round-trip test asserts on the code, not a message) |
+| `consent_required` | setup | — | **closed by construction** — one of two authored literals (`overwrite-gw`, `shell-rc`), which is what lets `commands/setup.md` map it to a flag | `surfaces.bats` (the table names both) |
 | `base_url`, `config`, `log`, `pidfile`, `install_dir`, `binary`, `cwd`, `output_file` path, `pid`, `context_window` | all three | S9, S4 | **RAW BY DESIGN — functional, not display.** `lens.sh` and `launch.sh` *parse* `.base_url` and `.config` back out to build the request and read the token; sanitizing a path or a URL would silently corrupt a value the plugin itself consumes. They are also caller-supplied (`SPAWN_*` env, `--cwd`), so the threat model is self-shoot, not a hostile third party. Two of them are nonetheless closed by construction anyway: `pid` is digit-filtered by `read_pidfile`, and `context_window` is constrained to digits before it is used or printed. | `a non-numeric context_window …` |
 
 One re-entrant path was checked and is not a sink: `spawnctl.sh restart`
