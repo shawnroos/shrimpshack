@@ -56,11 +56,29 @@ setup() {
     DEST="$SPAWN_SEARCH_ROOT/gateway-9.9.9"
     OLD="$SPAWN_SEARCH_ROOT/gateway-0.1.0"
 
+    # --- U4 isolation ------------------------------------------------------
+    # Acquire now refuses to promote an install that can be authenticated by
+    # nothing (R9): the config it stages carries no token, so a stored one has
+    # to exist. That makes the Keychain part of EVERY acquire, including the
+    # tests here that predate U4 — without a fake one they would query this
+    # machine's login keychain. Same env-override discipline as the search root.
+    export SPAWN_SECURITY_BIN="$FIX/fake-security.sh"
+    export FAKE_SECURITY_STORE_DIR="$WORK/kc-store"
+    export FAKE_SECURITY_RECORD_DIR="$WORK/kc-record"
+    mkdir -p "$FAKE_SECURITY_STORE_DIR" "$FAKE_SECURITY_RECORD_DIR"
+    export SPAWN_KEYCHAIN_SERVICE="spawn-gateway-test"
+    export FAKE_SECURITY_MODE=ok
+
     OUT="$WORK/out.json"
     ERR="$WORK/err.txt"
     RC=0
 
     make_tarball "$FAKE_CURL_TARBALL"
+    # The stored gateway token R9 requires. Its VALUE is never used here — the
+    # R9 gate asks only whether one exists. setup-config.bats owns the refusal.
+    printf 'acq-tok-x1y2z3\nacq-tok-x1y2z3\n' \
+        | "$SPAWN_SECURITY_BIN" add-generic-password \
+            -a gateway-token -s "$SPAWN_KEYCHAIN_SERVICE" -U -w
 }
 
 teardown() {

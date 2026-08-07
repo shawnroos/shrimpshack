@@ -179,6 +179,18 @@ invocation() {
 # commands co-occurring with the config variable are flagged. Over-flagging a
 # hypothetical read-only `cp "\$CONFIG_PATH" elsewhere` is accepted: the
 # baseline-clean assertion keeps the lint honest against the shipped source.
+#
+# SCOPE (KTD3): the RUNTIME scripts — launch.sh, lens.sh, spawnctl.sh. It is no
+# longer stated as repo-wide, because lib/setup.sh is now the SANCTIONED writer
+# of gateway.yaml: the gateway pushes GATEWAY_TOKEN onto its auth list rather
+# than substituting it, so the literal token in a live config stays valid until
+# it is deleted from the file, and R23 is unreachable without a config edit.
+# setup.sh is exempted BY NAME, here and in the self-test below, never by
+# accident — and note that the exemption is a statement of sanction rather than
+# a mechanical bypass: this lint keys on $CONFIG_PATH/$SPAWN_CONFIG, and
+# setup.sh writes through "$staging/$CONFIG_NAME", which those patterns cannot
+# match anyway. Widening the patterns to cover setup.sh's own variables would
+# be re-litigating KTD3, not fixing a gap.
 config_write_lint() {   # <script>
     sed 's/#.*//' "$1" | grep -nE \
         -e '>[ ]*"?\$\{?(CONFIG_PATH|SPAWN_CONFIG)' \
@@ -655,11 +667,33 @@ config_write_lint() {   # <script>
     fi
     [ "$status" -ne 0 ]
     # The same holds for the other two scripts that read the config: the
-    # finding cites launch.sh, but the invariant is R12's, which is repo-wide.
+    # finding cites launch.sh, but the invariant is R12's, which covers every
+    # RUNTIME script (KTD3 narrowed the stated scope from repo-wide to these
+    # three when setup.sh became the sanctioned writer).
     run config_write_lint "$LIB/lens.sh"
     [ "$status" -ne 0 ]
     run config_write_lint "$LIB/spawnctl.sh"
     [ "$status" -ne 0 ]
+}
+
+@test "KTD3: the no-write invariant covers the three runtime scripts, and setup.sh is exempt BY NAME" {
+    # The scope change is worth a test of its own, because "the lint passes" is
+    # equally true of a lint that stopped being applied. Both halves are stated
+    # here: the runtime list is exactly these three files, and the one file
+    # outside it is named rather than discovered.
+    local script
+    for script in "$LAUNCH" "$LIB/lens.sh" "$LIB/spawnctl.sh"; do
+        [ -f "$script" ]
+        run config_write_lint "$script"
+        [ "$status" -ne 0 ]
+    done
+
+    # setup.sh exists, is not in that list, and DOES write a gateway.yaml —
+    # asserting the write is real is what stops this from being a vacuous
+    # exemption for a file that never writes anything.
+    [ -f "$LIB/setup.sh" ]
+    grep -q 'strip_server_token' "$LIB/setup.sh"
+    grep -q 'staging/\$CONFIG_NAME' "$LIB/setup.sh"
 }
 
 @test "R12 lint self-test: planted cp, tee, sed -i, yq -i and redirect writes each turn the lint red" {

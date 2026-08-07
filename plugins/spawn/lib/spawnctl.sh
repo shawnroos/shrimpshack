@@ -312,8 +312,56 @@ yaml_scan() {
 
 CONFIG_PATH=""
 SPAWN_TOKEN_VALUE=""
+# Where SPAWN_TOKEN_VALUE came from: config | env | keychain | "" (nothing).
+# Provenance is tracked rather than inferred from emptiness because the two
+# consumers below need different answers. See resolve_token_fallback.
+SPAWN_TOKEN_SOURCE=""
 CONFIG_MODELS_JSON="{}"
 CONFIG_LOADED=0
+
+# ---------------------------------------------------------------------------
+# resolve_token_fallback — R27.
+#
+# Setup retires the token from gateway.yaml (U4/KTD18), so from that point on
+# the config is NOT a token source for anyone. The gateway gets its token at
+# start time through the delivery file; every OTHER command — status, lens,
+# launch — has to present the same credential to a gateway that is ALREADY
+# running, and none of them goes anywhere near do_start_locked. Resolving the
+# fallback here, in the one place every verb passes through, is what stops a
+# successful setup from leaving `status` and `lens` exiting 7 against the
+# gateway it just configured.
+#
+# PRECEDENCE, and why:
+#   1. the config, when it declares one — unchanged behaviour for a pre-setup
+#      machine, and the gateway still treats a config token as valid;
+#   2. an inherited GATEWAY_TOKEN — the shell already holds the credential
+#      (KTD15 puts it there by reference), so consulting the Keychain again
+#      would be a second unlock-capable call for a value in hand;
+#   3. the stored credential.
+# ---------------------------------------------------------------------------
+resolve_token_fallback() {
+    if [ -n "$SPAWN_TOKEN_VALUE" ]; then
+        SPAWN_TOKEN_SOURCE="config"
+        return 0
+    fi
+    if [ -n "${GATEWAY_TOKEN:-}" ]; then
+        SPAWN_TOKEN_VALUE="$GATEWAY_TOKEN"
+        SPAWN_TOKEN_SOURCE="env"
+        return 0
+    fi
+    # keychain_exists first: it never produces the value, so a machine with no
+    # stored credential never runs a read at all.
+    if spawn::keychain_exists "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
+        local tok
+        tok="$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN")"
+        if [ -n "$tok" ]; then
+            SPAWN_TOKEN_VALUE="$tok"
+            SPAWN_TOKEN_SOURCE="keychain"
+        fi
+        tok=""
+    fi
+    return 0
+}
 
 resolve_config() {
     [ "$CONFIG_LOADED" -eq 1 ] && return 0
@@ -376,6 +424,9 @@ resolve_config() {
             esac
         fi
     fi
+    # After the config has had its say, never before: a declared token still
+    # wins, and this only fills the hole setup leaves behind (R27).
+    resolve_token_fallback
     CONFIG_LOADED=1
     return 0
 }
@@ -806,6 +857,12 @@ deliver_secrets() {
     # produce a gateway that rejects callers — it produces an open proxy on
     # 127.0.0.1 that forwards anything to a paid provider. Refused before the
     # spawn, so nothing is started and no delivery file is written.
+    #
+    # SPAWN_TOKEN_VALUE can now also hold an inherited GATEWAY_TOKEN (R27), and
+    # that correctly satisfies this guard rather than weakening it: with nothing
+    # delivered, TOKEN_DELIVERED stays 0, the child KEEPS the inherited export,
+    # and the gateway merges it into its auth list at startup (upstream
+    # src/main.rs:54-56). The list is non-empty, which is the whole claim.
     if [ -z "$SPAWN_TOKEN_VALUE" ] && [ "$have_tok" -eq 0 ]; then
         die "$EX_USAGE" "refusing to start an unauthenticated gateway: ${CONFIG_PATH:-<no config resolved>} declares no server.token and no gateway token is stored (Keychain service '$KEYCHAIN_SERVICE', account '$KEYCHAIN_ACCOUNT_TOKEN') — an empty auth token list makes the gateway an open proxy; run the setup command to store one"
     fi
@@ -851,8 +908,15 @@ deliver_secrets() {
     # credential in play. A config token that IS present stays authoritative —
     # the gateway merges rather than substitutes, so both are valid, and
     # today's behaviour is left alone.
-    if [ -z "$SPAWN_TOKEN_VALUE" ] && [ "$have_tok" -eq 1 ]; then
+    #
+    # Keyed on PROVENANCE, not on emptiness, since R27's fallback now populates
+    # SPAWN_TOKEN_VALUE before this point. An inherited GATEWAY_TOKEN is a
+    # POSSIBLY STALE copy — the child has it unset (TOKEN_DELIVERED below), so
+    # the started gateway's auth list holds the delivered value and nothing
+    # else, and probing with the stale one would report a rotation as exit 7.
+    if [ "$SPAWN_TOKEN_SOURCE" != "config" ] && [ "$have_tok" -eq 1 ]; then
         SPAWN_TOKEN_VALUE="$kc_tok"
+        SPAWN_TOKEN_SOURCE="keychain"
     fi
 
     if [ "$have_key" -eq 1 ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then

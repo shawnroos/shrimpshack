@@ -61,6 +61,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./common.sh
 . "$SCRIPT_DIR/common.sh"
 
+# The Keychain primitives (U1). Setup needs exactly one thing from them here:
+# whether a gateway token is STORED — never its value. See require_token_delivery.
+# shellcheck source=./secrets.sh
+. "$SCRIPT_DIR/secrets.sh"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -105,6 +110,13 @@ PROBE_BUDGET="${SPAWN_SETUP_PROBE_BUDGET:-10}"
 CONFIG_NAME="gateway.yaml"
 # Where a config template may hide inside a source archive, most likely first.
 CONFIG_CANDIDATES=("gateway.yaml" "config/gateway.yaml" "gateway.example.yaml")
+
+# Keychain coordinates. Byte-identical defaults and override names to
+# spawnctl.sh's — the two scripts are talking about the SAME two items, and a
+# service name spelled differently in one of them is a credential neither can
+# find. Overrides exist so the suites can point the whole path at a fake store.
+KEYCHAIN_SERVICE="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
+KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
 
 # Binary candidates inside an install dir, most specific first.
 #
@@ -335,27 +347,202 @@ binary_runs() {
 }
 
 # ---------------------------------------------------------------------------
-# stage_config <staging-dir> — make sure the staged tree carries a gateway.yaml.
+# TOKEN RETIREMENT (KTD18; R9, R23)
 #
-# A bare machine gets the upstream template as shipped (KTD18): the source
-# archive carries gateway.yaml at its root. The candidate list exists because
-# "at the root" is an upstream layout detail, not a guarantee.
+# config_has_server_token <file> — 0 when the file declares an ACTIVE server
+# token entry of any shape, 1 when it does not. It is a DETECTOR, not a parser:
+# it never yields, prints or stores the value. That distinction is the whole
+# point — this plugin already carries the scar of three near-identical
+# server.token parsers, a fourth is forbidden, and retirement is deletion, so
+# setup has no reason to ever hold the old literal.
 #
-# U4 layers MIGRATION on top of this: on an upgrade the previous install's
-# gateway.yaml is copied in with its server.token entry removed by line-level
-# edit, so the operator's models and settings survive. Until then this function
-# is template-only, and promotion refuses anything it leaves incomplete.
+# Commented shapes are not configuration and are left alone; the upstream
+# template's own `# tokens: [...]` and `# token: "${GATEWAY_TOKEN}"` lines are
+# documentation the operator should keep reading.
 # ---------------------------------------------------------------------------
-stage_config() {
-    local staging="$1" cand
-    [ -f "$staging/$CONFIG_NAME" ] && return 0
-    for cand in "${CONFIG_CANDIDATES[@]}"; do
-        if [ -f "$staging/$cand" ]; then
-            cp "$staging/$cand" "$staging/$CONFIG_NAME" || return 1
-            return 0
-        fi
+config_has_server_token() {
+    [ -f "$1" ] || return 1
+    awk '
+        /^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); next }
+        sec != "server" { next }
+        /^[ \t]*#/ { next }
+        /^[ \t]+tokens?:/ { found = 1; exit }
+        END { exit(found ? 0 : 1) }
+    ' "$1"
+}
+
+# strip_server_token <src> <dst> — write <src> to <dst> with every active
+# server token entry REMOVED and every other byte untouched.
+#
+# A line-level edit, deliberately. Rewriting the file through a YAML library
+# would reflow comments, quoting and key order — and this file is the
+# operator's, carrying their models, their providers and their notes. The three
+# shapes removed are the three the gateway accepts:
+#     token: <literal>        the shape the live config uses today
+#     tokens: [a, b]          the flow-sequence list form
+#     tokens:                 the block-sequence list form, with its `- item`
+#       - a                   continuation lines
+# KD5 forbids the reference shape `token: "${GATEWAY_TOKEN}"` as well: delivery
+# through the environment replaces it, so a reference is just another entry to
+# remove rather than a special case to preserve.
+strip_server_token() {
+    local src="$1" dst="$2"
+    [ -f "$src" ] || return 1
+    awk '
+        # A top-level key ends whatever block we were in, including a dropped
+        # tokens: list.
+        /^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); drop = 0; print; next }
+        sec == "server" && /^[ \t]*#/ { print; next }
+        sec == "server" && /^[ \t]+tokens?:/ { drop = 1; next }
+        # Continuation of a dropped block sequence. Anything that is not a list
+        # item ends the drop and is printed as usual.
+        drop == 1 && /^[ \t]*-[ \t]/ { next }
+        drop == 1 && /^[ \t]*-$/ { next }
+        { drop = 0; print }
+    ' "$src" > "$dst" || return 1
+    return 0
+}
+
+# previous_config — the newest existing install's gateway.yaml, or nothing.
+#
+# `sort -V` over the candidate paths, matching the resolution order the secret
+# scan in run-tests.sh already uses. This is NOT a fourth copy of
+# resolve_install_dir: that resolver answers "which install do I run?" and hard-
+# fails when the answer is unusable, while this answers "is there a config worth
+# carrying forward?" — a question whose only failure mode is falling back to the
+# template. On a same-version rebuild the newest install IS the destination, and
+# migrating from it is exactly right: that is the operator's current config.
+previous_config() {
+    local d
+    local -a cand=()
+    for d in "$SEARCH_ROOT"/gateway-*/; do
+        [ -f "$d$CONFIG_NAME" ] && cand+=("$d$CONFIG_NAME")
     done
+    [ "${#cand[@]}" -gt 0 ] || return 1
+    printf '%s\n' "${cand[@]}" | sort -V | tail -1
+}
+
+# ---------------------------------------------------------------------------
+# stage_config <staging-dir> — make sure the staged tree carries a gateway.yaml
+# that carries no token (KTD18).
+#
+# Two sources, in order:
+#   1. the previous install's config, forward-MIGRATED — the operator's models,
+#      providers, clients and comments survive an upgrade untouched;
+#   2. on a bare machine, the upstream template, which the source archive
+#      carries at its root (the candidate list exists because "at the root" is
+#      an upstream layout detail, not a guarantee).
+#
+# THE STRIP RUNS ON BOTH PATHS, and that is not an over-reading of "the template
+# as shipped". The upstream template ships an ACTIVE `token:` line carrying a
+# placeholder value — a value published in a public repository, and the one
+# this machine's own install is still running on. Emitting it verbatim would
+# leave a bare machine authenticating with a token the whole internet knows,
+# which is the failure R9 and R23 exist to prevent. "As shipped" governs where
+# the CONTENT comes from (upstream, not a generator); token retirement applies
+# to whatever content arrives.
+#
+# STAGED_CONFIG_ORIGIN records which path ran, for the operator-facing message.
+# ---------------------------------------------------------------------------
+STAGED_CONFIG_ORIGIN=""
+stage_config() {
+    local staging="$1" cand src="" prev tmp
+    if prev="$(previous_config)" && [ -n "$prev" ]; then
+        src="$prev"
+        STAGED_CONFIG_ORIGIN="migrated"
+    else
+        STAGED_CONFIG_ORIGIN="template"
+        for cand in "${CONFIG_CANDIDATES[@]}"; do
+            if [ -f "$staging/$cand" ]; then
+                src="$staging/$cand"
+                break
+            fi
+        done
+    fi
+    if [ -n "$src" ]; then
+        # Written beside the destination and moved into place, never edited in
+        # flight: a strip that died halfway would otherwise leave a truncated
+        # config that promote() would happily accept as complete.
+        tmp="$staging/.$CONFIG_NAME.migrating"
+        rm -f "$tmp" 2>/dev/null
+        strip_server_token "$src" "$tmp" || { rm -f "$tmp" 2>/dev/null; return 1; }
+        # The strip is checked by the detector rather than trusted. A silent
+        # pass-through here is the exact defect that would put a live token back
+        # into a promoted install while every other assertion stayed green.
+        if config_has_server_token "$tmp"; then
+            rm -f "$tmp" 2>/dev/null
+            return 1
+        fi
+        mv "$tmp" "$staging/$CONFIG_NAME" || { rm -f "$tmp" 2>/dev/null; return 1; }
+        return 0
+    fi
+    STAGED_CONFIG_ORIGIN=""
     return 1  # no template found
+}
+
+# ---------------------------------------------------------------------------
+# require_token_delivery <config> — R9's static half.
+#
+# The staged config now declares no token, so the gateway's auth list will be
+# whatever start-time delivery puts there and nothing else. An EMPTY auth list
+# does not make the gateway reject callers; it makes its auth check pass
+# everything, i.e. an open proxy on 127.0.0.1 forwarding to a paid provider. So
+# an install that cannot be authenticated is refused BEFORE it becomes visible
+# to the `gateway-*` glob, rather than after.
+#
+# keychain_exists, never keychain_read: setup has no use for the token's value,
+# and materialising a secret to answer a yes/no question is how secrets end up
+# in diagnostics. A stored-but-EMPTY item slips past this check and is caught by
+# U3's start guard, which reads the value anyway and refuses on an empty one.
+#
+# The live half of R9 is that same start guard; this half exists because a
+# promoted install is a durable artifact and "it will fail later" is not the
+# same promise as "it was never installed unauthenticated".
+# ---------------------------------------------------------------------------
+require_stored_token() {
+    spawn::keychain_exists "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN" && return 0
+    die "$EX_USAGE" "step 'config': refusing to leave a gateway whose $CONFIG_NAME declares no token while no gateway token is stored (Keychain service '$KEYCHAIN_SERVICE', account '$KEYCHAIN_ACCOUNT_TOKEN') — an empty auth token list makes the gateway an open proxy; store the credential first, then re-run. Nothing was moved into place."
+}
+
+require_token_delivery() {
+    local cfg="$1"
+    config_has_server_token "$cfg" && return 0
+    require_stored_token
+}
+
+# ---------------------------------------------------------------------------
+# retire_installed_token <config> — R23 on the SKIP path.
+#
+# `acquire` skips the fetch and build when the latest release is already
+# installed and runnable. That is the state this machine is in today, and its
+# config is the one still holding the literal token — so a skip that only
+# skipped would mean setup never retires anything on exactly the machine the
+# requirement was written for. The same line-level edit runs, in place, through
+# a temp file and one rename: the config is being read by concurrent status and
+# lens calls, and rename is the only way it is never seen half-written.
+# ---------------------------------------------------------------------------
+retire_installed_token() {
+    local cfg="$1" tmp
+    config_has_server_token "$cfg" || return 0
+    require_stored_token
+    tmp="$cfg.retiring.$$"
+    rm -f "$tmp" 2>/dev/null
+    strip_server_token "$cfg" "$tmp" \
+        || { rm -f "$tmp" 2>/dev/null; die "$EX_USAGE" "step 'config': could not rewrite '$cfg' without its token entry; it is untouched"; }
+    if config_has_server_token "$tmp"; then
+        rm -f "$tmp" 2>/dev/null
+        die "$EX_USAGE" "step 'config': the token entry in '$cfg' survived the edit; it is untouched"
+    fi
+    # Mode carried over rather than left to the umask: this file may already be
+    # tightened, and a rename that loosened it would be a silent downgrade.
+    # BSD stat first (this is a macOS-only path, KD11), GNU as the fallback.
+    local mode
+    mode="$(stat -f '%Lp' "$cfg" 2>/dev/null || stat -c '%a' "$cfg" 2>/dev/null)"
+    [ -n "$mode" ] && chmod "$mode" "$tmp" 2>/dev/null
+    mv "$tmp" "$cfg" \
+        || { rm -f "$tmp" 2>/dev/null; die "$EX_USAGE" "step 'config': could not move the token-free '$cfg' into place; it is untouched"; }
+    say "retired the server token entry in $cfg — the gateway now authenticates from the stored credential only"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -444,6 +631,11 @@ do_acquire() {
     # partial install from some earlier era, and skipping over it would leave
     # the machine in precisely the state KTD4 exists to prevent.
     if [ -d "$dest" ] && bin="$(find_binary_in "$dest")" && [ -f "$dest/$CONFIG_NAME" ] && binary_runs "$bin"; then
+        # R23. A skip still retires the token — this is the state the machine
+        # this requirement was written for is actually in, and a skip that
+        # skipped retirement too would leave the literal live forever.
+        retire_installed_token "$dest/$CONFIG_NAME"
+        require_token_delivery "$dest/$CONFIG_NAME"
         say "gateway $tag is already installed and runnable at $dest — nothing to build"
         emit "$(jq -nc --arg tag "$tag" --arg dir "$dest" --arg bin "$bin" --arg cfg "$dest/$CONFIG_NAME" \
             '{ok:true, verb:"acquire", action:"skipped", tag:$tag, commit:null,
@@ -479,6 +671,14 @@ do_acquire() {
 
     stage_config "$build" \
         || die "$EX_USAGE" "step 'config': the $tag source archive carries no config template (looked for: ${CONFIG_CANDIDATES[*]}); the staging directory was removed and no install was changed"
+    case "$STAGED_CONFIG_ORIGIN" in
+        migrated) say "migrated the existing $CONFIG_NAME forward with its token entry removed" ;;
+        template) say "no previous install found — staging the upstream $CONFIG_NAME template with its token entry removed" ;;
+    esac
+
+    # R9's static half, checked while the staged tree is still invisible to the
+    # `gateway-*` glob: nothing unauthenticated ever becomes the install.
+    require_token_delivery "$build/$CONFIG_NAME"
 
     promote "$build" "$dest"
     bin="$PROMOTED_BIN"
