@@ -446,13 +446,13 @@ KTD6 first: rebase onto `origin/feature/gateway-plugin`. Then U1 and U2 in paral
 - **Goal:** One entry point runs first-run, re-run, and rotation end to end, and refuses unearned success.
 - **Requirements:** R5, R6, R16, R17, R18, R21, R22, R25; F1, F2, F3.
 - **Dependencies:** U1, U2, U3, U4, U5, U6.
-- **Files:** `plugins/spawn/lib/setup.sh`, `plugins/spawn/tests/unit/setup.bats`.
+- **Files:** `plugins/spawn/lib/setup.sh`, `plugins/spawn/tests/unit/setup.bats`, `plugins/spawn/tests/fixtures/fake-gateway.py` (four opt-in additions the round-trip cannot be tested without: the `POST /v1/responses` Codex shape, a no-auth mode for the R9 reject-probe mutation, a credential-echoing 401 body for AE7, and a fixed-port flag plus an `auth-reject-post` scenario — the only shape where every config is correct and the gateway is up yet the round-trip still fails, which AE3 needs. Defaults are unchanged and the fixture's own pinning tests still pass).
 - **Approach:**
   1. Flag surface: bare run (first run or re-run), `--rotate-openrouter-key`, `--rotate-gateway-token` (KTD5), and the `--consent-*` flags (KTD17); unknown arguments die exit 2.
-  2. Steps run in F1 order; each records what it changed into the output JSON as it goes, so R18's state report is a property of structure rather than of error handling.
+  2. Steps run in dependency order — prereqs, OpenRouter key, gateway token, acquire, `gw`, wire, start, verify — each recording what it changed into the output JSON as it goes, so R18's state report is a property of structure rather than of error handling. This reorders F1's narrative sequence out of necessity, not preference: both acquire paths require a stored token, so acquiring before the credentials exist dies with "store the credential first". Taking the credentials first is also what lets an interrupted build re-run without re-prompting.
   3. Re-run reuses both stored secrets without prompting; token rotation prints the open-shells warning before acting (R22).
   4. Verification per KTD13 after a start through `spawnctl.sh` — both layers, config validation and round-trip, each attributable in the output; on failure the JSON names the failing step and the release just installed (F3).
-  5. Output per the plugin's one-JSON-object contract, with `steps`, `changed`, `wired`, `skipped`, and `losses` fields; exit codes 8 and 9 join the enum.
+  5. Output per the plugin's one-JSON-object contract, with `steps`, `changed`, `wired`, `skipped`, and `losses` fields; exit codes 8 and 9 join the enum. Verification failures reuse the existing codes (3 unreachable, 2 refusal) and carry a `failure_class` field — `auth`, `open-proxy`, `round-trip`, `unreachable`, `start`, `consent` — rather than minting a new code per failure shape. A response body is never relayed: a 401 body can quote the credential back, so only status, route, harness and alias reach the output (AE7).
 - **Patterns to follow:** exit-code and JSON conventions from `lens.sh`; `fake-gateway.py`'s scenario and request-log flags as the round-trip target.
 - **Test scenarios:**
   - Covers AE3. Every file written correctly but the fake gateway returns 401: setup fails with the auth class, emits no success, and `changed` names each written file.

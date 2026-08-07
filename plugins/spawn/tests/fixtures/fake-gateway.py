@@ -30,6 +30,31 @@ ROUTES
     GET  /health                  open (no auth), always 200 while serving
     GET  /anthropic/v1/models     auth; the configured alias list
     POST /anthropic/v1/messages   auth; behaviour per --scenario
+    POST /v1/responses            auth; the Codex wire shape (U7's round-trip)
+
+U7 ADDITIONS, AND WHY EACH ONE IS A FLAG RATHER THAN A DEFAULT
+--------------------------------------------------------------
+The default behaviour of this fixture is pinned by fixtures.bats (auth is
+required, a bare probe is 401), so every addition below is off unless asked for:
+
+    --port N          bind a CHOSEN port instead of an ephemeral one. Needed
+                      because setup's start path goes through spawnctl.sh,
+                      which reads the port out of gateway.yaml — an ephemeral
+                      port cannot be in a config written before the server runs.
+    --no-auth         accept every request, authenticated or not. This is the
+                      OPEN PROXY R9 forbids, and it exists so the unauthenticated
+                      reject probe can be shown to be load-bearing: with the probe
+                      removed from setup.sh, a run against this mode reports
+                      success, which is the defect.
+    --echo-credential-in-401
+                      put the presented credential into the 401 body, the way a
+                      chatty upstream does. AE7 asserts that setup's own output
+                      and stderr still carry no key bytes, and that assertion is
+                      vacuous against a fixture whose error text is a constant.
+
+The Codex route answers the `responses` wire shape (an `output` array of
+message items) rather than the Anthropic `content` shape — a client that
+accepted either would not be proving it posted to the right route.
 
 SCENARIOS
     down             bind, print the port, close it, exit 0 — the port is
@@ -40,6 +65,9 @@ SCENARIOS
     upstream-5xx     502 api_error
     throttle-429     429 rate_limit_error with Retry-After
     context-length   400 invalid_request_error, "prompt is too long"
+    auth-reject-post the model-list GET authenticates, both POST routes 401 —
+                     a gateway that is UP with a credential it will not accept
+                     for completions (the AE3 shape)
     slow             sleeps --delay seconds, then answers like healthy
 
 "unknown alias" is not a scenario: it falls out of --aliases. A model absent
@@ -89,10 +117,70 @@ class Handler(BaseHTTPRequestHandler):
             auth = self.headers.get("authorization") or ""
             if auth.lower().startswith("bearer "):
                 presented = auth[7:]
+        if CFG.get("no_auth"):
+            # The open proxy R9 exists to prevent: anything is served, including
+            # a request that presented nothing at all. Opt-in only.
+            return True
         if presented == CFG["token"]:
             return True
-        self._send(401, _err("authentication_error", "invalid x-api-key"))
+        message = "invalid x-api-key"
+        if CFG.get("echo_credential_in_401"):
+            # A chatty upstream quoting the credential back. AE7's whole point
+            # is that setup must not relay this body.
+            message = "invalid x-api-key: presented '%s'" % presented
+        self._send(401, _err("authentication_error", message))
         return False
+
+    def _log_request(self, path, req):
+        if not CFG.get("request_log"):
+            return
+        with open(CFG["request_log"], "a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "path": path,
+                        "headers": {k.lower(): v for k, v in self.headers.items()},
+                        "body": req,
+                    }
+                )
+                + "\n"
+            )
+
+    def _post_auth_ok(self):
+        """Auth for the two POST routes.
+
+        The `auth-reject-post` scenario authenticates the model-list GET and
+        refuses both POST routes. That is not a contrivance for its own sake: it
+        is the ONLY shape in which a config written perfectly and a gateway that
+        is up can still fail the live round-trip, which is the state AE3
+        describes. Without it, a wrong credential is caught by the liveness
+        probe at the start step and the round-trip is never reached — so the
+        round-trip's own assertion would be untestable.
+        """
+        if not self._authed():
+            return False
+        if CFG["scenario"] == "auth-reject-post":
+            message = "invalid x-api-key"
+            if CFG.get("echo_credential_in_401"):
+                presented = self.headers.get("x-api-key") or ""
+                if not presented:
+                    auth = self.headers.get("authorization") or ""
+                    if auth.lower().startswith("bearer "):
+                        presented = auth[7:]
+                message = "invalid x-api-key: presented '%s'" % presented
+            self._send(401, _err("authentication_error", message))
+            return False
+        return True
+
+    def _read_json(self):
+        """The request body, or None once an error has been answered."""
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        try:
+            return json.loads(raw.decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            self._send(400, _err("invalid_request_error", "body is not JSON"))
+            return None
 
     def do_GET(self):  # noqa: N802
         path = self.path.split("?", 1)[0]
@@ -117,18 +205,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = self.path.split("?", 1)[0]
+        if path == "/v1/responses":
+            self._responses()
+            return
         if path != "/anthropic/v1/messages":
             self._send(404, _err("not_found_error", "no route " + path))
             return
-        if not self._authed():
+        if not self._post_auth_ok():
             return
 
-        length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length) if length else b""
-        try:
-            req = json.loads(raw.decode("utf-8")) if raw else {}
-        except (ValueError, UnicodeDecodeError):
-            self._send(400, _err("invalid_request_error", "body is not JSON"))
+        req = self._read_json()
+        if req is None:
             return
 
         model = req.get("model") or ""
@@ -138,18 +225,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # Record the request so a test can assert on what the plugin actually
         # sent (headers included) rather than only on what came back.
-        if CFG.get("request_log"):
-            with open(CFG["request_log"], "a", encoding="utf-8") as fh:
-                fh.write(
-                    json.dumps(
-                        {
-                            "path": path,
-                            "headers": {k.lower(): v for k, v in self.headers.items()},
-                            "body": req,
-                        }
-                    )
-                    + "\n"
-                )
+        self._log_request(path, req)
 
         scenario = CFG["scenario"]
         if scenario == "upstream-5xx":
@@ -176,6 +252,56 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(CFG["delay"])
 
         self._send(200, self._message(model))
+
+    def _responses(self):
+        """POST /v1/responses — the Codex wire shape.
+
+        Same auth check and same scenario dispatch as the Anthropic route, so
+        neither route is an escape hatch from the other's rules.
+        """
+        if not self._post_auth_ok():
+            return
+        req = self._read_json()
+        if req is None:
+            return
+        model = req.get("model") or ""
+        if model not in CFG["aliases"]:
+            self._send(404, _err("not_found_error", "model not found: " + str(model)))
+            return
+        self._log_request("/v1/responses", req)
+
+        scenario = CFG["scenario"]
+        if scenario == "upstream-5xx":
+            self._send(502, _err("api_error", "upstream provider error"))
+            return
+        if scenario == "throttle-429":
+            self._send(
+                429,
+                _err("rate_limit_error", "rate limited by upstream provider"),
+                {"Retry-After": "13"},
+            )
+            return
+        if scenario == "slow":
+            time.sleep(CFG["delay"])
+        self._send(
+            200,
+            {
+                "id": "resp_fake_0001",
+                "object": "response",
+                "model": model,
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": CFG["response_text"]}
+                        ],
+                    }
+                ],
+                "usage": {"input_tokens": 11, "output_tokens": 7},
+            },
+        )
 
     def _message(self, model):
         # A 200 whose content carries NO text block. Found by driving the real
@@ -222,13 +348,24 @@ def main():
         "--scenario",
         default="healthy",
         choices=["down", "healthy", "upstream-5xx", "throttle-429", "context-length", "slow",
-            "thinking-only", "empty-text"],
+            "thinking-only", "empty-text", "auth-reject-post"],
     )
     ap.add_argument("--delay", type=float, default=5.0, help="seconds the slow scenario sleeps")
     ap.add_argument("--response-text", default="fixture response text")
     ap.add_argument("--response-bytes", type=int, default=0, help="pad the reply to ~N bytes")
     ap.add_argument("--port-file", default="", help="also write the port here")
     ap.add_argument("--request-log", default="", help="append each messages request as JSONL")
+    ap.add_argument("--port", type=int, default=0, help="bind this port (0 = ephemeral)")
+    ap.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="serve every request unauthenticated (the open proxy R9 forbids)",
+    )
+    ap.add_argument(
+        "--echo-credential-in-401",
+        action="store_true",
+        help="quote the presented credential in the 401 body (AE7's leak bait)",
+    )
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -241,6 +378,8 @@ def main():
             "response_text": args.response_text,
             "response_bytes": args.response_bytes,
             "request_log": args.request_log,
+            "no_auth": args.no_auth,
+            "echo_credential_in_401": args.echo_credential_in_401,
             "verbose": args.verbose,
         }
     )
@@ -249,13 +388,13 @@ def main():
         # Claim an ephemeral port only long enough to learn its number, then
         # release it. The caller gets a real port that nothing is listening on.
         sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
+        sock.bind(("127.0.0.1", args.port))
         port = sock.getsockname()[1]
         sock.close()
         _announce(port, args.port_file)
         return
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     httpd.daemon_threads = True
     port = httpd.server_address[1]
     _announce(port, args.port_file)
