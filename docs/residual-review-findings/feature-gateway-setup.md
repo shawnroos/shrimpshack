@@ -14,6 +14,22 @@ change whose entire purpose is refusing unearned success.
 
 ## Found live during the G4 smoke run
 
+**Root cause of the whole chain below: a third control surface nobody modelled.**
+`~/Library/LaunchAgents/com.shawnroos.gateway.plist` supervises the gateway on
+the machine this was built for (`launchctl list` shows `com.shawnroos.gateway`
+owning the listener). It predates this work and nothing in the plugin creates
+it. KTD4 assumed exactly two surfaces sharing `~/.gateway.pid` — the plugin and
+the hand-written `gw` — and a supervisor is a third that outranks both: it
+restarts on its own schedule, its relaunch never sees the transient delivery
+file, and it silently undoes a `stop` the plugin performs.
+
+Every observation below follows from it. The plan needs a position on
+supervised installs before any of the individual fixes are worth much: detect a
+LaunchAgent owning the port and refuse to manage that gateway, or own the plist
+and write the credential path into it. Managing a supervised process through a
+pidfile the supervisor does not write cannot be made to work.
+
+
 - **P1 · retiring the config token can leave a RUNNING gateway open, and nothing
   owns the transition.** Observed on a real machine. Run 1 retired the token out
   of `gateway.yaml` and stored a generated one in the Keychain, then stopped at
