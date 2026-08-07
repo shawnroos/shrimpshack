@@ -820,3 +820,48 @@ EOF
     run grep -q -- '--config' "$WORK/curl-argv.txt"
     [ "$status" -eq 0 ]
 }
+
+# --- stop: a listener that answers ANYTHING is a listener --------------------
+#
+# Both branches below used to key on the probe returning EX_OK, so a gateway
+# that answered 401 — proving it is alive, just not with our token — read as
+# "nothing is running". The empty-pidfile branch then reported a clean stop
+# that never happened, and the dead-pid branch deleted the ownership record
+# while a gateway served: the unstoppable-through-this-surface state the probe
+# was added to prevent. Both now key on PROBE_LISTENING.
+
+@test "stop: an AUTH-rejecting listener with an empty pidfile is refused, not reported stopped" {
+    start_fixture healthy "alpha"
+    # The fixture serves on $TOKEN; the config carries a different one, so the
+    # probe gets 401 (EX_AUTH) rather than EX_OK. A listener is still there.
+    make_config "$WORK/gateway.yaml" 4000 "wrong-token-entirely" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    : > "$WORK/.gateway.pid"
+
+    ctl stop
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -r '.result')" = "unmanaged" ]
+    [ "$(echo "$output" | jq -r '.ok')" = "false" ]
+}
+
+@test "stop: an AUTH-rejecting listener does not get the pidfile deleted under it" {
+    start_fixture healthy "alpha"
+    make_config "$WORK/gateway.yaml" 4000 "wrong-token-entirely" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    # A pid that is dead: the branch that used to rm -f the pidfile.
+    local dead; dead=$(bash -c 'echo $$')
+    while kill -0 "$dead" 2>/dev/null; do dead=$((dead + 1)); done
+    printf '%s\n' "$dead" > "$WORK/.gateway.pid"
+
+    ctl stop
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -r '.result')" = "unmanaged" ]
+    # The record survives: deleting it while a gateway serves is the bug.
+    [ -s "$WORK/.gateway.pid" ]
+}

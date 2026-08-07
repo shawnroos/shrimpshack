@@ -362,15 +362,17 @@ start_fixture() {       # <scenario> <aliases> [extra fixture args]
              stat python3 pgrep ps; do
         p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$d/$t"
     done
+    # Match against $output directly rather than re-quoting it into a `bash -c`
+    # string: an apostrophe in any remedy or detail — "the plugin's contract" —
+    # closes the single quote and the assertion runs a mangled command instead
+    # of the one it reads as. That bit once, and the message was innocent.
     run env PATH="$d" bash "$LENS" --help
     [ "$status" -eq 2 ]
-    run bash -c "printf '%s' '$output' | grep -qF '\"help_requested\":true'"
-    [ "$status" -eq 0 ]
+    [[ "$output" == *'"help_requested":true'* ]]
 
     run env PATH="$d" bash -c "bash '$LENS' --alias 'bad;alias' < /dev/null"
     [ "$status" -eq 2 ]
-    run bash -c "printf '%s' '$output' | grep -qF '\"help_requested\":false'"
-    [ "$status" -eq 0 ]
+    [[ "$output" == *'"help_requested":false'* ]]
 }
 
 @test "R11 — --describe declares help_requested, so a consumer knows to look for it" {

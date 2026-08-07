@@ -178,7 +178,7 @@ emit_error() {
     # the script exited with nothing on stdout at all. help_requested rides this
     # tier too — a box with no jq must still be able to tell help from a caller
     # bug, and it is a bash literal, so no encoder is needed for it.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash model "$err" "$code" ",\"alias\":null,\"text\":null,\"usage\":null,\"help_requested\":$HELP_REQUESTED")"
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash model "$err" "$code" ",\"alias\":null,\"text\":null,\"usage\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
     emit "$obj"
 }
 
@@ -245,7 +245,7 @@ need_jq() {
         # two the moment either changed.
         # help_requested rides here too: `-h` on a box with no jq is still a help
         # request, and a consumer must not have to read prose to see that.
-        emit "$(spawn::envelope_bash model "usage" 2 ",\"alias\":null,\"text\":null,\"usage\":null,\"help_requested\":$HELP_REQUESTED")"
+        emit "$(spawn::envelope_bash model "usage" 2 ",\"alias\":null,\"text\":null,\"usage\":null,\"help_requested\":$HELP_REQUESTED" "Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it.")"
         exit 2
     }
 }
@@ -305,6 +305,44 @@ emit_describe() {
     d_spill="$(num_or_null "$SPILL_BYTES")"
     d_maxtok="$(num_or_null "$DEFAULT_MAX_TOKENS")"
     d_timeout="$(num_or_null "$TOTAL_TIMEOUT")"
+
+    # U2 (KD6, KTD3): the family -> tier -> alias grammar the command layer
+    # (agent.md) reads prose against, as data — the only consumer that matters
+    # cannot load agent.md at all. Read the SAME way table_json() in
+    # spawnctl.sh does: a malformed families/no_family_alias/chain_policy
+    # shape collapses to empty rather than reaching --argjson with garbage.
+    # Local to this arm, not a new global — this script never resolves an
+    # alias from prose itself (KD6: that is the reading agent's job), it only
+    # needs to answer what the grammar IS.
+    local models_json grammar
+    models_json="${SPAWN_MODELS_JSON:-$SCRIPT_DIR/models.json}"
+    grammar='{"aliases":{},"families":{},"no_family_alias":null,"chain_policy":{}}'
+    if [ -f "$models_json" ]; then
+        grammar="$(jq -c '
+            def safeobj: if type == "object" then . else {} end;
+            def safe_families:
+                ((.families // {}) | safeobj)
+                | map_values(
+                    if type == "object" then
+                        ((.default // null) as $d
+                         | (.tiers // {}) as $t
+                         | {
+                             default: (if ($d|type) == "string" then $d else null end),
+                             tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
+                           })
+                    else empty end
+                  );
+            def safe_chain_policy:
+                ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+            if (type == "object") then {
+                families: safe_families,
+                no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
+                chain_policy: safe_chain_policy
+            } else {families:{}, no_family_alias:null, chain_policy:{}} end
+        ' < "$models_json" 2>/dev/null)" || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
+        [ -n "$grammar" ] || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
+    fi
+
     ev="$(jq -n \
         --arg r_usage "$(remedy_for usage)" \
         --arg r_unreach "$(remedy_for unreachable)" \
@@ -331,10 +369,13 @@ emit_describe() {
     emit "$(jq -nc --argjson errors "$ev" \
         --arg scope "$LENS_MODEL_SCOPE" --arg notice "$LENS_MODEL_SCOPE_NOTICE" \
         --argjson spill "$d_spill" --argjson maxtok "$d_maxtok" \
-        --argjson timeout "$d_timeout" \
+        --argjson timeout "$d_timeout" --argjson grammar "$grammar" \
         "$(spawn::envelope_jq plugin)"' + {
           ok:true, error:null, exit_code:0,
           response_kind:"describe",
+          families:$grammar.families,
+          no_family_alias:$grammar.no_family_alias,
+          chain_policy:$grammar.chain_policy,
           surface:"lens.sh",
           summary:"One tool-less turn against one gateway alias: a prompt in, one JSON object out.",
           prompt_input:["stdin","--prompt-file"],
@@ -389,7 +430,10 @@ emit_describe() {
             {name:"preflight",      always:false, note:"spawnctl ensure object on a preflight failure"},
             {name:"help_requested", always:false, note:"true only for --help; present on every error response"},
             {name:"model_scope",    always:false, note:"what the model could see; success responses only"},
-            {name:"model_scope_notice", always:false, note:"the same fact in words"}
+            {name:"model_scope_notice", always:false, note:"the same fact in words"},
+            {name:"families",       always:false, note:"--describe only: the declared family -> tier -> alias grammar (KTD3) agent.md resolves prose against"},
+            {name:"no_family_alias",always:false, note:"--describe only: the alias prose naming no family resolves to"},
+            {name:"chain_policy",   always:false, note:"--describe only: whether this surface accepts a chain alias"}
           ],
           spill_bytes:$spill,
           model_scope:$scope,

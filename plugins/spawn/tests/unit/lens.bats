@@ -803,8 +803,19 @@ allowlist_lint() {  # <readme>
     [ "$(printf '%s' "$output" | jq -r '.ok')" = "false" ]
     [ "$(printf '%s' "$output" | jq -r '.exit_code')" = "3" ]
     [ "$(printf '%s' "$output" | jq -r '.error')" = "not_installed" ]
-    # R12: the error names its remedy.
+    # R12: the error names its remedy, in the remedy field like every other
+    # failure — not folded into the detail prose.
     [ -n "$(printf '%s' "$output" | jq -r '.detail')" ]
+    [ "$(printf '%s' "$output" | jq -r '.remedy')" != "null" ]
+    [ -n "$(printf '%s' "$output" | jq -r '.remedy')" ]
+    # R23: this is the one response the shim writes itself — it cannot source
+    # common.sh, because it is reached precisely when no lib/ was found. The
+    # envelope is hand-inlined instead, and a consumer that branches on .schema
+    # or .content_trust for every response must not hit a hole here.
+    [ "$(printf '%s' "$output" | jq -r '.schema')" = "spawn.response/v1" ]
+    [ "$(printf '%s' "$output" | jq -r '.content_trust')" = "plugin-authored" ]
+    [ -n "$(printf '%s' "$output" | jq -r '.content_notice')" ]
+    [ "$(printf '%s' "$output" | jq -r '.help_requested')" = "false" ]
 
     # Installed shape, stubbed: cache/<mkt>/<plugin>/<version>/lib/lens.sh. The
     # shim must find it with no version in its own configuration, hand over argv

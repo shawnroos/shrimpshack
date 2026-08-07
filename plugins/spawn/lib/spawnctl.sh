@@ -158,7 +158,7 @@ need_jq() {
         # unsanitized, it could put a quote or an escape byte into stdout.
         # The envelope comes from common.sh (R23) rather than being written out
         # here, so this tier cannot drift from the other two.
-        emit "$(spawn::envelope_bash plugin "internal" 2 ",\"verb\":\"${VERB//[^a-z]/}\",\"help_requested\":$HELP_REQUESTED")"
+        emit "$(spawn::envelope_bash plugin "internal" 2 ",\"verb\":\"${VERB//[^a-z]/}\",\"help_requested\":$HELP_REQUESTED" "Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it.")"
         exit 2
     }
 }
@@ -222,7 +222,7 @@ emit_error() {
     # Reduced to the verb enum's own charset in pure bash — closed by
     # construction, since that is the only defence available with no jq. Also
     # reached when jq is present but ERRORED, which used to print nothing at all.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"verb\":\"${VERB//[^a-z]/}\",\"help_requested\":$HELP_REQUESTED")"
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"verb\":\"${VERB//[^a-z]/}\",\"help_requested\":$HELP_REQUESTED" "$rem")"
     emit "$obj"
 }
 
@@ -816,14 +816,47 @@ start_if_down() {
 # from success. models.json is hand-maintained metadata by design (KTD7), so a
 # typo here is the expected input, not an exotic one. launch.sh hardened its own
 # read of this same file; this read was left open.
+#
+# U2 (KTD3): `families`, `no_family_alias` and `chain_policy` get the same
+# shape treatment as `aliases` — a malformed families block collapses to `{}`,
+# a malformed no_family_alias to `null`, a malformed chain_policy to `{}`,
+# rather than surviving `jq -c '.'`'s syntax-only check and erroring inside a
+# downstream program the way the pre-KTD7 `aliases` read did. The drift
+# computation in `status` reads only `.aliases` from this table, so a malformed
+# families block cannot touch it either way — this normalization exists so a
+# future reader (this file's own --describe, or a caller) can consume the
+# grammar without its own defensive jq.
 table_json() {
+    local empty='{"aliases":{},"families":{},"no_family_alias":null,"chain_policy":{}}'
     if [ -f "$MODELS_JSON" ]; then
-        jq -c 'if (type == "object" and ((.aliases // {}) | type) == "object")
-               then {aliases: (.aliases // {} | map_values(select(type == "object")))}
-               else {aliases:{}} end' < "$MODELS_JSON" 2>/dev/null \
-            || printf '{"aliases":{}}'
+        jq -c '
+            def safeobj: if type == "object" then . else {} end;
+            def safe_families:
+                ((.families // {}) | safeobj)
+                | map_values(
+                    if type == "object" then
+                        ((.default // null) as $d
+                         | (.tiers // {}) as $t
+                         | {
+                             default: (if ($d|type) == "string" then $d else null end),
+                             tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
+                           })
+                    else empty end
+                  );
+            def safe_chain_policy:
+                ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+            if (type == "object" and ((.aliases // {}) | type) == "object")
+            then {
+                aliases: (.aliases // {} | map_values(select(type == "object"))),
+                families: safe_families,
+                no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
+                chain_policy: safe_chain_policy
+            }
+            else {aliases:{}, families:{}, no_family_alias:null, chain_policy:{}} end
+        ' < "$MODELS_JSON" 2>/dev/null \
+            || printf '%s' "$empty"
     else
-        printf '{"aliases":{}}'
+        printf '%s' "$empty"
     fi
 }
 
@@ -836,7 +869,7 @@ table_json() {
 # a table it copied once and now hard-codes.
 # ---------------------------------------------------------------------------
 emit_describe() {
-    local ev
+    local ev grammar
     ev="$(jq -n \
         --arg r_usage "$(remedy_for usage)" \
         --arg r_unreach "$(remedy_for unreachable)" \
@@ -849,13 +882,22 @@ emit_describe() {
           {value:"auth_rejected", exit_code:7, remedy:$r_auth},
           {value:"internal",      exit_code:2, remedy:$r_int}]')" || return 1
 
-    emit "$(jq -nc --argjson errors "$ev" --arg base "$BASE_URL" \
+    # U2 (KTD3, KD6): table_json() already normalizes families/no_family_alias/
+    # chain_policy shape-safe (see the function above), so this needs no
+    # further defense here. Read with the gateway down, with no install and
+    # with no config — table_json() only touches MODELS_JSON on disk.
+    grammar="$(table_json)"
+
+    emit "$(jq -nc --argjson errors "$ev" --arg base "$BASE_URL" --argjson grammar "$grammar" \
         "$(spawn::envelope_jq plugin)"' + {
           ok:true, error:null, exit_code:0,
           response_kind:"describe",
           surface:"spawnctl.sh",
           summary:"Start, stop and report on the local gateway process, and answer the one preflight question the other two scripts ask.",
           base_url:$base,
+          families:$grammar.families,
+          no_family_alias:$grammar.no_family_alias,
+          chain_policy:$grammar.chain_policy,
           verbs:[
             {name:"status",  argument:null,
              note:"never starts anything; exit 3 is a normal answer meaning the gateway is down"},
@@ -910,7 +952,10 @@ emit_describe() {
             {name:"result",           always:false, note:"stop only: stopped, not_running, stale_pidfile, unmanaged or pid_mismatch"},
             {name:"models",           always:false, note:"status only: the plugin table, as data"},
             {name:"drift",            always:false, note:"status only: the four drift classes below"},
-            {name:"help_requested",   always:false, note:"true only for --help; present on every error response"}
+            {name:"help_requested",   always:false, note:"true only for --help; present on every error response"},
+            {name:"families",        always:false, note:"--describe only: the declared family -> tier -> alias grammar (KTD3), same table lens.sh and launch.sh describe"},
+            {name:"no_family_alias", always:false, note:"--describe only: the alias prose naming no family resolves to"},
+            {name:"chain_policy",    always:false, note:"--describe only: which surfaces (agent, session, bg-agent) may resolve to a chain alias (KTD4)"}
           ],
           drift_kinds:[
             {name:"missing_from_table", note:"a served alias the plugin table does not list, and which the gateway says resolves to something the table does not already carry"},
@@ -1060,7 +1105,15 @@ stop)
     pid="$(read_pidfile)"
     if [ -z "$pid" ]; then
         probe
-        if [ $? -eq $EX_OK ]; then
+        # A listener that answered ANYTHING proves a gateway is there. Keying
+        # this on EX_OK alone meant a 401 — the gateway answering, with a
+        # token it did not like — read as "nothing is running": the empty-pid
+        # branch reported a clean stop that never happened, and the dead-pid
+        # branch below deleted the ownership record while a gateway served,
+        # which is the unstoppable-through-this-surface state this probe was
+        # added to prevent. PROBE_LISTENING is the signal do_start_locked
+        # already uses for the same decision.
+        if [ "$PROBE_LISTENING" -eq 1 ]; then
             say "a gateway is serving at $BASE_URL but $PIDFILE names no pid — refusing to guess which process to signal"
             emit "$(jq -nc --arg p "$PIDFILE" --argjson c $EX_USAGE \
                 --arg rem "Find the serving process yourself and stop it, or restart the box's gateway by hand; this script refuses to guess which pid to signal." \
@@ -1090,7 +1143,15 @@ stop)
         # writes $! before any liveness check, so a spawn that dies instantly on
         # AddrInUse against a gateway `gw` already started creates it by our hand.
         probe
-        if [ $? -eq $EX_OK ]; then
+        # A listener that answered ANYTHING proves a gateway is there. Keying
+        # this on EX_OK alone meant a 401 — the gateway answering, with a
+        # token it did not like — read as "nothing is running": the empty-pid
+        # branch reported a clean stop that never happened, and the dead-pid
+        # branch below deleted the ownership record while a gateway served,
+        # which is the unstoppable-through-this-surface state this probe was
+        # added to prevent. PROBE_LISTENING is the signal do_start_locked
+        # already uses for the same decision.
+        if [ "$PROBE_LISTENING" -eq 1 ]; then
             say "pid $pid is dead but a gateway is still serving at $BASE_URL — refusing to report a stop that did not happen, and leaving $PIDFILE alone"
             emit "$(jq -nc --argjson pid "$pid" --arg p "$PIDFILE" --argjson c $EX_USAGE \
                 --arg rem "A gateway is still serving under a pid this script did not record, so the pidfile was left alone. Stop that process yourself, then run start." \
@@ -1169,7 +1230,10 @@ restart)
     # applies "announced-but-broken is never success" a few lines above; restart
     # did not apply it to its own stop leg.
     if [ "$stop_rc" -ne "$EX_OK" ]; then
-        stop_reason="$(printf '%s' "$stop_out" | jq -r '.error // "no reason given"' 2>/dev/null)"
+        # .detail first: post-R23 `.error` carries the ENUM and the prose moved
+        # to `.detail`, so reading .error here printed "(usage)" where the
+        # sentence belonged. Same fix the lens and launch rewraps already carry.
+        stop_reason="$(printf '%s' "$stop_out" | jq -r '.detail // .error // "no reason given"' 2>/dev/null)"
         die "$EX_USAGE" "restart aborted: the stop phase exited $stop_rc without stopping the running gateway ($stop_reason) — the old process is still serving and was NOT replaced"
     fi
     start_if_down

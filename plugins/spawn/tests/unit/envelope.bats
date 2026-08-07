@@ -248,6 +248,41 @@ jq_free_path() {
     [ "$(echo "$output" | jq -r '.verb')" = "status" ]
 }
 
+@test "R12/R23: every failure carries a remedy, on every encoder tier" {
+    # --describe declares remedy present on every failure ("null only on
+    # success"). Two of the three tiers used to break that promise: the bash
+    # encoder hardcoded remedy null while emit_error computed a real one and
+    # threaded it into the jq object only, and need_jq — the tier that fires
+    # when jq is genuinely absent — passed none at all.
+    #
+    # The tiers do NOT carry the same remedy for a given argv, and asserting
+    # that they do would be asserting something false: without jq the script
+    # cannot reach alias validation, so it fails at need_jq with a different,
+    # correct error. The invariant is that the field is answered, never that
+    # the two answers match.
+    local nojq; nojq="$(jq_free_path)"
+    run env PATH="$nojq" bash -c 'command -v jq 2>/dev/null'
+    [ "$status" -ne 0 ]
+
+    local s arg rem
+    # jq present: a classified usage error.
+    for s in "$LENS" "$LAUNCH"; do
+        run bash -c "bash '$s' --alias < /dev/null 2>/dev/null"
+        [ "$status" -eq 2 ]
+        rem="$(echo "$output" | jq -r '.remedy')"
+        [ -n "$rem" ] && [ "$rem" != "null" ]
+    done
+
+    # jq absent: need_jq's tier, in all three scripts.
+    for s in "$LENS:--alias" "$LAUNCH:--alias" "$CTL:bogusverb"; do
+        arg="${s##*:}"
+        run env PATH="$nojq" bash -c "bash '${s%%:*}' $arg < /dev/null 2>/dev/null"
+        [ "$status" -eq 2 ]
+        rem="$(echo "$output" | jq -r '.remedy')"
+        [ -n "$rem" ] && [ "$rem" != "null" ]
+    done
+}
+
 @test "R23: the no-jq fallback carries the same trust marking as the jq tier" {
     local nojq; nojq="$(jq_free_path)"
     run env PATH="$nojq" bash -c "bash '$LENS' --alias 'bad;alias' < /dev/null 2>/dev/null"

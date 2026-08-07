@@ -55,9 +55,17 @@ fi
 
 # Exit 3 for "not installed", matching the foreign-consumer recipe in README.md
 # rather than inventing a second convention for the same condition. One JSON
-# object on stdout on this path too, and the detail names the remedy (R12).
+# object on stdout on this path too.
+#
+# The envelope fields are INLINED rather than sourced from lib/common.sh: this
+# branch is reached precisely when no lib/ can be found, so sourcing it here is
+# the one thing that cannot work. A consumer that branches on `.schema` or
+# `.content_trust` for every response would otherwise get null on this single
+# path — the shim's own failure — which is the shape mismatch that makes an
+# envelope worth having. `content_trust` is plugin-authored: no third-party
+# model ran, so there is no untrusted prose in this object.
 if [ -z "$LENS" ]; then
-    printf '{"ok":false,"alias":null,"text":null,"usage":null,"error":"not_installed","detail":"no lens.sh under ~/.claude/plugins/cache/*/spawn/*/lib/ — the spawn plugin does not appear to be installed; add it, then re-copy this shim from its bin/spawn-lens","exit_code":3}\n'
+    printf '%s\n' '{"schema":"spawn.response/v1","ok":false,"error":"not_installed","remedy":"Install the spawn plugin, then re-copy this shim from its bin/spawn-lens.","detail":"no lens.sh under ~/.claude/plugins/cache/*/spawn/*/lib/ — the spawn plugin does not appear to be installed","content_trust":"plugin-authored","content_notice":"Written by the plugin itself. No third-party model was reached on this path.","help_requested":false,"alias":null,"text":null,"output_file":null,"usage":null,"exit_code":3}'
     exit 3
 fi
 

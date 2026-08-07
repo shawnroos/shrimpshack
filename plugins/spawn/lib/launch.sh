@@ -166,7 +166,7 @@ emit_error() {
     # help_requested rides the no-jq tier too — a box without an encoder must
     # still be able to tell a help request from a caller bug, and it is a bash
     # literal, so no encoder is needed for it.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED")"
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
     emit "$obj"
 }
 
@@ -239,7 +239,7 @@ need_jq() {
         # Same envelope, same constants, no encoder (R23 / KTD7): this is the
         # tier that used to be a hand-written string and drifted from the other
         # two the moment either changed.
-        emit "$(spawn::envelope_bash plugin "usage" 2 ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED")"
+        emit "$(spawn::envelope_bash plugin "usage" 2 ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it.")"
         exit 2
     }
 }
@@ -284,6 +284,40 @@ emit_describe() {
     # validation below still refuses it on a real launch.
     local ev d_timeout
     if [[ "$SEED_TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then d_timeout="$SEED_TIMEOUT"; else d_timeout="null"; fi
+
+    # U2 (KD6, KTD3): the family -> tier -> alias grammar session.md reads
+    # prose against, as data. Same normalization as table_json() in
+    # spawnctl.sh (malformed collapses to empty, never reaches --argjson
+    # unparsed). MODELS_JSON is already this script's global for the launched
+    # session's context window; reused here rather than re-derived.
+    local grammar
+    grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
+    if [ -f "$MODELS_JSON" ]; then
+        grammar="$(jq -c '
+            def safeobj: if type == "object" then . else {} end;
+            def safe_families:
+                ((.families // {}) | safeobj)
+                | map_values(
+                    if type == "object" then
+                        ((.default // null) as $d
+                         | (.tiers // {}) as $t
+                         | {
+                             default: (if ($d|type) == "string" then $d else null end),
+                             tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
+                           })
+                    else empty end
+                  );
+            def safe_chain_policy:
+                ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+            if (type == "object") then {
+                families: safe_families,
+                no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
+                chain_policy: safe_chain_policy
+            } else {families:{}, no_family_alias:null, chain_policy:{}} end
+        ' < "$MODELS_JSON" 2>/dev/null)" || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
+        [ -n "$grammar" ] || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
+    fi
+
     ev="$(jq -n \
         --arg r_usage "$(remedy_for usage)" \
         --arg r_unreach "$(remedy_for unreachable)" \
@@ -304,10 +338,13 @@ emit_describe() {
           {value:"deadline_exceeded", exit_code:6, remedy:$r_dead},
           {value:"preflight_failed",  exit_code:3, remedy:$r_pre}]')" || return 1
 
-    emit "$(jq -nc --argjson errors "$ev" --argjson timeout "$d_timeout" \
+    emit "$(jq -nc --argjson errors "$ev" --argjson timeout "$d_timeout" --argjson grammar "$grammar" \
         "$(spawn::envelope_jq plugin)"' + {
           ok:true, error:null, exit_code:0,
           response_kind:"describe",
+          families:$grammar.families,
+          no_family_alias:$grammar.no_family_alias,
+          chain_policy:$grammar.chain_policy,
           surface:"launch.sh",
           summary:"Materialize a Claude Code session on a gateway alias and print a handle to attach with later. Nothing is opened; no terminal is taken over.",
           prompt_input:["stdin","--prompt-file"],
@@ -358,7 +395,10 @@ emit_describe() {
             {name:"context_window",  always:false, note:"from the plugin models table; null when the alias is not listed"},
             {name:"attach_command",  always:false, note:"a bash command that resumes the session; carries a token reference, never a token"},
             {name:"preflight",       always:false, note:"spawnctl ensure object on a preflight failure"},
-            {name:"help_requested",  always:false, note:"true only for --help; present on every error response"}
+            {name:"help_requested",  always:false, note:"true only for --help; present on every error response"},
+            {name:"families",        always:false, note:"--describe only: the declared family -> tier -> alias grammar (KTD3) session.md resolves prose against"},
+            {name:"no_family_alias", always:false, note:"--describe only: the alias prose naming no family resolves to"},
+            {name:"chain_policy",    always:false, note:"--describe only: whether this surface accepts a chain alias"}
           ],
           seed_timeout_seconds:$timeout,
           tools_on_far_side:true,

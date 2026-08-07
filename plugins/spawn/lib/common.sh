@@ -203,11 +203,26 @@ spawn::envelope_jq() {
 # to build their payload at all, and say so with `|| die`.
 #
 # $1 = trust tier, $2 = error enum, $3 = exit code, $4 = extra fields as a
-# literal JSON fragment beginning with a comma (the caller's null data fields).
+# literal JSON fragment beginning with a comma (the caller's null data fields),
+# $5 = the remedy string, optional.
+#
+# The remedy is carried here rather than defaulted to null because this tier and
+# the jq tier must agree on the SAME error: --describe declares remedy present on
+# every failure, and a box with no jq is exactly where a caller most needs to be
+# told what to do. The scrub is deliberate and narrow — remedies are static table
+# text with no caller or model input reaching them, so stripping the two
+# characters that could break out of a JSON string is enough, and anything
+# stricter would mangle the punctuation the sentences need.
 spawn::envelope_bash() {
     local trust="$SPAWN_TRUST_PLUGIN" notice="$SPAWN_NOTICE_PLUGIN"
     [ "${1:-plugin}" = "model" ] && { trust="$SPAWN_TRUST_MODEL"; notice="$SPAWN_NOTICE_MODEL"; }
     local err="${2//[^a-z_]/}" code="${3//[^0-9]/}"
-    printf '{"schema":"%s","ok":false,"error":"%s","remedy":null,"detail":null,"content_trust":"%s","content_notice":"%s","exit_code":%s%s}' \
-        "$SPAWN_SCHEMA" "$err" "$trust" "$notice" "${code:-2}" "${4:-}"
+    local rem="${5:-}" remfield='null'
+    if [ -n "$rem" ]; then
+        rem="${rem//\\/}"; rem="${rem//\"/}"
+        rem="$(printf '%s' "$rem" | tr -d '\000-\037')"
+        remfield="\"$rem\""
+    fi
+    printf '{"schema":"%s","ok":false,"error":"%s","remedy":%s,"detail":null,"content_trust":"%s","content_notice":"%s","exit_code":%s%s}' \
+        "$SPAWN_SCHEMA" "$err" "$remfield" "$trust" "$notice" "${code:-2}" "${4:-}"
 }
