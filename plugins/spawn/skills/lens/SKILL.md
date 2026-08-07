@@ -36,7 +36,7 @@ There is no Claude Code agent loop on the far side of this call (KTD1). It is a 
 
    The prompt is **never** taken from argv (KTD8) — `lens.sh --alias x "my question"` is refused with exit 2 rather than silently truncated. Callers pass diffs and multi-KB context, and argv hits quoting and length limits first, quietly.
 
-   The script is always invoked through `${CLAUDE_PLUGIN_ROOT}/lib/lens.sh`, never by PATH lookup. (`gw` on your PATH is an unrelated binary; this plugin deliberately leaves it alone.)
+   The script is always invoked through `${CLAUDE_PLUGIN_ROOT}/lib/lens.sh`, never by PATH lookup. (`gw` on your PATH is the wrapper the plugin's setup path rewrites; it has no lens verb and delegates its control verbs to `lib/spawnctl.sh`.)
 
 2. Flags — this is the whole set:
 

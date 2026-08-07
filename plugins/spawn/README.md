@@ -232,25 +232,31 @@ path captured at launch still exists at attach time.
 
 ## The `gw` note
 
-`~/.local/bin/gw` is a **separate, unrelated binary**. This plugin deliberately
-leaves it untouched (KTD4) — a plugin cannot ship a file outside its repo, so
-"fix `gw`" became "replace what `gw` does" inside the plugin's own control
-layer.
+`~/.local/bin/gw` is **rewritten by this plugin's setup path** (`/spawn:setup`).
+It keeps the command surface that is in your muscle memory — `start`, `stop`,
+`restart`, `status`, `log`, `claude`, and a bare `gw` meaning `status` — but it
+is now a thin front door:
 
-If you use both, know that they are not the same control surface, and that `gw`
-still carries the defects `spawnctl.sh` exists to fix:
+- `start | stop | restart | status` **delegate** to `lib/spawnctl.sh`, whose
+  absolute path is baked in when setup writes the file (a setup re-run re-bakes
+  it). That retires the wrapper's own defects rather than reimplementing them:
+  pidfile-based liveness that is wrong on a stale or recycled pid, a `>` log
+  redirect that truncated the shared log on every start, a version-pinned
+  install path, and no lock at all against concurrent starts.
+- `log` and `claude` stay local — neither has an equivalent in the control layer.
+- `claude` carries **no token**. It reads the gateway token from the Keychain and
+  the base URL from `spawnctl.sh ensure`, both at the moment you run it, so
+  rotating the credential reaches the wrapper with no rewrite. The hardcoded
+  token the old wrapper carried is retired by the overwrite.
 
-| | `gw` | `lib/spawnctl.sh` |
-|---|---|---|
-| **Liveness** | `kill -0` on the pidfile's pid — wrong when the pidfile is stale, and wrong again when that pid has been recycled onto an unrelated process | a token-bearing `GET /v1/models` probe (KTD3, R1) |
-| **Logging** | `> "$LOG"` — **truncates** the log on every start, so the history that would explain a crash-restart loop is gone | `>> "$LOG"`, append-only, never truncated (R3) |
-| **Install path** | `DIR="$HOME/gateway-0.1.1"` — pinned to one version; the next release silently breaks it | resolved at runtime: explicit env override, else the newest `~/gateway-*`, else a distinct failure (R4) |
-| **Concurrent start** | none — five callers against a down gateway race five starts | locked, re-probe under the lock, exactly one process |
-| **Token** | hardcoded in the script | read from the resolved config, never printed, never in argv (KTD6) |
+Setup recognizes a wrapper it wrote by a marker line plus a hash of the file
+body. A wrapper with the marker and a matching hash is rewritten freely; one you
+have hand-edited, or one that carries no marker at all, is **refused** with exit
+8 and left byte-for-byte alone until you re-run with `--consent-overwrite-gw`.
 
-The two surfaces share `~/.gateway.pid` and `~/.gateway.log` on purpose, so
-neither double-starts against the other and both see the same gateway. But `gw`
-truncating that shared log will still discard whatever the plugin appended.
+The two surfaces share `~/.gateway.pid`, `~/.gateway.log` and `~/.gateway.lock`
+on purpose, so neither double-starts against the other and both see the same
+gateway.
 
 ---
 
