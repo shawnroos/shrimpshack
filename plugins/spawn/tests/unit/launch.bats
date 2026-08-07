@@ -706,6 +706,11 @@ config_write_lint() {   # <script>
     [ "$status" -ne 0 ]
     run config_write_lint "$LIB/bg-repo.sh"
     [ "$status" -ne 0 ]
+    # U9's supervisor joins it as well. It reads gateway.yaml for the token in
+    # the detached role, exactly as this script does in the foreground one,
+    # which is the shape that could grow a write to it.
+    run config_write_lint "$LIB/bg-agent.sh"
+    [ "$status" -ne 0 ]
 }
 
 @test "KTD3: the no-write invariant covers the three runtime scripts, and the setup family is exempt BY NAME" {
