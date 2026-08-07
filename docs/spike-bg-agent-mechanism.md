@@ -47,34 +47,41 @@ looking only at the exit status. R9 is not a speculative failure mode — it is 
 default outcome of a misconfigured ceiling, and it is why the supervisor (R21)
 cannot take the child's exit code as evidence of anything.
 
-## OQ4 — detachment works, but `nohup` alone is not enough
+## OQ4 — detachment works in pure bash, but `nohup` alone is not enough
 
-| approach | survives launcher exit | own process group | verdict |
-|---|---|---|---|
-| `nohup … & disown` | yes (`PPID 1`) | **no — inherits launcher's** | fragile |
-| double-fork + `os.setsid` | yes (`PPID 1`) | yes | correct |
+| approach | survives launcher exit | own process group | needs an interpreter | verdict |
+|---|---|---|---|---|
+| `nohup … & disown` | yes (`PPID 1`) | **no — inherits launcher's** | no | fragile |
+| double-fork + `setsid()` | yes | yes | **yes** (python or perl) | works, costs a dependency |
+| **`set -m` + `nohup … &`** | yes (`PPID 1`) | **yes** | **no** | **chosen** |
 
 **`nohup … & disown` is not sufficient.** The job was reparented to init but kept
 the launcher's process group, and a group-directed `TERM` killed it. That is what
-a terminal sends on close, and what a harness plausibly sends when a tool call's
-process group is torn down. A job that dies when the session that started it
-closes is not a background job.
+a terminal sends on close. A job that dies when the session that started it closes
+is not a background job.
 
-`setsid(1)` **does not exist on macOS**. A true new session needs a double-fork
-plus `setsid()` from an interpreter — `python3` or `perl` (base-macOS
-`/usr/bin/perl` has `POSIX::setsid`).
+**`set -m` solves it in pure bash.** Enabling job control in the launcher gives
+each background job its own process group. Measured: launcher `pgid 16948`, child
+`pgid 16964`; the child then survived a `TERM` directed at the launcher's group —
+the same signal that killed the shell issuing it — and kept writing its log.
+Verified under `/bin/bash` 3.2 as well as bash 5.3, with no job-control noise on
+stderr in a non-interactive script.
 
-**This is a dependency decision, not a detail.** `lib/*.sh` today needs bash, jq,
-curl, awk and sed at runtime — verified: no `python` reference anywhere in
-`lib/`. `python3` is declared only as a *test* dependency, for the gateway
-fixture. Adding a runtime interpreter is the same class of objection the project
-already rejected once for Node (`tests/run-tests.sh:14-18`, and
-`docs/plans/2026-08-06-001-feat-gateway-plugin-plan.md:282`). `perl` is the
-cheaper door if one must be opened, being present on a stock macOS.
+This matters because `setsid(1)` **does not exist on macOS**, so the obvious
+alternative — a double-fork plus `setsid()` — needs `python3` or `perl` at
+runtime. `lib/*.sh` needs only bash, jq, curl, awk and sed today (verified: no
+`python` reference anywhere in `lib/`), and adding a runtime interpreter is the
+same class of objection this project already rejected for Node
+(`tests/run-tests.sh:14-18`, `docs/plans/2026-08-06-001-feat-gateway-plugin-plan.md:282`).
+`set -m` avoids the question entirely.
 
-Note the existing precedent carries the same weakness: `spawnctl.sh:694` starts
-the gateway with `nohup … &`, so the gateway is also in the process group of
-whatever started it.
+One caveat to carry into implementation: job control changes how a background job
+inherits signal dispositions, and a job that reads the terminal would take
+`SIGTTIN`. Redirect all three streams, as `launch.sh` already does.
+
+Note the existing precedent carries the weakness this fixes: `spawnctl.sh:694`
+starts the gateway with a bare `nohup … &`, so the gateway sits in the process
+group of whatever started it.
 
 ### Supervision primitives that do work
 
@@ -104,6 +111,10 @@ is by probing the model-list endpoint rather than trusting the pidfile.
 - **R9's stall half is closed by construction** — a denied tool is removed or
   refused, never queued behind a prompt, so an unattended job cannot park. The
   degraded half is confirmed necessary: denial returns clean success.
-- **OQ4's process-ownership half is answerable** — double-fork plus `setsid()`,
-  pending the runtime-interpreter decision.
-- **OQ4's concurrency half is untouched by this spike** and still open.
+- **OQ4's process-ownership half is answered, at no dependency cost** — `set -m`
+  plus `nohup`, liveness by probe, reap by TERM/poll/KILL with an argv identity
+  check. No new runtime interpreter.
+- **OQ4's concurrency half is untouched by this spike** and still open: whether two
+  jobs may run in one worktree, how their changes are attributed, and what happens
+  when two of them — or a job and the operator — reach the same file. That is now
+  the only thing between this plan and implementation units.
