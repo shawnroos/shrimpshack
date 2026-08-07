@@ -99,6 +99,7 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 - R25. Every config setup writes is validated by the owning harness's own loader before success is reported, and setup states what that check cannot cover.
 - R26. Setup's command is complete on its own. It carries its own exit-code meanings and consent handling, shares its name with no skill, and instructs no caller to invoke another surface.
 - R27. Every plugin command that authenticates to the gateway resolves its token from the stored credential when the config carries none, so the post-setup steady state works for `status`, `lens` and `launch` and not only for `start`.
+- R28. When a launchd agent supervises the gateway, setup makes that agent's own starts authenticate, and says what it changed. A supervised gateway that setup cannot reach is a gateway setup cannot claim to have configured.
 - R18. On failure, setup names the step that failed and what it had already changed, so the operator knows the machine's state.
 
 **Re-running and coexisting**
@@ -231,6 +232,9 @@ Two properties of the gateway raise the stakes. Its auth check returns success i
 - KTD18. **Config moves forward by migration, not regeneration.** On upgrade, the previous install's `gateway.yaml` is copied into staging with the `server.token`/`server.tokens` entry removed by line-level edit; a bare machine gets the upstream template as shipped. Setup never extracts the old literal's value — retirement is deletion, and no fourth `server.token` parser is written. Governs R2, R23.
 - KTD19. **`models.json` gains a per-alias `output_window` field with provenance strings in the existing style.** R14 requires declaring output windows and the table currently records only `context_window`; without the field the requirement is unsatisfiable. The schema `version` field bumps; the change is additive, so the status drift logic is untouched. Governs R14.
 
+- KTD21. **A supervisor is a third control surface, and setup owns its environment rather than fighting it.** (session-settled: user-directed — chosen over refusing to run on a supervised install, and over replacing the operator's plist with one that calls `spawnctl`.) KTD4 assumed two surfaces sharing `~/.gateway.pid`: the plugin and the hand-written `gw`. A `launchd` agent is a third and it outranks both — `KeepAlive` undoes a stop within seconds, `RunAtLoad` starts it at login, and its relaunch carries a bare environment that never sees the transient delivery file. Found live: the agent on the build machine has no `EnvironmentVariables` key, so once the config token was retired **every** respawn came up with an empty auth list, which that gateway serves as "no auth required". Setup therefore detects an agent owning the gateway and writes `GATEWAY_TOKEN` into its `EnvironmentVariables`, then reloads it. **The cost, stated rather than absorbed:** the gateway token then rests in a plist in plaintext at mode 0600, which is weaker than KD2's "neither secret is written to disk". It applies only to the cheap credential — the OpenRouter key never enters the plist and still travels by delivery file — and it buys a supervised gateway that authenticates on every start including at login. Refusing to manage supervised installs was the alternative, and it fails on the one machine this was built for. Governs R28.
+
+
 ### High-Level Technical Design
 
 The work has one lifecycle with three cooperating processes. Setup captures and stores; the start path (shared by `spawnctl.sh` and the delegating `gw`) delivers; the gateway holds the key in memory and no one else ever does.
@@ -350,7 +354,7 @@ KTD6 first: rebase onto `origin/feature/gateway-plugin`. Then U1 and U2 in paral
 ### U3. Start-time secret delivery in spawnctl
 
 - **Goal:** `start` delivers both secrets through the transient delivery file and refuses to boot an open proxy.
-- **Requirements:** R7, R9; F1.
+- **Requirements:** R7, R9, R28; F1.
 - **Dependencies:** U1.
 - **Files:** `plugins/spawn/lib/spawnctl.sh`, `plugins/spawn/tests/unit/spawnctl.bats`, `plugins/spawn/tests/fixtures/fake-gateway-bin.sh` (a stub binary the resolver finds: records its exec-time environment and the delivery file's presence, mode, and names, then serves like `fake-gateway.py`).
 - **Approach:**
@@ -358,6 +362,7 @@ KTD6 first: rebase onto `origin/feature/gateway-plugin`. Then U1 and U2 in paral
   2. Delete the file after the start probe settles, on success and on failure, via the existing trap set; replace any stale delivery file found on entry.
   3. R9 guard: a resolved config with no token and no deliverable `GATEWAY_TOKEN` refuses to start with a named error.
   4. Degrade: no Keychain items and a config that carries its own token starts exactly as today — pre-setup machines and the existing test suite are untouched.
+  6. Detect a `launchd` agent supervising the gateway (an agent whose `ProgramArguments` name the resolved binary, or that owns the port) and write `GATEWAY_TOKEN` into its `EnvironmentVariables`, then reload it, so the agent's own starts authenticate (R28, KTD21). Record the plist in `changed`, and state in the output that the token now rests there in plaintext. Refuse to write a plist setup did not find already present — this step adopts an existing agent, it never creates one.
   5. Clear `OPENROUTER_API_KEY` from the gateway child's environment before exec, then say the inherited value was ignored. The gateway's dotenv sets only unset variables, so an inherited export would both suppress the delivered value and put the key in the child's exec-time environment — the exposure R7 forbids. Warning alone does not prevent it.
 - **Patterns to follow:** existing `spawnctl.bats` `setup()`/`teardown()` isolation (env overrides, `pgrep -f "$WORK"` reaping); `make_config`/`make_install` helpers.
 - **Test scenarios:**
@@ -367,6 +372,8 @@ KTD6 first: rebase onto `origin/feature/gateway-plugin`. Then U1 and U2 in paral
   - Config without a token and both items in the fake Keychain: start succeeds and the probe authenticates with the delivered token.
   - No Keychain items, config with a literal token: today's behavior, asserted by the existing 33 spawnctl tests still passing unmodified.
   - A stale delivery file left by a crashed prior start is replaced, not appended to.
+  - A fixture agent plist with no `EnvironmentVariables` key gains one carrying `GATEWAY_TOKEN` and nothing else; the OpenRouter key is absent from the file, and the plist is listed in `changed` with the plaintext-at-rest note.
+  - A machine with no supervising agent takes the delivery-file path unchanged, and no plist is written or looked for beyond the detection probe.
   - Covers AE9. With `OPENROUTER_API_KEY` exported to a canary value before start, the stub binary's exec-time environment record contains neither the canary nor any `OPENROUTER_API_KEY` entry, the delivered value is what the gateway read, and the ignored-inheritance notice appears on stderr through the sanitizer.
 - **Verification:** Gates G1 and G3.
 
@@ -513,6 +520,7 @@ Fakery summary (KTD8): `fake-security.sh` and `fake-osascript.sh` (U1) stand in 
 - The live round-trip is not fakeable; G4 is the only proof of R16 and it spends real money.
 - The Keychain does not defend against same-user processes (KTD9); this plan documents that, it does not fix it.
 - **Codex config validation has a hole no available check closes.** Its `strict_config` defaults false, so a typo'd key name in `~/.codex/config.toml` is silently ignored — KTD20's check catches syntax and type errors, not misspelled option names. Setup states this rather than implying full coverage.
+- **The gateway token rests in plaintext in the LaunchAgent plist on a supervised install** (KTD21). Mode 0600, same-user readable, and a deliberate weakening of KD2 for the cheap credential only. The OpenRouter key is never written there.
 - **No harness config validation is provable on this machine.** The two-harness scope leaves Codex as the only harness with a setup-written config, and Codex is not installed here — so its detection, wiring and validation paths ship fixture-proven only. Claude Code has no config file to validate. G4 therefore confirms the Claude Code round-trip and nothing about config validation. opencode, the one harness with a measured offline validator, is deferred (see Scope Boundaries).
 - **The delivery file survives an untrappable death.** SIGKILL or power loss during startup leaves the mode-0600 file on disk until a later start replaces it. The trap covers every path the shell can see; nothing covers SIGKILL.
 - Codex is not installed on this machine, so its detection and validation paths ship fixture-proven only.
