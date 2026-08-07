@@ -286,10 +286,15 @@ fi
 # Preflight (U3 step 2/3): gatewayctl.sh ensure <alias>.
 #
 # The alias is passed so the served-list check and its exit 4 come from ONE
-# place (KTD3). ensure already prints a contract-shaped JSON object naming the
-# alias and the served list, so on failure this script re-emits THAT object
-# verbatim and propagates the code unchanged. Printing our own object on top of
-# it would put two objects on stdout — the exact bug KTD2 exists to stop.
+# place (KTD3): the CODE is ensure's decision and propagates unchanged.
+#
+# The OBJECT is not forwarded verbatim (R3). ensure's failure object is
+# {verb, error:<prose>} — no `text`, no `usage`, and prose where this script's
+# consumers branch on an enum — so a caller's `.error` switch broke exactly
+# when all N fan-out callers failed at once. The failure is REWRAPPED onto the
+# lens's own vocabulary (error enum + detail + the null data fields), and
+# ensure's full object rides along under `preflight` so nothing is lost.
+# Still exactly one object on stdout (KTD2).
 # ---------------------------------------------------------------------------
 # Run in the BACKGROUND with an explicit `wait`, for the same reason the curl
 # call below is: a `$( ... )` command substitution is a foreground child, and
@@ -305,11 +310,27 @@ ENSURE_RC=$?
 CHILD_PID=""
 ENSURE_OUT="$(cat "$ENSURE_TMP" 2>/dev/null)"
 if [ "$ENSURE_RC" -ne 0 ]; then
-    if [ -n "$ENSURE_OUT" ]; then
-        emit "$ENSURE_OUT"
-    else
-        emit_error "$ENSURE_RC" "preflight_failed" "gatewayctl ensure failed with code $ENSURE_RC and printed nothing"
-    fi
+    # The enum comes from the CODE, which KTD2 already defines, not from
+    # re-parsing ensure's prose — prose is what broke the consumers.
+    case "$ENSURE_RC" in
+        2) PRE_ENUM="usage" ;;
+        3) PRE_ENUM="unreachable" ;;
+        4) PRE_ENUM="alias_unknown" ;;
+        7) PRE_ENUM="auth_rejected" ;;
+        *) PRE_ENUM="preflight_failed" ;;
+    esac
+    # ensure's object, validated before it is embedded; garbage becomes null
+    # rather than corrupting our one object.
+    PRE_JSON="$(printf '%s' "$ENSURE_OUT" | jq -c '.' 2>/dev/null)" || PRE_JSON=""
+    [ -n "$PRE_JSON" ] || PRE_JSON="null"
+    PRE_DETAIL="$(printf '%s' "$ENSURE_OUT" | jq -r '.error // empty' 2>/dev/null)"
+    [ -n "$PRE_DETAIL" ] || PRE_DETAIL="gatewayctl ensure failed with code $ENSURE_RC and printed nothing"
+    emit "$(jq -nc --arg a "$ALIAS" --arg e "$PRE_ENUM" \
+        --arg d "$(gateway::sanitize_for_display "$PRE_DETAIL")" \
+        --argjson p "$PRE_JSON" --argjson c "$ENSURE_RC" \
+        '{ok:false, alias:$a, text:null, usage:null, error:$e, detail:$d,
+          preflight:$p, exit_code:$c}')" \
+        || emit_error "$ENSURE_RC" "$PRE_ENUM" "$PRE_DETAIL"
     exit "$ENSURE_RC"
 fi
 

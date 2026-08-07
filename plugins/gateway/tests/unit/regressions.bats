@@ -105,16 +105,15 @@ make_config() {
 # TEST. An unreachable line that a test appears to cover is worse than an
 # uncovered one.
 #
-# What it actually guards is a DISJUNCTION, established by mutation:
-#   * revert gatewayctl's tmpwork emit alone  -> still green (launch's
-#     silent-preflight fallback at launch.sh:258 covers it)
-#   * delete launch's fallback alone          -> still green (gatewayctl's
-#     object is non-empty and gets forwarded)
-#   * remove BOTH                             -> RED
-# So the contract has two independent guards and this test fails only when the
-# last one goes. That is real defence in depth, not redundancy to be tidied
-# away: whichever guard a future edit removes, the other still holds the
-# contract, and this test catches the edit that removes the second.
+# Since the R3 rewrap, what holds this contract is launch's preflight rewrap
+# emit: it fires on EVERY non-zero ensure, whether ensure printed an object or
+# nothing at all (the detail then says "printed nothing"). Established by
+# mutation:
+#   * revert gatewayctl's tmpwork emit alone -> still green (the rewrap emits
+#     its own object either way)
+#   * delete launch's rewrap emit            -> RED
+# The pre-R3 disjunction (forward-verbatim OR else-fallback) collapsed into
+# that single always-on guard, which this test pins directly.
 @test "KTD2: launch still returns one parseable object when the temp dir is unusable" {
     run bash -c "printf 'hi' | TMPDIR=/nonexistent-regress-dir/ bash '$LAUNCH' --alias kimi 2>/dev/null"
     [ "$status" -eq 2 ]

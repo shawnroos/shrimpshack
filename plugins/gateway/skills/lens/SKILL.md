@@ -50,14 +50,14 @@ There is no Claude Code agent loop on the far side of this call (KTD1). It is a 
    - **Exit 0 (ok):** the model answered. Go to step 4.
    - **Exit 2 (usage/refusal):** bad arguments — no `--alias`, an alias that failed the grammar, an empty prompt, a prompt handed on argv, an unreadable `--prompt-file`, or stdin left as a terminal with no `--prompt-file`. `detail` says which. This is a caller bug; fix the invocation, do not retry it.
    - **Exit 3 (gateway unreachable):** the gateway was down and could not be started. Not a per-alias problem.
-   - **Exit 4 (alias unknown):** the gateway is up but does not serve that alias. The lens never decides this itself — the JSON you get is `gatewayctl ensure`'s object re-emitted verbatim, and it carries `served_aliases`, so you can name a real alias instead of guessing.
+   - **Exit 4 (alias unknown):** the gateway is up but does not serve that alias. The lens never decides this itself — the code comes from `gatewayctl ensure`. The JSON is in the lens's own shape (`error` is `alias_unknown`, `text`/`usage` are null), and ensure's full object — including `served_aliases`, so you can name a real alias instead of guessing — is under `preflight`. Every preflight failure (exit 2/3/4/7) carries that `preflight` key.
    - **Exit 5 (upstream provider error):** the request reached the provider and the provider failed. Branch on `error`:
      - `rate_limited` — throttled upstream. Retrying later is reasonable.
      - `context_overflow` — the prompt does not fit this alias's window. Retrying the same prompt can never work; shrink it or pick a wider alias.
      - `upstream_error` — anything else the provider returned.
      Exit 5 also covers a 200 whose body was not a parseable messages response.
    - **Exit 6 (deadline exceeded):** no response within the timeout. The request was aborted — nothing is still running, so a retry does not stack a second call.
-   - **Exit 7 (token rejected):** the gateway is up and answering but refused the plugin's token. Distinct from exit 3 on purpose: the gateway is running, so restarting it is the wrong move — the token in the resolved `gateway.yaml` is the thing to look at.
+   - **Exit 7 (token rejected):** the gateway is up and answering but refused the plugin's token; `error` is `auth_rejected` whether the rejection came from the preflight or the messages call. Distinct from exit 3 on purpose: the gateway is running, so restarting it is the wrong move — the token in the resolved `gateway.yaml` is the thing to look at.
 
 4. On exit 0, read the JSON. `text` and `output_file` are **mutually exclusive** — branch on whichever is non-null:
 

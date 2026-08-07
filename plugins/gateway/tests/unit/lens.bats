@@ -304,9 +304,34 @@ EOF
     [ "$(echo "$output" | jq -s 'length')" = "1" ]
     [ "$(echo "$output" | jq -r '.alias')" = "gamma" ]
     [ "$(echo "$output" | jq -r '.error')" = "alias_unknown" ]
-    [ "$(echo "$output" | jq -r '.served_aliases|sort|join(",")')" = "alpha,beta" ]
+    # R3: the object is in the LENS's vocabulary — the fields a consumer
+    # branches on are present even though the failure came from the preflight —
+    # and ensure's own object rides along whole under `preflight`.
+    [ "$(echo "$output" | jq 'has("text") and has("usage") and has("detail")')" = "true" ]
+    [ "$(echo "$output" | jq -r '.preflight.served_aliases|sort|join(",")')" = "alpha,beta" ]
     # AE4's actual demand: 4 is not 3.
     [ "$status" -ne 3 ]
+}
+
+@test "R3: a preflight auth failure reaches the consumer as the lens's own enum, not gatewayctl prose" {
+    # Exit 7 out of the PREFLIGHT (ensure's probe is rejected before the lens
+    # ever reaches the messages endpoint). ensure's object is {verb, error:
+    # <prose>} — forwarding it verbatim put English where the enum belongs and
+    # dropped text/usage, breaking `.error` branching exactly when every caller
+    # in a fan-out fails at once.
+    start_fixture healthy "alpha"
+    make_config "$WORK/bad.yaml" "wrong-token" "alpha=up/alpha"
+    export GATEWAY_CONFIG="$WORK/bad.yaml"
+
+    lens "hi" --alias alpha
+    [ "$status" -eq 7 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.error')" = "auth_rejected" ]
+    [ "$(echo "$output" | jq -r '.exit_code')" = "7" ]
+    [ "$(echo "$output" | jq 'has("text") and has("usage") and has("detail")')" = "true" ]
+    # Nothing was lost in the rewrap: ensure's object is intact underneath.
+    [ "$(echo "$output" | jq -r '.preflight.verb')" = "ensure" ]
+    [ "$(echo "$output" | jq -r '.preflight.exit_code')" = "7" ]
 }
 
 @test "gateway down and unstartable: code 3, distinguishable from AE4's code 4" {
