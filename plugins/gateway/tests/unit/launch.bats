@@ -171,6 +171,22 @@ invocation() {
     awk -v want="$2" '/^--- invocation /{n++; next} n==want' "$1"
 }
 
+# R12 no-write lint (R7): prints every line that could WRITE the gateway config
+# and returns grep's status (0 = found = violation). The original matched
+# redirection syntax only, so cp/tee/sed -i/yq -i against \$CONFIG_PATH all
+# passed. Comments are stripped first. Reads stay legal — awk/cat/grep with the
+# config as an argument are how the token is resolved — so only write-capable
+# commands co-occurring with the config variable are flagged. Over-flagging a
+# hypothetical read-only `cp "\$CONFIG_PATH" elsewhere` is accepted: the
+# baseline-clean assertion keeps the lint honest against the shipped source.
+config_write_lint() {   # <script>
+    sed 's/#.*//' "$1" | grep -nE \
+        -e '>[ ]*"?\$\{?(CONFIG_PATH|GATEWAY_CONFIG)' \
+        -e '(^|[^A-Za-z0-9_])(cp|mv|tee|dd|install|truncate|sponge)[^|;&]*\$\{?(CONFIG_PATH|GATEWAY_CONFIG)' \
+        -e '(^|[^A-Za-z0-9_])(sed|perl|yq|gawk)[^|;&]*[ ]-i[^|;&]*\$\{?(CONFIG_PATH|GATEWAY_CONFIG)' \
+        -e '(^|[^A-Za-z0-9_])(sed|perl|yq|gawk)[^|;&]*\$\{?(CONFIG_PATH|GATEWAY_CONFIG)[^|;&]*[ ]-i'
+}
+
 # --- happy path ------------------------------------------------------------
 
 @test "happy path: exit 0, one JSON handle, and the session id matches the transcript on disk" {
@@ -615,9 +631,45 @@ invocation() {
     [ "$status" -eq 5 ]
     assert_config_untouched
 
-    # And the source contains no write to it at all.
-    run bash -c "sed 's/#.*//' '$LAUNCH' | grep -nE '>[ ]*\"?\\\$?\{?(CONFIG_PATH|GATEWAY_CONFIG)'"
+    # And the source contains no write to it at all — by redirect, copy,
+    # tee, or in-place edit (R7 broadened this beyond redirection syntax).
+    run config_write_lint "$LAUNCH"
+    if [ "$status" -eq 0 ]; then
+        printf 'config_write_lint flagged:\n%s\n' "$output" >&2
+    fi
     [ "$status" -ne 0 ]
+    # The same holds for the other two scripts that read the config: the
+    # finding cites launch.sh, but the invariant is R12's, which is repo-wide.
+    run config_write_lint "$LIB/lens.sh"
+    [ "$status" -ne 0 ]
+    run config_write_lint "$LIB/gatewayctl.sh"
+    [ "$status" -ne 0 ]
+}
+
+@test "R12 lint self-test: planted cp, tee, sed -i, yq -i and redirect writes each turn the lint red" {
+    # Shape follows escapes.bats' lint self-test: baseline clean, plant one
+    # violation, assert red. A detector never seen firing is vacuous green.
+    cp "$LAUNCH" "$WORK/launch-lint.sh"
+    run config_write_lint "$WORK/launch-lint.sh"
+    [ "$status" -ne 0 ]
+
+    local plant
+    for plant in \
+        'cp "$WORK/evil.yaml" "$CONFIG_PATH"' \
+        'printf x | tee "$CONFIG_PATH" >/dev/null' \
+        'sed -i.bak "s/token:.*/token: x/" "$CONFIG_PATH"' \
+        'yq -i ".server.token = \"x\"" "$CONFIG_PATH"' \
+        'sed "s/a/b/" "$CONFIG_PATH" -i' \
+        'printf x > "$CONFIG_PATH"' \
+        'mv "$WORK/evil.yaml" "${GATEWAY_CONFIG}"' ; do
+        cp "$LAUNCH" "$WORK/launch-plant.sh"
+        printf '%s\n' "$plant" >> "$WORK/launch-plant.sh"
+        run config_write_lint "$WORK/launch-plant.sh"
+        if [ "$status" -ne 0 ]; then
+            printf 'lint stayed green on plant: %s\n' "$plant" >&2
+        fi
+        [ "$status" -eq 0 ]
+    done
 }
 
 @test "KTD6: no scratch dir survives the invocation" {
