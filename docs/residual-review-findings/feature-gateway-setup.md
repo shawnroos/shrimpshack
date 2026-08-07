@@ -88,10 +88,10 @@ pidfile the supervisor does not write cannot be made to work.
   the original survived only because delivery never wrote. Either merge, or back
   it up and say so in `changed`.
 
-## Known gaps in the supervisor adoption (R28, shipped)
+## Known gaps in the supervisor adoption (R28) — both CLOSED
 
-- **P2 · detection is exact-binary-match, so it silently no-ops on the upgrade
-  path.** `supervisor` matches an agent whose `ProgramArguments[0]` equals the
+- **CLOSED.** ~~P2 · detection is exact-binary-match, so it silently no-ops on the upgrade
+  path.~~ `supervisor` matches an agent whose `ProgramArguments[0]` equals the
   *resolved* gateway binary. The moment `acquire` installs a version newer than
   the plist points at, that comparison fails, the step reports
   `not-supervised`, and setup reports success — while launchd keeps starting the
@@ -103,7 +103,7 @@ pidfile the supervisor does not write cannot be made to work.
   launcher's recorded argv onto the newly resolved install so the agent follows
   an upgrade instead of pinning to the version it was written against.
 
-- **P3 · the orchestrated `repointed` arm has no test.** `setup.bats` covers
+- **CLOSED.** ~~P3 · the orchestrated `repointed` arm has no test.~~ `setup.bats` covers
   only `supervisor → not-supervised`; the two `record_change` calls and the
   "adopted" `step_done` inside `do_setup` run in no test. The verb itself is
   covered nineteen ways, so this is a seam gap rather than a logic gap — adding
