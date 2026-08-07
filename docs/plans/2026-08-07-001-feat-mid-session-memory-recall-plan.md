@@ -263,7 +263,11 @@ Product shape was settled upstream (KTD1–KTD5); these vary only on HOW.
 
 Sequencing, revised after deepening. Three units now precede the original batch 1, because each removes a defect the later units would otherwise build on.
 
-- **Batch 0 (parallel-safe):** U0 (restore recall + repair the hook input contract), U10 (shared recursive corpus enumeration), U7 (measurement split), U8 (SubagentStart spike). U0 and U8 touch nothing the others need; U10 and U7 are independent of each other.
+- **Batch 0 (parallel-safe, with one ordering constraint):** U0 (restore recall + repair the hook input contract), U10 (shared recursive corpus enumeration), U7 (measurement split), U8 (SubagentStart spike). U0 and U8 touch nothing the others need; U10 and U7 are independent of each other.
+
+  **Constraint: U0 and U10 both edit `plugins/reflect/tests/harness.sh` — land U0's harness edit first, then U10's.** Separate worktrees appending separate blocks to one append-only file merge *cleanly* and silently produce a file neither author reviewed; a clean auto-merge on a shared append-only file is the dangerous case, not the safe one. Either sequence the two harness edits or have one agent own the file for the batch. The same applies to every later unit adding a harness block.
+
+  **U0's `~/.claude/settings.json` edit runs in the main loop, not a worker.** It is outside the repo and global to this machine, and gated/global edits dispatched to subagents have paused unattended runs before. One line, done inline.
 - **Batch 1:** U9 (extract the retrieval engine) after U10. U1 (local index) after U10. U3 (declared triggers) after U10 and after U0's hook-contract repair — U3 must not be written against the dead `$TOOL_INPUT` idiom.
 - **Batch 2:** U2 (recall CLI) after U9, U1, U3, U7. U4 (seeded-recall fail-over) after U9, U1, U7. U6 (trigger lifecycle) after U3.
 - **Batch 3 (parallel-safe):** U5 (deliberate command + guidance) and U11 (`/reflect regroup` grounding interrupt), both after U2. They share a scope boundary stated in each, so land them together and read them against each other.
