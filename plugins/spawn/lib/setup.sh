@@ -164,6 +164,28 @@ CODEX_CONFIG="${SPAWN_CODEX_CONFIG:-$HOME/.codex/config.toml}"
 GATEWAY_ENV_FILE="${SPAWN_GATEWAY_ENV_FILE:-$HOME/.gateway/env.sh}"
 SHELL_RC="${SPAWN_SHELL_RC:-$HOME/.zshrc}"
 
+# ---------------------------------------------------------------------------
+# The supervisor surface (U3 step 6; R28, KTD21). Same safety-rail reasoning as
+# SPAWN_GW_PATH, and more of it: the default here is the operator's REAL
+# ~/Library/LaunchAgents, and a suite that ran against it would rewrite the
+# agent that supervises the machine it is testing on. Every test points all
+# three of these at its own temp directory.
+# ---------------------------------------------------------------------------
+LAUNCH_AGENTS_DIR="${SPAWN_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+LAUNCHCTL_BIN="${SPAWN_LAUNCHCTL_BIN:-/bin/launchctl}"
+PLUTIL_BIN="${SPAWN_PLUTIL_BIN:-/usr/bin/plutil}"
+
+# WHERE THE GENERATED LAUNCHER LIVES, AND WHY IT IS NOT IN THE INSTALL DIR.
+# $HOME/.gateway is the plugin's own directory (it already holds env.sh) and it
+# SURVIVES promote(). The install directory does not: a same-version rebuild
+# moves the old one aside and deletes it, so a launcher written there would be
+# deleted out from under a plist still pointing at it — leaving launchd execing
+# a path that no longer exists AND destroying the recorded original command,
+# which is the only copy of what the agent used to start. Recognition on a
+# re-run depends on that file still being readable, so it lives where nothing
+# in this script deletes it.
+GATEWAY_LAUNCHER="${SPAWN_GATEWAY_LAUNCHER:-$HOME/.gateway/spawn-launch.sh}"
+
 # The gateway's own root URL. Derived from spawnctl.sh's SPAWN_BASE_URL seam so
 # a test that redirects one redirects both, with the `/anthropic` suffix trimmed:
 # that suffix is Claude Code's route prefix, and Codex needs the ROOT plus `/v1`.
@@ -1015,6 +1037,308 @@ do_gw() {
         '{ok:true, verb:"gw", action:(if $s == "absent" then "created" else "rewritten" end),
           path:$p, state_before:$s, spawnctl:$ctl, error:null, exit_code:0}')" \
         || die "$EX_USAGE" "could not encode the gw object"
+    exit "$EX_OK"
+}
+
+# ===========================================================================
+# THE SUPERVISOR (U3 step 6; R28, KTD21)
+# ===========================================================================
+#
+# WHY THIS STEP EXISTS AT ALL. A `launchd` agent is a THIRD control surface,
+# and it outranks both the plugin and `gw`: KeepAlive undoes a stop within
+# seconds, RunAtLoad starts the gateway at login, and its relaunch carries a
+# BARE ENVIRONMENT that never sees the transient delivery file the start path
+# writes. Found live on the build machine: the agent has no EnvironmentVariables
+# key at all, so once setup retires the token out of gateway.yaml, EVERY launchd
+# start comes up with an empty auth token list — which that gateway serves as
+# "no auth required". An unauthenticated request to it returned 200.
+#
+# WHY A LAUNCHER AND NOT A PLIST KEY. Writing GATEWAY_TOKEN into the plist's
+# EnvironmentVariables was considered and REJECTED (KTD21): it puts a credential
+# at rest where none was before, in a file that is not encrypted and rides into
+# backups. The launcher reads the Keychain at start instead, so the Keychain
+# stays the only store and nothing new rests on disk. Putting the token in the
+# gateway's exec-time environment is already sanctioned by KD3 — it is
+# loopback-only, worthless off 127.0.0.1:4000, and cheap to rotate. The
+# OpenRouter key is the one that must never travel that way, and it does not:
+# the launcher `cd`s to the install directory so the gateway keeps reading it
+# from that directory's own .env.local, and UNSETS it before exec so an
+# inherited export cannot turn into the exposure R7 forbids.
+#
+# WHAT IT WILL NOT DO. It adopts an agent that already exists and NEVER creates
+# one; a machine with no matching agent is reported not-supervised and nothing
+# is written anywhere. Two matching agents is a refusal, not a guess. Every
+# other key in the adopted plist — KeepAlive, RunAtLoad, WorkingDirectory,
+# StandardOutPath, StandardErrorPath, Label — survives untouched.
+#
+# THE COST, STATED RATHER THAN ABSORBED (KTD21): setup rewrites ProgramArguments
+# in a plist the operator wrote, so the gateway now starts through a file this
+# plugin owns. That is a real escalation of what the plugin touches, and the
+# step says so in its own output rather than reporting a bare success.
+# ---------------------------------------------------------------------------
+
+# The recognition marker, and the recorded original command. Their exact text is
+# part of the contract for the same reason GW_MARKER's is: a re-run recognises
+# its own launcher by the marker, and recovers the argv the agent ORIGINALLY
+# started with from the recorded line — the plist no longer holds it, because
+# the plist now names the launcher.
+LAUNCHER_MARKER="# spawn-setup: generated launcher — rewritten by /spawn:setup, edits are not preserved"
+LAUNCHER_ARGV_PREFIX="# spawn-setup-original-argv: "
+
+# plist_json <path> — the plist as JSON on stdout. Goes through plutil rather
+# than a text parser because a LaunchAgent plist is as likely to be binary as
+# XML, and grepping a bplist for a path is how a detector reports "not
+# supervised" on a machine that is. A plist plutil cannot represent as JSON
+# (dates, data) fails here and is SKIPPED by the sweep — an unrelated agent in
+# the operator's directory must not fail this step.
+plist_json() {
+    "$PLUTIL_BIN" -convert json -o - "$1" 2>/dev/null
+}
+
+# plist_format <path> — the encoding to write back. Preserved rather than
+# normalised: rewriting a binary agent as XML changes a file the operator owns
+# more than the one key this step is entitled to change.
+plist_format() {
+    case "$(head -c 8 "$1" 2>/dev/null)" in
+        bplist0*) printf 'binary1' ;;
+        *)        printf 'xml1' ;;
+    esac
+}
+
+# launcher_stored_argv <file> — the recorded original command, as a JSON array,
+# from a launcher this setup wrote. Non-zero when the file is absent, carries no
+# marker, or carries no usable record: those are the states where the original
+# command is UNRECOVERABLE, and the caller turns them into a named failure
+# rather than quietly inventing an argv.
+launcher_stored_argv() {
+    local f="$1" line
+    [ -f "$f" ] || return 1
+    grep -qF -- "$LAUNCHER_MARKER" "$f" 2>/dev/null || return 1
+    line="$(awk -v p="$LAUNCHER_ARGV_PREFIX" 'index($0, p) == 1 { print substr($0, length(p) + 1); exit }' "$f")"
+    [ -n "$line" ] || return 1
+    printf '%s' "$line" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1 || return 1
+    printf '%s' "$line"
+}
+
+# detect_supervisor <binary> — the sweep. Answers in two globals rather than on
+# stdout for the reason stated at resolve_latest_tag: this function calls die(),
+# and a die inside a command substitution writes the contract's one JSON object
+# into a variable instead of to the consumer.
+#
+# An agent matches when its ProgramArguments[0] is EITHER the resolved gateway
+# binary (the first-adoption shape) OR this script's own launcher (the re-run
+# shape, where the original command comes back out of the launcher). Counting
+# finishes BEFORE anything is written, so the zero-match and two-match paths
+# write neither file.
+SUPERVISOR_PLIST=""
+SUPERVISOR_ARGV=""
+detect_supervisor() {
+    local bin="$1" plist json arg0 args stored matches=0 found_plist="" found_args=""
+    SUPERVISOR_PLIST=""
+    SUPERVISOR_ARGV=""
+    [ -d "$LAUNCH_AGENTS_DIR" ] || return 0
+    for plist in "$LAUNCH_AGENTS_DIR"/*.plist; do
+        [ -f "$plist" ] || continue
+        json="$(plist_json "$plist")" || continue
+        [ -n "$json" ] || continue
+        arg0="$(printf '%s' "$json" | jq -r '.ProgramArguments[0]? // empty' 2>/dev/null)"
+        [ -n "$arg0" ] || continue
+        if [ "$arg0" = "$bin" ]; then
+            args="$(printf '%s' "$json" | jq -c '.ProgramArguments' 2>/dev/null)"
+            [ -n "$args" ] || continue
+        elif [ "$arg0" = "$GATEWAY_LAUNCHER" ]; then
+            stored="$(launcher_stored_argv "$GATEWAY_LAUNCHER")" \
+                || die "$EX_USAGE" "step 'supervisor': the launchd agent '$plist' already starts the gateway through '$GATEWAY_LAUNCHER', but that file is missing or carries no recorded original command — the command the agent started with cannot be recovered, so nothing was rewritten. Restore the agent's own ProgramArguments and re-run."
+            args="$stored"
+        else
+            continue
+        fi
+        matches=$((matches + 1))
+        found_plist="$plist"
+        found_args="$args"
+    done
+    [ "$matches" -eq 0 ] && return 0
+    [ "$matches" -gt 1 ] \
+        && die "$EX_USAGE" "step 'supervisor': $matches launchd agents in '$LAUNCH_AGENTS_DIR' start this gateway, and setup will not guess which one supervises it — nothing was written and no plist was touched. Leave exactly one and re-run."
+    SUPERVISOR_PLIST="$found_plist"
+    SUPERVISOR_ARGV="$found_args"
+    return 0
+}
+
+# launcher_body <argv-json> <install-dir> — everything below the recorded-argv
+# line. The Keychain coordinates and the security binary are BAKED RESOLVED
+# rather than left as ${VAR:-default} expansions, because launchd starts this
+# with a bare environment: an indirection through a variable nothing sets is an
+# indirection to the default, and a test's seam would never reach it.
+#
+# NO CREDENTIAL VALUE IS RESOLVED HERE. The token is read at START time, in the
+# launched process, so rotation reaches the supervised gateway with no rewrite
+# and no value ever rests in this file.
+launcher_body() {
+    local argv="$1" install="$2" cmd dir
+    cmd="$(printf '%s' "$argv" | jq -r '@sh' 2>/dev/null)" || return 1
+    [ -n "$cmd" ] || return 1
+    dir="$(printf '%s' "$install" | jq -Rr '@sh' 2>/dev/null)" || return 1
+    [ -n "$dir" ] || return 1
+    cat <<EOF
+set -uo pipefail
+
+# Baked at write time from the install this setup run resolved.
+INSTALL_DIR=$dir
+KEYCHAIN_SERVICE='$KEYCHAIN_SERVICE'
+KEYCHAIN_ACCOUNT_TOKEN='$KEYCHAIN_ACCOUNT_TOKEN'
+SECURITY_BIN='$SPAWN_SECURITY_BIN'
+# credentials are NEVER baked into this file: the token is read from the
+# Keychain at start time, so rotating it reaches this launcher with no rewrite.
+EOF
+    cat <<'EOF'
+
+# The gateway loads its .env.local CWD-relative, and that file is how the
+# OpenRouter key reaches it. Starting anywhere else silently starts a gateway
+# with no upstream credential.
+if ! cd "$INSTALL_DIR"; then
+    printf 'spawn-launch: the recorded gateway install directory is gone — run /spawn:setup\n' >&2
+    exit 3
+fi
+
+# `|| true` because `security` exits 44 when there is no such item, and under a
+# pipefail shell that status would end the launcher before the named, actionable
+# refusal below ever ran.
+token="$("$SECURITY_BIN" find-generic-password -a "$KEYCHAIN_ACCOUNT_TOKEN" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true)"
+if [ -z "$token" ]; then
+    printf 'spawn-launch: no gateway token is stored — refusing to start an unauthenticated gateway; run /spawn:setup\n' >&2
+    exit 9
+fi
+export GATEWAY_TOKEN="$token"
+
+# R7. The OpenRouter key must never arrive in an exec-time environment, where
+# any same-user process reads it out of the process table; it comes from this
+# directory's own .env.local instead. An inherited export would both sit in that
+# environment AND suppress the delivered value, because the gateway's dotenv
+# only sets variables that are unset.
+unset OPENROUTER_API_KEY
+EOF
+    printf 'exec %s\n' "$cmd"
+}
+
+# write_launcher <argv-json> <install-dir> — assemble and land it in one rename.
+write_launcher() {
+    local argv="$1" install="$2" dir tmp body
+    dir="$(dirname "$GATEWAY_LAUNCHER")"
+    mkdir -p "$dir" || return 1
+    body="$(launcher_body "$argv" "$install")" || return 1
+    [ -n "$body" ] || return 1
+    tmp="$GATEWAY_LAUNCHER.spawn-setup.$$"
+    rm -f "$tmp" 2>/dev/null
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf '%s\n' "$LAUNCHER_MARKER"
+        printf '%s%s\n' "$LAUNCHER_ARGV_PREFIX" "$argv"
+        printf '%s\n' "$body"
+    } > "$tmp" || { rm -f "$tmp" 2>/dev/null; return 1; }
+    chmod 755 "$tmp" || { rm -f "$tmp" 2>/dev/null; return 1; }
+    mv "$tmp" "$GATEWAY_LAUNCHER" || { rm -f "$tmp" 2>/dev/null; return 1; }
+    return 0
+}
+
+# repoint_plist <plist> <launcher> — ONE key changed, through a temp file and a
+# rename. Rename because launchd and the operator both read this file, and it
+# must never be seen half-written; the mode is carried over with stat/chmod for
+# the same reason retire_installed_token carries it, and the ENCODING is carried
+# over too. Every other key round-trips through plutil untouched.
+repoint_plist() {
+    local plist="$1" launcher="$2" json new fmt tmpjson tmpplist mode
+    json="$(plist_json "$plist")" || return 1
+    [ -n "$json" ] || return 1
+    new="$(printf '%s' "$json" | jq -c --arg l "$launcher" '.ProgramArguments = [$l]' 2>/dev/null)" || return 1
+    [ -n "$new" ] || return 1
+    fmt="$(plist_format "$plist")"
+    tmpjson="$plist.spawn-setup.$$.json"
+    tmpplist="$plist.spawn-setup.$$"
+    rm -f "$tmpjson" "$tmpplist" 2>/dev/null
+    printf '%s\n' "$new" > "$tmpjson" || { rm -f "$tmpjson" 2>/dev/null; return 1; }
+    "$PLUTIL_BIN" -convert "$fmt" -o "$tmpplist" "$tmpjson" >/dev/null 2>&1 \
+        || { rm -f "$tmpjson" "$tmpplist" 2>/dev/null; return 1; }
+    rm -f "$tmpjson" 2>/dev/null
+    mode="$(stat -f '%Lp' "$plist" 2>/dev/null || stat -c '%a' "$plist" 2>/dev/null)"
+    [ -n "$mode" ] && chmod "$mode" "$tmpplist" 2>/dev/null
+    mv "$tmpplist" "$plist" || { rm -f "$tmpplist" 2>/dev/null; return 1; }
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# supervisor (R28; F1)
+#
+# No credential is ever in scope in this path — the launcher carries a Keychain
+# READ, and this script never resolves the value — so there is deliberately no
+# `local -; set +x` guard here. Adding one would imply a secret passes through,
+# which is the opposite of what the design promises.
+# ---------------------------------------------------------------------------
+do_supervisor() {
+    local install="$1" bin name path
+
+    # R4's shape, applied to this verb's two seams: a missing binary is exit 9
+    # naming it, never a silent "not supervised".
+    for name in plutil launchctl; do
+        case "$name" in
+            plutil)    path="$PLUTIL_BIN" ;;
+            launchctl) path="$LAUNCHCTL_BIN" ;;
+        esac
+        case "$path" in
+            */*) [ -f "$path" ] && [ -x "$path" ] \
+                    || die "$EX_PREREQ" "missing prerequisite: $name (resolved to '$path'; install it, or point the matching SPAWN_*_BIN seam at it)" ;;
+            *)   command -v "$path" >/dev/null 2>&1 \
+                    || die "$EX_PREREQ" "missing prerequisite: $name (resolved to '$path'; install it, or point the matching SPAWN_*_BIN seam at it)" ;;
+        esac
+    done
+
+    [ -n "$install" ] \
+        || die "$EX_USAGE" "step 'supervisor': no gateway install directory was given (pass --install-dir, or set SPAWN_INSTALL_DIR); nothing was written"
+    [ -d "$install" ] \
+        || die "$EX_USAGE" "step 'supervisor': '$install' is not a directory, so there is no install a launchd agent could be supervising; nothing was written"
+    bin="$(find_binary_in "$install")" \
+        || die "$EX_USAGE" "step 'supervisor': '$install' holds no executable gateway binary (looked for: ${BIN_CANDIDATES[*]}); nothing was written"
+
+    detect_supervisor "$bin"
+
+    if [ -z "$SUPERVISOR_PLIST" ]; then
+        # NEVER CREATES ONE. A machine with no supervising agent has nothing to
+        # adopt, and inventing a plist here would make this plugin the owner of
+        # a startup path the operator never asked it to own.
+        say "no launchd agent in $LAUNCH_AGENTS_DIR starts $bin — nothing to adopt, and nothing was written"
+        emit "$(jq -nc --arg d "$LAUNCH_AGENTS_DIR" --arg b "$bin" \
+            '{ok:true, verb:"supervisor", action:"not-supervised", plist:null, launcher:null,
+              program:$b, agents_dir:$d,
+              detail:"no launchd agent starts this gateway, so nothing was adopted; setup never creates one",
+              error:null, exit_code:0}')" \
+            || die "$EX_USAGE" "could not encode the supervisor object"
+        exit "$EX_OK"
+    fi
+
+    write_launcher "$SUPERVISOR_ARGV" "$install" \
+        || die "$EX_USAGE" "step 'supervisor': could not write the launcher at '$GATEWAY_LAUNCHER'; the launchd agent at '$SUPERVISOR_PLIST' is untouched"
+
+    repoint_plist "$SUPERVISOR_PLIST" "$GATEWAY_LAUNCHER" \
+        || die "$EX_USAGE" "step 'supervisor': could not repoint the ProgramArguments of '$SUPERVISOR_PLIST'; it is untouched"
+
+    # An unload of a job that is not loaded fails, and that is an ordinary state
+    # (the operator's agent may be unloaded right now). It is said, not fatal.
+    "$LAUNCHCTL_BIN" unload "$SUPERVISOR_PLIST" >/dev/null 2>&1 \
+        || say "launchctl unload of $SUPERVISOR_PLIST reported a failure — the job was most likely not loaded; loading it now"
+    "$LAUNCHCTL_BIN" load "$SUPERVISOR_PLIST" >/dev/null 2>&1 \
+        || die "$EX_UNREACHABLE" "step 'supervisor': '$SUPERVISOR_PLIST' has ALREADY been repointed at '$GATEWAY_LAUNCHER' and the launcher is written, but 'launchctl load' failed, so the agent is not yet running the new command. Load it by hand, or log out and back in."
+
+    say "adopted the launchd agent at $SUPERVISOR_PLIST — it now starts the gateway through $GATEWAY_LAUNCHER, which reads the token from the Keychain at start. Setup now owns a step in this machine's startup path."
+    # NO APOSTROPHE in the detail text below: it sits inside a single-quoted jq
+    # program, and one would close the quote and break the script at parse time
+    # — which is how every test in the supervisor suite went red at once, once.
+    emit "$(jq -nc --arg p "$SUPERVISOR_PLIST" --arg l "$GATEWAY_LAUNCHER" --arg b "$bin" \
+        --arg d "$LAUNCH_AGENTS_DIR" --arg i "$install" --argjson argv "$SUPERVISOR_ARGV" \
+        '{ok:true, verb:"supervisor", action:"repointed", plist:$p, launcher:$l,
+          program:$b, agents_dir:$d, install_dir:$i, original_program_arguments:$argv,
+          detail:"the agent now starts the gateway through a launcher setup owns, which reads the token from the Keychain at start; no credential was written to the plist, and every other key in it is unchanged. SETUP NOW OWNS A STEP IN THE STARTUP PATH of this machine: the gateway starts through a file this plugin writes.",
+          error:null, exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the supervisor object"
     exit "$EX_OK"
 }
 
@@ -1938,6 +2262,34 @@ do_setup() {
     record_change "wrapper" "$GW_PATH" "$(printf '%s' "$SUB_JSON" | jq -r '"the gw wrapper was \(.action) (it was \(.state_before) before); its control verbs now delegate to the plugin and it carries no token value"' 2>/dev/null)"
     step_done "gw" "ok" "$(printf '%s' "$SUB_JSON" | jq -r '.action // "written"' 2>/dev/null) $GW_PATH"
 
+    # --- supervisor ---------------------------------------------------------
+    # After gw, because both are control surfaces and this one outranks it: a
+    # KeepAlive agent undoes a stop within seconds, so the wrapper's verbs are
+    # only meaningful once the agent starts an authenticated gateway.
+    step_start "supervisor"
+    [ -n "$SETUP_INSTALL_DIR" ] \
+        || die "$EX_USAGE" "step 'supervisor': the acquire step reported no install directory, so there is no binary to look for in the launchd agents; nothing was written"
+    run_sub supervisor --install-dir "$SETUP_INSTALL_DIR" \
+        || die "$EX_USAGE" "step 'supervisor': could not run the supervisor step"
+    [ "$SUB_RC" -eq 0 ] \
+        || die "$SUB_RC" "step 'supervisor': $(printf '%s' "$SUB_JSON" | jq -r '.error // "the supervising launchd agent could not be adopted"' 2>/dev/null)"
+    case "$(printf '%s' "$SUB_JSON" | jq -r '.action // empty' 2>/dev/null)" in
+        repointed)
+            local sv_plist sv_launcher
+            sv_plist="$(printf '%s' "$SUB_JSON" | jq -r '.plist // empty' 2>/dev/null)"
+            sv_launcher="$(printf '%s' "$SUB_JSON" | jq -r '.launcher // empty' 2>/dev/null)"
+            record_change "launcher" "$sv_launcher" \
+                "a start-time launcher that reads the gateway token from the Keychain and execs the gateway; it carries no credential value"
+            record_change "launch-agent" "$sv_plist" \
+                "its ProgramArguments now name that launcher; every other key in the plist is unchanged and no credential was written into it"
+            # KTD21's stated cost, in the report rather than absorbed.
+            step_done "supervisor" "adopted" \
+                "the launchd agent at $sv_plist now starts the gateway through $sv_launcher, so its own starts authenticate — which means SETUP NOW OWNS A STEP IN THIS MACHINE'S STARTUP PATH: the gateway starts through a file this plugin writes." ;;
+        *)
+            step_done "supervisor" "not-supervised" \
+                "no launchd agent starts this gateway, so nothing was adopted and no plist was created — this step never creates one" ;;
+    esac
+
     # --- wire ---------------------------------------------------------------
     step_start "wire"
     if [ "$consent_rc" -eq 1 ]; then
@@ -2057,6 +2409,7 @@ usage: setup.sh [--rotate-openrouter-key] [--rotate-gateway-token]
                 [--consent-overwrite-gw] [--consent-shell-rc]
        setup.sh acquire
        setup.sh gw [--consent-overwrite-gw]
+       setup.sh supervisor [--install-dir DIR]
        setup.sh wire [--consent-shell-rc]
 
   (no verb)  the whole path: prerequisites, both credentials, the gateway
@@ -2080,6 +2433,14 @@ usage: setup.sh [--rotate-openrouter-key] [--rotate-gateway-token]
             lib/spawnctl.sh and whose token is read from the Keychain at run
             time. A wrapper setup did not write is refused with exit 8 until
             --consent-overwrite-gw is passed.
+
+  supervisor  adopt a launchd agent that already supervises this gateway: its
+            ProgramArguments are repointed at a generated launcher that reads
+            the token from the Keychain at start and execs the original command,
+            so the agent's own starts authenticate. No credential is written to
+            the plist and every other key in it survives. A machine with no such
+            agent is reported not-supervised and nothing is written — this step
+            adopts an agent, it never creates one.
 
   wire      wire every supported harness that is installed. Codex gets a
             marker-delimited managed block in ~/.codex/config.toml, validated by
@@ -2202,6 +2563,22 @@ case "$VERB" in
         need_jq
         do_gw "$GW_CONSENT"
         ;;
+    supervisor)
+        shift
+        SUPERVISOR_INSTALL="${SPAWN_INSTALL_DIR:-}"
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --install-dir)
+                    shift
+                    [ $# -gt 0 ] || { need_jq; die "$EX_USAGE" "--install-dir needs a directory"; }
+                    SUPERVISOR_INSTALL="$1" ;;
+                *) need_jq; die "$EX_USAGE" "unexpected argument '$1'" ;;
+            esac
+            shift
+        done
+        need_jq
+        do_supervisor "$SUPERVISOR_INSTALL"
+        ;;
     wire)
         shift
         WIRE_CONSENT=0
@@ -2245,6 +2622,6 @@ case "$VERB" in
     *)
         usage
         need_jq
-        die "$EX_USAGE" "unknown verb '${VERB:-}' (expected: acquire|gw|wire, or no verb for the whole path)"
+        die "$EX_USAGE" "unknown verb '${VERB:-}' (expected: acquire|gw|supervisor|wire, or no verb for the whole path)"
         ;;
 esac

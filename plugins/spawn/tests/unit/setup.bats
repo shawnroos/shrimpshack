@@ -46,8 +46,19 @@ setup() {
     export SPAWN_CODEX_CONFIG="$WORK/dot-codex/config.toml"
     export SPAWN_GATEWAY_ENV_FILE="$WORK/dot-gateway/env.sh"
     export SPAWN_SHELL_RC="$WORK/dot-zshrc"
+    # The supervisor step's three surfaces. The agents directory is the loudest
+    # rail in this file: its default is the operator's real ~/Library/LaunchAgents,
+    # and an orchestrated run that swept it could repoint the agent supervising
+    # the machine this suite is running on.
+    export SPAWN_LAUNCH_AGENTS_DIR="$WORK/LaunchAgents"
+    mkdir -p "$SPAWN_LAUNCH_AGENTS_DIR"
+    export SPAWN_GATEWAY_LAUNCHER="$WORK/dot-gateway/spawn-launch.sh"
 
     # --- seams --------------------------------------------------------------
+    export SPAWN_PLUTIL_BIN="$FIX/fake-plutil.sh"
+    export SPAWN_LAUNCHCTL_BIN="$FIX/fake-launchctl.sh"
+    export FAKE_PLUTIL_RECORD="$WORK/plutil-argv"
+    export FAKE_LAUNCHCTL_RECORD="$WORK/launchctl-argv"
     export SPAWN_CURL_BIN="$FIX/fake-curl.sh"     # the GitHub API, not the gateway
     export SPAWN_CARGO_BIN="$FIX/fake-cargo.sh"
     export FAKE_CURL_RECORD_DIR="$WORK/rec-curl"
@@ -276,7 +287,13 @@ mutant() {
     # config declares no token while no token is stored (R9's static half), so
     # F1's written order cannot complete a first run.
     [ "$(jq -r '[.steps[].step] | join(",")' "$OUT")" \
-        = "prereqs,openrouter-key,gateway-token,acquire,gw,wire,start,verify" ]
+        = "prereqs,openrouter-key,gateway-token,acquire,gw,supervisor,wire,start,verify" ]
+
+    # R28. This machine has no supervising agent, so the step reports that and
+    # writes nothing — it adopts an agent, it never creates one.
+    [ "$(jq -r '.steps[] | select(.step == "supervisor") | .status' "$OUT")" = "not-supervised" ]
+    [ ! -e "$SPAWN_GATEWAY_LAUNCHER" ]
+    [ -z "$(find "$SPAWN_LAUNCH_AGENTS_DIR" -type f 2>/dev/null)" ]
 
     # The key was captured through the dialog exactly once, and its value is
     # nowhere in the output or the diagnostics (R5).
