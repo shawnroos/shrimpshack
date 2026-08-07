@@ -23,20 +23,27 @@ Two other reviewers were skipped with disclosure: `project-standards` (no
 CLAUDE.md/AGENTS.md anywhere in the repo) and `maintainability` (`ce-simplify-code`
 had just run reuse/quality/efficiency reviewers over exactly this code).
 
-## Open — worth doing
+## Resolved since this document was written
 
-| # | Where | What | Severity |
-|---|-------|------|----------|
-| R1 | `lens.sh:223` | `--timeout 0` passes validation and `curl --max-time 0` **disables** the deadline. Measured: 29s hang then rc=56, classified exit 3, not exit 6 — so the value a caller reads as "no artificial limit" is an unbounded hang in unattended fan-out. `GATEWAY_CONNECT_TIMEOUT` is unvalidated entirely. | P2 |
-| R2 | `launch.sh:340` | The seed run has no deadline and does not retain the child pid, so a caller-imposed timeout orphans `claude` — reparented to init, still holding the token in its environment. The in-file rationale against a watchdog applies to a *detached* one; a parent that waits and reaps has no such window, and `stop` already implements that TERM/poll/KILL pattern. | P2 |
-| R3 | `lens.sh:265`, `launch.sh:245` | Exit 7 reaches consumers in two incompatible shapes depending on whether it came from preflight or the messages call — preflight forwards gatewayctl's `{verb, error:<prose>}` object, which has no `text`/`usage`/`detail` and puts prose where the enum value belongs. Breaks `.error` branching exactly when all N fan-out callers fail at once. | P2 |
-| R4 | `gatewayctl.sh:507` | `pid_is_gateway` is an unanchored **substring** match on the resolved binary path. Fails open (a `tail`/`less`/editor whose argv merely mentions the path is "ours" and gets SIGTERM then SIGKILL) and fails closed after an upgrade (`resolve_install_dir` always picks the newest `~/gateway-*`, so a running older gateway stops being recognized — permanently). Suggested: record the binary path beside the pidfile at start and verify argv[0] against *that*. | P2 |
-| R5 | `gatewayctl.sh:432` | The probe reads any non-200 from a **live** gateway as down, so a 503 during startup or a 404 from a moved route triggers a second start against a held port. curl already returns rc=0 with a real status, which proves something is listening — that information is discarded. | P2 |
-| R6 | `escapes.bats:603` | The terminal-sink lint is line-scoped: a block redirect (`{ printf ...; } >&2`) and `> /dev/stderr` both pass. Verified on planted files. The self-test plants only the shape the lint already catches, so it proves the detector fires, not that its scope covers the class it is named for. | P2 |
-| R7 | `launch.bats:528` | The R12 no-write lint matches redirection syntax only — `cp`, `tee`, `sed -i`, `yq -i` against `$CONFIG_PATH` all pass. No self-test. | P2 |
-| R8 | `launch.sh:377` | The `is_error=true` branch (CLI exits 0 but reports a failed turn) has no test **and no fixture mode that can reach it** — `fake-claude.sh` hardcodes `is_error: False`. Deleting the branch leaves the suite green while launch hands back handles to failed sessions. | P2 |
-| R9 | `README.md:26`, `:126` | Every documented invocation uses `${CLAUDE_PLUGIN_ROOT}`, which resolves to the *calling* plugin's root — so the documented form does not work from the foreign-plugin consumers the plugin says it is built for. The allowlist paragraph asserts it matches that invocation form; it does not. A mismatched rule shows up as a silently hanging fan-out, not an error. | P2 |
-| R10 | `skills/launch/SKILL.md:65` | The "what a gateway-pointed session does not have" list omits the one difference that changes the trust posture: unlike the lens, launch runs a **full agent loop** under the user's normal permissions, in the pinned project dir, driven by a third-party model. Documentation only — the behaviour is the feature. | P3 |
+All ten numbered findings are now fixed. R1 and R4 landed in `2b4ab3b`; the
+rest landed in the residual-fix round of 2026-08-07. Every behavioural fix has
+a regression guard that was mutation-verified (fix reverted → test red → fix
+restored → green); the two lint findings are guarded by plant-based self-tests
+instead — the same evidence in lint form. R9/R10 are documentation and were
+verified by reading, with the one unverified point named in the table.
+
+| # | Where | What was fixed | How it is guarded |
+|---|-------|----------------|-------------------|
+| R1 | `lens.sh` | `--timeout 0` and a non-positive `GATEWAY_CONNECT_TIMEOUT` are refused with exit 2 instead of disabling curl's deadline (`2b4ab3b`). | validation guards in `lens.sh`; launch's sibling knob got the same treatment under R2 |
+| R2 | `launch.sh` | The seed run now runs in the background with a parent-owned deadline (`GATEWAY_LAUNCH_TIMEOUT`, default 600s, validated positive). On expiry or cancellation the child is TERMed → polled → KILLed → **reaped**; a TERM to launch.sh no longer orphans `claude` on init holding the token in its env. The old "no deadline" header rationale argued against a *detached* watchdog and is rewritten in-file. | `launch.bats`: deadline test (exit 6, `deadline_exceeded`, child dead), TERM-mid-seed test (exit 143, child dead, scratch dir gone), timeout-0 refusal. Mutation-verified |
+| R3 | `lens.sh`, `launch.sh` | Preflight failures are rewrapped onto each script's own vocabulary — enum in `error` (derived from the exit code, never re-parsed from prose), prose in `detail`, ensure's full object under a new `preflight` key. Still exactly one object on stdout on every path. | shape assertions in `lens.bats` / `launch.bats` on the exit-4 and exit-7 paths; mutation-verified by reverting to verbatim forwarding |
+| R4 | `gatewayctl.sh` | `pid_is_gateway` matches whole argv elements at position 0/1 (with `--config` required for the interpreter-launched shape) against the binary **recorded beside the pidfile at start**, falling back to today's resolution and the versioned install root (`2b4ab3b`). | guards added in `2b4ab3b` |
+| R5 | `gatewayctl.sh` | The probe now records whether *anything* answered — any HTTP status means the port is held — and `do_start_locked` refuses to spawn over a held port instead of racing an AddrInUse corpse whose pid clobbers the pidfile. | `gatewayctl.bats`: live 404 listener → exit 3, refusal named, zero spawns. Mutation-verified |
+| R6 | `escapes.bats` | The terminal-sink lint is no longer line-scoped: an awk pass also flags undefended interpolated prints inside `{ ... }` groups whose closing line redirects to a terminal, and `> /dev/stderr` joins `>&2` / `/dev/tty` as a sink. | self-test plants both previously-missed shapes (multi-line block redirect, `/dev/stderr`) plus a negative plant (a block redirected to a plain file must NOT fire) |
+| R7 | `launch.bats` | The R12 no-write lint is a named function that also flags `cp`/`mv`/`tee`/`dd`/`truncate`/`sponge` and `sed -i`/`perl -i`/`yq -i` co-occurring with `$CONFIG_PATH`/`$GATEWAY_CONFIG`, applied to all three lib scripts. Reads stay legal — resolving the token IS a read. | self-test in escapes.bats' plant shape: baseline clean, seven planted write shapes, each asserted red |
+| R8 | `launch.sh` | The `is_error=true` branch is now reachable: `fake-claude.sh` grew an `error` mode (exit 0, `is_error: true`) and a `hang` mode (records its pid, sleeps — R2's instrument), both pinned by fixture tests. | `launch.bats`: exit 5, `.error == "seed_failed"`, no handle. Mutation-verified by deleting the branch |
+| R9 | `README.md` | The `${CLAUDE_PLUGIN_ROOT}` invocation form is scoped to this plugin's own skills; a glob-based resolution recipe covers foreign-plugin consumers; the allowlist paragraph now states the real mechanism — the rule matches literal command text, so rule and invocation must be spelled identically — instead of asserting a match that was not there. | documentation. **Not verified:** the allowlist matcher's expansion semantics (e.g. how `~` in a rule compares against an absolute path) were not empirically tested; the doc deliberately pins "spell them identically" rather than any expansion behaviour |
+| R10 | `skills/launch/SKILL.md`, `README.md` | The handover section now leads with the trust-posture difference: unlike the lens, launch runs a **full agent loop** under the user's normal permissions in the pinned cwd, driven by a third-party model. No permission restriction was added — that stays a product decision. | documentation |
 
 ## Open — accepted or judgement calls
 
@@ -62,30 +69,50 @@ had just run reuse/quality/efficiency reviewers over exactly this code).
   function documents this hazard and avoids it. Harmless only because `main`
   ends in `exit`.
 
-## Known: a credential in the working tree
+## Resolved: the credential that was in the working tree
 
-`docs/handoff.md` contains the live gateway token, twice. It is **not** in HEAD,
-not in `origin/main`, and `git log -S` finds it in no commit on any branch — so
-nothing is published. It was found by widening the secret scan to the repo, and
-the previous plugin-scoped scan could not have seen it. No prefix heuristic would
-either: the token is 15 characters and word-shaped.
+`docs/handoff.md` held the live gateway token twice. **Scrubbed 2026-08-07** —
+both occurrences are now `${GATEWAY_TOKEN}`, which is also the shape the gateway
+itself expands, so the lines stay copy-pasteable. The repo-wide scan is green.
 
-Deferred by explicit decision. Every commit on this branch was scoped by path;
-`git add -A` was never used. The scan now warns on this state and fails only when
-such a file is staged or committed.
+It was never published. Verified exhaustively before touching anything: no
+commit on any ref (`git log --all -S`), no blob reachable from any ref, no stash,
+no reflog entry. A history rewrite was considered and **correctly not done** —
+it would have rewritten the branch behind an open PR and forced a push to remove
+something that was never there. Re-verify scope before any destructive
+remediation, even an explicitly authorised one.
 
-**Next action if picked up:** scrub the token from `docs/handoff.md`, and rotate
-it in `~/gateway-0.1.1/gateway.yaml` if that file has ever been shared or synced.
+Two things worth keeping from how this was found:
+
+- **The old scan could not have seen it.** It was scoped to `plugins/gateway/`
+  while a merge publishes the whole (public) repo. Widening it to the repo found
+  a real credential on the first run — the gate was not looking where the
+  exposure was.
+- **No heuristic would have caught it.** The token is 15 characters and
+  word-shaped; the prefix layer (`sk-`, `ghp_`, `AKIA`) never matches it. Only
+  the exact-token layer does — the same layer that, before this round, printed a
+  green `ACTIVE` while grepping for the literal text `${GATEWAY_TOKEN}`.
+
+**Still worth doing:** rotate the token in `~/gateway-0.1.1/gateway.yaml` if that
+file has ever been shared, synced or backed up. Scrubbing removes the copy, not
+the exposure of the original.
 
 ## Testing gaps worth closing
 
-- No test drives two concurrent `ensure` calls against a down gateway and asserts
-  exactly one gateway resulted — the single most load-bearing claim for the
-  fan-out workload, currently asserted only in a comment. The new lock fix is
-  guarded by reasoning and a reproduction, **not** by a test.
-- No test kills a script mid-flight with TERM/INT and asserts the credential dir
-  is gone. The fix was verified by hand (leftover dirs 1 → 0); nothing guards it.
-- No test passes `--timeout 0`.
+Updated 2026-08-07 alongside the residual fixes:
+
+- ~~No test drives concurrent `ensure` calls against a down gateway~~ —
+  `gatewayctl.bats` has had an 8-way concurrent-ensure test since U2. What
+  remains untested is the narrower **stale-lock break race** (pre-seeded dead
+  lock, multiple waiters, mv-then-rm break): that fix is still guarded by
+  reasoning and a reproduction, not a test.
+- Mid-flight TERM is now tested for **launch** (the R2 test TERMs it mid-seed
+  and asserts the child is dead and the scratch dir gone). The equivalent for
+  **lens** — TERM mid-curl, assert the credential dir is gone — still has no
+  test; that fix remains verified by hand only.
+- `--timeout 0` on the lens is refused since `2b4ab3b`, but no test pins it —
+  the guard itself has never been seen red. (`GATEWAY_LAUNCH_TIMEOUT=0` on
+  launch IS pinned, mutation-verified.)
 - No test exercises the `--flag=value` half of any argument parser — roughly half
   the parse surface across all three scripts.
 - The fixture's Bearer-token path is never exercised; every test authenticates

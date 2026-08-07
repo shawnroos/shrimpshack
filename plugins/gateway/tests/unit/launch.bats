@@ -32,7 +32,7 @@ setup() {
     export GATEWAY_PROBE_TIMEOUT=5
     export GATEWAY_START_TIMEOUT=10
     export GATEWAY_LOCK_TIMEOUT=30
-    unset GATEWAY_INSTALL_DIR GATEWAY_CONFIG GATEWAY_MODELS_JSON GATEWAY_CLAUDE_BIN
+    unset GATEWAY_INSTALL_DIR GATEWAY_CONFIG GATEWAY_MODELS_JSON GATEWAY_CLAUDE_BIN GATEWAY_LAUNCH_TIMEOUT
     # Default at a port nothing serves: a test that forgets to point somewhere
     # must not probe the REAL gateway on 4000.
     export GATEWAY_BASE_URL="http://127.0.0.1:1/anthropic"
@@ -614,6 +614,22 @@ config_write_lint() {   # <script>
 
     cap "seed" --alias alpha --cwd "$WORK/no-such-dir"
     [ "$rc" -eq 2 ]; [ "$(echo "$out" | jq -s 'length')" = "1" ]
+}
+
+@test "GATEWAY_LAUNCH_TIMEOUT=0 is refused with code 2, not accepted as 'no deadline'" {
+    # Same class as the lens's --timeout 0 (R1): zero reads as "no artificial
+    # limit" and would mean an unbounded seed run — the R2 deadline silently
+    # gone. Refused before any network call, so no fixture is needed.
+    export GATEWAY_BASE_URL="http://127.0.0.1:1/anthropic"
+    export GATEWAY_LAUNCH_TIMEOUT=0
+    launch --alias alpha
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.error')" = "usage" ]
+
+    export GATEWAY_LAUNCH_TIMEOUT="ten"
+    launch --alias alpha
+    [ "$status" -eq 2 ]
 }
 
 # --- R12 -------------------------------------------------------------------

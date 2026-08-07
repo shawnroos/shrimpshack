@@ -287,6 +287,33 @@ EOF
     [ "$status" -eq 2 ]
 }
 
+@test "R1: --timeout 0 is refused with code 2, not accepted as 'no deadline'" {
+    # `curl --max-time 0` does NOT mean "no cap" — it DISABLES the deadline, so
+    # the value a caller reads as "don't impose an artificial limit" would be an
+    # unbounded hang. Measured before the fix: it ran until the peer died and
+    # exited rc=56, which this script then classified as exit 3 (unreachable)
+    # rather than exit 6 (deadline) — so the failure was also mislabelled.
+    #
+    # BASE_URL points at a dead port, so a probe would give 3. Getting 2 proves
+    # the refusal happens during validation, before any network call.
+    export GATEWAY_BASE_URL="http://127.0.0.1:1/anthropic"
+    lens "hi" --alias kimi --timeout 0
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.error')" = "usage" ]
+
+    # A fractional zero is the same hole spelled differently.
+    lens "hi" --alias kimi --timeout 0.0
+    [ "$status" -eq 2 ]
+
+    # And the previously unvalidated connect timeout.
+    export GATEWAY_CONNECT_TIMEOUT=0
+    lens "hi" --alias kimi
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -r '.error')" = "usage" ]
+    unset GATEWAY_CONNECT_TIMEOUT
+}
+
 @test "an empty prompt is code 2, not an empty call to a paid model" {
     start_fixture healthy "alpha" --request-log "$WORK/req.jsonl"
     lens "" --alias alpha
