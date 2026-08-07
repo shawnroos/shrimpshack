@@ -105,11 +105,26 @@ die() {
 TMPWORK=""
 LOCK_HELD=0
 cleanup() {
-    [ "$LOCK_HELD" -eq 1 ] && rm -rf "$LOCKDIR" 2>/dev/null
+    # Ownership-checked, same reason release_lock is: an unconditional rm here
+    # lets an exiting process delete a lock another process now holds.
+    if [ "$LOCK_HELD" -eq 1 ] && [ "$(cat "$LOCKDIR/pid" 2>/dev/null)" = "$$" ]; then
+        rm -rf "$LOCKDIR" 2>/dev/null
+    fi
     [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
     return 0
 }
 trap cleanup EXIT
+# bash does NOT run an EXIT trap when the shell dies on an untrapped INT/TERM/HUP
+# (measured on this box, bash 5.3.15). Without these, a cancelled invocation
+# leaks $TMPWORK — which on the lens path holds the mode-0600 curl --config file
+# carrying the gateway token, so KTD6's "removed within a single invocation" is
+# false exactly when an orchestrator cancels a fan-out. It also leaves $LOCKDIR
+# behind, which is the stale-lock precondition acquire_lock then has to break.
+# These exit THROUGH the EXIT path rather than calling cleanup directly: a bare
+# `trap cleanup INT TERM` runs cleanup and then lets the script keep going.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # Sets TMPWORK; it does NOT print the path. A `work="$(tmpwork)"` form would run
 # this in a command substitution, so the assignment would land in the subshell
@@ -122,7 +137,13 @@ trap cleanup EXIT
 tmpwork() {
     if [ -z "$TMPWORK" ]; then
         TMPWORK="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/gatewayctl.XXXXXX")" || {
-            printf '✗ cannot create a temp dir\n' >&2; exit 2; }
+            # Same contract as need_jq below: "exactly one JSON object on stdout,
+            # ALWAYS" includes this path. An unwritable or missing TMPDIR used to
+            # exit 2 having printed nothing — indistinguishable from a crash. The
+            # fix was applied to need_jq and not to its neighbour here.
+            printf '✗ cannot create a temp dir\n' >&2
+            emit_error 2 "cannot create a temp dir under ${TMPDIR:-/tmp}"
+            exit 2; }
     fi
 }
 
@@ -152,7 +173,14 @@ emit_error() {
     # a hole in the `error` field, which is display text a consumer prints.
     msg="$(gateway::sanitize_for_display "$msg")"
     if command -v jq >/dev/null 2>&1; then
-        emit "$(jq -nc --arg verb "${VERB:-}" --arg m "$msg" --argjson c "$code" \
+        # VERB is raw argv on the unknown-verb path, and jq's --arg escapes
+        # control bytes but emits Unicode format characters (e.g. a U+202E bidi
+        # override) verbatim. lens.sh and launch.sh sanitize their `alias` field
+        # for exactly this reason; the structurally identical field here was left
+        # raw, which made the jq path weaker than the pure-bash fallback below.
+        local verb_d
+        verb_d="$(gateway::sanitize_for_display "${VERB:-}")"
+        emit "$(jq -nc --arg verb "$verb_d" --arg m "$msg" --argjson c "$code" \
             '{ok:false, verb:$verb, error:$m, exit_code:$c}')"
     else
         EMITTED=1
@@ -459,14 +487,40 @@ probe() {
 # A holder pid inside the dir lets a lock left behind by a killed process be
 # broken, so one crashed `ensure` cannot wedge every later one for good.
 # ---------------------------------------------------------------------------
+# Breaking a stale lock is `mv` then remove, never a bare `rm -rf`. read-then-rm
+# -then-mkdir is not atomic: two waiters that read the SAME dead holder pid both
+# run rm -rf, the first one's mkdir wins, and the second one's rm then deletes
+# the lock the winner is holding — so both proceed into do_start_locked and both
+# spawn a gateway, which is exactly the AddrInUse collision the lock exists to
+# prevent. Reproduced at 2-3 simultaneous holders in 4 of 5 trials with 8
+# concurrent workers against a pre-seeded stale lock. Only one contender's `mv`
+# can succeed, so the loser falls through to another mkdir attempt instead.
+#
+# The pid-write failure is treated as LOSING the lock rather than ignored: in
+# the same repro the loser's write landed on a directory that had already been
+# moved away, leaving a lock dir with no pid file — and `[ -n "$holder" ]` means
+# a pid-less lock can never be broken, so every later caller waited the full
+# LOCK_TIMEOUT and exited 3, permanently, until the file was removed by hand.
+# The mtime fallback below is the belt for any pid-less lock that still appears.
 acquire_lock() {
     local waited=0
     while ! mkdir "$LOCKDIR" 2>/dev/null; do
-        local holder
+        local holder stale=""
         holder="$(cat "$LOCKDIR/pid" 2>/dev/null)"
         if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-            say "breaking a stale gateway lock left by dead pid $holder"
-            rm -rf "$LOCKDIR" 2>/dev/null
+            stale="dead pid $holder"
+        elif [ -z "$holder" ] && [ -d "$LOCKDIR" ]; then
+            # A lock dir with no pid file inside. Either we caught a holder in
+            # the window before its write, or a previous break left it wedged.
+            # Age is the only signal available; a real holder writes its pid
+            # within milliseconds of the mkdir.
+            if [ -z "$(find "$LOCKDIR" -maxdepth 0 -mmin -1 2>/dev/null)" ]; then
+                stale="no holder pid and older than a minute"
+            fi
+        fi
+        if [ -n "$stale" ]; then
+            say "breaking a stale gateway lock ($stale)"
+            mv "$LOCKDIR" "$LOCKDIR.stale.$$" 2>/dev/null && rm -rf "$LOCKDIR.stale.$$" 2>/dev/null
             continue
         fi
         sleep 0.1
@@ -475,14 +529,24 @@ acquire_lock() {
             return 1
         fi
     done
-    printf '%s\n' "$$" > "$LOCKDIR/pid" 2>/dev/null
+    if ! printf '%s\n' "$$" > "$LOCKDIR/pid" 2>/dev/null; then
+        # The directory we just created is already gone — another contender broke
+        # it out from under us. We do NOT hold this lock; say so instead of
+        # proceeding into a start that a second process is also entering.
+        return 1
+    fi
     LOCK_HELD=1
     return 0
 }
 
+# Ownership-checked. An unconditional rm -rf here lets a departing process delete
+# a lock a DIFFERENT process has since acquired, which reopens the double-start
+# the lock exists to close.
 release_lock() {
     if [ "$LOCK_HELD" -eq 1 ]; then
-        rm -rf "$LOCKDIR" 2>/dev/null
+        if [ "$(cat "$LOCKDIR/pid" 2>/dev/null)" = "$$" ]; then
+            rm -rf "$LOCKDIR" 2>/dev/null
+        fi
         LOCK_HELD=0
     fi
 }
@@ -602,9 +666,21 @@ start_if_down() {
 # endpoint returns only id and display_name — a repointed alias keeps its name
 # and would otherwise drift silently.
 # ---------------------------------------------------------------------------
+# Normalizes SHAPE, not just syntax. `jq -c '.'` succeeds on any valid JSON, so a
+# table that is an array, or whose aliases map to scalars, used to pass this guard
+# and reach the two jq programs in `status` — where `.value.context_window` and
+# `has($a)` error, the command substitution yields "", --argjson rejects it, emit
+# wrote a bare newline and the script still exited 0 against a live gateway. That
+# is exit 0 with nothing to parse: the one failure a consumer cannot distinguish
+# from success. models.json is hand-maintained metadata by design (KTD7), so a
+# typo here is the expected input, not an exotic one. launch.sh hardened its own
+# read of this same file; this read was left open.
 table_json() {
     if [ -f "$MODELS_JSON" ]; then
-        jq -c '.' < "$MODELS_JSON" 2>/dev/null || printf '{"aliases":{}}'
+        jq -c 'if (type == "object" and ((.aliases // {}) | type) == "object")
+               then {aliases: (.aliases // {} | map_values(select(type == "object")))}
+               else {aliases:{}} end' < "$MODELS_JSON" 2>/dev/null \
+            || printf '{"aliases":{}}'
     else
         printf '{"aliases":{}}'
     fi
@@ -720,6 +796,23 @@ stop)
     fi
 
     if ! kill -0 "$pid" 2>/dev/null; then
+        # Probe BEFORE declaring success. This branch used to delete the pidfile
+        # and return ok:true while a gateway was still answering on the base URL,
+        # which is a wrong-success on the plugin's own bar — and it destroyed the
+        # only record of the live process, so the next stop fell into the
+        # empty-pidfile branch and the gateway became unstoppable through this
+        # surface. The empty-pidfile branch above already probes for exactly this
+        # reason; this one did not. The state is not exotic: do_start_locked
+        # writes $! before any liveness check, so a spawn that dies instantly on
+        # AddrInUse against a gateway `gw` already started creates it by our hand.
+        probe
+        if [ $? -eq $EX_OK ]; then
+            say "pid $pid is dead but a gateway is still serving at $BASE_URL — refusing to report a stop that did not happen, and leaving $PIDFILE alone"
+            emit "$(jq -nc --argjson pid "$pid" --arg p "$PIDFILE" --argjson c $EX_USAGE \
+                '{ok:false, verb:"stop", result:"unmanaged", pid:$pid, pidfile:$p,
+                  error:"the recorded pid is dead but a gateway is still serving; not stopped", exit_code:$c}')"
+            exit $EX_USAGE
+        fi
         rm -f "$PIDFILE"
         emit "$(jq -nc --argjson pid "$pid" \
             '{ok:true, verb:"stop", result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')"
@@ -730,10 +823,18 @@ stop)
     # Report, do not kill.
     if ! pid_is_gateway "$pid"; then
         say "pid $pid is live but its argv does not name $GATEWAY_BIN — recycled pid, refusing to signal it"
-        # actual_argv is another process's command line — free-form, unrelated to
-        # us, and printed by anyone diagnosing the mismatch. Sanitized (KTD5).
-        emit "$(jq -nc --argjson pid "$pid" --arg bin "$GATEWAY_BIN" --arg argv "$(gateway::sanitize_for_display "$(pid_argv "$pid")")" --argjson c $EX_USAGE \
-            '{ok:false, verb:"stop", result:"pid_mismatch", pid:$pid, expected_binary:$bin, actual_argv:$argv,
+        # Only argv[0], never the arguments. This object goes to stdout, into an
+        # agent transcript, and from there into summaries and files — and the
+        # process we are describing is by definition NOT ours, so its arguments
+        # may hold that process's own secrets. KTD6 refuses to put our token in
+        # argv precisely because the process table is readable by anything on the
+        # box; harvesting another process's argv and republishing it would be the
+        # same leak with the roles reversed. The executable answers the
+        # diagnostic question ("this pid is /usr/bin/foo, not the gateway")
+        # without the copy. Sanitized as display text (KTD5).
+        emit "$(jq -nc --argjson pid "$pid" --arg bin "$GATEWAY_BIN" \
+            --arg cmd "$(gateway::sanitize_for_display "$(pid_argv "$pid" | awk '{print $1}')")" --argjson c $EX_USAGE \
+            '{ok:false, verb:"stop", result:"pid_mismatch", pid:$pid, expected_binary:$bin, actual_command:$cmd,
               error:"pidfile pid belongs to an unrelated process; not signalled", exit_code:$c}')"
         exit $EX_USAGE
     fi
@@ -756,8 +857,24 @@ stop)
     ;;
 
 restart)
-    bash "${BASH_SOURCE[0]}" stop >/dev/null 2>&1
+    # Capture stop's object rather than discarding it, so its refusal reason can
+    # travel into the error below.
+    stop_out="$(bash "${BASH_SOURCE[0]}" stop 2>/dev/null)"
     stop_rc=$?
+    # A refused stop is a FAILED restart. stop exits 0 for every outcome that
+    # means "nothing left to stop" (stopped, not_running, stale_pidfile); the
+    # non-zero ones — unmanaged, pid_mismatch — signalled nothing, so the old
+    # process is still serving. start_if_down then probes, finds it up, and this
+    # verb used to report ok:true/exit 0 while the caller's whole reason for
+    # restarting (a changed gateway.yaml, a new binary) was silently not
+    # honoured. It also reported a `pid` re-read from the pidfile — the very pid
+    # the stop it just ran had refused to signal as unrelated. The `start` verb
+    # applies "announced-but-broken is never success" a few lines above; restart
+    # did not apply it to its own stop leg.
+    if [ "$stop_rc" -ne "$EX_OK" ]; then
+        stop_reason="$(printf '%s' "$stop_out" | jq -r '.error // "no reason given"' 2>/dev/null)"
+        die "$EX_USAGE" "restart aborted: the stop phase exited $stop_rc without stopping the running gateway ($stop_reason) — the old process is still serving and was NOT replaced"
+    fi
     start_if_down
     rc=$?
     if [ $rc -eq $EX_AUTH ]; then
@@ -831,6 +948,9 @@ status)
     running=false
     [ $prc -eq $EX_OK ] && running=true
 
+    # `|| die` because emit now refuses an empty payload: if either jq program
+    # above ever errors again, this must become an honest non-zero failure rather
+    # than a silent exit-0 with no object on stdout.
     emit "$(jq -nc \
         --argjson running "$running" \
         --argjson served "$PROBE_ALIASES_JSON" \
@@ -857,7 +977,8 @@ status)
           pid_verified:$pid_verified,
           served_aliases:$served, models:$models, drift:$drift,
           error:(if $detail == "" then null else $detail end),
-          exit_code:$c}')"
+          exit_code:$c}')" \
+        || die "$EX_USAGE" "could not encode the status object (models table at $MODELS_JSON may be malformed)"
     exit $prc
     ;;
 esac

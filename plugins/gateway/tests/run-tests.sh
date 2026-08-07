@@ -150,7 +150,7 @@ wire_smoke() {
     fi
 
     agent_consumer_smoke "$plugin_root" || rc=1
-    secret_scan "$plugin_root" || rc=1
+    secret_scan "$plugin_root" "$repo_root" || rc=1
 
     return $rc
 }
@@ -283,7 +283,13 @@ agent_consumer_smoke() {
 # On a hit this prints the FILENAME ONLY. A scan that echoes the matched bytes
 # into a transcript is itself the leak it was written to prevent.
 secret_scan() {
-    local plugin_root="$1" rc=0
+    # scan_root is the PUBLISH boundary, not the plugin directory. Merging to
+    # main publishes the whole repository (this one is public), and a
+    # gateway-related change routinely writes outside plugins/gateway — the
+    # implementation plan under docs/plans/ is authored from the very
+    # gateway.yaml that holds the token. Scanning only the plugin dir meant the
+    # gate did not look where the exposure is.
+    local plugin_root="$1" scan_root="${2:-$1}" rc=0 warned=0
 
     # Layer 1 — exact token.
     local cfg="" token=""
@@ -304,8 +310,39 @@ secret_scan() {
         fi
     fi
     if [ -n "$cfg" ]; then
-        token="$(sed -n 's/^[[:space:]]*token:[[:space:]]*//p' "$cfg" 2>/dev/null \
-            | head -1 | sed -e 's/[[:space:]]*#.*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+        # Resolve the token the way the PLUGIN resolves it, not with a second
+        # parser. The previous bare sed was wrong twice over, and both ways made
+        # this layer scan a string that is not the credential while still
+        # printing ACTIVE:
+        #   1. section-blind + `head -1` — it took the first `token:` key
+        #      anywhere in the file, so a config with an `upstreams:` block above
+        #      `server:` scanned a decoy.
+        #   2. no ${VAR} expansion — a `token: ${GATEWAY_TOKEN}` config made the
+        #      scan grep the tree for the literal text "${GATEWAY_TOKEN}", which
+        #      can never match, while the real credential went unscanned.
+        # Both are sourced from the plugin's own code now, so they cannot drift.
+        # shellcheck source=../lib/common.sh
+        . "$plugin_root/lib/common.sh"
+        token="$(expand_env_refs "$(awk '
+            function trim(v) { sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); return v }
+            function decomment(v) { sub(/[ \t]+#.*$/, "", v); return trim(v) }
+            function unquote(v) { gsub(/^["'"'"']|["'"'"']$/, "", v); return v }
+            /^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); next }
+            sec == "server" && /^[ \t]+token:/ {
+                v = $0; sub(/^[ \t]*token:[ \t]*/, "", v)
+                print unquote(decomment(v)); exit
+            }
+        ' "$cfg" 2>/dev/null)")"
+        # An unexpanded reference means the env var was not set in THIS shell, so
+        # there is no value to scan for. That is a skip, not an active layer —
+        # announcing ACTIVE here is worse than the silent version it replaced,
+        # because the notice that exists to make a dark layer visible would be
+        # reporting the layer as live.
+        case "$token" in
+            *'${'*'}'*)
+                echo -e "  ${YELLOW}secret scan${NC}: exact-token layer SKIPPED (server.token is an unresolved \${VAR} reference; set it in this shell to scan for the real value)"
+                token="" ;;
+        esac
     fi
 
     if [ -n "$token" ]; then
@@ -316,11 +353,30 @@ secret_scan() {
         echo -e "  ${GREEN}secret scan${NC}: exact-token layer ACTIVE (token resolved from a gateway config)"
         # -F: the token is a literal, not a pattern.
         local hits
-        hits="$(grep -rlF -- "$token" "$plugin_root" 2>/dev/null || true)"
+        hits="$(grep -rlF --exclude-dir=.git -- "$token" "$scan_root" 2>/dev/null || true)"
         if [ -n "$hits" ]; then
-            echo -e "  ${RED}secret scan FAIL${NC}: the gateway token appears in shipped file(s):"
-            printf '%s\n' "$hits" | sed 's/^/      /'
-            rc=1
+            # What a merge publishes is COMMITTED content, so a hit is triaged
+            # rather than lumped: a token reachable from HEAD or already staged
+            # fails the gate, while one that exists only as an uncommitted
+            # working-tree edit is a loud warning — real, worth fixing, but not
+            # publishable by merging this branch. Collapsing the two would either
+            # block every run on someone's local scratch file or, far worse,
+            # tempt a future edit to soften the whole layer back to green.
+            local f rel staged_hit head_hit
+            while IFS= read -r f; do
+                [ -n "$f" ] || continue
+                rel="$(cd "$scan_root" && realpath --relative-to=. "$f" 2>/dev/null || printf '%s' "${f#"$scan_root"/}")"
+                staged_hit=0; head_hit=0
+                git -C "$scan_root" show ":$rel" 2>/dev/null | grep -qF -- "$token" && staged_hit=1
+                git -C "$scan_root" show "HEAD:$rel" 2>/dev/null | grep -qF -- "$token" && head_hit=1
+                if [ "$staged_hit" -eq 1 ] || [ "$head_hit" -eq 1 ]; then
+                    echo -e "  ${RED}secret scan FAIL${NC}: the gateway token is COMMITTED or STAGED in: $rel"
+                    rc=1
+                else
+                    echo -e "  ${YELLOW}secret scan WARNING${NC}: the gateway token is in your working copy of $rel (uncommitted, so merging cannot publish it — but committing that file would). Scrub or rotate before you stage it."
+                    warned=1
+                fi
+            done <<< "$hits"
         fi
     else
         # R11: the suite must pass from a clean checkout with no gateway
@@ -332,14 +388,21 @@ secret_scan() {
     # Layer 2 — credential-shaped strings, by known prefix.
     local pat='sk-ant-[A-Za-z0-9_-]{16,}|sk-or-v1-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
     local phits
-    phits="$(grep -rlE -- "$pat" "$plugin_root" 2>/dev/null || true)"
+    phits="$(grep -rlE --exclude-dir=.git -- "$pat" "$scan_root" 2>/dev/null || true)"
     if [ -n "$phits" ]; then
         echo -e "  ${RED}secret scan FAIL${NC}: credential-shaped string in shipped file(s):"
         printf '%s\n' "$phits" | sed 's/^/      /'
         rc=1
     fi
 
-    [ $rc -eq 0 ] && echo -e "  ${GREEN}secret scan${NC}: no token and no credential-shaped string in the shipped tree"
+    # Only claim a clean tree when nothing fired. A "no token anywhere" line
+    # printed directly under a warning about a token is how a real hit gets read
+    # as noise.
+    if [ $rc -eq 0 ] && [ $warned -eq 0 ]; then
+        echo -e "  ${GREEN}secret scan${NC}: no token and no credential-shaped string in the shipped tree"
+    elif [ $rc -eq 0 ]; then
+        echo -e "  ${YELLOW}secret scan${NC}: nothing committed or staged holds a credential, but see the warning above"
+    fi
     return $rc
 }
 

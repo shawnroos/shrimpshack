@@ -133,6 +133,13 @@ cleanup() {
     return 0
 }
 trap cleanup EXIT
+# bash does NOT run an EXIT trap when the shell dies on an untrapped INT/TERM/HUP
+# (measured on this box, bash 5.3.15), so a cancelled launch leaks TMPWORK along
+# with the captured child stdout. These exit THROUGH the EXIT path; a bare
+# `trap cleanup INT TERM` would run cleanup and then let the script carry on.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # Sets $TMPWORK. Deliberately NOT "prints the path": called as $(tmpwork) the
 # assignment would happen in a command-substitution SUBSHELL, the parent's
@@ -141,7 +148,11 @@ trap cleanup EXIT
 tmpwork() {
     if [ -z "$TMPWORK" ]; then
         TMPWORK="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/gwlaunch.XXXXXX")" || {
-            printf '✗ cannot create a temp dir\n' >&2; exit 2; }
+            # KTD2 is "exactly one JSON object on stdout, ALWAYS", and that
+            # includes this path — it used to exit 2 printing nothing at all.
+            printf '✗ cannot create a temp dir\n' >&2
+            emit_error 2 "usage" "cannot create a temp dir under ${TMPDIR:-/tmp}"
+            exit 2; }
     fi
 }
 

@@ -44,8 +44,18 @@ expand_env_refs() {
 # JSON object, always" is a property of the code shape rather than of
 # discipline. EMITTED stays declared in each sourcing script — a bash function
 # reads the caller's globals dynamically, and the guard is that script's state.
+#
+# An EMPTY payload is refused rather than written. Every caller builds its
+# argument with `emit "$(jq ...)"`, and a jq that errors yields the empty string
+# with no failure visible at the call site — so emit would write a bare newline,
+# set EMITTED, and the script would still exit with whatever code it had, which
+# on a healthy gateway is 0. That is the one failure a consumer cannot tell from
+# success: exit 0 and nothing to parse. Refusing here closes it for all 18 call
+# sites at once instead of per-site; success paths pair this with `|| die`, and
+# the error paths fall through to their own pure-bash encoder.
 emit() {
     [ "$EMITTED" -eq 1 ] && return 0
+    [ -n "$1" ] || return 1
     EMITTED=1
     printf '%s\n' "$1"
 }
