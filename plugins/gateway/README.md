@@ -27,9 +27,33 @@ printf '%s' "$PROMPT" | bash "${CLAUDE_PLUGIN_ROOT}/lib/lens.sh" --alias gpt-sol
 bash "${CLAUDE_PLUGIN_ROOT}/lib/lens.sh" --alias kimi --prompt-file ./diff.txt
 ```
 
+That form works **from this plugin's own skills and commands only** — see
+*Calling from another plugin* below for everyone else.
+
 The prompt goes on **stdin or `--prompt-file`, never argv** (KTD8) — argv hits
 quoting and length limits first, and silently. A response above ~16 KB spills to
 a file and the JSON carries `output_file` instead of `text`.
+
+#### Calling from another plugin
+
+`${CLAUDE_PLUGIN_ROOT}` always resolves to the **calling** plugin's root.
+Inside this plugin's skills it points here; inside *your* plugin's skill it
+points at your plugin, and the invocation above fails with "no such file". A
+foreign consumer resolves the installed path first:
+
+```bash
+GATEWAY_LENS=""
+for f in ~/.claude/plugins/marketplaces/*/plugins/gateway/lib/lens.sh; do
+    [ -f "$f" ] && GATEWAY_LENS="$f" && break
+done
+[ -n "$GATEWAY_LENS" ] || { echo "gateway plugin is not installed" >&2; exit 3; }
+
+printf '%s' "$PROMPT" | bash "$GATEWAY_LENS" --alias gpt-sol
+```
+
+A glob, not `ls` — resolution has to survive shells whose `ls` decorates its
+output. The same recipe with `launch.sh` or `gatewayctl.sh` reaches the other
+two surfaces.
 
 There is no Claude Code agent loop on the far side (KTD1). It is a plain
 completion against the gateway's messages endpoint, so the model cannot read a
@@ -122,8 +146,14 @@ Notes on that string:
   settings, and the marketplace checkout is where an installed plugin actually
   lives — not this repo. If your marketplace is registered under another name,
   substitute it (`ls ~/.claude/plugins/marketplaces/`).
-- The entry matches the `bash <script>` invocation form the skills document. If
-  you invoke it another way, the rule will not match it.
+- **The rule matches literal command text, so the rule and the invocation must
+  be spelled to agree.** A command that reaches Bash as an unexpanded
+  `${CLAUDE_PLUGIN_ROOT}` path, or as the absolute `/Users/...` path the
+  resolution recipe above produces, is a *different string* from the `~/...`
+  spelling in this rule. Pick one spelling, use it in both the rule and the
+  invocation — if your consumer resolves an absolute path, write the rule with
+  that same absolute path. A mismatched rule does not error: it shows up as a
+  fan-out silently stalled on a permission prompt.
 - Allowlist the **lens** only. `launch.sh` starts a real session and
   `gatewayctl.sh` starts and stops a process; both are worth a prompt.
 
@@ -136,8 +166,14 @@ deliberately deferred.
 
 ## What a gateway-pointed session does not have
 
-Verified live on 2026-08-06 (see `skills/launch/SKILL.md`, which says the same
-thing at the point of handover). These are expected, not breakage:
+First, the thing it *does* have, because it changes the trust posture: unlike
+the lens — a plain completion, no tools, can only answer — a launch session
+runs Claude Code's **full agent loop** under the user's normal permissions in
+the pinned project directory, with a third-party model deciding the actions.
+That is the feature; weigh it the way KTD5 weighs lens text.
+
+The rest, verified live on 2026-08-06 (see `skills/launch/SKILL.md`, which says
+the same thing at the point of handover) — expected, not breakage:
 
 - **claude.ai MCP connectors do not load.** The gateway auth token takes
   precedence over the claude.ai login, so the connectors that login would carry

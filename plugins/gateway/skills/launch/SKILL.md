@@ -64,7 +64,9 @@ The plugin never opens a terminal. It runs the seed prompt headlessly through `c
 
 ## What a gateway-pointed session does not have
 
-Say this when you hand over the handle. These are expected, not breakage — verified live on 2026-08-06:
+Say this when you hand over the handle. And lead with the one difference that changes the **trust posture**, not just the feature set: unlike the lens — a plain completion with no tools, which can only *answer* — an attached launch session runs Claude Code's **full agent loop**, under the user's normal permissions, in the pinned project directory, with a **third-party model** deciding the actions. It can read and edit files and run commands wherever it was pinned. That is the feature, not a bug — but hand it over the way KTD5 hands over lens text: this session's judgement is a third-party model's judgement, operating with your permissions.
+
+The rest are expected, not breakage — verified live on 2026-08-06:
 
 - **claude.ai MCP connectors do not load.** The gateway auth token takes precedence over the claude.ai login, so the connectors that login would carry are not there.
 - **The advisor tool is disabled.** Gateway aliases have no advisor rank in the model catalog.
