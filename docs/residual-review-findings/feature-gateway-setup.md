@@ -41,6 +41,25 @@ change whose entire purpose is refusing unearned success.
   started. The narrower flag-and-action triggers keep missing the case where a
   prior run did the mutating.
 
+- **P1 · a failed verify leaves a running gateway that the plugin can no longer
+  stop.** Observed immediately after the open-proxy finding above. Setup started
+  the gateway, verify failed, setup exited 2 — and the gateway kept serving with
+  `~/.gateway.pid` **absent**, so `stop` answered `result: "unmanaged"` and
+  refused to signal anything. The refusal is correct on its own terms (KTD4's
+  shared-pidfile discipline means never signalling a process it cannot
+  identify), but the combination is the problem: setup started something,
+  declined to call it success, and left it running with no supported way to shut
+  it down. The operator had to be handed a raw `kill <pid>` found via `lsof`.
+
+  Compounds the open-proxy P1 directly — the process that could not be stopped
+  was the one serving unauthenticated. Not yet determined whether the pidfile
+  was never written or was written and then removed on the failure path; the
+  run that produced it is gone, so this needs reproducing under fixtures before
+  it is fixed. Fix direction, whichever it turns out to be: a start that
+  succeeds must leave a pidfile that survives a later step's failure, and a
+  `stop` that finds a serving gateway with no pidfile should offer the pid it
+  can see rather than only refusing.
+
 - **P2 · the 401 diagnostic names the wrong token source.** On the preceding run
   the failure read `token came from /Users/shawnroos/gateway-0.1.1/gateway.yaml`
   while that file had zero token lines — the value came from the Keychain. An
