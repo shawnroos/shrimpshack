@@ -1,6 +1,9 @@
 ---
 name: status
 description: >
+  Invoked by name only (via the Skill tool, or by a person naming this skill) — do NOT
+  trigger this skill from conversational phrasing on your own; `/spawn:report` is the
+  conversational front door and carries its own instructions.
   Report the local Superagent Gateway's state — running or not, the aliases it is
   actually serving, where it was resolved from, and any drift between the plugin's
   context-window table and the gateway's own config. Also starts, stops and restarts

@@ -1,6 +1,9 @@
 ---
 name: launch
 description: >
+  Invoked by name only (via the Skill tool, or by a person naming this skill) — do NOT
+  trigger this skill from conversational phrasing on your own; `/spawn:session` is the
+  conversational front door and carries its own instructions.
   Materialize a Claude Code session on a model the local Superagent Gateway serves,
   seeded with an opening prompt, and print a resume handle. Use when someone wants to
   work *with* a different model rather than just ask it something — "start a session
@@ -31,7 +34,7 @@ The plugin never opens a terminal. It runs the seed prompt headlessly through `c
 
 2. Flags — this is the whole set:
 
-   - `--alias <name>` — **required.** Must be served by the gateway; grammar `[A-Za-z0-9._-]+`, checked before any network call and before the alias is ever put into the attach command. `/spawn:status` lists what is served.
+   - `--alias <name>` — **required.** Must be served by the gateway; grammar `[A-Za-z0-9._-]+`, checked before any network call and before the alias is ever put into the attach command. `/spawn:report` lists what is served.
    - `--prompt-file <path>` — read the seed prompt from a file instead of stdin.
    - `--cwd <dir>` — the session's project directory. Defaults to the current directory. It is resolved to its physical path, so the transcript path in the handle is reproducible from anywhere.
 
