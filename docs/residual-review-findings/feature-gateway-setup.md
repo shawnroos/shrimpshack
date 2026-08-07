@@ -90,6 +90,13 @@ pidfile the supervisor does not write cannot be made to work.
 
 ## Open after the G4 run — setup's own start competes with the supervisor
 
+**G4 itself is now PASSED** (`ok:true`, exit 0, both verification layers green,
+unauthenticated probe rejected 401). But it passed on the *second* attempt,
+after the competing process was cleared by hand. The finding below is what made
+the first attempt fail, and it will make the FIRST run on any supervised
+machine fail the same way — which is the run that matters, because it is the
+one a new operator makes.
+
 - **P1 · after adopting a supervisor, setup still starts the gateway itself, and
   the two fight over the port.** Observed live. The `supervisor` step reloads the
   agent, so launchd immediately tries to start the gateway through the new
