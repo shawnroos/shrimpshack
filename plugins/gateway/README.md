@@ -133,19 +133,43 @@ message.
 ## Allowlist entry for unattended fan-out
 
 A fan-out of lens calls stalls on a Bash permission prompt unless the caller's
-settings allowlist the script. Add this to `permissions.allow` in
-`~/.claude/settings.json`:
+settings allowlist the script.
+
+**Do not copy a path from this document — read it off your own install**, then
+put it in `permissions.allow` in `~/.claude/settings.json`:
+
+```bash
+ls -d ~/.claude/plugins/cache/*/gateway/*/lib/lens.sh
+```
+
+On the box this was verified on, that prints:
+
+```
+/Users/<you>/.claude/plugins/cache/shrimpshack/gateway/0.1.0/lib/lens.sh
+```
+
+giving a rule of the shape:
 
 ```json
-"Bash(bash ~/.claude/plugins/marketplaces/shrimpshack/plugins/gateway/lib/lens.sh:*)"
+"Bash(bash ~/.claude/plugins/cache/shrimpshack/gateway/0.1.0/lib/lens.sh:*)"
 ```
 
 Notes on that string:
 
-- It is the **installed** path. `${CLAUDE_PLUGIN_ROOT}` does not expand inside
-  settings, and the marketplace checkout is where an installed plugin actually
-  lives — not this repo. If your marketplace is registered under another name,
-  substitute it (`ls ~/.claude/plugins/marketplaces/`).
+- **The version is IN the path.** `0.1.0` is a real directory component, so a
+  rule pinned to it stops matching the moment you upgrade — and it stops
+  matching *silently*, as a stalled fan-out rather than an error. Re-read the
+  path after every upgrade, or write the rule against a stable absolute path you
+  control (a symlink, or a wrapper script of your own that execs the versioned
+  one).
+- **An earlier version of this document named
+  `~/.claude/plugins/marketplaces/<marketplace>/plugins/gateway/lib/lens.sh`.
+  That path does not exist.** Installed plugins live under `cache/`, and on a
+  verified install `~/.claude/plugins/marketplaces/<marketplace>/` was empty.
+  A rule written against it can never match anything, which is the worst
+  possible failure here because it presents as a hang, not a refusal.
+- `${CLAUDE_PLUGIN_ROOT}` does not expand inside settings, which is why this has
+  to be a literal path at all.
 - **The rule matches literal command text, so the rule and the invocation must
   be spelled to agree.** A command that reaches Bash as an unexpanded
   `${CLAUDE_PLUGIN_ROOT}` path, or as the absolute `/Users/...` path the

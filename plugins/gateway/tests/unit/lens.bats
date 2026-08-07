@@ -641,6 +641,31 @@ EOF
     done
 }
 
+@test "the README's allowlist path is not the one that does not exist" {
+    # VERIFIED ON A REAL INSTALL, 2026-08-07. The README used to tell people to
+    # allowlist
+    #   ~/.claude/plugins/marketplaces/<mkt>/plugins/gateway/lib/lens.sh
+    # That path does not exist. Installing the plugin puts it at
+    #   ~/.claude/plugins/cache/<mkt>/gateway/<version>/lib/lens.sh
+    # and ~/.claude/plugins/marketplaces/<mkt>/ was EMPTY.
+    #
+    # This is the worst failure shape in the plugin: an allowlist rule that
+    # matches nothing does not error, it leaves an unattended fan-out parked on
+    # a permission prompt forever — no exit code, no JSON, nothing to branch on.
+    # Everything else here fails loudly; this one fails silently.
+    # Matched as an allowlist RULE, not as prose: the document deliberately
+    # names the bad path in order to warn about it, and a lint that cannot tell
+    # a warning from a recommendation would force the warning to be deleted.
+    local readme="$BATS_TEST_DIRNAME/../../README.md"
+    run grep -n 'Bash(bash [^)]*plugins/marketplaces' "$readme"
+    [ "$status" -ne 0 ]
+
+    # And it must still tell the reader to derive the path from their own box
+    # rather than copying one, since the version is a real path component.
+    run grep -q 'plugins/cache/\*/gateway/\*/lib/lens.sh' "$readme"
+    [ "$status" -eq 0 ]
+}
+
 @test "R7: the lens source contains no spend logic at all" {
     # A grep over the source with comments stripped. R7 is a NEGATIVE
     # requirement, so the only way to hold it is to assert the absence.
