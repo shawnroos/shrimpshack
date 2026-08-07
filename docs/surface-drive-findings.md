@@ -1,5 +1,13 @@
 # Driving the six surfaces — first real invocation
 
+> **Renamed since.** The plugin became `spawn` in `21f4d56` — `plugins/gateway/` →
+> `plugins/spawn/`, `gateway:lens|launch|status` → `spawn:lens|launch|status`,
+> `lib/gatewayctl.sh` → `lib/spawnctl.sh`. The invocations below are quoted as they
+> actually ran, under the old names; every finding holds unchanged under the new
+> ones. Re-verified post-rename: F2 (mode 644) and F4 (the drift block) are both
+> still true. "Gateway" in prose still means the Superagent Gateway itself, which
+> did not get renamed.
+
 Date: 2026-08-07. Plugin loaded via a local dev marketplace (`gateway-surfaces-dev`,
 scope local) off this worktree at `5c9f0d0`, then `/reload-plugins`. Gateway up at
 `http://127.0.0.1:4000/anthropic`, config `~/gateway-0.1.1/gateway.yaml`, 18 aliases.
@@ -71,9 +79,9 @@ Still untested: autonomous description-matched selection, rather than an explici
 ## F2 — `lens.sh` is mode 644; the other two entry points are 755
 
 ```
-100644 plugins/gateway/lib/lens.sh
-100755 plugins/gateway/lib/gatewayctl.sh
-100755 plugins/gateway/lib/launch.sh
+100644 plugins/spawn/lib/lens.sh
+100755 plugins/spawn/lib/spawnctl.sh
+100755 plugins/spawn/lib/launch.sh
 ```
 
 Committed that way, not a local artifact. Every documented invocation uses
