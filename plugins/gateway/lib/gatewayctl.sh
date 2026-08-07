@@ -417,11 +417,18 @@ resolve_install_dir() {
 # ---------------------------------------------------------------------------
 PROBE_ALIASES_JSON="[]"
 PROBE_DETAIL=""
+# Set to 1 the moment curl comes back with ANY http status. rc=0 with a status
+# PROVES a process holds the port, whatever it answered — only the
+# connect-failure branch establishes that nothing is there. start_if_down
+# branches on this: spawning a second gateway against a held port cannot
+# succeed (AddrInUse), and the corpse it leaves overwrites the pidfile.
+PROBE_LISTENING=0
 
 probe() {
     resolve_config
     PROBE_ALIASES_JSON="[]"
     PROBE_DETAIL=""
+    PROBE_LISTENING=0
     local work body code curlrc
     tmpwork
     work="$TMPWORK"
@@ -453,6 +460,7 @@ probe() {
         PROBE_DETAIL="no HTTP response from $BASE_URL/v1/models (curl rc=$rc)"
         return $EX_UNREACHABLE
     fi
+    PROBE_LISTENING=1
     if [ "$code" = "401" ] || [ "$code" = "403" ]; then
         PROBE_DETAIL="gateway is up at $BASE_URL but rejected our token (HTTP $code); token came from ${CONFIG_PATH:-<no config resolved>}"
         return $EX_AUTH
@@ -660,6 +668,18 @@ do_start_locked() {
     local rc=$?
     if [ $rc -eq $EX_OK ] || [ $rc -eq $EX_AUTH ]; then
         return $rc
+    fi
+
+    # Something IS listening on the port — it just answered wrongly (a 503
+    # during its own startup, a 404 from a moved route, a 200 with a body that
+    # is not a model list). curl returning an HTTP status proves the port is
+    # held, so a start here spawns a process that dies on AddrInUse, and the
+    # spawn overwrites the pidfile with the corpse's pid — the running process
+    # becomes unmanageable through this surface. Refuse instead: only the
+    # connect-failure branch (PROBE_LISTENING=0) established nothing is there.
+    if [ "$PROBE_LISTENING" -eq 1 ]; then
+        PROBE_DETAIL="${PROBE_DETAIL:-the probe failed} — something is already listening at $BASE_URL, so refusing to start a second gateway against a held port; fix or stop whatever holds it"
+        return $EX_UNREACHABLE
     fi
 
     resolve_install_dir hard

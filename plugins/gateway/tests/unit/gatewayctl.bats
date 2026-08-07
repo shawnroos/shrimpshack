@@ -342,6 +342,32 @@ count_gateway_procs() {
     [ "$starters" -eq 1 ]
 }
 
+@test "R5: a live listener answering non-200 refuses a start instead of spawning against the held port" {
+    # Something IS on the port — it just answers wrongly. Point the plugin at
+    # the fixture's port under a route prefix it does not serve: every probe
+    # gets a 404 from a live process, which is the moved-route / mid-startup
+    # shape. curl rc=0 with an HTTP status proves the port is held, so a spawn
+    # can only die on AddrInUse and clobber the pidfile with the corpse's pid.
+    start_fixture healthy "alpha"
+    local port2; port2="$(free_port)"
+    # The config binds a FREE port so that, if the guard is ever removed, the
+    # spawned decoy binds successfully and survives — making the process-count
+    # assertion below go red instead of racing a fast AddrInUse corpse.
+    make_config "$WORK/gateway.yaml" "$port2" "$TOKEN" "alpha=up/alpha"
+    export GATEWAY_CONFIG="$WORK/gateway.yaml"
+    make_install "$WORK/install"
+    export GATEWAY_INSTALL_DIR="$WORK/install"
+    export GATEWAY_START_TIMEOUT=2
+    export GATEWAY_BASE_URL="http://127.0.0.1:$PORT/wrong-prefix"
+
+    ctl ensure alpha
+    [ "$status" -eq 3 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    # The refusal is named, and nothing was spawned.
+    echo "$output" | jq -r '.error' | grep -q 'refusing to start'
+    [ "$(count_gateway_procs "$WORK/install")" -eq 0 ]
+}
+
 @test "R3: the log is appended, never truncated, across restarts" {
     local port; port="$(free_port)"
     make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
