@@ -923,6 +923,8 @@ EOF
     [ "$(echo "$output" | jq -r '.result')" = "unmanaged" ]
     # The record survives: deleting it while a gateway serves is the bug.
     [ -s "$WORK/.gateway.pid" ]
+}
+
 # --- U3: start-time secret delivery (KTD1; R7, R9) --------------------------
 #
 # Every assertion below is made from the CHILD's point of view, through the
@@ -1017,7 +1019,12 @@ EOF
     ctl start
     [ "$status" -eq 2 ]
     [ "$(echo "$output" | jq -s 'length')" = "1" ]
-    echo "$output" | jq -r '.error' | grep -q 'open proxy'
+    # R23 (the envelope from the surfaces work): `error` carries the ENUM and
+    # the prose moved to `detail`. Assert BOTH — the enum is what a fan-out
+    # caller switches on, and the prose is what tells a human which refusal
+    # this was. Checking only one of them passes while the other rots.
+    [ "$(echo "$output" | jq -r '.error')" = "usage" ]
+    echo "$output" | jq -r '.detail' | grep -q 'open proxy'
     # The refusal is BEFORE the spawn: the stub records every exec, and there
     # is no record at all.
     [ ! -f "$WORK/gwbin-record/execs" ]
