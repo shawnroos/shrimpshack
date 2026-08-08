@@ -1,6 +1,9 @@
 ---
 name: lens
 description: >
+  Invoked by name only (via the Skill tool, or by a person naming this skill) — do NOT
+  trigger this skill from conversational phrasing on your own; `/spawn:agent` is the
+  conversational front door and carries its own instructions.
   Ask a model the local Superagent Gateway serves — a headless, one-shot completion
   that returns the answer as data. Use when a skill or a person wants a different
   vendor's read on something (a diff, a design, a piece of prose), or asks for a
@@ -37,7 +40,7 @@ There is no Claude Code agent loop on the far side of this call (KTD1). It is a 
 
 2. Flags — this is the whole set:
 
-   - `--alias <name>` — **required.** Must be an alias the gateway is actually serving; the grammar is `[A-Za-z0-9._-]+` and anything else is refused before any network call. `/spawn:status` lists what is served.
+   - `--alias <name>` — **required.** Must be an alias the gateway is actually serving; the grammar is `[A-Za-z0-9._-]+` and anything else is refused before any network call. `/spawn:report` lists what is served.
    - `--prompt-file <path>` — read the prompt from a file instead of stdin.
    - `--max-tokens N` — response cap. Default 8192 (`SPAWN_LENS_MAX_TOKENS`).
    - `--timeout SECONDS` — total deadline for the call. Default 600 (`SPAWN_LENS_TIMEOUT`).

@@ -156,7 +156,9 @@ need_jq() {
         # crash. Same pure-bash fallback emit_error's non-jq branch uses: VERB
         # is raw argv, so it is reduced to the verb enum's own charset —
         # unsanitized, it could put a quote or an escape byte into stdout.
-        printf '{"ok":false,"verb":"%s","error":"internal","exit_code":2}\n' "${VERB//[^a-z]/}"
+        # The envelope comes from common.sh (R23) rather than being written out
+        # here, so this tier cannot drift from the other two.
+        emit "$(spawn::envelope_bash plugin "internal" 2 ",\"verb\":\"${VERB//[^a-z]/}\",\"help_requested\":$HELP_REQUESTED" "Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it.")"
         exit 2
     }
 }
@@ -165,13 +167,42 @@ need_jq() {
 # own state, so it stays declared here — a bash function reads the caller's
 # globals dynamically.
 EMITTED=0
+
+# R11 — the help discriminator. `--help` and an unknown or missing verb are all
+# exit 2 with error:"usage" because the enum is contract-frozen (KTD2), and they
+# were separated only by the English in `detail`. This field is that distinction
+# as data, and it rides every error response on both encoder tiers.
+HELP_REQUESTED=false
+
+# R12 — this script's error vocabulary is exactly the shared one (its enums all
+# come from the exit code through spawn::enum_for_code), so the table in
+# common.sh answers every value. The wrapper exists so a site can be given a
+# narrower repair here without moving the shared table, and so the three scripts
+# read the same way.
+remedy_for() { spawn::remedy_for "$1"; }
+
 emit_error() {
     local code="$1" msg="$2"
     [ "$EMITTED" -eq 1 ] && return 0
+    # R23: `error` carries the ENUM and the prose moves to `detail`. This script
+    # used to put English in `error` while lens.sh and launch.sh put an enum
+    # there — the divergence that made forwarding a preflight object unsafe and
+    # broke every fan-out caller's `.error` switch at once. The enum comes from
+    # the exit code through the one table in common.sh, which is the same table
+    # the two lenses classify a preflight failure with.
+    local err
+    err="$(spawn::enum_for_code "$code")"
+    [ -n "$err" ] || err="internal"
     # Sanitized here as well as in die(): idempotent on an already-clean string,
     # and it means a future caller that reaches emit_error directly cannot open
-    # a hole in the `error` field, which is display text a consumer prints.
+    # a hole in the `detail` field, which is display text a consumer prints.
     msg="$(spawn::sanitize_for_display "$msg")"
+    # R12: the site's own REMEDY wins, otherwise the enum's default from the one
+    # table. Defaulted here rather than at every die site, so "every error names
+    # its remedy" holds for die sites nobody has written yet.
+    local rem="${REMEDY:-}"
+    [ -n "$rem" ] || rem="$(remedy_for "$err")"
+    local obj=""
     if command -v jq >/dev/null 2>&1; then
         # VERB is raw argv on the unknown-verb path, and jq's --arg escapes
         # control bytes but emits Unicode format characters (e.g. a U+202E bidi
@@ -180,16 +211,19 @@ emit_error() {
         # raw, which made the jq path weaker than the pure-bash fallback below.
         local verb_d
         verb_d="$(spawn::sanitize_for_display "${VERB:-}")"
-        emit "$(jq -nc --arg verb "$verb_d" --arg m "$msg" --argjson c "$code" \
-            '{ok:false, verb:$verb, error:$m, exit_code:$c}')"
-    else
-        EMITTED=1
-        # No jq means no encoder, and VERB is raw argv: an unsanitized verb here
-        # would put a quote (breaking the object) or an escape byte into stdout.
-        # Reduced to the verb enum's own charset in pure bash — closed by
-        # construction, since that is the only defence available with no jq.
-        printf '{"ok":false,"verb":"%s","error":"internal","exit_code":%s}\n' "${VERB//[^a-z]/}" "$code"
+        obj="$(jq -nc --arg verb "$verb_d" --arg e "$err" --arg m "$msg" \
+            --arg r "$rem" --argjson c "$code" --argjson h "$HELP_REQUESTED" \
+            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:$verb, error:$e,
+              detail:$m, remedy:(if $r == "" then null else $r end),
+              help_requested:$h, exit_code:$c}')"
     fi
+    # No jq means no encoder, and VERB is raw argv: an unsanitized verb here
+    # would put a quote (breaking the object) or an escape byte into stdout.
+    # Reduced to the verb enum's own charset in pure bash — closed by
+    # construction, since that is the only defence available with no jq. Also
+    # reached when jq is present but ERRORED, which used to print nothing at all.
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"verb\":\"${VERB//[^a-z]/}\",\"help_requested\":$HELP_REQUESTED" "$rem")"
+    emit "$obj"
 }
 
 # ---------------------------------------------------------------------------
@@ -417,6 +451,15 @@ resolve_install_dir() {
 # ---------------------------------------------------------------------------
 PROBE_ALIASES_JSON="[]"
 PROBE_DETAIL=""
+# alias -> display_name, straight off the model list. The gateway serves a
+# display_name per served id, and two ids carrying the SAME display_name is the
+# gateway itself saying they present as one model. That is the only statement
+# the gateway makes about aliases it generates rather than reads out of the
+# config's `models:` block (the claude-* twins), so drift class 1 needs it.
+# Built only for `status`, the one verb that reads it — the same reason
+# CONFIG_MODELS_JSON is guarded, and for the same hot path (lens and launch
+# probe on every call).
+PROBE_DISPLAY_JSON="{}"
 # Set to 1 the moment curl comes back with ANY http status. rc=0 with a status
 # PROVES a process holds the port, whatever it answered — only the
 # connect-failure branch establishes that nothing is there. start_if_down
@@ -427,6 +470,7 @@ PROBE_LISTENING=0
 probe() {
     resolve_config
     PROBE_ALIASES_JSON="[]"
+    PROBE_DISPLAY_JSON="{}"
     PROBE_DETAIL=""
     PROBE_LISTENING=0
     local work body code curlrc
@@ -484,6 +528,22 @@ probe() {
         return $EX_UNREACHABLE
     fi
     PROBE_ALIASES_JSON="$aliases"
+
+    if [ "${VERB:-}" = "status" ]; then
+        local disp
+        # Keys go through the SAME strip as PROBE_ALIASES_JSON's values (the
+        # whole object is walked after from_entries), so a lookup by served
+        # alias cannot miss on a byte the other path removed. An id with no
+        # display_name becomes "" — which the drift program reads as "the
+        # gateway said nothing", never as a match.
+        disp="$(jq -c "$SPAWN_SANITIZE_JQ_DEF"'
+            [ .data[]? | select((.id // null) != null)
+              | {key: (.id | tostring),
+                 value: ((.display_name // "") | tostring)} ]
+            | from_entries | strip_display_deep' < "$body" 2>/dev/null)"
+        [ -n "$disp" ] && PROBE_DISPLAY_JSON="$disp"
+    fi
+
     PROBE_DETAIL=""
     return $EX_OK
 }
@@ -756,15 +816,156 @@ start_if_down() {
 # from success. models.json is hand-maintained metadata by design (KTD7), so a
 # typo here is the expected input, not an exotic one. launch.sh hardened its own
 # read of this same file; this read was left open.
+#
+# U2 (KTD3): `families`, `no_family_alias` and `chain_policy` get the same
+# shape treatment as `aliases` — a malformed families block collapses to `{}`,
+# a malformed no_family_alias to `null`, a malformed chain_policy to `{}`,
+# rather than surviving `jq -c '.'`'s syntax-only check and erroring inside a
+# downstream program the way the pre-KTD7 `aliases` read did. The drift
+# computation in `status` reads only `.aliases` from this table, so a malformed
+# families block cannot touch it either way — this normalization exists so a
+# future reader (this file's own --describe, or a caller) can consume the
+# grammar without its own defensive jq.
 table_json() {
+    local empty='{"aliases":{},"families":{},"no_family_alias":null,"chain_policy":{}}'
     if [ -f "$MODELS_JSON" ]; then
-        jq -c 'if (type == "object" and ((.aliases // {}) | type) == "object")
-               then {aliases: (.aliases // {} | map_values(select(type == "object")))}
-               else {aliases:{}} end' < "$MODELS_JSON" 2>/dev/null \
-            || printf '{"aliases":{}}'
+        jq -c '
+            def safeobj: if type == "object" then . else {} end;
+            def safe_families:
+                ((.families // {}) | safeobj)
+                | map_values(
+                    if type == "object" then
+                        ((.default // null) as $d
+                         | (.tiers // {}) as $t
+                         | {
+                             default: (if ($d|type) == "string" then $d else null end),
+                             tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
+                           })
+                    else empty end
+                  );
+            def safe_chain_policy:
+                ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+            if (type == "object" and ((.aliases // {}) | type) == "object")
+            then {
+                aliases: (.aliases // {} | map_values(select(type == "object"))),
+                families: safe_families,
+                no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
+                chain_policy: safe_chain_policy
+            }
+            else {aliases:{}, families:{}, no_family_alias:null, chain_policy:{}} end
+        ' < "$MODELS_JSON" 2>/dev/null \
+            || printf '%s' "$empty"
     else
-        printf '{"aliases":{}}'
+        printf '%s' "$empty"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# --describe (R10, R14, KD2) — the control layer's contract as data.
+#
+# Every value is projected from what this script actually runs on: the EX_*
+# constants, the verb list the case below accepts, the shared enum table and the
+# shared remedy table. A caller reconciles against the running version instead of
+# a table it copied once and now hard-codes.
+# ---------------------------------------------------------------------------
+emit_describe() {
+    local ev grammar
+    ev="$(jq -n \
+        --arg r_usage "$(remedy_for usage)" \
+        --arg r_unreach "$(remedy_for unreachable)" \
+        --arg r_alias "$(remedy_for alias_unknown)" \
+        --arg r_auth "$(remedy_for auth_rejected)" \
+        --arg r_int "$(remedy_for internal)" \
+        '[{value:"usage",         exit_code:2, remedy:$r_usage},
+          {value:"unreachable",   exit_code:3, remedy:$r_unreach},
+          {value:"alias_unknown", exit_code:4, remedy:$r_alias},
+          {value:"auth_rejected", exit_code:7, remedy:$r_auth},
+          {value:"internal",      exit_code:2, remedy:$r_int}]')" || return 1
+
+    # U2 (KTD3, KD6): table_json() already normalizes families/no_family_alias/
+    # chain_policy shape-safe (see the function above), so this needs no
+    # further defense here. Read with the gateway down, with no install and
+    # with no config — table_json() only touches MODELS_JSON on disk.
+    grammar="$(table_json)"
+
+    emit "$(jq -nc --argjson errors "$ev" --arg base "$BASE_URL" --argjson grammar "$grammar" \
+        "$(spawn::envelope_jq plugin)"' + {
+          ok:true, error:null, exit_code:0,
+          response_kind:"describe",
+          surface:"spawnctl.sh",
+          summary:"Start, stop and report on the local gateway process, and answer the one preflight question the other two scripts ask.",
+          base_url:$base,
+          families:$grammar.families,
+          no_family_alias:$grammar.no_family_alias,
+          chain_policy:$grammar.chain_policy,
+          verbs:[
+            {name:"status",  argument:null,
+             note:"never starts anything; exit 3 is a normal answer meaning the gateway is down"},
+            {name:"ensure",  argument:"alias (optional)",
+             note:"starts the gateway if it is down, then checks the alias against the served list; the single owner of exit 4"},
+            {name:"start",   argument:null,  note:"idempotent; a start that does not serve exits non-zero"},
+            {name:"stop",    argument:null,
+             note:"exits 0 for stopped, not_running and stale_pidfile; refuses to signal an unmanaged or recycled pid"},
+            {name:"restart", argument:null,  note:"a refused stop is a failed restart, never a green one"}
+          ],
+          flags:[
+            {name:"--help",     value:null, required:false, default:null,
+             note:"exit 2 with help_requested:true — not a usage error"},
+            {name:"--describe", value:null, required:false, default:null,
+             note:"this document; exit 0; needs no running gateway, no install and no config"}
+          ],
+          exit_codes:[
+            {code:0, error:null,            origin:"own", meaning:"the verb did what it says"},
+            {code:2, error:"usage",         origin:"own",
+             meaning:"unknown or missing verb, help, or a stop that refused to signal; branch on help_requested"},
+            {code:3, error:"unreachable",   origin:"own",
+             meaning:"the gateway is not answering; for status this is an answer, not a malfunction"},
+            {code:4, error:"alias_unknown", origin:"own",
+             meaning:"ensure only: the gateway is up but does not serve that alias"},
+            {code:7, error:"auth_rejected", origin:"own",
+             meaning:"the gateway answered and refused our token; deliberately not exit 3"}
+          ],
+          error_values:$errors,
+          response_fields:[
+            {name:"schema",           always:true,  note:"the version of this contract"},
+            {name:"ok",               always:true,  note:"boolean; agrees with exit_code"},
+            {name:"error",            always:true,  note:"enum value or null, never prose"},
+            {name:"remedy",           always:true,  note:"what to do about it; null only on success"},
+            {name:"detail",           always:true,  note:"human-readable diagnostic; the only prose field"},
+            {name:"content_trust",    always:true,  note:"how far the payload may be trusted"},
+            {name:"content_notice",   always:true,  note:"the rule that follows from content_trust"},
+            {name:"exit_code",        always:true,  note:"the process exit status, restated in the data"},
+            {name:"verb",             always:false, note:"which verb answered"},
+            {name:"running",          always:false, note:"did the probe reach a serving gateway"},
+            {name:"base_url",         always:false, note:"where the probe looked"},
+            {name:"served_aliases",   always:false, note:"the aliases the gateway reports; the real allowlist"},
+            {name:"alias",            always:false, note:"ensure only: the alias that was checked"},
+            {name:"config",           always:false, note:"the resolved gateway.yaml path; a path, never a token"},
+            {name:"install_dir",      always:false, note:"the resolved install directory"},
+            {name:"install_dir_error",always:false, note:"why resolution failed, when it did"},
+            {name:"binary",           always:false, note:"the gateway executable this script would run"},
+            {name:"log",              always:false, note:"where a started gateway writes"},
+            {name:"pidfile",          always:false, note:"where the managed pid is recorded"},
+            {name:"pid",              always:false, note:"the recorded pid"},
+            {name:"pid_verified",     always:false, note:"true only when that pid is live AND its argv names our binary"},
+            {name:"started",          always:false, note:"ensure only: did this call start the gateway"},
+            {name:"result",           always:false, note:"stop only: stopped, not_running, stale_pidfile, unmanaged or pid_mismatch"},
+            {name:"models",           always:false, note:"status only: the plugin table, as data"},
+            {name:"drift",            always:false, note:"status only: the four drift classes below"},
+            {name:"help_requested",   always:false, note:"true only for --help; present on every error response"},
+            {name:"families",        always:false, note:"--describe only: the declared family -> tier -> alias grammar (KTD3), same table lens.sh and launch.sh describe"},
+            {name:"no_family_alias", always:false, note:"--describe only: the alias prose naming no family resolves to"},
+            {name:"chain_policy",    always:false, note:"--describe only: which surfaces (agent, session, bg-agent) may resolve to a chain alias (KTD4)"}
+          ],
+          drift_kinds:[
+            {name:"missing_from_table", note:"a served alias the plugin table does not list, and which the gateway says resolves to something the table does not already carry"},
+            {name:"unknown_resolution", note:"a served alias the plugin table does not list and whose resolution the gateway does not state; not assumed equivalent to anything"},
+            {name:"missing_window",     note:"a table entry with no declared context window"},
+            {name:"model_drift",        note:"an alias whose upstream model string moved; each entry carries alias, recorded and current"}
+          ],
+          drift_entry_fields:["alias","recorded","current"]
+        }')" || return 1
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -775,14 +976,45 @@ VERB="${1:-}"
 
 case "$VERB" in
     start|stop|restart|status|ensure) ;;
-    ""|-h|--help|help)
-        printf 'usage: spawnctl.sh {start|stop|restart|status|ensure [alias]}\n' >&2
+    --describe)
+        # R10. Answered HERE — before resolve_config, before resolve_install_dir
+        # and before any probe — so the contract is readable with the gateway
+        # down, with no install found and with no gateway.yaml on the box. A
+        # caller reads it in order to interpret a failure, so it must not need
+        # the thing that failed.
+        #
+        # It requires jq, like every other success-shaped response in this
+        # plugin: the pure-bash tier encodes failures only, because building a
+        # payload with no encoder means hand-writing the envelope, and that is
+        # the drift R23 exists to close. With no jq, need_jq answers with the
+        # standard no-encoder object at exit 2.
         need_jq
-        die "$EX_USAGE" "no verb given"
+        emit_describe || die "$EX_USAGE" "could not encode the describe object"
+        exit $EX_OK
+        ;;
+    -h|--help|help)
+        # R11: help is exit 2 like a usage error — the enum is frozen — but it
+        # is NOT the same event, and the difference is now a field rather than
+        # the English in `detail`. Split from the ""-arm below on purpose: "you
+        # asked me to explain myself" and "you forgot the verb" were previously
+        # the same branch, which is precisely the pair a machine has to tell
+        # apart.
+        HELP_REQUESTED=true
+        printf 'usage: spawnctl.sh {start|stop|restart|status|ensure [alias]} | --describe | --help\n' >&2
+        need_jq
+        REMEDY="Nothing is broken — this was a help request, and exit 2 is what the frozen enum has for it. Branch on help_requested, not on the code. Call --describe for the same contract as data." \
+            die "$EX_USAGE" "help requested"
+        ;;
+    "")
+        printf 'usage: spawnctl.sh {start|stop|restart|status|ensure [alias]} | --describe | --help\n' >&2
+        need_jq
+        REMEDY="Call again with one of the verbs: start, stop, restart, status, ensure. Run --describe for the machine-readable list." \
+            die "$EX_USAGE" "no verb given"
         ;;
     *)
         need_jq
-        die "$EX_USAGE" "unknown verb '$VERB' (expected start|stop|restart|status|ensure)"
+        REMEDY="Call again with one of the verbs: start, stop, restart, status, ensure. Run --describe for the machine-readable list." \
+            die "$EX_USAGE" "unknown verb '$VERB' (expected start|stop|restart|status|ensure)"
         ;;
 esac
 
@@ -811,7 +1043,11 @@ ensure)
         if ! printf '%s' "$PROBE_ALIASES_JSON" | jq -e --arg a "$ALIAS" 'index($a) != null' >/dev/null 2>&1; then
             say "alias '$ALIAS' is not in the gateway's served list"
             emit "$(jq -nc --arg a "$ALIAS" --argjson served "$PROBE_ALIASES_JSON" --argjson c $EX_ALIAS \
-                '{ok:false, verb:"ensure", error:"alias_unknown", alias:$a, served_aliases:$served, exit_code:$c}')"
+                --arg rem "$(remedy_for alias_unknown)" \
+                "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"ensure",
+                  error:"alias_unknown", alias:$a, served_aliases:$served,
+                  remedy:$rem, exit_code:$c}')" \
+        || die "$EX_USAGE" "could not encode the alias_unknown object"
             exit $EX_ALIAS
         fi
     fi
@@ -829,10 +1065,12 @@ ensure)
         --arg cfg "${CONFIG_PATH:-}" \
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson started "$([ $STARTED -eq 1 ] && echo true || echo false)" \
-        '{ok:true, verb:"ensure", running:true, started:$started, base_url:$base,
+        "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"ensure", running:true,
+          started:$started, base_url:$base,
           alias:(if $alias == "" then null else $alias end),
           config:(if $cfg == "" then null else $cfg end),
-          served_aliases:$served, error:null, exit_code:0}')"
+          served_aliases:$served, error:null, exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the ensure object"
     exit $EX_OK
     ;;
 
@@ -854,9 +1092,11 @@ start)
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson started "$([ $STARTED -eq 1 ] && echo true || echo false)" \
         --arg pid "${pid:-}" \
-        '{ok:true, verb:"start", running:true, started:$started, base_url:$base,
+        "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"start", running:true,
+          started:$started, base_url:$base,
           pid:(if $pid == "" then null else ($pid|tonumber) end),
-          log:$log, served_aliases:$served, error:null, exit_code:0}')"
+          log:$log, served_aliases:$served, error:null, exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the start object"
     exit $EX_OK
     ;;
 
@@ -865,14 +1105,30 @@ stop)
     pid="$(read_pidfile)"
     if [ -z "$pid" ]; then
         probe
-        if [ $? -eq $EX_OK ]; then
+        # A listener that answered ANYTHING proves a gateway is there. Keying
+        # this on EX_OK alone meant a 401 — the gateway answering, with a
+        # token it did not like — read as "nothing is running": the empty-pid
+        # branch reported a clean stop that never happened, and the dead-pid
+        # branch below deleted the ownership record while a gateway served,
+        # which is the unstoppable-through-this-surface state this probe was
+        # added to prevent. PROBE_LISTENING is the signal do_start_locked
+        # already uses for the same decision.
+        if [ "$PROBE_LISTENING" -eq 1 ]; then
             say "a gateway is serving at $BASE_URL but $PIDFILE names no pid — refusing to guess which process to signal"
             emit "$(jq -nc --arg p "$PIDFILE" --argjson c $EX_USAGE \
-                '{ok:false, verb:"stop", result:"unmanaged", error:"a gateway is serving but the pidfile is empty or absent", pidfile:$p, exit_code:$c}')"
+                --arg rem "Find the serving process yourself and stop it, or restart the box's gateway by hand; this script refuses to guess which pid to signal." \
+                "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
+                  result:"unmanaged", error:"usage",
+                  detail:"a gateway is serving but the pidfile is empty or absent",
+                  remedy:$rem, pidfile:$p, exit_code:$c}')" \
+        || die "$EX_USAGE" "could not encode the stop refusal object"
             exit $EX_USAGE
         fi
         emit "$(jq -nc --arg p "$PIDFILE" \
-            '{ok:true, verb:"stop", result:"not_running", pid:null, pidfile:$p, error:null, exit_code:0}')"
+            "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
+              result:"not_running", pid:null, pidfile:$p, error:null,
+              exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the stop not_running object"
         exit $EX_OK
     fi
 
@@ -887,16 +1143,30 @@ stop)
         # writes $! before any liveness check, so a spawn that dies instantly on
         # AddrInUse against a gateway `gw` already started creates it by our hand.
         probe
-        if [ $? -eq $EX_OK ]; then
+        # A listener that answered ANYTHING proves a gateway is there. Keying
+        # this on EX_OK alone meant a 401 — the gateway answering, with a
+        # token it did not like — read as "nothing is running": the empty-pid
+        # branch reported a clean stop that never happened, and the dead-pid
+        # branch below deleted the ownership record while a gateway served,
+        # which is the unstoppable-through-this-surface state this probe was
+        # added to prevent. PROBE_LISTENING is the signal do_start_locked
+        # already uses for the same decision.
+        if [ "$PROBE_LISTENING" -eq 1 ]; then
             say "pid $pid is dead but a gateway is still serving at $BASE_URL — refusing to report a stop that did not happen, and leaving $PIDFILE alone"
             emit "$(jq -nc --argjson pid "$pid" --arg p "$PIDFILE" --argjson c $EX_USAGE \
-                '{ok:false, verb:"stop", result:"unmanaged", pid:$pid, pidfile:$p,
-                  error:"the recorded pid is dead but a gateway is still serving; not stopped", exit_code:$c}')"
+                --arg rem "A gateway is still serving under a pid this script did not record, so the pidfile was left alone. Stop that process yourself, then run start." \
+                "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
+                  result:"unmanaged", pid:$pid, pidfile:$p, error:"usage",
+                  detail:"the recorded pid is dead but a gateway is still serving; not stopped",
+                  remedy:$rem, exit_code:$c}')" \
+        || die "$EX_USAGE" "could not encode the stop refusal object"
             exit $EX_USAGE
         fi
         rm -f "$PIDFILE" "$PIDFILE.bin"
         emit "$(jq -nc --argjson pid "$pid" \
-            '{ok:true, verb:"stop", result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')"
+            "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
+              result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the stop stale_pidfile object"
         exit $EX_OK
     fi
 
@@ -914,9 +1184,14 @@ stop)
         # diagnostic question ("this pid is /usr/bin/foo, not the gateway")
         # without the copy. Sanitized as display text (KTD5).
         emit "$(jq -nc --argjson pid "$pid" --arg bin "$SPAWN_BIN" \
+            --arg rem "The recorded pid was recycled by an unrelated process, so nothing was signalled. Delete the stale pidfile named in this response, then run start." \
             --arg cmd "$(spawn::sanitize_for_display "$(pid_argv "$pid" | awk '{print $1}')")" --argjson c $EX_USAGE \
-            '{ok:false, verb:"stop", result:"pid_mismatch", pid:$pid, expected_binary:$bin, actual_command:$cmd,
-              error:"pidfile pid belongs to an unrelated process; not signalled", exit_code:$c}')"
+            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
+              result:"pid_mismatch", pid:$pid, expected_binary:$bin,
+              actual_command:$cmd, error:"usage",
+              detail:"pidfile pid belongs to an unrelated process; not signalled",
+              remedy:$rem, exit_code:$c}')" \
+        || die "$EX_USAGE" "could not encode the stop pid_mismatch object"
         exit $EX_USAGE
     fi
 
@@ -933,7 +1208,9 @@ stop)
     done
     rm -f "$PIDFILE" "$PIDFILE.bin"
     emit "$(jq -nc --argjson pid "$pid" \
-        '{ok:true, verb:"stop", result:"stopped", pid:$pid, error:null, exit_code:0}')"
+        "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
+          result:"stopped", pid:$pid, error:null, exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the stop stopped object"
     exit $EX_OK
     ;;
 
@@ -953,7 +1230,10 @@ restart)
     # applies "announced-but-broken is never success" a few lines above; restart
     # did not apply it to its own stop leg.
     if [ "$stop_rc" -ne "$EX_OK" ]; then
-        stop_reason="$(printf '%s' "$stop_out" | jq -r '.error // "no reason given"' 2>/dev/null)"
+        # .detail first: post-R23 `.error` carries the ENUM and the prose moved
+        # to `.detail`, so reading .error here printed "(usage)" where the
+        # sentence belonged. Same fix the lens and launch rewraps already carry.
+        stop_reason="$(printf '%s' "$stop_out" | jq -r '.detail // .error // "no reason given"' 2>/dev/null)"
         die "$EX_USAGE" "restart aborted: the stop phase exited $stop_rc without stopping the running gateway ($stop_reason) — the old process is still serving and was NOT replaced"
     fi
     start_if_down
@@ -970,9 +1250,12 @@ restart)
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson stop_rc "$stop_rc" \
         --arg pid "${pid:-}" \
-        '{ok:true, verb:"restart", running:true, base_url:$base,
+        "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"restart", running:true,
+          base_url:$base,
           pid:(if $pid == "" then null else ($pid|tonumber) end),
-          stop_exit_code:$stop_rc, served_aliases:$served, error:null, exit_code:0}')"
+          stop_exit_code:$stop_rc, served_aliases:$served, error:null,
+          exit_code:0}')" \
+        || die "$EX_USAGE" "could not encode the restart object"
     exit $EX_OK
     ;;
 
@@ -1000,13 +1283,63 @@ status)
     # a human what drifted; nothing parses them back into a path or a URL — so a
     # deep strip cannot break a functional value the way sanitizing `config` or
     # `base_url` would.
+    # R17/KD8. A served alias the table does not list is only drift if it is a
+    # DIFFERENT thing from something the table already lists, and that is decided
+    # from what the gateway says each alias resolves to — never from one name
+    # being a prefix of another. Prefix-stripping would hide a genuinely new
+    # model served as `claude-<new>`, which is the worse error in the other
+    # direction.
+    #
+    # Two sources say what an alias resolves to, and they are not equal in
+    # strength:
+    #
+    #   * the config's `models:` block ($cfg[a].model) — the model string
+    #     itself. Authoritative BOTH ways: equal strings mean the same model,
+    #     different strings mean different models.
+    #   * the model list's display_name ($disp[a]) — the gateway's own label.
+    #     Authoritative only for SAMENESS: the gateway generates the claude-*
+    #     aliases itself, so they never appear in `models:`, and an identical
+    #     display_name is the gateway stating they present as one model. Two
+    #     DIFFERENT labels prove nothing — a label is prose, and one model can
+    #     be labelled twice.
+    #
+    # So: the model string decides when we have it; display equality may only
+    # suppress; and an alias with neither a config entry nor a matching label is
+    # reported as unknown_resolution rather than being assumed equivalent.
+    # Assuming equivalence there is the same class of error as the false alarm
+    # this replaces, just pointing the other way.
     drift="$(jq -nc \
         --argjson served "$PROBE_ALIASES_JSON" \
         --argjson table "$tbl" \
         --argjson cfg "$CONFIG_MODELS_JSON" \
+        --argjson disp "$PROBE_DISPLAY_JSON" \
         "$SPAWN_SANITIZE_JQ_DEF"'
-        ($table.aliases // {}) as $t | {
-          missing_from_table: [ $served[] as $a | select(($t | has($a)) | not) | $a ],
+        ($table.aliases // {}) as $t |
+        # What the aliases the table DOES list resolve to. The config wins where
+        # it knows; the recorded model string in the table stands in where it
+        # does not, so a table entry for an alias absent from the models block
+        # still anchors its twins.
+        ([ $t | keys[] | (($cfg[.].model) // ($t[.].model) // empty) ]) as $known_models |
+        ([ $t | keys[] | (($disp[.]) // "") | select(. != "") ]) as $known_labels |
+        ([ $served[] as $a | select(($t | has($a)) | not)
+           | { alias: $a,
+               model: (($cfg[$a].model) // null),
+               label: (($disp[$a]) // "") } ]) as $unlisted |
+        # map/any, not index: a chain alias resolves to an ARRAY of model
+        # strings, and index() on an array argument searches for a subsequence
+        # rather than testing membership.
+        ([ $unlisted[] | . as $u
+           | $u + { verdict:
+                   (if $u.model != null then
+                        (if ($known_models | map(. == $u.model) | any)
+                         then "twin" else "drift" end)
+                    elif $u.label != ""
+                         and ($known_labels | map(. == $u.label) | any) then
+                        "twin"
+                    else "unknown" end) } ]) as $judged |
+        {
+          missing_from_table: [ $judged[] | select(.verdict == "drift") | .alias ],
+          unknown_resolution: [ $judged[] | select(.verdict == "unknown") | .alias ],
           missing_window: [ $t | to_entries[]
                             | select((.value.context_window // null) == null)
                             | .key ],
@@ -1029,6 +1362,13 @@ status)
     running=false
     [ $prc -eq $EX_OK ] && running=true
 
+    # R23: `error` is the enum, and the probe's prose — which is a real answer
+    # here, not a malfunction: exit 3 from `status` means "the gateway is down"
+    # — travels in `detail`. This emit used to put that prose straight into
+    # `error`, which is exactly the divergence a consumer's `.error` switch
+    # tripped over.
+    status_enum="$(spawn::enum_for_code "$prc")"
+
     # `|| die` because emit now refuses an empty payload: if either jq program
     # above ever errors again, this must become an honest non-zero failure rather
     # than a silent exit-0 with no object on stdout.
@@ -1047,8 +1387,10 @@ status)
         --argjson drift "$drift" \
         --argjson models "$models_view" \
         --arg detail "$(spawn::sanitize_for_display "${PROBE_DETAIL:-}")" \
+        --arg errenum "$status_enum" \
+        --arg rem "$(remedy_for "$status_enum")" \
         --argjson c "$prc" \
-        '{ok: ($c == 0), verb:"status", running:$running, base_url:$base,
+        "$(spawn::envelope_jq plugin)"' + {ok: ($c == 0), verb:"status", running:$running, base_url:$base,
           install_dir:(if $install == "" then null else $install end),
           binary:(if $bin == "" then null else $bin end),
           config:(if $cfg == "" then null else $cfg end),
@@ -1057,7 +1399,9 @@ status)
           pid:(if $pid == "" then null else ($pid|tonumber) end),
           pid_verified:$pid_verified,
           served_aliases:$served, models:$models, drift:$drift,
-          error:(if $detail == "" then null else $detail end),
+          error:(if $errenum == "" then null else $errenum end),
+          detail:(if $detail == "" then null else $detail end),
+          remedy:(if $rem == "" then null else $rem end),
           exit_code:$c}')" \
         || die "$EX_USAGE" "could not encode the status object (models table at $MODELS_JSON may be malformed)"
     exit $prc

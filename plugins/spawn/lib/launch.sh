@@ -104,7 +104,30 @@ say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
 # globals dynamically.
 EMITTED=0
 
+# R11 — the help discriminator. Same field, same reasoning, same values as
+# lens.sh: `-h` and a caller bug are both exit 2 with error:"usage" because the
+# enum is frozen (KTD2), and telling them apart used to mean grepping the
+# English in `detail`. Rides on every error response, both encoder tiers.
+HELP_REQUESTED=false
+
 ALIAS=""
+
+# R12 — launch's own error vocabulary, falling through to the shared table in
+# common.sh. Keyed on the ENUM: two sites reporting the same value must not hand
+# a caller two different repairs. A narrower site overrides with a `REMEDY=...`
+# prefix on die.
+remedy_for() {
+    case "$1" in
+        seed_failed)
+            printf 'No session was created, so there is nothing to attach to and nothing to clean up. Read `detail` and the stderr this printed; a seed that fails on its first turn usually means the alias or the token is wrong, not the prompt.' ;;
+        no_session_id)
+            printf 'The `claude` CLI ran but its JSON no longer carries the field this script reads. That is a plugin-vs-CLI version mismatch, not a caller mistake — no handle is printed rather than one built on a guess.' ;;
+        transcript_missing)
+            printf 'The CLI reported a session that is not on disk where this script looks. Check CLAUDE_CONFIG_DIR points at the same config directory the CLI used, then run again.' ;;
+        *) spawn::remedy_for "$1" ;;
+    esac
+}
+
 emit_error() {
     # $1 = exit code, $2 = machine-readable error value, rest = human detail.
     local code="$1" err="$2"; shift 2
@@ -118,15 +141,33 @@ emit_error() {
     # closed by construction yet. jq escapes a control byte in transit but
     # emits a Unicode bidi override literally, so the field is sanitized.
     alias_d="$(spawn::sanitize_for_display "$ALIAS")"
+    # R23: the envelope comes from common.sh, so this tier cannot drift from the
+    # success emit below or from the no-jq tier under it. REMEDY is the optional
+    # per-site remedy (R12) — a caller sets it as a prefix assignment on die.
+    # R12: the site's own REMEDY wins; otherwise the enum's default from the one
+    # table. Defaulting here rather than at every die site is what makes "every
+    # error names its remedy" a property of the code shape rather than a review
+    # item that goes stale on the next site somebody adds.
+    local rem="${REMEDY:-}"
+    [ -n "$rem" ] || rem="$(remedy_for "$err")"
+    local obj=""
     if command -v jq >/dev/null 2>&1; then
-        emit "$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" --argjson c "$code" \
-            '{ok:false, alias:(if $a == "" then null else $a end), session_id:null,
+        obj="$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" \
+            --arg r "$rem" --argjson c "$code" --argjson h "$HELP_REQUESTED" \
+            "$(spawn::envelope_jq plugin)"' + {ok:false,
+              alias:(if $a == "" then null else $a end), session_id:null,
               transcript_path:null, cwd:null, base_url:null, context_window:null,
-              attach_command:null, error:$e, detail:$d, exit_code:$c}')"
-    else
-        EMITTED=1
-        printf '{"ok":false,"alias":null,"session_id":null,"transcript_path":null,"attach_command":null,"error":"%s","exit_code":%s}\n' "$err" "$code"
+              attach_command:null, error:$e, detail:$d, help_requested:$h,
+              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
     fi
+    # Falls through to the pure-bash tier when jq is ABSENT and also when jq is
+    # present but errored: that yielded the empty string, emit refused it, and
+    # the script exited with nothing on stdout at all.
+    # help_requested rides the no-jq tier too — a box without an encoder must
+    # still be able to tell a help request from a caller bug, and it is a bash
+    # literal, so no encoder is needed for it.
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
+    emit "$obj"
 }
 
 die() {
@@ -186,7 +227,8 @@ tmpwork() {
             # KTD2 is "exactly one JSON object on stdout, ALWAYS", and that
             # includes this path — it used to exit 2 printing nothing at all.
             printf '✗ cannot create a temp dir\n' >&2
-            emit_error 2 "usage" "cannot create a temp dir under ${TMPDIR:-/tmp}"
+            REMEDY="Point TMPDIR at a writable directory and call again. Nothing was seeded, so no session exists to clean up." \
+                emit_error 2 "usage" "cannot create a temp dir under ${TMPDIR:-/tmp}"
             exit 2; }
     fi
 }
@@ -194,7 +236,10 @@ tmpwork() {
 need_jq() {
     command -v jq >/dev/null 2>&1 || {
         printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
-        printf '{"ok":false,"alias":null,"session_id":null,"attach_command":null,"error":"usage","exit_code":2}\n'
+        # Same envelope, same constants, no encoder (R23 / KTD7): this is the
+        # tier that used to be a hand-written string and drifted from the other
+        # two the moment either changed.
+        emit "$(spawn::envelope_bash plugin "usage" 2 ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it.")"
         exit 2
     }
 }
@@ -221,6 +266,148 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# --describe (R10, R14, KD2). Same arm, same reasoning as lens.sh: the contract
+# as data at exit 0, for the consumer that cannot load a command or a skill.
+#
+# It answers before preflight, so it holds with the gateway down and with no
+# config on the box — a caller reads the contract in order to interpret a
+# failure, and one that needed a healthy gateway would be missing exactly then.
+#
+# It does require jq, like every other success-shaped response here: the
+# pure-bash tier encodes failures only, because a payload built without an
+# encoder means a hand-written envelope, which is the drift R23 closes.
+# ---------------------------------------------------------------------------
+emit_describe() {
+    # SEED_TIMEOUT is env-overridable, so it is a SOURCE: a non-numeric value
+    # exported by the caller would make --argjson fail and take down the one arm
+    # that must answer under any conditions. Reported as absent instead; the
+    # validation below still refuses it on a real launch.
+    local ev d_timeout
+    if [[ "$SEED_TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then d_timeout="$SEED_TIMEOUT"; else d_timeout="null"; fi
+
+    # U2 (KD6, KTD3): the family -> tier -> alias grammar session.md reads
+    # prose against, as data. Same normalization as table_json() in
+    # spawnctl.sh (malformed collapses to empty, never reaches --argjson
+    # unparsed). MODELS_JSON is already this script's global for the launched
+    # session's context window; reused here rather than re-derived.
+    local grammar
+    grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
+    if [ -f "$MODELS_JSON" ]; then
+        grammar="$(jq -c '
+            def safeobj: if type == "object" then . else {} end;
+            def safe_families:
+                ((.families // {}) | safeobj)
+                | map_values(
+                    if type == "object" then
+                        ((.default // null) as $d
+                         | (.tiers // {}) as $t
+                         | {
+                             default: (if ($d|type) == "string" then $d else null end),
+                             tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
+                           })
+                    else empty end
+                  );
+            def safe_chain_policy:
+                ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+            if (type == "object") then {
+                families: safe_families,
+                no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
+                chain_policy: safe_chain_policy
+            } else {families:{}, no_family_alias:null, chain_policy:{}} end
+        ' < "$MODELS_JSON" 2>/dev/null)" || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
+        [ -n "$grammar" ] || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
+    fi
+
+    ev="$(jq -n \
+        --arg r_usage "$(remedy_for usage)" \
+        --arg r_unreach "$(remedy_for unreachable)" \
+        --arg r_alias "$(remedy_for alias_unknown)" \
+        --arg r_auth "$(remedy_for auth_rejected)" \
+        --arg r_dead "$(remedy_for deadline_exceeded)" \
+        --arg r_pre "$(remedy_for preflight_failed)" \
+        --arg r_seed "$(remedy_for seed_failed)" \
+        --arg r_sid "$(remedy_for no_session_id)" \
+        --arg r_tr "$(remedy_for transcript_missing)" \
+        '[{value:"usage",             exit_code:2, remedy:$r_usage},
+          {value:"unreachable",       exit_code:3, remedy:$r_unreach},
+          {value:"alias_unknown",     exit_code:4, remedy:$r_alias},
+          {value:"auth_rejected",     exit_code:7, remedy:$r_auth},
+          {value:"seed_failed",       exit_code:5, remedy:$r_seed},
+          {value:"no_session_id",     exit_code:5, remedy:$r_sid},
+          {value:"transcript_missing",exit_code:5, remedy:$r_tr},
+          {value:"deadline_exceeded", exit_code:6, remedy:$r_dead},
+          {value:"preflight_failed",  exit_code:3, remedy:$r_pre}]')" || return 1
+
+    emit "$(jq -nc --argjson errors "$ev" --argjson timeout "$d_timeout" --argjson grammar "$grammar" \
+        "$(spawn::envelope_jq plugin)"' + {
+          ok:true, error:null, exit_code:0,
+          response_kind:"describe",
+          families:$grammar.families,
+          no_family_alias:$grammar.no_family_alias,
+          chain_policy:$grammar.chain_policy,
+          surface:"launch.sh",
+          summary:"Materialize a Claude Code session on a gateway alias and print a handle to attach with later. Nothing is opened; no terminal is taken over.",
+          prompt_input:["stdin","--prompt-file"],
+          argv_prompt_accepted:false,
+          flags:[
+            {name:"--alias",       value:"alias", required:true,  default:null,
+             note:"exactly one; grammar [A-Za-z0-9._-]+"},
+            {name:"--prompt-file", value:"path",  required:false, default:null,
+             note:"alternative to stdin for the seed prompt"},
+            {name:"--cwd",         value:"dir",   required:false, default:"the current directory",
+             note:"pins the session project directory; resolved to its physical path"},
+            {name:"--help",        value:null,    required:false, default:null,
+             note:"exit 2 with help_requested:true — not a usage error"},
+            {name:"--describe",    value:null,    required:false, default:null,
+             note:"this document; exit 0; needs neither a running gateway nor a config"}
+          ],
+          exit_codes:[
+            {code:0, error:null,                origin:"own",
+             meaning:"the session exists on disk and the handle is real"},
+            {code:2, error:"usage",             origin:"own",
+             meaning:"caller bug or help; branch on help_requested"},
+            {code:3, error:"unreachable",       origin:"own",
+             meaning:"the gateway is down and could not be started"},
+            {code:4, error:"alias_unknown",     origin:"propagated",
+             meaning:"decided by spawnctl ensure; preflight.served_aliases lists what is served"},
+            {code:5, error:"seed_failed",       origin:"own",
+             meaning:"past preflight, then the seed run failed; error names the sub-class and no handle is printed"},
+            {code:6, error:"deadline_exceeded", origin:"own",
+             meaning:"the seed outlived SPAWN_LAUNCH_TIMEOUT; the child was stopped and reaped"},
+            {code:7, error:"auth_rejected",     origin:"propagated",
+             meaning:"the gateway is up and refused our token"}
+          ],
+          error_values:$errors,
+          response_fields:[
+            {name:"schema",          always:true,  note:"the version of this contract"},
+            {name:"ok",              always:true,  note:"boolean; agrees with exit_code"},
+            {name:"error",           always:true,  note:"enum value or null, never prose"},
+            {name:"remedy",          always:true,  note:"what to do about it; null only on success"},
+            {name:"detail",          always:true,  note:"human-readable diagnostic; the only prose field"},
+            {name:"content_trust",   always:true,  note:"how far the payload may be trusted"},
+            {name:"content_notice",  always:true,  note:"the rule that follows from content_trust"},
+            {name:"exit_code",       always:true,  note:"the process exit status, restated in the data"},
+            {name:"alias",           always:false, note:"the resolved alias, null when none was accepted"},
+            {name:"session_id",      always:false, note:"the materialized session; success only"},
+            {name:"transcript_path", always:false, note:"the transcript on disk, checked to exist before the handle is printed"},
+            {name:"cwd",             always:false, note:"the pinned project directory the handle resolves against"},
+            {name:"base_url",        always:false, note:"the gateway base url the session was seeded through"},
+            {name:"context_window",  always:false, note:"from the plugin models table; null when the alias is not listed"},
+            {name:"attach_command",  always:false, note:"a bash command that resumes the session; carries a token reference, never a token"},
+            {name:"preflight",       always:false, note:"spawnctl ensure object on a preflight failure"},
+            {name:"help_requested",  always:false, note:"true only for --help; present on every error response"},
+            {name:"families",        always:false, note:"--describe only: the declared family -> tier -> alias grammar (KTD3) session.md resolves prose against"},
+            {name:"no_family_alias", always:false, note:"--describe only: the alias prose naming no family resolves to"},
+            {name:"chain_policy",    always:false, note:"--describe only: whether this surface accepts a chain alias"}
+          ],
+          seed_timeout_seconds:$timeout,
+          tools_on_far_side:true,
+          token_in_output:false
+        }')" || return 1
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 PROMPT_FILE=""
@@ -234,9 +421,21 @@ while [ $# -gt 0 ]; do
         --prompt-file=*) PROMPT_FILE="${1#*=}"; shift ;;
         --cwd)           CWD_ARG="${2:-}"; shift; shift 2>/dev/null || true ;;
         --cwd=*)         CWD_ARG="${1#*=}"; shift ;;
-        -h|--help)       usage; need_jq; die "$EX_USAGE" "usage" "help requested" ;;
+        --describe)      need_jq
+                         # Answered here, before --alias is required and long
+                         # before preflight — so it holds with the gateway down
+                         # and with no config on the box (R10).
+                         emit_describe || die "$EX_USAGE" "usage" "could not encode the describe object"
+                         exit "$EX_OK" ;;
+        -h|--help)       # R11: same exit code, same enum, different FIELD. Set
+                         # before need_jq so the no-jq tier carries it too.
+                         HELP_REQUESTED=true
+                         usage; need_jq
+                         REMEDY="Nothing is broken — this was a help request, and exit 2 is what the frozen enum has for it. Branch on help_requested, not on the code. Call --describe for the same contract as data." \
+                             die "$EX_USAGE" "usage" "help requested" ;;
         *)
             need_jq
+            REMEDY="Pass the seed prompt on stdin or with --prompt-file, not as a bare argument. Run --describe for the flags this script accepts." \
             die "$EX_USAGE" "usage" "unexpected argument '$1' — the seed prompt is piped on stdin or passed with --prompt-file"
             ;;
     esac
@@ -244,14 +443,16 @@ done
 
 need_jq
 
-[ -n "$ALIAS" ] || { usage; die "$EX_USAGE" "usage" "--alias is required"; }
+[ -n "$ALIAS" ] || { usage; REMEDY="Pass exactly one --alias. 'spawnctl.sh status' lists what the gateway serves." \
+    die "$EX_USAGE" "usage" "--alias is required"; }
 validate_alias "$ALIAS"
 
 # Positive, not merely numeric — same reasoning as the lens's --timeout (R1):
 # 0 would read as "no artificial limit" and mean an unbounded seed run, which
 # under an unattended caller looks like work in progress forever.
 [[ "$SEED_TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [ "$(awk -v v="$SEED_TIMEOUT" 'BEGIN{print (v > 0)}')" = "1" ] \
-    || die "$EX_USAGE" "usage" "SPAWN_LAUNCH_TIMEOUT must be a POSITIVE number of seconds, got '$SEED_TIMEOUT'"
+    || REMEDY="Set SPAWN_LAUNCH_TIMEOUT to a positive number of seconds, or unset it for the default. Zero would mean an unbounded seed run, which an unattended caller cannot tell from work in progress." \
+        die "$EX_USAGE" "usage" "SPAWN_LAUNCH_TIMEOUT must be a POSITIVE number of seconds, got '$SEED_TIMEOUT'"
 
 # ---------------------------------------------------------------------------
 # Pin the working directory (U4 step 3).
@@ -263,7 +464,8 @@ validate_alias "$ALIAS"
 # the handle reproducible from anywhere else, which is what AE3 tests.
 # ---------------------------------------------------------------------------
 PIN_CWD="$(cd "${CWD_ARG:-$PWD}" 2>/dev/null && pwd -P)"
-[ -n "$PIN_CWD" ] || die "$EX_USAGE" "usage" "--cwd '${CWD_ARG:-$PWD}' is not a directory we can enter"
+[ -n "$PIN_CWD" ] || REMEDY="Pass a --cwd that exists and is enterable by this process, or omit it to use the current directory." \
+    die "$EX_USAGE" "usage" "--cwd '${CWD_ARG:-$PWD}' is not a directory we can enter"
 
 # ---------------------------------------------------------------------------
 # Seed prompt intake. Same discipline as the lens (KTD8): stdin or a file, never
@@ -271,16 +473,20 @@ PIN_CWD="$(cd "${CWD_ARG:-$PWD}" 2>/dev/null && pwd -P)"
 # the prompt is not a secret; only the token carries the argv prohibition.
 # ---------------------------------------------------------------------------
 if [ -n "$PROMPT_FILE" ]; then
-    [ -f "$PROMPT_FILE" ] || die "$EX_USAGE" "usage" "--prompt-file '$PROMPT_FILE' is not a readable file"
-    PROMPT="$(cat "$PROMPT_FILE")" || die "$EX_USAGE" "usage" "could not read --prompt-file '$PROMPT_FILE'"
+    [ -f "$PROMPT_FILE" ] || REMEDY="Check the path exists and is readable by this process, then call again." \
+        die "$EX_USAGE" "usage" "--prompt-file '$PROMPT_FILE' is not a readable file"
+    PROMPT="$(cat "$PROMPT_FILE")" || REMEDY="Check the file's permissions and that it is a regular file, then call again." \
+        die "$EX_USAGE" "usage" "could not read --prompt-file '$PROMPT_FILE'"
 else
     if [ -t 0 ]; then
         usage
-        die "$EX_USAGE" "usage" "no seed prompt: stdin is a terminal and --prompt-file was not given"
+        REMEDY="Pipe the seed prompt on stdin or pass --prompt-file. Reading a terminal would block forever, which an unattended caller cannot tell from work in progress." \
+            die "$EX_USAGE" "usage" "no seed prompt: stdin is a terminal and --prompt-file was not given"
     fi
     PROMPT="$(cat)"
 fi
-[ -n "$PROMPT" ] || die "$EX_USAGE" "usage" "the seed prompt is empty — a session seeded with nothing is not worth a handle"
+[ -n "$PROMPT" ] || REMEDY="Send a non-empty seed prompt. Check that whatever produced it on stdin actually wrote something." \
+    die "$EX_USAGE" "usage" "the seed prompt is empty — a session seeded with nothing is not worth a handle"
 
 # ---------------------------------------------------------------------------
 # Preflight (U4 step 1): spawnctl.sh ensure <alias>.
@@ -297,24 +503,30 @@ fi
 ENSURE_OUT="$(bash "$CTL" ensure "$ALIAS")"
 ENSURE_RC=$?
 if [ "$ENSURE_RC" -ne 0 ]; then
-    # Enum from the CODE, which KTD2 defines — never re-parsed out of prose.
-    case "$ENSURE_RC" in
-        2) PRE_ENUM="usage" ;;
-        3) PRE_ENUM="unreachable" ;;
-        4) PRE_ENUM="alias_unknown" ;;
-        7) PRE_ENUM="auth_rejected" ;;
-        *) PRE_ENUM="preflight_failed" ;;
-    esac
+    # Enum from the CODE, which KTD2 defines — never re-parsed out of prose. The
+    # table lives in common.sh (R23), and spawnctl derives its own `error` from
+    # the same one, so the two sides agree by construction.
+    PRE_ENUM="$(spawn::enum_for_code "$ENSURE_RC")"
+    [ -n "$PRE_ENUM" ] || PRE_ENUM="preflight_failed"
     PRE_JSON="$(printf '%s' "$ENSURE_OUT" | jq -c '.' 2>/dev/null)" || PRE_JSON=""
     [ -n "$PRE_JSON" ] || PRE_JSON="null"
-    PRE_DETAIL="$(printf '%s' "$ENSURE_OUT" | jq -r '.error // empty' 2>/dev/null)"
+    # `detail` first, `error` second: since the enum reconciliation ensure's
+    # `error` IS the enum and its prose moved to `detail`.
+    PRE_DETAIL="$(printf '%s' "$ENSURE_OUT" | jq -r '.detail // .error // empty' 2>/dev/null)"
     [ -n "$PRE_DETAIL" ] || PRE_DETAIL="spawnctl ensure failed with code $ENSURE_RC and printed nothing"
+    # R12: built directly rather than through emit_error, so the remedy is
+    # looked up here too — same table, same enum. This is the failure a caller
+    # meets most often, and it was the one with no instruction attached.
+    PRE_REMEDY="$(remedy_for "$PRE_ENUM")"
     emit "$(jq -nc --arg a "$ALIAS" --arg e "$PRE_ENUM" \
         --arg d "$(spawn::sanitize_for_display "$PRE_DETAIL")" \
+        --arg r "$PRE_REMEDY" \
         --argjson p "$PRE_JSON" --argjson c "$ENSURE_RC" \
-        '{ok:false, alias:$a, session_id:null, transcript_path:null, cwd:null,
-          base_url:null, context_window:null, attach_command:null,
-          error:$e, detail:$d, preflight:$p, exit_code:$c}')" \
+        "$(spawn::envelope_jq plugin)"' + {ok:false, alias:$a, session_id:null,
+          transcript_path:null, cwd:null, base_url:null, context_window:null,
+          attach_command:null, error:$e, detail:$d, preflight:$p,
+          help_requested:false,
+          remedy:(if $r == "" then null else $r end), exit_code:$c}')" \
         || emit_error "$ENSURE_RC" "$PRE_ENUM" "$PRE_DETAIL"
     exit "$ENSURE_RC"
 fi
@@ -521,8 +733,10 @@ emit "$(jq -nc \
     --arg base "$BASE_URL" \
     --arg attach "$ATTACH" \
     --arg win "$CONTEXT_WINDOW" \
-    '{ok:true, alias:$alias, session_id:$sid, transcript_path:$tr, cwd:$cwd,
-      base_url:$base,
+    "$(spawn::envelope_jq plugin)"' + {ok:true, alias:$alias, session_id:$sid,
+      transcript_path:$tr, cwd:$cwd, base_url:$base,
       context_window:(if $win == "" then null else ($win|tonumber) end),
-      attach_command:$attach, error:null, exit_code:0}')"
+      attach_command:$attach, error:null, exit_code:0}')" \
+    || REMEDY="The session was created but jq could not encode the handle. Check jq is a working build; the session exists on disk, so it can be resumed by session id without re-seeding." \
+        die "$EX_USAGE" "usage" "could not encode the response object"
 exit $EX_OK

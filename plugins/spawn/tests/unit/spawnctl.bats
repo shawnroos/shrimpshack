@@ -363,8 +363,14 @@ count_gateway_procs() {
     ctl ensure alpha
     [ "$status" -eq 3 ]
     [ "$(echo "$output" | jq -s 'length')" = "1" ]
-    # The refusal is named, and nothing was spawned.
-    echo "$output" | jq -r '.error' | grep -q 'refusing to start'
+    # The refusal is named, and nothing was spawned. Since U3's envelope (R23)
+    # `error` carries the ENUM a caller switches on and the prose lives in
+    # `detail` — this script used to put English in `error` while lens.sh and
+    # launch.sh put an enum there, which is what made forwarding a preflight
+    # object unsafe. Both halves are asserted: the enum a machine reads, and
+    # the sentence a human reads.
+    [ "$(echo "$output" | jq -r '.error')" = "unreachable" ]
+    echo "$output" | jq -r '.detail' | grep -q 'refusing to start'
     [ "$(count_gateway_procs "$WORK/install")" -eq 0 ]
 }
 
@@ -621,6 +627,82 @@ write_table() {
     [ "$(echo "$output" | jq -r '.drift.model_drift[0].current')" = "openrouter/vendor/NEW-model" ]
 }
 
+# --- R17: equivalence comes from what the gateway resolves to (KD8) ---------
+#
+# The gateway serves every model twice — once under its configured name and
+# once under a `claude-` prefixed name for the Anthropic-shaped route. Treating
+# each prefixed twin as a missing table entry made drift 100% false alarms on
+# the live gateway, and a surface that cries wolf gets ignored. Stripping the
+# prefix would be the other error: a genuinely NEW model served as
+# `claude-<new>` would vanish. So equivalence is read off the gateway.
+
+@test "drift 4 (AE7): two aliases resolving to the same model are not drift" {
+    start_fixture healthy "alpha,alpha-mirror,claude-alpha"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" \
+        "alpha=up/alpha" "alpha-mirror=up/alpha" "claude-alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    write_table '{"aliases":{"alpha":{"context_window":1000,"source":"test","model":"up/alpha","chain":false}}}'
+
+    ctl status
+    [ "$status" -eq 0 ]
+    # Neither the differently-spelled twin nor the prefixed one is drift: the
+    # config says all three are up/alpha, which the table already carries.
+    [ "$(echo "$output" | jq -r '.drift.missing_from_table|length')" = "0" ]
+    [ "$(echo "$output" | jq -r '.drift.unknown_resolution|length')" = "0" ]
+}
+
+@test "drift 4b (AE7): a prefixed alias resolving to a DIFFERENT model is reported" {
+    start_fixture healthy "alpha,claude-alpha"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" \
+        "alpha=up/alpha" "claude-alpha=up/something-else"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    write_table '{"aliases":{"alpha":{"context_window":1000,"source":"test","model":"up/alpha","chain":false}}}'
+
+    ctl status
+    [ "$status" -eq 0 ]
+    # The name is prefixed, the model is new — that is real drift, and hiding it
+    # is worse than the false alarm this rule replaced.
+    [ "$(echo "$output" | jq -r '.drift.missing_from_table|join(",")')" = "claude-alpha" ]
+    [ "$(echo "$output" | jq -r '.drift.unknown_resolution|length')" = "0" ]
+}
+
+@test "drift 5: a served alias whose resolution is unavailable is reported unknown" {
+    # `mystery` is served but absent from the config's models: block, and the
+    # model list gives it a display name matching nothing the table carries. So
+    # the gateway states nothing about what it resolves to. Reporting it as a
+    # twin would be the same wrong-suppression the prefix rule would have been.
+    start_fixture healthy "alpha,mystery"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    write_table '{"aliases":{"alpha":{"context_window":1000,"source":"test","model":"up/alpha","chain":false}}}'
+
+    ctl status
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.drift.unknown_resolution|join(",")')" = "mystery" ]
+    # Not silently equivalent, and not asserted to be new either.
+    [ "$(echo "$output" | jq -r '.drift.missing_from_table|length')" = "0" ]
+}
+
+@test "drift: the prose rendering still has one machine-readable object under it" {
+    # R18. The command body renders prose FROM this object; a Bash-only consumer
+    # still parses the object itself, so the response stays one JSON object with
+    # the envelope and every drift class present.
+    start_fixture healthy "alpha,claude-alpha,mystery"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" \
+        "alpha=up/alpha" "claude-alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    write_table '{"aliases":{"alpha":{"context_window":1000,"source":"test","model":"up/alpha","chain":false}}}'
+
+    ctl status
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '[.schema,.ok,.error,.exit_code]|length')" = "4" ]
+    [ "$(echo "$output" | jq -r '.exit_code')" = "0" ]
+    [ "$(echo "$output" | jq -r '.drift|keys|sort|join(",")')" \
+        = "missing_from_table,missing_window,model_drift,unknown_resolution" ]
+    [ "$(echo "$output" | jq -r '.served_aliases|length')" = "3" ]
+}
+
 @test "no drift: the shipped models.json matches the config it was seeded from" {
     start_fixture healthy "alpha"
     make_config "$WORK/gateway.yaml" 4000 "$TOKEN" \
@@ -737,4 +819,49 @@ EOF
     [ "$status" -ne 0 ]
     run grep -q -- '--config' "$WORK/curl-argv.txt"
     [ "$status" -eq 0 ]
+}
+
+# --- stop: a listener that answers ANYTHING is a listener --------------------
+#
+# Both branches below used to key on the probe returning EX_OK, so a gateway
+# that answered 401 — proving it is alive, just not with our token — read as
+# "nothing is running". The empty-pidfile branch then reported a clean stop
+# that never happened, and the dead-pid branch deleted the ownership record
+# while a gateway served: the unstoppable-through-this-surface state the probe
+# was added to prevent. Both now key on PROBE_LISTENING.
+
+@test "stop: an AUTH-rejecting listener with an empty pidfile is refused, not reported stopped" {
+    start_fixture healthy "alpha"
+    # The fixture serves on $TOKEN; the config carries a different one, so the
+    # probe gets 401 (EX_AUTH) rather than EX_OK. A listener is still there.
+    make_config "$WORK/gateway.yaml" 4000 "wrong-token-entirely" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    : > "$WORK/.gateway.pid"
+
+    ctl stop
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -r '.result')" = "unmanaged" ]
+    [ "$(echo "$output" | jq -r '.ok')" = "false" ]
+}
+
+@test "stop: an AUTH-rejecting listener does not get the pidfile deleted under it" {
+    start_fixture healthy "alpha"
+    make_config "$WORK/gateway.yaml" 4000 "wrong-token-entirely" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    # A pid that is dead: the branch that used to rm -f the pidfile.
+    local dead; dead=$(bash -c 'echo $$')
+    while kill -0 "$dead" 2>/dev/null; do dead=$((dead + 1)); done
+    printf '%s\n' "$dead" > "$WORK/.gateway.pid"
+
+    ctl stop
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -r '.result')" = "unmanaged" ]
+    # The record survives: deleting it while a gateway serves is the bug.
+    [ -s "$WORK/.gateway.pid" ]
 }
