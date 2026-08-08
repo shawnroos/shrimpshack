@@ -32,6 +32,16 @@ setup() {
     # otherwise be indistinguishable from one this test just leaked.
     export TMPDIR="$WORK/tmp"
     mkdir -p "$TMPDIR"
+    # lens.sh now sources secrets.sh for the env/Keychain token fallback, so the
+    # `security` seam has to be redirected here too. Without this, any test
+    # whose config carries no token would query the REAL login Keychain of
+    # whoever runs the suite.
+    export SPAWN_SECURITY_BIN="$FIX/fake-security.sh"
+    export FAKE_SECURITY_STORE_DIR="$WORK/kc-store"
+    export FAKE_SECURITY_RECORD_DIR="$WORK/kc-record"
+    export SPAWN_KEYCHAIN_SERVICE="spawn-gateway-test"
+    export SPAWN_KEYCHAIN_ACCOUNT_TOKEN="gateway-token-test"
+    unset GATEWAY_TOKEN
     export SPAWN_CONNECT_TIMEOUT=2
     export SPAWN_PROBE_TIMEOUT=5
     export SPAWN_START_TIMEOUT=10
@@ -69,7 +79,15 @@ make_config() {
     {
         printf 'server:\n'
         printf '  bind: "127.0.0.1:4000"\n'
-        printf '  token: %s        # Bearer or x-api-key\n' "$token"
+        # An EMPTY token omits the line entirely, because that is what `setup`
+        # actually leaves behind when it retires the config token — it removes
+        # the key rather than blanking it. Writing `token:` with the trailing
+        # comment still attached would model a state setup never produces, and
+        # every parser reads that as the literal comment text (a garbage
+        # non-empty token) rather than as absent.
+        if [ -n "$token" ]; then
+            printf '  token: %s        # Bearer or x-api-key\n' "$token"
+        fi
         printf '\nmodels:\n'
         local spec
         for spec in "$@"; do
@@ -850,4 +868,68 @@ allowlist_lint() {  # <readme>
     # requirement, so the only way to hold it is to assert the absence.
     run bash -c "sed 's/#.*//' '$LENS' | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
     [ "$status" -ne 0 ]
+}
+
+# --- R27: the token fallback reaches THIS surface, not just spawnctl ---------
+#
+# R27 added env-then-Keychain resolution to spawnctl's probe and left lens.sh
+# reading the config alone. Once setup retired the config token, `spawnctl
+# status` authenticated and a real lens call 401'd — the exact split lens.sh's
+# own comment calls undebuggable from the outside. These pin the chain here.
+
+# seed_keychain <value> — fed the way secrets.sh feeds it: twice, on stdin, to
+# a trailing bare -w.
+seed_keychain() {
+    printf '%s\n%s\n' "$1" "$1" \
+        | "$SPAWN_SECURITY_BIN" add-generic-password \
+            -a "$SPAWN_KEYCHAIN_ACCOUNT_TOKEN" -s "$SPAWN_KEYCHAIN_SERVICE" -U -w
+}
+
+@test "R27: a config whose token was retired still authenticates, from the Keychain" {
+    start_fixture healthy "alpha" --response-text "keychain answer"
+    # Exactly the state `setup` leaves behind after it retires the config token.
+    make_config "$WORK/gateway.yaml" "" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    seed_keychain "$TOKEN"
+
+    lens "ping" --alias alpha
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.text')" = "keychain answer" ]
+    [ "$(echo "$output" | jq -r '.error')" = "null" ]
+}
+
+@test "R27: GATEWAY_TOKEN outranks the Keychain, matching spawnctl's order" {
+    start_fixture healthy "alpha" --response-text "env answer"
+    make_config "$WORK/gateway.yaml" "" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    # A WRONG value in the Keychain: if the order were reversed this 401s, so
+    # the assertion is load-bearing rather than passing on either branch.
+    seed_keychain "tok-wrong-should-not-be-used"
+    export GATEWAY_TOKEN="$TOKEN"
+
+    lens "ping" --alias alpha
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.text')" = "env answer" ]
+}
+
+@test "R27: the config token still wins over both, so a normal install is unchanged" {
+    start_fixture healthy "alpha" --response-text "config answer"
+    make_config "$WORK/gateway.yaml" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    seed_keychain "tok-wrong-should-not-be-used"
+
+    lens "ping" --alias alpha
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.text')" = "config answer" ]
+}
+
+@test "R27: no token anywhere is still a truthful 401, not an invented failure" {
+    start_fixture healthy "alpha"
+    make_config "$WORK/gateway.yaml" "" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    # Keychain deliberately empty.
+
+    lens "ping" --alias alpha
+    [ "$status" -eq 7 ]
+    [ "$(echo "$output" | jq -r '.error')" = "auth_rejected" ]
 }

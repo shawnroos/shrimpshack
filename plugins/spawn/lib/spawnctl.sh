@@ -344,22 +344,10 @@ resolve_token_fallback() {
         SPAWN_TOKEN_SOURCE="config"
         return 0
     fi
-    if [ -n "${GATEWAY_TOKEN:-}" ]; then
-        SPAWN_TOKEN_VALUE="$GATEWAY_TOKEN"
-        SPAWN_TOKEN_SOURCE="env"
-        return 0
-    fi
-    # keychain_exists first: it never produces the value, so a machine with no
-    # stored credential never runs a read at all.
-    if spawn::keychain_exists "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
-        local tok
-        tok="$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN")"
-        if [ -n "$tok" ]; then
-            SPAWN_TOKEN_VALUE="$tok"
-            SPAWN_TOKEN_SOURCE="keychain"
-        fi
-        tok=""
-    fi
+    # env-then-Keychain lives in secrets.sh so lens.sh and launch.sh run the
+    # SAME chain. When it lived here, they did not, and a retired config token
+    # made this probe authenticate while a real lens call 401'd.
+    spawn::token_fallback "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN" || true
     return 0
 }
 

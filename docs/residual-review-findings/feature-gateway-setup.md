@@ -273,3 +273,47 @@ that process. *(security, confidence 50)*
 - No test exercises a failing write inside `deliver_secrets`.
 - `strip_server_token` has no multi-line flow-sequence fixture.
 - No test drives a trailing-slash base-URL override.
+
+## R27 was only half-applied — found by the post-rebase end-to-end check
+
+**Severity: P1. Fixed in this branch.**
+
+R27 added the env-then-Keychain token fallback to `spawnctl.sh`'s probe and
+nowhere else. `lens.sh` and `launch.sh` each resolve their own credential (KTD6
+keeps the delivery builders separate on purpose), and both still read the
+config alone. Once `setup` retired the config token, `spawnctl status` reported
+`ok:true` while a real `lens` call returned exit 7 `auth_rejected` — which is
+exactly what the live check after the rebase hit.
+
+`lens.sh:615` had already written down why this is the worst shape for a bug:
+"a lens that authenticated with a different token than the probe would pass
+preflight and then 401, and that divergence is undebuggable from the outside."
+The comment was right and could not enforce itself.
+
+Fix: one chain, `spawn::token_fallback` in `secrets.sh`, called by all three.
+The `server.token` awk parsers stay duplicated (common.sh names them as
+deliberate); only the env/Keychain half is shared, and it resolves in-process,
+so no token crosses a boundary it did not already cross.
+
+`launch.sh` had **two** consumers, not one: the in-process token and the
+printed attach command, which re-resolves in the user's shell at attach time.
+Fixing only the first would have left a handle that works today and 401s hours
+later. Both now carry the chain; the attach test EXECUTES the printed command
+rather than grepping it for the fallback text.
+
+## Latent: a blanked `token:` line parses as its own trailing comment
+
+**Severity: P3. Not fixed — recorded deliberately.**
+
+All three parsers decomment with `[ \t]+#`, which needs whitespace before the
+`#`. A line like `  token:        # Bearer or x-api-key` (key present, value
+removed, comment kept) leaves the `#` flush against the start of the value, so
+every parser returns the literal `# Bearer or x-api-key` as the token — a
+non-empty garbage credential that also suppresses the R27 fallback, since that
+only fires on an empty value.
+
+Not reachable today: `setup` retires the token by removing the whole key, not
+by blanking it, and the real `gateway.yaml` has no `token:` line at all. It
+would bite anyone who blanks the value by hand. Left alone because the fix
+touches three parsers that KTD6/common.sh deliberately keep separate, and all
+three currently agree — there is no divergence here, only a shared blind spot.

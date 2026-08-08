@@ -280,3 +280,49 @@ spawn::generate_token() {
     [ "${#raw}" -ge "$len" ] || return "$SPAWN_SECRET_FAIL"
     printf '%s' "${raw:0:len}"
 }
+
+# ---------------------------------------------------------------------------
+# spawn::token_fallback <service> <account>
+# The gateway-token fallback chain, shared by every surface that authenticates
+# against the gateway: env GATEWAY_TOKEN, then the Keychain. Sets
+# SPAWN_TOKEN_VALUE and SPAWN_TOKEN_SOURCE; returns 1 having set neither when
+# no token is stored.
+#
+# WHY THIS IS SHARED WHEN THE PARSERS ARE NOT
+# -------------------------------------------
+# common.sh deliberately keeps the three `server.token` awk parsers duplicated.
+# This is the other half of the resolution and it must NOT be: R27 added the
+# Keychain step to spawnctl's probe and left lens.sh and launch.sh reading the
+# config alone, so once setup retired the config token the probe authenticated
+# and the lens 401'd. lens.sh:615 had already written down why that is the
+# worst possible split ("undebuggable from the outside") — it just could not
+# enforce it. One chain, one place, is the enforcement.
+#
+# It ASSIGNS rather than prints: a `$(...)` caller would run this in a subshell
+# and silently drop SPAWN_TOKEN_SOURCE, which is exactly the kind of quiet
+# half-working result this branch exists to stop shipping. Assigning also keeps
+# the value out of one more process's memory.
+#
+# keychain_exists runs first because it never produces the value, so a machine
+# with no stored credential never performs a read at all.
+# ---------------------------------------------------------------------------
+spawn::token_fallback() {
+    local -
+    set +x
+    local service="$1" account="$2" tok
+    if [ -n "${GATEWAY_TOKEN:-}" ]; then
+        SPAWN_TOKEN_VALUE="$GATEWAY_TOKEN"
+        SPAWN_TOKEN_SOURCE="env"
+        return 0
+    fi
+    if spawn::keychain_exists "$service" "$account"; then
+        tok="$(spawn::keychain_read "$service" "$account")"
+        if [ -n "$tok" ]; then
+            SPAWN_TOKEN_VALUE="$tok"
+            SPAWN_TOKEN_SOURCE="keychain"
+            tok=""
+            return 0
+        fi
+    fi
+    return 1
+}

@@ -28,6 +28,16 @@ setup() {
     mkdir -p "$SPAWN_SEARCH_ROOT"
     export TMPDIR="$WORK/tmp"
     mkdir -p "$TMPDIR"
+    # launch.sh now sources secrets.sh for the env/Keychain token fallback, and
+    # the attach command it prints embeds the same chain. Both have to run
+    # against the fixture `security`, or a tokenless-config test would query the
+    # REAL login Keychain of whoever runs the suite.
+    export SPAWN_SECURITY_BIN="$FIX/fake-security.sh"
+    export FAKE_SECURITY_STORE_DIR="$WORK/kc-store"
+    export FAKE_SECURITY_RECORD_DIR="$WORK/kc-record"
+    export SPAWN_KEYCHAIN_SERVICE="spawn-gateway-test"
+    export SPAWN_KEYCHAIN_ACCOUNT_TOKEN="gateway-token-test"
+    unset GATEWAY_TOKEN
     export SPAWN_CONNECT_TIMEOUT=2
     export SPAWN_PROBE_TIMEOUT=5
     export SPAWN_START_TIMEOUT=10
@@ -102,7 +112,13 @@ make_config() {
     {
         printf 'server:\n'
         printf '  bind: "127.0.0.1:4000"\n'
-        printf '  token: %s        # Bearer or x-api-key\n' "$token"
+        # An EMPTY token omits the line entirely: that is what `setup` leaves
+        # behind when it retires the config token — it removes the key rather
+        # than blanking it, and a blanked key with its comment still attached
+        # parses as the literal comment text, not as absent.
+        if [ -n "$token" ]; then
+            printf '  token: %s        # Bearer or x-api-key\n' "$token"
+        fi
         printf '\nmodels:\n'
         local spec
         for spec in "$@"; do
@@ -728,4 +744,79 @@ config_write_lint() {   # <script>
     launch --alias alpha
     [ "$status" -eq 0 ]
     [ -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'gwlaunch.*' 2>/dev/null)" ]
+}
+
+# --- R27: the token fallback reaches BOTH of launch's consumers --------------
+#
+# launch has two: the in-process TOKEN it exports into the seed run, and the
+# attach command, which re-resolves at ATTACH time in the user's shell. R27
+# originally covered neither — it landed in spawnctl's probe alone, so once
+# setup retired the config token the probe authenticated and both of these
+# 401'd. The attach one is the nastier half: a handle printed today would stop
+# working hours later with nothing on screen explaining why.
+
+seed_keychain() {
+    printf '%s\n%s\n' "$1" "$1" \
+        | "$SPAWN_SECURITY_BIN" add-generic-password \
+            -a "$SPAWN_KEYCHAIN_ACCOUNT_TOKEN" -s "$SPAWN_KEYCHAIN_SERVICE" -U -w
+}
+
+# Rewrite the config start_fixture wrote, dropping the token, and re-pin the
+# sha the R12 no-write assertions compare against.
+retire_config_token() {
+    local -a specs=() parts=()
+    local a
+    IFS=',' read -ra parts <<< "$1"
+    for a in "${parts[@]}"; do specs+=("$a=up/$a"); done
+    make_config "$WORK/gateway.yaml" "" "${specs[@]}"
+    CFG_SHA="$(shasum "$WORK/gateway.yaml" | awk '{print $1}')"
+}
+
+@test "R27: a retired config token still launches, resolved from the Keychain" {
+    start_fixture healthy "alpha"
+    retire_config_token "alpha"
+    seed_keychain "$TOKEN"
+
+    launch --alias alpha
+    [ "$status" -eq 0 ]
+    # The seed run received the Keychain token through the environment.
+    grep -qx -- "ANTHROPIC_AUTH_TOKEN=$TOKEN" "$FAKE_CLAUDE_RECORD_DIR/env"
+    # And the handle still carries no literal (R9 + KTD6).
+    echo "$output" | jq -r '.attach_command' | refute_stdin_match "$TOKEN"
+}
+
+@test "R27: the printed attach command re-resolves from the Keychain when EXECUTED" {
+    start_fixture healthy "alpha"
+    retire_config_token "alpha"
+    seed_keychain "$TOKEN"
+
+    launch --alias alpha
+    [ "$status" -eq 0 ]
+    local attach
+    attach="$(echo "$output" | jq -r '.attach_command')"
+    [ -n "$attach" ] && [ "$attach" != "null" ]
+    echo "$attach" | refute_stdin_match "$TOKEN"
+
+    # RUN it, from elsewhere. Asserting the fallback text merely APPEARS in the
+    # command would pass against a snippet that cannot resolve anything — the
+    # silent-pass class this branch exists to close. Only executing it proves
+    # the embedded chain reaches the Keychain.
+    run bash -c 'cd "$1" && eval "$2"' _ "$ELSEWHERE" "$attach"
+    [ "$status" -eq 0 ]
+    invocation "$FAKE_CLAUDE_RECORD_DIR/env" 2 | grep -qx -- "ANTHROPIC_AUTH_TOKEN=$TOKEN"
+}
+
+@test "R27: an attach command whose config still has its token does not consult the Keychain" {
+    start_fixture healthy "alpha"
+    # Config token intact; a WRONG value stored, so a wrong precedence 401s
+    # rather than passing on either branch.
+    seed_keychain "tok-wrong-should-not-be-used"
+
+    launch --alias alpha
+    [ "$status" -eq 0 ]
+    local attach; attach="$(echo "$output" | jq -r '.attach_command')"
+
+    run bash -c 'cd "$1" && eval "$2"' _ "$ELSEWHERE" "$attach"
+    [ "$status" -eq 0 ]
+    invocation "$FAKE_CLAUDE_RECORD_DIR/env" 2 | grep -qx -- "ANTHROPIC_AUTH_TOKEN=$TOKEN"
 }

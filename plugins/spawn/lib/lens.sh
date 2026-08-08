@@ -44,6 +44,16 @@ CTL="$SCRIPT_DIR/spawnctl.sh"
 # shellcheck source=./common.sh
 . "$SCRIPT_DIR/common.sh"
 
+# Sourced for spawn::token_fallback ONLY: the config parser below stays local
+# (common.sh names it as deliberately duplicated), but the env/Keychain half of
+# resolution is shared so this script and spawnctl's probe cannot present
+# different tokens to the same gateway.
+# shellcheck source=./secrets.sh
+. "$SCRIPT_DIR/secrets.sh"
+
+KEYCHAIN_SERVICE="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
+KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -646,6 +656,16 @@ fi
 TOKEN=""
 if [ -n "$CONFIG_PATH" ]; then
     TOKEN="$(expand_env_refs "$(read_server_token "$CONFIG_PATH")")"
+fi
+# Then the SAME env/Keychain fallback spawnctl's probe runs (R27). Without it a
+# setup that retired the config token leaves the probe passing and this call
+# 401'ing — the divergence the comment above calls undebuggable.
+if [ -z "$TOKEN" ]; then
+    SPAWN_TOKEN_VALUE=""
+    if spawn::token_fallback "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
+        TOKEN="$SPAWN_TOKEN_VALUE"
+    fi
+    SPAWN_TOKEN_VALUE=""
 fi
 # An empty token is not fatal here: the gateway answers with 401/403 and that
 # becomes exit 7, which is a truthful classification. Guessing a code before the
