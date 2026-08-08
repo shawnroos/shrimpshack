@@ -38,6 +38,13 @@ setup() {
     export SPAWN_START_TIMEOUT=10
     export SPAWN_LOCK_TIMEOUT=30
     unset SPAWN_INSTALL_DIR SPAWN_CONFIG SPAWN_MODELS_JSON
+    # U12. The job root is redirected into $WORK for the same reason the state
+    # home is: `status` now reads this worktree's job records, and a suite that
+    # read the REAL .spawn would report whatever a background job happened to
+    # leave there — which is a green that means nothing and a red that means
+    # someone else was working.
+    export SPAWN_JOB_ROOT="$WORK/.spawn"
+    unset SPAWN_JOB_RETENTION SPAWN_JOB_REPORT_LIMIT
     # Default the base URL at a port nothing serves. Without this a test that
     # forgets to point somewhere would probe the REAL gateway on 4000.
     export SPAWN_BASE_URL="http://127.0.0.1:1/anthropic"
@@ -1512,4 +1519,178 @@ EOS
     [ "$status" -eq 0 ]
     [ "$(echo "$output" | jq -r '.result')" = "stopped" ]
     ! kill -0 "$pid" 2>/dev/null
+}
+
+# --- U12: jobs appear in the report ----------------------------------------
+#
+# The record layer (lib/jobs.sh) is the unit under test in jobs.bats; what is
+# pinned HERE is that `status` reports what that layer resolves rather than what
+# a status file claims, and that a worktree with nothing running reports exactly
+# what it reported before this block existed.
+#
+# Records are built on disk rather than by running a real supervisor: a report
+# test that needed a live child would be testing U9, and would go red for a
+# reason that has nothing to do with the report.
+
+# make_job_record <handle> <state> [pid] [ended_at] [detail]
+# The four files `claim` writes, in the shape it writes them.
+make_job_record() {
+    local h="$1" state="$2" pid="${3:-}" ended="${4:-}" detail="${5:-}"
+    local dir="$SPAWN_JOB_ROOT/$h"
+    mkdir -p "$dir"
+    printf 'task: keep the suite green\ndeliverables: report.md\n' > "$dir/contract"
+    : > "$dir/log"
+    jq -nc --arg h "$h" --arg s "$state" --arg p "$pid" --arg en "$ended" \
+        --arg dt "$detail" \
+        '{schema:"spawn.job/v1", job_id:$h, state:$s,
+          pid:(if $p == "" then null else ($p|tonumber) end),
+          started_at:"2026-08-08T09:00:00Z",
+          ended_at:(if $en == "" then null else $en end),
+          detail:(if $dt == "" then null else $dt end)}' > "$dir/status.json"
+}
+
+# hold_lock <handle> — the worktree lock, as jobs.sh records it.
+hold_lock() {
+    mkdir -p "$SPAWN_JOB_ROOT/lock"
+    printf '%s\n' "$1" > "$SPAWN_JOB_ROOT/lock/job"
+}
+
+# start_fake_job <handle> <alias> — the stand-in supervisor: a process whose
+# argv carries the job's marker, which is the whole of what the record layer
+# identifies a job by. Sets JOB_PID and registers it for teardown.
+JOB_PID=""
+start_fake_job() {
+    local h="$1" alias="$2"
+    cat > "$WORK/fake-job.sh" <<'EOF'
+#!/usr/bin/env bash
+while :; do sleep 0.2; done
+EOF
+    chmod +x "$WORK/fake-job.sh"
+    bash "$WORK/fake-job.sh" "spawn-bg-agent=$h" --alias "$alias" &
+    JOB_PID=$!
+    HELPER_PIDS+=("$JOB_PID")
+}
+
+@test "U12: a running job and a finished one both appear, each with its own state" {
+    start_fixture healthy "alpha"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+
+    make_job_record "job-20260808T090000Z-1000" "done" "" "2026-08-08T09:30:00Z" "every deliverable present"
+    start_fake_job "job-20260808T100000Z-2000" "gpt-sol"
+    make_job_record "job-20260808T100000Z-2000" "running" "$JOB_PID"
+    hold_lock "job-20260808T100000Z-2000"
+
+    ctl status
+    [ "$status" -eq 0 ]
+    # R18: still ONE machine-readable object, with the gateway answer intact.
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.running')" = "true" ]
+
+    [ "$(echo "$output" | jq -r '.jobs.running')" = "job-20260808T100000Z-2000" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed|length')" = "2" ]
+    # Newest first.
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].handle')" = "job-20260808T100000Z-2000" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].state')" = "running" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].live')" = "true" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].alias')" = "gpt-sol" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].terminal')" = "false" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[1].handle')" = "job-20260808T090000Z-1000" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[1].state')" = "done" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[1].terminal')" = "true" ]
+    # Age and last activity are numbers, not prose for a reader to parse back.
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].age_seconds|type')" = "number" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].last_activity_seconds_ago|type')" = "number" ]
+}
+
+@test "U12/KTD6: a job whose process is gone is reported by its PROBED state, not its status file" {
+    start_fixture healthy "alpha"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+
+    # A record that claims `running` for a pid that is definitively dead. This
+    # is what a killed supervisor leaves behind: the writer was what died, so
+    # nothing ever rewrote the file, and the file still says running.
+    local gone; gone="$(dead_pid)"
+    make_job_record "job-20260808T110000Z-3000" "running" "$gone"
+    hold_lock "job-20260808T110000Z-3000"
+
+    # Precondition, asserted rather than assumed: the CLAIM on disk is running.
+    [ "$(jq -r '.state' < "$SPAWN_JOB_ROOT/job-20260808T110000Z-3000/status.json")" = "running" ]
+
+    ctl status
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.jobs.listed|length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].state')" = "failed" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].state_source')" = "probe" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].live')" = "false" ]
+    # And nothing is reported as running, however the file reads.
+    [ "$(echo "$output" | jq -r '.jobs.running')" = "null" ]
+    # And the file was NOT repaired to make the two agree: it still claims
+    # running, so the reported `failed` is genuinely the probe's answer and not
+    # a rewrite that would have made this test pass either way.
+    [ "$(jq -r '.state' < "$SPAWN_JOB_ROOT/job-20260808T110000Z-3000/status.json")" = "running" ]
+}
+
+@test "U12: with no job records the report is unchanged — no jobs key at all" {
+    start_fixture healthy "alpha"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    [ ! -d "$SPAWN_JOB_ROOT" ]
+
+    ctl status
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    # An ABSENT key, not a null one and not an empty list: a worktree that has
+    # never run a job answers exactly what it answered before U12.
+    [ "$(echo "$output" | jq -r 'has("jobs")')" = "false" ]
+    # The rest of the shape is untouched.
+    [ "$(echo "$output" | jq -r '.running')" = "true" ]
+    [ "$(echo "$output" | jq -r '.drift|keys|sort|join(",")')" \
+        = "missing_from_table,missing_window,model_drift,unknown_resolution" ]
+    [ "$(echo "$output" | jq -r '.served_aliases|join(",")')" = "alpha" ]
+}
+
+@test "U12/KD8: a record older than the retention window drops off, but the lock holder never does" {
+    start_fixture healthy "alpha"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    # A one-minute window, so "old" is expressible without touching mtimes into
+    # the past — the two records below are written now and then aged past it.
+    export SPAWN_JOB_RETENTION=60
+
+    make_job_record "job-20260808T080000Z-4000" "done" "" "2026-08-08T08:10:00Z" "finished long ago"
+    make_job_record "job-20260808T120000Z-5000" "running" "$(dead_pid)"
+    hold_lock "job-20260808T120000Z-5000"
+    # Both records aged two minutes past the window.
+    touch -t "$(date -u -v-2M '+%Y%m%d%H%M' 2>/dev/null || date -u -d '2 minutes ago' '+%Y%m%d%H%M')" \
+        "$SPAWN_JOB_ROOT/job-20260808T080000Z-4000/status.json" \
+        "$SPAWN_JOB_ROOT/job-20260808T120000Z-5000/status.json"
+
+    ctl status
+    [ "$status" -eq 0 ]
+    # The lock holder is listed however stale its record is: a job that has been
+    # running for nine days is the thing this block exists to show.
+    [ "$(echo "$output" | jq -r '.jobs.listed|length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.jobs.listed[0].handle')" = "job-20260808T120000Z-5000" ]
+    [ "$(echo "$output" | jq -r '.jobs.retention_seconds')" = "60" ]
+}
+
+@test "U12: the cap bounds the list and reports what it dropped" {
+    start_fixture healthy "alpha"
+    make_config "$WORK/gateway.yaml" 4000 "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_JOB_REPORT_LIMIT=2
+
+    make_job_record "job-20260808T130000Z-6000" "done" "" "2026-08-08T13:01:00Z"
+    make_job_record "job-20260808T140000Z-7000" "done" "" "2026-08-08T14:01:00Z"
+    make_job_record "job-20260808T150000Z-8000" "done" "" "2026-08-08T15:01:00Z"
+
+    ctl status
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.jobs.listed|length')" = "2" ]
+    [ "$(echo "$output" | jq -r '.jobs.omitted')" = "1" ]
+    # Newest kept, oldest dropped.
+    [ "$(echo "$output" | jq -r '[.jobs.listed[].handle]|join(",")')" \
+        = "job-20260808T150000Z-8000,job-20260808T140000Z-7000" ]
 }
