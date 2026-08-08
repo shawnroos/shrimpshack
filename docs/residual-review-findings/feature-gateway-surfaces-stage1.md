@@ -99,3 +99,32 @@ each ran in their own.
 secrecy. KTD8's actual rationale was quoting and length limits — a seed over
 `ARG_MAX` dies as an exec failure and surfaces as `seed_failed`, exit 5. It fails
 loudly enough to accept, but the comment answers an objection nobody raised.
+
+---
+
+## Stage 2 divergence — recorded, not resolved
+
+**F1 describes an operator-invoked background job running at the operator's
+ceiling. The implementation is tighter: `bg-agent.sh` is repo-bounded always.**
+
+R8 and AE4 are satisfied — U8 built two separately permissioned entry points
+(`bg-operator.sh`, `bg-repo.sh`) and AE4 passes against both, which is exactly
+what R8 asks for. What is not implemented is the *detached* operator path that
+F1's step list describes.
+
+U9 chose this deliberately and documented it in `commands/bg-agent.md`: the job
+runs repo-bounded, there is no flag that changes it, and the body tells the
+caller to say so if they expected their own permissions to carry over. Its
+grounds: this file is reachable by an unattended caller by design — that is why
+the chain refusal lives in it — and the degraded machinery only has something to
+detect under a bound.
+
+**Left as-is on purpose.** Closing it means adding a reachability path to a
+constant that was deliberately made unreachable, in the permission-ceiling code,
+to match a flow description rather than a requirement. The architecture already
+supports it — the command body's own words are "the bound is fixed by which file
+ran" — so the change is a sibling entry point, roughly sixty lines, plus care
+that the detached re-invocation carries the ceiling through. That is a reviewed
+change, not a late-night one.
+
+Decide whether F1 or the implementation is right before building it.
