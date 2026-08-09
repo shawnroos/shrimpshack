@@ -2,7 +2,15 @@
 """local_index.py — the qmd-free retrieval primitive (plan U1).
 
 A BM25 index over the memory store, built in-process per query, returning either
-CONFIDENT hits or an EXPLICIT below-gate result. It never returns a flat guess.
+CONFIDENT hits or an EXPLICIT below-gate result.
+
+One honest caveat on that, raised by a cross-model reviewer: the SINGLETON path
+below passes on the absolute floor alone, because with one candidate there is no
+ratio to compute. A lone lexical match clearing the floor IS a flat guess, so the
+blanket claim "never returns a flat guess" holds for the ranked path and NOT for
+that one. Either require more of a singleton, or read the claim as scoped to the
+multi-candidate case — it is scoped that way here deliberately, since refusing every
+singleton would make a sparse or heavily-filtered corpus permanently silent.
 
 Why build per query (KTD6): the corpus is small (866-ish bodies, ~2.9 MB) and the
 build costs a few hundred milliseconds. A persisted index would buy that back and
@@ -17,7 +25,15 @@ two thirds of the corpus while reporting success.
 
 THE ORDER OF THE PIPELINE IS THE WHOLE UNIT (KTD15). In `search()`:
 
-  1. drop siblings         — `scope.classify(...) == "sibling"`
+  1. drop siblings         — `scope.classify(...) == "sibling"`, applied to the
+                             RANKED list: `score_all()` scores every matching body
+                             first, siblings included, and they are filtered
+                             immediately after. No verdict differs — a sibling never
+                             reaches `above` or the ratio — but the ordering below is
+                             about which scores the GATE reads, not about which
+                             bodies get scored. Said plainly because the two readings
+                             diverge the moment scoring gains a side effect or
+                             classification becomes score-dependent.
   2. absolute floor        — MEMORY_LOCAL_FLOOR_MIN, a CALIBRATED RAW score
   3. separation            — top1/top2 over the score-ordered survivors
   4. K+1 presentation      — `scope.select_scoped`, AFTER the gate has decided

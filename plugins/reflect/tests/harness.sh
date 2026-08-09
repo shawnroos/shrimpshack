@@ -325,6 +325,40 @@ check "shipped default budget: healthy success writes NO failure stamp" "[ ! -f 
 sr_killall   # reap any grandchildren left by the wedged-stub tests above
 cd "$REPO"
 
+# --- U0: the live settings override that silently switched recall off ----------
+# `SEEDED_RECALL_TIMEOUT` is the hook's TOTAL wall budget, and run() returns early
+# whenever less than 0.05s remains. A value at or below that starves every query
+# before qmd is ever called: no request, a recorded failure per prompt, and the
+# cooldown armed after two — indistinguishable from "nothing was relevant". That is
+# how recall stayed off on this machine through a 4,796-line session, and it is
+# machine state, so no diff would ever show it coming back.
+#
+# WARN, never FAIL: this reads the developer's own settings.json, and a suite that
+# failed on another user's config would be worse than the bug it guards.
+SR_LIVE_SETTINGS="$HOME/.claude/settings.json"
+if [ -f "$SR_LIVE_SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
+  SR_PINNED="$(python3 - "$SR_LIVE_SETTINGS" <<'PYEOF'
+import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get("env", {}).get("SEEDED_RECALL_TIMEOUT")
+except Exception:
+    sys.exit(0)
+if v is None:
+    sys.exit(0)
+try:
+    starving = float(v) <= 0.05
+except (TypeError, ValueError):
+    starving = False
+print(("STARVING " if starving else "PINNED ") + str(v))
+PYEOF
+)"
+  case "$SR_PINNED" in
+    STARVING*) echo "  warn - live settings pin SEEDED_RECALL_TIMEOUT=${SR_PINNED#STARVING } — at/below the 0.05s guard, so seeded recall NEVER calls qmd. Remove it from ~/.claude/settings.json." >&2 ;;
+    PINNED*)   echo "  info - live settings pin SEEDED_RECALL_TIMEOUT=${SR_PINNED#PINNED } (not starving; the shipped default is 6s)" ;;
+    *)         ok "live settings do not pin SEEDED_RECALL_TIMEOUT (shipped 6s budget applies)" ;;
+  esac
+fi
+
 # ----------------------------------------------------------------------- lint
 echo "== memory-index-lint =="
 L="$ROOT/lint"; mkdir -p "$L"; cd "$L"
@@ -836,6 +870,27 @@ check "hook: a command that merely MENTIONS 'gh pr merge' does not fire PR_event
 HK_E9="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"git fetch origin && gh pr merge 29 --squash"}}')"
 check "hook: PR_event still fires for a real invocation after && (anchor not too tight)" \
   '[ -f "$HKFLAG" ] && grep -q PR_event "$HKFLAG" && [ "$HK_E9" = "0" ]'
+
+# TodoWrite does not exist in agent/SDK/team sessions — they expose
+# TaskCreate/TaskUpdate/TaskList instead, and the session that BUILT this plugin was
+# one of them, so the all-done trigger could never fire there. TaskUpdate carries ONE
+# task, not the whole list, so "are they all done" is unknowable from its payload the
+# way it is from TodoWrite's. This fires per completion instead and leans on
+# reflect-trigger.sh's existing 600s coalesce window to collapse a burst — a
+# deliberately different signal, which is why it writes its own reason string.
+HK_TASK="$(hk_cmd PreToolUse TaskUpdate)" || { echo "  FAIL - hooks.json shape drifted (PreToolUse/TaskUpdate)"; FAIL=$((FAIL+1)); }
+HK_T1="$(hk_run "$HK_TASK" '{"tool_name":"TaskUpdate","tool_input":{"taskId":"9","status":"completed"}}')"
+check "hook: TaskUpdate fires on a completed task (the Task-tool completion boundary)" \
+  '[ -f "$HKFLAG" ] && grep -q TaskUpdate_completed "$HKFLAG" && [ "$HK_T1" = "0" ]'
+
+HK_T2="$(hk_run "$HK_TASK" '{"tool_name":"TaskUpdate","tool_input":{"taskId":"9","status":"in_progress"}}')"
+check "hook: TaskUpdate stays silent on a non-completed status (exit 0)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_T2" = "0" ]'
+
+HK_T3="$(hk_run "$HK_TASK" '{"tool_name":"TaskUpdate","tool_input":{"taskId":"9","status":"completed"}}' "$HKNOJQ")"
+check "hook: TaskUpdate fail-opens when jq is absent (exit 0, no flag)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_T3" = "0" ]'
+
 
 # ------------------------------------------- measurement split (U7, plan 001)
 # RECALL.log (surfacing telemetry) must stay out of the activation signal, and
