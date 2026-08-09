@@ -185,6 +185,12 @@ PLUTIL_BIN="${SPAWN_PLUTIL_BIN:-/usr/bin/plutil}"
 # re-run depends on that file still being readable, so it lives where nothing
 # in this script deletes it.
 GATEWAY_LAUNCHER="${SPAWN_GATEWAY_LAUNCHER:-$HOME/.gateway/spawn-launch.sh}"
+# The pidfile the generated launcher registers itself in. Resolved exactly as
+# spawnctl.sh resolves it, so the two control surfaces name one file. (The
+# PIDFILE inside gw_body is a different thing entirely: that is text of the
+# generated `gw` wrapper, not a variable of this script.)
+SETUP_STATE_HOME="${SPAWN_STATE_HOME:-$HOME}"
+PIDFILE="${SPAWN_PIDFILE:-$SETUP_STATE_HOME/.gateway.pid}"
 
 # The gateway's own root URL. Derived from spawnctl.sh's SPAWN_BASE_URL seam so
 # a test that redirects one redirects both, with the `/anthropic` suffix trimmed:
@@ -1084,6 +1090,12 @@ do_gw() {
 # the plist now names the launcher.
 LAUNCHER_MARKER="# spawn-setup: generated launcher — rewritten by /spawn:setup, edits are not preserved"
 LAUNCHER_ARGV_PREFIX="# spawn-setup-original-argv: "
+# The delivery file the launcher writes for the gateway's dotenv, and how long
+# it may live. Both are baked into the generated script rather than read from
+# the environment there — launchd inherits nothing — and both are overridable
+# so the launcher-runtime tests do not have to sleep for real.
+LAUNCHER_DELIVERY_NAME="${SPAWN_DELIVERY_NAME:-.env.local}"
+LAUNCHER_DELIVERY_TTL="${SPAWN_LAUNCHER_DELIVERY_TTL:-15}"
 
 # plist_json <path> — the plist as JSON on stdout. Goes through plutil rather
 # than a text parser because a LaunchAgent plist is as likely to be binary as
@@ -1225,19 +1237,33 @@ detect_supervisor() {
 # launched process, so rotation reaches the supervised gateway with no rewrite
 # and no value ever rests in this file.
 launcher_body() {
-    local argv="$1" install="$2" cmd dir
+    local argv="$1" install="$2" cmd dir gwbin
     cmd="$(printf '%s' "$argv" | jq -r '@sh' 2>/dev/null)" || return 1
     [ -n "$cmd" ] || return 1
     dir="$(printf '%s' "$install" | jq -Rr '@sh' 2>/dev/null)" || return 1
     [ -n "$dir" ] || return 1
+    # argv[0] of the executed command — the gateway binary this launcher will
+    # become. Recorded beside the pidfile so spawnctl's anchored identification
+    # (pid_is_gateway) accepts a launcher-started process as its own.
+    gwbin="$(printf '%s' "$argv" | jq -r '.[0] // empty' 2>/dev/null)" || return 1
+    [ -n "$gwbin" ] || return 1
     cat <<EOF
 set -uo pipefail
 
 # Baked at write time from the install this setup run resolved.
 INSTALL_DIR=$dir
+GATEWAY_BIN='$gwbin'
 KEYCHAIN_SERVICE='$KEYCHAIN_SERVICE'
 KEYCHAIN_ACCOUNT_TOKEN='$KEYCHAIN_ACCOUNT_TOKEN'
+KEYCHAIN_ACCOUNT_OPENROUTER='$KEYCHAIN_ACCOUNT_OPENROUTER'
 SECURITY_BIN='$SPAWN_SECURITY_BIN'
+# EVERY path is baked. launchd starts this with an environment that inherits
+# nothing from the shell setup ran in — no SPAWN_STATE_HOME, no SPAWN_PIDFILE —
+# so a launcher that read those would write its pidfile somewhere spawnctl
+# never looks.
+PIDFILE='$PIDFILE'
+DELIVERY_NAME='$LAUNCHER_DELIVERY_NAME'
+DELIVERY_TTL='$LAUNCHER_DELIVERY_TTL'
 # credentials are NEVER baked into this file: the token is read from the
 # Keychain at start time, so rotating it reaches this launcher with no rewrite.
 EOF
@@ -1267,6 +1293,63 @@ export GATEWAY_TOKEN="$token"
 # environment AND suppress the delivered value, because the gateway's dotenv
 # only sets variables that are unset.
 unset OPENROUTER_API_KEY
+
+# THE KEY IS DELIVERED HERE, not assumed to be lying around. This file used to
+# rely on a pre-existing .env.local, and there is never one: spawnctl WRITES
+# that file to start the gateway and deletes it again as soon as the start
+# probe settles, so after any spawnctl start the launcher had no upstream
+# credential at all and launchd brought up a keyless gateway. Mirrors
+# spawnctl's deliver_secrets, for the reasons documented there — `rm -f` first
+# so a stale symlink cannot redirect the key out of this directory, umask on
+# creation AND an explicit chmod because a replaced file keeps its old mode,
+# and a shell-builtin printf so the value never reaches the process table.
+key="$("$SECURITY_BIN" find-generic-password -a "$KEYCHAIN_ACCOUNT_OPENROUTER" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true)"
+if [ -n "$key" ]; then
+    rm -f "$INSTALL_DIR/$DELIVERY_NAME" 2>/dev/null
+    if (umask 077; : > "$INSTALL_DIR/$DELIVERY_NAME") 2>/dev/null; then
+        chmod 600 "$INSTALL_DIR/$DELIVERY_NAME" 2>/dev/null
+        printf 'OPENROUTER_API_KEY=%s\n' "$key" >> "$INSTALL_DIR/$DELIVERY_NAME"
+        # The file's life is the startup window and no longer (KTD1: the key
+        # rests in the Keychain, never on disk). The gateway reads its dotenv
+        # milliseconds after the exec below; this child outlives the exec —
+        # its parent becomes the gateway itself — and removes the file after a
+        # bounded wait. A leftover would be a plaintext provider key sitting
+        # in the install directory for the life of the machine.
+        ( sleep "$DELIVERY_TTL"; rm -f "$INSTALL_DIR/$DELIVERY_NAME" 2>/dev/null ) >/dev/null 2>&1 &
+    else
+        # No interpolation, like every other message this launcher prints: it
+        # is a standalone generated script with no access to the sanitizing
+        # chokepoints, and the install directory is recorded above in this same
+        # file. The sink lint enforces that rule rather than trusting it.
+        printf 'spawn-launch: could not write the start-time key delivery file in the install directory recorded above — starting without an upstream credential\n' >&2
+    fi
+fi
+key=""
+
+# REGISTER BEFORE EXEC. `exec` keeps this PID, so $$ recorded here IS the
+# gateway's pid. Without this the launchd-started gateway is invisible to
+# spawnctl: its pidfile stays empty while the port is held, so `stop` refuses
+# with "unmanaged" (correctly — it will not guess which process to signal) and
+# every restart path aborts over a perfectly good gateway.
+#
+# The liveness check is not belt-and-braces. setup's own start step and launchd
+# can race for the port; the loser must not overwrite the winner's pidfile,
+# because that is how spawnctl would be pointed at a pid that is not serving.
+if [ -f "$PIDFILE" ] && [ -f "$PIDFILE.bin" ]; then
+    prev="$(tr -dc '0-9' < "$PIDFILE" 2>/dev/null || true)"
+    prevbin="$(cat "$PIDFILE.bin" 2>/dev/null || true)"
+    if [ -n "$prev" ] && [ "$prevbin" = "$GATEWAY_BIN" ] && kill -0 "$prev" 2>/dev/null; then
+        printf 'spawn-launch: another process is already running this gateway binary — leaving its pidfile alone\n' >&2
+        prev=""; prevbin=""
+    else
+        prev=""; prevbin=""
+        printf '%s\n' "$$" > "$PIDFILE"
+        printf '%s\n' "$GATEWAY_BIN" > "$PIDFILE.bin"
+    fi
+else
+    printf '%s\n' "$$" > "$PIDFILE"
+    printf '%s\n' "$GATEWAY_BIN" > "$PIDFILE.bin"
+fi
 EOF
     printf 'exec %s\n' "$cmd"
 }
@@ -1286,6 +1369,20 @@ write_launcher() {
     mkdir -p "$dir" || return 1
     body="$(launcher_body "$exec_argv" "$install")" || return 1
     [ -n "$body" ] || return 1
+    # PROVE the body is complete, do not assume it. launcher_body builds the
+    # script from several heredocs, and an unset variable in ONE of them kills
+    # only that heredoc inside the command substitution: the rest still emits,
+    # the substitution still exits 0, and what lands is a launcher missing its
+    # entire configuration block that fails at start time with `cd: null
+    # directory`. That is not hypothetical — it is what this check was written
+    # against. Each name below is load-bearing at runtime, so a body missing
+    # any of them is a broken launcher and must not replace a working one.
+    local need
+    for need in INSTALL_DIR GATEWAY_BIN PIDFILE KEYCHAIN_SERVICE \
+                KEYCHAIN_ACCOUNT_TOKEN KEYCHAIN_ACCOUNT_OPENROUTER SECURITY_BIN; do
+        printf '%s' "$body" | grep -q "^$need=" || return 1
+    done
+    printf '%s' "$body" | grep -q '^exec ' || return 1
     tmp="$GATEWAY_LAUNCHER.spawn-setup.$$"
     rm -f "$tmp" 2>/dev/null
     {
@@ -1333,6 +1430,7 @@ repoint_plist() {
 # which is the opposite of what the design promises.
 # ---------------------------------------------------------------------------
 do_supervisor() {
+    local sv_consent="${1:-0}"; shift 2>/dev/null || true
     local install="$1" bin name path arg0 stale exec_argv rebased=0
 
     # R4's shape, applied to this verb's two seams: a missing binary is exit 9
@@ -1393,6 +1491,22 @@ do_supervisor() {
 
     if [ "$rebased" -eq 1 ]; then
         say "the launchd agent at $SUPERVISOR_PLIST still names the install at $stale, and this run resolved $install — the launcher will start the RESOLVED binary and config, so the agent follows the upgrade instead of pinning to the version it was written against"
+    fi
+
+    # CONSENT (KTD17). Repointing a launchd agent takes over a file setup did
+    # not write and inserts this plugin into the machine's startup path — the
+    # same class of act as overwriting a foreign `gw`, which has been gated
+    # since it shipped. This one was not, and it is the more consequential of
+    # the two: it changes what happens at every login, not what one command
+    # does.
+    if [ "$sv_consent" -ne 1 ]; then
+        say "adopting the launchd agent at $SUPERVISOR_PLIST means setup owns a step in this machine's startup path — refusing to repoint it without consent"
+        emit "$(jq -nc --arg p "$SUPERVISOR_PLIST" --arg l "$GATEWAY_LAUNCHER" --argjson c "$EX_CONSENT" \
+            '{ok:false, verb:"supervisor",
+              error:("refusing to repoint \($p): adopting it puts setup in this machines startup path; re-run with --consent-adopt-agent to adopt it"),
+              consent_required:"adopt-agent", plist:$p, launcher:$l, exit_code:$c}')" \
+            || die "$EX_USAGE" "could not encode the supervisor consent object"
+        exit "$EX_CONSENT"
     fi
 
     write_launcher "$SUPERVISOR_ARGV" "$exec_argv" "$install" \
@@ -1996,6 +2110,12 @@ do_wire() {
 # ---------------------------------------------------------------------------
 RT_CODE=""
 round_trip() {   # round_trip <url> <body-file> <token|"">  → RT_CODE
+    # xtrace guard: this scope holds credential values in locals, and a
+    # caller running under `bash -x` would otherwise trace every one of them
+    # into whatever it redirects stderr to. `local -` scopes the shell options
+    # to this function, so the caller's own -x is restored on return.
+    local -
+    set +x
     local url="$1" body="$2" tok="$3" work curlrc code rc
     RT_CODE=""
     work="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/spawn-rt.XXXXXX")" || return 1
@@ -2127,7 +2247,31 @@ EOF
         401|403) ;;
         2*)
             SETUP_FAILURE_CLASS="open-proxy"
-            die "$EX_USAGE" "step 'verify': the gateway SERVED a request that presented no credential at all (POST /anthropic/v1/messages returned HTTP $RT_CODE) — that is an open proxy on this machine forwarding to a paid provider, which R9 forbids. Setup will not report success. Stop the gateway, make sure its $CONFIG_NAME declares no empty token list, and re-run."
+            # STOP IT, do not merely report it. This branch used to end in a
+            # die that told the operator to stop the gateway — while leaving it
+            # running and, under a KeepAlive launchd agent, respawning. An open
+            # proxy to a paid provider is precisely the thing not to leave up
+            # while a human reads a message.
+            #
+            # Unload first: with the supervisor still loaded, stopping the
+            # process only triggers a respawn. Both are best-effort and their
+            # outcome is reported rather than assumed — refusing to claim a
+            # stop that did not happen is the same rule spawnctl's own stop
+            # follows.
+            local shut=""
+            if [ -n "${SUPERVISOR_PLIST:-}" ] && [ -f "${SUPERVISOR_PLIST:-}" ]; then
+                if "$LAUNCHCTL_BIN" unload "$SUPERVISOR_PLIST" >/dev/null 2>&1; then
+                    shut=" The supervising launchd agent at $SUPERVISOR_PLIST was unloaded so it cannot restart it."
+                else
+                    shut=" The supervising launchd agent at $SUPERVISOR_PLIST could NOT be unloaded — unload it by hand before anything else."
+                fi
+            fi
+            if bash "$SPAWNCTL_PATH" stop >/dev/null 2>&1; then
+                shut="$shut The gateway was stopped."
+            else
+                shut="$shut The gateway could NOT be stopped automatically — stop it by hand NOW."
+            fi
+            die "$EX_USAGE" "step 'verify': the gateway SERVED a request that presented no credential at all (POST /anthropic/v1/messages returned HTTP $RT_CODE) — that is an open proxy on this machine forwarding to a paid provider, which R9 forbids. Setup will not report success.$shut Make sure its $CONFIG_NAME declares no empty token list, and re-run."
             ;;
         *)
             SETUP_FAILURE_CLASS="reject-probe"
@@ -2291,7 +2435,13 @@ do_token_step() {
 # without re-prompting: the key is already stored before the build starts.
 # ---------------------------------------------------------------------------
 do_setup() {
-    local rotate_key="$1" rotate_token="$2" consent_gw="$3" consent_rc="$4"
+    # xtrace guard: this scope holds credential values in locals, and a
+    # caller running under `bash -x` would otherwise trace every one of them
+    # into whatever it redirects stderr to. `local -` scopes the shell options
+    # to this function, so the caller's own -x is restored on return.
+    local -
+    set +x
+    local rotate_key="$1" rotate_token="$2" consent_gw="$3" consent_rc="$4" consent_agent="${5:-0}"
     # Restart is decided by what this run CHANGED about what the gateway would
     # load, not by which flags were passed. A rotation is one such change; so is
     # installing a new release, and so is retiring the token out of the live
@@ -2353,8 +2503,17 @@ do_setup() {
     step_start "supervisor"
     [ -n "$SETUP_INSTALL_DIR" ] \
         || die "$EX_USAGE" "step 'supervisor': the acquire step reported no install directory, so there is no binary to look for in the launchd agents; nothing was written"
-    run_sub supervisor --install-dir "$SETUP_INSTALL_DIR" \
-        || die "$EX_USAGE" "step 'supervisor': could not run the supervisor step"
+    if [ "$consent_agent" -eq 1 ]; then
+        run_sub supervisor --consent-adopt-agent --install-dir "$SETUP_INSTALL_DIR" \
+            || die "$EX_USAGE" "step 'supervisor': could not run the supervisor step"
+    else
+        run_sub supervisor --install-dir "$SETUP_INSTALL_DIR" \
+            || die "$EX_USAGE" "step 'supervisor': could not run the supervisor step"
+    fi
+    # Same shape as gw and wire: exit 8 from the child is the operator's
+    # decision to make, so it is passed through with the steps and changes so
+    # far rather than reported as a failure of the run.
+    [ "$SUB_RC" -eq "$EX_CONSENT" ] && pass_consent "supervisor"
     [ "$SUB_RC" -eq 0 ] \
         || die "$SUB_RC" "step 'supervisor': $(printf '%s' "$SUB_JSON" | jq -r '.error // "the supervising launchd agent could not be adopted"' 2>/dev/null)"
     case "$(printf '%s' "$SUB_JSON" | jq -r '.action // empty' 2>/dev/null)" in
@@ -2376,6 +2535,15 @@ do_setup() {
                 record_change "launch-agent-rebase" "$sv_plist" \
                     "the agent was still starting the gateway installed at $sv_from; the launcher now execs the binary and config in $SETUP_INSTALL_DIR, so the supervised gateway follows this upgrade. The recorded original command is unchanged."
             fi
+            # The adopt path ALREADY restarted the gateway: do_supervisor runs
+            # launchctl unload followed by load, and a KeepAlive agent brings
+            # the gateway straight back up through the new launcher — on the
+            # resolved install, with the current credentials. A `restart` after
+            # that would stop a healthy supervised process and race the
+            # supervisor to rebind the port, which is the surviving half of the
+            # start-vs-supervisor race. Downgrading to `start` lets the start
+            # step observe the running gateway instead of fighting it.
+            needs_restart=0
             # KTD21's stated cost, in the report rather than absorbed.
             step_done "supervisor" "adopted" \
                 "the launchd agent at $sv_plist now starts the gateway through $sv_launcher, so its own starts authenticate — which means SETUP NOW OWNS A STEP IN THIS MACHINE'S STARTUP PATH: the gateway starts through a file this plugin writes.$sv_note" ;;
@@ -2503,7 +2671,7 @@ usage: setup.sh [--rotate-openrouter-key] [--rotate-gateway-token]
                 [--consent-overwrite-gw] [--consent-shell-rc]
        setup.sh acquire
        setup.sh gw [--consent-overwrite-gw]
-       setup.sh supervisor [--install-dir DIR]
+       setup.sh supervisor [--install-dir DIR] [--consent-adopt-agent]
        setup.sh wire [--consent-shell-rc]
 
   (no verb)  the whole path: prerequisites, both credentials, the gateway
@@ -2534,7 +2702,9 @@ usage: setup.sh [--rotate-openrouter-key] [--rotate-gateway-token]
             so the agent's own starts authenticate. No credential is written to
             the plist and every other key in it survives. A machine with no such
             agent is reported not-supervised and nothing is written — this step
-            adopts an agent, it never creates one.
+            adopts an agent, it never creates one. Adoption puts setup in this
+            machine's startup path, so it is refused with exit 8 until
+            --consent-adopt-agent is passed.
 
   wire      wire every supported harness that is installed. Codex gets a
             marker-delimited managed block in ~/.codex/config.toml, validated by
@@ -2660,18 +2830,20 @@ case "$VERB" in
     supervisor)
         shift
         SUPERVISOR_INSTALL="${SPAWN_INSTALL_DIR:-}"
+        SUPERVISOR_CONSENT=0
         while [ $# -gt 0 ]; do
             case "$1" in
                 --install-dir)
                     shift
                     [ $# -gt 0 ] || { need_jq; die "$EX_USAGE" "--install-dir needs a directory"; }
                     SUPERVISOR_INSTALL="$1" ;;
+                --consent-adopt-agent) SUPERVISOR_CONSENT=1 ;;
                 *) need_jq; die "$EX_USAGE" "unexpected argument '$1'" ;;
             esac
             shift
         done
         need_jq
-        do_supervisor "$SUPERVISOR_INSTALL"
+        do_supervisor "$SUPERVISOR_CONSENT" "$SUPERVISOR_INSTALL"
         ;;
     wire)
         shift
@@ -2700,18 +2872,20 @@ case "$VERB" in
         ROTATE_TOKEN=0
         SETUP_CONSENT_GW=0
         SETUP_CONSENT_RC=0
+        SETUP_CONSENT_AGENT=0
         while [ $# -gt 0 ]; do
             case "$1" in
                 --rotate-openrouter-key) ROTATE_KEY=1 ;;
                 --rotate-gateway-token)  ROTATE_TOKEN=1 ;;
                 --consent-overwrite-gw)  SETUP_CONSENT_GW=1 ;;
                 --consent-shell-rc)      SETUP_CONSENT_RC=1 ;;
+                --consent-adopt-agent)   SETUP_CONSENT_AGENT=1 ;;
                 *) need_jq; die "$EX_USAGE" "unexpected argument '$1'" ;;
             esac
             shift
         done
         need_jq
-        do_setup "$ROTATE_KEY" "$ROTATE_TOKEN" "$SETUP_CONSENT_GW" "$SETUP_CONSENT_RC"
+        do_setup "$ROTATE_KEY" "$ROTATE_TOKEN" "$SETUP_CONSENT_GW" "$SETUP_CONSENT_RC" "$SETUP_CONSENT_AGENT"
         ;;
     *)
         usage

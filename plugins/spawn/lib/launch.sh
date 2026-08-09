@@ -577,13 +577,20 @@ if [ -n "$CONFIG_PATH" ] && [ -f "$CONFIG_PATH" ]; then
 fi
 # Then the SAME env/Keychain fallback spawnctl's probe runs (R27), so a config
 # whose token setup retired still launches instead of seeding into a 401.
-if [ -z "$TOKEN" ]; then
+# Wrapped in a function ONLY so `local -` is available: this block assigns a
+# credential, and at top level there is no scope to confine `set +x` to, so a
+# caller running the script under `bash -x` would trace the token out. The
+# function restores the caller's own xtrace setting on return.
+resolve_token_from_fallback() {
+    local -
+    set +x
     SPAWN_TOKEN_VALUE=""
     if spawn::token_fallback "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
         TOKEN="$SPAWN_TOKEN_VALUE"
     fi
     SPAWN_TOKEN_VALUE=""
-fi
+}
+[ -n "$TOKEN" ] || resolve_token_from_fallback
 # An empty token is not fatal here: `ensure` already proved the gateway accepts
 # whatever this config holds. Guessing a failure before the wire would invent
 # one the gateway never reported.

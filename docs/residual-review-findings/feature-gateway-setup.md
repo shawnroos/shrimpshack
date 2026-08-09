@@ -317,3 +317,68 @@ by blanking it, and the real `gateway.yaml` has no `token:` line at all. It
 would bite anyone who blanks the value by hand. Left alone because the fix
 touches three parsers that KTD6/common.sh deliberately keep separate, and all
 three currently agree — there is no divergence here, only a shared blind spot.
+
+## Code review on PR #31 — five findings, all fixed
+
+**#1 + #2 (P1, one design fault): the launcher neither registered nor fed the
+process.** `launcher_body` exec'd the gateway directly, so a launchd-started
+gateway wrote no pidfile and spawnctl saw it as unmanaged — `stop` refused
+(correctly; it will not guess which process to signal) and every restart path
+aborted over a healthy gateway. The same launcher relied on a pre-existing
+`.env.local`, and there never is one: spawnctl writes that file to start the
+gateway and removes it once the probe settles, so a launchd start came up with
+no upstream credential at all.
+
+Fixed together, because they are one fault. The launcher now delivers the key
+itself (mirroring `deliver_secrets`, with a cleaner child so the file does not
+outlive startup — KTD1 keeps the key in the Keychain, not on disk) and records
+`$$` plus the binary path before `exec`, which keeps the pid. `exec spawnctl
+start` was considered and rejected: spawnctl daemonizes and exits, so launchd
+would see the job die and KeepAlive would respawn it forever.
+
+Two things surfaced while fixing it:
+- The launcher could lose a race with setup's own start step and clobber the
+  winner's pidfile, pointing spawnctl at a process that is not serving. It now
+  leaves a live pidfile alone.
+- `write_launcher` could land a BROKEN launcher and still report `ok:true`. An
+  unset variable killed one heredoc inside the command substitution; the rest
+  still emitted and the substitution still exited 0, so what landed was missing
+  its whole configuration block and failed at start with `cd: null directory`.
+  It now proves every required name is present before replacing a working file.
+
+**#3 (P2): the open-proxy refusal left the open proxy running.** It told the
+operator to stop it. It now unloads the supervising agent first (or a KeepAlive
+respawn defeats the stop), then stops the gateway, and reports which of those
+actually happened rather than claiming either.
+
+**#4 (P2): `deliver_secrets` had no xtrace guard.** Fixed as a class, not an
+instance: `deliver_secrets`, `round_trip` and `do_setup` all got `local -; set
++x`, and the top-level R27 fallback blocks in `lens.sh`/`launch.sh` are now
+wrapped in a function so `local -` exists to scope it.
+
+**#5 (P2): the plist repoint had no consent gate.** Now `--consent-adopt-agent`,
+using the existing EX_CONSENT=8 path, passed through `pass_consent` like `gw`
+and `wire`. It is the more consequential of the three consent gates: it changes
+what happens at every login.
+
+**The testing gap the review named is closed.** `fake-launchctl.sh` records argv
+and execs nothing, so every existing test proved the launcher was WRITTEN, none
+proved what happens when launchd RUNS it — which is exactly where both P1s
+lived. Five tests now execute the generated launcher, and the suite grew a
+fourth safety rail (`SPAWN_PIDFILE`), without which those tests would write the
+operator's real `~/.gateway.pid`.
+
+## Still open
+
+- **A lint for the xtrace class.** #4 was fixed everywhere it exists today, but
+  nothing stops the next credential-holding function from shipping unguarded.
+  The reviewer's suggestion — fail any credential assignment outside an
+  xtrace-guarded scope — is the durable fix and is not written.
+- **Start-vs-supervisor race: mitigated, not resolved.** `needs_restart` is now
+  cleared when the supervisor step already restarted the gateway, and the
+  launcher will not steal a live pidfile. The deeper question — what `stop`
+  should mean when a KeepAlive agent will respawn — is untouched.
+- **No cross-provider review.** All five review contexts were Claude siblings.
+  The 502s blocking a cross-vendor lens are an input x output size ceiling
+  (185KB in at 8000 max-tokens works; 35KB at 24000 fails), so the fix is to
+  slice the diff and cap output, not to retry the whole thing.

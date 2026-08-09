@@ -826,6 +826,12 @@ validate_alias() {
 KEY_DELIVERED=0
 TOKEN_DELIVERED=0
 deliver_secrets() {
+    # xtrace guard: this scope holds credential values in locals, and a
+    # caller running under `bash -x` would otherwise trace every one of them
+    # into whatever it redirects stderr to. `local -` scopes the shell options
+    # to this function, so the caller's own -x is restored on return.
+    local -
+    set +x
     local kc_key="" kc_tok="" have_key=0 have_tok=0
 
     # keychain_exists never produces the value; the read that follows is the

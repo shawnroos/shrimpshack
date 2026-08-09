@@ -473,13 +473,23 @@ mutant() {
     [ "$(jq -r '.failed_step' "$OUT")" = "verify" ]
     [ "$(jq -r '.failure_class' "$OUT")" = "open-proxy" ]
     jq -e '.error | test("open proxy")' "$OUT" >/dev/null
+    # Guard the guard: failure_class 'open-proxy' is set ONLY in the 2xx branch
+    # of the unauthenticated probe, and do_verify reaches that probe only after
+    # every authenticated round-trip has already passed. So this run failed on
+    # the reject probe and on nothing else. That used to be shown by curling
+    # the gateway afterwards and expecting 200 — which quietly also asserted
+    # that setup LEFT the open proxy running, and is now the opposite of the
+    # contract.
 
-    # Guard the guard: the authenticated round-trip DID succeed against this
-    # gateway, so the run failed on the reject probe and on nothing else.
-    run curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+    # AND THE OPEN PROXY IS DOWN. Refusing while leaving it up meant a machine
+    # forwarding unauthenticated requests to a paid provider for as long as it
+    # took someone to read the message — and under a KeepAlive agent, longer.
+    run curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST -H 'content-type: application/json' \
         -d '{"model":"kimi","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
         "http://127.0.0.1:$PORT/anthropic/v1/messages"
-    [ "$output" = "200" ]
+    [ "$output" != "200" ]
+    # ...and the operator is told so, rather than told to go do it themselves.
+    jq -e '.error | test("was stopped|could NOT be stopped")' "$OUT" >/dev/null
 }
 
 @test "G3: with the unauthenticated reject probe removed, the open proxy reports SUCCESS — the probe is what catches it" {
@@ -764,7 +774,7 @@ EOP
     plist="$(plant_agent gateway "$INSTALL/target/release/gateway" "$INSTALL")"
     install_claude
 
-    run_setup --consent-shell-rc
+    run_setup --consent-shell-rc --consent-adopt-agent
     [ "$RC" -eq 0 ]
     assert_one_json
     [ "$(jq -r '.ok' "$OUT")" = "true" ]
@@ -802,7 +812,7 @@ EOP
     [ ! -e "$old" ]
     install_claude
 
-    run_setup --consent-shell-rc
+    run_setup --consent-shell-rc --consent-adopt-agent
     [ "$RC" -eq 0 ]
     assert_one_json
     [ "$(step_status supervisor)" = "adopted" ]
@@ -820,4 +830,26 @@ EOP
     # ...while the recorded original still names what was first adopted.
     grep -qF -- "# spawn-setup-original-argv: " "$SPAWN_GATEWAY_LAUNCHER"
     grep -qF -- "$old/target/release/gateway" "$SPAWN_GATEWAY_LAUNCHER"
+}
+
+@test "KTD17: a bare orchestrated run will not adopt the supervising agent without consent" {
+    install_claude
+    local plist
+    plist="$(plant_agent gateway "$INSTALL/target/release/gateway" "$INSTALL")"
+
+    # No --consent-adopt-agent. Adoption puts setup in this machine's startup
+    # path, so the run must stop and ASK rather than quietly taking it over.
+    run_setup --consent-shell-rc
+    [ "$RC" -eq 8 ]
+    assert_one_json
+    [ "$(jq -r '.ok' "$OUT")" = "false" ]
+    [ "$(jq -r '.failure_class' "$OUT")" = "consent" ]
+    jq -r '.error' "$OUT" | grep -qF -- '--consent-adopt-agent'
+    # The operator's plist is untouched: a refusal that had already repointed it
+    # would be asking permission for something it had done.
+    # A plain `! grep` would be exempt from set -e and could never fail this
+    # test, which is the shape this repo has been bitten by; run it as a plain
+    # command instead.
+    run grep -F -- 'spawn-launch' "$plist"
+    [ "$status" -ne 0 ]
 }

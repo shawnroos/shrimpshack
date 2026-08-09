@@ -44,6 +44,17 @@ setup() {
     # supervises the box this suite is running on.
     export SPAWN_LAUNCH_AGENTS_DIR="$WORK/LaunchAgents"
     export SPAWN_GATEWAY_LAUNCHER="$WORK/dot-gateway/spawn-launch.sh"
+    # FOURTH RAIL. The launcher now records its own pid so spawnctl can manage
+    # a launchd-started gateway, and that path is BAKED into the generated
+    # script at write time. Without this the tests below would bake — and, when
+    # they run the launcher, write — the operator's real ~/.gateway.pid.
+    export SPAWN_PIDFILE="$WORK/state/.gateway.pid"
+    # The launcher's delivery file is transient by design; 1s keeps that real
+    # while letting the cleaner test observe both states.
+    export SPAWN_LAUNCHER_DELIVERY_TTL=1
+    mkdir -p "$WORK/state"
+    export SPAWN_STATE_HOME="$WORK/state"
+    PIDFILE="$SPAWN_PIDFILE"
     mkdir -p "$SPAWN_LAUNCH_AGENTS_DIR"
 
     export SPAWN_PLUTIL_BIN="$FIX/fake-plutil.sh"
@@ -84,6 +95,15 @@ setup() {
     printf 'args=%s\n' "$*"
     printf 'token=%s\n' "${GATEWAY_TOKEN:-}"
     printf 'openrouter=%s\n' "${OPENROUTER_API_KEY:-<unset>}"
+    # The delivery file AS IT IS AT EXEC. The launcher's cleaner removes it
+    # shortly after, so a test that looked afterwards would see nothing and
+    # could not tell "delivered then cleaned" from "never delivered".
+    if [ -f "$PWD/.env.local" ]; then
+        printf 'envlocal=%s\n' "$(cat "$PWD/.env.local")"
+        printf 'envmode=%s\n' "$(stat -f '%Lp' "$PWD/.env.local" 2>/dev/null || stat -c '%a' "$PWD/.env.local" 2>/dev/null)"
+    else
+        printf 'envlocal=<absent>\n'
+    fi
 } >> "$BIN_RECORD"
 exit 0
 EOS
@@ -112,7 +132,11 @@ run_supervisor() {   # run_supervisor [--script <path>] [flags...]
     if [ "${1:-}" = "--script" ]; then script="$2"; shift 2; fi
     rm -f "$OUT" "$ERR"
     RC=0
-    bash "$script" supervisor --install-dir "$INSTALL" "$@" >"$OUT" 2>"$ERR" || RC=$?
+    # Consent is granted by default here: every test below exercises what
+    # adoption DOES, and re-asserting the gate in each one would only test the
+    # gate 20 times. The gate itself has its own test, which calls the script
+    # WITHOUT this flag.
+    bash "$script" supervisor --consent-adopt-agent --install-dir "$INSTALL" "$@" >"$OUT" 2>"$ERR" || RC=$?
     return 0
 }
 
@@ -678,4 +702,144 @@ EOP
     # lost — and the healthy suite's preservation assertion is now false.
     run grep -F -- "$old/target/release/gateway" "$SPAWN_GATEWAY_LAUNCHER"
     [ "$status" -ne 0 ]
+}
+
+# --- KTD17: adoption is consent-gated --------------------------------------
+#
+# Repointing a launchd agent takes over a file setup did not write and puts
+# this plugin in the machine's startup path — a bigger act than overwriting
+# `gw`, which has been gated since it shipped. This one was not.
+
+@test "KTD17: adopting the agent without consent is refused with exit 8 and writes NOTHING" {
+    plant_agent com.example.gateway
+    local plist="$LAUNCH_AGENTS_DIR/com.example.gateway.plist"
+    local before_sha; before_sha="$(shasum "$plist" | awk '{print $1}')"
+
+    # No --consent-adopt-agent: the bare verb, as an operator would first run it.
+    RC=0
+    bash "$SETUP" supervisor --install-dir "$INSTALL" >"$OUT" 2>"$ERR" || RC=$?
+    [ "$RC" -eq 8 ]
+    assert_one_json
+    [ "$(jq -r '.ok' "$OUT")" = "false" ]
+    [ "$(jq -r '.consent_required' "$OUT")" = "adopt-agent" ]
+    [ "$(jq -r '.exit_code' "$OUT")" = "8" ]
+    # The error names the flag the caller must come back with, or the operator
+    # is told "no" with no way forward.
+    jq -r '.error' "$OUT" | grep -qF -- '--consent-adopt-agent'
+
+    # NOTHING was written: the plist is byte-identical and no launcher exists.
+    [ "$(shasum "$plist" | awk '{print $1}')" = "$before_sha" ]
+    [ ! -e "$SPAWN_GATEWAY_LAUNCHER" ]
+    # And launchctl was never called — a refusal that still unloaded the
+    # operator's agent would have taken their gateway down to say no.
+    [ ! -s "$CTL_RECORD" ] || refute_file_match 'load' "$CTL_RECORD"
+}
+
+@test "KTD17: with consent the same run adopts, so the gate is what differs" {
+    plant_agent com.example.gateway
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+    [ -f "$SPAWN_GATEWAY_LAUNCHER" ]
+}
+
+# --- THE LAUNCHER AT RUNTIME (the gap the review found) ---------------------
+#
+# fake-launchctl.sh records argv and execs nothing, so every test above proves
+# the launcher was WRITTEN and repointed — none proved what happens when
+# launchd actually runs it. Two defects lived in exactly that blind spot: the
+# launcher registered no pid (so spawnctl saw a launchd-started gateway as
+# unmanaged and every restart path aborted over a healthy process), and it
+# relied on a .env.local that spawnctl deletes after every start (so a
+# launchd-started gateway came up with no upstream credential). Both are
+# invisible to a structural assertion and obvious to an executed one.
+
+@test "R28: the launcher REGISTERS its pid, so a launchd-started gateway is not unmanaged" {
+    plant_agent gateway >/dev/null
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    [ ! -f "$PIDFILE" ]
+
+    run bash "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+
+    # exec keeps the pid, so what the launcher recorded IS the gateway's pid.
+    [ -f "$PIDFILE" ]
+    grep -qE '^[0-9]+$' "$PIDFILE"
+    # And the binary is recorded beside it, which is what spawnctl's anchored
+    # identification (pid_is_gateway) matches a live process against.
+    [ -f "$PIDFILE.bin" ]
+    [ "$(cat "$PIDFILE.bin")" = "$BIN" ]
+}
+
+@test "R7/KTD1: the launcher DELIVERS the OpenRouter key it used to assume was lying there" {
+    plant_agent gateway >/dev/null
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    # The state spawnctl leaves behind: it writes .env.local to start the
+    # gateway and removes it once the probe settles. Nothing is there.
+    rm -f "$INSTALL/.env.local"
+
+    run bash "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+
+    # The gateway stub records the delivery file it saw AT EXEC — after the
+    # launcher ran, before the cleaner fires.
+    grep -qx "envlocal=OPENROUTER_API_KEY=$STORED_KEY" "$BIN_RECORD"
+    # mode 0600, the same bar spawnctl's delivery meets.
+    grep -qx 'envmode=600' "$BIN_RECORD"
+    # Still never in the exec-time environment (R7): the file is the channel.
+    grep -qx 'openrouter=<unset>' "$BIN_RECORD"
+}
+
+@test "KTD1: the delivered key does NOT outlive startup — the cleaner removes it" {
+    plant_agent gateway >/dev/null
+    run_supervisor
+    [ "$RC" -eq 0 ]
+
+    run bash "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+    # SPAWN_LAUNCHER_DELIVERY_TTL is 1 in this suite, so a bounded wait covers
+    # it. A key left on disk for the life of the machine is the thing KTD1
+    # exists to prevent.
+    local i
+    for i in $(seq 1 40); do
+        [ -e "$INSTALL/.env.local" ] || break
+        sleep 0.25
+    done
+    [ ! -e "$INSTALL/.env.local" ]
+}
+
+@test "R9: a launcher with nothing stored writes NO pidfile and execs nothing" {
+    plant_agent gateway >/dev/null
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    "$SPAWN_SECURITY_BIN" delete-generic-password -a gateway-token -s "$SPAWN_KEYCHAIN_SERVICE" >/dev/null 2>&1
+
+    run bash "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 9 ]
+    # The refusal is total: no gateway ran, and no pidfile was left claiming one
+    # did. A pidfile written before the token check would point spawnctl at a
+    # pid that never served.
+    [ ! -f "$BIN_RECORD" ] || refute_file_match 'cwd=' "$BIN_RECORD"
+    [ ! -f "$PIDFILE" ]
+}
+
+@test "R4: the launcher does not steal the pidfile from a LIVE gateway of its own binary" {
+    plant_agent gateway >/dev/null
+    run_supervisor
+    [ "$RC" -eq 0 ]
+
+    # A live process holding the pidfile, recorded against the same binary —
+    # the start-vs-supervisor race. The launcher must leave it alone; pointing
+    # spawnctl at the loser is how a stop signals the wrong process.
+    sleep 60 &
+    local live=$!
+    printf '%s\n' "$live" > "$PIDFILE"
+    printf '%s\n' "$BIN" > "$PIDFILE.bin"
+
+    run bash "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$PIDFILE")" = "$live" ]
+    kill "$live" 2>/dev/null || true
 }
