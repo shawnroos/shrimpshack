@@ -73,7 +73,19 @@ for ln in text.splitlines():
     m = bullet_link.match(ln)
     if m:
         links.add(m.group(1))
-bodies = {f for f in os.listdir(d) if f.endswith(".md") and f != "MEMORY.md"}
+# Recursive, and store-relative: index targets for scoped memories are
+# `_scope/<slug>/name.md`, so a flat listdir reports every one of them as a dead
+# link the moment a scoped memory goes hot. Mirrors corpus.iter_bodies' walk.
+bodies = set()
+for root, dirs, files in os.walk(d):
+    dirs[:] = [x for x in dirs if not x.startswith(".")]
+    for f in files:
+        if not f.endswith(".md") or f.startswith("."):
+            continue
+        rel = os.path.relpath(os.path.join(root, f), d)
+        if rel == "MEMORY.md":
+            continue
+        bodies.add(rel)
 dead = sorted(t for t in links if t not in bodies)
 # Cold memories (body present, no index entry) are EXPECTED under the projection
 # model — the index is the budget-truncated hot tier, not every body. So orphans

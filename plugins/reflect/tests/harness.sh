@@ -561,8 +561,16 @@ printf -- '---\nname: gen pref\ncross-project: yes\n---\nPrefer rebase over merg
 printf -- '---\nname: t\n---\nx\n' > "$RIA/-Users-x-acme/memory/cruft.md"
 printf '# idx\n' > "$RIA/-Users-x-slate/memory/MEMORY.md"
 REIMPORT_TODAY=2026-06-27 python3 "$REPO/scripts/scoped-memory/reimport.py" "$RIA" "$RIS" --apply >/dev/null 2>&1
-check "reimport: repo memory lands under _scope/<slug>/ with pin + scope" \
-  "[ -f '$RIS/_scope/-Users-x-slate/conv.md' ] && grep -q 'scope: repo:-Users-x-slate' '$RIS/_scope/-Users-x-slate/conv.md' && grep -q 'pin: true' '$RIS/_scope/-Users-x-slate/conv.md'"
+check "reimport: repo memory lands under _scope/<slug>/ with its scope stamped" \
+  "[ -f '$RIS/_scope/-Users-x-slate/conv.md' ] && grep -q 'scope: repo:-Users-x-slate' '$RIS/_scope/-Users-x-slate/conv.md'"
+# Reimport must NOT pin. A pin bypasses the index budget outright, and retirement
+# never deletes for capacity anyway — a memory past the cut stays on disk, in QMD,
+# and recallable — so "prune-protection" protected against nothing. This assertion
+# exists because the opposite one shipped: 281 pinned re-imports would have evicted
+# 82 of 84 global entries and blown the index to 4.2x budget the moment recursive
+# enumeration made them visible.
+check "reimport: does NOT pin (a pin would bypass the index budget)" \
+  "! grep -q 'pin: true' '$RIS/_scope/-Users-x-slate/conv.md'"
 check "reimport: cross-cutting memory lands FLAT (global), not scoped" \
   "[ -f '$RIS/pref.md' ] && [ ! -f '$RIS/_scope/-Users-x-acme/pref.md' ]"
 check "reimport: trivial body dropped; MEMORY.md not imported" \
