@@ -391,7 +391,34 @@ the gateway went down because it was signalled.
 The pidfile is also removed when the gateway exits: one left naming a dead pid
 is what makes a later stop signal the wrong process.
 
+## Verified against real launchd (2026-08-09)
+
+The supervising launcher was confirmed on the machine, not only in tests:
+launchd's tracked job pid IS the launcher, the gateway is its child, the
+pidfile names the serving gateway, and `.env.local` is gone after startup —
+the cleanup that failed twice under the exec design.
+
+Getting there surfaced one more thing worth writing down. The FIRST adoption
+had left a gateway started by the old exec launcher, and launchd had lost the
+association with it across reloads, so it survived two `launchctl unload`s and
+kept port 4000. The new supervising launcher then crash-looped behind it
+(~12s per cycle, re-delivering the key each time) while `setup` reported
+ok:true, `verify` passed both layers, `spawnctl status` was green and a lens
+call returned exit 0 — all served by the STALE process. Every check proved a
+gateway was healthy; none proved it was the SUPERVISED one.
+
+That specific stranding was a migration artifact of the exec design and cannot
+recur the same way: launchd now tracks the launcher, which forwards TERM to its
+child, so `unload` stops the gateway.
+
 ## Still open
+
+- **`setup` does not confirm the adoption took effect (P2).** After
+  `unload`/`load` it reports "adopted" without checking that the gateway now
+  serving is the one launchd started. A gateway started OUTSIDE launchd (a
+  plain `spawnctl start`) holds the port, the supervised launcher cannot bind,
+  and every downstream check still passes because the unsupervised process
+  answers. The check to add: the pidfile pid's parent should be the launcher.
 
 - **A lint for the xtrace class.** #4 was fixed everywhere it exists today, but
   nothing stops the next credential-holding function from shipping unguarded.
