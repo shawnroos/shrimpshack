@@ -27,7 +27,36 @@ bad()  { FAIL=$((FAIL+1)); echo "  FAIL - $1" >&2; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 # qmd reads can transiently lag under heavy sequential load (sqlite); retry the
 # existence check so a qmd timing hiccup isn't reported as a logic failure.
-has_collection(){ local n; for n in 1 2 3 4 5; do qmd collection list 2>/dev/null | grep -q "$1" && return 0; sleep 1; done; return 1; }
+# Returns 0 = present, 1 = genuinely absent, 2 = qmd did not answer.
+# The third case is the one that matters here: qmd's collection state is GLOBAL on
+# this machine and the daemon answers intermittently, so a run can pass the block's
+# health gate and then hang mid-block. Every retry then elapses with no output, and
+# "we could not ask" gets recorded as "the answer was no" — a different assertion
+# failing on each run with no code change between. That conflation is precisely what
+# this plugin exists to fix at runtime; it has no business in the plugin's own tests.
+has_collection(){
+  local n out answered=0
+  for n in 1 2 3 4 5; do
+    out="$(qmd collection list 2>/dev/null)"
+    if [ -n "$out" ]; then
+      answered=1
+      printf '%s' "$out" | grep -q "$1" && return 0
+    fi
+    sleep 1
+  done
+  [ "$answered" = "1" ] && return 1
+  return 2
+}
+# check_collection: same contract as `check`, but a non-answering qmd is a SKIP.
+check_collection(){
+  local label="$1" name="$2" rc
+  has_collection "$name"; rc=$?
+  case "$rc" in
+    0) ok   "$label" ;;
+    1) bad  "$label" ;;
+    2) echo "  skip - $label (qmd stopped answering; not a failure)" ;;
+  esac
+}
 
 if ! command -v qmd >/dev/null 2>&1; then
   echo "harness: qmd not on PATH — skipping qmd-dependent tests" >&2
@@ -35,7 +64,27 @@ fi
 
 # ------------------------------------------------------------------ reconciler
 echo "== reconciler =="
-if command -v qmd >/dev/null 2>&1; then
+# Gate on qmd being RESPONSIVE, not merely present. `command -v qmd` only proves the
+# binary exists, and this box's failure mode is a qmd that answers `--version` fine
+# while real commands hang past 25s — so this block flaked, a different assertion
+# failing on each run with no code change between. That is the same distinction the
+# whole plugin now makes at runtime (absent is handled, wedged is not), and the
+# Verification Contract forbids depending on a healthy qmd anywhere.
+#
+# There is no `timeout` binary on this machine — a check that assumes one silently
+# PASSES — so the probe is the background-and-kill idiom used elsewhere in this file.
+qmd_responsive() {
+  command -v qmd >/dev/null 2>&1 || return 1
+  ( qmd collection list >/dev/null 2>&1 ) & local p=$!
+  local i=0
+  while [ "$i" -lt 10 ]; do
+    kill -0 "$p" 2>/dev/null || { wait "$p" 2>/dev/null; return $?; }
+    sleep 1; i=$((i+1))
+  done
+  kill -9 "$p" 2>/dev/null; wait "$p" 2>/dev/null || :
+  return 1
+}
+if qmd_responsive; then
   R="$ROOT/recon"; mkdir -p "$R"; cd "$R"
   qmd init >/dev/null 2>&1
   mkdir -p mem doc-store/brainstorms doc-store/handoffs foreign
@@ -51,10 +100,10 @@ if command -v qmd >/dev/null 2>&1; then
   export QMD_RECONCILE_DOC_STORE="$R/doc-store"
   export QMD_RECONCILE_NO_EMBED=1
   bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1
-  check "claude-memory created"      "has_collection 'claude-memory'"
-  check "claude-brainstorms created" "has_collection 'claude-brainstorms'"
-  check "claude-handoffs created"    "has_collection 'claude-handoffs'"
-  check "foreign collection untouched" "has_collection 'keepme-foreign'"
+  check_collection "claude-memory created"      "claude-memory"
+  check_collection "claude-brainstorms created" "claude-brainstorms"
+  check_collection "claude-handoffs created"    "claude-handoffs"
+  check_collection "foreign collection untouched" "keepme-foreign"
 
   # Compare the SET of collection NAMES (the list output also carries volatile
   # "Updated: Ns ago" timestamps, which is not a state change).
@@ -68,9 +117,13 @@ if command -v qmd >/dev/null 2>&1; then
 
   mkdir -p doc-store/solutions; printf '# s\ngamma solution\n' > doc-store/solutions/s1.md
   bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1
-  check "new doc-type auto-registers (claude-solutions)" "has_collection 'claude-solutions'"
+  check_collection "new doc-type auto-registers (claude-solutions)" "claude-solutions"
   unset QMD_RECONCILE_MEMORY_DIR QMD_RECONCILE_DOC_STORE QMD_RECONCILE_NO_EMBED
   cd "$REPO"
+else
+  # Say it out loud. A silently skipped block reads as coverage that ran, which is
+  # the failure mode this plugin exists to fix — reported, not swallowed.
+  echo "  skip - qmd reconcile block (qmd absent or unresponsive; not a failure)"
 fi
 # qmd-absent fallback (runs regardless of env): reconciler skips cleanly, exit 0
 if PATH="/usr/bin:/bin" bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1; then
