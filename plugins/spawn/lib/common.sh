@@ -300,3 +300,28 @@ find_binary_in() {
     done
     return 1
 }
+
+# Preflight-failure object shape, shared by lens.sh and launch.sh.
+#
+# When `spawnctl ensure` fails, both surfaces rewrap its response into their own
+# vocabulary — enum in `error`, prose in `detail`, ensure's full object under
+# `preflight` — rather than forwarding it verbatim. The two blocks were
+# near-identical and had ALREADY drifted once (one emitted the prose under
+# `.detail`, the other under `.error`), which broke callers switching on
+# `.error`. Both files' comments narrate that incident; this closes the
+# recurrence by making the shape single-sourced.
+#
+# What legitimately varies stays at the call site: the trust tier, and the
+# per-surface null fields (lens nulls text/usage; launch nulls the whole session
+# handle). What does NOT vary — ok/alias/error/detail/preflight/help_requested/
+# remedy/exit_code — lives here.
+#
+# Returns a jq program fragment. The caller still binds $a $e $d $r $p $c, so
+# argument binding and sanitization stay where they are visible.
+#   spawn::preflight_jq <tier> '<null-fields-fragment>'
+spawn::preflight_jq() {
+    local tier="$1" nulls="$2"
+    printf '%s' "$(spawn::envelope_jq "$tier")"' + {ok:false, alias:$a, '"$nulls"'
+          error:$e, detail:$d, preflight:$p, help_requested:false,
+          remedy:(if $r == "" then null else $r end), exit_code:$c}'
+}

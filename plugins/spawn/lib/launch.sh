@@ -516,11 +516,7 @@ if [ "$ENSURE_RC" -ne 0 ]; then
         --arg d "$(spawn::sanitize_for_display "$PRE_DETAIL")" \
         --arg r "$PRE_REMEDY" \
         --argjson p "$PRE_JSON" --argjson c "$ENSURE_RC" \
-        "$(spawn::envelope_jq plugin)"' + {ok:false, alias:$a, session_id:null,
-          transcript_path:null, cwd:null, base_url:null, context_window:null,
-          attach_command:null, error:$e, detail:$d, preflight:$p,
-          help_requested:false,
-          remedy:(if $r == "" then null else $r end), exit_code:$c}')" \
+        "$(spawn::preflight_jq plugin 'session_id:null, transcript_path:null, cwd:null, base_url:null, context_window:null, attach_command:null,')")" \
         || emit_error "$ENSURE_RC" "$PRE_ENUM" "$PRE_DETAIL"
     exit "$ENSURE_RC"
 fi

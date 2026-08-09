@@ -594,9 +594,7 @@ if [ "$ENSURE_RC" -ne 0 ]; then
         --arg d "$(spawn::sanitize_for_display "$PRE_DETAIL")" \
         --arg r "$PRE_REMEDY" \
         --argjson p "$PRE_JSON" --argjson c "$ENSURE_RC" \
-        "$(spawn::envelope_jq model)"' + {ok:false, alias:$a, text:null,
-          usage:null, error:$e, detail:$d, preflight:$p, help_requested:false,
-          remedy:(if $r == "" then null else $r end), exit_code:$c}')" \
+        "$(spawn::preflight_jq model 'text:null, usage:null,')")" \
         || emit_error "$ENSURE_RC" "$PRE_ENUM" "$PRE_DETAIL"
     exit "$ENSURE_RC"
 fi
