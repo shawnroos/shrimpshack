@@ -19,13 +19,42 @@ extra item alongside the usual top-K globals — never displacing a global, and
 suppressing other repos' memories. Outside any repo, only globals surface. The
 behavior degrades to today's exact recall when the scope module is absent.
 
-Drive it with `scripts/scoped-memory/reflect_cli.py`: `recall --here`, `save
+Drive it with `scripts/scoped-memory/reflect_cli.py`: `recall`, `save
 --scope <repo:.|repo:slug|global>`, `promote`/`rescope` (the move-between-scopes
 escape hatch for a mis-scoped memory), and `list [--here|--scope]`. The shared
 `scope.py` (resolver + qmd-path scope match + `select_scoped`) is the single source
 of truth the hook and tools both use. The archived per-repo stores are restored
 tagged via `scripts/scoped-memory/reimport.py`; go-forward native writes are
 scoped best-effort by `scripts/scoped-memory/backfill.py` (run from `setup.sh`).
+
+## Mid-session recall — one call, and when to make it
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory/reflect_cli.py recall \
+  --query "<what you are up against>" [--here] [--deliberate] [--cwd D] [--store D]
+```
+
+The query can also be a bare positional argument. That one call runs the whole
+layered path itself — declared triggers, then `qmd vsearch`, then the local BM25
+index when qmd was skipped, wedged, or empty — returns **bodies**, and always ends
+with a status line naming which layer answered. `--here` scopes to this repo (its own
+memories plus ancestors and globals, never a sibling repo's) and says so when you are
+not in a repo. `--deliberate` widens K and relaxes the local confidence gate; use it
+when a human explicitly asked. It exits 0 even on no match — read the output, not the
+exit code. A wedged qmd is named in the status line, never silently skipped.
+
+**When to make the call mid-session** — the measured misses all had one of these tells:
+
+- a **successful** command returned a surprising or thin result (nothing errored, but
+  the output doesn't explain what you're seeing);
+- you're about to touch an **unfamiliar external system** — a CLI, a service, another
+  team's repo;
+- an action was **denied**, or a tool behaved in a way you didn't expect;
+- you're about to **re-derive something that smells previously solved**.
+
+`/memories <topic>` is the same call made deliberately on a named topic, with the
+recording and trigger-proposing steps around it. `/reflect-regroup` is its no-argument
+counterpart: a human invokes it mid-task, and it stops first.
 
 Run when:
 - The user types `/reflect` or "reflect now" → silent mode

@@ -43,6 +43,15 @@ session are findable next session. A `UserPromptSubmit` seeded-recall hook surfa
 the few most relevant bodies on the first prompt of a session. When QMD is
 unavailable, the index pointer is a working file path — read the body directly.
 
+**Recall mid-session, not only at session start.** Run `/memories <topic>` — or, in a
+subagent that can't invoke a command, the reflect plugin's one recall call
+(`scripts/scoped-memory/reflect_cli.py recall --query "<what you are up against>"`,
+plus `--here` to scope it to this repo). It returns bodies and names which layer
+answered. Reach for it when a **successful** command returns a surprising or thin
+result, before touching an **unfamiliar external system**, after an action is
+**denied** or a tool behaves unexpectedly, and before **re-deriving anything that
+smells previously solved**.
+
 **Reinforce on overlap.** Before saving, search `MEMORY.md` for an existing entry on
 the same topic. If found, update and extend it instead of creating a duplicate.
 Overlapping saves are signal — they mean the rule is real and recurring.

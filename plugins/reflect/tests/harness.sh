@@ -976,6 +976,30 @@ check "trigger_lifecycle_test.py: reports a non-empty tally" 'grep -q "trigger_l
 check "the trigger writer restores st_mtime (KTD14)" \
   'grep -q "os.utime" "$SCRIPTS/scoped-memory/triggers.py"'
 
+# ------------------------------------------------------ commands (U5 / U11)
+# Both runners execute the exact CLI invocation their own doc specifies. That is
+# the guard against the drift this whole plan exists to fix: `recall --here` was
+# documented in SKILL.md for months while cmd_recall had no such branch. Verified
+# load-bearing — renaming --deliberate in the CLI fails 2 assertions in each.
+echo "== deliberate-memory commands (U5 / U11) =="
+MEMOUT="$ROOT/memories_cmd_test.out"
+$SR_CLEAN python3 "$REPO/tests/memories_cmd_test.py" > "$MEMOUT" 2>&1; MEMRC=$?
+check "memories_cmd_test.py: all assertions pass" '[ "$MEMRC" = "0" ]'
+check "memories_cmd_test.py: reports a non-empty tally" 'grep -q "memories_cmd_test: [1-9][0-9]* passed, 0 failed" "$MEMOUT"'
+
+RGOUT="$ROOT/regroup_cmd_test.out"
+$SR_CLEAN python3 "$REPO/tests/regroup_cmd_test.py" > "$RGOUT" 2>&1; RGRC=$?
+check "regroup_cmd_test.py: all assertions pass" '[ "$RGRC" = "0" ]'
+check "regroup_cmd_test.py: reports a non-empty tally" 'grep -q "regroup_cmd_test: [1-9][0-9]* passed, 0 failed" "$RGOUT"'
+
+check "both command files exist and are distinct" \
+  '[ -f "$REPO/commands/memories.md" ] && [ -f "$REPO/commands/reflect-regroup.md" ]'
+# The scope split is the design: /memories takes a topic and stops nothing;
+# /reflect regroup takes none and stops first. If either file stops naming the
+# other, the two commands have started to blur.
+check "each command file cross-references the other (scope split held)" \
+  'grep -qi "regroup" "$REPO/commands/memories.md" && grep -qi "memories" "$REPO/commands/reflect-regroup.md"'
+
 # ---------------------------------------------------------------------- report
 echo
 echo "harness: $PASS passed, $FAIL failed"
