@@ -511,13 +511,3 @@ mutant() {
     grep -q 'usage: setup.sh' "$ERR"
 }
 
-@test "setup.sh's BIN_CANDIDATES is byte-identical to spawnctl.sh's" {
-    # The two lists are deliberately duplicated (setup.sh cannot source
-    # spawnctl.sh — it dispatches a verb and exits), so the drift they would
-    # otherwise be free to develop is closed here instead of by discipline.
-    local a b
-    a="$(grep -n '^BIN_CANDIDATES=' "$SETUP" | cut -d: -f2-)"
-    b="$(grep -n '^BIN_CANDIDATES=' "$CTL" | cut -d: -f2-)"
-    [ -n "$a" ]
-    [ "$a" = "$b" ]
-}

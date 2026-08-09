@@ -82,7 +82,6 @@ START_TIMEOUT="${SPAWN_START_TIMEOUT:-20}"
 LOCK_TIMEOUT="${SPAWN_LOCK_TIMEOUT:-60}"
 
 # Binary candidates inside a resolved install dir, most specific first.
-BIN_CANDIDATES=("target/release/gateway" "target/debug/gateway" "bin/gateway" "gateway")
 
 # ---------------------------------------------------------------------------
 # Keychain item identity (KTD1, U1's primitives).
@@ -454,16 +453,6 @@ version_sort_key() {
     done
 }
 
-find_binary_in() {
-    local dir="$1" cand
-    for cand in "${BIN_CANDIDATES[@]}"; do
-        if [ -f "$dir/$cand" ] && [ -x "$dir/$cand" ]; then
-            printf '%s' "$dir/$cand"
-            return 0
-        fi
-    done
-    return 1
-}
 
 # resolve_install_dir [soft]
 #   soft: a "no candidate found" outcome records INSTALL_ERR and returns 1
@@ -483,7 +472,7 @@ resolve_install_dir() {
         local ovr="$SPAWN_INSTALL_DIR"
         [ -d "$ovr" ] || die "$EX_USAGE" "SPAWN_INSTALL_DIR is set to '$ovr', which is not a directory (set-but-invalid override is a hard failure, never a fall-through)"
         local bin
-        bin="$(find_binary_in "$ovr")" || die "$EX_USAGE" "SPAWN_INSTALL_DIR '$ovr' holds no executable regular-file gateway binary (looked for: ${BIN_CANDIDATES[*]})"
+        bin="$(find_binary_in "$ovr")" || die "$EX_USAGE" "SPAWN_INSTALL_DIR '$ovr' holds no executable regular-file gateway binary (looked for: ${SPAWN_BIN_CANDIDATES[*]})"
         INSTALL_DIR="$ovr"
         SPAWN_BIN="$bin"
         return 0
@@ -507,7 +496,7 @@ resolve_install_dir() {
 
     local bin
     if ! bin="$(find_binary_in "$best")"; then
-        INSTALL_ERR="newest gateway install '$best' holds no executable regular-file gateway binary (looked for: ${BIN_CANDIDATES[*]})"
+        INSTALL_ERR="newest gateway install '$best' holds no executable regular-file gateway binary (looked for: ${SPAWN_BIN_CANDIDATES[*]})"
         [ "$mode" = "soft" ] && return 1
         die "$EX_UNREACHABLE" "$INSTALL_ERR"
     fi
@@ -1062,22 +1051,7 @@ start_if_down() {
 table_json() {
     local empty='{"aliases":{},"families":{},"no_family_alias":null,"chain_policy":{}}'
     if [ -f "$MODELS_JSON" ]; then
-        jq -c "$SPAWN_MODELS_ALIASES_JQ_DEF"'
-            def safeobj: if type == "object" then . else {} end;
-            def safe_families:
-                ((.families // {}) | safeobj)
-                | map_values(
-                    if type == "object" then
-                        ((.default // null) as $d
-                         | (.tiers // {}) as $t
-                         | {
-                             default: (if ($d|type) == "string" then $d else null end),
-                             tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
-                           })
-                    else empty end
-                  );
-            def safe_chain_policy:
-                ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+        jq -c "$SPAWN_MODELS_ALIASES_JQ_DEF$SPAWN_MODELS_GRAMMAR_JQ_DEF"'
             if (type == "object" and ((.aliases // {}) | type) == "object")
             then {
                 aliases: spawn_aliases,

@@ -216,16 +216,6 @@ CODEX_PROVIDER_ID="${SPAWN_CODEX_PROVIDER_ID:-spawn_gateway}"
 # failure.
 DOCTOR_BUDGET="${SPAWN_SETUP_DOCTOR_BUDGET:-20}"
 
-# Binary candidates inside an install dir, most specific first.
-#
-# DELIBERATE DUPLICATION of the list in spawnctl.sh, and the one thing that
-# makes it safe: setup-acquire.bats asserts the two BIN_CANDIDATES lines are
-# byte-identical. Sourcing spawnctl.sh is not available — it dispatches a verb
-# and exits at the bottom of the file — and moving the list into common.sh
-# would edit three scripts to save one line. Drift is the real risk here (this
-# plugin already carries the scar of three copies of one parser), so it is
-# closed by a test rather than by discipline.
-BIN_CANDIDATES=("target/release/gateway" "target/debug/gateway" "bin/gateway" "gateway")
 
 # ---------------------------------------------------------------------------
 # Plumbing. Same chokepoints as the sibling scripts, deliberately byte-identical
@@ -548,21 +538,6 @@ resolve_commit_sha() {
         || die "$EX_UNREACHABLE" "step 'resolve commit': tag '$tag' resolved to no commit sha (nothing has been changed on this machine)"
 }
 
-# ---------------------------------------------------------------------------
-# Install inspection
-# ---------------------------------------------------------------------------
-find_binary_in() {
-    local dir="$1" cand
-    for cand in "${BIN_CANDIDATES[@]}"; do
-        # A REGULAR file, executable. `-x` alone is true of a directory, so a
-        # stray `gateway/` dir would resolve as the binary.
-        if [ -f "$dir/$cand" ] && [ -x "$dir/$cand" ]; then
-            printf '%s' "$dir/$cand"
-            return 0
-        fi
-    done
-    return 1
-}
 
 # binary_runs <path> — R3's "and its binary runs". Presence is not enough: an
 # interrupted build, a partially-restored backup, or a binary built for the
@@ -808,7 +783,7 @@ PROMOTED_BIN=""
 promote() {
     local staging="$1" dest="$2" bin
     bin="$(find_binary_in "$staging")" \
-        || die "$EX_USAGE" "step 'promote': refusing to install '$dest' — the staged build holds no executable gateway binary (looked for: ${BIN_CANDIDATES[*]}); nothing was moved into place"
+        || die "$EX_USAGE" "step 'promote': refusing to install '$dest' — the staged build holds no executable gateway binary (looked for: ${SPAWN_BIN_CANDIDATES[*]}); nothing was moved into place"
     [ -f "$staging/$CONFIG_NAME" ] \
         || die "$EX_USAGE" "step 'promote': refusing to install '$dest' — the staged build holds no $CONFIG_NAME, and an install with a binary but no config makes every concurrent status and lens misreport an auth failure (KTD4); nothing was moved into place"
 
@@ -1154,7 +1129,7 @@ launcher_stored_argv() {
 sibling_install_of() {
     local arg0="$1" install="${2%/}" cand stale
     [ -n "$arg0" ] && [ -n "$install" ] || return 1
-    for cand in "${BIN_CANDIDATES[@]}"; do
+    for cand in "${SPAWN_BIN_CANDIDATES[@]}"; do
         stale="${arg0%/"$cand"}"
         [ "$stale" = "$arg0" ] && continue
         [ -n "$stale" ] || continue
@@ -1498,7 +1473,7 @@ do_supervisor() {
     [ -d "$install" ] \
         || die "$EX_USAGE" "step 'supervisor': '$install' is not a directory, so there is no install a launchd agent could be supervising; nothing was written"
     bin="$(find_binary_in "$install")" \
-        || die "$EX_USAGE" "step 'supervisor': '$install' holds no executable gateway binary (looked for: ${BIN_CANDIDATES[*]}); nothing was written"
+        || die "$EX_USAGE" "step 'supervisor': '$install' holds no executable gateway binary (looked for: ${SPAWN_BIN_CANDIDATES[*]}); nothing was written"
 
     detect_supervisor "$bin" "$install"
 

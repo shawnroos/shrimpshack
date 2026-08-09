@@ -328,22 +328,7 @@ emit_describe() {
     models_json="${SPAWN_MODELS_JSON:-$SCRIPT_DIR/models.json}"
     grammar='{"aliases":{},"families":{},"no_family_alias":null,"chain_policy":{}}'
     if [ -f "$models_json" ]; then
-        grammar="$(jq -c '
-            def safeobj: if type == "object" then . else {} end;
-            def safe_families:
-                ((.families // {}) | safeobj)
-                | map_values(
-                    if type == "object" then
-                        ((.default // null) as $d
-                         | (.tiers // {}) as $t
-                         | {
-                             default: (if ($d|type) == "string" then $d else null end),
-                             tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
-                           })
-                    else empty end
-                  );
-            def safe_chain_policy:
-                ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+        grammar="$(jq -c "$SPAWN_MODELS_GRAMMAR_JQ_DEF"'
             if (type == "object") then {
                 families: safe_families,
                 no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),

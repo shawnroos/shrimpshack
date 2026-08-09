@@ -244,3 +244,59 @@ def spawn_aliases:
   then ((.aliases // {}) | map_values(select(type == "object")))
   else {} end;
 '
+
+# models.json GRAMMAR shape guard — the family/tier/chain-policy half of the
+# same job, and here for the same reason its alias sibling above is: it was
+# byte-identical in three files (spawnctl table_json, lens emit_describe,
+# launch emit_describe). Three copies of one parser is this plugin's founding
+# scar; the alias half was moved here and the grammar half was not.
+#
+# Only the three defs are shared. The projection that consumes them differs by
+# caller — spawnctl also emits `aliases`, the two agent surfaces do not — so
+# each call site still writes its own `if ... then {...} end`, which is the
+# part that legitimately varies.
+SPAWN_MODELS_GRAMMAR_JQ_DEF='
+def safeobj: if type == "object" then . else {} end;
+def safe_families:
+    ((.families // {}) | safeobj)
+    | map_values(
+        if type == "object" then
+            ((.default // null) as $d
+             | (.tiers // {}) as $t
+             | {
+                 default: (if ($d|type) == "string" then $d else null end),
+                 tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
+               })
+        else empty end
+      );
+def safe_chain_policy:
+    ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+'
+
+# Gateway binary discovery — the candidate list and the resolver, shared because
+# setup.sh and spawnctl.sh both need the SAME answer to "which file in this
+# install dir is the gateway".
+#
+# These were duplicated, with a bats test (setup-acquire.bats) asserting the two
+# BIN_CANDIDATES lines stayed byte-identical. A test whose job is to keep two
+# copies in sync is the module boundary telling you it is in the wrong place —
+# both scripts already source this file, so the stated reason for the copy
+# ("setup.sh cannot source spawnctl.sh") never applied to common.sh.
+#
+# Order matters: most specific first. A release build wins over a debug build,
+# and a bare `gateway` is the last resort.
+SPAWN_BIN_CANDIDATES=("target/release/gateway" "target/debug/gateway" "bin/gateway" "gateway")
+
+# find_binary_in <dir> — echo the first candidate that is a REGULAR executable
+# file. `-x` alone is true of a directory, so a stray `gateway/` dir would
+# otherwise resolve as the binary.
+find_binary_in() {
+    local d="$1" c
+    for c in "${SPAWN_BIN_CANDIDATES[@]}"; do
+        if [ -f "$d/$c" ] && [ -x "$d/$c" ]; then
+            printf '%s' "$d/$c"
+            return 0
+        fi
+    done
+    return 1
+}
