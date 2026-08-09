@@ -194,11 +194,33 @@ T1=$(sr_now)
 printf '{"prompt":"anything","session_id":"W2"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
 T2=$(sr_now)
 check "wedged 2nd prompt still probes (transient tolerance, not suppressed)" "sr_elapsed_gt $T1 $T2"
-# 3rd wedged prompt (different session): count>=2 -> suppressed INSTANTLY, no qmd call
-T3=$(sr_now)
+# 3rd wedged prompt (different session): count>=2 -> cooldown armed, NO qmd call.
+#
+# This assertion was rewritten by U4 and the old form is worth recording, because it
+# was the bug written down as a test:
+#   check "...3rd prompt suppressed instantly" "[ -z \"$OUTW3\" ] && sr_elapsed_lt $T3 $T4"
+# `[ -z "$OUTW3" ]` demanded EMPTY output on an armed cooldown — precisely the
+# fail-to-silence behavior U4 exists to delete. An armed cooldown must now say so.
+#
+# The timing half was replaced too, for a separate reason: `sr_elapsed_lt` (0.5s)
+# inferred "did it call qmd" from wall-clock, which was always a proxy and is now a
+# wrong one. The fallback builds a BM25 index over the live store (~889 bodies,
+# ~560ms build + ~26ms query), so the cooldown path runs ~0.7-0.9s and a 0.5s bound
+# would flake. Counting spawned children measures skipping qmd directly. Idiom
+# borrowed from the process-group-kill block below.
+W3_BEFORE="$(grep -c . "$SR_PIDFILE" 2>/dev/null || echo 0)"
 OUTW3="$(printf '{"prompt":"anything","session_id":"W3"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
-T4=$(sr_now)
-check "cooldown armed on 2nd failure: 3rd prompt suppressed instantly" "[ -z \"\$OUTW3\" ] && sr_elapsed_lt $T3 $T4"
+tail -n +"$((W3_BEFORE+1))" "$SR_PIDFILE" > "$SR/w3-new-pids" 2>/dev/null || : > "$SR/w3-new-pids"
+# `grep -c .` prints 0 AND exits 1 on an EMPTY file, so `|| echo 0` fires too and
+# the value becomes "0\n0" — never equal to "0". Every other use of this idiom in
+# this file reads a file that is non-empty in the passing case, so the fallback
+# never runs and the bug stays hidden; this is the one place it is empty when the
+# code is CORRECT, which turned a passing behavior into a failing assertion.
+W3_SPAWNED="$(wc -l < "$SR/w3-new-pids" | tr -d '[:space:]')"
+check "cooldown armed on 2nd failure: 3rd prompt makes NO qmd call" \
+  '[ "$W3_SPAWNED" = "0" ] && [ "$(sr_alive "$SR/w3-new-pids")" = "0" ]'
+check "cooldown armed: 3rd prompt states the degradation instead of going silent" \
+  'echo "$OUTW3" | grep -qi "fallback"'
 # FORCE bypasses an armed cooldown (still attempts qmd -> takes ~budget, not instant)
 T5=$(sr_now)
 printf '{"prompt":"anything","session_id":"W4"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_FORCE=1 SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
@@ -910,6 +932,49 @@ check "manifest compilation is its own script, not inside the renderer" \
 # correct code. Strip comments before looking for an actual expansion.
 check "the nudge hook reads stdin, not the nonexistent \$TOOL_INPUT" \
   '! grep -vE "^[[:space:]]*#" "$REPO/hooks/trigger-nudge.sh" | grep -q "TOOL_INPUT"'
+
+# ------------------------------------------------- batch 2 (U2 / U4 / U6)
+# Same contract as batch 1: the runners hold the assertions, these gate them and
+# pin the structural properties a runner cannot see from inside. Each runs with the
+# SEEDED_RECALL_* namespace cleared — the harness exports those for its own hook
+# fixtures and they otherwise redirect a child runner's stamp paths.
+SR_CLEAN="env -u SEEDED_RECALL_FLAG_DIR -u SEEDED_RECALL_TIMEOUT -u SEEDED_RECALL_COLLECTION -u SEEDED_RECALL_K -u SEEDED_RECALL_MEMORY_DIR -u SEEDED_RECALL_MIN_SCORE"
+
+echo "== recall CLI (U2) =="
+CLIOUT="$ROOT/recall_cli_test.out"
+$SR_CLEAN python3 "$REPO/tests/recall_cli_test.py" > "$CLIOUT" 2>&1; CLIRC=$?
+check "recall_cli_test.py: all assertions pass" '[ "$CLIRC" = "0" ]'
+check "recall_cli_test.py: reports a non-empty tally" 'grep -q "recall_cli_test: [1-9][0-9]* passed, 0 failed" "$CLIOUT"'
+# The drift this unit ends: CLI on `qmd search` (BM25) while the hook used
+# `qmd vsearch` (vector) — measured recall@3 0.25 vs 0.75. Both now go through
+# retrieval.py, so neither may shell qmd itself.
+# Assert INVOCATION, not vocabulary. The CLI legitimately says "qmd" in its
+# docstring, in comments, and as a source-layer label in output — a word-grep
+# matches all three and fails on correct code. What must not exist is a process
+# launch. (Third false positive of this exact shape in this file; the pattern is
+# always: grep for the thing the code correctly documents.)
+check "recall CLI never launches qmd itself (delegates to retrieval.py)" \
+  '! grep -vE "^[[:space:]]*#" "$SCRIPTS/scoped-memory/reflect_cli.py" | grep -qE "subprocess\.|os\.popen|os\.system|check_output" && grep -q "_retrieval\." "$SCRIPTS/scoped-memory/reflect_cli.py"'
+check "recall --here is implemented, not just documented" \
+  'grep -q "\-\-here" "$SCRIPTS/scoped-memory/reflect_cli.py"'
+
+echo "== seeded-recall fail-over (U4) =="
+FOOUT="$ROOT/seeded_failover_test.out"
+$SR_CLEAN python3 "$REPO/tests/seeded_failover_test.py" > "$FOOUT" 2>&1; FORC=$?
+check "seeded_failover_test.py: all assertions pass" '[ "$FORC" = "0" ]'
+check "seeded_failover_test.py: reports a non-empty tally" 'grep -q "seeded_failover_test: [1-9][0-9]* passed, 0 failed" "$FOOUT"'
+
+echo "== trigger lifecycle (U6) =="
+TLOUT="$ROOT/trigger_lifecycle_test.out"
+$SR_CLEAN python3 "$REPO/tests/trigger_lifecycle_test.py" > "$TLOUT" 2>&1; TLRC=$?
+check "trigger_lifecycle_test.py: all assertions pass" '[ "$TLRC" = "0" ]'
+check "trigger_lifecycle_test.py: reports a non-empty tally" 'grep -q "trigger_lifecycle_test: [1-9][0-9]* passed, 0 failed" "$TLOUT"'
+# KTD14: the backfill writes to ~219 files; mtime is a reinforcement signal weighted
+# at 0.3 with a 60-day half-life, so not restoring it spikes every touched memory's
+# activation and reshuffles the hot/cold cut. Verified load-bearing by mutation:
+# disabling the restore fails 2 assertions in the runner.
+check "the trigger writer restores st_mtime (KTD14)" \
+  'grep -q "os.utime" "$SCRIPTS/scoped-memory/triggers.py"'
 
 # ---------------------------------------------------------------------- report
 echo
