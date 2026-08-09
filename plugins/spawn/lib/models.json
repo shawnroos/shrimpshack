@@ -1,0 +1,116 @@
+{
+  "version": 2,
+  "note": "Per-alias context and output windows (KTD7, KTD19). The gateway has no window field to extend, so this table is the plugin's own. `model` records the upstream model string the alias pointed at when the entry was written — spawnctl status compares it against gateway.yaml, because the model-list endpoint returns only id and display_name and a repointed alias would otherwise drift silently. A chain alias takes the SMALLEST window across its routes, so a mid-session fallback can only under-declare rather than overflow. `output_window` is the max COMPLETION size, which is a different number from the context window and the one CLAUDE_CODE_MAX_OUTPUT_TOKENS silently defaults to 32000 for when the model name is not one Claude Code recognizes — a gateway alias never is, so an undeclared alias quietly caps its own answers at 32000 tokens. Where the upstream listing publishes no completion cap, the entry declares that same 32000 rather than guessing high: under-declaring truncates nothing the harness would not have truncated anyway.",
+  "seeded_from": "~/gateway-0.1.1/gateway.yaml",
+  "seeded_on": "2026-08-06",
+  "families_note": "The grammar the command layer reads prose against (KTD3). Everything after a command is prose; the reading agent derives a family and an optional tier from it and hands a script exactly ONE resolved alias (KD6). That derivation needs the family -> tier -> alias relation DECLARED, because it is not recoverable from the flat `aliases` map below: `k3` is relatable to `kimi` only through the upstream string `moonshotai/kimi-k3`, and `gpt` pointing at the same model as `gpt-sol` is a coincidence of how the gateway was configured, not a stated default. Inferring either is how an unserved tier silently becomes the default instead of failing loudly. `tiers` maps the tier name AS PROSE SPELLS IT (hyphens included, e.g. `sol-pro`) to the served alias; `default` is the alias a bare family name resolves to; `no_family_alias` is what prose naming no family at all resolves to. A family or tier absent from this block is UNSERVED: the command layer fails and names the served aliases rather than falling back. This block is the grammar; `aliases` stays the metadata table it already was.",
+  "families": {
+    "kimi": {
+      "default": "kimi",
+      "tiers": {
+        "k2.7-code": "kimi",
+        "k3": "k3"
+      }
+    },
+    "glm": {
+      "default": "glm",
+      "tiers": {
+        "5.2": "glm"
+      }
+    },
+    "gpt": {
+      "default": "gpt",
+      "tiers": {
+        "luna": "gpt-luna",
+        "terra": "gpt-terra",
+        "sol": "gpt-sol",
+        "sol-pro": "gpt-sol-pro"
+      }
+    }
+  },
+  "no_family_alias": "default",
+  "chain_policy_note": "Which surfaces may resolve to a chain alias (an `aliases` entry with chain:true, whose `model` is a list of routes). A chain can change model mid-flight on fallback, and this table deliberately under-declares a chain's context window to its smallest route — tolerable for one tool-less turn, wrong for an hour-long job holding tools (KTD4). `refuse` means the surface must reject the alias before any network call and say which non-chain aliases it will take.",
+  "chain_policy": {
+    "agent": "allow",
+    "session": "allow",
+    "bg-agent": "refuse"
+  },
+  "output_windows_added_on": "2026-08-07",
+  "aliases": {
+    "kimi": {
+      "context_window": 262144,
+      "output_window": 262144,
+      "source": "upstream model card — OpenRouter listing for moonshotai/kimi-k2.7-code reports context_length 262144, read 2026-08-06. gateway.yaml carries no window comment for this alias.",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 262144 for moonshotai/kimi-k2.7-code, read 2026-08-07.",
+      "model": "openrouter/moonshotai/kimi-k2.7-code",
+      "chain": false
+    },
+    "k3": {
+      "context_window": 1048576,
+      "output_window": 32000,
+      "source": "gateway.yaml comment above the alias: \"1M context, but ~4x the price of K2.7 Code\"; the OpenRouter listing for moonshotai/kimi-k3 pins that 1M at context_length 1048576, read 2026-08-06.",
+      "output_source": "the OpenRouter models endpoint publishes NO completion cap for moonshotai/kimi-k3 (top_provider.max_completion_tokens is null), read 2026-08-07 — so this declares 32000, the value Claude Code silently defaults to for an unrecognized model name. Declaring the default rather than guessing higher keeps the table honest about what is known.",
+      "model": "openrouter/moonshotai/kimi-k3",
+      "chain": false
+    },
+    "glm": {
+      "context_window": 1048576,
+      "output_window": 131072,
+      "source": "upstream model card — OpenRouter listing for z-ai/glm-5.2 reports context_length 1048576, read 2026-08-06. gateway.yaml carries no window comment for this alias.",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 131072 for z-ai/glm-5.2, read 2026-08-07.",
+      "model": "openrouter/z-ai/glm-5.2",
+      "chain": false
+    },
+    "gpt-luna": {
+      "context_window": 1050000,
+      "output_window": 128000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\".",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 128000 for openai/gpt-5.6-luna, read 2026-08-07.",
+      "model": "openrouter/openai/gpt-5.6-luna",
+      "chain": false
+    },
+    "gpt-terra": {
+      "context_window": 1050000,
+      "output_window": 128000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\".",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 128000 for openai/gpt-5.6-terra, read 2026-08-07.",
+      "model": "openrouter/openai/gpt-5.6-terra",
+      "chain": false
+    },
+    "gpt-sol": {
+      "context_window": 1050000,
+      "output_window": 128000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\".",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 128000 for openai/gpt-5.6-sol, read 2026-08-07.",
+      "model": "openrouter/openai/gpt-5.6-sol",
+      "chain": false
+    },
+    "gpt-sol-pro": {
+      "context_window": 1050000,
+      "output_window": 128000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\"; gpt-sol-pro is the same model as gpt-sol served with reasoning.mode=pro, so it inherits the tier's window.",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 128000 for openai/gpt-5.6-sol-pro, read 2026-08-07.",
+      "model": "openrouter/openai/gpt-5.6-sol-pro",
+      "chain": false
+    },
+    "gpt": {
+      "context_window": 1050000,
+      "output_window": 128000,
+      "source": "gateway.yaml comment above the GPT-5.6 tiers: \"all 1.05M context\"; `gpt` is the back-compat alias pointing at the same gpt-5.6-sol model as gpt-sol. It is also the DECLARED default of the `gpt` family (see `families`) — that it happens to serve the sol tier's model is no longer what makes it the default.",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 128000 for openai/gpt-5.6-sol, the model this back-compat alias points at, read 2026-08-07.",
+      "model": "openrouter/openai/gpt-5.6-sol",
+      "chain": false
+    },
+    "default": {
+      "context_window": 262144,
+      "output_window": 131072,
+      "source": "chain — the smallest window across its routes: kimi (262144) and glm (1048576), both from the OpenRouter listing read 2026-08-06. Under-declaring is the safe direction for a mid-session fallback.",
+      "output_source": "chain — the smallest completion cap across its routes: kimi (262144) and glm (131072), from the OpenRouter models endpoint read 2026-08-07. Same reasoning as the context window: a mid-session fallback must not be able to promise more output than the route it lands on will produce.",
+      "model": [
+        "openrouter/moonshotai/kimi-k2.7-code",
+        "openrouter/z-ai/glm-5.2"
+      ],
+      "chain": true
+    }
+  }
+}
