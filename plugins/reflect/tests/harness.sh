@@ -648,14 +648,19 @@ HKJSON="$REPO/.claude/hooks/hooks.json"
 HKHOME="$ROOT/hookhome"; mkdir -p "$HKHOME/.claude"
 HKFLAG="$HKHOME/.claude/.reflect-pending"
 # $1 = event (PostToolUse/PreToolUse), $2 = matcher -> the command string as shipped
+# Fatal on a miss, deliberately: a silent miss returns "" and `/bin/bash -c ""`
+# exits 0 writing no flag, which SATISFIES every negative-space assertion below.
+# Four of the seven would then pass vacuously and the suite would report a partial
+# green pointing at neither end. Drift in hooks.json must fail loudly instead.
 hk_cmd() {
   python3 - "$HKJSON" "$1" "$2" <<'PY'
 import json, sys
 cfg = json.load(open(sys.argv[1]))
-for entry in cfg["hooks"][sys.argv[2]]:
+for entry in cfg["hooks"].get(sys.argv[2], []):
     if entry.get("matcher") == sys.argv[3]:
         print(entry["hooks"][0]["command"])
-        break
+        sys.exit(0)
+sys.exit("hooks.json: no %s entry with matcher %r" % (sys.argv[2], sys.argv[3]))
 PY
 }
 # $1 = command, $2 = stdin payload, $3 = PATH override ("" keeps the current PATH).
@@ -667,8 +672,10 @@ hk_run() {
     ${3:+PATH="$3"} /bin/bash -c "$1" >/dev/null 2>&1
   echo "$?"
 }
-HK_BASH="$(hk_cmd PostToolUse Bash)"
-HK_TODO="$(hk_cmd PreToolUse TodoWrite)"
+HK_BASH="$(hk_cmd PostToolUse Bash)" || { echo "  FAIL - hooks.json shape drifted (PostToolUse/Bash)"; FAIL=$((FAIL+1)); }
+HK_TODO="$(hk_cmd PreToolUse TodoWrite)" || { echo "  FAIL - hooks.json shape drifted (PreToolUse/TodoWrite)"; FAIL=$((FAIL+1)); }
+check "hook: both matchers were actually found in hooks.json (guards the rest)" \
+  '[ -n "$HK_BASH" ] && [ -n "$HK_TODO" ]'
 check "hook: matchers no longer read the nonexistent \$TOOL_INPUT env var" \
   '! printf "%s%s" "$HK_BASH" "$HK_TODO" | grep -q "TOOL_INPUT"'
 
@@ -690,6 +697,30 @@ HK_E3="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"gh pr m
 check "hook: jq absent -> fail-open (exit 0, no flag written)" \
   '[ ! -f "$HKFLAG" ] && [ "$HK_E3" = "0" ]'
 
+# The jq-absent assertion above passes with OR WITHOUT the `command -v jq || exit 0`
+# guard: with jq unreachable the substitution is empty, grep fails, and the trailing
+# `exit 0` gives an identical outcome. Absence of a flag cannot distinguish "guard
+# worked" from "everything downstream quietly no-opped", so that assertion pins the
+# outcome but not the mechanism.
+#
+# This one pins the mechanism from the other side, with a jq SHIM that records having
+# run. It proves the matcher genuinely SHELLS OUT to jq and CONSUMES its stdout —
+# delete the jq call, or stop reading its output, and the sentinel or the flag stops
+# appearing. That is the property the absent-jq test cannot see.
+HKSHIM="$ROOT/jqshim-bin"; mkdir -p "$HKSHIM"
+HKSENT="$ROOT/jq-was-invoked"
+printf '#!/bin/sh\ntouch "%s"\ncat >/dev/null 2>&1\nprintf "gh pr merge 29"\n' "$HKSENT" > "$HKSHIM/jq"
+chmod +x "$HKSHIM/jq"
+rm -f "$HKSENT"
+# Payload carries a NON-matching command; only the shim's stdout matches. So a flag
+# can only appear if jq's output — not the raw payload — is what gets grepped.
+# PREPEND, never replace: the hook also needs grep/printf, and the shim needs touch.
+# Replacing PATH outright strips coreutils and the whole thing no-ops into a false
+# result — the same failure shape this assertion exists to catch.
+HK_E3B="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"git status"}}' "$HKSHIM:$PATH")"
+check "hook: the Bash matcher really invokes jq and greps ITS output, not raw stdin" \
+  '[ -f "$HKSENT" ] && [ -f "$HKFLAG" ] && [ "$HK_E3B" = "0" ]'
+
 # TodoWrite gates in jq, not on raw-JSON grep, so pretty-printed stdin still parses.
 HK_E4="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{"todos":[{"content":"a","status": "completed"},{"content":"b","status": "completed"}]}}')"
 check "hook: TodoWrite fires when every todo is completed (whitespace-tolerant)" \
@@ -698,6 +729,30 @@ check "hook: TodoWrite fires when every todo is completed (whitespace-tolerant)"
 HK_E5="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{"todos":[{"content":"a","status":"completed"},{"content":"b","status":"in_progress"}]}}')"
 check "hook: TodoWrite stays silent while a todo is still open (exit 0)" \
   '[ ! -f "$HKFLAG" ] && [ "$HK_E5" = "0" ]'
+
+# jq's `all` returns true over an EMPTY array, so `length > 0 and` is the only thing
+# standing between us and firing on every list-clearing write — which is exactly what
+# happens at the end of a plan. `and` short-circuits, so the guard works; without
+# these two assertions, deleting it leaves the suite fully green.
+HK_E6="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{"todos":[]}}')"
+check "hook: TodoWrite does NOT fire on an empty todo list (the vacuous-truth guard)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E6" = "0" ]'
+
+HK_E7="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{}}')"
+check "hook: TodoWrite does NOT fire when the todos key is absent entirely" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E7" = "0" ]'
+
+# The matcher greps the whole command string, so before anchoring, a commit message or
+# heredoc merely MENTIONING the phrase fired a PR_event. Not a regression (the old
+# matcher grepped "" and never fired at all) but newly reachable now that the path works
+# — and it would let U0's own success signal be satisfied by a non-event.
+HK_E8="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"docs: explain the gh pr merge flow\""}}')"
+check "hook: a command that merely MENTIONS 'gh pr merge' does not fire PR_event" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E8" = "0" ]'
+
+HK_E9="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"git fetch origin && gh pr merge 29 --squash"}}')"
+check "hook: PR_event still fires for a real invocation after && (anchor not too tight)" \
+  '[ -f "$HKFLAG" ] && grep -q PR_event "$HKFLAG" && [ "$HK_E9" = "0" ]'
 
 # ------------------------------------------- measurement split (U7, plan 001)
 # RECALL.log (surfacing telemetry) must stay out of the activation signal, and
@@ -715,6 +770,84 @@ check "no code path feeds RECALL.log into use_counts" \
   '! grep -rn "use_counts" "$REPO" --include=*.py --include=*.sh | grep -v "/tests/" | grep -q "RECALL"'
 check "use_counts reads only MEMORY_USE.log" \
   'grep -q "use_counts(os.path.join(memory_dir, \"MEMORY_USE.log\"))" "$SCRIPTS/memory_activation.py"'
+
+# ------------------------------- shared recursive corpus (U10, plan 001/KTD16)
+# One `iter_bodies()` walks the store; every reader consumes it. corpus_test.py
+# carries the property assertions (slug parsing, exclusions, scoped activation,
+# scoped rendering, the 866-shaped timing). Here we run it, build an 866-shaped
+# fixture to time the render the way SessionStart would, and add the grep-level
+# guard that the two production consumers no longer listdir the store themselves.
+echo "== shared recursive corpus =="
+CORPOUT="$ROOT/corpus_test.out"
+python3 "$REPO/tests/corpus_test.py" > "$CORPOUT" 2>&1; CORPRC=$?
+check "corpus_test.py: all assertions pass" '[ "$CORPRC" = "0" ]'
+check "corpus_test.py: reports a non-empty tally" \
+  'grep -q "corpus_test: [1-9][0-9]* passed, 0 failed" "$CORPOUT"'
+
+# 866-file-shaped fixture with nested scope dirs — the corpus the live store
+# actually has, not the flat 64% a listdir would show. Reused by the render-timing
+# and enumeration-count assertions below.
+CP="$ROOT/corpus866"; mkdir -p "$CP/_scope"
+python3 - "$CP" <<'PY'
+import os, sys
+d = sys.argv[1]
+slugs = ["-Users-x-projects-repo%02d" % i for i in range(13)]
+for s in slugs:
+    os.makedirs(os.path.join(d, "_scope", s), exist_ok=True)
+def body(n, i):
+    return ("---\nname: %s\nlast_used: 2026-%02d-%02d\n---\ndescription: hook for %s\n\nbody %s\n"
+            % (n, 1 + i % 6, 1 + i % 28, n, n))
+for i in range(579):
+    n = "feedback_flat_%04d" % i
+    open(os.path.join(d, n + ".md"), "w").write(body(n, i))
+for i in range(287):
+    n = "project_scoped_%04d" % i
+    open(os.path.join(d, "_scope", slugs[i % len(slugs)], n + ".md"), "w").write(body(n, i))
+# Non-bodies that must never be enumerated as memories.
+open(os.path.join(d, "MEMORY.md"), "w").write("# Memory Index\n\n")
+open(os.path.join(d, "MEMORY_USE.log"), "w").write(
+    "".join("2026-06-01 feedback_flat_%04d applied\n" % i for i in range(0, 579, 3)))
+open(os.path.join(d, "RECALL.log"), "w").write("2026-06-01 feedback_flat_0000 qmd\n")
+open(os.path.join(d, "MEMORY.md.pre-render.bak"), "w").write("# old\n")
+open(os.path.join(d, "TRIGGERS.json"), "w").write('{"triggers": []}\n')
+PY
+check "866-shaped fixture: enumeration finds all 866 bodies (579 flat + 287 scoped)" \
+  '[ "$(python3 "$SCRIPTS/scoped-memory/corpus.py" "$CP" 2>/dev/null | wc -l | tr -d " ")" = "866" ]'
+check "866-shaped fixture: 287 of them are scoped" \
+  '[ "$(python3 "$SCRIPTS/scoped-memory/corpus.py" "$CP" 2>/dev/null | grep -c "^-Users-x-projects-repo")" = "287" ]'
+
+# Render wall time over the full corpus. This runs at SessionStart, so it is a real
+# budget, not a micro-benchmark. NOTE: there is no `timeout` binary on this box — a
+# check written around one exits 0 having measured nothing — so the elapsed time is
+# measured directly with the shell's own SECONDS-free millisecond arithmetic.
+CP_T0=$(python3 -c 'import time; print(int(time.time()*1000))')
+MEMORY_DIR="$CP" python3 "$SCRIPTS/memory-index-render.py" "$CP/MEMORY.md" > "$ROOT/corpus866.render" 2>&1
+CP_RC=$?
+CP_T1=$(python3 -c 'import time; print(int(time.time()*1000))')
+CP_MS=$((CP_T1 - CP_T0))
+echo "  info - 866-body index render: ${CP_MS}ms — $(cat "$ROOT/corpus866.render")"
+check "866-shaped store renders successfully" '[ "$CP_RC" = "0" ]'
+check "866-shaped render stays within the SessionStart budget (<5000ms)" \
+  '[ "$CP_MS" -lt 5000 ]'
+check "scoped bodies are eligible for the hot tier" \
+  'grep -q "](_scope/" "$CP/MEMORY.md"'
+check "scoped entries are titled from the file, not the scope directory" \
+  '! grep -qE "^- \[[^]]*Users-x-projects" "$CP/MEMORY.md"'
+check "non-bodies never enter the index (logs, .bak, trigger manifest)" \
+  '! grep -qE "\]\((MEMORY_USE\.log|RECALL\.log|TRIGGERS\.json|MEMORY\.md(\.pre-render\.bak)?)\)" "$CP/MEMORY.md"'
+
+# The guard KTD16 exists for: a consumer that enumerates the store itself sees a
+# different corpus than its siblings. Scoped to the two production consumers this
+# unit repoints; the remaining sites (memory-index-lint.sh, migrate-memory-index.py,
+# backfill.py) are outside U10's file list and are reported, not silently edited.
+# Matches the CALL (trailing paren), not the identifier — both files name
+# `os.listdir` in prose explaining why they no longer call it.
+check "memory_activation.py does not listdir the store" \
+  '! grep -q "os\.listdir(" "$SCRIPTS/memory_activation.py"'
+check "memory-index-render.py does not listdir the store" \
+  '! grep -q "os\.listdir(" "$SCRIPTS/memory-index-render.py"'
+check "both consumers enumerate through corpus.iter_bodies" \
+  'grep -q "corpus.iter_bodies" "$SCRIPTS/memory_activation.py" && grep -q "corpus.body_paths" "$SCRIPTS/memory-index-render.py"'
 
 # ---------------------------------------------------------------------- report
 echo

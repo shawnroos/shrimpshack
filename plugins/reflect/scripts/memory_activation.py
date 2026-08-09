@@ -33,7 +33,15 @@ an exception).
 import math
 import os
 import re
+import sys
 from datetime import date, datetime
+
+# The shared recursive store enumeration (KTD16). Imported by path rather than as
+# a package: `scoped-memory` is not an importable name (it has a hyphen) and this
+# script is run directly as often as it is imported.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "scoped-memory"))
+import corpus
 
 # --- Tunable parameters (Phase B spike sweeps these; defaults are the start) ---
 DEFAULT_PARAMS = {
@@ -222,26 +230,36 @@ def use_counts(use_log_path):
 
 
 def score_dir(memory_dir, today=None, params=None):
-    """Score every body .md in memory_dir. Returns a list of
-    (filename, score) sorted by score descending then filename, ready for the
-    renderer to truncate at the budget. MEMORY.md and dotfiles are excluded;
-    name matching for use_counts strips the .md so a frontmatter `name:` slug or
-    the filename stem both line up with the log's 2nd field."""
+    """Score every memory body under memory_dir. Returns a list of
+    (relpath, score) sorted by score descending then relpath, ready for the
+    renderer to truncate at the budget.
+
+    Enumeration is `corpus.iter_bodies` — RECURSIVE, so the `_scope/<slug>/`
+    subtree is scored too. It used to be a flat `os.listdir`, which left roughly
+    a third of the store with no activation data at all: scoped memories could
+    never reach the hot index no matter how often they were applied (KTD16).
+
+    The identifier is therefore the STORE-RELATIVE PATH, not the bare filename —
+    `_scope/-Users-x-projects-y/bar.md` — because that is what addresses a scoped
+    body as an index link target. Callers wanting a display name take the
+    basename.
+
+    Use-log matching deliberately keys on the BASENAME stem: the log's 2nd field
+    is a name slug or filename stem and has never carried a path, so looking up
+    the relpath would hand every scoped body a use count of zero — reintroducing
+    the invisibility this enumeration exists to remove. Both spellings are tried
+    (underscore filename stem and kebab frontmatter slug)."""
     today = today or date.today()
     p = _params(params)
     counts = use_counts(os.path.join(memory_dir, "MEMORY_USE.log"))
     scored = []
-    for fn in os.listdir(memory_dir):
-        if not fn.endswith(".md") or fn == "MEMORY.md" or fn.startswith("."):
-            continue
+    for fn, _slug in corpus.iter_bodies(memory_dir):
         path = os.path.join(memory_dir, fn)
         try:
             mtime_date = datetime.fromtimestamp(os.path.getmtime(path)).date()
         except Exception:
             mtime_date = None
-        stem = fn[:-3]
-        # log may record either the frontmatter name slug or the filename stem;
-        # count both spellings (underscore filename vs kebab slug) when present.
+        stem = os.path.basename(fn)[:-3]
         uc = counts.get(stem, 0) or counts.get(stem.replace("_", "-"), 0)
         s = activation(
             today,
