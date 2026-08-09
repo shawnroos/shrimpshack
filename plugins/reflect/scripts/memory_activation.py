@@ -146,10 +146,68 @@ def parse_pinned(path):
     return bool(_PIN_RE.search(text))
 
 
+#: The one token an agent writes into MEMORY_USE.log.
+APPLIED_TOKEN = "applied"
+
+#: Machine records of something that is NOT an application: `written` (the memory
+#: was saved) and `reflect` (a /reflect batch timestamp bump). These must never
+#: raise activation. **Any future non-application token must be added here in the
+#: same change that introduces its writer** — this set is where that risk lives.
+NON_APPLICATION_TOKENS = frozenset({"written", "reflect"})
+
+
+def use_line_counts(parts):
+    """Does this MEMORY_USE.log line contribute to activation?
+
+    Line shape is `<date-or-timestamp> <name> <token> [annotation...]`. Only an
+    *application* may count: use raises activation, activation lowers the recall
+    floor, and a lower floor surfaces the memory more — so counting a mere save
+    would let a memory reinforce itself for having been written down (KTD9a).
+
+    The rule:
+
+      * fewer than 2 fields                -> not a record, does not count
+      * field 3 absent                     -> historical application, counts
+      * field 3 starts with `[` or `(`     -> annotation, not a token:
+                                              historical application, counts
+      * field 3 in NON_APPLICATION_TOKENS  -> does not count
+      * anything else                      -> historical context tag, counts
+
+    That last branch is measured, not assumed. The live log (1701 lines, larger
+    than the 1596 the plan measured) carries 468 lines with a bare unbracketed
+    field 3 across 44 distinct tags: 154 are the reserved `reflect` batch bump,
+    and the other ~314 are ad-hoc session/context tags on genuine applications
+    (`web2991-session`, `ce-debug`, `U12`, `manual`, an em-dash followed by
+    prose). Refusing to count unrecognized tokens would silently drop those 314
+    applications and reshuffle the whole hot/cold cut of the index — the same
+    bulk-reshuffle harm KTD14 guards against, for a hypothetical benefit.
+
+    `reflect-manual` / `reflect-session` / `reflect-spinoff-*` (92 lines) are
+    counted deliberately, not by oversight: they carry individual dates, one line
+    per memory, and read as reflect Pass 2 recording applications observed in a
+    session — unlike the bare `reflect` batch, which stamps many memories with one
+    identical timestamp. The exclusion is by exact token, never by prefix.
+
+    Going forward the contract is narrow: agents write only `applied`, machines
+    write only the reserved tokens.
+    """
+    if len(parts) < 2:
+        return False
+    if len(parts) < 3:
+        return True
+    token = parts[2]
+    if token[:1] in ("[", "("):
+        return True
+    return token not in NON_APPLICATION_TOKENS
+
+
 def use_counts(use_log_path):
-    """Map of memory-name -> count from MEMORY_USE.log. Log lines look like
-    `<date> <memory-name> [trigger]`; the 2nd whitespace field is the name.
-    Missing/unreadable log -> empty map (every memory gets 0 uses)."""
+    """Map of memory-name -> count of ACTIVATION-BEARING lines in MEMORY_USE.log.
+    The 2nd whitespace field is the name; `use_line_counts` above decides which
+    lines count. Missing/unreadable log -> empty map (every memory gets 0 uses).
+
+    RECALL.log (surfacing telemetry) is never read here — that separation is the
+    whole point of the measurement split (KTD9)."""
     counts = {}
     try:
         lines = open(use_log_path, encoding="utf-8").read().splitlines()
@@ -157,7 +215,7 @@ def use_counts(use_log_path):
         return counts
     for ln in lines:
         parts = ln.split()
-        if len(parts) >= 2:
+        if use_line_counts(parts):
             name = parts[1]
             counts[name] = counts.get(name, 0) + 1
     return counts

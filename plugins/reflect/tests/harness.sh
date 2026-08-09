@@ -699,6 +699,23 @@ HK_E5="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{"todos":[{"co
 check "hook: TodoWrite stays silent while a todo is still open (exit 0)" \
   '[ ! -f "$HKFLAG" ] && [ "$HK_E5" = "0" ]'
 
+# ------------------------------------------- measurement split (U7, plan 001)
+# RECALL.log (surfacing telemetry) must stay out of the activation signal, and
+# only `applied` may raise activation. telemetry_test.py carries the property
+# assertions; here we run it and add the grep-level guard that no code path
+# anywhere under the plugin ever feeds RECALL.log into use_counts.
+echo "== measurement split =="
+TELOUT="$ROOT/telemetry_test.out"
+python3 "$REPO/tests/telemetry_test.py" > "$TELOUT" 2>&1; TELRC=$?
+check "telemetry_test.py: all assertions pass" '[ "$TELRC" = "0" ]'
+check "telemetry_test.py: reports a non-empty tally" 'grep -q "telemetry_test: [1-9][0-9]* passed, 0 failed" "$TELOUT"'
+check "activation_test.py still green after the use_counts change" \
+  'python3 "$REPO/tests/activation_test.py" >/dev/null 2>&1'
+check "no code path feeds RECALL.log into use_counts" \
+  '! grep -rn "use_counts" "$REPO" --include=*.py --include=*.sh | grep -v "/tests/" | grep -q "RECALL"'
+check "use_counts reads only MEMORY_USE.log" \
+  'grep -q "use_counts(os.path.join(memory_dir, \"MEMORY_USE.log\"))" "$SCRIPTS/memory_activation.py"'
+
 # ---------------------------------------------------------------------- report
 echo
 echo "harness: $PASS passed, $FAIL failed"

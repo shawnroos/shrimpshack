@@ -47,10 +47,15 @@ unavailable, the index pointer is a working file path — read the body directly
 the same topic. If found, update and extend it instead of creating a duplicate.
 Overlapping saves are signal — they mean the rule is real and recurring.
 
-**Track use.** When applying a memory in reasoning, append a one-line entry to
-`~/.claude/projects/-Users-shawnroos/memory/MEMORY_USE.log` with the memory name and
-date. On reinforced memories, also update a `last_used:` field in the file's
-frontmatter.
+**Track use — `applied` only.** When you **apply** a memory in reasoning, append one
+line to `~/.claude/projects/-Users-shawnroos/memory/MEMORY_USE.log`:
+`<timestamp> <memory-name> applied [session:<id>] [note]` — use `[session:unknown]`
+when you don't know the session id, never a guess. On reinforced memories, also
+update `last_used:` in the frontmatter. `applied` is the **only** token you write:
+`written` (saved) and `reflect` (batch timestamp bump) are machine records, and only
+`applied` raises a memory's activation, so logging a mere save would let a memory
+reinforce itself for having been written down. Surfacing events (what recall showed
+you) go to `RECALL.log`, written by machines — never log those here.
 
 **Consolidate via /reflect.** Eager save during work; bulk synthesis at completion
 boundaries. `/reflect` does the housekeeping pass — update timestamps, merge overlaps,

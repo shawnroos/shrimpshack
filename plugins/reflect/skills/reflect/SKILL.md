@@ -53,7 +53,7 @@ This pass produces an internal mental model only. Never surface to the user exce
 
 ### 2. Memory update pass
 - Memories applied during this session: update `last_used:` in frontmatter to today's date
-- Append one line per used memory to `MEMORY_USE.log` in the memory dir: `<date> <memory-name> [trigger]`
+- Append one line per **applied** memory to `MEMORY_USE.log` in the memory dir: `<timestamp> <memory-name> applied [session:<id>] [trigger]` — `[session:unknown]` when the session id isn't known, never a guess. `applied` is the only token you write here: `written` (saved) and `reflect` (batch timestamp bump) are machine records, and only `applied` raises activation, so logging a mere save would let a memory reinforce itself for having been written down. Surfacing events belong in `RECALL.log`, not here.
 - Memories where the session revealed nuance or contradiction: edit content to incorporate it (this counts as reinforcement — touch the file's mtime)
 - Corrections that emerged but aren't yet memories: save now as `feedback_*.md`
 
