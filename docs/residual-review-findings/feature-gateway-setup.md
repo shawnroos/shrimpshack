@@ -420,6 +420,26 @@ child, so `unload` stops the gateway.
   and every downstream check still passes because the unsupervised process
   answers. The check to add: the pidfile pid's parent should be the launcher.
 
+- **`spawnctl stop` is a ~10s restart on a supervised machine, not a stop
+  (P2).** It kills the gateway, the launcher's `wait` returns, the launcher
+  exits, and KeepAlive respawns it. `result:"stopped"` is true only
+  momentarily. This is the same thing the open-proxy fix already says out loud
+  ("stopping the process only triggers a respawn", which is why that path
+  unloads first) — it is now the everyday behaviour on an adopted machine.
+  `stop` should detect the supervised case and either unload the agent or say
+  plainly that the agent must be unloaded. Operator-visible, not a
+  wrong-success, so it is not merge-blocking.
+
+- **Setup bakes the path of the checkout it runs from into `~/.local/bin/gw`
+  (P2).** Line 7 of the generated wrapper pins `SPAWNCTL=` to an absolute path.
+  Run setup from a git worktree and the wrapper points into that worktree; when
+  the worktree is removed after the PR lands, `gw` breaks with no warning and
+  nothing on the machine explains why. The launcher and `env.sh` do not have
+  this problem — they bake only machine paths and the gateway binary. Worth
+  either resolving the plugin root to a durable checkout or refusing/warning
+  when setup runs from a worktree. Remedy today: re-run setup from the
+  permanent checkout once the plugin has landed there.
+
 - **A lint for the xtrace class.** #4 was fixed everywhere it exists today, but
   nothing stops the next credential-holding function from shipping unguarded.
   The reviewer's suggestion — fail any credential assignment outside an
