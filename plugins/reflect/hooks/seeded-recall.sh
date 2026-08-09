@@ -12,8 +12,15 @@
 # a drifting copy (plan U9 / KTD8). Read its docstring for the contracts,
 # including the cooldown-stamp location and the budget-asymmetry rule.
 #
-# Fail-safe: any missing qmd, error, or timeout exits 0 with no output — recall
-# degrades to the manual pointer-index fallback, the prompt is never blocked.
+# Fail-safe: any error exits 0 with no output — the prompt is never blocked.
+#
+# Fail-over (plan U4): once qmd is CONFIRMED wedged (an armed cooldown, or a probe
+# failure that just armed it), recall no longer fails to silence. It states the
+# degradation in one line and falls over to the local BM25 index, whose own
+# calibrated gate (MEMORY_LOCAL_FLOOR_MIN / MEMORY_LOCAL_FLOOR_RATIO) decides
+# whether any body is confident enough to inject — loud about state, silent about
+# low-confidence content. A single transient failure still stays quiet and simply
+# retries on the next prompt.
 #
 # Config (env, all optional) — parsed by retrieval.Config:
 #   SEEDED_RECALL_COLLECTION      (default claude-memory)
@@ -78,8 +85,39 @@ try:
     res = retrieval.recall(prompt, config=cfg)
 except Exception:
     out_nothing()
-if res.status != "ok" or not res.items:
+
+# Fail-over (plan U4). A CONFIRMED wedge — an armed cooldown, or a probe failure
+# that just armed it — no longer means silence: say so in one line and fall over to
+# the local index. The confirmation is the existing stamp's own threshold semantics
+# (transient tolerance: a first blip stays quiet and simply retries next prompt), so
+# no second guard and no new state. Loudness self-bounds — emitting anything writes
+# the once-per-session flag below, so the notice appears at most once per session.
+notice = ""
+if res.status in ("cooldown", "unavailable"):
+    degraded = res.status == "cooldown"
+    if not degraded:
+        try:
+            degraded = retrieval.HealthState(cfg.flag_dir, cfg.cooldown,
+                                             cfg.fail_threshold, cfg.source).armed()
+        except Exception:
+            degraded = False
+    if not degraded:
+        out_nothing()
+    notice = ("> memory recall degraded — qmd is not answering (failure cooldown "
+              "armed); local index fallback active, so this may be less relevant "
+              "than usual. Remedy: run `qmd status`; if it hangs, restart it and "
+              "re-run `qmd embed -c %s`.\n\n" % cfg.collection)
+    try:
+        res = retrieval.local_fallback(prompt, config=cfg)
+    except Exception:
+        res = None
+    # Loud about STATE, silent about low-confidence CONTENT: a below-gate fallback
+    # injects no bodies but still carries the notice.
+    items = list(res.items) if res is not None else []
+elif res.status != "ok" or not res.items:
     out_nothing()
+else:
+    items = list(res.items)
 
 # Neutralize a literal closing tag in body/title so a memory's content can't break
 # out of the <recalled-memories> wrapper it's injected into (zero-width space after
@@ -87,10 +125,36 @@ if res.status != "ok" or not res.items:
 def _safe(s):
     return s.replace("</recalled-memories>", "<​/recalled-memories>")
 
-blocks = [f"### {_safe(i.title)}\n{_safe(i.body)}" for i in res.items]
+def _heading(i):
+    # Mark a fallback body at the point of use: a reader must be able to tell a
+    # local-index body from a qmd one without reading the notice above it.
+    tag = " [source: local-fallback]" if i.source == "local-fallback" else ""
+    return f"### {_safe(i.title)}{tag}"
+
+
+blocks = [f"{_heading(i)}\n{_safe(i.body)}" for i in items]
+if not blocks and not notice:
+    out_nothing()
+
+# Record what was actually injected (plan U7's RECALL.log). Fail-open and
+# best-effort: telemetry must never cost recall anything.
+if items:
+    try:
+        import telemetry
+        store = cfg.memory_dir or retrieval.local_index_store()
+        if not os.path.isdir(store):
+            raise OSError("no store to log into")   # caught below; never fatal
+        log = os.path.join(store, telemetry.RECALL_LOG_NAME)
+        for i in items:
+            name = os.path.basename(i.pointer)
+            telemetry.append_recall(log, name[:-3] if name.endswith(".md") else name,
+                                    "seeded", i.source, session_id=session_id,
+                                    score=i.score, gate=i.gate)
+    except Exception:
+        pass
 
 stale_note = ""
-if res.pending_embeddings:
+if res is not None and res.pending_embeddings:
     stale_note = ("> recall may be incomplete — the memory index has pending "
                   "embeddings (run `qmd embed -c %s`)\n\n" % cfg.collection)
 
@@ -103,9 +167,12 @@ if flag is not None:
         pass  # best-effort; worst case recall fires again next prompt
 
 print("<recalled-memories source=\"seeded-recall\">")
+if notice:
+    print(notice, end="")
 if stale_note:
     print(stale_note, end="")
-print("\n\n---\n\n".join(blocks))
+if blocks:
+    print("\n\n---\n\n".join(blocks))
 print("</recalled-memories>")
 sys.exit(0)
 PY

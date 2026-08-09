@@ -266,16 +266,18 @@ class RecallResult:
     unavailable — qmd itself failed (missing/timeout/non-zero/unparseable output)
     empty       — qmd answered but nothing survived filtering, or no bodies fetched
     no-query    — nothing to search for
+    below-gate  — LOCAL FALLBACK ONLY: candidates existed, none confident enough
     """
 
     def __init__(self, status, items=None, source="qmd", pending_embeddings=False,
-                 budget=None, stamped=False):
+                 budget=None, stamped=False, reason=""):
         self.status = status
         self.items = items or []
         self.source = source
         self.pending_embeddings = pending_embeddings
         self.budget = budget
         self.stamped = stamped
+        self.reason = reason          # why a below-gate/empty result is empty
 
     def __bool__(self):
         return bool(self.items)
@@ -538,6 +540,119 @@ def recall(query, budget=None, health=None, config=None, cwd=None, **kw):
     health.clear()
     return RecallResult("ok", items, source="qmd", pending_embeddings=pending,
                         budget=cfg.budget)
+
+
+# --------------------------------------------------------------- local fallback
+def local_index_store():
+    """The store the local fallback reads, derived exactly as the rest of the
+    plugin derives it. Empty string if the local index module is unavailable, so a
+    caller can fall back without importing it themselves."""
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import local_index
+        return local_index.default_store()
+    except Exception:
+        return ""
+
+
+def _local_title(path, relpath):
+    """Display name for a body read off disk: its frontmatter `name:`, else the
+    filename stem. Only the frontmatter block is scanned, so a `name:` appearing
+    in prose further down can't rename a memory."""
+    stem = os.path.basename(relpath)
+    if stem.endswith(".md"):
+        stem = stem[:-3]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            first = fh.readline()
+            if first.strip() == "---":
+                for line in fh:
+                    if line.strip() == "---":
+                        break
+                    if line.startswith("name:"):
+                        val = line.split(":", 1)[1].strip()
+                        if val:
+                            return val
+    except OSError:
+        pass
+    return stem
+
+
+def local_fallback(query, config=None, cwd=None, store_dir=None, **kw):
+    """The qmd-free fail-over (plan U4): rank `query` with the LOCAL BM25 index and
+    return bodies read straight off disk. Called when qmd is confirmed wedged — a
+    failed probe or an armed cooldown — so session-start recall degrades to a
+    weaker layer instead of degrading to silence.
+
+    The gate is `local_index`'s own: the calibrated RAW-BM25 floor plus separation
+    (`MEMORY_LOCAL_FLOOR_MIN` / `MEMORY_LOCAL_FLOOR_RATIO`). The qmd-side floors on
+    `Config` are DELIBERATELY not passed down — they are vector-score thresholds and
+    are arithmetically inert on BM25 scores (KTD12), so honoring them here would
+    silently filter nothing while looking like a gate.
+
+    Returns a RecallResult with `source="local-fallback"` and status:
+      ok | below-gate | empty | no-query | unavailable (module missing/broken)
+    Fail-open throughout: a caller that gets `unavailable` simply injects nothing.
+    """
+    cfg = config or Config(**kw)
+    query = (query or "").strip()
+    if not query:
+        return RecallResult("no-query", source="local-fallback")
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import local_index
+    except Exception:
+        return RecallResult("unavailable", source="local-fallback",
+                            reason="local index module unavailable")
+    try:
+        store = store_dir or cfg.memory_dir or local_index.default_store()
+        res = local_index.search(store, query[:400], cwd=cwd, k=cfg.k)
+    except Exception:
+        return RecallResult("unavailable", source="local-fallback",
+                            reason="local index raised")
+
+    if res.status != local_index.HITS:
+        status = "below-gate" if res.status == local_index.BELOW_GATE else "empty"
+        return RecallResult(status, source="local-fallback", reason=res.reason)
+
+    cur_slug = None
+    if scope:
+        try:
+            cur_slug = scope.resolve_repo_slug(cwd or os.getcwd())
+        except Exception:
+            cur_slug = None
+
+    items = []
+    for hit in res.hits:
+        rel = hit.get("file")
+        if not rel:
+            continue
+        path = os.path.join(store, rel)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                body = fh.read().strip()
+        except OSError:
+            continue
+        if not body:
+            continue
+        if len(body) > cfg.max_body:
+            body = body[:cfg.max_body].rstrip() + "\n…(truncated)"
+        gate = "pass"
+        if scope and cur_slug:
+            try:
+                if scope.classify(rel, cur_slug) == "current":
+                    gate = "repo"
+            except Exception:
+                pass
+        items.append(RecallItem(rel, _local_title(path, rel), body,
+                                hit.get("score"), source="local-fallback",
+                                gate=gate))
+    if not items:
+        return RecallResult("empty", source="local-fallback",
+                            reason="no body was readable")
+    return RecallResult("ok", items, source="local-fallback", reason=res.reason)
 
 
 def _main(argv):
