@@ -368,6 +368,29 @@ lived. Five tests now execute the generated launcher, and the suite grew a
 fourth safety rail (`SPAWN_PIDFILE`), without which those tests would write the
 operator's real `~/.gateway.pid`.
 
+## The exec-based cleaner did not survive launchd — found on the real machine
+
+**Severity: P1. Fixed.**
+
+The first fix for #2 delivered the key and forked a `( sleep N; rm )` child to
+remove the file, then `exec`'d the gateway. Verifying it against the real
+adopted agent showed the key still on disk minutes later, with `DELIVERY_TTL`
+correctly baked and no `sleep` pending: under launchd that child does not
+survive to run. It works under a direct run, which is exactly why the test that
+executes the launcher directly could not see the difference — the same class of
+blind spot the review had just caught.
+
+The launcher no longer execs. It starts the gateway as a child, registers the
+CHILD's pid, removes the delivery file itself after a bounded wait, and waits.
+launchd is satisfied by any long-lived process, and cleanup is now in-process
+rather than depending on an orphan. Because a parent now sits between launchd
+and the gateway, a TERM has to be forwarded or an unload would orphan the
+gateway holding the port — so it is, and a test kills the launcher and asserts
+the gateway went down because it was signalled.
+
+The pidfile is also removed when the gateway exits: one left naming a dead pid
+is what makes a later stop signal the wrong process.
+
 ## Still open
 
 - **A lint for the xtrace class.** #4 was fixed everywhere it exists today, but

@@ -98,6 +98,25 @@ setup() {
     # The delivery file AS IT IS AT EXEC. The launcher's cleaner removes it
     # shortly after, so a test that looked afterwards would see nothing and
     # could not tell "delivered then cleaned" from "never delivered".
+    # Recorded from INSIDE the live gateway: the launcher writes the pidfile
+    # just after starting this child and removes it when this child exits, so
+    # that window is the only place the registration is observable. The wait
+    # covers the ordering (child starts, parent then writes).
+    for _i in $(seq 1 40); do
+        [ -s "${SPAWN_PIDFILE:-/nonexistent}" ] && break
+        sleep 0.05
+    done
+    printf 'self=%s\n' "$$"
+    # A long-running mode, for the signal test: launchd stops a job by
+    # signalling the launcher, and with the launcher no longer exec'ing there
+    # is a parent in between that has to forward it.
+    if [ -n "${GATEWAY_STUB_SLEEP:-}" ]; then
+        trap 'printf "signalled=yes\n" >> "$BIN_RECORD"; exit 0' TERM
+        sleep "$GATEWAY_STUB_SLEEP" &
+        wait $!
+    fi
+    printf 'pidfile=%s\n' "$(cat "${SPAWN_PIDFILE:-/nonexistent}" 2>/dev/null)"
+    printf 'pidfilebin=%s\n' "$(cat "${SPAWN_PIDFILE:-/nonexistent}.bin" 2>/dev/null)"
     if [ -f "$PWD/.env.local" ]; then
         printf 'envlocal=%s\n' "$(cat "$PWD/.env.local")"
         printf 'envmode=%s\n' "$(stat -f '%Lp' "$PWD/.env.local" 2>/dev/null || stat -c '%a' "$PWD/.env.local" 2>/dev/null)"
@@ -543,7 +562,7 @@ EOP
     grep -q '^# spawn-setup-original-argv: ' "$SPAWN_GATEWAY_LAUNCHER"
     grep -qF -- "$old/target/release/gateway" "$SPAWN_GATEWAY_LAUNCHER"
     # ...while the line that RUNS names the install this run resolved.
-    grep -qF -- "exec '$BIN'" "$SPAWN_GATEWAY_LAUNCHER"
+    grep -qF -- "'$BIN' '--config'" "$SPAWN_GATEWAY_LAUNCHER"
 
     # The re-run sees a plist naming the LAUNCHER, recovers the original out of
     # it, and rebases again from that record — stable, not drifting.
@@ -678,7 +697,7 @@ EOP
     [ "$RC" -eq 0 ]
     [ "$(jq -r '.action' "$OUT")" = "repointed" ]
     # The mutation is live: the launcher execs the install that is GONE...
-    grep -qF -- "exec '$old/target/release/gateway'" "$SPAWN_GATEWAY_LAUNCHER"
+    grep -qF -- "'$old/target/release/gateway' '--config'" "$SPAWN_GATEWAY_LAUNCHER"
     # ...so the healthy suite's functional assertion is now false — the gateway
     # never starts, which is what "adopted" would have been claiming. `run !`
     # rather than a bare `run`, because the failure here is the POINT and bats
@@ -763,13 +782,18 @@ EOP
     run bash "$SPAWN_GATEWAY_LAUNCHER"
     [ "$status" -eq 0 ]
 
-    # exec keeps the pid, so what the launcher recorded IS the gateway's pid.
-    [ -f "$PIDFILE" ]
-    grep -qE '^[0-9]+$' "$PIDFILE"
+    # What the launcher registered IS this gateway's own pid — asserted from
+    # inside the process, against its own $$.
+    local self reg
+    self="$(grep -m1 '^self=' "$BIN_RECORD" | cut -d= -f2)"
+    reg="$(grep -m1 '^pidfile=' "$BIN_RECORD" | cut -d= -f2)"
+    [ -n "$self" ] && [ "$reg" = "$self" ]
     # And the binary is recorded beside it, which is what spawnctl's anchored
     # identification (pid_is_gateway) matches a live process against.
-    [ -f "$PIDFILE.bin" ]
-    [ "$(cat "$PIDFILE.bin")" = "$BIN" ]
+    grep -qx "pidfilebin=$BIN" "$BIN_RECORD"
+    # Once the gateway is gone the registration goes with it: a pidfile left
+    # naming a dead pid is what makes a later stop signal the wrong process.
+    [ ! -f "$PIDFILE" ]
 }
 
 @test "R7/KTD1: the launcher DELIVERS the OpenRouter key it used to assume was lying there" {
@@ -842,4 +866,36 @@ EOP
     [ "$status" -eq 0 ]
     [ "$(cat "$PIDFILE")" = "$live" ]
     kill "$live" 2>/dev/null || true
+}
+
+@test "R28: the launcher forwards a stop to the gateway — unload does not orphan it" {
+    plant_agent gateway >/dev/null
+    run_supervisor
+    [ "$RC" -eq 0 ]
+
+    # launchd stops a job by signalling the process it started. That used to BE
+    # the gateway (exec kept the pid); it is now a parent, so a stop that was
+    # not forwarded would leave the gateway holding the port after an unload —
+    # the unmanageable state this whole unit exists to prevent.
+    GATEWAY_STUB_SLEEP=30 bash "$SPAWN_GATEWAY_LAUNCHER" &
+    local launcher_pid=$!
+    local i
+    for i in $(seq 1 60); do
+        grep -q '^self=' "$BIN_RECORD" 2>/dev/null && break
+        sleep 0.1
+    done
+    grep -q '^self=' "$BIN_RECORD"
+    local gw_pid; gw_pid="$(grep -m1 '^self=' "$BIN_RECORD" | cut -d= -f2)"
+    kill -0 "$gw_pid"
+
+    kill -TERM "$launcher_pid"
+    for i in $(seq 1 60); do
+        kill -0 "$gw_pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    # The gateway is gone, and it went down because it was signalled.
+    run kill -0 "$gw_pid"
+    [ "$status" -ne 0 ]
+    grep -qx 'signalled=yes' "$BIN_RECORD"
+    wait "$launcher_pid" 2>/dev/null || true
 }

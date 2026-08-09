@@ -1310,12 +1310,8 @@ if [ -n "$key" ]; then
         chmod 600 "$INSTALL_DIR/$DELIVERY_NAME" 2>/dev/null
         printf 'OPENROUTER_API_KEY=%s\n' "$key" >> "$INSTALL_DIR/$DELIVERY_NAME"
         # The file's life is the startup window and no longer (KTD1: the key
-        # rests in the Keychain, never on disk). The gateway reads its dotenv
-        # milliseconds after the exec below; this child outlives the exec —
-        # its parent becomes the gateway itself — and removes the file after a
-        # bounded wait. A leftover would be a plaintext provider key sitting
-        # in the install directory for the life of the machine.
-        ( sleep "$DELIVERY_TTL"; rm -f "$INSTALL_DIR/$DELIVERY_NAME" 2>/dev/null ) >/dev/null 2>&1 &
+        # rests in the Keychain, never on disk). It is removed further down, in
+        # THIS process, once the gateway has started — see the supervision tail.
     else
         # No interpolation, like every other message this launcher prints: it
         # is a standalone generated script with no access to the sanitizing
@@ -1326,32 +1322,72 @@ if [ -n "$key" ]; then
 fi
 key=""
 
-# REGISTER BEFORE EXEC. `exec` keeps this PID, so $$ recorded here IS the
-# gateway's pid. Without this the launchd-started gateway is invisible to
-# spawnctl: its pidfile stays empty while the port is held, so `stop` refuses
-# with "unmanaged" (correctly — it will not guess which process to signal) and
-# every restart path aborts over a perfectly good gateway.
+# THE SUPERVISION TAIL. This script does NOT exec the gateway; it starts it as
+# a child and stays alive as a thin parent. launchd is satisfied by any
+# long-lived process, and staying alive buys the one thing exec cannot: the
+# delivery file is removed by THIS process, deterministically.
+#
+# The exec version forked a `( sleep N; rm )` child to do that, and under
+# launchd that child did not survive to run — measured on a real adopted agent,
+# where the key was still on disk minutes later with the TTL correctly baked.
+# It works fine under a direct run, which is exactly why a test that runs the
+# launcher directly cannot see the difference.
+EOF
+    # The argv is substituted HERE, at generation time: the surrounding heredoc
+    # is quoted so the launcher's own runtime variables survive verbatim, which
+    # also means $cmd would not expand inside it.
+    printf '%s &\ngw_pid=$!\n' "$cmd"
+    cat <<'EOF'
+
+# REGISTER the CHILD. That pid is the gateway, which is what spawnctl must be
+# able to identify and signal; without it a launchd-started gateway is
+# invisible, `stop` refuses with "unmanaged" (correctly — it will not guess
+# which process to signal) and every restart path aborts over a healthy one.
 #
 # The liveness check is not belt-and-braces. setup's own start step and launchd
 # can race for the port; the loser must not overwrite the winner's pidfile,
-# because that is how spawnctl would be pointed at a pid that is not serving.
+# because that is how spawnctl would be pointed at a process that is not
+# serving.
+claimed=1
 if [ -f "$PIDFILE" ] && [ -f "$PIDFILE.bin" ]; then
     prev="$(tr -dc '0-9' < "$PIDFILE" 2>/dev/null || true)"
     prevbin="$(cat "$PIDFILE.bin" 2>/dev/null || true)"
-    if [ -n "$prev" ] && [ "$prevbin" = "$GATEWAY_BIN" ] && kill -0 "$prev" 2>/dev/null; then
+    if [ -n "$prev" ] && [ "$prevbin" = "$GATEWAY_BIN" ] && [ "$prev" != "$gw_pid" ] \
+       && kill -0 "$prev" 2>/dev/null; then
         printf 'spawn-launch: another process is already running this gateway binary — leaving its pidfile alone\n' >&2
-        prev=""; prevbin=""
-    else
-        prev=""; prevbin=""
-        printf '%s\n' "$$" > "$PIDFILE"
-        printf '%s\n' "$GATEWAY_BIN" > "$PIDFILE.bin"
+        claimed=0
     fi
-else
-    printf '%s\n' "$$" > "$PIDFILE"
+    prev=""; prevbin=""
+fi
+if [ "$claimed" -eq 1 ]; then
+    printf '%s\n' "$gw_pid" > "$PIDFILE"
     printf '%s\n' "$GATEWAY_BIN" > "$PIDFILE.bin"
 fi
+
+# launchd stops a job by signalling THIS process. Forward it, or the gateway
+# would outlive the unload and keep the port — the state this whole unit exists
+# to make impossible.
+trap 'kill -TERM "$gw_pid" 2>/dev/null' TERM INT HUP
+
+# The delivery file's whole life. The gateway reads its dotenv at startup, so a
+# bounded wait covers it; then the plaintext key leaves the disk.
+sleep "$DELIVERY_TTL"
+rm -f "$INSTALL_DIR/$DELIVERY_NAME" 2>/dev/null
+
+# `wait` returns early when a trapped signal arrives, so it is retried until
+# the child is genuinely gone; the second wait reports its real status. Exiting
+# with that status is what lets a KeepAlive agent see a crash as a crash.
+wait "$gw_pid" 2>/dev/null
+gw_rc=$?
+while kill -0 "$gw_pid" 2>/dev/null; do
+    wait "$gw_pid" 2>/dev/null
+    gw_rc=$?
+done
+if [ "$claimed" -eq 1 ]; then
+    rm -f "$PIDFILE" "$PIDFILE.bin" 2>/dev/null
+fi
+exit "$gw_rc"
 EOF
-    printf 'exec %s\n' "$cmd"
 }
 
 # write_launcher <recorded-argv-json> <exec-argv-json> <install-dir> — assemble
@@ -1382,7 +1418,13 @@ write_launcher() {
                 KEYCHAIN_ACCOUNT_TOKEN KEYCHAIN_ACCOUNT_OPENROUTER SECURITY_BIN; do
         printf '%s' "$body" | grep -q "^$need=" || return 1
     done
-    printf '%s' "$body" | grep -q '^exec ' || return 1
+    # The launch line and the supervision tail. The launcher no longer execs —
+    # it starts the gateway as a child and waits — so a body that still ended
+    # at an exec, or that lost the wait, would be a launcher launchd could not
+    # stop and one that never removes the delivered key.
+    printf '%s' "$body" | grep -q '^gw_pid=\$!' || return 1
+    printf '%s' "$body" | grep -q '^wait "\$gw_pid"' || return 1
+    printf '%s' "$body" | grep -q 'rm -f "\$INSTALL_DIR/\$DELIVERY_NAME"' || return 1
     tmp="$GATEWAY_LAUNCHER.spawn-setup.$$"
     rm -f "$tmp" 2>/dev/null
     {

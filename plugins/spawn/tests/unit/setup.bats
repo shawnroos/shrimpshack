@@ -824,7 +824,9 @@ EOP
     jq -e --arg i "$INSTALL" '.steps[] | select(.step == "supervisor") | .detail | test($i)' "$OUT" >/dev/null
 
     # And the launcher execs the RESOLVED build, not the retired one.
-    grep -qF -- "exec '$INSTALL/target/release/gateway'" "$SPAWN_GATEWAY_LAUNCHER"
+    # The launcher starts the gateway as a child and supervises it rather than
+    # exec'ing it, so the launch line is the argv followed by `&`.
+    grep -qF -- "'$INSTALL/target/release/gateway' '--config'" "$SPAWN_GATEWAY_LAUNCHER"
     run grep -F -- "exec '$old" "$SPAWN_GATEWAY_LAUNCHER"
     [ "$status" -ne 0 ]
     # ...while the recorded original still names what was first adopted.
