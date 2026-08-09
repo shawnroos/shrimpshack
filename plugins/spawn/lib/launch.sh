@@ -61,6 +61,15 @@ CTL="$SCRIPT_DIR/spawnctl.sh"
 # shellcheck source=./common.sh
 . "$SCRIPT_DIR/common.sh"
 
+# Sourced for spawn::token_fallback ONLY: TOKEN_AWK below stays local (it is
+# embedded verbatim in the attach command), but the env/Keychain half of
+# resolution is shared so every surface presents the same token.
+# shellcheck source=./secrets.sh
+. "$SCRIPT_DIR/secrets.sh"
+
+KEYCHAIN_SERVICE="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
+KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -566,6 +575,22 @@ TOKEN=""
 if [ -n "$CONFIG_PATH" ] && [ -f "$CONFIG_PATH" ]; then
     TOKEN="$(expand_env_refs "$(awk "$TOKEN_AWK" "$CONFIG_PATH")")"
 fi
+# Then the SAME env/Keychain fallback spawnctl's probe runs (R27), so a config
+# whose token setup retired still launches instead of seeding into a 401.
+# Wrapped in a function ONLY so `local -` is available: this block assigns a
+# credential, and at top level there is no scope to confine `set +x` to, so a
+# caller running the script under `bash -x` would trace the token out. The
+# function restores the caller's own xtrace setting on return.
+resolve_token_from_fallback() {
+    local -
+    set +x
+    SPAWN_TOKEN_VALUE=""
+    if spawn::token_fallback "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
+        TOKEN="$SPAWN_TOKEN_VALUE"
+    fi
+    SPAWN_TOKEN_VALUE=""
+}
+[ -n "$TOKEN" ] || resolve_token_from_fallback
 # An empty token is not fatal here: `ensure` already proved the gateway accepts
 # whatever this config holds. Guessing a failure before the wire would invent
 # one the gateway never reported.
@@ -717,9 +742,18 @@ fi
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 ATTACH="cd $(shq "$PIN_CWD") && "
-ATTACH+="GW_TOK=\"\$(awk $(shq "$TOKEN_AWK") $(shq "$CONFIG_PATH"))\" && "
+ATTACH+="GW_TOK=\"\$(awk $(shq "$TOKEN_AWK") $(shq "$CONFIG_PATH") 2>/dev/null)\"; "
 # Expand a whole-value ${VAR} reference the same way the gateway itself does.
 ATTACH+="case \"\$GW_TOK\" in '\${'*'}') GW_N=\"\${GW_TOK#\\\$\\{}\"; GW_N=\"\${GW_N%\\}}\"; GW_TOK=\"\${!GW_N-}\";; esac; "
+# The same env/Keychain fallback the in-process path runs, embedded so it
+# resolves at ATTACH time. Without it a handle printed today stops working the
+# moment setup retires the config token — a 401 arriving hours later, from a
+# command that used to work, with nothing on screen explaining why. Still by
+# REFERENCE (KTD6): the resolution runs in the user's shell, the value is in
+# neither this output nor any argv, and `-w` stays last with no `-g` so the
+# secret goes to stdout inside a substitution rather than to a terminal.
+ATTACH+="[ -n \"\$GW_TOK\" ] || GW_TOK=\"\${GATEWAY_TOKEN:-}\"; "
+ATTACH+="[ -n \"\$GW_TOK\" ] || GW_TOK=\"\$($(shq "$SPAWN_SECURITY_BIN") find-generic-password -a $(shq "$KEYCHAIN_ACCOUNT_TOKEN") -s $(shq "$KEYCHAIN_SERVICE") -w 2>/dev/null)\"; "
 ATTACH+="ANTHROPIC_BASE_URL=$(shq "$BASE_URL") "
 ATTACH+="ANTHROPIC_AUTH_TOKEN=\"\$GW_TOK\" ANTHROPIC_API_KEY=\"\$GW_TOK\" "
 [ -n "$CONTEXT_WINDOW" ] && ATTACH+="CLAUDE_CODE_MAX_CONTEXT_TOKENS=$(shq "$CONTEXT_WINDOW") "

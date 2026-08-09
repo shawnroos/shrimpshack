@@ -44,6 +44,16 @@ CTL="$SCRIPT_DIR/spawnctl.sh"
 # shellcheck source=./common.sh
 . "$SCRIPT_DIR/common.sh"
 
+# Sourced for spawn::token_fallback ONLY: the config parser below stays local
+# (common.sh names it as deliberately duplicated), but the env/Keychain half of
+# resolution is shared so this script and spawnctl's probe cannot present
+# different tokens to the same gateway.
+# shellcheck source=./secrets.sh
+. "$SCRIPT_DIR/secrets.sh"
+
+KEYCHAIN_SERVICE="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
+KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -647,6 +657,23 @@ TOKEN=""
 if [ -n "$CONFIG_PATH" ]; then
     TOKEN="$(expand_env_refs "$(read_server_token "$CONFIG_PATH")")"
 fi
+# Then the SAME env/Keychain fallback spawnctl's probe runs (R27). Without it a
+# setup that retired the config token leaves the probe passing and this call
+# 401'ing — the divergence the comment above calls undebuggable.
+# Wrapped in a function ONLY so `local -` is available: this block assigns a
+# credential, and at top level there is no scope to confine `set +x` to, so a
+# caller running the script under `bash -x` would trace the token out. The
+# function restores the caller's own xtrace setting on return.
+resolve_token_from_fallback() {
+    local -
+    set +x
+    SPAWN_TOKEN_VALUE=""
+    if spawn::token_fallback "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
+        TOKEN="$SPAWN_TOKEN_VALUE"
+    fi
+    SPAWN_TOKEN_VALUE=""
+}
+[ -n "$TOKEN" ] || resolve_token_from_fallback
 # An empty token is not fatal here: the gateway answers with 401/403 and that
 # becomes exit 7, which is a truthful classification. Guessing a code before the
 # wire would invent a failure the gateway never reported.

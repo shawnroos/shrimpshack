@@ -24,7 +24,7 @@ One script owns liveness, start/stop, and reporting. Liveness is a real probe of
    bash "${CLAUDE_PLUGIN_ROOT}/lib/spawnctl.sh" status
    ```
 
-   Always through `${CLAUDE_PLUGIN_ROOT}/lib/spawnctl.sh`, never by PATH lookup. (`gw` on your PATH is an unrelated binary; this plugin deliberately leaves it alone and both surfaces share the same pid and log files, so neither double-starts against the other.)
+   Always through `${CLAUDE_PLUGIN_ROOT}/lib/spawnctl.sh`, never by PATH lookup. (`gw` on your PATH is the wrapper the plugin's setup path rewrites; its `start|stop|restart|status` verbs delegate to this very script, and both surfaces share the same pid, log and lock files, so neither double-starts against the other.)
 
    The other verbs, same script, same contract:
 

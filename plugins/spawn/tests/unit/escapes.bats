@@ -577,7 +577,15 @@ terminal_sink_lint() {
         # moment a helper grows a `>&2` print of an interpolated value this
         # lint goes red. That is the property the test is named for, and it
         # stays whole. (The self-test plants exactly that sink to prove it.)
-        if [ "$base" != "common.sh" ]; then
+        # secrets.sh is the same case as common.sh and carries the same
+        # annotation in its own header: it is a pure-helper library with no
+        # diagnostics and no terminal sink, because every value it handles is a
+        # credential the plugin must never print. Adding a say() there to
+        # satisfy this lint would create a printing chokepoint in the one file
+        # whose contract is that it never prints. Exempt from the STRUCTURAL
+        # checks only — the sink scan below still runs on it, and the sixth
+        # plant in the self-test proves that carve-out did not widen.
+        if [ "$base" != "common.sh" ] && [ "$base" != "secrets.sh" ]; then
             # Every script must source the shared sanitizer rather than grow its own.
             if ! grep -q '\. "\$SCRIPT_DIR/sanitize.sh"' "$f"; then
                 printf 'LINT %s: does not source sanitize.sh\n' "$base"
@@ -708,6 +716,21 @@ terminal_sink_lint() {
     run terminal_sink_lint "$WORK/liblint4"
     [ "$status" -ne 0 ]
     echo "$output" | grep -q 'raw interpolated stderr sink'
+
+    # Sixth plant: the SECOND file the structural checks skip. secrets.sh is
+    # exempt from "must own a say()" for the same reason common.sh is, and for
+    # the same reason it is NOT exempt from the sink scan — it handles nothing
+    # but credentials, so a `>&2` print of an interpolated value there is the
+    # worst version of this bug in the plugin. If the carve-out above ever
+    # widened into a full exclusion, this assertion is what goes red.
+    mkdir -p "$WORK/liblint6"
+    cp "$LIB"/*.sh "$WORK/liblint6/"
+    run terminal_sink_lint "$WORK/liblint6"
+    [ "$status" -eq 0 ]
+    printf 'printf "secret leak: %%s\\n" "$SOME_SECRET_VALUE" >&2\n' >> "$WORK/liblint6/secrets.sh"
+    run terminal_sink_lint "$WORK/liblint6"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -q 'LINT secrets.sh: raw interpolated stderr sink'
 
     # And the block scan does not fire on a block redirected to a plain FILE —
     # a lint that cries wolf on every curlrc heredoc gets deleted, not fixed.

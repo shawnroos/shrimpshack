@@ -28,6 +28,16 @@ setup() {
     mkdir -p "$SPAWN_SEARCH_ROOT"
     export TMPDIR="$WORK/tmp"
     mkdir -p "$TMPDIR"
+    # launch.sh now sources secrets.sh for the env/Keychain token fallback, and
+    # the attach command it prints embeds the same chain. Both have to run
+    # against the fixture `security`, or a tokenless-config test would query the
+    # REAL login Keychain of whoever runs the suite.
+    export SPAWN_SECURITY_BIN="$FIX/fake-security.sh"
+    export FAKE_SECURITY_STORE_DIR="$WORK/kc-store"
+    export FAKE_SECURITY_RECORD_DIR="$WORK/kc-record"
+    export SPAWN_KEYCHAIN_SERVICE="spawn-gateway-test"
+    export SPAWN_KEYCHAIN_ACCOUNT_TOKEN="gateway-token-test"
+    unset GATEWAY_TOKEN
     export SPAWN_CONNECT_TIMEOUT=2
     export SPAWN_PROBE_TIMEOUT=5
     export SPAWN_START_TIMEOUT=10
@@ -102,7 +112,13 @@ make_config() {
     {
         printf 'server:\n'
         printf '  bind: "127.0.0.1:4000"\n'
-        printf '  token: %s        # Bearer or x-api-key\n' "$token"
+        # An EMPTY token omits the line entirely: that is what `setup` leaves
+        # behind when it retires the config token — it removes the key rather
+        # than blanking it, and a blanked key with its comment still attached
+        # parses as the literal comment text, not as absent.
+        if [ -n "$token" ]; then
+            printf '  token: %s        # Bearer or x-api-key\n' "$token"
+        fi
         printf '\nmodels:\n'
         local spec
         for spec in "$@"; do
@@ -179,6 +195,18 @@ invocation() {
 # commands co-occurring with the config variable are flagged. Over-flagging a
 # hypothetical read-only `cp "\$CONFIG_PATH" elsewhere` is accepted: the
 # baseline-clean assertion keeps the lint honest against the shipped source.
+#
+# SCOPE (KTD3): the RUNTIME scripts — launch.sh, lens.sh, spawnctl.sh. It is no
+# longer stated as repo-wide, because lib/setup.sh is now the SANCTIONED writer
+# of gateway.yaml: the gateway pushes GATEWAY_TOKEN onto its auth list rather
+# than substituting it, so the literal token in a live config stays valid until
+# it is deleted from the file, and R23 is unreachable without a config edit.
+# setup.sh is exempted BY NAME, here and in the self-test below, never by
+# accident — and note that the exemption is a statement of sanction rather than
+# a mechanical bypass: this lint keys on $CONFIG_PATH/$SPAWN_CONFIG, and
+# setup.sh writes through "$staging/$CONFIG_NAME", which those patterns cannot
+# match anyway. Widening the patterns to cover setup.sh's own variables would
+# be re-litigating KTD3, not fixing a gap.
 config_write_lint() {   # <script>
     sed 's/#.*//' "$1" | grep -nE \
         -e '>[ ]*"?\$\{?(CONFIG_PATH|SPAWN_CONFIG)' \
@@ -655,11 +683,33 @@ config_write_lint() {   # <script>
     fi
     [ "$status" -ne 0 ]
     # The same holds for the other two scripts that read the config: the
-    # finding cites launch.sh, but the invariant is R12's, which is repo-wide.
+    # finding cites launch.sh, but the invariant is R12's, which covers every
+    # RUNTIME script (KTD3 narrowed the stated scope from repo-wide to these
+    # three when setup.sh became the sanctioned writer).
     run config_write_lint "$LIB/lens.sh"
     [ "$status" -ne 0 ]
     run config_write_lint "$LIB/spawnctl.sh"
     [ "$status" -ne 0 ]
+}
+
+@test "KTD3: the no-write invariant covers the three runtime scripts, and setup.sh is exempt BY NAME" {
+    # The scope change is worth a test of its own, because "the lint passes" is
+    # equally true of a lint that stopped being applied. Both halves are stated
+    # here: the runtime list is exactly these three files, and the one file
+    # outside it is named rather than discovered.
+    local script
+    for script in "$LAUNCH" "$LIB/lens.sh" "$LIB/spawnctl.sh"; do
+        [ -f "$script" ]
+        run config_write_lint "$script"
+        [ "$status" -ne 0 ]
+    done
+
+    # setup.sh exists, is not in that list, and DOES write a gateway.yaml —
+    # asserting the write is real is what stops this from being a vacuous
+    # exemption for a file that never writes anything.
+    [ -f "$LIB/setup.sh" ]
+    grep -q 'strip_server_token' "$LIB/setup.sh"
+    grep -q 'staging/\$CONFIG_NAME' "$LIB/setup.sh"
 }
 
 @test "R12 lint self-test: planted cp, tee, sed -i, yq -i and redirect writes each turn the lint red" {
@@ -694,4 +744,79 @@ config_write_lint() {   # <script>
     launch --alias alpha
     [ "$status" -eq 0 ]
     [ -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'gwlaunch.*' 2>/dev/null)" ]
+}
+
+# --- R27: the token fallback reaches BOTH of launch's consumers --------------
+#
+# launch has two: the in-process TOKEN it exports into the seed run, and the
+# attach command, which re-resolves at ATTACH time in the user's shell. R27
+# originally covered neither — it landed in spawnctl's probe alone, so once
+# setup retired the config token the probe authenticated and both of these
+# 401'd. The attach one is the nastier half: a handle printed today would stop
+# working hours later with nothing on screen explaining why.
+
+seed_keychain() {
+    printf '%s\n%s\n' "$1" "$1" \
+        | "$SPAWN_SECURITY_BIN" add-generic-password \
+            -a "$SPAWN_KEYCHAIN_ACCOUNT_TOKEN" -s "$SPAWN_KEYCHAIN_SERVICE" -U -w
+}
+
+# Rewrite the config start_fixture wrote, dropping the token, and re-pin the
+# sha the R12 no-write assertions compare against.
+retire_config_token() {
+    local -a specs=() parts=()
+    local a
+    IFS=',' read -ra parts <<< "$1"
+    for a in "${parts[@]}"; do specs+=("$a=up/$a"); done
+    make_config "$WORK/gateway.yaml" "" "${specs[@]}"
+    CFG_SHA="$(shasum "$WORK/gateway.yaml" | awk '{print $1}')"
+}
+
+@test "R27: a retired config token still launches, resolved from the Keychain" {
+    start_fixture healthy "alpha"
+    retire_config_token "alpha"
+    seed_keychain "$TOKEN"
+
+    launch --alias alpha
+    [ "$status" -eq 0 ]
+    # The seed run received the Keychain token through the environment.
+    grep -qx -- "ANTHROPIC_AUTH_TOKEN=$TOKEN" "$FAKE_CLAUDE_RECORD_DIR/env"
+    # And the handle still carries no literal (R9 + KTD6).
+    echo "$output" | jq -r '.attach_command' | refute_stdin_match "$TOKEN"
+}
+
+@test "R27: the printed attach command re-resolves from the Keychain when EXECUTED" {
+    start_fixture healthy "alpha"
+    retire_config_token "alpha"
+    seed_keychain "$TOKEN"
+
+    launch --alias alpha
+    [ "$status" -eq 0 ]
+    local attach
+    attach="$(echo "$output" | jq -r '.attach_command')"
+    [ -n "$attach" ] && [ "$attach" != "null" ]
+    echo "$attach" | refute_stdin_match "$TOKEN"
+
+    # RUN it, from elsewhere. Asserting the fallback text merely APPEARS in the
+    # command would pass against a snippet that cannot resolve anything — the
+    # silent-pass class this branch exists to close. Only executing it proves
+    # the embedded chain reaches the Keychain.
+    run bash -c 'cd "$1" && eval "$2"' _ "$ELSEWHERE" "$attach"
+    [ "$status" -eq 0 ]
+    invocation "$FAKE_CLAUDE_RECORD_DIR/env" 2 | grep -qx -- "ANTHROPIC_AUTH_TOKEN=$TOKEN"
+}
+
+@test "R27: an attach command whose config still has its token does not consult the Keychain" {
+    start_fixture healthy "alpha"
+    # Config token intact; a WRONG value stored, so a wrong precedence 401s
+    # rather than passing on either branch.
+    seed_keychain "tok-wrong-should-not-be-used"
+
+    launch --alias alpha
+    [ "$status" -eq 0 ]
+    local attach; attach="$(echo "$output" | jq -r '.attach_command')"
+
+    run bash -c 'cd "$1" && eval "$2"' _ "$ELSEWHERE" "$attach"
+    [ "$status" -eq 0 ]
+    invocation "$FAKE_CLAUDE_RECORD_DIR/env" 2 | grep -qx -- "ANTHROPIC_AUTH_TOKEN=$TOKEN"
 }

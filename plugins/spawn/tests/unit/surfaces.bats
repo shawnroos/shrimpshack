@@ -233,3 +233,78 @@ frontmatter() {         # <file>
     run bash -c "claude plugin validate '$ROOT' 2>&1"
     printf '%s' "$output" | grep -qF 'Validation passed'
 }
+
+# --- the setup command's own contract --------------------------------------
+# Carried across the rebase from the gateway-setup branch. The R1/R3/R20 loops
+# above already cover commands/setup.md generically; this is the one assertion
+# they do not make, because it is specific to that command: its exit-code table
+# is derived from lib/setup.sh's real EX_* constants rather than from prose, so
+# a code added to the script without a row here fails.
+
+# --- R26: setup ships as ONE surface, so its command defers to nothing -----
+#
+# KD9: setup ships as a command with no same-named skill, which means
+# commands/setup.md has to carry its own contract — there is no second surface
+# to hand off to. R3 above forbids the two Skill-tool phrasings across every
+# command; this is wider, because a command can send the caller elsewhere by
+# naming a skill path or a slash command without ever using the word "invoke".
+
+@test "commands/setup.md instructs the caller to invoke no other surface (R26)" {
+    local md="$CMD_DIR/setup.md"
+    [ -f "$md" ]
+
+    local pat
+    for pat in 'Use the Skill tool' 'Skill tool to invoke' 'skills/' 'SKILL\.md' '/spawn:'; do
+        if grep -qE -- "$pat" "$md"; then
+            printf 'commands/setup.md reaches another surface: matched %s\n' "$pat" >&2
+            return 1
+        fi
+    done
+
+    # NOT VACUOUS. The original anchored this on a sibling command that
+    # legitimately deferred to its skill; R3 has since removed that shape from
+    # every command, so that anchor is now structurally impossible rather than
+    # merely missing. A synthetic control replaces it — the same pattern set,
+    # run over text that DOES reach another surface, must fire on every
+    # pattern. A regex that had rotted into matching nothing anywhere would
+    # otherwise pass this test for exactly the wrong reason.
+    local control="$BATS_TEST_TMPDIR/reaches-out.md"
+    cat > "$control" <<'CTL'
+Use the Skill tool to invoke it.
+See skills/lens/SKILL.md, or just run /spawn:status instead.
+CTL
+    for pat in 'Use the Skill tool' 'Skill tool to invoke' 'skills/' 'SKILL\.md' '/spawn:'; do
+        grep -qE -- "$pat" "$control"
+    done
+}
+
+@test "the exit-code table in commands/setup.md lists every code setup.sh can return" {
+    [ -f "$CMD_DIR/setup.md" ]
+    local script="$ROOT/lib/setup.sh"
+    [ -f "$script" ]
+
+    # Derived from the CODE, not from the plan's prose. Only real constant
+    # definitions at the start of a line — a mention inside a comment or a die()
+    # call is not a definition.
+    local codes
+    codes="$(grep -Eo '^EX_[A-Z_]+=[0-9]+' "$script" | sed 's/.*=//' | sort -un)"
+    [ -n "$codes" ]
+    # Guard against a grep that silently stopped matching.
+    [ "$(printf '%s\n' "$codes" | wc -l | tr -d ' ')" -ge 5 ]
+
+    # The table rows are ``| `N` |`` — the same shape the README's enum uses.
+    local c missing=""
+    for c in $codes; do
+        grep -qE '^\| `'"$c"'` \|' "$CMD_DIR/setup.md" || missing="$missing $c"
+    done
+    if [ -n "$missing" ]; then
+        printf 'commands/setup.md has no exit-code row for:%s\n' "$missing" >&2
+        return 1
+    fi
+
+    # 8 and 9 are the two codes this unit introduced, and 8 is useless without
+    # the flag to come back with — assert the mapping, not just the row.
+    grep -q -- '--consent-overwrite-gw' "$CMD_DIR/setup.md"
+    grep -q -- '--consent-shell-rc' "$CMD_DIR/setup.md"
+    grep -q -- 'consent_required' "$CMD_DIR/setup.md"
+}
