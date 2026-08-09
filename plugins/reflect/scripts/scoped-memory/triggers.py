@@ -73,10 +73,50 @@ trigger nudges in every repo you work in.
 The nudge is a POINTER — title, one-line hook, how to fetch the body. Never the
 body itself (R5).
 
+THE LIFECYCLE (plan U6 / KTD10 / KTD14)
+---------------------------------------
+A field nobody maintains is worse than no field, so `triggers:` has three
+maintenance points, two of which live here as REPORTS and one as a WRITER.
+
+* **Backfill candidates** (`report --backfill`) — memories with `MIN_USE_DAYS`+
+  distinct *application* days, plus the pinned and hot-index tier. Roughly a
+  third of the store. The rest are NOT candidates: an undeclared memory falls to
+  ranked-gated search, which is the design (KTD5), not debt — and a big-bang
+  backfill of everything would manufacture low-conviction trigger sets that decay
+  into noise (KTD10). This is a report, not a script that writes triggers:
+  authoring a trigger is a judgment call, made by `/reflect` reading the body.
+
+* **Never-acted-on triggers** (`report --misfire`) — nudges joined against
+  applications **on `session_id`** via `telemetry.join_surfaced_applied`. Never
+  on date: with concurrent sessions a date join credits session A's nudge to
+  session B's unrelated application, and both logs still look well-formed
+  (KTD9b). A trigger that has fired `MIN_MISFIRE_NUDGES` times with zero
+  same-session applications is surfaced for prune-or-sharpen.
+
+* **The writer** (`add`) — `add_triggers()` is the only sanctioned way to put a
+  `triggers:` field into an existing body, and it exists because of KTD14:
+  **an automated write to a memory file must preserve `st_mtime`.** Activation
+  weights mtime at 0.3 with a 60-day half-life *as "last reinforcement"*, so
+  writing a field into ~200 files would reset ~200 mtimes to today, spike their
+  activation, reshuffle `MEMORY.md`'s hot/cold cut and lower their recall floors
+  — surfacing them more for no reason but the write. `st_mode` is restored too:
+  `mkstemp` creates 0600, and a body silently demoted from 0644 is a second
+  unwanted side effect of the same write.
+
+  Restoring the file mtime does NOT hide the edit from the manifest.
+  `compile-triggers.is_current` folds DIRECTORY mtimes in, and `os.replace` into
+  the body's own directory bumps that directory — so the write is invisible to
+  activation and visible to the freshness test, which is exactly the split this
+  unit needs.
+
 CLI:
     triggers.py match  [--store DIR] [--cwd DIR] [--session ID] [--all] [--plain]
                        # situation text on STDIN; prints hook JSON, or nothing
     triggers.py compile [--store DIR]     # see compile-triggers.py for the hook
+    triggers.py report [--store DIR] [--backfill] [--misfire] [--json]
+                       # lifecycle reports; both sections by default
+    triggers.py add    --memory RELPATH [--store DIR] [--literal V]... [--regex V]...
+                       [--replace] [--no-compile]     # the mtime-preserving writer
 """
 import hashlib
 import json
@@ -482,6 +522,305 @@ def hook_payload(text):
     }})
 
 
+# ----------------------------------------------------------------- lifecycle
+
+#: Distinct application days that earn a memory a place on the backfill list.
+MIN_USE_DAYS = int(os.environ.get("MEMORY_TRIGGER_MIN_USE_DAYS", "2"))
+
+#: Nudges a trigger may fire with zero same-session applications before it is
+#: reported for prune-or-sharpen.
+MIN_MISFIRE_NUDGES = int(os.environ.get("MEMORY_TRIGGER_MIN_MISFIRE", "3"))
+
+#: The use log records a memory by a NAME, and the name it records drifts: the
+#: same body appears as `squash_on_pr_landing` and `feedback_squash_on_pr_landing`,
+#: with `-` where the filename has `_`. Measured on the live log: matching names
+#: to bodies verbatim resolves 167 of 213 multi-day names; normalizing case,
+#: separator and this type prefix resolves 206. The 7 that remain are memories
+#: since deleted plus two junk lines — which is the honest residue, not a bug.
+_TYPE_PREFIX_RE = re.compile(r"^(feedback|reference|project|user|idea)_")
+
+#: MEMORY.md pointer line: `- [Title](file.md) — hook`.
+_INDEX_LINK_RE = re.compile(r"\]\(([^)\s]+\.md)\)")
+
+
+def _norm_name(name):
+    """Fold a use-log name or a filename to its comparison key."""
+    n = (name or "").strip().lower()
+    if n.endswith(".md"):
+        n = n[:-3]
+    return n.replace("-", "_")
+
+
+def _name_keys(name):
+    """Lookup keys for a name, most specific first: the normalized name, then
+    the same with a `type_` prefix stripped."""
+    exact = _norm_name(name)
+    stripped = _TYPE_PREFIX_RE.sub("", exact)
+    return (exact,) if stripped == exact else (exact, stripped)
+
+
+def body_index(store_dir):
+    """`{name key: relpath}` over every body in the store.
+
+    Exact keys are claimed in a first pass so a prefix-stripped alias can never
+    shadow a real filename — `foo.md` and `feedback_foo.md` can both exist.
+    """
+    bodies = [relpath for relpath, _ in corpus.iter_bodies(store_dir)]
+    index = {}
+    for relpath in bodies:
+        index[_norm_name(os.path.basename(relpath))] = relpath
+    for relpath in bodies:
+        for key in _name_keys(os.path.basename(relpath)):
+            index.setdefault(key, relpath)
+    return index
+
+
+def _resolve(index, name):
+    for key in _name_keys(name):
+        if key in index:
+            return index[key]
+    return None
+
+
+def use_days(store_dir, use_log_path=None):
+    """`{relpath: set(dates)}` of ACTIVATION-BEARING use days per body.
+
+    Days are unioned per resolved BODY, not per log name: two aliases of one
+    memory used on one day each are one memory used on two days, and thresholding
+    per name would miss it.
+    """
+    if telemetry is None:
+        return {}
+    path = use_log_path or os.path.join(store_dir, "MEMORY_USE.log")
+    index = body_index(store_dir)
+    days = {}
+    for rec in telemetry.parse_use(path):
+        if not rec.get("counts"):
+            continue
+        relpath = _resolve(index, rec.get("memory"))
+        if relpath is None:
+            continue
+        days.setdefault(relpath, set()).add(rec.get("date"))
+    return days
+
+
+def hot_paths(store_dir):
+    """Relpaths pointed at by `MEMORY.md` — the rendered hot tier. An absent or
+    unreadable index yields an empty set: the report degrades to the use-history
+    and pinned tiers rather than failing."""
+    try:
+        text = open(os.path.join(store_dir, "MEMORY.md"),
+                    encoding="utf-8", errors="replace").read()
+    except Exception:
+        return set()
+    out = set()
+    for target in _INDEX_LINK_RE.findall(text):
+        out.add(target.lstrip("./"))
+    return out
+
+
+def declares_triggers(text):
+    """Does this body text declare a `triggers:` block at all? A body whose every
+    pattern is rejected still counts as declared — it needs sharpening, not a
+    backfill."""
+    return bool(parse_triggers(frontmatter_lines(text)))
+
+
+def _pinned(path):
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import memory_activation                       # noqa: PLC0415
+        return bool(memory_activation.parse_pinned(path))
+    except Exception:
+        return False
+
+
+def backfill_candidates(store_dir, min_days=None, include_declared=False,
+                        use_log_path=None):
+    """Memories whose history earns them a declared trigger (KTD10).
+
+    Returns one dict per candidate: `path`, `memory`, `use_days`, `reasons`
+    (`used` / `pinned` / `hot`), `has_triggers`. Already-declared memories are
+    filtered out by default, which is what keeps the report re-runnable after a
+    backfill pass has executed.
+    """
+    min_days = MIN_USE_DAYS if min_days is None else min_days
+    days = use_days(store_dir, use_log_path=use_log_path)
+    hot = hot_paths(store_dir)
+    out = []
+    for relpath, _slug in corpus.iter_bodies(store_dir):
+        full = os.path.join(store_dir, relpath)
+        n_days = len(days.get(relpath, ()))
+        reasons = []
+        if n_days >= min_days:
+            reasons.append("used")
+        if _pinned(full):
+            reasons.append("pinned")
+        if relpath in hot:
+            reasons.append("hot")
+        if not reasons:
+            continue
+        text = read_head(full)
+        has = declares_triggers(text)
+        if has and not include_declared:
+            continue
+        name = os.path.basename(relpath)
+        out.append({
+            "path": relpath,
+            "memory": name[:-3] if name.endswith(".md") else name,
+            "use_days": n_days,
+            "reasons": reasons,
+            "has_triggers": has,
+            "hook": hook_of(text, ""),
+        })
+    out.sort(key=lambda c: (-c["use_days"], c["path"]))
+    return out
+
+
+def never_acted_on(store_dir, min_nudges=None):
+    """Triggers that keep firing and never get applied.
+
+    The join is `telemetry.join_surfaced_applied`, used unchanged — it credits a
+    nudge only when the SAME session later applied that memory (KTD9b). Nudge
+    records carry the manifest's canonical memory name and forward-going
+    `applied` lines are written with the same name, so no normalization belongs
+    here; loosening the match would loosen the attribution the join exists to
+    keep honest.
+    """
+    if telemetry is None:
+        return []
+    min_nudges = MIN_MISFIRE_NUDGES if min_nudges is None else min_nudges
+    surfaced = [r for r in telemetry.parse_recall(
+        os.path.join(store_dir, telemetry.RECALL_LOG_NAME))
+        if r.get("source") == "nudge"]
+    uses = telemetry.parse_use(os.path.join(store_dir, telemetry.USE_LOG_NAME))
+    tally = {}
+    for joined in telemetry.join_surfaced_applied(surfaced, uses):
+        name = joined["surfaced"].get("memory")
+        rec = tally.setdefault(name, {"memory": name, "nudges": 0, "credited": 0})
+        rec["nudges"] += 1
+        if joined["credited"]:
+            rec["credited"] += 1
+    out = [r for r in tally.values()
+           if r["credited"] == 0 and r["nudges"] >= min_nudges]
+    out.sort(key=lambda r: (-r["nudges"], r["memory"] or ""))
+    return out
+
+
+# ------------------------------------------------------ the mtime-safe writer
+
+def render_block(entries, indent=""):
+    """The `triggers:` frontmatter block for `[(kind, value), ...]`."""
+    lines = ["%striggers:" % indent]
+    for kind, value in entries:
+        lines.append("%s  - %s: %s" % (indent, kind, value))
+    return lines
+
+
+def _splice_triggers(text, entries, replace):
+    """`(new_text, None)` or `(None, reason)`.
+
+    The block is spliced into the frontmatter as text. Nothing else in the file
+    is re-serialized: a YAML round-trip would rewrite a store of hand-written
+    bodies wholesale, and this writer's whole purpose is to be invisible.
+    """
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None, "no frontmatter block to write into"
+    close = None
+    for i, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            close = i
+            break
+    if close is None:
+        return None, "unterminated frontmatter block"
+
+    start = end = None
+    indent = ""
+    for i in range(1, close):
+        m = re.match(r"^(\s*)triggers\s*:\s*(.*)$", lines[i])
+        if not m or m.group(2).strip():
+            continue
+        indent, start = m.group(1), i
+        end = close
+        for j in range(i + 1, close):
+            stripped = lines[j].strip()
+            if not stripped:
+                continue
+            if len(lines[j]) - len(lines[j].lstrip()) <= len(indent):
+                end = j
+                break
+        break
+
+    block = render_block(entries, indent)
+    if start is None:
+        return "\n".join(lines[:close] + block + lines[close:]), None
+    if not replace:
+        return None, "already declares triggers (pass --replace to overwrite)"
+    return "\n".join(lines[:start] + block + lines[end:]), None
+
+
+def add_triggers(path, entries, replace=False):
+    """Write a validated `triggers:` block into a body, preserving mtime + mode.
+
+    `entries` is `[(kind, value), ...]`. Every pattern is validated first and a
+    rejected one aborts the whole write — half a trigger set is worse than none.
+    Returns `(True, None)` or `(False, reason)`.
+    """
+    if not entries:
+        return False, "no trigger patterns given"
+    if len(entries) > MAX_PATTERNS_PER_MEMORY:
+        return False, ("more than %d patterns" % MAX_PATTERNS_PER_MEMORY)
+    for kind, value in entries:
+        _src, reason = validate_pattern(kind, value)
+        if reason:
+            return False, "%r — %s" % (value, reason)
+    try:
+        original = os.stat(path)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        return False, "unreadable: %s" % exc
+
+    new_text, reason = _splice_triggers(text, entries, replace)
+    if reason:
+        return False, reason
+
+    directory = os.path.dirname(os.path.abspath(path))
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".triggers-add.",
+                                   suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(new_text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        tmp = None
+    except Exception as exc:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return False, "write failed: %s" % exc
+
+    # KTD14. The mtime restore is the load-bearing line of this function: without
+    # it a bulk backfill reads to `memory_activation` as ~200 memories reinforced
+    # today. `mkstemp` also created the replacement 0600, so the mode goes back
+    # too. Both are restored on a best effort — a failure here is worth reporting,
+    # never worth discarding a written file over.
+    try:
+        os.chmod(path, original.st_mode & 0o7777)
+    except OSError:
+        pass
+    try:
+        os.utime(path, (original.st_atime, original.st_mtime))
+    except OSError:
+        return False, "written, but mtime could not be restored"
+    return True, None
+
+
 # ----------------------------------------------------------------------- CLI
 
 def default_store():
@@ -546,12 +885,81 @@ def cmd_compile(argv):
     return 0
 
 
+def _args(argv, name):
+    """Every value given for a repeatable `--flag VALUE` option."""
+    out = []
+    for i, tok in enumerate(argv):
+        if tok == name and i + 1 < len(argv):
+            out.append(argv[i + 1])
+    return out
+
+
+def cmd_report(argv):
+    """The lifecycle reports. Exit 0 always — this is a report, not a gate."""
+    store = _arg(argv, "--store") or os.environ.get("MEMORY_DIR") or default_store()
+    want_backfill = "--backfill" in argv or "--misfire" not in argv
+    want_misfire = "--misfire" in argv or "--backfill" not in argv
+    as_json = "--json" in argv
+
+    payload = {}
+    if want_backfill:
+        payload["backfill"] = backfill_candidates(
+            store, include_declared="--include-declared" in argv)
+    if want_misfire:
+        payload["misfire"] = never_acted_on(store)
+
+    if as_json:
+        print(json.dumps(payload, indent=1, sort_keys=True))
+        return 0
+
+    if want_backfill:
+        rows = payload["backfill"]
+        print("backfill candidates: %d (>=%d use days, or pinned, or in the "
+              "hot index; already-declared excluded)" % (len(rows), MIN_USE_DAYS))
+        for row in rows:
+            print("  %-58s days=%-3d %s" % (row["memory"][:58], row["use_days"],
+                                            ",".join(row["reasons"])))
+    if want_misfire:
+        rows = payload["misfire"]
+        print("never-acted-on triggers: %d (>=%d nudges, zero same-session "
+              "applications — prune or sharpen)" % (len(rows), MIN_MISFIRE_NUDGES))
+        for row in rows:
+            print("  %-58s nudges=%d" % ((row["memory"] or "?")[:58], row["nudges"]))
+    return 0
+
+
+def cmd_add(argv):
+    """Write triggers into one body without touching its mtime (KTD14)."""
+    store = _arg(argv, "--store") or os.environ.get("MEMORY_DIR") or default_store()
+    relpath = _arg(argv, "--memory")
+    if not relpath:
+        print("triggers: add needs --memory RELPATH", file=sys.stderr)
+        return 2
+    entries = ([("literal", v) for v in _args(argv, "--literal")]
+               + [("regex", v) for v in _args(argv, "--regex")])
+    path = relpath if os.path.isabs(relpath) else os.path.join(store, relpath)
+    ok, reason = add_triggers(path, entries, replace="--replace" in argv)
+    if not ok:
+        print("triggers: %s: not written — %s" % (relpath, reason), file=sys.stderr)
+        return 1
+    print("triggers: %s: %d pattern(s) written (mtime preserved)"
+          % (relpath, len(entries)))
+    if "--no-compile" in argv:
+        return 0
+    return cmd_compile(["compile", "--store", store])
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if args and args[0] == "match":
         sys.exit(cmd_match(args))
     if args and args[0] == "compile":
         sys.exit(cmd_compile(args))
+    if args and args[0] == "report":
+        sys.exit(cmd_report(args))
+    if args and args[0] == "add":
+        sys.exit(cmd_add(args))
     print(__doc__.strip().splitlines()[0], file=sys.stderr)
-    print("usage: triggers.py {match|compile} [--store DIR] ...", file=sys.stderr)
+    print("usage: triggers.py {match|compile|report|add} [--store DIR] ...",
+          file=sys.stderr)
     sys.exit(2)
