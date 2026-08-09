@@ -857,6 +857,60 @@ check "memory-index-render.py does not listdir the store" \
 check "both consumers enumerate through corpus.iter_bodies" \
   'grep -q "corpus.iter_bodies" "$SCRIPTS/memory_activation.py" && grep -q "corpus.body_paths" "$SCRIPTS/memory-index-render.py"'
 
+# ------------------------------------------------- batch 1 (U9 / U1 / U3)
+# Each unit's real assertions live in its own runner; these gate them and pin the
+# structural properties a runner cannot see from the inside. The tally greps
+# require "[1-9]... passed, 0 failed" so a runner that silently degrades to zero
+# assertions cannot report success by printing "0 passed, 0 failed".
+echo "== retrieval engine (U9) =="
+RETOUT="$ROOT/retrieval_test.out"
+env -u SEEDED_RECALL_FLAG_DIR -u SEEDED_RECALL_TIMEOUT -u SEEDED_RECALL_COLLECTION \
+  -u SEEDED_RECALL_K -u SEEDED_RECALL_MEMORY_DIR -u SEEDED_RECALL_MIN_SCORE \
+  python3 "$REPO/tests/retrieval_test.py" > "$RETOUT" 2>&1; RETRC=$?
+check "retrieval_test.py: all assertions pass" '[ "$RETRC" = "0" ]'
+check "retrieval_test.py: reports a non-empty tally" 'grep -q "retrieval: [1-9][0-9]* passed, 0 failed" "$RETOUT"'
+# The extraction is the unit: if retrieval logic survives in the hook, the CLI will
+# copy it and the drift this plan exists to fix returns.
+check "seeded-recall.sh holds no retrieval logic (engine is importable)" \
+  '! grep -qE "qmd (vsearch|search)|recall_floor|select_scoped" "$REPO/hooks/seeded-recall.sh"'
+check "seeded-recall.sh delegates to the extracted module" \
+  'grep -q "retrieval" "$REPO/hooks/seeded-recall.sh"'
+
+echo "== local ranked index (U1) =="
+LIXOUT="$ROOT/local_index_test.out"
+env -u SEEDED_RECALL_FLAG_DIR -u SEEDED_RECALL_TIMEOUT -u SEEDED_RECALL_COLLECTION \
+  -u SEEDED_RECALL_K -u SEEDED_RECALL_MEMORY_DIR -u SEEDED_RECALL_MIN_SCORE \
+  python3 "$REPO/tests/local_index_test.py" > "$LIXOUT" 2>&1; LIXRC=$?
+check "local_index_test.py: all assertions pass" '[ "$LIXRC" = "0" ]'
+check "local_index_test.py: reports a non-empty tally" 'grep -q "local_index_test: [1-9][0-9]* passed, 0 failed" "$LIXOUT"'
+# KTD12: the qmd floor is arithmetically inert on BM25 scores (0.45-0.60 vs 25-38),
+# and top1-relative normalization makes the top hit clear any floor unconditionally.
+# Either mistake is silent, so both are pinned here rather than left to review.
+# Assert USE, not mention: the module's docstring correctly explains at length why
+# it must not reuse recall_floor or touch qmd, so a bare word-grep matches the
+# warning and fails on correct code. Check the import and the call instead.
+check "local index does not import or call the qmd activation floor" \
+  '! grep -qE "^[[:space:]]*(from|import)[[:space:]]+memory_activation" "$SCRIPTS/scoped-memory/local_index.py" && ! grep -qE "recall_floor[[:space:]]*\(" "$SCRIPTS/scoped-memory/local_index.py"'
+check "local index shells nothing (runs with qmd absent from PATH)" \
+  '! grep -qE "^[[:space:]]*(import|from)[[:space:]]+subprocess|os\.system|os\.popen|check_output" "$SCRIPTS/scoped-memory/local_index.py"'
+
+echo "== declared triggers (U3) =="
+TRGOUT="$ROOT/trigger_test.out"
+env -u SEEDED_RECALL_FLAG_DIR -u SEEDED_RECALL_TIMEOUT -u SEEDED_RECALL_COLLECTION \
+  -u SEEDED_RECALL_K -u SEEDED_RECALL_MEMORY_DIR -u SEEDED_RECALL_MIN_SCORE \
+  python3 "$REPO/tests/trigger_test.py" > "$TRGOUT" 2>&1; TRGRC=$?
+check "trigger_test.py: all assertions pass" '[ "$TRGRC" = "0" ]'
+check "trigger_test.py: reports a non-empty tally" 'grep -q "trigger_test: [1-9][0-9]* passed, 0 failed" "$TRGOUT"'
+# KTD18: compilation must not ride inside the renderer, whose byte-identical early
+# return would skip it on an unchanged store.
+check "manifest compilation is its own script, not inside the renderer" \
+  '[ -f "$REPO/scripts/compile-triggers.py" ] && ! grep -q "triggers" "$SCRIPTS/memory-index-render.py"'
+# Mention vs use again: the hook's header comment correctly explains that
+# $TOOL_INPUT does not exist for command hooks, so a bare word-grep fails on
+# correct code. Strip comments before looking for an actual expansion.
+check "the nudge hook reads stdin, not the nonexistent \$TOOL_INPUT" \
+  '! grep -vE "^[[:space:]]*#" "$REPO/hooks/trigger-nudge.sh" | grep -q "TOOL_INPUT"'
+
 # ---------------------------------------------------------------------- report
 echo
 echo "harness: $PASS passed, $FAIL failed"
