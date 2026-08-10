@@ -123,6 +123,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -344,7 +345,12 @@ def compile_manifest(store_dir):
 #: never say "no" when the answer is yes, or a nudge disappears with nothing to show
 #: it did. Dropping the word boundaries widens each pattern, which is the safe
 #: direction, and it also drops the one construct BSD grep does not portably support.
-_PREFILTER_STRIP = re.compile(r"\\b")
+#: Strip only a REAL `\b`, never the `b` of an escaped backslash. `foo\\bar` matches
+#: a literal `foo\bar`; a naive strip turns it into `foo\ar`, which NARROWS the
+#: prefilter — the unsafe direction — and a source ending `\\b` strips to a lone
+#: trailing backslash, an invalid ERE that poisons the whole `-f` file. The lookbehind
+#: plus the even-backslash group keeps escaped pairs intact.
+_PREFILTER_STRIP = re.compile(r"(?<!\\)((?:\\\\)*)\\b")
 
 
 def prefilter_lines(manifest):
@@ -359,11 +365,83 @@ def prefilter_lines(manifest):
     seen = set()
     for entry in manifest.get("entries", []):
         for pat in entry.get("patterns", []):
-            rx = _PREFILTER_STRIP.sub("", pat.get("re", ""))
-            if rx and rx not in seen:
+            src = pat.get("re", "")
+            rx = _PREFILTER_STRIP.sub(r"\1", src)
+            if not rx:
+                # A pattern that strips to nothing (e.g. a bare `\b`) would be
+                # DROPPED here while staying live in the manifest — the prefilter
+                # would then reject commands the matcher matches. It is still live,
+                # so the prefilter must not exist at all rather than exist narrowed.
+                return None
+            if rx not in seen:
                 seen.add(rx)
                 out.append(rx)
     return out
+
+
+#: Constructs whose meaning differs between Python `re` and POSIX ERE, or that can
+#: match ACROSS a newline. Either kind makes a grep prefilter unsafe:
+#:
+#:   * `\A` `\Z` `\d` `\s` `\w` `(?...` — Python-only. `\A` is an anchor to Python
+#:     and a literal `A` to grep, so grep would REJECT what the matcher accepts.
+#:   * `\s` `\n` — can span a line. grep is line-oriented and `re.search` is not, so
+#:     `git\s+push` matches a two-line command in Python and cannot in grep.
+#:
+#: Detected rather than probed. An earlier version ran each pattern through grep with
+#: a synthesised probe string, and the synthesis was unsound: it turned `[^\n]` into
+#: `[^n]`, which the pattern then genuinely could not match, so the whole prefilter
+#: was suppressed on the live store for no reason. A flaky guard that disables the
+#: optimization is worse than no guard.
+_UNSAFE_FOR_GREP = re.compile(r"\\[AZdswWDS]|\(\?|\\n")
+
+#: `[^\\n]` is the OPPOSITE of a newline hazard — it cannot cross a line — so it is
+#: removed before the unsafe scan. Without this, two perfectly safe live patterns
+#: suppressed the prefilter entirely.
+_NEGATED_NEWLINE_CLASS = re.compile(r"\[\^\\n\]")
+
+
+def prefilter_is_safe(lines):
+    """Can a line-oriented grep stand in for the matcher over THESE patterns?
+
+    All-or-nothing on purpose: dropping just the offending line would leave a
+    prefilter NARROWER than the matcher, which is the one direction that loses a
+    nudge. Better to write nothing and let every command reach python.
+    """
+    if not lines:
+        return False
+    for line in lines:
+        # `[^\n]` is the opposite of a hazard — it explicitly cannot cross a line —
+        # so drop those before looking for one. Without this the rule rejected two
+        # perfectly safe live patterns and suppressed the prefilter entirely.
+        probe = _NEGATED_NEWLINE_CLASS.sub("", line)
+        if _UNSAFE_FOR_GREP.search(probe):
+            return False
+    return True
+
+
+def _grep_parses(lines):
+    """Can the grep the HOOK resolves actually PARSE this file?
+
+    Not per-pattern: an unparseable file makes grep exit 2 for EVERY command. The
+    hook already treats exit >=2 as "maybe" and falls through, so this is a second
+    belt — but a cheap one, and it keeps a known-broken artifact off disk.
+    """
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".prefilter-probe")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        r = subprocess.run(["grep", "-qiEf", tmp], input="\n",
+                           text=True, capture_output=True)
+        return r.returncode < 2
+    except Exception:
+        return False
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def write_prefilter(store_dir, manifest):
@@ -375,12 +453,24 @@ def write_prefilter(store_dir, manifest):
     it was before.
     """
     dest = os.path.join(store_dir, PREFILTER_NAME)
+
+    lines = prefilter_lines(manifest)
+    if lines is None or not prefilter_is_safe(lines) or not _grep_parses(lines):
+        # No prefilter beats a narrow one. Remove any stale file so the hook reads
+        # "missing" — which it treats as "maybe" and falls through to python — rather
+        # than trusting an artifact that describes a different manifest.
+        try:
+            os.unlink(dest)
+        except OSError:
+            pass
+        return False
+
     tmp = None
     try:
         fd, tmp = tempfile.mkstemp(dir=store_dir, prefix=".%s." % PREFILTER_NAME,
                                    suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(prefilter_lines(manifest)))
+            fh.write("\n".join(lines))
             fh.write("\n")
             fh.flush()
             os.fsync(fh.fileno())

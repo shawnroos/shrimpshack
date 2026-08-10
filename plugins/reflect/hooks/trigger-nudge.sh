@@ -68,18 +68,31 @@ SESSION="$(jq -r '.session_id // empty' < "$TMPIN" 2>/dev/null)" || true
 # 3. Nothing to match against.
 [ -n "$CMD" ] || exit 0
 
-# `printf '%s'` does not interpret escapes in its ARGUMENT, so a command full of
-# backslashes reaches python byte-for-byte.
 # 4. Cheap reject. Only skip when the prefilter EXISTS and definitively says no —
 # a missing file falls through, because "could not ask" must never become "no".
 PREFILTER="$STORE/TRIGGERS.prefilter"
 if [ -s "$PREFILTER" ]; then
-  # -i is REQUIRED, not a nicety: the real matcher compiles with re.I, so a
-  # case-sensitive prefilter drops real nudges. Measured on 480 recorded commands
-  # it lost exactly 2 — a rate low enough to look like nothing and be missed.
-  printf '%s' "$CMD" | grep -qiEf "$PREFILTER" 2>/dev/null || exit 0
+  # Multi-line commands go through the prefilter too, and safely: `write_prefilter`
+  # refuses to emit a file containing any pattern that could match ACROSS a newline
+  # (`\s`, a bare `\n`, Python-only classes). With those excluded, matching each
+  # line is equivalent to `re.search` over the whole command, so line-oriented grep
+  # is not a narrowing. This matters more than it looks — 457 of 480 recorded Bash
+  # calls were multi-line, so skipping them would have left the optimization
+  # covering 5% of real traffic.
+  #
+  # -i is REQUIRED: the matcher compiles with re.I, and a case-sensitive prefilter
+  # lost exactly 2 nudges across those 480 commands.
+  printf '%s' "$CMD" | grep -qiEf "$PREFILTER" 2>/dev/null
+  # ONLY exit 1 means "no match". Exit 2 is an unparseable pattern file and 127 is
+  # no grep at all; reading either as "nothing matched" would let ONE bad pattern
+  # silently suppress every nudge in the store. Verified: /usr/bin/grep exits 2 on a
+  # Python-valid lookahead that ugrep accepts, so which grep resolves would decide
+  # whether the mechanism went quiet. Anything but a clean "no" falls through.
+  case $? in 1) exit 0 ;; esac
 fi
 
+# `printf '%s'` does not interpret escapes in its ARGUMENT, so a command full of
+# backslashes reaches python byte-for-byte.
 printf '%s' "$CMD" | python3 "$PLUGIN_ROOT/scripts/scoped-memory/triggers.py" \
   match --store "$STORE" --session "${SESSION:-}" --cwd "$PWD" 2>/dev/null || true
 

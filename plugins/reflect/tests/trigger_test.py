@@ -333,11 +333,24 @@ with tempfile.TemporaryDirectory() as store:
           seen and all(os.path.basename(s).startswith(".") for s in seen))
 
 # ------------------------------------------- prefilter is a SUPERSET (perf guard)
-# The nudge hook rejects a command with `grep -iEf TRIGGERS.prefilter` before it
-# starts python. That is only safe if the prefilter can never say "no" where the
-# real matcher says "yes" — a lost nudge is invisible, which is the failure this
-# plugin exists to remove. So: widened, never narrowed.
+# The nudge hook rejects a command with `grep -qiEf TRIGGERS.prefilter` before it
+# starts python, so the prefilter must never say "no" where the matcher says "yes" —
+# a lost nudge is invisible, the failure this plugin exists to remove.
+#
+# These assertions run the REAL grep, not a python re-implementation. An earlier
+# version of this block compiled the prefilter with `re.compile(l, re.I)` and
+# compared python to python, which by construction could not see the entire real
+# failure class: python `re` and POSIX ERE are different languages.
 print("== prefilter never loses a nudge ==")
+
+
+def grep_says_match(prefilter_path, cmd):
+    """(matched, exit_code) from the hook's exact invocation."""
+    r = subprocess.run(["grep", "-qiEf", prefilter_path], input=cmd,
+                       text=True, capture_output=True)
+    return r.returncode == 0, r.returncode
+
+
 with tempfile.TemporaryDirectory() as store:
     write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
     write(os.path.join(store, "reference_case.md"),
@@ -348,30 +361,66 @@ with tempfile.TemporaryDirectory() as store:
                  "  - regex: gh pr (create|merge)\n"))
     man, _ = tg.compile_manifest(store)
     tg.write_manifest(store, man)
-
     pre_path = os.path.join(store, tg.PREFILTER_NAME)
+
     check("write_manifest emits the prefilter beside the manifest",
           os.path.exists(pre_path))
     pre = [l for l in open(pre_path).read().splitlines() if l]
     check("the prefilter carries ONLY patterns — no names, scopes or hooks",
           all("reference_case" not in l for l in pre))
-    check("word boundaries are stripped (widening, and BSD-grep portable)",
-          all("\\b" not in l for l in pre))
 
-    # The property, over commands that SHOULD match and commands that should not.
-    rx = [re.compile(l, re.I) for l in pre]
-    should_match = ["gh pr view 5159 --json statusCheckRollup",
-                    "GH PR VIEW 5159",                    # case: matcher uses re.I
-                    "cd /tmp && gh pr merge 34 --squash",  # multi-line-ish, later position
-                    "ng build 2>&1 | grep NG8002"]
-    for cmd in should_match:
+    # Superset, judged by the REAL grep against commands the matcher matches.
+    for cmd in ["gh pr view 5159 --json statusCheckRollup",
+                "GH PR VIEW 5159",
+                "cd /tmp && gh pr merge 34 --squash",
+                "ng build 2>&1 | grep NG8002"]:
         hits, _ = tg.match(man, cmd, cwd="/tmp")
-        passes = any(r.search(cmd) for r in rx)
-        check("prefilter passes what the matcher matches: %r" % cmd[:34],
-              (not hits) or passes)
+        check("matcher DOES match %r (guards against a vacuous check)" % cmd[:30],
+              bool(hits))
+        matched, rc = grep_says_match(pre_path, cmd)
+        check("real grep agrees, so the prefilter cannot drop it: %r" % cmd[:30],
+              matched)
 
-    check("and it still rejects an unrelated command",
-          not any(r.search("echo hello world") for r in rx))
+    check("and grep still rejects an unrelated command",
+          not grep_says_match(pre_path, "echo hello world")[0])
+
+# A pattern that is valid PYTHON and invalid ERE must not produce a prefilter at
+# all: a file grep cannot parse makes it exit 2 for EVERY command, and a hook that
+# read exit 2 as "no match" would suppress every nudge in the store.
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_look.md"),
+          memory("reference_look", "python-valid, ERE-invalid",
+                 "triggers:\n  - regex: gh(?= pr)\n"))
+    man2, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man2)
+    pre2 = os.path.join(store, tg.PREFILTER_NAME)
+    if os.path.exists(pre2):
+        _, rc = grep_says_match(pre2, "gh pr view 1")
+        check("if a prefilter was written, the resolved grep can PARSE it (rc<2)",
+              rc < 2)
+    else:
+        check("no prefilter written for an ERE-incompatible pattern (fail-safe)", True)
+
+# A pattern stripping to empty must suppress the whole prefilter, not silently
+# narrow it — it stays live in the manifest either way.
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_bare.md"),
+          memory("reference_bare", "bare boundary",
+                 "triggers:\n  - regex: \\b\n"))
+    man3, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man3)
+    check("a pattern that strips to nothing writes NO prefilter",
+          not os.path.exists(os.path.join(store, tg.PREFILTER_NAME)))
+
+# \b stripping must not eat an ESCAPED backslash, which would narrow the pattern
+# or emit a trailing lone backslash (an invalid ERE).
+check("stripping keeps an escaped backslash intact",
+      tg._PREFILTER_STRIP.sub(r"\1", r"foo\\bar") == r"foo\\bar")
+check("stripping never leaves a trailing lone backslash",
+      not tg._PREFILTER_STRIP.sub(r"\1", r"x\\b").endswith("\\")
+      or tg._PREFILTER_STRIP.sub(r"\1", r"x\\b") == r"x\\b")
 
 # ------------------------------------------------------- scope filter (KTD13)
 print("== scope filter at match time (KTD13) ==")
