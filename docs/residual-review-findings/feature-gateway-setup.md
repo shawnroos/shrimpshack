@@ -413,6 +413,32 @@ child, so `unload` stops the gateway.
 
 ## Still open
 
+- **`spawnctl start` can overwrite the launchd launcher's pidfile claim, leaving
+  a stale pid over a supervised gateway (P1). Observed live, 2026-08-10.**
+  Timeline from the machine: launcher pid 8123 started 21:37:35 and claimed the
+  pidfile; the gateway it spawned (8139) held :4000; at 22:58:57 — 81 minutes
+  later — the pidfile was rewritten to 66681, which then died. Result:
+  `spawnctl status` reported `running:true, pid_verified:false` against a
+  pidfile pointing at a corpse, while the real, supervised gateway ran
+  unmanaged. `stop`/`restart` are refused in that state, so the machine cannot
+  be controlled through the plugin at all.
+
+  The launcher has the correct guard — it declines to claim when the recorded
+  pid is ALIVE and names the same binary (spawn-launch.sh:99-112). `spawnctl`'s
+  own start path has no reciprocal guard: nothing stops it stamping its pid over
+  a claim the launcher already holds.
+
+  Verified fixable and verified NOT a launcher defect: `launchctl unload` then
+  `load` restored `pid_verified:true` with the pidfile naming the live process,
+  and the unload released :4000 with zero listeners left — so the launcher's
+  signal forwarding and pidfile claim both work when they run uncontested.
+
+  Fix: give `do_start_locked` the mirror of the launcher's guard — refuse to
+  overwrite a pidfile whose recorded pid is alive and names the same binary —
+  and/or have it detect a loaded launchd agent and route through it rather than
+  starting a competing process.
+
+
 - **`setup` does not confirm the adoption took effect (P2).** After
   `unload`/`load` it reports "adopted" without checking that the gateway now
   serving is the one launchd started. A gateway started OUTSIDE launchd (a
