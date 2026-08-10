@@ -266,7 +266,22 @@ def validate_pattern(kind, value):
         return None, ("pattern contains `description:`, which the index renderer "
                       "would lift into MEMORY.md as this memory's hook")
     if kind == "literal":
-        return re.escape(value), None
+        # Word-boundary the ends, so a literal matches a COMMAND rather than any text
+        # that happens to contain those characters. Measured against 480 real Bash
+        # calls from one session: the bare substring `ng test` fired on the prose
+        # "how to fix the faili|ng test|", and `gh pr merge` fired on a commit message
+        # merely mentioning it. Same false-positive class the PostToolUse matcher was
+        # anchored for; declared triggers had the identical hole.
+        #
+        # \b is only applied where the adjacent character is word-ish: a pattern like
+        # `--squash` or `ps -o comm` starts/ends on punctuation, where \b would mean
+        # the opposite of what is wanted and could never match.
+        esc = re.escape(value)
+        if value[:1].isalnum() or value[:1] == "_":
+            esc = r"\b" + esc
+        if value[-1:].isalnum() or value[-1:] == "_":
+            esc = esc + r"\b"
+        return esc, None
     try:
         re.compile(value)
     except re.error as exc:
