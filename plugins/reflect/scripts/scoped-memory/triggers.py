@@ -22,7 +22,14 @@ undetected. Typing it is the whole point.
 The five things the schema fixes, so no reader has to infer them:
 
 * **Engine** — Python's `re` module, `re.search`, `re.IGNORECASE`. One engine, one
-  dialect; nothing here is fed to grep.
+  dialect, for MATCHING. Separately, a WIDENED projection of these patterns is fed
+  to `grep -Ef` as a reject-only prefilter so the hook can skip starting Python on
+  the ~80% of commands nothing can match (see `write_prefilter`). That projection
+  is the only place a second regex dialect exists, and it is allowed to say "maybe"
+  but never "no" — so any construct grep might read differently suppresses the
+  whole prefilter via `prefilter_is_safe`. If you add a construct to the pattern
+  language, check it against `_UNSAFE_FOR_GREP`; an unrecognised one is treated as
+  unsafe by design, which costs speed, never correctness.
 * **Anchoring** — patterns are NOT anchored. A pattern matches anywhere in the
   situation text (substring semantics, which is what "this command mentions X"
   means). Anchor explicitly with `^` / `$` / `\\b` in a `regex:` entry.
@@ -367,6 +374,7 @@ def prefilter_lines(manifest):
         for pat in entry.get("patterns", []):
             src = pat.get("re", "")
             rx = _PREFILTER_STRIP.sub(r"\1", src)
+            rx = _NEGATED_NEWLINE_CLASS.sub(".", rx)
             if not rx:
                 # A pattern that strips to nothing (e.g. a bare `\b`) would be
                 # DROPPED here while staying live in the manifest — the prefilter
@@ -379,24 +387,55 @@ def prefilter_lines(manifest):
     return out
 
 
-#: Constructs whose meaning differs between Python `re` and POSIX ERE, or that can
-#: match ACROSS a newline. Either kind makes a grep prefilter unsafe:
+#: Constructs a line-oriented POSIX grep cannot be trusted to read the way Python
+#: `re` reads them. An ALLOWLIST, not a denylist, and that shape is the point: the
+#: prefilter's one guarantee is that it never says "no" where the matcher says
+#: "yes", so an unrecognised construct has to land on the suppress side. The
+#: previous denylist enumerated `\A \Z \d \s \w \W \D \S`, `(?` and `\n` — and
+#: shipped two live bugs through the gaps it left (see below). Enumerating the
+#: hazards means the next one ships too.
 #:
-#:   * `\A` `\Z` `\d` `\s` `\w` `(?...` — Python-only. `\A` is an anchor to Python
-#:     and a literal `A` to grep, so grep would REJECT what the matcher accepts.
-#:   * `\s` `\n` — can span a line. grep is line-oriented and `re.search` is not, so
-#:     `git\s+push` matches a two-line command in Python and cannot in grep.
+#: Two rules:
 #:
-#: Detected rather than probed. An earlier version ran each pattern through grep with
-#: a synthesised probe string, and the synthesis was unsound: it turned `[^\n]` into
-#: `[^n]`, which the pattern then genuinely could not match, so the whole prefilter
-#: was suppressed on the live store for no reason. A flaky guard that disables the
-#: optimization is worse than no guard.
-_UNSAFE_FOR_GREP = re.compile(r"\\[AZdswWDS]|\(\?|\\n")
+#:   * **Any backslash escape before an alphanumeric.** Covers the Python-only
+#:     anchors and classes (`\A` is an anchor to Python and a literal `A` to grep,
+#:     so grep REJECTS what the matcher accepts), everything that can span a line
+#:     (`\s`, `\n`), and every escape nobody has thought about yet — `\t`, `\B`,
+#:     `\x41`, backreferences, whatever `re` gains next. Escaped PUNCTUATION is
+#:     deliberately still allowed (`\.`, `\*`, `\\`, `\ ` — all `re.escape` emits):
+#:     both dialects agree on those, and rejecting them would suppress the
+#:     prefilter for every literal trigger, i.e. for the whole store.
+#:     The even-backslash guard keeps `foo\\bar` (a literal backslash, then a
+#:     literal `b`) from reading as an escape.
+#:   * **Any negated character class.** `[^;]` matches a newline in Python; grep is
+#:     line-oriented and can never match across one, so `rm -rf[^;]*node_modules`
+#:     matches a line-continuation command in the matcher and is REJECTED by the
+#:     prefilter. 457 of 480 recorded commands were multi-line, so this is the
+#:     common shape, not an edge. Note the alnum rule alone does NOT catch this —
+#:     `[^;]` contains no escape at all.
+#:
+#: `[^\n]` never reaches here: `prefilter_lines` rewrites it to `.` first, which is
+#: exactly equivalent in both engines. Writing it through verbatim was the second
+#: shipped bug — POSIX gives backslash no meaning inside a bracket expression, so
+#: grep reads `[^\n]` as "not a backslash and not the letter n", and the two live
+#: patterns using it silently lost every nudge whose span contained an `n`.
+#:
+#: Detected rather than probed. An earlier version ran each pattern through grep
+#: with a synthesised probe string, and the synthesis was unsound: it turned
+#: `[^\n]` into `[^n]`, which the pattern then genuinely could not match, so the
+#: whole prefilter was suppressed on the live store for no reason. A flaky guard
+#: that disables the optimization is worse than no guard.
+#:
+#: Known non-goal: a backslash before non-alnum INSIDE a bracket expression
+#: (`[a\]b]`) still passes, and POSIX parses that differently from Python. Only
+#: reachable from a hand-authored `regex:`; `re.escape` never emits it.
+_UNSAFE_FOR_GREP = re.compile(r"(?<!\\)(?:\\\\)*\\[A-Za-z0-9]|\(\?|\[\^")
 
-#: `[^\\n]` is the OPPOSITE of a newline hazard — it cannot cross a line — so it is
-#: removed before the unsafe scan. Without this, two perfectly safe live patterns
-#: suppressed the prefilter entirely.
+#: Rewritten to `.` — not exempted — before the unsafe scan ever sees it. Python's
+#: `[^\n]` and ERE's `.` both mean "any character except newline", and a `.` needs
+#: no bracket parsing, so the projection is neither widened nor narrowed. The two
+#: live patterns that use this construct keep their prefilter; passing them through
+#: as-is is what broke them.
 _NEGATED_NEWLINE_CLASS = re.compile(r"\[\^\\n\]")
 
 
@@ -410,11 +449,7 @@ def prefilter_is_safe(lines):
     if not lines:
         return False
     for line in lines:
-        # `[^\n]` is the opposite of a hazard — it explicitly cannot cross a line —
-        # so drop those before looking for one. Without this the rule rejected two
-        # perfectly safe live patterns and suppressed the prefilter entirely.
-        probe = _NEGATED_NEWLINE_CLASS.sub("", line)
-        if _UNSAFE_FOR_GREP.search(probe):
+        if _UNSAFE_FOR_GREP.search(line):
             return False
     return True
 
@@ -486,7 +521,75 @@ def write_prefilter(store_dir, manifest):
                 os.unlink(tmp)
             except OSError:
                 pass
+        # Drop the stale destination too, exactly as the unsafe branch above does.
+        # Removing only the temp file would leave the PREVIOUS manifest's prefilter
+        # live beside a manifest that has already been replaced — and since
+        # `write_manifest` discards this False and stamps the manifest mtime anyway,
+        # the compile-side freshness skip would call the pair current and never retry.
+        # A prefilter missing one new memory's patterns rejects exactly the commands
+        # that memory exists to nudge on, for as many sessions as it takes the store
+        # to change again. Every failure mode has to converge on "no prefilter".
+        try:
+            os.unlink(dest)
+        except OSError:
+            pass
         return False
+
+
+#: Serialises the manifest+prefilter PAIR. Dot-prefixed so `corpus.iter_bodies`
+#: skips it, same as the KTD18 temp files.
+PAIR_LOCK_NAME = ".TRIGGERS.lock"
+
+
+def _acquire_pair_lock(store_dir):
+    """Hold an exclusive lock across the whole manifest+prefilter write, or None.
+
+    Each `os.replace` is already atomic (KTD18), but the PAIR is not — and the pair
+    is what the hook trusts. Two sessions compiling at once can interleave as
+    A.manifest -> B.manifest -> B.prefilter -> A.prefilter, leaving B's manifest live
+    beside A's prefilter. If B's snapshot carries a trigger A's snapshot predates,
+    the prefilter is NARROWER than the live manifest and the hook silently rejects
+    exactly that trigger's commands. It persists, too: `write_manifest` stamps the
+    manifest mtime regardless, so the compile-side freshness skip calls the
+    mismatched pair current until the store happens to change again.
+
+    Blocking, not try-once. A non-blocking "someone else is compiling, skip" is
+    wrong here: the process that loses the race may be the one holding the FRESHER
+    snapshot, and skipping its write leaves the staler pair stamped current — the
+    exact persistence this exists to prevent. A compile is milliseconds, so the wait
+    is bounded by one compile.
+
+    Best-effort: if locking is unavailable, the write proceeds unserialised, which is
+    what shipped before this lock existed.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        return None
+    try:
+        fd = os.open(os.path.join(store_dir, PAIR_LOCK_NAME),
+                     os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return None
+    return fd
+
+
+def _release_pair_lock(fd):
+    """Closing the descriptor releases the flock."""
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
 
 
 def write_manifest(store_dir, manifest):
@@ -494,10 +597,13 @@ def write_manifest(store_dir, manifest):
 
     The temp file is UNIQUE and lives in the destination directory (KTD18), so two
     sessions compiling concurrently cannot assemble one file out of two runs. Its
-    name starts with `.` so `corpus.iter_bodies` skips it even mid-window.
+    name starts with `.` so `corpus.iter_bodies` skips it even mid-window. The
+    manifest and its prefilter are written under one lock so the PAIR is consistent
+    too, not just each file (see `_acquire_pair_lock`).
     """
     dest = os.path.join(store_dir, MANIFEST_NAME)
     tmp = None
+    lock_fd = _acquire_pair_lock(store_dir)
     try:
         fd, tmp = tempfile.mkstemp(dir=store_dir, prefix=".%s." % MANIFEST_NAME,
                                    suffix=".tmp")
@@ -507,9 +613,10 @@ def write_manifest(store_dir, manifest):
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, dest)
-        # Written from the SAME call that writes the manifest, so the two cannot
-        # drift: a prefilter describing a manifest that no longer exists would
-        # reject nudges the matcher would have made.
+        # Written from the SAME call, under the SAME lock, so the two cannot drift:
+        # a prefilter describing a manifest that no longer exists would reject
+        # nudges the matcher would have made. The lock is what makes that true
+        # across processes — within one process the ordering alone was never enough.
         write_prefilter(store_dir, manifest)
         # Stamp the manifest AFTER the replace. `os.replace` bumps the store
         # directory's own mtime, and the freshness test folds directory mtimes in
@@ -529,6 +636,8 @@ def write_manifest(store_dir, manifest):
             except OSError:
                 pass
         return False
+    finally:
+        _release_pair_lock(lock_fd)
 
 
 def load_manifest(store_dir):

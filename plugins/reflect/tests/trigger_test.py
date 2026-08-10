@@ -344,11 +344,29 @@ with tempfile.TemporaryDirectory() as store:
 print("== prefilter never loses a nudge ==")
 
 
+#: EVERY grep we can reach, not just the one on PATH. This is load-bearing: on this
+#: box PATH resolves ugrep, which reads `[^\n]` Perl-style and therefore MATCHES the
+#: patterns a POSIX grep rejects. A PATH-only check was green both before and after
+#: the `[^\n]` -> `.` fix, so it discriminated nothing — the bug it missed was live
+#: in the compiled store. The hook runs whatever `grep` its own PATH resolves, so
+#: the prefilter has to be correct under every dialect a user might have.
+GREPS = ["grep"] + ([p for p in ["/usr/bin/grep"] if os.path.exists(p)])
+
+
 def grep_says_match(prefilter_path, cmd):
-    """(matched, exit_code) from the hook's exact invocation."""
-    r = subprocess.run(["grep", "-qiEf", prefilter_path], input=cmd,
-                       text=True, capture_output=True)
-    return r.returncode == 0, r.returncode
+    """(matched-under-EVERY-grep, worst exit code).
+
+    Conjunction, not disjunction: the superset guarantee has to hold for whichever
+    grep the hook resolves, so one dialect rejecting is a failure even if another
+    accepts.
+    """
+    matched, worst = True, 0
+    for g in GREPS:
+        r = subprocess.run([g, "-qiEf", prefilter_path], input=cmd,
+                           text=True, capture_output=True)
+        matched = matched and r.returncode == 0
+        worst = max(worst, r.returncode)
+    return matched, worst
 
 
 with tempfile.TemporaryDirectory() as store:
@@ -383,6 +401,114 @@ with tempfile.TemporaryDirectory() as store:
 
     check("and grep still rejects an unrelated command",
           not grep_says_match(pre_path, "echo hello world")[0])
+
+    # MULTI-LINE commands are the common shape (457 of 480 recorded Bash calls), and
+    # they are exactly where line-oriented grep can diverge from `re.search`. Every
+    # command above is single-line, which is why the negated-class bug shipped green.
+    for cmd in ["cd /tmp && \\\n  gh pr view 5159",
+                "set -e\ngh pr merge 34 --squash\necho done",
+                "echo first\nng build 2>&1 | grep NG8002"]:
+        hits, _ = tg.match(man, cmd, cwd="/tmp")
+        check("matcher DOES match multi-line %r" % cmd[:24], bool(hits))
+        check("real grep agrees on multi-line %r" % cmd[:24],
+              grep_says_match(pre_path, cmd)[0])
+
+# `[^\n]` must be TRANSLATED to `.`, not passed through. POSIX gives backslash no
+# meaning inside a bracket expression, so a POSIX grep reads `[^\n]` as "not a
+# backslash and not the letter n" — narrower than Python's "not a newline". Two live
+# store patterns used this, and every invocation with an `n` in the matched span
+# silently lost its nudge. The `n`-bearing command below is the whole point.
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_negnl.md"),
+          memory("reference_negnl", "the live [^\\n] shape",
+                 "triggers:\n  - regex: gh run rerun[^\\n]*--failed\n"))
+    man4, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man4)
+    pre4 = os.path.join(store, tg.PREFILTER_NAME)
+
+    check("a [^\\n] pattern still gets a prefilter (optimization preserved)",
+          os.path.exists(pre4))
+    check("[^\\n] is rewritten to `.` rather than emitted verbatim",
+          "[^" not in open(pre4).read())
+    for cmd in ["gh run rerun --repo owner/name 99 --failed",
+                "gh run rerun $run_id --failed",
+                "gh run rerun 12345 --failed"]:
+        hits, _ = tg.match(man4, cmd, cwd="/tmp")
+        check("matcher DOES match %r" % cmd[:34], bool(hits))
+        check("EVERY grep agrees (the n-in-span case): %r" % cmd[:34],
+              grep_says_match(pre4, cmd)[0])
+    check("and the rewrite still cannot cross a newline",
+          not grep_says_match(pre4, "gh run rerun \nfoo --failed")[0])
+
+# Any OTHER negated class must suppress the prefilter entirely. `[^;]` matches a
+# newline in Python and can never match across one in grep, so a multi-line command
+# matches the matcher and is rejected by the prefilter — a silent lost nudge. Note
+# this class contains no escape at all, so the backslash rule alone does not see it.
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_negcls.md"),
+          memory("reference_negcls", "negated class spans lines",
+                 "triggers:\n  - regex: rm -rf[^;]*node_modules\n"))
+    man5, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man5)
+    check("a negated character class writes NO prefilter",
+          not os.path.exists(os.path.join(store, tg.PREFILTER_NAME)))
+    check("...and the trigger is still live in the manifest (matcher unaffected)",
+          bool(tg.match(man5, "rm -rf \\\n  node_modules", cwd="/tmp")[0]))
+
+# The safety gate is an ALLOWLIST, so each hazard class has to be named individually.
+# Neutering `prefilter_is_safe` to `return bool(lines)` previously left the suite
+# green: every hazard below then reaches grep, which reads it narrower than Python.
+for hazard, why in [("\\Agh pr", "python-only anchor, a literal A to grep"),
+                    ("git\\s+push", "can span a line"),
+                    ("git\\tpush", "unlisted escape, dialect-dependent"),
+                    ("x\\By", "unlisted escape, dialect-dependent"),
+                    ("gh\\x20pr", "hex escape, not portable")]:
+    with tempfile.TemporaryDirectory() as store:
+        write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+        write(os.path.join(store, "reference_hz.md"),
+              memory("reference_hz", "hazard",
+                     "triggers:\n  - regex: %s\n" % hazard))
+        manh, _ = tg.compile_manifest(store)
+        tg.write_manifest(store, manh)
+        check("NO prefilter for %r (%s)" % (hazard, why),
+              not os.path.exists(os.path.join(store, tg.PREFILTER_NAME)))
+
+# ...while the constructs `re.escape` actually emits must stay prefilterable, or the
+# gate would suppress the optimization for the entire store — correct but pointless.
+for benign in ["gh\\ pr\\ view", "foo\\\\bar", "gh\\ pr\\ (view|merge)", "a\\.b\\*c"]:
+    with tempfile.TemporaryDirectory() as store:
+        write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+        write(os.path.join(store, "reference_ok.md"),
+              memory("reference_ok", "benign",
+                     "triggers:\n  - regex: %s\n" % benign))
+        manb, _ = tg.compile_manifest(store)
+        tg.write_manifest(store, manb)
+        check("prefilter IS written for escaped punctuation %r" % benign,
+              os.path.exists(os.path.join(store, tg.PREFILTER_NAME)))
+
+# A store that compiles safe once and LATER gains an unsafe pattern must lose its
+# prefilter. Every suppression test above starts from a fresh tempdir, so none of
+# them can see a stale file — deleting write_prefilter's unlink left the suite green
+# while a prefilter describing an older manifest stayed live on disk.
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_safe.md"),
+          memory("reference_safe", "safe first",
+                 "triggers:\n  - literal: gh pr view\n"))
+    man6, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man6)
+    stale = os.path.join(store, tg.PREFILTER_NAME)
+    check("prefilter exists after the safe compile", os.path.exists(stale))
+
+    write(os.path.join(store, "reference_unsafe.md"),
+          memory("reference_unsafe", "now unsafe",
+                 "triggers:\n  - regex: git\\s+push\n"))
+    man7, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man7)
+    check("recompiling into an unsafe store REMOVES the stale prefilter",
+          not os.path.exists(stale))
 
 # A pattern that is valid PYTHON and invalid ERE must not produce a prefilter at
 # all: a file grep cannot parse makes it exit 2 for EVERY command, and a hook that
@@ -475,6 +601,15 @@ with tempfile.TemporaryDirectory() as store:
         check("Case 1 end-to-end completes well inside the hook's 5s timeout, qmd-free",
               case1_elapsed < 5.0)
 
+        # Case-insensitivity has to be asserted through the HOOK's own grep line.
+        # It was asserted only via the test-local helper, which hardcodes its own
+        # `-qiEf` — so the helper agreed with itself and dropping `-i` from the hook
+        # left the suite green while real nudges were lost (2 of 480 measured).
+        rc_up, out_up, _eu = run_hook(store, CASE1_CMD.upper(), session="sUP",
+                                      flag_dir=flags)
+        check("the hook's own grep is case-insensitive (prefilter must not narrow)",
+              rc_up == 0 and additional_context(out_up) is not None)
+
         rc2, out2, _e2 = run_hook(store, CASE1_CMD, session="s1", flag_dir=flags)
         check("the same memory does not nudge twice in one session (dedupe)",
               rc2 == 0 and out2.strip() == "")
@@ -497,6 +632,33 @@ with tempfile.TemporaryDirectory() as store:
             log = ""
         check("each nudge is logged to RECALL.log with source `nudge` and the session",
               " s9 nudge reference_gh_conflicting_blocks_ci_silently trigger" in log)
+
+# The hook must treat a prefilter it cannot use as "maybe" and fall through to
+# python. An unparseable file makes grep exit 2 for EVERY command, so reading exit 2
+# as "nothing matched" would let ONE bad pattern silently suppress every nudge in the
+# store. Widening the hook's gate to `1|2|127` previously left the suite green:
+# nothing ever planted a corrupt prefilter, so that branch was never executed.
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_gh_conflicting_blocks_ci_silently.md"),
+          LITERAL_MEM)
+    man_p, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man_p)
+    pre_bad = os.path.join(store, tg.PREFILTER_NAME)
+    write(pre_bad, "gh(?= pr)\n")          # python-valid, ERE-invalid -> grep rc=2
+    check("the corrupt-prefilter fixture really does make grep exit >=2 (guard)",
+          grep_says_match(pre_bad, CASE1_CMD)[1] >= 2)
+    with tempfile.TemporaryDirectory() as flags:
+        rc_b, out_b, _eb = run_hook(store, CASE1_CMD, session="sBAD", flag_dir=flags)
+        check("an unparseable prefilter falls THROUGH to python, nudge still fires",
+              rc_b == 0 and additional_context(out_b) is not None)
+
+    # Same contract for a prefilter that is simply absent: missing means "maybe".
+    os.unlink(pre_bad)
+    with tempfile.TemporaryDirectory() as flags:
+        rc_m, out_m, _em = run_hook(store, CASE1_CMD, session="sMISS", flag_dir=flags)
+        check("a MISSING prefilter falls through to python, nudge still fires",
+              rc_m == 0 and additional_context(out_m) is not None)
 
 # ------------------------------------------------------------ cap and fail-open
 print("== cap and fail-open ==")
