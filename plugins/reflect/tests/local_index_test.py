@@ -224,7 +224,11 @@ with tempfile.TemporaryDirectory() as tmp:
     flat = idx.score_all(FLAT_Q)
     flat_top, flat_second = flat[0][1], flat[1][1]
 
-    res = li.search(d, FLAT_Q, cwd=tmp, index=idx)
+    # Pin the floor: this fixture is a handful of bodies, and the shipped floor now
+    # scales to corpus size (floor_for_corpus). These assertions are about the GATE'S
+    # LOGIC against a known floor, not about the calibration constant, so they state
+    # the floor they mean instead of inheriting whatever the fixture size implies.
+    res = li.search(d, FLAT_Q, cwd=tmp, index=idx, min_score=li.DEFAULT_FLOOR_MIN)
     check("verdict is below_gate", res.status == li.BELOW_GATE)
     check("no hits are returned", res.hits == [])
     check("the reason names the floor", "floor" in res.reason)
@@ -308,7 +312,9 @@ with tempfile.TemporaryDirectory() as tmp:
     stub = StubIndex([("reference_anc_top.md", 30.0),
                       ("reference_anc_second.md", 18.0),
                       (cur, 3.0)])
-    res = li.search(tmp, "q", cwd=repo, index=stub)
+    # Same reason as above: "below-floor" means below the CALIBRATED floor, so pin it
+    # rather than let a 3-entry stub scale the floor down under the 3.0 body.
+    res = li.search(tmp, "q", cwd=repo, index=stub, min_score=li.DEFAULT_FLOOR_MIN)
     check("a below-floor current-repo body is not boosted back in",
           all(h["file"] != cur for h in res.hits))
 
@@ -493,6 +499,43 @@ check("the separation default sits on the measured boundary",
       1.3 <= li.DEFAULT_FLOOR_RATIO <= 1.6)
 check("floor and separation are two independent conditions, not one",
       li.floor_min() != li.floor_ratio())
+
+
+# --------------- 9. the floor scales to the corpus in hand (X1, cross-model find)
+print()
+print("== the floor is a property of the corpus, not a constant ==")
+check("at the calibration size the floor is exactly the measured 12.0",
+      li.floor_for_corpus(886) == li.DEFAULT_FLOOR_MIN)
+check("a larger corpus keeps 12.0 — never scaled UP from a formula",
+      li.floor_for_corpus(5000) == li.DEFAULT_FLOOR_MIN)
+check("a small corpus scales DOWN",
+      li.floor_for_corpus(8) < li.DEFAULT_FLOOR_MIN)
+check("the guard stops it collapsing toward zero on a near-empty store",
+      li.floor_for_corpus(1) >= li.DEFAULT_FLOOR_GUARD)
+os.environ["MEMORY_LOCAL_FLOOR_MIN"] = "4.0"
+try:
+    check("an explicit MEMORY_LOCAL_FLOOR_MIN is honored, not re-scaled",
+          li.floor_for_corpus(5) == 4.0)
+finally:
+    del os.environ["MEMORY_LOCAL_FLOOR_MIN"]
+
+with tempfile.TemporaryDirectory() as tmp:
+    d = os.path.join(tmp, "small"); os.makedirs(d)
+    write(os.path.join(d, "target.md"),
+          "---\nname: gh-conflicting\n---\nA PR that goes CONFLICTING silently stops "
+          "running CI: GitHub cannot build the merge ref so zero pull_request workflows "
+          "run. Check mergeable first.\n")
+    for i in range(7):
+        write(os.path.join(d, "f%d.md" % i),
+              "---\nname: f%d\n---\nNote about docker compose networking %d.\n" % (i, i))
+    q = "PR conflicting stopped running CI mergeable merge ref"
+
+    check("an 8-body store returns its own exact match instead of staying mute",
+          li.search(d, q, cwd=tmp).status == li.HITS)
+    # Load-bearing: the unscaled constant refuses that same true hit, which is the
+    # bug this scaling exists to remove.
+    check("pinning the floor back to 12.0 refuses that same true hit",
+          li.search(d, q, cwd=tmp, min_score=li.DEFAULT_FLOOR_MIN).status == li.BELOW_GATE)
 
 print()
 print(f"local_index_test: {PASS} passed, {FAIL} failed")

@@ -103,6 +103,11 @@ DEFAULT_B = 0.75
 #: this must be recalibrated as the store grows. The ratio half (below) need not be.
 DEFAULT_FLOOR_MIN = 12.0
 
+#: The corpus the floor above was measured against, and the hard guard the scaled
+#: floor may never fall below. See `floor_for_corpus`.
+FLOOR_CALIBRATION_N = 886
+DEFAULT_FLOOR_GUARD = 2.0
+
 #: Separation (KTD11): top1 must beat top2 by this factor. Measured basis is thin —
 #: the plan's true hit ratio'd 1.51 and both known misses were flat; the live probes
 #: above put true hits at 1.30–1.94 and junk at 1.02–1.49 — so the default starts on
@@ -149,6 +154,52 @@ def _envf(name, default):
 def floor_min():
     """The calibrated absolute BM25 floor. NOT `memory_activation.recall_floor`."""
     return _envf("MEMORY_LOCAL_FLOOR_MIN", DEFAULT_FLOOR_MIN)
+
+
+def floor_guard():
+    """The hard minimum the scaled floor may never fall below."""
+    return _envf("MEMORY_LOCAL_FLOOR_GUARD", DEFAULT_FLOOR_GUARD)
+
+
+def floor_for_corpus(n_corpus, base=None):
+    """Scale the calibrated floor to the corpus actually in hand.
+
+    The 12.0 above is a property OF AN 886-BODY CORPUS. BM25 sums IDF terms and IDF
+    grows with log(N), so that constant does not transfer downward. Measured against
+    real fixture stores: a true hit tops out at 5.50 on a 3-body store and 8.52 on an
+    8-body one, both refused outright by a floor of 12.0. Below roughly 20 memories
+    the whole layer returns nothing however good the match — which is every fresh
+    install, the one case with no telemetry to notice.
+
+    So the floor scales by log1p(N)/log1p(886), which keeps the calibration EXACTLY
+    where it was measured (N>=886 → 12.0, untouched) and never scales UP, because
+    inventing a higher bar from a formula would suppress true hits with nothing
+    behind it. A hard guard stops it collapsing toward zero on a near-empty store.
+
+    BE HONEST ABOUT WHAT THIS DOES NOT FIX. On a small corpus the true and junk score
+    bands OVERLAP — measured at N=8, a true hit scored 8.52 while the best junk query
+    reached 7.84; at N=20, 11.39 against 10.84. No absolute floor separates those,
+    and the ratio does not rescue it either. Small-store recall is therefore WEAKER,
+    not merely rescaled: it answers where it used to be mute, and it will sometimes
+    answer wrongly. That is a deliberate trade the store owner chose over silence,
+    not a claim that the gate works as well down there.
+
+    The guard is provisional. It was picked from synthetic fixtures because no real
+    small store exists to measure — and synthetic junk is not representative junk.
+    RECALL.log now records every surfacing with its scores, so the first real
+    small-store telemetry should replace this number.
+    """
+    base = floor_min() if base is None else base
+    if os.environ.get("MEMORY_LOCAL_FLOOR_MIN"):
+        return base          # an explicit override is a decision; do not second-guess it
+    try:
+        n = int(n_corpus)
+    except (TypeError, ValueError):
+        return base
+    if n >= FLOOR_CALIBRATION_N or n <= 0:
+        return base
+    scaled = base * (math.log1p(n) / math.log1p(FLOOR_CALIBRATION_N))
+    return max(floor_guard(), scaled)
 
 
 def floor_ratio():
@@ -289,7 +340,9 @@ def search(store_dir, query, cwd=None, k=DEFAULT_K, index=None,
     """
     idx = index if index is not None else build(store_dir)
     cur_slug = scope.resolve_repo_slug(cwd or os.getcwd())
-    fmin = floor_min() if min_score is None else min_score
+    # Scaled to the corpus in hand (floor_for_corpus). An explicit caller min_score
+    # is honored as given and never scaled.
+    fmin = floor_for_corpus(len(idx)) if min_score is None else min_score
     fratio = floor_ratio() if min_ratio is None else min_ratio
 
     ranked = idx.score_all(query)
