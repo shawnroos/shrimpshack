@@ -70,32 +70,36 @@ you it is in the wrong place.**
   Fix: `tests/helpers/sandbox.bash` owning `spawn_sandbox`, `seed_keychain`,
   `wire_fake_security`, `wire_fake_launchd`, `make_install`.
 
-## Blocker for the remaining work: the suite is non-deterministic
+## CORRECTED: the suite is deterministic; the flake was mine
 
-`tests/unit/setup-supervisor.bats` passes **34/34 in isolation** and
-intermittently fails inside full-suite runs.
+An earlier version of this document recorded `tests/unit/setup-supervisor.bats`
+as intermittently failing in full-suite runs and called it a blocker. **That was
+wrong, and the cause was my own overlapping suite runs.**
 
-Observed twice:
-- Run A (unmodified `main`, before any refactor): 4 failures — tests 13, 18, 28, 34
-- Run B (after F6): 1 failure — test 22
+Evidence for the correction, on the split tree (`e66b23a`), machine verified
+idle before each run (`bats`/`run-tests.sh`/`fake-gateway` all zero, stale
+`gateway-tests.*` TMPDIRs cleared):
 
-**Every failure is the same assertion**: `[ "$RC" -eq 0 ]`, i.e. `run_supervisor`
-returning non-zero. Different tests each time. Never in isolation. Present on
-unmodified main, so it is not caused by the refactor.
+    run 1: 370 passing, 0 failing
+    run 2: 370 passing, 0 failing
+    run 3: 370 passing, 0 failing
 
-Likely timing/resource sensitivity: the supervisor path probes and waits, and the
-launcher carries a TTL cleanup (`sleep "$DELIVERY_TTL"`, `setup.sh:1349`; the
-comment at :1305 describes a forked `( sleep N; rm )`).
+All three included the full 34-test setup-supervisor.bats — the suite that was
+supposedly flaky. The two earlier failing runs both overlapped other suite
+activity, and they failed DIFFERENT tests each time (13/18/28/34, then 22),
+which is what contention looks like, not a deterministic defect.
 
-**This should be fixed before the F1/F3 decomposition, not after.** The suite is
-the release gate and the only arbiter for a behaviour-preserving refactor. A gate
-that intermittently reports failures you did not cause is how a real regression
-gets waved through as "probably the flaky one". F8 may well be the fix rather
-than merely tidiness — if the rails are 17 separate disciplines, a cross-suite
-shared-state collision is exactly this shape.
+A related hypothesis was also tested and eliminated: that a bats suite was
+leaking past its `SPAWN_STATE_HOME` rail and writing the operator's real
+`~/.gateway.pid`. Four suites carry no rail (fixtures, secrets, setup-wiring,
+surfaces) but none of them executes the gateway — setup-wiring's spawnctl
+reference is a comment, surfaces' two are static string checks on command files.
+The rails hold. Consolidating them (F8) is still worth doing for maintainability,
+but it is not fixing a live leak.
 
-Also worth noting: the full suite now takes **over 10 minutes**. A gate that slow
-stops being run.
+**Do not use "the known flake" to wave through a red supervisor run.** There is
+no known flake. A failure there is a real failure — check for a concurrent suite
+run first, then treat it as a defect.
 
 ## Recommended order
 
