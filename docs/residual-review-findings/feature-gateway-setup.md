@@ -471,8 +471,34 @@ child, so `unload` stops the gateway.
   plainly that the agent must be unloaded. Operator-visible, not a
   wrong-success, so it is not merge-blocking.
 
-- **Setup bakes the path of the checkout it runs from into `~/.local/bin/gw`
-  (P2).** Line 7 of the generated wrapper pins `SPAWNCTL=` to an absolute path.
+- **FIXED 2026-08-10 (`62e2de6`).** ~~Setup bakes the path of the checkout it
+  runs from into `~/.local/bin/gw` (P2).~~ Setup now bakes the same file in the
+  MAIN checkout when it is running from a linked worktree (git identifies one
+  itself: `--git-dir` and `--git-common-dir` differ there and nowhere else), and
+  only when that durable twin exists — a plugin living solely on the worktree's
+  branch keeps its path and gets a warning in the emitted object instead, since
+  pointing at a file that is not there trades a delayed break for an immediate
+  one. Three tests on a real linked worktree, mutation-verified, with a
+  non-worktree negative control.
+
+- **NEW (P3): the `gw` marker/hash scheme cannot tell "the operator edited this"
+  from "an older setup wrote this".** `gw_classify` hashes the wrapper body and
+  calls any mismatch `modified`, which requires consent to overwrite. That is
+  right for a hand-edit and wrong for a version bump: ANY future change to
+  `gw_body` makes every wrapper already on disk classify as `modified`, so the
+  next setup run refuses to upgrade it and reports a state the operator will
+  read as "something tampered with my file".
+  Found while fixing the P2 above — a runtime existence check inside the wrapper
+  was the obvious extra guard, and it was NOT added precisely because it would
+  have triggered this on every installed `gw`. So the flaw is already
+  suppressing a fix it should not have a vote on.
+  Likely shape: record the plugin version beside the hash and treat
+  `marker present + hash mismatch + older version` as `stale` (rewrite freely)
+  rather than `modified`. Not free — it cannot distinguish an old version that
+  was ALSO hand-edited — so it needs a deliberate call, not a quick patch.
+
+- ~~Setup bakes the path of the checkout it runs from into `~/.local/bin/gw`
+  (P2) — original text:~~ Line 7 of the generated wrapper pins `SPAWNCTL=` to an absolute path.
   Run setup from a git worktree and the wrapper points into that worktree; when
   the worktree is removed after the PR lands, `gw` breaks with no warning and
   nothing on the machine explains why. The launcher and `env.sh` do not have
