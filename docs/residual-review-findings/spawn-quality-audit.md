@@ -108,8 +108,10 @@ run first, then treat it as a defect.
 
 ## DECIDED: `spawnctl.sh` stays one file, for now
 
-`spawnctl.sh` is **1,683 lines total — but 902 lines of code**, with 685 lines
-of comment and 96 blank.
+`spawnctl.sh` is **1767 lines total — but 926 lines of code**, with 742 lines
+of comment and 99 blank. (Recount these; they moved during the 2026-08-10
+review round, from 1,683/902, as guards were added for a P1 and four P2s. If
+they have drifted again, recount rather than trusting this line.)
 
 That distinction is not special pleading; it is **the audit's own yardstick**.
 When this document called `setup.sh` a size problem it said so explicitly:
@@ -117,30 +119,29 @@ When this document called `setup.sh` a size problem it said so explicitly:
 explain it away." Applied honestly in the other direction, `spawnctl.sh` is
 under the bar on the measure this audit chose before it knew the answer.
 
+**The margin is now thinner, and that matters.** At 926 code lines it is
+within 74 of the bar it is being argued past. This decision should be
+re-taken, not re-quoted, the next time this file grows — and F1's `spawnctl run`
+verb would grow it.
+
 The comments are not padding. They are the incident record — why the pidfile
 carries a `.bin` sibling, why the probe keys on PROBE_LISTENING rather than
 EX_OK, why the token is delivered through a mode-0600 file instead of the
-environment, why `stop` probes before declaring success. Deleting them to make
-a line count look better would destroy the most valuable thing in the file.
+environment, why `stop` refuses when a launchd job supervises the process.
+Deleting them to make a line count look better would destroy the most valuable
+thing in the file.
 
 **The seam that does exist, named so the next reader does not have to find it.**
-The file divides cleanly at line ~1212, where the verb dispatch begins:
+The file divides where the verb dispatch begins: primitives above (config and
+install resolution, probe, lock, pid identity, token resolution, secret
+delivery, start), verbs below (dispatch, and the envelope each verb emits).
 
-* **primitives** (120-1210) — config and install resolution, probe, lock,
-  pid identity, token resolution, secret delivery, start
-* **verbs** (1212-end) — dispatch, and the envelope each verb emits
-
-If this file grows again, that is where to cut, and the halves would be roughly
-600 and 300 code lines. It is NOT cut today because, unlike `setup.sh`, there is
-no process boundary already there: `run_sub` had setup re-invoking itself as a
-child, so that split only had to follow a seam the code was already using.
-Splitting here would be inventing one, and inventing a boundary in the middle of
-shared mutable state (PROBE_*, SPAWN_TOKEN_*, STARTED, the lock) is how the
-next drift gets introduced rather than prevented.
-
-**What would change this decision:** F1's `spawnctl run` verb. It adds
-foreground supervision to this file, and at that point the primitives/verbs cut
-should land in the same change rather than after it.
+It is NOT cut today because, unlike `setup.sh`, there is no process boundary
+already there: `run_sub` had setup re-invoking itself as a child, so that split
+only had to follow a seam the code was already using. Splitting here would be
+inventing one, and inventing a boundary through shared mutable state (PROBE_*,
+SPAWN_TOKEN_*, STARTED, the lock) is how the next drift gets introduced rather
+than prevented.
 
 ## Decisions on the remaining audit findings
 
