@@ -146,6 +146,44 @@ inventing one, and inventing a boundary through shared mutable state (PROBE_*,
 SPAWN_TOKEN_*, STARTED, the lock) is how the next drift gets introduced rather
 than prevented.
 
+## What the duplicate gate closes — and what it does not
+
+`tests/unit/escapes.bats` fails the suite on any two shipped scripts sharing a
+byte-identical function body. **That closes EXACT copy-paste, not the
+duplication class**, and the distinction is not pedantic:
+
+- It WOULD have caught both of this round's regressions the moment they landed —
+  `reap_child` copy-pasted between the model surfaces, and `need_jq` made
+  identical by the fix for a different finding.
+- It would NOT have caught the finding that opened the round. That `emit_error`
+  pair was a ~40-line NEAR-copy differing in a trust tier and a null-field list.
+  A hash is blind to that by construction — and near-copy is the shape this
+  codebase actually produces, because an extraction shares the easy part and
+  leaves the varying part behind.
+
+A similarity threshold was considered and deliberately NOT added: it
+false-positives, gets muted, and a muted gate is worse than no gate. The fuzzy
+pass is a review-time step instead, and its surviving pairs are the table below.
+
+**The gate had two demonstrated evasions, both found by attacking it rather than
+reading it, and both are now closed:**
+
+1. **Brace-depth truncation.** The depth counter never incremented, so a body
+   ended at the first NESTED `}` — and this codebase's house style opens with a
+   guard clause ending in `|| { ... }`. Ten functions were partially scanned;
+   `do_wire` at 51 of its 112 code lines. A duplicate pasted into an unscanned
+   tail would not have registered. Now the body ends at the first column-0
+   close, which is simpler and more robust for bash than brace accounting —
+   braces appear inside strings, awk programs, jq programs and heredocs here.
+2. **One-line bodies.** `f() { ...; }` was invisible while four byte-identical
+   one-line `say()` bodies sat in the tree.
+
+Still open, recorded rather than fixed: the definition regex requires the
+`name() {` form, so `name ()` on its own line or `function name {` is not
+matched. Every definition in the tree uses the matched form, so a drive-by paste
+is caught and a reformatting paste is not. The scan also globs `lib/*.sh` only —
+`bin/` and `hooks/` are unscanned, and define no shell functions today.
+
 ## Criterion 4: the near-duplicate pairs that REMAIN, and why each stays
 
 Exact duplicates are gated by `tests/unit/escapes.bats` and there are none. A

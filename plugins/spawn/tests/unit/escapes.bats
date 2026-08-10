@@ -779,6 +779,24 @@ terminal_sink_lint() {
     [ "$status" -eq 0 ]
 }
 
+# WHAT THIS GATE DOES AND DOES NOT CLOSE — read before trusting it.
+#
+# It closes EXACT copy-paste: the same function body in two files, verbatim.
+# That is both of the regressions this codebase produced in one review round
+# (reap_child copy-pasted between the model surfaces, need_jq made identical by
+# a fix), and each would have failed the moment it landed.
+#
+# It does NOT close the duplication CLASS, and recording it as if it did would
+# be the same overclaim this file exists to prevent. The finding that started
+# that round was a NEAR-copy: two ~40-line emit_error bodies differing only in a
+# trust tier and a null-field list. A hash gate is blind to that by
+# construction, and near-copy is the shape this codebase actually produces — an
+# extraction shares the easy part and leaves the varying part duplicated.
+#
+# A similarity threshold is deliberately NOT added: it false-positives, gets
+# muted, and a muted gate is worse than an absent one. The fuzzy pass is run by
+# hand at review time instead, and its surviving pairs are recorded with reasons
+# in docs/residual-review-findings/spawn-quality-audit.md.
 @test "lint: no two shipped scripts carry a byte-identical function body" {
     # THE GATE FOR CRITERION 4, and it exists because judgement kept failing at
     # it. Over one review round: a 4-line duplicate (die) was collapsed, and two
@@ -799,7 +817,23 @@ terminal_sink_lint() {
     # Threshold of 3 code lines: below that, identical bodies are coincidence
     # (`return 0`), not duplication.
     local report
-    report="$(python3 - "$LIB" <<'PYEOF'
+    report="$(dupe_scan "$LIB")"
+    if [ -n "$report" ]; then
+        echo "$report"
+        echo "Move the shared body into common.sh (or secrets.sh) and inherit it."
+        return 1
+    fi
+}
+
+# dupe_scan <dir> — the scan itself, taking the directory to scan so the
+# self-test below can point it at a THROWAWAY COPY of lib/ instead of planting
+# into the real shipped sources. The previous self-test appended to
+# lib/sanitize.sh and lib/secrets.sh and restored afterwards; correct on the
+# assertion path, but a Ctrl-C or a TERM between the two appends and the restore
+# would have left probe functions in two shipped files, and it made the suite
+# unsafe under `bats -j`.
+dupe_scan() {
+    python3 - "$1" <<'PYEOF'
 import sys, pathlib, re, hashlib
 lib = pathlib.Path(sys.argv[1])
 funcs = {}
@@ -820,10 +854,26 @@ for f in sorted(lib.glob("*.sh")):
             continue
         m = re.match(r'^([A-Za-z_][A-Za-z0-9_:]*)\(\)\s*\{\s*$', lines[i])
         if m:
-            name = m.group(1); body = []; depth = 1; j = i + 1
-            while j < len(lines) and depth > 0:
-                if lines[j].strip() == "}": depth -= 1
-                if depth == 0: break
+            # END AT A COLUMN-0 CLOSE, not at a brace-depth count.
+            #
+            # The first version counted depth and NEVER INCREMENTED IT, so the
+            # first line inside the function that stripped to `}` ended the body
+            # — including the close of a NESTED block. Since this codebase's
+            # house style opens with a guard clause ending in `|| { ... }` (it is
+            # how need_jq is written), that truncated real functions: do_wire was
+            # scanned at 51 of its 112 code lines, yaml_scan at 7 of 28, and ten
+            # functions in all. A duplicate pasted into an unscanned tail would
+            # not have registered, and a short enough truncation drops the whole
+            # function under any floor and out of the scan entirely.
+            #
+            # Every top-level close in this tree is at column 0, which is a
+            # simpler and more robust end condition for bash than brace
+            # accounting — braces appear inside strings, awk programs, jq
+            # programs and heredocs here, all of which a counter would have to
+            # understand and this does not.
+            name = m.group(1); body = []; j = i + 1
+            while j < len(lines):
+                if re.match(r'^\}', lines[j]): break
                 body.append(lines[j]); j += 1
             norm = [re.sub(r'\s+', ' ', l.strip()) for l in body
                     if l.strip() and not l.strip().startswith("#")]
@@ -844,35 +894,51 @@ for group in funcs.values():
         print("DUPLICATE (%d code lines): %s" % (
             group[0][2], ", ".join("%s:%s" % w for w in where)))
 PYEOF
-)"
-    if [ -n "$report" ]; then
-        echo "$report"
-        echo "Move the shared body into common.sh (or secrets.sh) and inherit it."
-        return 1
-    fi
 }
 
 @test "lint self-test: the duplicate scan FAILS on a planted copy" {
-    # A detector never seen detecting is not evidence. This plants the same
-    # function in two shipped files, asserts the scan fires, and removes it.
-    local a="$LIB/sanitize.sh" b="$LIB/secrets.sh"
-    cp "$a" "$BATS_TEST_TMPDIR/a.bak"; cp "$b" "$BATS_TEST_TMPDIR/b.bak"
+    # A detector never seen detecting is not evidence.
+    #
+    # Plants into a THROWAWAY COPY of lib/, never the shipped sources. The
+    # earlier version appended to lib/sanitize.sh and lib/secrets.sh and
+    # restored afterwards — right on the assertion path, but an interrupt
+    # between the appends and the restore would have left probe functions in
+    # two shipped files, and it made the suite unsafe to run in parallel.
+    local scratch="$BATS_TEST_TMPDIR/liba"
+    mkdir -p "$scratch"
+    cp "$LIB"/*.sh "$scratch/"
+
+    # Two plants: a plain body, and the shape that DEFEATED the first version of
+    # this scan — a guard clause ending in `|| { ... }`, which is this
+    # codebase's house style. The old brace-depth logic ended the body at that
+    # nested close and dropped the function out of the scan entirely.
     local plant='
 _dupe_plant_probe() {
     local x="$1" y="$2"
     printf "%s\n" "$x"
     printf "%s\n" "$y"
+}
+
+_dupe_plant_nested() {
+    [ -n "${A:-}" ] || {
+        printf "no A\n" >&2
+    }
+    local one two three
+    one="alpha"
+    two="beta"
+    three="gamma"
+    printf "%s %s %s\n" "$one" "$two" "$three"
 }'
-    printf '%s\n' "$plant" >> "$a"
-    printf '%s\n' "$plant" >> "$b"
+    printf '%s\n' "$plant" >> "$scratch/sanitize.sh"
+    printf '%s\n' "$plant" >> "$scratch/secrets.sh"
 
-    run bats "$BATS_TEST_FILENAME" -f 'no two shipped scripts carry a byte-identical'
-    local planted_status="$status" planted_out="$output"
+    run dupe_scan "$scratch"
+    [ -n "$output" ]
+    echo "$output" | grep -q '_dupe_plant_probe'
+    # The nested-brace plant is the regression guard for the truncation bug.
+    echo "$output" | grep -q '_dupe_plant_nested'
 
-    cat "$BATS_TEST_TMPDIR/a.bak" > "$a"
-    cat "$BATS_TEST_TMPDIR/b.bak" > "$b"
-
-    # Asserted AFTER restoring, so a failure here cannot leave the tree dirty.
-    [ "$planted_status" -ne 0 ]
-    echo "$planted_out" | grep -q '_dupe_plant_probe'
+    # And the real tree is untouched by construction — nothing was written to it.
+    run dupe_scan "$LIB"
+    [ -z "$output" ]
 }
