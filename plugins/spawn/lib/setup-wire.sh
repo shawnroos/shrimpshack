@@ -343,6 +343,22 @@ codex_config_load_status() {
 ENV_MARKER="# spawn-setup: generated — rewritten by /spawn:setup, edits are not preserved"
 env_snippet() {
     printf '%s\n' "$ENV_MARKER"
+    # SHELL-QUOTED before baking, and baked WITHOUT surrounding double quotes.
+    #
+    # THE QUOTES MATTERED AND I GOT THEM WRONG ONCE. Inside double quotes, the
+    # word in ${VAR:-word} is itself treated as double-quoted, so @sh's single
+    # quotes are NOT removed: "${SPAWN_SECURITY_BIN:-'/usr/bin/security'}"
+    # resolves to the literal ['/usr/bin/security'], apostrophes included. On
+    # every machine where that variable is unset — the normal case — the snippet
+    # then ran a path that does not exist, and because the line ends in
+    # `2>/dev/null || true` it failed SILENTLY: every new login shell got no
+    # GATEWAY_TOKEN, which is the entire deliverable of this step.
+    #
+    # Bare is correct and safe: an assignment's right-hand side is not subject
+    # to word splitting or globbing, so a value containing spaces survives
+    # without outer quotes. setup-supervisor.sh bakes `INSTALL_DIR=$dir` for
+    # exactly this reason.
+    #
     # SHELL-QUOTED before baking. This is sourced into the operator's own
     # interactive shell at login, and the old form interpolated straight inside
     # double quotes — so a value carrying `$(...)` or a backtick would EXECUTE
@@ -364,9 +380,9 @@ env_snippet() {
 # The coordinates are baked from what setup resolved, and each stays
 # overridable at run time so this file behaves the way the plugin's own
 # scripts do.
-__spawn_security="\${SPAWN_SECURITY_BIN:-$q_sec}"
-__spawn_service="\${SPAWN_KEYCHAIN_SERVICE:-$q_svc}"
-__spawn_account="\${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-$q_acct}"
+__spawn_security=\${SPAWN_SECURITY_BIN:-$q_sec}
+__spawn_service=\${SPAWN_KEYCHAIN_SERVICE:-$q_svc}
+__spawn_account=\${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-$q_acct}
 EOF
     cat <<'EOF'
 

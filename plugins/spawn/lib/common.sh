@@ -20,9 +20,17 @@
 #   * the server.token awk parsers, and tmpwork() (whose mktemp template and
 #     comment name the script they belong to).
 #
-# This file prints NOTHING to stderr and holds no diagnostics, which is why it
-# does not source sanitize.sh: it has no terminal sink to defend. The
-# escapes.bats sink lint still scans it — see the annotated carve-out there.
+# This file prints NOTHING to stderr and holds no diagnostics of its own, which
+# is why it does not SOURCE sanitize.sh. The escapes.bats sink lint still scans
+# it — see the annotated carve-out there.
+#
+# It does, however, CALL spawn::sanitize_for_display — in spawn::emit_error, on
+# `detail` and on `alias`. That dependency arrived with the shared failure
+# envelope, and the header used to say flatly "it has no terminal sink to
+# defend", which was true when written and is not now. Every current consumer
+# sources sanitize.sh before this file, so nothing is broken — but a future one
+# that sources common.sh alone would fail at the moment it tried to report an
+# error, which is the worst possible moment. Source sanitize.sh first.
 
 # ---------------------------------------------------------------------------
 # ${VAR} expansion. The gateway expands env references in server.token, so a
