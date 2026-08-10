@@ -145,12 +145,8 @@ remedy_for() {
 # that had already drifted.
 emit_error() { spawn::emit_error plugin "session_id transcript_path cwd base_url context_window attach_command" "$@"; }
 
-die() {
-    local code="$1" err="$2"; shift 2
-    printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
-    emit_error "$code" "$err" "$*"
-    exit "$code"
-}
+# die() is inherited from common.sh — it was byte-identical here and in the
+# sibling surface, which is the module boundary saying it belongs there.
 
 # TMPWORK holds scratch that must not outlive the call — the captured child
 # stdout above all, because that is the one place the session id lives before

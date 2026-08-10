@@ -529,3 +529,31 @@ spawn::emit_error() {
     [ -n "$obj" ] || obj="$(spawn::envelope_bash "$tier" "$err" "$code" ",\"alias\":null${bash_nulls},\"help_requested\":${HELP_REQUESTED:-false}" "$rem" "$detail")"
     emit "$obj"
 }
+
+# ---------------------------------------------------------------------------
+# die <exit-code> <error-enum> <detail...> — the model surfaces' exit door.
+#
+# NOT namespaced, and that is the point: lens.sh and launch.sh call `die` at
+# ~40 sites each, and wrapping it as `die() { spawn::die "$@"; }` in both files
+# would trade one duplication for two pure-passthrough functions. A plain
+# definition here is inherited by anything that sources this file.
+#
+# spawnctl.sh and setup-lib.sh define their OWN `die` — different signature
+# (no enum argument, since they derive it from the exit code) — and both do so
+# AFTER sourcing this file, so their definition wins. That is bash function
+# resolution doing what it should, not a collision.
+#
+# `emit_error` is resolved at CALL time from the caller's scope, so each surface
+# still emits its own envelope shape. Only the sequence — sanitize, print to
+# stderr, emit, exit — is shared, and that sequence was byte-identical in the
+# two files a mechanical duplicate-body scan of lib/ turned up.
+#
+# The sanitize call is INLINE at the printf, not hidden behind a local: the
+# escapes.bats sink lint reads these lines, and a defence it cannot see is one
+# the next reviewer cannot verify either.
+die() {
+    local code="$1" err="$2"; shift 2
+    printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
+    emit_error "$code" "$err" "$*"
+    exit "$code"
+}
