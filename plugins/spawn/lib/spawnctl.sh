@@ -782,56 +782,6 @@ read_pidfile() {
 }
 
 # ---------------------------------------------------------------------------
-# Is this gateway supervised by launchd?
-#
-# WHY stop HAS TO ASK. On an adopted machine `stop` was a ~10s RESTART, not a
-# stop: it killed the gateway, the launcher's `wait` returned, the launcher
-# exited, and KeepAlive respawned the whole thing. `result:"stopped"` was true
-# for about a second. The plugin already says this out loud elsewhere — the
-# open-proxy fix unloads the agent first "because stopping the process only
-# triggers a respawn" — it just never applied it to the everyday verb.
-#
-# WHY THE PARENT, NOT THE GATEWAY ITSELF. setup's launcher is the launchd job;
-# the gateway is its CHILD, so the gateway's own pid never appears in
-# `launchctl list`. Verified on this machine: gateway 1518's parent 1359 is the
-# row `1359 0 com.shawnroos.gateway`. Both are checked anyway, because a plist
-# pointed straight at the binary (the pre-adoption shape) makes the gateway the
-# job itself.
-#
-# WHY NOT REUSE detect_supervisor. That one parses every plist in
-# ~/Library/LaunchAgents through plutil to decide which agent setup should
-# ADOPT — it needs an install dir, it can die, and it answers a different
-# question. Asking launchd directly needs no plist, no plutil, and no install
-# resolution. This is one lookup, not a second copy of that logic.
-#
-# Sets SUPERVISOR_LABEL. Returns 1 when nothing supervises the pid, INCLUDING
-# on any machine with no launchctl at all (Linux, a container) — where the
-# honest answer is "not supervised" rather than a failure.
-SUPERVISOR_LABEL=""
-supervising_label() {
-    local pid="$1" ppid="" row
-    SUPERVISOR_LABEL=""
-    [ -n "$pid" ] || return 1
-    [ -x "$LAUNCHCTL_BIN" ] || command -v "$LAUNCHCTL_BIN" >/dev/null 2>&1 || return 1
-    ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -dc '0-9')"
-    # PPID 1 IS NOT SUPERVISION. do_start_locked backgrounds the gateway inside
-    # a subshell that then exits, so an unsupervised gateway is reparented to
-    # pid 1 — launchd itself. If pid 1 ever appeared in `launchctl list`, every
-    # orphan on the box would read as supervised and `stop` would refuse to
-    # stop anything it started. It does not appear there today (checked), but
-    # "checked once" is not a guarantee, and the cost of excluding a pid that
-    # can never legitimately be a job's own pid is zero.
-    [ "$ppid" = "1" ] && ppid=""
-    # Column 1 of `launchctl list` is the pid; column 3 is the label. Matching
-    # on the WHOLE field, never a substring: pid 15 must not match 1518.
-    row="$("$LAUNCHCTL_BIN" list 2>/dev/null | awk -F'\t' -v a="$pid" -v b="${ppid:-}" \
-        '$1 == a || (b != "" && $1 == b) { print $3; exit }')"
-    [ -n "$row" ] || return 1
-    SUPERVISOR_LABEL="$row"
-    return 0
-}
-
-# ---------------------------------------------------------------------------
 # Alias grammar (KTD5). Validated BEFORE any network call so an escape byte or
 # a shell metacharacter in an identifier is impossible rather than filtered.
 # ---------------------------------------------------------------------------
@@ -1492,7 +1442,7 @@ stop)
     # explicit consent (exit 8), and a `stop` that quietly unloaded a launchd
     # job would take that decision without asking. The remedy names the exact
     # command instead.
-    if supervising_label "$pid"; then
+    if spawn::supervising_label "$pid"; then
         say "pid $pid is supervised by the launchd job '$SUPERVISOR_LABEL' — killing it would only trigger a respawn, so nothing was signalled"
         emit "$(jq -nc --argjson pid "$pid" --arg label "$SUPERVISOR_LABEL" \
             --arg p "$PIDFILE" --argjson c $EX_USAGE \

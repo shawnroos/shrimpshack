@@ -543,6 +543,48 @@ do_supervisor() {
     "$LAUNCHCTL_BIN" load "$SUPERVISOR_PLIST" >/dev/null 2>&1 \
         || die "$EX_UNREACHABLE" "step 'supervisor': '$SUPERVISOR_PLIST' has ALREADY been repointed at '$GATEWAY_LAUNCHER' and the launcher is written, but 'launchctl load' failed, so the agent is not yet running the new command. Load it by hand, or log out and back in."
 
+    # DID THE ADOPTION ACTUALLY TAKE EFFECT?
+    #
+    # `launchctl load` exiting 0 means the job was submitted, not that the
+    # gateway now serving is the one it started. The failure this catches is
+    # ordinary and silent: a gateway started OUTSIDE launchd — a plain
+    # `spawnctl start`, or the operator's own `gw start` — already holds the
+    # port, so the supervised launcher cannot bind and gives up, while every
+    # downstream check still passes because the UNSUPERVISED process answers
+    # them. Setup then reports "adopted" and the machine reboots into a
+    # different arrangement than the one it was told it had.
+    #
+    # The question is answered the same way spawnctl's `stop` answers it, out
+    # of common.sh, because it is the same question. Asked with a bounded
+    # retry: launchd takes a moment to fork the launcher, and the pidfile is
+    # written by the launcher, not by us.
+    adoption_verified=0
+    adoption_detail=""
+    adopt_pid=""
+    adopt_try=0
+    while [ "$adopt_try" -lt "$ADOPT_VERIFY_TRIES" ]; do
+        adopt_pid="$(tr -dc '0-9' < "$PIDFILE" 2>/dev/null)"
+        if [ -n "$adopt_pid" ] && kill -0 "$adopt_pid" 2>/dev/null \
+           && spawn::supervising_label "$adopt_pid"; then
+            adoption_verified=1
+            break
+        fi
+        adopt_try=$((adopt_try + 1))
+        [ "$adopt_try" -lt "$ADOPT_VERIFY_TRIES" ] && sleep "$ADOPT_VERIFY_SLEEP"
+    done
+    if [ "$adoption_verified" -eq 1 ]; then
+        say "verified: the gateway now serving (pid $adopt_pid) is supervised by the launchd job '$SUPERVISOR_LABEL'"
+    else
+        # NOT fatal, and deliberately so: the plist IS repointed and the
+        # launcher IS written, so the next login gets the adopted arrangement.
+        # What is wrong is only the CURRENT process. Failing here would leave
+        # the operator with a correct configuration and an error, which reads
+        # as "the adoption broke" when it did not. Reported loudly instead, in
+        # the object as well as in prose.
+        adoption_detail="the plist is repointed and the launcher is written, but the gateway serving RIGHT NOW is not the one launchd started (pid ${adopt_pid:-none} is not under a loaded job). Something started a gateway outside launchd and is holding the port, so the supervised launcher could not bind. Stop that process — note that spawnctl stop refuses on a supervised gateway, so this one is unsupervised and will stop normally — then run: launchctl unload '$SUPERVISOR_PLIST' && launchctl load '$SUPERVISOR_PLIST'. The next login would pick up the adopted arrangement regardless."
+        say "WARNING: adoption is configured but NOT in effect — $adoption_detail"
+    fi
+
     say "adopted the launchd agent at $SUPERVISOR_PLIST — it now starts the gateway through $GATEWAY_LAUNCHER, which reads the token from the Keychain at start. Setup now owns a step in this machine's startup path."
     # NO APOSTROPHE in the detail text below: it sits inside a single-quoted jq
     # program, and one would close the quote and break the script at parse time
@@ -550,12 +592,18 @@ do_supervisor() {
     emit "$(jq -nc --arg p "$SUPERVISOR_PLIST" --arg l "$GATEWAY_LAUNCHER" --arg b "$bin" \
         --arg d "$LAUNCH_AGENTS_DIR" --arg i "$install" --argjson argv "$SUPERVISOR_ARGV" \
         --argjson xargv "$exec_argv" --argjson reb "$rebased" --arg from "$stale" \
+        --argjson ver "$adoption_verified" --arg vd "$adoption_detail" \
+        --arg vpid "${adopt_pid:-}" --arg vlabel "${SUPERVISOR_LABEL:-}" \
         '{ok:true, verb:"supervisor", action:"repointed", plist:$p, launcher:$l,
           program:$b, agents_dir:$d, install_dir:$i, original_program_arguments:$argv,
           program_arguments:$xargv,
           rebased:($reb == 1), rebased_from:(if $reb == 1 then $from else null end),
           detail:("the agent now starts the gateway through a launcher setup owns, which reads the token from the Keychain at start; no credential was written to the plist, and every other key in it is unchanged. SETUP NOW OWNS A STEP IN THE STARTUP PATH of this machine: the gateway starts through a file this plugin writes."
             + (if $reb == 1 then " REBASED: the agent named the install at \($from), which is not the install this run resolved, so the launcher now execs the resolved binary and config at \($i) — the agent follows the upgrade instead of starting the older build. The recorded original command still names what was first adopted." else "" end)),
+          adoption_in_effect:($ver == 1),
+          supervised_pid:(if $ver == 1 and $vpid != "" then ($vpid|tonumber) else null end),
+          supervisor_label:(if $ver == 1 and $vlabel != "" then $vlabel else null end),
+          adoption_warning:(if $ver == 1 then null else $vd end),
           error:null, exit_code:0}')" \
         || die "$EX_USAGE" "could not encode the supervisor object"
     exit "$EX_OK"

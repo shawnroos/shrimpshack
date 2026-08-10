@@ -58,6 +58,13 @@ setup() {
     mkdir -p "$SPAWN_LAUNCH_AGENTS_DIR"
 
     export SPAWN_PLUTIL_BIN="$FIX/fake-plutil.sh"
+    # The adoption-verification budget. A fixture never writes a real pidfile
+    # under a real launchd job, so every test here takes the not-in-effect
+    # branch — at the real-machine budget that is ~4s of sleeping per test and
+    # turned this suite from 64s into 203s. The tests that assert the VERIFIED
+    # branch wire a job list and a live pid, and one try is enough for them.
+    export SPAWN_ADOPT_VERIFY_TRIES=1
+    export SPAWN_ADOPT_VERIFY_SLEEP=0
     export SPAWN_LAUNCHCTL_BIN="$FIX/fake-launchctl.sh"
     PLUTIL_RECORD="$WORK/plutil-argv"
     CTL_RECORD="$WORK/launchctl-argv"
@@ -898,4 +905,69 @@ EOP
     [ "$status" -ne 0 ]
     grep -qx 'signalled=yes' "$BIN_RECORD"
     wait "$launcher_pid" 2>/dev/null || true
+}
+
+# --- did the adoption actually take effect? ---------------------------------
+#
+# `launchctl load` exiting 0 means the job was SUBMITTED, not that the gateway
+# now serving is the one it started. The silent failure: a gateway started
+# outside launchd (a plain spawnctl start, or the operator's own `gw start`)
+# already holds the port, the supervised launcher cannot bind and gives up, and
+# every downstream check still passes because the unsupervised process answers
+# them. Setup reported "adopted" and the machine rebooted into a different
+# arrangement than the one it was told it had.
+
+@test "adoption is VERIFIED when the serving gateway is under the loaded job" {
+    local plist; plist="$(plant_agent gateway)"
+    # A live process standing in for the gateway launchd started, and a job list
+    # that claims it. Its own pid is used (not a parent) because that models the
+    # plist-points-straight-at-the-binary shape; the child shape is covered in
+    # spawnctl.bats.
+    sleep 60 & local live=$!
+    printf '%s\n' "$live" > "$SPAWN_PIDFILE"
+    printf '%s\t0\tcom.example.gateway\n' "$live" > "$WORK/lclist"
+    export FAKE_LAUNCHCTL_LIST="$WORK/lclist"
+
+    run_supervisor
+    kill "$live" 2>/dev/null || true
+
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+    [ "$(jq -r '.adoption_in_effect' "$OUT")" = "true" ]
+    [ "$(jq -r '.supervised_pid' "$OUT")" = "$live" ]
+    [ "$(jq -r '.supervisor_label' "$OUT")" = "com.example.gateway" ]
+    [ "$(jq -r '.adoption_warning' "$OUT")" = "null" ]
+}
+
+@test "an adoption that is configured but NOT in effect is reported, not hidden" {
+    local plist; plist="$(plant_agent gateway)"
+    # A live gateway that no loaded job owns — the unsupervised-process-holds-
+    # the-port shape. The job list is empty, so nothing supervises this pid.
+    sleep 60 & local live=$!
+    printf '%s\n' "$live" > "$SPAWN_PIDFILE"
+    : > "$WORK/lclist"
+    export FAKE_LAUNCHCTL_LIST="$WORK/lclist"
+
+    run_supervisor
+    kill "$live" 2>/dev/null || true
+
+    # STILL exit 0 and ok:true, deliberately: the plist IS repointed and the
+    # launcher IS written, so the next login gets the adopted arrangement. Only
+    # the CURRENT process is wrong. Failing here would hand the operator a
+    # correct configuration alongside an error, which reads as "the adoption
+    # broke" when it did not.
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.ok' "$OUT")" = "true" ]
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+
+    # The whole point: the difference is VISIBLE and machine-branchable.
+    [ "$(jq -r '.adoption_in_effect' "$OUT")" = "false" ]
+    [ "$(jq -r '.supervised_pid' "$OUT")" = "null" ]
+    [ "$(jq -r '.adoption_warning' "$OUT")" != "null" ]
+    jq -e '.adoption_warning | test("not the one launchd started")' "$OUT" >/dev/null
+    # And it names the recovery, including the trap that the process to stop is
+    # the UNSUPERVISED one.
+    jq -e '.adoption_warning | test("launchctl unload")' "$OUT" >/dev/null
 }

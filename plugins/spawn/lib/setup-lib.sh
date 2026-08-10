@@ -224,6 +224,16 @@ SHELL_RC="${SPAWN_SHELL_RC:-$HOME/.zshrc}"
 # ---------------------------------------------------------------------------
 LAUNCH_AGENTS_DIR="${SPAWN_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 LAUNCHCTL_BIN="${SPAWN_LAUNCHCTL_BIN:-/bin/launchctl}"
+
+# How long the supervisor step waits for launchd to fork the launcher and for
+# the launcher to write the pidfile, before deciding the adoption is configured
+# but not in effect. A seam, for the usual reason: the suites drive this path
+# ~34 times and a real-machine budget spent waiting for a pidfile no fixture
+# will ever write turned one suite from 64s into 203s. Generous by default,
+# because the cost of deciding too early on a real machine is a false warning
+# about a working adoption.
+ADOPT_VERIFY_TRIES="${SPAWN_ADOPT_VERIFY_TRIES:-10}"
+ADOPT_VERIFY_SLEEP="${SPAWN_ADOPT_VERIFY_SLEEP:-0.5}"
 PLUTIL_BIN="${SPAWN_PLUTIL_BIN:-/usr/bin/plutil}"
 
 # WHERE THE GENERATED LAUNCHER LIVES, AND WHY IT IS NOT IN THE INSTALL DIR.

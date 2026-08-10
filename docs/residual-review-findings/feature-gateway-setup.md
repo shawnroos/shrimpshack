@@ -454,7 +454,25 @@ child, so `unload` stops the gateway.
   agent by hand.
 
 
-- **`setup` does not confirm the adoption took effect (P2).** After
+- **FIXED 2026-08-10.** ~~`setup` does not confirm the adoption took effect
+  (P2).~~ After `unload`/`load`, setup now waits for the pidfile and checks
+  that the pid serving is under a loaded launchd job, using the same
+  `spawn::supervising_label` helper `spawnctl stop` uses — moved into
+  `common.sh` rather than copied, since "three copies of one parser, one of
+  which drifted" is this repo's own scar.
+  Reported, NOT fatal: the plist is repointed and the launcher is written, so
+  the next login gets the adopted arrangement; only the current process is
+  wrong. Failing would hand the operator a correct configuration alongside an
+  error. `adoption_in_effect`, `supervised_pid`, `supervisor_label` and
+  `adoption_warning` are in the emitted object, so a caller can branch on it.
+  Two tests, mutation-verified (forcing "verified" turns the not-in-effect test
+  red).
+  **Cost paid honestly:** the retry budget added ~140s to the supervisor suite
+  (64s -> 203s) because no fixture ever writes a real pidfile under a real
+  launchd job. Fixed with a seam (`SPAWN_ADOPT_VERIFY_TRIES`), generous on a
+  real machine and 1 in the suite — back to 64s.
+
+- ~~original text:~~ After
   `unload`/`load` it reports "adopted" without checking that the gateway now
   serving is the one launchd started. A gateway started OUTSIDE launchd (a
   plain `spawnctl start`) holds the port, the supervised launcher cannot bind,
