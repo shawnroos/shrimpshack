@@ -147,6 +147,56 @@ GW_PATH="${SPAWN_GW_PATH:-$HOME/.local/bin/gw}"
 # pointing at a directory that no longer exists.
 SPAWNCTL_PATH="${SPAWN_SPAWNCTL_PATH:-$SCRIPT_DIR/spawnctl.sh}"
 
+# ...unless "this script's own location" is a GIT WORKTREE, which is a
+# directory that is EXPECTED to be deleted. Baking one produces a `gw` that
+# works perfectly until the PR lands and the worktree is removed, then fails
+# with exit 127 and no explanation anywhere on the machine. That is not
+# hypothetical: it happened here on 2026-08-10, and the only reason it was
+# diagnosed is that the person who broke it had just removed the worktree.
+#
+# A linked worktree is identified by git itself — in one, --git-dir points at
+# <main>/.git/worktrees/<name> while --git-common-dir points at <main>/.git, so
+# the two DIFFER. In a normal clone (and in a plain non-git install directory,
+# where both calls simply fail) they do not, and nothing below runs.
+#
+# The fix is to bake the SAME file in the main working tree instead. Only done
+# when that file actually exists: a plugin developed on a branch that the main
+# checkout does not carry has no durable copy, and pointing at a path that is
+# not there would trade a delayed break for an immediate one. In that case the
+# worktree path is kept and the caller warns, which is the honest ordering —
+# working now and fragile later beats broken now.
+spawn::durable_spawnctl_path() {
+    local from="$1" gitdir commondir main rel cand
+    command -v git >/dev/null 2>&1 || return 1
+    gitdir="$(git -C "$from" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+    commondir="$(git -C "$from" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+    [ -n "$gitdir" ] && [ -n "$commondir" ] || return 1
+    # Same directory => not a linked worktree => nothing to re-point.
+    [ "$gitdir" = "$commondir" ] && return 1
+    main="$(dirname "$commondir")"
+    [ -d "$main" ] || return 1
+    rel="$(git -C "$from" rev-parse --show-prefix 2>/dev/null)" || return 1
+    cand="$main/${rel}$(basename "$SPAWNCTL_PATH")"
+    [ -f "$cand" ] || return 1
+    printf '%s' "$cand"
+}
+
+# Only re-point a path we derived ourselves. An explicit SPAWN_SPAWNCTL_PATH is
+# the caller's decision and the suites' rail; overriding it here would make the
+# override untestable.
+SPAWNCTL_FROM_WORKTREE=0
+if [ -z "${SPAWN_SPAWNCTL_PATH:-}" ]; then
+    if _durable="$(spawn::durable_spawnctl_path "$SCRIPT_DIR")"; then
+        SPAWNCTL_PATH="$_durable"
+    elif git -C "$SCRIPT_DIR" rev-parse --absolute-git-dir >/dev/null 2>&1 \
+         && [ "$(git -C "$SCRIPT_DIR" rev-parse --absolute-git-dir 2>/dev/null)" \
+              != "$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ]; then
+        # A linked worktree with no durable twin: keep the path, flag it loudly.
+        SPAWNCTL_FROM_WORKTREE=1
+    fi
+    unset _durable
+fi
+
 # ---------------------------------------------------------------------------
 # U6's write targets. EVERY ONE OF THEM IS A SAFETY RAIL, for the same reason
 # SPAWN_GW_PATH is: these are the operator's real dotfiles, and a suite that ran

@@ -232,9 +232,20 @@ do_gw() {
         || die "$EX_USAGE" "step 'gw': could not write '$GW_PATH'; it is untouched"
 
     say "wrote $GW_PATH — its control verbs now delegate to the plugin, and its token is read from the Keychain at run time"
+
+    # The baked path is a git worktree with no copy in the main checkout, so it
+    # will stop existing when that worktree is removed. Reported in the object
+    # and not only in prose: setup's caller is usually an agent, and a warning
+    # it cannot branch on is a warning it will not act on.
+    local warn=null
+    if [ "${SPAWNCTL_FROM_WORKTREE:-0}" -eq 1 ]; then
+        warn="\"the delegation target baked into this wrapper lives in a git WORKTREE ($SPAWNCTL_PATH), which is expected to be deleted; when it is, gw will fail with exit 127 and nothing on the machine will explain why. Re-run setup from the permanent checkout once this branch has landed there.\""
+        say "WARNING: $GW_PATH now points into a git worktree — re-run setup from the permanent checkout after this branch lands, or gw breaks when the worktree is removed"
+    fi
     emit "$(jq -nc --arg p "$GW_PATH" --arg s "$before" --arg ctl "$SPAWNCTL_PATH" \
+        --argjson w "$warn" \
         '{ok:true, verb:"gw", action:(if $s == "absent" then "created" else "rewritten" end),
-          path:$p, state_before:$s, spawnctl:$ctl, error:null, exit_code:0}')" \
+          path:$p, state_before:$s, spawnctl:$ctl, warning:$w, error:null, exit_code:0}')" \
         || die "$EX_USAGE" "could not encode the gw object"
     exit "$EX_OK"
 }
