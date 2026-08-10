@@ -1242,3 +1242,137 @@ EOF
     grep -q 'pre-existing' "$WORK/outside.txt"
     grep -q '^delivery_mode=600$' "$WORK/gwbin-record/delivery"
 }
+
+# --- stop must not report a stop that KeepAlive undoes ----------------------
+#
+# On an adopted machine `stop` was a ~10s RESTART: it killed the gateway, the
+# launcher's `wait` returned, the launcher exited, and KeepAlive respawned
+# everything. result:"stopped" was true for about a second. The plugin already
+# says this elsewhere — the open-proxy path unloads the agent first "because
+# stopping the process only triggers a respawn" — it just never applied it to
+# the everyday verb.
+#
+# The fixture models `launchctl list`'s real TAB-separated "PID Status Label"
+# output, because the pid is read from column 1 and that is the one thing that
+# must not drift.
+
+# wire_fake_launchd <pid-to-declare-supervised> — a launchctl stand-in whose
+# job list claims that pid. Passing the gateway's PARENT is the real shape
+# (setup's launcher is the job; the gateway is its child); passing the gateway
+# pid itself models a plist pointed straight at the binary.
+wire_fake_launchd() {
+    export SPAWN_LAUNCHCTL_BIN="$FIX/fake-launchctl.sh"
+    export FAKE_LAUNCHCTL_RECORD="$WORK/launchctl-argv"
+    export FAKE_LAUNCHCTL_LIST="$WORK/launchctl-list"
+    printf '%s\t0\tcom.test.gateway\n' "$1" > "$FAKE_LAUNCHCTL_LIST"
+}
+
+@test "stop REFUSES on a supervised gateway instead of reporting a stop KeepAlive undoes" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    kill -0 "$pid"
+    wire_fake_launchd "$pid"
+
+    ctl stop
+
+    # NOTHING WAS SIGNALLED, asserted FIRST. This is what separates "refuses"
+    # from "kills and then admits it will come back", so a mutation run must
+    # fail HERE rather than on an exit code — the same reordering the pidfile-
+    # claim guard needed. The gateway is still alive, the pidfile still names
+    # it, and no state changed.
+    kill -0 "$pid"
+    [ "$(cat "$WORK/.gateway.pid")" = "$pid" ]
+    [ "$(count_gateway_procs "$WORK/install")" -eq 1 ]
+
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.result')" = "supervised" ]
+    [ "$(echo "$output" | jq -r '.supervisor_label')" = "com.test.gateway" ]
+    # The remedy names the operation that actually stops it.
+    echo "$output" | jq -r '.remedy' | grep -q 'launchctl unload'
+}
+
+@test "restart on a supervised gateway aborts and names the supervisor operation" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    wire_fake_launchd "$pid"
+
+    ctl restart
+    [ "$status" -eq 2 ]
+    # Before this, restart "worked" by accident on an adopted machine: the kill
+    # triggered a respawn and start_if_down reported success for a restart it
+    # had not performed.
+    echo "$output" | jq -r '.detail' | grep -q 'kickstart'
+    echo "$output" | jq -r '.detail' | grep -q 'com.test.gateway'
+    kill -0 "$pid"
+    [ "$(count_gateway_procs "$WORK/install")" -eq 1 ]
+}
+
+@test "an UNSUPERVISED gateway still stops normally" {
+    # Negative control, and the one that matters most: a guard that read every
+    # gateway as supervised would make stop refuse to stop anything it started.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    # A job list that names OTHER pids — launchd is present, this gateway is
+    # simply not one of its jobs.
+    export SPAWN_LAUNCHCTL_BIN="$FIX/fake-launchctl.sh"
+    export FAKE_LAUNCHCTL_RECORD="$WORK/launchctl-argv"
+    export FAKE_LAUNCHCTL_LIST="$WORK/launchctl-list"
+    printf '99998\t0\tcom.other.thing\n99999\t0\tcom.other.two\n' > "$FAKE_LAUNCHCTL_LIST"
+
+    ctl stop
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.result')" = "stopped" ]
+    ! kill -0 "$pid" 2>/dev/null
+    [ "$(count_gateway_procs "$WORK/install")" -eq 0 ]
+}
+
+@test "a gateway reparented to pid 1 is NOT read as supervised" {
+    # do_start_locked backgrounds the gateway in a subshell that exits, so an
+    # unsupervised gateway ends up with ppid 1 — launchd itself. If pid 1 were
+    # matched against the job list, every orphan on the box would read as
+    # supervised and stop would refuse to stop anything it started.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    # Confirm the premise rather than assuming it: this really is an orphan.
+    [ "$(ps -o ppid= -p "$pid" | tr -d ' ')" = "1" ]
+
+    # A job list that claims PID 1. Nothing may match it.
+    export SPAWN_LAUNCHCTL_BIN="$FIX/fake-launchctl.sh"
+    export FAKE_LAUNCHCTL_RECORD="$WORK/launchctl-argv"
+    export FAKE_LAUNCHCTL_LIST="$WORK/launchctl-list"
+    printf '1\t0\tcom.apple.launchd\n' > "$FAKE_LAUNCHCTL_LIST"
+
+    ctl stop
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.result')" = "stopped" ]
+    ! kill -0 "$pid" 2>/dev/null
+}

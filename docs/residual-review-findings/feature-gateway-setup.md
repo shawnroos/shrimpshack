@@ -461,8 +461,30 @@ child, so `unload` stops the gateway.
   and every downstream check still passes because the unsupervised process
   answers. The check to add: the pidfile pid's parent should be the launcher.
 
-- **`spawnctl stop` is a ~10s restart on a supervised machine, not a stop
-  (P2).** It kills the gateway, the launcher's `wait` returns, the launcher
+- **FIXED 2026-08-10.** ~~`spawnctl stop` is a ~10s restart on a supervised
+  machine, not a stop (P2).~~ `stop` now asks launchd whether the pid (or its
+  parent — setup's launcher is the job, the gateway is its child) is a loaded
+  job, and REFUSES without signalling anything, naming the label and the unload
+  command. Refusing rather than killing-and-admitting matches the verb's two
+  other honest outcomes (`unmanaged`, `pid_mismatch`) and leaves the machine
+  unchurned. It does NOT unload the agent on the operator's behalf: setup
+  treats owning a step in the startup path as needing explicit consent, and a
+  `stop` that quietly unloaded a launchd job would take that decision without
+  asking.
+  `restart` gets its own branch — before this it "worked" on an adopted machine
+  only by accident (the kill triggered a respawn and start_if_down reported
+  success for a restart it had not performed); it now aborts and names
+  `launchctl kickstart -k`.
+  Detection asks launchd directly rather than reusing `detect_supervisor`,
+  which parses every plist through plutil to answer a different question
+  (which agent to ADOPT) and can die. Explicitly excludes ppid 1: an
+  unsupervised gateway is reparented to launchd itself, and matching that
+  would make `stop` refuse to stop anything it started.
+  Four tests, mutation-verified — including that negative control and a
+  reparented-orphan case. **Verified live** on the adopted machine: it named
+  `com.shawnroos.gateway`, refused, and left pid 1518 running and verified.
+
+- ~~original text:~~ It kills the gateway, the launcher's `wait` returns, the launcher
   exits, and KeepAlive respawns it. `result:"stopped"` is true only
   momentarily. This is the same thing the open-proxy fix already says out loud
   ("stopping the process only triggers a respawn", which is why that path
