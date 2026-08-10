@@ -63,6 +63,16 @@ def repo_root(cwd, timeout=5):
     if not common:
         return None
     common = common.rstrip("/")
+
+    # A SUBMODULE's common-dir is `<super>/.git/modules/<name>`, which ends in
+    # neither `/.git` nor a `.git` basename — so both folds below fall through and
+    # the caller gets a path INSIDE `.git` as a repo root, producing a scope slug
+    # that names neither the submodule nor the superproject. Fold it to the
+    # superproject, which is the repo a person would say they are working in.
+    marker = "/.git/modules/"
+    if marker in common:
+        return common[: common.index(marker)]
+
     return common[: -len("/.git")] if common.endswith("/.git") else (
         os.path.dirname(common) if os.path.basename(common) == ".git" else common)
 

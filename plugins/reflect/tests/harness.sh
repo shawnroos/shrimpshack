@@ -650,6 +650,21 @@ check "scope: parses scope slug from a _scope path too (unmangled)" \
 MAIN_CHECKOUT="$(git -C "$REPO" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
 check "scope: resolver folds this checkout to the main repo root (derived)" \
   "scope_py \"sys.exit(0 if scope.repo_root('$REPO')=='$MAIN_CHECKOUT' and '/worktrees/' not in scope.repo_root('$REPO') else 1)\""
+# A submodule's .git is a FILE pointing at <super>/.git/modules/<name>, so the
+# worktree folds never matched it and the slug named a path inside .git — neither the
+# submodule nor the superproject. Built for real rather than mocked, because the
+# whole bug is in what git actually reports.
+SMR="$ROOT/sm"; mkdir -p "$SMR"
+( cd "$SMR" \
+  && git init -q sub && git -C sub -c user.email=t@t -c user.name=t commit -q --allow-empty -m i \
+  && git init -q super && git -C super -c user.email=t@t -c user.name=t commit -q --allow-empty -m i \
+  && git -C super -c protocol.file.allow=always submodule add -q ../sub sub ) >/dev/null 2>&1
+if [ -d "$SMR/super/sub" ]; then
+  check "scope: a submodule folds to the superproject, not inside .git" \
+    "scope_py \"r=scope.repo_root('$SMR/super/sub'); sys.exit(0 if r and r.rstrip('/').endswith('/super') and '/.git/' not in r else 1)\""
+else
+  echo "  skip - submodule fold (could not build a submodule fixture here)"
+fi
 check "scope: outside a git repo resolves to global" \
   "scope_py \"sys.exit(0 if scope.resolve_repo_slug('/tmp')=='global' else 1)\""
 check "scope: home slug is an ancestor of a repo slug; siblings are not" \

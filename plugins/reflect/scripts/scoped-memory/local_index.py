@@ -232,9 +232,14 @@ class Index:
         return len(self.docs)
 
     def _idf(self, term):
-        """Robertson/Sparck-Jones idf with the +1 that keeps it non-negative — a
-        term in every document contributes ~0 rather than a negative score that
-        would let a common word DRAG a document below the floor."""
+        """Robertson/Sparck-Jones idf with the +1 that keeps it non-negative, so a
+        corpus-common word can never DRAG a document down with a negative score.
+
+        A term present in EVERY document contributes log(1 + 0.5/(N+0.5)), which
+        approaches zero as the corpus grows but is not zero on a small one — about
+        0.288 at a single body. Worth stating precisely rather than as "~0": it is
+        part of why raw scores from a small store are not comparable with the
+        thresholds calibrated against this one (see X8 in the residuals record)."""
         n = self.df.get(term, 0)
         if not n:
             return 0.0
@@ -266,7 +271,22 @@ class Index:
 
 def build(store_dir, k1=DEFAULT_K1, b=DEFAULT_B):
     """Read and index every body under `store_dir`. Fail-open: a missing store, an
-    unreadable body, or a binary file yields a smaller index, never an exception."""
+    unreadable body, or a binary file yields a smaller index, never an exception.
+
+    `k1` and `b` are clamped to the ranges BM25 is defined over. The shipped defaults
+    are fine; the guard is for the public surface, where `k1 <= 0` or a `b` outside
+    [0, 1] can drive the saturation denominator to zero or negative and turn scores
+    into nonsense that still looks like a number. Clamping keeps the fail-open
+    posture of everything else here — a bad tunable must not take retrieval down.
+    """
+    try:
+        k1 = max(0.001, float(k1))
+    except (TypeError, ValueError):
+        k1 = DEFAULT_K1
+    try:
+        b = min(1.0, max(0.0, float(b)))
+    except (TypeError, ValueError):
+        b = DEFAULT_B
     docs, tfs, lengths, df = [], [], [], {}
     total = 0
     for rel, _slug in corpus.iter_bodies(store_dir):
