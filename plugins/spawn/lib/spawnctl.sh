@@ -81,7 +81,6 @@ PROBE_TIMEOUT="${SPAWN_PROBE_TIMEOUT:-5}"
 START_TIMEOUT="${SPAWN_START_TIMEOUT:-20}"
 LOCK_TIMEOUT="${SPAWN_LOCK_TIMEOUT:-60}"
 
-# Binary candidates inside a resolved install dir, most specific first.
 
 # ---------------------------------------------------------------------------
 # Keychain item identity (KTD1, U1's primitives).

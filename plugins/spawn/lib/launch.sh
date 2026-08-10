@@ -175,7 +175,16 @@ emit_error() {
     # help_requested rides the no-jq tier too — a box without an encoder must
     # still be able to tell a help request from a caller bug, and it is a bash
     # literal, so no encoder is needed for it.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
+    # THE FIELD LIST HERE MUST MATCH THE jq TIER ABOVE, KEY FOR KEY. It did not:
+    # cwd, base_url and context_window were in the jq object and missing here,
+    # so on a box without jq this surface answered with three fewer fields than
+    # its own --describe publishes. That is exactly the failure common.sh warns
+    # about — "any envelope that covers fewer than three drifts on the tier it
+    # missed, silently, because the missing tier is the one nobody runs" — and
+    # it drifted anyway, because the two lists are written out twice by hand.
+    # envelope.bats now asserts tier-to-tier parity for every surface, so this
+    # cannot drift again without going red.
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"cwd\":null,\"base_url\":null,\"context_window\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
     emit "$obj"
 }
 
@@ -248,7 +257,7 @@ need_jq() {
         # Same envelope, same constants, no encoder (R23 / KTD7): this is the
         # tier that used to be a hand-written string and drifted from the other
         # two the moment either changed.
-        emit "$(spawn::envelope_bash plugin "usage" 2 ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it.")"
+        emit "$(spawn::envelope_bash plugin "usage" 2 ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"cwd\":null,\"base_url\":null,\"context_window\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it.")"
         exit 2
     }
 }
@@ -558,20 +567,10 @@ if [ -n "$CONFIG_PATH" ] && [ -f "$CONFIG_PATH" ]; then
 fi
 # Then the SAME env/Keychain fallback spawnctl's probe runs (R27), so a config
 # whose token setup retired still launches instead of seeding into a 401.
-# Wrapped in a function ONLY so `local -` is available: this block assigns a
-# credential, and at top level there is no scope to confine `set +x` to, so a
-# caller running the script under `bash -x` would trace the token out. The
-# function restores the caller's own xtrace setting on return.
-resolve_token_from_fallback() {
-    local -
-    set +x
-    SPAWN_TOKEN_VALUE=""
-    if spawn::token_fallback "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
-        TOKEN="$SPAWN_TOKEN_VALUE"
-    fi
-    SPAWN_TOKEN_VALUE=""
-}
-[ -n "$TOKEN" ] || resolve_token_from_fallback
+# spawn::resolve_token (secrets.sh) owns this, xtrace guard and all — it was a
+# byte-identical copy in both this file and its sibling until the duplication
+# was collapsed into the file that already owns the chain.
+[ -n "$TOKEN" ] || spawn::resolve_token "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"
 # An empty token is not fatal here: `ensure` already proved the gateway accepts
 # whatever this config holds. Guessing a failure before the wire would invent
 # one the gateway never reported.

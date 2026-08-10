@@ -20,9 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./setup-lib.sh
 . "$SCRIPT_DIR/setup-lib.sh"
 
-# The printing chokepoint, byte-identical to setup-lib.sh's definition (the
-# sink lint asks each script to own the chokepoint it prints through).
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
+# say() comes from setup-lib.sh, sourced above — one definition of the
+# printing chokepoint, not six.
 
 
 # ===========================================================================
@@ -237,15 +236,25 @@ do_gw() {
     # will stop existing when that worktree is removed. Reported in the object
     # and not only in prose: setup's caller is usually an agent, and a warning
     # it cannot branch on is a warning it will not act on.
-    local warn=null
+    # BUILT BY jq, NOT BY HAND. An earlier version of this assembled the JSON
+    # string itself — `warn="\"...$SPAWNCTL_PATH...\""` passed to --argjson —
+    # so a single `"` or `\` anywhere in the path produced invalid JSON and took
+    # the whole emit down with it. That is the one failure mode this script
+    # cannot afford: KTD2 says exactly one object on stdout ALWAYS, and a path
+    # is caller-influenced data. The flag is a bash integer and the prose is an
+    # --arg string; jq does the quoting, which is the doctrine everywhere else
+    # in this plugin.
+    local warn_on=0
     if [ "${SPAWNCTL_FROM_WORKTREE:-0}" -eq 1 ]; then
-        warn="\"the delegation target baked into this wrapper lives in a git WORKTREE ($SPAWNCTL_PATH), which is expected to be deleted; when it is, gw will fail with exit 127 and nothing on the machine will explain why. Re-run setup from the permanent checkout once this branch has landed there.\""
+        warn_on=1
         say "WARNING: $GW_PATH now points into a git worktree — re-run setup from the permanent checkout after this branch lands, or gw breaks when the worktree is removed"
     fi
     emit "$(jq -nc --arg p "$GW_PATH" --arg s "$before" --arg ctl "$SPAWNCTL_PATH" \
-        --argjson w "$warn" \
+        --argjson won "$warn_on" \
+        --arg wtext "the delegation target baked into this wrapper lives in a git WORKTREE ($SPAWNCTL_PATH), which is expected to be deleted; when it is, gw will fail with exit 127 and nothing on the machine will explain why. Re-run setup from the permanent checkout once this branch has landed there." \
         '{ok:true, verb:"gw", action:(if $s == "absent" then "created" else "rewritten" end),
-          path:$p, state_before:$s, spawnctl:$ctl, warning:$w, error:null, exit_code:0}')" \
+          path:$p, state_before:$s, spawnctl:$ctl,
+          warning:(if $won == 1 then $wtext else null end), error:null, exit_code:0}')" \
         || die "$EX_USAGE" "could not encode the gw object"
     exit "$EX_OK"
 }

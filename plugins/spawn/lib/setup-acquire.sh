@@ -20,9 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./setup-lib.sh
 . "$SCRIPT_DIR/setup-lib.sh"
 
-# The printing chokepoint, byte-identical to setup-lib.sh's definition (the
-# sink lint asks each script to own the chokepoint it prints through).
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
+# say() comes from setup-lib.sh, sourced above — one definition of the
+# printing chokepoint, not six.
 
 
 # ---------------------------------------------------------------------------

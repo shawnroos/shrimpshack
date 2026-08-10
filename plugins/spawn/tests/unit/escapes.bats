@@ -591,10 +591,34 @@ terminal_sink_lint() {
                 printf 'LINT %s: does not source sanitize.sh\n' "$base"
                 found=1
             fi
-            # ...and its two chokepoints must actually sanitize.
-            grep -q 'say() { printf .* "\$(spawn::sanitize_for_display "\$\*")" >&2; }' "$f" \
-                || { printf 'LINT %s: say() does not sanitize\n' "$base"; found=1; }
-            grep -q 'spawn::sanitize_for_display' "$f" \
+            # ...and its two chokepoints must actually sanitize — in this
+            # file, OR in a file this one sources.
+            #
+            # Requiring the text in every file made the five setup-family
+            # scripts each carry a byte-identical copy of say(), written for no
+            # reason except to satisfy this grep, since they all already source
+            # setup-lib.sh where it is defined. That is the shape this codebase
+            # condemns in its own words: "A test whose job is to keep two copies
+            # in sync is the module boundary telling you it is in the wrong
+            # place." The lint was the thing in the wrong place.
+            #
+            # This does NOT weaken anything. A file that neither defines a
+            # sanitizing say() nor inherits one still fails, and the sink scan
+            # below — the real defence — runs on every file regardless.
+            say_re='say() { printf .* "\$(spawn::sanitize_for_display "\$\*")" >&2; }'
+            defines_say=0; inherits_say=0; calls_sanitize=0
+            grep -q "$say_re" "$f" && defines_say=1
+            grep -q 'spawn::sanitize_for_display' "$f" && calls_sanitize=1
+            for _srcd in $(grep -oE '\. "\$SCRIPT_DIR/[a-z-]+\.sh"' "$f" | sed 's|.*SCRIPT_DIR/||; s|"$||'); do
+                [ -f "$LIB/$_srcd" ] || continue
+                if grep -q "$say_re" "$LIB/$_srcd"; then
+                    inherits_say=1
+                    calls_sanitize=1
+                fi
+            done
+            [ "$defines_say" -eq 1 ] || [ "$inherits_say" -eq 1 ] \
+                || { printf 'LINT %s: say() neither sanitizes nor sources a file defining a sanitizing say()\n' "$base"; found=1; }
+            [ "$calls_sanitize" -eq 1 ] \
                 || { printf 'LINT %s: no sanitize call at all\n' "$base"; found=1; }
         fi
 

@@ -385,3 +385,47 @@ jq_free_path() {
     # contract does not list — the caller supplies its own fallback.
     [ "$(echo "$output" | grep '^99=')" = "99=" ]
 }
+
+# --- the two tiers must agree on the FIELD SET, not just the core -----------
+#
+# The pre-existing jq-absent tests assert the shared envelope core plus
+# `.error`. That is not enough: it passed green while launch.sh's bash tier was
+# missing `cwd`, `base_url` and `context_window` — three fields its own jq tier
+# emits and its own --describe publishes. A consumer on a box without jq got a
+# different shape than the contract promises, and nothing went red.
+#
+# common.sh states the rule this pins: "Any envelope that covers fewer than
+# three drifts on the tier it missed, silently, because the missing tier is the
+# one nobody runs." Comparing key sets is what turns that from a warning into a
+# guard.
+
+@test "R23: the jq and no-jq tiers emit the SAME KEYS for the same failure" {
+    local nojq; nojq="$(jq_free_path)"
+    run env PATH="$nojq" bash -c 'command -v jq 2>/dev/null'
+    [ "$status" -ne 0 ]
+
+    local script name with without only_jq only_bash
+    for script in "$LENS" "$LAUNCH"; do
+        name="$(basename "$script")"
+
+        # Same invocation, same failure, both tiers.
+        with="$(bash "$script" --alias 'bad;alias' < /dev/null 2>/dev/null \
+                 | jq -S 'keys' 2>/dev/null)"
+        without="$(env PATH="$nojq" bash -c "bash '$script' --alias 'bad;alias' < /dev/null 2>/dev/null" \
+                 | jq -S 'keys' 2>/dev/null)"
+
+        # Guard the guard: both tiers actually produced something parseable, or
+        # "the key sets match" is a statement about two empty strings.
+        [ -n "$with" ] || { echo "$name: jq tier produced nothing"; return 1; }
+        [ -n "$without" ] || { echo "$name: no-jq tier produced nothing"; return 1; }
+
+        if [ "$with" != "$without" ]; then
+            only_jq="$(jq -n --argjson a "$with" --argjson b "$without" '$a - $b | join(",")')"
+            only_bash="$(jq -n --argjson a "$with" --argjson b "$without" '$b - $a | join(",")')"
+            echo "$name: encoder tiers disagree on their field set"
+            echo "  only in the jq tier:    ${only_jq:-<none>}"
+            echo "  only in the bash tier:  ${only_bash:-<none>}"
+            return 1
+        fi
+    done
+}

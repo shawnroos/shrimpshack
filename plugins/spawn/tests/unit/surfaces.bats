@@ -308,3 +308,32 @@ CTL
     grep -q -- '--consent-shell-rc' "$CMD_DIR/setup.md"
     grep -q -- 'consent_required' "$CMD_DIR/setup.md"
 }
+
+@test "the EX_* enum is IDENTICAL in setup.sh and setup-lib.sh" {
+    # setup.sh restates setup-lib.sh's contract constants because this suite
+    # derives the exit-code table in commands/setup.md from THIS file's
+    # `EX_*=<n>` lines. Its own comment says "a change here without the matching
+    # change in setup-lib.sh is a defect" — and nothing asserted it, so the
+    # defect it names could ship. A comment naming a failure class is not a
+    # guard against it.
+    #
+    # The right fix is arguably to stop restating them, but that means changing
+    # where this suite reads the table from, which is a bigger change than the
+    # risk warrants. Pinning the invariant costs four lines and closes it now.
+    local lib="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
+    local a b
+    a="$(grep -oE '^EX_[A-Z]+=[0-9]+' "$lib/setup.sh" | sort)"
+    b="$(grep -oE '^EX_[A-Z]+=[0-9]+' "$lib/setup-lib.sh" | sort)"
+
+    # Guard the guard: both actually matched something, or "they are equal" is a
+    # statement about two empty strings.
+    [ -n "$a" ]
+    [ -n "$b" ]
+    [ "$(printf '%s\n' "$a" | wc -l | tr -d ' ')" -ge 5 ]
+
+    if [ "$a" != "$b" ]; then
+        echo "setup.sh and setup-lib.sh disagree on the frozen exit-code enum:"
+        diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") || true
+        return 1
+    fi
+}

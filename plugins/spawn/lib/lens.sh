@@ -643,20 +643,10 @@ fi
 # Then the SAME env/Keychain fallback spawnctl's probe runs (R27). Without it a
 # setup that retired the config token leaves the probe passing and this call
 # 401'ing — the divergence the comment above calls undebuggable.
-# Wrapped in a function ONLY so `local -` is available: this block assigns a
-# credential, and at top level there is no scope to confine `set +x` to, so a
-# caller running the script under `bash -x` would trace the token out. The
-# function restores the caller's own xtrace setting on return.
-resolve_token_from_fallback() {
-    local -
-    set +x
-    SPAWN_TOKEN_VALUE=""
-    if spawn::token_fallback "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
-        TOKEN="$SPAWN_TOKEN_VALUE"
-    fi
-    SPAWN_TOKEN_VALUE=""
-}
-[ -n "$TOKEN" ] || resolve_token_from_fallback
+# spawn::resolve_token (secrets.sh) owns this, xtrace guard and all — it was a
+# byte-identical copy in both this file and its sibling until the duplication
+# was collapsed into the file that already owns the chain.
+[ -n "$TOKEN" ] || spawn::resolve_token "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"
 # An empty token is not fatal here: the gateway answers with 401/403 and that
 # becomes exit 7, which is a truthful classification. Guessing a code before the
 # wire would invent a failure the gateway never reported.
