@@ -7,7 +7,12 @@ repo and stays quiet elsewhere. Cross-cutting memories go to the flat root (glob
 instead, so a genuinely general learning isn't locked to one repo.
 
 Reuses plan 002's import discipline:
-  - prune-protected: stamps a fresh `last_used` and `pin: true`
+  - stamps a fresh `last_used`. It does NOT pin: reflect's retirement pass never
+    deletes for capacity (a memory past the index cut stays on disk and in QMD and
+    is still recalled), so "prune-protection" guards against nothing — while a pin
+    bypasses the index budget entirely. 281 re-imported bodies carrying `pin: true`
+    would have evicted 82 of 84 global entries and blown the index to 4.2x budget
+    the moment recursive enumeration made them visible.
   - idempotent: skips when `(origin, origin_hash)` is already present
   - non-destructive: never touches the archive
   - schema-preserving: line-inserts the new top-level keys, no parse-reemit
@@ -27,7 +32,6 @@ import os
 import sys
 
 GLOBAL = "global"
-PIN_LINE = "pin: true"
 
 
 def _err(msg):
@@ -166,7 +170,7 @@ def apply(actions, today):
             text = open(src, encoding="utf-8", errors="replace").read()
             scope_val = action.split("import:", 1)[1]
             extra = ["scope: " + scope_val, "origin: " + origin,
-                     "origin_hash: " + body_hash(text), "last_used: " + today, PIN_LINE]
+                     "origin_hash: " + body_hash(text), "last_used: " + today]
             out = inject_frontmatter(text, extra)
             os.makedirs(os.path.dirname(target), exist_ok=True)
             tmp = target + ".tmp"

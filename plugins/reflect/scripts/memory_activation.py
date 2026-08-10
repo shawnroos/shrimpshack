@@ -33,7 +33,15 @@ an exception).
 import math
 import os
 import re
+import sys
 from datetime import date, datetime
+
+# The shared recursive store enumeration (KTD16). Imported by path rather than as
+# a package: `scoped-memory` is not an importable name (it has a hyphen) and this
+# script is run directly as often as it is imported.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "scoped-memory"))
+import corpus
 
 # --- Tunable parameters (Phase B spike sweeps these; defaults are the start) ---
 DEFAULT_PARAMS = {
@@ -146,10 +154,68 @@ def parse_pinned(path):
     return bool(_PIN_RE.search(text))
 
 
+#: The one token an agent writes into MEMORY_USE.log.
+APPLIED_TOKEN = "applied"
+
+#: Machine records of something that is NOT an application: `written` (the memory
+#: was saved) and `reflect` (a /reflect batch timestamp bump). These must never
+#: raise activation. **Any future non-application token must be added here in the
+#: same change that introduces its writer** — this set is where that risk lives.
+NON_APPLICATION_TOKENS = frozenset({"written", "reflect"})
+
+
+def use_line_counts(parts):
+    """Does this MEMORY_USE.log line contribute to activation?
+
+    Line shape is `<date-or-timestamp> <name> <token> [annotation...]`. Only an
+    *application* may count: use raises activation, activation lowers the recall
+    floor, and a lower floor surfaces the memory more — so counting a mere save
+    would let a memory reinforce itself for having been written down (KTD9a).
+
+    The rule:
+
+      * fewer than 2 fields                -> not a record, does not count
+      * field 3 absent                     -> historical application, counts
+      * field 3 starts with `[` or `(`     -> annotation, not a token:
+                                              historical application, counts
+      * field 3 in NON_APPLICATION_TOKENS  -> does not count
+      * anything else                      -> historical context tag, counts
+
+    That last branch is measured, not assumed. The live log (1701 lines, larger
+    than the 1596 the plan measured) carries 468 lines with a bare unbracketed
+    field 3 across 44 distinct tags: 154 are the reserved `reflect` batch bump,
+    and the other ~314 are ad-hoc session/context tags on genuine applications
+    (`web2991-session`, `ce-debug`, `U12`, `manual`, an em-dash followed by
+    prose). Refusing to count unrecognized tokens would silently drop those 314
+    applications and reshuffle the whole hot/cold cut of the index — the same
+    bulk-reshuffle harm KTD14 guards against, for a hypothetical benefit.
+
+    `reflect-manual` / `reflect-session` / `reflect-spinoff-*` (92 lines) are
+    counted deliberately, not by oversight: they carry individual dates, one line
+    per memory, and read as reflect Pass 2 recording applications observed in a
+    session — unlike the bare `reflect` batch, which stamps many memories with one
+    identical timestamp. The exclusion is by exact token, never by prefix.
+
+    Going forward the contract is narrow: agents write only `applied`, machines
+    write only the reserved tokens.
+    """
+    if len(parts) < 2:
+        return False
+    if len(parts) < 3:
+        return True
+    token = parts[2]
+    if token[:1] in ("[", "("):
+        return True
+    return token not in NON_APPLICATION_TOKENS
+
+
 def use_counts(use_log_path):
-    """Map of memory-name -> count from MEMORY_USE.log. Log lines look like
-    `<date> <memory-name> [trigger]`; the 2nd whitespace field is the name.
-    Missing/unreadable log -> empty map (every memory gets 0 uses)."""
+    """Map of memory-name -> count of ACTIVATION-BEARING lines in MEMORY_USE.log.
+    The 2nd whitespace field is the name; `use_line_counts` above decides which
+    lines count. Missing/unreadable log -> empty map (every memory gets 0 uses).
+
+    RECALL.log (surfacing telemetry) is never read here — that separation is the
+    whole point of the measurement split (KTD9)."""
     counts = {}
     try:
         lines = open(use_log_path, encoding="utf-8").read().splitlines()
@@ -157,33 +223,43 @@ def use_counts(use_log_path):
         return counts
     for ln in lines:
         parts = ln.split()
-        if len(parts) >= 2:
+        if use_line_counts(parts):
             name = parts[1]
             counts[name] = counts.get(name, 0) + 1
     return counts
 
 
 def score_dir(memory_dir, today=None, params=None):
-    """Score every body .md in memory_dir. Returns a list of
-    (filename, score) sorted by score descending then filename, ready for the
-    renderer to truncate at the budget. MEMORY.md and dotfiles are excluded;
-    name matching for use_counts strips the .md so a frontmatter `name:` slug or
-    the filename stem both line up with the log's 2nd field."""
+    """Score every memory body under memory_dir. Returns a list of
+    (relpath, score) sorted by score descending then relpath, ready for the
+    renderer to truncate at the budget.
+
+    Enumeration is `corpus.iter_bodies` — RECURSIVE, so the `_scope/<slug>/`
+    subtree is scored too. It used to be a flat `os.listdir`, which left roughly
+    a third of the store with no activation data at all: scoped memories could
+    never reach the hot index no matter how often they were applied (KTD16).
+
+    The identifier is therefore the STORE-RELATIVE PATH, not the bare filename —
+    `_scope/-Users-x-projects-y/bar.md` — because that is what addresses a scoped
+    body as an index link target. Callers wanting a display name take the
+    basename.
+
+    Use-log matching deliberately keys on the BASENAME stem: the log's 2nd field
+    is a name slug or filename stem and has never carried a path, so looking up
+    the relpath would hand every scoped body a use count of zero — reintroducing
+    the invisibility this enumeration exists to remove. Both spellings are tried
+    (underscore filename stem and kebab frontmatter slug)."""
     today = today or date.today()
     p = _params(params)
     counts = use_counts(os.path.join(memory_dir, "MEMORY_USE.log"))
     scored = []
-    for fn in os.listdir(memory_dir):
-        if not fn.endswith(".md") or fn == "MEMORY.md" or fn.startswith("."):
-            continue
+    for fn, _slug in corpus.iter_bodies(memory_dir):
         path = os.path.join(memory_dir, fn)
         try:
             mtime_date = datetime.fromtimestamp(os.path.getmtime(path)).date()
         except Exception:
             mtime_date = None
-        stem = fn[:-3]
-        # log may record either the frontmatter name slug or the filename stem;
-        # count both spellings (underscore filename vs kebab slug) when present.
+        stem = os.path.basename(fn)[:-3]
         uc = counts.get(stem, 0) or counts.get(stem.replace("_", "-"), 0)
         s = activation(
             today,

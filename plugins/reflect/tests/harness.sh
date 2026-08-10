@@ -27,7 +27,36 @@ bad()  { FAIL=$((FAIL+1)); echo "  FAIL - $1" >&2; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 # qmd reads can transiently lag under heavy sequential load (sqlite); retry the
 # existence check so a qmd timing hiccup isn't reported as a logic failure.
-has_collection(){ local n; for n in 1 2 3 4 5; do qmd collection list 2>/dev/null | grep -q "$1" && return 0; sleep 1; done; return 1; }
+# Returns 0 = present, 1 = genuinely absent, 2 = qmd did not answer.
+# The third case is the one that matters here: qmd's collection state is GLOBAL on
+# this machine and the daemon answers intermittently, so a run can pass the block's
+# health gate and then hang mid-block. Every retry then elapses with no output, and
+# "we could not ask" gets recorded as "the answer was no" — a different assertion
+# failing on each run with no code change between. That conflation is precisely what
+# this plugin exists to fix at runtime; it has no business in the plugin's own tests.
+has_collection(){
+  local n out answered=0
+  for n in 1 2 3 4 5; do
+    out="$(qmd collection list 2>/dev/null)"
+    if [ -n "$out" ]; then
+      answered=1
+      printf '%s' "$out" | grep -q "$1" && return 0
+    fi
+    sleep 1
+  done
+  [ "$answered" = "1" ] && return 1
+  return 2
+}
+# check_collection: same contract as `check`, but a non-answering qmd is a SKIP.
+check_collection(){
+  local label="$1" name="$2" rc
+  has_collection "$name"; rc=$?
+  case "$rc" in
+    0) ok   "$label" ;;
+    1) bad  "$label" ;;
+    2) echo "  skip - $label (qmd stopped answering; not a failure)" ;;
+  esac
+}
 
 if ! command -v qmd >/dev/null 2>&1; then
   echo "harness: qmd not on PATH — skipping qmd-dependent tests" >&2
@@ -35,6 +64,59 @@ fi
 
 # ------------------------------------------------------------------ reconciler
 echo "== reconciler =="
+# The reconcile block runs against a STUB qmd, not the live one.
+#
+# It used to shell the real binary, and qmd's collection state is GLOBAL on this
+# machine — 13 collections visible repo-wide, `claude-handoffs` already present from
+# an earlier /reflect — so the block's own `qmd init` in a temp dir isolated nothing
+# and concurrent runs shared one daemon. Worse, the daemon answers intermittently, so
+# a run could pass a health probe and then hang mid-block; a different assertion
+# failed on each run with no code change between. Gating on responsiveness only
+# converted those false failures into skipped coverage.
+#
+# A stub removes the dependency entirely: the assertions are about what the
+# RECONCILER does with collections, never about qmd's own behavior, so modelling
+# collection state in a file tests exactly as much and always runs. The Verification
+# Contract's rule that nothing may depend on a healthy qmd now holds here too.
+echo "== qmd reconcile (stubbed) =="
+QSTUB="$ROOT/qmd-stub"; mkdir -p "$QSTUB"
+QSTATE="$ROOT/qmd-collections"; : > "$QSTATE"
+cat > "$QSTUB/qmd" <<'QMDEOF'
+#!/bin/sh
+# Minimal qmd modelling ONLY what qmd-reconcile-collections.sh and this harness
+# call: one line per collection in $QMD_STUB_STATE, "<name> <path>".
+state="${QMD_STUB_STATE:?}"
+case "$1" in
+  init) exit 0 ;;
+  embed) exit 0 ;;
+  collection)
+    shift
+    case "$1" in
+      show) grep -q "^$2 " "$state" 2>/dev/null && exit 0 || exit 1 ;;
+      list) [ -s "$state" ] || { echo "Collections (0):"; exit 0; }
+            echo "Collections ($(grep -c . "$state")):"
+            while read -r n p; do [ -n "$n" ] && echo "$n (qmd://$n/)  $p"; done < "$state"
+            exit 0 ;;
+      add)  name=""; path=""
+            shift
+            while [ $# -gt 0 ]; do
+              case "$1" in --name) name="$2"; shift 2 ;; *) path="$1"; shift ;; esac
+            done
+            [ -n "$name" ] || name="$(basename "$path")"
+            grep -q "^$name " "$state" 2>/dev/null && exit 0
+            echo "$name $path" >> "$state"; exit 0 ;;
+      rename) sed_tmp="$state.t"; awk -v o="$2" -v n="$3" '{ if ($1==o) $1=n; print }' \
+                "$state" > "$sed_tmp" && mv "$sed_tmp" "$state"; exit 0 ;;
+      *) exit 1 ;;
+    esac ;;
+  *) exit 1 ;;
+esac
+QMDEOF
+chmod +x "$QSTUB/qmd"
+QMD_PREV_PATH="$PATH"
+export QMD_STUB_STATE="$QSTATE"
+export PATH="$QSTUB:$PATH"
+
 if command -v qmd >/dev/null 2>&1; then
   R="$ROOT/recon"; mkdir -p "$R"; cd "$R"
   qmd init >/dev/null 2>&1
@@ -43,7 +125,7 @@ if command -v qmd >/dev/null 2>&1; then
   printf '# b\nbeta brainstorm\n' > doc-store/brainstorms/b1.md
   printf '# h\nhandoff note\n' > doc-store/handoffs/h1.md
   printf '# f\nforeign content\n' > foreign/f1.md
-  # seed a foreign (non-claude-) collection that must remain untouched
+  # a foreign (non-claude-) collection that must remain untouched
   qmd collection add ./foreign >/dev/null 2>&1
   qmd collection rename foreign keepme-foreign >/dev/null 2>&1
 
@@ -51,10 +133,10 @@ if command -v qmd >/dev/null 2>&1; then
   export QMD_RECONCILE_DOC_STORE="$R/doc-store"
   export QMD_RECONCILE_NO_EMBED=1
   bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1
-  check "claude-memory created"      "has_collection 'claude-memory'"
-  check "claude-brainstorms created" "has_collection 'claude-brainstorms'"
-  check "claude-handoffs created"    "has_collection 'claude-handoffs'"
-  check "foreign collection untouched" "has_collection 'keepme-foreign'"
+  check_collection "claude-memory created"      "claude-memory"
+  check_collection "claude-brainstorms created" "claude-brainstorms"
+  check_collection "claude-handoffs created"    "claude-handoffs"
+  check_collection "foreign collection untouched" "keepme-foreign"
 
   # Compare the SET of collection NAMES (the list output also carries volatile
   # "Updated: Ns ago" timestamps, which is not a state change).
@@ -68,10 +150,16 @@ if command -v qmd >/dev/null 2>&1; then
 
   mkdir -p doc-store/solutions; printf '# s\ngamma solution\n' > doc-store/solutions/s1.md
   bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1
-  check "new doc-type auto-registers (claude-solutions)" "has_collection 'claude-solutions'"
+  check_collection "new doc-type auto-registers (claude-solutions)" "claude-solutions"
   unset QMD_RECONCILE_MEMORY_DIR QMD_RECONCILE_DOC_STORE QMD_RECONCILE_NO_EMBED
   cd "$REPO"
+else
+  # Say it out loud. A silently skipped block reads as coverage that ran, which is
+  # the failure mode this plugin exists to fix — reported, not swallowed.
+  echo "  skip - qmd reconcile block (stub not runnable; not a failure)"
 fi
+# Take the stub back off PATH: every later block must see the real environment.
+PATH="$QMD_PREV_PATH"; unset QMD_STUB_STATE
 # qmd-absent fallback (runs regardless of env): reconciler skips cleanly, exit 0
 if PATH="/usr/bin:/bin" bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1; then
   ok "reconciler skips cleanly when qmd is absent (exit 0)"
@@ -194,11 +282,33 @@ T1=$(sr_now)
 printf '{"prompt":"anything","session_id":"W2"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
 T2=$(sr_now)
 check "wedged 2nd prompt still probes (transient tolerance, not suppressed)" "sr_elapsed_gt $T1 $T2"
-# 3rd wedged prompt (different session): count>=2 -> suppressed INSTANTLY, no qmd call
-T3=$(sr_now)
+# 3rd wedged prompt (different session): count>=2 -> cooldown armed, NO qmd call.
+#
+# This assertion was rewritten by U4 and the old form is worth recording, because it
+# was the bug written down as a test:
+#   check "...3rd prompt suppressed instantly" "[ -z \"$OUTW3\" ] && sr_elapsed_lt $T3 $T4"
+# `[ -z "$OUTW3" ]` demanded EMPTY output on an armed cooldown — precisely the
+# fail-to-silence behavior U4 exists to delete. An armed cooldown must now say so.
+#
+# The timing half was replaced too, for a separate reason: `sr_elapsed_lt` (0.5s)
+# inferred "did it call qmd" from wall-clock, which was always a proxy and is now a
+# wrong one. The fallback builds a BM25 index over the live store (~889 bodies,
+# ~560ms build + ~26ms query), so the cooldown path runs ~0.7-0.9s and a 0.5s bound
+# would flake. Counting spawned children measures skipping qmd directly. Idiom
+# borrowed from the process-group-kill block below.
+W3_BEFORE="$(grep -c . "$SR_PIDFILE" 2>/dev/null || echo 0)"
 OUTW3="$(printf '{"prompt":"anything","session_id":"W3"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
-T4=$(sr_now)
-check "cooldown armed on 2nd failure: 3rd prompt suppressed instantly" "[ -z \"\$OUTW3\" ] && sr_elapsed_lt $T3 $T4"
+tail -n +"$((W3_BEFORE+1))" "$SR_PIDFILE" > "$SR/w3-new-pids" 2>/dev/null || : > "$SR/w3-new-pids"
+# `grep -c .` prints 0 AND exits 1 on an EMPTY file, so `|| echo 0` fires too and
+# the value becomes "0\n0" — never equal to "0". Every other use of this idiom in
+# this file reads a file that is non-empty in the passing case, so the fallback
+# never runs and the bug stays hidden; this is the one place it is empty when the
+# code is CORRECT, which turned a passing behavior into a failing assertion.
+W3_SPAWNED="$(wc -l < "$SR/w3-new-pids" | tr -d '[:space:]')"
+check "cooldown armed on 2nd failure: 3rd prompt makes NO qmd call" \
+  '[ "$W3_SPAWNED" = "0" ] && [ "$(sr_alive "$SR/w3-new-pids")" = "0" ]'
+check "cooldown armed: 3rd prompt states the degradation instead of going silent" \
+  'echo "$OUTW3" | grep -qi "fallback"'
 # FORCE bypasses an armed cooldown (still attempts qmd -> takes ~budget, not instant)
 T5=$(sr_now)
 printf '{"prompt":"anything","session_id":"W4"}' | PATH="$SR_WEDGED_PATH" SEEDED_RECALL_FLAG_DIR="$F1" SEEDED_RECALL_FORCE=1 SEEDED_RECALL_TIMEOUT=1 bash "$HOOKS/seeded-recall.sh" >/dev/null 2>&1
@@ -249,6 +359,40 @@ check "shipped default budget: healthy recall fires with TIMEOUT unset" "echo \"
 check "shipped default budget: healthy success writes NO failure stamp" "[ ! -f \"$F5/qmd-failure-stamp\" ]"
 sr_killall   # reap any grandchildren left by the wedged-stub tests above
 cd "$REPO"
+
+# --- U0: the live settings override that silently switched recall off ----------
+# `SEEDED_RECALL_TIMEOUT` is the hook's TOTAL wall budget, and run() returns early
+# whenever less than 0.05s remains. A value at or below that starves every query
+# before qmd is ever called: no request, a recorded failure per prompt, and the
+# cooldown armed after two — indistinguishable from "nothing was relevant". That is
+# how recall stayed off on this machine through a 4,796-line session, and it is
+# machine state, so no diff would ever show it coming back.
+#
+# WARN, never FAIL: this reads the developer's own settings.json, and a suite that
+# failed on another user's config would be worse than the bug it guards.
+SR_LIVE_SETTINGS="$HOME/.claude/settings.json"
+if [ -f "$SR_LIVE_SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
+  SR_PINNED="$(python3 - "$SR_LIVE_SETTINGS" <<'PYEOF'
+import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get("env", {}).get("SEEDED_RECALL_TIMEOUT")
+except Exception:
+    sys.exit(0)
+if v is None:
+    sys.exit(0)
+try:
+    starving = float(v) <= 0.05
+except (TypeError, ValueError):
+    starving = False
+print(("STARVING " if starving else "PINNED ") + str(v))
+PYEOF
+)"
+  case "$SR_PINNED" in
+    STARVING*) echo "  warn - live settings pin SEEDED_RECALL_TIMEOUT=${SR_PINNED#STARVING } — at/below the 0.05s guard, so seeded recall NEVER calls qmd. Remove it from ~/.claude/settings.json." >&2 ;;
+    PINNED*)   echo "  info - live settings pin SEEDED_RECALL_TIMEOUT=${SR_PINNED#PINNED } (not starving; the shipped default is 6s)" ;;
+    *)         ok "live settings do not pin SEEDED_RECALL_TIMEOUT (shipped 6s budget applies)" ;;
+  esac
+fi
 
 # ----------------------------------------------------------------------- lint
 echo "== memory-index-lint =="
@@ -535,8 +679,27 @@ check "scope: flat-root (global) body does not match a repo slug" \
   "scope_py \"sys.exit(0 if not scope.scope_matches('qmd://fa/global.md','-Users-shawnroos-projects-slate-web-app') else 1)\""
 check "scope: parses scope slug from a _scope path too (unmangled)" \
   "scope_py \"sys.exit(0 if scope.scope_of_qmd_file('mem/_scope/-Users-x-proj/a.md')=='-Users-x-proj' else 1)\""
-check "scope: resolver folds this worktree to its parent repo (reflect)" \
-  "scope_py \"sys.exit(0 if scope.repo_root('$REPO').endswith('/projects/reflect') and 'worktrees' not in scope.repo_root('$REPO') else 1)\""
+# The expected root is DERIVED, not hardcoded: `worktree list --porcelain`'s first
+# entry is the MAIN checkout, which is what a worktree must fold to. Deriving it via
+# --git-common-dir (what repo_root itself uses) would be tautological.
+MAIN_CHECKOUT="$(git -C "$REPO" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
+check "scope: resolver folds this checkout to the main repo root (derived)" \
+  "scope_py \"sys.exit(0 if scope.repo_root('$REPO')=='$MAIN_CHECKOUT' and '/worktrees/' not in scope.repo_root('$REPO') else 1)\""
+# A submodule's .git is a FILE pointing at <super>/.git/modules/<name>, so the
+# worktree folds never matched it and the slug named a path inside .git — neither the
+# submodule nor the superproject. Built for real rather than mocked, because the
+# whole bug is in what git actually reports.
+SMR="$ROOT/sm"; mkdir -p "$SMR"
+( cd "$SMR" \
+  && git init -q sub && git -C sub -c user.email=t@t -c user.name=t commit -q --allow-empty -m i \
+  && git init -q super && git -C super -c user.email=t@t -c user.name=t commit -q --allow-empty -m i \
+  && git -C super -c protocol.file.allow=always submodule add -q ../sub sub ) >/dev/null 2>&1
+if [ -d "$SMR/super/sub" ]; then
+  check "scope: a submodule folds to the superproject, not inside .git" \
+    "scope_py \"r=scope.repo_root('$SMR/super/sub'); sys.exit(0 if r and r.rstrip('/').endswith('/super') and '/.git/' not in r else 1)\""
+else
+  echo "  skip - submodule fold (could not build a submodule fixture here)"
+fi
 check "scope: outside a git repo resolves to global" \
   "scope_py \"sys.exit(0 if scope.resolve_repo_slug('/tmp')=='global' else 1)\""
 check "scope: home slug is an ancestor of a repo slug; siblings are not" \
@@ -557,8 +720,16 @@ printf -- '---\nname: gen pref\ncross-project: yes\n---\nPrefer rebase over merg
 printf -- '---\nname: t\n---\nx\n' > "$RIA/-Users-x-acme/memory/cruft.md"
 printf '# idx\n' > "$RIA/-Users-x-slate/memory/MEMORY.md"
 REIMPORT_TODAY=2026-06-27 python3 "$REPO/scripts/scoped-memory/reimport.py" "$RIA" "$RIS" --apply >/dev/null 2>&1
-check "reimport: repo memory lands under _scope/<slug>/ with pin + scope" \
-  "[ -f '$RIS/_scope/-Users-x-slate/conv.md' ] && grep -q 'scope: repo:-Users-x-slate' '$RIS/_scope/-Users-x-slate/conv.md' && grep -q 'pin: true' '$RIS/_scope/-Users-x-slate/conv.md'"
+check "reimport: repo memory lands under _scope/<slug>/ with its scope stamped" \
+  "[ -f '$RIS/_scope/-Users-x-slate/conv.md' ] && grep -q 'scope: repo:-Users-x-slate' '$RIS/_scope/-Users-x-slate/conv.md'"
+# Reimport must NOT pin. A pin bypasses the index budget outright, and retirement
+# never deletes for capacity anyway — a memory past the cut stays on disk, in QMD,
+# and recallable — so "prune-protection" protected against nothing. This assertion
+# exists because the opposite one shipped: 281 pinned re-imports would have evicted
+# 82 of 84 global entries and blown the index to 4.2x budget the moment recursive
+# enumeration made them visible.
+check "reimport: does NOT pin (a pin would bypass the index budget)" \
+  "! grep -q 'pin: true' '$RIS/_scope/-Users-x-slate/conv.md'"
 check "reimport: cross-cutting memory lands FLAT (global), not scoped" \
   "[ -f '$RIS/pref.md' ] && [ ! -f '$RIS/_scope/-Users-x-acme/pref.md' ]"
 check "reimport: trivial body dropped; MEMORY.md not imported" \
@@ -633,6 +804,359 @@ BF_A="$(find "$BF/store" -name '*.md' | wc -l | tr -d ' ')"
 python3 "$REPO/scripts/scoped-memory/backfill.py" "$BF/store" "$BF/projects" --home-slug "$HSLUG" --apply >/dev/null 2>&1
 BF_B="$(find "$BF/store" -name '*.md' | wc -l | tr -d ' ')"
 check "backfill: idempotent (file count stable on re-run)" '[ "$BF_A" = "$BF_B" ]'
+
+# ------------------------------------------- hook input contract (U0, plan 004)
+# Claude Code delivers hook input as JSON on STDIN; no CLAUDE_TOOL*/$TOOL_INPUT env
+# var exists. These assertions run the SHIPPED command extracted straight out of
+# hooks.json (never copy-pasted) so they bind to what the harness actually executes.
+# reflect-trigger.sh writes to $HOME/.claude/.reflect-pending, so HOME is stubbed.
+echo "== hook input contract =="
+HKJSON="$REPO/.claude/hooks/hooks.json"
+HKHOME="$ROOT/hookhome"; mkdir -p "$HKHOME/.claude"
+HKFLAG="$HKHOME/.claude/.reflect-pending"
+# $1 = event (PostToolUse/PreToolUse), $2 = matcher -> the command string as shipped
+# Fatal on a miss, deliberately: a silent miss returns "" and `/bin/bash -c ""`
+# exits 0 writing no flag, which SATISFIES every negative-space assertion below.
+# Four of the seven would then pass vacuously and the suite would report a partial
+# green pointing at neither end. Drift in hooks.json must fail loudly instead.
+hk_cmd() {
+  python3 - "$HKJSON" "$1" "$2" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for entry in cfg["hooks"].get(sys.argv[2], []):
+    if entry.get("matcher") == sys.argv[3]:
+        print(entry["hooks"][0]["command"])
+        sys.exit(0)
+sys.exit("hooks.json: no %s entry with matcher %r" % (sys.argv[2], sys.argv[3]))
+PY
+}
+# $1 = command, $2 = stdin payload, $3 = PATH override ("" keeps the current PATH).
+# /bin/bash is spelled absolutely so a stripped PATH can't make the shell itself
+# unfindable — that would fake a pass on the fail-open assertion.
+hk_run() {
+  rm -f "$HKFLAG"
+  printf '%s' "$2" | env HOME="$HKHOME" CLAUDE_PLUGIN_ROOT="$REPO" \
+    ${3:+PATH="$3"} /bin/bash -c "$1" >/dev/null 2>&1
+  echo "$?"
+}
+HK_BASH="$(hk_cmd PostToolUse Bash)" || { echo "  FAIL - hooks.json shape drifted (PostToolUse/Bash)"; FAIL=$((FAIL+1)); }
+HK_TODO="$(hk_cmd PreToolUse TodoWrite)" || { echo "  FAIL - hooks.json shape drifted (PreToolUse/TodoWrite)"; FAIL=$((FAIL+1)); }
+check "hook: both matchers were actually found in hooks.json (guards the rest)" \
+  '[ -n "$HK_BASH" ] && [ -n "$HK_TODO" ]'
+check "hook: matchers no longer read the nonexistent \$TOOL_INPUT env var" \
+  '! printf "%s%s" "$HK_BASH" "$HK_TODO" | grep -q "TOOL_INPUT"'
+
+HK_E1="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"gh pr merge 29 --squash"},"tool_response":{"stdout":""},"tool_use_id":"t1","duration_ms":12}')"
+check "hook: Bash matcher fires PR_event on a 'gh pr merge' stdin payload" \
+  '[ -f "$HKFLAG" ] && grep -q PR_event "$HKFLAG" && [ "$HK_E1" = "0" ]'
+
+HK_E2="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"git status --short"},"tool_response":{"stdout":""},"tool_use_id":"t2"}')"
+check "hook: Bash matcher writes no flag on a non-matching command (exit 0)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E2" = "0" ]'
+
+# jq is installed in BOTH /opt/homebrew/bin and /usr/bin here, so the usual
+# PATH="/usr/bin:/bin" idiom does not strip it — point PATH at an empty dir instead
+# and verify jq really is unreachable before trusting the assertion.
+HKNOJQ="$ROOT/nojq-bin"; mkdir -p "$HKNOJQ"
+check "hook: jq-absent fixture actually hides jq (guards the next assertion)" \
+  '! PATH="$HKNOJQ" command -v jq >/dev/null 2>&1'
+HK_E3="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"gh pr merge 29 --squash"}}' "$HKNOJQ")"
+check "hook: jq absent -> fail-open (exit 0, no flag written)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E3" = "0" ]'
+
+# The jq-absent assertion above passes with OR WITHOUT the `command -v jq || exit 0`
+# guard: with jq unreachable the substitution is empty, grep fails, and the trailing
+# `exit 0` gives an identical outcome. Absence of a flag cannot distinguish "guard
+# worked" from "everything downstream quietly no-opped", so that assertion pins the
+# outcome but not the mechanism.
+#
+# This one pins the mechanism from the other side, with a jq SHIM that records having
+# run. It proves the matcher genuinely SHELLS OUT to jq and CONSUMES its stdout —
+# delete the jq call, or stop reading its output, and the sentinel or the flag stops
+# appearing. That is the property the absent-jq test cannot see.
+HKSHIM="$ROOT/jqshim-bin"; mkdir -p "$HKSHIM"
+HKSENT="$ROOT/jq-was-invoked"
+printf '#!/bin/sh\ntouch "%s"\ncat >/dev/null 2>&1\nprintf "gh pr merge 29"\n' "$HKSENT" > "$HKSHIM/jq"
+chmod +x "$HKSHIM/jq"
+rm -f "$HKSENT"
+# Payload carries a NON-matching command; only the shim's stdout matches. So a flag
+# can only appear if jq's output — not the raw payload — is what gets grepped.
+# PREPEND, never replace: the hook also needs grep/printf, and the shim needs touch.
+# Replacing PATH outright strips coreutils and the whole thing no-ops into a false
+# result — the same failure shape this assertion exists to catch.
+HK_E3B="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"git status"}}' "$HKSHIM:$PATH")"
+check "hook: the Bash matcher really invokes jq and greps ITS output, not raw stdin" \
+  '[ -f "$HKSENT" ] && [ -f "$HKFLAG" ] && [ "$HK_E3B" = "0" ]'
+
+# TodoWrite gates in jq, not on raw-JSON grep, so pretty-printed stdin still parses.
+HK_E4="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{"todos":[{"content":"a","status": "completed"},{"content":"b","status": "completed"}]}}')"
+check "hook: TodoWrite fires when every todo is completed (whitespace-tolerant)" \
+  '[ -f "$HKFLAG" ] && grep -q TodoWrite_all_done "$HKFLAG" && [ "$HK_E4" = "0" ]'
+
+HK_E5="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{"todos":[{"content":"a","status":"completed"},{"content":"b","status":"in_progress"}]}}')"
+check "hook: TodoWrite stays silent while a todo is still open (exit 0)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E5" = "0" ]'
+
+# jq's `all` returns true over an EMPTY array, so `length > 0 and` is the only thing
+# standing between us and firing on every list-clearing write — which is exactly what
+# happens at the end of a plan. `and` short-circuits, so the guard works; without
+# these two assertions, deleting it leaves the suite fully green.
+HK_E6="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{"todos":[]}}')"
+check "hook: TodoWrite does NOT fire on an empty todo list (the vacuous-truth guard)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E6" = "0" ]'
+
+HK_E7="$(hk_run "$HK_TODO" '{"tool_name":"TodoWrite","tool_input":{}}')"
+check "hook: TodoWrite does NOT fire when the todos key is absent entirely" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E7" = "0" ]'
+
+# The matcher greps the whole command string, so before anchoring, a commit message or
+# heredoc merely MENTIONING the phrase fired a PR_event. Not a regression (the old
+# matcher grepped "" and never fired at all) but newly reachable now that the path works
+# — and it would let U0's own success signal be satisfied by a non-event.
+HK_E8="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"docs: explain the gh pr merge flow\""}}')"
+check "hook: a command that merely MENTIONS 'gh pr merge' does not fire PR_event" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_E8" = "0" ]'
+
+HK_E9="$(hk_run "$HK_BASH" '{"tool_name":"Bash","tool_input":{"command":"git fetch origin && gh pr merge 29 --squash"}}')"
+check "hook: PR_event still fires for a real invocation after && (anchor not too tight)" \
+  '[ -f "$HKFLAG" ] && grep -q PR_event "$HKFLAG" && [ "$HK_E9" = "0" ]'
+
+# TodoWrite does not exist in agent/SDK/team sessions — they expose
+# TaskCreate/TaskUpdate/TaskList instead, and the session that BUILT this plugin was
+# one of them, so the all-done trigger could never fire there. TaskUpdate carries ONE
+# task, not the whole list, so "are they all done" is unknowable from its payload the
+# way it is from TodoWrite's. This fires per completion instead and leans on
+# reflect-trigger.sh's existing 600s coalesce window to collapse a burst — a
+# deliberately different signal, which is why it writes its own reason string.
+HK_TASK="$(hk_cmd PreToolUse TaskUpdate)" || { echo "  FAIL - hooks.json shape drifted (PreToolUse/TaskUpdate)"; FAIL=$((FAIL+1)); }
+HK_T1="$(hk_run "$HK_TASK" '{"tool_name":"TaskUpdate","tool_input":{"taskId":"9","status":"completed"}}')"
+check "hook: TaskUpdate fires on a completed task (the Task-tool completion boundary)" \
+  '[ -f "$HKFLAG" ] && grep -q TaskUpdate_completed "$HKFLAG" && [ "$HK_T1" = "0" ]'
+
+HK_T2="$(hk_run "$HK_TASK" '{"tool_name":"TaskUpdate","tool_input":{"taskId":"9","status":"in_progress"}}')"
+check "hook: TaskUpdate stays silent on a non-completed status (exit 0)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_T2" = "0" ]'
+
+HK_T3="$(hk_run "$HK_TASK" '{"tool_name":"TaskUpdate","tool_input":{"taskId":"9","status":"completed"}}' "$HKNOJQ")"
+check "hook: TaskUpdate fail-opens when jq is absent (exit 0, no flag)" \
+  '[ ! -f "$HKFLAG" ] && [ "$HK_T3" = "0" ]'
+
+
+# ------------------------------------------- measurement split (U7, plan 001)
+# RECALL.log (surfacing telemetry) must stay out of the activation signal, and
+# only `applied` may raise activation. telemetry_test.py carries the property
+# assertions; here we run it and add the grep-level guard that no code path
+# anywhere under the plugin ever feeds RECALL.log into use_counts.
+echo "== measurement split =="
+TELOUT="$ROOT/telemetry_test.out"
+python3 "$REPO/tests/telemetry_test.py" > "$TELOUT" 2>&1; TELRC=$?
+check "telemetry_test.py: all assertions pass" '[ "$TELRC" = "0" ]'
+check "telemetry_test.py: reports a non-empty tally" 'grep -q "telemetry_test: [1-9][0-9]* passed, 0 failed" "$TELOUT"'
+check "activation_test.py still green after the use_counts change" \
+  'python3 "$REPO/tests/activation_test.py" >/dev/null 2>&1'
+check "no code path feeds RECALL.log into use_counts" \
+  '! grep -rn "use_counts" "$REPO" --include=*.py --include=*.sh | grep -v "/tests/" | grep -q "RECALL"'
+check "use_counts reads only MEMORY_USE.log" \
+  'grep -q "use_counts(os.path.join(memory_dir, \"MEMORY_USE.log\"))" "$SCRIPTS/memory_activation.py"'
+
+# ------------------------------- shared recursive corpus (U10, plan 001/KTD16)
+# One `iter_bodies()` walks the store; every reader consumes it. corpus_test.py
+# carries the property assertions (slug parsing, exclusions, scoped activation,
+# scoped rendering, the 866-shaped timing). Here we run it, build an 866-shaped
+# fixture to time the render the way SessionStart would, and add the grep-level
+# guard that the two production consumers no longer listdir the store themselves.
+echo "== shared recursive corpus =="
+CORPOUT="$ROOT/corpus_test.out"
+python3 "$REPO/tests/corpus_test.py" > "$CORPOUT" 2>&1; CORPRC=$?
+check "corpus_test.py: all assertions pass" '[ "$CORPRC" = "0" ]'
+check "corpus_test.py: reports a non-empty tally" \
+  'grep -q "corpus_test: [1-9][0-9]* passed, 0 failed" "$CORPOUT"'
+
+# 866-file-shaped fixture with nested scope dirs — the corpus the live store
+# actually has, not the flat 64% a listdir would show. Reused by the render-timing
+# and enumeration-count assertions below.
+CP="$ROOT/corpus866"; mkdir -p "$CP/_scope"
+python3 - "$CP" <<'PY'
+import os, sys
+d = sys.argv[1]
+slugs = ["-Users-x-projects-repo%02d" % i for i in range(13)]
+for s in slugs:
+    os.makedirs(os.path.join(d, "_scope", s), exist_ok=True)
+def body(n, i):
+    return ("---\nname: %s\nlast_used: 2026-%02d-%02d\n---\ndescription: hook for %s\n\nbody %s\n"
+            % (n, 1 + i % 6, 1 + i % 28, n, n))
+for i in range(579):
+    n = "feedback_flat_%04d" % i
+    open(os.path.join(d, n + ".md"), "w").write(body(n, i))
+for i in range(287):
+    n = "project_scoped_%04d" % i
+    open(os.path.join(d, "_scope", slugs[i % len(slugs)], n + ".md"), "w").write(body(n, i))
+# Non-bodies that must never be enumerated as memories.
+open(os.path.join(d, "MEMORY.md"), "w").write("# Memory Index\n\n")
+open(os.path.join(d, "MEMORY_USE.log"), "w").write(
+    "".join("2026-06-01 feedback_flat_%04d applied\n" % i for i in range(0, 579, 3)))
+open(os.path.join(d, "RECALL.log"), "w").write("2026-06-01 feedback_flat_0000 qmd\n")
+open(os.path.join(d, "MEMORY.md.pre-render.bak"), "w").write("# old\n")
+open(os.path.join(d, "TRIGGERS.json"), "w").write('{"triggers": []}\n')
+PY
+check "866-shaped fixture: enumeration finds all 866 bodies (579 flat + 287 scoped)" \
+  '[ "$(python3 "$SCRIPTS/scoped-memory/corpus.py" "$CP" 2>/dev/null | wc -l | tr -d " ")" = "866" ]'
+check "866-shaped fixture: 287 of them are scoped" \
+  '[ "$(python3 "$SCRIPTS/scoped-memory/corpus.py" "$CP" 2>/dev/null | grep -c "^-Users-x-projects-repo")" = "287" ]'
+
+# Render wall time over the full corpus. This runs at SessionStart, so it is a real
+# budget, not a micro-benchmark. NOTE: there is no `timeout` binary on this box — a
+# check written around one exits 0 having measured nothing — so the elapsed time is
+# measured directly with the shell's own SECONDS-free millisecond arithmetic.
+CP_T0=$(python3 -c 'import time; print(int(time.time()*1000))')
+MEMORY_DIR="$CP" python3 "$SCRIPTS/memory-index-render.py" "$CP/MEMORY.md" > "$ROOT/corpus866.render" 2>&1
+CP_RC=$?
+CP_T1=$(python3 -c 'import time; print(int(time.time()*1000))')
+CP_MS=$((CP_T1 - CP_T0))
+echo "  info - 866-body index render: ${CP_MS}ms — $(cat "$ROOT/corpus866.render")"
+check "866-shaped store renders successfully" '[ "$CP_RC" = "0" ]'
+check "866-shaped render stays within the SessionStart budget (<5000ms)" \
+  '[ "$CP_MS" -lt 5000 ]'
+check "scoped bodies are eligible for the hot tier" \
+  'grep -q "](_scope/" "$CP/MEMORY.md"'
+check "scoped entries are titled from the file, not the scope directory" \
+  '! grep -qE "^- \[[^]]*Users-x-projects" "$CP/MEMORY.md"'
+check "non-bodies never enter the index (logs, .bak, trigger manifest)" \
+  '! grep -qE "\]\((MEMORY_USE\.log|RECALL\.log|TRIGGERS\.json|MEMORY\.md(\.pre-render\.bak)?)\)" "$CP/MEMORY.md"'
+
+# The guard KTD16 exists for: a consumer that enumerates the store itself sees a
+# different corpus than its siblings. Scoped to the two production consumers this
+# unit repoints; the remaining sites (memory-index-lint.sh, migrate-memory-index.py,
+# backfill.py) are outside U10's file list and are reported, not silently edited.
+# Matches the CALL (trailing paren), not the identifier — both files name
+# `os.listdir` in prose explaining why they no longer call it.
+check "memory_activation.py does not listdir the store" \
+  '! grep -q "os\.listdir(" "$SCRIPTS/memory_activation.py"'
+check "memory-index-render.py does not listdir the store" \
+  '! grep -q "os\.listdir(" "$SCRIPTS/memory-index-render.py"'
+check "both consumers enumerate through corpus.iter_bodies" \
+  'grep -q "corpus.iter_bodies" "$SCRIPTS/memory_activation.py" && grep -q "corpus.body_paths" "$SCRIPTS/memory-index-render.py"'
+
+# ------------------------------------------------- batch 1 (U9 / U1 / U3)
+# Each unit's real assertions live in its own runner; these gate them and pin the
+# structural properties a runner cannot see from the inside. The tally greps
+# require "[1-9]... passed, 0 failed" so a runner that silently degrades to zero
+# assertions cannot report success by printing "0 passed, 0 failed".
+echo "== retrieval engine (U9) =="
+RETOUT="$ROOT/retrieval_test.out"
+env -u SEEDED_RECALL_FLAG_DIR -u SEEDED_RECALL_TIMEOUT -u SEEDED_RECALL_COLLECTION \
+  -u SEEDED_RECALL_K -u SEEDED_RECALL_MEMORY_DIR -u SEEDED_RECALL_MIN_SCORE \
+  python3 "$REPO/tests/retrieval_test.py" > "$RETOUT" 2>&1; RETRC=$?
+check "retrieval_test.py: all assertions pass" '[ "$RETRC" = "0" ]'
+check "retrieval_test.py: reports a non-empty tally" 'grep -q "retrieval: [1-9][0-9]* passed, 0 failed" "$RETOUT"'
+# The extraction is the unit: if retrieval logic survives in the hook, the CLI will
+# copy it and the drift this plan exists to fix returns.
+check "seeded-recall.sh holds no retrieval logic (engine is importable)" \
+  '! grep -qE "qmd (vsearch|search)|recall_floor|select_scoped" "$REPO/hooks/seeded-recall.sh"'
+check "seeded-recall.sh delegates to the extracted module" \
+  'grep -q "retrieval" "$REPO/hooks/seeded-recall.sh"'
+
+echo "== local ranked index (U1) =="
+LIXOUT="$ROOT/local_index_test.out"
+env -u SEEDED_RECALL_FLAG_DIR -u SEEDED_RECALL_TIMEOUT -u SEEDED_RECALL_COLLECTION \
+  -u SEEDED_RECALL_K -u SEEDED_RECALL_MEMORY_DIR -u SEEDED_RECALL_MIN_SCORE \
+  python3 "$REPO/tests/local_index_test.py" > "$LIXOUT" 2>&1; LIXRC=$?
+check "local_index_test.py: all assertions pass" '[ "$LIXRC" = "0" ]'
+check "local_index_test.py: reports a non-empty tally" 'grep -q "local_index_test: [1-9][0-9]* passed, 0 failed" "$LIXOUT"'
+# KTD12: the qmd floor is arithmetically inert on BM25 scores (0.45-0.60 vs 25-38),
+# and top1-relative normalization makes the top hit clear any floor unconditionally.
+# Either mistake is silent, so both are pinned here rather than left to review.
+# Assert USE, not mention: the module's docstring correctly explains at length why
+# it must not reuse recall_floor or touch qmd, so a bare word-grep matches the
+# warning and fails on correct code. Check the import and the call instead.
+check "local index does not import or call the qmd activation floor" \
+  '! grep -qE "^[[:space:]]*(from|import)[[:space:]]+memory_activation" "$SCRIPTS/scoped-memory/local_index.py" && ! grep -qE "recall_floor[[:space:]]*\(" "$SCRIPTS/scoped-memory/local_index.py"'
+check "local index shells nothing (runs with qmd absent from PATH)" \
+  '! grep -qE "^[[:space:]]*(import|from)[[:space:]]+subprocess|os\.system|os\.popen|check_output" "$SCRIPTS/scoped-memory/local_index.py"'
+
+echo "== declared triggers (U3) =="
+TRGOUT="$ROOT/trigger_test.out"
+env -u SEEDED_RECALL_FLAG_DIR -u SEEDED_RECALL_TIMEOUT -u SEEDED_RECALL_COLLECTION \
+  -u SEEDED_RECALL_K -u SEEDED_RECALL_MEMORY_DIR -u SEEDED_RECALL_MIN_SCORE \
+  python3 "$REPO/tests/trigger_test.py" > "$TRGOUT" 2>&1; TRGRC=$?
+check "trigger_test.py: all assertions pass" '[ "$TRGRC" = "0" ]'
+check "trigger_test.py: reports a non-empty tally" 'grep -q "trigger_test: [1-9][0-9]* passed, 0 failed" "$TRGOUT"'
+# KTD18: compilation must not ride inside the renderer, whose byte-identical early
+# return would skip it on an unchanged store.
+check "manifest compilation is its own script, not inside the renderer" \
+  '[ -f "$REPO/scripts/compile-triggers.py" ] && ! grep -q "triggers" "$SCRIPTS/memory-index-render.py"'
+# Mention vs use again: the hook's header comment correctly explains that
+# $TOOL_INPUT does not exist for command hooks, so a bare word-grep fails on
+# correct code. Strip comments before looking for an actual expansion.
+check "the nudge hook reads stdin, not the nonexistent \$TOOL_INPUT" \
+  '! grep -vE "^[[:space:]]*#" "$REPO/hooks/trigger-nudge.sh" | grep -q "TOOL_INPUT"'
+
+# ------------------------------------------------- batch 2 (U2 / U4 / U6)
+# Same contract as batch 1: the runners hold the assertions, these gate them and
+# pin the structural properties a runner cannot see from inside. Each runs with the
+# SEEDED_RECALL_* namespace cleared — the harness exports those for its own hook
+# fixtures and they otherwise redirect a child runner's stamp paths.
+SR_CLEAN="env -u SEEDED_RECALL_FLAG_DIR -u SEEDED_RECALL_TIMEOUT -u SEEDED_RECALL_COLLECTION -u SEEDED_RECALL_K -u SEEDED_RECALL_MEMORY_DIR -u SEEDED_RECALL_MIN_SCORE"
+
+echo "== recall CLI (U2) =="
+CLIOUT="$ROOT/recall_cli_test.out"
+$SR_CLEAN python3 "$REPO/tests/recall_cli_test.py" > "$CLIOUT" 2>&1; CLIRC=$?
+check "recall_cli_test.py: all assertions pass" '[ "$CLIRC" = "0" ]'
+check "recall_cli_test.py: reports a non-empty tally" 'grep -q "recall_cli_test: [1-9][0-9]* passed, 0 failed" "$CLIOUT"'
+# The drift this unit ends: CLI on `qmd search` (BM25) while the hook used
+# `qmd vsearch` (vector) — measured recall@3 0.25 vs 0.75. Both now go through
+# retrieval.py, so neither may shell qmd itself.
+# Assert INVOCATION, not vocabulary. The CLI legitimately says "qmd" in its
+# docstring, in comments, and as a source-layer label in output — a word-grep
+# matches all three and fails on correct code. What must not exist is a process
+# launch. (Third false positive of this exact shape in this file; the pattern is
+# always: grep for the thing the code correctly documents.)
+check "recall CLI never launches qmd itself (delegates to retrieval.py)" \
+  '! grep -vE "^[[:space:]]*#" "$SCRIPTS/scoped-memory/reflect_cli.py" | grep -qE "subprocess\.|os\.popen|os\.system|check_output" && grep -q "_retrieval\." "$SCRIPTS/scoped-memory/reflect_cli.py"'
+check "recall --here is implemented, not just documented" \
+  'grep -q "\-\-here" "$SCRIPTS/scoped-memory/reflect_cli.py"'
+
+echo "== seeded-recall fail-over (U4) =="
+FOOUT="$ROOT/seeded_failover_test.out"
+$SR_CLEAN python3 "$REPO/tests/seeded_failover_test.py" > "$FOOUT" 2>&1; FORC=$?
+check "seeded_failover_test.py: all assertions pass" '[ "$FORC" = "0" ]'
+check "seeded_failover_test.py: reports a non-empty tally" 'grep -q "seeded_failover_test: [1-9][0-9]* passed, 0 failed" "$FOOUT"'
+
+echo "== trigger lifecycle (U6) =="
+TLOUT="$ROOT/trigger_lifecycle_test.out"
+$SR_CLEAN python3 "$REPO/tests/trigger_lifecycle_test.py" > "$TLOUT" 2>&1; TLRC=$?
+check "trigger_lifecycle_test.py: all assertions pass" '[ "$TLRC" = "0" ]'
+check "trigger_lifecycle_test.py: reports a non-empty tally" 'grep -q "trigger_lifecycle_test: [1-9][0-9]* passed, 0 failed" "$TLOUT"'
+# KTD14: the backfill writes to ~219 files; mtime is a reinforcement signal weighted
+# at 0.3 with a 60-day half-life, so not restoring it spikes every touched memory's
+# activation and reshuffles the hot/cold cut. Verified load-bearing by mutation:
+# disabling the restore fails 2 assertions in the runner.
+check "the trigger writer restores st_mtime (KTD14)" \
+  'grep -q "os.utime" "$SCRIPTS/scoped-memory/triggers.py"'
+
+# ------------------------------------------------------ commands (U5 / U11)
+# Both runners execute the exact CLI invocation their own doc specifies. That is
+# the guard against the drift this whole plan exists to fix: `recall --here` was
+# documented in SKILL.md for months while cmd_recall had no such branch. Verified
+# load-bearing — renaming --deliberate in the CLI fails 2 assertions in each.
+echo "== deliberate-memory commands (U5 / U11) =="
+MEMOUT="$ROOT/memories_cmd_test.out"
+$SR_CLEAN python3 "$REPO/tests/memories_cmd_test.py" > "$MEMOUT" 2>&1; MEMRC=$?
+check "memories_cmd_test.py: all assertions pass" '[ "$MEMRC" = "0" ]'
+check "memories_cmd_test.py: reports a non-empty tally" 'grep -q "memories_cmd_test: [1-9][0-9]* passed, 0 failed" "$MEMOUT"'
+
+RGOUT="$ROOT/regroup_cmd_test.out"
+$SR_CLEAN python3 "$REPO/tests/regroup_cmd_test.py" > "$RGOUT" 2>&1; RGRC=$?
+check "regroup_cmd_test.py: all assertions pass" '[ "$RGRC" = "0" ]'
+check "regroup_cmd_test.py: reports a non-empty tally" 'grep -q "regroup_cmd_test: [1-9][0-9]* passed, 0 failed" "$RGOUT"'
+
+check "both command files exist and are distinct" \
+  '[ -f "$REPO/commands/memories.md" ] && [ -f "$REPO/commands/reflect-regroup.md" ]'
+# The scope split is the design: /memories takes a topic and stops nothing;
+# /reflect regroup takes none and stops first. If either file stops naming the
+# other, the two commands have started to blur.
+check "each command file cross-references the other (scope split held)" \
+  'grep -qi "regroup" "$REPO/commands/memories.md" && grep -qi "memories" "$REPO/commands/reflect-regroup.md"'
 
 # ---------------------------------------------------------------------- report
 echo

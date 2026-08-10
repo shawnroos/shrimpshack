@@ -19,13 +19,42 @@ extra item alongside the usual top-K globals — never displacing a global, and
 suppressing other repos' memories. Outside any repo, only globals surface. The
 behavior degrades to today's exact recall when the scope module is absent.
 
-Drive it with `scripts/scoped-memory/reflect_cli.py`: `recall --here`, `save
+Drive it with `scripts/scoped-memory/reflect_cli.py`: `recall`, `save
 --scope <repo:.|repo:slug|global>`, `promote`/`rescope` (the move-between-scopes
 escape hatch for a mis-scoped memory), and `list [--here|--scope]`. The shared
 `scope.py` (resolver + qmd-path scope match + `select_scoped`) is the single source
 of truth the hook and tools both use. The archived per-repo stores are restored
 tagged via `scripts/scoped-memory/reimport.py`; go-forward native writes are
 scoped best-effort by `scripts/scoped-memory/backfill.py` (run from `setup.sh`).
+
+## Mid-session recall — one call, and when to make it
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory/reflect_cli.py recall \
+  --query "<what you are up against>" [--here] [--deliberate] [--cwd D] [--store D]
+```
+
+The query can also be a bare positional argument. That one call runs the whole
+layered path itself — declared triggers, then `qmd vsearch`, then the local BM25
+index when qmd was skipped, wedged, or empty — returns **bodies**, and always ends
+with a status line naming which layer answered. `--here` scopes to this repo (its own
+memories plus ancestors and globals, never a sibling repo's) and says so when you are
+not in a repo. `--deliberate` widens K and relaxes the local confidence gate; use it
+when a human explicitly asked. It exits 0 even on no match — read the output, not the
+exit code. A wedged qmd is named in the status line, never silently skipped.
+
+**When to make the call mid-session** — the measured misses all had one of these tells:
+
+- a **successful** command returned a surprising or thin result (nothing errored, but
+  the output doesn't explain what you're seeing);
+- you're about to touch an **unfamiliar external system** — a CLI, a service, another
+  team's repo;
+- an action was **denied**, or a tool behaved in a way you didn't expect;
+- you're about to **re-derive something that smells previously solved**.
+
+`/memories <topic>` is the same call made deliberately on a named topic, with the
+recording and trigger-proposing steps around it. `/reflect-regroup` is its no-argument
+counterpart: a human invokes it mid-task, and it stops first.
 
 Run when:
 - The user types `/reflect` or "reflect now" → silent mode
@@ -53,13 +82,47 @@ This pass produces an internal mental model only. Never surface to the user exce
 
 ### 2. Memory update pass
 - Memories applied during this session: update `last_used:` in frontmatter to today's date
-- Append one line per used memory to `MEMORY_USE.log` in the memory dir: `<date> <memory-name> [trigger]`
+- Append one line per **applied** memory to `MEMORY_USE.log` in the memory dir: `<timestamp> <memory-name> applied [session:<id>] [trigger]` — `[session:unknown]` when the session id isn't known, never a guess. `applied` is the only token you write here: `written` (saved) and `reflect` (batch timestamp bump) are machine records, and only `applied` raises activation, so logging a mere save would let a memory reinforce itself for having been written down. Surfacing events belong in `RECALL.log`, not here.
 - Memories where the session revealed nuance or contradiction: edit content to incorporate it (this counts as reinforcement — touch the file's mtime)
 - Corrections that emerged but aren't yet memories: save now as `feedback_*.md`
 
 This use-tracking is the activation signal: `last_used` and `MEMORY_USE.log` count feed the render's ranking (Pass 6), so using a cold memory bumps it back toward the hot tier. Recording use here is what makes accessibility self-reversing. An **absent** `last_used` means "unknown", not "never used" — the activation function seeds it at a neutral value, so a valuable-but-never-cited memory is never sunk purely for missing telemetry.
 
-Tally: `updated=N saved=M`.
+**Declare a trigger where the situation is machine-recognizable.** For each memory saved or reinforced this session, ask: is there a *concrete signal* that says "you are in this situation right now" — a command shape (`gh pr view --json`), an error string (`mergeable=CONFLICTING`), a tool or file name? If yes, add a `triggers:` block to its frontmatter:
+
+```yaml
+triggers:
+  - regex: gh\s+pr\s+view\b
+  - literal: statusCheckRollup
+  - regex: mergeable\s*=\s*CONFLICTING
+```
+
+Every entry is typed — `literal:` (matched verbatim) or `regex:` (Python `re`, case-insensitive, unanchored). A bare untyped string is rejected, never guessed at.
+
+A `literal:` matches as a contiguous substring, so write it as one only when the words really are adjacent: `literal: gh pr view --json` does **not** fire on `gh pr view 29 --json`, because the PR number sits between. For a command shape with arguments in the middle, use a `regex:` with `\s+`, or a `literal:` on the one distinctive token (a flag, a subcommand, an error string).
+
+**Skip it when the situation isn't machine-recognizable, and never force one.** A memory with no declared trigger is served by ranked search — that is the design, not debt. A vague trigger is worse than none: it fires on unrelated work, gets ignored, and teaches the agent to ignore the next one too.
+
+**Trigger lifecycle check** — run the report, then act on it with judgment:
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory/triggers.py report
+```
+
+- **Backfill candidates** — memories with 2+ distinct application days, plus the pinned and hot-index tier (~200 in the live store). Work a few per reflect, not all at once: read the body, and declare a trigger only where the situation is crisply recognizable. Memories outside this list are deliberately not backfilled — a big-bang pass over everything manufactures low-conviction triggers that decay into noise.
+- **Never-acted-on triggers** — a trigger that fired 3+ times with zero same-session applications. Prune it or sharpen it. Firing without ever helping is the failure mode this field has; leaving it is how the whole mechanism becomes noise.
+
+**Write triggers into an existing memory with the tool, never by hand:**
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory/triggers.py add \
+  --memory feedback_gh_conflicting_blocks_ci_silently.md \
+  --regex 'gh\s+pr\s+view\b' --regex 'mergeable\s*=\s*CONFLICTING'
+```
+
+It validates each pattern before writing, refuses to clobber an existing block without `--replace`, recompiles the manifest, and **preserves the file's mtime**. That last part is why hand-editing is wrong: activation reads mtime as "last reinforcement", so hand-editing 200 files would spike 200 activations, reshuffle the index's hot/cold cut and lower those memories' recall floors — surfacing them more for no reason but the write. The same rule holds for any future bulk frontmatter edit.
+
+Tally: `updated=N saved=M triggers_declared=T triggers_pruned=P`.
 
 ### 3. Memory merge pass
 - Scan `MEMORY.md` for entries with overlapping topics (same subject area, similar guidance)
@@ -136,16 +199,18 @@ Tally: `worktrees_removed=N`.
 
 ### 10. Log
 
-Append one line to `<memory-dir>/REFLECT.log`. The field set is extended additively with `index_tightened=`, `captured=`, and `embedded=` (any REFLECT.log parser must be updated for the new fields):
+Append one line to `<memory-dir>/REFLECT.log`. The field set is extended additively with `index_tightened=`, `captured=`, `embedded=`, and Pass 2's `triggers_declared=` / `triggers_pruned=` (any REFLECT.log parser must be updated for the new fields):
 
 ```
-<ISO8601 timestamp> <trigger> updated=N saved=M merged=K retired=L compounded=C index_tightened=I captured=X embedded=Y worktrees_removed=W
+<ISO8601 timestamp> <trigger> updated=N saved=M merged=K retired=L compounded=C index_tightened=I captured=X embedded=Y worktrees_removed=W triggers_declared=T triggers_pruned=P
 ```
+
+The two trigger fields go last so every existing positional reader keeps working. `triggers_declared` counts memories given a `triggers:` block this pass — authored at save time or backfilled — and `triggers_pruned` counts never-acted-on triggers removed or sharpened. Both are `0` on a pass that declared none, which is a normal and expected outcome, not a skip.
 
 Examples:
 ```
-2026-05-08T18:42:13-07:00 manual updated=2 saved=0 merged=0 retired=1 compounded=0 index_tightened=1 captured=0 embedded=1 worktrees_removed=0
-2026-05-08T19:15:00-07:00 PR_event updated=0 saved=1 merged=0 retired=0 compounded=1 index_tightened=0 captured=2 embedded=2 worktrees_removed=2
+2026-05-08T18:42:13-07:00 manual updated=2 saved=0 merged=0 retired=1 compounded=0 index_tightened=1 captured=0 embedded=1 worktrees_removed=0 triggers_declared=0 triggers_pruned=0
+2026-05-08T19:15:00-07:00 PR_event updated=0 saved=1 merged=0 retired=0 compounded=1 index_tightened=0 captured=2 embedded=2 worktrees_removed=2 triggers_declared=1 triggers_pruned=0
 ```
 
 In verbose mode (`/reflect verbose`): also print the full pass-by-pass summary to screen, ending with the log line. In silent mode: only the log line is written; nothing prints to screen unless an exception is raised.

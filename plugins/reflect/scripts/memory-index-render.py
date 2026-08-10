@@ -29,7 +29,10 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "scoped-memory"))
 import memory_activation as ma
+import corpus
 
 _proj_slug = "-" + os.path.expanduser("~").lstrip("/").replace("/", "-")
 INDEX = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser(
@@ -48,6 +51,10 @@ def clean(s):
 
 
 def title_from_filename(fn):
+    # `fn` may be a store-relative path (`_scope/<slug>/x.md`) since the corpus
+    # enumeration went recursive — the title comes from the file, never the
+    # scope directory, or every scoped entry would be titled after the repo.
+    fn = os.path.basename(fn)
     stem = fn[:-3] if fn.endswith(".md") else fn
     parts = stem.split("_")
     if parts and parts[0] in TYPE_PREFIXES:
@@ -102,7 +109,9 @@ def line_for(target, hook):
 
 
 def main():
-    bodies = {f for f in os.listdir(DIR) if f.endswith(".md") and f != "MEMORY.md"}
+    # Shared recursive enumeration (KTD16) — the same corpus the scorer sees, so
+    # the abort guard below can never disagree with the ranking it guards.
+    bodies = set(corpus.body_paths(DIR))
     if not bodies:
         print(f"render: ABORT — no body files in MEMORY_DIR={DIR}; refusing to "
               f"render an empty index", file=sys.stderr)
