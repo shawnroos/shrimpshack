@@ -611,7 +611,32 @@ do_setup() {
             # supervisor to rebind the port, which is the surviving half of the
             # start-vs-supervisor race. Downgrading to `start` lets the start
             # step observe the running gateway instead of fighting it.
-            needs_restart=0
+            # ...but ONLY IF THE ADOPTION ACTUALLY TOOK EFFECT. The reasoning
+            # above holds when launchd's unload/load really did restart the
+            # gateway. do_supervisor now reports when it did NOT —
+            # adoption_in_effect:false means a gateway started outside launchd
+            # is holding the port, so the supervised launcher could not bind and
+            # the process serving right now is the OLD one.
+            #
+            # Forcing needs_restart 1 -> 0 there is a silent wrong-success on
+            # the path that matters most: `--rotate-openrouter-key` then runs
+            # `start` rather than `restart`, the start step finds the old
+            # process serving, and the verify round-trip RETURNS 200 — because
+            # the gateway token is unchanged and only the upstream key rotated.
+            # setup reports ok:true with "the OpenRouter key was replaced in
+            # place" while the running gateway still holds the old key in
+            # memory. That is the exact failure the restart exists to prevent,
+            # stated a few dozen lines below in this same function.
+            #
+            # Token rotation does not slip through (the old process 401s and
+            # setup dies with failure_class "auth"); the key rotation is silent,
+            # which is why this needs the flag rather than a probe.
+            sv_in_effect="$(printf '%s' "$SUB_JSON" | jq -r '.adoption_in_effect // true' 2>/dev/null)"
+            if [ "$sv_in_effect" = "false" ]; then
+                say "the launchd agent was repointed but is NOT the process serving right now, so the restart is NOT being skipped — a rotation must reach the running gateway"
+            else
+                needs_restart=0
+            fi
             # KTD21's stated cost, in the report rather than absorbed.
             step_done "supervisor" "adopted" \
                 "the launchd agent at $sv_plist now starts the gateway through $sv_launcher, so its own starts authenticate — which means SETUP NOW OWNS A STEP IN THIS MACHINE'S STARTUP PATH: the gateway starts through a file this plugin writes.$sv_note" ;;

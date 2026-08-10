@@ -971,3 +971,43 @@ EOP
     # the UNSUPERVISED one.
     jq -e '.adoption_warning | test("launchctl unload")' "$OUT" >/dev/null
 }
+
+@test "an apostrophe in a baked value produces a VALID launcher, not a validated-but-broken one" {
+    # The launcher bakes values into a file launchd EXECUTES at login. They used
+    # to be wrapped in single quotes rather than shell-quoted, so an apostrophe
+    # anywhere ended the quote and made the launcher a bash syntax error.
+    #
+    # The compounding part is what makes this more than cosmetic: write_launcher
+    # validates its own output by grepping for ^PIDFILE=, ^KEYCHAIN_SERVICE= and
+    # friends — and those STILL MATCH in a syntactically broken file. The broken
+    # launcher passed validation and was moved over the working one. Under a
+    # KeepAlive agent that is a login-time respawn loop with the gateway never
+    # starting.
+    #
+    # The Keychain service name is used because the suite already controls it as
+    # a seam. The sharpest real input is the gateway path, which comes from
+    # jq .[0] on an OPERATOR-OWNED plist and is therefore not a value setup
+    # produced — same bake, same fix, harder to reach from a test.
+    local q; q="$(printf '\047')"
+    export SPAWN_KEYCHAIN_SERVICE="spawn-it${q}s-test"
+    local plist; plist="$(plant_agent gateway)"
+
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+
+    # THE ASSERTION THAT MATTERS: the generated launcher actually parses.
+    [ -f "$SPAWN_GATEWAY_LAUNCHER" ]
+    run bash -n "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+
+    # ...and the value survived intact. Asserted by EVALUATING the assignment,
+    # not by grepping the file: jq @sh escapes an apostrophe as '\'' , so the
+    # literal string is deliberately NOT present in the text. Grepping for it
+    # fails against a perfectly correct launcher — which is exactly what the
+    # first version of this assertion did.
+    run bash -c 'eval "$(grep -m1 "^KEYCHAIN_SERVICE=" "$1")"; printf "%s" "$KEYCHAIN_SERVICE"' _ "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+    [ "$output" = "spawn-it${q}s-test" ]
+}

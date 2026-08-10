@@ -1430,3 +1430,50 @@ EOS
     [ "$(echo "$output" | jq -r '.ok')" = "false" ]
     [ "$(echo "$output" | jq -r '.result')" = "kill_failed" ]
 }
+
+@test "a lock whose stale-break keeps failing still times out instead of spinning forever" {
+    # The livelock: the stale-break branch used to `continue`, jumping past both
+    # the sleep and the counter, so LOCK_TIMEOUT was unreachable from it. With a
+    # break that never succeeds the loop could not end — a 100%-CPU spin that
+    # never exits and never emits the one JSON object the contract promises,
+    # inherited by every fan-out worker that calls ensure.
+    #
+    # Reproduced the way the reviewer described it: a lock directory whose
+    # PARENT is read-only, already holding a dead pid. mkdir fails EACCES, the
+    # holder is dead so the break fires, the mv fails EPERM, and round it goes.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    local lockparent="$WORK/lockparent"
+    mkdir -p "$lockparent/.gateway.lock"
+    printf '%s\n' "$(dead_pid)" > "$lockparent/.gateway.lock/pid"
+    chmod a-w "$lockparent"
+    export SPAWN_LOCK="$lockparent/.gateway.lock"
+    # Small budget so the bound is observable: 1s => ~10 ticks.
+    export SPAWN_LOCK_TIMEOUT=1
+
+    # Guard the guard: the break must genuinely be impossible here, or the test
+    # passes for the wrong reason (a lock that was simply acquired).
+    run mv "$lockparent/.gateway.lock" "$lockparent/.gateway.lock.probe"
+    [ "$status" -ne 0 ]
+
+    local before after
+    before="$(date +%s)"
+    ctl start
+    after="$(date +%s)"
+    chmod u+w "$lockparent"
+
+    # IT TERMINATED — the assertion the livelock fails. Bounded generously
+    # (the budget is 1s; anything under 30 proves the loop ended on its own
+    # rather than being cut off by something else).
+    [ $((after - before)) -lt 30 ]
+    # ...and it terminated the way the contract requires: one JSON object,
+    # a named failure, never a silent spin.
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$status" -ne 0 ]
+    [ "$(echo "$output" | jq -r '.ok')" = "false" ]
+}

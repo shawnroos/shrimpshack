@@ -343,6 +343,18 @@ codex_config_load_status() {
 ENV_MARKER="# spawn-setup: generated — rewritten by /spawn:setup, edits are not preserved"
 env_snippet() {
     printf '%s\n' "$ENV_MARKER"
+    # SHELL-QUOTED before baking. This is sourced into the operator's own
+    # interactive shell at login, and the old form interpolated straight inside
+    # double quotes — so a value carrying `$(...)` or a backtick would EXECUTE
+    # every time a shell started. These three come from the plugin's own env
+    # seams rather than operator-owned data, so this is breakage-hardening
+    # rather than a crossed trust boundary — but it is the same class the
+    # launcher bake and the gw wrapper both carried, and there is no reason for
+    # the third instance to stay open once the other two are closed.
+    local q_sec q_svc q_acct
+    q_sec="$(printf '%s' "$SPAWN_SECURITY_BIN" | jq -Rr '@sh')" || return 1
+    q_svc="$(printf '%s' "$KEYCHAIN_SERVICE" | jq -Rr '@sh')" || return 1
+    q_acct="$(printf '%s' "$KEYCHAIN_ACCOUNT_TOKEN" | jq -Rr '@sh')" || return 1
     cat <<EOF
 # Sourced by your shell rc. It holds a Keychain READ, never a token value, so
 # rotating the credential reaches every new shell with no rewrite here.
@@ -352,9 +364,9 @@ env_snippet() {
 # The coordinates are baked from what setup resolved, and each stays
 # overridable at run time so this file behaves the way the plugin's own
 # scripts do.
-__spawn_security="\${SPAWN_SECURITY_BIN:-$SPAWN_SECURITY_BIN}"
-__spawn_service="\${SPAWN_KEYCHAIN_SERVICE:-$KEYCHAIN_SERVICE}"
-__spawn_account="\${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-$KEYCHAIN_ACCOUNT_TOKEN}"
+__spawn_security="\${SPAWN_SECURITY_BIN:-$q_sec}"
+__spawn_service="\${SPAWN_KEYCHAIN_SERVICE:-$q_svc}"
+__spawn_account="\${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-$q_acct}"
 EOF
     cat <<'EOF'
 

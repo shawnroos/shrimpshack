@@ -674,9 +674,23 @@ acquire_lock() {
             fi
         fi
         if [ -n "$stale" ]; then
+            # THE BREAK IS BOUNDED LIKE EVERY OTHER ITERATION. This `continue`
+            # used to jump past both the sleep and the counter below, which made
+            # LOCK_TIMEOUT unreachable from this branch — the loop could not
+            # end. Concrete: a lock directory whose PARENT is not writable
+            # (permissions change, read-only remount) and which already holds a
+            # dead pid. mkdir fails EACCES, the holder is dead so `stale` is
+            # set, the mv fails EPERM, and round it goes — a 100%-CPU spin
+            # printing "breaking a stale gateway lock" forever, never exiting
+            # and never emitting the one JSON object the contract promises.
+            # Every fan-out worker that calls `ensure` inherits it.
+            #
+            # A break that SUCCEEDS still costs one tick, which is the right
+            # price: the next mkdir attempt is what actually acquires, and it
+            # gets the same bound as any other attempt. Concurrent breakers
+            # self-heal (the loser's mv fails ENOENT) and are unaffected.
             say "breaking a stale gateway lock ($stale)"
             mv "$LOCKDIR" "$LOCKDIR.stale.$$" 2>/dev/null && rm -rf "$LOCKDIR.stale.$$" 2>/dev/null
-            continue
         fi
         sleep 0.1
         waited=$((waited + 1))

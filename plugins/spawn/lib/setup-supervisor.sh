@@ -225,23 +225,48 @@ launcher_body() {
     # (pid_is_gateway) accepts a launcher-started process as its own.
     gwbin="$(printf '%s' "$argv" | jq -r '.[0] // empty' 2>/dev/null)" || return 1
     [ -n "$gwbin" ] || return 1
+    # SHELL-QUOTED, NOT WRAPPED IN QUOTES. Everything below is baked into a file
+    # that launchd EXECUTES at login, so a value carrying an apostrophe ends the
+    # '...' the old form put it in. Two distinct failures came out of that:
+    #
+    #   * BREAKAGE — an apostrophe anywhere makes the launcher a bash syntax
+    #     error, and write_launcher's completeness check only greps for
+    #     `^PIDFILE=` and friends, which STILL MATCH, so the broken file passes
+    #     validation and is mv'd over the working one. Under a KeepAlive agent
+    #     that is a login-time respawn loop with the gateway never starting.
+    #   * INJECTION — gwbin is `jq -r '.[0]'` straight out of an operator-owned
+    #     ~/Library/LaunchAgents plist. It is not a value setup produced, so a
+    #     `$(...)` or `'; ...; :'` inside a gateway-* path that
+    #     sibling_install_of accepts would run at every login, from inside a
+    #     0755 file this plugin wrote.
+    #
+    # `dir` was already doing this correctly 13 lines up; the rest were not.
+    local q_gwbin q_svc q_tok q_or q_sec q_pid q_dname q_dttl
+    q_gwbin="$(printf '%s' "$gwbin" | jq -Rr '@sh')" || return 1
+    q_svc="$(printf '%s' "$KEYCHAIN_SERVICE" | jq -Rr '@sh')" || return 1
+    q_tok="$(printf '%s' "$KEYCHAIN_ACCOUNT_TOKEN" | jq -Rr '@sh')" || return 1
+    q_or="$(printf '%s' "$KEYCHAIN_ACCOUNT_OPENROUTER" | jq -Rr '@sh')" || return 1
+    q_sec="$(printf '%s' "$SPAWN_SECURITY_BIN" | jq -Rr '@sh')" || return 1
+    q_pid="$(printf '%s' "$PIDFILE" | jq -Rr '@sh')" || return 1
+    q_dname="$(printf '%s' "$LAUNCHER_DELIVERY_NAME" | jq -Rr '@sh')" || return 1
+    q_dttl="$(printf '%s' "$LAUNCHER_DELIVERY_TTL" | jq -Rr '@sh')" || return 1
     cat <<EOF
 set -uo pipefail
 
 # Baked at write time from the install this setup run resolved.
 INSTALL_DIR=$dir
-GATEWAY_BIN='$gwbin'
-KEYCHAIN_SERVICE='$KEYCHAIN_SERVICE'
-KEYCHAIN_ACCOUNT_TOKEN='$KEYCHAIN_ACCOUNT_TOKEN'
-KEYCHAIN_ACCOUNT_OPENROUTER='$KEYCHAIN_ACCOUNT_OPENROUTER'
-SECURITY_BIN='$SPAWN_SECURITY_BIN'
+GATEWAY_BIN=$q_gwbin
+KEYCHAIN_SERVICE=$q_svc
+KEYCHAIN_ACCOUNT_TOKEN=$q_tok
+KEYCHAIN_ACCOUNT_OPENROUTER=$q_or
+SECURITY_BIN=$q_sec
 # EVERY path is baked. launchd starts this with an environment that inherits
 # nothing from the shell setup ran in — no SPAWN_STATE_HOME, no SPAWN_PIDFILE —
 # so a launcher that read those would write its pidfile somewhere spawnctl
 # never looks.
-PIDFILE='$PIDFILE'
-DELIVERY_NAME='$LAUNCHER_DELIVERY_NAME'
-DELIVERY_TTL='$LAUNCHER_DELIVERY_TTL'
+PIDFILE=$q_pid
+DELIVERY_NAME=$q_dname
+DELIVERY_TTL=$q_dttl
 # credentials are NEVER baked into this file: the token is read from the
 # Keychain at start time, so rotating it reaches this launcher with no rewrite.
 EOF
