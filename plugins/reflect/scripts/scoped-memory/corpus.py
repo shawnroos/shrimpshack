@@ -38,9 +38,14 @@ SCOPE_DIR = "_scope"
 #: manifest format change must not silently start feeding it to scorers.
 TRIGGER_MANIFEST = "TRIGGERS.json"
 
+#: A grep-able projection of the manifest, written beside it. One ERE per line, no
+#: memory names — it answers "could ANYTHING match?" and nothing else, so the nudge
+#: hook can reject the common case without starting a Python interpreter.
+TRIGGER_PREFILTER = "TRIGGERS.prefilter"
+
 #: Store files that are not memory bodies. `MEMORY.md` is the rendered index
 #: (a projection OF the corpus, never a member of it).
-EXCLUDED_NAMES = frozenset({"MEMORY.md", TRIGGER_MANIFEST})
+EXCLUDED_NAMES = frozenset({"MEMORY.md", TRIGGER_MANIFEST, TRIGGER_PREFILTER})
 
 #: Suffixes that are never a body. `.log` covers MEMORY_USE.log and RECALL.log;
 #: `.bak` covers MEMORY.md.pre-render.bak and any hand-made backup.

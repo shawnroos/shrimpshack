@@ -138,6 +138,7 @@ except Exception:                                    # pragma: no cover
     telemetry = None                                 # telemetry is never load-bearing
 
 MANIFEST_NAME = corpus.TRIGGER_MANIFEST
+PREFILTER_NAME = corpus.TRIGGER_PREFILTER
 SCHEMA_VERSION = 1
 
 #: Longest accepted pattern, and the most patterns one memory may declare.
@@ -338,6 +339,66 @@ def compile_manifest(store_dir):
     return manifest, problems
 
 
+#: `\b` is stripped from prefilter patterns on purpose. The prefilter must be a
+#: SUPERSET of the real matcher — it may say "maybe" when the answer is no, but must
+#: never say "no" when the answer is yes, or a nudge disappears with nothing to show
+#: it did. Dropping the word boundaries widens each pattern, which is the safe
+#: direction, and it also drops the one construct BSD grep does not portably support.
+_PREFILTER_STRIP = re.compile(r"\\b")
+
+
+def prefilter_lines(manifest):
+    """The manifest projected to one ERE per line, deduped and widened.
+
+    Deliberately carries NO memory names, scopes or hooks: this file answers exactly
+    one question — could anything match this command? — and the moment it carries
+    more, something will start using it as a second source of truth for what the
+    manifest says.
+    """
+    out = []
+    seen = set()
+    for entry in manifest.get("entries", []):
+        for pat in entry.get("patterns", []):
+            rx = _PREFILTER_STRIP.sub("", pat.get("re", ""))
+            if rx and rx not in seen:
+                seen.add(rx)
+                out.append(rx)
+    return out
+
+
+def write_prefilter(store_dir, manifest):
+    """Write the grep-able prefilter beside the manifest. Best-effort by design.
+
+    A missing or stale prefilter must never suppress a nudge, so the hook treats
+    absence as "maybe" and falls through to the real matcher. That makes this file a
+    pure optimization: worst case it is not there and the hook is exactly as slow as
+    it was before.
+    """
+    dest = os.path.join(store_dir, PREFILTER_NAME)
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=store_dir, prefix=".%s." % PREFILTER_NAME,
+                                   suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(prefilter_lines(manifest)))
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, dest)
+        try:
+            os.utime(dest, None)
+        except OSError:
+            pass
+        return True
+    except Exception:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return False
+
+
 def write_manifest(store_dir, manifest):
     """Atomically replace `TRIGGERS.json`. True on write, False on any failure.
 
@@ -356,6 +417,10 @@ def write_manifest(store_dir, manifest):
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, dest)
+        # Written from the SAME call that writes the manifest, so the two cannot
+        # drift: a prefilter describing a manifest that no longer exists would
+        # reject nudges the matcher would have made.
+        write_prefilter(store_dir, manifest)
         # Stamp the manifest AFTER the replace. `os.replace` bumps the store
         # directory's own mtime, and the freshness test folds directory mtimes in
         # (so a DELETED memory invalidates the manifest). Without this the

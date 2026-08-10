@@ -12,6 +12,7 @@ a tempdir. Run: `python3 tests/trigger_test.py`.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -318,12 +319,59 @@ with tempfile.TemporaryDirectory() as store:
         tg.write_manifest(store, survivor)
     finally:
         os.replace = real_replace
-    check("two writes use DIFFERENT temp paths — the property KTD18 turns on",
-          len(seen) == 2 and seen[0] != seen[1])
-    check("the temp file sits in the DESTINATION directory, so replace is atomic",
-          len(seen) == 2 and all(os.path.dirname(s) == store for s in seen))
-    check("the temp name is a dotfile, so a mid-window corpus walk never sees it",
-          len(seen) == 2 and all(os.path.basename(s).startswith(".") for s in seen))
+    # Count the replaces rather than pinning a number: `write_manifest` also emits
+    # the grep prefilter, so one call now produces two atomic replaces. The PROPERTY
+    # is what KTD18 turns on — every temp path unique, in the destination directory,
+    # dotfile-named — and it must hold for however many artifacts a write produces.
+    check("every write uses a DISTINCT temp path — the property KTD18 turns on",
+          len(seen) >= 2 and len(set(seen)) == len(seen))
+    check("both artifacts are written (manifest + prefilter) per call",
+          len(seen) == 4)
+    check("every temp file sits in the DESTINATION directory, so replace is atomic",
+          seen and all(os.path.dirname(s) == store for s in seen))
+    check("every temp name is a dotfile, so a mid-window corpus walk never sees it",
+          seen and all(os.path.basename(s).startswith(".") for s in seen))
+
+# ------------------------------------------- prefilter is a SUPERSET (perf guard)
+# The nudge hook rejects a command with `grep -iEf TRIGGERS.prefilter` before it
+# starts python. That is only safe if the prefilter can never say "no" where the
+# real matcher says "yes" — a lost nudge is invisible, which is the failure this
+# plugin exists to remove. So: widened, never narrowed.
+print("== prefilter never loses a nudge ==")
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_case.md"),
+          memory("reference_case", "the case-1 memory",
+                 "triggers:\n"
+                 "  - literal: gh pr view\n"
+                 "  - literal: NG8002\n"
+                 "  - regex: gh pr (create|merge)\n"))
+    man, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man)
+
+    pre_path = os.path.join(store, tg.PREFILTER_NAME)
+    check("write_manifest emits the prefilter beside the manifest",
+          os.path.exists(pre_path))
+    pre = [l for l in open(pre_path).read().splitlines() if l]
+    check("the prefilter carries ONLY patterns — no names, scopes or hooks",
+          all("reference_case" not in l for l in pre))
+    check("word boundaries are stripped (widening, and BSD-grep portable)",
+          all("\\b" not in l for l in pre))
+
+    # The property, over commands that SHOULD match and commands that should not.
+    rx = [re.compile(l, re.I) for l in pre]
+    should_match = ["gh pr view 5159 --json statusCheckRollup",
+                    "GH PR VIEW 5159",                    # case: matcher uses re.I
+                    "cd /tmp && gh pr merge 34 --squash",  # multi-line-ish, later position
+                    "ng build 2>&1 | grep NG8002"]
+    for cmd in should_match:
+        hits, _ = tg.match(man, cmd, cwd="/tmp")
+        passes = any(r.search(cmd) for r in rx)
+        check("prefilter passes what the matcher matches: %r" % cmd[:34],
+              (not hits) or passes)
+
+    check("and it still rejects an unrelated command",
+          not any(r.search("echo hello world") for r in rx))
 
 # ------------------------------------------------------- scope filter (KTD13)
 print("== scope filter at match time (KTD13) ==")
