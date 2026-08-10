@@ -472,13 +472,6 @@ child, so `unload` stops the gateway.
   launchd job. Fixed with a seam (`SPAWN_ADOPT_VERIFY_TRIES`), generous on a
   real machine and 1 in the suite — back to 64s.
 
-- ~~original text:~~ After
-  `unload`/`load` it reports "adopted" without checking that the gateway now
-  serving is the one launchd started. A gateway started OUTSIDE launchd (a
-  plain `spawnctl start`) holds the port, the supervised launcher cannot bind,
-  and every downstream check still passes because the unsupervised process
-  answers. The check to add: the pidfile pid's parent should be the launcher.
-
 - **FIXED 2026-08-10.** ~~`spawnctl stop` is a ~10s restart on a supervised
   machine, not a stop (P2).~~ `stop` now asks launchd whether the pid (or its
   parent — setup's launcher is the job, the gateway is its child) is a loaded
@@ -501,15 +494,6 @@ child, so `unload` stops the gateway.
   Four tests, mutation-verified — including that negative control and a
   reparented-orphan case. **Verified live** on the adopted machine: it named
   `com.shawnroos.gateway`, refused, and left pid 1518 running and verified.
-
-- ~~original text:~~ It kills the gateway, the launcher's `wait` returns, the launcher
-  exits, and KeepAlive respawns it. `result:"stopped"` is true only
-  momentarily. This is the same thing the open-proxy fix already says out loud
-  ("stopping the process only triggers a respawn", which is why that path
-  unloads first) — it is now the everyday behaviour on an adopted machine.
-  `stop` should detect the supervised case and either unload the agent or say
-  plainly that the agent must be unloaded. Operator-visible, not a
-  wrong-success, so it is not merge-blocking.
 
 - **FIXED 2026-08-10 (`62e2de6`).** ~~Setup bakes the path of the checkout it
   runs from into `~/.local/bin/gw` (P2).~~ Setup now bakes the same file in the
@@ -536,16 +520,6 @@ child, so `unload` stops the gateway.
   `marker present + hash mismatch + older version` as `stale` (rewrite freely)
   rather than `modified`. Not free — it cannot distinguish an old version that
   was ALSO hand-edited — so it needs a deliberate call, not a quick patch.
-
-- ~~Setup bakes the path of the checkout it runs from into `~/.local/bin/gw`
-  (P2) — original text:~~ Line 7 of the generated wrapper pins `SPAWNCTL=` to an absolute path.
-  Run setup from a git worktree and the wrapper points into that worktree; when
-  the worktree is removed after the PR lands, `gw` breaks with no warning and
-  nothing on the machine explains why. The launcher and `env.sh` do not have
-  this problem — they bake only machine paths and the gateway binary. Worth
-  either resolving the plugin root to a durable checkout or refusing/warning
-  when setup runs from a worktree. Remedy today: re-run setup from the
-  permanent checkout once the plugin has landed there.
 
 - **A lint for the xtrace class.** #4 was fixed everywhere it exists today, but
   nothing stops the next credential-holding function from shipping unguarded.
