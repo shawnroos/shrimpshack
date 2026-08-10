@@ -429,3 +429,38 @@ jq_free_path() {
         fi
     done
 }
+
+@test "R23: every error enum a surface can EMIT is published in its error_values" {
+    # The contract a consumer builds a switch from is `error_values`. A surface
+    # that can emit an enum it does not publish hands that consumer a value its
+    # own documentation says cannot occur.
+    #
+    # This was live twice over when the check was written:
+    #   * lens emitted `deadline_exceeded` (lens.sh:686) and published it in the
+    #     exit_codes table but NOT in error_values — two published tables
+    #     disagreeing with each other;
+    #   * both surfaces gained `internal` when encoder failures stopped
+    #     masquerading as `usage`, and neither published it.
+    # Neither was found by reading. Both fell out of comparing the two lists
+    # mechanically, which is the only way this stays true as enums are added.
+    local script name published emitted missing
+    for script in "$LENS" "$LAUNCH"; do
+        name="$(basename "$script")"
+        published="$(bash "$script" --describe 2>/dev/null | jq -r '.error_values[].value' | sort -u)"
+        # Every `die "$EX_..." "<enum>"` site — the only way these surfaces
+        # produce a classified failure.
+        emitted="$(grep -oE 'die "\$EX_[A-Z]+" "[a-z_]+"' "$script" \
+                   | sed 's/.*"\([a-z_]*\)"$/\1/' | sort -u)"
+
+        # Guard the guard: if either extraction breaks, this test must fail
+        # loudly rather than compare two empty sets and pass.
+        [ -n "$published" ] || { echo "$name: no error_values published"; return 1; }
+        [ -n "$emitted" ] || { echo "$name: found no die sites — the grep broke"; return 1; }
+
+        missing="$(comm -13 <(echo "$published") <(echo "$emitted") | tr '\n' ' ')"
+        if [ -n "${missing// /}" ]; then
+            echo "$name emits enum(s) it does not publish in error_values: $missing"
+            return 1
+        fi
+    done
+}

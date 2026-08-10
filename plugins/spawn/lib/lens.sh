@@ -151,46 +151,13 @@ remedy_for() {
     esac
 }
 
-emit_error() {
-    # $1 = exit code, $2 = machine-readable error value, rest = human detail.
-    local code="$1" err="$2"; shift 2
-    [ "$EMITTED" -eq 1 ] && return 0
-    # `detail` is human-readable diagnostic text — a consumer prints it — and it
-    # can quote the upstream error body, so it is sanitized. `text` is NOT: that
-    # is the raw-by-design data field (KTD5), and it is emitted elsewhere.
-    local detail alias_d
-    detail="$(spawn::sanitize_for_display "$*")"
-    # The alias is display text on THIS path and only here: emit_error is the
-    # one place it can be an alias the grammar REFUSED, so it has not been
-    # closed by construction yet. jq escapes a control byte in transit but
-    # emits a Unicode bidi override literally, so the field is sanitized.
-    alias_d="$(spawn::sanitize_for_display "$ALIAS")"
-    # R23: the envelope comes from common.sh, so this tier cannot drift from the
-    # success emit below or from the no-jq tier under it. REMEDY is the optional
-    # per-site remedy (R12) — a caller sets it as a prefix assignment on die.
-    # R12: the site's own REMEDY wins; otherwise the enum's default from the one
-    # table. Defaulting here rather than at ~20 call sites is what makes "every
-    # error names its remedy" a property of the code shape instead of a review
-    # item that goes stale on the next die site somebody adds.
-    local rem="${REMEDY:-}"
-    [ -n "$rem" ] || rem="$(remedy_for "$err")"
-    local obj=""
-    if command -v jq >/dev/null 2>&1; then
-        obj="$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" \
-            --arg r "$rem" --argjson c "$code" --argjson h "$HELP_REQUESTED" \
-            "$(spawn::envelope_jq model)"' + {ok:false,
-              alias:(if $a == "" then null else $a end), text:null,
-              usage:null, error:$e, detail:$d, help_requested:$h,
-              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
-    fi
-    # Falls through to the pure-bash tier when jq is ABSENT and also when jq is
-    # present but errored: that yielded the empty string, emit refused it, and
-    # the script exited with nothing on stdout at all. help_requested rides this
-    # tier too — a box with no jq must still be able to tell help from a caller
-    # bug, and it is a bash literal, so no encoder is needed for it.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash model "$err" "$code" ",\"alias\":null,\"text\":null,\"usage\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
-    emit "$obj"
-}
+# The failure envelope lives in common.sh (spawn::emit_error): this was a
+# ~40-line near-copy of its sibling, differing only in the trust tier and the
+# per-surface null fields — the same two axes spawn::preflight_jq already
+# parametrizes. The null fields are named ONCE now; the shared helper derives
+# both the jq and the no-jq spelling from that one list, which is the pair
+# that had already drifted.
+emit_error() { spawn::emit_error model "text usage" "$@"; }
 
 die() {
     local code="$1" err="$2"; shift 2
@@ -336,6 +303,7 @@ emit_describe() {
         --arg r_up "$(remedy_for upstream_error)" \
         --arg r_dead "$(remedy_for deadline_exceeded)" \
         --arg r_pre "$(remedy_for preflight_failed)" \
+        --arg r_int "$(remedy_for internal)" \
         --arg r_rate "$(remedy_for rate_limited)" \
         --arg r_ctx "$(remedy_for context_overflow)" \
         --arg r_trunc "$(remedy_for no_text_truncated)" \
@@ -349,7 +317,9 @@ emit_describe() {
           {value:"no_text_truncated",   exit_code:5, remedy:$r_trunc},
           {value:"no_text_in_response", exit_code:5, remedy:$r_none},
           {value:"upstream_error",  exit_code:5, remedy:$r_up},
-          {value:"preflight_failed",exit_code:3, remedy:$r_pre}]')" || return 1
+          {value:"preflight_failed",exit_code:3, remedy:$r_pre},
+          {value:"deadline_exceeded",exit_code:6, remedy:$r_dead},
+          {value:"internal",exit_code:2, remedy:$r_int}]')" || return 1
 
     emit "$(jq -nc --argjson errors "$ev" \
         --arg scope "$LENS_MODEL_SCOPE" --arg notice "$LENS_MODEL_SCOPE_NOTICE" \
@@ -453,7 +423,7 @@ while [ $# -gt 0 ]; do
                         # timeout validation and long before preflight — so it
                         # holds with the gateway down and with no config on the
                         # box (R10).
-                        emit_describe || die "$EX_USAGE" "usage" "could not encode the describe object"
+                        emit_describe || die "$EX_USAGE" "internal" "could not encode the describe object"
                         exit "$EX_OK" ;;
         -h|--help)      # R11: same exit code, same enum, different FIELD. The
                         # flag is set before need_jq so the no-jq tier carries
@@ -654,7 +624,7 @@ BODY="$WORK/body.json"
 jq -n --arg model "$ALIAS" --argjson mt "$MAX_TOKENS" --rawfile p "$PROMPT_PATH" \
     '{model:$model, max_tokens:$mt, messages:[{role:"user", content:$p}]}' > "$BODY" \
     || REMEDY="jq could not encode the prompt. Check jq is a working build and that the prompt file was not truncated mid-read; nothing was sent." \
-        die "$EX_USAGE" "usage" "could not encode the prompt as a JSON request body"
+        die "$EX_USAGE" "internal" "could not encode the prompt as a JSON request body"
 
 # ---------------------------------------------------------------------------
 # Credential delivery (KTD6): a mode-0600 curl --config file, NEVER an argv
@@ -856,7 +826,7 @@ if [ -n "$SPILLED" ]; then
           output_file:$f, bytes:$b, usage:$u, error:null,
           model_scope:$ms, model_scope_notice:$mn, exit_code:0}')" \
         || REMEDY="The model answered but jq could not encode the response. Check jq is a working build; the answer itself is lost, so the call must be made again." \
-            die "$EX_USAGE" "usage" "could not encode the response object"
+            die "$EX_USAGE" "internal" "could not encode the response object"
 else
     # KTD5: the model's prose is UNTRUSTED DATA. JSON encoding escapes control
     # bytes in transit, but a consumer gets the raw bytes back on parse — so a
@@ -872,6 +842,6 @@ else
           output_file:null, bytes:$b, usage:$u, error:null,
           model_scope:$ms, model_scope_notice:$mn, exit_code:0}')" \
         || REMEDY="The model answered but jq could not encode the response. Check jq is a working build; the answer itself is lost, so the call must be made again." \
-            die "$EX_USAGE" "usage" "could not encode the response object"
+            die "$EX_USAGE" "internal" "could not encode the response object"
 fi
 exit $EX_OK

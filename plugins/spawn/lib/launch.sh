@@ -137,56 +137,13 @@ remedy_for() {
     esac
 }
 
-emit_error() {
-    # $1 = exit code, $2 = machine-readable error value, rest = human detail.
-    local code="$1" err="$2"; shift 2
-    [ "$EMITTED" -eq 1 ] && return 0
-    # `detail` is human-readable diagnostic text a consumer prints, so it is
-    # sanitized (KTD5).
-    local detail alias_d
-    detail="$(spawn::sanitize_for_display "$*")"
-    # The alias is display text on THIS path and only here: emit_error is the
-    # one place it can be an alias the grammar REFUSED, so it has not been
-    # closed by construction yet. jq escapes a control byte in transit but
-    # emits a Unicode bidi override literally, so the field is sanitized.
-    alias_d="$(spawn::sanitize_for_display "$ALIAS")"
-    # R23: the envelope comes from common.sh, so this tier cannot drift from the
-    # success emit below or from the no-jq tier under it. REMEDY is the optional
-    # per-site remedy (R12) — a caller sets it as a prefix assignment on die.
-    # R12: the site's own REMEDY wins; otherwise the enum's default from the one
-    # table. Defaulting here rather than at every die site is what makes "every
-    # error names its remedy" a property of the code shape rather than a review
-    # item that goes stale on the next site somebody adds.
-    local rem="${REMEDY:-}"
-    [ -n "$rem" ] || rem="$(remedy_for "$err")"
-    local obj=""
-    if command -v jq >/dev/null 2>&1; then
-        obj="$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" \
-            --arg r "$rem" --argjson c "$code" --argjson h "$HELP_REQUESTED" \
-            "$(spawn::envelope_jq plugin)"' + {ok:false,
-              alias:(if $a == "" then null else $a end), session_id:null,
-              transcript_path:null, cwd:null, base_url:null, context_window:null,
-              attach_command:null, error:$e, detail:$d, help_requested:$h,
-              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
-    fi
-    # Falls through to the pure-bash tier when jq is ABSENT and also when jq is
-    # present but errored: that yielded the empty string, emit refused it, and
-    # the script exited with nothing on stdout at all.
-    # help_requested rides the no-jq tier too — a box without an encoder must
-    # still be able to tell a help request from a caller bug, and it is a bash
-    # literal, so no encoder is needed for it.
-    # THE FIELD LIST HERE MUST MATCH THE jq TIER ABOVE, KEY FOR KEY. It did not:
-    # cwd, base_url and context_window were in the jq object and missing here,
-    # so on a box without jq this surface answered with three fewer fields than
-    # its own --describe publishes. That is exactly the failure common.sh warns
-    # about — "any envelope that covers fewer than three drifts on the tier it
-    # missed, silently, because the missing tier is the one nobody runs" — and
-    # it drifted anyway, because the two lists are written out twice by hand.
-    # envelope.bats now asserts tier-to-tier parity for every surface, so this
-    # cannot drift again without going red.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"cwd\":null,\"base_url\":null,\"context_window\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
-    emit "$obj"
-}
+# The failure envelope lives in common.sh (spawn::emit_error): this was a
+# ~40-line near-copy of its sibling, differing only in the trust tier and the
+# per-surface null fields — the same two axes spawn::preflight_jq already
+# parametrizes. The null fields are named ONCE now; the shared helper derives
+# both the jq and the no-jq spelling from that one list, which is the pair
+# that had already drifted.
+emit_error() { spawn::emit_error plugin "session_id transcript_path cwd base_url context_window attach_command" "$@"; }
 
 die() {
     local code="$1" err="$2"; shift 2
@@ -322,6 +279,7 @@ emit_describe() {
         --arg r_auth "$(remedy_for auth_rejected)" \
         --arg r_dead "$(remedy_for deadline_exceeded)" \
         --arg r_pre "$(remedy_for preflight_failed)" \
+        --arg r_int "$(remedy_for internal)" \
         --arg r_seed "$(remedy_for seed_failed)" \
         --arg r_sid "$(remedy_for no_session_id)" \
         --arg r_tr "$(remedy_for transcript_missing)" \
@@ -333,7 +291,8 @@ emit_describe() {
           {value:"no_session_id",     exit_code:5, remedy:$r_sid},
           {value:"transcript_missing",exit_code:5, remedy:$r_tr},
           {value:"deadline_exceeded", exit_code:6, remedy:$r_dead},
-          {value:"preflight_failed",  exit_code:3, remedy:$r_pre}]')" || return 1
+          {value:"preflight_failed",  exit_code:3, remedy:$r_pre},
+          {value:"internal",exit_code:2, remedy:$r_int}]')" || return 1
 
     emit "$(jq -nc --argjson errors "$ev" --argjson timeout "$d_timeout" --argjson grammar "$grammar" \
         "$(spawn::envelope_jq plugin)"' + {
@@ -422,7 +381,7 @@ while [ $# -gt 0 ]; do
                          # Answered here, before --alias is required and long
                          # before preflight — so it holds with the gateway down
                          # and with no config on the box (R10).
-                         emit_describe || die "$EX_USAGE" "usage" "could not encode the describe object"
+                         emit_describe || die "$EX_USAGE" "internal" "could not encode the describe object"
                          exit "$EX_OK" ;;
         -h|--help)       # R11: same exit code, same enum, different FIELD. Set
                          # before need_jq so the no-jq tier carries it too.
@@ -781,5 +740,5 @@ emit "$(jq -nc \
       context_window:(if $win == "" then null else ($win|tonumber) end),
       attach_command:$attach, error:null, exit_code:0}')" \
     || REMEDY="The session was created but jq could not encode the handle. Check jq is a working build; the session exists on disk, so it can be resumed by session id without re-seeding." \
-        die "$EX_USAGE" "usage" "could not encode the response object"
+        die "$EX_USAGE" "internal" "could not encode the response object"
 exit $EX_OK

@@ -237,7 +237,19 @@ emit_error() {
     # the exit code through the one table in common.sh, which is the same table
     # the two lenses classify a preflight failure with.
     local err
-    err="$(spawn::enum_for_code "$code")"
+    # ERROR_ENUM is the same prefix-assignment idiom REMEDY already uses. It
+    # exists for ONE class: a failure of the ENCODER itself. Those sites used
+    # `usage`, because that is what exit 2 maps to — so a caller could not tell
+    # "your argument was bad" from "our jq broke", and every one of them handed
+    # back the usage remedy: "Fix the invocation... Retrying the same call
+    # cannot succeed." Every clause of that is false for an internal fault.
+    #
+    # This does NOT touch the frozen exit-code enum. KTD2's rule is that new
+    # classes go in `error`, never in a new exit code — `internal` at exit 2 is
+    # that rule being followed, and spawnctl already publishes `internal` in its
+    # own error_values for the no-jq tier.
+    local err
+    err="${ERROR_ENUM:-$(spawn::enum_for_code "$code")}"
     [ -n "$err" ] || err="internal"
     # Sanitized here as well as in die(): idempotent on an already-clean string,
     # and it means a future caller that reaches emit_error directly cannot open
@@ -1223,7 +1235,7 @@ case "$VERB" in
         # the drift R23 exists to close. With no jq, need_jq answers with the
         # standard no-encoder object at exit 2.
         need_jq
-        emit_describe || die "$EX_USAGE" "could not encode the describe object"
+        emit_describe || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the describe object"
         exit $EX_OK
         ;;
     -h|--help|help)
@@ -1281,7 +1293,7 @@ ensure)
                 "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"ensure",
                   error:"alias_unknown", alias:$a, served_aliases:$served,
                   remedy:$rem, exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the alias_unknown object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the alias_unknown object"
             exit $EX_ALIAS
         fi
     fi
@@ -1304,7 +1316,7 @@ ensure)
           alias:(if $alias == "" then null else $alias end),
           config:(if $cfg == "" then null else $cfg end),
           served_aliases:$served, error:null, exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the ensure object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the ensure object"
     exit $EX_OK
     ;;
 
@@ -1330,7 +1342,7 @@ start)
           started:$started, base_url:$base,
           pid:(if $pid == "" then null else ($pid|tonumber) end),
           log:$log, served_aliases:$served, error:null, exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the start object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the start object"
     exit $EX_OK
     ;;
 
@@ -1355,14 +1367,14 @@ stop)
                   result:"unmanaged", error:"usage",
                   detail:"a gateway is serving but the pidfile is empty or absent",
                   remedy:$rem, pidfile:$p, exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the stop refusal object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop refusal object"
             exit $EX_USAGE
         fi
         emit "$(jq -nc --arg p "$PIDFILE" \
             "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
               result:"not_running", pid:null, pidfile:$p, error:null,
               exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the stop not_running object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop not_running object"
         exit $EX_OK
     fi
 
@@ -1393,14 +1405,14 @@ stop)
                   result:"unmanaged", pid:$pid, pidfile:$p, error:"usage",
                   detail:"the recorded pid is dead but a gateway is still serving; not stopped",
                   remedy:$rem, exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the stop refusal object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop refusal object"
             exit $EX_USAGE
         fi
         rm -f "$PIDFILE" "$PIDFILE.bin"
         emit "$(jq -nc --argjson pid "$pid" \
             "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
               result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the stop stale_pidfile object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop stale_pidfile object"
         exit $EX_OK
     fi
 
@@ -1425,7 +1437,7 @@ stop)
               actual_command:$cmd, error:"usage",
               detail:"pidfile pid belongs to an unrelated process; not signalled",
               remedy:$rem, exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the stop pid_mismatch object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop pid_mismatch object"
         exit $EX_USAGE
     fi
 
@@ -1451,7 +1463,7 @@ stop)
               pidfile:$p, error:"usage",
               detail:("the gateway is supervised by the launchd job \($label), which respawns it — a kill here would report a stop that lasts about a second"),
               remedy:$rem, exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the stop supervised object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop supervised object"
         exit $EX_USAGE
     fi
 
@@ -1470,7 +1482,7 @@ stop)
     emit "$(jq -nc --argjson pid "$pid" \
         "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
           result:"stopped", pid:$pid, error:null, exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the stop stopped object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop stopped object"
     exit $EX_OK
     ;;
 
@@ -1528,7 +1540,7 @@ restart)
           pid:(if $pid == "" then null else ($pid|tonumber) end),
           stop_exit_code:$stop_rc, served_aliases:$served, error:null,
           exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the restart object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the restart object"
     exit $EX_OK
     ;;
 
@@ -1676,7 +1688,7 @@ status)
           detail:(if $detail == "" then null else $detail end),
           remedy:(if $rem == "" then null else $rem end),
           exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the status object (models table at $MODELS_JSON may be malformed)"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the status object (models table at $MODELS_JSON may be malformed)"
     exit $prc
     ;;
 esac

@@ -424,3 +424,73 @@ spawn::models_grammar() {
     [ -n "$out" ] || out="$empty"
     printf '%s' "$out"
 }
+
+# ---------------------------------------------------------------------------
+# spawn::emit_error <tier> <null-fields> <code> <error-enum> <detail...>
+#
+# The failure envelope for the model surfaces. `null-fields` is a SPACE-
+# SEPARATED LIST OF FIELD NAMES ("text usage"), not two hand-written fragments.
+#
+# WHY ONE LIST AND NOT TWO. lens.sh and launch.sh each carried a ~40-line
+# emit_error that differed only in (a) the trust tier and (b) the per-surface
+# null fields — the exact two axes spawn::preflight_jq already parametrizes a
+# few functions up. The decomposition was done for the 4-line preflight block
+# and skipped for the 40-line one.
+#
+# Worse, each copy wrote its null fields TWICE — once as a jq fragment and once
+# as a JSON fragment for the no-jq tier — and those two spellings had already
+# drifted: launch's jq tier emitted cwd, base_url and context_window while its
+# bash tier did not, so a box without jq answered with three fewer fields than
+# launch's own --describe publishes. Taking ONE list and generating both
+# spellings makes that drift unrepresentable rather than merely tested for.
+#
+# READS THE CALLER'S GLOBALS BY DESIGN (bash dynamic scoping), the same way
+# emit() reads EMITTED: ALIAS, HELP_REQUESTED, REMEDY and the caller's own
+# remedy_for. Each surface keeps its own error vocabulary; only the SHAPE is
+# shared, which is the same split spawn::preflight_jq makes.
+spawn::emit_error() {
+    local tier="$1" nullfields="$2" code="$3" err="$4"; shift 4
+    [ "$EMITTED" -eq 1 ] && return 0
+
+    # `detail` is human-readable diagnostic text a consumer prints, and it can
+    # quote an upstream error body, so it is sanitized (KTD5). Data fields are
+    # not — those are raw by design and emitted elsewhere.
+    local detail alias_d
+    detail="$(spawn::sanitize_for_display "$*")"
+    # The alias is display text on THIS path and only here: emit_error is the
+    # one place it can be an alias the grammar REFUSED, so it has not been
+    # closed by construction yet. jq escapes a control byte in transit but
+    # emits a Unicode bidi override literally, so the field is sanitized.
+    alias_d="$(spawn::sanitize_for_display "${ALIAS:-}")"
+
+    # R12: the site's own REMEDY wins; otherwise the enum's default from the one
+    # table. Defaulting here rather than at ~20 call sites is what makes "every
+    # error names its remedy" a property of the code shape instead of a review
+    # item that goes stale on the next die site somebody adds.
+    local rem="${REMEDY:-}"
+    [ -n "$rem" ] || rem="$(remedy_for "$err")"
+
+    # The two spellings of the SAME list.
+    local f jq_nulls="" bash_nulls=""
+    for f in $nullfields; do
+        jq_nulls="${jq_nulls}${f}:null, "
+        bash_nulls="${bash_nulls},\"${f}\":null"
+    done
+
+    local obj=""
+    if command -v jq >/dev/null 2>&1; then
+        obj="$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" \
+            --arg r "$rem" --argjson c "$code" --argjson h "${HELP_REQUESTED:-false}" \
+            "$(spawn::envelope_jq "$tier")"' + {ok:false,
+              alias:(if $a == "" then null else $a end), '"$jq_nulls"'
+              error:$e, detail:$d, help_requested:$h,
+              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
+    fi
+    # Falls through to the pure-bash tier when jq is ABSENT and also when jq is
+    # present but errored: that yielded the empty string, emit refused it, and
+    # the script exited with nothing on stdout at all. help_requested rides this
+    # tier too — a box with no encoder must still tell a help request from a
+    # caller bug, and it is a bash literal, so no encoder is needed for it.
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash "$tier" "$err" "$code" ",\"alias\":null${bash_nulls},\"help_requested\":${HELP_REQUESTED:-false}" "$rem")"
+    emit "$obj"
+}
