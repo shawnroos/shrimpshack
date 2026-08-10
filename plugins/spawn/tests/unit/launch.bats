@@ -692,7 +692,7 @@ config_write_lint() {   # <script>
     [ "$status" -ne 0 ]
 }
 
-@test "KTD3: the no-write invariant covers the three runtime scripts, and setup.sh is exempt BY NAME" {
+@test "KTD3: the no-write invariant covers the three runtime scripts, and the setup family is exempt BY NAME" {
     # The scope change is worth a test of its own, because "the lint passes" is
     # equally true of a lint that stopped being applied. Both halves are stated
     # here: the runtime list is exactly these three files, and the one file
@@ -704,12 +704,14 @@ config_write_lint() {   # <script>
         [ "$status" -ne 0 ]
     done
 
-    # setup.sh exists, is not in that list, and DOES write a gateway.yaml —
-    # asserting the write is real is what stops this from being a vacuous
-    # exemption for a file that never writes anything.
+    # The setup family (setup.sh and the setup-*.sh scripts it execs) exists,
+    # is not in that list, and DOES write a gateway.yaml — asserting the write
+    # is real is what stops this from being a vacuous exemption for files that
+    # never write anything. Family-scoped rather than pinned to one filename,
+    # so the next code move cannot silently point these greps at the wrong file.
     [ -f "$LIB/setup.sh" ]
-    grep -q 'strip_server_token' "$LIB/setup.sh"
-    grep -q 'staging/\$CONFIG_NAME' "$LIB/setup.sh"
+    grep -q 'strip_server_token' "$LIB"/setup*.sh
+    grep -q 'staging/\$CONFIG_NAME' "$LIB"/setup*.sh
 }
 
 @test "R12 lint self-test: planted cp, tee, sed -i, yq -i and redirect writes each turn the lint red" {

@@ -269,7 +269,7 @@ mutant() {
     mkdir -p "$dir"
     cp "$LIB"/*.sh "$dir/"
     [ -f "$LIB/models.json" ] && cp "$LIB/models.json" "$dir/"
-    sed -i '' "$expr" "$dir/$file"
+    sed -i '' "$expr" "$dir"/*.sh
     printf '%s' "$dir/$file"
 }
 

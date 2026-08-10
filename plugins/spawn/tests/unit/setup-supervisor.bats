@@ -232,7 +232,7 @@ mutant() {
     mkdir -p "$dir"
     cp "$LIB"/*.sh "$dir/"
     [ -f "$LIB/models.json" ] && cp "$LIB/models.json" "$dir/"
-    sed -i '' "$expr" "$dir/$file"
+    sed -i '' "$expr" "$dir"/*.sh
     printf '%s' "$dir/$file"
 }
 
@@ -624,7 +624,7 @@ EOP
     # the owner of a startup path the operator never asked it to own.
     local script
     script="$(mutant setup.sh 's|^        say "no launchd agent in .*|        printf "invented\\n" > "$LAUNCH_AGENTS_DIR/com.spawn.invented.plist"|')"
-    grep -q 'com.spawn.invented.plist' "$script"
+    grep -rq 'com.spawn.invented.plist' "$(dirname "$script")"
 
     plant_agent unrelated "/usr/bin/true" >/dev/null
     local before
@@ -642,7 +642,7 @@ EOP
 @test "G3 self-test: a launcher that BAKES the token makes the credential-free assertion go red" {
     local script
     script="$(mutant setup.sh 's|^# credentials are NEVER baked into this file.*|GATEWAY_TOKEN=$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN")|')"
-    grep -q 'GATEWAY_TOKEN=\$(spawn::keychain_read' "$script"
+    grep -rq 'GATEWAY_TOKEN=\$(spawn::keychain_read' "$(dirname "$script")"
 
     plant_agent gateway >/dev/null
     run_supervisor --script "$script"
@@ -660,7 +660,7 @@ EOP
     # with no token.
     local script
     script="$(mutant setup.sh 's|^    "\$LAUNCHCTL_BIN" unload "\$SUPERVISOR_PLIST"|    true unload "$SUPERVISOR_PLIST"|')"
-    grep -q '^    true unload' "$script"
+    grep -rq '^    true unload' "$(dirname "$script")"
 
     plant_agent gateway >/dev/null
     run_supervisor --script "$script"
@@ -690,7 +690,7 @@ EOP
 @test "G3 self-test: a launcher that execs the argv UNREBASED makes the launcher-run assertion go red" {
     local script old="$WORK/gateway-0.1.0"
     script="$(mutant setup.sh 's,write_launcher "\$SUPERVISOR_ARGV" "\$exec_argv",write_launcher "$SUPERVISOR_ARGV" "$SUPERVISOR_ARGV",')"
-    grep -q 'write_launcher "\$SUPERVISOR_ARGV" "\$SUPERVISOR_ARGV"' "$script"
+    grep -rq 'write_launcher "\$SUPERVISOR_ARGV" "\$SUPERVISOR_ARGV"' "$(dirname "$script")"
 
     plant_agent gateway "$old/target/release/gateway" "$old" >/dev/null
     run_supervisor --script "$script"
@@ -710,7 +710,7 @@ EOP
 @test "G3 self-test: recording the REBASED argv makes the original-command assertion go red" {
     local script old="$WORK/gateway-0.1.0"
     script="$(mutant setup.sh 's,write_launcher "\$SUPERVISOR_ARGV" "\$exec_argv",write_launcher "$exec_argv" "$exec_argv",')"
-    grep -q 'write_launcher "\$exec_argv" "\$exec_argv"' "$script"
+    grep -rq 'write_launcher "\$exec_argv" "\$exec_argv"' "$(dirname "$script")"
 
     plant_agent gateway "$old/target/release/gateway" "$old" >/dev/null
     run_supervisor --script "$script"

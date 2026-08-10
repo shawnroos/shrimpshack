@@ -149,7 +149,7 @@ mutant() {
     mkdir -p "$dir"
     cp "$LIB"/*.sh "$dir/"
     [ -f "$LIB/models.json" ] && cp "$LIB/models.json" "$dir/"
-    sed -i '' "$expr" "$dir/$file"
+    sed -i '' "$expr" "$dir"/*.sh
     printf '%s' "$dir/$file"
 }
 
@@ -560,7 +560,7 @@ EOF
     # wired nothing.
     local script
     script="$(mutant setup.sh '/does not load, so it cannot be wired/s|.*|                codex_here=0|')"
-    grep -qE '^ +codex_here=0$' "$script"
+    grep -rqE '^ +codex_here=0$' "$(dirname "$script")"
 
     install_codex invalid
     plant_operator_codex_config
@@ -583,7 +583,7 @@ EOF
     # gateway is not started yet.
     local script
     script="$(mutant setup.sh '/# rc is READ but never branched on/s|.*|    if [ "$rc" -ne 0 ]; then CODEX_LOAD_STATUS="error"; CODEX_LOAD_DETAIL="codex doctor exited $rc"; rm -f "$out" 2>/dev/null; return 0; fi|')"
-    grep -qF 'if [ "$rc" -ne 0 ]; then CODEX_LOAD_STATUS="error"' "$script"
+    grep -rqF 'if [ "$rc" -ne 0 ]; then CODEX_LOAD_STATUS="error"' "$(dirname "$script")"
 
     install_codex net_fail
 
@@ -600,7 +600,7 @@ EOF
     # success, and let the harness discover the problem mid-task.
     local script
     script="$(mutant setup.sh '/^        codex_config_load_status$/s|.*|        CODEX_LOAD_STATUS=ok; CODEX_LOAD_DETAIL=unchecked|')"
-    grep -qF 'CODEX_LOAD_STATUS=ok; CODEX_LOAD_DETAIL=unchecked' "$script"
+    grep -rqF 'CODEX_LOAD_STATUS=ok; CODEX_LOAD_DETAIL=unchecked' "$(dirname "$script")"
 
     install_codex invalid
     [ ! -e "$SPAWN_CODEX_CONFIG" ]

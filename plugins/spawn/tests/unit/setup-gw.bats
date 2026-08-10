@@ -163,7 +163,7 @@ mutant() {
     mkdir -p "$dir"
     cp "$LIB"/*.sh "$dir/"
     [ -f "$LIB/models.json" ] && cp "$LIB/models.json" "$dir/"
-    sed -i '' "$expr" "$dir/$file"
+    sed -i '' "$expr" "$dir"/*.sh
     printf '%s' "$dir/$file"
 }
 
@@ -370,7 +370,7 @@ mutant() {
     # exactly the shape the file being replaced had.
     local script
     script="$(mutant setup.sh 's|^# credentials are NEVER baked into this file.*|ANTHROPIC_AUTH_TOKEN="$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN")"|')"
-    grep -q 'ANTHROPIC_AUTH_TOKEN="\$(spawn::keychain_read' "$script"
+    grep -rq 'ANTHROPIC_AUTH_TOKEN="\$(spawn::keychain_read' "$(dirname "$script")"
 
     run_gw --script "$script"
     [ "$RC" -eq 0 ]
@@ -388,7 +388,7 @@ mutant() {
     # their edit is silently discarded.
     local script
     script="$(mutant setup.sh 's|        GW_STATE="modified"|        GW_STATE="generated"|')"
-    grep -q 'GW_STATE="generated"$' "$script"
+    grep -rq 'GW_STATE="generated"$' "$(dirname "$script")"
 
     run_gw
     [ "$RC" -eq 0 ]
@@ -406,7 +406,7 @@ mutant() {
 @test "G3 self-test: recognition that accepts a markerless wrapper makes the consent assertion go red" {
     local script
     script="$(mutant setup.sh 's|GW_STATE="foreign"; return 0|GW_STATE="generated"; return 0|')"
-    grep -q 'GW_STATE="generated"; return 0; }' "$script"
+    grep -rq 'GW_STATE="generated"; return 0; }' "$(dirname "$script")"
 
     plant_markerless_gw
     local before
