@@ -337,3 +337,48 @@ CTL
         return 1
     fi
 }
+
+@test "the size justification's line counts match the file it is arguing about" {
+    # A justification is only as good as its measurement, and this one's numbers
+    # have gone stale THREE times in a single review round — each time because
+    # the file changed after the argument was written. Twice I refreshed them by
+    # hand and wrote a note telling the next reader to recount; the third time
+    # proved that a note is not a mechanism.
+    #
+    # So the doc's own figures are now checked against the file on every run. If
+    # this fails, RECOUNT AND UPDATE THE DOC — do not delete the assertion. The
+    # whole point of the recorded decision is that a reader can verify the
+    # numbers it rests on, and a stale figure reads as rationalisation whether
+    # or not the argument behind it still holds.
+    local doc="$(cd "$BATS_TEST_DIRNAME/../../../.." && pwd)/docs/residual-review-findings/spawn-quality-audit.md"
+    local f="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)/spawnctl.sh"
+    [ -f "$doc" ]
+    [ -f "$f" ]
+
+    local claimed_total claimed_code
+    claimed_total="$(grep -oE '[0-9]+ lines total' "$doc" | head -1 | grep -oE '[0-9]+')"
+    claimed_code="$(grep -oE 'but [0-9]+ lines of code' "$doc" | head -1 | grep -oE '[0-9]+')"
+
+    # Guard the guard: if the wording changes so the numbers stop being found,
+    # this must fail loudly rather than compare two empty strings and pass.
+    [ -n "$claimed_total" ]
+    [ -n "$claimed_code" ]
+
+    local actual_total actual_comment actual_blank actual_code
+    actual_total="$(wc -l < "$f" | tr -d ' ')"
+    actual_comment="$(grep -cE '^[[:space:]]*#' "$f")"
+    actual_blank="$(grep -cE '^[[:space:]]*$' "$f")"
+    actual_code=$((actual_total - actual_comment - actual_blank))
+
+    if [ "$claimed_total" != "$actual_total" ] || [ "$claimed_code" != "$actual_code" ]; then
+        echo "spawn-quality-audit.md is stale about spawnctl.sh:"
+        echo "  doc says:  $claimed_total total, $claimed_code code"
+        echo "  file is:   $actual_total total, $actual_code code"
+        echo "Recount and update the doc; do not delete this check."
+        return 1
+    fi
+
+    # The argument itself is that the file is under the bar ON CODE LINES. If
+    # that ever stops being true the decision has to be re-taken, not re-quoted.
+    [ "$actual_code" -lt 1000 ]
+}

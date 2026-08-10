@@ -108,8 +108,11 @@ run first, then treat it as a defect.
 
 ## DECIDED: `spawnctl.sh` stays one file, for now
 
-`spawnctl.sh` is **1767 lines total — but 926 lines of code**, with 742 lines
-of comment and 99 blank. (Recount these; they moved during the 2026-08-10
+`spawnctl.sh` is **1767 lines total — but 925 lines of code**, with 743 lines
+of comment and 99 blank. (These are CHECKED by tests/unit/surfaces.bats on every suite run — if
+the file changes and the doc does not, the suite goes red and names both
+numbers. They drifted three times by hand before that gate existed. They moved
+during the 2026-08-10
 review round, from 1,683/902, as guards were added for a P1 and four P2s. If
 they have drifted again, recount rather than trusting this line.)
 
@@ -120,7 +123,7 @@ explain it away." Applied honestly in the other direction, `spawnctl.sh` is
 under the bar on the measure this audit chose before it knew the answer.
 
 **The margin is now thinner, and that matters.** At 926 code lines it is
-within 74 of the bar it is being argued past. This decision should be
+within 75 of the bar it is being argued past. This decision should be
 re-taken, not re-quoted, the next time this file grows — and F1's `spawnctl run`
 verb would grow it.
 
