@@ -439,16 +439,29 @@ def match(manifest, situation, cwd=None, budget=None):
     `sibling` against the current repo are dropped. Global bodies classify as
     `ancestor` and always pass.
     """
-    if not manifest or not situation:
+    entries = manifest.get("entries", []) if manifest else []
+    if not entries or not situation:
         return [], []
     text = situation[:MAX_SITUATION]
-    cur = scope.resolve_repo_slug(cwd or os.getcwd())
+
+    # Resolve the current repo LAZILY. This runs on every Bash tool call — 453 times
+    # in the session that motivated this plugin — and `scope.resolve_repo_slug`
+    # shells out to `git rev-parse` (scope.py:61), a real subprocess. Nothing needs
+    # it until an entry actually carries a scope: `scope.classify` returns "ancestor"
+    # immediately for a global body without reading the slug at all. Most memories
+    # are global, so resolving up front paid for a process spawn per call to answer a
+    # question no entry asked. Same verdicts, because the global path never consulted
+    # it.
+    cur = None
     deadline = time.monotonic() + (MATCH_BUDGET_S if budget is None else budget)
     hits, timeouts = [], []
-    for entry in manifest.get("entries", []):
+    for entry in entries:
         try:
-            if scope.classify(entry.get("path", ""), cur) == "sibling":
-                continue
+            if entry.get("scope"):
+                if cur is None:
+                    cur = scope.resolve_repo_slug(cwd or os.getcwd())
+                if scope.classify(entry.get("path", ""), cur) == "sibling":
+                    continue
         except Exception:
             continue
         for pat in entry.get("patterns", []):
