@@ -590,10 +590,7 @@ BASE_URL="${BASE_URL%/}"
 read_server_token() {
     local cfg="$1"
     [ -f "$cfg" ] || return 1
-    awk '
-        function trim(v) { sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); return v }
-        function decomment(v) { sub(/[ \t]+#.*$/, "", v); return trim(v) }
-        function unquote(v) { gsub(/^["'"'"']|["'"'"']$/, "", v); return v }
+    awk "$SPAWN_YAML_AWK_DEFS"'
         /^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); next }
         sec == "server" && /^[ \t]+token:/ {
             v = $0; sub(/^[ \t]*token:[ \t]*/, "", v)

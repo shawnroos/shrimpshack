@@ -17,8 +17,17 @@
 #     would push a token across a boundary it currently never crosses.
 #   * launch.sh's quote-free TOKEN_AWK — it is embedded verbatim in the printed
 #     attach command and re-invoked by the user's shell.
-#   * the server.token awk parsers, and tmpwork() (whose mktemp template and
-#     comment name the script they belong to).
+#   * tmpwork() (whose mktemp template and comment name the script they belong
+#     to, and whose per-surface remedy text differs).
+#
+# REMOVED FROM THIS LIST 2026-08-10: "the server.token awk parsers". A reviewer
+# called that rationalisation by listing and was right — the reason stated beside
+# it justifies tmpwork, not the parsers. launch.sh's TOKEN_AWK has a real reason
+# of its own (above). But lens.sh's read_server_token was a strict subset of
+# spawnctl.sh's yaml_scan, sharing the trim/decomment/unquote helpers verbatim
+# with no reason at all. Those three now live in SPAWN_YAML_AWK_DEFS below; each
+# caller keeps its own RULES, which genuinely differ. Listing a duplication
+# under a "deliberate" heading is not the same as giving it a reason.
 #
 # WHAT THIS FILE DOES AND DOES NOT DO WITH THE TERMINAL
 #
@@ -662,3 +671,28 @@ validate_alias() {
     [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
         || die "$EX_USAGE" "usage" "alias failed the grammar [A-Za-z0-9._-]+ — refused before any network call"
 }
+
+# ---------------------------------------------------------------------------
+# SPAWN_YAML_AWK_DEFS — the three scalar helpers every gateway.yaml reader needs.
+#
+# Shared for the same reason SPAWN_MODELS_GRAMMAR_JQ_DEF is, and in the same
+# shape: only the DEFS travel, each caller keeps its own RULES. lens.sh reads one
+# key; spawnctl.sh reads the token AND the whole models table, and its section
+# rule additionally resets its alias accumulator. Those genuinely differ. The
+# three helpers did not — they were byte-identical, and a fuzzy scan put the two
+# parsers at 0.67 similarity with these lines as the entire shared core.
+#
+# common.sh's own header used to list "the server.token awk parsers" under
+# deliberate duplication. That was rationalisation by listing: the reason given
+# beside it justifies tmpwork(), and launch.sh's TOKEN_AWK has a real one of its
+# own (it is embedded verbatim in the printed attach command and must carry no
+# quote byte). This pair had neither.
+#
+# NOT a general YAML parser, and must not become one: it handles the flat
+# two-level shape gateway.yaml actually has. A real parser is a dependency this
+# plugin deliberately does not take.
+SPAWN_YAML_AWK_DEFS='
+    function trim(v) { sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); return v }
+    function decomment(v) { sub(/[ \t]+#.*$/, "", v); return trim(v) }
+    function unquote(v) { gsub(/^["'"'"']|["'"'"']$/, "", v); return v }
+'

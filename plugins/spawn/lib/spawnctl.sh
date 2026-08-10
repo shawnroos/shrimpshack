@@ -295,10 +295,7 @@ emit_error() {
 yaml_scan() {
     local cfg="$1"
     [ -f "$cfg" ] || return 1
-    awk '
-        function trim(v) { sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); return v }
-        function decomment(v) { sub(/[ \t]+#.*$/, "", v); return trim(v) }
-        function unquote(v) { gsub(/^["'"'"']|["'"'"']$/, "", v); return v }
+    awk "$SPAWN_YAML_AWK_DEFS"'
         /^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); alias = ""; next }
         sec == "server" && /^[ \t]+token:/ {
             v = $0; sub(/^[ \t]*token:[ \t]*/, "", v)

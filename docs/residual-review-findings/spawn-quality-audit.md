@@ -108,7 +108,7 @@ run first, then treat it as a defect.
 
 ## DECIDED: `spawnctl.sh` stays one file, for now
 
-`spawnctl.sh` is **1767 lines total — but 925 lines of code**, with 743 lines
+`spawnctl.sh` is **1764 lines total — but 922 lines of code**, with 743 lines
 of comment and 99 blank. (These are CHECKED by tests/unit/surfaces.bats on every suite run — if
 the file changes and the doc does not, the suite goes red and names both
 numbers. They drifted three times by hand before that gate existed. They moved
@@ -123,7 +123,7 @@ explain it away." Applied honestly in the other direction, `spawnctl.sh` is
 under the bar on the measure this audit chose before it knew the answer.
 
 **The margin is now thinner, and that matters.** At 926 code lines it is
-within 75 of the bar it is being argued past. This decision should be
+within 78 of the bar it is being argued past. This decision should be
 re-taken, not re-quoted, the next time this file grows — and F1's `spawnctl run`
 verb would grow it.
 
@@ -145,6 +145,29 @@ only had to follow a seam the code was already using. Splitting here would be
 inventing one, and inventing a boundary through shared mutable state (PROBE_*,
 SPAWN_TOKEN_*, STARTED, the lock) is how the next drift gets introduced rather
 than prevented.
+
+## Criterion 4: the near-duplicate pairs that REMAIN, and why each stays
+
+Exact duplicates are gated by `tests/unit/escapes.bats` and there are none. A
+FUZZY pass (Jaccard over normalised body lines, cross-file, >=3 lines) still
+reports four pairs at >=0.55. Recorded here with a reason each, so the next
+reviewer does not have to re-derive them — and so that if one of these reasons
+ever stops being true, it is visible rather than assumed.
+
+| Pair | Sim | Why it stays |
+|---|---|---|
+| `launch.sh:cleanup` / `lens.sh:cleanup` | 0.75 | The shared half is already shared: both call `reap_child` (common.sh) then remove `TMPWORK`. What differs is real — launch also removes the preflight scratch file, which exists BEFORE its work directory does. Sharing the remaining two lines would need a per-surface hook, which is more machinery than the duplication. |
+| `setup-lib.sh:need_jq` / `spawnctl.sh:need_jq` | 0.60 | Different envelopes: spawnctl reports a `verb`, setup-lib reports its own shape (F2 territory). The model surfaces' identical copies WERE shared — they are in common.sh. These two are not identical and would need the F2 contract decision first. |
+| `lens.sh:read_server_token` / `spawnctl.sh:yaml_scan` | 0.56 | Was 0.67. The shared core — `trim`/`decomment`/`unquote` — is now `SPAWN_YAML_AWK_DEFS` in common.sh. What is left is the shell scaffolding (`local cfg="$1"`, the file guard, the awk invocation) and genuinely different RULES: lens reads one key, spawnctl reads the token AND the whole models table with an alias accumulator. |
+| `launch.sh:tmpwork` / `lens.sh:tmpwork` | 0.56 | Carved out in `common.sh`'s header with a stated reason: the mktemp template and the per-surface remedy text name the script they belong to. |
+
+**One entry was removed from that carve-out list rather than defended.** It used
+to include "the server.token awk parsers". A reviewer called that
+rationalisation by listing and was right: the reason printed beside it justifies
+`tmpwork`, and `launch.sh`'s `TOKEN_AWK` has a real reason of its own (embedded
+verbatim in the printed attach command, so it must carry no quote byte). The
+lens/spawnctl pair had neither, and is now shared. Listing a duplication under a
+"deliberate" heading is not the same as giving it a reason.
 
 ## Decisions on the remaining audit findings
 
