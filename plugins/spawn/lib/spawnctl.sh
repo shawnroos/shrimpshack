@@ -1220,6 +1220,27 @@ emit_describe() {
 VERB="${1:-}"
 [ $# -gt 0 ] && shift
 
+# VALIDATED BEFORE ANY ARITHMETIC. Both are consumed as $((VAR * n)), and bash
+# arithmetic evaluates the CONTENTS of a variable: a non-numeric value resolves
+# as a name to 0, and `a[$(cmd)]` executes cmd. A zero here is not cosmetic —
+# it collapses the start wait to a single tick, so do_start_locked removes the
+# mode-0600 delivery file out from under a gateway that has not read it yet and
+# reports unreachable for a start that was merely still coming up.
+# launch.sh already validates its own timeout knob exactly this way; these two
+# siblings had nothing.
+for _tv in START_TIMEOUT LOCK_TIMEOUT; do
+    case "${!_tv}" in
+        ''|*[!0-9]*)
+            # No bare printf here: die() already prints the message through the
+            # sanitizing chokepoint, and a second raw sink is what escapes.bats'
+            # lint exists to catch. It caught this line when it was one.
+            ERROR_ENUM=usage die 2 "SPAWN_${_tv} is not a positive integer — refusing before it reaches shell arithmetic, where a non-numeric value silently becomes 0 and a crafted one executes" ;;
+    esac
+    [ "${!_tv}" -gt 0 ] 2>/dev/null || \
+        ERROR_ENUM=usage die 2 "SPAWN_${_tv} must be greater than zero"
+done
+unset _tv
+
 case "$VERB" in
     start|stop|restart|status|ensure) ;;
     --describe)
@@ -1475,9 +1496,38 @@ stop)
         if [ "$waited" -gt 100 ]; then
             say "pid $pid ignored SIGTERM for 10s — escalating to SIGKILL"
             kill -KILL "$pid" 2>/dev/null
+            # Give the KILL a moment to land before deciding it worked.
+            for _k in 1 2 3 4 5 6 7 8 9 10; do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.1
+            done
             break
         fi
     done
+
+    # VERIFY THE KILL. SIGKILL is not delivered to a task in uninterruptible
+    # sleep until it leaves the kernel — a gateway wedged on a hung mount under
+    # its log dir survives it. The loop used to `break` unconditionally, delete
+    # BOTH pidfile records, and report ok:true / result:"stopped" / exit 0 while
+    # the process was still alive and serving. Worse, deleting the ownership
+    # record is what makes the next stop fall into the empty-pidfile branch, so
+    # the gateway becomes unstoppable through this surface entirely.
+    #
+    # The other two stop branches were already hardened against exactly this and
+    # say so — "refusing to report a stop that did not happen". Two of three
+    # branches got the treatment; the one that actually signals did not.
+    if kill -0 "$pid" 2>/dev/null; then
+        say "pid $pid survived SIGKILL — refusing to report a stop that did not happen, and leaving $PIDFILE alone"
+        emit "$(jq -nc --argjson pid "$pid" --arg p "$PIDFILE" --argjson c $EX_USAGE \
+            --arg rem "The process did not die, most likely wedged in uninterruptible sleep (a hung mount or stuck disk write). The pidfile was left alone so this gateway stays manageable. Clear whatever it is blocked on, then run stop again." \
+            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
+              result:"kill_failed", pid:$pid, pidfile:$p, error:"usage",
+              detail:"the recorded pid survived SIGTERM and SIGKILL; it was NOT stopped and the pidfile was left intact",
+              remedy:$rem, exit_code:$c}')" \
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop kill_failed object"
+        exit $EX_USAGE
+    fi
+
     rm -f "$PIDFILE" "$PIDFILE.bin"
     emit "$(jq -nc --argjson pid "$pid" \
         "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",

@@ -464,3 +464,44 @@ jq_free_path() {
         fi
     done
 }
+
+@test "R23: the shared envelope helpers survive a consumer that declares none of their globals" {
+    # common.sh's helpers read the CALLER's globals by bash dynamic scoping —
+    # EMITTED, ALIAS, HELP_REQUESTED, REMEDY, remedy_for. Every script here runs
+    # under `set -u`, where an undefined global is FATAL, so an unguarded read
+    # kills the next consumer inside the one function whose entire job is
+    # guaranteeing something reaches stdout.
+    #
+    # This was live: emit() read "$EMITTED" bare, and a bare consumer aborted
+    # with "EMITTED: unbound variable" mid-emit, printing nothing at all — the
+    # exact failure emit's own header says it exists to prevent.
+    #
+    # NOTE ON THE ASSERTIONS: the first version of this check piped straight to
+    # `jq -e .` and reported success, because jq on EMPTY input exits 0. It was
+    # passing against zero bytes. Emptiness is therefore asserted BEFORE
+    # validity, and the field values after — an order this file has been bitten
+    # into using.
+    local consumer="$BATS_TEST_TMPDIR/bare-consumer.sh"
+    cat > "$consumer" <<EOS
+set -uo pipefail
+SCRIPT_DIR="$LIB"
+. "\$SCRIPT_DIR/sanitize.sh"
+. "\$SCRIPT_DIR/common.sh"
+spawn::emit_error plugin "foo bar" 2 usage "a consumer declaring none of the globals"
+EOS
+
+    run bash "$consumer"
+    [ "$status" -eq 0 ]
+    # Non-empty FIRST — this is the assertion the vacuous version skipped.
+    [ -n "$output" ]
+    [ "$(printf '%s' "$output" | wc -c | tr -d ' ')" -gt 100 ]
+    # Exactly one object, and parseable.
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    # The caller-named null fields are present...
+    [ "$(echo "$output" | jq -r 'has("foo")')" = "true" ]
+    [ "$(echo "$output" | jq -r 'has("bar")')" = "true" ]
+    # ...and it fell back to the shared remedy table rather than dying on a
+    # remedy_for the consumer never defined.
+    [ "$(echo "$output" | jq -r '.remedy')" != "null" ]
+    [ "$(echo "$output" | jq -r '.error')" = "usage" ]
+}

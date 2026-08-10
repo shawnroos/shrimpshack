@@ -350,8 +350,16 @@ spawn::resolve_token() {
     local -
     set +x
     SPAWN_TOKEN_VALUE=""
+    local found=1
     if spawn::token_fallback "$1" "$2"; then
         TOKEN="$SPAWN_TOKEN_VALUE"
+        found=0
     fi
     SPAWN_TOKEN_VALUE=""
+    # RETURNS WHETHER IT FOUND ONE. Without this the last command is an
+    # assignment, so the function reported success either way. Both call sites
+    # today ignore the status, so nothing was broken — but the next consumer
+    # writing `spawn::resolve_token ... || die` would get a guard that can never
+    # fire, which is the quiet kind of wrong.
+    return "$found"
 }

@@ -1376,3 +1376,57 @@ wire_fake_launchd() {
     [ "$(echo "$output" | jq -r '.result')" = "stopped" ]
     ! kill -0 "$pid" 2>/dev/null
 }
+
+@test "stop refuses to report success when the process survives SIGKILL" {
+    # The wrong-success the other two stop branches were already hardened
+    # against, in the one branch that actually signals. SIGKILL is not delivered
+    # to a task in uninterruptible sleep, so a gateway wedged on a hung mount
+    # survives it — and the old code broke out of the wait loop unconditionally,
+    # deleted BOTH pidfile records, and reported ok:true / result:"stopped".
+    # Deleting the ownership record is the compounding part: the next stop then
+    # lands in the empty-pidfile branch and the gateway is unmanageable.
+    #
+    # D-state cannot be produced in a test, so the equivalent is used: a process
+    # that survives both signals. `kill` is shadowed for the script only, so the
+    # signals are genuinely issued and genuinely have no effect — the same
+    # observable state, without needing a wedged filesystem.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    kill -0 "$pid"
+
+    # `kill` is a bash BUILTIN, so a shim on PATH is never consulted — the
+    # first version of this test put one there and the gateway simply died,
+    # proving nothing. BASH_ENV is sourced by every non-interactive bash at
+    # startup, which is exactly what `bash spawnctl.sh` is, so a FUNCTION
+    # defined there does shadow the builtin inside the script under test.
+    #
+    # `kill -0` still answers truthfully via the real builtin: without that the
+    # test could not tell "survived" from "the liveness check is broken too".
+    cat > "$WORK/nokill.bash" <<'EOS'
+kill() {
+    if [ "${1:-}" = "-0" ]; then builtin kill "$@"; return $?; fi
+    return 0
+}
+EOS
+    export SPAWN_START_TIMEOUT=2
+    # stdout ONLY, like the ctl() helper — a diagnostic on stderr would break
+    # the parse, which is how this file enforces the never-both-on-stdout rule.
+    run bash -c 'BASH_ENV="$1" bash "$2" stop 2>/dev/null' _ "$WORK/nokill.bash" "$CTL"
+
+    # BEHAVIOUR FIRST: the gateway is still alive and still OURS to manage.
+    kill -0 "$pid"
+    [ -f "$WORK/.gateway.pid" ]
+    [ "$(cat "$WORK/.gateway.pid")" = "$pid" ]
+
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.ok')" = "false" ]
+    [ "$(echo "$output" | jq -r '.result')" = "kill_failed" ]
+}

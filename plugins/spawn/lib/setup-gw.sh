@@ -67,11 +67,33 @@ gw_hash() { shasum -a 256 | awk '{print $1}'; }
 # the second is QUOTED, so every `$` in it belongs to the wrapper's own runtime
 # rather than to this script.
 gw_body() {
+    # ESCAPED BEFORE BAKING. This heredoc is deliberately unquoted so it can
+    # bake absolute paths, and the result is written to ~/.local/bin/gw and
+    # chmod 755 — an EXECUTED file. A path containing a double quote, a
+    # backslash, a `$` or a backtick therefore either breaks the wrapper
+    # syntactically or gets EXECUTED on every `gw` invocation. The path is
+    # caller-influenced: SPAWN_SPAWNCTL_PATH is an env override, and the
+    # derived value is a filesystem path.
+    #
+    # The identical hazard on the REPORTING side is already closed ~170 lines
+    # below, where the warning JSON is built by jq rather than by hand. Same
+    # variable, same class, and only one of the two halves was defended.
+    #
+    # Escaping the four bytes rather than using printf %q is deliberate: %q
+    # would drop the surrounding quotes for an ordinary path and change the
+    # generated body, which is HASHED — every `gw` already on disk would then
+    # classify as hand-edited and demand consent for an unrelated upgrade. This
+    # form leaves an ordinary path byte-identical.
+    local ctl_esc="$SPAWNCTL_PATH"
+    ctl_esc="${ctl_esc//\\/\\\\}"   # backslash first, or it re-escapes the others
+    ctl_esc="${ctl_esc//\"/\\\"}"
+    ctl_esc="${ctl_esc//\$/\\\$}"
+    ctl_esc="${ctl_esc//\`/\\\`}"
     cat <<EOF
 set -euo pipefail
 
 # Baked at write time from the plugin's own location; a setup re-run re-bakes it.
-SPAWNCTL="$SPAWNCTL_PATH"
+SPAWNCTL="$ctl_esc"
 # credentials are NEVER baked into this file: the token is read from the
 # Keychain at run time, so rotating it reaches this wrapper with no rewrite.
 EOF

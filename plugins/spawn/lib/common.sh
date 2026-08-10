@@ -54,7 +54,13 @@ expand_env_refs() {
 # site at once instead of per-site; success paths pair this with `|| die`, and
 # the error paths fall through to their own pure-bash encoder.
 emit() {
-    [ "$EMITTED" -eq 1 ] && return 0
+    # EMITTED belongs to the CALLING script (bash dynamic scoping). Read with a
+    # default because every script here runs under `set -u`, where an undefined
+    # global is FATAL — a consumer that sourced common.sh without declaring
+    # EMITTED would die inside the one function whose entire job is guaranteeing
+    # something reaches stdout. Found by writing a bare consumer and watching it
+    # abort with "EMITTED: unbound variable" mid-emit.
+    [ "${EMITTED:-0}" -eq 1 ] && return 0
     [ -n "$1" ] || return 1
     EMITTED=1
     printf '%s\n' "$1"
@@ -223,8 +229,22 @@ spawn::envelope_bash() {
         rem="$(printf '%s' "$rem" | tr -d '\000-\037')"
         remfield="\"$rem\""
     fi
-    printf '{"schema":"%s","ok":false,"error":"%s","remedy":%s,"detail":null,"content_trust":"%s","content_notice":"%s","exit_code":%s%s}' \
-        "$SPAWN_SCHEMA" "$err" "$remfield" "$trust" "$notice" "${code:-2}" "${4:-}"
+    # $6 = detail, same narrow scrub the remedy gets. It used to be hardcoded
+    # null here, so EVERY failure on a box without jq lost the diagnostic
+    # entirely — the enum and the remedy survived and the one field explaining
+    # WHAT happened did not, on exactly the box where it is hardest to get any
+    # other way. That is the drift spawn::emit_error's header claims to have
+    # made unrepresentable; `detail` simply was not part of the list it derives
+    # both spellings from. Optional, so existing callers that pass five
+    # arguments keep emitting detail:null exactly as before.
+    local det="${6:-}" detfield='null'
+    if [ -n "$det" ]; then
+        det="${det//\\/}"; det="${det//\"/}"
+        det="$(printf '%s' "$det" | tr -d '\000-\037')"
+        detfield="\"$det\""
+    fi
+    printf '{"schema":"%s","ok":false,"error":"%s","remedy":%s,"detail":%s,"content_trust":"%s","content_notice":"%s","exit_code":%s%s}' \
+        "$SPAWN_SCHEMA" "$err" "$remfield" "$detfield" "$trust" "$notice" "${code:-2}" "${4:-}"
 }
 # models.json alias-table shape guard, shared because both readers need the
 # SAME predicate and a second copy drifts silently.
@@ -450,7 +470,12 @@ spawn::models_grammar() {
 # shared, which is the same split spawn::preflight_jq makes.
 spawn::emit_error() {
     local tier="$1" nullfields="$2" code="$3" err="$4"; shift 4
-    [ "$EMITTED" -eq 1 ] && return 0
+    # EMITTED is the CALLER's state (bash dynamic scoping), read defensively for
+    # the same reason spawn::supervising_label defaults LAUNCHCTL_BIN: a shared
+    # helper that trips `set -u` on a global its next consumer had no reason to
+    # define is a landmine, and every script here runs with -u. Today all three
+    # callers define it; the guard is for the fourth.
+    [ "${EMITTED:-0}" -eq 1 ] && return 0
 
     # `detail` is human-readable diagnostic text a consumer prints, and it can
     # quote an upstream error body, so it is sanitized (KTD5). Data fields are
@@ -468,7 +493,17 @@ spawn::emit_error() {
     # error names its remedy" a property of the code shape instead of a review
     # item that goes stale on the next die site somebody adds.
     local rem="${REMEDY:-}"
-    [ -n "$rem" ] || rem="$(remedy_for "$err")"
+    # The caller's own vocabulary first (each surface has one), falling back to
+    # the shared table. `command -v` rather than calling blind: a consumer that
+    # defines no remedy_for would otherwise die with "command not found" while
+    # emitting a failure object, which is the one moment this must not fail.
+    if [ -z "$rem" ]; then
+        if command -v remedy_for >/dev/null 2>&1; then
+            rem="$(remedy_for "$err")"
+        else
+            rem="$(spawn::remedy_for "$err")"
+        fi
+    fi
 
     # The two spellings of the SAME list.
     local f jq_nulls="" bash_nulls=""
@@ -491,6 +526,6 @@ spawn::emit_error() {
     # the script exited with nothing on stdout at all. help_requested rides this
     # tier too — a box with no encoder must still tell a help request from a
     # caller bug, and it is a bash literal, so no encoder is needed for it.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash "$tier" "$err" "$code" ",\"alias\":null${bash_nulls},\"help_requested\":${HELP_REQUESTED:-false}" "$rem")"
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash "$tier" "$err" "$code" ",\"alias\":null${bash_nulls},\"help_requested\":${HELP_REQUESTED:-false}" "$rem" "$detail")"
     emit "$obj"
 }
