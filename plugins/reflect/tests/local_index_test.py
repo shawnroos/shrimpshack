@@ -159,7 +159,13 @@ mergeable field before diagnosing missing continuous integration.
 CASE2_Q = "six failing E2E shards different test on each re-run flake or regression"
 FLAT_Q = "statusCheckRollup returned thin output no checks reported"
 SINGLETON_Q = "pgrep secret bearing process dumps the environment"
-NOTHING_Q = "squash"
+# Renamed from ONE_WORD_Q. Its premise was wrong: "squash" HAS a right answer in the
+# fixture — feedback_squash_on_pr_landing.md, a memory about squashing on PR landing.
+# The old floor scored it 3.46 against a 12.0 threshold and refused it, and the test
+# recorded that false negative as expected behavior. Under coverage it returns, which
+# is correct. Kept as a one-word query because that is the case coverage is weakest
+# on, and the assertion below states what SHOULD happen there.
+ONE_WORD_Q = "squash"
 
 
 def case_store(parent, case2_at=None, name="store"):
@@ -192,6 +198,13 @@ class StubIndex:
     def score_all(self, query):
         return list(self.ranked)
 
+    def coverage(self, relpath, query):
+        """Always relevant. These fixtures exist to test score ORDER through the
+        pipeline, so the relevance condition must not be what decides them —
+        otherwise the ordering assertions would silently start passing for the
+        wrong reason."""
+        return 1.0
+
 
 # ------------------------------------------- 1. Case 2 ranks first + clears gate
 print("== Case 2: the covered query clears the gate ==")
@@ -212,8 +225,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check("top score cleared the shipped floor", res.top_score >= li.DEFAULT_FLOOR_MIN)
     check("separation was evaluated and cleared",
           res.ratio is not None and res.ratio >= li.DEFAULT_FLOOR_RATIO)
-    check("the reason states which conditions were met",
-          "floor" in res.reason and "separation" in res.reason)
+    check("the reason states what the gate actually checked",
+          "covers" in res.reason)
 
 # --------------------------- 2. the flat query is silenced BY THE FLOOR (KTD12)
 print()
@@ -264,21 +277,41 @@ with tempfile.TemporaryDirectory() as tmp:
     d = case_store(tmp)
     idx = li.build(d)
 
+    # "Singleton" was defined BY the old floor — exactly one candidate cleared 12.0.
+    # Under coverage every relevant survivor passes, so this fixture now yields
+    # several. The singleton PATH still exists and still must not read a ratio it
+    # does not have, so pin the floor to reach it deliberately rather than by
+    # accident of calibration.
     above = [(r, s) for r, s in idx.score_all(SINGLETON_Q) if s >= li.DEFAULT_FLOOR_MIN]
-    check("fixture really does yield exactly one floor-clearing candidate",
+    check("fixture yields exactly one candidate above the pinned floor",
           len(above) == 1)
-    res = li.search(d, SINGLETON_Q, cwd=tmp, index=idx)
-    check("a singleton passes on the floor alone", res.status == li.HITS)
+    res = li.search(d, SINGLETON_Q, cwd=tmp, index=idx, min_score=li.DEFAULT_FLOOR_MIN)
+    check("a singleton passes without a ratio to evaluate", res.status == li.HITS)
     check("separation is NOT evaluated for a singleton", res.ratio is None)
     check("its runner-up is not reported as a gate input", res.runner_up is None)
     check("the singleton is the returned hit",
           [h["file"] for h in res.hits] == ["feedback_pgrep_ps_env_leak.md"])
 
-    res = li.search(d, NOTHING_Q, cwd=tmp, index=idx)
-    check("nothing clears the floor -> below_gate", res.status == li.BELOW_GATE)
-    check("no best-effort top hit is returned", res.hits == [])
-    check("the top score is still reported so a caller can say how close it was",
-          res.top_score is not None and res.top_score < li.DEFAULT_FLOOR_MIN)
+    # Unpinned, the same query is relevant and returns — with company, flagged.
+    res_cov = li.search(d, SINGLETON_Q, cwd=tmp, index=idx)
+    check("unpinned, coverage returns that same body among its hits",
+          any(h["file"] == "feedback_pgrep_ps_env_leak.md" for h in res_cov.hits))
+
+    res = li.search(d, ONE_WORD_Q, cwd=tmp, index=idx)
+    check("a one-word query whose answer IS on disk returns it",
+          res.status == li.HITS)
+    check("and it returns the RIGHT body, not merely something containing the word",
+          [h["file"] for h in res.hits] == ["feedback_squash_on_pr_landing.md"])
+    # The floor scored this 3.46 against 12.0 and refused it. That refusal was the
+    # bug, recorded as an expectation — the same shape as an earlier hook assertion
+    # that demanded empty output from a path whose whole job was to speak.
+    check("pinning the old floor reproduces the false negative it used to ship",
+          li.search(d, ONE_WORD_Q, cwd=tmp, index=idx,
+                    min_score=li.DEFAULT_FLOOR_MIN).status == li.BELOW_GATE)
+    # A query with genuinely no answer still gets silence — coverage, not the floor.
+    res_none = li.search(d, "gardening tulips bulbs perennials", cwd=tmp, index=idx)
+    check("a query with no answer on disk is still refused",
+          res_none.status in (li.BELOW_GATE, li.EMPTY))
 
 # ---------------------------- 4. the gate runs BEFORE select_scoped (KTD15)
 print()
@@ -425,15 +458,29 @@ with tempfile.TemporaryDirectory() as tmp:
         os.environ["MEMORY_LOCAL_FLOOR_MIN"] = "not-a-number"
         check("a garbage floor env var falls back to the default",
               li.floor_min() == li.DEFAULT_FLOOR_MIN)
-        os.environ["MEMORY_LOCAL_FLOOR_MIN"] = "99999"
-        check("a valid floor env var IS honoured",
-              li.search(d, CASE2_Q, cwd=tmp).status == li.BELOW_GATE)
     finally:
         os.environ.pop("MEMORY_LOCAL_FLOOR_MIN", None)
+
+    # The shipped relevance knob is coverage now, so that is the one whose override
+    # must reach a verdict. Demanding 99% of the query's vocabulary silences a query
+    # that otherwise passes.
+    try:
+        os.environ["MEMORY_LOCAL_MIN_COVERAGE"] = "0.99"
+        check("a coverage env override IS honoured (silences a passing query)",
+              li.search(d, FLAT_Q, cwd=tmp).status == li.BELOW_GATE)
+    finally:
+        os.environ.pop("MEMORY_LOCAL_MIN_COVERAGE", None)
+
+    # The ratio no longer REJECTS — it flags a thin margin and shows the runners-up.
+    # Assert the new contract rather than deleting the coverage: an impossible ratio
+    # must still return hits, and must say the margin was thin.
     try:
         os.environ["MEMORY_LOCAL_FLOOR_RATIO"] = "99"
-        check("a valid ratio env var IS honoured",
-              li.search(d, CASE2_Q, cwd=tmp).status == li.BELOW_GATE)
+        r_amb = li.search(d, CASE2_Q, cwd=tmp)
+        check("an impossible ratio no longer silences a relevant query",
+              r_amb.status == li.HITS)
+        check("...it reports the thin margin instead of hiding the answer",
+              "thin" in r_amb.reason)
     finally:
         os.environ.pop("MEMORY_LOCAL_FLOOR_RATIO", None)
 

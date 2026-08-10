@@ -101,6 +101,28 @@ DEFAULT_B = 0.75
 #: overlapping bands above are exactly why one condition would not be enough.
 #: A floor is a property OF A CORPUS: BM25 is unnormalized and corpus-dependent, so
 #: this must be recalibrated as the store grows. The ratio half (below) need not be.
+#: The gate's RELEVANCE condition: how much of the query's own vocabulary the top hit
+#: actually contains. Scale-free — the same rule at 3 bodies and at 8,860.
+#: Measured on the live store (889 bodies):
+#:   true hits  1.00  1.00  0.75  0.67
+#:   junk       0.50  0.25  0.25  0.00
+#: 0.60 sits in that gap, measured over DISCRIMINATING terms (see `coverage`). Eight points is thin and RECALL.log should refine it, but it
+#: beats the three points the previous threshold rested on — and unlike that one,
+#: being slightly off does not get WORSE as the store grows.
+#: A query term appearing in more than this share of the corpus carries no signal
+#: about WHICH body is wanted, so coverage ignores it. Without this, a longer question
+#: scores lower than a short one for the same answer.
+COMMON_TERM_FRACTION = 0.05
+
+#: ...but never treat a term as common on the strength of a handful of documents.
+#: Without this floor the fraction collapses to 1 on a small store and discards terms
+#: that are doing all the discriminating.
+COMMON_TERM_MIN_DF = 3
+
+DEFAULT_MIN_COVERAGE = 0.60
+
+#: Kept for callers that pin an explicit absolute floor (tests do, to exercise gate
+#: LOGIC against a known number). No longer the shipped relevance condition.
 DEFAULT_FLOOR_MIN = 12.0
 
 #: The corpus the floor above was measured against, and the hard guard the scaled
@@ -221,6 +243,7 @@ class Index:
 
     def __init__(self, docs, tfs, lengths, df, avgdl, k1=DEFAULT_K1, b=DEFAULT_B):
         self.docs = docs          # [relpath, ...] — body identity is the relpath
+        self._doc_pos = {r: i for i, r in enumerate(docs)}
         self.tfs = tfs            # [{term: count}, ...] parallel to docs
         self.lengths = lengths    # [int, ...] parallel to docs
         self.df = df              # {term: document frequency}
@@ -244,6 +267,39 @@ class Index:
         if not n:
             return 0.0
         return math.log(1.0 + (len(self.docs) - n + 0.5) / (n + 0.5))
+
+    def coverage(self, relpath, query):
+        """Fraction of the query's own meaningful terms this body contains.
+
+        Scale-free ON PURPOSE, unlike a raw BM25 floor. BM25 sums IDF terms and IDF
+        grows with log(N), so a raw-score threshold is a property of ONE corpus and
+        silently wrong for any other. Coverage is measured against the QUERY, so it
+        means the same at 3 bodies and at 8,860 and never needs recalibrating.
+        """
+        terms = set(tokenize(query))
+        if not terms or relpath not in self._doc_pos:
+            return 0.0
+
+        # Measure against the terms that DISCRIMINATE, not every term. A word present
+        # in a large share of the corpus says nothing about WHICH body you want, and
+        # counting it punishes the user for adding context: measured, one memory was
+        # found by both a short and a long form of the same question, and scored 0.71
+        # (returned) against 0.58 (refused). More context made recall worse, which is
+        # backwards. Dropping corpus-common terms fixes that and widens the gap at the
+        # same time — junk fell from 0.67/0.40 to 0.50/0.25 while true hits held or
+        # rose.
+        # The floor of 3 matters more than the fraction. On a small store
+        # `0.05 * N` rounds to 1, so a term appearing in TWO bodies would count as
+        # corpus-common and be discarded — on an 8-body fixture that threw away every
+        # term and scored a real match at 0%. A term has to appear in a handful of
+        # places before its presence stops telling you which body you want, and that
+        # "handful" does not shrink just because the store is small.
+        cut = max(COMMON_TERM_MIN_DF, int(COMMON_TERM_FRACTION * len(self.docs)))
+        disc = {t for t in terms if self.df.get(t, 0) <= cut}
+        if not disc:                      # every term is corpus-common: fall back
+            disc = terms                  # rather than divide by zero
+        tf = self.tfs[self._doc_pos[relpath]]
+        return sum(1 for t in disc if tf.get(t)) / float(len(disc))
 
     def score_all(self, query):
         """`[(relpath, score), ...]` score-descending, for every doc matching at
@@ -362,7 +418,7 @@ def search(store_dir, query, cwd=None, k=DEFAULT_K, index=None,
     cur_slug = scope.resolve_repo_slug(cwd or os.getcwd())
     # Scaled to the corpus in hand (floor_for_corpus). An explicit caller min_score
     # is honored as given and never scaled.
-    fmin = floor_for_corpus(len(idx)) if min_score is None else min_score
+    fcover = _envf("MEMORY_LOCAL_MIN_COVERAGE", DEFAULT_MIN_COVERAGE)
     fratio = floor_ratio() if min_ratio is None else min_ratio
 
     ranked = idx.score_all(query)
@@ -378,32 +434,48 @@ def search(store_dir, query, cwd=None, k=DEFAULT_K, index=None,
         return Result(EMPTY, reason="every match belongs to another repo's scope",
                       n_corpus=len(idx))
 
-    # 2. the calibrated ABSOLUTE floor (KTD12) — raw BM25 units, not recall_floor,
-    #    not top1-relative.
-    above = [(rel, s) for rel, s in survivors if s >= fmin]
+    # 2. RELEVANCE — coverage, not a raw-score floor.
+    #
+    #    A raw floor is a property of ONE corpus: the shipped 12.0 refused true hits
+    #    on any store under ~20 bodies, and rescaling by log(N) only relocated the
+    #    arbitrary constant. Coverage asks something whose answer does not drift with
+    #    corpus size — how much of what you asked for does this body contain.
+    #
+    #    `min_score` still pins an absolute floor for callers that want to exercise
+    #    gate logic against a known number.
     top = survivors[0][1]
-    if not above:
+    cov = idx.coverage(survivors[0][0], query)
+    if min_score is not None:
+        above = [(rel, sc) for rel, sc in survivors if sc >= min_score]
+        if not above:
+            return Result(BELOW_GATE,
+                          reason="top score %.2f below pinned floor %.2f" % (top, min_score),
+                          top_score=top,
+                          runner_up=survivors[1][1] if len(survivors) > 1 else None,
+                          n_candidates=len(survivors), n_corpus=len(idx))
+    elif cov < fcover:
         return Result(BELOW_GATE,
-                      reason="top score %.2f below local floor %.2f" % (top, fmin),
+                      reason="top hit covers %.0f%% of the query (needs %.0f%%)"
+                             % (cov * 100, fcover * 100),
                       top_score=top,
                       runner_up=survivors[1][1] if len(survivors) > 1 else None,
                       n_candidates=len(survivors), n_corpus=len(idx))
+    else:
+        above = survivors
 
-    # 3. separation (KTD11), over the score-ordered survivors that cleared step 2.
-    #    A SINGLETON HAS NO RATIO and passes on the floor alone — stated because the
-    #    alternative default (reject) would silently suppress every store holding
-    #    exactly one good answer.
+    # 3. AMBIGUITY — a thin margin returns BOTH candidates, never nothing.
+    #
+    #    The previous gate rejected when top1/top2 fell below 1.4 and, measured
+    #    against four queries whose answers are on disk, refused TWO of them (1.07
+    #    and 1.13) — the exact failure this plugin exists to remove. Its threshold
+    #    rested on three data points, as the plan stated at the definition site.
+    #
+    #    Two bodies that both cover the query are not grounds for silence; they are an
+    #    ambiguous question with two honest answers. Showing both costs a line.
     top1 = above[0][1]
     top2 = above[1][1] if len(above) > 1 else None
-    ratio = None
-    if top2 is not None:
-        ratio = (top1 / top2) if top2 > 0 else float("inf")
-        if ratio < fratio:
-            return Result(BELOW_GATE,
-                          reason="separation %.2f below %.2f (%.2f vs %.2f)" % (
-                              ratio, fratio, top1, top2),
-                          top_score=top1, runner_up=top2, ratio=ratio,
-                          n_candidates=len(above), n_corpus=len(idx))
+    ratio = (top1 / top2) if (top2 and top2 > 0) else None
+    ambiguous = ratio is not None and ratio < fratio
 
     # 4. ONLY NOW the K+1 current-repo presentation boost. It reorders by scope, not
     #    by score, so nothing after this point may make a score-order judgement.
@@ -415,9 +487,9 @@ def search(store_dir, query, cwd=None, k=DEFAULT_K, index=None,
     selected = scope.select_scoped(rows, cur_slug, k, repo_floor=None)
 
     return Result(HITS, hits=selected,
-                  reason="floor %.2f cleared%s" % (
-                      fmin, "" if ratio is None
-                      else "; separation %.2f >= %.2f" % (ratio, fratio)),
+                  reason="top hit covers %.0f%% of the query%s" % (
+                      cov * 100, "" if not ambiguous else
+                      "; margin thin (%.2f) — close runners-up shown too" % ratio),
                   top_score=top1, runner_up=top2, ratio=ratio,
                   n_candidates=len(above), n_corpus=len(idx))
 

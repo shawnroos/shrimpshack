@@ -192,7 +192,9 @@ def cmd_list(args):
 #: answer, so K widens and the local gate relaxes. Relaxation is expressed ONLY as
 #: parameters the layers already take: nothing here re-implements a gate.
 DELIBERATE_K = 8
-DELIBERATE_FLOOR_FACTOR = 0.5      # applied to local_index's calibrated raw floor
+DELIBERATE_COVERAGE_FACTOR = 0.5   # deliberate HALVES the relevance bar: a human
+                                   # asked, so a marginal hit costs them one line to
+                                   # read and discard, while silence costs the memory
 DELIBERATE_RATIO = 1.0             # separation off — 1.0 is "top1 >= top2", always true
 DELIBERATE_MIN_BUDGET = 12.0       # a person is waiting; give qmd longer than a hook does
 
@@ -371,10 +373,19 @@ def cmd_recall(args):
         try:
             min_score = min_ratio = None
             if deliberate:
-                min_score = _local.floor_min() * DELIBERATE_FLOOR_FACTOR
+                # Relax the condition the gate ACTUALLY uses. The shipped relevance
+                # test is coverage, so halving a raw-score floor here relaxed nothing
+                # — it silently pinned an absolute floor instead, and pinning is
+                # stricter than the default path, not looser.
+                os.environ["MEMORY_LOCAL_MIN_COVERAGE"] = str(
+                    _local.DEFAULT_MIN_COVERAGE * DELIBERATE_COVERAGE_FACTOR)
                 min_ratio = DELIBERATE_RATIO
-            lres = _local.search(store, q, cwd=cwd, k=k,
-                                 min_score=min_score, min_ratio=min_ratio)
+            try:
+                lres = _local.search(store, q, cwd=cwd, k=k,
+                                     min_score=min_score, min_ratio=min_ratio)
+            finally:
+                if deliberate:
+                    os.environ.pop("MEMORY_LOCAL_MIN_COVERAGE", None)
             for h in lres.hits:
                 rel = h.get("file", "")
                 # "local-fallback", matching retrieval.RecallItem.source. RECALL.log

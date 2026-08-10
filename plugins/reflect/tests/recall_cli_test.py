@@ -167,10 +167,22 @@ write(os.path.join("_scope", SIBLING_SLUG, "project_sibling_note.md"),
 # gate rejects the pair; DELIBQ is the same shape with enough raw score to clear
 # the relaxed floor. Both are junk-by-construction: the point is the gate, not the
 # content.
+# Junk under the CURRENT gate means LOW COVERAGE — a body that shares only part of
+# the query's vocabulary. The previous pair contained the flat query verbatim, six
+# and five times over, which made them junk only in the sense that their SCORES were
+# close: under a coverage gate a body containing your entire query is a perfect
+# match, not junk. Each carries one of the three query terms and nothing else, so the
+# best any of them covers is 1/3.
 write("gate_alpha.md", "---\nname: gate_alpha\n---\n"
-      + "zorkmid quibble frobnitz " * 6 + "\n")
+      + "zorkmid " * 6 + "unrelated docker networking notes\n")
 write("gate_beta.md", "---\nname: gate_beta\n---\n"
-      + "zorkmid quibble frobnitz " * 5 + "\n")
+      + "zorkmid " * 5 + "unrelated postgres vacuum notes\n")
+# And a pair that DOES fully cover a query, to exercise the thin-margin path: both
+# answer it, so the gate must return them flagged rather than pick one or go silent.
+write("ambig_one.md", "---\nname: ambig_one\n---\n"
+      + "widget calibration procedure " * 4 + "\n")
+write("ambig_two.md", "---\nname: ambig_two\n---\n"
+      + "widget calibration procedure " * 3 + "\n")
 
 manifest, problems = triggers.compile_manifest(STORE)
 triggers.write_manifest(STORE, manifest)
@@ -299,8 +311,14 @@ check("--here: exit 0", rc == 0, "rc=%d" % rc)
 print()
 print("== layer 1: declared triggers ==")
 FT = os.path.join(ROOT, "flags-trigger"); os.makedirs(FT, exist_ok=True)
-TRIG_Q = ("statusCheckRollup returned one line while the failing e2e shard "
-          "looked like a flake or a regression")
+# The query must do two jobs: fire the declared trigger AND leave the ranker with a
+# real top hit, so the ordering assertion below is not comparing against nothing.
+# The previous phrasing spanned two topics and, under a coverage gate, no single body
+# covered enough of it — the ranker went silent and the "is it FIRST" check had
+# nothing to be first OF. Phrased in the e2e body's own vocabulary, the ranker
+# answers confidently while `statusCheckRollup` still fires the trigger.
+TRIG_Q = ("statusCheckRollup — the failing e2e shard, flake or regression, "
+          "re-run the shard and compare the failing test names")
 out, rc, _el = run_recall(STORE, env_for(None, FT), "--query", TRIG_Q, cwd=NEUTRAL)
 check("trigger: the declared memory surfaced", "reference_gh_conflicting" in out, out)
 check("trigger: it is MARKED as a trigger match",

@@ -57,6 +57,14 @@ LABELLED = [
     ("cp is interactive and silently fails to overwrite",
      "reference_cp_is_interactive_in_shell.md",
      "a machine constraint that bit this very session"),
+    ("statusCheckRollup returned one line while the failing e2e shard looked like "
+     "a flake or a regression",
+     "reference_e2e_flake_vs_regression_triage.md",
+     "LONG, two-topic. The same body answers the short form of this question, so a "
+     "gate that refuses the long one punishes the user for adding context"),
+    ("the reflect hook greps a variable that does not exist so it never fires",
+     "reference_claude_code_hooks_stdin_not_env.md",
+     "phrased as prose rather than keywords — the shape a person actually types"),
 
     # --- should stay silent ------------------------------------------------------
     ("completely unrelated gardening tulips bulbs", None,

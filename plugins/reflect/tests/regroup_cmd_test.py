@@ -186,10 +186,13 @@ twice before calling a failing e2e shard someone else's problem.
 # Gate fixtures: two near-identical bodies, so the DEFAULT separation gate rejects
 # the pair and only a relaxed gate returns them. Junk by construction — the point
 # is the gate, not the content.
+# Junk under the CURRENT gate means LOW COVERAGE. The previous pair contained the
+# flat query verbatim, which made them junk only in the sense that their scores
+# were close — under a coverage gate a body holding your entire query is a match.
 write("gate_alpha.md", "---\nname: gate_alpha\n---\n"
-      + "zorkmid quibble frobnitz " * 6 + "\n")
+      + "zorkmid " * 6 + "unrelated docker networking notes\n")
 write("gate_beta.md", "---\nname: gate_beta\n---\n"
-      + "zorkmid quibble frobnitz " * 5 + "\n")
+      + "zorkmid " * 5 + "unrelated postgres vacuum notes\n")
 
 SITUATION_Q = "is this failing e2e shard a flake or a regression"
 FLAT_Q = "zorkmid quibble frobnitz"

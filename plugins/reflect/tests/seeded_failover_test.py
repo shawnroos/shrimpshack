@@ -92,8 +92,12 @@ metadata:
 Nothing in this body shares a term with the query under test.
 """
 
-#: Two bodies with IDENTICAL text: any query matching one matches the other exactly
-#: as well, so top1/top2 == 1.00 and the separation gate must reject the pair.
+#: Two bodies with IDENTICAL text. Under the previous gate that made top1/top2 ==
+#: 1.00 and separation rejected the pair; the gate now returns BOTH and flags the
+#: thin margin, because two bodies that equally answer a question are an ambiguous
+#: question with two honest answers, not a reason for silence. So the probe below
+#: asks something these bodies do NOT answer — the gate still has to hold, just for
+#: the right reason: low coverage, not a tie.
 FLAT_BODY = """---
 name: flat-one
 description: flat
@@ -237,7 +241,7 @@ def main():
         arm_cooldown(f3)
         env3 = dict(wedged_env, SEEDED_RECALL_FLAG_DIR=f3,
                     SEEDED_RECALL_MEMORY_DIR=flat_store, **local_env)
-        out_e, rc_e = run_hook("quibbleplex ambiguous content", "F3", env3, bindir)
+        out_e, rc_e = run_hook("gardening tulips bulbs perennials mulch", "F3", env3, bindir)
         check("flat scores: hook still exits 0", rc_e == 0)
         check("flat scores: gate holds — no memory body injects",
               "quibbleplex" not in out_e.lower().replace(NOTICE, ""))
