@@ -79,11 +79,17 @@ gw_body() {
     # below, where the warning JSON is built by jq rather than by hand. Same
     # variable, same class, and only one of the two halves was defended.
     #
-    # Escaping the four bytes rather than using printf %q is deliberate: %q
-    # would drop the surrounding quotes for an ordinary path and change the
-    # generated body, which is HASHED — every `gw` already on disk would then
-    # classify as hand-edited and demand consent for an unrelated upgrade. This
-    # form leaves an ordinary path byte-identical.
+    # Escaping the four bytes rather than using printf %q keeps an ordinary path
+    # byte-identical to what previous versions generated, so a re-run rewrites
+    # the same bytes instead of churning the file for no reason.
+    #
+    # An earlier version of this comment justified it as avoiding consent churn,
+    # claiming a changed body would make every `gw` on disk read as hand-edited.
+    # THAT WAS WRONG and is corrected here rather than left to mislead the next
+    # reader: gw_classify compares a file's own declared hash against its own
+    # body, so a wrapper written by an older setup is self-consistent and
+    # rewrites freely. Verified both directions on a real machine. The escaping
+    # is still the right call; the reason given for it was not.
     local ctl_esc="$SPAWNCTL_PATH"
     ctl_esc="${ctl_esc//\\/\\\\}"   # backslash first, or it re-escapes the others
     ctl_esc="${ctl_esc//\"/\\\"}"

@@ -505,21 +505,28 @@ child, so `unload` stops the gateway.
   one. Three tests on a real linked worktree, mutation-verified, with a
   non-worktree negative control.
 
-- **NEW (P3): the `gw` marker/hash scheme cannot tell "the operator edited this"
-  from "an older setup wrote this".** `gw_classify` hashes the wrapper body and
-  calls any mismatch `modified`, which requires consent to overwrite. That is
-  right for a hand-edit and wrong for a version bump: ANY future change to
-  `gw_body` makes every wrapper already on disk classify as `modified`, so the
-  next setup run refuses to upgrade it and reports a state the operator will
-  read as "something tampered with my file".
-  Found while fixing the P2 above — a runtime existence check inside the wrapper
-  was the obvious extra guard, and it was NOT added precisely because it would
-  have triggered this on every installed `gw`. So the flaw is already
-  suppressing a fix it should not have a vote on.
-  Likely shape: record the plugin version beside the hash and treat
-  `marker present + hash mismatch + older version` as `stale` (rewrite freely)
-  rather than `modified`. Not free — it cannot distinguish an old version that
-  was ALSO hand-edited — so it needs a deliberate call, not a quick patch.
+- **RETRACTED 2026-08-10 — this was a phantom, and it was mine.** I recorded a
+  P3 claiming the `gw` marker/hash scheme "cannot tell the operator edited this
+  from an older setup wrote this", and that any change to the wrapper body would
+  make every `gw` on disk demand consent for an unrelated upgrade.
+  **That is not what the code does.** `gw_classify` compares the file's OWN
+  DECLARED hash against the hash of its OWN body — it asks "is this file
+  self-consistent?", not "does this file match what setup would write today". A
+  wrapper written by an older setup is self-consistent, so it classifies as
+  `generated` and is rewritten freely.
+  Verified on the real machine rather than argued: a body change (the
+  `gw claude` fix) rewrote with `state_before:"generated"`, exit 0, no consent;
+  appending one line by hand then re-running gave `state_before:"modified"`,
+  `consent_required:"overwrite-gw"`, exit 8. Both directions, on the operator's
+  actual file.
+  **Two things downstream of this were also wrong and are corrected:** the
+  warning that the `gw claude` fix would force `--consent-overwrite-gw` (it does
+  not), and the stated reason for hand-escaping the baked path instead of using
+  `printf %q` — the escaping is still fine, but "avoiding consent churn" was
+  never a real constraint.
+  I reasoned about the classifier instead of running it. Same failure as the
+  supervisor "flake" earlier today: a defect recorded from reading, which then
+  shaped a later decision.
 
 - **A lint for the xtrace class.** #4 was fixed everywhere it exists today, but
   nothing stops the next credential-holding function from shipping unguarded.

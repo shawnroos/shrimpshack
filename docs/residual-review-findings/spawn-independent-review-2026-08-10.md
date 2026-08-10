@@ -62,14 +62,15 @@ them is silently open.
 - **`setup-lib.sh` reads the caller's `$1` at source time** (`VERB="${1:-}"`).
   It works because all six entry points source before any `shift`, but nothing
   enforces it and the "SOURCED, never exec'd" header does not mention it.
-- **The `gw` marker/hash scheme cannot tell "the operator edited this" from "an
-  older setup wrote this".** Any change to the wrapper body makes every `gw` on
-  disk classify as `modified` and demand consent for an upgrade. This already
-  shaped a decision today: the F2 escaping was written to keep an ordinary path
-  byte-identical specifically to avoid triggering it.
-  **NOTE: the `gw claude` fix above DOES change the body**, so the next setup
-  run on a machine with an existing generated `gw` will require
-  `--consent-overwrite-gw`. That is the flaw showing its cost, not a new bug.
+- ~~The `gw` marker/hash scheme cannot tell "the operator edited this" from "an
+  older setup wrote this".~~ **RETRACTED — I was wrong, and I verified it only
+  after writing it down.** `gw_classify` compares the file's own declared hash
+  against its own body, so a wrapper written by an OLDER setup is
+  self-consistent and rewrites freely. Proven on the real machine: the body
+  change rewrote with `state_before:"generated"` and no consent, while a
+  one-line hand edit produced `consent_required:"overwrite-gw"`, exit 8. The
+  claim that the `gw claude` fix would force `--consent-overwrite-gw` was also
+  wrong and is withdrawn.
 - **`write_launcher` greps its own generated output**, and `launcher_body`
   reimplements the control layer a third time. Owned by the audit's F1.
 - **`remedy_for` in `spawnctl.sh` is a pure passthrough**; **`secrets.sh` has
