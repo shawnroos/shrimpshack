@@ -933,3 +933,62 @@ seed_keychain() {
     [ "$status" -eq 7 ]
     [ "$(echo "$output" | jq -r '.error')" = "auth_rejected" ]
 }
+
+@test "TERMing lens mid-preflight REAPS the ensure child instead of leaving it on the lock" {
+    # cleanup used to send TERM and return immediately, while the header claimed
+    # "No orphan". For curl that is nearly true — it dies on TERM promptly. But
+    # CHILD_PID is not always curl: on the preflight path it is `spawnctl
+    # ensure`, whose OWN term trap is deferred while it sits in a foreground
+    # curl probe. So it could outlive lens by seconds STILL HOLDING THE START
+    # LOCK, and the next caller waits on a lock whose owner nobody is waiting
+    # for.
+    #
+    # lens resolves spawnctl from its own directory, so making preflight slow
+    # needs a lib copy with a slow spawnctl in it — which also exercises the
+    # real resolution rather than a test-only seam.
+    local libdir="$WORK/slowlib"
+    mkdir -p "$libdir"
+    cp "$LIB"/lens.sh "$LIB"/common.sh "$LIB"/sanitize.sh "$LIB"/secrets.sh "$libdir/"
+    cp "$LIB"/models.json "$libdir/" 2>/dev/null || true
+
+    # A spawnctl that records its pid then IGNORES SIGTERM for a while — the
+    # deferred-trap shape. If lens only TERMs and walks away, this survives.
+    cat > "$libdir/spawnctl.sh" <<EOS
+#!/usr/bin/env bash
+trap '' TERM
+printf '%s\n' "\$\$" > "$WORK/ensure.pid"
+sleep 120
+EOS
+    chmod +x "$libdir/spawnctl.sh"
+
+    printf 'hello' | bash "$libdir/lens.sh" --alias alpha > "$WORK/out" 2> "$WORK/err" &
+    local lpid=$!
+
+    local i epid=""
+    for i in $(seq 1 200); do
+        [ -s "$WORK/ensure.pid" ] && break
+        sleep 0.05
+    done
+    epid="$(head -1 "$WORK/ensure.pid")"
+    [ -n "$epid" ]
+    kill -0 "$epid"
+
+    kill -TERM "$lpid"
+    for i in $(seq 1 100); do
+        kill -0 "$lpid" 2>/dev/null || break
+        sleep 0.1
+    done
+    run kill -0 "$lpid"
+    [ "$status" -ne 0 ]
+
+    # THE ASSERTION: the ensure child is GONE. It ignores TERM, so only the
+    # escalation to KILL can have removed it — which is exactly what was missing.
+    for i in $(seq 1 60); do
+        kill -0 "$epid" 2>/dev/null || break
+        sleep 0.1
+    done
+    run kill -0 "$epid"
+    [ "$status" -ne 0 ]
+
+    wait "$lpid" 2>/dev/null || true
+}

@@ -169,11 +169,39 @@ emit_error() { spawn::emit_error model "text usage" "$@"; }
 # deleted by our own EXIT trap is a path the caller cannot read.
 TMPWORK=""
 CHILD_PID=""
+# TERM -> bounded poll -> KILL -> REAP, the same escalation launch.sh and
+# spawnctl's stop both use.
+#
+# It used to send TERM and immediately return. The header a few hundred lines
+# down claimed "No orphan: cleanup signals CHILD_PID before it returns", and for
+# curl that is nearly true — curl dies on TERM promptly. But CHILD_PID is not
+# always curl: on the preflight path it is `spawnctl ensure`, whose OWN term
+# trap is deferred while it sits in a foreground curl probe. So it could outlive
+# this script by seconds STILL HOLDING THE START LOCK, and the next caller waits
+# on a lock whose owner is a process nobody is waiting for.
+#
+# Reaping also matters on its own: an unreaped child re-parented to init keeps
+# whatever it holds for as long as it lives.
+reap_child() {
+    [ -n "$CHILD_PID" ] || return 0
+    kill -TERM "$CHILD_PID" 2>/dev/null
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        kill -0 "$CHILD_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -0 "$CHILD_PID" 2>/dev/null && kill -KILL "$CHILD_PID" 2>/dev/null
+    wait "$CHILD_PID" 2>/dev/null
+    CHILD_PID=""
+    return 0
+}
+
 cleanup() {
-    # Kill the request before removing the directory it reads its credential
-    # from. See the call site: curl runs in the BACKGROUND so this handler can
-    # run at all — bash defers a trap while it is blocked on a foreground child.
-    [ -n "$CHILD_PID" ] && kill -TERM "$CHILD_PID" 2>/dev/null
+    # Kill AND REAP the request before removing the directory it reads its
+    # credential from. See the call site: curl runs in the BACKGROUND so this
+    # handler can run at all — bash defers a trap while it is blocked on a
+    # foreground child.
+    reap_child
     [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
     return 0
 }
@@ -670,7 +698,7 @@ chmod 600 "$CURLRC" 2>/dev/null
 # leave the mode-0600 curlrc — the file holding the gateway token — on disk for
 # up to the full timeout, and permanently if it escalated to SIGKILL. `wait` is
 # interruptible, so the trap fires immediately, kills curl and removes the
-# directory. No orphan: cleanup signals CHILD_PID before it returns.
+# directory. No orphan: cleanup TERMs, polls, KILLs and REAPS CHILD_PID before it returns.
 # ---------------------------------------------------------------------------
 RESP="$WORK/resp.json"
 : > "$RESP"
