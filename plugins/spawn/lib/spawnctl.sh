@@ -947,6 +947,28 @@ do_start_locked() {
 
     resolve_install_dir hard
 
+    # The pidfile is a CLAIM, and this is not the only writer of it. The
+    # launchd launcher (setup's spawn-launch.sh) declines to claim when the
+    # recorded pid is alive and names the same binary; without the mirror of
+    # that guard here, a start on a supervised machine stamps its own pid over
+    # the launcher's claim, and when that process dies `status` reports
+    # running:true / pid_verified:false against a corpse while the real,
+    # supervised gateway runs unmanaged — stop and restart both refuse, so the
+    # machine cannot be controlled through this surface at all. Observed live
+    # 2026-08-10: the launcher claimed at 21:37:35, the pidfile was rewritten
+    # 81 minutes later, and the rewritten pid was already dead.
+    #
+    # Reachable even though the probe just failed: a supervised gateway that is
+    # still binding, wedged, or listening elsewhere is alive without answering.
+    # A DEAD recorded pid is not a claim (nothing to protect), and a live pid
+    # that argv-fails pid_is_gateway is an unrelated process on a reused pid —
+    # neither blocks a start.
+    local claimed_pid
+    if claimed_pid="$(read_pidfile)" && pid_is_gateway "$claimed_pid"; then
+        PROBE_DETAIL="${PROBE_DETAIL:-the probe failed} — but $PIDFILE already claims pid $claimed_pid, which is alive and is a gateway process; refusing to start a second one and overwrite that claim (a supervisor such as the launchd agent may own it). Stop that gateway, or unload the launchd agent, before starting one here"
+        return $EX_UNREACHABLE
+    fi
+
     # Both secrets, and the R9 refusal, before anything is spawned.
     deliver_secrets
 

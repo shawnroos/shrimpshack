@@ -433,6 +433,91 @@ count_gateway_procs() {
     [ "$(count_gateway_procs "$WORK/install")" -eq 0 ]
 }
 
+# --- the pidfile is a CLAIM, and this is not its only writer -----------------
+#
+# Reproduces the live 2026-08-10 failure on a supervised machine: the launchd
+# launcher claimed the pidfile, a later `start` stamped its own pid over that
+# claim, and when THAT process died `status` reported running:true /
+# pid_verified:false against a corpse while the real gateway ran unmanaged —
+# stop and restart both refused, so the machine was uncontrollable through the
+# plugin. The launcher declines to claim in the mirror-image situation
+# (spawn-launch.sh); this pins the reciprocal guard in spawnctl.
+
+# start_claimed_gateway — a LIVE gateway process, argv-identical to one this
+# script would spawn, holding the pidfile claim, but NOT answering at
+# SPAWN_BASE_URL. That gap is the real shape: a supervised gateway that is
+# still binding, wedged, or bound elsewhere is alive without being probeable.
+# Sets $CLAIMED_PID.
+CLAIMED_PID=""
+start_claimed_gateway() {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    "$WORK/install/target/release/gateway" --config "$WORK/gateway.yaml" \
+        >"$WORK/claimed.out" 2>&1 &
+    CLAIMED_PID=$!
+    HELPER_PIDS+=("$CLAIMED_PID")
+    local i
+    for i in $(seq 1 100); do
+        grep -q 'fake gateway binary serving' "$WORK/claimed.out" 2>/dev/null && break
+        sleep 0.05
+    done
+    kill -0 "$CLAIMED_PID"
+
+    printf '%s\n' "$CLAIMED_PID" > "$WORK/.gateway.pid"
+    printf '%s\n' "$WORK/install/target/release/gateway" > "$WORK/.gateway.pid.bin"
+    # Nothing serves here, so the probe fails on CONNECT (PROBE_LISTENING=0)
+    # and reaches the start path. Without the guard, that start overwrites the
+    # claim above.
+    export SPAWN_BASE_URL="http://127.0.0.1:1/anthropic"
+    export SPAWN_START_TIMEOUT=2
+}
+
+@test "start refuses to overwrite a pidfile claim held by a LIVE gateway process" {
+    start_claimed_gateway
+
+    ctl start
+
+    # BEHAVIOUR FIRST, prose second. Deleting the guard still yields exit 3
+    # here (the competing spawn dies on AddrInUse against the claimed
+    # gateway's port, and the probe URL serves nothing either way), so the
+    # exit code is NOT what distinguishes fixed from broken — the surviving
+    # claim is. Asserted before the message so a mutation run fails on the
+    # defect itself rather than on a sentence.
+    [ "$(cat "$WORK/.gateway.pid")" = "$CLAIMED_PID" ]
+    kill -0 "$CLAIMED_PID"
+    [ "$(count_gateway_procs "$WORK/install")" -eq 1 ]
+
+    [ "$status" -eq 3 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.error')" = "unreachable" ]
+    echo "$output" | jq -r '.detail' | grep -q 'already claims pid'
+}
+
+@test "the claim guard is not blanket: a live NON-gateway pid does not block a start" {
+    # Negative control for the pid_is_gateway half. A recycled pid belonging to
+    # some unrelated process is not a claim, and must not wedge the start path
+    # shut — a guard that refused here would be worse than the bug it fixes.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    live_decoy_pid
+    printf '%s\n' "$DECOY_PID" > "$WORK/.gateway.pid"
+
+    ctl start
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.running')" = "true" ]
+    [ "$(cat "$WORK/.gateway.pid")" != "$DECOY_PID" ]
+    [ "$(count_gateway_procs "$WORK/install")" -eq 1 ]
+}
+
 @test "R3: the log is appended, never truncated, across restarts" {
     local port; port="$(free_port)"
     make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
