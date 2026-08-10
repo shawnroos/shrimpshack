@@ -966,14 +966,20 @@ def cmd_report(argv):
         print("backfill candidates: %d (>=%d use days, or pinned, or in the "
               "hot index; already-declared excluded)" % (len(rows), MIN_USE_DAYS))
         for row in rows:
-            print("  %-58s days=%-3d %s" % (row["memory"][:58], row["use_days"],
+            # Never truncate the NAME. This report is read by a human deciding what
+            # to backfill, and by whatever they hand the list to — a clipped name
+            # resolves to no file. A backfill pass hit exactly that: six memories
+            # whose names exceed the old 58-char column silently proposed nothing,
+            # because the worker could not find the files and correctly refused to
+            # guess. Names here run to 74 characters.
+            print("  %-74s days=%-3d %s" % (row["memory"], row["use_days"],
                                             ",".join(row["reasons"])))
     if want_misfire:
         rows = payload["misfire"]
         print("never-acted-on triggers: %d (>=%d nudges, zero same-session "
               "applications — prune or sharpen)" % (len(rows), MIN_MISFIRE_NUDGES))
         for row in rows:
-            print("  %-58s nudges=%d" % ((row["memory"] or "?")[:58], row["nudges"]))
+            print("  %-74s nudges=%d" % ((row["memory"] or "?"), row["nudges"]))
     return 0
 
 
