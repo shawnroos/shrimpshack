@@ -91,9 +91,18 @@ step_start() { CURRENT_STEP="$1"; }
 
 # step_done <name> <status> <detail> — one settled step, appended in order.
 step_done() {
+    local _prev="$STEPS_JSON"
     STEPS_JSON="$(printf '%s' "$STEPS_JSON" | jq -c \
         --arg n "$1" --arg s "$2" --arg d "$(spawn::sanitize_for_display "$3")" \
-        '. + [{step:$n, status:$s, detail:$d}]' 2>/dev/null)" || STEPS_JSON="[]"
+        '. + [{step:$n, status:$s, detail:$d}]' 2>/dev/null)" || STEPS_JSON="$_prev"
+    # KEEP THE PRIOR VALUE, never reset to []. Resetting meant ONE failing jq
+    # discarded every step recorded so far, and the run carried on to a green
+    # final object reporting steps:[] — the R18 state report silently emptied on
+    # a SUCCESS path, which is the shape "announced-but-broken is never success"
+    # exists to forbid. Losing the newest entry is bad; losing the whole history
+    # of what this run already changed to the machine is what makes a failure
+    # unrecoverable by hand.
+    [ -n "$STEPS_JSON" ] || STEPS_JSON="$_prev"
     CURRENT_STEP=""
 }
 
@@ -102,9 +111,14 @@ step_done() {
 # `target` is a path or a Keychain coordinate; NO VALUE EVER GOES IN HERE — the
 # whole object is printed, and R5 forbids the key reaching any output.
 record_change() {
+    local _prev="$CHANGED_JSON"
     CHANGED_JSON="$(printf '%s' "$CHANGED_JSON" | jq -c \
         --arg w "$1" --arg t "$(spawn::sanitize_for_display "$2")" --arg d "$(spawn::sanitize_for_display "$3")" \
-        '. + [{what:$w, target:$t, detail:$d}]' 2>/dev/null)" || CHANGED_JSON="[]"
+        '. + [{what:$w, target:$t, detail:$d}]' 2>/dev/null)" || CHANGED_JSON="$_prev"
+    # Same reasoning as step_done, and worse if lost: `changed` is the list of
+    # things this run did to the operator's machine. An empty one on a failure
+    # object reads as "nothing was touched".
+    [ -n "$CHANGED_JSON" ] || CHANGED_JSON="$_prev"
 }
 
 # emit_setup_failure <code> <message> — the R18 object. It SERIALIZES the

@@ -470,7 +470,7 @@ validate_alias "$ALIAS"
 [[ "$CONNECT_TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [ "$(awk -v v="$CONNECT_TIMEOUT" 'BEGIN{print (v > 0)}')" = "1" ] \
     || die "$EX_USAGE" "usage" "SPAWN_CONNECT_TIMEOUT must be a POSITIVE number of seconds, got '$CONNECT_TIMEOUT'"
 MAX_TOKENS="${MAX_TOKENS:-$DEFAULT_MAX_TOKENS}"
-[[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] \
+[[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] && [ "$MAX_TOKENS" -gt 0 ] \
     || die "$EX_USAGE" "usage" "--max-tokens must be a positive integer, got '$MAX_TOKENS'"
 
 # ---------------------------------------------------------------------------
@@ -495,7 +495,16 @@ else
         REMEDY="Pipe the prompt on stdin or pass --prompt-file. Reading a terminal would block forever, which an unattended caller cannot tell from work in progress." \
             die "$EX_USAGE" "usage" "no prompt: stdin is a terminal and --prompt-file was not given"
     fi
-    cat > "$PROMPT_PATH"
+    # CHECKED, like its --prompt-file sibling above. An unchecked write means
+    # ENOSPC in $TMPDIR produces a PARTIAL prompt that still satisfies the
+    # non-empty test below — so a truncated diff goes to the model, the model
+    # answers the fragment confidently, and the response is ok:true. Silent
+    # truncation of a review-sized prompt is the exact class KTD8 cites when it
+    # refuses to accept prompts through argv; accepting it here on the stdin
+    # path would be the same defect through a different door.
+    cat > "$PROMPT_PATH" \
+        || REMEDY="The prompt could not be written to scratch — most likely no space left in TMPDIR. Nothing was sent. Free space or point TMPDIR somewhere writable, then call again." \
+            die "$EX_USAGE" "usage" "could not write the prompt to scratch (a partial write would have sent a truncated prompt and returned a confident answer to it)"
 fi
 
 [ -s "$PROMPT_PATH" ] || REMEDY="Send a non-empty prompt. Check that whatever produced it on stdin actually wrote something." \

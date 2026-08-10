@@ -161,7 +161,14 @@ case "${1:-status}" in
       printf 'no gateway token is stored — run /spawn:setup\n' >&2
       exit 9
     fi
-    ANTHROPIC_BASE_URL="$base" ANTHROPIC_AUTH_TOKEN="$token" exec claude "$@"
+    # BOTH names, matching launch.sh and the printed attach command. Setting
+    # only ANTHROPIC_AUTH_TOKEN left an operator's REAL ANTHROPIC_API_KEY —
+    # exported in a normal shell, which is the common case — inherited straight
+    # into the child. Whichever name Claude Code prefers, this surface then
+    # authenticated differently from every other one, and in the case where the
+    # API key wins, the operator's real Anthropic credential is handed to a
+    # local proxy that forwards upstream. Overriding both closes it.
+    ANTHROPIC_BASE_URL="$base" ANTHROPIC_AUTH_TOKEN="$token" ANTHROPIC_API_KEY="$token" exec claude "$@"
     ;;
   *)
     usage

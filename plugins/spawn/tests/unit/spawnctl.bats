@@ -1477,3 +1477,39 @@ EOS
     [ "$status" -ne 0 ]
     [ "$(echo "$output" | jq -r '.ok')" = "false" ]
 }
+
+@test "stop still works when the install directory has been renamed away" {
+    # stop used to open with `resolve_install_dir hard`, so renaming or deleting
+    # ~/gateway-* under a RUNNING gateway made stop — and therefore restart —
+    # die exit 3 "no gateway install found" without signalling anything. A live
+    # gateway that cannot be stopped through this surface is the same
+    # unmanageable state the rest of this verb goes to lengths to avoid.
+    #
+    # It never needed the install: pid_is_gateway anchors on $PIDFILE.bin, the
+    # binary recorded beside the pidfile at start, precisely so a moved install
+    # cannot break identification. status already used soft.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    kill -0 "$pid"
+
+    # The install disappears under the running process, and the override with
+    # it — this is the upgrade/cleanup shape, not an exotic one.
+    mv "$WORK/install" "$WORK/install-moved"
+    unset SPAWN_INSTALL_DIR
+
+    # Guard the guard: resolution really must fail now, or this passes for the
+    # wrong reason. The search root is empty, so nothing can be resolved.
+    [ ! -d "$WORK/install" ]
+
+    ctl stop
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.result')" = "stopped" ]
+    ! kill -0 "$pid" 2>/dev/null
+}

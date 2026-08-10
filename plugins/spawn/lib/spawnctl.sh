@@ -1382,7 +1382,16 @@ start)
     ;;
 
 stop)
-    resolve_install_dir hard
+    # SOFT, not hard. `stop` does not need an install directory: pid_is_gateway
+    # anchors on $PIDFILE.bin — the binary RECORDED beside the pidfile when the
+    # process was started — precisely so an install that moved cannot break
+    # identification (R4). Requiring resolution here meant that renaming or
+    # deleting ~/gateway-* under a running gateway made `stop` (and therefore
+    # `restart`) die exit 3 "no gateway install found" WITHOUT SIGNALLING
+    # ANYTHING, leaving a live gateway nobody can stop through this surface —
+    # the same unmanageable state the rest of this verb works hard to avoid.
+    # `status` already uses soft for exactly this reason.
+    resolve_install_dir soft
     pid="$(read_pidfile)"
     if [ -z "$pid" ]; then
         probe
