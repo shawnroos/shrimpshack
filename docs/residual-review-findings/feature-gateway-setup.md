@@ -12,6 +12,23 @@ limit rather than an outage. Independent adversarial coverage of this diff is
 therefore missing — the one lens specifically aimed at wrong-success paths, on a
 change whose entire purpose is refusing unearned success.
 
+> **HOW TO READ THIS FILE.** Everything above `## Still open` is a CHRONOLOGICAL
+> RECORD of findings as they were made — the P0/P1/P2 tags in those sections are
+> what the finding was rated WHEN FOUND, not what is open now. Their fixes are
+> described in the later sections (`Code review on PR #31 — five findings, all
+> fixed`, `Verified against real launchd`, and the FIXED entries under
+> `Still open`).
+>
+> **`## Still open` is the only live list.** If you want to know what is
+> outstanding, read that section and nothing else.
+>
+> This banner exists because a mechanical scan of this file for unstruck
+> P0/P1/P2 markers returns eight hits, all of them historical — which is exactly
+> how a reader, or a reviewer, concludes there are open P1s when there are none.
+> Verified live on 2026-08-10: the open-proxy chain that opens this record is
+> closed — an unauthenticated GET to the gateway returns 401, a credentialed one
+> returns 200.
+
 ## Found live during the G4 smoke run
 
 **Root cause of the whole chain below: a third control surface nobody modelled.**
