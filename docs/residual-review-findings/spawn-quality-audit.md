@@ -35,27 +35,32 @@ you it is in the wrong place.**
   non-behaviour-preserving item in the audit. Right call, but a contract
   decision.
 
-- **F1 + F3 — the flagship.** `launcher_body` (`setup.sh:1239-1391`) generates
-  ~150 lines that reimplement the control layer a **third** time: Keychain read,
+- **F3 — the split: APPLIED on this branch.** `setup.sh` went from 2,937 to
+  **831 lines**, split along the seams that already existed (`run_sub` was
+  already re-invoking `setup.sh <verb>` as a child process, so the process
+  boundary was there and only the file boundary was missing):
+  `setup-supervisor.sh` (584), `setup-wire.sh` (579), `setup-lib.sh` (442),
+  `setup-acquire.sh` (404), `setup-gw.sh` (257). Dispatch is now an `exec` per
+  verb. No CLI surface changed and no test changed shape. Suite green
+  throughout.
+
+- **F1 — the `spawnctl run` verb: STILL OPEN.** `launcher_body` still generates
+  ~150 lines that reimplement the control layer a third time: Keychain read,
   delivery-file rm/umask/chmod dance, pidfile claim, signal forwarding, reap.
-  `setup.sh:844`'s own header says reimplementing control logic "would be a
-  fourth copy of control logic in a plugin that already carries the scar of three
-  copies of one parser" — and then it does exactly that. The tell: `write_launcher`
-  **greps its own generated output** for load-bearing lines, because an unset
-  variable can silently gut a heredoc. A generator that lints its own output is
-  admitting the approach is wrong.
-  **This is a live drift vector, not a style point:** a fix to `deliver_secrets`
-  does not reach launchd-started gateways until the operator re-runs setup,
-  because the logic is frozen into a file on disk.
-  Proposed: a `spawnctl run` verb (foreground supervision, argv passthrough), so
-  the launcher becomes a few baked lines ending in `exec … spawnctl run --`, the
-  same shape `gw` already has. Then split `setup.sh` along the seams that
-  **already exist** — `run_sub` re-invokes `setup.sh <verb>` as a child process,
-  so the process boundary is there and only the file boundary is missing:
-  `setup.sh` (dispatcher/orchestrator), `setup-acquire.sh`, `setup-gw.sh`,
-  `setup-supervisor.sh`, `setup-wire.sh`, `setup-lib.sh`. Changes no CLI surface
-  and no test. Deletes the `ORCHESTRATING` mode switch and the dual-personality
-  `die()` rather than relocating them.
+  The tell remains: `write_launcher` **greps its own generated output** for
+  load-bearing lines, because an unset variable can silently gut a heredoc. A
+  generator that lints its own output is admitting the approach is wrong.
+  **This is a live drift vector, not a style point** — and it has now bitten
+  once for real. The 2026-08-10 P1 (`spawnctl start` overwriting the launcher's
+  pidfile claim) is exactly the failure this duplication predicts: the launcher
+  had the correct claim guard, `spawnctl` did not, because the same logic lives
+  in two places. That P1 is fixed on both sides, but the divergence that
+  produced it is still there.
+  Proposed fix unchanged: a `spawnctl run` verb (foreground supervision, argv
+  passthrough) so the launcher becomes a few baked lines ending in
+  `exec … spawnctl run --`, the same shape `gw` already has.
+  **Note the tension:** that verb ADDS lines to `spawnctl.sh`, which is already
+  the one file over the 1,000 bar (see below). Decide the two together.
 
 - **F7** — `/anthropic` route knowledge is trimmed by consumers (`setup.sh` twice)
   instead of served by its owner. Fix: `ensure`/`start` report `root_url`
@@ -101,15 +106,33 @@ but it is not fixing a live leak.
 no known flake. A failure there is a real failure — check for a concurrent suite
 run first, then treat it as a defect.
 
+## The one file still over the bar
+
+`spawnctl.sh` is **1,638 lines** — after the split it is the only file above
+1,000. It is not the same kind of problem `setup.sh` had: it is one coherent
+subject (the control layer: probe, lock, start, stop, status, token
+resolution), with no second personality and no mode switch. But "coherent" is
+not the bar; "justified" is. Two honest options, and this needs a decision
+rather than a shrug:
+
+1. **Split it** along the seams it already has — probe/lock primitives, the
+   start/stop lifecycle, and the reporting surface.
+2. **Record it as deliberate**, with the reason written down, and accept that
+   any reviewer will raise it every time.
+
+F1's `run` verb pushes this the wrong way (it adds to the file), so F1 and this
+decision are the same decision.
+
 ## Recommended order
 
-1. **Suite determinism** — reproduce the `run_supervisor` non-zero under load,
-   fix it, ideally via F8's shared sandbox helper.
-2. **F1 + F3** — `spawnctl run` verb, then split `setup.sh`. This is the only
-   thing that fixes the size blocker (`setup.sh` is 2,912 lines, ~2.9x the bar
-   on code lines alone; comment density does not explain it away).
-3. **F2** — envelope adoption, once the shape change is agreed.
-4. **F7** — `root_url` from its owner.
+1. **F1 + the `spawnctl.sh` size question, together** — the `run` verb removes
+   the third copy of the control layer but grows the one file already over the
+   bar. Taking them as one decision is the only way either answer is coherent.
+2. **F2** — envelope adoption, once the shape change is agreed. It is the only
+   non-behaviour-preserving item here.
+3. **F7** — `root_url` from its owner.
+4. **F8** — the shared test sandbox helper. Worth doing for maintainability;
+   note it is NOT fixing a live rail leak (see the correction above).
 
 ## Credit where due
 

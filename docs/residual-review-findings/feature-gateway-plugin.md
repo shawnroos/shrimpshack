@@ -106,6 +106,15 @@ coordinating; the naming decision shapes that whole branch.
 - **`secret_scan`'s exact-token layer is inert on any box with no gateway
   installed.** Loud skip, correct for R11, but with no CI the layer only runs if
   whoever merges happens to have a gateway.
+  **Updated 2026-08-10:** the premise narrowed but the gap is real and was
+  worse than recorded. The layer read `server.token` from gateway.yaml only, so
+  when setup migrated the credential to the Keychain and dropped that key, it
+  went dark ON A MACHINE THAT HAD BOTH a gateway and a stored token — and said
+  "no gateway config resolved", which is not what happened. It now resolves
+  through `spawn::token_fallback` (config, then env, then Keychain) and scans
+  every DISTINCT value rather than only the one the plugin would use, so a
+  stale exported `GATEWAY_TOKEN` can no longer mask the live one. The two skip
+  reasons are reported separately. The R11 clean-checkout skip is unchanged.
 - **A `RETURN` trap survives in `self_check`** (`run-tests.sh:98`) — the sibling
   function documents this hazard and avoids it. Harmless only because `main`
   ends in `exit`.

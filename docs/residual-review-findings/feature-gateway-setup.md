@@ -413,8 +413,9 @@ child, so `unload` stops the gateway.
 
 ## Still open
 
-- **`spawnctl start` can overwrite the launchd launcher's pidfile claim, leaving
-  a stale pid over a supervised gateway (P1). Observed live, 2026-08-10.**
+- **FIXED 2026-08-10 (`0d4b646`).** ~~`spawnctl start` can overwrite the launchd
+  launcher's pidfile claim, leaving a stale pid over a supervised gateway
+  (P1). Observed live, 2026-08-10.~~
   Timeline from the machine: launcher pid 8123 started 21:37:35 and claimed the
   pidfile; the gateway it spawned (8139) held :4000; at 22:58:57 — 81 minutes
   later — the pidfile was rewritten to 66681, which then died. Result:
@@ -433,10 +434,24 @@ child, so `unload` stops the gateway.
   and the unload released :4000 with zero listeners left — so the launcher's
   signal forwarding and pidfile claim both work when they run uncontested.
 
-  Fix: give `do_start_locked` the mirror of the launcher's guard — refuse to
-  overwrite a pidfile whose recorded pid is alive and names the same binary —
-  and/or have it detect a loaded launchd agent and route through it rather than
-  starting a competing process.
+  **Fixed:** `do_start_locked` now refuses when the pidfile names a pid that is
+  alive AND argv-identifies as a gateway — the mirror of the launcher's guard.
+  Placed after `resolve_install_dir` (so the check has today's binary) and
+  before `deliver_secrets` (so a refusal never writes a key to disk first).
+
+  Guarded by two mutation-verified tests. The first version asserted the
+  refusal MESSAGE before the behaviour, and the mutant failed on the grep —
+  deleting the guard still yields exit 3, because the competing spawn dies on
+  AddrInUse. The exit code does not separate fixed from broken; the surviving
+  claim does. Reordered so the mutant fails on "the pidfile no longer names the
+  live process", which is the live defect. The second test is a negative
+  control: a live NON-gateway pid on a recycled number must not block a start,
+  because a guard that wedged the start path shut would be worse than the bug.
+
+  Still open, deliberately: routing through a loaded launchd agent instead of
+  refusing. Refusing is the honest floor — it never leaves the machine
+  uncontrollable — but an operator on a supervised box still has to unload the
+  agent by hand.
 
 
 - **`setup` does not confirm the adoption took effect (P2).** After
