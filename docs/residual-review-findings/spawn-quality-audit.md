@@ -106,22 +106,62 @@ but it is not fixing a live leak.
 no known flake. A failure there is a real failure — check for a concurrent suite
 run first, then treat it as a defect.
 
-## The one file still over the bar
+## DECIDED: `spawnctl.sh` stays one file, for now
 
-`spawnctl.sh` is **1,638 lines** — after the split it is the only file above
-1,000. It is not the same kind of problem `setup.sh` had: it is one coherent
-subject (the control layer: probe, lock, start, stop, status, token
-resolution), with no second personality and no mode switch. But "coherent" is
-not the bar; "justified" is. Two honest options, and this needs a decision
-rather than a shrug:
+`spawnctl.sh` is **1,683 lines total — but 902 lines of code**, with 685 lines
+of comment and 96 blank.
 
-1. **Split it** along the seams it already has — probe/lock primitives, the
-   start/stop lifecycle, and the reporting surface.
-2. **Record it as deliberate**, with the reason written down, and accept that
-   any reviewer will raise it every time.
+That distinction is not special pleading; it is **the audit's own yardstick**.
+When this document called `setup.sh` a size problem it said so explicitly:
+"2,912 lines, ~2.9x the bar **on code lines alone**; comment density does not
+explain it away." Applied honestly in the other direction, `spawnctl.sh` is
+under the bar on the measure this audit chose before it knew the answer.
 
-F1's `run` verb pushes this the wrong way (it adds to the file), so F1 and this
-decision are the same decision.
+The comments are not padding. They are the incident record — why the pidfile
+carries a `.bin` sibling, why the probe keys on PROBE_LISTENING rather than
+EX_OK, why the token is delivered through a mode-0600 file instead of the
+environment, why `stop` probes before declaring success. Deleting them to make
+a line count look better would destroy the most valuable thing in the file.
+
+**The seam that does exist, named so the next reader does not have to find it.**
+The file divides cleanly at line ~1212, where the verb dispatch begins:
+
+* **primitives** (120-1210) — config and install resolution, probe, lock,
+  pid identity, token resolution, secret delivery, start
+* **verbs** (1212-end) — dispatch, and the envelope each verb emits
+
+If this file grows again, that is where to cut, and the halves would be roughly
+600 and 300 code lines. It is NOT cut today because, unlike `setup.sh`, there is
+no process boundary already there: `run_sub` had setup re-invoking itself as a
+child, so that split only had to follow a seam the code was already using.
+Splitting here would be inventing one, and inventing a boundary in the middle of
+shared mutable state (PROBE_*, SPAWN_TOKEN_*, STARTED, the lock) is how the
+next drift gets introduced rather than prevented.
+
+**What would change this decision:** F1's `spawnctl run` verb. It adds
+foreground supervision to this file, and at that point the primitives/verbs cut
+should land in the same change rather than after it.
+
+## Decisions on the remaining audit findings
+
+* **F1 (`spawnctl run` verb) — OPEN, deliberately.** It is the right fix and it
+  is not small: it removes the third copy of the control layer, and the P1 this
+  session proves the duplication is live rather than theoretical. It also
+  changes what the launchd launcher execs on a machine that is currently
+  adopted and working. Doing it in the same session that just changed `stop`,
+  `start` and the supervisor step would stack four behaviour changes on the one
+  path that is hardest to verify without a reboot.
+* **F2 (envelope adoption in `setup.sh`) — OPEN, needs a call that is not
+  mine.** It changes the emitted JSON shape. Every other item in this audit is
+  behaviour-preserving; this one is a contract change, and the plugin's callers
+  include commands and skills that switch on these fields.
+* **F7 (`root_url` from its owner) — OPEN, small.** Cosmetic-adjacent: two
+  trims and two explanatory paragraphs vanish. No correctness impact.
+* **F8 (shared test sandbox helper) — OPEN, and downgraded.** The audit called
+  it a safety issue on the belief that an unrailed suite could write the
+  operator's real `~/.gateway.pid`. That belief was tested and is FALSE (see the
+  correction above): the four unrailed suites never execute the gateway. It is
+  now a maintainability item, which is a different priority.
 
 ## Recommended order
 
