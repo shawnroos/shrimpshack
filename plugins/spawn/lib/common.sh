@@ -632,3 +632,33 @@ need_jq() {
         exit 2
     }
 }
+
+# ---------------------------------------------------------------------------
+# say — the human-diagnostic chokepoint. STDERR ONLY; stdout belongs to the one
+# JSON object, and a diagnostic printed there is how a consumer's `jq` blows up
+# on output it was promised it could parse whole.
+#
+# Everything human-readable goes through here so KTD5 sanitization is a property
+# of the code SHAPE rather than per-site discipline — a message nobody has
+# written yet is closed too. The sanitize call is INLINE at the printf, not
+# hidden behind a local, because escapes.bats' sink lint reads these lines and a
+# defence it cannot see is one the next reviewer cannot verify either.
+#
+# It lives here because it was byte-identical in FOUR files. Five more copies
+# were deleted earlier in this round once the sink lint learned to accept
+# "defines it, or sources a file that defines it"; these four survived only
+# because the duplicate scan could not see a one-line function body. It can now.
+say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
+
+# ---------------------------------------------------------------------------
+# validate_alias — KTD5's identifier grammar, checked BEFORE any network call
+# and before the alias is interpolated anywhere, so an escape byte or a shell
+# metacharacter in an identifier is impossible rather than filtered.
+#
+# `die` is resolved at call time from the caller's scope, which is what lets the
+# two model surfaces share this while spawnctl keeps its own (its die takes no
+# enum argument, so its copy passes different arguments and stays local).
+validate_alias() {
+    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
+        || die "$EX_USAGE" "usage" "alias failed the grammar [A-Za-z0-9._-]+ — refused before any network call"
+}

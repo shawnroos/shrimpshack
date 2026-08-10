@@ -609,12 +609,26 @@ terminal_sink_lint() {
             defines_say=0; inherits_say=0; calls_sanitize=0
             grep -q "$say_re" "$f" && defines_say=1
             grep -q 'spawn::sanitize_for_display' "$f" && calls_sanitize=1
-            for _srcd in $(grep -oE '\. "\$SCRIPT_DIR/[a-z-]+\.sh"' "$f" | sed 's|.*SCRIPT_DIR/||; s|"$||'); do
-                [ -f "$LIB/$_srcd" ] || continue
-                if grep -q "$say_re" "$LIB/$_srcd"; then
-                    inherits_say=1
-                    calls_sanitize=1
-                fi
+            # TRANSITIVE. A one-hop check was wrong the moment say() moved into
+            # common.sh: the setup family sources setup-lib.sh, which sources
+            # common.sh, so the definition is two hops away and every one of
+            # those five files failed a lint they satisfy. Sourcing is
+            # transitive in bash, so the check has to be too.
+            _seen=""
+            _queue="$(grep -oE '\. "\$SCRIPT_DIR/[a-z-]+\.sh"' "$f" | sed 's|.*SCRIPT_DIR/||; s|"$||')"
+            while [ -n "$_queue" ]; do
+                _next=""
+                for _srcd in $_queue; do
+                    case " $_seen " in *" $_srcd "*) continue ;; esac
+                    _seen="$_seen $_srcd"
+                    [ -f "$LIB/$_srcd" ] || continue
+                    if grep -q "$say_re" "$LIB/$_srcd"; then
+                        inherits_say=1
+                        calls_sanitize=1
+                    fi
+                    _next="$_next $(grep -oE '\. "\$SCRIPT_DIR/[a-z-]+\.sh"' "$LIB/$_srcd" | sed 's|.*SCRIPT_DIR/||; s|"$||')"
+                done
+                _queue="$_next"
             done
             [ "$defines_say" -eq 1 ] || [ "$inherits_say" -eq 1 ] \
                 || { printf 'LINT %s: say() neither sanitizes nor sources a file defining a sanitizing say()\n' "$base"; found=1; }
@@ -792,6 +806,18 @@ funcs = {}
 for f in sorted(lib.glob("*.sh")):
     lines = f.read_text().split("\n"); i = 0
     while i < len(lines):
+        # ONE-LINE BODIES COUNT. The first version matched only a brace that
+        # opened a multi-line body, so `f() { ...; }` was invisible — and four
+        # byte-identical one-line say() bodies were in lib/ at the time, unseen.
+        # Writing the duplicate on one line was a way around the check.
+        one = re.match(r'^([A-Za-z_][A-Za-z0-9_:]*)\(\)\s*\{(.*)\}\s*$', lines[i])
+        if one:
+            b = re.sub(r'\s+', ' ', one.group(2).strip())
+            if b:
+                key = hashlib.sha256(b.encode()).hexdigest()
+                funcs.setdefault(key, []).append((f.name, one.group(1), 1))
+            i += 1
+            continue
         m = re.match(r'^([A-Za-z_][A-Za-z0-9_:]*)\(\)\s*\{\s*$', lines[i])
         if m:
             name = m.group(1); body = []; depth = 1; j = i + 1
@@ -801,10 +827,16 @@ for f in sorted(lib.glob("*.sh")):
                 body.append(lines[j]); j += 1
             norm = [re.sub(r'\s+', ' ', l.strip()) for l in body
                     if l.strip() and not l.strip().startswith("#")]
-            if len(norm) >= 3:
+            # NO FLOOR. A 3-line floor was the other way around this gate: it
+            # hid a real 2-line duplicate (validate_alias) as well as every
+            # one-liner. An identical body IS the finding, whatever its length.
+            # If a genuine coincidence ever fires, carve THAT pair out by name
+            # with a stated reason rather than reopening the whole class.
+            if norm:
                 key = hashlib.sha256("\n".join(norm).encode()).hexdigest()
                 funcs.setdefault(key, []).append((f.name, name, len(norm)))
             i = j
+            continue
         i += 1
 for group in funcs.values():
     where = sorted({(a, b) for a, b, _ in group})

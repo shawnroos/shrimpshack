@@ -116,7 +116,7 @@ DELIVERY_NAME=".env.local"
 # chokepoint is closed for messages nobody has written yet. Interpolating an
 # attacker-controlled value into a raw `printf ... >&2` bypasses this and is
 # what the lint in tests/unit/escapes.bats exists to catch.
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
+# say() is inherited from common.sh — it was byte-identical in four files.
 die() {
     # $1 = exit code, rest = message. Stderr only — stdout belongs to the one
     # JSON object, and a diagnostic printed there is how a consumer's `jq`

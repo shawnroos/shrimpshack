@@ -283,7 +283,7 @@ DOCTOR_BUDGET="${SPAWN_SETUP_DOCTOR_BUDGET:-20}"
 # where the escapes.bats lint reads them: a defence spelled differently in each
 # file is a defence the lint cannot verify.
 # ---------------------------------------------------------------------------
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
+# say() is inherited from common.sh — it was byte-identical in four files.
 die() {
     # $1 = exit code, rest = message. Stderr only — stdout belongs to the one
     # JSON object. The sanitize call is INLINE at the printf rather than hidden

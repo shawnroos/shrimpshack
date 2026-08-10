@@ -112,7 +112,7 @@ DEFAULT_MAX_TOKENS="${SPAWN_LENS_MAX_TOKENS:-8192}"
 # ($ERR_MSG) reaches the terminal only through die(), so provider prose cannot
 # rewrite the statusline no matter which classification branch quotes it — and
 # a message nobody has written yet is closed the same way.
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
+# say() is inherited from common.sh — it was byte-identical in four files.
 
 # The single stdout write lives in common.sh (emit); EMITTED is this script's
 # own state, so it stays declared here — a bash function reads the caller's
@@ -234,10 +234,8 @@ tmpwork() {
 # Alias grammar (KTD5). Checked BEFORE any network call, so an escape byte or a
 # shell metacharacter in an identifier is impossible rather than filtered.
 # ---------------------------------------------------------------------------
-validate_alias() {
-    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
-        || die "$EX_USAGE" "usage" "alias failed the grammar [A-Za-z0-9._-]+ — refused before any network call"
-}
+# validate_alias() is inherited from common.sh (byte-identical in both model
+# surfaces); spawnctl keeps its own because its die takes no enum argument.
 
 usage() {
     cat >&2 <<'EOF'
