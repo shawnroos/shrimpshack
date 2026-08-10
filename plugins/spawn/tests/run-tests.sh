@@ -351,16 +351,74 @@ secret_scan() {
         esac
     fi
 
-    if [ -n "$token" ]; then
+    # KEYCHAIN FALLBACK — the config is no longer where the token lives.
+    #
+    # Once setup migrated the credential into the Keychain and dropped
+    # `server.token`, this layer went dark: it printed SKIPPED "no gateway
+    # config resolved" on a box that has both a gateway AND a stored token, so
+    # the ONLY layer that has ever caught a real credential in this repo
+    # (docs/handoff.md — 15 chars, word-shaped, invisible to the prefix layer)
+    # stopped running at exactly the moment the storage changed.
+    #
+    # This is the same bug secrets.sh:290-299 already narrates: "R27 added the
+    # Keychain step to spawnctl's probe and left lens.sh and launch.sh reading
+    # the config alone... One chain, one place, is the enforcement." The scan
+    # was the fourth consumer reading the config alone. So it now resolves
+    # through spawn::token_fallback — the same chain, not a fifth copy of it.
+    #
+    # token_fallback ASSIGNS (a $(...) capture would run it in a subshell and
+    # drop the source). No value is ever printed — only which chain produced it.
+    #
+    # EVERY distinct value is scanned, not just the one the plugin would USE.
+    # token_fallback's precedence (env before Keychain) is right for AUTH and
+    # wrong for a SCAN: with a stale GATEWAY_TOKEN exported, taking only the
+    # winner greps for a string that is not the live credential while printing
+    # ACTIVE — the precise false-green this layer exists to prevent. Collecting
+    # both removes the precedence question from the gate entirely.
+    local -a tokens=() sources=()
+    [ -n "$token" ] && { tokens+=("$token"); sources+=("config"); }
+
+    # shellcheck source=../lib/secrets.sh
+    . "$plugin_root/lib/secrets.sh"
+    local kc_service="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
+    local kc_account="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
+    local cand src seen t
+    # env, then Keychain, each resolved through the shared chain — the Keychain
+    # pass masks GATEWAY_TOKEN so the chain's own precedence cannot hide the
+    # stored value behind an exported one. Neither lookup is reimplemented here.
+    for src in env keychain; do
+        SPAWN_TOKEN_VALUE=""; SPAWN_TOKEN_SOURCE=""
+        if [ "$src" = env ]; then
+            [ -n "${GATEWAY_TOKEN:-}" ] || continue
+            spawn::token_fallback "$kc_service" "$kc_account" || continue
+        else
+            GATEWAY_TOKEN="" spawn::token_fallback "$kc_service" "$kc_account" || continue
+        fi
+        cand="$SPAWN_TOKEN_VALUE"
+        SPAWN_TOKEN_VALUE=""
+        [ -n "$cand" ] || continue
+        seen=0
+        if [ "${#tokens[@]}" -gt 0 ]; then
+            for t in "${tokens[@]}"; do [ "$t" = "$cand" ] && seen=1; done
+        fi
+        [ "$seen" -eq 1 ] && continue
+        tokens+=("$cand"); sources+=("$src")
+    done
+    cand=""
+
+    if [ "${#tokens[@]}" -gt 0 ]; then
         # FALSE-GREEN GUARD. "the token never appears" is vacuously true when
         # the token resolved to an empty string — that exact shape has already
         # passed green over leaking code in this repo. Assert the secret EXISTS
         # before asserting it is absent, and say which mode this run is in.
-        echo -e "  ${GREEN}secret scan${NC}: exact-token layer ACTIVE (token resolved from a gateway config)"
-        # -F: the token is a literal, not a pattern.
-        local hits
-        hits="$(grep -rlF --exclude-dir=.git -- "$token" "$scan_root" 2>/dev/null || true)"
-        if [ -n "$hits" ]; then
+        local joined; joined="$(IFS=,; printf '%s' "${sources[*]}")"
+        echo -e "  ${GREEN}secret scan${NC}: exact-token layer ACTIVE (${#tokens[@]} distinct token(s) resolved from: $joined)"
+        local i hits
+        for i in "${!tokens[@]}"; do
+            token="${tokens[$i]}"
+            # -F: the token is a literal, not a pattern.
+            hits="$(grep -rlF --exclude-dir=.git -- "$token" "$scan_root" 2>/dev/null || true)"
+            [ -n "$hits" ] || continue
             # What a merge publishes is COMMITTED content, so a hit is triaged
             # rather than lumped: a token reachable from HEAD or already staged
             # fails the gate, while one that exists only as an uncommitted
@@ -376,19 +434,31 @@ secret_scan() {
                 git -C "$scan_root" show ":$rel" 2>/dev/null | grep -qF -- "$token" && staged_hit=1
                 git -C "$scan_root" show "HEAD:$rel" 2>/dev/null | grep -qF -- "$token" && head_hit=1
                 if [ "$staged_hit" -eq 1 ] || [ "$head_hit" -eq 1 ]; then
-                    echo -e "  ${RED}secret scan FAIL${NC}: the gateway token is COMMITTED or STAGED in: $rel"
+                    echo -e "  ${RED}secret scan FAIL${NC}: the gateway token (${sources[$i]}) is COMMITTED or STAGED in: $rel"
                     rc=1
                 else
-                    echo -e "  ${YELLOW}secret scan WARNING${NC}: the gateway token is in your working copy of $rel (uncommitted, so merging cannot publish it — but committing that file would). Scrub or rotate before you stage it."
+                    echo -e "  ${YELLOW}secret scan WARNING${NC}: the gateway token (${sources[$i]}) is in your working copy of $rel (uncommitted, so merging cannot publish it — but committing that file would). Scrub or rotate before you stage it."
                     warned=1
                 fi
             done <<< "$hits"
-        fi
+        done
+        token=""
+        tokens=()
     else
         # R11: the suite must pass from a clean checkout with no gateway
         # installed. Skip WITH NOTICE — a silent skip is how this layer would
         # quietly stop running.
-        echo -e "  ${YELLOW}secret scan${NC}: exact-token layer SKIPPED (no gateway config resolved on this box)"
+        #
+        # The reason is reported SEPARATELY for the two states this used to
+        # collapse into "no gateway config resolved". That single message was
+        # actively misleading on this machine: a config WAS resolved, it simply
+        # no longer carries the token, and the notice sent whoever read it
+        # looking for a missing install instead of a missing credential.
+        if [ -n "$cfg" ]; then
+            echo -e "  ${YELLOW}secret scan${NC}: exact-token layer SKIPPED (config $cfg declares no server.token, and no token is stored in the Keychain or exported here)"
+        else
+            echo -e "  ${YELLOW}secret scan${NC}: exact-token layer SKIPPED (no gateway config resolved on this box)"
+        fi
     fi
 
     # Layer 2 — credential-shaped strings, by known prefix.
