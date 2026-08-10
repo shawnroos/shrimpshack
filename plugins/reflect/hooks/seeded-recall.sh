@@ -17,7 +17,7 @@
 # Fail-over (plan U4): once qmd is CONFIRMED wedged (an armed cooldown, or a probe
 # failure that just armed it), recall no longer fails to silence. It states the
 # degradation in one line and falls over to the local BM25 index, whose own
-# calibrated gate (MEMORY_LOCAL_FLOOR_MIN / MEMORY_LOCAL_FLOOR_RATIO) decides
+# coverage gate (MEMORY_LOCAL_MIN_COVERAGE) decides
 # whether any body is confident enough to inject — loud about state, silent about
 # low-confidence content. A single transient failure still stays quiet and simply
 # retries on the next prompt.

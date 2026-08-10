@@ -585,8 +585,9 @@ def local_fallback(query, config=None, cwd=None, store_dir=None, **kw):
     failed probe or an armed cooldown — so session-start recall degrades to a
     weaker layer instead of degrading to silence.
 
-    The gate is `local_index`'s own: the calibrated RAW-BM25 floor plus separation
-    (`MEMORY_LOCAL_FLOOR_MIN` / `MEMORY_LOCAL_FLOOR_RATIO`). The qmd-side floors on
+    The gate is `local_index`'s own: COVERAGE of the query's discriminating
+    vocabulary (`MEMORY_LOCAL_MIN_COVERAGE`), with a thin top1/top2 margin
+    returning BOTH candidates rather than rejecting either. The qmd-side floors on
     `Config` are DELIBERATELY not passed down — they are vector-score thresholds and
     are arithmetically inert on BM25 scores (KTD12), so honoring them here would
     silently filter nothing while looking like a gate.

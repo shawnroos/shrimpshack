@@ -25,45 +25,48 @@ two thirds of the corpus while reporting success.
 
 THE ORDER OF THE PIPELINE IS THE WHOLE UNIT (KTD15). In `search()`:
 
-  1. drop siblings         — `scope.classify(...) == "sibling"`, applied to the
-                             RANKED list: `score_all()` scores every matching body
-                             first, siblings included, and they are filtered
-                             immediately after. No verdict differs — a sibling never
-                             reaches `above` or the ratio — but the ordering below is
-                             about which scores the GATE reads, not about which
-                             bodies get scored. Said plainly because the two readings
-                             diverge the moment scoring gains a side effect or
-                             classification becomes score-dependent.
-  2. absolute floor        — MEMORY_LOCAL_FLOOR_MIN, a CALIBRATED RAW score
-  3. separation            — top1/top2 over the score-ordered survivors
-  4. K+1 presentation      — `scope.select_scoped`, AFTER the gate has decided
+  1. drop siblings    — `scope.classify(...) == "sibling"`, applied to the RANKED
+                        list: `score_all()` scores every matching body first,
+                        siblings included, and they are filtered immediately after.
+                        No verdict differs — a sibling never reaches `above` or the
+                        ratio — but the order below is about which scores the GATE
+                        READS, not which bodies get scored.
+  2. relevance        — COVERAGE: what fraction of the query's own discriminating
+                        vocabulary the top hit contains (`MEMORY_LOCAL_MIN_COVERAGE`)
+  3. ambiguity        — top1/top2. A thin margin does NOT reject; it returns both
+                        candidates and says the margin was thin.
+  4. K+1 presentation — `scope.select_scoped`, AFTER the gate has decided
 
-Step 4 is last because `scope.select_scoped` (scope.py:150-174) deliberately
-PREPENDS the best current-repo body ahead of higher-scoring ancestors — plan 003's
-K+1 boost, working as designed. Run the gate after it and a position-based top1/top2
-comparison reads a list whose positions no longer track score: a current-repo 0.50
-with ancestors 0.95 and 0.62 presents as [0.50, 0.95, 0.62], so the gate compares
-0.50/0.95 and rejects a query whose real top pair is 0.95/0.62 = 1.53 and should
-have passed. The inverse manufactures a false positive just as easily.
+Step 4 is last because `scope.select_scoped` (scope.py:150-174) deliberately PREPENDS
+the best current-repo body ahead of higher-scoring ancestors — plan 003's K+1 boost,
+working as designed. Run the gate after it and a position-based comparison reads a
+list whose positions no longer track score.
 
-THE FLOOR IS NOT THE QMD FLOOR (KTD12). `memory_activation.recall_floor` returns
-`base + span*(1-norm)` — 0.45 to 0.60 with shipped defaults — and was calibrated for
-qmd VECTOR scores in [0,1]. Raw BM25 scores on this corpus run in the tens. That
-floor applied here filters nothing, ever, silently. Nor is the floor top1-relative
-(`score / top1`): that pins top1 at exactly 1.0 for every non-empty result set, so
-the strongest hit clears any 0.45-0.60 floor unconditionally whether its raw score
-was 38 or 0.08 — dead code promoted to rubber stamp, which is worse because it
-looks like it is working. So: a calibrated RAW-score floor, env-overridable in the
-`SEEDED_RECALL_*` / `MEMORY_ACT_*` tradition. Separation is a SECOND, INDEPENDENT
-condition on top of it (KTD11) — never a substitute.
+WHY COVERAGE AND NOT A SCORE FLOOR. The gate was originally an absolute BM25 floor
+plus a separation threshold that REJECTED. Measured against fourteen labelled queries
+on the live store, that scored 8/14 with six false negatives — it refused Case 1 and
+Case 2 from the plan, the misses this whole plugin exists for. Coverage scores 13/14
+and refuses exactly the same junk.
 
-Two behaviors that are specified here rather than left to chance, because either
-default would ship silently:
+The floor could not be rescued: BM25 is unnormalized, so a raw threshold is a
+property of ONE corpus. It refused true hits outright on any store under ~20 bodies,
+and scaling it by log(N) only relocated the arbitrary constant (that scaling was
+written, measured, and deleted — see X8 in docs/residual-review-findings/).
 
-  * SINGLETON — exactly one candidate clears the floor, so no top1/top2 ratio
-    exists. It passes on the ABSOLUTE FLOOR ALONE; separation is not evaluated.
-  * NOTHING CLEARS THE FLOOR — the explicit below-gate result. Never a best-effort
-    top hit.
+Nor is the floor top1-relative (`score / top1`): that pins top1 at exactly 1.0 for
+every non-empty result set, so the strongest hit clears any floor unconditionally
+whether it scored 38 or 0.08 — dead code promoted to rubber stamp.
+
+And it is NOT `memory_activation.recall_floor` (KTD12): that returns 0.45-0.60, tuned
+for qmd VECTOR scores in [0,1], while raw BM25 here runs in the tens. Applied to BM25
+it filters nothing, ever, silently. Those two floors stay separate.
+
+Separation no longer rejects. It refused two true hits at ratios 1.07 and 1.13 on a
+threshold resting on three data points. Two bodies that both cover the query are an
+ambiguous question with two honest answers, not grounds for silence.
+
+`min_score` still pins an absolute floor for callers that want to exercise gate LOGIC
+against a known number; the tests use it for exactly that.
 
 This module shells nothing and imports no qmd. It works with qmd absent from PATH,
 which is the point of it.
@@ -125,11 +128,6 @@ DEFAULT_MIN_COVERAGE = 0.60
 #: LOGIC against a known number). No longer the shipped relevance condition.
 DEFAULT_FLOOR_MIN = 12.0
 
-#: The corpus the floor above was measured against, and the hard guard the scaled
-#: floor may never fall below. See `floor_for_corpus`.
-FLOOR_CALIBRATION_N = 886
-DEFAULT_FLOOR_GUARD = 2.0
-
 #: Separation (KTD11): top1 must beat top2 by this factor. Measured basis is thin —
 #: the plan's true hit ratio'd 1.51 and both known misses were flat; the live probes
 #: above put true hits at 1.30–1.94 and junk at 1.02–1.49 — so the default starts on
@@ -176,52 +174,6 @@ def _envf(name, default):
 def floor_min():
     """The calibrated absolute BM25 floor. NOT `memory_activation.recall_floor`."""
     return _envf("MEMORY_LOCAL_FLOOR_MIN", DEFAULT_FLOOR_MIN)
-
-
-def floor_guard():
-    """The hard minimum the scaled floor may never fall below."""
-    return _envf("MEMORY_LOCAL_FLOOR_GUARD", DEFAULT_FLOOR_GUARD)
-
-
-def floor_for_corpus(n_corpus, base=None):
-    """Scale the calibrated floor to the corpus actually in hand.
-
-    The 12.0 above is a property OF AN 886-BODY CORPUS. BM25 sums IDF terms and IDF
-    grows with log(N), so that constant does not transfer downward. Measured against
-    real fixture stores: a true hit tops out at 5.50 on a 3-body store and 8.52 on an
-    8-body one, both refused outright by a floor of 12.0. Below roughly 20 memories
-    the whole layer returns nothing however good the match — which is every fresh
-    install, the one case with no telemetry to notice.
-
-    So the floor scales by log1p(N)/log1p(886), which keeps the calibration EXACTLY
-    where it was measured (N>=886 → 12.0, untouched) and never scales UP, because
-    inventing a higher bar from a formula would suppress true hits with nothing
-    behind it. A hard guard stops it collapsing toward zero on a near-empty store.
-
-    BE HONEST ABOUT WHAT THIS DOES NOT FIX. On a small corpus the true and junk score
-    bands OVERLAP — measured at N=8, a true hit scored 8.52 while the best junk query
-    reached 7.84; at N=20, 11.39 against 10.84. No absolute floor separates those,
-    and the ratio does not rescue it either. Small-store recall is therefore WEAKER,
-    not merely rescaled: it answers where it used to be mute, and it will sometimes
-    answer wrongly. That is a deliberate trade the store owner chose over silence,
-    not a claim that the gate works as well down there.
-
-    The guard is provisional. It was picked from synthetic fixtures because no real
-    small store exists to measure — and synthetic junk is not representative junk.
-    RECALL.log now records every surfacing with its scores, so the first real
-    small-store telemetry should replace this number.
-    """
-    base = floor_min() if base is None else base
-    if os.environ.get("MEMORY_LOCAL_FLOOR_MIN"):
-        return base          # an explicit override is a decision; do not second-guess it
-    try:
-        n = int(n_corpus)
-    except (TypeError, ValueError):
-        return base
-    if n >= FLOOR_CALIBRATION_N or n <= 0:
-        return base
-    scaled = base * (math.log1p(n) / math.log1p(FLOOR_CALIBRATION_N))
-    return max(floor_guard(), scaled)
 
 
 def floor_ratio():
@@ -416,8 +368,6 @@ def search(store_dir, query, cwd=None, k=DEFAULT_K, index=None,
     """
     idx = index if index is not None else build(store_dir)
     cur_slug = scope.resolve_repo_slug(cwd or os.getcwd())
-    # Scaled to the corpus in hand (floor_for_corpus). An explicit caller min_score
-    # is honored as given and never scaled.
     fcover = _envf("MEMORY_LOCAL_MIN_COVERAGE", DEFAULT_MIN_COVERAGE)
     fratio = floor_ratio() if min_ratio is None else min_ratio
 

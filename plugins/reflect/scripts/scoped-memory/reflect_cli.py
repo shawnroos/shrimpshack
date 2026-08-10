@@ -195,7 +195,10 @@ DELIBERATE_K = 8
 DELIBERATE_COVERAGE_FACTOR = 0.5   # deliberate HALVES the relevance bar: a human
                                    # asked, so a marginal hit costs them one line to
                                    # read and discard, while silence costs the memory
-DELIBERATE_RATIO = 1.0             # separation off — 1.0 is "top1 >= top2", always true
+DELIBERATE_RATIO = 1.0             # separation does not reject for ANYONE since
+                                   # the gate rewrite, so this is inert. Kept only
+                                   # so `min_ratio` has an explicit value at the
+                                   # call site rather than an implicit default.
 DELIBERATE_MIN_BUDGET = 12.0       # a person is waiting; give qmd longer than a hook does
 
 

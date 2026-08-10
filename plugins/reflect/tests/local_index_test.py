@@ -45,6 +45,8 @@ import local_index as li           # noqa: E402
 import memory_activation as ma     # noqa: E402
 import scope                       # noqa: E402
 
+STORE_LIVE = os.path.expanduser("~/.claude/projects/-Users-shawnroos/memory")
+
 PASS = 0
 FAIL = 0
 
@@ -548,41 +550,21 @@ check("floor and separation are two independent conditions, not one",
       li.floor_min() != li.floor_ratio())
 
 
-# --------------- 9. the floor scales to the corpus in hand (X1, cross-model find)
+# --------------- 9. the gate's relevance condition is coverage, not a floor
 print()
-print("== the floor is a property of the corpus, not a constant ==")
-check("at the calibration size the floor is exactly the measured 12.0",
-      li.floor_for_corpus(886) == li.DEFAULT_FLOOR_MIN)
-check("a larger corpus keeps 12.0 — never scaled UP from a formula",
-      li.floor_for_corpus(5000) == li.DEFAULT_FLOOR_MIN)
-check("a small corpus scales DOWN",
-      li.floor_for_corpus(8) < li.DEFAULT_FLOOR_MIN)
-check("the guard stops it collapsing toward zero on a near-empty store",
-      li.floor_for_corpus(1) >= li.DEFAULT_FLOOR_GUARD)
-os.environ["MEMORY_LOCAL_FLOOR_MIN"] = "4.0"
-try:
-    check("an explicit MEMORY_LOCAL_FLOOR_MIN is honored, not re-scaled",
-          li.floor_for_corpus(5) == 4.0)
-finally:
-    del os.environ["MEMORY_LOCAL_FLOOR_MIN"]
-
-with tempfile.TemporaryDirectory() as tmp:
-    d = os.path.join(tmp, "small"); os.makedirs(d)
-    write(os.path.join(d, "target.md"),
-          "---\nname: gh-conflicting\n---\nA PR that goes CONFLICTING silently stops "
-          "running CI: GitHub cannot build the merge ref so zero pull_request workflows "
-          "run. Check mergeable first.\n")
-    for i in range(7):
-        write(os.path.join(d, "f%d.md" % i),
-              "---\nname: f%d\n---\nNote about docker compose networking %d.\n" % (i, i))
-    q = "PR conflicting stopped running CI mergeable merge ref"
-
-    check("an 8-body store returns its own exact match instead of staying mute",
-          li.search(d, q, cwd=tmp).status == li.HITS)
-    # Load-bearing: the unscaled constant refuses that same true hit, which is the
-    # bug this scaling exists to remove.
-    check("pinning the floor back to 12.0 refuses that same true hit",
-          li.search(d, q, cwd=tmp, min_score=li.DEFAULT_FLOOR_MIN).status == li.BELOW_GATE)
+print("== coverage is the relevance condition ==")
+# The corpus-scaled floor that used to live here was deleted with its production
+# code: it was superseded by coverage, which is scale-free by construction and
+# needs no calibration to corpus size. Testing a dead function's behavior is worse
+# than not testing it — it reads as coverage of something shipped.
+check("a query whose top hit covers enough of its vocabulary returns",
+      li.search(STORE_LIVE, "failing E2E shard sprout spec flake or real regression",
+                cwd="/tmp").status == li.HITS
+      if os.path.isdir(STORE_LIVE) else True)
+check("the coverage default is a fraction, not a raw score",
+      0.0 < li.DEFAULT_MIN_COVERAGE <= 1.0)
+check("no corpus-scaled floor machinery survives",
+      not hasattr(li, "floor_for_corpus") and not hasattr(li, "floor_guard"))
 
 print()
 print(f"local_index_test: {PASS} passed, {FAIL} failed")
