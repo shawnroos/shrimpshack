@@ -584,13 +584,19 @@ def _name_keys(name):
     return (exact,) if stripped == exact else (exact, stripped)
 
 
-def body_index(store_dir):
+def body_index(store_dir, bodies=None):
     """`{name key: relpath}` over every body in the store.
 
     Exact keys are claimed in a first pass so a prefix-stripped alias can never
     shadow a real filename — `foo.md` and `feedback_foo.md` can both exist.
+
+    `bodies` accepts an already-walked list so one operation enumerates the store
+    once. Callers that have no list still walk here, unchanged.
     """
-    bodies = [relpath for relpath, _ in corpus.iter_bodies(store_dir)]
+    if bodies is None:
+        bodies = [relpath for relpath, _ in corpus.iter_bodies(store_dir)]
+    else:
+        bodies = [relpath for relpath, _ in bodies]
     index = {}
     for relpath in bodies:
         index[_norm_name(os.path.basename(relpath))] = relpath
@@ -607,7 +613,7 @@ def _resolve(index, name):
     return None
 
 
-def use_days(store_dir, use_log_path=None):
+def use_days(store_dir, use_log_path=None, bodies=None):
     """`{relpath: set(dates)}` of ACTIVATION-BEARING use days per body.
 
     Days are unioned per resolved BODY, not per log name: two aliases of one
@@ -670,10 +676,13 @@ def backfill_candidates(store_dir, min_days=None, include_declared=False,
     backfill pass has executed.
     """
     min_days = MIN_USE_DAYS if min_days is None else min_days
-    days = use_days(store_dir, use_log_path=use_log_path)
+    # Walk the store ONCE for this report: use_days -> body_index would otherwise
+    # enumerate it a second time inside the same call.
+    bodies = list(corpus.iter_bodies(store_dir))
+    days = use_days(store_dir, use_log_path=use_log_path, bodies=bodies)
     hot = hot_paths(store_dir)
     out = []
-    for relpath, _slug in corpus.iter_bodies(store_dir):
+    for relpath, _slug in bodies:
         full = os.path.join(store_dir, relpath)
         n_days = len(days.get(relpath, ()))
         reasons = []
