@@ -373,6 +373,12 @@ def prefilter_lines(manifest):
     for entry in manifest.get("entries", []):
         for pat in entry.get("patterns", []):
             src = pat.get("re", "")
+            if _has_nested_bracket(src):
+                # Checked on the SOURCE, because the `[^\n]` rewrite below would
+                # destroy the evidence: `[a[^\n]]` becomes `[a.]`, which looks
+                # perfectly ordinary and would then be emitted NARROWER than the
+                # pattern it came from. Suppress the whole prefilter instead.
+                return None
             rx = _PREFILTER_STRIP.sub(r"\1", src)
             rx = _NEGATED_NEWLINE_CLASS.sub(".", rx)
             if not rx:
@@ -397,22 +403,32 @@ def prefilter_lines(manifest):
 #:
 #: Two rules:
 #:
-#:   * **Any backslash escape before an alphanumeric.** Covers the Python-only
-#:     anchors and classes (`\A` is an anchor to Python and a literal `A` to grep,
-#:     so grep REJECTS what the matcher accepts), everything that can span a line
-#:     (`\s`, `\n`), and every escape nobody has thought about yet — `\t`, `\B`,
-#:     `\x41`, backreferences, whatever `re` gains next. Escaped PUNCTUATION is
-#:     deliberately still allowed (`\.`, `\*`, `\\`, `\ ` — all `re.escape` emits):
-#:     both dialects agree on those, and rejecting them would suppress the
-#:     prefilter for every literal trigger, i.e. for the whole store.
+#:   * **Any backslash escape outside `_ESCAPE_OK`.** A denylist of known-bad
+#:     escapes is the wrong shape and was tried first: it enumerated `\A \Z \d \s
+#:     \w \W \D \S`, then grew an alphanumeric rule, and BOTH times something not
+#:     on the list shipped — most recently `\<` and `\>`, which are literal `<`/`>`
+#:     to Python and word-boundary ANCHORS to BSD grep, GNU grep and ugrep alike.
+#:     So the rule is inverted: a backslash may only precede a character we have
+#:     actually verified reads as that literal in both dialects. Everything else —
+#:     `\A`, `\s`, `\t`, `\B`, `\x41`, backreferences, `\<`, GNU's `\``/`\'` buffer
+#:     anchors, whatever `re` gains next — is unsafe by default.
 #:     The even-backslash guard keeps `foo\\bar` (a literal backslash, then a
 #:     literal `b`) from reading as an escape.
 #:   * **Any negated character class.** `[^;]` matches a newline in Python; grep is
 #:     line-oriented and can never match across one, so `rm -rf[^;]*node_modules`
 #:     matches a line-continuation command in the matcher and is REJECTED by the
 #:     prefilter. 457 of 480 recorded commands were multi-line, so this is the
-#:     common shape, not an edge. Note the alnum rule alone does NOT catch this —
+#:     common shape, not an edge. Note the escape rule alone does NOT catch this —
 #:     `[^;]` contains no escape at all.
+#:   * **`{,n}`** — a `{0,n}` quantifier to Python, a LITERAL `{,n}` to both greps
+#:     (POSIX leaves the omitted lower bound undefined). No escape, no bracket, so
+#:     nothing else here sees it. `{m,n}` with an explicit lower bound is fine.
+#:   * **A nested `[` inside a bracket expression** (`_has_nested_bracket`) — covers
+#:     POSIX classes and collating elements (`[[:alpha:]]`, `[[.a.]]`, `[[=a=]]`),
+#:     which grep reads as a character class and Python reads as an ordinary set of
+#:     the literal characters. Python emits a FutureWarning for some of these, but
+#:     that is not usable as a detector: `re` caches compiled patterns, so the
+#:     warning fires once per process and then never again.
 #:
 #: `[^\n]` never reaches here: `prefilter_lines` rewrites it to `.` first, which is
 #: exactly equivalent in both engines. Writing it through verbatim was the second
@@ -425,11 +441,52 @@ def prefilter_lines(manifest):
 #: `[^\n]` into `[^n]`, which the pattern then genuinely could not match, so the
 #: whole prefilter was suppressed on the live store for no reason. A flaky guard
 #: that disables the optimization is worse than no guard.
-#:
-#: Known non-goal: a backslash before non-alnum INSIDE a bracket expression
-#: (`[a\]b]`) still passes, and POSIX parses that differently from Python. Only
-#: reachable from a hand-authored `regex:`; `re.escape` never emits it.
-_UNSAFE_FOR_GREP = re.compile(r"(?<!\\)(?:\\\\)*\\[A-Za-z0-9]|\(\?|\[\^")
+
+#: Exactly the characters `re.escape` emits a backslash before, and nothing else.
+#: Every one is verified — by `tests/trigger_test.py` — to read as that literal
+#: character in Python `re` AND in every grep on the box. Allowing precisely this
+#: set is what keeps literal triggers prefilterable (`re.escape` escapes `-` and
+#: space, so `gh pr --json` would otherwise suppress the whole store's prefilter)
+#: without admitting an escape whose meaning we have not checked.
+_ESCAPE_OK = "()[]{}?*+-|^$.&~# \\\t\n\r\v\f"
+
+_UNSAFE_FOR_GREP = re.compile(
+    r"(?<!\\)(?:\\\\)*\\[^%s]" % re.escape(_ESCAPE_OK)   # unverified escape
+    + r"|\(\?"                                            # Python-only group syntax
+    + r"|\{,"                                             # {,n}: literal to grep
+    + r"|\[\^"                                            # negated class: see above
+)
+
+
+def _has_nested_bracket(line):
+    """True when a `[` opens inside an already-open bracket expression.
+
+    That is POSIX class / collating-element territory (`[[:alpha:]]`), where grep
+    and Python disagree about the whole construct rather than about one character.
+    Deliberately crude — it over-reports rather than parse POSIX bracket rules, and
+    over-reporting only costs the optimization.
+    """
+    i, n, inside = 0, len(line), False
+    while i < n:
+        c = line[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "[":
+            if inside:
+                return True
+            inside = True
+            # A `]` immediately after `[` or `[^` is a literal member, not the end.
+            i += 1
+            if i < n and line[i] == "^":
+                i += 1
+            if i < n and line[i] == "]":
+                i += 1
+            continue
+        if c == "]" and inside:
+            inside = False
+        i += 1
+    return False
 
 #: Rewritten to `.` — not exempted — before the unsafe scan ever sees it. Python's
 #: `[^\n]` and ERE's `.` both mean "any character except newline", and a `.` needs
@@ -449,7 +506,7 @@ def prefilter_is_safe(lines):
     if not lines:
         return False
     for line in lines:
-        if _UNSAFE_FOR_GREP.search(line):
+        if _UNSAFE_FOR_GREP.search(line) or _has_nested_bracket(line):
             return False
     return True
 

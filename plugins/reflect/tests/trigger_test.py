@@ -462,9 +462,19 @@ with tempfile.TemporaryDirectory() as store:
 # green: every hazard below then reaches grep, which reads it narrower than Python.
 for hazard, why in [("\\Agh pr", "python-only anchor, a literal A to grep"),
                     ("git\\s+push", "can span a line"),
-                    ("git\\tpush", "unlisted escape, dialect-dependent"),
-                    ("x\\By", "unlisted escape, dialect-dependent"),
-                    ("gh\\x20pr", "hex escape, not portable")]:
+                    ("git\\tpush", "unverified escape, dialect-dependent"),
+                    ("x\\By", "unverified escape, dialect-dependent"),
+                    ("gh\\x20pr", "hex escape, not portable"),
+                    # Found by review AFTER the allowlist shipped, which is the
+                    # argument for the allowlist: each of these is literal to
+                    # Python and something else entirely to a real grep, and none
+                    # was on any denylist anyone wrote.
+                    ("cat \\<\\<EOF", "\\< is a WORD BOUNDARY to every grep"),
+                    ("x\\>y", "\\> is a word boundary to every grep"),
+                    ("a{,3}b", "{,n} is a quantifier to Python, literal to grep"),
+                    ("x[[:alpha:]]y", "POSIX class: grep reads a class, Python a set"),
+                    ("x[[.a.]]y", "collating element, same divergence"),
+                    ("[a[^\\n]]", "nested set — the [^\\n] rewrite must not hide it")]:
     with tempfile.TemporaryDirectory() as store:
         write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
         write(os.path.join(store, "reference_hz.md"),
@@ -477,7 +487,9 @@ for hazard, why in [("\\Agh pr", "python-only anchor, a literal A to grep"),
 
 # ...while the constructs `re.escape` actually emits must stay prefilterable, or the
 # gate would suppress the optimization for the entire store — correct but pointless.
-for benign in ["gh\\ pr\\ view", "foo\\\\bar", "gh\\ pr\\ (view|merge)", "a\\.b\\*c"]:
+# `re.escape` escapes `-` and space, so `gh pr --json` alone would do it.
+for benign in ["gh\\ pr\\ view", "foo\\\\bar", "gh\\ pr\\ (view|merge)", "a\\.b\\*c",
+               re.escape("gh pr view --json"), "a[0-9]b", "a{2,3}b"]:
     with tempfile.TemporaryDirectory() as store:
         write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
         write(os.path.join(store, "reference_ok.md"),
@@ -485,8 +497,29 @@ for benign in ["gh\\ pr\\ view", "foo\\\\bar", "gh\\ pr\\ (view|merge)", "a\\.b\
                      "triggers:\n  - regex: %s\n" % benign))
         manb, _ = tg.compile_manifest(store)
         tg.write_manifest(store, manb)
-        check("prefilter IS written for escaped punctuation %r" % benign,
+        check("prefilter IS written for benign %r" % benign,
               os.path.exists(os.path.join(store, tg.PREFILTER_NAME)))
+
+# The allowlist rests on a factual claim: every character `re.escape` puts a
+# backslash in front of reads as that literal character in Python AND in every grep.
+# That claim was WRONG once already — the previous gate allowed all escaped
+# punctuation on the same reasoning, and `\<` / `\>` turned out to be word-boundary
+# anchors in BSD grep, GNU grep and ugrep alike. So check it rather than assert it:
+# if a future Python widens `re.escape`, or a grep reinterprets one of these, this
+# fails here instead of silently dropping nudges in the field.
+for ch in "()[]{}?*+-|^$.&~# ":
+    esc = re.escape(ch)
+    check("re.escape(%r)=%r is in the verified-safe escape set" % (ch, esc),
+          len(esc) < 2 or esc[1] in tg._ESCAPE_OK)
+    if len(esc) < 2:
+        continue                      # this Python does not escape it at all
+    with tempfile.TemporaryDirectory() as d:
+        pf = os.path.join(d, "pf")
+        write(pf, "a%sb\n" % esc)
+        text = "a%sb" % ch
+        check("EVERY grep reads %r as the literal %r, as Python does" % (esc, ch),
+              bool(re.search("a%sb" % esc, text, re.I))
+              and grep_says_match(pf, text)[0])
 
 # A store that compiles safe once and LATER gains an unsafe pattern must lose its
 # prefilter. Every suppression test above starts from a fresh tempdir, so none of
@@ -509,6 +542,75 @@ with tempfile.TemporaryDirectory() as store:
     tg.write_manifest(store, man7)
     check("recompiling into an unsafe store REMOVES the stale prefilter",
           not os.path.exists(stale))
+
+# The WRITE-FAILURE path has to drop the stale file too, and it is a different branch
+# from the unsafe one above — deleting its unlink left the suite green, because no
+# test ever entered `except Exception`. Force it by making mkstemp raise.
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_safe2.md"),
+          memory("reference_safe2", "safe",
+                 "triggers:\n  - literal: gh pr view\n"))
+    man8, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man8)
+    pre8 = os.path.join(store, tg.PREFILTER_NAME)
+    check("prefilter exists before the forced write failure (guard)",
+          os.path.exists(pre8))
+
+    # Patch os.replace, NOT mkstemp. `_grep_parses` calls mkstemp first, so a broken
+    # mkstemp fails the SAFETY probe and routes into the unsafe branch — which has
+    # its own, older unlink. The test then passes with the exception-path unlink
+    # deleted, i.e. for entirely the wrong reason. os.replace is reached only after
+    # the probe, inside the write itself, so it targets the intended branch.
+    real_replace = tg.os.replace
+    def boom(*a, **k):
+        raise OSError("forced write failure")
+    tg.os.replace = boom
+    try:
+        ok8 = tg.write_prefilter(store, man8)
+    finally:
+        tg.os.replace = real_replace
+    check("a failed prefilter write reports False", ok8 is False)
+    check("a failed prefilter write REMOVES the stale prefilter "
+          "(never leave one beside a newer manifest)", not os.path.exists(pre8))
+    check("the os.replace monkeypatch was really undone (guard)",
+          tg.os.replace is real_replace)
+
+# The pair lock guarantees manifest+prefilter consistency across processes. Stubbing
+# `_acquire_pair_lock` to `return None` left the suite green — ~50 lines of new
+# concurrency code could be disabled with nothing noticing.
+with tempfile.TemporaryDirectory() as store:
+    # write_manifest must actually TAKE the lock, not merely be able to: stubbing
+    # `lock_fd = _acquire_pair_lock(...)` to `lock_fd = None` at the call site passes
+    # every direct test of the lock functions themselves. The lock file only comes
+    # into existence if the call really happens.
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_lk.md"),
+          memory("reference_lk", "lock", "triggers:\n  - literal: gh pr view\n"))
+    man_lk, _ = tg.compile_manifest(store)
+    check("no lock file before the first write (guard)",
+          not os.path.exists(os.path.join(store, tg.PAIR_LOCK_NAME)))
+    tg.write_manifest(store, man_lk)
+    check("write_manifest takes the pair lock (the pair, not just each file)",
+          os.path.exists(os.path.join(store, tg.PAIR_LOCK_NAME)))
+
+with tempfile.TemporaryDirectory() as store:
+    fd = tg._acquire_pair_lock(store)
+    check("the pair lock is actually acquired on this platform", fd is not None)
+    check("the lock file is dot-prefixed so corpus iteration skips it",
+          tg.PAIR_LOCK_NAME.startswith(".")
+          and os.path.exists(os.path.join(store, tg.PAIR_LOCK_NAME)))
+    tg._release_pair_lock(fd)
+    # Assert the descriptor is CLOSED rather than re-acquiring: a second blocking
+    # acquire against an unreleased lock would hang the suite instead of failing it,
+    # and a hang reads as a mysterious slow CI run, not as this regression.
+    closed = False
+    try:
+        os.fstat(fd)
+    except OSError:
+        closed = True
+    check("releasing the pair lock closes the descriptor (so the flock drops)",
+          closed)
 
 # A pattern that is valid PYTHON and invalid ERE must not produce a prefilter at
 # all: a file grep cannot parse makes it exit 2 for EVERY command, and a hook that
