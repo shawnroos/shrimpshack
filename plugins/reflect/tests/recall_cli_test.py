@@ -237,7 +237,7 @@ check("armed cooldown: the wedged qmd was never probed (returned fast)",
 check("armed cooldown: the output names the cooldown as the reason",
       "cooldown is armed" in out, out)
 check("armed cooldown: local-index results came back anyway",
-      "reference_e2e_flake_triage" in out and "[via: local]" in out, out)
+      "reference_e2e_flake_triage" in out and "[via: local-fallback]" in out, out)
 check("armed cooldown: exit 0", rc == 0, "rc=%d" % rc)
 
 # ------------------------------------------- 3. no qmd on PATH: the local fallback
@@ -245,7 +245,7 @@ print()
 print("== layer 3: local index, no qmd on PATH ==")
 FL = os.path.join(ROOT, "flags-local"); os.makedirs(FL, exist_ok=True)
 out, rc, _el = run_recall(STORE, env_for(None, FL), "--query", CASE2_Q, cwd=NEUTRAL)
-check("no qmd: the local index answered", "[via: local]" in out, out)
+check("no qmd: the local index answered", "[via: local-fallback]" in out, out)
 check("no qmd: the BODY is printed, not just the title",
       "A DIFFERENT e2e test failing on each re-run" in out, out)
 check("no qmd: the status line names the local layer and its verdict",

@@ -467,10 +467,22 @@ def match(manifest, situation, cwd=None, budget=None):
 # -------------------------------------------------------------- session state
 
 def flag_dir():
+    """Directory holding the once-per-session nudge flags.
+
+    Store-adjacent, NOT `$TMPDIR`-relative, for the reason retrieval.py's module
+    docstring already spells out for the cooldown stamp: the PostToolUse hook runs in
+    the hook executor while `triggers.py match` can be invoked straight from the Bash
+    tool, and those are not guaranteed the same `TMPDIR` — this session has an
+    overridden scratch path proving it. Divergent paths mean a memory marked "already
+    nudged" in one context is invisible in the other, so the same nudge repeats, or a
+    stale flag suppresses one that should fire. Same bug class, same fix.
+    """
     base = os.environ.get("MEMORY_TRIGGER_FLAG_DIR")
     if base:
         return base
-    return os.path.join(os.environ.get("TMPDIR", "/tmp"), "claude-trigger-nudge")
+    home = os.path.expanduser("~")
+    return os.path.join(home, ".claude", "projects", scope.slugify(home),
+                        "trigger-nudge-state")
 
 
 def _flag_path(session_id, memory):

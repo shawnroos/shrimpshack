@@ -377,7 +377,12 @@ def cmd_recall(args):
                                  min_score=min_score, min_ratio=min_ratio)
             for h in lres.hits:
                 rel = h.get("file", "")
-                add(_mem_name(rel), rel, "local", _read_body(store, rel, max_body))
+                # "local-fallback", matching retrieval.RecallItem.source. RECALL.log
+                # is ONE shared log written by the hook and the CLI both, so a second
+                # token for the same layer silently splits it into two buckets for any
+                # consumer that groups by layer — which is the measurement split's
+                # whole purpose (KTD9).
+                add(_mem_name(rel), rel, "local-fallback", _read_body(store, rel, max_body))
             notes.append("local index: %s (%s)" % (lres.status, lres.reason))
         except Exception:
             notes.append("local index errored")

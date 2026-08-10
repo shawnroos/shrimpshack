@@ -89,7 +89,7 @@ def state_dir(flag_dir=None):
     if env:
         return env
     home = os.path.expanduser("~")
-    slug = "-" + home.lstrip("/").replace("/", "-")
+    slug = scope.slugify(home)
     return os.path.join(home, ".claude", "projects", slug, "recall-state")
 
 
