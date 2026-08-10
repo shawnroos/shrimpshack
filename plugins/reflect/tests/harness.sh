@@ -64,27 +64,60 @@ fi
 
 # ------------------------------------------------------------------ reconciler
 echo "== reconciler =="
-# Gate on qmd being RESPONSIVE, not merely present. `command -v qmd` only proves the
-# binary exists, and this box's failure mode is a qmd that answers `--version` fine
-# while real commands hang past 25s — so this block flaked, a different assertion
-# failing on each run with no code change between. That is the same distinction the
-# whole plugin now makes at runtime (absent is handled, wedged is not), and the
-# Verification Contract forbids depending on a healthy qmd anywhere.
+# The reconcile block runs against a STUB qmd, not the live one.
 #
-# There is no `timeout` binary on this machine — a check that assumes one silently
-# PASSES — so the probe is the background-and-kill idiom used elsewhere in this file.
-qmd_responsive() {
-  command -v qmd >/dev/null 2>&1 || return 1
-  ( qmd collection list >/dev/null 2>&1 ) & local p=$!
-  local i=0
-  while [ "$i" -lt 10 ]; do
-    kill -0 "$p" 2>/dev/null || { wait "$p" 2>/dev/null; return $?; }
-    sleep 1; i=$((i+1))
-  done
-  kill -9 "$p" 2>/dev/null; wait "$p" 2>/dev/null || :
-  return 1
-}
-if qmd_responsive; then
+# It used to shell the real binary, and qmd's collection state is GLOBAL on this
+# machine — 13 collections visible repo-wide, `claude-handoffs` already present from
+# an earlier /reflect — so the block's own `qmd init` in a temp dir isolated nothing
+# and concurrent runs shared one daemon. Worse, the daemon answers intermittently, so
+# a run could pass a health probe and then hang mid-block; a different assertion
+# failed on each run with no code change between. Gating on responsiveness only
+# converted those false failures into skipped coverage.
+#
+# A stub removes the dependency entirely: the assertions are about what the
+# RECONCILER does with collections, never about qmd's own behavior, so modelling
+# collection state in a file tests exactly as much and always runs. The Verification
+# Contract's rule that nothing may depend on a healthy qmd now holds here too.
+echo "== qmd reconcile (stubbed) =="
+QSTUB="$ROOT/qmd-stub"; mkdir -p "$QSTUB"
+QSTATE="$ROOT/qmd-collections"; : > "$QSTATE"
+cat > "$QSTUB/qmd" <<'QMDEOF'
+#!/bin/sh
+# Minimal qmd modelling ONLY what qmd-reconcile-collections.sh and this harness
+# call: one line per collection in $QMD_STUB_STATE, "<name> <path>".
+state="${QMD_STUB_STATE:?}"
+case "$1" in
+  init) exit 0 ;;
+  embed) exit 0 ;;
+  collection)
+    shift
+    case "$1" in
+      show) grep -q "^$2 " "$state" 2>/dev/null && exit 0 || exit 1 ;;
+      list) [ -s "$state" ] || { echo "Collections (0):"; exit 0; }
+            echo "Collections ($(grep -c . "$state")):"
+            while read -r n p; do [ -n "$n" ] && echo "$n (qmd://$n/)  $p"; done < "$state"
+            exit 0 ;;
+      add)  name=""; path=""
+            shift
+            while [ $# -gt 0 ]; do
+              case "$1" in --name) name="$2"; shift 2 ;; *) path="$1"; shift ;; esac
+            done
+            [ -n "$name" ] || name="$(basename "$path")"
+            grep -q "^$name " "$state" 2>/dev/null && exit 0
+            echo "$name $path" >> "$state"; exit 0 ;;
+      rename) sed_tmp="$state.t"; awk -v o="$2" -v n="$3" '{ if ($1==o) $1=n; print }' \
+                "$state" > "$sed_tmp" && mv "$sed_tmp" "$state"; exit 0 ;;
+      *) exit 1 ;;
+    esac ;;
+  *) exit 1 ;;
+esac
+QMDEOF
+chmod +x "$QSTUB/qmd"
+QMD_PREV_PATH="$PATH"
+export QMD_STUB_STATE="$QSTATE"
+export PATH="$QSTUB:$PATH"
+
+if command -v qmd >/dev/null 2>&1; then
   R="$ROOT/recon"; mkdir -p "$R"; cd "$R"
   qmd init >/dev/null 2>&1
   mkdir -p mem doc-store/brainstorms doc-store/handoffs foreign
@@ -92,7 +125,7 @@ if qmd_responsive; then
   printf '# b\nbeta brainstorm\n' > doc-store/brainstorms/b1.md
   printf '# h\nhandoff note\n' > doc-store/handoffs/h1.md
   printf '# f\nforeign content\n' > foreign/f1.md
-  # seed a foreign (non-claude-) collection that must remain untouched
+  # a foreign (non-claude-) collection that must remain untouched
   qmd collection add ./foreign >/dev/null 2>&1
   qmd collection rename foreign keepme-foreign >/dev/null 2>&1
 
@@ -123,8 +156,10 @@ if qmd_responsive; then
 else
   # Say it out loud. A silently skipped block reads as coverage that ran, which is
   # the failure mode this plugin exists to fix — reported, not swallowed.
-  echo "  skip - qmd reconcile block (qmd absent or unresponsive; not a failure)"
+  echo "  skip - qmd reconcile block (stub not runnable; not a failure)"
 fi
+# Take the stub back off PATH: every later block must see the real environment.
+PATH="$QMD_PREV_PATH"; unset QMD_STUB_STATE
 # qmd-absent fallback (runs regardless of env): reconciler skips cleanly, exit 0
 if PATH="/usr/bin:/bin" bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1; then
   ok "reconciler skips cleanly when qmd is absent (exit 0)"
