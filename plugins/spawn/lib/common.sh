@@ -386,3 +386,41 @@ spawn::supervising_label() {
     SUPERVISOR_LABEL="$row"
     return 0
 }
+
+# ---------------------------------------------------------------------------
+# spawn::models_grammar <models-json-path>
+#
+# The family -> tier -> alias grammar, normalized, as one JSON object on stdout.
+# ALWAYS prints something parseable: a missing file, an unreadable one, a
+# non-object, or a jq failure all collapse to the empty grammar, because the
+# caller feeds this straight into --argjson on the one arm of --describe that
+# has to answer under any conditions.
+#
+# WHY IT IS HERE. The F4 extraction pulled the jq DEFS
+# (SPAWN_MODELS_GRAMMAR_JQ_DEF) into this file and left the ~11 lines of bash
+# around them duplicated in lens.sh and launch.sh — read the file, guard
+# emptiness, and repeat the fallback literal three times each. Half an
+# extraction: the part that was easy to share was shared, and the part that
+# actually drifts (a fallback literal written six times across two files) was
+# not. lens.sh's copy had even acquired an extra `aliases` key in its first
+# literal that its own jq program never produces.
+#
+# Callers that need a DIFFERENT projection (spawnctl's table_json adds
+# `aliases`) keep their own jq program — what is shared is the read-guard-
+# fallback shape, not the projection.
+spawn::models_grammar() {
+    local path="$1" empty='{"families":{},"no_family_alias":null,"chain_policy":{}}' out
+    if [ ! -f "$path" ]; then
+        printf '%s' "$empty"
+        return 0
+    fi
+    out="$(jq -c "$SPAWN_MODELS_GRAMMAR_JQ_DEF"'
+        if (type == "object") then {
+            families: safe_families,
+            no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
+            chain_policy: safe_chain_policy
+        } else {families:{}, no_family_alias:null, chain_policy:{}} end
+    ' < "$path" 2>/dev/null)" || out=""
+    [ -n "$out" ] || out="$empty"
+    printf '%s' "$out"
+}

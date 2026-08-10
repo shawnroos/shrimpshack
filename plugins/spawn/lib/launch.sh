@@ -200,6 +200,7 @@ die() {
 # it reaches the handle.
 TMPWORK=""
 CHILD_PID=""
+ENSURE_TMP=""
 
 # TERM → bounded poll → KILL → reap (the escalation spawnctl's stop uses).
 # Reaping matters as much as signalling: an unreaped `claude` re-parented to
@@ -224,6 +225,9 @@ cleanup() {
     # (or a Ctrl-C) end the `claude` underneath instead of orphaning it (R2).
     reap_child
     [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
+    # The preflight scratch file exists BEFORE TMPWORK does, so it needs its own
+    # line here rather than riding along inside the work directory.
+    [ -n "$ENSURE_TMP" ] && rm -f "$ENSURE_TMP" 2>/dev/null
     return 0
 }
 trap cleanup EXIT
@@ -309,17 +313,7 @@ emit_describe() {
     # unparsed). MODELS_JSON is already this script's global for the launched
     # session's context window; reused here rather than re-derived.
     local grammar
-    grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
-    if [ -f "$MODELS_JSON" ]; then
-        grammar="$(jq -c "$SPAWN_MODELS_GRAMMAR_JQ_DEF"'
-            if (type == "object") then {
-                families: safe_families,
-                no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
-                chain_policy: safe_chain_policy
-            } else {families:{}, no_family_alias:null, chain_policy:{}} end
-        ' < "$MODELS_JSON" 2>/dev/null)" || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
-        [ -n "$grammar" ] || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
-    fi
+    grammar="$(spawn::models_grammar "$MODELS_JSON")"
 
     ev="$(jq -n \
         --arg r_usage "$(remedy_for usage)" \
@@ -503,8 +497,43 @@ fi
 # vocabulary (error enum + detail + the null handle fields), with ensure's full
 # object under `preflight` so nothing is lost. One object on stdout (KTD2).
 # ---------------------------------------------------------------------------
-ENSURE_OUT="$(bash "$CTL" ensure "$ALIAS")"
+# Run in the BACKGROUND with an explicit `wait`, matching lens.sh — which
+# documents why at length: a `$( ... )` command substitution is a FOREGROUND
+# child, and bash defers every trap until a foreground child returns. Preflight
+# can sit here for the lock wait plus a gateway start, so a TERM arriving in
+# that window was ignored until ensure finished on its own.
+#
+# This file had the sibling's reasoning available and did the opposite, with no
+# note saying why. Two consequences, and the second is the real one:
+#   * nothing was leaking TODAY only because tmpwork() runs AFTER preflight —
+#     an accident of ordering, not a decision, and moving one line would have
+#     silently reintroduced the leak lens.sh wrote three paragraphs about;
+#   * the ensure CHILD was never killed. It holds the control lock and may be
+#     starting a gateway, so a cancelled launch left it running unsupervised.
+#     CHILD_PID + reap_child already existed here for the seed run; preflight
+#     just was not using them.
+# Also suppressing ensure's stderr, as lens.sh does: its diagnostics were
+# interleaving with this script's own.
+# mktemp CAN fail here — an unwritable TMPDIR is a real state, and this line
+# now runs BEFORE tmpwork(), which used to be the first thing to touch TMPDIR
+# and owns the friendly refusal for it. Backgrounding preflight moved that
+# first touch earlier, so the refusal has to move with it: without this the
+# redirect below gets an empty path and the script dies with no JSON at all,
+# breaking KTD2 on a path regressions.bats already pins. Same code, same enum
+# and same remedy shape as tmpwork's, deliberately.
+ENSURE_TMP="$(umask 077; mktemp "${TMPDIR:-/tmp}/gwlaunch-ensure.XXXXXX")" || {
+    printf '✗ cannot create a temp file\n' >&2
+    REMEDY="Point TMPDIR at a writable directory and call again. Nothing was seeded, so no session exists to clean up." \
+        emit_error 2 "usage" "cannot create a temp file under ${TMPDIR:-/tmp}"
+    exit 2; }
+bash "$CTL" ensure "$ALIAS" > "$ENSURE_TMP" 2>/dev/null &
+CHILD_PID=$!
+wait "$CHILD_PID"
 ENSURE_RC=$?
+CHILD_PID=""
+ENSURE_OUT="$(cat "$ENSURE_TMP" 2>/dev/null)"
+rm -f "$ENSURE_TMP" 2>/dev/null
+ENSURE_TMP=""
 if [ "$ENSURE_RC" -ne 0 ]; then
     # Enum from the CODE, which KTD2 defines — never re-parsed out of prose. The
     # table lives in common.sh (R23), and spawnctl derives its own `error` from

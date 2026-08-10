@@ -326,17 +326,7 @@ emit_describe() {
     # needs to answer what the grammar IS.
     local models_json grammar
     models_json="${SPAWN_MODELS_JSON:-$SCRIPT_DIR/models.json}"
-    grammar='{"aliases":{},"families":{},"no_family_alias":null,"chain_policy":{}}'
-    if [ -f "$models_json" ]; then
-        grammar="$(jq -c "$SPAWN_MODELS_GRAMMAR_JQ_DEF"'
-            if (type == "object") then {
-                families: safe_families,
-                no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
-                chain_policy: safe_chain_policy
-            } else {families:{}, no_family_alias:null, chain_policy:{}} end
-        ' < "$models_json" 2>/dev/null)" || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
-        [ -n "$grammar" ] || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
-    fi
+    grammar="$(spawn::models_grammar "$models_json")"
 
     ev="$(jq -n \
         --arg r_usage "$(remedy_for usage)" \
