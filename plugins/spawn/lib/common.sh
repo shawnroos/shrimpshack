@@ -20,17 +20,25 @@
 #   * the server.token awk parsers, and tmpwork() (whose mktemp template and
 #     comment name the script they belong to).
 #
-# This file prints NOTHING to stderr and holds no diagnostics of its own, which
-# is why it does not SOURCE sanitize.sh. The escapes.bats sink lint still scans
-# it — see the annotated carve-out there.
+# WHAT THIS FILE DOES AND DOES NOT DO WITH THE TERMINAL
 #
-# It does, however, CALL spawn::sanitize_for_display — in spawn::emit_error, on
-# `detail` and on `alias`. That dependency arrived with the shared failure
-# envelope, and the header used to say flatly "it has no terminal sink to
-# defend", which was true when written and is not now. Every current consumer
-# sources sanitize.sh before this file, so nothing is broken — but a future one
-# that sources common.sh alone would fail at the moment it tried to report an
-# error, which is the worst possible moment. Source sanitize.sh first.
+# It holds no diagnostics of its own and does not SOURCE sanitize.sh. The
+# escapes.bats sink lint still scans it — see the annotated carve-out there.
+#
+# It DOES print to stderr, and it DOES call spawn::sanitize_for_display: in
+# spawn::emit_error (on `detail` and `alias`) and in die(), which prints its
+# message through the sanitizing chokepoint. Both arrived with the shared
+# failure path, and the header used to state the opposite on both counts.
+#
+# The consequence for a CONSUMER: source sanitize.sh before this file. Every
+# current one does, so nothing is broken today — but a future consumer that
+# sourced common.sh alone would fail at the moment it tried to report an error,
+# which is the worst possible moment to discover a missing dependency.
+#
+# This sentence has been corrected twice. The first correction fixed only the
+# sanitize half and left "prints NOTHING to stderr" standing — which the very
+# commit that prompted the correction had already falsified. Hence stating both
+# halves together rather than patching the same claim a third time.
 
 # ---------------------------------------------------------------------------
 # ${VAR} expansion. The gateway expands env references in server.token, so a
@@ -564,4 +572,63 @@ die() {
     printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
     emit_error "$code" "$err" "$*"
     exit "$code"
+}
+
+# ---------------------------------------------------------------------------
+# reap_child — TERM -> bounded poll -> KILL -> REAP the caller's CHILD_PID.
+#
+# Both model surfaces run their long operations in a BACKGROUND child with an
+# explicit `wait`, because bash defers every trap while blocked in a foreground
+# child. That makes cancellation work; this makes it complete. Signalling alone
+# is not enough: the child may itself be blocked in a foreground call (the
+# preflight child is `spawnctl ensure`, sitting in a curl probe with its own
+# trap deferred), so it can outlive the parent still holding the control lock.
+# Reaping also matters on its own — an unreaped child re-parented to init keeps
+# whatever it holds for as long as it lives.
+#
+# CHILD_PID is the CALLER's, read by the same dynamic scoping `emit` uses for
+# EMITTED, and defaulted for the same reason: every script here runs under
+# `set -u`, where an undefined global is fatal.
+#
+# It lives here because it was byte-identical in launch.sh and lens.sh — and it
+# got that way DURING the review round that had just collapsed `die` for the
+# same reason, two commits earlier. A 4-line duplicate was closed and a 12-line
+# one opened in the same two files. tests/unit/escapes.bats now scans for exact
+# duplicate function bodies so that cannot happen quietly again.
+reap_child() {
+    [ -n "${CHILD_PID:-}" ] || return 0
+    kill -TERM "$CHILD_PID" 2>/dev/null
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        kill -0 "$CHILD_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -0 "$CHILD_PID" 2>/dev/null && kill -KILL "$CHILD_PID" 2>/dev/null
+    wait "$CHILD_PID" 2>/dev/null
+    CHILD_PID=""
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# need_jq — refuse, in the contract's own shape, when the encoder is missing.
+#
+# "Exactly one JSON object on stdout, ALWAYS" includes the path where jq itself
+# is absent; this used to exit 2 printing nothing, which is the one failure a
+# consumer cannot distinguish from a crash.
+#
+# It goes through the caller's `emit_error`, resolved at call time, so each
+# surface still emits its own envelope and its own null-field list — the same
+# split `die` makes. That is also what made the two copies byte-identical:
+# routing them through emit_error removed their last per-surface difference, so
+# the fix for one duplication created another. Shared now, once.
+#
+# spawnctl.sh and setup-lib.sh keep their own need_jq: theirs report a `verb`
+# rather than an alias, and both define it after sourcing this file.
+need_jq() {
+    command -v jq >/dev/null 2>&1 || {
+        printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
+        REMEDY="Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it." \
+            emit_error 2 "usage" "jq is required: the contract is exactly one JSON object on stdout, and jq is the encoder"
+        exit 2
+    }
 }

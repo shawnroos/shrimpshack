@@ -764,3 +764,83 @@ terminal_sink_lint() {
     run terminal_sink_lint "$WORK/liblint5"
     [ "$status" -eq 0 ]
 }
+
+@test "lint: no two shipped scripts carry a byte-identical function body" {
+    # THE GATE FOR CRITERION 4, and it exists because judgement kept failing at
+    # it. Over one review round: a 4-line duplicate (die) was collapsed, and two
+    # commits later a 12-line one (reap_child) was created by copy-pasting
+    # between the same two files. A separate fix then made need_jq identical by
+    # removing its last per-surface difference — the fix for one duplication
+    # manufactured another.
+    #
+    # None of that was caught by reading, by a green suite, or by my own scan,
+    # which I ran once and then quoted as current after changing the code twice.
+    # A mechanical check that runs EVERY time is the only version of this that
+    # stays true.
+    #
+    # Bodies are compared with comments and blank lines stripped and whitespace
+    # collapsed, so two copies cannot be excused by differing commentary — that
+    # is exactly how the historical BIN_CANDIDATES pair survived.
+    #
+    # Threshold of 3 code lines: below that, identical bodies are coincidence
+    # (`return 0`), not duplication.
+    local report
+    report="$(python3 - "$LIB" <<'PYEOF'
+import sys, pathlib, re, hashlib
+lib = pathlib.Path(sys.argv[1])
+funcs = {}
+for f in sorted(lib.glob("*.sh")):
+    lines = f.read_text().split("\n"); i = 0
+    while i < len(lines):
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_:]*)\(\)\s*\{\s*$', lines[i])
+        if m:
+            name = m.group(1); body = []; depth = 1; j = i + 1
+            while j < len(lines) and depth > 0:
+                if lines[j].strip() == "}": depth -= 1
+                if depth == 0: break
+                body.append(lines[j]); j += 1
+            norm = [re.sub(r'\s+', ' ', l.strip()) for l in body
+                    if l.strip() and not l.strip().startswith("#")]
+            if len(norm) >= 3:
+                key = hashlib.sha256("\n".join(norm).encode()).hexdigest()
+                funcs.setdefault(key, []).append((f.name, name, len(norm)))
+            i = j
+        i += 1
+for group in funcs.values():
+    where = sorted({(a, b) for a, b, _ in group})
+    if len(where) > 1:
+        print("DUPLICATE (%d code lines): %s" % (
+            group[0][2], ", ".join("%s:%s" % w for w in where)))
+PYEOF
+)"
+    if [ -n "$report" ]; then
+        echo "$report"
+        echo "Move the shared body into common.sh (or secrets.sh) and inherit it."
+        return 1
+    fi
+}
+
+@test "lint self-test: the duplicate scan FAILS on a planted copy" {
+    # A detector never seen detecting is not evidence. This plants the same
+    # function in two shipped files, asserts the scan fires, and removes it.
+    local a="$LIB/sanitize.sh" b="$LIB/secrets.sh"
+    cp "$a" "$BATS_TEST_TMPDIR/a.bak"; cp "$b" "$BATS_TEST_TMPDIR/b.bak"
+    local plant='
+_dupe_plant_probe() {
+    local x="$1" y="$2"
+    printf "%s\n" "$x"
+    printf "%s\n" "$y"
+}'
+    printf '%s\n' "$plant" >> "$a"
+    printf '%s\n' "$plant" >> "$b"
+
+    run bats "$BATS_TEST_FILENAME" -f 'no two shipped scripts carry a byte-identical'
+    local planted_status="$status" planted_out="$output"
+
+    cat "$BATS_TEST_TMPDIR/a.bak" > "$a"
+    cat "$BATS_TEST_TMPDIR/b.bak" > "$b"
+
+    # Asserted AFTER restoring, so a failure here cannot leave the tree dirty.
+    [ "$planted_status" -ne 0 ]
+    echo "$planted_out" | grep -q '_dupe_plant_probe'
+}

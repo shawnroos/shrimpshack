@@ -158,19 +158,8 @@ ENSURE_TMP=""
 # TERM → bounded poll → KILL → reap (the escalation spawnctl's stop uses).
 # Reaping matters as much as signalling: an unreaped `claude` re-parented to
 # init keeps the gateway token in its environment for as long as it lives.
-reap_child() {
-    [ -n "$CHILD_PID" ] || return 0
-    kill -TERM "$CHILD_PID" 2>/dev/null
-    local i
-    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-        kill -0 "$CHILD_PID" 2>/dev/null || break
-        sleep 0.1
-    done
-    kill -0 "$CHILD_PID" 2>/dev/null && kill -KILL "$CHILD_PID" 2>/dev/null
-    wait "$CHILD_PID" 2>/dev/null
-    CHILD_PID=""
-    return 0
-}
+# reap_child() is inherited from common.sh — it was byte-identical here and in
+# the sibling surface, which is the module boundary saying where it belongs.
 
 cleanup() {
     # Kill and reap the seed child before removing the scratch its output is
@@ -208,20 +197,8 @@ tmpwork() {
     fi
 }
 
-need_jq() {
-    command -v jq >/dev/null 2>&1 || {
-        printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
-        # THROUGH emit_error, not a hand-written string. This used to spell the
-        # null-field list out a second time, one function below the wrapper that
-        # names it once — the exact artefact spawn::emit_error was extracted to
-        # delete, reintroduced in the same file by the extraction that deleted
-        # it. emit_error's bash tier already covers the no-jq case, which is the
-        # only case that reaches here, so the list has one home again.
-        REMEDY="Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it." \
-            emit_error 2 "usage" "jq is required: the contract is exactly one JSON object on stdout, and jq is the encoder"
-        exit 2
-    }
-}
+# need_jq() is inherited from common.sh; it routes through this file's own
+# emit_error, so the envelope stays per-surface while the shape is shared.
 
 # ---------------------------------------------------------------------------
 # Alias grammar (KTD5). Checked BEFORE any network call and before the alias is
