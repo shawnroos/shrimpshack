@@ -1,6 +1,6 @@
 ---
-description: Ask a model the local Superagent Gateway serves — one tool-less turn, one answer back as data. No session, no tab, no tools on the far side.
-argument-hint: "prose — name a model family (and optionally a tier), then say what you want asked"
+description: Ask another model a question and get the answer back as data — one turn, no session, and no tools on the far side, so it can read what you send and answer, nothing else.
+argument-hint: "prose — name a model (and optionally a tier), then say what you want asked"
 ---
 
 Run **one tool-less turn** against a named gateway alias and bring the answer back as data.

@@ -5,10 +5,8 @@
 Claude Code talks to Claude. This plugin lets it talk to GPT, Kimi, GLM, or
 anything else — without leaving your session, and without changing how you work.
 
-It does that through a small program on your Mac called the Superagent Gateway.
-The gateway sits at `127.0.0.1:4000`, speaks Claude's API language, and forwards
-your request to whichever model you asked for. Nothing about your work leaves
-your machine except the request itself.
+Everything runs on your Mac. Your prompt goes out to the model you asked for and
+the answer comes back — nothing else about your work leaves the machine.
 
 ---
 
@@ -24,9 +22,9 @@ Then, once:
 /spawn:setup
 ```
 
-Setup does the whole job: downloads and builds the gateway, asks for your
-OpenRouter key and stores it in the macOS Keychain, wires up your shell, starts
-everything, and then proves it works — it sends a real request to a real model,
+Setup does the whole job: installs what it needs, asks for your OpenRouter key
+and stores it in the macOS Keychain, wires up your shell, starts everything, and
+then proves it works — it sends a real request to a real model,
 and separately checks that a request with no credentials is *rejected*. It only
 reports success if both are true.
 
@@ -39,7 +37,7 @@ where the other models come from, and it's what your key pays for.
 
 ---
 
-## The four things you can do
+## What you can do
 
 ### Ask another model a question
 
@@ -83,29 +81,15 @@ somewhere you'd like a genuinely separate perspective.
 /spawn:report
 ```
 
-Tells you whether the gateway is running and which models it's serving. It finds
-out by actually asking the gateway, not by reading a file that claims to know —
-so the answer is true even if something crashed messily.
+Tells you whether everything's working and which models are available. It finds
+out by actually asking, not by reading a file that claims to know — so the answer
+is true even if something crashed messily.
 
 Add a word to act instead of look:
 
 ```
 /spawn:report restart
 ```
-
-### Use it without Claude Code
-
-Setup puts a `gw` command on your PATH:
-
-```
-gw status          is it running?
-gw start           start it
-gw stop            stop it
-gw log             watch what it's doing
-gw claude          open Claude Code pointed at the gateway
-```
-
----
 
 ## If you want to script it
 
@@ -142,11 +126,11 @@ out:
 |---|---|
 | `0` | it worked |
 | `2` | you asked for something impossible — fix the call |
-| `3` | the gateway isn't reachable |
+| `3` | it isn't reachable — try `/spawn:report` |
 | `4` | that model isn't being served — the response lists which are |
 | `5` | the provider failed — `error` says how |
 | `6` | it took too long and was cancelled cleanly |
-| `7` | the gateway rejected the credentials |
+| `7` | the credentials were rejected |
 
 And every script will describe itself, so a script can ask rather than assume:
 
@@ -160,11 +144,11 @@ bash lib/lens.sh --describe | jq '.families'
 
 Your OpenRouter key lives in the macOS Keychain. It is never written into a
 command line, a log file, or anything this plugin generates. When a script needs
-to hand it to the gateway, it does so through a temporary file that only you can
-read, and deletes it in the same breath.
+to hand it over, it does so through a temporary file that only you can read, and
+deletes it in the same breath.
 
-The one place a credential is deliberately shared is the local gateway token,
-which only works on `127.0.0.1` and is trivial to rotate:
+There is a second credential used only between the pieces on your own machine.
+It is worthless off `127.0.0.1`, and either can be replaced at any time:
 
 ```
 /spawn:setup --rotate-gateway-token

@@ -1,6 +1,6 @@
 ---
-description: Create and seed a resumable Claude Code session on a gateway alias, and print an attach handle you can use whenever you like.
-argument-hint: "prose — name a model family (and optionally a tier), then give the opening prompt"
+description: Start a resumable Claude Code session on another model and print an attach handle you can use whenever you like. Nothing opens; the first turn runs headlessly.
+argument-hint: "prose — name a model (and optionally a tier), then give the opening prompt"
 ---
 
 **Create and seed a resumable Claude Code session** on a named gateway alias and hand back an attach handle. Nothing opens a terminal: the first turn runs headlessly, the session lands on disk, and you get a paste-ready attach command.
