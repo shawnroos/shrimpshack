@@ -39,6 +39,14 @@
 #
 #   env: MEMORY_DIR                 override the store (tests)
 #        MEMORY_TRIGGER_FLAG_DIR    override the per-session dedupe flag dir
+#        MEMORY_TRIGGER_PREFILTER_AUDIT=1
+#                                   do not trust the grep prefilter's "no" — fall
+#                                   through to python anyway and report any command
+#                                   it rejected that the matcher actually matches.
+#                                   Costs the full ~89ms on every call, so it is for
+#                                   checking the mechanism is honest, not for daily
+#                                   use. A disagreement prints to stderr and lands in
+#                                   RECALL.log as `prefilter-disagreement`.
 set -u
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -63,7 +71,6 @@ trap 'rm -f "$TMPIN"' EXIT
 cat > "$TMPIN" 2>/dev/null || exit 0
 
 CMD="$(jq -r '.tool_input.command // empty' < "$TMPIN" 2>/dev/null)" || exit 0
-SESSION="$(jq -r '.session_id // empty' < "$TMPIN" 2>/dev/null)" || true
 
 # 3. Nothing to match against.
 [ -n "$CMD" ] || exit 0
@@ -82,18 +89,64 @@ if [ -s "$PREFILTER" ]; then
   #
   # -i is REQUIRED: the matcher compiles with re.I, and a case-sensitive prefilter
   # lost exactly 2 nudges across those 480 commands.
-  printf '%s' "$CMD" | grep -qiEf "$PREFILTER" 2>/dev/null
+  # A NON-ASCII command is never judged by grep. Case folding is symmetric, and the
+  # compile-side gate only checks the PATTERN's bytes — which leaves the command side
+  # open. Python's matcher folds Unicode (`re.I`, no `re.ASCII`), so the plain ASCII
+  # pattern `pip install` matches the command `pıp install` (U+0131 dotless i, the
+  # classic Turkish-keyboard typo); K U+212A and ſ U+017F fold onto k and s the same
+  # way. No grep folds any of them, under any locale, so grep says no, the matcher
+  # says yes, and the nudge is lost silently. Non-ASCII commands are rare, so falling
+  # through costs almost nothing.
+  #
+  # LC_ALL=C pins the fold on everything else. Without it, `grep -i` folds per the
+  # ambient locale, and a Turkish/az locale folds I to ı — narrowing the prefilter on
+  # glibc in the other direction. macOS libc happens not to implement that fold, so
+  # this is the class of bug that passes here and breaks on a Linux user's box.
+  #
+  # KNOWINGLY UNTESTED: removing this pin does not fail the suite, because no locale
+  # on this machine reproduces the divergence. Proving it needs a glibc box with
+  # tr_TR.UTF-8 installed. Everything else in this block IS pinned by a test; this one
+  # line rests on the argument above, so do not "simplify" it away.
+  case "$CMD" in
+    *[![:ascii:]]*)
+      RC=0 ;;
+    *)
+      printf '%s' "$CMD" | LC_ALL=C grep -qiEf "$PREFILTER" 2>/dev/null
+      RC=$? ;;
+  esac
+  # Captured on the very next line on purpose: the reasoning below is long, and
+  # although comments do not clobber `$?`, any command someone later inserts between
+  # the pipeline and the test would silently retarget it.
+  #
   # ONLY exit 1 means "no match". Exit 2 is an unparseable pattern file and 127 is
   # no grep at all; reading either as "nothing matched" would let ONE bad pattern
   # silently suppress every nudge in the store. Verified: /usr/bin/grep exits 2 on a
   # Python-valid lookahead that ugrep accepts, so which grep resolves would decide
   # whether the mechanism went quiet. Anything but a clean "no" falls through.
-  case $? in 1) exit 0 ;; esac
+  if [ "$RC" -eq 1 ]; then
+    # A wrong reject here is the one failure this mechanism cannot show you: no
+    # error, no log line, no nudge, and RECALL.log is written by python — which a
+    # reject means we never start. Three such bugs have shipped. So there is a way
+    # to ASK: with the audit flag set, a reject falls through to python anyway,
+    # marked, and python records any disagreement. Off by default and deterministic
+    # (a flag, not a sampling probability), so the fast path is unchanged unless you
+    # deliberately turn it on to check the mechanism is honest.
+    if [ "${MEMORY_TRIGGER_PREFILTER_AUDIT:-}" = "1" ]; then
+      AUDIT="--prefilter-rejected"
+    else
+      exit 0
+    fi
+  fi
 fi
+
+# Extracted AFTER the reject, not with the command above: this is a second `jq`
+# process (~6ms of a ~40ms fast path) charged to every Bash call, and only the python
+# invocation below reads it. The temp file is still alive — the trap fires at EXIT.
+SESSION="$(jq -r '.session_id // empty' < "$TMPIN" 2>/dev/null)" || true
 
 # `printf '%s'` does not interpret escapes in its ARGUMENT, so a command full of
 # backslashes reaches python byte-for-byte.
 printf '%s' "$CMD" | python3 "$PLUGIN_ROOT/scripts/scoped-memory/triggers.py" \
-  match --store "$STORE" --session "${SESSION:-}" --cwd "$PWD" 2>/dev/null || true
+  match --store "$STORE" --session "${SESSION:-}" --cwd "$PWD" ${AUDIT:-} 2>/dev/null || true
 
 exit 0

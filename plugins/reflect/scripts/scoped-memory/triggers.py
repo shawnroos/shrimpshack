@@ -118,7 +118,13 @@ maintenance points, two of which live here as REPORTS and one as a WRITER.
 
 CLI:
     triggers.py match  [--store DIR] [--cwd DIR] [--session ID] [--all] [--plain]
-                       # situation text on STDIN; prints hook JSON, or nothing
+                       [--prefilter-rejected]
+                       # situation text on STDIN; prints hook JSON, or nothing.
+                       # --prefilter-rejected says "the grep prefilter said NO about
+                       # this command"; the hook sets it under
+                       # MEMORY_TRIGGER_PREFILTER_AUDIT=1, and any match then means
+                       # the prefilter was WRONG — reported on stderr and logged to
+                       # RECALL.log as `prefilter-disagreement`.
     triggers.py compile [--store DIR]     # see compile-triggers.py for the hook
     triggers.py report [--store DIR] [--backfill] [--misfire] [--json]
                        # lifecycle reports; both sections by default
@@ -130,7 +136,6 @@ import json
 import os
 import re
 import signal
-import subprocess
 import sys
 import tempfile
 import threading
@@ -373,14 +378,28 @@ def prefilter_lines(manifest):
     for entry in manifest.get("entries", []):
         for pat in entry.get("patterns", []):
             src = pat.get("re", "")
-            if _has_nested_bracket(src):
-                # Checked on the SOURCE, because the `[^\n]` rewrite below would
-                # destroy the evidence: `[a[^\n]]` becomes `[a.]`, which looks
-                # perfectly ordinary and would then be emitted NARROWER than the
-                # pattern it came from. Suppress the whole prefilter instead.
+            # ORDER IS LOAD-BEARING, and each step has to run on the right string.
+            #
+            # 1. Nested `[` on the RAW source, because the rewrite below destroys the
+            #    evidence: `[a[^\n]]` becomes `[a.]`, which looks perfectly ordinary
+            #    and would then be emitted NARROWER than the pattern it came from.
+            if _bracket_scan(src)[0]:
                 return None
-            rx = _PREFILTER_STRIP.sub(r"\1", src)
-            rx = _NEGATED_NEWLINE_CLASS.sub(".", rx)
+            # 2. Rewrite `[^\n]` BEFORE looking for backslashes in brackets — it is
+            #    itself a backslash inside a bracket, and the two live patterns that
+            #    use it are safe. Checking first would suppress the prefilter for the
+            #    whole store, which is the regression the old exemption existed to
+            #    stop. After the rewrite the construct is a plain `.` and is gone.
+            rx = _NEGATED_NEWLINE_CLASS.sub(".", src)
+            # 3. NOW any surviving backslash inside a bracket expression is a real
+            #    hazard: POSIX gives it no special meaning, so `[a\]b]` is the set
+            #    {a,\,b} plus a literal `]` to grep but {a,],b} to Python. It also
+            #    covers `\b` inside a class, where Python means BACKSPACE and the
+            #    strip below would blindly delete it — narrowing the pattern.
+            if _bracket_scan(rx)[1]:
+                return None
+            # 4. Strip `\b` last, once no bracket can still contain one.
+            rx = _PREFILTER_STRIP.sub(r"\1", rx)
             if not rx:
                 # A pattern that strips to nothing (e.g. a bare `\b`) would be
                 # DROPPED here while staying live in the manifest — the prefilter
@@ -423,12 +442,15 @@ def prefilter_lines(manifest):
 #:   * **`{,n}`** — a `{0,n}` quantifier to Python, a LITERAL `{,n}` to both greps
 #:     (POSIX leaves the omitted lower bound undefined). No escape, no bracket, so
 #:     nothing else here sees it. `{m,n}` with an explicit lower bound is fine.
-#:   * **A nested `[` inside a bracket expression** (`_has_nested_bracket`) — covers
-#:     POSIX classes and collating elements (`[[:alpha:]]`, `[[.a.]]`, `[[=a=]]`),
-#:     which grep reads as a character class and Python reads as an ordinary set of
-#:     the literal characters. Python emits a FutureWarning for some of these, but
-#:     that is not usable as a detector: `re` caches compiled patterns, so the
+#:   * **Bracket-expression internals** (`_bracket_scan`) — a nested `[` covers POSIX
+#:     classes and collating elements (`[[:alpha:]]`, `[[.a.]]`, `[[=a=]]`), which
+#:     grep reads as a character class and Python as an ordinary set of literals; a
+#:     backslash inside a bracket covers `[a\]b]` and `[x\b]`, where POSIX gives the
+#:     backslash no meaning at all. Python emits a FutureWarning for some of these,
+#:     but that is not usable as a detector: `re` caches compiled patterns, so the
 #:     warning fires once per process and then never again.
+#:   * **Any non-ASCII character** (in `prefilter_is_safe`) — a CONTENT hazard rather
+#:     than a syntax one: `grep -i` folds case per locale, `re.I` folds Unicode.
 #:
 #: `[^\n]` never reaches here: `prefilter_lines` rewrites it to `.` first, which is
 #: exactly equivalent in both engines. Writing it through verbatim was the second
@@ -458,35 +480,48 @@ _UNSAFE_FOR_GREP = re.compile(
 )
 
 
-def _has_nested_bracket(line):
-    """True when a `[` opens inside an already-open bracket expression.
+def _bracket_scan(line):
+    """`(nested_bracket, backslash_inside)` for the bracket expressions in `line`.
 
-    That is POSIX class / collating-element territory (`[[:alpha:]]`), where grep
-    and Python disagree about the whole construct rather than about one character.
-    Deliberately crude — it over-reports rather than parse POSIX bracket rules, and
-    over-reporting only costs the optimization.
+    Two separate hazards, reported separately because `prefilter_lines` has to check
+    them at different points (see the ordering note there):
+
+    * **nested `[`** — POSIX class / collating-element territory (`[[:alpha:]]`,
+      `[[.a.]]`), where grep reads one construct and Python reads a set of literal
+      characters. Whole-construct disagreement.
+    * **backslash inside a bracket** — POSIX gives backslash no special meaning
+      there, so `[a\\]b]` is {a,\\,b} then a literal `]` to grep and {a,],b} to
+      Python; `[x\\b]` is a BACKSPACE to Python and {x,\\,b} to grep. This is the
+      round-1 "known non-goal" that used to be documented and unenforced.
+
+    Deliberately crude: it over-reports rather than implement POSIX bracket parsing,
+    and over-reporting only ever costs the optimization.
     """
     i, n, inside = 0, len(line), False
+    nested = backslash_inside = False
     while i < n:
         c = line[i]
         if c == "\\":
+            if inside:
+                backslash_inside = True
             i += 2
             continue
         if c == "[":
             if inside:
-                return True
-            inside = True
-            # A `]` immediately after `[` or `[^` is a literal member, not the end.
-            i += 1
-            if i < n and line[i] == "^":
+                nested = True
+            else:
+                inside = True
+                # A `]` right after `[` or `[^` is a literal member, not the end.
                 i += 1
-            if i < n and line[i] == "]":
-                i += 1
-            continue
-        if c == "]" and inside:
+                if i < n and line[i] == "^":
+                    i += 1
+                if i < n and line[i] == "]":
+                    i += 1
+                continue
+        elif c == "]" and inside:
             inside = False
         i += 1
-    return False
+    return nested, backslash_inside
 
 #: Rewritten to `.` — not exempted — before the unsafe scan ever sees it. Python's
 #: `[^\n]` and ERE's `.` both mean "any character except newline", and a `.` needs
@@ -506,7 +541,26 @@ def prefilter_is_safe(lines):
     if not lines:
         return False
     for line in lines:
-        if _UNSAFE_FOR_GREP.search(line) or _has_nested_bracket(line):
+        if _UNSAFE_FOR_GREP.search(line):
+            return False
+        if any(_bracket_scan(line)):
+            # Dead on the production path — `prefilter_lines` already returned None
+            # for both bracket hazards before anything reaches here. Kept anyway so
+            # this function is a COMPLETE oracle on its own: the question in the
+            # docstring is "can grep stand in for the matcher over these patterns",
+            # and a version that answers "yes" for `x[[:alpha:]]y` unless you happen
+            # to have called it through one specific caller is a trap for the next
+            # test or tool that asks it directly. A stale safety contract on this
+            # gate has already shipped one bug.
+            return False
+        if any(ord(c) > 127 for c in line):
+            # Case folding is Unicode in Python `re.I` and LOCALE-dependent in
+            # `grep -i`. Under LC_ALL=C — which a hook process can easily inherit,
+            # since it does not get an interactive shell's environment — grep folds
+            # ASCII bytes only, so a pattern like `naïve` misses `NAÏVE` while the
+            # matcher hits it. This is the one hazard that is about pattern CONTENT
+            # rather than syntax, so nothing else here can see it. Zero of the live
+            # store's patterns are non-ASCII, so suppressing costs nothing today.
             return False
     return True
 
@@ -518,6 +572,12 @@ def _grep_parses(lines):
     hook already treats exit >=2 as "maybe" and falls through, so this is a second
     belt — but a cheap one, and it keeps a known-broken artifact off disk.
     """
+    # Imported here, not at module scope: this is the only use site and it runs on
+    # the COMPILE path, while the module is imported afresh on every Bash call by the
+    # match path — which is the latency this whole prefilter exists to cut. Costs
+    # ~5ms of interpreter start that the hot path was paying for nothing.
+    import subprocess
+
     tmp = None
     try:
         fd, tmp = tempfile.mkstemp(suffix=".prefilter-probe")
@@ -536,6 +596,76 @@ def _grep_parses(lines):
                 pass
 
 
+def _unlink_quietly(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _atomic_store_write(store_dir, name, write_fn,
+                        after_replace=None, unlink_dest_on_failure=False):
+    """Replace `store_dir/name` atomically. True on success, False on any failure.
+
+    Stated once because it is subtle and was living in two copies that had already
+    started to diverge. The load-bearing parts:
+
+    * **A UNIQUE temp file in the DESTINATION directory** (KTD18). The repo's older
+      fixed-`.tmp` idiom gives readers atomicity and concurrent writers nothing: two
+      sessions compiling at once open the same temp name and the survivor is a valid
+      file assembled from two different runs.
+    * **A `.`-prefixed temp name**, so `corpus.iter_bodies` skips it even mid-window.
+    * **fsync before replace**, so a crash cannot leave a truncated file live.
+    * **`os.utime` AFTER the replace, and after `after_replace`.** `os.replace` bumps
+      the destination DIRECTORY's mtime and the freshness test folds directory mtimes
+      in, so a file stamped before anything else touches that directory is born older
+      than it and every compile decides it is stale — the mtime skip silently never
+      skips. `after_replace` exists precisely for work that writes another file into
+      the same directory (the manifest writing its prefilter); doing it before the
+      stamp is what keeps the skip honest.
+
+    The two callers deliberately differ on `unlink_dest_on_failure`, and the asymmetry
+    is the point rather than an oversight:
+
+    * the **prefilter** passes True — it is a pure optimization, "missing" means
+      "maybe" and falls through to the matcher, so gone is always safer than stale.
+    * the **manifest** passes False — it is the source of truth, and deleting it on a
+      failed write turns "some triggers may be stale" into "no memory nudges at all".
+      A stale manifest still nudges correctly for every memory that did not change.
+
+    `write_fn(fh)` writes the body; everything else is handled here.
+    """
+    dest = os.path.join(store_dir, name)
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=store_dir, prefix=".%s." % name, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            write_fn(fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, dest)
+        if after_replace is not None:
+            after_replace()
+        try:
+            os.utime(dest, None)
+        except OSError:
+            pass
+        return True
+    except Exception:
+        if tmp:
+            _unlink_quietly(tmp)
+        if unlink_dest_on_failure:
+            # Every failure mode converges on "no prefilter". Removing only the temp
+            # would leave the PREVIOUS manifest's prefilter live beside a manifest
+            # already replaced — and `write_manifest` discards this False and stamps
+            # the manifest anyway, so the freshness skip would call the mismatched
+            # pair current and never retry. That prefilter rejects exactly the
+            # commands the new memory exists to nudge on, for as many sessions as it
+            # takes the store to change again.
+            _unlink_quietly(dest)
+        return False
+
+
 def write_prefilter(store_dir, manifest):
     """Write the grep-able prefilter beside the manifest. Best-effort by design.
 
@@ -551,54 +681,29 @@ def write_prefilter(store_dir, manifest):
         # No prefilter beats a narrow one. Remove any stale file so the hook reads
         # "missing" — which it treats as "maybe" and falls through to python — rather
         # than trusting an artifact that describes a different manifest.
-        try:
-            os.unlink(dest)
-        except OSError:
-            pass
+        _unlink_quietly(dest)
         return False
 
-    tmp = None
-    try:
-        fd, tmp = tempfile.mkstemp(dir=store_dir, prefix=".%s." % PREFILTER_NAME,
-                                   suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(lines))
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, dest)
-        try:
-            os.utime(dest, None)
-        except OSError:
-            pass
-        return True
-    except Exception:
-        if tmp:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-        # Drop the stale destination too, exactly as the unsafe branch above does.
-        # Removing only the temp file would leave the PREVIOUS manifest's prefilter
-        # live beside a manifest that has already been replaced — and since
-        # `write_manifest` discards this False and stamps the manifest mtime anyway,
-        # the compile-side freshness skip would call the pair current and never retry.
-        # A prefilter missing one new memory's patterns rejects exactly the commands
-        # that memory exists to nudge on, for as many sessions as it takes the store
-        # to change again. Every failure mode has to converge on "no prefilter".
-        try:
-            os.unlink(dest)
-        except OSError:
-            pass
-        return False
+    return _atomic_store_write(
+        store_dir, PREFILTER_NAME,
+        lambda fh: fh.write("\n".join(lines) + "\n"),
+        unlink_dest_on_failure=True)
 
 
 #: Serialises the manifest+prefilter PAIR. Dot-prefixed so `corpus.iter_bodies`
 #: skips it, same as the KTD18 temp files.
 PAIR_LOCK_NAME = ".TRIGGERS.lock"
 
+#: How long a compile waits for a peer's pair write before giving up and proceeding
+#: unserialised. Two seconds is ~100x a normal compile and a fifth of the hook's own
+#: 10s timeout, so a wedged holder costs a bounded pause instead of a killed hook.
+#: A parameter rather than a bare constant so tests can inject a short deadline —
+#: otherwise proving the expiry path means a real 2s sleep in the suite.
+PAIR_LOCK_TIMEOUT_S = 2.0
+PAIR_LOCK_POLL_S = 0.01
 
-def _acquire_pair_lock(store_dir):
+
+def _acquire_pair_lock(store_dir, timeout=None):
     """Hold an exclusive lock across the whole manifest+prefilter write, or None.
 
     Each `os.replace` is already atomic (KTD18), but the PAIR is not — and the pair
@@ -610,15 +715,24 @@ def _acquire_pair_lock(store_dir):
     manifest mtime regardless, so the compile-side freshness skip calls the
     mismatched pair current until the store happens to change again.
 
-    Blocking, not try-once. A non-blocking "someone else is compiling, skip" is
-    wrong here: the process that loses the race may be the one holding the FRESHER
+    We WAIT rather than skip. A non-blocking "someone else is compiling, so skip"
+    is wrong: the process that loses the race may be the one holding the FRESHER
     snapshot, and skipping its write leaves the staler pair stamped current — the
-    exact persistence this exists to prevent. A compile is milliseconds, so the wait
-    is bounded by one compile.
+    exact persistence this exists to prevent. A compile is milliseconds, so in the
+    normal case the wait is one compile.
 
-    Best-effort: if locking is unavailable, the write proceeds unserialised, which is
-    what shipped before this lock existed.
+    But the wait is BOUNDED, because an unbounded one has a bad tail: a compile
+    wedged while holding the lock (an fsync stall, a stopped process) would make
+    every later SessionStart block until the hook's own 10s timeout killed it —
+    a silent +10s per session start, for as long as the holder lives. On expiry we
+    proceed unserialised, which is exactly the behaviour that shipped before this
+    lock existed, so the degradation is bounded on both axes.
+
+    Best-effort throughout: if locking is unavailable at all, the write proceeds
+    unserialised too.
     """
+    if timeout is None:
+        timeout = PAIR_LOCK_TIMEOUT_S
     try:
         import fcntl
     except ImportError:
@@ -628,15 +742,44 @@ def _acquire_pair_lock(store_dir):
                      os.O_CREAT | os.O_RDWR, 0o600)
     except OSError:
         return None
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-    except OSError:
+    deadline = time.monotonic() + max(0.0, timeout)
+    expired = False
+    while True:
         try:
-            os.close(fd)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
         except OSError:
-            pass
-        return None
-    return fd
+            if time.monotonic() >= deadline:
+                expired = True
+                break
+            try:
+                time.sleep(PAIR_LOCK_POLL_S)
+            except Exception:
+                break
+        except Exception:
+            break
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    if expired:
+        # Say so. Proceeding unserialised is the sanctioned degradation, but it is
+        # also exactly the mismatched-pair scenario the lock exists to prevent, and
+        # it happens precisely when two writers hold different fresh snapshots. An
+        # expiry that leaves no trace is indistinguishable from a lock that is never
+        # contended — and from one that is permanently broken (bad permissions, a
+        # holder wedged for days). This module's rule is that a silent failure mode
+        # has to be askable; the prefilter got an audit channel, so does this.
+        print("triggers: pair lock timed out after %.1fs — writing the manifest and "
+              "prefilter UNSERIALISED. A concurrent compile may leave the two "
+              "describing different states." % timeout, file=sys.stderr)
+        if telemetry is not None:
+            try:
+                telemetry.append_recall(os.path.join(store_dir, "RECALL.log"),
+                                        None, "pair-lock-timeout", "trigger")
+            except Exception:
+                pass
+    return None
 
 
 def _release_pair_lock(fd):
@@ -658,41 +801,24 @@ def write_manifest(store_dir, manifest):
     manifest and its prefilter are written under one lock so the PAIR is consistent
     too, not just each file (see `_acquire_pair_lock`).
     """
-    dest = os.path.join(store_dir, MANIFEST_NAME)
-    tmp = None
     lock_fd = _acquire_pair_lock(store_dir)
     try:
-        fd, tmp = tempfile.mkstemp(dir=store_dir, prefix=".%s." % MANIFEST_NAME,
-                                   suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        def write_json(fh):
             json.dump(manifest, fh, indent=1, sort_keys=True)
             fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, dest)
-        # Written from the SAME call, under the SAME lock, so the two cannot drift:
-        # a prefilter describing a manifest that no longer exists would reject
-        # nudges the matcher would have made. The lock is what makes that true
-        # across processes — within one process the ordering alone was never enough.
-        write_prefilter(store_dir, manifest)
-        # Stamp the manifest AFTER the replace. `os.replace` bumps the store
-        # directory's own mtime, and the freshness test folds directory mtimes in
-        # (so a DELETED memory invalidates the manifest). Without this the
-        # manifest is born one instant older than the directory it just changed,
-        # and every compile would decide it was stale — the mtime skip would
-        # silently never skip.
-        try:
-            os.utime(dest, None)
-        except OSError:
-            pass
-        return True
-    except Exception:
-        if tmp:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-        return False
+
+        # The prefilter is written from the SAME call, under the SAME lock, so the
+        # two cannot drift: a prefilter describing a manifest that no longer exists
+        # rejects nudges the matcher would have made. The lock is what makes that
+        # true across processes — within one process the ordering alone never was.
+        #
+        # It runs as `after_replace`, i.e. between the manifest's replace and its
+        # mtime stamp, because writing it bumps the store directory's mtime. Stamping
+        # the manifest first would leave it older than the directory it just changed
+        # and the freshness skip would never skip.
+        return _atomic_store_write(
+            store_dir, MANIFEST_NAME, write_json,
+            after_replace=lambda: write_prefilter(store_dir, manifest))
     finally:
         _release_pair_lock(lock_fd)
 
@@ -1209,6 +1335,12 @@ def cmd_match(argv):
     session = _arg(argv, "--session") or ""
     show_all = "--all" in argv
     plain = "--plain" in argv
+    #: The hook sets this only under MEMORY_TRIGGER_PREFILTER_AUDIT=1, and only when
+    #: the grep prefilter said NO. Reaching here at all therefore means the cheap
+    #: reject would have ended the call — so any hit below is a pattern the prefilter
+    #: got WRONG, which is the one failure mode this mechanism otherwise cannot show
+    #: anyone. Without the marker an audit run is indistinguishable from a normal one.
+    prefilter_rejected = "--prefilter-rejected" in argv
     try:
         situation = sys.stdin.read()
     except Exception:
@@ -1217,6 +1349,22 @@ def cmd_match(argv):
     if manifest is None:
         return 0
     hits, timeouts = match(manifest, situation, cwd=cwd)
+    if prefilter_rejected and hits:
+        # RECALL.log is the channel that matters — the hook runs this with stderr
+        # redirected to /dev/null (fail-open, deliberately), so the message below is
+        # only visible when running `triggers.py match --prefilter-rejected` directly.
+        # Every line recorded here is a nudge that IS being lost, silently, in every
+        # session not running the audit.
+        names = ",".join(str(h.get("memory")) for h in hits)
+        print("triggers: PREFILTER DISAGREEMENT — grep rejected a command the "
+              "matcher matches (%s). The prefilter is narrower than the matcher; "
+              "nudges are being lost silently outside audit mode." % names,
+              file=sys.stderr)
+        if telemetry is not None:
+            for h in hits:
+                telemetry.append_recall(os.path.join(store, "RECALL.log"),
+                                        h.get("memory"), "prefilter-disagreement",
+                                        "trigger", session_id=session or None)
     for memory, src in timeouts:
         print("triggers: %s — pattern exceeded its %.3fs evaluation bound, skipped: %s"
               % (memory, PATTERN_BUDGET_S, src[:80]), file=sys.stderr)
