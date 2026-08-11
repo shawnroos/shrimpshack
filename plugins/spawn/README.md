@@ -1,17 +1,182 @@
 # spawn
 
-Run Claude on any model the local Superagent Gateway serves — headlessly for
-skills that need a different-vendor answer (`lib/lens.sh`), or as an attachable
-session (`lib/launch.sh`), over a control layer that owns liveness and startup
-(`lib/spawnctl.sh`).
+**Use a different AI model from inside Claude Code.**
 
-The gateway is a local process that fronts OpenRouter (and anything else its
-config carries) behind an Anthropic-shaped API. This plugin is the control
-surface for it: it decides whether the gateway is up, starts it if not, and then
-either asks a model a question or hands you a session on one.
+Claude Code talks to Claude. This plugin lets it talk to GPT, Kimi, GLM, or
+anything else — without leaving your session, and without changing how you work.
 
-**Requirements:** `bash`, `curl`, `jq`. `python3` and `bats` only for the tests.
-Nothing else — no other shrimpshack plugin, no node (R11).
+It does that through a small program on your Mac called the Superagent Gateway.
+The gateway sits at `127.0.0.1:4000`, speaks Claude's API language, and forwards
+your request to whichever model you asked for. Nothing about your work leaves
+your machine except the request itself.
+
+---
+
+## Install
+
+```
+claude plugin install spawn@shrimpshack
+```
+
+Then, once:
+
+```
+/spawn:setup
+```
+
+Setup does the whole job: downloads and builds the gateway, asks for your
+OpenRouter key and stores it in the macOS Keychain, wires up your shell, starts
+everything, and then proves it works — it sends a real request to a real model,
+and separately checks that a request with no credentials is *rejected*. It only
+reports success if both are true.
+
+You will not be prompted mid-run. If setup needs your permission for something —
+replacing a file you wrote, adding a line to your shell config — it stops and
+tells you exactly what to re-run.
+
+**You need:** a Mac, and an [OpenRouter](https://openrouter.ai) account. That's
+where the other models come from, and it's what your key pays for.
+
+---
+
+## The four things you can do
+
+### Ask another model a question
+
+```
+/spawn:agent ask gpt whether this migration is reversible
+/spawn:agent have kimi look at the diff in /tmp/changes.patch
+```
+
+You get an answer back, in one turn. Say it in plain English — it works out which
+model you meant.
+
+The model on the other end **cannot do anything**. It can't read your files, run
+commands, or change your code. It reads what you sent and answers. That's the
+whole interaction, and it's the point: it's a second opinion, not a second cook
+in the kitchen.
+
+Good for: a different vendor's read on a design, a review of a diff, a sanity
+check on an approach.
+
+### Work inside another model
+
+```
+/spawn:session start a glm session to explore the auth flow
+```
+
+This creates a real, resumable Claude Code session running on a different model.
+Nothing opens on screen — the first turn runs quietly, the session is saved, and
+you get a command you can paste in whenever you want to pick it up.
+
+**Worth understanding before you use it:** that session has your normal
+permissions in the folder you point it at, and a third-party model is deciding
+what to do with them. That's the feature. It's also the reason to think about
+which folder you point it at.
+
+Good for: exploring a problem with a model that thinks differently, or working
+somewhere you'd like a genuinely separate perspective.
+
+### Check on things
+
+```
+/spawn:report
+```
+
+Tells you whether the gateway is running and which models it's serving. It finds
+out by actually asking the gateway, not by reading a file that claims to know —
+so the answer is true even if something crashed messily.
+
+Add a word to act instead of look:
+
+```
+/spawn:report restart
+```
+
+### Use it without Claude Code
+
+Setup puts a `gw` command on your PATH:
+
+```
+gw status          is it running?
+gw start           start it
+gw stop            stop it
+gw log             watch what it's doing
+gw claude          open Claude Code pointed at the gateway
+```
+
+---
+
+## If you want to script it
+
+Everything is a shell script that prints JSON, so you can pipe it to `jq` and
+build on it.
+
+The scripts live in the plugin's `lib/` directory. Inside Claude Code that is
+`${CLAUDE_PLUGIN_ROOT}/lib`. From a plain shell, the tidiest way is to copy the
+small launcher once, so you have a path that does not change when the plugin
+upgrades:
+
+```bash
+mkdir -p ~/.claude/bin
+cp ~/.claude/plugins/cache/shrimpshack/spawn/*/bin/spawn-lens ~/.claude/bin/
+```
+
+Then ask a model anything, from anywhere:
+
+```bash
+printf 'Is this SQL injection-safe?\n' \
+  | ~/.claude/bin/spawn-lens --alias claude-gpt --max-tokens 2048 \
+  | jq -r '.text'
+```
+
+Two things make that pleasant rather than fragile:
+
+**Every script prints exactly one JSON object, always** — whether it worked or
+not. Diagnostics go to stderr. So `| jq` never chokes on a half-written response.
+
+**The exit code tells you what happened**, so you never parse English to find
+out:
+
+| Code | Meaning |
+|---|---|
+| `0` | it worked |
+| `2` | you asked for something impossible — fix the call |
+| `3` | the gateway isn't reachable |
+| `4` | that model isn't being served — the response lists which are |
+| `5` | the provider failed — `error` says how |
+| `6` | it took too long and was cancelled cleanly |
+| `7` | the gateway rejected the credentials |
+
+And every script will describe itself, so a script can ask rather than assume:
+
+```bash
+bash lib/lens.sh --describe | jq '.families'
+```
+
+---
+
+## About your keys
+
+Your OpenRouter key lives in the macOS Keychain. It is never written into a
+command line, a log file, or anything this plugin generates. When a script needs
+to hand it to the gateway, it does so through a temporary file that only you can
+read, and deletes it in the same breath.
+
+The one place a credential is deliberately shared is the local gateway token,
+which only works on `127.0.0.1` and is trivial to rotate:
+
+```
+/spawn:setup --rotate-gateway-token
+/spawn:setup --rotate-openrouter-key
+```
+
+---
+
+## Reference
+
+Everything below is the detailed reference — the scripts, their flags, the
+contracts they publish, and the reasoning behind the parts that look unusual.
 
 ---
 
