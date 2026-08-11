@@ -5,6 +5,40 @@ description: Silent memory hygiene and session consolidation. Reviews memories s
 
 # /reflect — Silent session consolidation
 
+## The output contract — two visible units, and nothing else
+
+This is the first rule, because it is the one most often broken. A reflect run shows the
+user **exactly two things**:
+
+```
+⏺ Reflecting on <subject matter>
+```
+
+…then the work happens out of sight, then **one** closing summary. Nothing in between.
+
+- `<subject matter>` names what this run is consolidating, in the user's terms — what the
+  session was about ("the grep prefilter work", "the WEB-2845 detector fix"), not the
+  machinery ("passes 1-10", "17 memories").
+- **Do the work in ONE batched call, or dispatch it to a background agent.** Ten passes is
+  not ten visible tool calls. A pass that needs several shell steps needs one script, not
+  one call per step.
+- **Never narrate the passes.** No "now updating timestamps", no "checking merge
+  candidates", no per-pass tallies on screen, no thinking-out-loud between steps. The
+  REFLECT.log line is the record; the closing summary is the report.
+- **The closing summary is short**: what changed, plus anything that genuinely needs the
+  human — the three exception conditions below. Never a pass-by-pass transcript.
+
+The measured failure this exists to prevent (2026-08-11): a `/reflect` run produced ~25
+narrated tool calls with commentary between each. The user's correction: *"there's a lot of
+the agent talking through what it's doing instead of using the tool then providing a single
+response."* Memory work is plumbing for the actual task — narrating it displaces the thing
+the user is trying to follow, and the volume buries the one line that matters (an exception,
+a halted cleanup) instead of surfacing it.
+
+`/reflect verbose` is the ONLY mode that prints the pass-by-pass detail.
+
+---
+
 Reflect operates without user involvement. Output goes to `REFLECT.log` in the canonical memory dir — the `$HOME`-derived store `~/.claude/projects/-Users-<you>/memory/` (e.g. `~/.claude/projects/-Users-shawnroos/memory/`) — as a single line per run. This is one fixed store regardless of which project you're working in: `setup.sh` pins Claude Code's native auto-memory directory there via the `autoMemoryDirectory` setting, so a session started inside a project repo doesn't scatter memories to a git-root-derived per-project store. Only interrupt the user for genuine exception conditions (see end of file).
 
 ## Repo-scoped recall (plan 003)
@@ -213,7 +247,11 @@ Examples:
 2026-05-08T19:15:00-07:00 PR_event updated=0 saved=1 merged=0 retired=0 compounded=1 index_tightened=0 captured=2 embedded=2 worktrees_removed=2 triggers_declared=1 triggers_pruned=0
 ```
 
-In verbose mode (`/reflect verbose`): also print the full pass-by-pass summary to screen, ending with the log line. In silent mode: only the log line is written; nothing prints to screen unless an exception is raised.
+In verbose mode (`/reflect verbose`): also print the full pass-by-pass summary to screen, ending with the log line.
+
+In silent mode (the default): the log line is written to `REFLECT.log`, and the screen gets
+the two units from **The output contract** at the top of this file — the `⏺ Reflecting on
+<subject matter>` line, then one closing summary. The passes themselves never appear.
 
 ## Exception conditions — when to interrupt the user
 
