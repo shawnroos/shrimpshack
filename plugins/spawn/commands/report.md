@@ -1,6 +1,6 @@
 ---
-description: Is the local Superagent Gateway up, what is it serving, and is a background job running here? Reports liveness, the served aliases, where it was resolved from, any genuine drift, and this worktree's background jobs with their probed state.
-argument-hint: "(no arguments; add \"start\", \"stop\" or \"restart\" to act on the gateway instead of just reporting)"
+description: Is everything working, which models are available, and is a background job running here? Liveness is a real probe, so the answer is true even after an unclean shutdown.
+argument-hint: "(no arguments; add \"start\", \"stop\" or \"restart\" to act instead of just reporting)"
 ---
 
 **Answer whether the gateway is up and what it serves.** Liveness is a real probe of the gateway's model-list endpoint — the pidfile is never consulted for it, so a stale pidfile over a serving gateway still reports up, and a dead gateway whose pid got recycled still reports down.

@@ -1,6 +1,6 @@
 ---
-description: Start a supervised background agent loop on a gateway alias against a stated contract, and hand back a job handle. Returns immediately; notifies on completion.
-argument-hint: "prose — name a model family (and optionally a tier), then the task, what done means, and what it must hand back"
+description: Run an unattended job on another model against a contract you state up front, and get a handle back immediately. The result is judged against the contract, not the model's account of itself.
+argument-hint: "prose — name a model (and optionally a tier), then the task, what done means, and what it must hand back"
 ---
 
 **Start a supervised asynchronous agent loop** against a named gateway alias and a contract, and return a job handle immediately. The job runs unattended with tools, in a scratchpad inside the current worktree; you get control back at once and a notification when it reaches a terminal state.

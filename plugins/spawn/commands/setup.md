@@ -1,5 +1,5 @@
 ---
-description: Take this Mac from nothing to a working gateway-backed session — acquire and build the Superagent Gateway, capture both credentials into the Keychain, rewrite the gw wrapper, wire Claude Code and Codex, and prove it with a live model round-trip before reporting success.
+description: Set up spawn on this Mac, once — install what it needs, store your OpenRouter key in the Keychain, wire up your harnesses, and prove it works with a live model round-trip before reporting success.
 argument-hint: "(no arguments for the whole path; add \"--rotate-openrouter-key\" or \"--rotate-gateway-token\" to replace a stored credential)"
 ---
 
