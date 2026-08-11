@@ -35,9 +35,10 @@ Ask what you want to be true when the call returns.
 
 Three questions settle almost every case:
 
-1. **Does the far side need tools?** No → `agent`. It is a plain completion: the
-   model cannot read a file, run a command, or edit what it is reviewing, in any
-   configuration. That is a guarantee, not a limitation to work around.
+1. **Does the far side need to LOOK at anything you have not already sent it?**
+   No → `agent`. It is a plain completion — the Claude Code agent loop is not in
+   that path, so tools are off by construction, not by policy. See "what each
+   surface can reach" below, because this is the question people get wrong.
 2. **Do you want to be in the loop?** Yes → `session`. It runs Claude Code's full
    agent loop under YOUR permissions in a directory you pin, with a third-party
    model choosing the actions. That is the feature and the risk in one sentence.
@@ -46,6 +47,59 @@ Three questions settle almost every case:
 
 **When in doubt, prefer the cheaper surface.** `agent` is one HTTP call. Escalate
 when it turns out you needed tools or persistence, not in anticipation.
+
+## What each surface can reach, and how to choose
+
+This is the axis that decides most dispatches, and the one it is easiest to get
+wrong — because "no tools" sounds like a safety feature and reads like a
+limitation only after the answer comes back thin.
+
+| Surface | What the far side can do |
+|---|---|
+| `agent` | **Nothing.** One message in, one answer out. No file reads, no commands, no second turn. |
+| `bg-agent` | `Read`, `Write`, `Edit` **scoped to the worktree**, plus `Glob` and `Grep`, which are allowed unscoped. **No `Bash`** — it cannot run a command, a test, or `git log`. Version-control internals, hooks and agent configuration are denied outright; a path that resolves outside the worktree — an escaping symlink included — falls outside the allow and is refused. |
+| `session` | Claude Code's full loop under **your own** permissions in the directory you pin. |
+
+### The trap: an `agent` reviewer only sees what you thought to include
+
+`agent` is excellent for judgement on material you can hand over whole — a
+design, a piece of prose, a self-contained diff, a decision with its context.
+
+It is **weak for adversarial review of a codebase**, and the reason is worth
+stating because it is not obvious: the far side's coverage is bounded by the
+prompt author's imagination. It cannot grep for the caller you forgot, open the
+sibling file, or check whether the thing the diff claims is also true three
+directories away. **The gap you did not think to include is exactly the gap a
+review exists to find**, so the surface is blind in precisely the place you
+wanted it sharp.
+
+If you catch yourself writing "I will send it the diff plus the context it
+cannot otherwise see" — that sentence is the tell. You are hand-selecting the
+evidence for your own reviewer.
+
+**When the far side needs to go and look, use `bg-agent`.** It gets file-reading
+and search tools, so it can chase what you did not anticipate, and its findings
+are checked against a contract rather than accepted as prose. It searches with
+`Glob` and `Grep` and reads with `Read`; it has no shell, so a question only a
+command can answer — a test run, a `git log` — is not one it can go and settle.
+
+### Grant the least that lets the work happen
+
+The ceiling is set by which surface you reach, not by a flag you pass — there is
+no flag that changes it, because the bound is fixed by which file ran. So the
+choice of surface **is** the choice of permissions, and it is worth making
+deliberately rather than by habit:
+
+- **Judgement on material you can hand over** → `agent`. Nothing can be touched.
+- **Investigation, review, or anything needing discovery** → `bg-agent`. It can
+  read and search; it can also write inside the worktree, so scope the contract
+  to what you actually want changed and let the deliverables check hold it.
+- **Work you intend to supervise interactively** → `session`, understanding it
+  carries your permissions and a third-party model is choosing the actions.
+
+Escalate when the task needs it, not in anticipation — but do not under-grant a
+review into uselessness either. A reviewer that cannot look is a reviewer that
+can only agree with your framing.
 
 ## `bg-agent`: the contract is the whole point
 
