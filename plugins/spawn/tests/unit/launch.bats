@@ -692,7 +692,7 @@ config_write_lint() {   # <script>
     [ "$status" -ne 0 ]
 }
 
-@test "KTD3: the no-write invariant covers the three runtime scripts, and setup.sh is exempt BY NAME" {
+@test "KTD3: the no-write invariant covers the three runtime scripts, and the setup family is exempt BY NAME" {
     # The scope change is worth a test of its own, because "the lint passes" is
     # equally true of a lint that stopped being applied. Both halves are stated
     # here: the runtime list is exactly these three files, and the one file
@@ -704,12 +704,14 @@ config_write_lint() {   # <script>
         [ "$status" -ne 0 ]
     done
 
-    # setup.sh exists, is not in that list, and DOES write a gateway.yaml —
-    # asserting the write is real is what stops this from being a vacuous
-    # exemption for a file that never writes anything.
+    # The setup family (setup.sh and the setup-*.sh scripts it execs) exists,
+    # is not in that list, and DOES write a gateway.yaml — asserting the write
+    # is real is what stops this from being a vacuous exemption for files that
+    # never write anything. Family-scoped rather than pinned to one filename,
+    # so the next code move cannot silently point these greps at the wrong file.
     [ -f "$LIB/setup.sh" ]
-    grep -q 'strip_server_token' "$LIB/setup.sh"
-    grep -q 'staging/\$CONFIG_NAME' "$LIB/setup.sh"
+    grep -q 'strip_server_token' "$LIB"/setup*.sh
+    grep -q 'staging/\$CONFIG_NAME' "$LIB"/setup*.sh
 }
 
 @test "R12 lint self-test: planted cp, tee, sed -i, yq -i and redirect writes each turn the lint red" {
@@ -819,4 +821,73 @@ retire_config_token() {
     run bash -c 'cd "$1" && eval "$2"' _ "$ELSEWHERE" "$attach"
     [ "$status" -eq 0 ]
     invocation "$FAKE_CLAUDE_RECORD_DIR/env" 2 | grep -qx -- "ANTHROPIC_AUTH_TOKEN=$TOKEN"
+}
+
+@test "TERMing launch mid-PREFLIGHT kills the ensure child instead of orphaning it" {
+    # The sibling of the mid-seed test above, and the gap that existed until the
+    # preflight call was aligned with lens.sh. `ensure` was invoked as a
+    # $( ... ) command substitution — a FOREGROUND child — and bash defers every
+    # trap until a foreground child returns, so a TERM arriving during the lock
+    # wait or a gateway start was ignored until ensure finished on its own. The
+    # ensure child HOLDS THE CONTROL LOCK and may be starting a gateway, so a
+    # cancelled launch left it running unsupervised.
+    #
+    # launch.sh resolves spawnctl from its OWN directory, so the only way to
+    # make preflight slow is a lib copy with a slow spawnctl in it. Copying is
+    # the point: it exercises the real resolution rather than a seam that only
+    # exists for tests.
+    local libdir="$WORK/slowlib"
+    mkdir -p "$libdir"
+    cp "$LIB"/launch.sh "$LIB"/common.sh "$LIB"/sanitize.sh "$LIB"/secrets.sh "$libdir/"
+    cp "$LIB"/models.json "$libdir/" 2>/dev/null || true
+
+    # A spawnctl that records its pid, then hangs. It never returns on its own,
+    # so anything that finishes this test is the trap doing its job.
+    cat > "$libdir/spawnctl.sh" <<EOS
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" > "$WORK/ensure.pid"
+sleep 120
+EOS
+    chmod +x "$libdir/spawnctl.sh"
+    printf 'seed me' > "$WORK/seed.txt"
+
+    bash "$libdir/launch.sh" --cwd "$PROJ" --prompt-file "$WORK/seed.txt" --alias alpha \
+        < /dev/null > "$WORK/out" 2> "$WORK/err" &
+    local lpid=$!
+
+    local i epid=""
+    for i in $(seq 1 200); do
+        [ -s "$WORK/ensure.pid" ] && break
+        sleep 0.05
+    done
+    epid="$(head -1 "$WORK/ensure.pid")"
+    [ -n "$epid" ]
+    kill -0 "$epid"
+
+    kill -TERM "$lpid"
+    # Bounded poll, never a bare wait: if the trap regressed, a bare wait would
+    # hang the whole suite for 120s instead of failing this test.
+    for i in $(seq 1 100); do
+        kill -0 "$lpid" 2>/dev/null || break
+        sleep 0.1
+    done
+    run kill -0 "$lpid"
+    [ "$status" -ne 0 ]
+
+    # THE ASSERTION THAT MATTERS, and it is asserted first: the ensure child is
+    # dead. Before the fix it survived, still holding the lock.
+    for i in $(seq 1 50); do
+        kill -0 "$epid" 2>/dev/null || break
+        sleep 0.1
+    done
+    run kill -0 "$epid"
+    [ "$status" -ne 0 ]
+
+    # And the preflight scratch file is gone — it is created BEFORE the work
+    # directory exists, so it needs its own line in cleanup.
+    [ -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'gwlaunch-ensure.*' 2>/dev/null)" ]
+
+    local rc=0
+    wait "$lpid" || rc=$?
+    [ "$rc" -eq 143 ]
 }

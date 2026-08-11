@@ -326,3 +326,40 @@ spawn::token_fallback() {
     fi
     return 1
 }
+
+# ---------------------------------------------------------------------------
+# spawn::resolve_token — the LAST MILE of token resolution, shared.
+#
+# Sets TOKEN in the caller's scope when the env/Keychain chain yields one, and
+# leaves it untouched when it does not (a config-derived token the caller
+# already found must win over nothing).
+#
+# WHY IT IS HERE AND NOT COPY-PASTED. It was copy-pasted: lens.sh and launch.sh
+# each carried a byte-identical `resolve_token_from_fallback`, differing only in
+# their comments — in the two files that both already source THIS one, directly
+# below the header that states the rule for exactly this case ("One chain, one
+# place, is the enforcement"). The chain was shared and its last mile was not.
+#
+# The `local -` wrapper is the load-bearing part, not ceremony: this assigns a
+# CREDENTIAL, and at top level there is no scope to confine `set +x` to, so a
+# caller running the script under `bash -x` would trace the token out. `local -`
+# restores the caller's own xtrace setting on return. Two copies of that guard
+# meant the next hardening of it would land in one surface.
+#   spawn::resolve_token <service> <account>
+spawn::resolve_token() {
+    local -
+    set +x
+    SPAWN_TOKEN_VALUE=""
+    local found=1
+    if spawn::token_fallback "$1" "$2"; then
+        TOKEN="$SPAWN_TOKEN_VALUE"
+        found=0
+    fi
+    SPAWN_TOKEN_VALUE=""
+    # RETURNS WHETHER IT FOUND ONE. Without this the last command is an
+    # assignment, so the function reported success either way. Both call sites
+    # today ignore the status, so nothing was broken — but the next consumer
+    # writing `spawn::resolve_token ... || die` would get a guard that can never
+    # fire, which is the quiet kind of wrong.
+    return "$found"
+}

@@ -308,3 +308,77 @@ CTL
     grep -q -- '--consent-shell-rc' "$CMD_DIR/setup.md"
     grep -q -- 'consent_required' "$CMD_DIR/setup.md"
 }
+
+@test "the EX_* enum is IDENTICAL in setup.sh and setup-lib.sh" {
+    # setup.sh restates setup-lib.sh's contract constants because this suite
+    # derives the exit-code table in commands/setup.md from THIS file's
+    # `EX_*=<n>` lines. Its own comment says "a change here without the matching
+    # change in setup-lib.sh is a defect" — and nothing asserted it, so the
+    # defect it names could ship. A comment naming a failure class is not a
+    # guard against it.
+    #
+    # The right fix is arguably to stop restating them, but that means changing
+    # where this suite reads the table from, which is a bigger change than the
+    # risk warrants. Pinning the invariant costs four lines and closes it now.
+    local lib="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
+    local a b
+    a="$(grep -oE '^EX_[A-Z]+=[0-9]+' "$lib/setup.sh" | sort)"
+    b="$(grep -oE '^EX_[A-Z]+=[0-9]+' "$lib/setup-lib.sh" | sort)"
+
+    # Guard the guard: both actually matched something, or "they are equal" is a
+    # statement about two empty strings.
+    [ -n "$a" ]
+    [ -n "$b" ]
+    [ "$(printf '%s\n' "$a" | wc -l | tr -d ' ')" -ge 5 ]
+
+    if [ "$a" != "$b" ]; then
+        echo "setup.sh and setup-lib.sh disagree on the frozen exit-code enum:"
+        diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") || true
+        return 1
+    fi
+}
+
+@test "the size justification's line counts match the file it is arguing about" {
+    # A justification is only as good as its measurement, and this one's numbers
+    # have gone stale THREE times in a single review round — each time because
+    # the file changed after the argument was written. Twice I refreshed them by
+    # hand and wrote a note telling the next reader to recount; the third time
+    # proved that a note is not a mechanism.
+    #
+    # So the doc's own figures are now checked against the file on every run. If
+    # this fails, RECOUNT AND UPDATE THE DOC — do not delete the assertion. The
+    # whole point of the recorded decision is that a reader can verify the
+    # numbers it rests on, and a stale figure reads as rationalisation whether
+    # or not the argument behind it still holds.
+    local doc="$(cd "$BATS_TEST_DIRNAME/../../../.." && pwd)/docs/residual-review-findings/spawn-quality-audit.md"
+    local f="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)/spawnctl.sh"
+    [ -f "$doc" ]
+    [ -f "$f" ]
+
+    local claimed_total claimed_code
+    claimed_total="$(grep -oE '[0-9]+ lines total' "$doc" | head -1 | grep -oE '[0-9]+')"
+    claimed_code="$(grep -oE 'but [0-9]+ lines of code' "$doc" | head -1 | grep -oE '[0-9]+')"
+
+    # Guard the guard: if the wording changes so the numbers stop being found,
+    # this must fail loudly rather than compare two empty strings and pass.
+    [ -n "$claimed_total" ]
+    [ -n "$claimed_code" ]
+
+    local actual_total actual_comment actual_blank actual_code
+    actual_total="$(wc -l < "$f" | tr -d ' ')"
+    actual_comment="$(grep -cE '^[[:space:]]*#' "$f")"
+    actual_blank="$(grep -cE '^[[:space:]]*$' "$f")"
+    actual_code=$((actual_total - actual_comment - actual_blank))
+
+    if [ "$claimed_total" != "$actual_total" ] || [ "$claimed_code" != "$actual_code" ]; then
+        echo "spawn-quality-audit.md is stale about spawnctl.sh:"
+        echo "  doc says:  $claimed_total total, $claimed_code code"
+        echo "  file is:   $actual_total total, $actual_code code"
+        echo "Recount and update the doc; do not delete this check."
+        return 1
+    fi
+
+    # The argument itself is that the file is under the bar ON CODE LINES. If
+    # that ever stops being true the decision has to be re-taken, not re-quoted.
+    [ "$actual_code" -lt 1000 ]
+}

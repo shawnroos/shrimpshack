@@ -175,7 +175,7 @@ mutant() {
     mkdir -p "$dir"
     cp "$LIB"/*.sh "$dir/"
     [ -f "$LIB/models.json" ] && cp "$LIB/models.json" "$dir/"
-    sed -i '' "$expr" "$dir/$file"
+    sed -i '' "$expr" "$dir"/*.sh
     printf '%s' "$dir/$file"
 }
 
@@ -467,7 +467,7 @@ EOF
     # the staged tree — complete, well-formed, and carrying the token.
     local script
     script="$(mutant setup.sh 's|^strip_server_token() {$|strip_server_token() { cp "$1" "$2"; return 0|')"
-    grep -q 'strip_server_token() { cp "$1" "$2"; return 0' "$script"
+    grep -rq 'strip_server_token() { cp "$1" "$2"; return 0' "$(dirname "$script")"
 
     make_install "$OLD"
     cat > "$OLD/gateway.yaml" <<'EOF'
@@ -494,7 +494,7 @@ EOF
     # happily pass. Only the expected-file diff sees it.
     local script
     script="$(mutant setup.sh 's|.*{ drop = 1; next }|        sec == "server" { next }|')"
-    grep -q 'sec == "server" { next }' "$script"
+    grep -rq 'sec == "server" { next }' "$(dirname "$script")"
 
     make_install "$OLD"
     cat > "$OLD/gateway.yaml" <<'EOF'
@@ -629,7 +629,7 @@ EOF
     # exact behaviour a successful setup would leave behind without step 5.
     local script
     script="$(mutant spawnctl.sh 's|^resolve_token_fallback() {$|resolve_token_fallback() { return 0|')"
-    grep -q 'resolve_token_fallback() { return 0' "$script"
+    grep -rq 'resolve_token_fallback() { return 0' "$(dirname "$script")"
 
     start_fixture "$STORED_TOKEN"
     make_retired_install

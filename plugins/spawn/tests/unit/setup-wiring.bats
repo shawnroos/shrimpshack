@@ -149,7 +149,7 @@ mutant() {
     mkdir -p "$dir"
     cp "$LIB"/*.sh "$dir/"
     [ -f "$LIB/models.json" ] && cp "$LIB/models.json" "$dir/"
-    sed -i '' "$expr" "$dir/$file"
+    sed -i '' "$expr" "$dir"/*.sh
     printf '%s' "$dir/$file"
 }
 
@@ -560,7 +560,7 @@ EOF
     # wired nothing.
     local script
     script="$(mutant setup.sh '/does not load, so it cannot be wired/s|.*|                codex_here=0|')"
-    grep -qE '^ +codex_here=0$' "$script"
+    grep -rqE '^ +codex_here=0$' "$(dirname "$script")"
 
     install_codex invalid
     plant_operator_codex_config
@@ -583,7 +583,7 @@ EOF
     # gateway is not started yet.
     local script
     script="$(mutant setup.sh '/# rc is READ but never branched on/s|.*|    if [ "$rc" -ne 0 ]; then CODEX_LOAD_STATUS="error"; CODEX_LOAD_DETAIL="codex doctor exited $rc"; rm -f "$out" 2>/dev/null; return 0; fi|')"
-    grep -qF 'if [ "$rc" -ne 0 ]; then CODEX_LOAD_STATUS="error"' "$script"
+    grep -rqF 'if [ "$rc" -ne 0 ]; then CODEX_LOAD_STATUS="error"' "$(dirname "$script")"
 
     install_codex net_fail
 
@@ -600,7 +600,7 @@ EOF
     # success, and let the harness discover the problem mid-task.
     local script
     script="$(mutant setup.sh '/^        codex_config_load_status$/s|.*|        CODEX_LOAD_STATUS=ok; CODEX_LOAD_DETAIL=unchecked|')"
-    grep -qF 'CODEX_LOAD_STATUS=ok; CODEX_LOAD_DETAIL=unchecked' "$script"
+    grep -rqF 'CODEX_LOAD_STATUS=ok; CODEX_LOAD_DETAIL=unchecked' "$(dirname "$script")"
 
     install_codex invalid
     [ ! -e "$SPAWN_CODEX_CONFIG" ]
@@ -610,4 +610,63 @@ EOF
     [ "$RC" -eq 0 ]
     [ "$(jq -r '.ok' "$OUT")" = "true" ]
     [ -f "$SPAWN_CODEX_CONFIG" ]
+}
+
+@test "the env snippet works on a DEFAULT machine, with no SPAWN_* seam exported" {
+    # THE TEST THAT WAS MISSING, and its absence hid a P1.
+    #
+    # Every other test in this file exports SPAWN_SECURITY_BIN to point at the
+    # fixture — correctly, so nothing touches the real Keychain. But the
+    # generated snippet reads ${SPAWN_SECURITY_BIN:-<baked default>}, and with
+    # that variable exported the DEFAULT BRANCH IS NEVER TAKEN. The suite was
+    # structurally incapable of seeing a broken default.
+    #
+    # It was broken: the baked value goes through jq @sh, and it was placed
+    # inside double quotes, where the word in ${VAR:-word} is itself treated as
+    # double-quoted — so the single quotes were not removed and the value
+    # resolved to ['/usr/bin/security'], apostrophes included. Since the lookup
+    # line ends in `2>/dev/null || true`, every login shell silently got no
+    # GATEWAY_TOKEN: the entire deliverable of this step, failing quietly.
+    #
+    # So this test UNSETS the seams and checks the defaults resolve to usable
+    # values. It deliberately does not run the security binary — only that the
+    # path the snippet computes is the one that was baked.
+    install_claude
+    local envf="$WORK/default-env.sh" rcf="$WORK/default-rc"
+    : > "$rcf"
+
+    # The seams that mask the bug are unset HERE and only here. Everything else
+    # the suite needs (the harness binary, the state root) stays wired.
+    run env -u SPAWN_SECURITY_BIN -u SPAWN_KEYCHAIN_SERVICE -u SPAWN_KEYCHAIN_ACCOUNT_TOKEN \
+        SPAWN_SHELL_RC="$rcf" SPAWN_GATEWAY_ENV_FILE="$envf" \
+        bash "$SETUP" wire --consent-shell-rc
+    if [ "$status" -ne 0 ]; then echo "status=$status"; echo "$output" | head -3; return 1; fi
+    [ -f "$envf" ]
+
+    # Each baked default must resolve to exactly what was baked — no stray
+    # quote characters carried into the value.
+    local line val
+    for pair in "__spawn_security:/usr/bin/security" \
+                "__spawn_service:spawn-gateway" \
+                "__spawn_account:gateway-token"; do
+        local name="${pair%%:*}" want="${pair#*:}"
+        line="$(grep -m1 "^${name}=" "$envf")"
+        [ -n "$line" ]
+        # Evaluated with the seams UNSET too. Leaving them exported here is
+        # the same masking that hid the bug: the ${VAR:-default} default branch
+        # is only taken when VAR is absent, so a test that evaluates the line
+        # inside the suite's own environment measures the override, never the
+        # baked default.
+        val="$(env -u SPAWN_SECURITY_BIN -u SPAWN_KEYCHAIN_SERVICE -u SPAWN_KEYCHAIN_ACCOUNT_TOKEN \
+               bash -c "$line"$'\n'"printf '%s' \"\$$name\"")"
+        if [ "$val" != "$want" ]; then
+            echo "$name resolved to [$val], expected [$want]"
+            echo "  generated line: $line"
+            return 1
+        fi
+    done
+
+    # And the security path is actually runnable, which is the property that
+    # made the failure silent rather than loud.
+    [ -x "/usr/bin/security" ]
 }

@@ -12,6 +12,23 @@ limit rather than an outage. Independent adversarial coverage of this diff is
 therefore missing — the one lens specifically aimed at wrong-success paths, on a
 change whose entire purpose is refusing unearned success.
 
+> **HOW TO READ THIS FILE.** Everything above `## Still open` is a CHRONOLOGICAL
+> RECORD of findings as they were made — the P0/P1/P2 tags in those sections are
+> what the finding was rated WHEN FOUND, not what is open now. Their fixes are
+> described in the later sections (`Code review on PR #31 — five findings, all
+> fixed`, `Verified against real launchd`, and the FIXED entries under
+> `Still open`).
+>
+> **`## Still open` is the only live list.** If you want to know what is
+> outstanding, read that section and nothing else.
+>
+> This banner exists because a mechanical scan of this file for unstruck
+> P0/P1/P2 markers returns eight hits, all of them historical — which is exactly
+> how a reader, or a reviewer, concludes there are open P1s when there are none.
+> Verified live on 2026-08-10: the open-proxy chain that opens this record is
+> closed — an unauthenticated GET to the gateway returns 401, a credentialed one
+> returns 200.
+
 ## Found live during the G4 smoke run
 
 **Root cause of the whole chain below: a third control surface nobody modelled.**
@@ -413,32 +430,120 @@ child, so `unload` stops the gateway.
 
 ## Still open
 
-- **`setup` does not confirm the adoption took effect (P2).** After
-  `unload`/`load` it reports "adopted" without checking that the gateway now
-  serving is the one launchd started. A gateway started OUTSIDE launchd (a
-  plain `spawnctl start`) holds the port, the supervised launcher cannot bind,
-  and every downstream check still passes because the unsupervised process
-  answers. The check to add: the pidfile pid's parent should be the launcher.
+- **FIXED 2026-08-10 (`0d4b646`).** ~~`spawnctl start` can overwrite the launchd
+  launcher's pidfile claim, leaving a stale pid over a supervised gateway
+  (P1). Observed live, 2026-08-10.~~
+  Timeline from the machine: launcher pid 8123 started 21:37:35 and claimed the
+  pidfile; the gateway it spawned (8139) held :4000; at 22:58:57 — 81 minutes
+  later — the pidfile was rewritten to 66681, which then died. Result:
+  `spawnctl status` reported `running:true, pid_verified:false` against a
+  pidfile pointing at a corpse, while the real, supervised gateway ran
+  unmanaged. `stop`/`restart` are refused in that state, so the machine cannot
+  be controlled through the plugin at all.
 
-- **`spawnctl stop` is a ~10s restart on a supervised machine, not a stop
-  (P2).** It kills the gateway, the launcher's `wait` returns, the launcher
-  exits, and KeepAlive respawns it. `result:"stopped"` is true only
-  momentarily. This is the same thing the open-proxy fix already says out loud
-  ("stopping the process only triggers a respawn", which is why that path
-  unloads first) — it is now the everyday behaviour on an adopted machine.
-  `stop` should detect the supervised case and either unload the agent or say
-  plainly that the agent must be unloaded. Operator-visible, not a
-  wrong-success, so it is not merge-blocking.
+  The launcher has the correct guard — it declines to claim when the recorded
+  pid is ALIVE and names the same binary (spawn-launch.sh:99-112). `spawnctl`'s
+  own start path has no reciprocal guard: nothing stops it stamping its pid over
+  a claim the launcher already holds.
 
-- **Setup bakes the path of the checkout it runs from into `~/.local/bin/gw`
-  (P2).** Line 7 of the generated wrapper pins `SPAWNCTL=` to an absolute path.
-  Run setup from a git worktree and the wrapper points into that worktree; when
-  the worktree is removed after the PR lands, `gw` breaks with no warning and
-  nothing on the machine explains why. The launcher and `env.sh` do not have
-  this problem — they bake only machine paths and the gateway binary. Worth
-  either resolving the plugin root to a durable checkout or refusing/warning
-  when setup runs from a worktree. Remedy today: re-run setup from the
-  permanent checkout once the plugin has landed there.
+  Verified fixable and verified NOT a launcher defect: `launchctl unload` then
+  `load` restored `pid_verified:true` with the pidfile naming the live process,
+  and the unload released :4000 with zero listeners left — so the launcher's
+  signal forwarding and pidfile claim both work when they run uncontested.
+
+  **Fixed:** `do_start_locked` now refuses when the pidfile names a pid that is
+  alive AND argv-identifies as a gateway — the mirror of the launcher's guard.
+  Placed after `resolve_install_dir` (so the check has today's binary) and
+  before `deliver_secrets` (so a refusal never writes a key to disk first).
+
+  Guarded by two mutation-verified tests. The first version asserted the
+  refusal MESSAGE before the behaviour, and the mutant failed on the grep —
+  deleting the guard still yields exit 3, because the competing spawn dies on
+  AddrInUse. The exit code does not separate fixed from broken; the surviving
+  claim does. Reordered so the mutant fails on "the pidfile no longer names the
+  live process", which is the live defect. The second test is a negative
+  control: a live NON-gateway pid on a recycled number must not block a start,
+  because a guard that wedged the start path shut would be worse than the bug.
+
+  Still open, deliberately: routing through a loaded launchd agent instead of
+  refusing. Refusing is the honest floor — it never leaves the machine
+  uncontrollable — but an operator on a supervised box still has to unload the
+  agent by hand.
+
+
+- **FIXED 2026-08-10.** ~~`setup` does not confirm the adoption took effect
+  (P2).~~ After `unload`/`load`, setup now waits for the pidfile and checks
+  that the pid serving is under a loaded launchd job, using the same
+  `spawn::supervising_label` helper `spawnctl stop` uses — moved into
+  `common.sh` rather than copied, since "three copies of one parser, one of
+  which drifted" is this repo's own scar.
+  Reported, NOT fatal: the plist is repointed and the launcher is written, so
+  the next login gets the adopted arrangement; only the current process is
+  wrong. Failing would hand the operator a correct configuration alongside an
+  error. `adoption_in_effect`, `supervised_pid`, `supervisor_label` and
+  `adoption_warning` are in the emitted object, so a caller can branch on it.
+  Two tests, mutation-verified (forcing "verified" turns the not-in-effect test
+  red).
+  **Cost paid honestly:** the retry budget added ~140s to the supervisor suite
+  (64s -> 203s) because no fixture ever writes a real pidfile under a real
+  launchd job. Fixed with a seam (`SPAWN_ADOPT_VERIFY_TRIES`), generous on a
+  real machine and 1 in the suite — back to 64s.
+
+- **FIXED 2026-08-10.** ~~`spawnctl stop` is a ~10s restart on a supervised
+  machine, not a stop (P2).~~ `stop` now asks launchd whether the pid (or its
+  parent — setup's launcher is the job, the gateway is its child) is a loaded
+  job, and REFUSES without signalling anything, naming the label and the unload
+  command. Refusing rather than killing-and-admitting matches the verb's two
+  other honest outcomes (`unmanaged`, `pid_mismatch`) and leaves the machine
+  unchurned. It does NOT unload the agent on the operator's behalf: setup
+  treats owning a step in the startup path as needing explicit consent, and a
+  `stop` that quietly unloaded a launchd job would take that decision without
+  asking.
+  `restart` gets its own branch — before this it "worked" on an adopted machine
+  only by accident (the kill triggered a respawn and start_if_down reported
+  success for a restart it had not performed); it now aborts and names
+  `launchctl kickstart -k`.
+  Detection asks launchd directly rather than reusing `detect_supervisor`,
+  which parses every plist through plutil to answer a different question
+  (which agent to ADOPT) and can die. Explicitly excludes ppid 1: an
+  unsupervised gateway is reparented to launchd itself, and matching that
+  would make `stop` refuse to stop anything it started.
+  Four tests, mutation-verified — including that negative control and a
+  reparented-orphan case. **Verified live** on the adopted machine: it named
+  `com.shawnroos.gateway`, refused, and left pid 1518 running and verified.
+
+- **FIXED 2026-08-10 (`62e2de6`).** ~~Setup bakes the path of the checkout it
+  runs from into `~/.local/bin/gw` (P2).~~ Setup now bakes the same file in the
+  MAIN checkout when it is running from a linked worktree (git identifies one
+  itself: `--git-dir` and `--git-common-dir` differ there and nowhere else), and
+  only when that durable twin exists — a plugin living solely on the worktree's
+  branch keeps its path and gets a warning in the emitted object instead, since
+  pointing at a file that is not there trades a delayed break for an immediate
+  one. Three tests on a real linked worktree, mutation-verified, with a
+  non-worktree negative control.
+
+- **RETRACTED 2026-08-10 — this was a phantom, and it was mine.** I recorded a
+  P3 claiming the `gw` marker/hash scheme "cannot tell the operator edited this
+  from an older setup wrote this", and that any change to the wrapper body would
+  make every `gw` on disk demand consent for an unrelated upgrade.
+  **That is not what the code does.** `gw_classify` compares the file's OWN
+  DECLARED hash against the hash of its OWN body — it asks "is this file
+  self-consistent?", not "does this file match what setup would write today". A
+  wrapper written by an older setup is self-consistent, so it classifies as
+  `generated` and is rewritten freely.
+  Verified on the real machine rather than argued: a body change (the
+  `gw claude` fix) rewrote with `state_before:"generated"`, exit 0, no consent;
+  appending one line by hand then re-running gave `state_before:"modified"`,
+  `consent_required:"overwrite-gw"`, exit 8. Both directions, on the operator's
+  actual file.
+  **Two things downstream of this were also wrong and are corrected:** the
+  warning that the `gw claude` fix would force `--consent-overwrite-gw` (it does
+  not), and the stated reason for hand-escaping the baked path instead of using
+  `printf %q` — the escaping is still fine, but "avoiding consent churn" was
+  never a real constraint.
+  I reasoned about the classifier instead of running it. Same failure as the
+  supervisor "flake" earlier today: a defect recorded from reading, which then
+  shaped a later decision.
 
 - **A lint for the xtrace class.** #4 was fixed everywhere it exists today, but
   nothing stops the next credential-holding function from shipping unguarded.

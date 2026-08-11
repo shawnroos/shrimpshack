@@ -385,3 +385,123 @@ jq_free_path() {
     # contract does not list — the caller supplies its own fallback.
     [ "$(echo "$output" | grep '^99=')" = "99=" ]
 }
+
+# --- the two tiers must agree on the FIELD SET, not just the core -----------
+#
+# The pre-existing jq-absent tests assert the shared envelope core plus
+# `.error`. That is not enough: it passed green while launch.sh's bash tier was
+# missing `cwd`, `base_url` and `context_window` — three fields its own jq tier
+# emits and its own --describe publishes. A consumer on a box without jq got a
+# different shape than the contract promises, and nothing went red.
+#
+# common.sh states the rule this pins: "Any envelope that covers fewer than
+# three drifts on the tier it missed, silently, because the missing tier is the
+# one nobody runs." Comparing key sets is what turns that from a warning into a
+# guard.
+
+@test "R23: the jq and no-jq tiers emit the SAME KEYS for the same failure" {
+    local nojq; nojq="$(jq_free_path)"
+    run env PATH="$nojq" bash -c 'command -v jq 2>/dev/null'
+    [ "$status" -ne 0 ]
+
+    local script name with without only_jq only_bash
+    for script in "$LENS" "$LAUNCH"; do
+        name="$(basename "$script")"
+
+        # Same invocation, same failure, both tiers.
+        with="$(bash "$script" --alias 'bad;alias' < /dev/null 2>/dev/null \
+                 | jq -S 'keys' 2>/dev/null)"
+        without="$(env PATH="$nojq" bash -c "bash '$script' --alias 'bad;alias' < /dev/null 2>/dev/null" \
+                 | jq -S 'keys' 2>/dev/null)"
+
+        # Guard the guard: both tiers actually produced something parseable, or
+        # "the key sets match" is a statement about two empty strings.
+        [ -n "$with" ] || { echo "$name: jq tier produced nothing"; return 1; }
+        [ -n "$without" ] || { echo "$name: no-jq tier produced nothing"; return 1; }
+
+        if [ "$with" != "$without" ]; then
+            only_jq="$(jq -n --argjson a "$with" --argjson b "$without" '$a - $b | join(",")')"
+            only_bash="$(jq -n --argjson a "$with" --argjson b "$without" '$b - $a | join(",")')"
+            echo "$name: encoder tiers disagree on their field set"
+            echo "  only in the jq tier:    ${only_jq:-<none>}"
+            echo "  only in the bash tier:  ${only_bash:-<none>}"
+            return 1
+        fi
+    done
+}
+
+@test "R23: every error enum a surface can EMIT is published in its error_values" {
+    # The contract a consumer builds a switch from is `error_values`. A surface
+    # that can emit an enum it does not publish hands that consumer a value its
+    # own documentation says cannot occur.
+    #
+    # This was live twice over when the check was written:
+    #   * lens emitted `deadline_exceeded` (lens.sh:686) and published it in the
+    #     exit_codes table but NOT in error_values — two published tables
+    #     disagreeing with each other;
+    #   * both surfaces gained `internal` when encoder failures stopped
+    #     masquerading as `usage`, and neither published it.
+    # Neither was found by reading. Both fell out of comparing the two lists
+    # mechanically, which is the only way this stays true as enums are added.
+    local script name published emitted missing
+    for script in "$LENS" "$LAUNCH"; do
+        name="$(basename "$script")"
+        published="$(bash "$script" --describe 2>/dev/null | jq -r '.error_values[].value' | sort -u)"
+        # Every `die "$EX_..." "<enum>"` site — the only way these surfaces
+        # produce a classified failure.
+        emitted="$(grep -oE 'die "\$EX_[A-Z]+" "[a-z_]+"' "$script" \
+                   | sed 's/.*"\([a-z_]*\)"$/\1/' | sort -u)"
+
+        # Guard the guard: if either extraction breaks, this test must fail
+        # loudly rather than compare two empty sets and pass.
+        [ -n "$published" ] || { echo "$name: no error_values published"; return 1; }
+        [ -n "$emitted" ] || { echo "$name: found no die sites — the grep broke"; return 1; }
+
+        missing="$(comm -13 <(echo "$published") <(echo "$emitted") | tr '\n' ' ')"
+        if [ -n "${missing// /}" ]; then
+            echo "$name emits enum(s) it does not publish in error_values: $missing"
+            return 1
+        fi
+    done
+}
+
+@test "R23: the shared envelope helpers survive a consumer that declares none of their globals" {
+    # common.sh's helpers read the CALLER's globals by bash dynamic scoping —
+    # EMITTED, ALIAS, HELP_REQUESTED, REMEDY, remedy_for. Every script here runs
+    # under `set -u`, where an undefined global is FATAL, so an unguarded read
+    # kills the next consumer inside the one function whose entire job is
+    # guaranteeing something reaches stdout.
+    #
+    # This was live: emit() read "$EMITTED" bare, and a bare consumer aborted
+    # with "EMITTED: unbound variable" mid-emit, printing nothing at all — the
+    # exact failure emit's own header says it exists to prevent.
+    #
+    # NOTE ON THE ASSERTIONS: the first version of this check piped straight to
+    # `jq -e .` and reported success, because jq on EMPTY input exits 0. It was
+    # passing against zero bytes. Emptiness is therefore asserted BEFORE
+    # validity, and the field values after — an order this file has been bitten
+    # into using.
+    local consumer="$BATS_TEST_TMPDIR/bare-consumer.sh"
+    cat > "$consumer" <<EOS
+set -uo pipefail
+SCRIPT_DIR="$LIB"
+. "\$SCRIPT_DIR/sanitize.sh"
+. "\$SCRIPT_DIR/common.sh"
+spawn::emit_error plugin "foo bar" 2 usage "a consumer declaring none of the globals"
+EOS
+
+    run bash "$consumer"
+    [ "$status" -eq 0 ]
+    # Non-empty FIRST — this is the assertion the vacuous version skipped.
+    [ -n "$output" ]
+    [ "$(printf '%s' "$output" | wc -c | tr -d ' ')" -gt 100 ]
+    # Exactly one object, and parseable.
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    # The caller-named null fields are present...
+    [ "$(echo "$output" | jq -r 'has("foo")')" = "true" ]
+    [ "$(echo "$output" | jq -r 'has("bar")')" = "true" ]
+    # ...and it fell back to the shared remedy table rather than dying on a
+    # remedy_for the consumer never defined.
+    [ "$(echo "$output" | jq -r '.remedy')" != "null" ]
+    [ "$(echo "$output" | jq -r '.error')" = "usage" ]
+}

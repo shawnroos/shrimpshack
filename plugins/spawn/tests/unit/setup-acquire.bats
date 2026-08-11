@@ -191,7 +191,7 @@ mutant() {
     mkdir -p "$dir"
     cp "$LIB"/*.sh "$dir/"
     [ -f "$LIB/models.json" ] && cp "$LIB/models.json" "$dir/"
-    sed -i '' "$expr" "$dir/setup.sh"
+    sed -i '' "$expr" "$dir"/*.sh
     printf '%s' "$dir/setup.sh"
 }
 
@@ -296,7 +296,7 @@ mutant() {
     # exactly the shape KTD4 forbids.
     local script
     script="$(mutant 's|\.gateway-staging\.XXXXXX|gateway-99999.XXXXXX|')"
-    grep -q 'gateway-99999.XXXXXX' "$script"
+    grep -rq 'gateway-99999.XXXXXX' "$(dirname "$script")"
 
     export FAKE_CARGO_MODE=pause
     export FAKE_CARGO_RELEASE="$WORK/release-cargo"
@@ -356,7 +356,7 @@ mutant() {
     make_tarball "$FAKE_CURL_TARBALL" --no-config
     local script
     script="$(mutant 's|^    return 1  # no template found$|    return 0  # MUTATED|')"
-    grep -q 'return 0  # MUTATED' "$script"
+    grep -rq 'return 0  # MUTATED' "$(dirname "$script")"
 
     run_acquire "$script"
     [ "$RC" -ne 0 ]
@@ -433,7 +433,7 @@ mutant() {
     # which is the ordering R4 forbids.
     local script
     script="$(mutant 's|^    need_prereqs$|    resolve_latest_tag; need_prereqs|')"
-    grep -q 'resolve_latest_tag; need_prereqs' "$script"
+    grep -rq 'resolve_latest_tag; need_prereqs' "$(dirname "$script")"
 
     run_acquire "$script"
     [ "$RC" -eq 9 ]
@@ -511,13 +511,3 @@ mutant() {
     grep -q 'usage: setup.sh' "$ERR"
 }
 
-@test "setup.sh's BIN_CANDIDATES is byte-identical to spawnctl.sh's" {
-    # The two lists are deliberately duplicated (setup.sh cannot source
-    # spawnctl.sh — it dispatches a verb and exits), so the drift they would
-    # otherwise be free to develop is closed here instead of by discipline.
-    local a b
-    a="$(grep -n '^BIN_CANDIDATES=' "$SETUP" | cut -d: -f2-)"
-    b="$(grep -n '^BIN_CANDIDATES=' "$CTL" | cut -d: -f2-)"
-    [ -n "$a" ]
-    [ "$a" = "$b" ]
-}

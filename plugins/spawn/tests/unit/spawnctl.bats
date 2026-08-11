@@ -433,6 +433,91 @@ count_gateway_procs() {
     [ "$(count_gateway_procs "$WORK/install")" -eq 0 ]
 }
 
+# --- the pidfile is a CLAIM, and this is not its only writer -----------------
+#
+# Reproduces the live 2026-08-10 failure on a supervised machine: the launchd
+# launcher claimed the pidfile, a later `start` stamped its own pid over that
+# claim, and when THAT process died `status` reported running:true /
+# pid_verified:false against a corpse while the real gateway ran unmanaged —
+# stop and restart both refused, so the machine was uncontrollable through the
+# plugin. The launcher declines to claim in the mirror-image situation
+# (spawn-launch.sh); this pins the reciprocal guard in spawnctl.
+
+# start_claimed_gateway — a LIVE gateway process, argv-identical to one this
+# script would spawn, holding the pidfile claim, but NOT answering at
+# SPAWN_BASE_URL. That gap is the real shape: a supervised gateway that is
+# still binding, wedged, or bound elsewhere is alive without being probeable.
+# Sets $CLAIMED_PID.
+CLAIMED_PID=""
+start_claimed_gateway() {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    "$WORK/install/target/release/gateway" --config "$WORK/gateway.yaml" \
+        >"$WORK/claimed.out" 2>&1 &
+    CLAIMED_PID=$!
+    HELPER_PIDS+=("$CLAIMED_PID")
+    local i
+    for i in $(seq 1 100); do
+        grep -q 'fake gateway binary serving' "$WORK/claimed.out" 2>/dev/null && break
+        sleep 0.05
+    done
+    kill -0 "$CLAIMED_PID"
+
+    printf '%s\n' "$CLAIMED_PID" > "$WORK/.gateway.pid"
+    printf '%s\n' "$WORK/install/target/release/gateway" > "$WORK/.gateway.pid.bin"
+    # Nothing serves here, so the probe fails on CONNECT (PROBE_LISTENING=0)
+    # and reaches the start path. Without the guard, that start overwrites the
+    # claim above.
+    export SPAWN_BASE_URL="http://127.0.0.1:1/anthropic"
+    export SPAWN_START_TIMEOUT=2
+}
+
+@test "start refuses to overwrite a pidfile claim held by a LIVE gateway process" {
+    start_claimed_gateway
+
+    ctl start
+
+    # BEHAVIOUR FIRST, prose second. Deleting the guard still yields exit 3
+    # here (the competing spawn dies on AddrInUse against the claimed
+    # gateway's port, and the probe URL serves nothing either way), so the
+    # exit code is NOT what distinguishes fixed from broken — the surviving
+    # claim is. Asserted before the message so a mutation run fails on the
+    # defect itself rather than on a sentence.
+    [ "$(cat "$WORK/.gateway.pid")" = "$CLAIMED_PID" ]
+    kill -0 "$CLAIMED_PID"
+    [ "$(count_gateway_procs "$WORK/install")" -eq 1 ]
+
+    [ "$status" -eq 3 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.error')" = "unreachable" ]
+    echo "$output" | jq -r '.detail' | grep -q 'already claims pid'
+}
+
+@test "the claim guard is not blanket: a live NON-gateway pid does not block a start" {
+    # Negative control for the pid_is_gateway half. A recycled pid belonging to
+    # some unrelated process is not a claim, and must not wedge the start path
+    # shut — a guard that refused here would be worse than the bug it fixes.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    live_decoy_pid
+    printf '%s\n' "$DECOY_PID" > "$WORK/.gateway.pid"
+
+    ctl start
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.running')" = "true" ]
+    [ "$(cat "$WORK/.gateway.pid")" != "$DECOY_PID" ]
+    [ "$(count_gateway_procs "$WORK/install")" -eq 1 ]
+}
+
 @test "R3: the log is appended, never truncated, across restarts" {
     local port; port="$(free_port)"
     make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
@@ -1156,4 +1241,275 @@ EOF
     [ "$status" -ne 0 ]
     grep -q 'pre-existing' "$WORK/outside.txt"
     grep -q '^delivery_mode=600$' "$WORK/gwbin-record/delivery"
+}
+
+# --- stop must not report a stop that KeepAlive undoes ----------------------
+#
+# On an adopted machine `stop` was a ~10s RESTART: it killed the gateway, the
+# launcher's `wait` returned, the launcher exited, and KeepAlive respawned
+# everything. result:"stopped" was true for about a second. The plugin already
+# says this elsewhere — the open-proxy path unloads the agent first "because
+# stopping the process only triggers a respawn" — it just never applied it to
+# the everyday verb.
+#
+# The fixture models `launchctl list`'s real TAB-separated "PID Status Label"
+# output, because the pid is read from column 1 and that is the one thing that
+# must not drift.
+
+# wire_fake_launchd <pid-to-declare-supervised> — a launchctl stand-in whose
+# job list claims that pid. Passing the gateway's PARENT is the real shape
+# (setup's launcher is the job; the gateway is its child); passing the gateway
+# pid itself models a plist pointed straight at the binary.
+wire_fake_launchd() {
+    export SPAWN_LAUNCHCTL_BIN="$FIX/fake-launchctl.sh"
+    export FAKE_LAUNCHCTL_RECORD="$WORK/launchctl-argv"
+    export FAKE_LAUNCHCTL_LIST="$WORK/launchctl-list"
+    printf '%s\t0\tcom.test.gateway\n' "$1" > "$FAKE_LAUNCHCTL_LIST"
+}
+
+@test "stop REFUSES on a supervised gateway instead of reporting a stop KeepAlive undoes" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    kill -0 "$pid"
+    wire_fake_launchd "$pid"
+
+    ctl stop
+
+    # NOTHING WAS SIGNALLED, asserted FIRST. This is what separates "refuses"
+    # from "kills and then admits it will come back", so a mutation run must
+    # fail HERE rather than on an exit code — the same reordering the pidfile-
+    # claim guard needed. The gateway is still alive, the pidfile still names
+    # it, and no state changed.
+    kill -0 "$pid"
+    [ "$(cat "$WORK/.gateway.pid")" = "$pid" ]
+    [ "$(count_gateway_procs "$WORK/install")" -eq 1 ]
+
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.result')" = "supervised" ]
+    [ "$(echo "$output" | jq -r '.supervisor_label')" = "com.test.gateway" ]
+    # The remedy names the operation that actually stops it.
+    echo "$output" | jq -r '.remedy' | grep -q 'launchctl unload'
+}
+
+@test "restart on a supervised gateway aborts and names the supervisor operation" {
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    wire_fake_launchd "$pid"
+
+    ctl restart
+    [ "$status" -eq 2 ]
+    # Before this, restart "worked" by accident on an adopted machine: the kill
+    # triggered a respawn and start_if_down reported success for a restart it
+    # had not performed.
+    echo "$output" | jq -r '.detail' | grep -q 'kickstart'
+    echo "$output" | jq -r '.detail' | grep -q 'com.test.gateway'
+    kill -0 "$pid"
+    [ "$(count_gateway_procs "$WORK/install")" -eq 1 ]
+}
+
+@test "an UNSUPERVISED gateway still stops normally" {
+    # Negative control, and the one that matters most: a guard that read every
+    # gateway as supervised would make stop refuse to stop anything it started.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    # A job list that names OTHER pids — launchd is present, this gateway is
+    # simply not one of its jobs.
+    export SPAWN_LAUNCHCTL_BIN="$FIX/fake-launchctl.sh"
+    export FAKE_LAUNCHCTL_RECORD="$WORK/launchctl-argv"
+    export FAKE_LAUNCHCTL_LIST="$WORK/launchctl-list"
+    printf '99998\t0\tcom.other.thing\n99999\t0\tcom.other.two\n' > "$FAKE_LAUNCHCTL_LIST"
+
+    ctl stop
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.result')" = "stopped" ]
+    ! kill -0 "$pid" 2>/dev/null
+    [ "$(count_gateway_procs "$WORK/install")" -eq 0 ]
+}
+
+@test "a gateway reparented to pid 1 is NOT read as supervised" {
+    # do_start_locked backgrounds the gateway in a subshell that exits, so an
+    # unsupervised gateway ends up with ppid 1 — launchd itself. If pid 1 were
+    # matched against the job list, every orphan on the box would read as
+    # supervised and stop would refuse to stop anything it started.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    # Confirm the premise rather than assuming it: this really is an orphan.
+    [ "$(ps -o ppid= -p "$pid" | tr -d ' ')" = "1" ]
+
+    # A job list that claims PID 1. Nothing may match it.
+    export SPAWN_LAUNCHCTL_BIN="$FIX/fake-launchctl.sh"
+    export FAKE_LAUNCHCTL_RECORD="$WORK/launchctl-argv"
+    export FAKE_LAUNCHCTL_LIST="$WORK/launchctl-list"
+    printf '1\t0\tcom.apple.launchd\n' > "$FAKE_LAUNCHCTL_LIST"
+
+    ctl stop
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.result')" = "stopped" ]
+    ! kill -0 "$pid" 2>/dev/null
+}
+
+@test "stop refuses to report success when the process survives SIGKILL" {
+    # The wrong-success the other two stop branches were already hardened
+    # against, in the one branch that actually signals. SIGKILL is not delivered
+    # to a task in uninterruptible sleep, so a gateway wedged on a hung mount
+    # survives it — and the old code broke out of the wait loop unconditionally,
+    # deleted BOTH pidfile records, and reported ok:true / result:"stopped".
+    # Deleting the ownership record is the compounding part: the next stop then
+    # lands in the empty-pidfile branch and the gateway is unmanageable.
+    #
+    # D-state cannot be produced in a test, so the equivalent is used: a process
+    # that survives both signals. `kill` is shadowed for the script only, so the
+    # signals are genuinely issued and genuinely have no effect — the same
+    # observable state, without needing a wedged filesystem.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    kill -0 "$pid"
+
+    # `kill` is a bash BUILTIN, so a shim on PATH is never consulted — the
+    # first version of this test put one there and the gateway simply died,
+    # proving nothing. BASH_ENV is sourced by every non-interactive bash at
+    # startup, which is exactly what `bash spawnctl.sh` is, so a FUNCTION
+    # defined there does shadow the builtin inside the script under test.
+    #
+    # `kill -0` still answers truthfully via the real builtin: without that the
+    # test could not tell "survived" from "the liveness check is broken too".
+    cat > "$WORK/nokill.bash" <<'EOS'
+kill() {
+    if [ "${1:-}" = "-0" ]; then builtin kill "$@"; return $?; fi
+    return 0
+}
+EOS
+    export SPAWN_START_TIMEOUT=2
+    # stdout ONLY, like the ctl() helper — a diagnostic on stderr would break
+    # the parse, which is how this file enforces the never-both-on-stdout rule.
+    run bash -c 'BASH_ENV="$1" bash "$2" stop 2>/dev/null' _ "$WORK/nokill.bash" "$CTL"
+
+    # BEHAVIOUR FIRST: the gateway is still alive and still OURS to manage.
+    kill -0 "$pid"
+    [ -f "$WORK/.gateway.pid" ]
+    [ "$(cat "$WORK/.gateway.pid")" = "$pid" ]
+
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.ok')" = "false" ]
+    [ "$(echo "$output" | jq -r '.result')" = "kill_failed" ]
+}
+
+@test "a lock whose stale-break keeps failing still times out instead of spinning forever" {
+    # The livelock: the stale-break branch used to `continue`, jumping past both
+    # the sleep and the counter, so LOCK_TIMEOUT was unreachable from it. With a
+    # break that never succeeds the loop could not end — a 100%-CPU spin that
+    # never exits and never emits the one JSON object the contract promises,
+    # inherited by every fan-out worker that calls ensure.
+    #
+    # Reproduced the way the reviewer described it: a lock directory whose
+    # PARENT is read-only, already holding a dead pid. mkdir fails EACCES, the
+    # holder is dead so the break fires, the mv fails EPERM, and round it goes.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    local lockparent="$WORK/lockparent"
+    mkdir -p "$lockparent/.gateway.lock"
+    printf '%s\n' "$(dead_pid)" > "$lockparent/.gateway.lock/pid"
+    chmod a-w "$lockparent"
+    export SPAWN_LOCK="$lockparent/.gateway.lock"
+    # Small budget so the bound is observable: 1s => ~10 ticks.
+    export SPAWN_LOCK_TIMEOUT=1
+
+    # Guard the guard: the break must genuinely be impossible here, or the test
+    # passes for the wrong reason (a lock that was simply acquired).
+    run mv "$lockparent/.gateway.lock" "$lockparent/.gateway.lock.probe"
+    [ "$status" -ne 0 ]
+
+    local before after
+    before="$(date +%s)"
+    ctl start
+    after="$(date +%s)"
+    chmod u+w "$lockparent"
+
+    # IT TERMINATED — the assertion the livelock fails. Bounded generously
+    # (the budget is 1s; anything under 30 proves the loop ended on its own
+    # rather than being cut off by something else).
+    [ $((after - before)) -lt 30 ]
+    # ...and it terminated the way the contract requires: one JSON object,
+    # a named failure, never a silent spin.
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$status" -ne 0 ]
+    [ "$(echo "$output" | jq -r '.ok')" = "false" ]
+}
+
+@test "stop still works when the install directory has been renamed away" {
+    # stop used to open with `resolve_install_dir hard`, so renaming or deleting
+    # ~/gateway-* under a RUNNING gateway made stop — and therefore restart —
+    # die exit 3 "no gateway install found" without signalling anything. A live
+    # gateway that cannot be stopped through this surface is the same
+    # unmanageable state the rest of this verb goes to lengths to avoid.
+    #
+    # It never needed the install: pid_is_gateway anchors on $PIDFILE.bin, the
+    # binary recorded beside the pidfile at start, precisely so a moved install
+    # cannot break identification. status already used soft.
+    local port; port="$(free_port)"
+    make_config "$WORK/gateway.yaml" "$port" "$TOKEN" "alpha=up/alpha"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export SPAWN_BASE_URL="http://127.0.0.1:$port/anthropic"
+    make_install "$WORK/install"
+    export SPAWN_INSTALL_DIR="$WORK/install"
+
+    bash "$CTL" start >/dev/null
+    local pid; pid="$(cat "$WORK/.gateway.pid")"
+    kill -0 "$pid"
+
+    # The install disappears under the running process, and the override with
+    # it — this is the upgrade/cleanup shape, not an exotic one.
+    mv "$WORK/install" "$WORK/install-moved"
+    unset SPAWN_INSTALL_DIR
+
+    # Guard the guard: resolution really must fail now, or this passes for the
+    # wrong reason. The search root is empty, so nothing can be resolved.
+    [ ! -d "$WORK/install" ]
+
+    ctl stop
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.result')" = "stopped" ]
+    ! kill -0 "$pid" 2>/dev/null
 }

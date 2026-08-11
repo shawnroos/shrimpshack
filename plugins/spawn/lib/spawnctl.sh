@@ -81,8 +81,6 @@ PROBE_TIMEOUT="${SPAWN_PROBE_TIMEOUT:-5}"
 START_TIMEOUT="${SPAWN_START_TIMEOUT:-20}"
 LOCK_TIMEOUT="${SPAWN_LOCK_TIMEOUT:-60}"
 
-# Binary candidates inside a resolved install dir, most specific first.
-BIN_CANDIDATES=("target/release/gateway" "target/debug/gateway" "bin/gateway" "gateway")
 
 # ---------------------------------------------------------------------------
 # Keychain item identity (KTD1, U1's primitives).
@@ -96,6 +94,12 @@ BIN_CANDIDATES=("target/release/gateway" "target/debug/gateway" "bin/gateway" "g
 KEYCHAIN_SERVICE="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
 KEYCHAIN_ACCOUNT_OPENROUTER="${SPAWN_KEYCHAIN_ACCOUNT_OPENROUTER:-openrouter-api-key}"
 KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
+
+# Read-only here: this script never loads, unloads or starts a launchd job — it
+# only ASKS whether one supervises the gateway, so `stop` can stop claiming a
+# stop that KeepAlive undoes. Same default and same override name setup-lib.sh
+# uses, so a suite that redirects one redirects both.
+LAUNCHCTL_BIN="${SPAWN_LAUNCHCTL_BIN:-/bin/launchctl}"
 
 # The transient delivery file (KTD1). `.env.local` is the gateway's own
 # CWD-relative dotenv name, and do_start_locked already runs the child with the
@@ -112,7 +116,7 @@ DELIVERY_NAME=".env.local"
 # chokepoint is closed for messages nobody has written yet. Interpolating an
 # attacker-controlled value into a raw `printf ... >&2` bypasses this and is
 # what the lint in tests/unit/escapes.bats exists to catch.
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
+# say() is inherited from common.sh — it was byte-identical in four files.
 die() {
     # $1 = exit code, rest = message. Stderr only — stdout belongs to the one
     # JSON object, and a diagnostic printed there is how a consumer's `jq`
@@ -233,7 +237,19 @@ emit_error() {
     # the exit code through the one table in common.sh, which is the same table
     # the two lenses classify a preflight failure with.
     local err
-    err="$(spawn::enum_for_code "$code")"
+    # ERROR_ENUM is the same prefix-assignment idiom REMEDY already uses. It
+    # exists for ONE class: a failure of the ENCODER itself. Those sites used
+    # `usage`, because that is what exit 2 maps to — so a caller could not tell
+    # "your argument was bad" from "our jq broke", and every one of them handed
+    # back the usage remedy: "Fix the invocation... Retrying the same call
+    # cannot succeed." Every clause of that is false for an internal fault.
+    #
+    # This does NOT touch the frozen exit-code enum. KTD2's rule is that new
+    # classes go in `error`, never in a new exit code — `internal` at exit 2 is
+    # that rule being followed, and spawnctl already publishes `internal` in its
+    # own error_values for the no-jq tier.
+    local err
+    err="${ERROR_ENUM:-$(spawn::enum_for_code "$code")}"
     [ -n "$err" ] || err="internal"
     # Sanitized here as well as in die(): idempotent on an already-clean string,
     # and it means a future caller that reaches emit_error directly cannot open
@@ -279,10 +295,7 @@ emit_error() {
 yaml_scan() {
     local cfg="$1"
     [ -f "$cfg" ] || return 1
-    awk '
-        function trim(v) { sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); return v }
-        function decomment(v) { sub(/[ \t]+#.*$/, "", v); return trim(v) }
-        function unquote(v) { gsub(/^["'"'"']|["'"'"']$/, "", v); return v }
+    awk "$SPAWN_YAML_AWK_DEFS"'
         /^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); alias = ""; next }
         sec == "server" && /^[ \t]+token:/ {
             v = $0; sub(/^[ \t]*token:[ \t]*/, "", v)
@@ -454,16 +467,6 @@ version_sort_key() {
     done
 }
 
-find_binary_in() {
-    local dir="$1" cand
-    for cand in "${BIN_CANDIDATES[@]}"; do
-        if [ -f "$dir/$cand" ] && [ -x "$dir/$cand" ]; then
-            printf '%s' "$dir/$cand"
-            return 0
-        fi
-    done
-    return 1
-}
 
 # resolve_install_dir [soft]
 #   soft: a "no candidate found" outcome records INSTALL_ERR and returns 1
@@ -483,7 +486,7 @@ resolve_install_dir() {
         local ovr="$SPAWN_INSTALL_DIR"
         [ -d "$ovr" ] || die "$EX_USAGE" "SPAWN_INSTALL_DIR is set to '$ovr', which is not a directory (set-but-invalid override is a hard failure, never a fall-through)"
         local bin
-        bin="$(find_binary_in "$ovr")" || die "$EX_USAGE" "SPAWN_INSTALL_DIR '$ovr' holds no executable regular-file gateway binary (looked for: ${BIN_CANDIDATES[*]})"
+        bin="$(find_binary_in "$ovr")" || die "$EX_USAGE" "SPAWN_INSTALL_DIR '$ovr' holds no executable regular-file gateway binary (looked for: ${SPAWN_BIN_CANDIDATES[*]})"
         INSTALL_DIR="$ovr"
         SPAWN_BIN="$bin"
         return 0
@@ -507,7 +510,7 @@ resolve_install_dir() {
 
     local bin
     if ! bin="$(find_binary_in "$best")"; then
-        INSTALL_ERR="newest gateway install '$best' holds no executable regular-file gateway binary (looked for: ${BIN_CANDIDATES[*]})"
+        INSTALL_ERR="newest gateway install '$best' holds no executable regular-file gateway binary (looked for: ${SPAWN_BIN_CANDIDATES[*]})"
         [ "$mode" = "soft" ] && return 1
         die "$EX_UNREACHABLE" "$INSTALL_ERR"
     fi
@@ -668,9 +671,23 @@ acquire_lock() {
             fi
         fi
         if [ -n "$stale" ]; then
+            # THE BREAK IS BOUNDED LIKE EVERY OTHER ITERATION. This `continue`
+            # used to jump past both the sleep and the counter below, which made
+            # LOCK_TIMEOUT unreachable from this branch — the loop could not
+            # end. Concrete: a lock directory whose PARENT is not writable
+            # (permissions change, read-only remount) and which already holds a
+            # dead pid. mkdir fails EACCES, the holder is dead so `stale` is
+            # set, the mv fails EPERM, and round it goes — a 100%-CPU spin
+            # printing "breaking a stale gateway lock" forever, never exiting
+            # and never emitting the one JSON object the contract promises.
+            # Every fan-out worker that calls `ensure` inherits it.
+            #
+            # A break that SUCCEEDS still costs one tick, which is the right
+            # price: the next mkdir attempt is what actually acquires, and it
+            # gets the same bound as any other attempt. Concurrent breakers
+            # self-heal (the loser's mv fails ENOENT) and are unaffected.
             say "breaking a stale gateway lock ($stale)"
             mv "$LOCKDIR" "$LOCKDIR.stale.$$" 2>/dev/null && rm -rf "$LOCKDIR.stale.$$" 2>/dev/null
-            continue
         fi
         sleep 0.1
         waited=$((waited + 1))
@@ -958,6 +975,28 @@ do_start_locked() {
 
     resolve_install_dir hard
 
+    # The pidfile is a CLAIM, and this is not the only writer of it. The
+    # launchd launcher (setup's spawn-launch.sh) declines to claim when the
+    # recorded pid is alive and names the same binary; without the mirror of
+    # that guard here, a start on a supervised machine stamps its own pid over
+    # the launcher's claim, and when that process dies `status` reports
+    # running:true / pid_verified:false against a corpse while the real,
+    # supervised gateway runs unmanaged — stop and restart both refuse, so the
+    # machine cannot be controlled through this surface at all. Observed live
+    # 2026-08-10: the launcher claimed at 21:37:35, the pidfile was rewritten
+    # 81 minutes later, and the rewritten pid was already dead.
+    #
+    # Reachable even though the probe just failed: a supervised gateway that is
+    # still binding, wedged, or listening elsewhere is alive without answering.
+    # A DEAD recorded pid is not a claim (nothing to protect), and a live pid
+    # that argv-fails pid_is_gateway is an unrelated process on a reused pid —
+    # neither blocks a start.
+    local claimed_pid
+    if claimed_pid="$(read_pidfile)" && pid_is_gateway "$claimed_pid"; then
+        PROBE_DETAIL="${PROBE_DETAIL:-the probe failed} — but $PIDFILE already claims pid $claimed_pid, which is alive and is a gateway process; refusing to start a second one and overwrite that claim (a supervisor such as the launchd agent may own it). Stop that gateway, or unload the launchd agent, before starting one here"
+        return $EX_UNREACHABLE
+    fi
+
     # Both secrets, and the R9 refusal, before anything is spawned.
     deliver_secrets
 
@@ -1062,22 +1101,7 @@ start_if_down() {
 table_json() {
     local empty='{"aliases":{},"families":{},"no_family_alias":null,"chain_policy":{}}'
     if [ -f "$MODELS_JSON" ]; then
-        jq -c "$SPAWN_MODELS_ALIASES_JQ_DEF"'
-            def safeobj: if type == "object" then . else {} end;
-            def safe_families:
-                ((.families // {}) | safeobj)
-                | map_values(
-                    if type == "object" then
-                        ((.default // null) as $d
-                         | (.tiers // {}) as $t
-                         | {
-                             default: (if ($d|type) == "string" then $d else null end),
-                             tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
-                           })
-                    else empty end
-                  );
-            def safe_chain_policy:
-                ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+        jq -c "$SPAWN_MODELS_ALIASES_JQ_DEF$SPAWN_MODELS_GRAMMAR_JQ_DEF"'
             if (type == "object" and ((.aliases // {}) | type) == "object")
             then {
                 aliases: spawn_aliases,
@@ -1207,6 +1231,27 @@ emit_describe() {
 VERB="${1:-}"
 [ $# -gt 0 ] && shift
 
+# VALIDATED BEFORE ANY ARITHMETIC. Both are consumed as $((VAR * n)), and bash
+# arithmetic evaluates the CONTENTS of a variable: a non-numeric value resolves
+# as a name to 0, and `a[$(cmd)]` executes cmd. A zero here is not cosmetic —
+# it collapses the start wait to a single tick, so do_start_locked removes the
+# mode-0600 delivery file out from under a gateway that has not read it yet and
+# reports unreachable for a start that was merely still coming up.
+# launch.sh already validates its own timeout knob exactly this way; these two
+# siblings had nothing.
+for _tv in START_TIMEOUT LOCK_TIMEOUT; do
+    case "${!_tv}" in
+        ''|*[!0-9]*)
+            # No bare printf here: die() already prints the message through the
+            # sanitizing chokepoint, and a second raw sink is what escapes.bats'
+            # lint exists to catch. It caught this line when it was one.
+            ERROR_ENUM=usage die 2 "SPAWN_${_tv} is not a positive integer — refusing before it reaches shell arithmetic, where a non-numeric value silently becomes 0 and a crafted one executes" ;;
+    esac
+    [ "${!_tv}" -gt 0 ] 2>/dev/null || \
+        ERROR_ENUM=usage die 2 "SPAWN_${_tv} must be greater than zero"
+done
+unset _tv
+
 case "$VERB" in
     start|stop|restart|status|ensure) ;;
     --describe)
@@ -1222,7 +1267,7 @@ case "$VERB" in
         # the drift R23 exists to close. With no jq, need_jq answers with the
         # standard no-encoder object at exit 2.
         need_jq
-        emit_describe || die "$EX_USAGE" "could not encode the describe object"
+        emit_describe || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the describe object"
         exit $EX_OK
         ;;
     -h|--help|help)
@@ -1280,7 +1325,7 @@ ensure)
                 "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"ensure",
                   error:"alias_unknown", alias:$a, served_aliases:$served,
                   remedy:$rem, exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the alias_unknown object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the alias_unknown object"
             exit $EX_ALIAS
         fi
     fi
@@ -1303,7 +1348,7 @@ ensure)
           alias:(if $alias == "" then null else $alias end),
           config:(if $cfg == "" then null else $cfg end),
           served_aliases:$served, error:null, exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the ensure object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the ensure object"
     exit $EX_OK
     ;;
 
@@ -1329,12 +1374,21 @@ start)
           started:$started, base_url:$base,
           pid:(if $pid == "" then null else ($pid|tonumber) end),
           log:$log, served_aliases:$served, error:null, exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the start object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the start object"
     exit $EX_OK
     ;;
 
 stop)
-    resolve_install_dir hard
+    # SOFT, not hard. `stop` does not need an install directory: pid_is_gateway
+    # anchors on $PIDFILE.bin — the binary RECORDED beside the pidfile when the
+    # process was started — precisely so an install that moved cannot break
+    # identification (R4). Requiring resolution here meant that renaming or
+    # deleting ~/gateway-* under a running gateway made `stop` (and therefore
+    # `restart`) die exit 3 "no gateway install found" WITHOUT SIGNALLING
+    # ANYTHING, leaving a live gateway nobody can stop through this surface —
+    # the same unmanageable state the rest of this verb works hard to avoid.
+    # `status` already uses soft for exactly this reason.
+    resolve_install_dir soft
     pid="$(read_pidfile)"
     if [ -z "$pid" ]; then
         probe
@@ -1354,14 +1408,14 @@ stop)
                   result:"unmanaged", error:"usage",
                   detail:"a gateway is serving but the pidfile is empty or absent",
                   remedy:$rem, pidfile:$p, exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the stop refusal object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop refusal object"
             exit $EX_USAGE
         fi
         emit "$(jq -nc --arg p "$PIDFILE" \
             "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
               result:"not_running", pid:null, pidfile:$p, error:null,
               exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the stop not_running object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop not_running object"
         exit $EX_OK
     fi
 
@@ -1392,14 +1446,14 @@ stop)
                   result:"unmanaged", pid:$pid, pidfile:$p, error:"usage",
                   detail:"the recorded pid is dead but a gateway is still serving; not stopped",
                   remedy:$rem, exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the stop refusal object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop refusal object"
             exit $EX_USAGE
         fi
         rm -f "$PIDFILE" "$PIDFILE.bin"
         emit "$(jq -nc --argjson pid "$pid" \
             "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
               result:"stale_pidfile", pid:$pid, error:null, exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the stop stale_pidfile object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop stale_pidfile object"
         exit $EX_OK
     fi
 
@@ -1424,7 +1478,33 @@ stop)
               actual_command:$cmd, error:"usage",
               detail:"pidfile pid belongs to an unrelated process; not signalled",
               remedy:$rem, exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the stop pid_mismatch object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop pid_mismatch object"
+        exit $EX_USAGE
+    fi
+
+    # SUPERVISED: killing this is a ~10s restart, not a stop. Refuse BEFORE
+    # signalling anything — a kill followed by an honest "it will come back"
+    # would still churn the machine and still leave the caller's intent
+    # unmet, and this script's other two honest outcomes (`unmanaged`,
+    # `pid_mismatch`) both refuse rather than act. Nothing is signalled here,
+    # so the gateway keeps serving and no state changes.
+    #
+    # Unloading the agent is deliberately NOT done on the operator's behalf:
+    # setup treats owning a step in the machine's startup path as needing
+    # explicit consent (exit 8), and a `stop` that quietly unloaded a launchd
+    # job would take that decision without asking. The remedy names the exact
+    # command instead.
+    if spawn::supervising_label "$pid"; then
+        say "pid $pid is supervised by the launchd job '$SUPERVISOR_LABEL' — killing it would only trigger a respawn, so nothing was signalled"
+        emit "$(jq -nc --argjson pid "$pid" --arg label "$SUPERVISOR_LABEL" \
+            --arg p "$PIDFILE" --argjson c $EX_USAGE \
+            --arg rem "This gateway is supervised by launchd, which restarts it when it dies. Unload the agent to actually stop it: launchctl unload ~/Library/LaunchAgents/<the plist declaring this label>. Re-run setup to bring it back." \
+            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
+              result:"supervised", pid:$pid, supervisor_label:$label,
+              pidfile:$p, error:"usage",
+              detail:("the gateway is supervised by the launchd job \($label), which respawns it — a kill here would report a stop that lasts about a second"),
+              remedy:$rem, exit_code:$c}')" \
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop supervised object"
         exit $EX_USAGE
     fi
 
@@ -1436,14 +1516,43 @@ stop)
         if [ "$waited" -gt 100 ]; then
             say "pid $pid ignored SIGTERM for 10s — escalating to SIGKILL"
             kill -KILL "$pid" 2>/dev/null
+            # Give the KILL a moment to land before deciding it worked.
+            for _k in 1 2 3 4 5 6 7 8 9 10; do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.1
+            done
             break
         fi
     done
+
+    # VERIFY THE KILL. SIGKILL is not delivered to a task in uninterruptible
+    # sleep until it leaves the kernel — a gateway wedged on a hung mount under
+    # its log dir survives it. The loop used to `break` unconditionally, delete
+    # BOTH pidfile records, and report ok:true / result:"stopped" / exit 0 while
+    # the process was still alive and serving. Worse, deleting the ownership
+    # record is what makes the next stop fall into the empty-pidfile branch, so
+    # the gateway becomes unstoppable through this surface entirely.
+    #
+    # The other two stop branches were already hardened against exactly this and
+    # say so — "refusing to report a stop that did not happen". Two of three
+    # branches got the treatment; the one that actually signals did not.
+    if kill -0 "$pid" 2>/dev/null; then
+        say "pid $pid survived SIGKILL — refusing to report a stop that did not happen, and leaving $PIDFILE alone"
+        emit "$(jq -nc --argjson pid "$pid" --arg p "$PIDFILE" --argjson c $EX_USAGE \
+            --arg rem "The process did not die, most likely wedged in uninterruptible sleep (a hung mount or stuck disk write). The pidfile was left alone so this gateway stays manageable. Clear whatever it is blocked on, then run stop again." \
+            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:"stop",
+              result:"kill_failed", pid:$pid, pidfile:$p, error:"usage",
+              detail:"the recorded pid survived SIGTERM and SIGKILL; it was NOT stopped and the pidfile was left intact",
+              remedy:$rem, exit_code:$c}')" \
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop kill_failed object"
+        exit $EX_USAGE
+    fi
+
     rm -f "$PIDFILE" "$PIDFILE.bin"
     emit "$(jq -nc --argjson pid "$pid" \
         "$(spawn::envelope_jq plugin)"' + {ok:true, verb:"stop",
           result:"stopped", pid:$pid, error:null, exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the stop stopped object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the stop stopped object"
     exit $EX_OK
     ;;
 
@@ -1467,6 +1576,19 @@ restart)
         # to `.detail`, so reading .error here printed "(usage)" where the
         # sentence belonged. Same fix the lens and launch rewraps already carry.
         stop_reason="$(printf '%s' "$stop_out" | jq -r '.detail // .error // "no reason given"' 2>/dev/null)"
+        # The supervised case gets its own remedy. Before the stop verb learned
+        # to detect launchd, restart on an adopted machine "worked" by
+        # accident: the kill triggered a respawn, start_if_down probed, found a
+        # gateway up, and reported success. It really did restart — but only
+        # because something this script does not manage put it back, which is
+        # not a thing to rely on and not a thing to describe as a restart this
+        # verb performed. Restarting a supervised job means going through the
+        # supervisor, and the operator is told exactly how rather than having
+        # this script reach into launchd on its own (same reasoning as stop).
+        if [ "$(printf '%s' "$stop_out" | jq -r '.result // ""' 2>/dev/null)" = "supervised" ]; then
+            stop_label="$(printf '%s' "$stop_out" | jq -r '.supervisor_label // "the launchd job"' 2>/dev/null)"
+            die "$EX_USAGE" "restart aborted: this gateway is supervised by the launchd job '$stop_label', so restarting it means restarting that job, not killing the process — a kill here is undone by KeepAlive within seconds. Run: launchctl kickstart -k gui/\$UID/$stop_label (or unload and load its plist). Nothing was signalled and the gateway is still serving."
+        fi
         die "$EX_USAGE" "restart aborted: the stop phase exited $stop_rc without stopping the running gateway ($stop_reason) — the old process is still serving and was NOT replaced"
     fi
     start_if_down
@@ -1488,7 +1610,7 @@ restart)
           pid:(if $pid == "" then null else ($pid|tonumber) end),
           stop_exit_code:$stop_rc, served_aliases:$served, error:null,
           exit_code:0}')" \
-        || die "$EX_USAGE" "could not encode the restart object"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the restart object"
     exit $EX_OK
     ;;
 
@@ -1636,7 +1758,7 @@ status)
           detail:(if $detail == "" then null else $detail end),
           remedy:(if $rem == "" then null else $rem end),
           exit_code:$c}')" \
-        || die "$EX_USAGE" "could not encode the status object (models table at $MODELS_JSON may be malformed)"
+        || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the status object (models table at $MODELS_JSON may be malformed)"
     exit $prc
     ;;
 esac

@@ -58,6 +58,13 @@ setup() {
     mkdir -p "$SPAWN_LAUNCH_AGENTS_DIR"
 
     export SPAWN_PLUTIL_BIN="$FIX/fake-plutil.sh"
+    # The adoption-verification budget. A fixture never writes a real pidfile
+    # under a real launchd job, so every test here takes the not-in-effect
+    # branch — at the real-machine budget that is ~4s of sleeping per test and
+    # turned this suite from 64s into 203s. The tests that assert the VERIFIED
+    # branch wire a job list and a live pid, and one try is enough for them.
+    export SPAWN_ADOPT_VERIFY_TRIES=1
+    export SPAWN_ADOPT_VERIFY_SLEEP=0
     export SPAWN_LAUNCHCTL_BIN="$FIX/fake-launchctl.sh"
     PLUTIL_RECORD="$WORK/plutil-argv"
     CTL_RECORD="$WORK/launchctl-argv"
@@ -232,7 +239,7 @@ mutant() {
     mkdir -p "$dir"
     cp "$LIB"/*.sh "$dir/"
     [ -f "$LIB/models.json" ] && cp "$LIB/models.json" "$dir/"
-    sed -i '' "$expr" "$dir/$file"
+    sed -i '' "$expr" "$dir"/*.sh
     printf '%s' "$dir/$file"
 }
 
@@ -624,7 +631,7 @@ EOP
     # the owner of a startup path the operator never asked it to own.
     local script
     script="$(mutant setup.sh 's|^        say "no launchd agent in .*|        printf "invented\\n" > "$LAUNCH_AGENTS_DIR/com.spawn.invented.plist"|')"
-    grep -q 'com.spawn.invented.plist' "$script"
+    grep -rq 'com.spawn.invented.plist' "$(dirname "$script")"
 
     plant_agent unrelated "/usr/bin/true" >/dev/null
     local before
@@ -642,7 +649,7 @@ EOP
 @test "G3 self-test: a launcher that BAKES the token makes the credential-free assertion go red" {
     local script
     script="$(mutant setup.sh 's|^# credentials are NEVER baked into this file.*|GATEWAY_TOKEN=$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN")|')"
-    grep -q 'GATEWAY_TOKEN=\$(spawn::keychain_read' "$script"
+    grep -rq 'GATEWAY_TOKEN=\$(spawn::keychain_read' "$(dirname "$script")"
 
     plant_agent gateway >/dev/null
     run_supervisor --script "$script"
@@ -660,7 +667,7 @@ EOP
     # with no token.
     local script
     script="$(mutant setup.sh 's|^    "\$LAUNCHCTL_BIN" unload "\$SUPERVISOR_PLIST"|    true unload "$SUPERVISOR_PLIST"|')"
-    grep -q '^    true unload' "$script"
+    grep -rq '^    true unload' "$(dirname "$script")"
 
     plant_agent gateway >/dev/null
     run_supervisor --script "$script"
@@ -690,7 +697,7 @@ EOP
 @test "G3 self-test: a launcher that execs the argv UNREBASED makes the launcher-run assertion go red" {
     local script old="$WORK/gateway-0.1.0"
     script="$(mutant setup.sh 's,write_launcher "\$SUPERVISOR_ARGV" "\$exec_argv",write_launcher "$SUPERVISOR_ARGV" "$SUPERVISOR_ARGV",')"
-    grep -q 'write_launcher "\$SUPERVISOR_ARGV" "\$SUPERVISOR_ARGV"' "$script"
+    grep -rq 'write_launcher "\$SUPERVISOR_ARGV" "\$SUPERVISOR_ARGV"' "$(dirname "$script")"
 
     plant_agent gateway "$old/target/release/gateway" "$old" >/dev/null
     run_supervisor --script "$script"
@@ -710,7 +717,7 @@ EOP
 @test "G3 self-test: recording the REBASED argv makes the original-command assertion go red" {
     local script old="$WORK/gateway-0.1.0"
     script="$(mutant setup.sh 's,write_launcher "\$SUPERVISOR_ARGV" "\$exec_argv",write_launcher "$exec_argv" "$exec_argv",')"
-    grep -q 'write_launcher "\$exec_argv" "\$exec_argv"' "$script"
+    grep -rq 'write_launcher "\$exec_argv" "\$exec_argv"' "$(dirname "$script")"
 
     plant_agent gateway "$old/target/release/gateway" "$old" >/dev/null
     run_supervisor --script "$script"
@@ -898,4 +905,109 @@ EOP
     [ "$status" -ne 0 ]
     grep -qx 'signalled=yes' "$BIN_RECORD"
     wait "$launcher_pid" 2>/dev/null || true
+}
+
+# --- did the adoption actually take effect? ---------------------------------
+#
+# `launchctl load` exiting 0 means the job was SUBMITTED, not that the gateway
+# now serving is the one it started. The silent failure: a gateway started
+# outside launchd (a plain spawnctl start, or the operator's own `gw start`)
+# already holds the port, the supervised launcher cannot bind and gives up, and
+# every downstream check still passes because the unsupervised process answers
+# them. Setup reported "adopted" and the machine rebooted into a different
+# arrangement than the one it was told it had.
+
+@test "adoption is VERIFIED when the serving gateway is under the loaded job" {
+    local plist; plist="$(plant_agent gateway)"
+    # A live process standing in for the gateway launchd started, and a job list
+    # that claims it. Its own pid is used (not a parent) because that models the
+    # plist-points-straight-at-the-binary shape; the child shape is covered in
+    # spawnctl.bats.
+    sleep 60 & local live=$!
+    printf '%s\n' "$live" > "$SPAWN_PIDFILE"
+    printf '%s\t0\tcom.example.gateway\n' "$live" > "$WORK/lclist"
+    export FAKE_LAUNCHCTL_LIST="$WORK/lclist"
+
+    run_supervisor
+    kill "$live" 2>/dev/null || true
+
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+    [ "$(jq -r '.adoption_in_effect' "$OUT")" = "true" ]
+    [ "$(jq -r '.supervised_pid' "$OUT")" = "$live" ]
+    [ "$(jq -r '.supervisor_label' "$OUT")" = "com.example.gateway" ]
+    [ "$(jq -r '.adoption_warning' "$OUT")" = "null" ]
+}
+
+@test "an adoption that is configured but NOT in effect is reported, not hidden" {
+    local plist; plist="$(plant_agent gateway)"
+    # A live gateway that no loaded job owns — the unsupervised-process-holds-
+    # the-port shape. The job list is empty, so nothing supervises this pid.
+    sleep 60 & local live=$!
+    printf '%s\n' "$live" > "$SPAWN_PIDFILE"
+    : > "$WORK/lclist"
+    export FAKE_LAUNCHCTL_LIST="$WORK/lclist"
+
+    run_supervisor
+    kill "$live" 2>/dev/null || true
+
+    # STILL exit 0 and ok:true, deliberately: the plist IS repointed and the
+    # launcher IS written, so the next login gets the adopted arrangement. Only
+    # the CURRENT process is wrong. Failing here would hand the operator a
+    # correct configuration alongside an error, which reads as "the adoption
+    # broke" when it did not.
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.ok' "$OUT")" = "true" ]
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+
+    # The whole point: the difference is VISIBLE and machine-branchable.
+    [ "$(jq -r '.adoption_in_effect' "$OUT")" = "false" ]
+    [ "$(jq -r '.supervised_pid' "$OUT")" = "null" ]
+    [ "$(jq -r '.adoption_warning' "$OUT")" != "null" ]
+    jq -e '.adoption_warning | test("not the one launchd started")' "$OUT" >/dev/null
+    # And it names the recovery, including the trap that the process to stop is
+    # the UNSUPERVISED one.
+    jq -e '.adoption_warning | test("launchctl unload")' "$OUT" >/dev/null
+}
+
+@test "an apostrophe in a baked value produces a VALID launcher, not a validated-but-broken one" {
+    # The launcher bakes values into a file launchd EXECUTES at login. They used
+    # to be wrapped in single quotes rather than shell-quoted, so an apostrophe
+    # anywhere ended the quote and made the launcher a bash syntax error.
+    #
+    # The compounding part is what makes this more than cosmetic: write_launcher
+    # validates its own output by grepping for ^PIDFILE=, ^KEYCHAIN_SERVICE= and
+    # friends — and those STILL MATCH in a syntactically broken file. The broken
+    # launcher passed validation and was moved over the working one. Under a
+    # KeepAlive agent that is a login-time respawn loop with the gateway never
+    # starting.
+    #
+    # The Keychain service name is used because the suite already controls it as
+    # a seam. The sharpest real input is the gateway path, which comes from
+    # jq .[0] on an OPERATOR-OWNED plist and is therefore not a value setup
+    # produced — same bake, same fix, harder to reach from a test.
+    local q; q="$(printf '\047')"
+    export SPAWN_KEYCHAIN_SERVICE="spawn-it${q}s-test"
+    local plist; plist="$(plant_agent gateway)"
+
+    run_supervisor
+    [ "$RC" -eq 0 ]
+    assert_one_json
+    [ "$(jq -r '.action' "$OUT")" = "repointed" ]
+
+    # THE ASSERTION THAT MATTERS: the generated launcher actually parses.
+    [ -f "$SPAWN_GATEWAY_LAUNCHER" ]
+    run bash -n "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+
+    # ...and the value survived intact. Asserted by EVALUATING the assignment,
+    # not by grepping the file: jq @sh escapes an apostrophe as '\'' , so the
+    # literal string is deliberately NOT present in the text. Grepping for it
+    # fails against a perfectly correct launcher — which is exactly what the
+    # first version of this assertion did.
+    run bash -c 'eval "$(grep -m1 "^KEYCHAIN_SERVICE=" "$1")"; printf "%s" "$KEYCHAIN_SERVICE"' _ "$SPAWN_GATEWAY_LAUNCHER"
+    [ "$status" -eq 0 ]
+    [ "$output" = "spawn-it${q}s-test" ]
 }

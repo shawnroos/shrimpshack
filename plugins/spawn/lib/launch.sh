@@ -106,7 +106,7 @@ PROJECTS_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
 # Every human-readable diagnostic goes through say() or die(), and both
 # sanitize (KTD5) — a chokepoint rather than per-site discipline, so a message
 # nobody has written yet is closed too.
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
+# say() is inherited from common.sh — it was byte-identical in four files.
 
 # The single stdout write lives in common.sh (emit); EMITTED is this script's
 # own state, so it stays declared here — a bash function reads the caller's
@@ -137,77 +137,29 @@ remedy_for() {
     esac
 }
 
-emit_error() {
-    # $1 = exit code, $2 = machine-readable error value, rest = human detail.
-    local code="$1" err="$2"; shift 2
-    [ "$EMITTED" -eq 1 ] && return 0
-    # `detail` is human-readable diagnostic text a consumer prints, so it is
-    # sanitized (KTD5).
-    local detail alias_d
-    detail="$(spawn::sanitize_for_display "$*")"
-    # The alias is display text on THIS path and only here: emit_error is the
-    # one place it can be an alias the grammar REFUSED, so it has not been
-    # closed by construction yet. jq escapes a control byte in transit but
-    # emits a Unicode bidi override literally, so the field is sanitized.
-    alias_d="$(spawn::sanitize_for_display "$ALIAS")"
-    # R23: the envelope comes from common.sh, so this tier cannot drift from the
-    # success emit below or from the no-jq tier under it. REMEDY is the optional
-    # per-site remedy (R12) — a caller sets it as a prefix assignment on die.
-    # R12: the site's own REMEDY wins; otherwise the enum's default from the one
-    # table. Defaulting here rather than at every die site is what makes "every
-    # error names its remedy" a property of the code shape rather than a review
-    # item that goes stale on the next site somebody adds.
-    local rem="${REMEDY:-}"
-    [ -n "$rem" ] || rem="$(remedy_for "$err")"
-    local obj=""
-    if command -v jq >/dev/null 2>&1; then
-        obj="$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" \
-            --arg r "$rem" --argjson c "$code" --argjson h "$HELP_REQUESTED" \
-            "$(spawn::envelope_jq plugin)"' + {ok:false,
-              alias:(if $a == "" then null else $a end), session_id:null,
-              transcript_path:null, cwd:null, base_url:null, context_window:null,
-              attach_command:null, error:$e, detail:$d, help_requested:$h,
-              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
-    fi
-    # Falls through to the pure-bash tier when jq is ABSENT and also when jq is
-    # present but errored: that yielded the empty string, emit refused it, and
-    # the script exited with nothing on stdout at all.
-    # help_requested rides the no-jq tier too — a box without an encoder must
-    # still be able to tell a help request from a caller bug, and it is a bash
-    # literal, so no encoder is needed for it.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
-    emit "$obj"
-}
+# The failure envelope lives in common.sh (spawn::emit_error): this was a
+# ~40-line near-copy of its sibling, differing only in the trust tier and the
+# per-surface null fields — the same two axes spawn::preflight_jq already
+# parametrizes. The null fields are named ONCE now; the shared helper derives
+# both the jq and the no-jq spelling from that one list, which is the pair
+# that had already drifted.
+emit_error() { spawn::emit_error plugin "session_id transcript_path cwd base_url context_window attach_command" "$@"; }
 
-die() {
-    local code="$1" err="$2"; shift 2
-    printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
-    emit_error "$code" "$err" "$*"
-    exit "$code"
-}
+# die() is inherited from common.sh — it was byte-identical here and in the
+# sibling surface, which is the module boundary saying it belongs there.
 
 # TMPWORK holds scratch that must not outlive the call — the captured child
 # stdout above all, because that is the one place the session id lives before
 # it reaches the handle.
 TMPWORK=""
 CHILD_PID=""
+ENSURE_TMP=""
 
 # TERM → bounded poll → KILL → reap (the escalation spawnctl's stop uses).
 # Reaping matters as much as signalling: an unreaped `claude` re-parented to
 # init keeps the gateway token in its environment for as long as it lives.
-reap_child() {
-    [ -n "$CHILD_PID" ] || return 0
-    kill -TERM "$CHILD_PID" 2>/dev/null
-    local i
-    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-        kill -0 "$CHILD_PID" 2>/dev/null || break
-        sleep 0.1
-    done
-    kill -0 "$CHILD_PID" 2>/dev/null && kill -KILL "$CHILD_PID" 2>/dev/null
-    wait "$CHILD_PID" 2>/dev/null
-    CHILD_PID=""
-    return 0
-}
+# reap_child() is inherited from common.sh — it was byte-identical here and in
+# the sibling surface, which is the module boundary saying where it belongs.
 
 cleanup() {
     # Kill and reap the seed child before removing the scratch its output is
@@ -215,6 +167,9 @@ cleanup() {
     # (or a Ctrl-C) end the `claude` underneath instead of orphaning it (R2).
     reap_child
     [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
+    # The preflight scratch file exists BEFORE TMPWORK does, so it needs its own
+    # line here rather than riding along inside the work directory.
+    [ -n "$ENSURE_TMP" ] && rm -f "$ENSURE_TMP" 2>/dev/null
     return 0
 }
 trap cleanup EXIT
@@ -242,26 +197,16 @@ tmpwork() {
     fi
 }
 
-need_jq() {
-    command -v jq >/dev/null 2>&1 || {
-        printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
-        # Same envelope, same constants, no encoder (R23 / KTD7): this is the
-        # tier that used to be a hand-written string and drifted from the other
-        # two the moment either changed.
-        emit "$(spawn::envelope_bash plugin "usage" 2 ",\"alias\":null,\"session_id\":null,\"transcript_path\":null,\"attach_command\":null,\"help_requested\":$HELP_REQUESTED" "Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it.")"
-        exit 2
-    }
-}
+# need_jq() is inherited from common.sh; it routes through this file's own
+# emit_error, so the envelope stays per-surface while the shape is shared.
 
 # ---------------------------------------------------------------------------
 # Alias grammar (KTD5). Checked BEFORE any network call and before the alias is
 # ever interpolated into the attach command, so an escape byte or a shell
 # metacharacter in an identifier is impossible rather than filtered.
 # ---------------------------------------------------------------------------
-validate_alias() {
-    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
-        || die "$EX_USAGE" "usage" "alias failed the grammar [A-Za-z0-9._-]+ — refused before any network call"
-}
+# validate_alias() is inherited from common.sh (byte-identical in both model
+# surfaces); spawnctl keeps its own because its die takes no enum argument.
 
 usage() {
     cat >&2 <<'EOF'
@@ -300,32 +245,7 @@ emit_describe() {
     # unparsed). MODELS_JSON is already this script's global for the launched
     # session's context window; reused here rather than re-derived.
     local grammar
-    grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
-    if [ -f "$MODELS_JSON" ]; then
-        grammar="$(jq -c '
-            def safeobj: if type == "object" then . else {} end;
-            def safe_families:
-                ((.families // {}) | safeobj)
-                | map_values(
-                    if type == "object" then
-                        ((.default // null) as $d
-                         | (.tiers // {}) as $t
-                         | {
-                             default: (if ($d|type) == "string" then $d else null end),
-                             tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
-                           })
-                    else empty end
-                  );
-            def safe_chain_policy:
-                ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
-            if (type == "object") then {
-                families: safe_families,
-                no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
-                chain_policy: safe_chain_policy
-            } else {families:{}, no_family_alias:null, chain_policy:{}} end
-        ' < "$MODELS_JSON" 2>/dev/null)" || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
-        [ -n "$grammar" ] || grammar='{"families":{},"no_family_alias":null,"chain_policy":{}}'
-    fi
+    grammar="$(spawn::models_grammar "$MODELS_JSON")"
 
     ev="$(jq -n \
         --arg r_usage "$(remedy_for usage)" \
@@ -334,6 +254,7 @@ emit_describe() {
         --arg r_auth "$(remedy_for auth_rejected)" \
         --arg r_dead "$(remedy_for deadline_exceeded)" \
         --arg r_pre "$(remedy_for preflight_failed)" \
+        --arg r_int "$(remedy_for internal)" \
         --arg r_seed "$(remedy_for seed_failed)" \
         --arg r_sid "$(remedy_for no_session_id)" \
         --arg r_tr "$(remedy_for transcript_missing)" \
@@ -345,7 +266,8 @@ emit_describe() {
           {value:"no_session_id",     exit_code:5, remedy:$r_sid},
           {value:"transcript_missing",exit_code:5, remedy:$r_tr},
           {value:"deadline_exceeded", exit_code:6, remedy:$r_dead},
-          {value:"preflight_failed",  exit_code:3, remedy:$r_pre}]')" || return 1
+          {value:"preflight_failed",  exit_code:3, remedy:$r_pre},
+          {value:"internal",exit_code:2, remedy:$r_int}]')" || return 1
 
     emit "$(jq -nc --argjson errors "$ev" --argjson timeout "$d_timeout" --argjson grammar "$grammar" \
         "$(spawn::envelope_jq plugin)"' + {
@@ -434,7 +356,7 @@ while [ $# -gt 0 ]; do
                          # Answered here, before --alias is required and long
                          # before preflight — so it holds with the gateway down
                          # and with no config on the box (R10).
-                         emit_describe || die "$EX_USAGE" "usage" "could not encode the describe object"
+                         emit_describe || die "$EX_USAGE" "internal" "could not encode the describe object"
                          exit "$EX_OK" ;;
         -h|--help)       # R11: same exit code, same enum, different FIELD. Set
                          # before need_jq so the no-jq tier carries it too.
@@ -509,8 +431,43 @@ fi
 # vocabulary (error enum + detail + the null handle fields), with ensure's full
 # object under `preflight` so nothing is lost. One object on stdout (KTD2).
 # ---------------------------------------------------------------------------
-ENSURE_OUT="$(bash "$CTL" ensure "$ALIAS")"
+# Run in the BACKGROUND with an explicit `wait`, matching lens.sh — which
+# documents why at length: a `$( ... )` command substitution is a FOREGROUND
+# child, and bash defers every trap until a foreground child returns. Preflight
+# can sit here for the lock wait plus a gateway start, so a TERM arriving in
+# that window was ignored until ensure finished on its own.
+#
+# This file had the sibling's reasoning available and did the opposite, with no
+# note saying why. Two consequences, and the second is the real one:
+#   * nothing was leaking TODAY only because tmpwork() runs AFTER preflight —
+#     an accident of ordering, not a decision, and moving one line would have
+#     silently reintroduced the leak lens.sh wrote three paragraphs about;
+#   * the ensure CHILD was never killed. It holds the control lock and may be
+#     starting a gateway, so a cancelled launch left it running unsupervised.
+#     CHILD_PID + reap_child already existed here for the seed run; preflight
+#     just was not using them.
+# Also suppressing ensure's stderr, as lens.sh does: its diagnostics were
+# interleaving with this script's own.
+# mktemp CAN fail here — an unwritable TMPDIR is a real state, and this line
+# now runs BEFORE tmpwork(), which used to be the first thing to touch TMPDIR
+# and owns the friendly refusal for it. Backgrounding preflight moved that
+# first touch earlier, so the refusal has to move with it: without this the
+# redirect below gets an empty path and the script dies with no JSON at all,
+# breaking KTD2 on a path regressions.bats already pins. Same code, same enum
+# and same remedy shape as tmpwork's, deliberately.
+ENSURE_TMP="$(umask 077; mktemp "${TMPDIR:-/tmp}/gwlaunch-ensure.XXXXXX")" || {
+    printf '✗ cannot create a temp file\n' >&2
+    REMEDY="Point TMPDIR at a writable directory and call again. Nothing was seeded, so no session exists to clean up." \
+        emit_error 2 "usage" "cannot create a temp file under ${TMPDIR:-/tmp}"
+    exit 2; }
+bash "$CTL" ensure "$ALIAS" > "$ENSURE_TMP" 2>/dev/null &
+CHILD_PID=$!
+wait "$CHILD_PID"
 ENSURE_RC=$?
+CHILD_PID=""
+ENSURE_OUT="$(cat "$ENSURE_TMP" 2>/dev/null)"
+rm -f "$ENSURE_TMP" 2>/dev/null
+ENSURE_TMP=""
 if [ "$ENSURE_RC" -ne 0 ]; then
     # Enum from the CODE, which KTD2 defines — never re-parsed out of prose. The
     # table lives in common.sh (R23), and spawnctl derives its own `error` from
@@ -531,11 +488,7 @@ if [ "$ENSURE_RC" -ne 0 ]; then
         --arg d "$(spawn::sanitize_for_display "$PRE_DETAIL")" \
         --arg r "$PRE_REMEDY" \
         --argjson p "$PRE_JSON" --argjson c "$ENSURE_RC" \
-        "$(spawn::envelope_jq plugin)"' + {ok:false, alias:$a, session_id:null,
-          transcript_path:null, cwd:null, base_url:null, context_window:null,
-          attach_command:null, error:$e, detail:$d, preflight:$p,
-          help_requested:false,
-          remedy:(if $r == "" then null else $r end), exit_code:$c}')" \
+        "$(spawn::preflight_jq plugin 'session_id:null, transcript_path:null, cwd:null, base_url:null, context_window:null, attach_command:null,')")" \
         || emit_error "$ENSURE_RC" "$PRE_ENUM" "$PRE_DETAIL"
     exit "$ENSURE_RC"
 fi
@@ -577,20 +530,10 @@ if [ -n "$CONFIG_PATH" ] && [ -f "$CONFIG_PATH" ]; then
 fi
 # Then the SAME env/Keychain fallback spawnctl's probe runs (R27), so a config
 # whose token setup retired still launches instead of seeding into a 401.
-# Wrapped in a function ONLY so `local -` is available: this block assigns a
-# credential, and at top level there is no scope to confine `set +x` to, so a
-# caller running the script under `bash -x` would trace the token out. The
-# function restores the caller's own xtrace setting on return.
-resolve_token_from_fallback() {
-    local -
-    set +x
-    SPAWN_TOKEN_VALUE=""
-    if spawn::token_fallback "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"; then
-        TOKEN="$SPAWN_TOKEN_VALUE"
-    fi
-    SPAWN_TOKEN_VALUE=""
-}
-[ -n "$TOKEN" ] || resolve_token_from_fallback
+# spawn::resolve_token (secrets.sh) owns this, xtrace guard and all — it was a
+# byte-identical copy in both this file and its sibling until the duplication
+# was collapsed into the file that already owns the chain.
+[ -n "$TOKEN" ] || spawn::resolve_token "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"
 # An empty token is not fatal here: `ensure` already proved the gateway accepts
 # whatever this config holds. Guessing a failure before the wire would invent
 # one the gateway never reported.
@@ -772,5 +715,5 @@ emit "$(jq -nc \
       context_window:(if $win == "" then null else ($win|tonumber) end),
       attach_command:$attach, error:null, exit_code:0}')" \
     || REMEDY="The session was created but jq could not encode the handle. Check jq is a working build; the session exists on disk, so it can be resumed by session id without re-seeding." \
-        die "$EX_USAGE" "usage" "could not encode the response object"
+        die "$EX_USAGE" "internal" "could not encode the response object"
 exit $EX_OK

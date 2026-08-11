@@ -163,7 +163,7 @@ mutant() {
     mkdir -p "$dir"
     cp "$LIB"/*.sh "$dir/"
     [ -f "$LIB/models.json" ] && cp "$LIB/models.json" "$dir/"
-    sed -i '' "$expr" "$dir/$file"
+    sed -i '' "$expr" "$dir"/*.sh
     printf '%s' "$dir/$file"
 }
 
@@ -370,7 +370,7 @@ mutant() {
     # exactly the shape the file being replaced had.
     local script
     script="$(mutant setup.sh 's|^# credentials are NEVER baked into this file.*|ANTHROPIC_AUTH_TOKEN="$(spawn::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN")"|')"
-    grep -q 'ANTHROPIC_AUTH_TOKEN="\$(spawn::keychain_read' "$script"
+    grep -rq 'ANTHROPIC_AUTH_TOKEN="\$(spawn::keychain_read' "$(dirname "$script")"
 
     run_gw --script "$script"
     [ "$RC" -eq 0 ]
@@ -388,7 +388,7 @@ mutant() {
     # their edit is silently discarded.
     local script
     script="$(mutant setup.sh 's|        GW_STATE="modified"|        GW_STATE="generated"|')"
-    grep -q 'GW_STATE="generated"$' "$script"
+    grep -rq 'GW_STATE="generated"$' "$(dirname "$script")"
 
     run_gw
     [ "$RC" -eq 0 ]
@@ -406,7 +406,7 @@ mutant() {
 @test "G3 self-test: recognition that accepts a markerless wrapper makes the consent assertion go red" {
     local script
     script="$(mutant setup.sh 's|GW_STATE="foreign"; return 0|GW_STATE="generated"; return 0|')"
-    grep -q 'GW_STATE="generated"; return 0; }' "$script"
+    grep -rq 'GW_STATE="generated"; return 0; }' "$(dirname "$script")"
 
     plant_markerless_gw
     local before
@@ -419,4 +419,89 @@ mutant() {
     [ "$(sha_of "$SPAWN_GW_PATH")" != "$before" ]
     run grep -F -- "$FIXTURE_LITERAL" "$SPAWN_GW_PATH"
     [ "$status" -ne 0 ]
+}
+
+# --- the baked delegation path must outlive the checkout it was written from --
+#
+# Live failure, 2026-08-10: setup was run from a git worktree, so `gw` baked
+# SPAWNCTL= into that worktree. The PR landed, the worktree was removed, and gw
+# started failing with exit 127 — with nothing on the machine explaining why.
+# A worktree is a directory that is EXPECTED to be deleted; baking one is the
+# bug.
+#
+# These build a REAL linked worktree rather than faking the git plumbing,
+# because the whole fix keys on git's own answer (--git-dir differs from
+# --git-common-dir in a linked worktree and nowhere else). A stubbed git would
+# pin the stub, not the behaviour.
+
+# make_worktree_plugin — a throwaway repo carrying the real lib/ at the real
+# relative path, plus a linked worktree of it. Sets $MAIN_REPO and $WT.
+MAIN_REPO=""
+WT=""
+make_worktree_plugin() {
+    MAIN_REPO="$WORK/mainrepo"
+    mkdir -p "$MAIN_REPO/plugins/spawn"
+    cp -R "$LIB" "$MAIN_REPO/plugins/spawn/lib"
+    git -C "$MAIN_REPO" init -q
+    git -C "$MAIN_REPO" config user.email t@t
+    git -C "$MAIN_REPO" config user.name t
+    git -C "$MAIN_REPO" add -A
+    git -C "$MAIN_REPO" commit -qm base
+    WT="$WORK/wt"
+    git -C "$MAIN_REPO" worktree add -q -b wtbranch "$WT"
+    [ -f "$WT/plugins/spawn/lib/setup.sh" ]
+}
+
+@test "setup run from a git worktree bakes the MAIN checkout's path, not the worktree's" {
+    make_worktree_plugin
+    # The rail that forces this code path: with SPAWN_SPAWNCTL_PATH set, the
+    # resolution is the caller's decision and is deliberately left alone. The
+    # whole point here is the DERIVED path, so it must be unset.
+    unset SPAWN_SPAWNCTL_PATH
+
+    run bash -c 'bash "$1" gw 2>/dev/null' _ "$WT/plugins/spawn/lib/setup.sh"
+    [ "$status" -eq 0 ]
+
+    local baked; baked="$(echo "$output" | jq -r '.spawnctl')"
+    # It points into the durable main checkout...
+    [ "$baked" = "$MAIN_REPO/plugins/spawn/lib/spawnctl.sh" ]
+    # ...NOT into the worktree, which is the thing that disappears.
+    case "$baked" in "$WT"/*) return 1 ;; esac
+    [ "$(echo "$output" | jq -r '.warning')" = "null" ]
+
+    # The real proof: remove the worktree and the wrapper still resolves.
+    git -C "$MAIN_REPO" worktree remove --force "$WT"
+    [ ! -d "$WT" ]
+    grep -q "SPAWNCTL=\"$MAIN_REPO/plugins/spawn/lib/spawnctl.sh\"" "$SPAWN_GW_PATH"
+    [ -f "$(grep -m1 '^SPAWNCTL=' "$SPAWN_GW_PATH" | sed 's/^SPAWNCTL="//; s/"$//')" ]
+}
+
+@test "a worktree with no durable twin keeps its path and says so in the object" {
+    make_worktree_plugin
+    unset SPAWN_SPAWNCTL_PATH
+    # The branch under test: a plugin that exists ONLY on the worktree's branch.
+    # Nothing durable to point at, so re-pointing would trade a delayed break
+    # for an immediate one — it must keep the worktree path AND warn.
+    rm -f "$MAIN_REPO/plugins/spawn/lib/spawnctl.sh"
+
+    run bash -c 'bash "$1" gw 2>/dev/null' _ "$WT/plugins/spawn/lib/setup.sh"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.spawnctl')" = "$WT/plugins/spawn/lib/spawnctl.sh" ]
+    # Machine-readable, not just prose: setup's caller is usually an agent.
+    [ "$(echo "$output" | jq -r '.warning')" != "null" ]
+    echo "$output" | jq -r '.warning' | grep -q 'WORKTREE'
+    echo "$output" | jq -r '.warning' | grep -q '127'
+}
+
+@test "a normal (non-worktree) checkout is left alone and never warns" {
+    # Negative control. In a plain clone --git-dir and --git-common-dir agree,
+    # so none of the re-pointing runs. A fix that fired here would silently
+    # redirect every ordinary install.
+    make_worktree_plugin
+    unset SPAWN_SPAWNCTL_PATH
+
+    run bash -c 'bash "$1" gw 2>/dev/null' _ "$MAIN_REPO/plugins/spawn/lib/setup.sh"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.spawnctl')" = "$MAIN_REPO/plugins/spawn/lib/spawnctl.sh" ]
+    [ "$(echo "$output" | jq -r '.warning')" = "null" ]
 }

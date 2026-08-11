@@ -17,12 +17,37 @@
 #     would push a token across a boundary it currently never crosses.
 #   * launch.sh's quote-free TOKEN_AWK — it is embedded verbatim in the printed
 #     attach command and re-invoked by the user's shell.
-#   * the server.token awk parsers, and tmpwork() (whose mktemp template and
-#     comment name the script they belong to).
+#   * tmpwork() (whose mktemp template and comment name the script they belong
+#     to, and whose per-surface remedy text differs).
 #
-# This file prints NOTHING to stderr and holds no diagnostics, which is why it
-# does not source sanitize.sh: it has no terminal sink to defend. The
+# REMOVED FROM THIS LIST 2026-08-10: "the server.token awk parsers". A reviewer
+# called that rationalisation by listing and was right — the reason stated beside
+# it justifies tmpwork, not the parsers. launch.sh's TOKEN_AWK has a real reason
+# of its own (above). But lens.sh's read_server_token was a strict subset of
+# spawnctl.sh's yaml_scan, sharing the trim/decomment/unquote helpers verbatim
+# with no reason at all. Those three now live in SPAWN_YAML_AWK_DEFS below; each
+# caller keeps its own RULES, which genuinely differ. Listing a duplication
+# under a "deliberate" heading is not the same as giving it a reason.
+#
+# WHAT THIS FILE DOES AND DOES NOT DO WITH THE TERMINAL
+#
+# It holds no diagnostics of its own and does not SOURCE sanitize.sh. The
 # escapes.bats sink lint still scans it — see the annotated carve-out there.
+#
+# It DOES print to stderr, and it DOES call spawn::sanitize_for_display: in
+# spawn::emit_error (on `detail` and `alias`) and in die(), which prints its
+# message through the sanitizing chokepoint. Both arrived with the shared
+# failure path, and the header used to state the opposite on both counts.
+#
+# The consequence for a CONSUMER: source sanitize.sh before this file. Every
+# current one does, so nothing is broken today — but a future consumer that
+# sourced common.sh alone would fail at the moment it tried to report an error,
+# which is the worst possible moment to discover a missing dependency.
+#
+# This sentence has been corrected twice. The first correction fixed only the
+# sanitize half and left "prints NOTHING to stderr" standing — which the very
+# commit that prompted the correction had already falsified. Hence stating both
+# halves together rather than patching the same claim a third time.
 
 # ---------------------------------------------------------------------------
 # ${VAR} expansion. The gateway expands env references in server.token, so a
@@ -50,11 +75,17 @@ expand_env_refs() {
 # with no failure visible at the call site — so emit would write a bare newline,
 # set EMITTED, and the script would still exit with whatever code it had, which
 # on a healthy gateway is 0. That is the one failure a consumer cannot tell from
-# success: exit 0 and nothing to parse. Refusing here closes it for all 18 call
-# sites at once instead of per-site; success paths pair this with `|| die`, and
+# success: exit 0 and nothing to parse. Refusing here closes it for EVERY call
+# site at once instead of per-site; success paths pair this with `|| die`, and
 # the error paths fall through to their own pure-bash encoder.
 emit() {
-    [ "$EMITTED" -eq 1 ] && return 0
+    # EMITTED belongs to the CALLING script (bash dynamic scoping). Read with a
+    # default because every script here runs under `set -u`, where an undefined
+    # global is FATAL — a consumer that sourced common.sh without declaring
+    # EMITTED would die inside the one function whose entire job is guaranteeing
+    # something reaches stdout. Found by writing a bare consumer and watching it
+    # abort with "EMITTED: unbound variable" mid-emit.
+    [ "${EMITTED:-0}" -eq 1 ] && return 0
     [ -n "$1" ] || return 1
     EMITTED=1
     printf '%s\n' "$1"
@@ -223,8 +254,22 @@ spawn::envelope_bash() {
         rem="$(printf '%s' "$rem" | tr -d '\000-\037')"
         remfield="\"$rem\""
     fi
-    printf '{"schema":"%s","ok":false,"error":"%s","remedy":%s,"detail":null,"content_trust":"%s","content_notice":"%s","exit_code":%s%s}' \
-        "$SPAWN_SCHEMA" "$err" "$remfield" "$trust" "$notice" "${code:-2}" "${4:-}"
+    # $6 = detail, same narrow scrub the remedy gets. It used to be hardcoded
+    # null here, so EVERY failure on a box without jq lost the diagnostic
+    # entirely — the enum and the remedy survived and the one field explaining
+    # WHAT happened did not, on exactly the box where it is hardest to get any
+    # other way. That is the drift spawn::emit_error's header claims to have
+    # made unrepresentable; `detail` simply was not part of the list it derives
+    # both spellings from. Optional, so existing callers that pass five
+    # arguments keep emitting detail:null exactly as before.
+    local det="${6:-}" detfield='null'
+    if [ -n "$det" ]; then
+        det="${det//\\/}"; det="${det//\"/}"
+        det="$(printf '%s' "$det" | tr -d '\000-\037')"
+        detfield="\"$det\""
+    fi
+    printf '{"schema":"%s","ok":false,"error":"%s","remedy":%s,"detail":%s,"content_trust":"%s","content_notice":"%s","exit_code":%s%s}' \
+        "$SPAWN_SCHEMA" "$err" "$remfield" "$detfield" "$trust" "$notice" "${code:-2}" "${4:-}"
 }
 # models.json alias-table shape guard, shared because both readers need the
 # SAME predicate and a second copy drifts silently.
@@ -243,4 +288,411 @@ def spawn_aliases:
   if (type == "object" and ((.aliases // {}) | type) == "object")
   then ((.aliases // {}) | map_values(select(type == "object")))
   else {} end;
+'
+
+# models.json GRAMMAR shape guard — the family/tier/chain-policy half of the
+# same job, and here for the same reason its alias sibling above is: it was
+# byte-identical in three files (spawnctl table_json, lens emit_describe,
+# launch emit_describe). Three copies of one parser is this plugin's founding
+# scar; the alias half was moved here and the grammar half was not.
+#
+# Only the three defs are shared. The projection that consumes them differs by
+# caller — spawnctl also emits `aliases`, the two agent surfaces do not — so
+# each call site still writes its own `if ... then {...} end`, which is the
+# part that legitimately varies.
+SPAWN_MODELS_GRAMMAR_JQ_DEF='
+def safeobj: if type == "object" then . else {} end;
+def safe_families:
+    ((.families // {}) | safeobj)
+    | map_values(
+        if type == "object" then
+            ((.default // null) as $d
+             | (.tiers // {}) as $t
+             | {
+                 default: (if ($d|type) == "string" then $d else null end),
+                 tiers: (if ($t|type) == "object" then ($t | map_values(select(type == "string"))) else {} end)
+               })
+        else empty end
+      );
+def safe_chain_policy:
+    ((.chain_policy // {}) | safeobj) | map_values(select(type == "string"));
+'
+
+# Gateway binary discovery — the candidate list and the resolver, shared because
+# setup.sh and spawnctl.sh both need the SAME answer to "which file in this
+# install dir is the gateway".
+#
+# These were duplicated, with a bats test (setup-acquire.bats) asserting the two
+# BIN_CANDIDATES lines stayed byte-identical. A test whose job is to keep two
+# copies in sync is the module boundary telling you it is in the wrong place —
+# both scripts already source this file, so the stated reason for the copy
+# ("setup.sh cannot source spawnctl.sh") never applied to common.sh.
+#
+# Order matters: most specific first. A release build wins over a debug build,
+# and a bare `gateway` is the last resort.
+SPAWN_BIN_CANDIDATES=("target/release/gateway" "target/debug/gateway" "bin/gateway" "gateway")
+
+# find_binary_in <dir> — echo the first candidate that is a REGULAR executable
+# file. `-x` alone is true of a directory, so a stray `gateway/` dir would
+# otherwise resolve as the binary.
+find_binary_in() {
+    local d="$1" c
+    for c in "${SPAWN_BIN_CANDIDATES[@]}"; do
+        if [ -f "$d/$c" ] && [ -x "$d/$c" ]; then
+            printf '%s' "$d/$c"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Preflight-failure object shape, shared by lens.sh and launch.sh.
+#
+# When `spawnctl ensure` fails, both surfaces rewrap its response into their own
+# vocabulary — enum in `error`, prose in `detail`, ensure's full object under
+# `preflight` — rather than forwarding it verbatim. The two blocks were
+# near-identical and had ALREADY drifted once (one emitted the prose under
+# `.detail`, the other under `.error`), which broke callers switching on
+# `.error`. Both files' comments narrate that incident; this closes the
+# recurrence by making the shape single-sourced.
+#
+# What legitimately varies stays at the call site: the trust tier, and the
+# per-surface null fields (lens nulls text/usage; launch nulls the whole session
+# handle). What does NOT vary — ok/alias/error/detail/preflight/help_requested/
+# remedy/exit_code — lives here.
+#
+# Returns a jq program fragment. The caller still binds $a $e $d $r $p $c, so
+# argument binding and sanitization stay where they are visible.
+#   spawn::preflight_jq <tier> '<null-fields-fragment>'
+spawn::preflight_jq() {
+    local tier="$1" nulls="$2"
+    printf '%s' "$(spawn::envelope_jq "$tier")"' + {ok:false, alias:$a, '"$nulls"'
+          error:$e, detail:$d, preflight:$p, help_requested:false,
+          remedy:(if $r == "" then null else $r end), exit_code:$c}'
+}
+
+# ---------------------------------------------------------------------------
+# Is this gateway supervised by launchd?
+#
+# TWO CALLERS, ONE LOOKUP. spawnctl's `stop` asks so it stops claiming a stop
+# KeepAlive undoes; setup's supervisor step asks so it stops reporting an
+# adoption that did not take effect. Those are the same question, and this file
+# already exists because three copies of one parser drifted.
+#
+# WHY stop HAS TO ASK. On an adopted machine `stop` was a ~10s RESTART, not a
+# stop: it killed the gateway, the launcher's `wait` returned, the launcher
+# exited, and KeepAlive respawned the whole thing. `result:"stopped"` was true
+# for about a second. The plugin already says this out loud elsewhere — the
+# open-proxy fix unloads the agent first "because stopping the process only
+# triggers a respawn" — it just never applied it to the everyday verb.
+#
+# WHY THE PARENT, NOT THE GATEWAY ITSELF. setup's launcher is the launchd job;
+# the gateway is its CHILD, so the gateway's own pid never appears in
+# `launchctl list`. Verified on this machine: gateway 1518's parent 1359 is the
+# row `1359 0 com.shawnroos.gateway`. Both are checked anyway, because a plist
+# pointed straight at the binary (the pre-adoption shape) makes the gateway the
+# job itself.
+#
+# WHY NOT REUSE detect_supervisor. That one parses every plist in
+# ~/Library/LaunchAgents through plutil to decide which agent setup should
+# ADOPT — it needs an install dir, it can die, and it answers a different
+# question. Asking launchd directly needs no plist, no plutil, and no install
+# resolution. This is one lookup, not a second copy of that logic.
+#
+#   spawn::supervising_label <pid>
+#
+# Sets SUPERVISOR_LABEL. Returns 1 when nothing supervises the pid, INCLUDING
+# on any machine with no launchctl at all (Linux, a container) — where the
+# honest answer is "not supervised" rather than a failure.
+SUPERVISOR_LABEL=""
+spawn::supervising_label() {
+    local pid="$1" ppid="" row
+    SUPERVISOR_LABEL=""
+    [ -n "$pid" ] || return 1
+    # Defaulted here as well as at each call site: common.sh is sourced by
+    # lens.sh and launch.sh too, and a helper that trips `set -u` on a variable
+    # its caller had no reason to define is a landmine for the next consumer.
+    local lc="${LAUNCHCTL_BIN:-${SPAWN_LAUNCHCTL_BIN:-/bin/launchctl}}"
+    [ -x "$lc" ] || command -v "$lc" >/dev/null 2>&1 || return 1
+    ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -dc '0-9')"
+    # PPID 1 IS NOT SUPERVISION. do_start_locked backgrounds the gateway inside
+    # a subshell that then exits, so an unsupervised gateway is reparented to
+    # pid 1 — launchd itself. If pid 1 ever appeared in `launchctl list`, every
+    # orphan on the box would read as supervised and `stop` would refuse to
+    # stop anything it started. It does not appear there today (checked), but
+    # "checked once" is not a guarantee, and the cost of excluding a pid that
+    # can never legitimately be a job's own pid is zero.
+    [ "$ppid" = "1" ] && ppid=""
+    # Column 1 of `launchctl list` is the pid; column 3 is the label. Matching
+    # on the WHOLE field, never a substring: pid 15 must not match 1518.
+    row="$("$lc" list 2>/dev/null | awk -F'\t' -v a="$pid" -v b="${ppid:-}" \
+        '$1 == a || (b != "" && $1 == b) { print $3; exit }')"
+    [ -n "$row" ] || return 1
+    SUPERVISOR_LABEL="$row"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# spawn::models_grammar <models-json-path>
+#
+# The family -> tier -> alias grammar, normalized, as one JSON object on stdout.
+# ALWAYS prints something parseable: a missing file, an unreadable one, a
+# non-object, or a jq failure all collapse to the empty grammar, because the
+# caller feeds this straight into --argjson on the one arm of --describe that
+# has to answer under any conditions.
+#
+# WHY IT IS HERE. The F4 extraction pulled the jq DEFS
+# (SPAWN_MODELS_GRAMMAR_JQ_DEF) into this file and left the ~11 lines of bash
+# around them duplicated in lens.sh and launch.sh — read the file, guard
+# emptiness, and repeat the fallback literal three times each. Half an
+# extraction: the part that was easy to share was shared, and the part that
+# actually drifts (a fallback literal written six times across two files) was
+# not. lens.sh's copy had even acquired an extra `aliases` key in its first
+# literal that its own jq program never produces.
+#
+# Callers that need a DIFFERENT projection (spawnctl's table_json adds
+# `aliases`) keep their own jq program — what is shared is the read-guard-
+# fallback shape, not the projection.
+spawn::models_grammar() {
+    local path="$1" empty='{"families":{},"no_family_alias":null,"chain_policy":{}}' out
+    if [ ! -f "$path" ]; then
+        printf '%s' "$empty"
+        return 0
+    fi
+    out="$(jq -c "$SPAWN_MODELS_GRAMMAR_JQ_DEF"'
+        if (type == "object") then {
+            families: safe_families,
+            no_family_alias: ((.no_family_alias // null) as $n | if ($n|type) == "string" then $n else null end),
+            chain_policy: safe_chain_policy
+        } else {families:{}, no_family_alias:null, chain_policy:{}} end
+    ' < "$path" 2>/dev/null)" || out=""
+    [ -n "$out" ] || out="$empty"
+    printf '%s' "$out"
+}
+
+# ---------------------------------------------------------------------------
+# spawn::emit_error <tier> <null-fields> <code> <error-enum> <detail...>
+#
+# The failure envelope for the model surfaces. `null-fields` is a SPACE-
+# SEPARATED LIST OF FIELD NAMES ("text usage"), not two hand-written fragments.
+#
+# WHY ONE LIST AND NOT TWO. lens.sh and launch.sh each carried a ~40-line
+# emit_error that differed only in (a) the trust tier and (b) the per-surface
+# null fields — the exact two axes spawn::preflight_jq already parametrizes a
+# few functions up. The decomposition was done for the 4-line preflight block
+# and skipped for the 40-line one.
+#
+# Worse, each copy wrote its null fields TWICE — once as a jq fragment and once
+# as a JSON fragment for the no-jq tier — and those two spellings had already
+# drifted: launch's jq tier emitted cwd, base_url and context_window while its
+# bash tier did not, so a box without jq answered with three fewer fields than
+# launch's own --describe publishes. Taking ONE list and generating both
+# spellings makes that drift unrepresentable rather than merely tested for.
+#
+# READS THE CALLER'S GLOBALS BY DESIGN (bash dynamic scoping), the same way
+# emit() reads EMITTED: ALIAS, HELP_REQUESTED, REMEDY and the caller's own
+# remedy_for. Each surface keeps its own error vocabulary; only the SHAPE is
+# shared, which is the same split spawn::preflight_jq makes.
+spawn::emit_error() {
+    local tier="$1" nullfields="$2" code="$3" err="$4"; shift 4
+    # EMITTED is the CALLER's state (bash dynamic scoping), read defensively for
+    # the same reason spawn::supervising_label defaults LAUNCHCTL_BIN: a shared
+    # helper that trips `set -u` on a global its next consumer had no reason to
+    # define is a landmine, and every script here runs with -u. Today all three
+    # callers define it; the guard is for the fourth.
+    [ "${EMITTED:-0}" -eq 1 ] && return 0
+
+    # `detail` is human-readable diagnostic text a consumer prints, and it can
+    # quote an upstream error body, so it is sanitized (KTD5). Data fields are
+    # not — those are raw by design and emitted elsewhere.
+    local detail alias_d
+    detail="$(spawn::sanitize_for_display "$*")"
+    # The alias is display text on THIS path and only here: emit_error is the
+    # one place it can be an alias the grammar REFUSED, so it has not been
+    # closed by construction yet. jq escapes a control byte in transit but
+    # emits a Unicode bidi override literally, so the field is sanitized.
+    alias_d="$(spawn::sanitize_for_display "${ALIAS:-}")"
+
+    # R12: the site's own REMEDY wins; otherwise the enum's default from the one
+    # table. Defaulting here rather than at ~20 call sites is what makes "every
+    # error names its remedy" a property of the code shape instead of a review
+    # item that goes stale on the next die site somebody adds.
+    local rem="${REMEDY:-}"
+    # The caller's own vocabulary first (each surface has one), falling back to
+    # the shared table. `command -v` rather than calling blind: a consumer that
+    # defines no remedy_for would otherwise die with "command not found" while
+    # emitting a failure object, which is the one moment this must not fail.
+    if [ -z "$rem" ]; then
+        if command -v remedy_for >/dev/null 2>&1; then
+            rem="$(remedy_for "$err")"
+        else
+            rem="$(spawn::remedy_for "$err")"
+        fi
+    fi
+
+    # The two spellings of the SAME list.
+    local f jq_nulls="" bash_nulls=""
+    for f in $nullfields; do
+        jq_nulls="${jq_nulls}${f}:null, "
+        bash_nulls="${bash_nulls},\"${f}\":null"
+    done
+
+    local obj=""
+    if command -v jq >/dev/null 2>&1; then
+        obj="$(jq -nc --arg a "$alias_d" --arg e "$err" --arg d "$detail" \
+            --arg r "$rem" --argjson c "$code" --argjson h "${HELP_REQUESTED:-false}" \
+            "$(spawn::envelope_jq "$tier")"' + {ok:false,
+              alias:(if $a == "" then null else $a end), '"$jq_nulls"'
+              error:$e, detail:$d, help_requested:$h,
+              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
+    fi
+    # Falls through to the pure-bash tier when jq is ABSENT and also when jq is
+    # present but errored: that yielded the empty string, emit refused it, and
+    # the script exited with nothing on stdout at all. help_requested rides this
+    # tier too — a box with no encoder must still tell a help request from a
+    # caller bug, and it is a bash literal, so no encoder is needed for it.
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash "$tier" "$err" "$code" ",\"alias\":null${bash_nulls},\"help_requested\":${HELP_REQUESTED:-false}" "$rem" "$detail")"
+    emit "$obj"
+}
+
+# ---------------------------------------------------------------------------
+# die <exit-code> <error-enum> <detail...> — the model surfaces' exit door.
+#
+# NOT namespaced, and that is the point: lens.sh and launch.sh call `die` at
+# ~40 sites each, and wrapping it as `die() { spawn::die "$@"; }` in both files
+# would trade one duplication for two pure-passthrough functions. A plain
+# definition here is inherited by anything that sources this file.
+#
+# spawnctl.sh and setup-lib.sh define their OWN `die` — different signature
+# (no enum argument, since they derive it from the exit code) — and both do so
+# AFTER sourcing this file, so their definition wins. That is bash function
+# resolution doing what it should, not a collision.
+#
+# `emit_error` is resolved at CALL time from the caller's scope, so each surface
+# still emits its own envelope shape. Only the sequence — sanitize, print to
+# stderr, emit, exit — is shared, and that sequence was byte-identical in the
+# two files a mechanical duplicate-body scan of lib/ turned up.
+#
+# The sanitize call is INLINE at the printf, not hidden behind a local: the
+# escapes.bats sink lint reads these lines, and a defence it cannot see is one
+# the next reviewer cannot verify either.
+die() {
+    local code="$1" err="$2"; shift 2
+    printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
+    emit_error "$code" "$err" "$*"
+    exit "$code"
+}
+
+# ---------------------------------------------------------------------------
+# reap_child — TERM -> bounded poll -> KILL -> REAP the caller's CHILD_PID.
+#
+# Both model surfaces run their long operations in a BACKGROUND child with an
+# explicit `wait`, because bash defers every trap while blocked in a foreground
+# child. That makes cancellation work; this makes it complete. Signalling alone
+# is not enough: the child may itself be blocked in a foreground call (the
+# preflight child is `spawnctl ensure`, sitting in a curl probe with its own
+# trap deferred), so it can outlive the parent still holding the control lock.
+# Reaping also matters on its own — an unreaped child re-parented to init keeps
+# whatever it holds for as long as it lives.
+#
+# CHILD_PID is the CALLER's, read by the same dynamic scoping `emit` uses for
+# EMITTED, and defaulted for the same reason: every script here runs under
+# `set -u`, where an undefined global is fatal.
+#
+# It lives here because it was byte-identical in launch.sh and lens.sh — and it
+# got that way DURING the review round that had just collapsed `die` for the
+# same reason, two commits earlier. A 4-line duplicate was closed and a 12-line
+# one opened in the same two files. tests/unit/escapes.bats now scans for exact
+# duplicate function bodies so that cannot happen quietly again.
+reap_child() {
+    [ -n "${CHILD_PID:-}" ] || return 0
+    kill -TERM "$CHILD_PID" 2>/dev/null
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        kill -0 "$CHILD_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -0 "$CHILD_PID" 2>/dev/null && kill -KILL "$CHILD_PID" 2>/dev/null
+    wait "$CHILD_PID" 2>/dev/null
+    CHILD_PID=""
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# need_jq — refuse, in the contract's own shape, when the encoder is missing.
+#
+# "Exactly one JSON object on stdout, ALWAYS" includes the path where jq itself
+# is absent; this used to exit 2 printing nothing, which is the one failure a
+# consumer cannot distinguish from a crash.
+#
+# It goes through the caller's `emit_error`, resolved at call time, so each
+# surface still emits its own envelope and its own null-field list — the same
+# split `die` makes. That is also what made the two copies byte-identical:
+# routing them through emit_error removed their last per-surface difference, so
+# the fix for one duplication created another. Shared now, once.
+#
+# spawnctl.sh and setup-lib.sh keep their own need_jq: theirs report a `verb`
+# rather than an alias, and both define it after sourcing this file.
+need_jq() {
+    command -v jq >/dev/null 2>&1 || {
+        printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
+        REMEDY="Install jq and re-run. The plugin's contract is one JSON object on stdout, and jq is what encodes it." \
+            emit_error 2 "usage" "jq is required: the contract is exactly one JSON object on stdout, and jq is the encoder"
+        exit 2
+    }
+}
+
+# ---------------------------------------------------------------------------
+# say — the human-diagnostic chokepoint. STDERR ONLY; stdout belongs to the one
+# JSON object, and a diagnostic printed there is how a consumer's `jq` blows up
+# on output it was promised it could parse whole.
+#
+# Everything human-readable goes through here so KTD5 sanitization is a property
+# of the code SHAPE rather than per-site discipline — a message nobody has
+# written yet is closed too. The sanitize call is INLINE at the printf, not
+# hidden behind a local, because escapes.bats' sink lint reads these lines and a
+# defence it cannot see is one the next reviewer cannot verify either.
+#
+# It lives here because it was byte-identical in FOUR files. Five more copies
+# were deleted earlier in this round once the sink lint learned to accept
+# "defines it, or sources a file that defines it"; these four survived only
+# because the duplicate scan could not see a one-line function body. It can now.
+say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
+
+# ---------------------------------------------------------------------------
+# validate_alias — KTD5's identifier grammar, checked BEFORE any network call
+# and before the alias is interpolated anywhere, so an escape byte or a shell
+# metacharacter in an identifier is impossible rather than filtered.
+#
+# `die` is resolved at call time from the caller's scope, which is what lets the
+# two model surfaces share this while spawnctl keeps its own (its die takes no
+# enum argument, so its copy passes different arguments and stays local).
+validate_alias() {
+    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \
+        || die "$EX_USAGE" "usage" "alias failed the grammar [A-Za-z0-9._-]+ — refused before any network call"
+}
+
+# ---------------------------------------------------------------------------
+# SPAWN_YAML_AWK_DEFS — the three scalar helpers every gateway.yaml reader needs.
+#
+# Shared for the same reason SPAWN_MODELS_GRAMMAR_JQ_DEF is, and in the same
+# shape: only the DEFS travel, each caller keeps its own RULES. lens.sh reads one
+# key; spawnctl.sh reads the token AND the whole models table, and its section
+# rule additionally resets its alias accumulator. Those genuinely differ. The
+# three helpers did not — they were byte-identical, and a fuzzy scan put the two
+# parsers at 0.67 similarity with these lines as the entire shared core.
+#
+# common.sh's own header used to list "the server.token awk parsers" under
+# deliberate duplication. That was rationalisation by listing: the reason given
+# beside it justifies tmpwork(), and launch.sh's TOKEN_AWK has a real one of its
+# own (it is embedded verbatim in the printed attach command and must carry no
+# quote byte). This pair had neither.
+#
+# NOT a general YAML parser, and must not become one: it handles the flat
+# two-level shape gateway.yaml actually has. A real parser is a dependency this
+# plugin deliberately does not take.
+SPAWN_YAML_AWK_DEFS='
+    function trim(v) { sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); return v }
+    function decomment(v) { sub(/[ \t]+#.*$/, "", v); return trim(v) }
+    function unquote(v) { gsub(/^["'"'"']|["'"'"']$/, "", v); return v }
 '
