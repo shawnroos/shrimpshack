@@ -173,7 +173,7 @@ CHILD_PID=""
 # spawnctl's stop both use.
 #
 # It used to send TERM and immediately return. The header a few hundred lines
-# down claimed "No orphan: cleanup signals CHILD_PID before it returns", and for
+# down claimed "No orphan: spawn::cleanup_tmpwork signals CHILD_PID before it returns", and for
 # curl that is nearly true — curl dies on TERM promptly. But CHILD_PID is not
 # always curl: on the preflight path it is `spawnctl ensure`, whose OWN term
 # trap is deferred while it sits in a foreground curl probe. So it could outlive
@@ -185,16 +185,7 @@ CHILD_PID=""
 # reap_child() is inherited from common.sh — it was byte-identical here and in
 # the sibling surface, which is the module boundary saying where it belongs.
 
-cleanup() {
-    # Kill AND REAP the request before removing the directory it reads its
-    # credential from. See the call site: curl runs in the BACKGROUND so this
-    # handler can run at all — bash defers a trap while it is blocked on a
-    # foreground child.
-    reap_child
-    [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
-    return 0
-}
-trap cleanup EXIT
+trap spawn::cleanup_tmpwork EXIT
 # bash does NOT run an EXIT trap when the shell dies on an untrapped INT/TERM/HUP
 # (measured on this box, bash 5.3.15). Without these, a cancelled lens call leaks
 # TMPWORK — and TMPWORK holds the mode-0600 curlrc carrying the gateway token, so
@@ -202,7 +193,7 @@ trap cleanup EXIT
 # when it matters most: this script is built for fan-out, and an orchestrator
 # cancelling reviewer subagents (or a human hitting Ctrl-C on a 600s call) sends
 # precisely these signals. Nothing else ever reaps that file. These exit THROUGH
-# the EXIT path; a bare `trap cleanup INT TERM` would clean up and then continue.
+# the EXIT path; a bare `trap spawn::cleanup_tmpwork INT TERM` would clean up and then continue.
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
@@ -533,7 +524,7 @@ fi
 ENSURE_TMP="$WORK/ensure.json"
 bash "$CTL" ensure "$ALIAS" > "$ENSURE_TMP" 2>/dev/null &
 ENSURE_PID=$!
-CHILD_PID="$ENSURE_PID"   # cleanup kills whichever child is currently live
+CHILD_PID="$ENSURE_PID"   # spawn::cleanup_tmpwork kills whichever child is live
 wait "$ENSURE_PID"
 ENSURE_RC=$?
 CHILD_PID=""
@@ -672,7 +663,7 @@ chmod 600 "$CURLRC" 2>/dev/null
 # leave the mode-0600 curlrc — the file holding the gateway token — on disk for
 # up to the full timeout, and permanently if it escalated to SIGKILL. `wait` is
 # interruptible, so the trap fires immediately, kills curl and removes the
-# directory. No orphan: cleanup TERMs, polls, KILLs and REAPS CHILD_PID before it returns.
+# directory. No orphan: spawn::cleanup_tmpwork TERMs, polls, KILLs and REAPS CHILD_PID first.
 # ---------------------------------------------------------------------------
 RESP="$WORK/resp.json"
 : > "$RESP"

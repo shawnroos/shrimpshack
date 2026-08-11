@@ -107,8 +107,6 @@ RETENTION="${SPAWN_JOB_RETENTION:-604800}"
 # the child and are as untrusted as any model output, so a diagnostic quoting
 # either reaches the terminal only through these two chokepoints. The lint in
 # tests/unit/escapes.bats iterates lib/*.sh and reads these exact lines.
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
-
 EMITTED=0
 
 # R11 — the help discriminator. `--help` and a caller mistake are both exit 2
@@ -145,45 +143,6 @@ remedy_for() {
     esac
 }
 
-emit_error() {
-    # $1 = exit code, $2 = machine-readable error value, rest = human detail.
-    local code="$1" err="$2"; shift 2
-    [ "$EMITTED" -eq 1 ] && return 0
-    # `detail` is display text a consumer prints, and it can quote raw argv or a
-    # detail string a child wrote, so it is sanitized. The handle is sanitized
-    # for the same reason: this is the one place it can be a handle the grammar
-    # REFUSED, so it has not been closed by construction yet.
-    local detail handle_d
-    detail="$(spawn::sanitize_for_display "$*")"
-    handle_d="$(spawn::sanitize_for_display "$HANDLE")"
-    local rem="${REMEDY:-}"
-    [ -n "$rem" ] || rem="$(remedy_for "$err")"
-    local obj=""
-    if command -v jq >/dev/null 2>&1; then
-        obj="$(jq -nc --arg v "$VERB" --arg h "$handle_d" --arg e "$err" \
-            --arg d "$detail" --arg r "$rem" --argjson c "$code" \
-            --argjson hr "$HELP_REQUESTED" \
-            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:(if $v == "" then null else $v end),
-              handle:(if $h == "" then null else $h end),
-              job:null, error:$e, detail:$d, help_requested:$hr,
-              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
-    fi
-    # Reached when jq is ABSENT and also when jq is present but ERRORED — that
-    # yielded the empty string, emit refused it, and the script would exit with
-    # nothing on stdout at all, which is the one failure a consumer cannot tell
-    # from success. VERB is raw argv here, so with no encoder available it is
-    # reduced to the verb enum's own charset in pure bash.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"verb\":\"${VERB//[^a-z-]/}\",\"handle\":null,\"job\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
-    emit "$obj"
-}
-
-die() {
-    local code="$1" err="$2"; shift 2
-    printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
-    emit_error "$code" "$err" "$*"
-    exit "$code"
-}
-
 need_jq() {
     command -v jq >/dev/null 2>&1 || {
         printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
@@ -192,8 +151,6 @@ need_jq() {
     }
 }
 
-now_utc() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
-
 # ---------------------------------------------------------------------------
 # Grammar. Validated BEFORE any path is built from it or any handle is handed to
 # the record layer, so a handle carrying a slash or a shell metacharacter is
@@ -201,11 +158,6 @@ now_utc() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 # two must agree, or a handle this file accepted would be refused one layer down
 # with a message about a grammar the caller was never shown.
 # ---------------------------------------------------------------------------
-validate_handle() {
-    [[ "$1" =~ ^job-[0-9]{8}T[0-9]{6}Z-[0-9]{4,10}$ ]] \
-        || die "$EX_USAGE" "usage" "handle failed the grammar job-<UTC>-<n> — refused before any path was built from it"
-}
-
 # A bound is a positive whole number of seconds. ZERO IS REFUSED rather than
 # read as "check once": the same guard the lens applies to --timeout 0, and an
 # await with no wait in it is `state` under another name.
@@ -239,12 +191,6 @@ read_record() {   # <handle>
 
 jf() {   # <jq filter> — one field out of the record we last read
     printf '%s' "$JOB_JSON" | jq -r "$1" 2>/dev/null
-}
-
-is_terminal() {
-    local s
-    for s in $JOB_TERMINAL_STATES; do [ "$s" = "$1" ] && return 0; done
-    return 1
 }
 
 # ---------------------------------------------------------------------------

@@ -82,8 +82,6 @@ CLAIM_GRACE="${SPAWN_JOB_CLAIM_GRACE:-60}"
 # child — so a diagnostic quoting either one reaches the terminal only through
 # these two chokepoints. The lint in tests/unit/escapes.bats iterates lib/*.sh
 # and reads these exact lines, so this file was covered the moment it landed.
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
-
 # The single stdout write lives in common.sh (emit); EMITTED is this script's
 # own state, so it stays declared here — a bash function reads the caller's
 # globals dynamically.
@@ -118,50 +116,6 @@ remedy_for() {
     esac
 }
 
-emit_error() {
-    # $1 = exit code, $2 = machine-readable error value, rest = human detail.
-    local code="$1" err="$2"; shift 2
-    [ "$EMITTED" -eq 1 ] && return 0
-    # `detail` is display text a consumer prints, and on the unknown-handle path
-    # it quotes raw argv, so it is sanitized. The handle is sanitized for the
-    # same reason: emit_error is the one place it can be a handle the grammar
-    # REFUSED, so it has not been closed by construction yet, and jq escapes a
-    # control byte in transit but emits a Unicode bidi override literally.
-    local detail handle_d
-    detail="$(spawn::sanitize_for_display "$*")"
-    handle_d="$(spawn::sanitize_for_display "$HANDLE")"
-    # R12: the site's own REMEDY wins, otherwise the enum's default from the one
-    # table — so "every error names its remedy" holds for die sites nobody has
-    # written yet.
-    local rem="${REMEDY:-}"
-    [ -n "$rem" ] || rem="$(remedy_for "$err")"
-    local obj=""
-    if command -v jq >/dev/null 2>&1; then
-        obj="$(jq -nc --arg v "$VERB" --arg h "$handle_d" --arg e "$err" \
-            --arg d "$detail" --arg r "$rem" --argjson c "$code" \
-            --argjson hr "$HELP_REQUESTED" \
-            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:(if $v == "" then null else $v end),
-              handle:(if $h == "" then null else $h end),
-              job:null, error:$e, detail:$d, help_requested:$hr,
-              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
-    fi
-    # Reached when jq is ABSENT and also when jq is present but ERRORED — that
-    # yielded the empty string, emit refused it, and the script would exit with
-    # nothing on stdout at all, which is the one failure a consumer cannot tell
-    # from success. VERB is raw argv here, so it is reduced to the verb enum's
-    # own charset in pure bash: with no encoder available, closing it by
-    # construction is the only defence there is.
-    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"verb\":\"${VERB//[^a-z-]/}\",\"handle\":null,\"job\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
-    emit "$obj"
-}
-
-die() {
-    local code="$1" err="$2"; shift 2
-    printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
-    emit_error "$code" "$err" "$*"
-    exit "$code"
-}
-
 need_jq() {
     command -v jq >/dev/null 2>&1 || {
         printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
@@ -170,19 +124,12 @@ need_jq() {
     }
 }
 
-now_utc() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
-
 # ---------------------------------------------------------------------------
 # Grammar. Validated BEFORE any path is built from it, so a handle carrying a
 # slash, a shell metacharacter or an escape byte can never reach the filesystem
 # — refused rather than filtered, the same way spawnctl validates an alias
 # before any network call.
 # ---------------------------------------------------------------------------
-validate_handle() {
-    [[ "$1" =~ ^job-[0-9]{8}T[0-9]{6}Z-[0-9]{4,10}$ ]] \
-        || die "$EX_USAGE" "usage" "handle failed the grammar job-<UTC>-<n> — refused before any path was built from it"
-}
-
 # ---------------------------------------------------------------------------
 # Where the record lives.
 #
@@ -268,12 +215,6 @@ status_field() {
 }
 
 # is_terminal <state>
-is_terminal() {
-    local s
-    for s in $JOB_TERMINAL_STATES; do [ "$s" = "$1" ] && return 0; done
-    return 1
-}
-
 # ---------------------------------------------------------------------------
 # resolve_state <handle> — the whole of KTD6, in one place.
 #

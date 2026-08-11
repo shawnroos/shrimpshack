@@ -696,3 +696,96 @@ SPAWN_YAML_AWK_DEFS='
     function decomment(v) { sub(/[ \t]+#.*$/, "", v); return trim(v) }
     function unquote(v) { gsub(/^["'"'"']|["'"'"']$/, "", v); return v }
 '
+
+# ---------------------------------------------------------------------------
+# The background-agent surfaces' shared helpers (U9-U12).
+#
+# These arrived as byte-identical copies across bg-agent.sh, ceilings.sh,
+# handle.sh and jobs.sh, and the duplicate gate in tests/unit/escapes.bats
+# caught every one. They are here for the reason the rest of this file is:
+# "each was duplicated verbatim, and keeping them in step by hand is what
+# drifts". Nothing below is surface-specific — each reads the caller's globals
+# dynamically, which is the same mechanism `die` and `validate_alias` above
+# already rely on.
+# ---------------------------------------------------------------------------
+
+# The stamp every job record and handle is keyed by. One format, because the
+# handle grammar (job-<UTC>-<n>) is parsed back out of it by validate_handle.
+now_utc() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+
+# The handle grammar, checked BEFORE any path is built from a handle — the same
+# discipline as validate_alias above, and for the same reason: a handle reaches
+# the filesystem, so an escape byte in one must be impossible rather than
+# filtered.
+validate_handle() {
+    [[ "$1" =~ ^job-[0-9]{8}T[0-9]{6}Z-[0-9]{4,10}$ ]] \
+        || die "$EX_USAGE" "usage" "handle failed the grammar job-<UTC>-<n> — refused before any path was built from it"
+}
+
+# JOB_TERMINAL_STATES is the CALLER's list, read dynamically: handle.sh and
+# jobs.sh must agree on what terminal means, and the way they agree is by
+# sharing this test rather than each writing the loop.
+is_terminal() {
+    local s
+    for s in $JOB_TERMINAL_STATES; do [ "$s" = "$1" ] && return 0; done
+    return 1
+}
+
+# The alias grammar as the job surfaces check it. This is deliberately NOT
+# validate_alias above: that one is the model surfaces' regex form with its own
+# message, and collapsing the two would change what a caller is told on a
+# refusal. Two grammars that happen to accept the same bytes are not one rule.
+spawn::validate_alias_name() {
+    case "$1" in
+        ""|*[!A-Za-z0-9._-]*)
+            REMEDY="Pass one alias made of letters, digits, dot, underscore or hyphen. 'spawnctl.sh status' lists what the gateway serves." \
+                die "$EX_USAGE" "usage" "alias '$1' is not a valid alias name" ;;
+    esac
+}
+
+# The EXIT trap shared by lens.sh and ceilings.sh. Kill AND REAP the request
+# before removing the directory it reads its credential from: the call site runs
+# curl in the BACKGROUND so this handler can run at all — bash defers a trap
+# while it is blocked on a foreground child.
+spawn::cleanup_tmpwork() {
+    reap_child
+    [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
+    return 0
+}
+
+# The job surfaces' error encoder. handle.sh and jobs.sh carried this verbatim;
+# it is a DEFAULT here, not a mandate — every other surface that sources this
+# file defines its own emit_error after the source line and overrides it, which
+# is how bg-agent.sh keeps a different null-field list. `die` above resolves
+# emit_error at call time, so a surface gets whichever one it defined.
+emit_error() {
+    # $1 = exit code, $2 = machine-readable error value, rest = human detail.
+    local code="$1" err="$2"; shift 2
+    [ "$EMITTED" -eq 1 ] && return 0
+    # `detail` is display text a consumer prints, and it can quote raw argv or a
+    # detail string a child wrote, so it is sanitized. The handle is sanitized
+    # for the same reason: this is the one place it can be a handle the grammar
+    # REFUSED, so it has not been closed by construction yet.
+    local detail handle_d
+    detail="$(spawn::sanitize_for_display "$*")"
+    handle_d="$(spawn::sanitize_for_display "$HANDLE")"
+    local rem="${REMEDY:-}"
+    [ -n "$rem" ] || rem="$(remedy_for "$err")"
+    local obj=""
+    if command -v jq >/dev/null 2>&1; then
+        obj="$(jq -nc --arg v "$VERB" --arg h "$handle_d" --arg e "$err" \
+            --arg d "$detail" --arg r "$rem" --argjson c "$code" \
+            --argjson hr "$HELP_REQUESTED" \
+            "$(spawn::envelope_jq plugin)"' + {ok:false, verb:(if $v == "" then null else $v end),
+              handle:(if $h == "" then null else $h end),
+              job:null, error:$e, detail:$d, help_requested:$hr,
+              remedy:(if $r == "" then null else $r end), exit_code:$c}')"
+    fi
+    # Reached when jq is ABSENT and also when jq is present but ERRORED — that
+    # yielded the empty string, emit refused it, and the script would exit with
+    # nothing on stdout at all, which is the one failure a consumer cannot tell
+    # from success. VERB is raw argv here, so with no encoder available it is
+    # reduced to the verb enum's own charset in pure bash.
+    [ -n "$obj" ] || obj="$(spawn::envelope_bash plugin "$err" "$code" ",\"verb\":\"${VERB//[^a-z-]/}\",\"handle\":null,\"job\":null,\"help_requested\":$HELP_REQUESTED" "$rem")"
+    emit "$obj"
+}

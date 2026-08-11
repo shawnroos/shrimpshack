@@ -53,6 +53,4 @@ ENTRY_POINT="bg-operator.sh"
 CEILING_CALLER="operator — a person who typed a command, present and accountable"
 CEILING_SUMMARY="The operator door. A background job started by a person runs under that person's own permission configuration; the ceiling is fixed by this file being the one that ran, not by anything the caller says about itself."
 
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
-
 spawn::ceiling_main "$@"

@@ -67,6 +67,4 @@ ENTRY_POINT="bg-repo.sh"
 CEILING_CALLER="calling agent — no human is present to answer for this job"
 CEILING_SUMMARY="The agent door. A background job started autonomously runs repo-bounded: writes scoped to the worktree, version-control hooks and agent configuration denied, and the operator's own settings dropped from the child's sources so they cannot be inherited."
 
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
-
 spawn::ceiling_main "$@"

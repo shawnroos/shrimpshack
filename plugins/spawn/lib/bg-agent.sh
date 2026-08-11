@@ -140,8 +140,6 @@ HANDLE=""
 JOB_DIR=""
 CONTRACT=""
 
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
-
 # ---------------------------------------------------------------------------
 # R12 — this surface's own error vocabulary, falling through to the shared
 # table. Keyed on the ENUM, never on the call site.
@@ -202,13 +200,6 @@ emit_error() {
     emit "$obj"
 }
 
-die() {
-    local code="$1" err="$2"; shift 2
-    printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
-    emit_error "$code" "$err" "$*"
-    exit "$code"
-}
-
 need_jq() {
     command -v jq >/dev/null 2>&1 || {
         printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
@@ -217,25 +208,10 @@ need_jq() {
         exit 2; }
 }
 
-now_utc() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
-
 # ---------------------------------------------------------------------------
 # Grammar. Identifiers are closed by CONSTRUCTION, not filtered, and validated
 # before they reach a path, a message or a process argument.
 # ---------------------------------------------------------------------------
-validate_alias() {
-    case "$1" in
-        ""|*[!A-Za-z0-9._-]*)
-            REMEDY="Pass one alias made of letters, digits, dot, underscore or hyphen. 'spawnctl.sh status' lists what the gateway serves." \
-                die "$EX_USAGE" "usage" "alias '$1' is not a valid alias name" ;;
-    esac
-}
-
-validate_handle() {
-    [[ "$1" =~ ^job-[0-9]{8}T[0-9]{6}Z-[0-9]{4,10}$ ]] \
-        || die "$EX_USAGE" "usage" "handle failed the grammar job-<UTC>-<n> — refused before any path was built from it"
-}
-
 # A deliverable is a path INSIDE the worktree, stated relative to it. Absolute
 # paths and `..` traversal are refused rather than normalized: a contract that
 # can name anything on the box is not a contract about this job's work, and a
@@ -458,7 +434,7 @@ launcher_main() {
 
     [ -n "$ALIAS" ] || { usage; REMEDY="Pass exactly one --alias. 'spawnctl.sh status' lists what the gateway serves." \
         die "$EX_USAGE" "usage" "--alias is required"; }
-    validate_alias "$ALIAS"
+    spawn::validate_alias_name "$ALIAS"
     [ -n "$CONTRACT" ] || { usage; REMEDY="$(remedy_for contract_invalid)" \
         die "$EX_USAGE" "contract_invalid" "--contract is required: a background job is given its contract before it starts"; }
 
@@ -847,7 +823,7 @@ supervisor_main() {
     validate_handle "$SUP_HANDLE"
     [ -d "$SUP_JOB_DIR" ] || exit 2
     ALIAS="${SUP_ALIAS:-}"
-    validate_alias "$ALIAS"
+    spawn::validate_alias_name "$ALIAS"
 
     trap sup_cancel TERM INT HUP
 

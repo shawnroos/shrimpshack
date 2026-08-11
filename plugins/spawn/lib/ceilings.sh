@@ -195,8 +195,6 @@ CLAUDE_BIN="${SPAWN_CLAUDE_BIN:-claude}"
 # supervision; the bound itself does not go away.
 JOB_TIMEOUT="${SPAWN_BG_TIMEOUT:-900}"
 
-say() { printf '▸ %s\n' "$(spawn::sanitize_for_display "$*")" >&2; }
-
 EMITTED=0
 HELP_REQUESTED=false
 ALIAS=""
@@ -243,13 +241,6 @@ emit_error() {
     return 0
 }
 
-die() {
-    local code="$1" err="$2"; shift 2
-    printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
-    emit_error "$code" "$err" "$*"
-    exit "$code"
-}
-
 need_jq() {
     command -v jq >/dev/null 2>&1 || {
         printf '✗ jq is required (the contract is one JSON object on stdout)\n' >&2
@@ -276,12 +267,6 @@ reap_child() {
     return 0
 }
 
-spawn::ceiling_cleanup() {
-    reap_child
-    [ -n "$TMPWORK" ] && rm -rf "$TMPWORK" 2>/dev/null
-    return 0
-}
-
 # Sets $TMPWORK. Deliberately NOT "prints the path": called as $(tmpwork) the
 # assignment would happen in a subshell and the EXIT trap would remove nothing.
 tmpwork() {
@@ -296,14 +281,6 @@ tmpwork() {
 
 # Identifiers are closed by CONSTRUCTION, not filtered (KTD5): an alias that is
 # not [A-Za-z0-9._-] never reaches a message, a URL or a process argument.
-spawn::ceiling_validate_alias() {
-    case "$1" in
-        ""|*[!A-Za-z0-9._-]*)
-            REMEDY="Pass one alias made of letters, digits, dot, underscore or hyphen. 'spawnctl.sh status' lists what the gateway serves." \
-                die "$EX_USAGE" "usage" "alias '$1' is not a valid alias name" ;;
-    esac
-}
-
 # Both interpolated values are plugin CONSTANTS, not caller or model input —
 # but the terminal-sink lint is structural on purpose and does not know that,
 # and an exemption argued per site is how the class re-opens. Routed through
@@ -394,7 +371,7 @@ spawn::ceiling_describe() {
 # from an argument, and no argument this function accepts can change them.
 # ---------------------------------------------------------------------------
 spawn::ceiling_main() {
-    trap spawn::ceiling_cleanup EXIT
+    trap spawn::cleanup_tmpwork EXIT
     # bash does not run an EXIT trap when the shell dies on an untrapped
     # INT/TERM/HUP, so these exit THROUGH the EXIT path rather than around it.
     trap 'exit 130' INT
@@ -431,7 +408,7 @@ spawn::ceiling_main() {
 
     [ -n "$ALIAS" ] || { spawn::ceiling_usage; REMEDY="Pass exactly one --alias. 'spawnctl.sh status' lists what the gateway serves." \
         die "$EX_USAGE" "usage" "--alias is required"; }
-    spawn::ceiling_validate_alias "$ALIAS"
+    spawn::validate_alias_name "$ALIAS"
 
     [[ "$JOB_TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [ "$(awk -v v="$JOB_TIMEOUT" 'BEGIN{print (v > 0)}')" = "1" ] \
         || REMEDY="Set SPAWN_BG_TIMEOUT to a positive number of seconds, or unset it for the default. Zero would mean an unbounded unattended run, which nobody can tell from work in progress." \

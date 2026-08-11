@@ -108,8 +108,8 @@ run first, then treat it as a defect.
 
 ## DECIDED: `spawnctl.sh` stays one file, for now
 
-`spawnctl.sh` is **1764 lines total — but 922 lines of code**, with 743 lines
-of comment and 99 blank. (These are CHECKED by tests/unit/surfaces.bats on every suite run — if
+`spawnctl.sh` is **1780 lines total — but 927 lines of code**, with 751 lines
+of comment and 102 blank. (These are CHECKED by tests/unit/surfaces.bats on every suite run — if
 the file changes and the doc does not, the suite goes red and names both
 numbers. They drifted three times by hand before that gate existed. They moved
 during the 2026-08-10
@@ -122,9 +122,19 @@ When this document called `setup.sh` a size problem it said so explicitly:
 explain it away." Applied honestly in the other direction, `spawnctl.sh` is
 under the bar on the measure this audit chose before it knew the answer.
 
-**The margin is now thinner, and that matters.** At 926 code lines it is
-within 78 of the bar it is being argued past. This decision should be
-re-taken, not re-quoted, the next time this file grows — and F1's `spawnctl run`
+**This decision has since been re-taken once, and that is worth recording** —
+because it is the only evidence that the sentence below is load-bearing rather
+than decorative. The background agent added a `status` jobs block (`jobs_view`
+and three helpers) which took the file to 1033 code lines, over the bar. The
+gate went red, as designed, and the re-take did NOT reach for a bigger bar: the
+block moved out to `lib/jobs-view.sh`, because reading the job record layer and
+rendering it was never this script's concern — the status verb only splices one
+envelope field. That is a seam the code already had. The counter is what forced
+someone to look at it.
+
+**The margin is thin, and that matters.** At 927 code lines it is within 73 of
+the bar it is being argued past. This decision should be re-taken, not
+re-quoted, the next time this file grows — and F1's `spawnctl run`
 verb would grow it.
 
 The comments are not padding. They are the incident record — why the pidfile
