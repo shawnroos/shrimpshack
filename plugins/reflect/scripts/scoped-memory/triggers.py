@@ -1197,10 +1197,49 @@ def never_acted_on(store_dir, min_nudges=None):
         rec["nudges"] += 1
         if joined["credited"]:
             rec["credited"] += 1
-    out = [r for r in tally.values()
-           if r["credited"] == 0 and r["nudges"] >= min_nudges]
+        # Distinct repos this memory nudged in — the field that picks the remedy.
+        # Absent on records written before `repo=` existed, which read as unknown
+        # rather than as one repo, so an old log cannot fake a scope diagnosis.
+        # `parse_recall_line` nests every `k=v` token under "extra" — reading
+        # `.get("repo")` off the record itself silently returns None forever, which
+        # reads as "no repo data" and quietly disables the whole diagnosis.
+        where = (joined["surfaced"].get("extra") or {}).get("repo")
+        if where:
+            rec.setdefault("repos", set()).add(where)
+    out = []
+    for rec in tally.values():
+        if rec["credited"] or rec["nudges"] < min_nudges:
+            continue
+        repos = rec.pop("repos", set())
+        rec["repo_count"] = len(repos)
+        rec["repos"] = sorted(repos)
+        # A GLOBAL memory firing in more than one repo and never once applied is
+        # mis-scoped, not merely blunt: sharpening its pattern narrows what it
+        # matches without changing WHERE it is allowed to match. Anything else —
+        # one repo, or already repo-scoped — is a prune-or-sharpen call.
+        rec["remedy"] = ("rescope" if len(repos) > 1
+                         and scope_of_memory(store_dir, rec["memory"]) == scope.GLOBAL
+                         else "prune-or-sharpen")
+        out.append(rec)
     out.sort(key=lambda r: (-r["nudges"], r["memory"] or ""))
     return out
+
+
+def scope_of_memory(store_dir, name):
+    """The scope slug a memory is stored at, or `scope.GLOBAL` when flat/unknown."""
+    if not name:
+        return scope.GLOBAL
+    flat = os.path.join(store_dir, name + ".md")
+    if os.path.exists(flat):
+        return scope.GLOBAL
+    scoped = os.path.join(store_dir, "_scope")
+    try:
+        for slug in os.listdir(scoped):
+            if os.path.exists(os.path.join(scoped, slug, name + ".md")):
+                return slug
+    except OSError:
+        pass
+    return scope.GLOBAL
 
 
 # ------------------------------------------------------ the mtime-safe writer
@@ -1380,11 +1419,27 @@ def cmd_match(argv):
     print(text if plain else hook_payload(text))
     if not show_all:
         log = os.path.join(store, "RECALL.log")
+        # WHERE a nudge fired is what separates the two remedies for a trigger that
+        # never gets applied. Firing repeatedly in ONE repo means the trigger is in
+        # the right place and simply is not useful — prune it or sharpen it. Firing
+        # across MANY repos from a GLOBAL memory means the memory is mis-scoped: the
+        # trigger is doing its job, it is just declared somewhere it applies to a
+        # fraction of the traffic. Without this field the report can only say "prune
+        # or sharpen", so the mis-scoped case gets sharpened again and again while
+        # still firing everywhere — measured: two Slate-only memories fired 145 times
+        # across every repo on the machine, were sharpened once, and kept firing,
+        # because sharpening a trigger cannot fix a scope problem.
+        # Best-effort: an unresolvable repo records nothing rather than failing.
+        try:
+            here = scope.resolve_repo_slug(cwd) or scope.GLOBAL
+        except Exception:
+            here = scope.GLOBAL
         for entry in shown:
             mark_nudged(session, entry.get("memory"))
             if telemetry is not None:
                 telemetry.append_recall(log, entry.get("memory"), "nudge",
-                                        "trigger", session_id=session or None)
+                                        "trigger", session_id=session or None,
+                                        repo=here)
     return 0
 
 
@@ -1445,10 +1500,29 @@ def cmd_report(argv):
                                             ",".join(row["reasons"])))
     if want_misfire:
         rows = payload["misfire"]
+        rescope = [r for r in rows if r.get("remedy") == "rescope"]
         print("never-acted-on triggers: %d (>=%d nudges, zero same-session "
-              "applications — prune or sharpen)" % (len(rows), MIN_MISFIRE_NUDGES))
+              "applications)" % (len(rows), MIN_MISFIRE_NUDGES))
         for row in rows:
-            print("  %-74s nudges=%d" % ((row["memory"] or "?"), row["nudges"]))
+            note = ""
+            if row.get("remedy") == "rescope":
+                note = "  MIS-SCOPED: global, fired in %d repos" % row["repo_count"]
+            elif row.get("repo_count") == 1:
+                note = "  one repo"
+            print("  %-64s nudges=%-4d%s" % ((row["memory"] or "?"),
+                                             row["nudges"], note))
+        if rescope:
+            # Name the remedy AND the command. A report that says "prune or sharpen"
+            # about a scope problem sends the reader to sharpen the pattern, which
+            # cannot fix it — the trigger is right, the placement is wrong.
+            print("\n  %d of these are GLOBAL memories firing across several repos."
+                  % len(rescope))
+            print("  Sharpening cannot fix that — the trigger works, it is declared"
+                  " too widely. Rescope:")
+            for row in rescope:
+                print("    reflect_cli.py rescope %s.md repo:<slug>   # fired in: %s"
+                      % (row["memory"], ", ".join(row["repos"][:3])
+                         + (" …" if len(row["repos"]) > 3 else "")))
     return 0
 
 

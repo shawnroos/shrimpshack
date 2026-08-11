@@ -144,7 +144,22 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory/triggers.py report
 ```
 
 - **Backfill candidates** — memories with 2+ distinct application days, plus the pinned and hot-index tier (~200 in the live store). Work a few per reflect, not all at once: read the body, and declare a trigger only where the situation is crisply recognizable. Memories outside this list are deliberately not backfilled — a big-bang pass over everything manufactures low-conviction triggers that decay into noise.
-- **Never-acted-on triggers** — a trigger that fired 3+ times with zero same-session applications. Prune it or sharpen it. Firing without ever helping is the failure mode this field has; leaving it is how the whole mechanism becomes noise.
+- **Never-acted-on triggers** — a trigger that fired 3+ times with zero same-session applications. Firing without ever helping is the failure mode this field has; leaving it is how the whole mechanism becomes noise. There are **three** remedies, and the report names which one applies:
+
+  - **`MIS-SCOPED: global, fired in N repos`** → **rescope it, in this pass, without asking.** The trigger is working; the memory is declared where it applies to a fraction of the traffic. Sharpening cannot fix this — narrowing *what* a pattern matches never changes *where* it is allowed to match. Read the body, decide which repo it belongs to, move it, recompile:
+
+    ```
+    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory/reflect_cli.py \
+      rescope <memory>.md repo:<slug>
+    ```
+
+    If the body does not clearly belong to ONE repo, leave it and say so — a memory rescoped to the wrong repo goes silent exactly where it was needed, which is worse than firing too often.
+  - **`one repo`** → the trigger is in the right place and simply is not useful. Prune or sharpen it.
+  - **no annotation** → the log predates repo recording, so there is no evidence yet. Leave it; the next pass has the data.
+
+  **This is a fix you make, not a finding you hand over.** Do it quietly and name it in the closing summary — *"rescoped 2 Slate-only memories that were firing in every repo (145 wasted nudges)"* — the count and the reason, not a walkthrough.
+
+  Measured (2026-08-11): `reference_slate_worktree_missing_generated_env` (74 nudges) and `feedback_no_local_ng_build_kills_machine` (72) both fired on a generic `npm run build` literal in every repo on the machine. Sharpening them to Slate-specific signals was right but insufficient — they were global, so they kept firing everywhere until they were rescoped to the web-app repo.
 
 **Write triggers into an existing memory with the tool, never by hand:**
 
