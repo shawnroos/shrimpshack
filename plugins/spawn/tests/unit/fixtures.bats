@@ -275,3 +275,96 @@ msg_body() {
     [ "$status" -eq 0 ]
     [ "$(echo "$output" | jq -r '.session_id')" = "sess-9999" ]
 }
+
+# --- fake claude: the two knobs U9's supervisor drives it with -------------
+#
+# U9 classifies a job by EFFECT and by the child's permission denials, so the
+# fixture has to be able to produce both. Asserted here rather than only through
+# the supervisor suite: a fixture knob that silently stopped working would leave
+# supervisor.bats green while the behaviour it claims to prove went dark, which
+# is the failure this whole file exists to close.
+
+@test "fake-claude reports no permission denials by default" {
+    run env FAKE_CLAUDE_RECORD_DIR="$WORK/rec" FAKE_CLAUDE_PROJECTS_ROOT="$WORK/projects" \
+        bash "$FIX/fake-claude.sh" --model alpha --output-format json -p "seed"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -c '.permission_denials')" = "[]" ]
+}
+
+@test "fake-claude carries FAKE_CLAUDE_DENIALS through verbatim, with is_error still false" {
+    # The shape U8 measured: a call that is present but NOT ALLOWED under
+    # dontAsk is attempted, refused, and recorded — while the run still reports
+    # a clean turn. That pairing is the hollow success R9 names.
+    run env FAKE_CLAUDE_RECORD_DIR="$WORK/rec" FAKE_CLAUDE_PROJECTS_ROOT="$WORK/projects" \
+        FAKE_CLAUDE_DENIALS='[{"tool_name":"Bash","tool_use_id":"tu_7","tool_input":{"command":"rm -rf /"}}]' \
+        bash "$FIX/fake-claude.sh" --model alpha --output-format json -p "seed"
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.is_error')" = "false" ]
+    [ "$(echo "$output" | jq -r '.permission_denials | length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.permission_denials[0].tool_name')" = "Bash" ]
+    [ "$(echo "$output" | jq -r '.permission_denials[0].tool_use_id')" = "tu_7" ]
+    [ "$(echo "$output" | jq -r '.permission_denials[0].tool_input.command')" = "rm -rf /" ]
+}
+
+@test "fake-claude refuses a malformed FAKE_CLAUDE_DENIALS rather than emitting an unparseable result" {
+    # A fixture bug must look like a fixture bug. Emitting a broken object here
+    # would surface in a later unit as "the supervisor cannot read denials",
+    # which is a day spent in the wrong file.
+    run env FAKE_CLAUDE_RECORD_DIR="$WORK/rec" FAKE_CLAUDE_PROJECTS_ROOT="$WORK/projects" \
+        FAKE_CLAUDE_DENIALS='not json' \
+        bash "$FIX/fake-claude.sh" --model alpha --output-format json -p "seed"
+    [ "$status" -eq 64 ]
+
+    # A well-formed JSON value that is not an ARRAY is refused too.
+    run env FAKE_CLAUDE_RECORD_DIR="$WORK/rec" FAKE_CLAUDE_PROJECTS_ROOT="$WORK/projects" \
+        FAKE_CLAUDE_DENIALS='{"tool_name":"Bash"}' \
+        bash "$FIX/fake-claude.sh" --model alpha --output-format json -p "seed"
+    [ "$status" -eq 64 ]
+}
+
+@test "FAKE_CLAUDE_WRITE creates its paths under the child's cwd, making directories as needed" {
+    mkdir -p "$WORK/proj"
+    run env FAKE_CLAUDE_RECORD_DIR="$WORK/rec" FAKE_CLAUDE_PROJECTS_ROOT="$WORK/projects" \
+        FAKE_CLAUDE_WRITE="out.txt nested/deeper/note.md" \
+        bash -c 'cd "$1" && bash "$2" --model alpha --output-format json -p "seed"' \
+        _ "$WORK/proj" "$FIX/fake-claude.sh"
+    [ "$status" -eq 0 ]
+    [ -s "$WORK/proj/out.txt" ]
+    [ -s "$WORK/proj/nested/deeper/note.md" ]
+}
+
+@test "FAKE_CLAUDE_WRITE refuses an absolute path" {
+    # It is the instrument for "the job produced this file IN THE WORKTREE". A
+    # path that could land anywhere on the box would make a passing deliverable
+    # test prove something else.
+    run env FAKE_CLAUDE_RECORD_DIR="$WORK/rec" FAKE_CLAUDE_PROJECTS_ROOT="$WORK/projects" \
+        FAKE_CLAUDE_WRITE="/tmp/escape.txt" \
+        bash "$FIX/fake-claude.sh" --model alpha --output-format json -p "seed"
+    [ "$status" -eq 64 ]
+    run bash -c '[ -e /tmp/escape.txt ]'
+    [ "$status" -ne 0 ]
+}
+
+@test "FAKE_CLAUDE_WRITE lands BEFORE the hang, so a reaped job can still have produced its file" {
+    # Load-bearing ordering: U9's cancel and deadline tests need a job that has
+    # done something and then does not finish. If the write moved below the hang
+    # branch, those cases would silently become "produced nothing", and the
+    # classification they exercise would be the wrong one.
+    mkdir -p "$WORK/proj2" "$WORK/rec"
+    env FAKE_CLAUDE_MODE=hang FAKE_CLAUDE_RECORD_DIR="$WORK/rec" \
+        FAKE_CLAUDE_WRITE="early.txt" \
+        bash -c 'cd "$1" && bash "$2" --model alpha --output-format json -p "seed"' \
+        _ "$WORK/proj2" "$FIX/fake-claude.sh" &
+    local fpid=$!
+    local i
+    for i in $(seq 1 100); do
+        [ -s "$WORK/rec/pid" ] && break
+        sleep 0.05
+    done
+    [ -s "$WORK/rec/pid" ]
+    [ -s "$WORK/proj2/early.txt" ]
+    kill -TERM "$fpid" 2>/dev/null
+    wait "$fpid" 2>/dev/null || true
+    run kill -0 "$(head -1 "$WORK/rec/pid")"
+    [ "$status" -ne 0 ]
+}

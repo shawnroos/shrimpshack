@@ -1,0 +1,7 @@
+{
+  "$comment": "SHIPPED DEFAULT — the operator ceiling (R25, KD4, KD10). A person typed the slash command, is present and accountable, so their own settings still govern: the operator entry point does NOT narrow --setting-sources, and this file adds nothing to what the operator already allows themselves. It exists so the operator ceiling has a real, editable override point rather than being 'whatever the flags happen to omit'. defaultMode is dontAsk because an unattended job must never park on a prompt (R9) — that is a property of the JOB, not of who started it. To override, point SPAWN_CEILING_CONFIG_OPERATOR at your own file; the plugin never edits your settings for you.",
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "deny": []
+  }
+}

@@ -38,6 +38,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./secrets.sh
 . "$SCRIPT_DIR/secrets.sh"
 
+# The `status` verb's jobs block (U12). It lives in its own file because it is
+# the job record layer's concern rather than this script's — and because
+# surfaces.bats holds this file under the audit's 1000-code-line bar, which the
+# block's four functions crossed. See jobs-view.sh's header for the full reason.
+# shellcheck source=./jobs-view.sh
+. "$SCRIPT_DIR/jobs-view.sh"
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -1117,6 +1124,7 @@ table_json() {
     fi
 }
 
+
 # ---------------------------------------------------------------------------
 # --describe (R10, R14, KD2) — the control layer's contract as data.
 #
@@ -1209,6 +1217,7 @@ emit_describe() {
             {name:"result",           always:false, note:"stop only: stopped, not_running, stale_pidfile, unmanaged or pid_mismatch"},
             {name:"models",           always:false, note:"status only: the plugin table, as data"},
             {name:"drift",            always:false, note:"status only: the four drift classes below"},
+            {name:"jobs",             always:false, note:"status only: background jobs recorded in this worktree — job_root, worktree, running, listed, omitted, retention_seconds, limit. Every listed entry carries handle, state, state_source, live, terminal, alias, pid, started_at, ended_at, age_seconds, last_activity_seconds_ago, job_dir, log and detail. The state is PROBED by the record layer (KTD6), never the claim written in the status file, and the block is absent when this worktree has no records to list"},
             {name:"help_requested",   always:false, note:"true only for --help; present on every error response"},
             {name:"families",        always:false, note:"--describe only: the declared family -> tier -> alias grammar (KTD3), same table lens.sh and launch.sh describe"},
             {name:"no_family_alias", always:false, note:"--describe only: the alias prose naming no family resolves to"},
@@ -1717,6 +1726,11 @@ status)
     running=false
     [ $prc -eq $EX_OK ] && running=true
 
+    # Built whatever the probe said. A gateway that is DOWN is precisely when
+    # "is something still running in this worktree" matters most, so this is not
+    # gated on $running — and jobs_view never fails the call.
+    jobs_view
+
     # R23: `error` is the enum, and the probe's prose — which is a real answer
     # here, not a malfunction: exit 3 from `status` means "the gateway is down"
     # — travels in `detail`. This emit used to put that prose straight into
@@ -1741,6 +1755,7 @@ status)
         --arg install_error "$(spawn::sanitize_for_display "${install_note:-}")" \
         --argjson drift "$drift" \
         --argjson models "$models_view" \
+        --argjson jobs "${JOBS_JSON:-null}" \
         --arg detail "$(spawn::sanitize_for_display "${PROBE_DETAIL:-}")" \
         --arg errenum "$status_enum" \
         --arg rem "$(remedy_for "$status_enum")" \
@@ -1757,7 +1772,8 @@ status)
           error:(if $errenum == "" then null else $errenum end),
           detail:(if $detail == "" then null else $detail end),
           remedy:(if $rem == "" then null else $rem end),
-          exit_code:$c}')" \
+          exit_code:$c}
+          + (if $jobs == null then {} else {jobs:$jobs} end)')" \
         || ERROR_ENUM=internal die "$EX_USAGE" "could not encode the status object (models table at $MODELS_JSON may be malformed)"
     exit $prc
     ;;

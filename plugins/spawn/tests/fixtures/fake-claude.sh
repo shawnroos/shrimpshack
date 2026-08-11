@@ -34,6 +34,19 @@
 #                            long sleep — for the R2 deadline/reap tests, whose
 #                            assertions need the pid of the thing that must die
 #   FAKE_CLAUDE_RESULT_TEXT  the assistant text in the result JSON
+#   FAKE_CLAUDE_DENIALS      a JSON ARRAY placed verbatim in the result JSON's
+#                            permission_denials field (default []). U9's
+#                            supervisor reads that array to see which tool calls
+#                            the ceiling attempted and refused — measured, that
+#                            is the one refusal mechanism a supervisor can
+#                            observe without believing the model. Malformed JSON
+#                            here is a fixture bug and exits 64 rather than
+#                            emitting an object the caller cannot parse.
+#   FAKE_CLAUDE_WRITE        space-separated relative paths to create under $PWD
+#                            before answering. This is how a test gives a job a
+#                            real side effect: U9 classifies by EFFECT against a
+#                            pre-job baseline, so a fixture that only talks
+#                            cannot exercise the done path at all.
 #
 # Transcript path encoding mirrors Claude Code: the session's project directory
 # is the absolute cwd with every non-alphanumeric byte replaced by '-', so
@@ -46,6 +59,7 @@ MODE="${FAKE_CLAUDE_MODE:-ok}"
 REC_DIR="${FAKE_CLAUDE_RECORD_DIR:-${TMPDIR:-/tmp}/fake-claude-record}"
 SESSION_ID="${FAKE_CLAUDE_SESSION_ID:-11111111-2222-3333-4444-555555555555}"
 RESULT_TEXT="${FAKE_CLAUDE_RESULT_TEXT:-fixture seed answer}"
+DENIALS="${FAKE_CLAUDE_DENIALS:-[]}"
 
 mkdir -p "$REC_DIR"
 
@@ -81,6 +95,21 @@ done
 if [[ "$MODE" == "fail" ]]; then
   echo "fake-claude: seed run failed (FAKE_CLAUDE_MODE=fail)" >&2
   exit 1
+fi
+
+# --- the side effect, if the test asked for one ----------------------------
+# Written before the HANG branch, so a job that is cancelled or hits its
+# deadline can still have produced a file — "the work landed but the run never
+# finished" is a distinct case from either half on its own. `fail` returns
+# above it: a run that dies on its first turn wrote nothing.
+if [[ -n "${FAKE_CLAUDE_WRITE:-}" ]]; then
+  for rel in $FAKE_CLAUDE_WRITE; do
+    case "$rel" in
+      /*) echo "fake-claude: FAKE_CLAUDE_WRITE takes relative paths, got $rel" >&2; exit 64 ;;
+    esac
+    mkdir -p "$(dirname "$PWD/$rel")"
+    printf 'written by fake-claude at %s\n' "$(date +%s)" > "$PWD/$rel"
+  done
 fi
 
 if [[ "$MODE" == "hang" ]]; then
@@ -119,9 +148,17 @@ if [[ "$output_format" == "json" ]]; then
   # In error mode the CLI exits 0 but the result object says the turn FAILED —
   # a real shape (`claude -p` reports tool/turn failures this way), and the one
   # launch.sh's is_error branch exists for (R8).
-  python3 - "$SESSION_ID" "$RESULT_TEXT" "$model" "$MODE" <<'PY'
+  python3 - "$SESSION_ID" "$RESULT_TEXT" "$model" "$MODE" "$DENIALS" <<'PY'
 import json, sys
-session_id, result, model, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+session_id, result, model, mode, denials = sys.argv[1:6]
+try:
+    denials = json.loads(denials)
+except ValueError:
+    sys.stderr.write("fake-claude: FAKE_CLAUDE_DENIALS is not valid JSON\n")
+    sys.exit(64)
+if not isinstance(denials, list):
+    sys.stderr.write("fake-claude: FAKE_CLAUDE_DENIALS must be a JSON array\n")
+    sys.exit(64)
 print(json.dumps({
     "type": "result",
     "subtype": "error_during_execution" if mode == "error" else "success",
@@ -130,6 +167,11 @@ print(json.dumps({
     "session_id": session_id,
     "result": result,
     "model": model,
+    # Measured shape: a call that is present but NOT ALLOWED under dontAsk is
+    # attempted, refused, and recorded here as {tool_name, tool_use_id,
+    # tool_input}. A permissions.deny PATH rule refuses without leaving an entry
+    # at all, which is why this array is a real signal and not a complete one.
+    "permission_denials": denials,
     "usage": {"input_tokens": 11, "output_tokens": 7},
 }))
 PY

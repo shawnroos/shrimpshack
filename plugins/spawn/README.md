@@ -435,6 +435,103 @@ rollout beyond this paragraph is deliberately deferred.
 
 ---
 
+## Two doors, two ceilings — `lib/bg-operator.sh` and `lib/bg-repo.sh`
+
+A background job runs under a permission ceiling, and **which ceiling is
+decided by which file ran** — not by anything the caller says about itself.
+
+| entry point | who it is for | what the child gets |
+|---|---|---|
+| `lib/bg-operator.sh` | a person who typed a command | `--settings permissions/operator.settings.json --permission-mode dontAsk` |
+| `lib/bg-repo.sh` | an agent, with no human present | `--setting-sources project --settings <rendered repo-bounded config> --permission-mode dontAsk` |
+
+The difference that actually bites is `--setting-sources project`: it drops
+`user`, so the child does **not** inherit what you have already allowed
+yourself. Measured — a child launched from a session that broadly allows shell
+access could not run a shell command, while the control arm with the same
+prompt could.
+
+`--permission-mode dontAsk` is on both, and is not about who called: an
+unattended job that can wait on a permission decision nobody is there to make
+is stalled forever, so an unallowed call is refused rather than queued.
+
+There is deliberately **no `--ceiling` flag**. A flag would be self-declared,
+and any agent able to run the script could claim to be the operator. Allowlist
+the two paths separately and the harness decides which ceiling a caller can
+reach:
+
+```json
+"Bash(bash */plugins/spawn/lib/bg-operator.sh:*)"
+"Bash(bash */plugins/spawn/lib/bg-repo.sh:*)"
+```
+
+### What the repo-bounded default allows and denies
+
+Read the file — `permissions/repo-bounded.settings.json` — it is the whole
+story. In summary: reads, greps, writes and edits are **scoped to the
+worktree**; version-control internals and hooks, and agent configuration
+(`.claude/`, `.claude-plugin/`, `CLAUDE.md`, `AGENTS.md`, `.mcp.json`) are
+denied; `Bash` is simply not allowed.
+
+`{{WORKTREE}}` in that file is substituted at launch with the job's worktree.
+A permission path is only absolute when it starts with `//`, which is why the
+rules read `//{{WORKTREE}}/**` and the substitution drops the leading slash —
+a rule written `/Users/...` matches nothing and reads exactly like a working
+allow that silently is not one.
+
+Two consequences worth knowing:
+
+- **The symlink bound is not a rule, it is a resolution.** There is no symlink
+  primitive in the settings grammar. The permission system resolves a path
+  before matching it, so a link inside the tree that resolves outside falls
+  outside the worktree-scoped allow and is refused. Measured.
+- **Nothing here removes a tool, but only some refusals are observable.** A
+  tool-level deny *removes* the tool — the model reports having no such tool
+  and never attempts it, so there is nothing to see. This ceiling uses none of
+  those. What it does use splits in two, measured:
+  - **Not allowed** (`Bash`, a write outside the worktree): attempted,
+    refused, and recorded in the child's result JSON as
+    `permission_denials[] = {tool_name, tool_use_id, tool_input}`.
+  - **A deny rule** (`.git/**`, `.claude/**`, `CLAUDE.md`, …): attempted and
+    refused, but it leaves **no** entry in `permission_denials[]`. The only
+    account of it is the model's own prose, which is not a witness worth
+    trusting. Detect those by effect — the file is not there — not by asking.
+
+Within the bound the model still **reads** whatever the worktree contains,
+secrets included. This ceiling denies execution-bearing paths, not readable
+ones.
+
+### Overriding a ceiling
+
+The plugin ships defaults and **never edits your settings** — not your
+`~/.claude/settings.json`, not a project's. To override, point an environment
+variable at your own file:
+
+```bash
+export SPAWN_CEILING_CONFIG_REPO=~/my-repo-ceiling.json      # the agent door
+export SPAWN_CEILING_CONFIG_OPERATOR=~/my-operator-ceiling.json
+```
+
+Your file is used exactly as shipped ones are: read, `{{WORKTREE}}`
+substituted, handed to the child. Editing `permissions/*.json` in place works
+too, and is the right move when the change should travel with the plugin. The
+harness's own agent defaults are the third route, and they are outside this
+plugin entirely.
+
+A ceiling that cannot be read or rendered is **not** a job that starts wide —
+it is exit 2 with `error: "ceiling_unavailable"` and no child at all.
+
+### What these doors do not do
+
+They do not police the bound. The ceiling is a permission configuration the
+child session runs under and the **harness** enforces it; these scripts choose
+which configuration to hand down and hand it down. They also do not classify
+the result: a fully denied child returns `is_error: false` and exit 0
+(measured), so `child_exit_code` in the response is data, never evidence that
+work happened.
+
+---
+
 ## What a gateway-pointed session does not have
 
 First, the thing it *does* have, because it changes the trust posture: unlike

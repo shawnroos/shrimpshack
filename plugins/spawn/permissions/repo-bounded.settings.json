@@ -1,0 +1,29 @@
+{
+  "$comment": "SHIPPED DEFAULT — the repo-bounded ceiling (R25, KD4, KD10). Handed to a child whose caller was an AGENT, so no human is present to answer for it. {{WORKTREE}} is substituted at launch with the job's worktree, absolute and with the leading slash removed, because a permission path is only absolute when it begins with '//' — a rule written '/Users/...' matches nothing and reads as an allow that silently is not one (measured). Three bounds, each measured against the real CLI: (1) writes and edits are scoped to the worktree, and the permission system resolves a path BEFORE matching it, so a symlink inside the tree that resolves outside falls outside the allow and is refused; (2) version-control internals and hooks are denied outright, so a job cannot leave behind something that runs on the next commit; (3) agent configuration is denied, so a job cannot widen its own ceiling or the next session's. Bash is NOT allowed: this ceiling is reached only when nobody is watching, and the same launcher's own shell permission must not leak into it — the agent entry point drops 'user' from the child's setting sources for exactly that reason. defaultMode is dontAsk so an unallowed call is REFUSED rather than queued behind a prompt nobody will answer (R9). Note the mechanisms differ in what they leave behind, measured: a call that is simply NOT ALLOWED (Bash, or a write outside the worktree) is attempted, refused, and RECORDED in the child result's permission_denials[]; a deny rule below is also attempted and refused, but leaves NO entry there, so a supervisor can only detect those by effect against a baseline. No tool is removed by a tool-level deny anywhere in this file, because a removed tool is never attempted and leaves nothing at all. To override, point SPAWN_CEILING_CONFIG_REPO at your own file; the plugin never edits your settings for you.",
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Read(//{{WORKTREE}}/**)",
+      "Glob",
+      "Grep",
+      "Write(//{{WORKTREE}}/**)",
+      "Edit(//{{WORKTREE}}/**)"
+    ],
+    "deny": [
+      "Write(//**/.git/**)",
+      "Edit(//**/.git/**)",
+      "Write(//**/.githooks/**)",
+      "Edit(//**/.githooks/**)",
+      "Write(//**/.claude/**)",
+      "Edit(//**/.claude/**)",
+      "Write(//**/.claude-plugin/**)",
+      "Edit(//**/.claude-plugin/**)",
+      "Write(//**/CLAUDE.md)",
+      "Edit(//**/CLAUDE.md)",
+      "Write(//**/AGENTS.md)",
+      "Edit(//**/AGENTS.md)",
+      "Write(//**/.mcp.json)",
+      "Edit(//**/.mcp.json)"
+    ]
+  }
+}

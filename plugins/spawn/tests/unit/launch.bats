@@ -690,6 +690,32 @@ config_write_lint() {   # <script>
     [ "$status" -ne 0 ]
     run config_write_lint "$LIB/spawnctl.sh"
     [ "$status" -ne 0 ]
+    # U7's job record joins the same enumeration. This lint is enumerated rather
+    # than computed, so a new script is covered by hand or is silently
+    # uncovered — and "silently uncovered" reads exactly like green. Unguarded
+    # for that reason: if jobs.sh is renamed or lost, this goes RED rather than
+    # quietly skipping the file it was added to cover.
+    run config_write_lint "$LIB/jobs.sh"
+    [ "$status" -ne 0 ]
+    # U8's ceiling machinery and its two entry points join it too. These read
+    # the gateway config for the token exactly as this script does, which is
+    # precisely the shape that could grow a write to it.
+    run config_write_lint "$LIB/ceilings.sh"
+    [ "$status" -ne 0 ]
+    run config_write_lint "$LIB/bg-operator.sh"
+    [ "$status" -ne 0 ]
+    run config_write_lint "$LIB/bg-repo.sh"
+    [ "$status" -ne 0 ]
+    # U9's supervisor joins it as well. It reads gateway.yaml for the token in
+    # the detached role, exactly as this script does in the foreground one,
+    # which is the shape that could grow a write to it.
+    run config_write_lint "$LIB/bg-agent.sh"
+    [ "$status" -ne 0 ]
+    # U10's handle operations join it too. They read the job record and the
+    # supervisor's result and write NOTHING at all, which is exactly the shape
+    # that could quietly grow a write to the gateway config later.
+    run config_write_lint "$LIB/handle.sh"
+    [ "$status" -ne 0 ]
 }
 
 @test "KTD3: the no-write invariant covers the three runtime scripts, and the setup family is exempt BY NAME" {
