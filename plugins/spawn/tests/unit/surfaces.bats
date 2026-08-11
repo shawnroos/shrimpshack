@@ -202,13 +202,45 @@ frontmatter() {         # <file>
 # --- the skills stay reachable without re-colliding -----------------------
 
 @test "each SKILL.md description carries the do-not-self-trigger clause" {
-    local s
-    for s in lens launch status; do
-        run bash -c "$(declare -f frontmatter); frontmatter '$SKILL_DIR/$s/SKILL.md'"
+    # GLOBBED, not a hardcoded list. This used to iterate `lens launch status`
+    # while claiming "each SKILL.md", so a skill added later was invisible to it
+    # — the check was narrower than the invariant its own name states, and a new
+    # skill could self-trigger with nothing going red.
+    #
+    # ONE deliberate exception, named here rather than silently skipped: the
+    # `spawn` router IS the conversational front door. Its whole job is to be
+    # reachable from "get me a second opinion" and then delegate. If it carried
+    # the clause, nothing in the plugin could be entered conversationally and the
+    # four surfaces would only be reachable by someone who already knew which one
+    # they wanted — which is the problem the router exists to solve.
+    local d name
+    local checked=0
+    for d in "$SKILL_DIR"/*/; do
+        name="$(basename "$d")"
+        [ -f "$d/SKILL.md" ] || continue
+        if [ "$name" = "spawn" ]; then
+            # The exception is asserted, not assumed: the router must NOT carry
+            # the clause. If someone adds it, this fails and they have to think.
+            run bash -c "$(declare -f frontmatter); frontmatter '$d/SKILL.md'"
+            [ "$status" -eq 0 ]
+            printf '%s' "$output" | grep -qF 'conversationally triggerable'
+            if printf '%s' "$output" | grep -qF 'do NOT'; then
+                echo "the spawn router must NOT carry the do-not-self-trigger clause —"
+                echo "it is the conversational front door. Remove the clause, or if the"
+                echo "router is genuinely no longer the entry point, update this test."
+                return 1
+            fi
+            continue
+        fi
+        run bash -c "$(declare -f frontmatter); frontmatter '$d/SKILL.md'"
         [ "$status" -eq 0 ]
         printf '%s' "$output" | grep -qF 'do NOT'
         printf '%s' "$output" | grep -qF 'conversational phrasing'
+        checked=$((checked + 1))
     done
+    # Guard the guard: if the glob ever matches nothing, this must fail loudly
+    # rather than pass over an empty loop.
+    [ "$checked" -ge 3 ]
 }
 
 @test "no skill body points at a command name this unit deleted" {
