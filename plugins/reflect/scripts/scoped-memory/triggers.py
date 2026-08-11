@@ -118,7 +118,13 @@ maintenance points, two of which live here as REPORTS and one as a WRITER.
 
 CLI:
     triggers.py match  [--store DIR] [--cwd DIR] [--session ID] [--all] [--plain]
-                       # situation text on STDIN; prints hook JSON, or nothing
+                       [--prefilter-rejected]
+                       # situation text on STDIN; prints hook JSON, or nothing.
+                       # --prefilter-rejected says "the grep prefilter said NO about
+                       # this command"; the hook sets it under
+                       # MEMORY_TRIGGER_PREFILTER_AUDIT=1, and any match then means
+                       # the prefilter was WRONG — reported on stderr and logged to
+                       # RECALL.log as `prefilter-disagreement`.
     triggers.py compile [--store DIR]     # see compile-triggers.py for the hook
     triggers.py report [--store DIR] [--backfill] [--misfire] [--json]
                        # lifecycle reports; both sections by default
@@ -537,6 +543,16 @@ def prefilter_is_safe(lines):
     for line in lines:
         if _UNSAFE_FOR_GREP.search(line):
             return False
+        if any(_bracket_scan(line)):
+            # Dead on the production path — `prefilter_lines` already returned None
+            # for both bracket hazards before anything reaches here. Kept anyway so
+            # this function is a COMPLETE oracle on its own: the question in the
+            # docstring is "can grep stand in for the matcher over these patterns",
+            # and a version that answers "yes" for `x[[:alpha:]]y` unless you happen
+            # to have called it through one specific caller is a trap for the next
+            # test or tool that asks it directly. A stale safety contract on this
+            # gate has already shipped one bug.
+            return False
         if any(ord(c) > 127 for c in line):
             # Case folding is Unicode in Python `re.I` and LOCALE-dependent in
             # `grep -i`. Under LC_ALL=C — which a hook process can easily inherit,
@@ -727,20 +743,42 @@ def _acquire_pair_lock(store_dir, timeout=None):
     except OSError:
         return None
     deadline = time.monotonic() + max(0.0, timeout)
+    expired = False
     while True:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return fd
         except OSError:
             if time.monotonic() >= deadline:
+                expired = True
                 break
-            time.sleep(PAIR_LOCK_POLL_S)
+            try:
+                time.sleep(PAIR_LOCK_POLL_S)
+            except Exception:
+                break
         except Exception:
             break
     try:
         os.close(fd)
     except OSError:
         pass
+    if expired:
+        # Say so. Proceeding unserialised is the sanctioned degradation, but it is
+        # also exactly the mismatched-pair scenario the lock exists to prevent, and
+        # it happens precisely when two writers hold different fresh snapshots. An
+        # expiry that leaves no trace is indistinguishable from a lock that is never
+        # contended — and from one that is permanently broken (bad permissions, a
+        # holder wedged for days). This module's rule is that a silent failure mode
+        # has to be askable; the prefilter got an audit channel, so does this.
+        print("triggers: pair lock timed out after %.1fs — writing the manifest and "
+              "prefilter UNSERIALISED. A concurrent compile may leave the two "
+              "describing different states." % timeout, file=sys.stderr)
+        if telemetry is not None:
+            try:
+                telemetry.append_recall(os.path.join(store_dir, "RECALL.log"),
+                                        None, "pair-lock-timeout", "trigger")
+            except Exception:
+                pass
     return None
 
 

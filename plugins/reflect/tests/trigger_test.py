@@ -475,7 +475,6 @@ for hazard, why in [("\\Agh pr", "python-only anchor, a literal A to grep"),
                     ("x[[:alpha:]]y", "POSIX class: grep reads a class, Python a set"),
                     ("x[[.a.]]y", "collating element, same divergence"),
                     ("[a[^\\n]]", "nested set — the [^\\n] rewrite must not hide it"),
-                    ("x[[.a.]]y", "collating element"),
                     ("rm [x\\b]y", "\\b inside a class is BACKSPACE, not a boundary"),
                     ("a[a\\]b]c", "backslash inside a class has no POSIX meaning"),
                     ("gh café", "non-ASCII: grep -i folds per LOCALE, re.I per Unicode")]:
@@ -503,6 +502,18 @@ for benign in ["gh\\ pr\\ view", "foo\\\\bar", "gh\\ pr\\ (view|merge)", "a\\.b\
         tg.write_manifest(store, manb)
         check("prefilter IS written for benign %r" % benign,
               os.path.exists(os.path.join(store, tg.PREFILTER_NAME)))
+
+# `prefilter_is_safe` must be a COMPLETE oracle on its own, not merely correct when
+# reached through `prefilter_lines`. Every test above goes through the full pipeline,
+# where prefilter_lines returns None for bracket hazards before this function is
+# called — so a version of it that answers "safe" for a POSIX class passes all of
+# them. Ask it directly. The next test or tool to use it as the safety oracle will.
+for hazard in ["x[[:alpha:]]y", "x[[.a.]]y", "a[a\\]b]c", "rm [x\\b]y"]:
+    check("prefilter_is_safe rejects %r when asked DIRECTLY" % hazard,
+          not tg.prefilter_is_safe([hazard]))
+for ok in ["gh\\ pr\\ view", "a[0-9]b", "gh run rerun.*--failed"]:
+    check("prefilter_is_safe still accepts %r directly" % ok,
+          tg.prefilter_is_safe([ok]))
 
 # The allowlist rests on a factual claim: every character `re.escape` puts a
 # backslash in front of reads as that literal character in Python AND in every grep.
@@ -638,6 +649,16 @@ with tempfile.TemporaryDirectory() as store:
           not th.is_alive())
     check("...and gives up by returning None, so the write proceeds unserialised",
           box.get("r", "still-running") is None)
+    # An expiry that leaves no trace is indistinguishable from a lock that is never
+    # contended — and from one that is permanently broken. Proceeding unserialised is
+    # sanctioned, but it is also exactly the mismatched-pair case the lock exists to
+    # prevent, so it has to be countable.
+    try:
+        lock_log = open(os.path.join(store, "RECALL.log"), encoding="utf-8").read()
+    except OSError:
+        lock_log = ""
+    check("a pair-lock timeout is RECORDED, not silent",
+          "pair-lock-timeout" in lock_log)
 
     tg._release_pair_lock(fd)
     # Assert the descriptor is CLOSED rather than re-acquiring: a second blocking
@@ -661,7 +682,27 @@ with tempfile.TemporaryDirectory() as store:
     th2.join(5.0)
     after = box2.get("r")
     check("...so the next writer can take it", not th2.is_alive() and after is not None)
+
+    # The SHIPPED default has to wait, and no test above exercises it — both threaded
+    # acquires pass timeout=0.05, and every uncontended acquire succeeds on the first
+    # LOCK_NB try without consulting the deadline at all. So setting
+    # PAIR_LOCK_TIMEOUT_S = 0 left the suite green while every contended real compile
+    # would proceed unserialised immediately, re-opening the pair-drift race.
+    check("the shipped pair-lock timeout is a real wait, not zero",
+          tg.PAIR_LOCK_TIMEOUT_S > 0)
+    waiter = {}
+    tw = _th.Thread(target=lambda: waiter.setdefault(
+        "r", tg._acquire_pair_lock(store)), daemon=True)      # NO timeout: the default
+    tw.start()
+    time.sleep(0.2)                                            # still waiting on us
+    still_waiting = tw.is_alive()
     tg._release_pair_lock(after)
+    tw.join(5.0)
+    check("a waiter using the DEFAULT timeout blocks until the holder releases",
+          still_waiting)
+    check("...and then acquires, rather than having given up immediately",
+          not tw.is_alive() and waiter.get("r") is not None)
+    tg._release_pair_lock(waiter.get("r"))
 
 # The prefilter's one failure mode is invisible by construction: a wrong reject
 # produces no error, no log line, no nudge. The audit flag is the way to ASK whether
@@ -695,6 +736,14 @@ with tempfile.TemporaryDirectory() as store:
             recall = ""
         check("audit ON: the disagreement is RECORDED, not just recovered",
               "prefilter-disagreement" in recall)
+
+    # A NON-ASCII command must never be judged by grep. Case folding is symmetric, so
+    # an all-ASCII pattern can match a non-ASCII command in Python (`re.I` folds
+    # U+0131 dotless-i onto `i`) while no grep folds it under any locale. The
+    # compile-side gate cannot see this: it inspects the PATTERN's bytes, and the
+    # pattern here is pure ASCII. Restore the honest prefilter first so the only
+    # thing under test is the command's encoding.
+    tg.write_manifest(store, man_a)
 
     # ...and a prefilter that is CORRECT must produce no disagreement, or the signal
     # is noise and nobody will trust it.
@@ -855,6 +904,44 @@ with tempfile.TemporaryDirectory() as store:
         rc_m, out_m, _em = run_hook(store, CASE1_CMD, session="sMISS", flag_dir=flags)
         check("a MISSING prefilter falls through to python, nudge still fires",
               rc_m == 0 and additional_context(out_m) is not None)
+
+# A NON-ASCII command must never be judged by grep. Case folding is symmetric: the
+# compile-side gate checks the PATTERN's bytes, but Python's `re.I` (no `re.ASCII`)
+# folds U+0131 dotless-i onto `i`, so the pure-ASCII pattern `pip install` matches the
+# command `pıp install` while no grep folds it under any locale. Pattern-side rules
+# cannot see this, because the pattern is entirely innocent.
+#
+# The trigger span itself has to carry the non-ASCII character. An earlier version of
+# this test reused a fixture whose matched span was plain ASCII, so grep matched
+# regardless and the guard was never exercised — and it asserted `rc == 0`, which the
+# hook returns on EVERY path by design. It passed with the guard deleted.
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_uni.md"),
+          memory("reference_uni", "the unicode-fold memory",
+                 "triggers:\n  - literal: pip install\n"))
+    man_u, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man_u)
+    UNI_CMD = "pıp install numpy"          # U+0131, folds to `i` in Python only
+
+    # Guard the fixture: the hazard must actually exist, or the check below is empty.
+    check("the matcher DOES match the non-ASCII command (Unicode fold)",
+          bool(tg.match(man_u, UNI_CMD, cwd="/tmp")[0]))
+    check("...and every grep does NOT (that is the whole hazard)",
+          not grep_says_match(os.path.join(store, tg.PREFILTER_NAME), UNI_CMD)[0])
+
+    with tempfile.TemporaryDirectory() as flags:
+        rc_u, out_u, _eu = run_hook(store, UNI_CMD, session="sUNI", flag_dir=flags)
+        check("a non-ASCII command is NOT rejected on grep's word — the nudge fires",
+              rc_u == 0 and additional_context(out_u) is not None)
+
+    # ...and the guard must not become "always fall through": an ASCII command that
+    # genuinely matches nothing still has to take the cheap reject.
+    with tempfile.TemporaryDirectory() as flags:
+        rc_n, out_n, _en = run_hook(store, "echo entirely unrelated", session="sASC",
+                                    flag_dir=flags)
+        check("an ASCII no-match command still rejects cheaply",
+              rc_n == 0 and out_n.strip() == "")
 
 # ------------------------------------------------------------ cap and fail-open
 print("== cap and fail-open ==")

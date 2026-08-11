@@ -89,8 +89,31 @@ if [ -s "$PREFILTER" ]; then
   #
   # -i is REQUIRED: the matcher compiles with re.I, and a case-sensitive prefilter
   # lost exactly 2 nudges across those 480 commands.
-  printf '%s' "$CMD" | grep -qiEf "$PREFILTER" 2>/dev/null
-  RC=$?
+  # A NON-ASCII command is never judged by grep. Case folding is symmetric, and the
+  # compile-side gate only checks the PATTERN's bytes — which leaves the command side
+  # open. Python's matcher folds Unicode (`re.I`, no `re.ASCII`), so the plain ASCII
+  # pattern `pip install` matches the command `pıp install` (U+0131 dotless i, the
+  # classic Turkish-keyboard typo); K U+212A and ſ U+017F fold onto k and s the same
+  # way. No grep folds any of them, under any locale, so grep says no, the matcher
+  # says yes, and the nudge is lost silently. Non-ASCII commands are rare, so falling
+  # through costs almost nothing.
+  #
+  # LC_ALL=C pins the fold on everything else. Without it, `grep -i` folds per the
+  # ambient locale, and a Turkish/az locale folds I to ı — narrowing the prefilter on
+  # glibc in the other direction. macOS libc happens not to implement that fold, so
+  # this is the class of bug that passes here and breaks on a Linux user's box.
+  #
+  # KNOWINGLY UNTESTED: removing this pin does not fail the suite, because no locale
+  # on this machine reproduces the divergence. Proving it needs a glibc box with
+  # tr_TR.UTF-8 installed. Everything else in this block IS pinned by a test; this one
+  # line rests on the argument above, so do not "simplify" it away.
+  case "$CMD" in
+    *[![:ascii:]]*)
+      RC=0 ;;
+    *)
+      printf '%s' "$CMD" | LC_ALL=C grep -qiEf "$PREFILTER" 2>/dev/null
+      RC=$? ;;
+  esac
   # Captured on the very next line on purpose: the reasoning below is long, and
   # although comments do not clobber `$?`, any command someone later inserts between
   # the pipeline and the test would silently retarget it.
