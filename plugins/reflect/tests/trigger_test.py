@@ -474,7 +474,11 @@ for hazard, why in [("\\Agh pr", "python-only anchor, a literal A to grep"),
                     ("a{,3}b", "{,n} is a quantifier to Python, literal to grep"),
                     ("x[[:alpha:]]y", "POSIX class: grep reads a class, Python a set"),
                     ("x[[.a.]]y", "collating element, same divergence"),
-                    ("[a[^\\n]]", "nested set — the [^\\n] rewrite must not hide it")]:
+                    ("[a[^\\n]]", "nested set — the [^\\n] rewrite must not hide it"),
+                    ("x[[.a.]]y", "collating element"),
+                    ("rm [x\\b]y", "\\b inside a class is BACKSPACE, not a boundary"),
+                    ("a[a\\]b]c", "backslash inside a class has no POSIX meaning"),
+                    ("gh café", "non-ASCII: grep -i folds per LOCALE, re.I per Unicode")]:
     with tempfile.TemporaryDirectory() as store:
         write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
         write(os.path.join(store, "reference_hz.md"),
@@ -594,12 +598,47 @@ with tempfile.TemporaryDirectory() as store:
     check("write_manifest takes the pair lock (the pair, not just each file)",
           os.path.exists(os.path.join(store, tg.PAIR_LOCK_NAME)))
 
+    # The manifest's mtime stamp must land AFTER the prefilter is written, because
+    # writing the prefilter replaces a file in this same directory and so bumps the
+    # directory's mtime — which is what the freshness test compares against. Stamp
+    # first and the manifest is born older than the directory it just changed, so
+    # `is_current` is False forever and the compile-side skip silently never skips.
+    man_dir = os.path.dirname(os.path.abspath(tg.__file__))
+    ct_path = os.path.join(man_dir, "..", "compile-triggers.py")
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location("ct_mod", os.path.abspath(ct_path))
+    _ct = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_ct)
+    check("the manifest is CURRENT right after write_manifest "
+          "(prefilter written before the mtime stamp)", _ct.is_current(store))
+    tg.write_manifest(store, man_lk)
+    check("...and stays current across a recompile, so the skip actually skips",
+          _ct.is_current(store))
+
 with tempfile.TemporaryDirectory() as store:
     fd = tg._acquire_pair_lock(store)
     check("the pair lock is actually acquired on this platform", fd is not None)
     check("the lock file is dot-prefixed so corpus iteration skips it",
           tg.PAIR_LOCK_NAME.startswith(".")
           and os.path.exists(os.path.join(store, tg.PAIR_LOCK_NAME)))
+    # The wait is BOUNDED. An unbounded LOCK_EX behind a wedged holder would block
+    # every later SessionStart until the hook's own 10s timeout killed it — a silent
+    # +10s per session for as long as the holder lives. On expiry we proceed
+    # unserialised, which is exactly what shipped before the lock existed.
+    # Run it on a thread with a join deadline: if the bounded wait ever regresses to
+    # a blocking LOCK_EX, this must FAIL, not hang. A suite that hangs reads as a
+    # mysterious slow CI run and gets retried rather than diagnosed.
+    import threading as _th
+    box = {}
+    th = _th.Thread(target=lambda: box.setdefault(
+        "r", tg._acquire_pair_lock(store, timeout=0.05)), daemon=True)
+    th.start()
+    th.join(5.0)
+    check("a contended pair lock GIVES UP rather than blocking forever",
+          not th.is_alive())
+    check("...and gives up by returning None, so the write proceeds unserialised",
+          box.get("r", "still-running") is None)
+
     tg._release_pair_lock(fd)
     # Assert the descriptor is CLOSED rather than re-acquiring: a second blocking
     # acquire against an unreleased lock would hang the suite instead of failing it,
@@ -611,6 +650,61 @@ with tempfile.TemporaryDirectory() as store:
         closed = True
     check("releasing the pair lock closes the descriptor (so the flock drops)",
           closed)
+    # Threaded for the same reason as above, and it is not redundant: if the wait
+    # regresses to blocking, the earlier contended acquire is still parked on the
+    # lock and grabs it the moment we release — so a direct call here would hang the
+    # whole suite rather than report the regression.
+    box2 = {}
+    th2 = _th.Thread(target=lambda: box2.setdefault(
+        "r", tg._acquire_pair_lock(store, timeout=0.05)), daemon=True)
+    th2.start()
+    th2.join(5.0)
+    after = box2.get("r")
+    check("...so the next writer can take it", not th2.is_alive() and after is not None)
+    tg._release_pair_lock(after)
+
+# The prefilter's one failure mode is invisible by construction: a wrong reject
+# produces no error, no log line, no nudge. The audit flag is the way to ASK whether
+# it is honest, and it is only worth having if it actually reports a disagreement.
+print("== prefilter audit mode ==")
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_gh_conflicting_blocks_ci_silently.md"),
+          LITERAL_MEM)
+    man_a, _ = tg.compile_manifest(store)
+    tg.write_manifest(store, man_a)
+    # A prefilter that cannot match what the matcher matches — i.e. exactly the bug
+    # class that shipped three times, made deliberate so it can be detected.
+    write(os.path.join(store, tg.PREFILTER_NAME), "zzz-nothing-can-match-this\n")
+
+    with tempfile.TemporaryDirectory() as flags:
+        rc_off, out_off, _e = run_hook(store, CASE1_CMD, session="sOFF",
+                                       flag_dir=flags)
+        check("audit OFF: the wrong reject silently loses the nudge (the bug shape)",
+              rc_off == 0 and out_off.strip() == "")
+
+    with tempfile.TemporaryDirectory() as flags:
+        rc_on, out_on, _e2 = run_hook(store, CASE1_CMD, session="sON",
+                                      flag_dir=flags,
+                                      env_extra={"MEMORY_TRIGGER_PREFILTER_AUDIT": "1"})
+        check("audit ON: the hook falls through and the nudge fires anyway",
+              rc_on == 0 and additional_context(out_on) is not None)
+        try:
+            recall = open(os.path.join(store, "RECALL.log"), encoding="utf-8").read()
+        except OSError:
+            recall = ""
+        check("audit ON: the disagreement is RECORDED, not just recovered",
+              "prefilter-disagreement" in recall)
+
+    # ...and a prefilter that is CORRECT must produce no disagreement, or the signal
+    # is noise and nobody will trust it.
+    tg.write_manifest(store, man_a)          # restores the real prefilter
+    with tempfile.TemporaryDirectory() as flags:
+        run_hook(store, CASE1_CMD, session="sOK", flag_dir=flags,
+                 env_extra={"MEMORY_TRIGGER_PREFILTER_AUDIT": "1"})
+        recall2 = open(os.path.join(store, "RECALL.log"), encoding="utf-8").read()
+        check("an HONEST prefilter logs no disagreement under audit",
+              recall2.count("prefilter-disagreement") == 1)   # still just the earlier one
 
 # A pattern that is valid PYTHON and invalid ERE must not produce a prefilter at
 # all: a file grep cannot parse makes it exit 2 for EVERY command, and a hook that
