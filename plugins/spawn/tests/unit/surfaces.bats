@@ -88,11 +88,25 @@ frontmatter() {         # <file>
     done
 }
 
-@test "R1 — the four declared verbs are the command surface" {
+@test "R1 — the declared verbs are the command surface" {
     local v
-    for v in agent bg-agent session report; do
+    for v in agent session report; do
         [ -f "$CMD_DIR/$v.md" ]
     done
+    # bg-agent is DELIBERATELY ABSENT. Its engine (lib/bg-agent.sh) does not
+    # exist, and a command that can only refuse does not belong in the / menu —
+    # a surface that lists things which cannot work teaches the operator to
+    # distrust the list. The command body is preserved in git history and the
+    # KTD4 chain policy for it is still declared in models.json, so restoring it
+    # alongside the engine is a revert, not a rewrite.
+    #
+    # This assertion is the guard against it coming back WITHOUT the engine.
+    # When the engine lands, this pair flips: assert bg-agent.md exists.
+    if [ -e "$ROOT/lib/bg-agent.sh" ]; then
+        [ -f "$CMD_DIR/bg-agent.md" ]
+    else
+        [ ! -e "$CMD_DIR/bg-agent.md" ]
+    fi
     # And the shadowing names are gone, not merely joined.
     for v in lens launch status; do
         [ ! -e "$CMD_DIR/$v.md" ]
@@ -156,7 +170,6 @@ frontmatter() {         # <file>
     local -a pairs=(
         "agent:lib/lens.sh"
         "session:lib/launch.sh"
-        "bg-agent:lib/bg-agent.sh"
         "report:lib/spawnctl.sh"
     )
     local pair name script
@@ -175,21 +188,6 @@ frontmatter() {         # <file>
     grep -qF 'spawnctl.sh" status' "$CMD_DIR/report.md"
 }
 
-@test "R20 — bg-agent checks its engine exists before running it" {
-    # Always true: the body checks for the script rather than assuming it.
-    grep -qF '[ -f "${CLAUDE_PLUGIN_ROOT}/lib/bg-agent.sh" ]' "$CMD_DIR/bg-agent.md"
-
-    # State-conditional. U9 owns the supervisor; until it lands, the body must
-    # also SAY the engine is absent so a caller gets an honest answer instead of
-    # a silent substitution. Once U9 ships the script that wording is stale, so
-    # this half retires with the condition rather than going red in a suite U9
-    # does not own.
-    if [ ! -e "$ROOT/lib/bg-agent.sh" ]; then
-        grep -qF 'does not exist yet' "$CMD_DIR/bg-agent.md"
-    else
-        refute_file_match 'does not exist yet' "$CMD_DIR/bg-agent.md"
-    fi
-}
 
 @test "every command body ends by passing \$ARGUMENTS through" {
     local f
