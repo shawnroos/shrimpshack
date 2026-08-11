@@ -1,6 +1,6 @@
 {
   "name": "reflect",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "A QMD-backed memory + document store for Claude Code. Keeps the auto-loaded memory index small and complete (a budgeted pointer index instead of one ever-growing file that silently truncates), surfaces the most relevant memory bodies on demand via fast local search, and captures the documents agentic work generates \u2014 brainstorms, handoffs, solutions \u2014 into a searchable store before worktrees are cleaned up. Hooks wire automatically when enabled; the invasive one-time steps (migrating an existing MEMORY.md, patching the Memory Protocol) are opt-in via /reflect-setup. Degrades gracefully when qmd is missing, slow, or wedged: the index still loads and bodies are read by file pointer, seeded recall self-suppresses after repeated failures (a cross-session cooldown) so a stalled qmd never taxes every prompt, and only search-based recall is dormant.",
   "author": {
     "name": "Shawn Roos",

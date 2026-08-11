@@ -1049,6 +1049,60 @@ check("compilation does NOT ride inside memory-index-render.py",
                             encoding="utf-8").read().lower().replace(
           "compiled", "").replace("re.compile", ""))
 
+
+# ---------------------------------------- a misfiring trigger: which remedy?
+# "Prune or sharpen" is the wrong advice for a GLOBAL memory that fires in many
+# repos: sharpening narrows WHAT it matches, never WHERE it may match, so the
+# thing keeps firing everywhere. Measured: two Slate-only memories fired 145
+# times across every repo on the machine, were sharpened once, and kept going.
+# The repo a nudge fired in is what separates the two remedies.
+print("== misfire remedy: rescope vs prune-or-sharpen ==")
+MISFIRE_MEM = ("---\nname: %s\ndescription: d\nmetadata:\n  type: reference\n"
+               "triggers:\n  - literal: ng build\n---\nBody.\n")
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_many.md"), MISFIRE_MEM % "reference_many")
+    write(os.path.join(store, "reference_one.md"), MISFIRE_MEM % "reference_one")
+    os.makedirs(os.path.join(store, "_scope", "repo-x"))
+    write(os.path.join(store, "_scope", "repo-x", "reference_scoped.md"),
+          MISFIRE_MEM % "reference_scoped")
+    rlog = os.path.join(store, "RECALL.log")
+    for i, (nm, repos) in enumerate([("reference_many", ["r1", "r2", "r3"] * 2),
+                                     ("reference_one", ["r1"] * 6),
+                                     ("reference_scoped", ["r1", "r2", "r3"] * 2)]):
+        for j, rp in enumerate(repos):
+            tg.telemetry.append_recall(rlog, nm, "nudge", "trigger",
+                                       session_id="s%d_%d" % (i, j), repo=rp)
+    rows = {r["memory"]: r for r in tg.never_acted_on(store)}
+
+    check("the repo a nudge fired in survives the log round-trip",
+          rows["reference_many"]["repo_count"] == 3)
+    check("a GLOBAL memory firing in many repos is diagnosed MIS-SCOPED",
+          rows["reference_many"]["remedy"] == "rescope")
+    check("...and the same memory firing in ONE repo is not",
+          rows["reference_one"]["remedy"] == "prune-or-sharpen")
+    check("an already-scoped memory is never told to rescope",
+          rows["reference_scoped"]["remedy"] == "prune-or-sharpen")
+    check("scope_of_memory reads a flat body as global",
+          tg.scope_of_memory(store, "reference_many") == tg.scope.GLOBAL)
+    check("...and a _scope/<slug>/ body as that slug",
+          tg.scope_of_memory(store, "reference_scoped") == "repo-x")
+
+# A log written before `repo=` existed must read as UNKNOWN, not as one repo —
+# otherwise an old store would manufacture a confident "prune or sharpen".
+with tempfile.TemporaryDirectory() as store:
+    write(os.path.join(store, "MEMORY.md"), "# Memory Index\n")
+    write(os.path.join(store, "reference_old.md"), MISFIRE_MEM % "reference_old")
+    rlog = os.path.join(store, "RECALL.log")
+    for j in range(6):
+        tg.telemetry.append_recall(rlog, "reference_old", "nudge", "trigger",
+                                   session_id="old%d" % j)     # no repo=
+    row = {r["memory"]: r for r in tg.never_acted_on(store)}["reference_old"]
+    check("a pre-`repo=` log reads as unknown (0), never as one repo",
+          row["repo_count"] == 0)
+    check("...and unknown never claims a scope diagnosis",
+          row["remedy"] == "prune-or-sharpen")
+
 print()
 print(f"trigger_test: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
