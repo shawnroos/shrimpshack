@@ -635,19 +635,85 @@ run_unresolvable() {
   [[ "$output" == *"launcher:  none"* ]]
 }
 
-@test "silent: resolvable herdr whose server is down falls back quietly (R9)" {
-  # The binary RESOLVES here, so the record is never taken — a dead server is a
-  # different fact from a missing binary, and only the second one is loud.
+@test "loud: resolvable herdr whose server is down exits 5, not a silent 0 (R9)" {
+  # This test used to assert exit 0. That silence was the defect: a dead herdr server
+  # looked exactly like a session that isn't in a multiplexer, and the background agent
+  # that relays this script reads the status, not the prose. The binary resolves here,
+  # so $LOUD_BIN is empty and the gate selects 5 rather than 4.
   LOUD_STUBS=herdr
   run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
-  [ "$status" -eq 0 ]
-  [[ "$output" != *"could not resolve"* ]]
+  [ "$status" -eq 5 ]
   [[ "$output" == *"launcher:  none"* ]]
-  # ...and it must not LIE about why. This session DID announce herdr; the binary was
-  # found and the server was down. Saying "no multiplexer announced" here is the same
-  # lying-message defect the whole change exists to remove, so pin the honest wording.
-  [[ "$output" == *"herdr announced this session"* ]]
+  # The cause-neutral lead, then the backend and the announcing variable.
+  [[ "$output" == *"would not take it"* ]]
+  [[ "$output" == *"herdr"* ]]
+  [[ "$output" == *"HERDR_ENV=1"* ]]
+  # The remedy is starting the server — NOT setting a binary path. Borrowing exit 4's
+  # diagnosis here would send the user to fix a $PATH that is already correct.
+  [[ "$output" == *"herdr status server"* ]]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" != *"SPINOFF_BIN_PATHS"* ]]
+  # A retrying caller must be told the worktree is already there; re-running the same
+  # --name dies at exit 1 on "worktree path already exists", turning a recoverable
+  # failure into a confusing one. This line is the only thing preventing that.
+  [[ "$output" == *"NEW --name"* ]]
+  [[ "$output" == *"$UREPO/worktrees/uh"* ]]
+  # It must not read as a skip, and it must not lie about what announced.
   [[ "$output" != *"no multiplexer announced"* ]]
+  [[ "$output" != *"skipping launch automation"* ]]
+  # The artifacts survive — this is a failed launch, not a failed spinoff.
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+}
+
+@test "loud: the probe-failed summary says INCOMPLETE and never prints a tick" {
+  # Same regression KTD-5 pinned for exit 4: teaching the tail exit but not the header
+  # prints "✓ Spinoff complete" above a failing status, in the block the skill relays
+  # verbatim. The header reads the generalized flag, so this covers exit 5 too.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"Spinoff INCOMPLETE"* ]]
+  [[ "$output" != *"✓ Spinoff complete"* ]]
+}
+
+@test "loud: a forced launcher can also reach the exit-5 gate (second entry path)" {
+  # Regression coverage for the OTHER route into the gate: a forced --launcher whose
+  # probe fails falls through to detection instead of returning early, so an announced
+  # session can land on `none` this way too. Note this does NOT prove the gate is
+  # default-deny — herdr is still the announced backend and its probe still failed, so
+  # an enumerating gate would pass this as well. The source-level test below is what
+  # separates those two implementations.
+  #
+  # CMUX_BIN is pinned at a nonexistent path on purpose. Emptying $PATH is NOT enough
+  # to make cmux unresolvable: resolve_bin also tries the app's own install location
+  # (/Applications/cmux.app/...), so on a machine with cmux installed the forced probe
+  # SUCCEEDS, returns early, and the run drives a real cmux socket instead of the case
+  # under test — passing or failing according to what the developer happens to have
+  # installed. A set-but-invalid override resolves to empty (R15), which is deterministic.
+  LOUD_STUBS=herdr
+  LOUD_ARGS="--launcher cmux"
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0 \
+                   CMUX_BIN=/nonexistent/cmux
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"falling back to auto-detection"* ]]
+}
+
+@test "the loud gate keys on the ANNOUNCEMENT, not on any one backend's probe" {
+  # A STRUCTURAL test, deliberately. KTD1 requires the gate to be default-deny: any
+  # announced backend that did not launch fails, whatever the reason. No behavioural
+  # test can prove that today, because `_cmux_probe` is binary-only, so herdr is the
+  # only backend that can reach "announced, resolved, probe failed" — an implementation
+  # keyed on "herdr announced and _herdr_probe failed" passes every other test in this
+  # file, including the flipped one above, while being exactly what KTD1 forbids.
+  # Do not delete this as redundant. If cmux ever grows a real liveness probe, replace
+  # it with the behavioural test that becomes possible then.
+  run grep -n 'ANNOUNCED_UNLAUNCHED=1$' "$SCRIPT"
+  [ "$status" -eq 0 ]
+  gate="$(grep -n -B2 'ANNOUNCED_UNLAUNCHED=1$' "$SCRIPT" | grep 'if \[')"
+  [[ "$gate" == *'$ANNOUNCED_BIN'* ]]
+  [[ "$gate" != *HERDR* ]]
+  [[ "$gate" != *CMUX* ]]
+  [[ "$gate" != *probe* ]]
 }
 
 @test "silent: unannounced session says nothing announced, not a backend name (R7)" {
@@ -926,3 +992,4 @@ run_resolve_bin_rejected() {
   [ "$status" -eq 0 ]
   [ "$output" = "$known/tool" ]
 }
+
