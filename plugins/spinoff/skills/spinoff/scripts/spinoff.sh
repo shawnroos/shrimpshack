@@ -250,24 +250,41 @@ resolve_launcher() {
   # nothing, printed "no multiplexer announced this session" — false, the user had just
   # named one — and exited 0 with a tick. Closing one route and leaving the other is
   # the enumeration this gate exists to stop doing.
+  # A forced backend that can carry a REAL cause is recorded first: it names a binary,
+  # so it produces either an actionable exit-4 ("set CMUX_BIN") or an exit-5 naming the
+  # backend the user chose. Either way the diagnosis is about the thing they asked for.
   case "${FORCED_LAUNCHER:-auto}" in
     herdr) _record_loud herdr "${HERDR:-}" '--launcher herdr' HERDR_BIN "${HERDR_REJECTED:-}" ;;
     cmux)  _record_loud cmux "${CMUX:-}" '--launcher cmux' CMUX_BIN "${CMUX_REJECTED:-}" \
                         /Applications/cmux.app/Contents/Resources/bin/cmux ;;
-    ghostty)
-      # This is the KTD-9 note at the ghostty resolution coming due. Ghostty's ENV vars
-      # stay excluded — they are set for every Ghostty window and announce nothing — but
-      # the FLAG is a deliberate request and belongs in the loud path. Record the
-      # announcement only, never $LOUD_*: ghostty has no single override binary to name
-      # (the .app is found by directory scan), so a forced ghostty that failed is an
-      # exit-5 "the backend refused", not an exit-4 "set this variable".
-      [ -z "$ANNOUNCED_BIN" ] && { ANNOUNCED_BIN=ghostty; ANNOUNCED_BY='--launcher ghostty'; } ;;
   esac
   [ "${HERDR_ENV:-}" = 1 ] \
     && _record_loud herdr "${HERDR:-}" 'HERDR_ENV=1' HERDR_BIN "${HERDR_REJECTED:-}"
   [ -n "${CMUX_WORKSPACE_ID:-}" ] \
     && _record_loud cmux "${CMUX:-}" 'CMUX_WORKSPACE_ID' CMUX_BIN "${CMUX_REJECTED:-}" \
                     /Applications/cmux.app/Contents/Resources/bin/cmux
+  # Any OTHER forced backend announces itself LAST, and only if nothing else has. This
+  # is the KTD-9 note at the ghostty resolution coming due — ghostty's ENV vars stay
+  # excluded (set for every Ghostty window, they announce nothing) while the FLAG is a
+  # deliberate request and belongs in the loud path.
+  #
+  # It defers deliberately. `--launcher ghostty` is what SKILL.md tells you to reach for
+  # when herdr's server is dead, so that exact run has BOTH a forced ghostty and a live
+  # HERDR_ENV=1. Recording ghostty first would replace herdr's diagnosis — which hands
+  # over `herdr status server`, the one command that separates a stopped server from a
+  # socket this process cannot reach — with a ghostty message that has no remedy at all.
+  # The exit code is 5 either way, so nothing checking status would have caught that.
+  # Whatever announced a cause worth acting on keeps the message.
+  #
+  # The `*)` is a catch-all rather than a `ghostty)` arm on purpose: a backend added to
+  # the --launcher validation and the probe case but forgotten here would otherwise
+  # announce nothing and exit 0 having launched nothing — the very defect this gate
+  # closes, re-opened by omission. Default-deny here too.
+  case "${FORCED_LAUNCHER:-auto}" in
+    auto|herdr|cmux) ;;
+    *) [ -z "$ANNOUNCED_BIN" ] \
+         && { ANNOUNCED_BIN="$FORCED_LAUNCHER"; ANNOUNCED_BY="--launcher $FORCED_LAUNCHER"; } ;;
+  esac
   if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
   elif [ -n "${CMUX_WORKSPACE_ID:-}" ] && _cmux_probe;    then LAUNCHER=cmux
   # ghostty is checked LAST, and only when NO multiplexer announced itself in the
@@ -1648,8 +1665,20 @@ elif [ "$ANNOUNCED_UNLAUNCHED" = 1 ]; then
     echo "    the binary resolved fine; its server did not answer THIS process." >&2
     echo "    check \`herdr status server\` here — if it reports running, the server is fine" >&2
     echo "    and this process just can't reach it (a detached/background shell often can't)." >&2
+  elif [ "$ANNOUNCED_BIN" = ghostty ]; then
+    # Ghostty has no server to be up or down: `_ghostty_probe` fails ONLY when the .app
+    # or osascript did not resolve. Saying "the binary resolved fine" here would be
+    # exactly backwards — a false cause in the message, which is the defect this whole
+    # file exists to remove. Name the piece that is actually missing.
+    if [ -z "${GHOSTTY_APP:-}" ]; then
+      echo "    Ghostty.app was not found (looked where \$GHOSTTY_RESOURCES_DIR points," >&2
+      echo "    then /Applications and ~/Applications)." >&2
+    fi
+    if [ -z "${OSASCRIPT:-}" ]; then
+      echo "    osascript was not found — set \$OSASCRIPT_BIN to its absolute path." >&2
+    fi
   else
-    echo "    the binary resolved fine; the backend did not pass its readiness probe." >&2
+    echo "    the backend did not pass its readiness probe." >&2
   fi
 fi
 
@@ -1841,9 +1870,14 @@ if [ "${ANNOUNCED_UNLAUNCHED:-0}" = "1" ]; then
     echo "  happens when the script runs detached from the session that owns herdr. Run" >&2
     echo "  \`herdr status server\` here to tell the two apart, fix whichever it is, then re-run" >&2
     echo "  — but the worktree and branch already exist, so re-run with a NEW --name," >&2
+  elif [ "$ANNOUNCED_BIN" = ghostty ]; then
+    echo "  Ghostty could not be driven: the ⚠ above names what was missing — the .app itself," >&2
+    echo "  or osascript (\$OSASCRIPT_BIN pins it). There is no ghostty server to start. Fix" >&2
+    echo "  that, then re-run — but the worktree and branch already exist, so re-run with a" >&2
+    echo "  NEW --name," >&2
   else
-    echo "  The binary resolved; the backend did not pass its readiness probe. Fix that, then" >&2
-    echo "  re-run — but the worktree and branch already exist, so re-run with a NEW --name," >&2
+    echo "  The backend did not pass its readiness probe. Fix that, then re-run — but the" >&2
+    echo "  worktree and branch already exist, so re-run with a NEW --name," >&2
   fi
   echo "  or just start the session by hand in the worktree that is already there:" >&2
   echo >&2

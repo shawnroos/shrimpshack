@@ -697,10 +697,30 @@ run_unresolvable() {
   [ "$status" -eq 4 ]
   [[ "$output" == *"falling back to auto-detection"* ]]
   [[ "$output" == *"could not resolve"* ]]
-  # the diagnosis must name the FLAG the user passed, not an env var they never set
-  [[ "$output" == *"--launcher herdr"* ]]
+  # The diagnosis must name the FLAG the user passed, not an env var they never set.
+  # Assert the announce text from the record — a bare "--launcher herdr" is printed by
+  # the falling-back warning above and would hold against the old code too.
+  [[ "$output" == *"announced it (--launcher herdr)"* ]]
   [[ "$output" != *"no multiplexer announced this session"* ]]
   [[ "$output" != *"✓ Spinoff complete"* ]]
+}
+
+@test "loud: forced ghostty must not erase a live herdr's diagnosis" {
+  # SKILL.md points you at `--launcher ghostty` precisely when herdr's server is dead,
+  # so that run has BOTH a forced ghostty and HERDR_ENV=1 with a resolvable herdr. The
+  # message has to keep herdr's cause: `herdr status server` is the only thing here that
+  # separates a stopped server from a socket this process cannot reach. Naming ghostty
+  # instead would swap an actionable diagnosis for one with no remedy — at the same
+  # exit code, so no status check would notice.
+  LOUD_STUBS=herdr
+  LOUD_ARGS="--launcher ghostty"
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0 \
+                   OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"announced this session (HERDR_ENV=1)"* ]]
+  [[ "$output" == *"herdr status server"* ]]
+  [[ "$output" != *"announced this session (--launcher ghostty)"* ]]
+  [[ "$output" != *"osascript was not found"* ]]
 }
 
 @test "loud: forced --launcher ghostty that can't run exits 5 (KTD-9 flag vs env)" {
@@ -710,9 +730,16 @@ run_unresolvable() {
   LOUD_ARGS="--launcher ghostty"
   run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= OSASCRIPT_BIN=/nonexistent/osascript
   [ "$status" -eq 5 ]
-  [[ "$output" == *"--launcher ghostty"* ]]
-  [[ "$output" == *"did not pass its readiness probe"* ]]
-  # ghostty has no override binary to name, so it must NOT borrow exit 4's advice
+  [[ "$output" == *"announced this session (--launcher ghostty)"* ]]
+  # It must name what is ACTUALLY missing. osascript is pinned at a nonexistent path
+  # here, so that is the piece to report. Ghostty's probe only ever fails because
+  # something did not resolve — there is no ghostty server — so a message claiming
+  # "the binary resolved fine" would be false, which is the class of defect this whole
+  # change removes. Assert the true cause, not just the harmless tail of the sentence.
+  [[ "$output" == *"osascript was not found"* ]]
+  [[ "$output" != *"the binary resolved fine"* ]]
+  [[ "$output" != *"resolved; the backend did not pass"* ]]
+  # and it must not borrow the other backends' remedies
   [[ "$output" != *"could not resolve"* ]]
   [[ "$output" != *"herdr status server"* ]]
 }

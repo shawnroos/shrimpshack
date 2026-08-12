@@ -113,14 +113,16 @@ exists to remove. Every non-zero code here has a named cause and a named fix.
 | `1` | `die` — a precondition failed (no repo resolves, `git worktree add` refused, a bad `--label`). The message names it. | Surface the message verbatim; fix the input and re-run. |
 | `2` | Unknown argument. | A skill bug. Fix the invocation. |
 | `3` | A session **launched but was not briefed** — the launch itself failed partway. | Worktree survives. Relay the recovery line the script prints and brief the tab by hand. |
-| `4` | The environment **announced a backend** (`HERDR_ENV=1` or `CMUX_WORKSPACE_ID`) whose **binary could not be resolved** — nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN`, then re-run **with a new `--name`** — the worktree and branch already exist, so re-running the same name dies at exit 1. |
-| `5` | The environment **announced a backend whose binary was fine**, but the backend **wouldn't take the launch** (herdr's server isn't running) — nothing launched. | Worktree survives. Start the backend's server (`herdr status server` shows it), then re-run **with a new `--name`** — the worktree and branch already exist, so re-running the same name dies at exit 1. Or use the manual line the script prints. Don't reach for `HERDR_BIN` here: the binary was never the problem. |
+| `4` | A backend was **named** — by the environment (`HERDR_ENV=1`, `CMUX_WORKSPACE_ID`) or by an explicit `--launcher` — and its **binary could not be resolved**; nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN`, then re-run **with a new `--name`** — the worktree and branch already exist, so re-running the same name dies at exit 1. |
+| `5` | A backend was **named** the same two ways, and it **wouldn't take the launch**; nothing launched. | Worktree survives. Read the `⚠` — the cause differs by backend and it names the real one. For herdr: the server did not answer this process, which means it is stopped **or** running-but-unreachable from a detached shell; `herdr status server` tells the two apart. For `--launcher ghostty`: the `.app` or `osascript` was missing, and there is no server to start. Then re-run **with a new `--name`**, or use the manual line the script prints. Don't reach for `HERDR_BIN` on a herdr 5 — the binary was never the problem. |
 
 Codes 3, 4 and 5 are mutually exclusive by construction. 3 means a backend resolved
 and the launch broke, so a launcher was in play. 4 and 5 both mean no launch happened
-at all, and they split on whether the binary resolved: 4 is a resolution failure, 5 is
-a live backend refusing. If you see 4 or 5, nothing was launched and the fix is named
-in the `⚠` — relay it verbatim rather than paraphrasing it as "something went wrong".
+at all, and they split on whether the *named* backend's binary resolved: 4 is a
+resolution failure, 5 is a resolved backend refusing. Both codes cover the flag route
+as well as the environment route — naming a backend and launching nothing is a failure
+however it was named. If you see 4 or 5, nothing was launched and the fix is named in
+the `⚠` — relay it verbatim rather than paraphrasing it as "something went wrong".
 
 Every launcher binary is resolved to an **absolute path** first — `$*_BIN` override,
 then `PATH`, then `$SPINOFF_BIN_PATHS`, then the tool's own install location. This
