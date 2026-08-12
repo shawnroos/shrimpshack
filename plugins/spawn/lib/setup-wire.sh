@@ -365,8 +365,8 @@ env_snippet() {
     # every time a shell started. These three come from the plugin's own env
     # seams rather than operator-owned data, so this is breakage-hardening
     # rather than a crossed trust boundary — but it is the same class the
-    # launcher bake and the gw wrapper both carried, and there is no reason for
-    # the third instance to stay open once the other two are closed.
+    # launcher bake carried, and there is no reason for this instance to stay
+    # open once that one is closed.
     local q_sec q_svc q_acct
     q_sec="$(printf '%s' "$SPAWN_SECURITY_BIN" | jq -Rr '@sh')" || return 1
     q_svc="$(printf '%s' "$KEYCHAIN_SERVICE" | jq -Rr '@sh')" || return 1

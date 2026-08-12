@@ -336,7 +336,6 @@ CTL
 
     # 8 and 9 are the two codes this unit introduced, and 8 is useless without
     # the flag to come back with — assert the mapping, not just the row.
-    grep -q -- '--consent-overwrite-gw' "$CMD_DIR/setup.md"
     grep -q -- '--consent-shell-rc' "$CMD_DIR/setup.md"
     grep -q -- 'consent_required' "$CMD_DIR/setup.md"
 }

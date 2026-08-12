@@ -241,8 +241,8 @@ Full reference: `skills/launch/SKILL.md`.
 Takes a bare Mac to a working gateway-backed session in one run: resolve the
 latest published gateway release, fetch and build it, promote it to
 `~/gateway-<version>` in one atomic move, capture the OpenRouter key and a
-generated gateway token into the macOS Keychain, rewrite `~/.local/bin/gw`,
-wire every installed harness (Claude Code and Codex), start the gateway, and
+generated gateway token into the macOS Keychain, adopt a launchd agent that
+already supervises the gateway if there is one, wire every installed harness (Claude Code and Codex), start the gateway, and
 only then claim success — after a live completion round-trip in each wired
 harness's own wire shape *and* an unauthenticated request that the gateway must
 reject.
@@ -267,9 +267,9 @@ Two properties worth knowing before you read the output:
   credential at all.
 
 `setup.sh` is **non-interactive**. Where it needs the operator's say-so —
-overwriting a `gw` it did not write, appending a line to your shell rc — it
-exits **8** with a `consent_required` field naming the flag to come back with
-(`--consent-overwrite-gw`, `--consent-shell-rc`). Exit **9** is a missing
+appending a line to your shell rc, repointing a launchd agent it did not write —
+it exits **8** with a `consent_required` field naming the flag to come back with
+(`--consent-shell-rc`, `--consent-adopt-agent`). Exit **9** is a missing
 prerequisite. Both codes join the enum below and belong to setup only.
 
 **Setup deliberately ships no skill.** A command and a same-named skill collide
@@ -308,7 +308,8 @@ context-window table. `ensure` is the shared preflight both surfaces call.
 Full reference: `skills/status/SKILL.md`.
 
 Every path between components goes through `${CLAUDE_PLUGIN_ROOT}`. Nothing is
-invoked by PATH lookup — see *The `gw` note* below for why that matters.
+invoked by PATH lookup: a name on PATH is whatever the operator's machine says
+it is, and the plugin has to reach its own scripts.
 
 ---
 
@@ -547,31 +548,20 @@ path captured at launch still exists at attach time.
 
 ## The `gw` note
 
-`~/.local/bin/gw` is **rewritten by this plugin's setup path** (`/spawn:setup`).
-It keeps the command surface that is in your muscle memory — `start`, `stop`,
-`restart`, `status`, `log`, `claude`, and a bare `gw` meaning `status` — but it
-is now a thin front door:
+If you already have a `~/.local/bin/gw`, **this plugin does not touch it**.
+Setup used to rewrite it to delegate to `lib/spawnctl.sh`; that step is gone,
+because taking over a file the operator wrote is not setup's to do.
 
-- `start | stop | restart | status` **delegate** to `lib/spawnctl.sh`, whose
-  absolute path is baked in when setup writes the file (a setup re-run re-bakes
-  it). That retires the wrapper's own defects rather than reimplementing them:
-  pidfile-based liveness that is wrong on a stale or recycled pid, a `>` log
-  redirect that truncated the shared log on every start, a version-pinned
-  install path, and no lock at all against concurrent starts.
-- `log` and `claude` stay local — neither has an equivalent in the control layer.
-- `claude` carries **no token**. It reads the gateway token from the Keychain and
-  the base URL from `spawnctl.sh ensure`, both at the moment you run it, so
-  rotating the credential reaches the wrapper with no rewrite. The hardcoded
-  token the old wrapper carried is retired by the overwrite.
+The consequence worth knowing: your `gw` and this plugin are two independent
+front doors to one gateway. If yours does pidfile-based liveness or truncates
+`~/.gateway.log` on start, it still does — the plugin's control layer probes the
+model-list endpoint instead (KTD3) and appends to the log, and the two can
+disagree about whether the gateway is up. Reach for `lib/spawnctl.sh` when you
+want the plugin's answer.
 
-Setup recognizes a wrapper it wrote by a marker line plus a hash of the file
-body. A wrapper with the marker and a matching hash is rewritten freely; one you
-have hand-edited, or one that carries no marker at all, is **refused** with exit
-8 and left byte-for-byte alone until you re-run with `--consent-overwrite-gw`.
-
-The two surfaces share `~/.gateway.pid`, `~/.gateway.log` and `~/.gateway.lock`
-on purpose, so neither double-starts against the other and both see the same
-gateway.
+Both do share `~/.gateway.pid`, `~/.gateway.log` and `~/.gateway.lock` if your
+`gw` uses the default paths, so they see the same gateway rather than starting
+two.
 
 ---
 
@@ -598,7 +588,6 @@ Suites in `tests/unit/`:
 | `secrets.bats` | the Keychain primitives — argv leakage, the silent-empty write, read-back proof |
 | `setup-acquire.bats` | release resolution, fetch, build, staging invisibility, atomic promotion |
 | `setup-config.bats` | config migration and token retirement (the token entry is deleted, never parsed) |
-| `setup-gw.bats` | the `gw` recognition matrix and the emitted wrapper |
 | `setup-wiring.bats` | harness detection, the Codex managed block, the shell snippet and rc line |
 | `setup.bats` | orchestration, rotation, and the two-layer round-trip proof |
 | `surfaces.bats` | the shipped surfaces — no skill directory shares a command's name, `commands/setup.md` reaches no other surface, and its exit-code table matches `setup.sh`'s `EX_*` constants |
@@ -677,7 +666,7 @@ NFKC / homoglyph defence — see *Known limits*.
 | S9 | the environment / filesystem (install dirs, state paths, base URL) | `SPAWN_*` overrides and `~/gateway-*` resolution |
 | S10 | GitHub release metadata — tag names, commit shas | the release/commit lookups in `setup.sh` acquire |
 | S11 | a harness's own loader output | `codex doctor --json` → `CODEX_LOAD_DETAIL` (`setup.sh` wire) |
-| S12 | files on disk setup did not write — an existing `gw`, `~/.codex/config.toml`, a previous `gateway.yaml` | the `gw` recognition matrix, the managed-block scan, config migration (`setup.sh`) |
+| S12 | files on disk setup did not write — `~/.codex/config.toml`, a previous `gateway.yaml`, a launchd plist | the managed-block scan, config migration, the supervisor's plist read (`setup.sh`) |
 | S13 | build tool output — `cargo`, `tar`, `curl` failures | the acquire step's failure messages (`setup.sh`) |
 
 **Not a source, deliberately.** Neither credential is ever a display value.
@@ -731,7 +720,7 @@ object is a mixed channel, so the disposition is **per field**, not per script:
 | `losses`, `validation_gaps` | setup | — | **authored fixed strings**, copied into `setup.sh` at authoring time rather than read from a `SKILL.md` that never loads (KD9). No external input reaches them. | — |
 | `wired[]` / `skipped[]` (`validation_detail`) | setup | **S11 (another program's output)** | **sanitized** — `CODEX_LOAD_DETAIL` is `codex doctor`'s own text, encoded by `jq` and relayed as display only | — |
 | `verification.round_trip[]` | setup | — | **status code and route only.** The HTTP response body is **dropped, never relayed** — a 401 body can quote the credential that was presented (AE7). | `setup.bats` (the auth-class round-trip test asserts on the code, not a message) |
-| `consent_required` | setup | — | **closed by construction** — one of two authored literals (`overwrite-gw`, `shell-rc`), which is what lets `commands/setup.md` map it to a flag | `surfaces.bats` (the table names both) |
+| `consent_required` | setup | — | **closed by construction** — one of two authored literals (`shell-rc`, `adopt-agent`), which is what lets `commands/setup.md` map it to a flag | `surfaces.bats` (the table names the flag) |
 | `base_url`, `config`, `log`, `pidfile`, `install_dir`, `binary`, `cwd`, `output_file` path, `pid`, `context_window` | all three | S9, S4 | **RAW BY DESIGN — functional, not display.** `lens.sh` and `launch.sh` *parse* `.base_url` and `.config` back out to build the request and read the token; sanitizing a path or a URL would silently corrupt a value the plugin itself consumes. They are also caller-supplied (`SPAWN_*` env, `--cwd`), so the threat model is self-shoot, not a hostile third party. Two of them are nonetheless closed by construction anyway: `pid` is digit-filtered by `read_pidfile`, and `context_window` is constrained to digits before it is used or printed. | `a non-numeric context_window …` |
 
 One re-entrant path was checked and is not a sink: `spawnctl.sh restart`
