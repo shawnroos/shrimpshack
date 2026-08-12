@@ -413,3 +413,61 @@ CTL
     # that ever stops being true the decision has to be re-taken, not re-quoted.
     [ "$actual_code" -lt 1000 ]
 }
+
+# ---------------------------------------------------------------------------
+# THE SHARED TOKEN CHAIN, ENFORCED RATHER THAN ASSERTED IN A COMMENT.
+#
+# secrets.sh's header already states the rule — "One chain, one place, is the
+# enforcement" — and explains that R27 shipped this bug once: a surface reading
+# server.token alone kept working until setup retired that key, after which the
+# probe authenticated and the surface 401'd. Nothing mechanically held the rule,
+# so bg-agent.sh was written afterwards WITHOUT the fallback and shipped the
+# identical defect: on any box whose gateway.yaml omits server.token, every job
+# exported an empty credential and died on its first request, with
+# permission_denials:[] making it read like a ceiling problem.
+#
+# The invariant is not "bg-agent.sh sources secrets.sh" — that is today's shape,
+# and a check that narrow goes green the moment a FIFTH surface is added. The
+# invariant is: any lib that hands ANTHROPIC_AUTH_TOKEN to a child must resolve
+# it through the shared chain. So this globs, and each new surface is caught by
+# existing without opting in rather than by anyone remembering to list it.
+# ---------------------------------------------------------------------------
+@test "every surface that exports a gateway credential resolves it through the shared chain" {
+    local offenders=() f base
+    for f in "$ROOT"/lib/*.sh; do
+        base="$(basename "$f")"
+        # secrets.sh IS the chain; it necessarily mentions the variable.
+        [ "$base" = "secrets.sh" ] && continue
+        # DISCOVERY must be wider than one spelling. `export VAR=`, `declare -x`,
+        # and an `env VAR=` prefix all hand a credential to a child; matching only
+        # the first would let a new surface evade the gate by writing it another
+        # way, which is the same "narrower than the invariant" failure this gate
+        # exists to close. (`env VAR=` is separately forbidden — KTD6, argv is
+        # world-readable — but a gate should not depend on another rule holding.)
+        grep -qE '(export|declare -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|env[[:space:]]+[^|;]*ANTHROPIC_AUTH_TOKEN=' "$f" || continue
+        # CODE lines only. Matching the whole file lets a COMMENT naming the
+        # helper satisfy the gate — not hypothetical: the first version of this
+        # check stayed green with the call deleted, because the comment above the
+        # call mentioned it by name. Strip comments before looking.
+        grep -v '^[[:space:]]*#' "$f" \
+            | grep -q 'spawn::resolve_token\|spawn::token_fallback' \
+            || offenders+=("$base")
+    done
+
+    if [ "${#offenders[@]}" -ne 0 ]; then
+        echo "These libs export ANTHROPIC_AUTH_TOKEN to a child but never consult"
+        echo "the shared env/Keychain chain, so they authenticate with whatever the"
+        echo "config alone yields — an empty string when server.token is absent:"
+        printf '  %s\n' "${offenders[@]}"
+        echo "Source secrets.sh and call spawn::resolve_token after the config read."
+        return 1
+    fi
+
+    # The gate is only worth having if it can see a real surface. If the glob
+    # ever matches nothing that exports the credential, it would pass vacuously.
+    local exporters=0
+    for f in "$ROOT"/lib/*.sh; do
+        grep -qE '(export|declare -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|env[[:space:]]+[^|;]*ANTHROPIC_AUTH_TOKEN=' "$f" && exporters=$((exporters + 1))
+    done
+    [ "$exporters" -ge 2 ]
+}
