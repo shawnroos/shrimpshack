@@ -1,8 +1,31 @@
 # Residual review findings — spinoff silent launch failure
 
-Branch `fix/spinoff-silent-launch-failure`. Reviewed by three independently
-dispatched lenses (correctness, adversarial, testing) against base `5cd4dc0`.
-Everything actionable was applied except the items below.
+Branch `fix/spinoff-silent-launch-failure`, reviewed twice against base `5cd4dc0`.
+
+Round 1 (correctness, adversarial, testing) covered the original gate change.
+Round 2 (correctness, adversarial; the testing lens timed out and returned nothing)
+covered the forced-`--launcher` change, which round 1 never saw. Everything
+actionable from both rounds was applied.
+
+Round 2 earned its keep: the forced-flag change had introduced a regression on the
+skill's own documented recovery, caught at confidence 100 by both lenses. Making the
+flag win announcement precedence meant `--launcher ghostty` — which the skill tells
+you to use when herdr's server is dead — replaced herdr's actionable diagnosis with
+a ghostty message that had no remedy, at the same exit code. Fixed in `1a7e253`: a
+forced backend that can name a binary is still recorded first, anything else defers
+and only announces when nothing already has.
+
+Two message defects came with it and are also fixed: exit 5 told every failed
+`--launcher ghostty` that "the binary resolved fine" when ghostty's probe fails only
+because something did *not* resolve, and the skill's exit table still described the
+pre-flag contract.
+
+Recurring lesson across both rounds, worth stating plainly: **four separate
+assertions in these tests passed against the implementation they claimed to pin.**
+Three matched strings the script prints for unrelated reasons (a worktree path in
+the summary block, a flag name in the fall-back warning), one asserted the harmless
+half of a sentence whose other half was false. Assert the text the change itself
+emits, not a substring that happens to appear.
 
 ## Raised by review, now resolved
 
