@@ -42,7 +42,6 @@ setup() {
     export SPAWN_SEARCH_ROOT="$WORK/root"
     mkdir -p "$SPAWN_SEARCH_ROOT"
     export SPAWN_STATE_HOME="$WORK"
-    export SPAWN_GW_PATH="$WORK/localbin/gw"
     export SPAWN_CODEX_CONFIG="$WORK/dot-codex/config.toml"
     export SPAWN_GATEWAY_ENV_FILE="$WORK/dot-gateway/env.sh"
     export SPAWN_SHELL_RC="$WORK/dot-zshrc"
@@ -287,7 +286,7 @@ mutant() {
     # config declares no token while no token is stored (R9's static half), so
     # F1's written order cannot complete a first run.
     [ "$(jq -r '[.steps[].step] | join(",")' "$OUT")" \
-        = "prereqs,openrouter-key,gateway-token,acquire,gw,supervisor,wire,start,verify" ]
+        = "prereqs,openrouter-key,gateway-token,acquire,supervisor,wire,start,verify" ]
 
     # R28. This machine has no supervising agent, so the step reports that and
     # writes nothing — it adopts an agent, it never creates one.
@@ -310,9 +309,12 @@ mutant() {
     jq -e '.verification | has("config_validation")' "$OUT" >/dev/null
 
     # R18's accumulator, asserted from the SUCCESS side too: a report built only
-    # in the error handler cannot satisfy this.
+    # in the error handler cannot satisfy this. Both ends of the accumulator are
+    # named: `keychain-item` is recorded by do_setup's own credential step, and
+    # `shell-rc` is forwarded up out of the wire child — the operator's rc file
+    # is the edit they are most entitled to see reported.
     jq -e '[.changed[].what] | index("keychain-item") != null' "$OUT" >/dev/null
-    jq -e '[.changed[].what] | index("wrapper") != null' "$OUT" >/dev/null
+    jq -e '[.changed[].what] | index("shell-rc") != null' "$OUT" >/dev/null
     jq -e '[.changed[].target] | index($ENV.SPAWN_GATEWAY_ENV_FILE) != null' "$OUT" >/dev/null
 
     # R15's losses reach the top-level object rather than being lost in a child.
@@ -321,7 +323,6 @@ mutant() {
     [ "$(jq -r '[.skipped[].harness] | join(",")' "$OUT")" = "codex" ]
 
     # And the machine really has the things it says it has.
-    [ -x "$SPAWN_GW_PATH" ]
     [ -f "$SPAWN_GATEWAY_ENV_FILE" ]
 }
 
@@ -424,7 +425,6 @@ mutant() {
     [ "$(step_status gateway-token)" = "generated" ]
     jq -e --arg s "$SPAWN_KEYCHAIN_SERVICE" \
         '[.changed[] | select(.what == "keychain-item") | .target] | index($s + "/openrouter-api-key") != null' "$OUT" >/dev/null
-    jq -e '[.changed[].target] | index($ENV.SPAWN_GW_PATH) != null' "$OUT" >/dev/null
     # F3: the release just installed is named, so an upstream break is
     # attributable to a version.
     [ "$(jq -r '.release.tag' "$OUT")" = "v9.9.9" ]
@@ -626,29 +626,29 @@ mutant() {
     jq -e '.error | test("unexpected argument")' "$OUT" >/dev/null
     # Refused before anything was written or prompted for.
     [ "$(dialog_count)" -eq 0 ]
-    [ ! -e "$SPAWN_GW_PATH" ]
 }
 
 @test "KTD17/R18: a consent refusal mid-run exits 8 naming the flag AND reports what had already changed" {
     install_claude
-    # A gw the operator wrote themselves: overwriting it needs consent.
-    mkdir -p "$(dirname "$SPAWN_GW_PATH")"
-    printf '#!/usr/bin/env bash\n# my own wrapper\n' > "$SPAWN_GW_PATH"
-    chmod +x "$SPAWN_GW_PATH"
+    # A shell rc the operator owns: appending the source line needs consent.
+    # This used to use the gw wrapper as its example of a consent gate; that
+    # step is gone, but the MECHANISM is not — so the coverage moved to another
+    # gate rather than being deleted with the step it happened to exercise.
+    printf '# my own shell rc\n' > "$SPAWN_SHELL_RC"
     local before
-    before="$(shasum -a 256 "$SPAWN_GW_PATH" | awk '{print $1}')"
+    before="$(shasum -a 256 "$SPAWN_SHELL_RC" | awk '{print $1}')"
 
-    run_setup --consent-shell-rc
+    run_setup
     [ "$RC" -eq 8 ]
     assert_one_json
-    [ "$(jq -r '.consent_required' "$OUT")" = "overwrite-gw" ]
-    [ "$(jq -r '.failed_step' "$OUT")" = "gw" ]
+    [ "$(jq -r '.consent_required' "$OUT")" = "shell-rc" ]
+    [ "$(jq -r '.failed_step' "$OUT")" = "wire" ]
     # The operator is about to re-run: they need to know the credentials are
     # already stored and the install is already there.
     [ "$(step_status acquire)" = "skipped" ]
     [ "$(jq -r '[.changed[].what] | index("keychain-item") != null' "$OUT")" = "true" ]
     # And their file is untouched.
-    [ "$(shasum -a 256 "$SPAWN_GW_PATH" | awk '{print $1}')" = "$before" ]
+    [ "$(shasum -a 256 "$SPAWN_SHELL_RC" | awk '{print $1}')" = "$before" ]
 }
 
 @test "R11: with no harness installed the run fails at wire rather than reporting an empty success" {

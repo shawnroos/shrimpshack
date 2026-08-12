@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # setup-lib.sh — the shared foundation of the gateway plugin's setup path
 # (plan U2 onward). SOURCED, never exec'd: setup.sh (the front door and
-# orchestrator) and the four verb scripts beside it all load this file.
+# orchestrator) and the three verb scripts beside it all load this file.
 #
 #   setup.sh acquire      → setup-acquire.sh
-#   setup.sh gw           → setup-gw.sh
 #   setup.sh supervisor   → setup-supervisor.sh
 #   setup.sh wire         → setup-wire.sh
 #   setup.sh (no verb)    the whole path, run by setup.sh itself
@@ -137,18 +136,16 @@ KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
 # the only writer of it.
 KEYCHAIN_ACCOUNT_OPENROUTER="${SPAWN_KEYCHAIN_ACCOUNT_OPENROUTER:-openrouter-api-key}"
 
-# The wrapper setup rewrites (KD8, R19). Overridable so no suite can ever be one
-# typo away from writing the operator's real `gw`.
-GW_PATH="${SPAWN_GW_PATH:-$HOME/.local/bin/gw}"
 
-# The delegation target, baked ABSOLUTE into the emitted wrapper (KTD14). It is
+# The delegation target: the control script setup starts the gateway through,
+# and the path baked ABSOLUTE into the generated launcher (KTD14). It is
 # resolved from this script's own location, so a setup re-run from a moved or
-# reinstalled plugin re-bakes the new path rather than leaving the wrapper
+# reinstalled plugin re-bakes the new path rather than leaving the launcher
 # pointing at a directory that no longer exists.
 SPAWNCTL_PATH="${SPAWN_SPAWNCTL_PATH:-$SCRIPT_DIR/spawnctl.sh}"
 
 # ...unless "this script's own location" is a GIT WORKTREE, which is a
-# directory that is EXPECTED to be deleted. Baking one produces a `gw` that
+# directory that is EXPECTED to be deleted. Baking one produces a launcher that
 # works perfectly until the PR lands and the worktree is removed, then fails
 # with exit 127 and no explanation anywhere on the machine. That is not
 # hypothetical: it happened here on 2026-08-10, and the only reason it was
@@ -199,7 +196,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # U6's write targets. EVERY ONE OF THEM IS A SAFETY RAIL, for the same reason
-# SPAWN_GW_PATH is: these are the operator's real dotfiles, and a suite that ran
+# SPAWN_SHELL_RC is: these are the operator's real dotfiles, and a suite that ran
 # against the defaults would rewrite the shell rc of the machine it is testing
 # on. Each override points the whole path at a sandbox.
 # ---------------------------------------------------------------------------
@@ -217,7 +214,7 @@ SHELL_RC="${SPAWN_SHELL_RC:-$HOME/.zshrc}"
 
 # ---------------------------------------------------------------------------
 # The supervisor surface (U3 step 6; R28, KTD21). Same safety-rail reasoning as
-# SPAWN_GW_PATH, and more of it: the default here is the operator's REAL
+# the shell-rc rail, and more of it: the default here is the operator's REAL
 # ~/Library/LaunchAgents, and a suite that ran against it would rewrite the
 # agent that supervises the machine it is testing on. Every test points all
 # three of these at its own temp directory.
@@ -247,9 +244,7 @@ PLUTIL_BIN="${SPAWN_PLUTIL_BIN:-/usr/bin/plutil}"
 # in this script deletes it.
 GATEWAY_LAUNCHER="${SPAWN_GATEWAY_LAUNCHER:-$HOME/.gateway/spawn-launch.sh}"
 # The pidfile the generated launcher registers itself in. Resolved exactly as
-# spawnctl.sh resolves it, so the two control surfaces name one file. (The
-# PIDFILE inside gw_body is a different thing entirely: that is text of the
-# generated `gw` wrapper, not a variable of this script.)
+# spawnctl.sh resolves it, so the two control surfaces name one file.
 SETUP_STATE_HOME="${SPAWN_STATE_HOME:-$HOME}"
 PIDFILE="${SPAWN_PIDFILE:-$SETUP_STATE_HOME/.gateway.pid}"
 
@@ -331,8 +326,8 @@ cleanup() {
     [ -n "$STAGING_ROOT" ] && rm -rf "$STAGING_ROOT" 2>/dev/null
     # The contract is one JSON object on stdout on EVERY path, and a cancelled
     # orchestrated run is the path that used to break it: by the time verify
-    # runs, two Keychain items exist, an install is promoted, gw is rewritten
-    # and the rc file has a line appended — and the accumulator naming all of
+    # runs, two Keychain items exist, an install is promoted, a launchd agent
+    # may be adopted and the rc file has a line appended — and the accumulator naming all of
     # that would have been discarded in silence. Guarded on EMITTED so the
     # single verbs and every normal exit are untouched.
     if [ "${ORCHESTRATING:-0}" -eq 1 ] && [ "${EMITTED:-0}" -eq 0 ]; then

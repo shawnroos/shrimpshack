@@ -30,7 +30,7 @@ The plugin never opens a terminal. It runs the seed prompt headlessly through `c
    bash "${CLAUDE_PLUGIN_ROOT}/lib/launch.sh" --alias kimi --prompt-file ./seed.md --cwd ~/projects/thing
    ```
 
-   Always through `${CLAUDE_PLUGIN_ROOT}/lib/launch.sh`, never by PATH lookup. (`gw` on your PATH is the wrapper the plugin's setup path rewrites; it delegates to these same scripts, so reach for the script directly rather than for `gw`.)
+   Always through `${CLAUDE_PLUGIN_ROOT}/lib/launch.sh`, never by PATH lookup. (A `gw` on your PATH is the operator's own tool — this plugin does not write or read it, and it has no launch verb. Reach for the script.)
 
 2. Flags — this is the whole set:
 

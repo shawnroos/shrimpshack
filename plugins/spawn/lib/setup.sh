@@ -5,9 +5,6 @@
 #
 #   setup.sh acquire      → setup-acquire.sh   fetch, build and promote the
 #                                              latest gateway release
-#   setup.sh gw           → setup-gw.sh        rewrite ~/.local/bin/gw as a
-#                                              Keychain-sourced, plugin-
-#                                              delegating wrapper (U5)
 #   setup.sh supervisor   → setup-supervisor.sh adopt a supervising launchd
 #                                              agent (U3 step 6)
 #   setup.sh wire         → setup-wire.sh      wire the installed harnesses
@@ -65,7 +62,7 @@ EX_PREREQ=9
 # changes.
 #
 # ORCHESTRATING is the switch that routes die() here. It stays 0 for the single
-# verbs (`acquire`, `gw`, `wire`), whose one-object contract is unchanged.
+# verbs (`acquire`, `supervisor`, `wire`), whose one-object contract is unchanged.
 # ---------------------------------------------------------------------------
 # (ORCHESTRATING's 0 default lives in setup-lib.sh — die() expands it under
 # set -u, so every verb process needs the default before its first die.)
@@ -258,7 +255,7 @@ rt_body() {
 # verify <base-url> <alias> — both layers, each attributable in the output.
 #
 # Fails through die(), so every failure here carries the full R18 state report:
-# by this point the install, both credentials, the wrapper and the harness
+# by this point the install, both credentials, the supervisor and the harness
 # configs are all already recorded, which is exactly what the operator needs to
 # know they do not have to redo (AE5).
 # ---------------------------------------------------------------------------
@@ -371,7 +368,7 @@ VERIFY_UNAUTH_JSON="null"
 # ===========================================================================
 #
 # THE SUB-STEPS ARE RUN AS CHILD PROCESSES, not as function calls, and that is
-# deliberate: `acquire`, `gw` and `wire` each end in `exit`, each owns a
+# deliberate: `acquire`, `supervisor` and `wire` each end in `exit`, each owns a
 # one-JSON-object contract, and each is already covered by its own suite. Calling
 # them in-process would mean rewriting all three to return instead of exit —
 # three more edits to already-proven code — and the child's JSON is exactly the
@@ -523,7 +520,7 @@ do_setup() {
     # to this function, so the caller's own -x is restored on return.
     local -
     set +x
-    local rotate_key="$1" rotate_token="$2" consent_gw="$3" consent_rc="$4" consent_agent="${5:-0}"
+    local rotate_key="$1" rotate_token="$2" consent_rc="$3" consent_agent="${4:-0}"
     # Restart is decided by what this run CHANGED about what the gateway would
     # load, not by which flags were passed. A rotation is one such change; so is
     # installing a new release, and so is retiring the token out of the live
@@ -566,22 +563,10 @@ do_setup() {
             step_done "acquire" "skipped" "$SETUP_TAG was already installed and runnable at $SETUP_INSTALL_DIR" ;;
     esac
 
-    # --- gw -----------------------------------------------------------------
-    step_start "gw"
-    if [ "$consent_gw" -eq 1 ]; then
-        run_sub gw --consent-overwrite-gw || die "$EX_USAGE" "step 'gw': could not run the gw step"
-    else
-        run_sub gw || die "$EX_USAGE" "step 'gw': could not run the gw step"
-    fi
-    [ "$SUB_RC" -eq "$EX_CONSENT" ] && pass_consent "gw"
-    [ "$SUB_RC" -eq 0 ] || die "$SUB_RC" "step 'gw': $(printf '%s' "$SUB_JSON" | jq -r '.error // "the gw wrapper could not be written"' 2>/dev/null)"
-    record_change "wrapper" "$GW_PATH" "$(printf '%s' "$SUB_JSON" | jq -r '"the gw wrapper was \(.action) (it was \(.state_before) before); its control verbs now delegate to the plugin and it carries no token value"' 2>/dev/null)"
-    step_done "gw" "ok" "$(printf '%s' "$SUB_JSON" | jq -r '.action // "written"' 2>/dev/null) $GW_PATH"
-
     # --- supervisor ---------------------------------------------------------
-    # After gw, because both are control surfaces and this one outranks it: a
-    # KeepAlive agent undoes a stop within seconds, so the wrapper's verbs are
-    # only meaningful once the agent starts an authenticated gateway.
+    # A launchd agent outranks every other control surface: KeepAlive undoes a
+    # stop within seconds, so an adopted agent has to start an authenticated
+    # gateway before anything else about liveness is meaningful.
     step_start "supervisor"
     [ -n "$SETUP_INSTALL_DIR" ] \
         || die "$EX_USAGE" "step 'supervisor': the acquire step reported no install directory, so there is no binary to look for in the launchd agents; nothing was written"
@@ -592,7 +577,7 @@ do_setup() {
         run_sub supervisor --install-dir "$SETUP_INSTALL_DIR" \
             || die "$EX_USAGE" "step 'supervisor': could not run the supervisor step"
     fi
-    # Same shape as gw and wire: exit 8 from the child is the operator's
+    # Same shape as wire: exit 8 from the child is the operator's
     # decision to make, so it is passed through with the steps and changes so
     # far rather than reported as a failure of the run.
     [ "$SUB_RC" -eq "$EX_CONSENT" ] && pass_consent "supervisor"
@@ -775,14 +760,13 @@ EOF
 usage() {
     cat >&2 <<'EOF'
 usage: setup.sh [--rotate-openrouter-key] [--rotate-gateway-token]
-                [--consent-overwrite-gw] [--consent-shell-rc]
+                [--consent-shell-rc]
        setup.sh acquire
-       setup.sh gw [--consent-overwrite-gw]
        setup.sh supervisor [--install-dir DIR] [--consent-adopt-agent]
        setup.sh wire [--consent-shell-rc]
 
   (no verb)  the whole path: prerequisites, both credentials, the gateway
-             install, the gw wrapper, harness wiring, a start, and a live
+             install, the supervisor, harness wiring, a start, and a live
              round-trip through every wired harness plus an unauthenticated
              probe that must be rejected. Re-running is safe: both stored
              credentials are reused and nothing is prompted for.
@@ -797,11 +781,6 @@ usage: setup.sh [--rotate-openrouter-key] [--rotate-gateway-token]
             a staging directory, and promote it to ~/gateway-<version> in one
             atomic move. Skips the fetch and build when that install already
             exists and its binary runs.
-
-  gw        rewrite ~/.local/bin/gw as a wrapper whose control verbs delegate to
-            lib/spawnctl.sh and whose token is read from the Keychain at run
-            time. A wrapper setup did not write is refused with exit 8 until
-            --consent-overwrite-gw is passed.
 
   supervisor  adopt a launchd agent that already supervises this gateway: its
             ProgramArguments are repointed at a generated launcher that reads
@@ -824,12 +803,12 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Dispatch. The four verbs are thin shims: each execs its own script, which
+# Dispatch. The three verbs are thin shims: each execs its own script, which
 # carries its own argument parsing — argv is passed through whole, verb
 # included, so `setup.sh <verb> [flags]` behaves exactly as it always has.
 # ---------------------------------------------------------------------------
 case "$VERB" in
-    acquire|gw|supervisor|wire)
+    acquire|supervisor|wire)
         exec bash "$SCRIPT_DIR/setup-$VERB.sh" "$@"
         ;;
     -h|--help|help)
@@ -844,14 +823,12 @@ case "$VERB" in
         # not rotate.
         ROTATE_KEY=0
         ROTATE_TOKEN=0
-        SETUP_CONSENT_GW=0
         SETUP_CONSENT_RC=0
         SETUP_CONSENT_AGENT=0
         while [ $# -gt 0 ]; do
             case "$1" in
                 --rotate-openrouter-key) ROTATE_KEY=1 ;;
                 --rotate-gateway-token)  ROTATE_TOKEN=1 ;;
-                --consent-overwrite-gw)  SETUP_CONSENT_GW=1 ;;
                 --consent-shell-rc)      SETUP_CONSENT_RC=1 ;;
                 --consent-adopt-agent)   SETUP_CONSENT_AGENT=1 ;;
                 *) need_jq; die "$EX_USAGE" "unexpected argument '$1'" ;;
@@ -859,11 +836,11 @@ case "$VERB" in
             shift
         done
         need_jq
-        do_setup "$ROTATE_KEY" "$ROTATE_TOKEN" "$SETUP_CONSENT_GW" "$SETUP_CONSENT_RC" "$SETUP_CONSENT_AGENT"
+        do_setup "$ROTATE_KEY" "$ROTATE_TOKEN" "$SETUP_CONSENT_RC" "$SETUP_CONSENT_AGENT"
         ;;
     *)
         usage
         need_jq
-        die "$EX_USAGE" "unknown verb '${VERB:-}' (expected: acquire|gw|supervisor|wire, or no verb for the whole path)"
+        die "$EX_USAGE" "unknown verb '${VERB:-}' (expected: acquire|supervisor|wire, or no verb for the whole path)"
         ;;
 esac

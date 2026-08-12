@@ -539,11 +539,9 @@ do_supervisor() {
     fi
 
     # CONSENT (KTD17). Repointing a launchd agent takes over a file setup did
-    # not write and inserts this plugin into the machine's startup path — the
-    # same class of act as overwriting a foreign `gw`, which has been gated
-    # since it shipped. This one was not, and it is the more consequential of
-    # the two: it changes what happens at every login, not what one command
-    # does.
+    # not write and inserts this plugin into the machine's startup path. It is
+    # the most consequential thing setup does: it changes what happens at every
+    # login, not what one command does.
     if [ "$sv_consent" -ne 1 ]; then
         say "adopting the launchd agent at $SUPERVISOR_PLIST means setup owns a step in this machine's startup path — refusing to repoint it without consent"
         emit "$(jq -nc --arg p "$SUPERVISOR_PLIST" --arg l "$GATEWAY_LAUNCHER" --argjson c "$EX_CONSENT" \
