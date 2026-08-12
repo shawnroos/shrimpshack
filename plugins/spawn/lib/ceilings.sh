@@ -192,6 +192,11 @@ EX_USAGE=2
 EX_UNREACHABLE=3
 EX_UPSTREAM=5
 EX_DEADLINE=6
+# 7 is the frozen enum's auth code. Defined HERE because this file is sourced
+# standalone by the door scripts: a review found the die call below was reading
+# an UNSET EX_AUTH and living entirely on its `:-7` default, while the comment
+# claimed it used the shared constant. Same shape as the bug this file fixes.
+EX_AUTH=7
 
 CLAUDE_BIN="${SPAWN_CLAUDE_BIN:-claude}"
 
@@ -533,7 +538,7 @@ spawn::ceiling_main() {
     # An empty credential is worse than none — the CLI uses it rather than
     # falling back — and it is knowable here, before the child spends a deadline
     # discovering it. EX_AUTH is the frozen enum's auth code; no new code.
-    [ -n "$TOKEN" ] || die "${EX_AUTH:-7}" "auth_rejected" \
+    [ -n "$TOKEN" ] || die "$EX_AUTH" "auth_rejected" \
         "no gateway token was resolvable: the config has no server.token, GATEWAY_TOKEN is unset, and the Keychain holds no entry — nothing was started"
 
     # -----------------------------------------------------------------------

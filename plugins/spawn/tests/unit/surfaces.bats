@@ -432,6 +432,29 @@ CTL
 # it through the shared chain. So this globs, and each new surface is caught by
 # existing without opting in rather than by anyone remembering to list it.
 # ---------------------------------------------------------------------------
+# WHAT THIS GATE IS, AND WHAT IT IS NOT.
+#
+# It is a LINT over known credential-passing spellings. It is NOT proof that the
+# invariant holds, and it must not be described as closing the regression class.
+# Three independent reviewers and this repo's own solution doc
+# (docs/solutions/logic-errors/default-allow-regex-projection-gate-silently-drops-nudges.md)
+# say the same thing: enumerating permitted forms is default-allow, and "the
+# surface is everything nobody thought of". Widening the enumeration a fourth
+# time does not change that.
+#
+# Known and accepted holes, all lexical by nature — do not paper over them by
+# adding another alternation and calling it closed:
+#   * dead code passes:      if false; then spawn::resolve_token; fi
+#   * ordering is unchecked: a real call placed AFTER the export still passes
+#   * indirection is blind:  v=ANTHROPIC_AUTH_TOKEN; env "$v=$tok" cmd
+#   * a call inside a function that is never invoked still counts
+#
+# What would actually close it is a BEHAVIORAL test: run each surface against a
+# fake claude, a fake config and a fake Keychain, and assert on the child's
+# environment — token present from each source in turn, and NO child spawned
+# when nothing resolves. That does not exist yet and is recorded as the top
+# residual finding for this change. Until it does, this gate buys one thing:
+# a new surface written in an ordinary spelling cannot silently skip the chain.
 @test "every surface that exports a gateway credential resolves it through the shared chain" {
     local offenders=() f base
     for f in "$ROOT"/lib/*.sh; do
@@ -444,13 +467,14 @@ CTL
         # way, which is the same "narrower than the invariant" failure this gate
         # exists to close. (`env VAR=` is separately forbidden — KTD6, argv is
         # world-readable — but a gate should not depend on another rule holding.)
-        grep -qE '(export|declare -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|env[[:space:]]+[^|;]*ANTHROPIC_AUTH_TOKEN=' "$f" || continue
-        # CODE lines only. Matching the whole file lets a COMMENT naming the
-        # helper satisfy the gate — not hypothetical: the first version of this
-        # check stayed green with the call deleted, because the comment above the
-        # call mentioned it by name. Strip comments before looking.
-        grep -v '^[[:space:]]*#' "$f" \
-            | grep -q 'spawn::resolve_token\|spawn::token_fallback' \
+        # Strip comments ONCE, then do BOTH tests on the stripped text. Order is
+        # load-bearing and was wrong: discovery ran on the raw file while the
+        # helper check ran on stripped text, so a commented-OUT export selected a
+        # file that exports nothing (false fail) and an INLINE comment naming the
+        # helper satisfied the requirement (false pass). Both were reproduced.
+        local code; code="$(sed 's/#.*$//' "$f")"
+        printf '%s' "$code" | grep -qE '(export|declare -x|declare -gx|typeset -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|(^|[[:space:];&|(]) *ANTHROPIC_AUTH_TOKEN=' || continue
+        printf '%s' "$code" | grep -q 'spawn::resolve_token\|spawn::token_fallback' \
             || offenders+=("$base")
     done
 
@@ -467,7 +491,9 @@ CTL
     # ever matches nothing that exports the credential, it would pass vacuously.
     local exporters=0
     for f in "$ROOT"/lib/*.sh; do
-        grep -qE '(export|declare -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|env[[:space:]]+[^|;]*ANTHROPIC_AUTH_TOKEN=' "$f" && exporters=$((exporters + 1))
+        sed 's/#.*$//' "$f" \
+            | grep -qE '(export|declare -x|declare -gx|typeset -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|(^|[[:space:];&|(]) *ANTHROPIC_AUTH_TOKEN=' \
+            && exporters=$((exporters + 1))
     done
     [ "$exporters" -ge 2 ]
 }
