@@ -182,7 +182,7 @@ run_herdr_workspace() {
 run_resolve() {
   SPINOFF_TEST_SOURCE=1 bash -c '
     source "$1"
-    HERDR="$2"; CMUX="$3"; LAUNCHER="$4"
+    HERDR="$2"; CMUX="$3"; LAUNCHER="$4"; FORCED_LAUNCHER="$4"
     resolve_launcher 2>/dev/null
     echo "$LAUNCHER"
   ' _ "$SCRIPT" "$HERDR_BIN" "$CMUX_BIN" "$1"
@@ -673,6 +673,12 @@ run_unresolvable() {
   # block prints that path unconditionally on every run, so a path-only assertion
   # holds even if the recovery paragraph is deleted entirely.
   [[ "$output" == *"cd '$UREPO/worktrees/uh' && claude"* ]]
+  # A single occurrence proves nothing — the LAUNCHER=none summary branch prints
+  # MANUAL_CMD too, so deleting it from the failure paragraph still leaves one. Require
+  # BOTH: the summary's copy and the exit-5 tail's. That paragraph is the part relayed
+  # outside the summary block, so losing its recovery line is the regression that matters.
+  [ "$(grep -cF "cd '$UREPO/worktrees/uh' && claude" <<<"$output")" -ge 2 ]
+  [[ "$output" == *"or just start the session by hand in the worktree that is already there:"* ]]
   # It must not read as a skip, and it must not lie about what announced.
   [[ "$output" != *"no multiplexer announced"* ]]
   [[ "$output" != *"skipping launch automation"* ]]
@@ -752,7 +758,13 @@ run_unresolvable() {
                    TERM_PROGRAM=ghostty OSASCRIPT_BIN=/nonexistent/osascript
   [ "$status" -eq 0 ]
   [[ "$output" == *"no multiplexer announced this session"* ]]
-  [[ "$output" != *"--launcher"* ]]
+  # Not `!= *"--launcher"*` — no flag is passed here, so nothing could print it and the
+  # check cannot fail. Deny the ANNOUNCE-TEXT form instead: a real announcement always
+  # renders as "<backend> announced this session (<what announced it>)", and the benign
+  # line above is "no multiplexer announced this session" with no parenthetical. So the
+  # trailing " (" is what separates them — this breaks the moment ghostty's env vars are
+  # promoted to an announcement, which is the distinction the test is named for.
+  [[ "$output" != *"announced this session ("* ]]
 }
 
 @test "loud: two announced backends failing differently report ONE cause (exit 4)" {
@@ -767,8 +779,13 @@ run_unresolvable() {
   run_unresolvable HERDR_ENV=1 HERDR_STUB_LIVE=0 CMUX_WORKSPACE_ID=workspace:1 \
                    CMUX_BIN=/nonexistent/cmux
   [ "$status" -eq 4 ]
-  [[ "$output" == *"could not resolve"* ]]
-  [[ "$output" == *cmux* ]]
+  # Assert the diagnosis line VERBATIM, and deny the other backend by name. A bare
+  # *cmux* substring cannot tell which backend was named — "cmux" also appears in the
+  # searched-locations list (/Applications/cmux.app/...) — so it holds even if the
+  # wording is repointed at $ANNOUNCED_BIN and reports herdr's dead server instead.
+  # That repointing is the exact drift this test exists to stop.
+  [[ "$output" == *'could not resolve `cmux`'* ]]
+  [[ "$output" != *'could not resolve `herdr`'* ]]
   [[ "$output" != *"would not take it"* ]]
 }
 
@@ -813,8 +830,11 @@ run_unresolvable() {
   run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0 \
                    CMUX_BIN=/nonexistent/cmux
   [ "$status" -eq 4 ]
-  [[ "$output" == *"could not resolve"* ]]
-  [[ "$output" == *cmux* ]]
+  # Verbatim, and deny herdr by name — same reason as the two-backend test below: a
+  # bare *cmux* substring also matches the searched-locations list, so it cannot tell
+  # which backend the diagnosis actually named.
+  [[ "$output" == *'could not resolve `cmux`'* ]]
+  [[ "$output" != *'could not resolve `herdr`'* ]]
   [[ "$output" != *"would not take the launch"* ]]
 }
 
