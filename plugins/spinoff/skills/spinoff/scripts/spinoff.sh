@@ -1138,6 +1138,14 @@ launcher_open_viewer_ghostty() {
   fi
 }
 
+# _announced_unlaunched — the default-deny gate, as a function so it can be tested.
+# True when something announced a backend and nothing launched. It reads ONLY the
+# announcement and the settled launcher: no backend name, no probe. That is the whole
+# invariant, and keeping it in one testable place is what lets a test prove it with a
+# backend name that does not exist yet — which is the only way to tell this apart from
+# an implementation that enumerates the causes it happens to know about.
+_announced_unlaunched() { [ "$LAUNCHER" = none ] && [ -n "$ANNOUNCED_BIN" ]; }
+
 # ---- test hook --------------------------------------------------------------
 # When sourced by the bats suite (SPINOFF_TEST_SOURCE=1), stop here: load the
 # functions above so they can be exercised in isolation, but run none of the
@@ -1573,7 +1581,7 @@ resolve_launcher
 # `--launcher ghostty` usable inside a herdr session; do not hoist the record above it.
 ANNOUNCED_UNLAUNCHED=0
 LAUNCH_UNRESOLVED=0
-if [ "$LAUNCHER" = "none" ] && [ -n "$ANNOUNCED_BIN" ]; then
+if _announced_unlaunched; then
   ANNOUNCED_UNLAUNCHED=1
 fi
 if [ "$ANNOUNCED_UNLAUNCHED" = 1 ] && [ -n "$LOUD_BIN" ]; then
@@ -1604,7 +1612,15 @@ elif [ "$ANNOUNCED_UNLAUNCHED" = 1 ]; then
   echo "  ⚠ \`$ANNOUNCED_BIN\` announced this session ($ANNOUNCED_BY) but would not take the launch —" >&2
   echo "    NOT launching, and NOT calling that a skip. The worktree and handoff are still made." >&2
   if [ "$ANNOUNCED_BIN" = herdr ]; then
-    echo "    the binary resolved fine; its server isn't answering. Check: herdr status server" >&2
+    # TWO causes, and the second is the common one. The server may genuinely be
+    # stopped — or it may be running fine and simply unreachable from THIS process:
+    # a background agent's environment does not always carry what `herdr status
+    # server` needs to find the socket, and that probe then fails while the user's
+    # herdr is perfectly alive. Saying only "start the server" sends someone to
+    # restart something that is already running, so name both.
+    echo "    the binary resolved fine; its server did not answer THIS process." >&2
+    echo "    check \`herdr status server\` here — if it reports running, the server is fine" >&2
+    echo "    and this process just can't reach it (a detached/background shell often can't)." >&2
   else
     echo "    the binary resolved fine; the backend did not pass its readiness probe." >&2
   fi
@@ -1780,7 +1796,9 @@ if [ "${LAUNCH_UNRESOLVED:-0}" = "1" ]; then
   echo "⚠ NO SESSION WAS LAUNCHED — \`$LOUD_BIN\` could not be resolved." >&2
   echo "  This session announced it ($LOUD_ANNOUNCE), so this is a failure, not a skip." >&2
   echo "  The worktree, branch and handoff are intact. Fix the resolution (the ⚠ above names" >&2
-  echo "  the paths searched and $LOUD_OVERRIDE) and re-run, or start the session by hand:" >&2
+  echo "  the paths searched and $LOUD_OVERRIDE) and re-run — but the worktree and branch" >&2
+  echo "  already exist, so re-run with a NEW --name, or just start the session by hand in" >&2
+  echo "  the worktree that is already there:" >&2
   echo >&2
   echo "    $MANUAL_CMD" >&2
   exit 4
@@ -1791,8 +1809,11 @@ if [ "${ANNOUNCED_UNLAUNCHED:-0}" = "1" ]; then
   echo "⚠ NO SESSION WAS LAUNCHED — \`$ANNOUNCED_BIN\` would not take it." >&2
   echo "  This session announced it ($ANNOUNCED_BY), so this is a failure, not a skip." >&2
   if [ "$ANNOUNCED_BIN" = herdr ]; then
-    echo "  The binary resolved; its server isn't answering. Start it (check \`herdr status server\`)," >&2
-    echo "  then re-run — but the worktree and branch already exist, so re-run with a NEW --name," >&2
+    echo "  The binary resolved; its server did not answer this process. Either it is stopped —" >&2
+    echo "  start it — or it is running and this shell cannot reach its socket, which is what" >&2
+    echo "  happens when the script runs detached from the session that owns herdr. Run" >&2
+    echo "  \`herdr status server\` here to tell the two apart, fix whichever it is, then re-run" >&2
+    echo "  — but the worktree and branch already exist, so re-run with a NEW --name," >&2
   else
     echo "  The binary resolved; the backend did not pass its readiness probe. Fix that, then" >&2
     echo "  re-run — but the worktree and branch already exist, so re-run with a NEW --name," >&2

@@ -595,6 +595,17 @@ run_unresolvable() {
   [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
 }
 
+@test "loud: exit 4 warns that re-running the same --name will die, like exit 5 does" {
+  # Both loud codes leave a worktree and branch behind and both tell the user to
+  # re-run. Exit 5 says re-run with a NEW --name; exit 4 used to just say "re-run",
+  # sending the user into `worktree path already exists` at exit 1 — a named,
+  # recoverable failure turned into a confusing unrelated one. Held to the same
+  # message contract here so the two blocks cannot drift apart again.
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"NEW --name"* ]]
+}
+
 @test "loud: the summary block says INCOMPLETE and never prints a tick (KTD-5)" {
   # Teaching only the tail exit would print "✓ Spinoff complete" alongside exit 4, and
   # the skill relays this block verbatim — so the header has to learn the flag too.
@@ -644,10 +655,10 @@ run_unresolvable() {
   run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
   [ "$status" -eq 5 ]
   [[ "$output" == *"launcher:  none"* ]]
-  # The cause-neutral lead, then the backend and the announcing variable.
-  [[ "$output" == *"would not take it"* ]]
-  [[ "$output" == *"herdr"* ]]
-  [[ "$output" == *"HERDR_ENV=1"* ]]
+  # Assert the NEW wording specifically. Bare "herdr" and "HERDR_ENV=1" would be
+  # useless here — the old step line this diff removed contained both, so asserting
+  # them would pass against the very implementation this test exists to reject.
+  [[ "$output" == *'`herdr` announced this session (HERDR_ENV=1) but would not take the launch'* ]]
   # The remedy is starting the server — NOT setting a binary path. Borrowing exit 4's
   # diagnosis here would send the user to fix a $PATH that is already correct.
   [[ "$output" == *"herdr status server"* ]]
@@ -655,9 +666,13 @@ run_unresolvable() {
   [[ "$output" != *"SPINOFF_BIN_PATHS"* ]]
   # A retrying caller must be told the worktree is already there; re-running the same
   # --name dies at exit 1 on "worktree path already exists", turning a recoverable
-  # failure into a confusing one. This line is the only thing preventing that.
+  # failure into a confusing one.
   [[ "$output" == *"NEW --name"* ]]
-  [[ "$output" == *"$UREPO/worktrees/uh"* ]]
+  # ...and the failure must still hand over a working recovery command. Assert the
+  # MANUAL_CMD the exit-5 tail prints, not the worktree path on its own: the summary
+  # block prints that path unconditionally on every run, so a path-only assertion
+  # holds even if the recovery paragraph is deleted entirely.
+  [[ "$output" == *"cd '$UREPO/worktrees/uh' && claude"* ]]
   # It must not read as a skip, and it must not lie about what announced.
   [[ "$output" != *"no multiplexer announced"* ]]
   [[ "$output" != *"skipping launch automation"* ]]
@@ -674,6 +689,23 @@ run_unresolvable() {
   [ "$status" -eq 5 ]
   [[ "$output" == *"Spinoff INCOMPLETE"* ]]
   [[ "$output" != *"✓ Spinoff complete"* ]]
+}
+
+@test "loud: two announced backends failing differently report ONE cause (exit 4)" {
+  # The only reachable run where the two records disagree: $ANNOUNCED_* is
+  # first-announced-wins (herdr, resolved, server dead), $LOUD_* is
+  # first-unresolved-wins (cmux, missing). The gate fires on the announcement but the
+  # branch selects on $LOUD_BIN, so this run must diagnose cmux ONLY — fixing CMUX_BIN
+  # genuinely restores a launch, and naming herdr's dead server alongside it would put
+  # two backends in one diagnosis. Without this test, a later edit that keys any loud
+  # wording off $ANNOUNCED_BIN produces exactly that and every other test stays green.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 HERDR_STUB_LIVE=0 CMUX_WORKSPACE_ID=workspace:1 \
+                   CMUX_BIN=/nonexistent/cmux
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"could not resolve"* ]]
+  [[ "$output" == *cmux* ]]
+  [[ "$output" != *"would not take it"* ]]
 }
 
 @test "loud: a forced launcher can also reach the exit-5 gate (second entry path)" {
@@ -698,22 +730,28 @@ run_unresolvable() {
   [[ "$output" == *"falling back to auto-detection"* ]]
 }
 
-@test "the loud gate keys on the ANNOUNCEMENT, not on any one backend's probe" {
-  # A STRUCTURAL test, deliberately. KTD1 requires the gate to be default-deny: any
-  # announced backend that did not launch fails, whatever the reason. No behavioural
-  # test can prove that today, because `_cmux_probe` is binary-only, so herdr is the
-  # only backend that can reach "announced, resolved, probe failed" — an implementation
-  # keyed on "herdr announced and _herdr_probe failed" passes every other test in this
-  # file, including the flipped one above, while being exactly what KTD1 forbids.
-  # Do not delete this as redundant. If cmux ever grows a real liveness probe, replace
-  # it with the behavioural test that becomes possible then.
-  run grep -n 'ANNOUNCED_UNLAUNCHED=1$' "$SCRIPT"
+@test "the loud gate keys on the ANNOUNCEMENT, not on any one backend's probe (KTD1)" {
+  # KTD1 requires the gate to be default-deny: ANY announced backend that did not
+  # launch is a failure, whatever the reason. End-to-end runs cannot prove that today —
+  # `_cmux_probe` is binary-only, so herdr is the only backend that can reach
+  # "announced, resolved, probe failed", and an implementation keyed on "herdr
+  # announced and _herdr_probe failed" would pass every behavioural test in this file
+  # including the flipped one above, while being exactly what KTD1 forbids.
+  #
+  # So drive the decision directly with a backend name that DOES NOT EXIST. Nothing
+  # keyed on herdr, on cmux, or on any probe can return true for `futurebackend`;
+  # only a gate that reads the announcement itself can. That is the invariant, tested
+  # rather than the source text spelling it — this survives renames and reflows.
+  run bash -c '
+    SPINOFF_TEST_SOURCE=1 . "$1" || exit 9
+    LAUNCHER=none ANNOUNCED_BIN=futurebackend LOUD_BIN=""
+    _announced_unlaunched || exit 1
+    # and it must stay quiet when nothing announced, or when something DID launch
+    ANNOUNCED_BIN="" ;                 _announced_unlaunched && exit 2
+    LAUNCHER=herdr ANNOUNCED_BIN=herdr; _announced_unlaunched && exit 3
+    exit 0
+  ' _ "$SCRIPT"
   [ "$status" -eq 0 ]
-  gate="$(grep -n -B2 'ANNOUNCED_UNLAUNCHED=1$' "$SCRIPT" | grep 'if \[')"
-  [[ "$gate" == *'$ANNOUNCED_BIN'* ]]
-  [[ "$gate" != *HERDR* ]]
-  [[ "$gate" != *CMUX* ]]
-  [[ "$gate" != *probe* ]]
 }
 
 @test "silent: unannounced session says nothing announced, not a backend name (R7)" {

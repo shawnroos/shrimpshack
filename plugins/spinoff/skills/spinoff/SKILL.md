@@ -110,7 +110,7 @@ exists to remove. Every non-zero code here has a named cause and a named fix.
 | `1` | `die` — a precondition failed (no repo resolves, `git worktree add` refused, a bad `--label`). The message names it. | Surface the message verbatim; fix the input and re-run. |
 | `2` | Unknown argument. | A skill bug. Fix the invocation. |
 | `3` | A session **launched but was not briefed** — the launch itself failed partway. | Worktree survives. Relay the recovery line the script prints and brief the tab by hand. |
-| `4` | The environment **announced a backend** (`HERDR_ENV=1` or `CMUX_WORKSPACE_ID`) whose **binary could not be resolved** — nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN` and re-run. |
+| `4` | The environment **announced a backend** (`HERDR_ENV=1` or `CMUX_WORKSPACE_ID`) whose **binary could not be resolved** — nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN`, then re-run **with a new `--name`** — the worktree and branch already exist, so re-running the same name dies at exit 1. |
 | `5` | The environment **announced a backend whose binary was fine**, but the backend **wouldn't take the launch** (herdr's server isn't running) — nothing launched. | Worktree survives. Start the backend's server (`herdr status server` shows it), then re-run **with a new `--name`** — the worktree and branch already exist, so re-running the same name dies at exit 1. Or use the manual line the script prints. Don't reach for `HERDR_BIN` here: the binary was never the problem. |
 
 Codes 3, 4 and 5 are mutually exclusive by construction. 3 means a backend resolved
