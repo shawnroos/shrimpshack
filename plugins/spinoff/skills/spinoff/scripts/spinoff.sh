@@ -240,6 +240,29 @@ resolve_launcher() {
   # taken from the announcements as they stand, and is read only after $LAUNCHER has
   # settled — a run that goes on to launch through another announced backend never
   # looks at it (R17).
+  # An explicit --launcher is a LOUDER launch request than any env var — the user named
+  # the backend — so record it FIRST and let it win $ANNOUNCED_* precedence, so the
+  # diagnosis names what they actually asked for. Only a forced launcher whose probe
+  # FAILED reaches this line; a successful one returned above and never lands here.
+  #
+  # Without this, the flag route stayed open into the exact defect the env route was
+  # just closed against: `--launcher herdr` in a session announcing nothing launched
+  # nothing, printed "no multiplexer announced this session" — false, the user had just
+  # named one — and exited 0 with a tick. Closing one route and leaving the other is
+  # the enumeration this gate exists to stop doing.
+  case "${FORCED_LAUNCHER:-auto}" in
+    herdr) _record_loud herdr "${HERDR:-}" '--launcher herdr' HERDR_BIN "${HERDR_REJECTED:-}" ;;
+    cmux)  _record_loud cmux "${CMUX:-}" '--launcher cmux' CMUX_BIN "${CMUX_REJECTED:-}" \
+                        /Applications/cmux.app/Contents/Resources/bin/cmux ;;
+    ghostty)
+      # This is the KTD-9 note at the ghostty resolution coming due. Ghostty's ENV vars
+      # stay excluded — they are set for every Ghostty window and announce nothing — but
+      # the FLAG is a deliberate request and belongs in the loud path. Record the
+      # announcement only, never $LOUD_*: ghostty has no single override binary to name
+      # (the .app is found by directory scan), so a forced ghostty that failed is an
+      # exit-5 "the backend refused", not an exit-4 "set this variable".
+      [ -z "$ANNOUNCED_BIN" ] && { ANNOUNCED_BIN=ghostty; ANNOUNCED_BY='--launcher ghostty'; } ;;
+  esac
   [ "${HERDR_ENV:-}" = 1 ] \
     && _record_loud herdr "${HERDR:-}" 'HERDR_ENV=1' HERDR_BIN "${HERDR_REJECTED:-}"
   [ -n "${CMUX_WORKSPACE_ID:-}" ] \
@@ -1188,6 +1211,10 @@ case "$LAUNCHER" in
   herdr|cmux|ghostty|auto) ;;
   *) die "invalid --launcher '$LAUNCHER' (expected: herdr | cmux | ghostty | auto)" ;;
 esac
+# Keep what the user asked for. resolve_launcher overwrites $LAUNCHER with what it
+# actually settled on, and by the time the loud gate runs there is otherwise no way to
+# tell "detection found nothing" from "the user named a backend and it didn't work".
+FORCED_LAUNCHER="$LAUNCHER"
 
 [ -n "$NAME" ] || die "missing --name <kebab-feature-name>"
 # A curated --label is passed to `herdr agent start "$LABEL"` as a BARE positional

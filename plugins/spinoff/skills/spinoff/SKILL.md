@@ -72,9 +72,12 @@ detection:
   `--launcher ghostty` when you actually want a bare window.
 - **`--launcher herdr` / `cmux` / `ghostty`** — force that backend, but it's *still*
   probed; if the probe fails it falls back to auto-detection rather than hard-erroring.
-  In a session that announced a multiplexer, that fallback can still land on `none`
-  and exit 5 — the flag doesn't make a run that launched nothing succeed. A forced
-  backend whose probe *passes* launches and exits 0 as usual.
+  But the flag itself counts as announcing a backend, so if that fallback also lands on
+  `none`, the run exits **4 or 5 rather than 0** — naming a backend and launching
+  nothing is a failure however you named it. A forced backend whose probe *passes*
+  launches and exits 0 as usual. This is the one place `ghostty` enters the loud path:
+  being *in* a Ghostty window announces nothing (its env vars are set for every
+  window), but typing `--launcher ghostty` is a deliberate request.
 
 Where the backends differ, in the parts worth knowing:
 

@@ -4,34 +4,24 @@ Branch `fix/spinoff-silent-launch-failure`. Reviewed by three independently
 dispatched lenses (correctness, adversarial, testing) against base `5cd4dc0`.
 Everything actionable was applied except the items below.
 
-## Open — needs a decision
+## Raised by review, now resolved
 
-### The forced `--launcher` route into the same defect class
+### ~~The forced `--launcher` route into the same defect class~~ — CLOSED
 
-**Both the correctness and the adversarial reviewer found this independently.**
+Both reviewers found this independently; it is now fixed rather than deferred.
 
-The gate closes the *environment-announcement* route into "asked to launch,
-launched nothing, reported success". It leaves the *explicit-flag* route open.
+`--launcher <backend>` is recorded as an announcement, ahead of the env vars so the
+diagnosis names the flag the user typed rather than a variable they never set. The
+flag route now lands on the same gate: exit 4 when the forced backend's binary is
+missing, exit 5 when it resolved and refused. Previously `--launcher herdr` in an
+unannounced session printed `no multiplexer announced this session` and a tick at
+exit 0.
 
-`--launcher herdr` in a session where no env var announced anything: the probe
-fails, the run prints `⚠ … falling back to auto-detection`, nothing launches, and
-the summary block says `✓ Spinoff complete` and `no multiplexer announced this
-session` — which is false on its face given the flag the user just passed — at
-exit 0. A background agent relaying that run reports done.
-
-This is the same defect class the change exists to close, and closing only the env
-route is itself the enumeration the design argues against. It was excluded because
-the confirmed scope was env announcements, and because that path does print a
-visible warning — but the warning scrolls past while the relayed summary claims
-success.
-
-**Both reviewers proposed the same fix:** capture the flag before
-`resolve_launcher` overwrites `$LAUNCHER`, and record a non-`auto` value through
-`_record_loud` so it flows through the same gate.
-
-**Why it wasn't just done:** it changes `--launcher X` in an unannounced session
-from exit 0 to exit 5, which is real user-visible blast radius beyond the
-confirmed scope. That is a scope call, not a code call.
+This also settles the KTD-9 note left at the ghostty resolution: ghostty's *env vars*
+stay excluded (they are set for every Ghostty window and announce nothing), but the
+*flag* is a deliberate request and enters the loud path. That makes the previously
+unreachable non-herdr exit-5 branch reachable, so its wording is now exercised by a
+test instead of being dead code.
 
 ### The probe's output string is now load-bearing
 
@@ -53,11 +43,11 @@ this fix.
   process that outlives the herdr server now hard-fails at exit 5 where it used to
   produce a worktree at exit 0. This is the change's intent, and it is the concrete
   thing users will feel.
-- **The non-herdr exit-5 branch is unreachable today.** Reaching it needs a backend
-  that is announced, resolves, and fails a probe; `_cmux_probe` is binary-only, so a
-  resolved cmux always launches. The generic wording exists for the next backend and
-  has never executed. Noted rather than deleted — deleting it would re-narrow the
-  gate to herdr.
+- ~~**The non-herdr exit-5 branch is unreachable today.**~~ Fixed as a side effect of
+  closing the flag route: `--launcher ghostty` with no usable ghostty now reaches it,
+  so the generic wording is exercised by a test instead of being dead code. Still true
+  for **cmux specifically** — `_cmux_probe` is binary-only, so a resolved cmux always
+  launches and can never be the announced-and-refused backend.
 - **A forced `--launcher herdr` whose probe fails runs `herdr status server`
   twice** (once in the forced case, once in detection). No correctness consequence.
 - **Exit 5 is never asserted disjoint from exit 3.** The claim holds by

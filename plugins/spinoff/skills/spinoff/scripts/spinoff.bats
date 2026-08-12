@@ -691,6 +691,43 @@ run_unresolvable() {
   [[ "$output" != *"✓ Spinoff complete"* ]]
 }
 
+@test "loud: forced --launcher herdr with nothing announced exits 4, not a silent 0" {
+  LOUD_ARGS="--launcher herdr"
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"falling back to auto-detection"* ]]
+  [[ "$output" == *"could not resolve"* ]]
+  # the diagnosis must name the FLAG the user passed, not an env var they never set
+  [[ "$output" == *"--launcher herdr"* ]]
+  [[ "$output" != *"no multiplexer announced this session"* ]]
+  [[ "$output" != *"✓ Spinoff complete"* ]]
+}
+
+@test "loud: forced --launcher ghostty that can't run exits 5 (KTD-9 flag vs env)" {
+  # Ghostty's ENV vars stay excluded from the loud path — they are set for every
+  # Ghostty window and announce nothing. The FLAG is a deliberate request, so it does
+  # count. This is also the only reachable exercise of the non-herdr exit-5 wording.
+  LOUD_ARGS="--launcher ghostty"
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"--launcher ghostty"* ]]
+  [[ "$output" == *"did not pass its readiness probe"* ]]
+  # ghostty has no override binary to name, so it must NOT borrow exit 4's advice
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" != *"herdr status server"* ]]
+}
+
+@test "silent: ghostty ENV identity alone still announces nothing (R14, KTD-9)" {
+  # The counterpart to the test above, and the line the flag change must not cross:
+  # being IN a Ghostty window is not a launch request. Without the flag this stays a
+  # quiet exit 0 even though the exact same probe fails.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= \
+                   TERM_PROGRAM=ghostty OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no multiplexer announced this session"* ]]
+  [[ "$output" != *"--launcher"* ]]
+}
+
 @test "loud: two announced backends failing differently report ONE cause (exit 4)" {
   # The only reachable run where the two records disagree: $ANNOUNCED_* is
   # first-announced-wins (herdr, resolved, server dead), $LOUD_* is
@@ -716,6 +753,28 @@ run_unresolvable() {
   # an enumerating gate would pass this as well. The source-level test below is what
   # separates those two implementations.
   #
+  # Forced herdr, binary present, server dead: the flag's probe fails, the run falls
+  # through to detection, detection also lands on none, and the gate fires. $LOUD_BIN
+  # is empty because the binary resolved, so this is the exit-5 shape.
+  LOUD_STUBS=herdr
+  LOUD_ARGS="--launcher herdr"
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"falling back to auto-detection"* ]]
+  # The flag outranks the env var for the diagnosis: HERDR_ENV=1 is also set here, and
+  # the message must still name the flag the user typed. Assert the announce text in
+  # the failure itself — a bare "--launcher herdr" would be satisfied by the
+  # falling-back warning above and would hold against the old code too.
+  [[ "$output" == *"announced this session (--launcher herdr)"* ]]
+  [[ "$output" != *"announced this session (HERDR_ENV=1)"* ]]
+}
+
+@test "loud: a forced backend whose BINARY is missing is exit 4, not exit 5" {
+  # The sibling of the test above, and the reason the flag is recorded through the same
+  # two-record split as an env announcement rather than always meaning "backend
+  # refused". Forcing cmux with no cmux installed is a resolution failure, and the
+  # actionable answer is CMUX_BIN — not "start the server".
+  #
   # CMUX_BIN is pinned at a nonexistent path on purpose. Emptying $PATH is NOT enough
   # to make cmux unresolvable: resolve_bin also tries the app's own install location
   # (/Applications/cmux.app/...), so on a machine with cmux installed the forced probe
@@ -726,8 +785,10 @@ run_unresolvable() {
   LOUD_ARGS="--launcher cmux"
   run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0 \
                    CMUX_BIN=/nonexistent/cmux
-  [ "$status" -eq 5 ]
-  [[ "$output" == *"falling back to auto-detection"* ]]
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"could not resolve"* ]]
+  [[ "$output" == *cmux* ]]
+  [[ "$output" != *"would not take the launch"* ]]
 }
 
 @test "the loud gate keys on the ANNOUNCEMENT, not on any one backend's probe (KTD1)" {
