@@ -137,6 +137,12 @@ ALIAS=""
 # common.sh. Keyed on the ENUM, not on the call site: two sites that report the
 # same value must not hand a caller two different repairs. A site whose fix is
 # narrower than its class overrides with a `REMEDY=... die ...` prefix.
+# File scope on purpose. This lived inside emit_describe(), which meant it did
+# not exist on the request path at all — the classification ladder never calls
+# that function, so the first caller there would have died with "command not
+# found" on the one path that needed it.
+num_or_null() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]] && printf '%s' "$1" || printf 'null'; }
+
 remedy_for() {
     case "$1" in
         rate_limited)
@@ -270,7 +276,6 @@ emit_describe() {
     # is reported as an absent default; the validation below still refuses it
     # on a real call.
     local ev d_spill d_maxtok d_timeout
-    num_or_null() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]] && printf '%s' "$1" || printf 'null'; }
     d_spill="$(num_or_null "$SPILL_BYTES")"
     d_maxtok="$(num_or_null "$DEFAULT_MAX_TOKENS")"
     d_timeout="$(num_or_null "$TOTAL_TIMEOUT")"
@@ -670,14 +675,30 @@ chmod 600 "$CURLRC" 2>/dev/null
 RESP="$WORK/resp.json"
 : > "$RESP"
 : > "$WORK/http"
-curl -sS -o "$RESP" -w '%{http_code}' \
+# The write-out is PINNED to these two fields. Anything broader (%{json}) puts
+# an unpredictable blob in the same file $HTTP is parsed from, and $HTTP decides
+# every branch of the classification ladder below.
+curl -sS -o "$RESP" -w '%{http_code} %{time_total}' \
     --connect-timeout "$CONNECT_TIMEOUT" --max-time "$TOTAL_TIMEOUT" \
     --config "$CURLRC" >"$WORK/http" 2>"$WORK/curl.err" &
 CHILD_PID=$!
 wait "$CHILD_PID"
 CURL_RC=$?
 CHILD_PID=""
-HTTP="$(cat "$WORK/http" 2>/dev/null)"
+# `read`, NOT `cut -f2`: cut returns the WHOLE line when the delimiter is
+# absent, so a single-field file would hand the HTTP STATUS back as the elapsed
+# time — numeric, so it survives validation, and the detail would read "after
+# 502s". Found by mutation-testing this line.
+HTTP=""; ELAPSED=""
+read -r HTTP ELAPSED < "$WORK/http" 2>/dev/null || true
+# Validated, never trusted: %{time_total} renders with a locale-dependent
+# decimal separator, and a curl that died before writing leaves the file empty.
+# Two forms so prose reads correctly when the measurement is unusable.
+if [ "$(num_or_null "$ELAPSED")" = "null" ]; then
+    ELAPSED="unknown"; ELAPSED_TEXT="an unknown duration"
+else
+    ELAPSED_TEXT="${ELAPSED}s"
+fi
 
 if [ "$CURL_RC" -eq 28 ]; then
     # 28 is curl's operation-timeout. A hung CONNECT also lands here rather than
@@ -739,11 +760,26 @@ if [ "$HTTP" != "200" ]; then
     if [ "$HTTP" = "429" ] || [ "$ERR_TYPE" = "rate_limit_error" ]; then
         die "$EX_UPSTREAM" "rate_limited" "upstream rate-limited the call (HTTP $HTTP): ${ERR_MSG:-no message}"
     fi
+    # ORDER IS LOAD-BEARING: this runs BEFORE classify_overflow, which matches
+    # open-ended message PROSE. Behind it, an undecodable 502 whose message
+    # merely contained "too long" was reported as context_overflow — telling the
+    # caller to shrink the prompt or pick a wider alias, when a second vendor was
+    # measured failing identically. The narrower, better-evidenced class wins the
+    # tie; the loose prose matcher only gets what this one declines.
+    #
+    # The elapsed time is carried because the two readings take different
+    # repairs (see the remedy): near a route ceiling is the gateway giving up on
+    # its own attempt at that route's timeout_ms, which applies only to a
+    # non-streamed call like this one; a fast failure is the far side refusing
+    # the size outright. Measured on this box: 24000 max-tokens returned 200 at
+    # 89.4s on one prompt and failed at 120.4s and 121.7s on a slightly larger
+    # one — same requested output, opposite outcomes, so time is doing work that
+    # size alone does not explain.
+    if [ "$HTTP" = "502" ] && classify_undecodable "$ERR_MSG"; then
+        die "$EX_UPSTREAM" "response_too_large" "the call did not return a response this size after ${ELAPSED_TEXT} (HTTP $HTTP): ${ERR_MSG:-no message}"
+    fi
     if classify_overflow "$ERR_MSG"; then
         die "$EX_UPSTREAM" "context_overflow" "the prompt does not fit this alias's context window (HTTP $HTTP): ${ERR_MSG:-no message}"
-    fi
-    if [ "$HTTP" = "502" ] && classify_undecodable "$ERR_MSG"; then
-        die "$EX_UPSTREAM" "response_too_large" "the provider could not return a response this size (HTTP $HTTP): ${ERR_MSG:-no message}"
     fi
     # Anything else — including a 404 — is the generic upstream class. Exit 4 is
     # NOT re-derived from an error body here; it belongs to ensure's served-list

@@ -1,157 +1,135 @@
-# Spinoff: spinoff's herdr backend can't survive the mandated background agent
+# Spinoff: scope (or honestly document) the unscoped Glob/Grep hole in spawn's repo-bounded ceiling
 
 > This handoff is directional — author intent and a starting point, not a spec.
 > The code and tests are the source of truth; validate against them and refine.
 
 ## Goal
 
-Make `/spinoff:start-session` and `/spinoff:start-split` actually launch a herdr
-session when herdr is live. Right now the skill's two hard rules contradict each
-other, and the failure is silent.
+`plugins/spawn/permissions/repo-bounded.settings.json` is the permission ceiling
+for `/spawn:bg-agent` — the one spawn surface that runs unattended. It confines
+writes and file reads to the worktree, but **`Glob` and `Grep` are allowed with no
+path scope at all**. Decide whether to scope them, or to leave them and make every
+document that describes the ceiling tell the truth. Either outcome is acceptable;
+shipping a doc that overstates the bound is not.
 
 ## Why now / context
 
-Reported symptom: a spinoff run lands on `launcher: none`, prints the manual
-`cd … && claude` line, and **exits 0 with no `⚠`** — so it reads as success. It
-was initially taken for a flaky run. It is not; it looks like a design conflict.
+Found while fact-checking a tool-guidance skill against the code (that check is
+commit `2809c67` on `task/spawn-tool-guidance`). The doc claimed all five tools
+were worktree-scoped. The file says otherwise. Verified on disk — the allow list
+is exactly:
 
-The conflict, in the skill's own words:
-
-- SKILL.md: *"You MUST run the script through a background `Agent`
-  (`run_in_background: true`) — never inline in this session. This is not optional."*
-- `spinoff.sh:232` and `:237`: the herdr branch is gated on the **environment
-  variable** `HERDR_ENV = 1`.
-
-```sh
-232  [ "${HERDR_ENV:-}" = 1 ] \
-233    && _record_loud herdr "${HERDR:-}" 'HERDR_ENV=1' HERDR_BIN "${HERDR_REJECTED:-}"
-237  if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
+```
+Read(//{{WORKTREE}}/**)
+Glob                      <- no path scope
+Grep                      <- no path scope
+Write(//{{WORKTREE}}/**)
+Edit(//{{WORKTREE}}/**)
 ```
 
-`HERDR_ENV` is set by herdr when it spawns the session. It is **not** a flag and
-the skill has no documented way to pass it down. The skill *did* anticipate the
-`PATH` half of this problem — Step 4 tells the main session to resolve `herdr` and
-pass `HERDR_BIN` down, precisely because "the background agent's shell does not
-inherit the login shell's `PATH`". But `HERDR_BIN` only survives the binary
-lookup. It does nothing for the `HERDR_ENV=1` gate on line 237, which is what
-actually selects the backend. Same class of bug, only half-fixed.
+plus 14 deny rules. **`Bash` is absent entirely** — worth holding onto, because it
+means a bg-agent job cannot run a test, a command, or `git log`.
 
-There is a second env dependency further down, `spinoff.sh:521`:
+The reason this matters more than it first looks: **Grep returns matching
+content**, not just a list of paths. An absolute path argument therefore reads text
+out of any file on the machine — while `Read`, the tool that *looks* like the
+reading tool, is properly confined. `Glob` leaks paths the same way. So the ceiling
+built for "nobody is watching" has the widest read surface of the two ceilings.
 
-```sh
-521  if [ -n "${HERDR_PANE_ID:-}" ]; then
-522    ws="$("$HERDR" pane get "$HERDR_PANE_ID" …)"
-```
-
-`HERDR_PANE_ID` is how the script resolves the *live* workspace (deliberately
-preferred over the stale `HERDR_WORKSPACE_ID`). Also env-only, also not passable.
-So even if the gate on 237 were forced open, workspace resolution would degrade.
-
-**The nastiest part is what happens next, and it may not be `none`.** Line 250
-only suppresses the ghostty backend when `HERDR_ENV` is *empty*:
-
-```sh
-250  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] \
-251       && { … [ "${TERM_PROGRAM:-}" = ghostty ] … } && _ghostty_probe;  then LAUNCHER=ghostty
-```
-
-That suppression exists because herdr runs *inside* ghostty here (both sets of
-vars are present in a real session). If the background agent loses `HERDR_ENV`
-but keeps `TERM_PROGRAM=ghostty`, the guard on 250 inverts from protection into a
-trigger and the script opens a **bare ghostty window beside the user's herdr
-layout** — exactly the outcome the comment on 243–244 says it must never do. So
-depending on what the agent's shell inherits, the bug is either a silent `none`
-or a stray window. Establish which before designing the fix.
+This is the plugin's recurring defect class showing up in a new place: **a check
+narrower in reality than the invariant it claims to hold.** Same shape as the
+`SPAWN_SECURITY_BIN` P1 and the duplicate-scan holes. See
+`docs/residual-review-findings/` and the memory
+`feedback_checks_narrower_than_their_invariant`.
 
 ## Key decisions already made
 
-- **Fix the script, not the skill's workaround.** SKILL.md is explicit: *"if the
-  script does the wrong thing, FIX THE SCRIPT, don't work around it by hand."*
-  Do not solve this by telling the skill to run inline — the background-agent rule
-  exists to keep ~40 lines of step output and a readiness poll out of the main
-  session, and that reason is still good.
-- **The main session is the only place that can answer "what backend owns this
-  session".** That is already the established pattern for `HERDR_BIN` and
-  `--from-surface`; extending it to the announcement itself is consistent with the
-  design rather than a new idea.
-- **A silent wrong answer is the real defect.** The skill's own exit-code table
-  treats `launcher: none` at exit 0 as *legitimate* (a worktree-only spinoff). That
-  is correct when nothing announced a backend — and wrong when a backend announced
-  itself and got lost in transit. Whatever the fix, that case must become loud. The
-  script already has the machinery: `_record_loud` / `$LOUD_*` drive the `⚠` and
-  exit 4, and its comment on 200–205 names this exact bug class ("the same
-  lying-message defect this change exists to remove").
+- **This is a decision, not a foregone fix.** Scoping is a behaviour change to a
+  ceiling that has shipped. Do not treat "add `//{{WORKTREE}}/**`" as obviously
+  correct — it may break legitimate jobs.
+- **`ceiling_selectable` stays `false`.** There is deliberately no `--ceiling`
+  flag; the bound is fixed by which settings file ran, not by anything a caller
+  asserts (`ceilings.sh:12`). Do not add one, and do not "solve" this by letting a
+  job request a wider ceiling.
+- **Deliberately NOT fixed in the session that found it.** Correcting the doc was
+  in scope there; changing the ceiling was not. That's why this is its own branch.
+- **The doc half is not optional.** Whichever way the decision goes, the settings
+  file's own comment and the SKILL.md text must end up true. The doc asserting a
+  property the file did not have is precisely what hid this.
 
 ## Open questions / not yet decided
 
-1. **What does a background agent's shell actually inherit?** This is the whole
-   premise and it has NOT been measured. The main session's Bash tool *does* see
-   `HERDR_ENV=1` (verified). A subagent may share that process env — in which case
-   the herdr path works and the reported failure has a different cause. **Measure
-   before designing anything.** Cheapest probe: a background agent that runs
-   `env | grep -E 'HERDR|CMUX|GHOSTTY|TERM_PROGRAM'` and reports back.
-2. If the env *is* lost — how to pass the announcement? Options, roughly in
-   ascending invasiveness: an env prefix on the dispatch command (same shape as
-   `HERDR_BIN`, needs no script change but does need `HERDR_ENV` + `HERDR_PANE_ID`
-   documented as passable); explicit `--launcher-announce` / `--from-pane` flags;
-   or having the script detect a live herdr session from the server rather than
-   from env vars at all. The last is the most robust and the biggest change.
-3. Does `--launcher herdr` already work around this today? Line 221 forces the
-   probe and skips the env-keyed detection — so a forced launcher may reach herdr
-   without `HERDR_ENV`. If so it is a usable stopgap, but workspace resolution
-   (521) still degrades to the frozen/absent `HERDR_WORKSPACE_ID`. Check what it
-   actually produces before recommending it.
-4. Is `/spinoff:start-workspace` affected the same way? It takes the same
-   `resolve_launcher` path, so probably yes — confirm rather than assume.
-5. Does the cmux path have the identical hole? Line 238 gates on
-   `CMUX_WORKSPACE_ID`, also env-only. If cmux works in practice, the difference
-   is evidence about what agents inherit — worth knowing either way.
+1. **What does a scoped `Grep` rule actually permit?** `Grep` with no path argument
+   defaults to cwd. Under `Grep(//{{WORKTREE}}/**)`, does a bare no-path call still
+   match, or does it fall outside the allow and start landing in
+   `permission_denials[]`? **Establish this empirically. Do not reason about the
+   permission matcher's semantics from first principles** — the whole finding
+   exists because someone asserted a property instead of testing it.
+2. **Does `operator.settings.json` have the same shape?** Check before deciding;
+   it may want the same treatment, or may be intentionally wider.
+3. **Is unscoped Glob/Grep defensible on purpose?** A job that must read a sibling
+   package or a system config to do its work would need it. If it is deliberate,
+   the fix is a *precise* comment plus a stated threat model, not a scope change.
+4. **What is the actual exposure?** Reading a file's content is one thing;
+   exfiltrating it is another. bg-agent has no `Bash` and no network tool, so map
+   what a job could genuinely do with what it reads before sizing this.
 
 ## Starting point
 
-- `~/projects/shrimpshack/plugins/spinoff/skills/spinoff/scripts/spinoff.sh`
-  - `resolve_launcher()` — lines 219–255. The gate (232, 237), the ghostty
-    suppression (250–252), the `none` fallback (253).
-  - `_record_loud()` — lines 206–213, plus the design note at 196–205.
-  - Workspace resolution from a live pane — lines 511–547.
-  - Binary resolution + the `HERDR_BIN` override — lines 1219–1221.
-- `~/projects/shrimpshack/plugins/spinoff/skills/spinoff/SKILL.md` — the
-  "You MUST run the script through a background `Agent`" rule in Step 4, the
-  binary-resolution table, and the exit-code table (which needs revisiting if
-  "announced but lost in transit" becomes a new loud case).
-- Repo is at `plugins/spinoff` version **0.9.1** — the same version currently
-  installed in the plugin cache.
+- `plugins/spawn/permissions/repo-bounded.settings.json` — the allow list and its
+  misleading comment.
+- `plugins/spawn/permissions/operator.settings.json` — the sibling ceiling.
+- `plugins/spawn/lib/ceilings.sh` — selection logic; `:12` states the no-flag
+  policy, `:104-106` reads `SPAWN_CEILING_CONFIG_REPO` from the environment (an
+  operator-level override, framed as user configuration in R25).
+- `plugins/spawn/commands/bg-agent.md:53` — already the most precise phrasing in
+  the tree ("*writes* scoped to the worktree"); prefer its shape.
+- **Read commit `2809c67` on `task/spawn-tool-guidance` before editing any ceiling
+  doc** — it just rewrote those exact sentences, and duplicating that work or
+  contradicting it is the easy mistake here.
+- `tests/unit/surfaces.bats` — owns the doc invariants. Two opt-in live ceiling
+  tests exist behind `SPAWN_CEILING_LIVE=1` (they cost money; they are the 2
+  skips in a normal green run). Those are likely where a real
+  cannot-grep-outside-the-worktree assertion belongs.
 
-**Do not forget the plugin cache.** Merging a fix in `~/projects/shrimpshack`
-does not fix the live behavior: Claude Code runs the *installed* copy under
-`~/.claude/plugins/cache/shrimpshack/spinoff/<version>/`. The fix only takes
-effect after the plugin version is bumped and the cache re-installs. Plan the
-version bump as part of the change, and verify against the cached path, not the
-source tree.
+## Constraints (inherited, non-negotiable)
 
-## Verification note
+- Exactly one JSON object on stdout on **every** path including failures;
+  diagnostics to stderr only.
+- Frozen exit enum: 0 ok · 2 usage · 3 unreachable · 4 alias unknown · 5 upstream ·
+  6 deadline · 7 auth. New classes go in `error`, never a new exit code.
+- `tests/unit/escapes.bats` fails the suite on any byte-identical function body
+  across two shipped files — copy-paste will not land.
+- **Mutation-verify any new assertion.** Write the test, revert the settings
+  change, watch it go RED, restore, watch it go green. A test that passes both
+  before and after proves nothing. This is a hard bar in this plugin, earned the
+  hard way — see `feedback_mutation_test_not_inject_fail_proves_assertions`.
 
-This spinoff run is itself the experiment. It was dispatched exactly as SKILL.md
-mandates — background agent, `HERDR_BIN=/opt/homebrew/bin/herdr` passed down,
-`--target tab`, herdr live and probed from the main session. Whatever launcher it
-reports is a real data point for open question 1:
+## Sibling work in flight — read this before you rebase
 
-- reports `herdr` → the premise is wrong; the agent inherits the env, and the
-  original `launcher: none` had some other cause worth chasing.
-- reports `none` → premise confirmed; the announcement is lost in transit.
-- reports `ghostty` (a bare window appeared) → premise confirmed *and* the
-  line-250 inversion above is real, which is the more urgent of the two.
+Two branches touch the same plugin and neither is pushed:
 
-Read the dispatch result before touching code.
+- `task/spawn-drop-gw` — removes the `gw` step from setup so the plugin never
+  touches the user's `~/.local/bin/gw`. ~14 files, uncommitted as of this handoff.
+- `task/spawn-tool-guidance` — commit `2809c67`, clean, 489 passing. Where this
+  hole was found.
+
+Base is `origin/main`, which as of 16:47 today carries PR #41 ("spawn: say what
+the user gets, not what it is built on") — the plain-language rewrite of the
+README and all five command descriptions. Expect to rebase onto whichever sibling
+lands first, and expect textual overlap in the README and SKILL files rather than
+logical conflict.
 
 ## Recommended next step
 
-`/ce-brainstorm`. The defect is well localized but the *fix* is not: option 2
-above spans "add an env prefix to a doc" through "stop keying detection off env
-vars entirely", and that choice needs a shape before it needs a plan. Run the
-measurement in open question 1 first — it may collapse the whole problem — then
-brainstorm the passing mechanism.
+`/ce-brainstorm`. The scope-vs-document call is genuinely open and hinges on an
+empirical unknown (question 1) plus a threat-model judgement (question 4) — that
+is ambiguity about *approach*, not just sequencing, which is what brainstorm is
+for. Jumping to `/ce-plan` would bake in "scope it" as the answer before anyone
+has established what a scoped rule actually permits. Validate that read against
+what you find; if question 1 resolves cleanly and the answer is obviously "scope
+it", go straight to `/ce-plan`.
 
 ## Source session
-Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/1e90b332-cb44-41ea-8b7c-186fff0104fb.jsonl`
-Resume:     `cd /Users/shawnroos && claude -r 1e90b332-cb44-41ea-8b7c-186fff0104fb`
+Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos-projects-shrimpshack-worktrees-gateway-plugin/a518d741-a626-447a-9b77-dbef6ce6c59d.jsonl`
+Resume:     `cd /Users/shawnroos/projects/shrimpshack && claude -r a518d741-a626-447a-9b77-dbef6ce6c59d`
