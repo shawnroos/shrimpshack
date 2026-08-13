@@ -1,0 +1,16 @@
+{
+    "description": "spawn plugin hooks. UserPromptSubmit runs job-report.sh, which announces bg-agent jobs in the CURRENT worktree that reached a terminal state and have not been announced before, then marks each so it is never announced twice. This exists because commands/bg-agent.md promised 'a notification when it reaches a terminal state' while bg-agent.sh's own comment said there was no channel to push one down — three jobs died unannounced on 2026-08-12, one of them an adversarial review of a PR that then merged without it. The hook emits ONLY supervisor-measured fields (terminal_state, deliverables_satisfied, alias, handle, denial count) and NEVER the `narrative`, which is untrusted third-party model prose the rest of the plugin works to keep separate — injecting it here would hand that model a direct channel into the user's session. Raw stdout is the UserPromptSubmit injection channel (the seeded-recall.sh precedent). Fail-open in every path and exits 0 always: no git, no jq, no worktree, an unparseable record or an unwritable marker all produce silence rather than a delayed or blocked prompt. Paths resolve via ${CLAUDE_PLUGIN_ROOT}; hook arrays merge additively with the user's settings and other plugins.",
+    "hooks": {
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "[ -x \"${CLAUDE_PLUGIN_ROOT}/hooks/job-report.sh\" ] && \"${CLAUDE_PLUGIN_ROOT}/hooks/job-report.sh\" || true",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ]
+    }
+}

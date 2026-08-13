@@ -3,7 +3,7 @@ description: Run an unattended job on another model against a contract you state
 argument-hint: "prose — name a model (and optionally a tier), then the task, what done means, and what it must hand back"
 ---
 
-**Start a supervised asynchronous agent loop** against a named gateway alias and a contract, and return a job handle immediately. The job runs unattended with tools, in a scratchpad inside the current worktree; you get control back at once and a notification when it reaches a terminal state.
+**Start a supervised asynchronous agent loop** against a named gateway alias and a contract, and return a job handle immediately. The job runs unattended with tools, in a scratchpad inside the current worktree; you get control back at once, and the next time you type in this worktree the plugin tells you it finished — its measured outcome, once, never the model's prose.
 
 Everything after the command is prose. Derive the model family and optional tier from it and invoke the script with exactly one resolved `--alias`.
 
