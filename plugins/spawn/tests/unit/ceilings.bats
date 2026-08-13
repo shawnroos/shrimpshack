@@ -57,6 +57,10 @@ setup() {
     export SPAWN_LOCK_TIMEOUT=30
     unset SPAWN_INSTALL_DIR SPAWN_CONFIG SPAWN_MODELS_JSON SPAWN_CLAUDE_BIN
     unset SPAWN_BG_TIMEOUT SPAWN_CEILING_CONFIG_OPERATOR SPAWN_CEILING_CONFIG_REPO SPAWN_CEILING_DIR
+    # Credential inputs: a real GATEWAY_TOKEN in the developer's or CI's shell
+    # would otherwise decide what a "nothing is resolvable" test measures. Each
+    # test sets what it needs; none may inherit it.
+    unset GATEWAY_TOKEN SPAWN_KEYCHAIN_SERVICE SPAWN_KEYCHAIN_ACCOUNT_TOKEN
     # A test that forgets to point somewhere must not probe the REAL gateway.
     export SPAWN_BASE_URL="http://127.0.0.1:1/anthropic"
 
@@ -631,7 +635,12 @@ child_auth_token() {
         "$FAKE_CLAUDE_RECORD_DIR/env"
 }
 
-@test "token: a config server.token reaches the child's environment" {
+# CONTROL, not a regression test — measured, not assumed: this passes against the
+# ORIGINAL BUGGY code, because the defect only appears when server.token is
+# ABSENT. It is here to prove the happy path still works and that the harness can
+# observe the child's credential at all; without it a green on the others could
+# mean the assertion never ran. Do not count it as coverage of the fix.
+@test "token (control): a config server.token reaches the child's environment" {
     start_fixture healthy "k3"
     door "$REPO" --alias k3
     [ "$status" -eq 0 ]
@@ -639,6 +648,10 @@ child_auth_token() {
     [ "$(child_auth_token)" = "$TOKEN" ]
 }
 
+# THE regression test. Verified against a reverted copy of the whole plugin:
+# this is the ONLY one of the four that fails when the fallback is removed. The
+# other three pass with and without the fix — 22 and 23 because preflight exits 7
+# first, 20 because a config token was never the broken case.
 @test "token: with no server.token, GATEWAY_TOKEN reaches the child (the 401 regression)" {
     start_fixture healthy "k3"
     # Same gateway, but the config loses the key. Before the fix this exported
@@ -693,7 +706,43 @@ child_auth_token() {
     [ "$status" -eq 7 ]
     [ "$(printf '%s' "$output" | jq -s 'length')" -eq 1 ]
     [ "$(printf '%s' "$output" | jq -r '.error')" = "auth_rejected" ]
-    # The token must not appear in a refusal that names config paths and
-    # Keychain identifiers.
-    refute_file_match "$TOKEN" <(printf '%s' "$output")
+    # NO leak assertion here on purpose. On this arm nothing is ever resolved —
+    # no config token, no env, a Keychain service that does not exist — so
+    # `refute_file_match "$TOKEN"` could not fail whatever the code did. A check
+    # that cannot fail is decoration, and this file already guards the real case
+    # (a RESOLVED token, with a value actually in play) further up.
+}
+
+@test "token: with no server.token and no env, the KEYCHAIN leg reaches the child" {
+    # The third leg of the shared chain, and the one no other test here exercises:
+    # 20 resolves from config, 21 from the environment, 22/23 from nothing. A
+    # regression that broke only the Keychain read — service and account
+    # transposed, say — would pass every one of them, because an env token masks
+    # it and the miss-path test points at a service that was never real.
+    #
+    # This arm DOES substitute SPAWN_SECURITY_BIN, deliberately: it needs a
+    # Keychain hit and must not write to the developer's real login keychain. The
+    # miss-path tests above deliberately do NOT substitute it, so the pair covers
+    # both the seam and the real binary — a suite where every arm exports the seam
+    # is how this plugin's original credential P1 sat green.
+    start_fixture healthy "k3"
+    make_config_no_token "$WORK/gateway.yaml" "k3=up/k3"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    unset GATEWAY_TOKEN
+
+    export SPAWN_SECURITY_BIN="$FIX/fake-security.sh"
+    export FAKE_SECURITY_STORE_DIR="$WORK/keychain"; mkdir -p "$FAKE_SECURITY_STORE_DIR"
+    export SPAWN_KEYCHAIN_SERVICE="spawn-gateway"
+    export SPAWN_KEYCHAIN_ACCOUNT_TOKEN="gateway-token"
+    # The value TWICE: a bare trailing -w reads the password from stdin and asks
+    # for a confirmation, which the fixture mirrors from the real binary. One
+    # line stores nothing and the read-back is empty — measured, not assumed.
+    printf '%s\n%s\n' "$TOKEN" "$TOKEN" | "$SPAWN_SECURITY_BIN" add-generic-password \
+        -a "$SPAWN_KEYCHAIN_ACCOUNT_TOKEN" -s "$SPAWN_KEYCHAIN_SERVICE" -U -w
+    [ "$("$SPAWN_SECURITY_BIN" find-generic-password \
+        -a "$SPAWN_KEYCHAIN_ACCOUNT_TOKEN" -s "$SPAWN_KEYCHAIN_SERVICE" -w)" = "$TOKEN" ]
+
+    door "$REPO" --alias k3
+    [ "$status" -eq 0 ]
+    [ "$(child_auth_token)" = "$TOKEN" ]
 }

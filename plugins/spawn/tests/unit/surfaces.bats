@@ -472,7 +472,14 @@ CTL
         # helper check ran on stripped text, so a commented-OUT export selected a
         # file that exports nothing (false fail) and an INLINE comment naming the
         # helper satisfied the requirement (false pass). Both were reproduced.
-        local code; code="$(sed 's/#.*$//' "$f")"
+        # `sed 's/#.*$//'` is NOT a shell lexer and cutting at the first `#`
+        # anywhere destroys real code: `[ "$#" -gt 0 ] && export TOKEN=...`
+        # becomes `[ "$`, so a genuine exporter vanishes and the gate passes
+        # over it — the original false-pass class, reintroduced by the fix for
+        # it. Drop whole-line comments, then cut only at WHITESPACE-hash, which
+        # leaves `$#` and `${v##*/}` intact while still removing the trailing
+        # `# spawn::resolve_token` that defeated the first version.
+        local code; code="$(grep -v '^[[:space:]]*#' "$f" | sed 's/[[:space:]]#.*$//')"
         printf '%s' "$code" | grep -qE '(export|declare -x|declare -gx|typeset -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|(^|[[:space:];&|(]) *ANTHROPIC_AUTH_TOKEN=' || continue
         printf '%s' "$code" | grep -q 'spawn::resolve_token\|spawn::token_fallback' \
             || offenders+=("$base")
@@ -491,9 +498,48 @@ CTL
     # ever matches nothing that exports the credential, it would pass vacuously.
     local exporters=0
     for f in "$ROOT"/lib/*.sh; do
-        sed 's/#.*$//' "$f" \
+        grep -v '^[[:space:]]*#' "$f" | sed 's/[[:space:]]#.*$//' \
             | grep -qE '(export|declare -x|declare -gx|typeset -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|(^|[[:space:];&|(]) *ANTHROPIC_AUTH_TOKEN=' \
             && exporters=$((exporters + 1))
     done
     [ "$exporters" -ge 2 ]
+}
+
+@test "every file that defines an EX_* code agrees with every other on its value" {
+    # The enum is FROZEN and it is restated in several files rather than shared,
+    # so the only thing keeping the copies honest is a check. This branch added a
+    # third definition of EX_AUTH (ceilings.sh, because its `die` call was reading
+    # an UNSET one and living on a `:-7` default) — three copies of a constant
+    # with nothing asserting they agree is the same shape as the bug this branch
+    # exists to fix, so it gets a guard rather than a comment.
+    #
+    # Pairwise on NAME, not per-file: a file is free to define only the codes it
+    # produces. What is forbidden is two files giving the same name two values.
+    local lib="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
+    local f name val seen conflicts=""
+    local -a pairs=()
+
+    for f in "$lib"/*.sh; do
+        while IFS= read -r line; do
+            name="${line%%=*}"; val="${line#*=}"
+            pairs+=("$name $val $(basename "$f")")
+        done < <(grep -oE '^EX_[A-Z]+=[0-9]+' "$f")
+    done
+
+    # The guard's own guard: if nothing matched, "no conflicts" is vacuous.
+    [ "${#pairs[@]}" -ge 5 ]
+
+    for name in $(printf '%s\n' "${pairs[@]}" | awk '{print $1}' | sort -u); do
+        seen="$(printf '%s\n' "${pairs[@]}" | awk -v n="$name" '$1==n {print $2}' | sort -u)"
+        if [ "$(printf '%s\n' "$seen" | wc -l | tr -d ' ')" -gt 1 ]; then
+            conflicts="$conflicts$name: $(printf '%s\n' "${pairs[@]}" | awk -v n="$name" '$1==n {printf "%s=%s(%s) ", $1, $2, $3}')
+"
+        fi
+    done
+
+    if [ -n "$conflicts" ]; then
+        echo "the frozen exit-code enum disagrees across files:"
+        printf '%s' "$conflicts"
+        return 1
+    fi
 }
