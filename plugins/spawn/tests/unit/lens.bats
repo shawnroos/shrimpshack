@@ -1004,3 +1004,34 @@ EOS
 
     wait "$lpid" 2>/dev/null || true
 }
+
+@test "a 502 that could not decode the response is response_too_large, not the generic class" {
+    # Measured, not guessed: the same brief at 185KB in / 8k out succeeds and at
+    # 35KB in / 24k out fails with this body. The ceiling is on the PRODUCT of
+    # input and requested output, so the generic upstream remedy — "retry once,
+    # then try a different alias" — is advice that cannot work, and a second
+    # vendor was observed failing identically. Its own class exists so the remedy
+    # can say lower --max-tokens or shrink the prompt instead.
+    start_fixture upstream-undecodable "alpha"
+
+    lens "hi" --alias alpha
+    [ "$status" -eq 5 ]
+    [ "$(echo "$output" | jq -s 'length')" = "1" ]
+    [ "$(echo "$output" | jq -r '.error')" = "response_too_large" ]
+    [ "$(echo "$output" | jq -r '.text')" = "null" ]
+
+    # The remedy must not send the caller down the path that cannot work.
+    local remedy; remedy="$(echo "$output" | jq -r '.remedy')"
+    case "$remedy" in *max-tokens*) : ;; *) echo "remedy does not name the knob: $remedy"; return 1 ;; esac
+}
+
+@test "a 502 with any other body stays the generic upstream class" {
+    # The guard on the guard. A classifier that matched every 502 would relabel
+    # real provider outages as a size problem and send the caller to shrink a
+    # prompt that was never too big. This is the arm that keeps it narrow.
+    start_fixture upstream-5xx "alpha"
+
+    lens "hi" --alias alpha
+    [ "$status" -eq 5 ]
+    [ "$(echo "$output" | jq -r '.error')" = "upstream_error" ]
+}

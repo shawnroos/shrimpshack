@@ -63,6 +63,8 @@ SCENARIOS
                      other process that grabbed a hardcoded port)
     healthy          200 with a canned assistant message (default)
     upstream-5xx     502 api_error
+    upstream-undecodable  502 whose body says the RESPONSE could not be decoded — the
+                     size-ceiling shape, distinct from a generic 502
     throttle-429     429 rate_limit_error with Retry-After
     context-length   400 invalid_request_error, "prompt is too long"
     auth-reject-post the model-list GET authenticates, both POST routes 401 —
@@ -231,6 +233,9 @@ class Handler(BaseHTTPRequestHandler):
         if scenario == "upstream-5xx":
             self._send(502, _err("api_error", "upstream provider error"))
             return
+        if scenario == "upstream-undecodable":
+            self._send(502, _err("api_error", "error decoding response body"))
+            return
         if scenario == "throttle-429":
             self._send(
                 429,
@@ -273,6 +278,9 @@ class Handler(BaseHTTPRequestHandler):
         scenario = CFG["scenario"]
         if scenario == "upstream-5xx":
             self._send(502, _err("api_error", "upstream provider error"))
+            return
+        if scenario == "upstream-undecodable":
+            self._send(502, _err("api_error", "error decoding response body"))
             return
         if scenario == "throttle-429":
             self._send(
@@ -347,7 +355,7 @@ def main():
     ap.add_argument(
         "--scenario",
         default="healthy",
-        choices=["down", "healthy", "upstream-5xx", "throttle-429", "context-length", "slow",
+        choices=["down", "healthy", "upstream-5xx", "upstream-undecodable", "throttle-429", "context-length", "slow",
             "thinking-only", "empty-text", "auth-reject-post"],
     )
     ap.add_argument("--delay", type=float, default=5.0, help="seconds the slow scenario sleeps")

@@ -293,6 +293,7 @@ emit_describe() {
         --arg r_alias "$(remedy_for alias_unknown)" \
         --arg r_auth "$(remedy_for auth_rejected)" \
         --arg r_up "$(remedy_for upstream_error)" \
+        --arg r_big "$(remedy_for response_too_large)" \
         --arg r_dead "$(remedy_for deadline_exceeded)" \
         --arg r_pre "$(remedy_for preflight_failed)" \
         --arg r_int "$(remedy_for internal)" \
@@ -308,7 +309,8 @@ emit_describe() {
           {value:"context_overflow",exit_code:5, remedy:$r_ctx},
           {value:"no_text_truncated",   exit_code:5, remedy:$r_trunc},
           {value:"no_text_in_response", exit_code:5, remedy:$r_none},
-          {value:"upstream_error",  exit_code:5, remedy:$r_up},
+          {value:"response_too_large", exit_code:5, remedy:$r_big},
+            {value:"upstream_error",  exit_code:5, remedy:$r_up},
           {value:"preflight_failed",exit_code:3, remedy:$r_pre},
           {value:"deadline_exceeded",exit_code:6, remedy:$r_dead},
           {value:"internal",exit_code:2, remedy:$r_int}]')" || return 1
@@ -699,6 +701,23 @@ fi
 ERR_TYPE="$(jq -r '.error.type // empty' < "$RESP" 2>/dev/null)"
 ERR_MSG="$(jq -r '.error.message // empty' < "$RESP" 2>/dev/null)"
 
+classify_undecodable() {
+    # A 502 whose body says the RESPONSE could not be decoded. Measured on this
+    # box: the same brief at 185KB in / 8k out succeeds and at 35KB in / 24k out
+    # fails, so the ceiling is on the PRODUCT of input and requested output — not
+    # on either alone, and not on the vendor. That last part is why this needs its
+    # own class: the generic upstream remedy says "try a different alias", and a
+    # second vendor was tried and failed identically. Following that advice costs
+    # a call and cannot work.
+    local m
+    m="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    case "$m" in
+        *error\ decoding\ response\ body*|*decoding\ response*)
+            return 0 ;;
+    esac
+    return 1
+}
+
 classify_overflow() {
     # Matched on the upstream error BODY, which is the only place the signal
     # exists. Providers word it differently, so several known phrasings are
@@ -722,6 +741,9 @@ if [ "$HTTP" != "200" ]; then
     fi
     if classify_overflow "$ERR_MSG"; then
         die "$EX_UPSTREAM" "context_overflow" "the prompt does not fit this alias's context window (HTTP $HTTP): ${ERR_MSG:-no message}"
+    fi
+    if [ "$HTTP" = "502" ] && classify_undecodable "$ERR_MSG"; then
+        die "$EX_UPSTREAM" "response_too_large" "the provider could not return a response this size (HTTP $HTTP): ${ERR_MSG:-no message}"
     fi
     # Anything else — including a 404 — is the generic upstream class. Exit 4 is
     # NOT re-derived from an error body here; it belongs to ensure's served-list
