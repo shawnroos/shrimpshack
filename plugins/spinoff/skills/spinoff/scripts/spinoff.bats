@@ -182,7 +182,7 @@ run_herdr_workspace() {
 run_resolve() {
   SPINOFF_TEST_SOURCE=1 bash -c '
     source "$1"
-    HERDR="$2"; CMUX="$3"; LAUNCHER="$4"
+    HERDR="$2"; CMUX="$3"; LAUNCHER="$4"; FORCED_LAUNCHER="$4"
     resolve_launcher 2>/dev/null
     echo "$LAUNCHER"
   ' _ "$SCRIPT" "$HERDR_BIN" "$CMUX_BIN" "$1"
@@ -595,6 +595,17 @@ run_unresolvable() {
   [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
 }
 
+@test "loud: exit 4 warns that re-running the same --name will die, like exit 5 does" {
+  # Both loud codes leave a worktree and branch behind and both tell the user to
+  # re-run. Exit 5 says re-run with a NEW --name; exit 4 used to just say "re-run",
+  # sending the user into `worktree path already exists` at exit 1 — a named,
+  # recoverable failure turned into a confusing unrelated one. Held to the same
+  # message contract here so the two blocks cannot drift apart again.
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"NEW --name"* ]]
+}
+
 @test "loud: the summary block says INCOMPLETE and never prints a tick (KTD-5)" {
   # Teaching only the tail exit would print "✓ Spinoff complete" alongside exit 4, and
   # the skill relays this block verbatim — so the header has to learn the flag too.
@@ -635,19 +646,220 @@ run_unresolvable() {
   [[ "$output" == *"launcher:  none"* ]]
 }
 
-@test "silent: resolvable herdr whose server is down falls back quietly (R9)" {
-  # The binary RESOLVES here, so the record is never taken — a dead server is a
-  # different fact from a missing binary, and only the second one is loud.
+@test "loud: resolvable herdr whose server is down exits 5, not a silent 0 (R9)" {
+  # This test used to assert exit 0. That silence was the defect: a dead herdr server
+  # looked exactly like a session that isn't in a multiplexer, and the background agent
+  # that relays this script reads the status, not the prose. The binary resolves here,
+  # so $LOUD_BIN is empty and the gate selects 5 rather than 4.
   LOUD_STUBS=herdr
   run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
-  [ "$status" -eq 0 ]
-  [[ "$output" != *"could not resolve"* ]]
+  [ "$status" -eq 5 ]
   [[ "$output" == *"launcher:  none"* ]]
-  # ...and it must not LIE about why. This session DID announce herdr; the binary was
-  # found and the server was down. Saying "no multiplexer announced" here is the same
-  # lying-message defect the whole change exists to remove, so pin the honest wording.
-  [[ "$output" == *"herdr announced this session"* ]]
+  # Assert the NEW wording specifically. Bare "herdr" and "HERDR_ENV=1" would be
+  # useless here — the old step line this diff removed contained both, so asserting
+  # them would pass against the very implementation this test exists to reject.
+  [[ "$output" == *'`herdr` announced this session (HERDR_ENV=1) but would not take the launch'* ]]
+  # The remedy is starting the server — NOT setting a binary path. Borrowing exit 4's
+  # diagnosis here would send the user to fix a $PATH that is already correct.
+  [[ "$output" == *"herdr status server"* ]]
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" != *"SPINOFF_BIN_PATHS"* ]]
+  # A retrying caller must be told the worktree is already there; re-running the same
+  # --name dies at exit 1 on "worktree path already exists", turning a recoverable
+  # failure into a confusing one.
+  [[ "$output" == *"NEW --name"* ]]
+  # ...and the failure must still hand over a working recovery command. Assert the
+  # MANUAL_CMD the exit-5 tail prints, not the worktree path on its own: the summary
+  # block prints that path unconditionally on every run, so a path-only assertion
+  # holds even if the recovery paragraph is deleted entirely.
+  [[ "$output" == *"cd '$UREPO/worktrees/uh' && claude"* ]]
+  # A single occurrence proves nothing — the LAUNCHER=none summary branch prints
+  # MANUAL_CMD too, so deleting it from the failure paragraph still leaves one. Require
+  # BOTH: the summary's copy and the exit-5 tail's. That paragraph is the part relayed
+  # outside the summary block, so losing its recovery line is the regression that matters.
+  [ "$(grep -cF "cd '$UREPO/worktrees/uh' && claude" <<<"$output")" -ge 2 ]
+  [[ "$output" == *"or just start the session by hand in the worktree that is already there:"* ]]
+  # It must not read as a skip, and it must not lie about what announced.
   [[ "$output" != *"no multiplexer announced"* ]]
+  [[ "$output" != *"skipping launch automation"* ]]
+  # The artifacts survive — this is a failed launch, not a failed spinoff.
+  [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+}
+
+@test "loud: the probe-failed summary says INCOMPLETE and never prints a tick" {
+  # Same regression KTD-5 pinned for exit 4: teaching the tail exit but not the header
+  # prints "✓ Spinoff complete" above a failing status, in the block the skill relays
+  # verbatim. The header reads the generalized flag, so this covers exit 5 too.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"Spinoff INCOMPLETE"* ]]
+  [[ "$output" != *"✓ Spinoff complete"* ]]
+}
+
+@test "loud: forced --launcher herdr with nothing announced exits 4, not a silent 0" {
+  LOUD_ARGS="--launcher herdr"
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"falling back to auto-detection"* ]]
+  [[ "$output" == *"could not resolve"* ]]
+  # The diagnosis must name the FLAG the user passed, not an env var they never set.
+  # Assert the announce text from the record — a bare "--launcher herdr" is printed by
+  # the falling-back warning above and would hold against the old code too.
+  [[ "$output" == *"announced it (--launcher herdr)"* ]]
+  [[ "$output" != *"no multiplexer announced this session"* ]]
+  [[ "$output" != *"✓ Spinoff complete"* ]]
+}
+
+@test "loud: forced ghostty must not erase a live herdr's diagnosis" {
+  # SKILL.md points you at `--launcher ghostty` precisely when herdr's server is dead,
+  # so that run has BOTH a forced ghostty and HERDR_ENV=1 with a resolvable herdr. The
+  # message has to keep herdr's cause: `herdr status server` is the only thing here that
+  # separates a stopped server from a socket this process cannot reach. Naming ghostty
+  # instead would swap an actionable diagnosis for one with no remedy — at the same
+  # exit code, so no status check would notice.
+  LOUD_STUBS=herdr
+  LOUD_ARGS="--launcher ghostty"
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0 \
+                   OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"announced this session (HERDR_ENV=1)"* ]]
+  [[ "$output" == *"herdr status server"* ]]
+  [[ "$output" != *"announced this session (--launcher ghostty)"* ]]
+  [[ "$output" != *"osascript was not found"* ]]
+}
+
+@test "loud: forced --launcher ghostty that can't run exits 5 (KTD-9 flag vs env)" {
+  # Ghostty's ENV vars stay excluded from the loud path — they are set for every
+  # Ghostty window and announce nothing. The FLAG is a deliberate request, so it does
+  # count. This is also the only reachable exercise of the non-herdr exit-5 wording.
+  LOUD_ARGS="--launcher ghostty"
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"announced this session (--launcher ghostty)"* ]]
+  # It must name what is ACTUALLY missing. osascript is pinned at a nonexistent path
+  # here, so that is the piece to report. Ghostty's probe only ever fails because
+  # something did not resolve — there is no ghostty server — so a message claiming
+  # "the binary resolved fine" would be false, which is the class of defect this whole
+  # change removes. Assert the true cause, not just the harmless tail of the sentence.
+  [[ "$output" == *"osascript was not found"* ]]
+  [[ "$output" != *"the binary resolved fine"* ]]
+  [[ "$output" != *"resolved; the backend did not pass"* ]]
+  # and it must not borrow the other backends' remedies
+  [[ "$output" != *"could not resolve"* ]]
+  [[ "$output" != *"herdr status server"* ]]
+}
+
+@test "silent: ghostty ENV identity alone still announces nothing (R14, KTD-9)" {
+  # The counterpart to the test above, and the line the flag change must not cross:
+  # being IN a Ghostty window is not a launch request. Without the flag this stays a
+  # quiet exit 0 even though the exact same probe fails.
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= \
+                   TERM_PROGRAM=ghostty OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no multiplexer announced this session"* ]]
+  # Not `!= *"--launcher"*` — no flag is passed here, so nothing could print it and the
+  # check cannot fail. Deny the ANNOUNCE-TEXT form instead: a real announcement always
+  # renders as "<backend> announced this session (<what announced it>)", and the benign
+  # line above is "no multiplexer announced this session" with no parenthetical. So the
+  # trailing " (" is what separates them — this breaks the moment ghostty's env vars are
+  # promoted to an announcement, which is the distinction the test is named for.
+  [[ "$output" != *"announced this session ("* ]]
+}
+
+@test "loud: two announced backends failing differently report ONE cause (exit 4)" {
+  # The only reachable run where the two records disagree: $ANNOUNCED_* is
+  # first-announced-wins (herdr, resolved, server dead), $LOUD_* is
+  # first-unresolved-wins (cmux, missing). The gate fires on the announcement but the
+  # branch selects on $LOUD_BIN, so this run must diagnose cmux ONLY — fixing CMUX_BIN
+  # genuinely restores a launch, and naming herdr's dead server alongside it would put
+  # two backends in one diagnosis. Without this test, a later edit that keys any loud
+  # wording off $ANNOUNCED_BIN produces exactly that and every other test stays green.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 HERDR_STUB_LIVE=0 CMUX_WORKSPACE_ID=workspace:1 \
+                   CMUX_BIN=/nonexistent/cmux
+  [ "$status" -eq 4 ]
+  # Assert the diagnosis line VERBATIM, and deny the other backend by name. A bare
+  # *cmux* substring cannot tell which backend was named — "cmux" also appears in the
+  # searched-locations list (/Applications/cmux.app/...) — so it holds even if the
+  # wording is repointed at $ANNOUNCED_BIN and reports herdr's dead server instead.
+  # That repointing is the exact drift this test exists to stop.
+  [[ "$output" == *'could not resolve `cmux`'* ]]
+  [[ "$output" != *'could not resolve `herdr`'* ]]
+  [[ "$output" != *"would not take it"* ]]
+}
+
+@test "loud: a forced launcher can also reach the exit-5 gate (second entry path)" {
+  # Regression coverage for the OTHER route into the gate: a forced --launcher whose
+  # probe fails falls through to detection instead of returning early, so an announced
+  # session can land on `none` this way too. Note this does NOT prove the gate is
+  # default-deny — herdr is still the announced backend and its probe still failed, so
+  # an enumerating gate would pass this as well. The source-level test below is what
+  # separates those two implementations.
+  #
+  # Forced herdr, binary present, server dead: the flag's probe fails, the run falls
+  # through to detection, detection also lands on none, and the gate fires. $LOUD_BIN
+  # is empty because the binary resolved, so this is the exit-5 shape.
+  LOUD_STUBS=herdr
+  LOUD_ARGS="--launcher herdr"
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"falling back to auto-detection"* ]]
+  # The flag outranks the env var for the diagnosis: HERDR_ENV=1 is also set here, and
+  # the message must still name the flag the user typed. Assert the announce text in
+  # the failure itself — a bare "--launcher herdr" would be satisfied by the
+  # falling-back warning above and would hold against the old code too.
+  [[ "$output" == *"announced this session (--launcher herdr)"* ]]
+  [[ "$output" != *"announced this session (HERDR_ENV=1)"* ]]
+}
+
+@test "loud: a forced backend whose BINARY is missing is exit 4, not exit 5" {
+  # The sibling of the test above, and the reason the flag is recorded through the same
+  # two-record split as an env announcement rather than always meaning "backend
+  # refused". Forcing cmux with no cmux installed is a resolution failure, and the
+  # actionable answer is CMUX_BIN — not "start the server".
+  #
+  # CMUX_BIN is pinned at a nonexistent path on purpose. Emptying $PATH is NOT enough
+  # to make cmux unresolvable: resolve_bin also tries the app's own install location
+  # (/Applications/cmux.app/...), so on a machine with cmux installed the forced probe
+  # SUCCEEDS, returns early, and the run drives a real cmux socket instead of the case
+  # under test — passing or failing according to what the developer happens to have
+  # installed. A set-but-invalid override resolves to empty (R15), which is deterministic.
+  LOUD_STUBS=herdr
+  LOUD_ARGS="--launcher cmux"
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0 \
+                   CMUX_BIN=/nonexistent/cmux
+  [ "$status" -eq 4 ]
+  # Verbatim, and deny herdr by name — same reason as the two-backend test below: a
+  # bare *cmux* substring also matches the searched-locations list, so it cannot tell
+  # which backend the diagnosis actually named.
+  [[ "$output" == *'could not resolve `cmux`'* ]]
+  [[ "$output" != *'could not resolve `herdr`'* ]]
+  [[ "$output" != *"would not take the launch"* ]]
+}
+
+@test "the loud gate keys on the ANNOUNCEMENT, not on any one backend's probe (KTD1)" {
+  # KTD1 requires the gate to be default-deny: ANY announced backend that did not
+  # launch is a failure, whatever the reason. End-to-end runs cannot prove that today —
+  # `_cmux_probe` is binary-only, so herdr is the only backend that can reach
+  # "announced, resolved, probe failed", and an implementation keyed on "herdr
+  # announced and _herdr_probe failed" would pass every behavioural test in this file
+  # including the flipped one above, while being exactly what KTD1 forbids.
+  #
+  # So drive the decision directly with a backend name that DOES NOT EXIST. Nothing
+  # keyed on herdr, on cmux, or on any probe can return true for `futurebackend`;
+  # only a gate that reads the announcement itself can. That is the invariant, tested
+  # rather than the source text spelling it — this survives renames and reflows.
+  run bash -c '
+    SPINOFF_TEST_SOURCE=1 . "$1" || exit 9
+    LAUNCHER=none ANNOUNCED_BIN=futurebackend LOUD_BIN=""
+    _announced_unlaunched || exit 1
+    # and it must stay quiet when nothing announced, or when something DID launch
+    ANNOUNCED_BIN="" ;                 _announced_unlaunched && exit 2
+    LAUNCHER=herdr ANNOUNCED_BIN=herdr; _announced_unlaunched && exit 3
+    exit 0
+  ' _ "$SCRIPT"
+  [ "$status" -eq 0 ]
 }
 
 @test "silent: unannounced session says nothing announced, not a backend name (R7)" {
@@ -926,3 +1138,4 @@ run_resolve_bin_rejected() {
   [ "$status" -eq 0 ]
   [ "$output" = "$known/tool" ]
 }
+

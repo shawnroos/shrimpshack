@@ -59,15 +59,25 @@ detection:
   live (a `herdr status server` probe — a stale `HERDR_ENV` never wins); else **cmux**
   when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **ghostty** when
   Ghostty is the terminal *and* no multiplexer announced itself at all; else **none**
-  (worktree + handoff still produced, plus a manual `cd … && claude` line).
-  Precedence is explicit: **herdr (live) > cmux > ghostty > none**.
+  (worktree + handoff still produced, plus a manual `cd … && claude` line). Landing on
+  **none** is only a success when nothing announced a backend — if something did and
+  the launch never happened, the run exits 4 or 5. Precedence is explicit:
+  **herdr (live) > cmux > ghostty > none**.
 - Ghostty is deliberately suppressed whenever `HERDR_ENV` or `CMUX_WORKSPACE_ID` is
   set, even if the multiplexer's own probe then fails. Those vars are both present
   inside herdr-running-in-ghostty, and a multiplexer that announced itself owns the
-  session — opening a bare ghostty window would be the wrong recovery. Use
-  `--launcher ghostty` when you actually want that.
+  session — opening a bare ghostty window would be the wrong recovery. That
+  suppression is also the direct route to **exit 5**: an announced multiplexer whose
+  probe fails has nowhere left to go. Remedy is starting its server, or
+  `--launcher ghostty` when you actually want a bare window.
 - **`--launcher herdr` / `cmux` / `ghostty`** — force that backend, but it's *still*
   probed; if the probe fails it falls back to auto-detection rather than hard-erroring.
+  But the flag itself counts as announcing a backend, so if that fallback also lands on
+  `none`, the run exits **4 or 5 rather than 0** — naming a backend and launching
+  nothing is a failure however you named it. A forced backend whose probe *passes*
+  launches and exits 0 as usual. This is the one place `ghostty` enters the loud path:
+  being *in* a Ghostty window announces nothing (its env vars are set for every
+  window), but typing `--launcher ghostty` is a deliberate request.
 
 Where the backends differ, in the parts worth knowing:
 
@@ -99,14 +109,20 @@ exists to remove. Every non-zero code here has a named cause and a named fix.
 
 | Exit | Meaning | What to do |
 | --- | --- | --- |
-| `0` | Worktree, branch and handoff made, and either a briefed session launched or nothing announced a multiplexer. | Relay normally. `launcher: none` at exit 0 is a legitimate worktree-only spinoff — give Shawn the manual `cd … && claude` line. |
+| `0` | Worktree, branch and handoff made, and either a briefed session launched or **nothing announced a multiplexer**. | Relay normally. `launcher: none` at exit 0 means nothing announced a backend — a legitimate worktree-only spinoff. Give Shawn the manual `cd … && claude` line. A `launcher: none` that came from a backend that *did* announce itself never reaches exit 0; it is 4 or 5. |
 | `1` | `die` — a precondition failed (no repo resolves, `git worktree add` refused, a bad `--label`). The message names it. | Surface the message verbatim; fix the input and re-run. |
 | `2` | Unknown argument. | A skill bug. Fix the invocation. |
 | `3` | A session **launched but was not briefed** — the launch itself failed partway. | Worktree survives. Relay the recovery line the script prints and brief the tab by hand. |
-| `4` | The environment **announced a backend** (`HERDR_ENV=1` or `CMUX_WORKSPACE_ID`) whose **binary could not be resolved** — nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN` and re-run. |
+| `4` | A backend was **named** — by the environment (`HERDR_ENV=1`, `CMUX_WORKSPACE_ID`) or by an explicit `--launcher` — and its **binary could not be resolved**; nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN`, then re-run **with a new `--name`** — the worktree and branch already exist, so re-running the same name dies at exit 1. |
+| `5` | A backend was **named** the same two ways, and it **wouldn't take the launch**; nothing launched. | Worktree survives. Read the `⚠` — the cause differs by backend and it names the real one. For herdr: the server did not answer this process, which means it is stopped **or** running-but-unreachable from a detached shell; `herdr status server` tells the two apart. For `--launcher ghostty`: the `.app` or `osascript` was missing, and there is no server to start. Then re-run **with a new `--name`**, or use the manual line the script prints. Don't reach for `HERDR_BIN` on a herdr 5 — the binary was never the problem. |
 
-Codes 3 and 4 can't both apply: 3 means a backend resolved and the launch broke, 4
-means no announced backend resolved at all.
+Codes 3, 4 and 5 are mutually exclusive by construction. 3 means a backend resolved
+and the launch broke, so a launcher was in play. 4 and 5 both mean no launch happened
+at all, and they split on whether the *named* backend's binary resolved: 4 is a
+resolution failure, 5 is a resolved backend refusing. Both codes cover the flag route
+as well as the environment route — naming a backend and launching nothing is a failure
+however it was named. If you see 4 or 5, nothing was launched and the fix is named in
+the `⚠` — relay it verbatim rather than paraphrasing it as "something went wrong".
 
 Every launcher binary is resolved to an **absolute path** first — `$*_BIN` override,
 then `PATH`, then `$SPINOFF_BIN_PATHS`, then the tool's own install location. This
@@ -405,8 +421,11 @@ while herdr is also live, or `ghostty` to open a plain ghostty window from insid
 multiplexer (auto-detection suppresses ghostty there on purpose).
 
 Tell the background agent to return: the branch, the worktree path, the launcher
-backend + tab/split/workspace + agent pane ref, and the source-session resume line — i.e.
-the contents of the script's `✓ Spinoff complete` summary block, plus any `⚠` lines.
+backend + tab/split/workspace + agent pane ref, and the source-session resume line —
+i.e. the contents of the script's summary block **and its exit code**, plus any `⚠`
+lines. Ask for the block by position, not by its header: a failed run's header reads
+`⚠ Spinoff INCOMPLETE`, so an agent told to return "the `✓ Spinoff complete` block"
+has nothing to return on exactly the runs that matter most.
 
 The script is safe to read top-to-bottom; it prints each step. What it does, in
 order:
@@ -458,13 +477,18 @@ continues in the new surface.
 
 ## When the script can't do something
 
-- **No live backend** (detection resolves to `none` — herdr not running, no
-  `CMUX_WORKSPACE_ID`, and not a plain Ghostty session): the script still creates the
-  worktree + handoff and prints the manual `cd <worktree> && claude` command, so
-  the spinoff isn't lost — only the surface automation is skipped. **Exit 0.** Tell
-  Shawn. This also covers the case where a multiplexer announced itself but its probe
-  failed (a dead herdr server, `HERDR_ENV=0`): ghostty is deliberately not used as the
-  recovery there.
+- **Nothing announced a backend** (detection resolves to `none` because no
+  `HERDR_ENV=1`, no `CMUX_WORKSPACE_ID`, and not a plain Ghostty session): the script
+  still creates the worktree + handoff and prints the manual `cd <worktree> && claude`
+  command, so the spinoff isn't lost — only the surface automation is skipped.
+  **Exit 0.** Tell Shawn. This is the only `launcher: none` that is a success.
+- **A backend announced itself but wouldn't take the launch** (`HERDR_ENV=1` and the
+  binary resolves, but the herdr server isn't running): **exit 5**, not a skip. This
+  used to be lumped in with the case above and exit 0, which made a dead server
+  indistinguishable from a plain terminal. The `⚠` names the backend, the announcing
+  variable, and the remedy — start the server, not fix a path. Note `HERDR_ENV=0` is
+  *not* this case: an announcement that is switched off announces nothing, so it stays
+  a silent exit 0. Ghostty is deliberately not used as the recovery for either.
 - **An announced backend whose binary can't be found** (`HERDR_ENV=1` or
   `CMUX_WORKSPACE_ID` set, but `herdr`/`cmux` doesn't resolve): a different outcome
   from the one above, and deliberately not silent. The summary block says

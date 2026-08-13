@@ -1,143 +1,157 @@
-# Spinoff: gateway plugin command & skill surfaces (AX/UX)
+# Spinoff: spinoff's herdr backend can't survive the mandated background agent
 
 > This handoff is directional — author intent and a starting point, not a spec.
 > The code and tests are the source of truth; validate against them and refine.
 
 ## Goal
 
-Make the gateway plugin's six surfaces — three commands (`/gateway:lens`,
-`/gateway:launch`, `/gateway:status`) and three skills (`lens`, `launch`,
-`status`) — genuinely good to use, for both the humans who type a slash command
-and the agents that shell out to `lib/*.sh`. The plumbing underneath is verified
-and solid; this is about the layer people actually touch.
+Make `/spinoff:start-session` and `/spinoff:start-split` actually launch a herdr
+session when herdr is live. Right now the skill's two hard rules contradict each
+other, and the failure is silent.
 
 ## Why now / context
 
-The plugin (PR #30, `feature/gateway-plugin`) has been through six reviewers,
-seventeen fixes and a full manual verification against the real gateway. Every
-capability works. But the verification pass ended on an uncomfortable fact:
+Reported symptom: a spinoff run lands on `launcher: none`, prints the manual
+`cd … && claude` line, and **exits 0 with no `⚠`** — so it reads as success. It
+was initially taken for a flaky run. It is not; it looks like a design conflict.
 
-**None of the six surfaces has ever been invoked.** Everything was exercised by
-running `lib/*.sh` directly by absolute path. The plugin was finally installed at
-the end of that session, and `Skill(gateway:status)` returned `Unknown skill` —
-plugins load at session start, so a mid-session install can't be tested. The
-scripts are proven; the surfaces are not.
+The conflict, in the skill's own words:
 
-So this workstream starts from a real gap, not a polish impulse. **First
-concrete task: get the plugin loaded (fresh session or `/reload-plugins`) and
-actually drive all six.** Everything below is a hypothesis until that happens.
+- SKILL.md: *"You MUST run the script through a background `Agent`
+  (`run_in_background: true`) — never inline in this session. This is not optional."*
+- `spinoff.sh:232` and `:237`: the herdr branch is gated on the **environment
+  variable** `HERDR_ENV = 1`.
+
+```sh
+232  [ "${HERDR_ENV:-}" = 1 ] \
+233    && _record_loud herdr "${HERDR:-}" 'HERDR_ENV=1' HERDR_BIN "${HERDR_REJECTED:-}"
+237  if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
+```
+
+`HERDR_ENV` is set by herdr when it spawns the session. It is **not** a flag and
+the skill has no documented way to pass it down. The skill *did* anticipate the
+`PATH` half of this problem — Step 4 tells the main session to resolve `herdr` and
+pass `HERDR_BIN` down, precisely because "the background agent's shell does not
+inherit the login shell's `PATH`". But `HERDR_BIN` only survives the binary
+lookup. It does nothing for the `HERDR_ENV=1` gate on line 237, which is what
+actually selects the backend. Same class of bug, only half-fixed.
+
+There is a second env dependency further down, `spinoff.sh:521`:
+
+```sh
+521  if [ -n "${HERDR_PANE_ID:-}" ]; then
+522    ws="$("$HERDR" pane get "$HERDR_PANE_ID" …)"
+```
+
+`HERDR_PANE_ID` is how the script resolves the *live* workspace (deliberately
+preferred over the stale `HERDR_WORKSPACE_ID`). Also env-only, also not passable.
+So even if the gate on 237 were forced open, workspace resolution would degrade.
+
+**The nastiest part is what happens next, and it may not be `none`.** Line 250
+only suppresses the ghostty backend when `HERDR_ENV` is *empty*:
+
+```sh
+250  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] \
+251       && { … [ "${TERM_PROGRAM:-}" = ghostty ] … } && _ghostty_probe;  then LAUNCHER=ghostty
+```
+
+That suppression exists because herdr runs *inside* ghostty here (both sets of
+vars are present in a real session). If the background agent loses `HERDR_ENV`
+but keeps `TERM_PROGRAM=ghostty`, the guard on 250 inverts from protection into a
+trigger and the script opens a **bare ghostty window beside the user's herdr
+layout** — exactly the outcome the comment on 243–244 says it must never do. So
+depending on what the agent's shell inherits, the bug is either a silent `none`
+or a stray window. Establish which before designing the fix.
 
 ## Key decisions already made
 
-Carry these; ids refer to `docs/plans/2026-08-06-001-feat-gateway-plugin-plan.md`.
-
-- **The script IS the agent surface, not the skill (KTD1 / R-design).**
-  `skills/lens/SKILL.md` says so in its own text: the primary consumer runs with
-  `allowed-tools: Bash, Read` and *cannot invoke a skill or a slash command at
-  all*. This is the central tension of this workstream — if the main consumer
-  can't load the skill, what is the skill for, and what has to live elsewhere?
-- **The answer that worked: put the contract IN THE DATA.** The untrusted-output
-  rule lived only in SKILL.md, unreachable by the very consumer that needed it.
-  The fix added constant `content_trust` / `content_notice` fields to the lens's
-  JSON. Verified: a Bash-only subagent, unable to read SKILL.md, correctly
-  derived the whole trust boundary from the JSON alone and explained which field
-  told it. **Treat that as the template** — for any affordance, ask whether it
-  belongs in-band rather than in a document.
-- **The exit enum is contract-frozen (KTD2):** 0, 2, 3, 4, 5, 6, 7. New failure
-  classes go in the `error` field, never a new code. Precedent: `rate_limited`,
-  `context_overflow`, and the two added this session, `no_text_truncated` /
-  `no_text_in_response`.
-- **Error messages should name the remedy.** `no_text_truncated` says "raise
-  --max-tokens and retry"; the two values are split precisely because the remedy
-  differs. Extend that standard, don't regress it.
-- **KD2/R7: no spend logic, and a lint enforces it.** The lens source may not
-  contain `spend|budget|cost|quota|dollar|usd|price`. It caught a message that
-  said "token budget" — the wording changed, not the lint. Any new copy has to
-  respect that vocabulary.
-- **KD3: launch prints a handle, not a terminal.** Verified byte-exact: the
-  printed attach command re-reads the token from config at attach time and never
-  carries its value.
-
-## Measured facts worth designing against
-
-Real numbers from `claude plugin details gateway` on a verified install:
-
-- **~561 tokens always-on, added to every session.** Skills ~140 each, commands
-  ~50 each.
-- **On-invoke:** lens ~2.4k, launch ~2.2k, status ~1.7k.
-- `plugin details` counts commands and skills together under "Skills" — the
-  `Skills (6)` line for three skills is a display convention, **not** duplicate
-  registration (spinoff shows 5 = 4 commands + 1 skill). Don't "fix" it.
-- **Installed path is `~/.claude/plugins/cache/<mkt>/gateway/<version>/…`** —
-  note the version component; `~/.claude/plugins/marketplaces/<mkt>/` was empty.
+- **Fix the script, not the skill's workaround.** SKILL.md is explicit: *"if the
+  script does the wrong thing, FIX THE SCRIPT, don't work around it by hand."*
+  Do not solve this by telling the skill to run inline — the background-agent rule
+  exists to keep ~40 lines of step output and a readiness poll out of the main
+  session, and that reason is still good.
+- **The main session is the only place that can answer "what backend owns this
+  session".** That is already the established pattern for `HERDR_BIN` and
+  `--from-surface`; extending it to the announcement itself is consistent with the
+  design rather than a new idea.
+- **A silent wrong answer is the real defect.** The skill's own exit-code table
+  treats `launcher: none` at exit 0 as *legitimate* (a worktree-only spinoff). That
+  is correct when nothing announced a backend — and wrong when a backend announced
+  itself and got lost in transit. Whatever the fix, that case must become loud. The
+  script already has the machinery: `_record_loud` / `$LOUD_*` drive the `⚠` and
+  exit 4, and its comment on 200–205 names this exact bug class ("the same
+  lying-message defect this change exists to remove").
 
 ## Open questions / not yet decided
 
-1. **Is ~561 always-on tokens the right price** for three skills and three
-   commands? Descriptions are the lever. What would a tighter surface cost, and
-   what discoverability would it give up?
-2. **Commands and skills share names** (`lens`/`lens`, etc.), and each command is
-   a thin wrapper whose body says "Use the Skill tool to invoke: gateway:lens".
-   Spinoff deliberately does the opposite — commands `start-session`/`start-split`
-   /`start-workspace`, skill `spinoff`. Is the collision good (one obvious name)
-   or confusing (two things, one name, ~50 tokens for a redirect)?
-3. **Should `lens.sh` expose `--describe`?** Open P3 from the agent-native
-   reviewer: `--help` prints usage to *stderr* and exits **2** with
-   `detail: "help requested"`, so a caller branching on exit code reads help as a
-   failure. A `--describe` emitting flags, the exit enum and response fields at
-   exit 0 would let a consumer reconcile at runtime instead of hard-coding.
-4. **The allowlist is the only silent failure in the plugin.** A wrong rule
-   doesn't error — the fan-out parks on a permission prompt forever. The path is
-   version-pinned, so it also breaks silently on upgrade. Is there a better shape
-   (a stable wrapper script, a symlink, documented convention)? This is squarely
-   AX work and arguably the highest-value item here.
-5. **Prompt assembly is undocumented.** A toolless lens can't fetch anything, so
-   the caller's single user message is the model's entire world. Nothing tells a
-   consumer that, or what a good assembled prompt looks like. (Open P3.)
-6. **Foreign-plugin consumers.** `${CLAUDE_PLUGIN_ROOT}` resolves to the *calling*
-   plugin's root, so the documented invocation doesn't work from another plugin.
-   R9 added a resolution recipe; the ergonomics are still poor.
-7. **What does `/gateway:status` show a human?** It currently returns the same
-   JSON an agent gets. A human reading 18 aliases and a drift block as raw JSON
-   is not obviously the right experience.
-
-## Scope boundary — read this
-
-A **separate spinoff is already running** on `feature/gateway-setup`: install
-flow, secure OpenRouter token capture, and per-harness config for Claude Code,
-Codex and opencode. **A `/gateway:setup` command belongs to that workstream, not
-this one.** This one is about the surfaces that already exist. Coordinate rather
-than duplicate — check that branch before designing anything install-shaped.
+1. **What does a background agent's shell actually inherit?** This is the whole
+   premise and it has NOT been measured. The main session's Bash tool *does* see
+   `HERDR_ENV=1` (verified). A subagent may share that process env — in which case
+   the herdr path works and the reported failure has a different cause. **Measure
+   before designing anything.** Cheapest probe: a background agent that runs
+   `env | grep -E 'HERDR|CMUX|GHOSTTY|TERM_PROGRAM'` and reports back.
+2. If the env *is* lost — how to pass the announcement? Options, roughly in
+   ascending invasiveness: an env prefix on the dispatch command (same shape as
+   `HERDR_BIN`, needs no script change but does need `HERDR_ENV` + `HERDR_PANE_ID`
+   documented as passable); explicit `--launcher-announce` / `--from-pane` flags;
+   or having the script detect a live herdr session from the server rather than
+   from env vars at all. The last is the most robust and the biggest change.
+3. Does `--launcher herdr` already work around this today? Line 221 forces the
+   probe and skips the env-keyed detection — so a forced launcher may reach herdr
+   without `HERDR_ENV`. If so it is a usable stopgap, but workspace resolution
+   (521) still degrades to the frozen/absent `HERDR_WORKSPACE_ID`. Check what it
+   actually produces before recommending it.
+4. Is `/spinoff:start-workspace` affected the same way? It takes the same
+   `resolve_launcher` path, so probably yes — confirm rather than assume.
+5. Does the cmux path have the identical hole? Line 238 gates on
+   `CMUX_WORKSPACE_ID`, also env-only. If cmux works in practice, the difference
+   is evidence about what agents inherit — worth knowing either way.
 
 ## Starting point
 
-- `plugins/gateway/commands/{lens,launch,status}.md` — the human front doors
-- `plugins/gateway/skills/{lens,launch,status}/SKILL.md` — the loaded guidance
-- `plugins/gateway/README.md` — source × sink matrix, allowlist section (rewritten
-  this session after the documented path turned out not to exist)
-- `plugins/gateway/lib/lens.sh` — the real agent surface; see the emit sites for
-  the `content_trust` precedent
-- `docs/residual-review-findings/feature-gateway-plugin.md` — open P3s, including
-  `--describe` and prompt assembly, plus the reviewer-independence caveat
-- Comparison: `plugins/spinoff/` and `plugins/multi-slice-review/` — sibling
-  plugins in this repo with different command/skill naming conventions
+- `~/projects/shrimpshack/plugins/spinoff/skills/spinoff/scripts/spinoff.sh`
+  - `resolve_launcher()` — lines 219–255. The gate (232, 237), the ghostty
+    suppression (250–252), the `none` fallback (253).
+  - `_record_loud()` — lines 206–213, plus the design note at 196–205.
+  - Workspace resolution from a live pane — lines 511–547.
+  - Binary resolution + the `HERDR_BIN` override — lines 1219–1221.
+- `~/projects/shrimpshack/plugins/spinoff/skills/spinoff/SKILL.md` — the
+  "You MUST run the script through a background `Agent`" rule in Step 4, the
+  binary-resolution table, and the exit-code table (which needs revisiting if
+  "announced but lost in transit" becomes a new loud case).
+- Repo is at `plugins/spinoff` version **0.9.1** — the same version currently
+  installed in the plugin cache.
 
-## Base and concurrency
+**Do not forget the plugin cache.** Merging a fix in `~/projects/shrimpshack`
+does not fix the live behavior: Claude Code runs the *installed* copy under
+`~/.claude/plugins/cache/shrimpshack/spinoff/<version>/`. The fix only takes
+effect after the plugin version is bumped and the cache re-installs. Plan the
+version bump as part of the change, and verify against the cached path, not the
+source tree.
 
-Branched from **`feature/gateway-plugin` @ 5c9f0d0** — `origin/main` has **zero**
-`plugins/gateway/` files, so there would be no surfaces to improve. That base is
-unmerged (PR #30 open); rebase when it lands.
+## Verification note
+
+This spinoff run is itself the experiment. It was dispatched exactly as SKILL.md
+mandates — background agent, `HERDR_BIN=/opt/homebrew/bin/herdr` passed down,
+`--target tab`, herdr live and probed from the main session. Whatever launcher it
+reports is a real data point for open question 1:
+
+- reports `herdr` → the premise is wrong; the agent inherits the env, and the
+  original `launcher: none` had some other cause worth chasing.
+- reports `none` → premise confirmed; the announcement is lost in transit.
+- reports `ghostty` (a bare window appeared) → premise confirmed *and* the
+  line-250 inversion above is real, which is the more urgent of the two.
+
+Read the dispatch result before touching code.
 
 ## Recommended next step
 
-**First, load the plugin and drive all six surfaces** — that is the missing input,
-and several questions above will answer themselves once you have. Then
-`/ce-brainstorm`: the goal here is a quality bar rather than a defined change,
-questions 1–4 are genuinely open with real trade-offs, and the token-cost and
-naming decisions shape everything downstream. Planning before using the surfaces
-would be planning blind.
+`/ce-brainstorm`. The defect is well localized but the *fix* is not: option 2
+above spans "add an env prefix to a doc" through "stop keying detection off env
+vars entirely", and that choice needs a shape before it needs a plan. Run the
+measurement in open question 1 first — it may collapse the whole problem — then
+brainstorm the passing mechanism.
 
 ## Source session
-
-Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos-projects-shrimpshack-worktrees-gateway-plugin/a518d741-a626-447a-9b77-dbef6ce6c59d.jsonl`
-Resume:     `cd /Users/shawnroos/projects/shrimpshack/worktrees/gateway-plugin && claude -r a518d741-a626-447a-9b77-dbef6ce6c59d`
+Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/1e90b332-cb44-41ea-8b7c-186fff0104fb.jsonl`
+Resume:     `cd /Users/shawnroos && claude -r 1e90b332-cb44-41ea-8b7c-186fff0104fb`

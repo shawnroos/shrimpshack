@@ -163,15 +163,17 @@ _ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
 #    whether or not a launch is wanted, and osascript does not exist off macOS at all
 #    — keying a loud failure on either would turn ordinary sessions into exit-4
 #    failures (R14).
-#  * KTD-8 — recording is NOT acting. Resolution only records WHICH announced backend
-#    was unresolvable; the warning, the INCOMPLETE header and exit 4 fire later, and
-#    only once resolve_launcher has settled on `none`. Without that split, a session
-#    announcing both herdr and cmux where only cmux resolves would launch perfectly
-#    and still exit 4 (R17) — the herdr→cmux fallthrough right below is pinned as
+#  * KTD-8 — recording is NOT acting. Resolution only records WHAT the environment
+#    announced and which announced backend was unresolvable; the warning, the
+#    INCOMPLETE header and the non-zero exit fire later, and only once
+#    resolve_launcher has settled on `none`. Without that split, a session announcing
+#    both herdr and cmux where only cmux resolves would launch perfectly and still
+#    exit non-zero (R17) — the herdr→cmux fallthrough right below is pinned as
 #    correct by the "HERDR_ENV set but server dead + cmux present -> cmux" test.
 # HERDR_ENV=0 (R8) never reaches the recorder at all — it isn't `=1`. A resolvable
-# binary whose probe merely failed (R9) DOES reach it, but records only $ANNOUNCED_*,
-# never $LOUD_*, so it stays a silent exit 0 while still being described truthfully.
+# binary whose probe merely failed DOES reach it and records only $ANNOUNCED_*, never
+# $LOUD_*. That is now a LOUD exit 5, not a silent exit 0: $ANNOUNCED_* alone is
+# enough to fail the run, and $LOUD_* only chooses which failure it is.
 LOUD_BIN=""        # binary an announcement asked for that resolution could not find
 LOUD_ANNOUNCE=""   # the env var that announced it, rendered for a human
 LOUD_OVERRIDE=""   # the env var that pins it explicitly
@@ -197,12 +199,21 @@ _bin_search_locations() {
 # herdr → cmux, so the diagnostic names the backend the environment asked for first.
 #
 # $ANNOUNCED_* is recorded SEPARATELY and unconditionally, including when the binary
-# resolved fine. The two answer different questions: $LOUD_* is "which announced
-# backend could not be found" (drives the ⚠ and exit 4), while $ANNOUNCED_* is "did
-# anything announce itself at all" (drives the wording of the SILENT fallback). Without
-# the split, a herdr that resolves but whose server is down fell through to a line
-# claiming nothing announced — false, and the same lying-message defect this change
-# exists to remove.
+# resolved fine. The two answer different questions, and the gate reads them in that
+# order: $ANNOUNCED_* is "did anything announce itself at all" and DECIDES whether a
+# no-launch run is a failure; $LOUD_* is "which announced backend could not be found"
+# and only SELECTS which failure (exit 4, binary missing) versus the other (exit 5,
+# resolved but unusable). Without the split, a herdr that resolves but whose server is
+# down fell through to a line claiming nothing announced — false, and the same
+# lying-message defect this change exists to remove.
+#
+# The two records use DIFFERENT precedence and can name different backends:
+# $ANNOUNCED_* is first-announced-wins, $LOUD_* is first-unresolved-wins. A session
+# announcing herdr (resolved, server dead) and cmux (binary missing) ends with
+# ANNOUNCED_BIN=herdr and LOUD_BIN=cmux. That run exits 4 and names cmux only —
+# correct, because fixing CMUX_BIN restores a launch. All wording in the loud path
+# therefore comes from $LOUD_BIN whenever it is set, so the two records can never
+# describe different backends in the same run.
 _record_loud() {
   if [ -z "$ANNOUNCED_BIN" ]; then ANNOUNCED_BIN="$1"; ANNOUNCED_BY="$3"; fi
   [ -z "${2:-}" ] || return 0      # it resolved — not an announced-and-missing case
@@ -229,11 +240,51 @@ resolve_launcher() {
   # taken from the announcements as they stand, and is read only after $LAUNCHER has
   # settled — a run that goes on to launch through another announced backend never
   # looks at it (R17).
+  # An explicit --launcher is a LOUDER launch request than any env var — the user named
+  # the backend — so record it FIRST and let it win $ANNOUNCED_* precedence, so the
+  # diagnosis names what they actually asked for. Only a forced launcher whose probe
+  # FAILED reaches this line; a successful one returned above and never lands here.
+  #
+  # Without this, the flag route stayed open into the exact defect the env route was
+  # just closed against: `--launcher herdr` in a session announcing nothing launched
+  # nothing, printed "no multiplexer announced this session" — false, the user had just
+  # named one — and exited 0 with a tick. Closing one route and leaving the other is
+  # the enumeration this gate exists to stop doing.
+  # A forced backend that can carry a REAL cause is recorded first: it names a binary,
+  # so it produces either an actionable exit-4 ("set CMUX_BIN") or an exit-5 naming the
+  # backend the user chose. Either way the diagnosis is about the thing they asked for.
+  case "${FORCED_LAUNCHER:-auto}" in
+    herdr) _record_loud herdr "${HERDR:-}" '--launcher herdr' HERDR_BIN "${HERDR_REJECTED:-}" ;;
+    cmux)  _record_loud cmux "${CMUX:-}" '--launcher cmux' CMUX_BIN "${CMUX_REJECTED:-}" \
+                        /Applications/cmux.app/Contents/Resources/bin/cmux ;;
+  esac
   [ "${HERDR_ENV:-}" = 1 ] \
     && _record_loud herdr "${HERDR:-}" 'HERDR_ENV=1' HERDR_BIN "${HERDR_REJECTED:-}"
   [ -n "${CMUX_WORKSPACE_ID:-}" ] \
     && _record_loud cmux "${CMUX:-}" 'CMUX_WORKSPACE_ID' CMUX_BIN "${CMUX_REJECTED:-}" \
                     /Applications/cmux.app/Contents/Resources/bin/cmux
+  # Any OTHER forced backend announces itself LAST, and only if nothing else has. This
+  # is the KTD-9 note at the ghostty resolution coming due — ghostty's ENV vars stay
+  # excluded (set for every Ghostty window, they announce nothing) while the FLAG is a
+  # deliberate request and belongs in the loud path.
+  #
+  # It defers deliberately. `--launcher ghostty` is what SKILL.md tells you to reach for
+  # when herdr's server is dead, so that exact run has BOTH a forced ghostty and a live
+  # HERDR_ENV=1. Recording ghostty first would replace herdr's diagnosis — which hands
+  # over `herdr status server`, the one command that separates a stopped server from a
+  # socket this process cannot reach — with a ghostty message that has no remedy at all.
+  # The exit code is 5 either way, so nothing checking status would have caught that.
+  # Whatever announced a cause worth acting on keeps the message.
+  #
+  # The `*)` is a catch-all rather than a `ghostty)` arm on purpose: a backend added to
+  # the --launcher validation and the probe case but forgotten here would otherwise
+  # announce nothing and exit 0 having launched nothing — the very defect this gate
+  # closes, re-opened by omission. Default-deny here too.
+  case "${FORCED_LAUNCHER:-auto}" in
+    auto|herdr|cmux) ;;
+    *) [ -z "$ANNOUNCED_BIN" ] \
+         && { ANNOUNCED_BIN="$FORCED_LAUNCHER"; ANNOUNCED_BY="--launcher $FORCED_LAUNCHER"; } ;;
+  esac
   if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
   elif [ -n "${CMUX_WORKSPACE_ID:-}" ] && _cmux_probe;    then LAUNCHER=cmux
   # ghostty is checked LAST, and only when NO multiplexer announced itself in the
@@ -1127,6 +1178,14 @@ launcher_open_viewer_ghostty() {
   fi
 }
 
+# _announced_unlaunched — the default-deny gate, as a function so it can be tested.
+# True when something announced a backend and nothing launched. It reads ONLY the
+# announcement and the settled launcher: no backend name, no probe. That is the whole
+# invariant, and keeping it in one testable place is what lets a test prove it with a
+# backend name that does not exist yet — which is the only way to tell this apart from
+# an implementation that enumerates the causes it happens to know about.
+_announced_unlaunched() { [ "$LAUNCHER" = none ] && [ -n "$ANNOUNCED_BIN" ]; }
+
 # ---- test hook --------------------------------------------------------------
 # When sourced by the bats suite (SPINOFF_TEST_SOURCE=1), stop here: load the
 # functions above so they can be exercised in isolation, but run none of the
@@ -1169,6 +1228,10 @@ case "$LAUNCHER" in
   herdr|cmux|ghostty|auto) ;;
   *) die "invalid --launcher '$LAUNCHER' (expected: herdr | cmux | ghostty | auto)" ;;
 esac
+# Keep what the user asked for. resolve_launcher overwrites $LAUNCHER with what it
+# actually settled on, and by the time the loud gate runs there is otherwise no way to
+# tell "detection found nothing" from "the user named a backend and it didn't work".
+FORCED_LAUNCHER="$LAUNCHER"
 
 [ -n "$NAME" ] || die "missing --name <kebab-feature-name>"
 # A curated --label is passed to `herdr agent start "$LABEL"` as a BARE positional
@@ -1538,17 +1601,34 @@ MANUAL_CMD="cd $(shq "$WORKTREE") && claude --name $(shq "$LABEL")"
 # (worktree + handoff still produced, summary prints the manual line).
 resolve_launcher
 
-# Now — and only now — is the recorded announcement actually a failure (KTD-8). Four
-# cases reach this line with $LAUNCHER = none and MUST stay silent at exit 0: an
-# HERDR_ENV=0 session (R8, never recorded — it isn't `=1`), a resolvable herdr whose
-# server is down (R9, never recorded — it resolved), a ghostty-only session (R14,
-# never recorded — ghostty vars aren't announcements), and a session in no multiplexer
-# at all (R7, nothing to record). A fifth case reaches it with $LAUNCHER set: a run
-# that launched through a DIFFERENT announced backend, which never reads the record
-# (R17). What's left is exactly the bug: the environment named a backend and the
-# binary wasn't there.
+# Now — and only now — is the recorded announcement actually a failure (KTD-8).
+#
+# The gate is DEFAULT-DENY, and that shape is the point. It asks one question — did
+# the environment announce a backend, and did nothing launch? — and any yes is a
+# failure. It does NOT enumerate the reasons a launch can fail to happen. An earlier
+# version of this block enumerated, and the case it forgot (a resolvable herdr whose
+# server is down) exited 0 with no ⚠ for two releases: indistinguishable from a
+# session that simply isn't in a multiplexer. Enumerating known-bad states is
+# default-allow, and the unenumerated state leaks by construction. So the cause is
+# read INSIDE the gate, where it selects wording and exit code only — a reason nobody
+# has thought of yet still lands here and still fails loudly, with generic wording.
+#
+# Three cases reach this line with $LAUNCHER = none and stay silent at exit 0, all
+# three because nothing announced anything: an HERDR_ENV=0 session (R8 — it isn't
+# `=1`, so it never reaches the recorder), a ghostty-only session (R14 — ghostty vars
+# aren't announcements, KTD-9), and a session in no multiplexer at all (R7). A fourth
+# case reaches this line with $LAUNCHER set: a run that launched through a DIFFERENT
+# announced backend, which never enters the gate (R17).
+#
+# A forced --launcher that PASSES its probe returns from resolve_launcher before the
+# record is taken, so it never enters the gate either. That early return is what keeps
+# `--launcher ghostty` usable inside a herdr session; do not hoist the record above it.
+ANNOUNCED_UNLAUNCHED=0
 LAUNCH_UNRESOLVED=0
-if [ "$LAUNCHER" = "none" ] && [ -n "$LOUD_BIN" ]; then
+if _announced_unlaunched; then
+  ANNOUNCED_UNLAUNCHED=1
+fi
+if [ "$ANNOUNCED_UNLAUNCHED" = 1 ] && [ -n "$LOUD_BIN" ]; then
   LAUNCH_UNRESOLVED=1
   echo "  ⚠ could not resolve \`$LOUD_BIN\`, and this session announced it ($LOUD_ANNOUNCE) —" >&2
   echo "    NOT launching, and NOT calling that a skip. The worktree and handoff are still made." >&2
@@ -1566,21 +1646,54 @@ if [ "$LAUNCHER" = "none" ] && [ -n "$LOUD_BIN" ]; then
     echo "    fix: set $LOUD_OVERRIDE to the binary's absolute path (e.g. $LOUD_OVERRIDE=/opt/homebrew/bin/$LOUD_BIN)," >&2
     echo "         or add its directory to \$SPINOFF_BIN_PATHS." >&2
   fi
+elif [ "$ANNOUNCED_UNLAUNCHED" = 1 ]; then
+  # The other side of the gate: the binary resolved, so there is nothing to fix on
+  # $PATH — the backend itself would not take the launch. Today that means herdr's
+  # server is not running (`_herdr_probe` greps `status server` for "running"). The
+  # first line is deliberately cause-NEUTRAL so it stays true if a future backend
+  # reaches this branch for some other reason; the named remedy follows it as the
+  # known cause rather than the definition of the failure.
+  echo "  ⚠ \`$ANNOUNCED_BIN\` announced this session ($ANNOUNCED_BY) but would not take the launch —" >&2
+  echo "    NOT launching, and NOT calling that a skip. The worktree and handoff are still made." >&2
+  if [ "$ANNOUNCED_BIN" = herdr ]; then
+    # TWO causes, and the second is the common one. The server may genuinely be
+    # stopped — or it may be running fine and simply unreachable from THIS process:
+    # a background agent's environment does not always carry what `herdr status
+    # server` needs to find the socket, and that probe then fails while the user's
+    # herdr is perfectly alive. Saying only "start the server" sends someone to
+    # restart something that is already running, so name both.
+    echo "    the binary resolved fine; its server did not answer THIS process." >&2
+    echo "    check \`herdr status server\` here — if it reports running, the server is fine" >&2
+    echo "    and this process just can't reach it (a detached/background shell often can't)." >&2
+  elif [ "$ANNOUNCED_BIN" = ghostty ]; then
+    # Ghostty has no server to be up or down: `_ghostty_probe` fails ONLY when the .app
+    # or osascript did not resolve. Saying "the binary resolved fine" here would be
+    # exactly backwards — a false cause in the message, which is the defect this whole
+    # file exists to remove. Name the piece that is actually missing.
+    if [ -z "${GHOSTTY_APP:-}" ]; then
+      echo "    Ghostty.app was not found (looked where \$GHOSTTY_RESOURCES_DIR points," >&2
+      echo "    then /Applications and ~/Applications)." >&2
+    fi
+    if [ -z "${OSASCRIPT:-}" ]; then
+      echo "    osascript was not found — set \$OSASCRIPT_BIN to its absolute path." >&2
+    fi
+  else
+    echo "    the backend did not pass its readiness probe." >&2
+  fi
 fi
 
 if [ "$LAUNCHER" = "none" ]; then
-  # Three ways to land here, and each gets its OWN wording. Collapsing them is the
+  # Two ways to land here, and each gets its OWN wording. Collapsing them is the
   # original bug in miniature: "or the CLI is missing" covered a benign state and a
   # broken one at once, and a relay of this run said "done" when nothing launched.
-  #  1. the loud case — already spoke above with a named cause, so stay quiet here.
-  #  2. announced, binary FOUND, backend not usable (herdr's server down, R9). Still
-  #     a silent exit 0 by decision, but saying "nothing announced" is false: the env
-  #     did announce it. Naming the real reason is the whole point of this change.
-  #  3. genuinely nothing announced (R7) — the only case that gets the benign line.
-  if [ "$LAUNCH_UNRESOLVED" = 1 ]; then
+  #  1. anything announced — the gate above already spoke with a named cause and this
+  #     run is going to exit non-zero, so stay quiet here. Saying "skipping launch
+  #     automation" beside a failing exit would re-create the exact skip-versus-failure
+  #     conflation this block exists to remove, and it is the first line a user reads.
+  #  2. genuinely nothing announced (R7) — the only case that gets the benign line,
+  #     and the only one that is still a legitimate worktree-only spinoff at exit 0.
+  if [ "$ANNOUNCED_UNLAUNCHED" = 1 ]; then
     :
-  elif [ -n "$ANNOUNCED_BIN" ]; then
-    step "$ANNOUNCED_BIN announced this session ($ANNOUNCED_BY) but isn't usable — skipping launch automation"
   else
     step "no multiplexer announced this session — skipping launch automation"
   fi
@@ -1614,14 +1727,16 @@ fi
 
 # ---- summary ----------------------------------------------------------------
 # Did we actually try to brief a session? (Launcher resolved AND a surface came up.)
-# Only then can an unsubmitted kickoff be a failure — a LAUNCHER=none run is a
-# legitimate worktree-only spinoff and still "complete".
+# Only then can an unsubmitted kickoff be a failure. A LAUNCHER=none run is a
+# legitimate worktree-only spinoff and still "complete" — but only when nothing
+# announced a backend; when something did, $ANNOUNCED_UNLAUNCHED carries that failure.
 BRIEF_ATTEMPTED=0
 # Attempted means "a backend was resolved and we tried to launch", NOT "a surface
 # came up". Gating on $LAUNCH_SFC meant every surface-creation failure — cmux
 # new-surface, herdr tab create, a workspace whose pane never registers, a dead
-# --from-surface — skipped the not-briefed gate and printed a tick. LAUNCHER=none
-# is still a legitimate worktree-only spinoff and stays complete.
+# --from-surface — skipped the not-briefed gate and printed a tick. This flag and
+# $ANNOUNCED_UNLAUNCHED can never both be 1: this one requires LAUNCHER != none and
+# that one requires LAUNCHER = none, which is what keeps exit 3 disjoint from 4 and 5.
 [ "$LAUNCHER" != "none" ] && BRIEF_ATTEMPTED=1
 
 # NEVER render an unbriefed session as success. The skill mandates relaying this
@@ -1632,11 +1747,13 @@ echo
 echo "════════════════════════════════════════════════════════"
 if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
   echo "⚠ Spinoff INCOMPLETE — worktree is ready, session is NOT briefed"
-elif [ "${LAUNCH_UNRESOLVED:-0}" = "1" ]; then
+elif [ "${ANNOUNCED_UNLAUNCHED:-0}" = "1" ]; then
   # The header has to learn this flag too, not just the exit at the tail (KTD-5): in
   # the loud case $LAUNCHER is none, so BRIEF_ATTEMPTED stays 0, and teaching only the
-  # tail would print "✓ Spinoff complete" alongside exit 4 — a block the skill relays
-  # verbatim, claiming success for a run that launched nothing.
+  # tail would print "✓ Spinoff complete" alongside a non-zero exit — a block the skill
+  # relays verbatim, claiming success for a run that launched nothing. It reads the
+  # GENERALIZED flag, not the exit-4-specific one, so every announced-but-unlaunched
+  # cause is covered by construction rather than by remembering to add each new one.
   echo "⚠ Spinoff INCOMPLETE — worktree is ready, no session was launched"
 else
   echo "✓ Spinoff complete"
@@ -1683,9 +1800,9 @@ elif [ "$LAUNCHER" = none ]; then
   if [ "${LAUNCH_UNRESOLVED:-0}" = "1" ]; then
     echo "  launch:    NOT automated — \`$LOUD_BIN\` could not be resolved (see the ⚠ above) — start manually:"
   else
-    # Same three-way split as the step line above, for the same reason: this block is
-    # the part the skill relays VERBATIM to the user, so a false cause here outlives the
-    # run. An announced-but-unusable backend must not read as "nothing announced".
+    # Same split as the step line above, for the same reason: this block is the part
+    # the skill relays VERBATIM to the user, so a false cause here outlives the run.
+    # An announced-but-unusable backend must not read as "nothing announced".
     if [ -n "$ANNOUNCED_BIN" ]; then
       echo "  launch:    not automated ($ANNOUNCED_BIN announced via $ANNOUNCED_BY but not usable) — start manually:"
     else
@@ -1714,20 +1831,56 @@ if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
 fi
 
 # The other way a run can fail to launch, and the reason this file grew a resolver:
-# the environment named a backend and its binary wasn't reachable. Same contract as
-# above — say it OUTSIDE the block so it survives a summary relay, hand over the exact
-# recovery, exit non-zero so a caller that only checks status can't read it as success.
-# A distinct code (4) because the recovery is distinct: nothing is wrong with the new
-# session, the PATH is. Codes 3 and 4 are mutually exclusive by construction (KTD-4):
-# 3 requires BRIEF_ATTEMPTED=1, which requires LAUNCHER != none, while 4 requires
-# LAUNCHER = none.
+# the environment named a backend and nothing launched. Same contract as above — say it
+# OUTSIDE the block so it survives a summary relay, hand over the exact recovery, exit
+# non-zero so a caller that only checks status can't read it as success.
+#
+# Two distinct codes because the two recoveries are distinct — one code cannot carry
+# both fixes. 4: the binary wasn't reachable; nothing is wrong with the new session,
+# the PATH is. 5: the binary was fine and the backend refused the launch; the PATH is
+# irrelevant and the server is what needs starting. Telling someone to set HERDR_BIN
+# when herdr is installed and merely stopped is the same unactionable answer this file
+# exists to remove.
+#
+# Mutual exclusivity of 3, 4 and 5 holds by construction, not by assurance (KTD-4):
+# 3 requires BRIEF_ATTEMPTED=1, which requires LAUNCHER != none. Both 4 and 5 require
+# ANNOUNCED_UNLAUNCHED=1, which requires LAUNCHER = none — so neither can co-occur
+# with 3. Between 4 and 5 the selector is $LOUD_BIN: 4 requires it non-empty, 5
+# requires it empty, and one variable cannot be both.
 if [ "${LAUNCH_UNRESOLVED:-0}" = "1" ]; then
   echo
   echo "⚠ NO SESSION WAS LAUNCHED — \`$LOUD_BIN\` could not be resolved." >&2
   echo "  This session announced it ($LOUD_ANNOUNCE), so this is a failure, not a skip." >&2
   echo "  The worktree, branch and handoff are intact. Fix the resolution (the ⚠ above names" >&2
-  echo "  the paths searched and $LOUD_OVERRIDE) and re-run, or start the session by hand:" >&2
+  echo "  the paths searched and $LOUD_OVERRIDE) and re-run — but the worktree and branch" >&2
+  echo "  already exist, so re-run with a NEW --name, or just start the session by hand in" >&2
+  echo "  the worktree that is already there:" >&2
   echo >&2
   echo "    $MANUAL_CMD" >&2
   exit 4
+fi
+
+if [ "${ANNOUNCED_UNLAUNCHED:-0}" = "1" ]; then
+  echo
+  echo "⚠ NO SESSION WAS LAUNCHED — \`$ANNOUNCED_BIN\` would not take it." >&2
+  echo "  This session announced it ($ANNOUNCED_BY), so this is a failure, not a skip." >&2
+  if [ "$ANNOUNCED_BIN" = herdr ]; then
+    echo "  The binary resolved; its server did not answer this process. Either it is stopped —" >&2
+    echo "  start it — or it is running and this shell cannot reach its socket, which is what" >&2
+    echo "  happens when the script runs detached from the session that owns herdr. Run" >&2
+    echo "  \`herdr status server\` here to tell the two apart, fix whichever it is, then re-run" >&2
+    echo "  — but the worktree and branch already exist, so re-run with a NEW --name," >&2
+  elif [ "$ANNOUNCED_BIN" = ghostty ]; then
+    echo "  Ghostty could not be driven: the ⚠ above names what was missing — the .app itself," >&2
+    echo "  or osascript (\$OSASCRIPT_BIN pins it). There is no ghostty server to start. Fix" >&2
+    echo "  that, then re-run — but the worktree and branch already exist, so re-run with a" >&2
+    echo "  NEW --name," >&2
+  else
+    echo "  The backend did not pass its readiness probe. Fix that, then re-run — but the" >&2
+    echo "  worktree and branch already exist, so re-run with a NEW --name," >&2
+  fi
+  echo "  or just start the session by hand in the worktree that is already there:" >&2
+  echo >&2
+  echo "    $MANUAL_CMD" >&2
+  exit 5
 fi
