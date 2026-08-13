@@ -543,3 +543,15 @@ CTL
         return 1
     fi
 }
+
+@test "every error class a surface declares has a real, distinct remedy" {
+    # A remedy is INSTRUCTION a caller acts on. `upstream_error` told people to
+    # retry and then switch alias on a 502 that is really a size ceiling — advice
+    # costing two calls that cannot work — and it drifted there because nothing
+    # checked it. The class NAME appeared in tests; that proved nothing about the
+    # prose. Prose correctness is not mechanically checkable; presence,
+    # non-emptiness and distinctness are, and those are what broke.
+    run python3 "$BATS_TEST_DIRNAME/../check-remedies.py" \
+        "$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
