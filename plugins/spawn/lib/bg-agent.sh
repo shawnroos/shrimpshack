@@ -126,6 +126,11 @@ JOBS="$SCRIPT_DIR/jobs.sh"
 # probe just authenticated against.
 # shellcheck source=./secrets.sh
 . "$SCRIPT_DIR/secrets.sh"
+# Sourced for the skill provisioning helpers: a child gets --setting-sources
+# project, so it does NOT inherit the operator's skills. A job told to run a
+# named skill has none unless one is copied where it can read it.
+# shellcheck source=./skills.sh
+. "$SCRIPT_DIR/skills.sh"
 KEYCHAIN_SERVICE="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
 KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
 
@@ -604,7 +609,17 @@ launcher_main() {
     # -----------------------------------------------------------------------
     local SUP_PID
     set -m
+    # The supervisor is a SEPARATE process: anything the launcher parsed reaches
+    # it only if it is forwarded here. Measured the hard way — --skill was parsed,
+    # SUP_SKILLS was populated, and the detached supervisor saw an empty array, so
+    # provisioning silently never ran. Same shape as a sibling plugin's launch
+    # bug: state resolved in one process and assumed present in another.
+    local SKILL_ARGS=()
+    local _s
+    for _s in ${SUP_SKILLS[@]+"${SUP_SKILLS[@]}"}; do SKILL_ARGS+=(--skill "$_s"); done
+
     nohup bash "$SELF" --supervise "spawn-bg-agent=$HANDLE" \
+        ${SKILL_ARGS[@]+"${SKILL_ARGS[@]}"} \
         --handle "$HANDLE" --alias "$ALIAS" --cwd "$PIN_CWD" \
         --worktree "$WORKTREE" --job-dir "$JOB_DIR" \
         --base-url "$BASE_URL" --settings "$SETTINGS" --config "$CONFIG_PATH" \
@@ -654,6 +669,8 @@ SUP_JOB_DIR=""
 SUP_CWD=""
 SUP_BASE_URL=""
 SUP_SETTINGS=""
+SUP_SKILLS=()      # names, in the order the caller asked for them
+SUP_SKILL_MANIFEST=""
 SUP_CONFIG=""
 SUP_STARTED=""
 SUP_RELEASED=0
@@ -887,10 +904,28 @@ supervisor_main() {
     if [ -z "$TOKEN" ]; then
         local NOTOK="no gateway token was resolvable, so the child was never started: the config has no server.token, GATEWAY_TOKEN is unset, and the Keychain holds no entry for this service. Nothing ran and nothing changed."
         sup_reason "$NOTOK"
+        [ -n "$SUP_SKILL_MANIFEST" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
         printf 'failed at %s — no token\n' "$(now_utc)" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
         sup_write_result "failed" 0 false "$NOTOK"
         sup_release_once "failed" "$NOTOK"
         exit 0
+    fi
+
+    # Skills the caller asked for, copied where the child can READ them. The
+    # ceiling denies Write/Edit on .claude/**, so the child uses them and cannot
+    # edit one or add itself another — provisioner and consumer stay separate,
+    # the same split the job record depends on.
+    #
+    # A failure here is recorded and the job still runs: a missing skill makes a
+    # job worse at its task, while refusing to start makes it impossible, and the
+    # record says which skills actually landed either way.
+    if [ "${#SUP_SKILLS[@]}" -gt 0 ]; then
+        SUP_SKILL_MANIFEST="$dir/skills.provisioned"
+        spawn::skill_git_exclude "$SUP_WORKTREE"
+        if ! spawn::skill_provision "$SUP_WORKTREE" "$SUP_SKILL_MANIFEST" "${SUP_SKILLS[@]}" 2>>"$dir/skills.err"; then
+            sup_reason "one or more requested skills could not be provisioned; see skills.err"
+        fi
+        printf '%s\n' "${SUP_SKILLS[@]}" > "$dir/skills.requested"
     fi
 
     spawn::ceiling_flags "$CEILING" "$SUP_SETTINGS"
@@ -1008,6 +1043,10 @@ supervisor_main() {
         STATE="degraded"
         DETAIL="the child exited 0, which is not evidence work happened; measured against the contract this job is degraded"
     fi
+
+    # Remove provisioned skills before the record is written, so a reader of a
+    # finished job never finds a worktree still carrying them.
+    [ -n "$SUP_SKILL_MANIFEST" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
 
     printf 'finished at %s in state %s\n' "$(now_utc)" "$STATE" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
     sup_write_result "$STATE" "$CHILD_RC" "$CHILD_IE" "$DETAIL"
@@ -1130,6 +1169,7 @@ while [ $# -gt 0 ]; do
         --job-dir)       SUP_JOB_DIR="${2:-}"; shift; shift 2>/dev/null || true ;;
         --base-url)      SUP_BASE_URL="${2:-}"; shift; shift 2>/dev/null || true ;;
         --settings)      SUP_SETTINGS="${2:-}"; shift; shift 2>/dev/null || true ;;
+        --skill)         [ -n "${2:-}" ] && SUP_SKILLS+=("$2"); shift; shift 2>/dev/null || true ;;
         --config)        SUP_CONFIG="${2:-}"; shift; shift 2>/dev/null || true ;;
         # The identity marker. It is an ARGUMENT rather than a variable because
         # jobs.sh resolves liveness by matching it as a whole field in argv, and

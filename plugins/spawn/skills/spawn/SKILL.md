@@ -48,6 +48,39 @@ Three questions settle almost every case:
 **When in doubt, prefer the cheaper surface.** `agent` is one HTTP call. Escalate
 when it turns out you needed tools or persistence, not in anticipation.
 
+## Giving a background job the skills it needs
+
+A `bg-agent` child does NOT inherit your skills. It runs with its own narrow
+settings, so a job told to "run ce-code-review" has no such skill and will
+improvise something shaped like one — which reads like the real thing in the
+narrative and is not. Pass `--skill <name>` (repeatable); the supervisor copies
+that skill where the child can read it, and removes it when the job ends.
+
+**Two sources, one flag, and the difference is worth stating.**
+
+- **The caller named it.** Honour it exactly, including the `plugin:skill` form.
+- **You judged the task needs it.** Add it — and say so in your summary. A skill
+  you chose is your judgment; a skill they named is their instruction. If the job
+  goes wrong, that distinction is the first thing worth knowing.
+
+**Before you provision a skill, check it can actually run there.** The child has
+**no Bash**. It can Read, Glob, Grep, Write and Edit inside the worktree, and
+nothing else. So:
+
+- a skill that reads files, greps, and writes a report → works
+- a skill that runs a build, a test, a linter, or `git` → will half-work, which
+  is worse than failing, because the job reports what it managed rather than what
+  it could not do
+
+If the task genuinely needs a command run, that is what the contract's `verify`
+is for: the SUPERVISOR runs it after the child exits, and its exit code is
+evidence rather than narrative.
+
+**Deliverables go in the worktree, never in `.spawn/`.** That directory is the
+supervisor's — the job record, the baseline, the provisioned skills — and the
+ceiling denies the child writing there. A contract naming a deliverable under
+`.spawn/` cannot be satisfied.
+
 ## What each surface can reach, and how to choose
 
 This is the axis that decides most dispatches, and the one it is easiest to get

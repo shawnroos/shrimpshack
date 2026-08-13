@@ -5,6 +5,13 @@ argument-hint: "prose — name a model (and optionally a tier), then the task, w
 
 **Start a supervised asynchronous agent loop** against a named gateway alias and a contract, and return a job handle immediately. The job runs unattended with tools, in a scratchpad inside the current worktree; you get control back at once, and the next time you type in this worktree the plugin tells you it finished — its measured outcome, once, never the model's prose.
 
+**Skills the job will need, if any.** A background child does NOT inherit your skills — it runs with its own narrow settings, so a job told to "run ce-code-review" has no such skill and will improvise something shaped like one. Pass `--skill <name>` (repeatable) and the supervisor copies that skill where the child can read it. Two sources, one flag:
+
+- **the caller named it** — honour it exactly, including the `plugin:skill` form
+- **you judged the task needs it** — add it, and say in your summary that you did, because a skill you chose is your judgment and a skill they named is their instruction
+
+The copy is read-only to the job: the ceiling denies writes under `.claude/`, so a child can use a skill but cannot edit one or grant itself another. Provisioned skills are removed when the job reaches a terminal state and are kept out of git while it runs.
+
 Everything after the command is prose. Derive the model family and optional tier from it and invoke the script with exactly one resolved `--alias`.
 
 1. What families and tiers exist is **declared, not guessed**:
