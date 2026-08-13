@@ -195,6 +195,8 @@ spawn::remedy_for() {
             printf 'The gateway is running and refused our token, so restarting it is the wrong move. Check `server.token` in the resolved gateway.yaml — the config path is in the `config` field of `spawnctl.sh status`.' ;;
         upstream_error)
             printf 'The provider behind the alias failed. Read `detail` for what it said; retry once, and if it repeats, try a different alias rather than the same one.' ;;
+        response_too_large)
+            printf 'Not flakiness and not the vendor: the request and the requested output together exceed what the provider will return, so the SAME call fails the same way every time. Lower --max-tokens first (cheapest to change), or send a smaller prompt. Do NOT retry unchanged and do NOT switch alias — a second vendor was measured failing identically.' ;;
         deadline_exceeded)
             printf 'The request was aborted, so nothing is still running and a retry does not stack a second call. Raise the timeout knob named in `detail`, or send a smaller prompt.' ;;
         preflight_failed)

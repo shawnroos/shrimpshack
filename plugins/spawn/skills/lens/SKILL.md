@@ -59,6 +59,7 @@ There is no Claude Code agent loop on the far side of this call (KTD1). It is a 
      - `context_overflow` — the prompt does not fit this alias's window. Retrying the same prompt can never work; shrink it or pick a wider alias.
      - `no_text_truncated` — the model spent its whole `--max-tokens` budget before writing any answer (it reasons in `thinking` blocks and never reached a `text` block). **Raise `--max-tokens` and retry** — the same budget will fail the same way. Reasoning models hit this on small budgets; measured on a real alias at 40 tokens, three runs out of three.
      - `no_text_in_response` — a 200 carrying no answer text and no truncation. Raising the budget will NOT help; this is the model saying nothing.
+   - `response_too_large` — a 502 whose body says the response could not be decoded. The prompt and the requested output TOGETHER exceed what the provider will return, so the same call fails the same way every time. Lower `--max-tokens` first, or send a smaller prompt. Retrying unchanged cannot work, and neither can a different alias — a second vendor was measured failing identically.
      - `upstream_error` — anything else the provider returned.
      Exit 5 also covers a 200 whose body was not a parseable messages response.
 
