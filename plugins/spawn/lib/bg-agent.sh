@@ -689,7 +689,12 @@ sup_cancel() {
 #
 # THE COMPLETION NOTIFICATION (R19, R6)
 # -------------------------------------
-# There is no channel to push a notification down. A caller holding only Bash
+# There is no channel to push a notification down FROM HERE — this process is
+# detached and the caller may be long gone. The record is still the signal, but
+# it is no longer the whole story: hooks/job-report.sh announces a terminal
+# record on the next prompt in that worktree, exactly once, measured fields
+# only. Written after three jobs died unannounced on 2026-08-12.
+# The original note, still true of THIS process: A caller holding only Bash
 # cannot receive one (handle.sh says so where it explains why `await` is always
 # bounded), and the three-layer visibility design was cut. So the completion
 # signal IS this record: written once, at the moment this process establishes
