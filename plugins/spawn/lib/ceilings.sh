@@ -82,6 +82,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/sanitize.sh"
 # shellcheck source=./common.sh
 . "$SCRIPT_DIR/common.sh"
+# Sourced for spawn::resolve_token ONLY. The server.token parser below stays
+# local (common.sh names the parsers as deliberately duplicated); the env/
+# Keychain half is shared, so a door and the probe cannot present different
+# tokens to the same gateway — or no token at all.
+# shellcheck source=./secrets.sh
+. "$SCRIPT_DIR/secrets.sh"
 
 CTL="$SCRIPT_DIR/spawnctl.sh"
 
@@ -186,6 +192,11 @@ EX_USAGE=2
 EX_UNREACHABLE=3
 EX_UPSTREAM=5
 EX_DEADLINE=6
+# 7 is the frozen enum's auth code. Defined HERE because this file is sourced
+# standalone by the door scripts: a review found the die call below was reading
+# an UNSET EX_AUTH and living entirely on its `:-7` default, while the comment
+# claimed it used the shared constant. Same shape as the bug this file fixes.
+EX_AUTH=7
 
 CLAUDE_BIN="${SPAWN_CLAUDE_BIN:-claude}"
 
@@ -516,6 +527,19 @@ spawn::ceiling_main() {
     if [ -n "$CONFIG_PATH" ] && [ -f "$CONFIG_PATH" ]; then
         TOKEN="$(expand_env_refs "$(awk "$TOKEN_AWK" "$CONFIG_PATH")")"
     fi
+    # The config is only the first half. Without this the comment above promised
+    # the opposite of what the code did: on a gateway.yaml with no server.token
+    # the probe authenticated via the shared chain and the child got "", i.e.
+    # exactly the "pass preflight and then 401" it says it prevents.
+    [ -n "$TOKEN" ] || spawn::resolve_token \
+        "${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}" \
+        "${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
+
+    # An empty credential is worse than none — the CLI uses it rather than
+    # falling back — and it is knowable here, before the child spends a deadline
+    # discovering it. EX_AUTH is the frozen enum's auth code; no new code.
+    [ -n "$TOKEN" ] || die "$EX_AUTH" "auth_rejected" \
+        "no gateway token was resolvable: the config has no server.token, GATEWAY_TOKEN is unset, and the Keychain holds no entry — nothing was started"
 
     # -----------------------------------------------------------------------
     # The child run.

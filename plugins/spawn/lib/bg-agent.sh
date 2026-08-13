@@ -118,6 +118,17 @@ JOBS="$SCRIPT_DIR/jobs.sh"
 # shellcheck source=./ceilings.sh
 . "$SCRIPT_DIR/ceilings.sh"
 
+# Sourced for spawn::resolve_token ONLY, the same way lens.sh and launch.sh do:
+# the server.token parser below stays local (common.sh names the three parsers as
+# deliberately duplicated), but the env/Keychain half of resolution is shared so
+# this supervisor and spawnctl's probe cannot present different tokens — or, as
+# happened here, so this supervisor cannot present NO token to a gateway the
+# probe just authenticated against.
+# shellcheck source=./secrets.sh
+. "$SCRIPT_DIR/secrets.sh"
+KEYCHAIN_SERVICE="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
+KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
+
 # ---------------------------------------------------------------------------
 # The one constant that fixes the bound. No argument, no environment variable
 # and no config key reaches it.
@@ -846,10 +857,35 @@ supervisor_main() {
     # The token, read locally from the same server.token the probe read, with
     # ${VAR} expansion — a child that authenticated with a different token than
     # the probe would pass preflight and then be rejected.
+    #
+    # The config is only the FIRST half of resolution. secrets.sh's header states
+    # the rule ("One chain, one place, is the enforcement") because R27 already
+    # shipped this exact bug once: a surface reading the config alone kept working
+    # until setup retired the config token, after which the probe authenticated
+    # and that surface 401'd. This function was written afterwards and repeated
+    # it — config-only, no fallback — so on any box whose gateway.yaml omits
+    # server.token every job died on its first request with permission_denials:[]
+    # and a third-party narrative. The comment above promised the preflight and
+    # the child would agree; without this line it guaranteed they would not.
     local TOKEN_AWK TOKEN=""
     TOKEN_AWK='/^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); next } sec == "server" && /^[ \t]+token:/ { v = $0; sub(/^[ \t]*token:[ \t]*/, "", v); sub(/[ \t]+#.*$/, "", v); sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); gsub(/^[\042\047]|[\042\047]$/, "", v); print v; exit }'
     if [ -n "$SUP_CONFIG" ] && [ -f "$SUP_CONFIG" ]; then
         TOKEN="$(expand_env_refs "$(awk "$TOKEN_AWK" "$SUP_CONFIG")")"
+    fi
+    [ -n "$TOKEN" ] || spawn::resolve_token "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT_TOKEN"
+
+    # Refuse rather than hand the child an empty credential. An absent token is a
+    # config fault knowable HERE, before a job spends its deadline discovering it
+    # — and `export ANTHROPIC_AUTH_TOKEN=""` is worse than not exporting at all,
+    # because the CLI then uses the empty value instead of falling back. Exit 7 is
+    # the frozen enum's auth code; this adds no new one.
+    if [ -z "$TOKEN" ]; then
+        local NOTOK="no gateway token was resolvable, so the child was never started: the config has no server.token, GATEWAY_TOKEN is unset, and the Keychain holds no entry for this service. Nothing ran and nothing changed."
+        sup_reason "$NOTOK"
+        printf 'failed at %s — no token\n' "$(now_utc)" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
+        sup_write_result "failed" 0 false "$NOTOK"
+        sup_release_once "failed" "$NOTOK"
+        exit 0
     fi
 
     spawn::ceiling_flags "$CEILING" "$SUP_SETTINGS"

@@ -413,3 +413,133 @@ CTL
     # that ever stops being true the decision has to be re-taken, not re-quoted.
     [ "$actual_code" -lt 1000 ]
 }
+
+# ---------------------------------------------------------------------------
+# THE SHARED TOKEN CHAIN, ENFORCED RATHER THAN ASSERTED IN A COMMENT.
+#
+# secrets.sh's header already states the rule — "One chain, one place, is the
+# enforcement" — and explains that R27 shipped this bug once: a surface reading
+# server.token alone kept working until setup retired that key, after which the
+# probe authenticated and the surface 401'd. Nothing mechanically held the rule,
+# so bg-agent.sh was written afterwards WITHOUT the fallback and shipped the
+# identical defect: on any box whose gateway.yaml omits server.token, every job
+# exported an empty credential and died on its first request, with
+# permission_denials:[] making it read like a ceiling problem.
+#
+# The invariant is not "bg-agent.sh sources secrets.sh" — that is today's shape,
+# and a check that narrow goes green the moment a FIFTH surface is added. The
+# invariant is: any lib that hands ANTHROPIC_AUTH_TOKEN to a child must resolve
+# it through the shared chain. So this globs, and each new surface is caught by
+# existing without opting in rather than by anyone remembering to list it.
+# ---------------------------------------------------------------------------
+# WHAT THIS GATE IS, AND WHAT IT IS NOT.
+#
+# It is a LINT over known credential-passing spellings. It is NOT proof that the
+# invariant holds, and it must not be described as closing the regression class.
+# Three independent reviewers and this repo's own solution doc
+# (docs/solutions/logic-errors/default-allow-regex-projection-gate-silently-drops-nudges.md)
+# say the same thing: enumerating permitted forms is default-allow, and "the
+# surface is everything nobody thought of". Widening the enumeration a fourth
+# time does not change that.
+#
+# Known and accepted holes, all lexical by nature — do not paper over them by
+# adding another alternation and calling it closed:
+#   * dead code passes:      if false; then spawn::resolve_token; fi
+#   * ordering is unchecked: a real call placed AFTER the export still passes
+#   * indirection is blind:  v=ANTHROPIC_AUTH_TOKEN; env "$v=$tok" cmd
+#   * a call inside a function that is never invoked still counts
+#
+# What would actually close it is a BEHAVIORAL test: run each surface against a
+# fake claude, a fake config and a fake Keychain, and assert on the child's
+# environment — token present from each source in turn, and NO child spawned
+# when nothing resolves. That does not exist yet and is recorded as the top
+# residual finding for this change. Until it does, this gate buys one thing:
+# a new surface written in an ordinary spelling cannot silently skip the chain.
+@test "every surface that exports a gateway credential resolves it through the shared chain" {
+    local offenders=() f base
+    for f in "$ROOT"/lib/*.sh; do
+        base="$(basename "$f")"
+        # secrets.sh IS the chain; it necessarily mentions the variable.
+        [ "$base" = "secrets.sh" ] && continue
+        # DISCOVERY must be wider than one spelling. `export VAR=`, `declare -x`,
+        # and an `env VAR=` prefix all hand a credential to a child; matching only
+        # the first would let a new surface evade the gate by writing it another
+        # way, which is the same "narrower than the invariant" failure this gate
+        # exists to close. (`env VAR=` is separately forbidden — KTD6, argv is
+        # world-readable — but a gate should not depend on another rule holding.)
+        # Strip comments ONCE, then do BOTH tests on the stripped text. Order is
+        # load-bearing and was wrong: discovery ran on the raw file while the
+        # helper check ran on stripped text, so a commented-OUT export selected a
+        # file that exports nothing (false fail) and an INLINE comment naming the
+        # helper satisfied the requirement (false pass). Both were reproduced.
+        # `sed 's/#.*$//'` is NOT a shell lexer and cutting at the first `#`
+        # anywhere destroys real code: `[ "$#" -gt 0 ] && export TOKEN=...`
+        # becomes `[ "$`, so a genuine exporter vanishes and the gate passes
+        # over it — the original false-pass class, reintroduced by the fix for
+        # it. Drop whole-line comments, then cut only at WHITESPACE-hash, which
+        # leaves `$#` and `${v##*/}` intact while still removing the trailing
+        # `# spawn::resolve_token` that defeated the first version.
+        local code; code="$(grep -v '^[[:space:]]*#' "$f" | sed 's/[[:space:]]#.*$//')"
+        printf '%s' "$code" | grep -qE '(export|declare -x|declare -gx|typeset -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|(^|[[:space:];&|(]) *ANTHROPIC_AUTH_TOKEN=' || continue
+        printf '%s' "$code" | grep -q 'spawn::resolve_token\|spawn::token_fallback' \
+            || offenders+=("$base")
+    done
+
+    if [ "${#offenders[@]}" -ne 0 ]; then
+        echo "These libs export ANTHROPIC_AUTH_TOKEN to a child but never consult"
+        echo "the shared env/Keychain chain, so they authenticate with whatever the"
+        echo "config alone yields — an empty string when server.token is absent:"
+        printf '  %s\n' "${offenders[@]}"
+        echo "Source secrets.sh and call spawn::resolve_token after the config read."
+        return 1
+    fi
+
+    # The gate is only worth having if it can see a real surface. If the glob
+    # ever matches nothing that exports the credential, it would pass vacuously.
+    local exporters=0
+    for f in "$ROOT"/lib/*.sh; do
+        grep -v '^[[:space:]]*#' "$f" | sed 's/[[:space:]]#.*$//' \
+            | grep -qE '(export|declare -x|declare -gx|typeset -x)[[:space:]]+ANTHROPIC_AUTH_TOKEN|(^|[[:space:];&|(]) *ANTHROPIC_AUTH_TOKEN=' \
+            && exporters=$((exporters + 1))
+    done
+    [ "$exporters" -ge 2 ]
+}
+
+@test "every file that defines an EX_* code agrees with every other on its value" {
+    # The enum is FROZEN and it is restated in several files rather than shared,
+    # so the only thing keeping the copies honest is a check. This branch added a
+    # third definition of EX_AUTH (ceilings.sh, because its `die` call was reading
+    # an UNSET one and living on a `:-7` default) — three copies of a constant
+    # with nothing asserting they agree is the same shape as the bug this branch
+    # exists to fix, so it gets a guard rather than a comment.
+    #
+    # Pairwise on NAME, not per-file: a file is free to define only the codes it
+    # produces. What is forbidden is two files giving the same name two values.
+    local lib="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
+    local f name val seen conflicts=""
+    local -a pairs=()
+
+    for f in "$lib"/*.sh; do
+        while IFS= read -r line; do
+            name="${line%%=*}"; val="${line#*=}"
+            pairs+=("$name $val $(basename "$f")")
+        done < <(grep -oE '^EX_[A-Z]+=[0-9]+' "$f")
+    done
+
+    # The guard's own guard: if nothing matched, "no conflicts" is vacuous.
+    [ "${#pairs[@]}" -ge 5 ]
+
+    for name in $(printf '%s\n' "${pairs[@]}" | awk '{print $1}' | sort -u); do
+        seen="$(printf '%s\n' "${pairs[@]}" | awk -v n="$name" '$1==n {print $2}' | sort -u)"
+        if [ "$(printf '%s\n' "$seen" | wc -l | tr -d ' ')" -gt 1 ]; then
+            conflicts="$conflicts$name: $(printf '%s\n' "${pairs[@]}" | awk -v n="$name" '$1==n {printf "%s=%s(%s) ", $1, $2, $3}')
+"
+        fi
+    done
+
+    if [ -n "$conflicts" ]; then
+        echo "the frozen exit-code enum disagrees across files:"
+        printf '%s' "$conflicts"
+        return 1
+    fi
+}
