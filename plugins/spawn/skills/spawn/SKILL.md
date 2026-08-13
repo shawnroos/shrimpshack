@@ -48,6 +48,30 @@ Three questions settle almost every case:
 **When in doubt, prefer the cheaper surface.** `agent` is one HTTP call. Escalate
 when it turns out you needed tools or persistence, not in anticipation.
 
+## What a background job can ACTUALLY do — measured, and it is not what is documented
+
+**A background job can run shell commands.** Measured 2026-08-13 through the real
+path: a job ran `id -un` via `Bash` and wrote the true username into its
+deliverable, with `permission_denials` EMPTY and the job classified `done`. The
+ceiling file says Bash is not allowed. That claim does not hold.
+
+It is **partial, not open** — the same path refused `echo CEILING_BREACH_$(id -un)`
+and refused `WebFetch` and `WebSearch`, each recorded as a denial. Why some Bash
+calls pass and others do not is **not yet understood**; command substitution is a
+hypothesis, not a finding.
+
+**Until that is settled, do not treat this ceiling as preventing shell
+execution.** Write contracts as if a job could run a command, and read
+`permission_denials[]` rather than the narrative to see what actually happened.
+
+Two other measured corrections:
+
+- A real child has **no `Glob` and no `Grep`** at all, though the allow list names
+  both. Do not plan a job around them.
+- The advertised tool list includes `Agent`, `Workflow`, `Task*` and `Cron*`. That
+  list is the model's **self-report** and is not evidence of what it may do — but
+  neither is it evidence it may not.
+
 ## Giving a background job the skills it needs
 
 A `bg-agent` child does NOT inherit your skills. It runs with its own narrow
@@ -64,7 +88,9 @@ that skill where the child can read it, and removes it when the job ends.
   goes wrong, that distinction is the first thing worth knowing.
 
 **Before you provision a skill, check it can actually run there.** The child has
-**no Bash**. It can Read, Glob, Grep, Write and Edit inside the worktree, and
+**no Bash**, and — measured through the real path, against this plugin's own
+allow list — **no Glob and no Grep either**. It can Read, Write and Edit inside
+the worktree, and
 nothing else. So:
 
 - a skill that reads files, greps, and writes a report → works
@@ -90,7 +116,7 @@ limitation only after the answer comes back thin.
 | Surface | What the far side can do |
 |---|---|
 | `agent` | **Nothing.** One message in, one answer out. No file reads, no commands, no second turn. |
-| `bg-agent` | `Read`, `Write`, `Edit` **scoped to the worktree**, plus `Glob` and `Grep`, which are allowed unscoped. **No `Bash`** — it cannot run a command, a test, or `git log`. Version-control internals, hooks and agent configuration are denied outright; a path that resolves outside the worktree — an escaping symlink included — falls outside the allow and is refused. |
+| `bg-agent` | `Read`, `Write`, `Edit` **scoped to the worktree**. The allow list also names `Glob` and `Grep`, but a real child has NEITHER — measured, so do not plan a job around them. **No `Bash`** — it cannot run a command, a test, or `git log`. Version-control internals, hooks and agent configuration are denied outright; a path that resolves outside the worktree — an escaping symlink included — falls outside the allow and is refused. |
 | `session` | Claude Code's full loop under **your own** permissions in the directory you pin. |
 
 ### The trap: an `agent` reviewer only sees what you thought to include
@@ -113,7 +139,7 @@ evidence for your own reviewer.
 **When the far side needs to go and look, use `bg-agent`.** It gets file-reading
 and search tools, so it can chase what you did not anticipate, and its findings
 are checked against a contract rather than accepted as prose. It searches with
-`Glob` and `Grep` and reads with `Read`; it has no shell, so a question only a
+reads with `Read`; it has no shell, so a question only a
 command can answer — a test run, a `git log` — is not one it can go and settle.
 
 ### Grant the least that lets the work happen
