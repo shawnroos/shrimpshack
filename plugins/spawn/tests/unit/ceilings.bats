@@ -587,3 +587,113 @@ EOF
     refute_file_match "$tree/.git/hooks/pre-commit" "$WORK/denied-paths.txt"
 }
 
+
+# ===========================================================================
+# THE TOKEN REACHES THE CHILD — behaviorally, not lexically.
+#
+# The 401 regression these guard: both doors read the gateway token ONLY from
+# server.token, so a config without that key produced TOKEN="" and the child was
+# started with ANTHROPIC_AUTH_TOKEN="". An empty credential is worse than an
+# absent one — the CLI uses it rather than falling back — so every job 401'd on
+# its first request, with permission_denials:[] making it read like a ceiling
+# problem.
+#
+# surfaces.bats has a lint that a surface CALLS the shared chain. A lint cannot
+# prove the token arrives, that the refusal fires, or that an empty credential is
+# never exported: those are runtime properties. These are those tests, and they
+# assert on the fixture's env record — a document the model did not author.
+#
+# ONE OF THESE DELIBERATELY DOES NOT SUBSTITUTE SPAWN_SECURITY_BIN. The original
+# P1 in this plugin sat green precisely because a fixture exported the seam that
+# masked the default branch, so the branch under test was never taken. The
+# no-token arm therefore runs the REAL `security` against a service name that
+# does not exist: a genuine miss through the real binary, not a faked one.
+# ===========================================================================
+
+# A config with models but NO server.token — the shape that caused the outage.
+make_config_no_token() {   # <path> <alias=model>...
+    local path="$1"; shift
+    {
+        printf 'server:\n'
+        printf '  bind: "127.0.0.1:4000"\n'
+        printf '\nmodels:\n'
+        local spec
+        for spec in "$@"; do
+            printf '  %s:\n' "${spec%%=*}"
+            printf '    model: %s\n' "${spec#*=}"
+        done
+    } > "$path"
+}
+
+# The value of ANTHROPIC_AUTH_TOKEN in the child's recorded environment.
+child_auth_token() {
+    awk -F= '/^ANTHROPIC_AUTH_TOKEN=/{sub(/^ANTHROPIC_AUTH_TOKEN=/,""); print; exit}' \
+        "$FAKE_CLAUDE_RECORD_DIR/env"
+}
+
+@test "token: a config server.token reaches the child's environment" {
+    start_fixture healthy "k3"
+    door "$REPO" --alias k3
+    [ "$status" -eq 0 ]
+    [ -f "$FAKE_CLAUDE_RECORD_DIR/env" ]
+    [ "$(child_auth_token)" = "$TOKEN" ]
+}
+
+@test "token: with no server.token, GATEWAY_TOKEN reaches the child (the 401 regression)" {
+    start_fixture healthy "k3"
+    # Same gateway, but the config loses the key. Before the fix this exported
+    # an empty credential; the child must now receive the env token instead.
+    make_config_no_token "$WORK/gateway.yaml" "k3=up/k3"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    export GATEWAY_TOKEN="$TOKEN"
+
+    door "$REPO" --alias k3
+    [ "$status" -eq 0 ]
+    [ "$(child_auth_token)" = "$TOKEN" ]
+    # The precise defect: never a set-but-empty credential.
+    [ -n "$(child_auth_token)" ]
+}
+
+# MUTATION-CHECKED AND HONEST ABOUT WHAT IT PROVES. Removing the door's own
+# refusal does NOT turn this red, because `spawnctl ensure` (line ~490) runs
+# BEFORE the door reads the token and resolves through the same shared chain, so
+# preflight already exits 7 when nothing is resolvable. What this test pins is
+# the user-visible property — exit 7 and NO child started — not which of the two
+# gates produced it. The door's own guard is a second line of defence for the
+# case the whole branch is about: preflight and the child resolving DIFFERENTLY.
+# That case cannot be staged here precisely because they now agree, and saying so
+# is better than a name implying coverage this does not have.
+@test "token: with nothing resolvable no child is started and the door exits 7" {
+    start_fixture healthy "k3"
+    make_config_no_token "$WORK/gateway.yaml" "k3=up/k3"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    unset GATEWAY_TOKEN
+    # NOT SPAWN_SECURITY_BIN. The real binary, asked for a service that does not
+    # exist, so the Keychain leg genuinely misses instead of being faked into
+    # missing. See the header.
+    export SPAWN_KEYCHAIN_SERVICE="spawn-tests-no-such-service-$$"
+    export SPAWN_KEYCHAIN_ACCOUNT_TOKEN="spawn-tests-no-such-account-$$"
+
+    door "$REPO" --alias k3
+    [ "$status" -eq 7 ]
+    # The child was never started — the point of refusing rather than exporting
+    # "" and letting a job burn its deadline discovering the 401.
+    refute_exists "$FAKE_CLAUDE_RECORD_DIR/env"
+}
+
+@test "token: an unresolvable token yields ONE JSON object carrying the frozen auth class" {
+    start_fixture healthy "k3"
+    make_config_no_token "$WORK/gateway.yaml" "k3=up/k3"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+    unset GATEWAY_TOKEN
+    export SPAWN_KEYCHAIN_SERVICE="spawn-tests-no-such-service-$$"
+    export SPAWN_KEYCHAIN_ACCOUNT_TOKEN="spawn-tests-no-such-account-$$"
+
+    door "$REPO" --alias k3
+    [ "$status" -eq 7 ]
+    [ "$(printf '%s' "$output" | jq -s 'length')" -eq 1 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "auth_rejected" ]
+    # The token must not appear in a refusal that names config paths and
+    # Keychain identifiers.
+    refute_file_match "$TOKEN" <(printf '%s' "$output")
+}
