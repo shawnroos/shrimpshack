@@ -282,12 +282,27 @@ if command -v qmd >/dev/null 2>&1; then
   check "failed embed forces embedded=unknown, never a false 0" \
     'echo "$OUT_FAIL" | grep -q "embedded=unknown"'
 
-  # U1 scenario 9 — a failing global update stays non-fatal: later scoped embeds
-  # are still attempted rather than the run dying under `set -e`.
+  # U1 scenario 9 — a failing global update stays non-fatal: EVERY collection is
+  # still embedded rather than the run dying under `set -e`.
+  #
+  # Count, don't just look. `grep -qx embed` would be satisfied by a single embed
+  # line, so a regression that died after claude-memory and never reached the
+  # doc-store subdirs would pass it — the presence check cannot see the starvation
+  # it exists to catch, which is the same defect class as the tally this file
+  # tests. Derive the expected count from the registered collections so adding a
+  # fixture later cannot silently weaken the assertion.
   : > "$QMD_STUB_CALLS"
-  QMD_STUB_FAIL_UPDATE=1 bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1 || true
-  check "failed update is non-fatal: embeds still attempted" \
-    'grep -qx embed "$QMD_STUB_CALLS"'
+  OUT_FAILUP="$(QMD_STUB_FAIL_UPDATE=1 bash "$SCRIPTS/qmd-reconcile-collections.sh" 2>/dev/null || true)"
+  N_CLAUDE_COLL="$(grep -c '^claude-' "$QMD_STUB_STATE" || true)"
+  check "failed update is non-fatal: every collection still embeds" \
+    '[ "$(grep -cx embed "$QMD_STUB_CALLS")" = "$N_CLAUDE_COLL" ] && [ "$N_CLAUDE_COLL" -gt 1 ]'
+  # The sharp one. When update fails, nothing new is indexed, so every embed below
+  # legitimately reports the no-work line — and a tally that only watched embeds
+  # would print a confident `embedded=0`, byte-identical to a healthy steady-state
+  # run, while this session's memories sit unindexed. `0` must mean "nothing to
+  # do", never "we never looked".
+  check "failed update forces embedded=unknown, never a false clean 0" \
+    'echo "$OUT_FAILUP" | grep -q "embedded=unknown"'
 
   unset QMD_RECONCILE_MEMORY_DIR QMD_RECONCILE_DOC_STORE
   cd "$REPO"
@@ -377,10 +392,25 @@ if command -v qmd >/dev/null 2>&1; then
   # Nothing here may run `qmd update` itself — the whole point is that the
   # reconciler is the only possible source of it.
   printf '# Retrieval\nGRONKLE distinctive phrase for retrieval proof.\n' > mem/gronkle.md
-  QMD_RECONCILE_MEMORY_DIR="$H/mem" QMD_RECONCILE_DOC_STORE="$H/nonexistent-doc-store" \
-    bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1 || true
-  check "R12: post-registration memory is findable after the production reconciler" \
-    'qmd search -c claude-memory GRONKLE 2>/dev/null | grep -qi gronkle'
+  R12_OUT="$(QMD_RECONCILE_MEMORY_DIR="$H/mem" QMD_RECONCILE_DOC_STORE="$H/nonexistent-doc-store" \
+    bash "$SCRIPTS/qmd-reconcile-collections.sh" 2>/dev/null || true)"
+  # Assert through `vsearch`, NOT `search`. `qmd search` is BM25 over the index and
+  # is satisfied by `qmd update` alone — it would stay green with the embed leg
+  # entirely broken, which is half the pipeline this assertion claims to cover.
+  # Seeded recall (the real consumer, see the block above) uses `vsearch`, which
+  # needs vectors, so only vsearch proves BOTH stages ran. Match on a body-only
+  # token so a filename hit cannot satisfy it.
+  check "R12: post-registration memory is retrievable via the vector path production uses" \
+    'qmd vsearch -c claude-memory "distinctive phrase for retrieval proof" 2>/dev/null | grep -q GRONKLE'
+  # Steady state against the REAL binary: nothing new on disk, so every embed must
+  # report the no-work literal and the tally must read 0. This is the only place
+  # the exact literal the parser matches meets real qmd output — if a qmd upgrade
+  # rewords it, production silently degrades to `unknown` forever and the stubbed
+  # scenarios (which emit that literal by construction) would never notice.
+  R12_AGAIN="$(QMD_RECONCILE_MEMORY_DIR="$H/mem" QMD_RECONCILE_DOC_STORE="$H/nonexistent-doc-store" \
+    bash "$SCRIPTS/qmd-reconcile-collections.sh" 2>/dev/null || true)"
+  check "R12: steady-state run against real qmd reports embedded=0 (no-work literal still matches)" \
+    'echo "$R12_AGAIN" | grep -q "embedded=0"'
 
   unset SEEDED_RECALL_COLLECTION SEEDED_RECALL_FLAG_DIR SEEDED_RECALL_K SEEDED_RECALL_TIMEOUT
   cd "$REPO"

@@ -4,12 +4,11 @@
 # collections: one `claude-memory` for the memory dir, and one `claude-<type>`
 # per doc-store sub-directory. Idempotent.
 #
-# SCOPE, precisely — this used to claim "only ever touches `claude-`-prefixed
-# collections, so foreign collections are never modified", and that is no longer
-# true of the whole run:
-#   * COLLECTION CREATION and EMBEDDING remain restricted to `claude-`-prefixed
-#     names. Foreign collections (openclaw, Slate, global) are never created,
-#     renamed, embedded, or removed here.
+# SCOPE — the two halves differ, and conflating them is how a false invariant got
+# documented here before:
+#   * COLLECTION CREATION and EMBEDDING touch only `claude-`-prefixed names.
+#     Foreign collections (openclaw, Slate, global) are never created, renamed,
+#     embedded, or removed here.
 #   * INDEXING is global. The run performs one `qmd update`, which takes no `-c`
 #     flag and therefore re-indexes every collection in the resolved qmd config,
 #     foreign ones included. That is unavoidable: `qmd embed` can only vectorise
@@ -27,7 +26,10 @@
 # Targets default to the real ~/.claude locations; override via env for tests:
 #   QMD_RECONCILE_MEMORY_DIR   — path indexed as `claude-memory`
 #   QMD_RECONCILE_DOC_STORE    — dir whose subdirs become `claude-<type>`
-#   QMD_RECONCILE_NO_EMBED=1   — skip the embed step (faster tests)
+#   QMD_RECONCILE_NO_EMBED=1   — skip BOTH qmd stages, the global index pass and
+#                                the per-collection embed (faster tests). Wider
+#                                than the name suggests: setting it means new
+#                                files are not indexed either.
 #
 # Isolation: qmd resolves a project-local `.qmd` from the cwd if one exists, so a
 # caller that wants an isolated index (the test harness) cd's into a `qmd init`
@@ -58,13 +60,19 @@ created=0
 existing=0
 # The tally is TWO variables on purpose, and they must stay that way.
 #
-# `embedded_docs` is numeric and is the ONLY thing arithmetic ever touches.
-# `embedded_unknown` is a flag rendered as the string `unknown` at the summary.
-# Collapsing them into one mixed-type variable is fatal, not merely untidy: under
-# `set -u`, `embedded=unknown` followed by any `$((embedded + n))` exits 1 with
-# "unknown: unbound variable", killing the run before the summary prints AND
+# `embedded_docs` is the numeric half and is today a constant 0: qmd reports
+# content hashes, not documents, and one document can carry several — so there is
+# no honest number above zero to compute. It exists as the numeric slot so that
+# if qmd ever exposes a real document count, arithmetic has somewhere safe to go.
+# `embedded_unknown` is a flag rendered as the string `unknown` at the summary,
+# and today it carries all the signal.
+#
+# Keeping them separate is a hazard guard, not tidiness: under `set -u`, a single
+# mixed-type variable holding `unknown` followed by any `$((var + n))` exits 1
+# with "unknown: unbound variable", killing the run before the summary prints AND
 # before the remaining doc-store collections are traversed — the exact starvation
-# the best-effort design exists to prevent.
+# the best-effort design exists to prevent. Never assign the string to the
+# numeric half.
 embedded_docs=0
 embedded_unknown=0
 
@@ -171,6 +179,13 @@ failed=0
 if [ "${QMD_RECONCILE_NO_EMBED:-0}" != "1" ]; then
   if ! qmd update >/dev/null 2>&1; then
     echo "qmd-reconcile: qmd update failed (non-fatal; new files may not be indexed)" >&2
+    # The tally is no longer knowable, so say so. Without this the run prints a
+    # byte-identical `embedded=0 failed=0` to a healthy steady-state run: every
+    # scoped embed below correctly finds no new work (because nothing was
+    # indexed) and reports the no-work line, so `0` would mean "nothing to do"
+    # when it actually means "we never looked". That is the exact false-clean
+    # this script was changed to eliminate, one stage earlier.
+    embedded_unknown=1
   fi
 fi
 
