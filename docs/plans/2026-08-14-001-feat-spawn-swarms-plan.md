@@ -801,7 +801,7 @@ Bump `plugin.json` from 0.2.5 to 0.2.6 and the root marketplace entry to match �
 | Declared vs passing | `bats --count plugins/spawn/tests/unit/*.bats` against `bats --tap plugins/spawn/tests/unit/*.bats \| grep '^ok' \| grep -vc '# skip'` | every unit |
 | Live contract | `bash plugins/spawn/lib/bg-agent.sh --describe \| jq -e '.flags[] \| select(.name == "--skill")'` | U2 |
 
-Declared count is 502 before this plan's work. Three skips are legitimate: two `LIVE:` arms in `ceilings.bats` gated on `SPAWN_CEILING_LIVE=1`, and one in `surfaces.bats` when the `claude` CLI is off PATH. A fourth skip is a finding. A test count is an arithmetic statement, not a verification statement — subtraction cannot tell a deleted test from one silently skipped, renamed to a no-op, or dropped out of the runner's glob, so compare declared against passing with skips named.
+Declared count is 507 before this plan's work, on a base rebased onto plugin version 0.2.8. Three skips are legitimate: two `LIVE:` arms in `ceilings.bats` gated on `SPAWN_CEILING_LIVE=1`, and one in `surfaces.bats` when the `claude` CLI is off PATH. A fourth skip is a finding. A test count is an arithmetic statement, not a verification statement — subtraction cannot tell a deleted test from one silently skipped, renamed to a no-op, or dropped out of the runner's glob, so compare declared against passing with skips named.
 
 Assert negatives through a helper that fails as a plain command. `! grep …` does **not** fail a bats test — POSIX exempts a pipeline beginning with `!`, and three assertions in this repo passed while the condition they guarded was false.
 
@@ -816,6 +816,7 @@ Assert negatives through a helper that fails as a plain command. `! grep …` do
 - Every new assertion has been mutation-verified: the code it guards was reverted, the assertion was seen RED, the code restored, and it went green. Record which assertions were shown red — a prior fix here had four behavioural tests of which exactly one was load-bearing.
 - Every test that asserts an absence has a control arm proving it can fail.
 - No function body in the new libs is byte-identical to one in another shipped file. The duplicate scan has no length floor.
+- Comments in the new libs are why-only: a measured constant at its constant, a non-obvious ordering constraint, a footgun that fails silently, or a deliberate deviation from convention. Nothing else. The existing files in `plugins/spawn/lib/` carry long rationale blocks — match their **structure**, never their comment density, and do not brief an implementer to "match the module's commenting convention". Where a decision needs a paragraph, its home is this plan's KTD, cited by ID from the code.
 - The new libs source `sanitize.sh` and `common.sh` and reach no unsanitized terminal print.
 - Any file exporting a credential names `spawn::resolve_token` or `spawn::token_fallback`.
 - No `wait -n`, `mapfile`, `readarray`, `declare -A` or `local -A` anywhere in `plugins/spawn/lib/`.
