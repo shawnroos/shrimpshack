@@ -243,6 +243,51 @@ frontmatter() {         # <file>
     [ "$checked" -ge 3 ]
 }
 
+@test "every implementation skill is hidden from the slash menu" {
+    # The do-not-self-trigger clause above is PROSE — it asks the model not to
+    # fire the skill on conversational phrasing. It does nothing about the `/`
+    # menu, so lens, launch and status still offered themselves to a person
+    # choosing a surface, alongside the four commands that are the real front
+    # doors. `user-invocable: false` is the mechanism: the harness parses it
+    # (default true) and registers the skill with isHidden set, which keeps it
+    # out of the menu while leaving it reachable by name through the Skill tool.
+    # Model reachability is gated by `disable-model-invocation`, a DIFFERENT
+    # field which is NOT set here on purpose — it would block the Skill tool and
+    # contradict the clause's own "invoked by name only (via the Skill tool)".
+    #
+    # GLOBBED for the same reason the clause test is: a hardcoded trio stops
+    # protecting the moment a fourth implementation skill is added.
+    #
+    # ONE exception, asserted rather than skipped: the `spawn` router is the
+    # conversational front door and must stay in the menu.
+    local d name checked=0
+    for d in "$SKILL_DIR"/*/; do
+        name="$(basename "$d")"
+        [ -f "$d/SKILL.md" ] || continue
+        run bash -c "$(declare -f frontmatter); frontmatter '$d/SKILL.md'"
+        [ "$status" -eq 0 ]
+        if [ "$name" = "spawn" ]; then
+            if printf '%s' "$output" | grep -qE '^user-invocable:'; then
+                echo "the spawn router must stay user-invocable — it is the"
+                echo "conversational front door and the one surface a person can"
+                echo "reach without already knowing which of the four they want."
+                return 1
+            fi
+            continue
+        fi
+        if ! printf '%s' "$output" | grep -qE '^user-invocable:[[:space:]]*false[[:space:]]*$'; then
+            printf '%s: frontmatter has no `user-invocable: false`, so it still appears in the / menu\n' \
+                "$d/SKILL.md" >&2
+            return 1
+        fi
+        # The field must also be DECLARED FRONTMATTER, not prose that happens to
+        # start a line in the body — frontmatter() already bounds that.
+        checked=$((checked + 1))
+    done
+    # Guard the guard: an empty loop must fail loudly, not pass silently.
+    [ "$checked" -ge 3 ]
+}
+
 @test "no skill body points at a command name this unit deleted" {
     local s
     for s in lens launch status; do

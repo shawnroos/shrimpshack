@@ -796,3 +796,40 @@ print('LEAKED' if '$t' in d['permissions']['allow'] else 'CLEAN')"
         [ "$output" = "CLEAN" ] || { echo "$t leaked into the ceiling"; return 1; }
     done
 }
+
+@test "the deny list carries every tool family that must not reach an unattended job" {
+    # THE DENY LIST IS THE ENFORCEMENT — measured by effect, not read off the file:
+    # with Bash in neither allow nor deny, a child RAN a shell command and the file
+    # appeared; adding "Bash" to deny blocked it; --allowedTools did not; and
+    # --permission-mode default did not either. So a tool is permitted unless it is
+    # DENIED, and this list is the whole boundary.
+    #
+    # It is an ENUMERATION and therefore cannot close the class — a tool the harness
+    # adds tomorrow is permitted until its name appears here. That is a property of
+    # the only mechanism available, not a choice, and it is why this test pins the
+    # names rather than pretending a rule covers them.
+    local perms; perms="$(cd "$BATS_TEST_DIRNAME/../../permissions" && pwd)"
+    run python3 -c "
+import json,sys
+d=json.load(open('$perms/repo-bounded.settings.json'))
+deny=set(d['permissions']['deny'])
+need={'Bash','Agent','Workflow','Task','TaskCreate','TaskUpdate','TaskGet','TaskList',
+      'TaskOutput','TaskStop','CronCreate','CronDelete','CronList','ScheduleWakeup',
+      'Monitor','WebFetch','SendMessage','RemoteTrigger','PushNotification',
+      'ShareOnboardingGuide','NotebookEdit','EnterWorktree','ExitWorktree','DesignSync'}
+missing=sorted(need-deny)
+print('MISSING:'+','.join(missing) if missing else 'COMPLETE')"
+    [ "$output" = "COMPLETE" ] || { echo "$output"; return 1; }
+}
+
+@test "WebSearch is NOT denied, because a deny would beat its grant" {
+    # --allow WebSearch works by adding an ALLOW entry, and allow only matters for
+    # tools that default to asking. Deny beats allow, so denying WebSearch here
+    # would silently break the one capability a caller can grant.
+    local perms; perms="$(cd "$BATS_TEST_DIRNAME/../../permissions" && pwd)"
+    run python3 -c "
+import json
+d=json.load(open('$perms/repo-bounded.settings.json'))
+print('DENIED' if 'WebSearch' in d['permissions']['deny'] else 'GRANTABLE')"
+    [ "$output" = "GRANTABLE" ]
+}

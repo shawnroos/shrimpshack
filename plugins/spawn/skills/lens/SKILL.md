@@ -10,6 +10,7 @@ description: >
   second opinion from GPT, Kimi, GLM, or any other alias the gateway carries. No
   session, no terminal, and no tools on the far side: the model can only answer.
 allowed-tools: Bash, Read
+user-invocable: false
 ---
 
 # Headless lens
