@@ -155,6 +155,62 @@ spawn::ceiling_render() {
     return 0
 }
 
+# spawn::ceiling_grantable <tool> — may this tool be granted to a job at all?
+#
+# DEFAULT-DENY, and short on purpose. A grant widens the one ceiling that exists
+# because nobody is watching, so the question is not "is this tool useful" but
+# "is it safe to hand an unattended process". Adding a name here is a security
+# decision, not a convenience.
+#
+# NOT grantable, deliberately, and each for its own reason:
+#   Bash          — arbitrary local execution. (Measured 2026-08-13: some Bash
+#                   calls already run despite this ceiling. That is an OPEN
+#                   defect, not a licence to grant it on purpose.)
+#   Agent, Task*  — an unattended job that can spawn agents fans out unbounded.
+#   Cron*         — schedules work that OUTLIVES the job nobody was watching.
+#   WebFetch      — fetches an arbitrary URL, including a host on this machine's
+#                   private network. A search API is a narrower thing than a
+#                   general-purpose fetcher, so it is granted separately or not
+#                   at all.
+spawn::ceiling_grantable() {
+    case "${1:-}" in
+        WebSearch) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# spawn::ceiling_grant <rendered-settings> <tool>...
+#
+# Adds validated tools to a RENDERED ceiling's allow list, in the job's own copy.
+# The shipped default on disk is never touched (R25: the plugin does not edit a
+# user's settings, including its own), and the child cannot reach this file to
+# widen it further — .spawn writes are denied to it.
+spawn::ceiling_grant() {
+    local dest="$1"; shift
+    [ -f "$dest" ] || return 1
+    local t
+    for t in "$@"; do
+        spawn::ceiling_grantable "$t" || {
+            printf 'grant_refused\t%s\n' "$(spawn::sanitize_for_display "$t")" >&2
+            return 1
+        }
+    done
+    python3 - "$dest" "$@" <<'PYG' || return 1
+import json, re, sys
+dest, tools = sys.argv[1], sys.argv[2:]
+raw = open(dest).read()
+# The shipped files carry // comments, which json rejects; strip for the read and
+# write back plain JSON. The rendered copy is the job's, not a file a human edits.
+data = json.loads(re.sub(r'^\s*//.*$', '', raw, flags=re.M))
+allow = data.setdefault("permissions", {}).setdefault("allow", [])
+for t in tools:
+    if t not in allow:
+        allow.append(t)
+json.dump(data, open(dest, "w"), indent=2)
+PYG
+    return 0
+}
+
 # The exact flag set a ceiling hands the child, as a global array (bash 3.2 has
 # indexed arrays; it does not have `mapfile` or associative arrays).
 #

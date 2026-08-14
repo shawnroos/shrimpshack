@@ -617,6 +617,7 @@ launcher_main() {
     local SKILL_ARGS=()
     local _s
     for _s in ${SUP_SKILLS[@]+"${SUP_SKILLS[@]}"}; do SKILL_ARGS+=(--skill "$_s"); done
+    for _s in ${SUP_GRANTS[@]+"${SUP_GRANTS[@]}"}; do SKILL_ARGS+=(--allow "$_s"); done
 
     nohup bash "$SELF" --supervise "spawn-bg-agent=$HANDLE" \
         ${SKILL_ARGS[@]+"${SKILL_ARGS[@]}"} \
@@ -670,6 +671,7 @@ SUP_CWD=""
 SUP_BASE_URL=""
 SUP_SETTINGS=""
 SUP_SKILLS=()      # names, in the order the caller asked for them
+SUP_GRANTS=()      # extra tools the caller asked the ceiling to permit
 SUP_SKILL_MANIFEST=""
 SUP_CONFIG=""
 SUP_STARTED=""
@@ -928,6 +930,25 @@ supervisor_main() {
         printf '%s\n' "${SUP_SKILLS[@]}" > "$dir/skills.requested"
     fi
 
+    # Widen the job's OWN copy of the ceiling, never the shipped default. A
+    # refused grant aborts the job rather than running it quietly narrower than
+    # the caller asked for — a job that silently lacks a capability it was
+    # promised produces a confident wrong answer, which is worse than not running.
+    if [ "${#SUP_GRANTS[@]}" -gt 0 ]; then
+        if spawn::ceiling_grant "$SUP_SETTINGS" "${SUP_GRANTS[@]}" 2>>"$dir/grants.err"; then
+            printf '%s\n' "${SUP_GRANTS[@]}" > "$dir/grants.applied"
+            sup_reason "the caller granted this job: $(printf '%s ' "${SUP_GRANTS[@]}")"
+        else
+            local BADG="a requested capability grant was refused; see grants.err. Nothing ran."
+            sup_reason "$BADG"
+            printf 'failed at %s — grant refused\n' "$(now_utc)" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
+            [ -n "$SUP_SKILL_MANIFEST" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
+            sup_write_result "failed" 0 false "$BADG"
+            sup_release_once "failed" "$BADG"
+            exit 0
+        fi
+    fi
+
     spawn::ceiling_flags "$CEILING" "$SUP_SETTINGS"
 
     printf 'started at %s\n' "$SUP_STARTED" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
@@ -1170,6 +1191,7 @@ while [ $# -gt 0 ]; do
         --base-url)      SUP_BASE_URL="${2:-}"; shift; shift 2>/dev/null || true ;;
         --settings)      SUP_SETTINGS="${2:-}"; shift; shift 2>/dev/null || true ;;
         --skill)         [ -n "${2:-}" ] && SUP_SKILLS+=("$2"); shift; shift 2>/dev/null || true ;;
+        --allow)         [ -n "${2:-}" ] && SUP_GRANTS+=("$2"); shift; shift 2>/dev/null || true ;;
         --config)        SUP_CONFIG="${2:-}"; shift; shift 2>/dev/null || true ;;
         # The identity marker. It is an ARGUMENT rather than a variable because
         # jobs.sh resolves liveness by matching it as a whole field in argv, and

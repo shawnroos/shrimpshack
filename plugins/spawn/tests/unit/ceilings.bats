@@ -746,3 +746,53 @@ child_auth_token() {
     [ "$status" -eq 0 ]
     [ "$(child_auth_token)" = "$TOKEN" ]
 }
+
+@test "a capability grant widens the job's OWN ceiling copy, and only for grantable tools" {
+    # Measured A/B on the real path: without the grant a WebSearch call is REFUSED
+    # and recorded in permission_denials[]; with it, denials is 0 and the tool
+    # runs. So the mechanism is the allow list in the job's rendered copy.
+    local proj="$WORK/grantproj"; mkdir -p "$proj"
+    render repo-bounded "$proj" "$proj/c.json"
+    [ "$status" -eq 0 ]
+
+    run bash -c '. "$1"; spawn::ceiling_grant "$2" WebSearch' _ "$LIB/ceilings.sh" "$proj/c.json"
+    [ "$status" -eq 0 ]
+    run python3 -c "
+import json,sys
+print('YES' if 'WebSearch' in json.load(open('$proj/c.json'))['permissions']['allow'] else 'NO')"
+    [ "$output" = "YES" ]
+
+    # The SHIPPED default must be untouched — R25, the plugin never edits its own
+    # or the user's settings on disk.
+    # Parsed, not grepped. The shipped file's COMMENT mentions WebSearch (it
+    # records that WebSearch is refused without a grant), so a whole-file grep
+    # matches prose and fails over working code — the same comment-matching trap
+    # that has bitten a gate in this repo already.
+    local perms; perms="$(cd "$BATS_TEST_DIRNAME/../../permissions" && pwd)"
+    run python3 -c "
+import json,re,sys
+d=json.loads(re.sub(r'^\\s*//.*\$','',open('$perms/repo-bounded.settings.json').read(),flags=re.M))
+print('LEAKED' if 'WebSearch' in d['permissions']['allow'] else 'CLEAN')"
+    [ "$output" = "CLEAN" ]
+}
+
+@test "a grant for a tool that is not grantable is REFUSED, not quietly dropped" {
+    # DEFAULT-DENY. Bash, Agent, Task* and Cron* are not grantable: this ceiling
+    # exists because nobody is watching, and each of those either executes
+    # locally, fans out, or schedules work that OUTLIVES the job. A caller asking
+    # for one gets an error, because a job that silently runs narrower than it was
+    # promised produces a confident wrong answer.
+    local proj="$WORK/grantbad"; mkdir -p "$proj"
+    render repo-bounded "$proj" "$proj/c.json"
+
+    local t
+    for t in Bash Agent CronCreate WebFetch TaskCreate NotARealTool; do
+        run bash -c '. "$1"; spawn::ceiling_grant "$2" "$3"' _ "$LIB/ceilings.sh" "$proj/c.json" "$t"
+        [ "$status" -ne 0 ] || { echo "GRANTED a tool that must not be: $t"; return 1; }
+        run python3 -c "
+import json,re,sys
+d=json.loads(re.sub(r'^\\s*//.*\$','',open('$proj/c.json').read(),flags=re.M))
+print('LEAKED' if '$t' in d['permissions']['allow'] else 'CLEAN')"
+        [ "$output" = "CLEAN" ] || { echo "$t leaked into the ceiling"; return 1; }
+    done
+}

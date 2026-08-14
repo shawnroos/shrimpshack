@@ -5,6 +5,12 @@ argument-hint: "prose — name a model (and optionally a tier), then the task, w
 
 **Start a supervised asynchronous agent loop** against a named gateway alias and a contract, and return a job handle immediately. The job runs unattended with tools, in a scratchpad inside the current worktree; you get control back at once, and the next time you type in this worktree the plugin tells you it finished — its measured outcome, once, never the model's prose.
 
+**Capabilities the job needs, if any.** The ceiling grants a job Read/Write/Edit inside the worktree and nothing else. `--allow <TOOL>` (repeatable) widens the job's OWN copy of that ceiling — the shipped default on disk is never touched, and the child cannot reach the copy to widen it further.
+
+Only `WebSearch` is grantable today, and the list is deliberately short: `Bash` executes locally, `Agent`/`Task*` let an unattended job fan out, `Cron*` schedules work that outlives the job, and `WebFetch` reaches any URL including hosts on this machine's private network. A request for one of those is REFUSED and the job does not start, rather than running quietly narrower than you asked for.
+
+**Measured caveat on `WebSearch`, so you do not debug it twice:** the grant works — without it the call is refused and recorded, with it the call runs. But a job runs against the gateway, and web search is a server-side tool of the Anthropic API, not something the permission system can provide for a third-party model. The tool runs and the backend answers "can't perform web searches". Granting it is correct and currently buys nothing on a gateway alias.
+
 **Skills the job will need, if any.** A background child does NOT inherit your skills — it runs with its own narrow settings, so a job told to "run ce-code-review" has no such skill and will improvise something shaped like one. Pass `--skill <name>` (repeatable) and the supervisor copies that skill where the child can read it. Two sources, one flag:
 
 - **the caller named it** — honour it exactly, including the `plugin:skill` form
