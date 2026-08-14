@@ -107,6 +107,102 @@ for k,p in w(d):
     [ -f "$WORK/.claude/skills/mine/SKILL.md" ]
 }
 
+# Most entries in ~/.claude/skills on this box are symlinks into ~/.agents/skills
+# — direct-writing, clean-code, agent-browser and more. `cp -R` preserved the
+# link, the ceiling resolved it outside the worktree, and every read the child
+# made was refused: a job landed degraded blaming permissions for a provisioning
+# bug. These tests assert what the CHILD can reach, not what cp was told to do.
+
+# A source tree with both shapes of nested link, plus content outside it that
+# must never become a real file inside the worktree.
+mk_skill_src() {
+    local root="$1"
+    mkdir -p "$root/real/nested" "$root/outside"
+    echo "the skill" > "$root/real/SKILL.md"
+    echo "nested content" > "$root/real/nested/deep.md"
+    echo "SECRET" > "$root/outside/secret.md"
+    ln -s ../../outside/secret.md "$root/real/nested/escape.md"
+    ln -s nested/deep.md "$root/real/inside.md"
+    ln -s "$root/real" "$root/link"
+}
+
+@test "a symlinked skill source provisions as a real directory the child can read" {
+    local home="$WORK/fakehome"; mkdir -p "$home/skills"
+    mk_skill_src "$WORK/src"
+    ln -s "$WORK/src/link" "$home/skills/linky"
+
+    run env SPAWN_SKILLS_HOME="$home" bash -c \
+        '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    [ "$status" -eq 0 ]
+
+    local d="$WORK/.claude/skills/linky"
+    [ ! -L "$d" ] || { echo "destination is still a symlink — the child's read resolves outside"; return 1; }
+    [ -d "$d" ]
+
+    # The reachability assertion: every path stays inside the worktree when
+    # resolved, which is the thing the ceiling actually matches on.
+    [ "$(cat "$d/SKILL.md")" = "the skill" ]
+    [ ! -L "$d/SKILL.md" ]
+    [ "$(cat "$d/nested/deep.md")" = "nested content" ]
+    [ ! -L "$d/nested/deep.md" ]
+    local real_deep; real_deep="$(cd "$d/nested" && pwd -P)"
+    [[ "$real_deep" == "$WORK"/* ]] || { echo "nested content resolves outside: $real_deep"; return 1; }
+
+    run grep -c . "$MAN"
+    [ "$output" = "1" ]
+}
+
+@test "a nested link escaping the source root is pruned, not materialised" {
+    local home="$WORK/fakehome"; mkdir -p "$home/skills"
+    mk_skill_src "$WORK/src"
+    ln -s "$WORK/src/link" "$home/skills/linky"
+
+    run env SPAWN_SKILLS_HOME="$home" bash -c \
+        '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
+
+    local d="$WORK/.claude/skills/linky"
+    # Neither a real file (that would place outside content in the worktree) nor
+    # a surviving link (the ceiling refuses it and the reader blames permissions).
+    [ ! -e "$d/nested/escape.md" ] && [ ! -L "$d/nested/escape.md" ] || {
+        echo "escaping link survived provisioning: $(ls -l "$d/nested/escape.md")"; return 1; }
+    run grep -rl SECRET "$d"
+    [ -z "$output" ] || { echo "outside content was materialised inside the worktree"; return 1; }
+    [ "$(cat "$WORK/src/outside/secret.md")" = "SECRET" ]
+
+    # A link that stays inside the source root is still usable.
+    [ -L "$d/inside.md" ]
+    [ "$(cat "$d/inside.md")" = "nested content" ]
+}
+
+@test "a real-directory source still provisions unchanged" {
+    local home="$WORK/fakehome"; mkdir -p "$home/skills/plain"
+    echo "plain skill" > "$home/skills/plain/SKILL.md"
+
+    run env SPAWN_SKILLS_HOME="$home" bash -c \
+        '. "$1"; spawn::skill_provision "$2" "$3" plain' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    [ "$status" -eq 0 ]
+    [ ! -L "$WORK/.claude/skills/plain" ]
+    [ "$(cat "$WORK/.claude/skills/plain/SKILL.md")" = "plain skill" ]
+    run grep -c . "$MAN"
+    [ "$output" = "1" ]
+}
+
+@test "teardown removes a symlink-sourced skill without touching its source" {
+    local home="$WORK/fakehome"; mkdir -p "$home/skills"
+    mk_skill_src "$WORK/src"
+    ln -s "$WORK/src/link" "$home/skills/linky"
+
+    run env SPAWN_SKILLS_HOME="$home" bash -c \
+        '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    run sk spawn::skill_unprovision "$MAN"
+    [ ! -e "$WORK/.claude/skills/linky" ]
+    # The dereferenced copy means teardown deletes real files — the source must
+    # not be one of them.
+    [ "$(cat "$WORK/src/real/SKILL.md")" = "the skill" ]
+    [ "$(cat "$WORK/src/real/nested/deep.md")" = "nested content" ]
+    [ -L "$WORK/src/real/nested/escape.md" ]
+}
+
 @test "provisioning refuses to overwrite a skill that already exists" {
     mkdir -p "$WORK/.claude/skills/ce-code-review"
     echo "the user's own" > "$WORK/.claude/skills/ce-code-review/SKILL.md"
