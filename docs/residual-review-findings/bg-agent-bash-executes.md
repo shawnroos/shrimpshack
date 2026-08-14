@@ -1,3 +1,20 @@
+# CLOSED 2026-08-13 — a background job could run shell commands; the deny list now stops it
+
+**Resolution.** The mechanism was measured by effect: `permissions.allow` does not
+gate, `--allowedTools` does not gate, and `--permission-mode default` does not
+gate — only `permissions.deny` blocks. Bash, Agent, Workflow, Task*, Cron* and
+the rest are now explicitly denied, verified by effect (the file a shell would
+have written does not appear; a Write to the worktree still does).
+
+**What is NOT closed, and cannot be:** a deny list is an enumeration. Every tool
+the harness adds in future is permitted here until its name is added. There is no
+default-deny available to reach for. That limitation is now stated in the ceiling
+file itself rather than left as an assumption.
+
+---
+
+## The original finding, kept for the record
+
 # OPEN P1 — a background job can run shell commands, and the ceiling says it cannot
 
 **Measured 2026-08-13**, through the real `bg-agent` path on the installed plugin

@@ -10,6 +10,7 @@ description: >
   on GPT", "give me a Kimi session with this context", "launch on glm". The first turn
   runs headlessly; nothing opens a terminal, and the handle is attached on demand.
 allowed-tools: Bash, Read
+user-invocable: false
 ---
 
 # Interactive launch

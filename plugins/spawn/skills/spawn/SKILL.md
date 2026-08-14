@@ -48,29 +48,28 @@ Three questions settle almost every case:
 **When in doubt, prefer the cheaper surface.** `agent` is one HTTP call. Escalate
 when it turns out you needed tools or persistence, not in anticipation.
 
-## What a background job can ACTUALLY do — measured, and it is not what is documented
+## What a background job can ACTUALLY do — measured by effect
 
-**A background job can run shell commands.** Measured 2026-08-13 through the real
-path: a job ran `id -un` via `Bash` and wrote the true username into its
-deliverable, with `permission_denials` EMPTY and the job classified `done`. The
-ceiling file says Bash is not allowed. That claim does not hold.
+**A job cannot run shell commands, spawn agents, schedule work, or reach the
+network.** Bash, Agent, Workflow, Task*, Cron*, ScheduleWakeup, Monitor,
+WebFetch, SendMessage, RemoteTrigger, PushNotification, ShareOnboardingGuide,
+NotebookEdit and the worktree-moving tools are all explicitly denied. It can
+Read, Write and Edit inside the worktree, and that is the job.
 
-It is **partial, not open** — the same path refused `echo CEILING_BREACH_$(id -un)`
-and refused `WebFetch` and `WebSearch`, each recorded as a denial. Why some Bash
-calls pass and others do not is **not yet understood**; command substitution is a
-hypothesis, not a finding.
+**Know how that boundary is built, because it changes what you can trust.** The
+deny list is the whole enforcement — measured 2026-08-13, a tool absent from both
+the allow list and the deny list RAN. `--allowedTools` did not restrict it either.
+So the allow list constrains nothing on its own, and the boundary is an
+**enumeration**: a tool the harness adds tomorrow is permitted until its name is
+added. Treat this as doors bolted shut, not as a wall.
 
-**Until that is settled, do not treat this ceiling as preventing shell
-execution.** Write contracts as if a job could run a command, and read
-`permission_denials[]` rather than the narrative to see what actually happened.
+**A denied call leaves no trace.** A call that is merely not-allowed is recorded
+in `permission_denials[]`; a DENY-rule refusal records nothing. So a job blocked
+by this ceiling looks, in the record, like a job that simply did not try. Judge it
+by the deliverables, which is what the contract is for.
 
-Two other measured corrections:
-
-- A real child has **no `Glob` and no `Grep`** at all, though the allow list names
-  both. Do not plan a job around them.
-- The advertised tool list includes `Agent`, `Workflow`, `Task*` and `Cron*`. That
-  list is the model's **self-report** and is not evidence of what it may do — but
-  neither is it evidence it may not.
+**A real child also has no `Glob` and no `Grep`**, though both are named in the
+allow list — inert on this harness version. Do not plan a job around them.
 
 ## Giving a background job the skills it needs
 
