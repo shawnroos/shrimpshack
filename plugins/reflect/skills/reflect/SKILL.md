@@ -232,11 +232,11 @@ Tally: `captured=N`.
 
 ### 8. Reconcile + embed pass — silent, automatic
 
-- Run `${CLAUDE_PLUGIN_ROOT}/scripts/qmd-reconcile-collections.sh` to ensure the Claude-owned QMD collections exist (`claude-memory` for the memory dir + one `claude-<type>` per doc-store subdirectory) and re-embed them with collection-scoped `qmd embed -c <name>`. This makes memories saved and docs captured this session findable next session (seeded recall depends on it).
-- Only `claude-`-prefixed collections are touched. The ~24.8k-doc global backlog and foreign collections (openclaw, Slate) are never embedded here.
+- Run `${CLAUDE_PLUGIN_ROOT}/scripts/qmd-reconcile-collections.sh` to ensure the Claude-owned QMD collections exist (`claude-memory` for the memory dir + one `claude-<type>` per doc-store subdirectory), then **index once with a global `qmd update` and re-embed each with collection-scoped `qmd embed -c <name>`, in that order**. Both steps are required and neither substitutes for the other: `update` adds newly saved files to the index (and drops deleted ones), `embed` generates the vectors. `qmd embed` alone only re-vectorises documents **already** in the index, so an embed-only pass leaves every memory saved this session unindexed and unfindable next session — which is exactly what it did before this was fixed.
+- **Creation and embedding** are restricted to `claude-`-prefixed collections: foreign collections (openclaw, Slate) are never created, embedded, or modified. **Indexing is global** — `qmd update` takes no `-c` flag, so the one update per run re-indexes every collection in the resolved config, the ~24.8k-doc backlog included. That is the price of new memories being findable at all; it is one rescan per run, never one per collection.
 - **If `qmd` is not installed, this pass is a clean no-op** (the script skips and exits 0). Memory still works: the budgeted pointer index loads, and bodies are read directly via their file pointers — only search-based and seeded recall stay dormant until `qmd` is installed.
 
-Tally: `embedded=N`.
+Tally: `embedded=0|unknown` — the script emits this, you do not compute it. It has exactly two values and neither is a count of collections visited. `0` means every embed proved it had no work to do; `unknown` means documents may have been embedded but the number is not observable, because `qmd` reports content hashes rather than documents and one document can carry several. A failed embed also yields `unknown`. Report whatever the script printed; never substitute a number for `unknown`, and never read `unknown` as a failure.
 
 ### 9. Work cleanup pass — silent, automatic
 
@@ -254,12 +254,14 @@ Append one line to `<memory-dir>/REFLECT.log`. The field set is extended additiv
 <ISO8601 timestamp> <trigger> updated=N saved=M merged=K retired=L compounded=C index_tightened=I captured=X embedded=Y worktrees_removed=W triggers_declared=T triggers_pruned=P
 ```
 
+`embedded=Y` is the one non-numeric field: it is `0` or the literal `unknown` (see Pass 8). Every other field is a count. **Every count means an observed effect, never a step that ran** — `updated` counts memory files whose content or `last_used` actually changed, not memories inspected; `saved` counts body files successfully written, not save attempts; `index_tightened` is `1` only when Pass 6 changed the rendered `MEMORY.md`, `0` when the render was already compliant even though render and lint both ran; `worktrees_removed` counts worktrees confirmed absent afterward, not removal commands issued. A `0` with a reason is a real result; a number you did not observe is not.
+
 The two trigger fields go last so every existing positional reader keeps working. `triggers_declared` counts memories given a `triggers:` block this pass — authored at save time or backfilled — and `triggers_pruned` counts never-acted-on triggers removed or sharpened. Both are `0` on a pass that declared none, which is a normal and expected outcome, not a skip.
 
 Examples:
 ```
-2026-05-08T18:42:13-07:00 manual updated=2 saved=0 merged=0 retired=1 compounded=0 index_tightened=1 captured=0 embedded=1 worktrees_removed=0 triggers_declared=0 triggers_pruned=0
-2026-05-08T19:15:00-07:00 PR_event updated=0 saved=1 merged=0 retired=0 compounded=1 index_tightened=0 captured=2 embedded=2 worktrees_removed=2 triggers_declared=1 triggers_pruned=0
+2026-05-08T18:42:13-07:00 manual updated=2 saved=0 merged=0 retired=1 compounded=0 index_tightened=1 captured=0 embedded=0 worktrees_removed=0 triggers_declared=0 triggers_pruned=0
+2026-05-08T19:15:00-07:00 PR_event updated=0 saved=1 merged=0 retired=0 compounded=1 index_tightened=0 captured=2 embedded=unknown worktrees_removed=2 triggers_declared=1 triggers_pruned=0
 ```
 
 In verbose mode (`/reflect verbose`): also print the full pass-by-pass summary to screen, ending with the log line.

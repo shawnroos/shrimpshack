@@ -83,12 +83,64 @@ QSTUB="$ROOT/qmd-stub"; mkdir -p "$QSTUB"
 QSTATE="$ROOT/qmd-collections"; : > "$QSTATE"
 cat > "$QSTUB/qmd" <<'QMDEOF'
 #!/bin/sh
-# Minimal qmd modelling ONLY what qmd-reconcile-collections.sh and this harness
-# call: one line per collection in $QMD_STUB_STATE, "<name> <path>".
+# qmd stub modelling ONLY what qmd-reconcile-collections.sh and this harness call.
+#
+# Three files, because the defect under test is precisely the difference between
+# them — a collection can be REGISTERED while a file inside it is not INDEXED, and
+# `embed` can only ever vectorise what is already indexed:
+#   $QMD_STUB_STATE    registered collections, one "<name> <path>" per line
+#   $QMD_STUB_INDEX    indexed files,  one "<collection> <file>" per line
+#   $QMD_STUB_EMBEDDED embedded files, one "<collection> <file>" per line
+#   $QMD_STUB_CALLS    ordered call ledger, one subcommand per line
+#
+# The seeding rule mirrors real qmd, which is load-bearing and NOT an assumption:
+# `collection add` indexes the files present at add time (proven by the real-qmd
+# seeded-recall block below, which adds a collection then embeds and recalls with
+# no intervening `update`), while a file created AFTER registration stays unindexed
+# until `update` rescans. That is the production bug this stub can finally see.
 state="${QMD_STUB_STATE:?}"
+index="${QMD_STUB_INDEX:-$state.index}"
+embedded="${QMD_STUB_EMBEDDED:-$state.embedded}"
+calls="${QMD_STUB_CALLS:-$state.calls}"
+
+# index_collection <name> <path> — record every file currently under <path>
+index_collection() {
+  for f in "$2"/*; do
+    [ -f "$f" ] || continue
+    grep -qxF "$1 $f" "$index" 2>/dev/null || echo "$1 $f" >> "$index"
+  done
+}
+
+echo "$1" >> "$calls"
 case "$1" in
   init) exit 0 ;;
-  embed) exit 0 ;;
+  update)
+    # Global: no -c flag. Rescans every registered path, which is exactly why the
+    # production call is hoisted once per run rather than made per collection.
+    [ "${QMD_STUB_FAIL_UPDATE:-0}" = "1" ] && { echo "qmd: update failed" >&2; exit 1; }
+    while read -r n p; do [ -n "$n" ] && index_collection "$n" "$p"; done < "$state"
+    echo "✓ All collections updated"
+    exit 0 ;;
+  embed)
+    # embed -c <name>: promotes only ALREADY-INDEXED files. Never indexes.
+    shift; name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in -c) name="$2"; shift 2 ;; *) shift ;; esac
+    done
+    [ "${QMD_STUB_FAIL_EMBED:-}" = "$name" ] && { echo "qmd: embed exploded" >&2; exit 1; }
+    moved=0
+    while read -r c f; do
+      [ "$c" = "$name" ] || continue
+      grep -qxF "$c $f" "$embedded" 2>/dev/null && continue
+      echo "$c $f" >> "$embedded"; moved=$((moved + 1))
+    done < "$index"
+    # The literal the production tally matches for "0 documents". Kept verbatim.
+    if [ "$moved" -eq 0 ]; then
+      echo "✓ All content hashes already have embeddings."
+    else
+      echo "Embedded $moved content hashes"
+    fi
+    exit 0 ;;
   collection)
     shift
     case "$1" in
@@ -104,9 +156,17 @@ case "$1" in
             done
             [ -n "$name" ] || name="$(basename "$path")"
             grep -q "^$name " "$state" 2>/dev/null && exit 0
-            echo "$name $path" >> "$state"; exit 0 ;;
+            echo "$name $path" >> "$state"
+            index_collection "$name" "$path"   # add-time seeding, mirroring real qmd
+            exit 0 ;;
       rename) sed_tmp="$state.t"; awk -v o="$2" -v n="$3" '{ if ($1==o) $1=n; print }' \
-                "$state" > "$sed_tmp" && mv "$sed_tmp" "$state"; exit 0 ;;
+                "$state" > "$sed_tmp" && mv "$sed_tmp" "$state"
+              for lf in "$index" "$embedded"; do
+                [ -f "$lf" ] || continue
+                awk -v o="$2" -v n="$3" '{ if ($1==o) $1=n; print }' "$lf" > "$lf.t" \
+                  && mv "$lf.t" "$lf"
+              done
+              exit 0 ;;
       *) exit 1 ;;
     esac ;;
   *) exit 1 ;;
@@ -115,6 +175,9 @@ QMDEOF
 chmod +x "$QSTUB/qmd"
 QMD_PREV_PATH="$PATH"
 export QMD_STUB_STATE="$QSTATE"
+export QMD_STUB_INDEX="$ROOT/qmd-index"       ; : > "$QMD_STUB_INDEX"
+export QMD_STUB_EMBEDDED="$ROOT/qmd-embedded" ; : > "$QMD_STUB_EMBEDDED"
+export QMD_STUB_CALLS="$ROOT/qmd-calls"       ; : > "$QMD_STUB_CALLS"
 export PATH="$QSTUB:$PATH"
 
 if command -v qmd >/dev/null 2>&1; then
@@ -151,7 +214,82 @@ if command -v qmd >/dev/null 2>&1; then
   mkdir -p doc-store/solutions; printf '# s\ngamma solution\n' > doc-store/solutions/s1.md
   bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1
   check_collection "new doc-type auto-registers (claude-solutions)" "claude-solutions"
-  unset QMD_RECONCILE_MEMORY_DIR QMD_RECONCILE_DOC_STORE QMD_RECONCILE_NO_EMBED
+
+  # U1 scenario 10 — the fast-test flag must gate BOTH qmd stages. `update` is an
+  # indexing step, not embedding work, so a flag scoped to embedding alone would
+  # leave a full global re-index running inside every assertion above.
+  : > "$QMD_STUB_CALLS"
+  bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1
+  check "NO_EMBED=1 calls neither update nor embed" \
+    '! grep -qx update "$QMD_STUB_CALLS" && ! grep -qx embed "$QMD_STUB_CALLS"'
+  unset QMD_RECONCILE_NO_EMBED
+
+  # ---------------------------------------------------- indexing + honest tally
+  # Everything below runs with embedding ENABLED. These are the assertions the
+  # old stub could not express: it modelled `embed` as unconditional success and
+  # had no notion of a file being indexed, so a reconciler that never called
+  # `qmd update` looked identical to one that did.
+  emb() { grep -qxF "$1 $2" "$QMD_STUB_EMBEDDED"; }
+
+  # U1 scenarios 1+2 — a memory written AFTER its collection was registered.
+  # Setup deliberately performs NO `qmd update`: if the test seeded the index
+  # itself it could never catch a production path that forgets to. The call
+  # ledger is reset immediately before the run so nothing earlier can be
+  # mistaken for the invocation under assertion.
+  printf '# new\ndelta memory written after registration\n' > mem/m2.md
+  : > "$QMD_STUB_CALLS"
+  bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1
+  check "post-registration file reaches the embedded ledger" \
+    'emb claude-memory "$R/mem/m2.md"'
+  check "reconciler itself calls update before embed" \
+    '[ "$(grep -nx update "$QMD_STUB_CALLS" | head -1 | cut -d: -f1)" -lt \
+       "$(grep -nx embed  "$QMD_STUB_CALLS" | head -1 | cut -d: -f1)" ]'
+  check "exactly one global update per run, not one per collection" \
+    '[ "$(grep -cx update "$QMD_STUB_CALLS")" = "1" ]'
+
+  # U1 scenario 3 — first-run collection: files present at creation must embed on
+  # that same run. Guards the add-time seeding the hoisted update cannot cover,
+  # since the collection does not exist yet when the update fires.
+  mkdir -p doc-store/plans; printf '# p\nepsilon plan\n' > doc-store/plans/p1.md
+  bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1
+  check "first-run collection embeds its initial files" \
+    'emb claude-plans "$R/doc-store/plans/p1.md"'
+
+  # U1 scenario 5 — steady state: every embed reports the no-work literal.
+  OUT_NOOP="$(bash "$SCRIPTS/qmd-reconcile-collections.sh" 2>/dev/null)"
+  check "all-no-work run reports embedded=0, not one per collection" \
+    'echo "$OUT_NOOP" | grep -q "embedded=0"'
+
+  # U1 scenario 6 — real embedding work happened, but qmd exposes no document
+  # count (only content hashes), so the honest answer is `unknown`, never a number.
+  printf '# new2\nzeta memory\n' > mem/m3.md
+  OUT_WORK="$(bash "$SCRIPTS/qmd-reconcile-collections.sh" 2>/dev/null)"
+  check "run that embedded something reports embedded=unknown" \
+    'echo "$OUT_WORK" | grep -q "embedded=unknown"'
+
+  # U1 scenarios 7+8 — a failing embed. It must warn, must not starve the
+  # collections after it, and must force `unknown`. Scenario 8 is the sharp one:
+  # every OTHER collection reports no-work, so a tally that only considers
+  # successful commands would print a confident — and false — embedded=0.
+  ERR_FAIL="$(QMD_STUB_FAIL_EMBED=claude-memory \
+    bash "$SCRIPTS/qmd-reconcile-collections.sh" 2>&1 >/dev/null || true)"
+  OUT_FAIL="$(QMD_STUB_FAIL_EMBED=claude-memory \
+    bash "$SCRIPTS/qmd-reconcile-collections.sh" 2>/dev/null || true)"
+  check "failed embed warns and names the collection" \
+    'echo "$ERR_FAIL" | grep -q "embed failed for claude-memory"'
+  check "failed embed does not starve later collections" \
+    'echo "$OUT_FAIL" | grep -q "claude-brainstorms ->"'
+  check "failed embed forces embedded=unknown, never a false 0" \
+    'echo "$OUT_FAIL" | grep -q "embedded=unknown"'
+
+  # U1 scenario 9 — a failing global update stays non-fatal: later scoped embeds
+  # are still attempted rather than the run dying under `set -e`.
+  : > "$QMD_STUB_CALLS"
+  QMD_STUB_FAIL_UPDATE=1 bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1 || true
+  check "failed update is non-fatal: embeds still attempted" \
+    'grep -qx embed "$QMD_STUB_CALLS"'
+
+  unset QMD_RECONCILE_MEMORY_DIR QMD_RECONCILE_DOC_STORE
   cd "$REPO"
 else
   # Say it out loud. A silently skipped block reads as coverage that ran, which is
@@ -227,6 +365,22 @@ if command -v qmd >/dev/null 2>&1; then
   OUT7="$(printf '{"prompt":"widget pipeline batches frobnicators","session_id":"U6"}' | SEEDED_RECALL_FLAG_DIR="$FLAG" SEEDED_RECALL_MEMORY_DIR="$H/mem" SEEDED_RECALL_FLOOR_BASE=0.0 SEEDED_RECALL_FLOOR_SPAN=2.0 SEEDED_RECALL_K=5 SEEDED_RECALL_TIMEOUT=60 bash "$HOOKS/seeded-recall.sh" 2>/dev/null)"
   check "U6 floor engages: fresh (high-activation) memory surfaces" "echo \"\$OUT7\" | grep -q FRESHTOKEN"
   check "U6 floor engages: faded (low-activation) memory is filtered out" "! echo \"\$OUT7\" | grep -q FADEDTOKEN"
+
+  # ------------------------------------------- R12: findability, against real qmd
+  # The stubbed block above proves the reconciler CALLS `qmd update` before `embed`.
+  # It cannot prove a memory becomes findable, because we author the stub semantics
+  # the assertion depends on — so if the premise were ever wrong, that suite would
+  # stay green while memories stayed unfindable. This is the one assertion that
+  # closes the loop against the real binary: write a memory AFTER its collection was
+  # registered, run the PRODUCTION reconciler, and search for it.
+  #
+  # Nothing here may run `qmd update` itself — the whole point is that the
+  # reconciler is the only possible source of it.
+  printf '# Retrieval\nGRONKLE distinctive phrase for retrieval proof.\n' > mem/gronkle.md
+  QMD_RECONCILE_MEMORY_DIR="$H/mem" QMD_RECONCILE_DOC_STORE="$H/nonexistent-doc-store" \
+    bash "$SCRIPTS/qmd-reconcile-collections.sh" >/dev/null 2>&1 || true
+  check "R12: post-registration memory is findable after the production reconciler" \
+    'qmd search -c claude-memory GRONKLE 2>/dev/null | grep -qi gronkle'
 
   unset SEEDED_RECALL_COLLECTION SEEDED_RECALL_FLAG_DIR SEEDED_RECALL_K SEEDED_RECALL_TIMEOUT
   cd "$REPO"
