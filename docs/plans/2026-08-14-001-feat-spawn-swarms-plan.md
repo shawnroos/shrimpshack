@@ -68,7 +68,7 @@ Two things make it worth building now. The single-job path became trustworthy: j
 - R32. No member is dispatched while a round is still in flight. The advance step reports a distinct waiting intent for as long as any member of the active round is non-terminal, and the concurrency maximum therefore bounds members in flight rather than members per dispatch call.
 - R7. A verdict is computed only from fields the plugin measured. A model's prose never reaches one.
 - R8. The verdict is default-deny: a member counts as passing only when its terminal state is `done`; every other state, including an unrecognised one, counts as failing.
-- R24. Every failing member's entry distinguishes one that produced nothing from one whose deliverables were satisfied but whose terminal state was not `done`. Measured: a job that satisfied every deliverable still lands `degraded` when it attempted any refused tool call, so a compliant member that probes its environment fails R8. The pass rule stays default-deny; the distinction is surfaced, not folded in.
+- R24. Every failing member's entry distinguishes one that produced nothing from one whose deliverables were satisfied but whose terminal state was not `done`. Measured twice: a job that satisfied every deliverable still lands `degraded` when it attempted a tool that is refused **and recorded** — which is a tool omitted from the allow list, not one on the deny list, since a deny rule records nothing. A compliant member that probes its environment therefore fails R8. The pass rule stays default-deny; the distinction is surfaced, not folded in.
 - R9. Two cross-writer channels into a member's worktree are closed while it runs: the driver writes nothing there between that member's launch and its terminal state, and the channels by which the child could have another process write for it are unavailable to it. Any other write into that worktree is credited to the member. Positive attribution is not delivered; see OQ1.
 
 **The loop**
@@ -534,12 +534,22 @@ First, deny the child the tools that let it ask another process to act for it, n
 
 The v1 set, in four groups, so a reader can tell what each entry is for:
 
-- **Shell** — `Bash`. Measured reachable despite omission, and a shell reaches everything else.
+- **Shell** — `Bash`. A shell reaches everything else, so this entry is the one that matters most.
 - **Fan-out** — `Agent`, `Task`, `Workflow`, `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`, `TaskOutput`, `TaskStop`. A member that can spawn is a member that can delegate its deliverable.
 - **Messaging and scheduling** — `SendMessage`, `RemoteTrigger`, `PushNotification`, `ScheduleWakeup`, `CronCreate`, `CronDelete`, `CronList`, `Monitor`. The measured recruitment channel was a message to another session; scheduling is the same thing deferred.
 - **Outbound reach** — `WebFetch`.
 
-The branch `fix/spawn-ceiling-deny` already carries this set, so U7 adopts it rather than inventing a parallel list, and this plan's job is to test it by effect. **An enumeration cannot close the class** — the ceiling file says so about itself, and a tool added to the harness tomorrow is not on this list. Treat the set as the v1 floor and the effect tests as the check, not the list as a proof. Measured on the shipped ceiling: omission does not reliably block — a probe job's `Bash` call was recorded in `permission_denials[]` while another `Bash` call in the same job returned the true output of `id -un`. A refused-yet-usable channel is not a control. The cost is real and accepted: a deny rule leaves no `permission_denials[]` entry, so closing the channel forfeits the record of attempts against it. Extend the file's `$comment`, which narrates three bounds and would otherwise not mention this one.
+This set shipped in plugin version 0.2.8, so U7 adopts the shipped ceiling rather than inventing a parallel list, and this plan's job is to test it by effect. **An enumeration cannot close the class** — the ceiling file says so about itself, and a tool added to the harness tomorrow is not on this list. Treat the set as the v1 floor and the effect tests as the check, not the list as a proof.
+
+Measured against that shipped ceiling, with a value the child could not fabricate — a caller-supplied nonce whose SHA-256 it was asked to compute with `Bash`:
+
+- **A deny rule blocks.** The child returned `REFUSED` for both the digest and a `date +%s`. It could not have guessed either.
+- **A deny rule leaves no record.** `permission_denials[]` was empty despite two refused attempts, exactly as the ceiling file's `$comment` states.
+- **Omission from the allow list also blocks**, but records the attempt. That is the only difference this probe found between the two mechanisms.
+
+Prefer deny regardless: it is directly assertable in the rendered settings file, whereas omission's protection depends on `defaultMode` staying `dontAsk`. The forfeited attempt record is the accepted cost — R9's second control closes a channel rather than watching it.
+
+**Probe design is load-bearing, and this plan got it wrong once.** An earlier probe asked the child to run `id -un` and treated the true username in its output as proof a shell had run. The username is a substring of the worktree path, so the child could produce it with no shell at all — and did, then wrote it with the `Write` tool after its `Bash` attempt was refused. That produced a false "refused yet usable" reading which stood in this plan through a full review round. Any future test of this ceiling must use a value that cannot be derived from what the child can already see. Extend the ceiling file's `$comment`, which narrates three bounds and would otherwise not mention this one.
 
 Second, the driver writes nothing into a member's worktree between that member's launch and its terminal state. Its own record, logs and scratch live under the driver's worktree. `changed_files` unions a `find -newer` sweep with a `git status --porcelain` diff over the member's worktree, so any concurrent write there is attributed to the member.
 
@@ -547,7 +557,8 @@ Second, the driver writes nothing into a member's worktree between that member's
 - The rendered ceiling includes an explicit deny rule for every tool in the v1 set above — assert per group, so a dropped entry names itself.
 - A child attempting a denied call does not achieve its effect: assert the artifact the tool would have produced is absent. Do not assert on a `permission_denials[]` entry — a deny rule leaves none, so that assertion would pass whether or not the rule existed.
 - A control arm proves the effect assertion can fail: with the deny rule removed, the same attempt produces its artifact and the test goes red.
-- The shell channel specifically: a member contracted to run a shell command and record its output produces no such output. This is the one measured to be reachable through omission, so it carries its own scenario rather than sharing the group's.
+- The shell channel specifically: a member contracted to compute the SHA-256 of a **caller-supplied nonce** writes `REFUSED` rather than the digest. The nonce is what makes this a test — a value the child can read off its own path or environment proves nothing, because it can produce that without a shell.
+- A denied attempt leaves `permission_denials[]` empty, and the job still classifies `done` when its deliverables are satisfied. Deny and omission differ here: only omission records, which is why R24's false-fail applies to not-allowed tools rather than denied ones.
 - The driver writes no file into a member's worktree during its run: snapshot at dispatch and at terminal, and assert the only changes are the member's contracted deliverables plus its job directory.
 - A control arm plants a driver write mid-run and the snapshot check catches it.
 - The driver's own record and logs are inside the driver's worktree, not any member's.
