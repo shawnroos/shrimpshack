@@ -45,6 +45,7 @@ Two things make it worth building now. The single-job path became trustworthy: j
 **The team**
 
 - R25. A team is a set of named members. Each member carries its own alias, contract and skill list, and every response reports members by name.
+- R33. The team is stated in one file the caller writes: the mode, the bounds, and the members with their names, aliases, contract paths and skill lists. Every surface takes a run identifier rather than re-stating the team, so dispatch, advance and status cannot disagree about who is on it. The file's shape appears in `--describe`.
 - R1. One command dispatches a round and returns a roster immediately.
 - R2. Each member runs in its own git worktree, so the existing one-job-per-worktree lock is untouched.
 - R3. The driver never dispatches a member into its own worktree.
@@ -54,7 +55,7 @@ Two things make it worth building now. The single-job path became trustworthy: j
 **Modes**
 
 - R26. Three modes are supported and named in the response. **Attached**: the driver hands control back after each round with a per-member report. **Unattended**: the driver advances rounds on a timer without waiting to be asked. **Single-round**: one round, no loop, no driver — every member runs to a terminal state and records it, whether or not any session survives.
-- R31. Single-round mode requires no process beyond the per-member supervisors that `bg-agent` already detaches.
+- R31. Single-round mode requires no process beyond the per-member supervisors that `bg-agent` already detaches. It refuses a roster larger than its concurrency maximum before any worktree is created, because it arms no driver and could not otherwise advance the remainder.
 
 **The record**
 
@@ -64,6 +65,7 @@ Two things make it worth building now. The single-job path became trustworthy: j
 **The round and the verdict**
 
 - R6. A round is not concluded until every member dispatched in it has reached a terminal state or a bound has fired. The driver does not block waiting for that — it re-enters, probes, and concludes the round when the condition holds.
+- R32. No member is dispatched while a round is still in flight. The advance step reports a distinct waiting intent for as long as any member of the active round is non-terminal, and the concurrency maximum therefore bounds members in flight rather than members per dispatch call.
 - R7. A verdict is computed only from fields the plugin measured. A model's prose never reaches one.
 - R8. The verdict is default-deny: a member counts as passing only when its terminal state is `done`; every other state, including an unrecognised one, counts as failing.
 - R24. Every failing member's entry distinguishes one that produced nothing from one whose deliverables were satisfied but whose terminal state was not `done`. Measured: a job that satisfied every deliverable still lands `degraded` when it attempted any refused tool call, so a compliant member that probes its environment fails R8. The pass rule stays default-deny; the distinction is surfaced, not folded in.
@@ -78,7 +80,7 @@ Two things make it worth building now. The single-job path became trustworthy: j
 
 **Watching a round**
 
-- R14. A caller can ask at any moment what every member is doing, and get an answer per member covering its resolved state, how long it has been running, which of its deliverables exist so far, and its token usage.
+- R14. A caller can ask at any moment what every member is doing, and get an answer per member covering its resolved state, how long it has been running, which of its deliverables exist so far, its token usage, and the last line of its own job log.
 - R15. Every field in that answer is probed or measured when asked. No field is read from a claim the member wrote, and none from its narrative. A member that has not reached a terminal state reports token usage as unknown, never as a number — the child emits usage only when it finishes.
 - R30. The response carries a count of members whose token usage is unmeasured, and a team whose usage is wholly unmeasured reports the token ceiling as unenforceable rather than as satisfied.
 - R20. Token usage is reported per member and per round, as the child reported it, with no conversion into money.
@@ -147,6 +149,8 @@ Two things make it worth building now. The single-job path became trustworthy: j
 - KTD17. **The driver is never a background job.** A `bg-agent` child cannot dispatch a team: measured, the ceiling does not reliably gate tools, and a branch is in flight to deny fan-out outright. The driver is the session, or a foreground shell the session runs. Stated because driver-as-job is the obvious wrong reading of KTD1.
 
 - KTD4. **Waiting is re-entry, not blocking.** Governs R6-as-rewritten, R26, R28. The driver does not sit in a loop watching N jobs. It dispatches a round, writes the record, and returns. It is re-entered later — by the caller in attached mode, by a timer in unattended mode — reads the record, and decides. This is `auto`'s pulse shape: one smallest-useful advance per wake-up, all state read from disk, conversation context irrelevant. It replaces an earlier decision to hand-roll a bash barrier over bounded awaits, which the bash 3.2 lint made awkward and which this design makes unnecessary.
+
+- KTD22. **The team travels as a file; every verb takes a run id.** Governs R33. A team is several members each with a name, an alias, a contract path and a skill list — a flag grammar for that is a parser nobody wants in bash, and it would have to be re-stated identically to `dispatch`, `advance` and `status` or they would disagree about the roster. So the caller writes one team file, `dispatch` reads it and returns a run id, and every later verb takes that id. This mirrors `bg-agent`, where the contract travels as a file copied into the job directory so a later edit cannot move the target; the team file is copied into the record for the same reason. The file's shape is declared in `--describe`, since a shape the caller must produce and cannot discover is the same defect as an undiscoverable flag.
 
 - KTD5. **The roster lives in the record, not in shell variables.** Governs R25, R27. Members are named in JSON, where naming is free. Nothing holds a map in bash, so the lint forbidding `declare -A` never binds, and no pair of parallel indexed arrays can drift out of step.
 
@@ -333,7 +337,13 @@ Units are in build order. U-IDs are stable and were assigned as the plan grew, s
 
 **Approach.** A sourced fragment that declares its own dependencies on `sanitize.sh` and `common.sh` — the sink lint walks source edges transitively, so a fragment inheriting its chokepoints must say so.
 
-The record holds: the run id, the mode, the caller's bounds, and a list of members. Each member row carries its name, alias, worktree, contract path, skill list, launch state (`pending`, `dispatched`, `launch_failed`), a nullable handle, and once terminal, its outcome and token counts.
+The record holds: the run id, the mode, the caller's bounds, a round ledger, and a list of members.
+
+Each **round** entry carries its ordinal, its state (`running`, `finished`), the time it opened, the time it closed, and its verdict once closed.
+
+Each **member** row carries its name, alias, worktree, contract path, skill list, launch state (`pending`, `dispatched`, `launch_failed`), a nullable handle, its round assignment once dispatched, its `started_at`, and once terminal, its outcome and token counts.
+
+Enumerate this schema before implementing the chokepoint, and derive it from what later units read rather than from what dispatch happens to know: U10 needs round membership and `started_at` for the diagram and for elapsed; U13 needs per-round token totals; U15 needs the active round's state to decide whether a dispatch is permitted. A field a later unit reads and this schema omits becomes hidden state or a reader-side recomputation, which is the drift KTD18 exists to prevent.
 
 One function writes the record. Inside it, immediately before the write: recompute the per-round verdict, the continuation condition, the bounds evaluation, and the stop reasons, and store them. Readers read those fields. No reader recomputes them. The write is atomic — temp file then `mv`, the shape `jobs.sh` already uses.
 
@@ -342,7 +352,9 @@ One function writes the record. Inside it, immediately before the write: recompu
 **Execution note.** Build this first and make the recompute-on-write property a test before anything else consumes the record. It is the property every later unit leans on, and the cheapest place to get it wrong is at the start.
 
 **Test scenarios.**
-- A record written and read back round-trips every member field.
+- A record written and read back round-trips every member field, including round assignment and `started_at`.
+- The round ledger round-trips: ordinal, state, open time, close time, and verdict once closed.
+- Every field U10 and U13 read is present in a record written by U14 alone — assert per field, so an omission fails here rather than surfacing as hidden state later.
 - The verdict field is present immediately after a write, with no separate compute call.
 - Mutating a member's outcome and writing recomputes the verdict; the previous value is not observable.
 - A reader that reads twice without an intervening write sees identical derived values.
@@ -398,7 +410,9 @@ Declare a `worktree_failed` error value with its own remedy, and use it when `gi
 
 **Files.** `plugins/spawn/lib/team.sh`, `plugins/spawn/tests/unit/team.bats`.
 
-**Approach.** Name the flags explicitly and put them in `--describe`: the concurrency maximum, the round maximum, and the token ceiling. Dispatch in roster order up to the concurrency maximum, shelling out to `bg-agent.sh` with that member's `--alias`, `--contract`, `--cwd` and its own `--skill` values. Atomically replace each member's `pending` row with `dispatched` plus the handle, or `launch_failed` plus the launcher's own error value. Then return the roster and exit — the round is in flight and nothing is watching it.
+**Approach.** The caller supplies a team file (R33, KTD22) naming the mode, the bounds and the members. Copy it into the record at dispatch so a later edit cannot move the target, exactly as `bg-agent` copies its contract into the job directory. Return a run id; every later verb takes that id rather than the file. Refuse a team file that is not one JSON object, names no members, or gives two members the same name.
+
+Name the bound flags explicitly and put them, and the team file's shape, in `--describe`: the concurrency maximum, the round maximum, and the token ceiling. A flag overrides the file's value for the same bound. Dispatch in roster order up to the concurrency maximum, shelling out to `bg-agent.sh` with that member's `--alias`, `--contract`, `--cwd` and its own `--skill` values. Atomically replace each member's `pending` row with `dispatched` plus the handle, or `launch_failed` plus the launcher's own error value. Then return the roster and exit — the round is in flight and nothing is watching it.
 
 Wrap each launch so a non-zero exit records that member and the loop continues to the next.
 
@@ -415,7 +429,11 @@ Wrap each launch so a non-zero exit records that member and the loop continues t
 - Each child receives its own alias — assert on the fixture's appended argv record, one entry per member.
 - Each child receives the `--skill` values named for its member and no others, on the same record.
 - Dispatch returns without waiting for any member to finish: assert the command exits while a `hang`-mode member is still live.
-- The three bound flags appear in `--describe`.
+- The three bound flags and the team file's shape appear in `--describe`.
+- The team file is copied into the record at dispatch; editing the original afterwards does not change the run.
+- A team file that is not one JSON object, names no members, or repeats a member name is refused with exit 2 and a named error.
+- A bound given both in the file and as a flag takes the flag's value.
+- `dispatch` returns a run id, and `advance` and `status` accept it without re-stating the team.
 
 **Verification.** `bats plugins/spawn/tests/unit/team.bats`. Mutation check: drop the per-member `--skill` forwarding and confirm the argv scenario turns red.
 
@@ -429,18 +447,32 @@ Wrap each launch so a non-zero exit records that member and the loop continues t
 
 **Files.** `plugins/spawn/lib/team.sh`, `plugins/spawn/tests/unit/team.bats`.
 
-**Approach.** Read the record from disk — never from arguments, never from an environment carried across calls. For each `dispatched` member not yet terminal, resolve its state with `jobs.sh state --cwd <its worktree>`, and for terminal ones read the outcome with `handle.sh result --cwd <its worktree>`. Keep the three distinct answers `handle.sh` gives distinct: `handle_unknown`, `handle_expired`, and a `state` of `failed`, which is a successful answer and not an error.
+**Approach.** Take the run lock for the whole read-probe-write-print operation, and release it at the end. Atomic rename prevents a torn file; it does not prevent two re-entries both reading the same record, both computing an advance, and the second overwriting the first. Use the `mkdir` primitive `jobs.sh` already uses, with the same discipline: the holder is the advance, a stale holder is broken by `mv`-then-remove rather than a bare `rm -rf`, and the lock is scoped to the run.
 
-Write the record — which recomputes the verdict, the bounds and the stop reasons — and then print the intent: `continue` when undispatched members remain and no bound is crossed, `stop` otherwise with its reasons listed, `noop` when a live advance already holds the run. Write before printing, so a crash between the two leaves a consistent record whose missing successor is detectable.
+Read the record from disk — never from arguments, never from an environment carried across calls. For each `dispatched` member not yet terminal, resolve its state with `jobs.sh state --cwd <its worktree>`, and for terminal ones read the outcome with `handle.sh result --cwd <its worktree>`. Keep the three distinct answers `handle.sh` gives distinct: `handle_unknown`, `handle_expired`, and a `state` of `failed`, which is a successful answer and not an error.
+
+Write the record — which recomputes the verdict, the bounds and the stop reasons — and then print the intent. The intent is decided from **round state first, roster state second**:
+
+- `waiting` while any member of the active round is non-terminal. No dispatch may follow this intent. Without it, `continue` fires while a round is in flight, the driver dispatches again, and the concurrency maximum bounds members per call rather than members in flight — which is R32, and which R6 forbids.
+- `continue` when the active round has closed, undispatched members remain, and no bound is crossed.
+- `stop` when a bound fired or the roster is exhausted, with every reason listed.
+- `noop` when the run lock is held by a live advance.
+
+Write before printing, so a crash between the two leaves a consistent record whose missing successor is detectable.
 
 `advance` never dispatches and never schedules. Dispatch belongs to U4; scheduling belongs to the driver.
 
 **Patterns to follow.** `plugins/auto/lib/pulse.py:1-40` for the whole shape — one advance, state from disk, intent as data, persist-before-signal.
 
 **Test scenarios.**
-- With undispatched members remaining and no bound crossed, the intent is `continue`.
+- With the active round closed, undispatched members remaining and no bound crossed, the intent is `continue`.
+- With any member of the active round still running, the intent is `waiting` — not `continue` — even when undispatched members remain.
+- Repeated advances during a live round never yield `continue`, so no second batch can be dispatched: assert the fixture's argv record gains no entries across three advances.
+- Members in flight never exceed the concurrency maximum across a full multi-round run.
 - With no undispatched members remaining, the intent is `stop` with the roster-exhausted reason.
-- A member still running is probed and left running; the intent does not wait for it.
+- A member still running is probed and left running; the advance returns rather than blocking on it.
+- Two advances racing on one record: the second returns `noop` and does not overwrite the first's result — assert the first advance's changes survive.
+- A stale run lock whose holder is gone is broken and the advance proceeds.
 - A member whose supervisor pid is gone resolves `failed`, not whatever its status file claims.
 - `handle_unknown` for one member does not abort the advance for the others.
 - A `state` of `failed` is treated as an answer, not an error.
@@ -498,14 +530,24 @@ Name identifiers so the enumerated no-spend lint keeps passing.
 
 **Approach.** Two halves, both narrow.
 
-First, deny the child the tools that let it ask another process to act for it, naming each concrete tool in an explicit **deny** rule rather than relying on omission from the allow list. Measured on the shipped ceiling: omission does not reliably block — a probe job's `Bash` call was recorded in `permission_denials[]` while another `Bash` call in the same job returned the true output of `id -un`. A refused-yet-usable channel is not a control. The cost is real and accepted: a deny rule leaves no `permission_denials[]` entry, so closing the channel forfeits the record of attempts against it. Extend the file's `$comment`, which narrates three bounds and would otherwise not mention this one.
+First, deny the child the tools that let it ask another process to act for it, naming each concrete tool in an explicit **deny** rule rather than relying on omission from the allow list.
+
+The v1 set, in four groups, so a reader can tell what each entry is for:
+
+- **Shell** — `Bash`. Measured reachable despite omission, and a shell reaches everything else.
+- **Fan-out** — `Agent`, `Task`, `Workflow`, `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`, `TaskOutput`, `TaskStop`. A member that can spawn is a member that can delegate its deliverable.
+- **Messaging and scheduling** — `SendMessage`, `RemoteTrigger`, `PushNotification`, `ScheduleWakeup`, `CronCreate`, `CronDelete`, `CronList`, `Monitor`. The measured recruitment channel was a message to another session; scheduling is the same thing deferred.
+- **Outbound reach** — `WebFetch`.
+
+The branch `fix/spawn-ceiling-deny` already carries this set, so U7 adopts it rather than inventing a parallel list, and this plan's job is to test it by effect. **An enumeration cannot close the class** — the ceiling file says so about itself, and a tool added to the harness tomorrow is not on this list. Treat the set as the v1 floor and the effect tests as the check, not the list as a proof. Measured on the shipped ceiling: omission does not reliably block — a probe job's `Bash` call was recorded in `permission_denials[]` while another `Bash` call in the same job returned the true output of `id -un`. A refused-yet-usable channel is not a control. The cost is real and accepted: a deny rule leaves no `permission_denials[]` entry, so closing the channel forfeits the record of attempts against it. Extend the file's `$comment`, which narrates three bounds and would otherwise not mention this one.
 
 Second, the driver writes nothing into a member's worktree between that member's launch and its terminal state. Its own record, logs and scratch live under the driver's worktree. `changed_files` unions a `find -newer` sweep with a `git status --porcelain` diff over the member's worktree, so any concurrent write there is attributed to the member.
 
 **Test scenarios.**
-- The rendered ceiling includes an explicit deny rule naming each outbound-channel tool.
+- The rendered ceiling includes an explicit deny rule for every tool in the v1 set above — assert per group, so a dropped entry names itself.
 - A child attempting a denied call does not achieve its effect: assert the artifact the tool would have produced is absent. Do not assert on a `permission_denials[]` entry — a deny rule leaves none, so that assertion would pass whether or not the rule existed.
 - A control arm proves the effect assertion can fail: with the deny rule removed, the same attempt produces its artifact and the test goes red.
+- The shell channel specifically: a member contracted to run a shell command and record its output produces no such output. This is the one measured to be reachable through omission, so it carries its own scenario rather than sharing the group's.
 - The driver writes no file into a member's worktree during its run: snapshot at dispatch and at terminal, and assert the only changes are the member's contracted deliverables plus its job directory.
 - A control arm plants a driver write mid-run and the snapshot check catches it.
 - The driver's own record and logs are inside the driver's worktree, not any member's.
@@ -623,7 +665,7 @@ The hook has a five-second timeout and the render probes N members. Bound the wo
 
 The concurrency choice is the skill's judgment, made per round and resizable between rounds. It is not a constant in the script, following `auto`'s dispatcher, which states the reason: the engine exposes what is ready and never hardcodes a concurrency constant.
 
-Single-round mode is one `dispatch` and no driver at all. The skill says so and does not arm anything — the per-member supervisors already own deadlines and records, and the terminal announcement reports the outcome whenever the caller returns.
+Single-round mode is one `dispatch` and no driver at all. The skill says so and does not arm anything — the per-member supervisors already own deadlines and records, and the terminal announcement reports the outcome whenever the caller returns. Because nothing will advance the run, single-round refuses a roster larger than its concurrency maximum **before any worktree is created**, with a named error and its own remedy. Accepting one would leave the remainder `pending` forever with nothing able to dispatch them, which reads as a run in progress rather than as a refusal.
 
 Document the honest boundary: dispatched members survive the session; the loop does not. Nothing is lost if the caller walks away mid-run, but no new round starts until something re-enters.
 
@@ -631,6 +673,9 @@ Document the honest boundary: dispatched members survive the session; the loop d
 - The command name and the skill names remain disjoint — a command and skill sharing a name silently disables the skill.
 - The skill declares the frontmatter keys the surface tests require.
 - The command passes `$ARGUMENTS` through as the other commands do.
+- Single-round with a roster larger than its concurrency maximum is refused with exit 2 and a named error, and no worktree exists afterwards.
+- Single-round with a roster at or below the maximum dispatches every member and arms nothing.
+- That refusal's error value has a distinct non-empty remedy.
 
 **Verification.** `bats plugins/spawn/tests/unit/surfaces.bats`.
 
