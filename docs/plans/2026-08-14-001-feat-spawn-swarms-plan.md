@@ -412,7 +412,9 @@ Declare a `worktree_failed` error value with its own remedy, and use it when `gi
 
 **Approach.** The caller supplies a team file (R33, KTD22) naming the mode, the bounds and the members. Copy it into the record at dispatch so a later edit cannot move the target, exactly as `bg-agent` copies its contract into the job directory. Return a run id; every later verb takes that id rather than the file. Refuse a team file that is not one JSON object, names no members, or gives two members the same name.
 
-Name the bound flags explicitly and put them, and the team file's shape, in `--describe`: the concurrency maximum, the round maximum, and the token ceiling. A flag overrides the file's value for the same bound. Dispatch in roster order up to the concurrency maximum, shelling out to `bg-agent.sh` with that member's `--alias`, `--contract`, `--cwd` and its own `--skill` values. Atomically replace each member's `pending` row with `dispatched` plus the handle, or `launch_failed` plus the launcher's own error value. Then return the roster and exit — the round is in flight and nothing is watching it.
+Name the bound flags explicitly and put them, and the team file's shape, in `--describe`: the concurrency maximum, the round maximum, and the token ceiling. A flag overrides the file's value for the same bound.
+
+**Dispatch is mode-aware, and enforces R31 here rather than in U16's prose.** A single-round team file whose roster exceeds the concurrency maximum is refused with exit 2 and its own error value, before any worktree is created. Single-round arms no driver, so an accepted oversized roster would strand the remainder `pending` forever with nothing able to advance them. The refusal must live in the script: U16 is a skill, and "exit 2, and no worktree exists afterwards" can only be turned red by code. Dispatch in roster order up to the concurrency maximum, shelling out to `bg-agent.sh` with that member's `--alias`, `--contract`, `--cwd` and its own `--skill` values. Atomically replace each member's `pending` row with `dispatched` plus the handle, or `launch_failed` plus the launcher's own error value. Then return the roster and exit — the round is in flight and nothing is watching it.
 
 Wrap each launch so a non-zero exit records that member and the loop continues to the next.
 
@@ -434,6 +436,9 @@ Wrap each launch so a non-zero exit records that member and the loop continues t
 - A team file that is not one JSON object, names no members, or repeats a member name is refused with exit 2 and a named error.
 - A bound given both in the file and as a flag takes the flag's value.
 - `dispatch` returns a run id, and `advance` and `status` accept it without re-stating the team.
+- A single-round team file whose roster exceeds the concurrency maximum is refused with exit 2 and a named error, and no worktree exists afterwards.
+- The same roster in attached or unattended mode is accepted and dispatches its first round.
+- That refusal's error value carries a distinct non-empty remedy.
 
 **Verification.** `bats plugins/spawn/tests/unit/team.bats`. Mutation check: drop the per-member `--skill` forwarding and confirm the argv scenario turns red.
 
@@ -453,7 +458,7 @@ Read the record from disk — never from arguments, never from an environment ca
 
 Write the record — which recomputes the verdict, the bounds and the stop reasons — and then print the intent. The intent is decided from **round state first, roster state second**:
 
-- `waiting` while any member of the active round is non-terminal. No dispatch may follow this intent. Without it, `continue` fires while a round is in flight, the driver dispatches again, and the concurrency maximum bounds members per call rather than members in flight — which is R32, and which R6 forbids.
+- `waiting` while any member of the active round is non-terminal. No dispatch may follow this intent. Without it, `continue` fires while a round is in flight, the driver dispatches again, and the concurrency maximum bounds members per call rather than members in flight — which is R32, and which R6 forbids. The `waiting` envelope alone carries a `delay` in seconds, clamped to `[60, 3600]`, computed from the active round's age against the child deadline: a round that just started can wait longer than one about to resolve. The driver schedules that value verbatim, so the pacing judgment is testable here rather than living in a skill's prose. No other intent carries a `delay` and no reader should look for one.
 - `continue` when the active round has closed, undispatched members remain, and no bound is crossed.
 - `stop` when a bound fired or the roster is exhausted, with every reason listed.
 - `noop` when the run lock is held by a live advance.
@@ -473,6 +478,8 @@ Write before printing, so a crash between the two leaves a consistent record who
 - A member still running is probed and left running; the advance returns rather than blocking on it.
 - Two advances racing on one record: the second returns `noop` and does not overwrite the first's result — assert the first advance's changes survive.
 - A stale run lock whose holder is gone is broken and the advance proceeds.
+- A `waiting` intent carries a numeric `delay` within `[60, 3600]`; `continue`, `stop` and `noop` carry none.
+- A round that just opened yields a longer `delay` than one whose members are near the child deadline.
 - A member whose supervisor pid is gone resolves `failed`, not whatever its status file claims.
 - `handle_unknown` for one member does not abort the advance for the others.
 - A `state` of `failed` is treated as an answer, not an error.
@@ -664,31 +671,86 @@ The hook has a five-second timeout and the render probes N members. Bound the wo
 
 ### U16. The driving skill
 
-**Goal.** A skill that runs a team in attached or unattended mode, and knows to do nothing in single-round mode.
+**Goal.** A skill that drives a team run in attached or unattended mode as pure glue over tested verbs — one advance per re-entry, dispatch only on `continue`, scheduling only from the model side — and that knows single-round mode has no driver at all.
 
-**Requirements.** R26, R31, KTD4, KTD19, KTD21.
+**Requirements.** R26, R31, R32, R10, KTD4, KTD17, KTD19, KTD21, KTD9.
 
-**Dependencies.** U15, U10.
+**Dependencies.** U15, U10. (U4 for the single-round refusal, which this unit moves into `team.sh` — see Approach.)
 
-**Files.** `plugins/spawn/skills/team-run/SKILL.md` (create), `plugins/spawn/commands/team.md` (create), `plugins/spawn/skills/spawn/SKILL.md` (modify), `plugins/spawn/tests/unit/surfaces.bats` (modify).
+**Files.** `plugins/spawn/skills/team-run/SKILL.md` (create), `plugins/spawn/commands/team.md` (create), `plugins/spawn/skills/spawn/SKILL.md` (modify — the router gains a "several models at once → team" row and a short section, per KTD3), `plugins/spawn/lib/team.sh` (the single-round refusal and the intent envelope's `delay` field land here, not in prose), `plugins/spawn/tests/unit/surfaces.bats` (modify), `plugins/spawn/tests/unit/team.bats` (modify).
 
-**Approach.** The skill is the driver. Per round it: chooses this round's concurrency from what the record shows and what the machine is doing, calls `team dispatch`, calls `team advance`, and acts on the intent — on `continue`, report and either hand control back (attached) or arm a timer and continue (unattended); on `stop`, report the verdict and stop; on `noop`, do nothing.
+**Approach.**
 
-The concurrency choice is the skill's judgment, made per round and resizable between rounds. It is not a constant in the script, following `auto`'s dispatcher, which states the reason: the engine exposes what is ready and never hardcodes a concurrency constant.
+The skill is the driver, and the division of labour is `auto`'s prepare/execute split, stated in the skill's own opening: **the scripts judge, the skill executes.** Every judgment that can live in `team.sh` lives there and is tested there; the skill's job is to call the verbs in the right order, act on the intent they print, report between rounds, and — in unattended mode only — issue the one tool call no script can (`ScheduleWakeup`, KTD19). Source of truth is the record on disk; the conversation is advisory. A re-entered session that remembers nothing loses nothing.
 
-Single-round mode is one `dispatch` and no driver at all. The skill says so and does not arm anything — the per-member supervisors already own deadlines and records, and the terminal announcement reports the outcome whenever the caller returns. Because nothing will advance the run, single-round refuses a roster larger than its concurrency maximum **before any worktree is created**, with a named error and its own remedy. Accepting one would leave the remainder `pending` forever with nothing able to dispatch them, which reads as a run in progress rather than as a refusal.
+**Entry: new run or re-entry.** The command `/spawn:team` fronts both. The skill decides which it is holding from its argument, never from conversation memory:
 
-Document the honest boundary: dispatched members survive the session; the loop does not. Nothing is lost if the caller walks away mid-run, but no new round starts until something re-enters.
+- **A run id** → re-entry into a live or finished run. Call `team advance <run-id>` first; never dispatch first. The record answers whether the run is live: a terminal record means report the outcome and stop — never restart it, never dispatch into it. A run id the record layer does not know gets the record layer's own distinct answer relayed as-is (the `handle.sh` discipline: unknown, expired, and failed are three different facts).
+- **No run id** → a new run. The caller supplies a team file (R33); its shape comes from `team.sh --describe`, not from this skill. Read the **mode** from the file, then branch:
 
-**Test scenarios.**
-- The command name and the skill names remain disjoint — a command and skill sharing a name silently disables the skill.
-- The skill declares the frontmatter keys the surface tests require.
-- The command passes `$ARGUMENTS` through as the other commands do.
-- Single-round with a roster larger than its concurrency maximum is refused with exit 2 and a named error, and no worktree exists afterwards.
-- Single-round with a roster at or below the maximum dispatches every member and arms nothing.
-- That refusal's error value has a distinct non-empty remedy.
+**Single-round mode: dispatch once, arm nothing, done.** One `team dispatch`, report the roster, stop. There is no driver, no advance, no timer — the per-member supervisors own deadlines and records, and U8's terminal announcement reports the outcome whenever the caller returns. The oversized-roster refusal (R31) is **`team.sh` behaviour, not skill prose**: `dispatch` on a single-round team file whose roster exceeds the concurrency maximum refuses with exit 2 and a named error, before any worktree is created. It must live in the script because the skill cannot be mechanically held to it, and the plan's own scenario ("no worktree exists afterwards") can only go red against code. The skill documents the refusal and relays it; it enforces nothing.
 
-**Verification.** `bats plugins/spawn/tests/unit/surfaces.bats`.
+**Attached and unattended modes: the per-round loop.** Ordered, per round:
+
+1. **Choose this round's concurrency.** Per-round judgment, never a constant (KTD9, following `auto`'s dispatcher). Inputs: the record's undispatched remainder, last round's `launch_failed` count, the unmeasured-usage count (a team going unmeasured is about to hit U13's unmeasured stop — dispatching wide first wastes a round), and what the machine is doing. Resizable between rounds; passed as the flag U4 defines, which overrides the file's value.
+2. **Dispatch:** `team dispatch` (new run: the team file, returns the run id; later rounds: the run id). The response says how many members remain.
+3. **Advance:** `team advance <run-id>` — exactly one call, and the only place the skill learns anything about the round.
+4. **Act on the intent.** Four intents, four distinct actions, no gaps:
+
+   - **`continue`** — the active round closed, members remain, no bound crossed. This is the **only** intent that ever permits a dispatch. **Attached:** report the closed round's outcome and hand control back — the dispatch happens on the caller's next entry, whose own advance re-yields `continue` and loops to step 1. This is KTD21's human backstop made real: the human sees round N's verdict before round N+1 commits. **Unattended:** go to step 1 now and dispatch the next round.
+   - **`waiting`** — the active round is in flight. **No dispatch may follow this intent** (R32 — acting on `waiting` as if it were `continue` is precisely the bug the intent exists to prevent). Report the in-flight state, then: attached → hand control back; unattended → arm the timer (below) and end the turn.
+   - **`stop`** — report the verdict and **every** stop reason in the intent's list, distinguishing roster-exhausted from a bound (a run stopped by its round maximum has not finished its work, and the report must not read as success). Arm nothing. The run is over.
+   - **`noop`** — another live advance holds the run lock. Do nothing and do **not** re-arm: the holder's initiator acts on the holder's intent, and a second timer here is how two chains end up racing one record.
+
+5. **Report between rounds.** From `team advance`'s envelope and `team status` — probed fields only, never a member's narrative (R15). The report: round position (the U10 diagram is available for it), per member its name, resolved state, deliverable-checklist summary, and token counts or `unknown`; the unmeasured count; and on `stop`, the reason list. The modes differ here: **attached** reports every round and hands back; **unattended** reports only on `stop` and on any refusal it cannot act on — the in-between rounds are U11's job, whose in-flight line repeats on every prompt unasked; **single-round** reports once, at dispatch.
+
+**Unattended arming.** On `waiting`, arm exactly one timer:
+
+```
+ScheduleWakeup(delay, "/spawn:team <run-id>")
+```
+
+Two mechanics are load-bearing, both learned in `auto`: the prompt must be the **namespaced** `/spawn:team` form — a bare command name fired from `ScheduleWakeup` is "Unknown command" — and delay clamps to `[60, 3600]` seconds. The delay is **data from the intent**: U15's `waiting` envelope carries a `delay` field computed in `team.sh` (from the active round's age against the child deadline — 900s — a fresh round can wait longer, an old one is about to resolve), so the skill executes `ScheduleWakeup(intent.delay, prompt)` verbatim and the pacing judgment is testable in `team.bats` rather than living in prose. Only `waiting` carries `delay` — a `continue` in unattended mode is acted on in the same turn (dispatch, then the follow-up advance yields `waiting`, which carries the delay), so no other intent needs one and nothing else should read one. Never arm on `stop` or `noop`. One timer per run: the re-entry it fires runs one advance and arms its own successor if still waiting.
+
+**Session death, and what the user comes back to.** State this honest boundary in the skill body, plainly: dispatched members and their supervisors are detached and survive; the loop — and in unattended mode the armed wakeup, which lives in the session — does not. Nothing is lost: the record is consistent (U15 writes before it prints), every in-flight member runs to a terminal state and records it. But no new round starts until something re-enters. One deliberate corollary: an unattended re-entry that lands `noop` — a foreground advance holds the lock — arms nothing, so if the lock-holder's initiator never acts on its intent, the chain ends there. That cost is accepted because the alternative, re-arming on `noop`, forks the chain: two timers each arm their own successor and double-advance the run forever, with no dedupe mechanism to collapse them. Either way the failure is visible and cheap: what the user sees on return is U11's in-flight line (run still going) or U8's announcement (run reached terminal by itself), and the resume action is one command: `/spawn:team <run-id>`.
+
+**What the skill must never do.** Explicit, because prose rules are the ones violated silently:
+
+- Never dispatch on any intent but `continue` (R32).
+- Never block, poll, or sleep-loop waiting for members. Waiting is re-entry (KTD4).
+- Never re-arm on `stop` or `noop`.
+- Never re-derive a verdict, widen `done`, or read the record's parts to second-guess its derived fields — **read, never re-derive** (KTD7, KTD18). The verdict is what the record says.
+- Never treat a member's narrative as fact or forward it as one; quote or summarize, marked (R7, R15).
+- Never write into a member's worktree between its launch and its terminal state (R9).
+- Never run the driver as a background job (KTD17) — the driver is this session or a foreground shell it runs.
+- Never hardcode a concurrency constant (KTD9).
+- Never schedule from a script or expect one to; `advance` prints intent, the skill calls `ScheduleWakeup` (KTD19).
+- Never arm anything in single-round mode (R31).
+
+**The command.** `commands/team.md` is self-sufficient (the surfaces suite forbids deferring to a skill): it names `${CLAUDE_PLUGIN_ROOT}/lib/team.sh`, states the run-id-vs-team-file branch and the four intents in brief, and passes `$ARGUMENTS` through. The skill carries the full loop; the command carries enough to act alone. Name disjointness is structural: command `team`, skill `team-run`.
+
+**Patterns to follow.** `plugins/auto/skills/auto/SKILL.md` — the prepare/execute split, the intent-dispatch table, the never-re-arm-on-stop/noop rule, "read, never re-derive". `plugins/auto/lib/pulse.py:1-40` — the model-tool boundary the delay-as-data design mirrors. `plugins/spawn/skills/status/SKILL.md` — frontmatter shape and the do-not-self-trigger clause. `plugins/spawn/commands/bg-agent.md` — the self-sufficient command shape.
+
+**Execution note.** Write the skill **after** U15's envelope is real, and derive the intent list and field names from `team.sh`'s actual output, not from this plan — a skill quoting an envelope shape the code never shipped is this repo's documented failure mode. If U15 lands without the `delay` field, add it there first; do not compensate with a delay constant in the skill.
+
+**Test scenarios.** Three honesty buckets, named as such.
+
+*Mechanically checkable in `surfaces.bats` (static, cannot regress silently):*
+- The command name (`team`) and both skill names (`team-run`, and `spawn` as modified) remain disjoint — the existing dynamic R1 loop catches this once the files exist; raise the enumeration guards' minimum counts with them.
+- `team-run/SKILL.md`'s frontmatter carries the literal strings `do NOT` and `conversational phrasing` — the globbed do-not-self-trigger test auto-enrols every new skill, so the file goes red the moment it exists without the clause. This skill is invoked by name or via the command, never conversationally; the router (`spawn`) remains the front door.
+- `commands/team.md` carries exactly one `description:` and one `argument-hint:` in frontmatter and ends with `$ARGUMENTS` (globbed, free).
+- `team:lib/team.sh` is added to the R20 "names the script it runs" pairs array — that gate is a hardcoded enumeration a new command must join or sit uncovered.
+- `commands/team.md` and `team-run/SKILL.md` both contain the namespaced string `/spawn:team`, and the arming instruction quotes no bare-name wake prompt.
+- `team-run/SKILL.md`'s body names all four intent words — `continue`, `waiting`, `stop`, `noop` — each at least once. A presence check only: it cannot prove correct handling, but it goes red on the omission this plan itself shipped in an earlier draft (a body handling three intents of four).
+
+*Checkable by effect on the record (in `team.bats`, because the behaviour was moved into `team.sh`):*
+- Single-round dispatch with a roster over the concurrency maximum exits 2 with a named error and its own distinct remedy, and no worktree exists afterwards.
+- Single-round dispatch at or under the maximum dispatches every member; `advance` on that run returns `stop` (roster exhausted) rather than expecting a driver.
+- The `waiting` envelope carries a numeric `delay` within `[60, 3600]`; `continue`, `stop` and `noop` carry none.
+
+*Genuinely uncheckable, named rather than papered over:* that a live session follows the loop order, chooses a defensible cap, actually issues the `ScheduleWakeup`, or reports honestly. No harness in this repo runs a model, and a test of the prose would pass regardless of the prose. The mitigation is structural, not asserted: every consequential judgment was moved into a verb this plan tests (`dispatch` refuses, `advance` gates dispatch via `waiting`, `delay` is computed in code), so the skill that remains is glue whose worst silent failure is a stalled loop — which the record survives, U11 surfaces, and one `/spawn:team <run-id>` resumes.
+
+**Verification.** `bats plugins/spawn/tests/unit/surfaces.bats` and `bats plugins/spawn/tests/unit/team.bats`. Mutation check for the presence assertions: delete the `waiting` section from the skill body and confirm the four-intents scenario turns red.
 
 ### U9. Enrol in the repo-wide gates and publish
 
