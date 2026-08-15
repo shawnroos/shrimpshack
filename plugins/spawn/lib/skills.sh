@@ -147,6 +147,45 @@ spawn::skill_selfcontained() {
     return 0
 }
 
+# spawn::skill_prune_escaping_links <dest> <name> — drop links the child cannot follow.
+#
+# After the copy, a nested link that does not resolve inside <dest> is dead
+# weight: the ceiling refuses it, so it can only produce a refusal the reader
+# will read as a permissions problem. Removing the link is deliberately NOT the
+# same as materialising it — copying the target in would place content from
+# outside the source root inside the worktree, a wider hole than the one being
+# closed. An absolute link into the original source root is pruned too: it
+# points back outside the worktree and is refused just the same.
+#
+# Returns non-zero when a link it meant to drop is still there — that link is the
+# thing the ceiling refuses, so a caller must be able to see it.
+spawn::skill_prune_escaping_links() {
+    local dest="$1" name="$2" link tgt dest_p rc=0
+    dest_p="$(cd "$dest" 2>/dev/null && pwd -P)" || {
+        printf 'skill_prune_unreadable\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+        return 1; }
+    while IFS= read -r -d '' link; do
+        tgt="$(cd "$(dirname "$link")" 2>/dev/null && cd "$(dirname "$(readlink "$link")")" 2>/dev/null && pwd -P)" || tgt=""
+        case "${tgt:-}" in
+            "$dest_p"|"$dest_p"/*) continue ;;
+        esac
+        if rm -f "$link" 2>/dev/null; then
+            printf 'skill_link_pruned\t%s\t%s\n' \
+                "$(spawn::sanitize_for_display "$name")" \
+                "$(spawn::sanitize_for_display "${link#"$dest_p"/}")" >&2
+        else
+            # The link SURVIVES the prune, so the ceiling refuses it and the
+            # reader blames permissions — the exact misdiagnosis this whole
+            # function exists to remove. Reported and failed, never silent.
+            printf 'skill_link_prune_failed\t%s\t%s\n' \
+                "$(spawn::sanitize_for_display "$name")" \
+                "$(spawn::sanitize_for_display "${link#"$dest_p"/}")" >&2
+            rc=1
+        fi
+    done < <(find "$dest_p" -type l -print0 2>/dev/null)
+    return "$rc"
+}
+
 # spawn::skill_provision <worktree> <manifest> <name>...
 #
 # Copies each named skill into <worktree>/.claude/skills/, appending one line per
@@ -179,9 +218,34 @@ spawn::skill_provision() {
             rc=1; continue
         fi
         mkdir -p "$dest_root" || { rc=1; continue; }
+        # Resolved before the copy, because `cp -R` preserves a symlink and most
+        # entries in ~/.claude/skills are symlinks into ~/.agents/skills. The
+        # permission system resolves a path BEFORE matching it, so the copy
+        # landed inside the worktree pointing out of it and every child read was
+        # refused — a provisioning bug that reads as a permissions one.
+        # `cp -RL` is not the fix: it also materialises nested links that escape
+        # the source root, making outside content real and readable in here.
+        src="$(cd "$src" 2>/dev/null && pwd -P)" || src=""
+        if [ -z "$src" ]; then
+            printf 'skill_copy_failed\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+            rc=1; continue
+        fi
         cp -R "$src" "$dest" 2>/dev/null || {
             printf 'skill_copy_failed\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
             rc=1; continue; }
+        # cp -R carries the source's directory modes, and a read-only directory
+        # there makes the prune below fail. The copy is a disposable child
+        # artifact, so mode fidelity buys nothing and costs the prune.
+        chmod -R u+w "$dest" 2>/dev/null
+        spawn::skill_prune_escaping_links "$dest" "$name" || rc=1
+        if [ ! -r "$dest/SKILL.md" ]; then
+            # Pruning empties a skill whose own SKILL.md was a link out of the
+            # source root. rc is the only channel the supervisor reads, so
+            # without this the job reports a skill it did not get.
+            printf 'skill_incomplete\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+            rc=1
+        fi
+        # Appended even when degraded: teardown must still remove what landed.
         printf '%s\n' "$dest" >> "$manifest"
     done
     return "$rc"
