@@ -57,6 +57,11 @@ setup() {
     # probe the REAL gateway on 4000.
     export SPAWN_BASE_URL="http://127.0.0.1:1/anthropic"
 
+    # Deliberately NOT in SCRIPTS: the R14 loops resolve a command body through
+    # command_for(), which has no entry for bg-agent.sh. bg-agent is asserted by
+    # the tests that name it.
+    BG="$LIB/bg-agent.sh"
+
     SCRIPTS=("$LENS" "$LAUNCH" "$CTL")
 }
 
@@ -569,4 +574,60 @@ start_fixture() {       # <scenario> <aliases> [extra fixture args]
     run agreement_check "$(describe_of "$WORK/lib2/lens.sh")" "$CMD_DIR/agent.md" equal
     [ "$status" -ne 0 ]
     printf '%s' "$output" | grep -qF 'exit 4'
+}
+
+# --- U2/R11: bg-agent's flag table is the only place --skill is discoverable --
+#
+# bg-agent.sh is absent from SCRIPTS above, so nothing in this file covered it
+# until these tests. A flag the parser accepts but the contract omits is
+# invisible to the consumer this suite exists for: it runs with Bash and Read
+# and cannot open the script.
+
+@test "U2 — bg-agent's contract declares --skill" {
+    run bash "$BG" --describe
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | jq -e '.flags[] | select(.name == "--skill")' >/dev/null
+}
+
+@test "U2 — the declared --skill is repeatable, so a caller knows it may pass several" {
+    run bash "$BG" --describe
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r '.flags[] | select(.name == "--skill") | .repeatable')" = "true" ]
+}
+
+@test "U2 — bg-agent answers --describe at exit 0 with no gateway and no config" {
+    [ ! -e "$SPAWN_SEARCH_ROOT/gateway" ]
+    [ -z "${SPAWN_CONFIG:-}" ]
+    run env SPAWN_BASE_URL="http://127.0.0.1:1/anthropic" bash "$BG" --describe
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r '.response_kind')" = "describe" ]
+    [ "$(printf '%s' "$output" | jq -r '.surface')" = "bg-agent.sh" ]
+    # Answered BEFORE --alias is required: the contract is what a caller reads
+    # to find out which flags exist, so demanding one of them first is circular.
+    printf '%s' "$output" | jq -e '.flags | map(select(.required)) | length > 0' >/dev/null
+}
+
+@test "U2 — bg-agent's describe is exactly one JSON object on stdout, with --skill in it" {
+    run bash "$BG" --describe
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -s 'length')" = "1" ]
+    [ "$(printf '%s' "$output" | jq -r 'type')" = "object" ]
+    # CONTROL ARM. The count above is an absence assertion — it claims no second
+    # object was printed. Two objects must make it read 2, or it would pass over
+    # a diagnostic that leaked onto stdout beside the answer.
+    [ "$(printf '%s\n%s' "$output" "$output" | jq -s 'length')" = "2" ]
+    printf '%s' "$output" | jq -e '[.flags[].name] | index("--skill") != null' >/dev/null
+}
+
+@test "U2 — bg-agent declares --allow, the other caller-facing flag it parses" {
+    # --allow reaches the parser from the CALLER (bg-agent.sh:1195), is forwarded
+    # to the detached supervisor, and changes what the job may do. --config is
+    # not asserted here: bg-agent passes it to ITSELF on the --supervise
+    # re-invocation and the launch role never reads it, so declaring it would
+    # advertise internal plumbing as a caller flag.
+    run bash "$BG" --describe
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | jq -e '.flags[] | select(.name == "--allow")' >/dev/null
+    [ "$(printf '%s' "$output" | jq -r '.flags[] | select(.name == "--allow") | .repeatable')" = "true" ]
+    refute_match '"--config"' "$(printf '%s' "$output" | jq -c '[.flags[].name]')"
 }

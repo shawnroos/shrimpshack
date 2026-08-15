@@ -918,3 +918,57 @@ EOS
     run bash -c "sed 's/#.*//' '$WORK/plant.sh' | grep -nE 'wait[ ]+-n|mapfile|readarray|declare[ ]+-A|local[ ]+-A'"
     [ "$status" -eq 0 ]
 }
+
+# ===========================================================================
+# R13 — the record names the skill that did not land
+# ===========================================================================
+
+@test "R13: an unprovisionable skill leaves the job running and is NAMED in the record" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    # A skills home holding exactly ONE of the two requested skills. Two are
+    # asked for so the record has to distinguish them: naming the whole
+    # requested list would pass a test that only looked for "a skill name".
+    export SPAWN_SKILLS_HOME="$WORK/skills-home"
+    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine"
+    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
+
+    run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" \
+        --skill lands-fine --skill never-installed 2>/dev/null' \
+        _ "$BG" "$PROJ" "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    HANDLE="$(printf '%s' "$output" | jq -r '.handle // empty')"
+    JOB_DIR="$(printf '%s' "$output" | jq -r '.job.job_dir // empty')"
+    [ -n "$HANDLE" ] && [ -n "$JOB_DIR" ]
+
+    # The job STILL RUNS. A missing skill makes a job worse at its task; it does
+    # not make it not happen.
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.child_exit_code')" = "0" ]
+    [ "$(result_field '.deliverables_satisfied')" = "true" ]
+
+    # The provisioner's own stderr agrees on which one failed, so the record is
+    # not merely echoing back the argument it was given.
+    grep -qF 'never-installed' "$JOB_DIR/skills.err"
+    refute_file_match 'lands-fine' "$JOB_DIR/skills.err"
+
+    result_field '.degraded_reasons | join(" ")' > "$WORK/reasons.txt"
+    grep -qF 'never-installed' "$WORK/reasons.txt"
+    # The one that LANDED must not appear in a failure reason. Naming the whole
+    # requested list is the bug this arm exists to catch.
+    refute_file_match 'lands-fine' "$WORK/reasons.txt"
+}
+
+@test "R13 control arm: the absence check on the landed skill can fail" {
+    # The assertion above claims a name is NOT in the reasons. An absence
+    # assertion that cannot go red proves nothing, so this drives it red on a
+    # file that does contain the name.
+    printf 'one or more requested skills could not be provisioned\n' > "$WORK/reasons.txt"
+    run refute_file_match 'lands-fine' "$WORK/reasons.txt"
+    [ "$status" -eq 0 ]
+    printf 'the caller asked for lands-fine\n' >> "$WORK/reasons.txt"
+    run refute_file_match 'lands-fine' "$WORK/reasons.txt"
+    [ "$status" -ne 0 ]
+}

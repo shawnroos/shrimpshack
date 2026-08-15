@@ -925,11 +925,22 @@ supervisor_main() {
         SUP_SKILL_MANIFEST="$dir/skills.provisioned"
         spawn::skill_git_exclude "$SUP_WORKTREE"
         if ! spawn::skill_provision "$SUP_WORKTREE" "$SUP_SKILL_MANIFEST" "${SUP_SKILLS[@]}" 2>>"$dir/skills.err"; then
-            # The first diagnostic names WHICH skill and why. Without it the
-            # reason says only that something failed, and the reader has to go
-            # find a file to learn anything at all.
-            local first; first="$(head -n 1 "$dir/skills.err" 2>/dev/null | tr '\t' ' ')"
-            sup_reason "one or more requested skills could not be provisioned${first:+ (${first})}; see skills.err"
+            # WHICH skills, from the manifest, and WHY, from the first
+            # diagnostic. The set is derived from what actually LANDED rather
+            # than by parsing skills.err, so a reworded diagnostic cannot
+            # silently empty it; the diagnostic is then appended as context,
+            # because a reader told only which skill is missing still has to
+            # open a file to learn anything about the cause.
+            local landed="" missing="" want bare first
+            [ -f "$SUP_SKILL_MANIFEST" ] && landed=" $(sed 's|.*/||' "$SUP_SKILL_MANIFEST" | tr '\n' ' ')"
+            for want in "${SUP_SKILLS[@]}"; do
+                bare="${want##*:}"
+                case "$landed" in *" $bare "*) continue ;; esac
+                missing="${missing:+$missing }$(spawn::sanitize_for_display "$want")"
+            done
+            first="$(head -n 1 "$dir/skills.err" 2>/dev/null | tr '\t' ' ')"
+            first="$(spawn::sanitize_for_display "$first")"
+            sup_reason "these skills could not be provisioned and the job ran without them: ${missing:-see skills.err}${first:+ (${first})}"
         fi
         printf '%s\n' "${SUP_SKILLS[@]}" > "$dir/skills.requested"
     fi
@@ -1134,6 +1145,8 @@ emit_describe() {
             {name:"--alias",    value:"name", required:true,  default:null, note:"exactly one resolved alias; a chain alias is refused before any network call"},
             {name:"--contract", value:"file", required:true,  default:null, note:"the contract, one JSON object; copied into the job directory so a later edit cannot move the target"},
             {name:"--cwd",      value:"dir",  required:false, default:"the process working directory", note:"the directory the child runs in; its worktree is what the ceiling is scoped to and what holds the one-job lock"},
+            {name:"--skill",    value:"name", required:false, default:null, repeatable:true, note:"a skill the child is to have; repeat the flag for several. The child runs with --setting-sources project and inherits no skill the operator has, so each named skill is copied into the worktree the job runs in, where the child can read it and the ceiling denies editing it, and is removed when the job ends. A skill that cannot be provisioned is named in the degraded_reasons[] of the job record and the job still runs"},
+            {name:"--allow",    value:"rule", required:false, default:null, repeatable:true, note:"one extra permission rule to widen the ceiling by, for this job only; repeat the flag for several. The shipped default is never edited. A rule the ceiling refuses to grant fails the job outright rather than running it quietly narrower than asked, because a job silently missing a capability it was promised returns a confident wrong answer"},
             {name:"--help",     value:null,   required:false, default:null, note:"exit 2 with help_requested:true — not a usage error"},
             {name:"--describe", value:null,   required:false, default:null, note:"this document; exit 0; needs no gateway and no config"}
           ],
