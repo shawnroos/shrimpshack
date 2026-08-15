@@ -631,3 +631,29 @@ start_fixture() {       # <scenario> <aliases> [extra fixture args]
     [ "$(printf '%s' "$output" | jq -r '.flags[] | select(.name == "--allow") | .repeatable')" = "true" ]
     refute_match '"--config"' "$(printf '%s' "$output" | jq -c '[.flags[].name]')"
 }
+
+# --- U12/R20/R30: the token counts are declared, and declared as TRUSTED -----
+#
+# The supervisor takes them from the CLI's own result envelope, not from the
+# child's prose, which is what puts them on the trusted side. A team that asked
+# its members how many tokens they used would be asking the untrusted narrator.
+
+@test "U12 — bg-agent declares both token counts as trusted fields" {
+    run bash "$BG" --describe
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | jq -e '.trusted_fields | index("usage.input_tokens") != null' >/dev/null
+    printf '%s' "$output" | jq -e '.trusted_fields | index("usage.output_tokens") != null' >/dev/null
+}
+
+@test "U12 — neither token count is declared untrusted" {
+    run bash "$BG" --describe
+    [ "$status" -eq 0 ]
+    local untrusted; untrusted="$(printf '%s' "$output" | jq -c '.untrusted_fields')"
+    refute_match 'usage\.input_tokens' "$untrusted"
+    refute_match 'usage\.output_tokens' "$untrusted"
+    # CONTROL ARM. The two lines above are absence assertions. The same check
+    # against a name that IS on the untrusted list must fail, or it would pass
+    # over an empty or missing untrusted_fields.
+    run refute_match 'narrative\.text' "$untrusted"
+    [ "$status" -ne 0 ]
+}

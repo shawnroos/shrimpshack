@@ -740,6 +740,12 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
     local dir="$SUP_JOB_DIR"
     local denials='[]' narrative="" session_id="" changed='[]' deliv='[]'
     local verify_rc='null' verify_ran=false reasons='[]'
+    # An absent measurement is null, never 0 — a reader that cannot tell them
+    # apart reports an unmeasured ceiling as a satisfied one. Defaulted out here
+    # because the contract-fault path writes a record before any child exists,
+    # and reset again below because a child that died before writing leaves
+    # child.json present but EMPTY, on which jq prints nothing and exits 0.
+    local usage_json='{"input_tokens":null,"output_tokens":null}'
 
     if [ -f "$dir/child.json" ]; then
         denials="$(jq -c 'if type == "object" and (.permission_denials | type) == "array" then .permission_denials else [] end' < "$dir/child.json" 2>/dev/null)"
@@ -747,6 +753,11 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         narrative="$(jq -r 'if type == "object" then (.result // "") else "" end' < "$dir/child.json" 2>/dev/null)"
         session_id="$(jq -r '.session_id // empty' < "$dir/child.json" 2>/dev/null)"
         case "$session_id" in ""|*[!A-Za-z0-9._-]*) session_id="" ;; esac
+        usage_json="$(jq -c 'def num(v): if (v | type) == "number" then v else null end;
+            (if type == "object" and (.usage | type) == "object" then .usage else {} end)
+            | {input_tokens: num(.input_tokens), output_tokens: num(.output_tokens)}' \
+            < "$dir/child.json" 2>/dev/null)"
+        [ -n "$usage_json" ] || usage_json='{"input_tokens":null,"output_tokens":null}'
     fi
 
     changed="$(changed_since_baseline "$SUP_WORKTREE" "$dir/baseline.marker" "$(dirname "$dir")" "$dir/baseline.git" \
@@ -812,7 +823,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         --arg tp "$SPAWN_TRUST_PLUGIN" --arg np "$SPAWN_NOTICE_PLUGIN" \
         --argjson dn "$denials" --argjson ch "$changed" --argjson dl "$deliv" \
         --argjson vr "$verify_rc" --argjson vran "$verify_ran" \
-        --argjson ok "$all_ok" --argjson rs "$reasons" \
+        --argjson ok "$all_ok" --argjson rs "$reasons" --argjson us "$usage_json" \
         --arg rc "$child_rc" --argjson ie "$child_ie" '{
           schema:$js, job_id:$h, alias:$a, ceiling:$c,
           worktree:$w, cwd:$cw,
@@ -827,6 +838,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
           verification:{command:(if $vc == "" then null else $vc end),
                         ran:$vran, exit_code:$vr},
           degraded_reasons:$rs,
+          usage:$us,
           narrative:{text:(if $n == "" then null else $n end),
                      content_trust:$tm, content_notice:$nm},
           notification:('"$notif_env"' + {
@@ -1170,6 +1182,7 @@ emit_describe() {
             "started_at","ended_at","terminal_state","child_exit_code",
             "permission_denials","changed_files","deliverables",
             "deliverables_satisfied","verification.exit_code",
+            "usage.input_tokens","usage.output_tokens",
             "notification.terminal_state","notification.deliverables_satisfied",
             "notification.permission_denial_count"
           ],

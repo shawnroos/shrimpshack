@@ -972,3 +972,162 @@ EOS
     run refute_file_match 'lands-fine' "$WORK/reasons.txt"
     [ "$status" -ne 0 ]
 }
+
+# ===========================================================================
+# U12/R20/R30 — the record carries the tokens the child reported
+#
+# NULL IS NOT ZERO. Every arm below pins the KEY's presence and the value's
+# TYPE, never `jq -r`'s rendering: `jq -r` prints JSON null, the string "null"
+# and an absent key identically, so an assertion written that way is green
+# before the field exists and stays green when an absent measurement is
+# recorded as 0 — which is the defect this unit exists to prevent.
+# ===========================================================================
+
+# A child that reports a chosen result JSON. The shared fixture always reports
+# usage and other suites pin that shape, so the variant shapes come from here.
+# It writes the deliverable, so these jobs classify on the same path as any
+# other rather than through the empty-worktree branch.
+stub_child() {  # <result json>
+    mkdir -p "$WORK/stub"
+    cat > "$WORK/stub/claude" <<STUB
+#!/usr/bin/env bash
+printf 'stub wrote at %s\n' "\$(date +%s)" > "\$PWD/out.txt"
+cat <<'RESULT'
+$1
+RESULT
+STUB
+    chmod +x "$WORK/stub/claude"
+    export SPAWN_CLAUDE_BIN="$WORK/stub/claude"
+}
+
+usage_is() {    # <field> <jq type> [<jq value expression>]
+    local field="$1" want="$2" expr="${3:-}"
+    jq -e --arg f "$field" --arg t "$want" \
+        'has("usage") and (.usage | has($f)) and ((.usage[$f] | type) == $t)' \
+        < "$JOB_DIR/result.json" >/dev/null || {
+            printf 'usage_is: %s is not present with type %s; record says: %s\n' \
+                "$field" "$want" "$(jq -c '.usage' < "$JOB_DIR/result.json")" >&2
+            return 1; }
+    [ -z "$expr" ] && return 0
+    jq -e --arg f "$field" ".usage[\$f] $expr" < "$JOB_DIR/result.json" >/dev/null || {
+        printf 'usage_is: %s failed %s; record says: %s\n' \
+            "$field" "$expr" "$(jq -c '.usage' < "$JOB_DIR/result.json")" >&2
+        return 1; }
+    return 0
+}
+
+@test "U12: a completed job's record carries the counts the child reported" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    # The fixture's own numbers, not a round figure: a record that hardcoded
+    # anything would have to hardcode these.
+    usage_is input_tokens number '== 11'
+    usage_is output_tokens number '== 7'
+}
+
+@test "U12: a child reporting ZERO tokens records 0, as a number" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    stub_child '{"type":"result","subtype":"success","is_error":false,"session_id":"11111111-2222-3333-4444-555555555555","result":"stub answer","permission_denials":[],"usage":{"input_tokens":0,"output_tokens":0}}'
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    # Asserted FIRST: a stub that failed to run leaves the job failed, and that
+    # red would be about the scaffolding rather than about usage.
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    usage_is input_tokens number '== 0'
+    usage_is output_tokens number '== 0'
+}
+
+@test "U12: a child that reports NO usage object records null, not zero" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    stub_child '{"type":"result","subtype":"success","is_error":false,"session_id":"11111111-2222-3333-4444-555555555555","result":"stub answer","permission_denials":[]}'
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    # The job classifies normally: an unmeasured child is not a broken one.
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    usage_is input_tokens 'null'
+    usage_is output_tokens 'null'
+}
+
+@test "U12: a non-numeric count records null, per field, and does not propagate the string" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    stub_child '{"type":"result","subtype":"success","is_error":false,"session_id":"11111111-2222-3333-4444-555555555555","result":"stub answer","permission_denials":[],"usage":{"input_tokens":"lots","output_tokens":7}}'
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    # Per field. A both-null answer would pass a record that threw the whole
+    # object away the moment one value was bad.
+    usage_is input_tokens 'null'
+    usage_is output_tokens number '== 7'
+    refute_file_match 'lots' "$JOB_DIR/result.json"
+}
+
+@test "U12: a job whose child produced no result at all records null counts and still ends" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_MODE=fail
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    # child.json exists and is EMPTY here — the redirection creates it before
+    # the child writes anything. That is a different path from an absent file.
+    [ "$(await_terminal "$HANDLE")" = "failed" ]
+    [ -f "$JOB_DIR/child.json" ]
+    [ ! -s "$JOB_DIR/child.json" ]
+
+    usage_is input_tokens 'null'
+    usage_is output_tokens 'null'
+}
+
+@test "U12: recording usage changes no classification — a degraded job stays degraded" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_DENIALS='[{"tool_name":"Bash","tool_use_id":"tu_12","tool_input":{"command":"touch out.txt"}}]'
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "degraded" ]
+    [ "$(result_field '.terminal_state')" = "degraded" ]
+    [ "$(result_field '.permission_denial_count')" = "1" ]
+    [ "$(result_field '.deliverables_satisfied')" = "true" ]
+    usage_is input_tokens number '== 11'
+}
+
+@test "U12 control arm: the type assertion goes red when a count is written as the wrong thing" {
+    JOB_DIR="$WORK/fakejob"; mkdir -p "$JOB_DIR"
+    printf '%s\n' '{"usage":{"input_tokens":0,"output_tokens":null}}' > "$JOB_DIR/result.json"
+    run usage_is input_tokens 'null'
+    [ "$status" -ne 0 ]
+    run usage_is output_tokens number
+    [ "$status" -ne 0 ]
+    run usage_is input_tokens number '== 7'
+    [ "$status" -ne 0 ]
+    # And it passes on the shapes it is meant to accept, so the arm above is a
+    # real discrimination and not a check that always fails.
+    run usage_is input_tokens number '== 0'
+    [ "$status" -eq 0 ]
+    run usage_is output_tokens 'null'
+    [ "$status" -eq 0 ]
+
+    printf '%s\n' '{"usage":{}}' > "$JOB_DIR/result.json"
+    run usage_is input_tokens 'null'
+    [ "$status" -ne 0 ]
+    printf '%s\n' '{}' > "$JOB_DIR/result.json"
+    run usage_is input_tokens 'null'
+    [ "$status" -ne 0 ]
+}
