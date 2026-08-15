@@ -156,19 +156,34 @@ spawn::skill_selfcontained() {
 # outside the source root inside the worktree, a wider hole than the one being
 # closed. An absolute link into the original source root is pruned too: it
 # points back outside the worktree and is refused just the same.
+#
+# Returns non-zero when a link it meant to drop is still there — that link is the
+# thing the ceiling refuses, so a caller must be able to see it.
 spawn::skill_prune_escaping_links() {
-    local dest="$1" name="$2" link tgt dest_p
-    dest_p="$(cd "$dest" 2>/dev/null && pwd -P)" || return 0
+    local dest="$1" name="$2" link tgt dest_p rc=0
+    dest_p="$(cd "$dest" 2>/dev/null && pwd -P)" || {
+        printf 'skill_prune_unreadable\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+        return 1; }
     while IFS= read -r -d '' link; do
         tgt="$(cd "$(dirname "$link")" 2>/dev/null && cd "$(dirname "$(readlink "$link")")" 2>/dev/null && pwd -P)" || tgt=""
         case "${tgt:-}" in
             "$dest_p"|"$dest_p"/*) continue ;;
         esac
-        rm -f "$link" 2>/dev/null && printf 'skill_link_pruned\t%s\t%s\n' \
-            "$(spawn::sanitize_for_display "$name")" \
-            "$(spawn::sanitize_for_display "${link#"$dest_p"/}")" >&2
+        if rm -f "$link" 2>/dev/null; then
+            printf 'skill_link_pruned\t%s\t%s\n' \
+                "$(spawn::sanitize_for_display "$name")" \
+                "$(spawn::sanitize_for_display "${link#"$dest_p"/}")" >&2
+        else
+            # The link SURVIVES the prune, so the ceiling refuses it and the
+            # reader blames permissions — the exact misdiagnosis this whole
+            # function exists to remove. Reported and failed, never silent.
+            printf 'skill_link_prune_failed\t%s\t%s\n' \
+                "$(spawn::sanitize_for_display "$name")" \
+                "$(spawn::sanitize_for_display "${link#"$dest_p"/}")" >&2
+            rc=1
+        fi
     done < <(find "$dest_p" -type l -print0 2>/dev/null)
-    return 0
+    return "$rc"
 }
 
 # spawn::skill_provision <worktree> <manifest> <name>...
@@ -218,7 +233,19 @@ spawn::skill_provision() {
         cp -R "$src" "$dest" 2>/dev/null || {
             printf 'skill_copy_failed\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
             rc=1; continue; }
-        spawn::skill_prune_escaping_links "$dest" "$name"
+        # cp -R carries the source's directory modes, and a read-only directory
+        # there makes the prune below fail. The copy is a disposable child
+        # artifact, so mode fidelity buys nothing and costs the prune.
+        chmod -R u+w "$dest" 2>/dev/null
+        spawn::skill_prune_escaping_links "$dest" "$name" || rc=1
+        if [ ! -r "$dest/SKILL.md" ]; then
+            # Pruning empties a skill whose own SKILL.md was a link out of the
+            # source root. rc is the only channel the supervisor reads, so
+            # without this the job reports a skill it did not get.
+            printf 'skill_incomplete\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+            rc=1
+        fi
+        # Appended even when degraded: teardown must still remove what landed.
         printf '%s\n' "$dest" >> "$manifest"
     done
     return "$rc"

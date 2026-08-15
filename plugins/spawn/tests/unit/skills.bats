@@ -17,8 +17,12 @@ setup() {
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-skills.XXXXXX")"; WORK="$(cd "$WORK" && pwd -P)"
     ( cd "$WORK" && git init -q . )
     MAN="$WORK/.manifest"
+    # OUTSIDE the worktree on purpose. A fixture source under $WORK makes the
+    # containment assertions unfalsifiable — a preserved symlink still resolves
+    # under $WORK — and the real sources (~/.agents/skills) are outside anyway.
+    SRC="$(mktemp -d "${TMPDIR:-/tmp}/gw-skillsrc.XXXXXX")"; SRC="$(cd "$SRC" && pwd -P)"
 }
-teardown() { rm -rf "$WORK"; }
+teardown() { chmod -R u+w "$SRC" 2>/dev/null; rm -rf "$WORK" "$SRC"; }
 
 sk() { bash -c '. "$1"; shift; "$@"' _ "$LIB/skills.sh" "$@"; }
 
@@ -128,8 +132,8 @@ mk_skill_src() {
 
 @test "a symlinked skill source provisions as a real directory the child can read" {
     local home="$WORK/fakehome"; mkdir -p "$home/skills"
-    mk_skill_src "$WORK/src"
-    ln -s "$WORK/src/link" "$home/skills/linky"
+    mk_skill_src "$SRC/src"
+    ln -s "$SRC/src/link" "$home/skills/linky"
 
     run env SPAWN_SKILLS_HOME="$home" bash -c \
         '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
@@ -154,8 +158,8 @@ mk_skill_src() {
 
 @test "a nested link escaping the source root is pruned, not materialised" {
     local home="$WORK/fakehome"; mkdir -p "$home/skills"
-    mk_skill_src "$WORK/src"
-    ln -s "$WORK/src/link" "$home/skills/linky"
+    mk_skill_src "$SRC/src"
+    ln -s "$SRC/src/link" "$home/skills/linky"
 
     run env SPAWN_SKILLS_HOME="$home" bash -c \
         '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
@@ -167,7 +171,7 @@ mk_skill_src() {
         echo "escaping link survived provisioning: $(ls -l "$d/nested/escape.md")"; return 1; }
     run grep -rl SECRET "$d"
     [ -z "$output" ] || { echo "outside content was materialised inside the worktree"; return 1; }
-    [ "$(cat "$WORK/src/outside/secret.md")" = "SECRET" ]
+    [ "$(cat "$SRC/src/outside/secret.md")" = "SECRET" ]
 
     # A link that stays inside the source root is still usable.
     [ -L "$d/inside.md" ]
@@ -189,18 +193,88 @@ mk_skill_src() {
 
 @test "teardown removes a symlink-sourced skill without touching its source" {
     local home="$WORK/fakehome"; mkdir -p "$home/skills"
-    mk_skill_src "$WORK/src"
-    ln -s "$WORK/src/link" "$home/skills/linky"
+    mk_skill_src "$SRC/src"
+    ln -s "$SRC/src/link" "$home/skills/linky"
 
     run env SPAWN_SKILLS_HOME="$home" bash -c \
         '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    [ "$status" -eq 0 ]
+    # Without this, every assertion below passes vacuously when nothing landed.
+    [ -d "$WORK/.claude/skills/linky" ]
+
     run sk spawn::skill_unprovision "$MAN"
+    [ "$status" -eq 0 ]
     [ ! -e "$WORK/.claude/skills/linky" ]
     # The dereferenced copy means teardown deletes real files — the source must
     # not be one of them.
-    [ "$(cat "$WORK/src/real/SKILL.md")" = "the skill" ]
-    [ "$(cat "$WORK/src/real/nested/deep.md")" = "nested content" ]
-    [ -L "$WORK/src/real/nested/escape.md" ]
+    [ "$(cat "$SRC/src/real/SKILL.md")" = "the skill" ]
+    [ "$(cat "$SRC/src/real/nested/deep.md")" = "nested content" ]
+    [ -L "$SRC/src/real/nested/escape.md" ]
+}
+
+# The prune is the only thing keeping an escaping link out of the worktree, so a
+# prune that fails must not pass for one that worked. These two tests cover the
+# ways it can go wrong quietly.
+
+@test "a read-only source directory does not defeat the prune" {
+    local home="$WORK/fakehome"; mkdir -p "$home/skills"
+    mk_skill_src "$SRC/src"
+    ln -s "$SRC/src/link" "$home/skills/linky"
+    # cp -R carries these modes to the copy, where they would make rm -f fail.
+    chmod 555 "$SRC/src/real/nested"
+
+    run env SPAWN_SKILLS_HOME="$home" bash -c \
+        '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    [ "$status" -eq 0 ] || { echo "provisioning reported failure: $output"; return 1; }
+
+    local d="$WORK/.claude/skills/linky"
+    [ ! -e "$d/nested/escape.md" ] && [ ! -L "$d/nested/escape.md" ] || {
+        echo "escaping link survived a read-only parent: $(ls -l "$d/nested/escape.md")"; return 1; }
+}
+
+@test "a prune it cannot perform is reported and fails, never silently skipped" {
+    mkdir -p "$WORK/dest/nested" "$SRC/outside"
+    echo SECRET > "$SRC/outside/secret.md"
+    ln -s "$SRC/outside/secret.md" "$WORK/dest/nested/escape.md"
+    chmod 555 "$WORK/dest/nested"
+
+    run sk spawn::skill_prune_escaping_links "$WORK/dest" linky
+    chmod 755 "$WORK/dest/nested"
+    [ "$status" -ne 0 ] || { echo "a failed prune reported success"; return 1; }
+    [[ "$output" == *skill_link_prune_failed* ]] || { echo "no diagnostic: $output"; return 1; }
+    [ -L "$WORK/dest/nested/escape.md" ]
+}
+
+# rc is the ONLY channel bg-agent reads (it calls sup_reason on a non-zero return
+# and nothing reads skills.err), so a pruner failure that does not reach rc is
+# invisible to the job report. Stubbed because the chmod above removes the only
+# reachable way to make a real prune fail.
+@test "a pruner failure reaches the caller's exit status" {
+    local home="$WORK/fakehome"; mkdir -p "$home/skills/plain"
+    echo "plain skill" > "$home/skills/plain/SKILL.md"
+
+    run env SPAWN_SKILLS_HOME="$home" bash -c \
+        '. "$1"; spawn::skill_prune_escaping_links() { return 1; }
+         spawn::skill_provision "$2" "$3" plain' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    [ "$status" -ne 0 ] || { echo "the pruner failed and provisioning still reported success"; return 1; }
+}
+
+@test "a skill whose SKILL.md is pruned away fails instead of reporting success" {
+    local home="$WORK/fakehome"; mkdir -p "$home/skills"
+    mkdir -p "$SRC/gutted" "$SRC/elsewhere"
+    echo "the real skill" > "$SRC/elsewhere/SKILL.md"
+    ln -s ../elsewhere/SKILL.md "$SRC/gutted/SKILL.md"
+    echo "extra" > "$SRC/gutted/other.md"
+    ln -s "$SRC/gutted" "$home/skills/gutted"
+
+    run env SPAWN_SKILLS_HOME="$home" bash -c \
+        '. "$1"; spawn::skill_provision "$2" "$3" gutted' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    [ "$status" -ne 0 ] || { echo "an empty skill was reported as provisioned"; return 1; }
+    [[ "$output" == *skill_incomplete* ]] || { echo "no skill_incomplete diagnostic: $output"; return 1; }
+
+    # Recorded anyway: teardown still has to remove what did land.
+    run grep -c . "$MAN"
+    [ "$output" = "1" ]
 }
 
 @test "provisioning refuses to overwrite a skill that already exists" {
