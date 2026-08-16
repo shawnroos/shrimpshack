@@ -47,6 +47,8 @@ if ! declare -F say >/dev/null 2>&1; then
 fi
 # shellcheck source=./team-record.sh
 . "$SCRIPT_DIR/team-record.sh"
+# shellcheck source=./team-view.sh
+. "$SCRIPT_DIR/team-view.sh"
 
 EX_OK=0
 EX_USAGE=2
@@ -105,7 +107,7 @@ remedy_for() {
 }
 
 # Null-valued data fields, so all three encoder tiers describe the same shape.
-emit_error() { spawn::emit_error plugin "run_id run_dir members removed team_file mode round round_state intent reasons complete ceiling_state members_unmeasured dispatched pending" "$@"; }
+emit_error() { spawn::emit_error plugin "run_id run_dir members removed team_file mode round round_state intent reasons complete ceiling_state members_unmeasured dispatched pending diagram listed omitted" "$@"; }
 
 # The frozen enum (0 ok · 2 usage · 3 unreachable · 4 alias · 5 upstream ·
 # 6 deadline · 7 auth) takes no new member, so a new failure class is a new
@@ -322,6 +324,7 @@ team.sh dispatch --team-file <path> [--run-id <id>] [--run-dir <dir>]
                  [--mode single-round|attached|unattended]
                  [--max-concurrent N] [--max-rounds N] [--token-ceiling N]
 team.sh advance  --run-id <id> | --run-dir <dir>
+team.sh status   --run-id <id> | --run-dir <dir>
 team.sh teardown --run-dir <dir>
 team.sh --describe
 USAGE
@@ -1038,6 +1041,54 @@ do_advance() {
     team_emit_intent "$rec" "$intent" "$reasons" "$delay" ""
 }
 
+# ---------------------------------------------------------------------------
+# status — what every member is doing, probed at the moment of asking (U10)
+#
+# READS ONLY. `advance` is the verb that probes AND records; asking a question
+# must not move a run, and a status that wrote would make two people looking at
+# the same run race each other over its record. The rendering itself lives in
+# team-view.sh — this is the argument-parsing and the envelope, nothing else.
+# ---------------------------------------------------------------------------
+do_status() {
+    need_jq
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id) RUN_ID="${2:-}"; shift 2 ;;
+            --run-dir) RUN_DIR="${2:-}"; shift 2 ;;
+            *) usage; SPAWN_TEAM_ERROR="usage"; spawn::team_fail "unexpected argument: $1" ;;
+        esac
+    done
+    team_context
+    [ -n "$RUN_DIR" ] || RUN_DIR="$DRIVER/.spawn/teams/$RUN_ID"
+
+    local rec obj
+    if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
+        spawn::team_record_refusal "$RUN_DIR"
+        spawn::team_fail "no readable run record at $RUN_DIR"
+    fi
+    [ -n "$RUN_ID" ] || RUN_ID="$(printf '%s' "$rec" | jq -r '.run_id')"
+
+    team_view "$rec"
+    [ -n "$TEAM_VIEW_JSON" ] || { SPAWN_TEAM_ERROR="record_malformed"
+        spawn::team_fail "the run at $RUN_DIR could not be rendered"; }
+
+    obj="$(printf '%s' "$rec" | jq -c --arg id "$RUN_ID" --arg d "$RUN_DIR" \
+        --argjson v "$TEAM_VIEW_JSON" \
+        "$(spawn::envelope_jq plugin)"' + {
+          ok:true, error:null, remedy:null, detail:null, exit_code:0,
+          response_kind:"team-status",
+          run_id:$id, run_dir:$d, mode:.mode,
+          round:(if (.rounds | length) == 0 then null else (.rounds | last | .ordinal) end),
+          round_state:(if (.rounds | length) == 0 then null else (.rounds | last | .state) end),
+          team_file:null, removed:null, intent:null, reasons:null,
+          dispatched:([ .members[] | select(.launch_state == "dispatched") ] | length),
+          pending:([ .members[] | select(.launch_state == "pending") ] | length)}
+        + $v')" \
+        || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the status could not be encoded"; }
+    emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the status encoded to nothing"; }
+    exit "$EX_OK"
+}
+
 do_teardown() {
     need_jq
     while [ $# -gt 0 ]; do
@@ -1080,6 +1131,7 @@ do_describe() {
         {name:"roster",   note:"place members and write their provisional rows; dispatches nothing"},
         {name:"dispatch", note:"one round, then exit — up to the concurrency maximum, in roster order, and no waiting"},
         {name:"advance",  note:"one advance of the run: probe every member in flight, record what finished, and print an intent. Dispatches nothing and schedules nothing"},
+        {name:"status",   note:"what every member is doing, probed at the moment of asking: resolved state, elapsed, a per-path deliverable checklist, token usage or `unknown`, and the last line of its own job log — plus a mermaid diagram of the round ledger built from those same rows. Reads only: it writes nothing and moves no run"},
         {name:"teardown", note:"remove the worktrees the run record names, and only those"}
       ],
       flags:[
@@ -1148,17 +1200,18 @@ main() {
         roster) do_roster "$@" ;;
         dispatch) do_dispatch "$@" ;;
         advance) do_advance "$@" ;;
+        status) do_status "$@" ;;
         teardown) do_teardown "$@" ;;
         --describe) do_describe ;;
         -h|--help)
             HELP_REQUESTED=true
             usage
             SPAWN_TEAM_ERROR="usage"
-            spawn::team_fail "no verb given: this surface answers 'roster', 'dispatch', 'advance' and 'teardown'" ;;
+            spawn::team_fail "no verb given: this surface answers 'roster', 'dispatch', 'advance', 'status' and 'teardown'" ;;
         *)
             usage
             SPAWN_TEAM_ERROR="usage"
-            spawn::team_fail "unknown verb — this surface answers 'roster', 'dispatch', 'advance' and 'teardown'" ;;
+            spawn::team_fail "unknown verb — this surface answers 'roster', 'dispatch', 'advance', 'status' and 'teardown'" ;;
     esac
 }
 

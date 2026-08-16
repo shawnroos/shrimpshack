@@ -733,6 +733,54 @@ is_terminal() {
     return 1
 }
 
+# ---------------------------------------------------------------------------
+# THE PRE-JOB BASELINE COMPARISON (KTD9), shared by the supervisor that judges a
+# finished job and the view that reports a running one.
+#
+# A pre-existing file must not satisfy a contract, so every deliverable is
+# fingerprinted BEFORE the child starts and the after-state is compared against
+# that record. `absent` is a fingerprint like any other, which is what makes
+# "was not there, now is" and "was there, was rewritten" both count while "was
+# there, untouched" does not.
+#
+# cksum is POSIX and needs no interpreter; it is fed on STDIN so its output
+# carries no filename. A directory fingerprints as its sorted listing, which
+# catches an added or removed entry but not a rewritten byte inside one — said
+# here rather than left for a reader to discover, because a contract naming a
+# directory is weaker than one naming files.
+# ---------------------------------------------------------------------------
+fingerprint_path() {    # <absolute path>
+    if [ -f "$1" ]; then
+        printf 'f:%s' "$(cksum < "$1" 2>/dev/null)"
+    elif [ -d "$1" ]; then
+        printf 'd:%s' "$(find "$1" 2>/dev/null | LC_ALL=C sort | cksum 2>/dev/null)"
+    else
+        printf 'absent'
+    fi
+}
+
+fingerprint_of() {      # <record file> <relative path>
+    awk -F '\t' -v want="$2" '$2 == want { print $1; exit }' "$1" 2>/dev/null
+}
+
+# deliverable_state <baseline file> <worktree> <relative path>
+# Prints "<was_present>\t<is_present>\t<is_changed>", all three `true`/`false`.
+#
+# `is_changed` requires presence as well as difference, so a deliverable DELETED
+# during the job reads as changed-from-baseline but is not progress — that
+# conjunction is the whole reason both readers share this rather than each
+# writing the comparison beside its own branch.
+deliverable_state() {
+    local base="$1" tree="$2" rel="$3" before after was is chg
+    before="$(fingerprint_of "$base" "$rel")"
+    [ -n "$before" ] || before="absent"
+    after="$(fingerprint_path "$tree/$rel")"
+    if [ "$before" = "absent" ]; then was=false; else was=true; fi
+    if [ "$after" = "absent" ]; then is=false; else is=true; fi
+    if [ "$after" != "$before" ] && [ "$is" = true ]; then chg=true; else chg=false; fi
+    printf '%s\t%s\t%s' "$was" "$is" "$chg"
+}
+
 # The alias grammar as the job surfaces check it. This is deliberately NOT
 # validate_alias above: that one is the model surfaces' regex form with its own
 # message, and collapsing the two would change what a caller is told on a
