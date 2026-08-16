@@ -100,14 +100,23 @@ for mem in $APPLIED; do
   fi
   before_sum="$(cksum < "$f")"
   MEM_FILE="$f" TODAY="$TODAY" python3 - <<'PY'
-import os, re, sys
+import os, re
 p = os.environ["MEM_FILE"]; today = os.environ["TODAY"]
 s = open(p, encoding="utf-8").read()
-if re.search(r'^last_used:.*$', s, re.M):
-    s2 = re.sub(r'^last_used:.*$', f'last_used: {today}', s, count=1, flags=re.M)
+
+# This pattern MUST stay identical to memory_activation.py's _DATE_RE: it is
+# whitespace-tolerant and first-match-wins, so the field it reads is often the
+# INDENTED one inside the `metadata:` block. Matching only an unindented
+# `^last_used:` appends a second, lower line that the reader never looks at — the
+# bump then runs, exits 0, and changes no activation at all.
+FIELD = re.compile(r'^([ \t]*)last_used[ \t]*:[ \t]*\S.*$', re.M)
+
+m = FIELD.search(s)
+if m:
+    s2 = s[:m.start()] + f'{m.group(1)}last_used: {today}' + s[m.end():]
 else:
-    # Insert INSIDE the frontmatter, before its closing fence — a last_used line
-    # dropped into the body is invisible to the activation reader.
+    # No field anywhere: insert INSIDE the frontmatter, before its closing fence.
+    # A last_used line dropped into the body is invisible to the reader.
     end = s.find('\n---', 3)
     s2 = s if end == -1 else s[:end] + f'\nlast_used: {today}' + s[end:]
 if s2 != s:
