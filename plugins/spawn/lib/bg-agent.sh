@@ -925,7 +925,11 @@ supervisor_main() {
         SUP_SKILL_MANIFEST="$dir/skills.provisioned"
         spawn::skill_git_exclude "$SUP_WORKTREE"
         if ! spawn::skill_provision "$SUP_WORKTREE" "$SUP_SKILL_MANIFEST" "${SUP_SKILLS[@]}" 2>>"$dir/skills.err"; then
-            sup_reason "one or more requested skills could not be provisioned; see skills.err"
+            # The first diagnostic names WHICH skill and why. Without it the
+            # reason says only that something failed, and the reader has to go
+            # find a file to learn anything at all.
+            local first; first="$(head -n 1 "$dir/skills.err" 2>/dev/null | tr '\t' ' ')"
+            sup_reason "one or more requested skills could not be provisioned${first:+ (${first})}; see skills.err"
         fi
         printf '%s\n' "${SUP_SKILLS[@]}" > "$dir/skills.requested"
     fi

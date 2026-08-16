@@ -139,15 +139,16 @@ PY
 #
 # A skill that resolves paths against its own plugin root cannot be copied
 # somewhere else and still work; it would load and then fail on a path that is
-# not there. Checked rather than assumed — ce-code-review has zero such refs and
-# copies cleanly, but that is a property of that skill, not of skills.
+# not there. Provisioning refuses such a skill rather than handing the child one
+# that loads and then misbehaves — measured on this box, 8 of 215 user skills
+# are refused, and each of those genuinely reads from its own plugin root.
 spawn::skill_selfcontained() {
     local dir="$1"
     grep -rqE 'CLAUDE_PLUGIN_ROOT|plugins/cache/' "$dir" 2>/dev/null && return 1
     return 0
 }
 
-# spawn::skill_prune_escaping_links <dest> <name> — drop links the child cannot follow.
+# spawn::skill_prune_escaping_links <dir> <name> — drop links the child cannot follow.
 #
 # After the copy, a nested link that does not resolve inside <dest> is dead
 # weight: the ceiling refuses it, so it can only produce a refusal the reader
@@ -160,30 +161,132 @@ spawn::skill_selfcontained() {
 # Returns non-zero when a link it meant to drop is still there — that link is the
 # thing the ceiling refuses, so a caller must be able to see it.
 spawn::skill_prune_escaping_links() {
-    local dest="$1" name="$2" link tgt dest_p rc=0
-    dest_p="$(cd "$dest" 2>/dev/null && pwd -P)" || {
+    local dir="$1" name="$2" report kind rel rc=0
+    report="$(python3 - "$dir" <<'PY'
+import os, sys
+
+# The invariant, stated once: a link is kept only when the path it RESOLVES to
+# is the root or lives under it. Resolving the target's parent instead would
+# read a chain whose next hop leaves as safe.
+root = os.path.realpath(sys.argv[1])
+for base, dirs, files in os.walk(root, followlinks=False):
+    for entry in list(dirs) + list(files):
+        link = os.path.join(base, entry)
+        if not os.path.islink(link):
+            continue
+        target = os.path.realpath(link)
+        if target == root or target.startswith(root + os.sep):
+            continue
+        rel = os.path.relpath(link, root)
+        try:
+            os.unlink(link)
+        except OSError:
+            print("failed\t" + rel)
+        else:
+            print("pruned\t" + rel)
+PY
+    )" || {
         printf 'skill_prune_unreadable\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
-        return 1; }
-    while IFS= read -r -d '' link; do
-        tgt="$(cd "$(dirname "$link")" 2>/dev/null && cd "$(dirname "$(readlink "$link")")" 2>/dev/null && pwd -P)" || tgt=""
-        case "${tgt:-}" in
-            "$dest_p"|"$dest_p"/*) continue ;;
+        return 1
+    }
+    while IFS="$(printf '\t')" read -r kind rel; do
+        [ -n "$kind" ] || continue
+        case "$kind" in
+            pruned) printf 'skill_link_pruned\t%s\t%s\n' \
+                "$(spawn::sanitize_for_display "$name")" \
+                "$(spawn::sanitize_for_display "$rel")" >&2 ;;
+            # The link SURVIVES, so the ceiling refuses it and the reader blames
+            # permissions — the misdiagnosis this function exists to remove.
+            failed) printf 'skill_link_prune_failed\t%s\t%s\n' \
+                "$(spawn::sanitize_for_display "$name")" \
+                "$(spawn::sanitize_for_display "$rel")" >&2
+                rc=1 ;;
         esac
-        if rm -f "$link" 2>/dev/null; then
-            printf 'skill_link_pruned\t%s\t%s\n' \
-                "$(spawn::sanitize_for_display "$name")" \
-                "$(spawn::sanitize_for_display "${link#"$dest_p"/}")" >&2
-        else
-            # The link SURVIVES the prune, so the ceiling refuses it and the
-            # reader blames permissions — the exact misdiagnosis this whole
-            # function exists to remove. Reported and failed, never silent.
-            printf 'skill_link_prune_failed\t%s\t%s\n' \
-                "$(spawn::sanitize_for_display "$name")" \
-                "$(spawn::sanitize_for_display "${link#"$dest_p"/}")" >&2
+    done <<EOF
+$report
+EOF
+    return "$rc"
+}
+
+# spawn::skill_install_one <dest_root> <manifest> <name> — one skill, or nothing.
+#
+# Everything happens in a staging directory beside the destination, and the
+# destination appears in one `mv` once the skill is known to be complete. That
+# is what makes the manifest honest: a path the child can see and a line in the
+# manifest exist only together, so teardown never has to reason about a half
+# skill and the child never loads one.
+spawn::skill_install_one() {
+    local dest_root="$1" manifest="$2" name="$3"
+    local src dest stage rc=0
+
+    # Validated FIRST. spawn::skill_resolve gates on the same grammar, so a name
+    # checked after it can only ever report `not found` for a name that is
+    # actually invalid — the diagnostic would name the wrong problem.
+    spawn::skill_name_ok "$name" || {
+        printf 'skill_name_invalid\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+        return 1
+    }
+    src="$(spawn::skill_resolve "$name")" || src=""
+    if [ -z "$src" ]; then
+        printf 'skill_not_found\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+        return 1
+    fi
+    # A skill that resolves paths against its own plugin root cannot be copied
+    # somewhere else and still work. Refused rather than provisioned, because
+    # the child would load it and then fail on a path that is not there.
+    spawn::skill_selfcontained "$src" || {
+        printf 'skill_not_selfcontained\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+        return 1
+    }
+
+    dest="$dest_root/${name##*:}"
+    if [ -e "$dest" ]; then
+        # Not an overwrite and not a silent skip — the caller asked for a skill
+        # and something else already owns that name.
+        printf 'skill_name_taken\t%s\t%s\n' \
+            "$(spawn::sanitize_for_display "$name")" "$(spawn::sanitize_for_display "$dest")" >&2
+        return 1
+    fi
+
+    # Beside the destination, so the `mv` that publishes it is a rename within
+    # one filesystem rather than a second copy that can half-finish.
+    stage="$(mktemp -d "$dest_root/.stage.XXXXXX")" || {
+        printf 'skill_copy_failed\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+        return 1
+    }
+
+    # Resolved before the copy, because `cp -R` preserves a symlink and most
+    # entries in ~/.claude/skills are symlinks into ~/.agents/skills. The
+    # permission system resolves a path BEFORE matching it, so the copy landed
+    # inside the worktree pointing out of it and every child read was refused —
+    # a provisioning bug that reads as a permissions one. `cp -RL` is not the
+    # fix: it also materialises nested links that escape the source root, making
+    # outside content real and readable in here.
+    src="$(cd "$src" 2>/dev/null && pwd -P)" || src=""
+    if [ -n "$src" ] && cp -R "$src" "$stage/payload" 2>/dev/null; then
+        # cp -R carries the source's directory modes, and a read-only directory
+        # makes the prune fail. Only directories need to be writable for that,
+        # and the copy is a disposable child artifact, so nothing is lost.
+        find "$stage/payload" -type d -exec chmod u+w {} + 2>/dev/null || rc=1
+        spawn::skill_prune_escaping_links "$stage/payload" "$name" || rc=1
+        if [ ! -r "$stage/payload/SKILL.md" ]; then
+            # Pruning empties a skill whose own SKILL.md was a link out of the
+            # source root. Nothing is published, so the child never sees it.
+            printf 'skill_incomplete\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
             rc=1
         fi
-    done < <(find "$dest_p" -type l -print0 2>/dev/null)
-    return "$rc"
+    else
+        printf 'skill_copy_failed\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
+        rc=1
+    fi
+
+    if [ "$rc" -ne 0 ] || ! mv "$stage/payload" "$dest" 2>/dev/null; then
+        rm -rf "$stage" 2>/dev/null
+        return 1
+    fi
+    rmdir "$stage" 2>/dev/null
+    printf '%s\n' "$dest" >> "$manifest"
+    return 0
 }
 
 # spawn::skill_provision <worktree> <manifest> <name>...
@@ -191,62 +294,20 @@ spawn::skill_prune_escaping_links() {
 # Copies each named skill into <worktree>/.claude/skills/, appending one line per
 # provisioned skill to <manifest> so teardown removes exactly what was added and
 # nothing a user put there. Refuses to overwrite: a job must never silently
-# replace a skill the repo already ships.
+# replace a skill the repo already ships. A non-zero return means at least one
+# named skill did not land; the ones that did are still usable.
 spawn::skill_provision() {
     local worktree="$1" manifest="$2"; shift 2
     local dest_root="$worktree/.claude/skills"
-    local name src dest rc=0
+    local name rc=0
 
+    mkdir -p "$dest_root" || {
+        printf 'skill_dest_unwritable\t%s\n' "$(spawn::sanitize_for_display "$dest_root")" >&2
+        return 1
+    }
     for name in "$@"; do
         [ -n "$name" ] || continue
-        src="$(spawn::skill_resolve "$name")" || src=""
-        if [ -z "$src" ]; then
-            printf 'skill_not_found\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
-            rc=1; continue
-        fi
-        # The validated bare name. basename+tr was NOT enough: it passes `..`
-        # through untouched, and the destination then resolves to .claude itself.
-        spawn::skill_name_ok "$name" || {
-            printf 'skill_name_invalid\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
-            rc=1; continue; }
-        dest="$dest_root/${name##*:}"
-        if [ -e "$dest" ]; then
-            # Not an overwrite and not a silent skip — the caller asked for a
-            # skill and something else already owns that name.
-            printf 'skill_name_taken\t%s\t%s\n' \
-                "$(spawn::sanitize_for_display "$name")" "$(spawn::sanitize_for_display "$dest")" >&2
-            rc=1; continue
-        fi
-        mkdir -p "$dest_root" || { rc=1; continue; }
-        # Resolved before the copy, because `cp -R` preserves a symlink and most
-        # entries in ~/.claude/skills are symlinks into ~/.agents/skills. The
-        # permission system resolves a path BEFORE matching it, so the copy
-        # landed inside the worktree pointing out of it and every child read was
-        # refused — a provisioning bug that reads as a permissions one.
-        # `cp -RL` is not the fix: it also materialises nested links that escape
-        # the source root, making outside content real and readable in here.
-        src="$(cd "$src" 2>/dev/null && pwd -P)" || src=""
-        if [ -z "$src" ]; then
-            printf 'skill_copy_failed\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
-            rc=1; continue
-        fi
-        cp -R "$src" "$dest" 2>/dev/null || {
-            printf 'skill_copy_failed\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
-            rc=1; continue; }
-        # cp -R carries the source's directory modes, and a read-only directory
-        # there makes the prune below fail. The copy is a disposable child
-        # artifact, so mode fidelity buys nothing and costs the prune.
-        chmod -R u+w "$dest" 2>/dev/null
-        spawn::skill_prune_escaping_links "$dest" "$name" || rc=1
-        if [ ! -r "$dest/SKILL.md" ]; then
-            # Pruning empties a skill whose own SKILL.md was a link out of the
-            # source root. rc is the only channel the supervisor reads, so
-            # without this the job reports a skill it did not get.
-            printf 'skill_incomplete\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
-            rc=1
-        fi
-        # Appended even when degraded: teardown must still remove what landed.
-        printf '%s\n' "$dest" >> "$manifest"
+        spawn::skill_install_one "$dest_root" "$manifest" "$name" || rc=1
     done
     return "$rc"
 }
