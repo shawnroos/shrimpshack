@@ -1342,6 +1342,22 @@ check "both command files exist and are distinct" \
 check "each command file cross-references the other (scope split held)" \
   'grep -qi "regroup" "$REPO/commands/memories.md" && grep -qi "memories" "$REPO/commands/reflect-regroup.md"'
 
+# ------------------------------------------------------------- reflect runner
+# Its own file, not more lines here: this suite is already ~1350 lines and review
+# flagged exactly that. The runner's tests are fully self-isolating (temp memory
+# dir, temp doc-store, stubbed reconciler) so they need nothing from this file.
+echo "== reflect runner (mechanical passes) =="
+RUNOUT="$ROOT/reflect_run_test.out"
+bash "$REPO/tests/reflect_run_test.sh" > "$RUNOUT" 2>&1; RUNRC=$?
+check "reflect_run_test.sh: all assertions pass" '[ "$RUNRC" = "0" ]'
+check "reflect_run_test.sh: reports a non-empty tally" 'grep -q "reflect_run_test: [1-9][0-9]* passed, 0 failed" "$RUNOUT"'
+# The writer and the reader must agree on where the field lives. They are in
+# different files and different languages, so nothing but this check couples
+# them — and when they diverged, every bump silently no-opped while the run
+# reported success.
+check "the runner matches last_used the same whitespace-tolerant way the reader does" \
+  'grep -q "last_used\[ .t\]\*:" "$SCRIPTS/reflect-run.sh"'
+
 # ---------------------------------------------------------------------- report
 echo
 echo "harness: $PASS passed, $FAIL failed"
