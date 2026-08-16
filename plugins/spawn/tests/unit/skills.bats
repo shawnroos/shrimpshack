@@ -193,6 +193,13 @@ provision() {
     [ -L "$d/inside.md" ]
     [ "$(cat "$d/inside.md")" = "nested content" ]
 
+    # The chain head goes too. Resolving the target's PARENT reads hop.md as
+    # safe (its parent is inside) and leaves it behind once the hop it points at
+    # is pruned — reachability is the same, because a dangling link is ENOENT
+    # rather than someone else's file, but the child is handed a broken path the
+    # skill still references. Resolving the TARGET removes both.
+    [ ! -L "$d/hop.md" ] || { echo "chain head survived as a dangling link"; return 1; }
+
     # The chain: nothing under the destination may RESOLVE outside it. A link
     # left dangling is fine — the child gets ENOENT, not someone else's file.
     run bash -c 'cd "$1" && for l in $(find . -type l); do
