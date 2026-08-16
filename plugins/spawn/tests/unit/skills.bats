@@ -128,18 +128,37 @@ mk_skill_src() {
     ln -s ../../outside/secret.md "$root/real/nested/escape.md"
     ln -s nested/deep.md "$root/real/inside.md"
     ln -s "$root/real" "$root/link"
+    # A CHAIN: hop.md's own target resolves inside, and only the hop it points at
+    # leaves. A containment check that resolves the target's parent rather than
+    # the target itself reads this as safe.
+    ln -s nested/escape.md "$root/real/hop.md"
+}
+
+# The two shapes every provisioning test needs, once. The `run env ... bash -c`
+# incantation in particular is the kind of string a dropped quote breaks
+# silently, so it is written in one place and not eight.
+mk_linky_home() {
+    HOME_FIXTURE="$WORK/fakehome"
+    mkdir -p "$HOME_FIXTURE/skills"
+    mk_skill_src "$SRC/src"
+    ln -s "$SRC/src/link" "$HOME_FIXTURE/skills/linky"
+    DEST="$WORK/.claude/skills/linky"
+}
+
+# Calls the real entry point. Assertions stay in the tests, where a failure
+# names the case that failed.
+provision() {
+    env SPAWN_SKILLS_HOME="$HOME_FIXTURE" bash -c \
+        '. "$1"; shift; spawn::skill_provision "$@"' _ "$LIB/skills.sh" "$WORK" "$MAN" "$@"
 }
 
 @test "a symlinked skill source provisions as a real directory the child can read" {
-    local home="$WORK/fakehome"; mkdir -p "$home/skills"
-    mk_skill_src "$SRC/src"
-    ln -s "$SRC/src/link" "$home/skills/linky"
+    mk_linky_home
 
-    run env SPAWN_SKILLS_HOME="$home" bash -c \
-        '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    run provision linky
     [ "$status" -eq 0 ]
 
-    local d="$WORK/.claude/skills/linky"
+    local d="$DEST"
     [ ! -L "$d" ] || { echo "destination is still a symlink — the child's read resolves outside"; return 1; }
     [ -d "$d" ]
 
@@ -157,14 +176,11 @@ mk_skill_src() {
 }
 
 @test "a nested link escaping the source root is pruned, not materialised" {
-    local home="$WORK/fakehome"; mkdir -p "$home/skills"
-    mk_skill_src "$SRC/src"
-    ln -s "$SRC/src/link" "$home/skills/linky"
+    mk_linky_home
 
-    run env SPAWN_SKILLS_HOME="$home" bash -c \
-        '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    run provision linky
 
-    local d="$WORK/.claude/skills/linky"
+    local d="$DEST"
     # Neither a real file (that would place outside content in the worktree) nor
     # a surviving link (the ceiling refuses it and the reader blames permissions).
     [ ! -e "$d/nested/escape.md" ] && [ ! -L "$d/nested/escape.md" ] || {
@@ -176,14 +192,29 @@ mk_skill_src() {
     # A link that stays inside the source root is still usable.
     [ -L "$d/inside.md" ]
     [ "$(cat "$d/inside.md")" = "nested content" ]
+
+    # The chain head goes too. Resolving the target's PARENT reads hop.md as
+    # safe (its parent is inside) and leaves it behind once the hop it points at
+    # is pruned — reachability is the same, because a dangling link is ENOENT
+    # rather than someone else's file, but the child is handed a broken path the
+    # skill still references. Resolving the TARGET removes both.
+    [ ! -L "$d/hop.md" ] || { echo "chain head survived as a dangling link"; return 1; }
+
+    # The chain: nothing under the destination may RESOLVE outside it. A link
+    # left dangling is fine — the child gets ENOENT, not someone else's file.
+    run bash -c 'cd "$1" && for l in $(find . -type l); do
+                     t="$(cd "$(dirname "$l")" && pwd -P)/$(readlink "$l")"
+                     r="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$t")"
+                     case "$r" in "$2"|"$2"/*) : ;; *) [ -e "$l" ] && echo "ESCAPES $l -> $r" ;; esac
+                 done' _ "$d" "$(cd "$d" && pwd -P)"
+    [ -z "$output" ] || { echo "$output"; return 1; }
 }
 
 @test "a real-directory source still provisions unchanged" {
-    local home="$WORK/fakehome"; mkdir -p "$home/skills/plain"
-    echo "plain skill" > "$home/skills/plain/SKILL.md"
+    HOME_FIXTURE="$WORK/fakehome"; mkdir -p "$HOME_FIXTURE/skills/plain"
+    echo "plain skill" > "$HOME_FIXTURE/skills/plain/SKILL.md"
 
-    run env SPAWN_SKILLS_HOME="$home" bash -c \
-        '. "$1"; spawn::skill_provision "$2" "$3" plain' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    run provision plain
     [ "$status" -eq 0 ]
     [ ! -L "$WORK/.claude/skills/plain" ]
     [ "$(cat "$WORK/.claude/skills/plain/SKILL.md")" = "plain skill" ]
@@ -192,12 +223,9 @@ mk_skill_src() {
 }
 
 @test "teardown removes a symlink-sourced skill without touching its source" {
-    local home="$WORK/fakehome"; mkdir -p "$home/skills"
-    mk_skill_src "$SRC/src"
-    ln -s "$SRC/src/link" "$home/skills/linky"
+    mk_linky_home
 
-    run env SPAWN_SKILLS_HOME="$home" bash -c \
-        '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    run provision linky
     [ "$status" -eq 0 ]
     # Without this, every assertion below passes vacuously when nothing landed.
     [ -d "$WORK/.claude/skills/linky" ]
@@ -217,17 +245,14 @@ mk_skill_src() {
 # ways it can go wrong quietly.
 
 @test "a read-only source directory does not defeat the prune" {
-    local home="$WORK/fakehome"; mkdir -p "$home/skills"
-    mk_skill_src "$SRC/src"
-    ln -s "$SRC/src/link" "$home/skills/linky"
+    mk_linky_home
     # cp -R carries these modes to the copy, where they would make rm -f fail.
     chmod 555 "$SRC/src/real/nested"
 
-    run env SPAWN_SKILLS_HOME="$home" bash -c \
-        '. "$1"; spawn::skill_provision "$2" "$3" linky' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    run provision linky
     [ "$status" -eq 0 ] || { echo "provisioning reported failure: $output"; return 1; }
 
-    local d="$WORK/.claude/skills/linky"
+    local d="$DEST"
     [ ! -e "$d/nested/escape.md" ] && [ ! -L "$d/nested/escape.md" ] || {
         echo "escaping link survived a read-only parent: $(ls -l "$d/nested/escape.md")"; return 1; }
 }
@@ -250,31 +275,80 @@ mk_skill_src() {
 # invisible to the job report. Stubbed because the chmod above removes the only
 # reachable way to make a real prune fail.
 @test "a pruner failure reaches the caller's exit status" {
-    local home="$WORK/fakehome"; mkdir -p "$home/skills/plain"
-    echo "plain skill" > "$home/skills/plain/SKILL.md"
+    HOME_FIXTURE="$WORK/fakehome"; mkdir -p "$HOME_FIXTURE/skills/plain"
+    echo "plain skill" > "$HOME_FIXTURE/skills/plain/SKILL.md"
 
-    run env SPAWN_SKILLS_HOME="$home" bash -c \
+    # Proven to land WITHOUT the stub first, so the assertion below cannot pass
+    # because the skill failed to resolve.
+    run provision plain
+    [ "$status" -eq 0 ]
+    rm -rf "$WORK/.claude/skills/plain"; : > "$MAN"
+
+    run env SPAWN_SKILLS_HOME="$HOME_FIXTURE" bash -c \
         '. "$1"; spawn::skill_prune_escaping_links() { return 1; }
          spawn::skill_provision "$2" "$3" plain' _ "$LIB/skills.sh" "$WORK" "$MAN"
     [ "$status" -ne 0 ] || { echo "the pruner failed and provisioning still reported success"; return 1; }
+    [ ! -e "$WORK/.claude/skills/plain" ] || { echo "a skill was published despite a failed prune"; return 1; }
 }
 
 @test "a skill whose SKILL.md is pruned away fails instead of reporting success" {
-    local home="$WORK/fakehome"; mkdir -p "$home/skills"
+    HOME_FIXTURE="$WORK/fakehome"; mkdir -p "$HOME_FIXTURE/skills"
     mkdir -p "$SRC/gutted" "$SRC/elsewhere"
     echo "the real skill" > "$SRC/elsewhere/SKILL.md"
     ln -s ../elsewhere/SKILL.md "$SRC/gutted/SKILL.md"
     echo "extra" > "$SRC/gutted/other.md"
-    ln -s "$SRC/gutted" "$home/skills/gutted"
+    ln -s "$SRC/gutted" "$HOME_FIXTURE/skills/gutted"
 
-    run env SPAWN_SKILLS_HOME="$home" bash -c \
-        '. "$1"; spawn::skill_provision "$2" "$3" gutted' _ "$LIB/skills.sh" "$WORK" "$MAN"
+    run provision gutted
     [ "$status" -ne 0 ] || { echo "an empty skill was reported as provisioned"; return 1; }
     [[ "$output" == *skill_incomplete* ]] || { echo "no skill_incomplete diagnostic: $output"; return 1; }
 
-    # Recorded anyway: teardown still has to remove what did land.
-    run grep -c . "$MAN"
-    [ "$output" = "1" ]
+    # Nothing published and nothing recorded: the child never sees a half skill,
+    # and teardown has nothing to reason about.
+    [ ! -e "$WORK/.claude/skills/gutted" ] || { echo "an incomplete skill was published"; return 1; }
+    [ ! -s "$MAN" ] || { echo "manifest recorded a skill that never landed: $(cat "$MAN")"; return 1; }
+    run bash -c 'ls -A "$1"' _ "$WORK/.claude/skills"
+    [ -z "$output" ] || { echo "staging left behind: $output"; return 1; }
+}
+
+# The staging directory is what lets these three be assertions rather than
+# apologies: a skill is published in one `mv` or not at all.
+
+@test "a copy that fails partway publishes nothing and records nothing" {
+    HOME_FIXTURE="$WORK/fakehome"; mkdir -p "$HOME_FIXTURE/skills/partial/sub"
+    echo "the skill" > "$HOME_FIXTURE/skills/partial/SKILL.md"
+    echo "readable" > "$HOME_FIXTURE/skills/partial/sub/ok.md"
+    echo "secret" > "$HOME_FIXTURE/skills/partial/sub/denied.md"
+    chmod 000 "$HOME_FIXTURE/skills/partial/sub/denied.md"
+
+    run provision partial
+    chmod 644 "$HOME_FIXTURE/skills/partial/sub/denied.md"
+    [ "$status" -ne 0 ] || { echo "a failed copy reported success"; return 1; }
+
+    [ ! -e "$WORK/.claude/skills/partial" ] || { echo "a half-copied skill was published"; return 1; }
+    [ ! -s "$MAN" ] || { echo "manifest recorded a skill that never landed"; return 1; }
+    run bash -c 'ls -A "$1"' _ "$WORK/.claude/skills"
+    [ -z "$output" ] || { echo "staging left behind: $output"; return 1; }
+}
+
+@test "a skill that resolves paths against its own plugin root is refused" {
+    HOME_FIXTURE="$WORK/fakehome"; mkdir -p "$HOME_FIXTURE/skills/rooted"
+    printf 'read %s/lib/thing.sh\n' '${CLAUDE_PLUGIN_ROOT}' > "$HOME_FIXTURE/skills/rooted/SKILL.md"
+
+    run provision rooted
+    [ "$status" -ne 0 ] || { echo "a skill that cannot work when copied was provisioned"; return 1; }
+    [[ "$output" == *skill_not_selfcontained* ]] || { echo "wrong diagnostic: $output"; return 1; }
+    [ ! -e "$WORK/.claude/skills/rooted" ]
+}
+
+@test "an invalid name is reported as invalid, not as missing" {
+    HOME_FIXTURE="$WORK/fakehome"; mkdir -p "$HOME_FIXTURE/skills"
+
+    run provision "a..b"
+    [ "$status" -ne 0 ]
+    # Validating after resolution made this branch unreachable: every bad name
+    # came back as `not found`, naming the wrong problem.
+    [[ "$output" == *skill_name_invalid* ]] || { echo "wrong diagnostic: $output"; return 1; }
 }
 
 @test "provisioning refuses to overwrite a skill that already exists" {
