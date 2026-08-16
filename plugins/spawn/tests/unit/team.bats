@@ -18,8 +18,12 @@
 #      the provisional-row test pins key PRESENCE and type, not just the value.
 
 setup() {
+    FIX="$(cd "$BATS_TEST_DIRNAME/../fixtures" && pwd)"
     LIB="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
     TEAM="$LIB/team.sh"
+    JOBS="$LIB/jobs.sh"
+    BG="$LIB/bg-agent.sh"
+    GW_PID=""
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-team.XXXXXX")"; WORK="$(cd "$WORK" && pwd -P)"
 
     PRIMARY="$WORK/proj"
@@ -37,6 +41,19 @@ setup() {
 }
 
 teardown() {
+    [ -n "${GW_PID:-}" ] && { kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; }
+    # A `hang` child execs `sleep 600` and keeps NOTHING of $WORK in its argv, so
+    # the sweep below cannot see it. Its pid is the only handle on it, and the
+    # fixture writes that down for exactly this reason.
+    if [ -f "${FAKE_CLAUDE_RECORD_DIR:-/nonexistent}/pid" ]; then
+        while read -r p; do
+            [ -n "$p" ] && kill -9 "$p" 2>/dev/null
+        done < "$FAKE_CLAUDE_RECORD_DIR/pid"
+    fi
+    for p in $(pgrep -f "$WORK" 2>/dev/null); do
+        [ "$p" = "$$" ] && continue
+        kill -9 "$p" 2>/dev/null
+    done
     rm -rf "$WORK"
 }
 
@@ -433,4 +450,660 @@ jq_free_path() {
     three_members
     [ "$status" -eq 0 ]
     [ "$(git -C "$PRIMARY" status --porcelain | wc -l | tr -d ' ')" = "0" ]
+}
+
+# ===========================================================================
+# U4 — `dispatch`: one round, then exit (R1, R4, R5, R25, R31, R33, KTD9,
+# KTD17, KTD22).
+#
+# WHY THESE TESTS RUN THE WHOLE CHAIN
+# -----------------------------------
+# Dispatch's job is to get a member's OWN alias and a member's OWN skills into
+# the process that eventually runs. bg-agent detaches its supervisor with
+# `nohup bash "$SELF" --supervise ...`, and everything the supervisor needs must
+# be written onto that one command line — a flag parsed by the launcher and left
+# off it arrives empty at the child with both ends green. That is a shipped bug
+# in this repo, in this file's sibling. So the alias assertion reads the argv
+# the FIXTURE recorded (`--model <alias>`, one entry per invocation) and the
+# skills assertion reads what the DETACHED SUPERVISOR wrote down and provisioned
+# — records on the far side of the boundary. A launcher-side assertion would
+# prove nothing about either.
+# ===========================================================================
+
+dispatch_env() {    # <alias,alias,...> — the fixture gateway and fixture CLI
+    local aliases="$1" portfile="$WORK/port" a i
+    export SPAWN_STATE_HOME="$WORK"
+    export SPAWN_SEARCH_ROOT="$WORK/searchroot"; mkdir -p "$SPAWN_SEARCH_ROOT"
+    export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
+    export SPAWN_CONNECT_TIMEOUT=2 SPAWN_PROBE_TIMEOUT=5
+    export SPAWN_START_TIMEOUT=10 SPAWN_LOCK_TIMEOUT=30
+    unset SPAWN_INSTALL_DIR SPAWN_CONFIG SPAWN_MODELS_JSON SPAWN_CLAUDE_BIN
+    unset SPAWN_BG_TIMEOUT SPAWN_JOB_ROOT
+    unset FAKE_CLAUDE_MODE FAKE_CLAUDE_WRITE FAKE_CLAUDE_DENIALS
+    export CLAUDE_CONFIG_DIR="$WORK/claude-home"; mkdir -p "$CLAUDE_CONFIG_DIR"
+    export FAKE_CLAUDE_RECORD_DIR="$WORK/rec"; mkdir -p "$FAKE_CLAUDE_RECORD_DIR"
+    export SPAWN_SKILLS_HOME="$WORK/skills-home"
+
+    mkdir -p "$WORK/bin"
+    ln -sf "$FIX/fake-claude.sh" "$WORK/bin/claude"
+    export PATH="$WORK/bin:$PATH"
+
+    rm -f "$portfile"
+    python3 "$FIX/fake-gateway.py" --token tok-team-s3cr3t --aliases "$aliases" \
+        --scenario healthy --port-file "$portfile" >"$WORK/gw.out" 2>"$WORK/gw.err" &
+    GW_PID=$!
+    for i in $(seq 1 100); do [ -s "$portfile" ] && break; sleep 0.05; done
+    PORT="$(cat "$portfile")"
+    [ -n "$PORT" ]
+    export SPAWN_BASE_URL="http://127.0.0.1:$PORT/anthropic"
+    {
+        printf 'server:\n  bind: "127.0.0.1:4000"\n  token: tok-team-s3cr3t\n\nmodels:\n'
+        for a in $(printf '%s' "$aliases" | tr ',' ' '); do
+            printf '  %s:\n    model: up/%s\n' "$a" "$a"
+        done
+    } > "$WORK/gateway.yaml"
+    export SPAWN_CONFIG="$WORK/gateway.yaml"
+}
+
+fake_skill() {      # <name> — a skill on the operator's side, for provisioning
+    mkdir -p "$SPAWN_SKILLS_HOME/skills/$1"
+    printf -- '---\nname: %s\n---\nfixture skill\n' "$1" > "$SPAWN_SKILLS_HOME/skills/$1/SKILL.md"
+}
+
+contract_file() {   # <path> <deliverable>
+    jq -n --arg d "$2" '{task:("create " + $d), done_means:"the deliverable exists",
+                         deliverables:[$d]}' > "$1"
+}
+
+# team_file <path> <mode> <max-concurrent> <name:alias:contract[:skill,skill]>...
+team_file() {
+    local f="$1" mode="$2" mc="$3"; shift 3
+    local spec name alias contract skills members='[]'
+    for spec in "$@"; do
+        name="${spec%%:*}"; spec="${spec#*:}"
+        alias="${spec%%:*}"; spec="${spec#*:}"
+        contract="${spec%%:*}"; skills="${spec#*:}"
+        if [ "$skills" = "$contract" ]; then skills=""; fi
+        members="$(printf '%s' "$members" | jq -c --arg n "$name" --arg a "$alias" \
+            --arg c "$contract" --arg s "$skills" \
+            '. + [{name:$n, alias:$a, contract:$c,
+                   skills:($s | split(",") | map(select(length > 0)))}]')"
+    done
+    jq -n --arg m "$mode" --argjson mc "$mc" --argjson ms "$members" \
+        '{mode:$m, bounds:{max_concurrent:$mc, max_rounds:3, token_ceiling:0},
+          members:$ms}' > "$f"
+}
+
+dispatch() {        # <args...> — always from inside the temp checkout
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' dispatch $* 2>/dev/null"
+}
+
+out() { printf '%s' "$output" | jq -r "$1"; }
+
+# The supervisor is detached, so the child's record appears AFTER dispatch has
+# returned. Polling is the property, not a workaround: KTD17 says dispatch does
+# not wait.
+await_invocations() {   # <count> [seconds]
+    local want="$1" limit="${2:-40}" i n=0
+    for i in $(seq 1 $((limit * 5))); do
+        n="$(grep -c '^--- invocation' "$FAKE_CLAUDE_RECORD_DIR/argv" 2>/dev/null)" || n=0
+        [ "$n" -ge "$want" ] && return 0
+        sleep 0.2
+    done
+    printf 'await_invocations: wanted %s child invocations, saw %s\n' "$want" "$n" >&2
+    return 1
+}
+
+await_file() {      # <path> [seconds]
+    local f="$1" limit="${2:-40}" i
+    for i in $(seq 1 $((limit * 5))); do
+        [ -e "$f" ] && return 0
+        sleep 0.2
+    done
+    printf 'await_file: %s never appeared\n' "$f" >&2
+    return 1
+}
+
+child_models() { awk '/^--model$/{getline; print}' "$FAKE_CLAUDE_RECORD_DIR/argv"; }
+
+assert_child_alias() {  # <alias> — this alias reached a child's own argv
+    if ! child_models | grep -qxF "$1"; then
+        printf 'assert_child_alias: no child was invoked with --model %s\n' "$1" >&2
+        child_models >&2
+        return 1
+    fi
+    return 0
+}
+
+refute_child_alias() {  # <alias>
+    if child_models | grep -qxF "$1"; then
+        printf 'refute_child_alias: a child WAS invoked with --model %s\n' "$1" >&2
+        return 1
+    fi
+    return 0
+}
+
+member_job_dir() {  # <handle> <worktree>
+    bash "$JOBS" state --handle "$1" --cwd "$2" 2>/dev/null | jq -r '.job.job_dir // empty'
+}
+
+member_wt() { rec ".members[] | select(.name == \"$1\") | .worktree"; }
+member_handle() { rec ".members[] | select(.name == \"$1\") | .handle"; }
+member_state() { rec ".members[] | select(.name == \"$1\") | .launch_state"; }
+
+# ---------------------------------------------------------------------------
+# R4 / KTD9 — the round is bounded, and a bigger roster clamps
+# ---------------------------------------------------------------------------
+
+@test "four members with a maximum of two dispatch two, and the rest stay pending" {
+    dispatch_env "alpha,beta,gamma,delta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json" \
+        "mason:gamma:$WORK/c.json" "clerk:delta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    # Clamping is not a refusal (KTD9), and the response says how many remain.
+    [ "$(out '.ok')" = "true" ]
+    [ "$(out '.dispatched')" = "2" ]
+    [ "$(out '.pending')" = "2" ]
+
+    [ "$(member_state lead)" = "dispatched" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    [ "$(member_state mason)" = "pending" ]
+    [ "$(member_state clerk)" = "pending" ]
+    # Four worktrees exist either way: a pending member is placed, not deferred.
+    assert_exists "$ROOT/r1/clerk/.git"
+}
+
+@test "the concurrency maximum is the caller's, not a constant: the same roster at 3 dispatches 3" {
+    # The control arm for the clamp above — it proves 2 was the bound the caller
+    # gave and not a number compiled into the surface (KTD9).
+    dispatch_env "alpha,beta,gamma,delta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 3 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json" \
+        "mason:gamma:$WORK/c.json" "clerk:delta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.dispatched')" = "3" ]
+    [ "$(out '.pending')" = "1" ]
+}
+
+@test "a bound given in the file and again as a flag takes the flag's value" {
+    dispatch_env "alpha,beta,gamma"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json" "mason:gamma:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" --max-concurrent 1
+    [ "$status" -eq 0 ]
+    [ "$(out '.dispatched')" = "1" ]
+    # The record keeps the EFFECTIVE bound, not the file's.
+    [ "$(rec '.bounds.max_concurrent')" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# The two argv scenarios (R25) — asserted on the child's side of the detach
+# ---------------------------------------------------------------------------
+
+@test "each child is invoked with its OWN alias, on the fixture's own argv record" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.dispatched')" = "2" ]
+
+    await_invocations 2
+    # One entry per member, each carrying that member's alias — the value the
+    # launcher parsed only counts if it crossed the nohup boundary.
+    [ "$(child_models | sort | tr '\n' ',')" = "alpha,beta," ]
+    assert_child_alias alpha
+    assert_child_alias beta
+    # ...and nothing else was invoked: an alias no member named must be absent.
+    refute_child_alias gamma
+}
+
+@test "control: refute_child_alias fails on an alias a child really did receive" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    run refute_child_alias alpha
+    [ "$status" -ne 0 ]
+    run assert_child_alias never-served
+    [ "$status" -ne 0 ]
+}
+
+@test "each member's supervisor receives that member's skills and no others" {
+    dispatch_env "alpha,beta"
+    fake_skill lead-only
+    fake_skill scout-only
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json:lead-only" "scout:beta:$WORK/c.json:scout-only"
+
+    # The child hangs, so the provisioned skills are still on disk to be looked
+    # at: the supervisor removes them the moment the job ends.
+    export FAKE_CLAUDE_MODE=hang
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+
+    local lead_dir scout_dir
+    lead_dir="$(member_job_dir "$(member_handle lead)" "$(member_wt lead)")"
+    scout_dir="$(member_job_dir "$(member_handle scout)" "$(member_wt scout)")"
+    [ -n "$lead_dir" ]
+    [ -n "$scout_dir" ]
+
+    # skills.requested is written BY THE DETACHED SUPERVISOR from the argv it
+    # was handed. It is the record that crosses the boundary for skills, which
+    # never reach the child's own command line.
+    await_file "$lead_dir/skills.requested"
+    await_file "$scout_dir/skills.requested"
+    [ "$(cat "$lead_dir/skills.requested")" = "lead-only" ]
+    [ "$(cat "$scout_dir/skills.requested")" = "scout-only" ]
+
+    # And the effect: each member's worktree holds its own skill and not its
+    # team-mate's.
+    await_file "$(member_wt lead)/.claude/skills/lead-only/SKILL.md"
+    await_file "$(member_wt scout)/.claude/skills/scout-only/SKILL.md"
+    refute_exists "$(member_wt lead)/.claude/skills/scout-only"
+    refute_exists "$(member_wt scout)/.claude/skills/lead-only"
+}
+
+@test "control: a member named no skills gets no skills directory at all" {
+    # The absence half of the scenario above can only be read if the present
+    # case is reachable, and this arm proves the emptiness is the team file's
+    # doing rather than provisioning being broken for everyone.
+    dispatch_env "alpha,beta"
+    fake_skill lead-only
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json:lead-only" "scout:beta:$WORK/c.json"
+
+    export FAKE_CLAUDE_MODE=hang
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_file "$(member_wt lead)/.claude/skills/lead-only/SKILL.md"
+    refute_exists "$(member_wt scout)/.claude/skills"
+    [ "$(rec '.members[] | select(.name == "scout") | .skills | length')" = "0" ]
+}
+
+# ---------------------------------------------------------------------------
+# R5 — a failed launch is recorded and the round continues
+# ---------------------------------------------------------------------------
+
+@test "a launch that fails records that member and the NEXT member still runs" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    # lead's contract does not exist, so bg-agent refuses that one launch and
+    # only that one.
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/no-such-contract.json" "scout:beta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    assert_one_object "$output"
+    [ "$(out '.dispatched')" = "1" ]
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    # The response names the launcher's OWN error value for the member it hit.
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "contract_invalid" ]
+    [ "$(out '.members[] | select(.name == "scout") | .error')" = "null" ]
+
+    # The proof that the round continued is on the child's side: an invocation
+    # exists for the LATER member.
+    await_invocations 1
+    assert_child_alias beta
+    refute_child_alias alpha
+}
+
+@test "a launch refused with job_already_running records that member and is not retried" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    # One job root for every member, so the one-job-at-a-time lock is shared and
+    # the SECOND member meets it. A member's own fresh checkout can never hold a
+    # prior job, so this configuration is the only way the refusal is reachable
+    # from a first round at all — and the refusal is the launcher's, recorded
+    # verbatim rather than reduced to "it failed".
+    export SPAWN_JOB_ROOT="$WORK/jobroot"
+
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    assert_one_object "$output"
+    [ "$(out '.dispatched')" = "1" ]
+    [ "$(member_state lead)" = "dispatched" ]
+    [ "$(member_state scout)" = "launch_failed" ]
+    [ "$(out '.members[] | select(.name == "scout") | .error')" = "job_already_running" ]
+    [ "$(member_handle scout)" = "null" ]
+
+    # Not retried, and not retried into a stolen lock: the job the root holds is
+    # still lead's, and scout produced no second child.
+    local h; h="$(member_handle lead)"
+    [ "$(bash "$JOBS" state --handle "$h" --cwd "$(member_wt lead)" | jq -r '.job.state')" = "running" ]
+    await_invocations 1
+    assert_child_alias alpha
+    refute_child_alias beta
+}
+
+@test "every dispatched member carries its handle in the record before the next launch begins" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    # scout's launch fails, so the record is read at a moment when lead's row is
+    # the only completed one — its handle must already be there.
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/no-such-contract.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_state lead)" = "dispatched" ]
+    [ "$(rec '.members[] | select(.name == "lead") | has("handle")')" = "true" ]
+    local h; h="$(member_handle lead)"
+    [ -n "$h" ]
+    [ "$h" != "null" ]
+    # The handle is a real one the record layer answers for, not a placeholder.
+    [ "$(bash "$JOBS" state --handle "$h" --cwd "$(member_wt lead)" | jq -r '.job.job_id')" = "$h" ]
+    [ "$(out '.members[] | select(.name == "lead") | .handle')" = "$h" ]
+}
+
+# ---------------------------------------------------------------------------
+# KTD17 — dispatch does not wait
+# ---------------------------------------------------------------------------
+
+@test "dispatch returns while a member is still live" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 2 "lead:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.dispatched')" = "1" ]
+
+    # The command has already returned — `run` collected its status. The child it
+    # started is STILL RUNNING, which is the whole claim: no waiting, no reaping.
+    await_file "$FAKE_CLAUDE_RECORD_DIR/pid"
+    local pid; pid="$(head -1 "$FAKE_CLAUDE_RECORD_DIR/pid")"
+    [ -n "$pid" ]
+    kill -0 "$pid"
+    [ "$(bash "$JOBS" state --handle "$(member_handle lead)" --cwd "$(member_wt lead)" \
+        | jq -r '.job.state')" = "running" ]
+}
+
+# ---------------------------------------------------------------------------
+# R33 / KTD22 — the team travels as a file, and the file is copied
+# ---------------------------------------------------------------------------
+
+@test "the team file is copied into the record, and editing the original does not move the target" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local copy; copy="$(out '.team_file')"
+    [ -n "$copy" ]
+    [ "$copy" != "$WORK/team.json" ]
+    assert_exists "$copy"
+    [ "$(jq -r '[.members[].name] | join(",")' < "$copy")" = "lead,scout" ]
+
+    # The caller edits the original afterwards. The run's copy is unmoved.
+    team_file "$WORK/team.json" attached 1 "impostor:alpha:$WORK/c.json"
+    [ "$(jq -r '[.members[].name] | join(",")' < "$copy")" = "lead,scout" ]
+    [ "$(rec '[.members[].name] | join(",")')" = "lead,scout" ]
+}
+
+@test "dispatch mints a run id the later verbs take, without re-stating the team" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local id; id="$(out '.run_id')"
+    [ -n "$id" ]
+    [ "$id" != "null" ]
+    [ "$(rec '.run_id')" = "$id" ]
+    # teardown takes the run, and names no member, alias or contract.
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r '.run_id')" = "$id" ]
+}
+
+# ---------------------------------------------------------------------------
+# The team file's grammar — every refusal before anything is created
+# ---------------------------------------------------------------------------
+
+@test "a team file that is not one JSON object is refused, exit 2, nothing created" {
+    printf '[{"members":[]}]\n' > "$WORK/team.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    assert_one_object "$output"
+    [ "$(out '.error')" = "team_file_malformed" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    refute_exists "$RUN/team.json"
+    refute_exists "$ROOT/r1"
+}
+
+@test "a team file naming no members is refused, exit 2, nothing created" {
+    jq -n '{mode:"attached", members:[]}' > "$WORK/team.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "team_file_empty" ]
+    refute_exists "$RUN/team.json"
+    refute_exists "$ROOT/r1"
+}
+
+@test "a team file repeating a member name is refused, exit 2, nothing created" {
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 "lead:alpha:$WORK/c.json" "lead:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "member_duplicate" ]
+    refute_exists "$RUN/team.json"
+    refute_exists "$ROOT/r1"
+}
+
+@test "a team file whose member has no alias or no contract is refused, exit 2" {
+    contract_file "$WORK/c.json" out.txt
+    jq -n --arg c "$WORK/c.json" \
+        '{mode:"attached", members:[{name:"lead", contract:$c}]}' > "$WORK/team.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "member_incomplete" ]
+    refute_exists "$ROOT/r1"
+}
+
+@test "a missing team file and a member name failing the grammar are both one object, exit 2" {
+    dispatch --team-file "$WORK/absent.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    assert_one_object "$output"
+    [ "$(out '.error')" = "team_file_unreadable" ]
+
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 "../escape:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    assert_one_object "$output"
+    [ "$(out '.error')" = "member_name_invalid" ]
+    refute_exists "$ROOT/r1"
+}
+
+@test "a team file may not name a member's own path" {
+    # THE DECISION (U3's handoff): a member placed outside <root>/<run-id>/<name>
+    # is never torn down, so a team file — a plain file anything on the box can
+    # write — does not get to choose a member's path. Placement is the surface's,
+    # and everything dispatch creates is therefore removable by the record.
+    contract_file "$WORK/c.json" out.txt
+    jq -n --arg c "$WORK/c.json" --arg w "$WORK/elsewhere" \
+        '{mode:"attached", bounds:{max_concurrent:2},
+          members:[{name:"lead", alias:"alpha", contract:$c, worktree:$w}]}' > "$WORK/team.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "member_path_forbidden" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    refute_exists "$WORK/elsewhere"
+    refute_exists "$ROOT/r1"
+    refute_exists "$RUN/team.json"
+}
+
+@test "control: the same team file without that key is accepted and places the member itself" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    jq -n --arg c "$WORK/c.json" \
+        '{mode:"attached", bounds:{max_concurrent:2},
+          members:[{name:"lead", alias:"alpha", contract:$c}]}' > "$WORK/team.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_wt lead)" = "$ROOT/r1/lead" ]
+}
+
+# ---------------------------------------------------------------------------
+# R31 — single-round refuses an oversized roster before it creates anything
+# ---------------------------------------------------------------------------
+
+@test "single-round refuses a roster larger than its maximum, exit 2, and no worktree exists" {
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" single-round 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json" "mason:gamma:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    assert_one_object "$output"
+    [ "$(out '.ok')" = "false" ]
+    [ "$(out '.error')" = "roster_exceeds_round" ]
+    # Nothing was created: single-round arms no driver, so an accepted oversized
+    # roster would strand the remainder pending with nothing able to advance it.
+    refute_exists "$ROOT/r1"
+    refute_exists "$RUN/team.json"
+    refute_exists "$RUN/team-file.json"
+}
+
+@test "roster_exceeds_round carries its own non-empty remedy, distinct from usage's" {
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" single-round 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    local re; re="$(out '.remedy')"
+    [ -n "$re" ]
+    [ "$re" != "null" ]
+
+    dispatch --run-id r1
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "usage" ]
+    local us; us="$(out '.remedy')"
+    [ -n "$us" ]
+    [ "$us" != "null" ]
+    [ "$re" != "$us" ]
+}
+
+@test "control: single-round at or under the maximum is accepted and dispatches its round" {
+    # The control arm for the refusal above — the refusal is about the roster
+    # outrunning the round, not about single-round being unsupported.
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" single-round 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.dispatched')" = "2" ]
+    [ "$(out '.pending')" = "0" ]
+}
+
+@test "the same roster in attached and in unattended mode both dispatch a first round" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/att.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/att.json" --run-id att --run-dir "$WORK/run-att"
+    [ "$status" -eq 0 ]
+    [ "$(out '.mode')" = "attached" ]
+    [ "$(out '.dispatched')" = "1" ]
+    [ "$(out '.pending')" = "1" ]
+
+    team_file "$WORK/un.json" unattended 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/un.json" --run-id un --run-dir "$WORK/run-un"
+    [ "$status" -eq 0 ]
+    [ "$(out '.mode')" = "unattended" ]
+    [ "$(out '.dispatched')" = "1" ]
+    [ "$(out '.pending')" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# The contract as data
+# ---------------------------------------------------------------------------
+
+@test "--describe names the three bound flags and the team file's shape" {
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' --describe 2>/dev/null"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.ok')" = "true" ]
+    local f
+    for f in --team-file --max-concurrent --max-rounds --token-ceiling; do
+        [ "$(printf '%s' "$output" | jq -r --arg f "$f" '[.flags[] | select(.name == $f)] | length')" = "1" ]
+    done
+    # The team file's shape, not merely its name: a caller writes this file.
+    for f in mode bounds members; do
+        [ "$(printf '%s' "$output" | jq -r --arg f "$f" '[.team_file_fields[] | select(.name == $f)] | length')" = "1" ]
+    done
+    [ "$(printf '%s' "$output" | jq -r '[.team_file_fields[] | select(.name == "members") | .member_fields[] | .name] | join(",")')" = "name,alias,contract,skills" ]
+    # And it answers with no gateway and no config, as bg-agent's does.
+    [ "$(out '.response_kind')" = "describe" ]
+}
+
+@test "the describe object parses under the platform's own /bin/bash, not only a newer one" {
+    # bash 3.2 is the floor and it is /bin/bash here, while PATH's bash on this
+    # box is 5.3. Measured: a quote sequence inside this file's longest command
+    # substitution parsed one way under 5.3 and another under 3.2, and
+    # --describe answered with a record_malformed refusal and a screen of jq
+    # compile errors on the shell the plugin actually ships to. Every other test
+    # in this file was green at the time, because they all reach team.sh through
+    # PATH.
+    run bash -c "cd '$PRIMARY' && /bin/bash '$TEAM' --describe 2>'$WORK/describe.err'"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.response_kind')" = "describe" ]
+    # The refusal that hid this printed to stderr; an empty stderr is the part
+    # that catches it whichever way the object comes out.
+    [ ! -s "$WORK/describe.err" ]
+}
+
+@test "a member with no checkout is reported worktree_failed and the round dispatches the rest" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    # lead's destination is occupied by a plain file, so it gets no checkout —
+    # and a member with no checkout must be skipped by the launch loop rather
+    # than launched with an empty --cwd, which bg-agent would take as the
+    # dispatching process's own directory.
+    mkdir -p "$ROOT/r1"
+    printf 'in the way\n' > "$ROOT/r1/lead"
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 5 ]
+    assert_one_object "$output"
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "worktree_failed" ]
+    [ "$(member_state lead)" = "launch_failed" ]
+    # R3, measured: with that member launched anyway, bg-agent reads an empty
+    # --cwd as the CALLING process's directory — which is the driver's own
+    # checkout. The job was claimed there, lock and all. A job root here is the
+    # signature of that.
+    refute_exists "$PRIMARY/.spawn"
+    [ "$(out '.dispatched')" = "1" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    await_invocations 1
+    assert_child_alias beta
+    refute_child_alias alpha
 }
