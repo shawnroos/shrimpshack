@@ -11,17 +11,20 @@ This is the first rule, because it is the one most often broken. A reflect run s
 user **exactly two things**:
 
 ```
-⏺ Reflecting on <subject matter>
+Reflecting on <subject matter>
 ```
 
 …then the work happens out of sight, then **one** closing summary. Nothing in between.
 
+- **Write that line as plain text — no `⏺`, no bullet, no other leading glyph.** The
+  harness already renders its own `⏺` in front of assistant text, so typing one produces
+  a doubled marker (`⏺ ⏺ Reflecting on …`).
 - `<subject matter>` names what this run is consolidating, in the user's terms — what the
   session was about ("the grep prefilter work", "the WEB-2845 detector fix"), not the
   machinery ("passes 1-10", "17 memories").
-- **Do the work in ONE batched call, or dispatch it to a background agent.** Ten passes is
-  not ten visible tool calls. A pass that needs several shell steps needs one script, not
-  one call per step.
+- **Run the mechanical passes through `scripts/reflect-run.sh`** (see below), which is one
+  short visible call instead of a hand-written shell blob. Whatever is left over goes in
+  ONE batched call, or a background agent. Ten passes is not ten visible tool calls.
 - **Never narrate the passes.** No "now updating timestamps", no "checking merge
   candidates", no per-pass tallies on screen, no thinking-out-loud between steps. The
   REFLECT.log line is the record; the closing summary is the report.
@@ -36,6 +39,46 @@ the user is trying to follow, and the volume buries the one line that matters (a
 a halted cleanup) instead of surfacing it.
 
 `/reflect verbose` is the ONLY mode that prints the pass-by-pass detail.
+
+---
+
+## The runner — one command for every mechanical pass
+
+The passes split in two. **Judgment** (what was learned, what to save, what merges into
+what, whether a worktree's leftovers matter) stays with you. **Mechanics** is the same
+shell every single run, and hand-writing it produced a forty-line blob in the transcript
+each time — the exact mess the output contract exists to prevent.
+
+So run the mechanics through the script, once, near the end:
+
+```
+bash <plugin>/scripts/reflect-run.sh \
+  --trigger manual \
+  --applied "feedback_a reference_b" \
+  --saved 1 --merged 0 --retired 0 --compounded 1 \
+  --triggers-declared 1 --triggers-pruned 0 \
+  --capture-from /path/to/worktree \
+  --scan-worktrees ~/projects/<repo>
+```
+
+It owns: pass 2's `last_used` bumps and `MEMORY_USE.log` lines, the trigger-manifest
+recompile, pass 6 (render + lint), pass 7 (durable doc capture), pass 8 (reconcile +
+index + embed), the pass 9 **scan**, and pass 10 (the REFLECT.log line). It prints a
+compact `key=value` report; read it, don't re-derive it.
+
+**What you still do yourself**, because a script cannot:
+
+- Passes 1, 3, 4, 5 — inventory, merges, retirement, `/ce-compound`.
+- Writing new memory bodies and `triggers:` blocks (use `triggers.py add`, never a hand
+  edit — it preserves mtime).
+- **Removing a worktree.** The runner scans and reports `state=DIRTY` / `pr=MERGED`; it
+  never removes anything, because deciding whether an untracked file is the only copy of
+  something is judgment, and being wrong is unrecoverable.
+
+**The counts it reports are observed effects, not steps that ran** — `updated` counts
+files whose bytes changed, `captured` counts files that differed from the store copy,
+`index_tightened` is `1` only if `MEMORY.md` actually changed. Pass its `embedded=` value
+through verbatim; never substitute a number for `unknown`.
 
 ---
 
