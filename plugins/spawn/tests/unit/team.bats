@@ -1405,6 +1405,34 @@ one_done_one_pending() {
     refute_has_delay "$output"
 }
 
+@test "a single-round run dispatches everyone, and its advance says stop, not continue" {
+    # U16's other half of the single-round contract. The refusal above proves an
+    # oversized roster never starts; this proves the accepted case needs no
+    # driver — everyone goes out in the one round, and the advance a returning
+    # caller happens to make finds nothing left to dispatch rather than asking
+    # for a round that mode arms nobody to run.
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    team_file "$WORK/team.json" single-round 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.dispatched')" = "2" ]
+    [ "$(out '.pending')" = "0" ]
+    [ "$(member_state lead)" = "dispatched" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    await_member_terminal lead
+    await_member_terminal scout
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("roster_exhausted") != null')" = "true" ]
+    refute_has_delay "$output"
+}
+
 @test "a member still running is probed and left running, and the advance returns" {
     one_hang_member 1
     advance --run-dir "$RUN"

@@ -70,11 +70,11 @@ frontmatter() {         # <file>
     # collision check vacuously true, which is the false-green shape here.
     run bash -c "$(declare -f command_names); CMD_DIR='$CMD_DIR'; command_names | grep -c ."
     [ "$status" -eq 0 ]
-    [ "$output" -ge 4 ]
+    [ "$output" -ge 6 ]
 
     run bash -c "$(declare -f skill_names); SKILL_DIR='$SKILL_DIR'; skill_names | grep -c ."
     [ "$status" -eq 0 ]
-    [ "$output" -ge 3 ]
+    [ "$output" -ge 5 ]
 
     local c s
     for c in $(command_names); do
@@ -158,6 +158,7 @@ frontmatter() {         # <file>
         "session:lib/launch.sh"
         "bg-agent:lib/bg-agent.sh"
         "report:lib/spawnctl.sh"
+        "team:lib/team.sh"
     )
     local pair name script
     for pair in "${pairs[@]}"; do
@@ -196,6 +197,85 @@ frontmatter() {         # <file>
     for f in "$CMD_DIR"/*.md; do
         [ -f "$f" ] || continue
         grep -qF '$ARGUMENTS' "$f"
+    done
+}
+
+# --- U16: the team surface ------------------------------------------------
+#
+# STATIC ONLY, AND SAID PLAINLY. Nothing here runs a model, so none of it can
+# show that a live session follows the loop, picks a sane cap, actually issues
+# the wakeup, or reports honestly. Those are uncheckable in this repo and are
+# named as such in the plan rather than covered by a test that looks like it
+# covers them. What IS checkable is that the two surfaces exist, name the right
+# script, carry the namespaced wake prompt, and handle four intents rather than
+# the three an earlier draft shipped.
+
+# Every line in <file> where ScheduleWakeup is called with a quoted prompt.
+# The prose mentions of the tool name — "the wakeup is this skill's call" —
+# carry no prompt and are not what this is about.
+wake_prompt_lines() {   # <file>
+    grep -n 'ScheduleWakeup(.*"' "$1"
+}
+
+@test "U16 — every armed wake prompt is the namespaced /spawn:team form" {
+    # A bare command name fired from ScheduleWakeup resolves to nothing. The
+    # command and the skill both quote the prompt, so both are scanned.
+    local f found=0 line
+    for f in "$CMD_DIR/team.md" "$SKILL_DIR/team-run/SKILL.md"; do
+        [ -f "$f" ]
+        while IFS= read -r line; do
+            found=$((found + 1))
+            case "$line" in
+                */spawn:team*) ;;
+                *)
+                    printf '%s: wake prompt is not namespaced: %s\n' "$f" "$line" >&2
+                    return 1
+                    ;;
+            esac
+        done < <(wake_prompt_lines "$f")
+    done
+    # Vacuity guard: a rotted matcher that finds no arming instruction at all
+    # would otherwise pass this test for exactly the wrong reason.
+    [ "$found" -ge 2 ]
+
+    # NOT VACUOUS, part two: the matcher must still fire on the bare-name shape
+    # it exists to reject. Same synthetic-control pattern the setup.md gate uses.
+    local control="$BATS_TEST_TMPDIR/bare-wake.md"
+    cat > "$control" <<'CTL'
+ScheduleWakeup(intent.delay, "team <run-id>")
+CTL
+    run bash -c "$(declare -f wake_prompt_lines); wake_prompt_lines '$control'"
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | grep -qF 'ScheduleWakeup'
+    refute_file_match '/spawn:team' "$control"
+}
+
+@test "U16 — both team surfaces name the namespaced command" {
+    grep -qF '/spawn:team' "$CMD_DIR/team.md"
+    grep -qF '/spawn:team' "$SKILL_DIR/team-run/SKILL.md"
+}
+
+@test "U16 — the team-run body names all four intents" {
+    # PRESENCE ONLY, and it cannot prove correct handling of any of them. It
+    # goes red on the omission this plan itself shipped in an earlier draft: a
+    # body that handled three intents of four.
+    #
+    # THE ROW, NOT THE WORD. The first version of this asserted each intent word
+    # appeared anywhere in the body, and deleting the whole `waiting` row from
+    # the dispatch table left it GREEN — every one of those four words also
+    # appears in surrounding prose, so "the body mentions waiting" was true of a
+    # body that had stopped dispatching on it. The table row is where an intent
+    # is actually given an action, so that is what is pinned.
+    local md="$SKILL_DIR/team-run/SKILL.md"
+    [ -f "$md" ]
+    local body w
+    body="$(awk 'NR==1 && $0=="---" { inb=1; next } inb && $0=="---" { inb=0; next } !inb' "$md")"
+    [ -n "$body" ]
+    for w in continue waiting stop noop; do
+        if ! printf '%s\n' "$body" | grep -q "^| \`$w\` |"; then
+            printf 'team-run/SKILL.md has no dispatch-table row for the `%s` intent\n' "$w" >&2
+            return 1
+        fi
     done
 }
 
@@ -240,7 +320,7 @@ frontmatter() {         # <file>
     done
     # Guard the guard: if the glob ever matches nothing, this must fail loudly
     # rather than pass over an empty loop.
-    [ "$checked" -ge 3 ]
+    [ "$checked" -ge 4 ]
 }
 
 @test "every implementation skill is hidden from the slash menu" {
@@ -285,7 +365,7 @@ frontmatter() {         # <file>
         checked=$((checked + 1))
     done
     # Guard the guard: an empty loop must fail loudly, not pass silently.
-    [ "$checked" -ge 3 ]
+    [ "$checked" -ge 4 ]
 }
 
 @test "no skill body points at a command name this unit deleted" {
