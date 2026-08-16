@@ -1107,3 +1107,627 @@ member_state() { rec ".members[] | select(.name == \"$1\") | .launch_state"; }
     assert_child_alias beta
     refute_child_alias alpha
 }
+
+# ===========================================================================
+# U15 — `advance`: one advance, prints intent (R28, R10, R26, R6, R32, KTD4,
+# KTD19).
+#
+# WHY THE PROBES ARE RUN FOR REAL
+# -------------------------------
+# The whole unit is a probe of somebody else's worktree. `jobs.sh`'s
+# resolve_worktree defaults --cwd to $PWD, so a probe that omits it ANSWERS —
+# about the driver's own checkout — and a test that only checked "the probe
+# returned something" would pass over exactly the bug U4 measured on bg-agent's
+# --cwd. So these tests dispatch real jobs into real member worktrees and read
+# the answer the probe could only have got from the member's own tree.
+#
+# Absence is the other trap. `.delay` must be ABSENT on three intents and
+# numeric on one, and `jq '.delay == null'` is true of an object with no delay
+# key at all — so both directions go through has("delay").
+# ===========================================================================
+
+advance() {         # <args...> — always from inside the temp checkout
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' advance $* 2>/dev/null"
+}
+
+argv_count() {
+    local n
+    n="$(grep -c '^--- invocation' "$FAKE_CLAUDE_RECORD_DIR/argv" 2>/dev/null)" || n=0
+    printf '%s' "$n"
+}
+
+member_outcome() { rec ".members[] | select(.name == \"$1\") | .outcome"; }
+
+# A member reaches a terminal state on the supervisor's clock, not ours. This
+# waits for THAT, and it asks through the member's own worktree — the same
+# question the advance asks.
+await_member_terminal() {   # <name> [seconds]
+    local name="$1" limit="${2:-40}" h wt i s=""
+    h="$(member_handle "$name")"; wt="$(member_wt "$name")"
+    for i in $(seq 1 $((limit * 5))); do
+        s="$(bash "$JOBS" state --handle "$h" --cwd "$wt" 2>/dev/null | jq -r '.job.state // ""')"
+        case "$s" in done|degraded|failed|cancelled) return 0 ;; esac
+        sleep 0.2
+    done
+    printf 'await_member_terminal: %s never went terminal (last: %s)\n' "$name" "$s" >&2
+    return 1
+}
+
+assert_has_delay() {    # <json>
+    if [ "$(printf '%s' "$1" | jq -r 'has("delay")')" != "true" ]; then
+        printf 'assert_has_delay: no delay key on %s\n' "$1" >&2
+        return 1
+    fi
+    if [ "$(printf '%s' "$1" | jq -r '.delay | type')" != "number" ]; then
+        printf 'assert_has_delay: delay is not a number on %s\n' "$1" >&2
+        return 1
+    fi
+    return 0
+}
+
+refute_has_delay() {    # <json>
+    if [ "$(printf '%s' "$1" | jq -r 'has("delay")')" != "false" ]; then
+        printf 'refute_has_delay: a delay key is present on %s\n' "$1" >&2
+        return 1
+    fi
+    return 0
+}
+
+# An ISO-8601 UTC stamp N seconds in the past, in both date dialects.
+iso_ago() {         # <seconds>
+    local t; t=$(( $(date -u '+%s') - $1 ))
+    date -u -r "$t" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+        || date -u -d "@$t" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null
+}
+
+# Hand-edit the record. The chokepoint recomputes DERIVED facts on every write
+# and leaves raw ones alone, so an edited raw field is what the next advance
+# reads — which is how a round's age and a member's handle are put under a
+# test's control.
+edit_record() {     # <jq args...> <jq program>
+    local tmp="$RUN/.edited.$$"
+    jq -c "$@" < "$RUN/team.json" > "$tmp" || return 1
+    cat "$tmp" > "$RUN/team.json" && rm -f "$tmp"
+}
+
+# One dispatched member, hanging, so the round stays in flight.
+one_hang_member() { # <roster-size>
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    if [ "${1:-1}" -gt 1 ]; then
+        team_file "$WORK/team.json" attached 1 \
+            "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    else
+        team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    fi
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state lead)" = "dispatched" ]
+    await_invocations 1
+}
+
+# One dispatched member that finishes, and one still pending behind it.
+one_done_one_pending() {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state lead)" = "dispatched" ]
+    [ "$(member_state scout)" = "pending" ]
+    await_member_terminal lead
+}
+
+# ---------------------------------------------------------------------------
+# The four intents, round state first and roster state second
+# ---------------------------------------------------------------------------
+
+@test "with the round closed and members still pending, the intent is continue" {
+    one_done_one_pending
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.ok')" = "true" ]
+    [ "$(out '.intent')" = "continue" ]
+    refute_has_delay "$output"
+    # The advance that records the last outcome is the advance that closes the
+    # round, so it must decide on the record it just WROTE.
+    [ "$(member_outcome lead)" != "null" ]
+    [ "$(rec '.derived.active_round')" = "null" ]
+    # The outcome came from `handle.sh result` and that call answered: asked
+    # from anywhere but this member's own worktree it would have refused, and
+    # the refusal would be on this row.
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "null" ]
+    [ "$(out '.members[] | select(.name == "lead") | .outcome')" != "null" ]
+}
+
+@test "with a member of the round still running the intent is waiting, not continue" {
+    one_hang_member 2
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.intent')" = "waiting" ]
+    # R32 — undispatched members remain and it still does not say continue.
+    [ "$(rec '[.members[] | select(.launch_state == "pending")] | length')" = "1" ]
+    [ "$(out '.members[] | select(.name == "lead") | .state')" = "running" ]
+}
+
+@test "a bound that fires mid-round yields waiting, not stop, until the round closes" {
+    # This is what "round state FIRST, roster state second" is actually for. A
+    # bound firing sets `stop_reasons` while the round is still in flight, and
+    # deciding roster-state-first would stop the run with members still running
+    # — R6 concludes a round only when every member in it is terminal. The
+    # `continue` branch alone cannot show this: the chokepoint's
+    # `dispatch_allowed` already requires no active round, so swapping THAT
+    # branch changes nothing and proves nothing.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" --max-rounds 1
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    # The bound HAS fired: one round of a one-round run is used up.
+    [ "$(rec '.derived.stop_reasons | index("round_max_reached") != null')" = "true" ]
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "waiting" ]
+    assert_has_delay "$output"
+
+    # Control arm: the same run stops on that same bound once the round has
+    # closed, so `waiting` above is about the round being in flight and not
+    # about the bound going unread.
+    local h wt pid
+    h="$(member_handle lead)"; wt="$(member_wt lead)"
+    pid="$(bash "$JOBS" state --handle "$h" --cwd "$wt" 2>/dev/null | jq -r '.job.pid')"
+    kill -9 "$pid" 2>/dev/null
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("round_max_reached") != null')" = "true" ]
+}
+
+@test "three advances during a live round dispatch nothing and never say continue" {
+    one_hang_member 2
+    local before; before="$(argv_count)"
+    local i
+    for i in 1 2 3; do
+        advance --run-dir "$RUN"
+        [ "$status" -eq 0 ]
+        [ "$(out '.intent')" = "waiting" ]
+    done
+    # R32 measured at the boundary: the child's own argv record is what a
+    # second dispatched batch would show up in.
+    [ "$(argv_count)" = "$before" ]
+    [ "$(member_state scout)" = "pending" ]
+}
+
+@test "a continue advance dispatches nothing either" {
+    one_done_one_pending
+    local before; before="$(argv_count)"
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "continue" ]
+    # Dispatch belongs to U4. `continue` is the tempting case: the round is
+    # closed and a member is waiting, and this verb still starts nobody.
+    [ "$(argv_count)" = "$before" ]
+    [ "$(member_state scout)" = "pending" ]
+}
+
+@test "a round in which every launch failed reaches a terminal intent, never waiting" {
+    # A U4 defect this unit surfaced. `round` was recorded on the success path
+    # and not on the failure path, so a round whose launches ALL failed had zero
+    # assigned members — and the chokepoint's `($rm | length) > 0` left it
+    # `running` for ever. The advance then answered `waiting` with nothing in
+    # flight and nothing that could ever finish: a permanently hung driver.
+    dispatch_env "alpha,beta"
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/no-such-contract.json" "scout:beta:$WORK/also-missing.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "launch_failed" ]
+    # An attempted launch belongs to the round it was attempted in, whether or
+    # not it produced a job.
+    [ "$(rec '.members[] | select(.name == "lead") | .round')" = "1" ]
+    [ "$(rec '.members[] | select(.name == "scout") | .round')" = "1" ]
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" != "waiting" ]
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("roster_exhausted") != null')" = "true" ]
+    [ "$(rec '.rounds[0].state')" = "finished" ]
+    [ "$(rec '.rounds[0].verdict')" = "fail" ]
+}
+
+@test "a round where every member lost its checkout also reaches a terminal intent" {
+    # The same defect class by the other route into launch_failed. Placement
+    # marks a member launch_failed before any round exists, and the launch loop
+    # then skips it — so a run where NO member got a checkout had the same
+    # empty round, and the same permanently hung driver.
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    mkdir -p "$ROOT/r1"
+    printf 'in the way\n' > "$ROOT/r1/lead"
+    printf 'in the way\n' > "$ROOT/r1/scout"
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "launch_failed" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .round')" = "1" ]
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(rec '.rounds[0].state')" = "finished" ]
+}
+
+@test "control: the argv count DOES move when something really is dispatched" {
+    # The control arm for the two tests above. They assert an absence — that the
+    # child argv record gains no entry — and an absence proves nothing until the
+    # counter is shown moving on the present case.
+    one_hang_member 2
+    local before; before="$(argv_count)"
+    advance --run-dir "$RUN"
+    [ "$(argv_count)" = "$before" ]
+    # scout is still pending; dispatching it is what an advance must NOT do, and
+    # what the counter registers when anything does.
+    dispatch --team-file "$RUN/team-file.json" --run-id r2 --run-dir "$WORK/run2"
+    await_invocations $(( before + 1 ))
+    [ "$(argv_count)" -gt "$before" ]
+}
+
+@test "with no undispatched members left, the intent is stop with roster_exhausted" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_member_terminal lead
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("roster_exhausted") != null')" = "true" ]
+    refute_has_delay "$output"
+}
+
+@test "a member still running is probed and left running, and the advance returns" {
+    one_hang_member 1
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "waiting" ]
+    # Probed, not awaited: the job is still live after the advance returned.
+    local h wt
+    h="$(member_handle lead)"; wt="$(member_wt lead)"
+    [ "$(bash "$JOBS" state --handle "$h" --cwd "$wt" 2>/dev/null | jq -r '.job.state')" = "running" ]
+    [ "$(member_outcome lead)" = "null" ]
+}
+
+# ---------------------------------------------------------------------------
+# The run lock
+# ---------------------------------------------------------------------------
+
+@test "an advance racing a live holder returns noop and overwrites nothing" {
+    one_done_one_pending
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "continue" ]
+    local sum; sum="$(cksum < "$RUN/team.json")"
+
+    mkdir -p "$RUN/advance.lock"
+    printf '%s\n' "$$" > "$RUN/advance.lock/pid"
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.intent')" = "noop" ]
+    refute_has_delay "$output"
+    # The first advance's result survives byte for byte.
+    [ "$(cksum < "$RUN/team.json")" = "$sum" ]
+    [ "$(member_outcome lead)" != "null" ]
+    rm -rf "$RUN/advance.lock"
+}
+
+@test "a stale advance lock whose holder is gone is broken and the advance proceeds" {
+    one_done_one_pending
+    local dead
+    sleep 0.01 & dead=$!
+    wait "$dead" 2>/dev/null || true
+
+    mkdir -p "$RUN/advance.lock"
+    printf '%s\n' "$dead" > "$RUN/advance.lock/pid"
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "continue" ]
+    [ "$(member_outcome lead)" != "null" ]
+    # Broken and then released — a lock left behind would noop every advance
+    # that followed.
+    refute_exists "$RUN/advance.lock"
+}
+
+@test "control: the noop assertion fails when the holder is this test's own live pid" {
+    # The control arm for the two above: it proves the lock is read at all, and
+    # that `noop` is not what an advance says whatever the lock holds.
+    one_done_one_pending
+    mkdir -p "$RUN/advance.lock"
+    printf '%s\n' "$$" > "$RUN/advance.lock/pid"
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "noop" ]
+    rm -rf "$RUN/advance.lock"
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" != "noop" ]
+}
+
+# ---------------------------------------------------------------------------
+# The delay — on `waiting` alone, clamped, and shorter as the round ages
+# ---------------------------------------------------------------------------
+
+@test "waiting carries a numeric delay inside [60, 3600]" {
+    one_hang_member 1
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "waiting" ]
+    assert_has_delay "$output"
+    local d; d="$(out '.delay')"
+    [ "$d" -ge 60 ]
+    [ "$d" -le 3600 ]
+}
+
+@test "continue, stop and noop carry no delay key at all" {
+    one_done_one_pending
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "continue" ]
+    refute_has_delay "$output"
+
+    mkdir -p "$RUN/advance.lock"
+    printf '%s\n' "$$" > "$RUN/advance.lock/pid"
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "noop" ]
+    refute_has_delay "$output"
+    rm -rf "$RUN/advance.lock"
+
+    # Roster exhausted: mark the pending member launch_failed so nothing is
+    # left to dispatch, which is the stop case without a bound firing.
+    edit_record '.members |= map(if .name == "scout" then .launch_state = "launch_failed" else . end)'
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "stop" ]
+    refute_has_delay "$output"
+}
+
+@test "control: refute_has_delay fails on the intent that really carries one" {
+    one_hang_member 1
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "waiting" ]
+    run refute_has_delay "$output"
+    [ "$status" -ne 0 ]
+}
+
+@test "a round that just opened waits longer than one near the child deadline" {
+    one_hang_member 1
+    export SPAWN_BG_TIMEOUT=4000
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "waiting" ]
+    local fresh; fresh="$(out '.delay')"
+
+    edit_record --arg t "$(iso_ago 3600)" '.rounds |= map(.opened_at = $t)'
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "waiting" ]
+    local aged; aged="$(out '.delay')"
+
+    [ "$fresh" -gt "$aged" ]
+    [ "$aged" -ge 60 ]
+}
+
+@test "the delay clamps at 3600 above and at 60 below" {
+    one_hang_member 1
+    export SPAWN_BG_TIMEOUT=100000
+    advance --run-dir "$RUN"
+    [ "$(out '.delay')" = "3600" ]
+
+    export SPAWN_BG_TIMEOUT=900
+    edit_record --arg t "$(iso_ago 5000)" '.rounds |= map(.opened_at = $t)'
+    advance --run-dir "$RUN"
+    [ "$(out '.delay')" = "60" ]
+}
+
+# ---------------------------------------------------------------------------
+# The probes: --cwd, and the three answers handle.sh gives kept distinct
+# ---------------------------------------------------------------------------
+
+@test "each probe carries --cwd for that member's own worktree" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 2
+
+    # THE CONTROL ARM. Each handle answers ONLY from its own member's worktree:
+    # asked from the driver's checkout, or from the other member's, the same
+    # handle is handle_unknown. So a `running` answer below could not have come
+    # from a probe that omitted --cwd or carried the wrong one.
+    local hl hs
+    hl="$(member_handle lead)"; hs="$(member_handle scout)"
+    [ "$(bash "$JOBS" state --handle "$hl" --cwd "$PRIMARY" 2>/dev/null | jq -r '.error')" = "handle_unknown" ]
+    [ "$(bash "$JOBS" state --handle "$hl" --cwd "$(member_wt scout)" 2>/dev/null | jq -r '.error')" = "handle_unknown" ]
+    [ "$(bash "$JOBS" state --handle "$hs" --cwd "$PRIMARY" 2>/dev/null | jq -r '.error')" = "handle_unknown" ]
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .state')" = "running" ]
+    [ "$(out '.members[] | select(.name == "scout") | .state')" = "running" ]
+    # And the driver's own checkout was never made into a job root by a probe
+    # that resolved against it.
+    refute_exists "$PRIMARY/.spawn"
+}
+
+@test "a member whose recorded worktree is empty is not probed against the driver" {
+    one_hang_member 1
+    # An empty --cwd is not an empty argument to jobs.sh: resolve_worktree
+    # falls back to $PWD, so the probe would answer about the DRIVER's tree.
+    edit_record '.members |= map(.worktree = "")'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "worktree_missing" ]
+    refute_exists "$PRIMARY/.spawn"
+}
+
+@test "handle_unknown for one member does not abort the advance for the others" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 2
+
+    edit_record '.members |= map(if .name == "lead"
+                                 then .handle = "job-19700101T000000Z-9999" else . end)'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "handle_unknown" ]
+    # Terminal, not left non-terminal: nothing can ever answer for that member
+    # again, and a member that never goes terminal holds its round open for
+    # ever (R6).
+    [ "$(member_outcome lead)" = "failed" ]
+    # The other member was still probed.
+    [ "$(out '.members[] | select(.name == "scout") | .state')" = "running" ]
+    [ "$(out '.members[] | select(.name == "scout") | .error')" = "null" ]
+}
+
+@test "a member whose supervisor pid is gone resolves failed, not what its file claims" {
+    one_hang_member 1
+    local h wt pid
+    h="$(member_handle lead)"; wt="$(member_wt lead)"
+    pid="$(bash "$JOBS" state --handle "$h" --cwd "$wt" 2>/dev/null | jq -r '.job.pid')"
+    [ "$pid" != "null" ]
+    kill -9 "$pid" 2>/dev/null
+    # The status file still CLAIMS running — the thing that would have updated
+    # it is the thing that was killed (KTD6).
+    [ "$(jq -r '.state' < "$(member_job_dir "$h" "$wt")/status.json")" = "running" ]
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .state')" = "failed" ]
+    [ "$(member_outcome lead)" = "failed" ]
+}
+
+@test "a state of failed is an answer, not an error" {
+    one_hang_member 1
+    local h wt pid
+    h="$(member_handle lead)"; wt="$(member_wt lead)"
+    pid="$(bash "$JOBS" state --handle "$h" --cwd "$wt" 2>/dev/null | jq -r '.job.pid')"
+    kill -9 "$pid" 2>/dev/null
+    advance --run-dir "$RUN"
+    # Exit 0, ok:true, error null — a probe that answered is a success whatever
+    # it answered.
+    [ "$status" -eq 0 ]
+    [ "$(out '.ok')" = "true" ]
+    [ "$(out '.error')" = "null" ]
+    [ "$(out '.intent')" = "stop" ]
+}
+
+# ---------------------------------------------------------------------------
+# Persist before signal, and the envelope
+# ---------------------------------------------------------------------------
+
+@test "the record is written before the intent is printed" {
+    one_done_one_pending
+    # stdout CLOSED, so every write to it fails. The record must already carry
+    # the advance: a crash between the write and the print leaves a consistent
+    # record, and a missing successor is detectable.
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' advance --run-dir '$RUN' >&- 2>/dev/null"
+    [ "$(member_outcome lead)" != "null" ]
+    [ "$(rec '.rounds[0].state')" = "finished" ]
+}
+
+@test "the intent is exactly one JSON object in the standard envelope" {
+    one_done_one_pending
+    advance --run-dir "$RUN"
+    assert_one_object "$output"
+    [ "$(out 'has("schema")')" = "true" ]
+    [ "$(out 'has("intent")')" = "true" ]
+    [ "$(out 'has("reasons")')" = "true" ]
+    [ "$(out '.exit_code')" = "0" ]
+    [ "$(out '.run_id')" = "r1" ]
+    [ "$(out '.mode')" = "attached" ]
+}
+
+@test "advance on a run that has no record is one JSON object, exit 2" {
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' advance --run-dir '$WORK/nothing' 2>/dev/null"
+    [ "$status" -eq 2 ]
+    assert_one_object "$output"
+    [ "$(printf '%s' "$output" | jq -r '.ok')" = "false" ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "record_missing" ]
+    [ "$(printf '%s' "$output" | jq -r '.remedy | length > 0')" = "true" ]
+}
+
+@test "teardown on a run that has no record says record_missing, not internal" {
+    # The same wart as the advance case above, in the verb next door, and it is
+    # not cosmetic: the remedy table is keyed on the error value, so `internal`
+    # hands a human "this is a plugin bug" where the truth is "your run
+    # directory has no record, and here is how to clean up by hand".
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$WORK/nothing' 2>/dev/null"
+    [ "$status" -eq 2 ]
+    assert_one_object "$output"
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "record_missing" ]
+    [ "$(printf '%s' "$output" | jq -r '.remedy | length > 0')" = "true" ]
+    [ "$(printf '%s' "$output" | jq -r '.remedy')" != "$(printf '%s' "$output" | jq -r '.detail')" ]
+}
+
+@test "control: a run dir whose record is unreadable says record_malformed" {
+    # The control arm: it proves the two cases are told apart, not that one
+    # value was hardcoded over the other.
+    mkdir -p "$RUN"
+    printf '{"not":"a run record"}\n' > "$RUN/team.json"
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "record_malformed" ]
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' advance --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "record_malformed" ]
+}
+
+@test "advance takes the run id the dispatch minted, without a run dir" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1
+    [ "$status" -eq 0 ]
+    local dir; dir="$(out '.run_dir')"
+    advance --run-id r1
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "waiting" ]
+    [ "$(out '.run_dir')" = "$dir" ]
+}
+
+@test "--describe names advance and all three modes" {
+    run bash -c "bash '$TEAM' --describe 2>/dev/null"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(printf '%s' "$output" | jq -r '[.verbs[].name] | index("advance") != null')" = "true" ]
+    [ "$(printf '%s' "$output" | jq -r '[.modes[].name] | sort | join(",")')" = "attached,single-round,unattended" ]
+    [ "$(printf '%s' "$output" | jq -r '[.intents[].name] | sort | join(",")')" = "continue,noop,stop,waiting" ]
+    [ "$(printf '%s' "$output" | jq -r '.intents[] | select(.name == "waiting") | .delay != null')" = "true" ]
+}
+
+@test "the describe object still parses under the platform's own /bin/bash" {
+    # U4 found --describe completely broken on bash 3.2 while the whole suite
+    # was green, because every other test reaches the script through PATH's
+    # bash 5. Empty stderr is the assertion, not just a parseable object.
+    run bash -c "/bin/bash '$TEAM' --describe 2>'$WORK/describe.err'"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(printf '%s' "$output" | jq -r '[.verbs[].name] | index("advance") != null')" = "true" ]
+    [ ! -s "$WORK/describe.err" ]
+}

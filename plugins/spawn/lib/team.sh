@@ -5,6 +5,7 @@
 #   team.sh roster   --run-id <id> --member <name> --alias <a> --contract <c>
 #                    [--skill <s>]... [--worktree <path>] [--member ...]
 #   team.sh dispatch --team-file <path> [--run-id <id>] [bounds]
+#   team.sh advance  --run-id <id> | --run-dir <dir>
 #   team.sh teardown --run-dir <dir>
 #   team.sh --describe
 #
@@ -102,7 +103,7 @@ remedy_for() {
 }
 
 # Null-valued data fields, so all three encoder tiers describe the same shape.
-emit_error() { spawn::emit_error plugin "run_id run_dir members removed team_file mode round dispatched pending" "$@"; }
+emit_error() { spawn::emit_error plugin "run_id run_dir members removed team_file mode round round_state intent reasons dispatched pending" "$@"; }
 
 # The frozen enum (0 ok · 2 usage · 3 unreachable · 4 alias · 5 upstream ·
 # 6 deadline · 7 auth) takes no new member, so a new failure class is a new
@@ -127,6 +128,19 @@ spawn::team_fail() {
     printf '✗ %s\n' "$(spawn::sanitize_for_display "$*")" >&2
     emit_error "$code" "$err" "$*"
     exit "$code"
+}
+
+# Set the refusal a failed record read MEANT. The reader sets it itself, but it
+# runs in a command substitution and that subshell's SPAWN_TEAM_ERROR never
+# reaches the caller — which reported `internal`, whose remedy tells a human
+# this is a plugin bug. The remedy table is keyed on the error value, so a wrong
+# value here is wrong recovery guidance, not a cosmetic mislabel.
+spawn::team_record_refusal() {  # <run-dir>
+    if [ -f "$(spawn::team_record_path "$1")" ]; then
+        SPAWN_TEAM_ERROR="record_malformed"
+    else
+        SPAWN_TEAM_ERROR="record_missing"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -305,6 +319,7 @@ team.sh roster   --run-id <id> [--run-dir <dir>] [--mode attached|unattended]
 team.sh dispatch --team-file <path> [--run-id <id>] [--run-dir <dir>]
                  [--mode single-round|attached|unattended]
                  [--max-concurrent N] [--max-rounds N] [--token-ceiling N]
+team.sh advance  --run-id <id> | --run-dir <dir>
 team.sh teardown --run-dir <dir>
 team.sh --describe
 USAGE
@@ -577,6 +592,14 @@ team_launch_member() {  # <index> <round>
     # contract_invalid.
     err="$(printf '%s' "$out" | jq -r '.error // empty' 2>/dev/null)"
     [ -n "$err" ] || err="launch_failed"
+    # The round is recorded BEFORE the state, and on this path as much as on the
+    # success path above: a member whose launch was ATTEMPTED in round N belongs
+    # to round N. Left null, a round whose launches ALL failed has no assigned
+    # members at all, and the chokepoint's round tally — which needs at least
+    # one member before it will call a round finished — holds it `running` for
+    # ever. The advance then answers `waiting` on a round nothing can finish.
+    spawn::team_member_set "$RUN_DIR" "$name" round "$round" \
+        || spawn::team_fail "member '$name' failed to launch and its round could not be recorded"
     spawn::team_member_set "$RUN_DIR" "$name" launch_state launch_failed \
         || spawn::team_fail "member '$name' failed to launch and could not be marked launch_failed"
     TEAM_LAUNCH_ERRS="$(printf '%s' "$TEAM_LAUNCH_ERRS" | jq -c --arg n "$name" --arg e "$err" '.[$n] = $e')"
@@ -633,6 +656,14 @@ do_dispatch() {
         [ "$live" -lt "$MAX_CONC" ] || break
         if [ -n "${M_WORKTREES[$i]}" ]; then
             team_launch_member "$i" "$round" && live=$(( live + 1 ))
+        else
+            # Placement already marked this member launch_failed, before any
+            # round existed. It still belongs to the round it was reached in —
+            # the same reason team_launch_member records the round on its own
+            # failure path, and the case where NO member got a checkout is the
+            # one that would otherwise leave an empty round running for ever.
+            spawn::team_member_set "$RUN_DIR" "${M_NAMES[$i]}" round "$round" \
+                || spawn::team_fail "member '${M_NAMES[$i]}' has no checkout and its round could not be recorded"
         fi
         i=$(( i + 1 ))
     done
@@ -666,6 +697,293 @@ do_dispatch() {
     exit "$code"
 }
 
+# ---------------------------------------------------------------------------
+# advance — one advance of the run, and an intent the driver acts on
+# (R28, R10, R6, R32, R26, KTD4, KTD19)
+#
+# This verb NEVER dispatches and NEVER schedules. Dispatch is U4's; scheduling
+# is the driver's, because `ScheduleWakeup` is a model tool no script can call.
+# What lives here is the judgment — which intent, and how long to wait — so that
+# it is testable code rather than a skill's prose.
+#
+# WAITING IS RE-ENTRY, NOT BLOCKING (KTD4). Every fact is read from disk on
+# every call; nothing is carried in an environment or an argument, and no
+# conversation context is consulted. One smallest-useful advance per wake-up.
+# ---------------------------------------------------------------------------
+JOBS_SH="$SCRIPT_DIR/jobs.sh"
+HANDLE_SH="$SCRIPT_DIR/handle.sh"
+JOB_TERMINAL_STATES="done degraded failed cancelled"
+ADVANCE_LOCK=""
+ADVANCE_HELD=false
+TEAM_PROBES='[]'
+
+advance_parse() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id) RUN_ID="${2:-}"; shift 2 ;;
+            --run-dir) RUN_DIR="${2:-}"; shift 2 ;;
+            *)
+                usage
+                SPAWN_TEAM_ERROR="usage"
+                spawn::team_fail "unexpected argument: $1" ;;
+        esac
+    done
+    [ -n "$RUN_ID" ] || [ -n "$RUN_DIR" ] || { SPAWN_TEAM_ERROR="usage"
+        spawn::team_fail "advance takes the run id dispatch returned, or --run-dir"; }
+    if [ -n "$RUN_ID" ]; then
+        spawn::team_name_ok "$RUN_ID" || { SPAWN_TEAM_ERROR="usage"
+            spawn::team_fail "the run id is a directory component and failed the grammar: $RUN_ID"; }
+    fi
+}
+
+# The child's own deadline, and the same default ceilings.sh reads for it. Kept
+# in step by hand: a delay paced against a deadline the child is not running on
+# would wake the driver on a clock nothing else in the run keeps.
+team_child_deadline() {
+    local d="${SPAWN_BG_TIMEOUT:-900}"
+    case "$d" in ''|*[!0-9]*) d=900 ;; esac
+    [ "$d" -gt 0 ] || d=900
+    printf '%s' "$d"
+}
+
+# An ISO-8601 UTC stamp as epoch seconds. BOTH date dialects, for the reason
+# jobs-view.sh's file_mtime states about stat: macOS wants `-j -f`, GNU wants
+# `-d`, and a helper that knew one would answer the empty string on the other
+# box — here that would silently become a wrong delay rather than no delay.
+team_epoch_of() {
+    local ts="$1" e
+    e="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$ts" '+%s' 2>/dev/null)" \
+        || e="$(date -u -d "$ts" '+%s' 2>/dev/null)" || return 1
+    case "$e" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$e"
+}
+
+# How long the driver sleeps before re-entering, for a `waiting` intent alone.
+#
+# A QUARTER of what the round has left, floored at 60 and capped at 3600. Tuned,
+# not derived: the quarter is what makes the wake-ups bunch toward the end of a
+# round instead of spacing evenly across it, so a round that just opened is
+# probed less often than one about to resolve. Raise the divisor and a long
+# round costs wake-ups that learn nothing; lower it and the run finds out late.
+#
+# An unreadable `opened_at` yields the FLOOR, not the cap: a broken record
+# should wake the driver sooner, never park it for an hour.
+team_wait_delay() {     # <opened_at>
+    local opened="${1:-}" dl start now rem d
+    dl="$(team_child_deadline)"
+    start="$(team_epoch_of "$opened")" || { printf '60'; return 0; }
+    now="$(date -u '+%s')"
+    rem=$(( dl - (now - start) ))
+    [ "$rem" -gt 0 ] || rem=0
+    d=$(( rem / 4 ))
+    [ "$d" -lt 60 ] && d=60
+    [ "$d" -gt 3600 ] && d=3600
+    printf '%s' "$d"
+}
+
+# ---------------------------------------------------------------------------
+# The run lock. mkdir is the atomic primitive jobs.sh uses, for the reason it
+# gives: there is no flock(1) on macOS. Deliberately NOT that lock and
+# deliberately not sourced from it — jobs.sh's is per worktree and is held by a
+# job for its whole life, this one is per RUN and is held for exactly one
+# read-probe-write-print. Same argument as handle.sh's pid_still_is_job, which
+# duplicates the record layer's probe rather than sharing it.
+#
+# Atomic rename already stops a torn record. It does NOT stop two re-entries
+# both reading the same record and the second overwriting the first's advance,
+# which is the whole reason this exists.
+# ---------------------------------------------------------------------------
+team_lock_holder() {
+    local p
+    p="$(tr -dc '0-9' < "$ADVANCE_LOCK/pid" 2>/dev/null)"
+    [ -n "$p" ] || return 1
+    printf '%s' "$p"
+}
+
+# `mv` then remove, never a bare `rm -rf`: read-then-rm-then-mkdir lets a second
+# breaker delete the directory the first breaker has already re-created and is
+# working under, and both then believe they hold it.
+team_lock_break() {
+    mv "$ADVANCE_LOCK" "$ADVANCE_LOCK.stale.$$" 2>/dev/null \
+        && rm -rf "$ADVANCE_LOCK.stale.$$" 2>/dev/null
+}
+
+# 0 when this process holds the lock, 1 when a live advance does.
+team_lock_take() {
+    local holder
+    if ! mkdir "$ADVANCE_LOCK" 2>/dev/null; then
+        if holder="$(team_lock_holder)" && kill -0 "$holder" 2>/dev/null; then
+            return 1
+        fi
+        # A lock with no holder written yet is either a claimant caught between
+        # its mkdir and its write — microseconds — or a process killed in that
+        # window. Breaking it on sight would let the second re-entry through the
+        # door the first is still walking through, so age decides, exactly as it
+        # does for a pid-less job lock.
+        if [ -z "$holder" ] && [ -n "$(find "$ADVANCE_LOCK" -maxdepth 0 -mmin -1 2>/dev/null)" ]; then
+            return 1
+        fi
+        say "team: breaking an advance lock whose holder is gone"
+        team_lock_break
+        mkdir "$ADVANCE_LOCK" 2>/dev/null || return 1
+    fi
+    printf '%s\n' "$$" > "$ADVANCE_LOCK/pid" 2>/dev/null
+    ADVANCE_HELD=true
+    return 0
+}
+
+team_lock_release() {
+    [ "$ADVANCE_HELD" = true ] || return 0
+    ADVANCE_HELD=false
+    team_lock_break
+}
+
+team_probe_row() {      # <name> <state> <outcome-json> <error>
+    TEAM_PROBES="$(printf '%s' "$TEAM_PROBES" | jq -c --arg n "$1" --arg s "$2" \
+        --argjson o "$3" --arg e "$4" \
+        '. + [{name:$n, state:$s, outcome:$o,
+               error:(if $e == "" then null else $e end)}]')"
+}
+
+# One member, probed in ITS OWN worktree, and its outcome recorded if it has
+# reached one. The three answers handle.sh gives are kept apart: handle_unknown
+# and handle_expired ride the member's row as errors, and a `state` of failed is
+# a SUCCESSFUL answer that is recorded like any other terminal state.
+team_probe_member() {   # <name> <handle> <worktree>
+    local name="$1" handle="$2" wt="$3" out state err res outcome
+    # An empty --cwd is not an empty argument to jobs.sh: resolve_worktree falls
+    # back to $PWD, so the probe would answer about the DRIVER's own checkout —
+    # the shape U4 measured on bg-agent's --cwd, where a member took the
+    # driver's one-job lock. A member with no checkout is reported, never
+    # probed.
+    if [ -z "$wt" ] || [ ! -d "$wt" ]; then
+        team_probe_row "$name" "unknown" null "worktree_missing"
+        return 0
+    fi
+    out="$(bash "$JOBS_SH" state --handle "$handle" --cwd "$wt" 2>/dev/null)"
+    state="$(printf '%s' "$out" | jq -r '.job.state // empty' 2>/dev/null)"
+    if [ -z "$state" ]; then
+        err="$(printf '%s' "$out" | jq -r '.error // empty' 2>/dev/null)"
+        [ -n "$err" ] || err="handle_unknown"
+        # Terminal, because nothing can ever answer for this member again. Left
+        # non-terminal it would hold its round open for ever, and R6 concludes a
+        # round only when every member in it is terminal.
+        spawn::team_member_set "$RUN_DIR" "$name" outcome failed \
+            || say "team: '$name' answered $err and its outcome could not be recorded"
+        team_probe_row "$name" "failed" '"failed"' "$err"
+        return 0
+    fi
+    if ! is_terminal "$state"; then
+        team_probe_row "$name" "$state" null ""
+        return 0
+    fi
+    err=""; outcome="$state"
+    res="$(bash "$HANDLE_SH" result --handle "$handle" --cwd "$wt" 2>/dev/null)"
+    if [ "$(printf '%s' "$res" | jq -r '.ok // false' 2>/dev/null)" = "true" ]; then
+        outcome="$(printf '%s' "$res" | jq -r '.terminal_state // empty' 2>/dev/null)"
+        [ -n "$outcome" ] || outcome="$state"
+    else
+        # handle_expired and result_missing say the job ran and its record is no
+        # longer readable — which is not the same as no answer. The probe's own
+        # state stands as the outcome and the refusal rides the row.
+        err="$(printf '%s' "$res" | jq -r '.error // empty' 2>/dev/null)"
+    fi
+    spawn::team_member_set "$RUN_DIR" "$name" outcome "$outcome" \
+        || say "team: '$name' reached $outcome and it could not be recorded"
+    team_probe_row "$name" "$state" "$(printf '%s' "$outcome" | jq -R .)" "$err"
+}
+
+# The intent, as one JSON object. `delay` is added on `waiting` ALONE — the
+# driver schedules it verbatim, and no other intent has anything to schedule.
+team_emit_intent() {    # <record> <intent> <reasons-json> <delay|""> <detail>
+    local rec="$1" intent="$2" reasons="$3" delay="$4" detail="$5" obj
+    obj="$(printf '%s' "$rec" | jq -c --arg id "$RUN_ID" --arg d "$RUN_DIR" \
+        --arg i "$intent" --arg dt "$detail" --arg dl "$delay" \
+        --argjson rs "$reasons" --argjson ms "$TEAM_PROBES" \
+        "$(spawn::envelope_jq plugin)"' + {
+          ok:true, error:null, remedy:null, exit_code:0,
+          detail:(if $dt == "" then null else $dt end),
+          run_id:$id, run_dir:$d, intent:$i, reasons:$rs, mode:.mode,
+          round:(if (.rounds | length) == 0 then null else (.rounds | last | .ordinal) end),
+          round_state:(if (.rounds | length) == 0 then null else (.rounds | last | .state) end),
+          team_file:null, removed:null,
+          dispatched:([ .members[] | select(.launch_state == "dispatched") ] | length),
+          pending:([ .members[] | select(.launch_state == "pending") ] | length),
+          members:$ms}
+        + (if $dl == "" then {} else {delay:($dl | tonumber)} end)')" \
+        || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the intent could not be encoded"; }
+    emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the intent encoded to nothing"; }
+    exit "$EX_OK"
+}
+
+do_advance() {
+    need_jq
+    advance_parse "$@"
+    team_context
+    [ -n "$RUN_DIR" ] || RUN_DIR="$DRIVER/.spawn/teams/$RUN_ID"
+    ADVANCE_LOCK="$RUN_DIR/advance.lock"
+
+    local rec
+    if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
+        spawn::team_record_refusal "$RUN_DIR"
+        spawn::team_fail "no readable run record at $RUN_DIR"
+    fi
+    [ -n "$RUN_ID" ] || RUN_ID="$(printf '%s' "$rec" | jq -r '.run_id')"
+
+    team_lock_take \
+        || team_emit_intent "$rec" noop '[]' "" "another advance holds this run's lock"
+
+    local name handle wt
+    while IFS=$'\037' read -r name handle wt; do
+        [ -n "$name" ] || continue
+        team_probe_member "$name" "$handle" "$wt"
+    done < <(printf '%s' "$rec" | jq -r '
+        .members[] | select(.launch_state == "dispatched" and .outcome == null)
+        | [.name, (.handle // ""), (.worktree // "")] | @tsv' | tr '\t' '\037')
+
+    # WRITE, THEN RE-READ, on every advance and not only on one that changed a
+    # member. The derived block is recomputed at the write and nowhere else
+    # (KTD18), so an advance that decided without writing would be deciding on a
+    # derivation some earlier process computed. And the advance that records the
+    # last member's outcome is the advance whose write closes the round, so the
+    # record read before the probe would answer `waiting` for a round this call
+    # itself finished.
+    rec="$(spawn::team_record_read "$RUN_DIR")" \
+        && spawn::team_record_write "$RUN_DIR" "$rec" \
+        && rec="$(spawn::team_record_read "$RUN_DIR")" || {
+        team_lock_release
+        SPAWN_TEAM_ERROR="record_unwritable"
+        spawn::team_fail "the run record could not be advanced at $RUN_DIR"
+    }
+
+    # ROUND STATE FIRST, ROSTER STATE SECOND (R32). Every fact below is read
+    # from the chokepoint's `derived` block, never recomputed here — that is
+    # KTD18, and a second copy of the arithmetic is exactly the drift it exists
+    # to prevent.
+    local intent reasons='[]' delay="" pending opened
+    pending="$(printf '%s' "$rec" | jq -r '[ .members[] | select(.launch_state == "pending") ] | length')"
+    if [ "$(printf '%s' "$rec" | jq -r '.derived.active_round != null')" = "true" ]; then
+        intent="waiting"
+        opened="$(printf '%s' "$rec" | jq -r '.rounds | map(select(.state == "running")) | last | .opened_at // ""')"
+        delay="$(team_wait_delay "$opened")"
+    elif [ "$(printf '%s' "$rec" | jq -r '.derived.dispatch_allowed')" = "true" ]; then
+        intent="continue"
+    else
+        intent="stop"
+        reasons="$(printf '%s' "$rec" | jq -c '.derived.stop_reasons')"
+        if [ "$pending" -eq 0 ]; then
+            reasons="$(printf '%s' "$reasons" | jq -c '. + ["roster_exhausted"]')"
+        fi
+    fi
+
+    # The record was written by the probe above, before anything is printed: a
+    # crash between the two leaves a consistent record whose missing successor
+    # the driver can detect, where the reverse order leaves an intent the run
+    # record does not back.
+    team_lock_release
+    team_emit_intent "$rec" "$intent" "$reasons" "$delay" ""
+}
+
 do_teardown() {
     need_jq
     while [ $# -gt 0 ]; do
@@ -677,8 +995,10 @@ do_teardown() {
     [ -n "$RUN_DIR" ] || { SPAWN_TEAM_ERROR="usage"; spawn::team_fail "--run-dir is required"; }
 
     local rec removed obj
-    rec="$(spawn::team_record_read "$RUN_DIR")" \
-        || spawn::team_fail "no readable run record at $RUN_DIR"
+    if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
+        spawn::team_record_refusal "$RUN_DIR"
+        spawn::team_fail "no readable run record at $RUN_DIR"
+    fi
     removed="$(spawn::team_teardown "$RUN_DIR")" \
         || spawn::team_fail "teardown could not complete for the run at $RUN_DIR"
 
@@ -705,6 +1025,7 @@ do_describe() {
       verbs:[
         {name:"roster",   note:"place members and write their provisional rows; dispatches nothing"},
         {name:"dispatch", note:"one round, then exit — up to the concurrency maximum, in roster order, and no waiting"},
+        {name:"advance",  note:"one advance of the run: probe every member in flight, record what finished, and print an intent. Dispatches nothing and schedules nothing"},
         {name:"teardown", note:"remove the worktrees the run record names, and only those"}
       ],
       flags:[
@@ -728,6 +1049,17 @@ do_describe() {
            {name:"skills",   required:false, note:"names of the skills this member is to have, and no other member gets them"}
          ]}
       ],
+      modes:[
+        {name:"single-round", note:"dispatch once and arm nothing; a roster larger than the concurrency maximum is refused, because nothing would advance the remainder"},
+        {name:"attached",     note:"a driver runs another round while the roster still holds never-dispatched members, and stops when it does not"},
+        {name:"unattended",   note:"the same round-by-round advance as attached, with nobody watching it between rounds"}
+      ],
+      intents:[
+        {name:"waiting",  delay:"seconds, clamped to [60, 3600]", note:"a member of the active round is still in flight. No dispatch may follow this, so the concurrency maximum bounds members IN FLIGHT rather than members per call. The driver sleeps `delay` and re-enters"},
+        {name:"continue", delay:null, note:"the active round has closed, members are still undispatched, and no bound is crossed — the driver dispatches the next round"},
+        {name:"stop",     delay:null, note:"a bound fired or the roster is exhausted; `reasons` lists every one that did"},
+        {name:"noop",     delay:null, note:"a live advance holds this run’s lock; the record was read for this answer and left unchanged"}
+      ],
       exit_codes:[
         {code:0, error:null,            meaning:"the round was dispatched; it says nothing about any member’s outcome"},
         {code:2, error:"usage",         meaning:"a caller mistake or a refusal — branch on error, never on prose"},
@@ -748,7 +1080,8 @@ do_describe() {
       ],
       notes:[
         "dispatch returns while the round is in flight. Nothing here waits, polls or reaps: each member runs behind the supervisor bg-agent detaches for it, and the run record is how the round is read afterwards.",
-        "A roster larger than the concurrency maximum is not an error outside single-round mode. The extra members stay pending and the response says how many."
+        "A roster larger than the concurrency maximum is not an error outside single-round mode. The extra members stay pending and the response says how many.",
+        "advance prints its intent as data and never schedules its own next run. Scheduling is the driver’s action, and `delay` is on the waiting intent alone — no other intent carries one and no reader should look for one."
       ]
     }')" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the describe object could not be encoded"; }
     exit "$EX_OK"
@@ -760,17 +1093,18 @@ main() {
     case "$verb" in
         roster) do_roster "$@" ;;
         dispatch) do_dispatch "$@" ;;
+        advance) do_advance "$@" ;;
         teardown) do_teardown "$@" ;;
         --describe) do_describe ;;
         -h|--help)
             HELP_REQUESTED=true
             usage
             SPAWN_TEAM_ERROR="usage"
-            spawn::team_fail "no verb given: this surface answers 'roster', 'dispatch' and 'teardown'" ;;
+            spawn::team_fail "no verb given: this surface answers 'roster', 'dispatch', 'advance' and 'teardown'" ;;
         *)
             usage
             SPAWN_TEAM_ERROR="usage"
-            spawn::team_fail "unknown verb — this surface answers 'roster', 'dispatch' and 'teardown'" ;;
+            spawn::team_fail "unknown verb — this surface answers 'roster', 'dispatch', 'advance' and 'teardown'" ;;
     esac
 }
 
