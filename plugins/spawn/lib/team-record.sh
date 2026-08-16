@@ -35,6 +35,23 @@ SPAWN_TEAM_ERROR=""
 # small bill and would let a run past its ceiling with nothing to show for it.
 # But a member whose launch failed is zero BY CONSTRUCTION, not an absent
 # measurement: counting it unknown halted a whole run on one failed worktree.
+#
+# `stop_reasons` is a LIST evaluated as independent conditions, never a chain
+# (R21). Two of them are true at the same write whenever a run's last round is
+# also the one that crosses the ceiling, and a chain reporting the first
+# condition it checks reads as correct on every run where exactly one fires.
+#
+# `roster_exhausted` rides that same list but is deliberately kept OUT of
+# `continue` and `dispatch_allowed`: it is not a bound, it is the run finishing
+# its work, and `complete` is the field that tells those two apart. A reader
+# branching on `continue` alone would treat a run out of rounds and a run that
+# finished as the same event.
+#
+# `complete` asks whether EVERY member is terminal, not whether any is still
+# pending. A member in flight is not pending either, so the pending form
+# answers true in the middle of a live round. Nor is it "no bound fired": a
+# roster that empties on its last permitted round has finished its work, and
+# the reasons list already says which bounds were touched on the way.
 SPAWN_TEAM_DERIVE_JQ='
 def is_done: (.outcome != null) or (.launch_state == "launch_failed");
 def usage_missing: (.launch_state != "launch_failed" and is_done
@@ -66,19 +83,29 @@ def tally($ms): if ($ms | length) == 0 then "pending"
 | (.bounds.max_rounds) as $mr
 | (.bounds.token_ceiling) as $tc
 | ($ms | map(select(.launch_state == "dispatched" and .outcome == null)) | length) as $live
+| ($ms | map(select(usage_missing)) | length) as $unm
+| ($ms | map(select(is_done and (usage_missing | not))) | length) as $meas
 | ([ (if $ru >= $mr then "round_max_reached" else empty end),
      (if ($tc > 0 and $used >= $tc) then "token_ceiling_reached" else empty end),
-     (if ($unk and $tc > 0) then "usage_unknown" else empty end) ]) as $stops
+     (if ($unk and $tc > 0) then "usage_unknown" else empty end) ]) as $hit
+| (($ms | length) > 0 and (($ms | map(.launch_state == "pending") | any) | not)) as $done_roster
+| ($hit + (if $done_roster then ["roster_exhausted"] else [] end)) as $stops
 | (.rounds | map(select(.state == "running")) | last) as $act
 | .derived = {
     verdict: tally($ms),
-    continue: (($stops | length) == 0),
+    continue: (($hit | length) == 0),
     active_round: (if $act == null then null else $act.ordinal end),
     active_round_state: (if $act == null then null else $act.state end),
-    dispatch_allowed: (($stops | length) == 0 and $act == null
+    dispatch_allowed: (($hit | length) == 0 and $act == null
                        and ($ms | map(.launch_state == "pending") | any)),
     stop_reasons: $stops,
+    complete: (($ms | length) > 0 and ($ms | map(is_done) | all)),
+    ceiling_state: (if $tc <= 0 then "none"
+                    elif ($unm > 0 and $meas == 0) then "unenforceable"
+                    elif $used >= $tc then "reached"
+                    else "within" end),
     usage_unknown: $unk,
+    members_unmeasured: $unm,
     tokens_used: $used,
     members_total: ($ms | length),
     members_terminal: ($ms | map(select(is_done)) | length),

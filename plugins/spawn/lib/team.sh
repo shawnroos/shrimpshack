@@ -96,6 +96,8 @@ remedy_for() {
             printf 'Every member carries its own alias and its own contract, because that is what a member IS here. The member named in `detail` is missing one of them. Add it and call again; nothing was created.' ;;
         member_path_forbidden)
             printf 'A team file does not choose where a member runs. Placement belongs to this surface — a member outside `<root>/<run-id>/<name>` is one teardown will never remove, and the team file is an ordinary file anything on the box can write. Drop the path key from the member named in `detail`; the run will place it.' ;;
+        token_ceiling_zero)
+            printf 'A token ceiling of zero stops the run before its first round, so it would dispatch nobody and report a finished team. There is no default ceiling: for a run with no token bound, leave --token-ceiling off entirely and drop token_ceiling from the bounds object in the team file. For a run with one, give a positive number. Nothing was created.' ;;
         roster_exceeds_round)
             printf 'Single-round mode dispatches once and arms nothing to advance the rest, so a roster bigger than one round would leave the remainder pending forever. Nothing was created. Either raise --max-concurrent to cover the whole roster, or run the team in attached or unattended mode, which advances over successive rounds.' ;;
         *) spawn::remedy_for "$1" ;;
@@ -103,7 +105,7 @@ remedy_for() {
 }
 
 # Null-valued data fields, so all three encoder tiers describe the same shape.
-emit_error() { spawn::emit_error plugin "run_id run_dir members removed team_file mode round round_state intent reasons dispatched pending" "$@"; }
+emit_error() { spawn::emit_error plugin "run_id run_dir members removed team_file mode round round_state intent reasons complete ceiling_state members_unmeasured dispatched pending" "$@"; }
 
 # The frozen enum (0 ok · 2 usage · 3 unreachable · 4 alias · 5 upstream ·
 # 6 deadline · 7 auth) takes no new member, so a new failure class is a new
@@ -332,7 +334,7 @@ M_NAMES=(); M_ALIASES=(); M_CONTRACTS=(); M_SKILLS=(); M_WORKTREES=()
 # The per-member flags attach to the most recent --member, so a member is
 # declared and described in one place on the command line.
 roster_parse() {
-    local mode="attached" mc=2 mr=3 tc=0 last=-1
+    local mode="attached" mc=2 mr=3 tc=0 tc_stated="" last=-1
     MODE=""; MAX_CONC=""; MAX_ROUNDS=""; TOKEN_CEILING=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -341,7 +343,7 @@ roster_parse() {
             --mode) mode="${2:-}"; shift 2 ;;
             --max-concurrent) mc="${2:-}"; shift 2 ;;
             --max-rounds) mr="${2:-}"; shift 2 ;;
-            --token-ceiling) tc="${2:-}"; shift 2 ;;
+            --token-ceiling) tc="${2:-}"; tc_stated="--token-ceiling"; shift 2 ;;
             --member)
                 M_NAMES+=("${2:-}"); M_ALIASES+=(""); M_CONTRACTS+=("")
                 M_SKILLS+=(""); M_WORKTREES+=("")
@@ -363,6 +365,7 @@ roster_parse() {
         esac
     done
     MODE="$mode"; MAX_CONC="$mc"; MAX_ROUNDS="$mr"; TOKEN_CEILING="$tc"
+    team_ceiling_ok "$tc_stated" "$tc"
     [ -n "$RUN_ID" ] || { SPAWN_TEAM_ERROR="usage"; spawn::team_fail "--run-id is required"; }
     spawn::team_name_ok "$RUN_ID" || { SPAWN_TEAM_ERROR="usage"
         spawn::team_fail "--run-id is a directory component and failed the grammar: $RUN_ID"; }
@@ -499,6 +502,18 @@ team_bound_ok() {   # <flag-name> <value>
     esac
 }
 
+# KTD20 — 0 is the record's sentinel for "no bound", and it is NOT a ceiling a
+# caller may state. Stated, it would fire before the first round: the run would
+# dispatch nobody and report a finished team, which is the failure R19's "no
+# default" exists to avoid rather than to hide. So absent stays absent and
+# stated-zero is refused, at both boundaries a value can arrive from.
+team_ceiling_ok() {     # <stated: flag name, or empty> <value>
+    [ -n "$1" ] || return 0
+    [ "$2" = "0" ] || return 0
+    SPAWN_TEAM_ERROR="token_ceiling_zero"
+    spawn::team_fail "$1 was given 0, and a run that may cross no tokens at all dispatches nobody"
+}
+
 # Reads the team file into the roster arrays and the effective bounds. Every
 # refusal here happens before anything is created, which is what makes R31's
 # "and no worktree exists afterwards" a property of the code rather than of the
@@ -527,11 +542,16 @@ team_file_load() {  # <path>
     MODE="$(jq -r '.mode // "attached"' "$f" 2>/dev/null)"
     MAX_CONC="$(jq -r '.bounds.max_concurrent // empty' "$f" 2>/dev/null)"
     MAX_ROUNDS="$(jq -r '.bounds.max_rounds // empty' "$f" 2>/dev/null)"
+    # A stated 0 and an omitted key must stay DIFFERENT here (KTD20), and `//`
+    # keeps them apart: only null and false are falsy in jq, so `0 // empty` is
+    # 0. `stated` is what carries that distinction on to the refusal.
+    local stated=""
     TOKEN_CEILING="$(jq -r '.bounds.token_ceiling // empty' "$f" 2>/dev/null)"
+    [ -n "$TOKEN_CEILING" ] && stated="token_ceiling in the team file"
     [ -n "$F_MODE" ] && MODE="$F_MODE"
     [ -n "$F_CONC" ] && MAX_CONC="$F_CONC"
     [ -n "$F_ROUNDS" ] && MAX_ROUNDS="$F_ROUNDS"
-    [ -n "$F_CEILING" ] && TOKEN_CEILING="$F_CEILING"
+    [ -n "$F_CEILING" ] && { TOKEN_CEILING="$F_CEILING"; stated="--token-ceiling"; }
     # KTD9 — the bound is the caller's. These are the values a team file that
     # states none inherits, not a limit compiled into the surface.
     [ -n "$MAX_CONC" ] || MAX_CONC=2
@@ -540,6 +560,7 @@ team_file_load() {  # <path>
     team_bound_ok --max-concurrent "$MAX_CONC"
     team_bound_ok --max-rounds "$MAX_ROUNDS"
     team_bound_ok --token-ceiling "$TOKEN_CEILING"
+    team_ceiling_ok "$stated" "$TOKEN_CEILING"
     [ "$MAX_CONC" -gt 0 ] || { SPAWN_TEAM_ERROR="usage"
         spawn::team_fail "--max-concurrent 0 would dispatch nobody and report a round"; }
 
@@ -845,6 +866,35 @@ team_probe_row() {      # <name> <state> <outcome-json> <error>
                error:(if $e == "" then null else $e end)}]')"
 }
 
+# The counts U12 captured, lifted out of the member's own result record and
+# into the run's (R20, R30). This is the ONLY thing that feeds the token total
+# the ceiling is read against — without it the total sits at zero and the bound
+# is advisory while presenting as active.
+#
+# WRITTEN BEFORE THE OUTCOME, and for the same reason team_launch_member writes
+# the handle before the state: each set is its own recompute-and-write, so an
+# outcome landing first leaves a record holding a TERMINAL member with no
+# counts — which is exactly the shape `usage_unknown` fires on, and a reader
+# catching the run between the two writes would see a run stopped as unmeasured
+# on a member that was measured.
+#
+# A non-numeric count is not written at all rather than written null. Absent is
+# already the field's initial value, and an absence must never overwrite a
+# measurement that is already there.
+team_record_usage() {   # <name> <handle.sh result object>
+    local name="$1" res="$2" fld path v
+    for fld in input output; do
+        case "$fld" in
+            input) path='.result.usage.input_tokens' ;;
+            output) path='.result.usage.output_tokens' ;;
+        esac
+        v="$(printf '%s' "$res" | jq -r "$path | numbers // empty" 2>/dev/null)"
+        [ -n "$v" ] || continue
+        spawn::team_member_set "$RUN_DIR" "$name" "tokens_$fld" "$v" \
+            || say "team: '$name' reported its $fld tokens and they could not be recorded"
+    done
+}
+
 # One member, probed in ITS OWN worktree, and its outcome recorded if it has
 # reached one. The three answers handle.sh gives are kept apart: handle_unknown
 # and handle_expired ride the member's row as errors, and a `state` of failed is
@@ -882,6 +932,7 @@ team_probe_member() {   # <name> <handle> <worktree>
     if [ "$(printf '%s' "$res" | jq -r '.ok // false' 2>/dev/null)" = "true" ]; then
         outcome="$(printf '%s' "$res" | jq -r '.terminal_state // empty' 2>/dev/null)"
         [ -n "$outcome" ] || outcome="$state"
+        team_record_usage "$name" "$res"
     else
         # handle_expired and result_missing say the job ran and its record is no
         # longer readable — which is not the same as no answer. The probe's own
@@ -904,6 +955,9 @@ team_emit_intent() {    # <record> <intent> <reasons-json> <delay|""> <detail>
           ok:true, error:null, remedy:null, exit_code:0,
           detail:(if $dt == "" then null else $dt end),
           run_id:$id, run_dir:$d, intent:$i, reasons:$rs, mode:.mode,
+          complete:.derived.complete,
+          ceiling_state:.derived.ceiling_state,
+          members_unmeasured:.derived.members_unmeasured,
           round:(if (.rounds | length) == 0 then null else (.rounds | last | .ordinal) end),
           round_state:(if (.rounds | length) == 0 then null else (.rounds | last | .state) end),
           team_file:null, removed:null,
@@ -960,8 +1014,7 @@ do_advance() {
     # from the chokepoint's `derived` block, never recomputed here — that is
     # KTD18, and a second copy of the arithmetic is exactly the drift it exists
     # to prevent.
-    local intent reasons='[]' delay="" pending opened
-    pending="$(printf '%s' "$rec" | jq -r '[ .members[] | select(.launch_state == "pending") ] | length')"
+    local intent reasons='[]' delay="" opened
     if [ "$(printf '%s' "$rec" | jq -r '.derived.active_round != null')" = "true" ]; then
         intent="waiting"
         opened="$(printf '%s' "$rec" | jq -r '.rounds | map(select(.state == "running")) | last | .opened_at // ""')"
@@ -970,10 +1023,11 @@ do_advance() {
         intent="continue"
     else
         intent="stop"
+        # Read whole, not appended to. `roster_exhausted` is derived at the
+        # chokepoint with every other reason (KTD18): assembled here it was a
+        # second copy of the arithmetic, and the surface's copy and the
+        # record's could disagree about why the same run stopped.
         reasons="$(printf '%s' "$rec" | jq -c '.derived.stop_reasons')"
-        if [ "$pending" -eq 0 ]; then
-            reasons="$(printf '%s' "$reasons" | jq -c '. + ["roster_exhausted"]')"
-        fi
     fi
 
     # The record was written by the probe above, before anything is printed: a
@@ -1035,7 +1089,7 @@ do_describe() {
         {name:"--mode",           value:"name", required:false, default:"the team file’s mode, else attached", note:"single-round | attached | unattended; single-round refuses a roster larger than the concurrency maximum, because it arms nothing that could advance the remainder"},
         {name:"--max-concurrent", value:"N",    required:false, default:2, note:"members dispatched in one round; a larger roster CLAMPS and the rest stay pending for the next round. Overrides the team file"},
         {name:"--max-rounds",     value:"N",    required:false, default:3, note:"rounds this run may open. Overrides the team file"},
-        {name:"--token-ceiling",  value:"N",    required:false, default:0, note:"tokens the run may spend, 0 for none. Overrides the team file"},
+        {name:"--token-ceiling",  value:"N",    required:false, default:null, note:"tokens the whole team may use before the run stops between rounds. There is NO default: leave it off for a run with no token bound. 0 is refused. Nothing is applied to any single call. Overrides the team file"},
         {name:"--describe",       value:null,   required:false, default:null, note:"this document; exit 0; needs no gateway and no config"}
       ],
       team_file_fields:[

@@ -516,6 +516,11 @@ contract_file() {   # <path> <deliverable>
 }
 
 # team_file <path> <mode> <max-concurrent> <name:alias:contract[:skill,skill]>...
+#
+# NO `token_ceiling` KEY unless TEAM_FILE_CEILING is set. Absent is the normal
+# case (KTD20: there is no default ceiling), and a file stating 0 is refused at
+# dispatch — so a helper that always wrote one could produce neither the
+# no-bound case nor an accepted run.
 team_file() {
     local f="$1" mode="$2" mc="$3"; shift 3
     local spec name alias contract skills members='[]'
@@ -530,8 +535,10 @@ team_file() {
                    skills:($s | split(",") | map(select(length > 0)))}]')"
     done
     jq -n --arg m "$mode" --argjson mc "$mc" --argjson ms "$members" \
-        '{mode:$m, bounds:{max_concurrent:$mc, max_rounds:3, token_ceiling:0},
-          members:$ms}' > "$f"
+        --arg tc "${TEAM_FILE_CEILING:-}" \
+        '{mode:$m, bounds:{max_concurrent:$mc, max_rounds:3},
+          members:$ms}
+         | (if $tc == "" then . else .bounds.token_ceiling = ($tc | tonumber) end)' > "$f"
 }
 
 dispatch() {        # <args...> — always from inside the temp checkout
@@ -1730,4 +1737,478 @@ one_done_one_pending() {
     assert_one_object "$output"
     [ "$(printf '%s' "$output" | jq -r '[.verbs[].name] | index("advance") != null')" = "true" ]
     [ ! -s "$WORK/describe.err" ]
+}
+
+# ===========================================================================
+# U13 — bounds and stop reasons (R18, R19, R21, R30, KTD14, KTD20)
+#
+# THE PLURAL CASE IS THE POINT. One scalar cannot carry two reasons, and an
+# `elif` chain over the conditions reads as correct on every run where exactly
+# one fires — which is nearly all of them. The two-together test below is the
+# only one that can tell those apart, so it is written first and the mutation
+# check aims at it.
+#
+# TOKENS COME FROM THE FIXTURE, NOT FROM A CONSTANT HERE. fake-claude.sh
+# reports usage {input:11, output:7} on its ok path, so a member that runs to
+# `done` costs 18. Ceilings below are chosen against that number: 10 is crossed
+# by one member, 100000 by none.
+# ===========================================================================
+
+FIXTURE_MEMBER_TOKENS=18
+
+# A pattern that must NOT be in a child's argv record, as a plain command.
+refute_in_argv() {  # <extended-regex> <file>
+    if grep -qiE "$1" "$2"; then
+        printf 'refute_in_argv: /%s/ reached a child argv:\n%s\n' "$1" "$(cat "$2")" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Rewrite a JSON file in place. `cat >`, never cp/mv: both are aliased
+# interactive on some operators' boxes and silently decline to overwrite.
+edit_json() {       # <file> <jq program>
+    local f="$1" tmp="$1.edit.$$"
+    jq -c "$2" < "$f" > "$tmp" || return 1
+    cat "$tmp" > "$f" && rm -f "$tmp"
+}
+
+# The seven words the enumerated no-spend lint forbids, as a plain command so a
+# `!` prefix cannot exempt it from failing the test.
+refute_spend_words() {  # <file>
+    local hits
+    hits="$(sed 's/#.*//' "$1" | grep -inE 'spend|budget|cost|quota|dollar|usd|price')" || return 0
+    printf 'refute_spend_words: %s carries forbidden words:\n%s\n' "$1" "$hits" >&2
+    return 1
+}
+
+# One member, run to completion, under a stated ceiling. Returns with the
+# member terminal and NOT yet advanced, so the caller owns the first advance.
+one_member_run() {  # <ceiling|""> [extra dispatch args...]
+    local ceiling="$1"; shift
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    TEAM_FILE_CEILING="$ceiling" team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" "$@"
+    [ "$status" -eq 0 ]
+    await_member_terminal lead
+}
+
+# --- R18 / R21: which bound fired, and roster exhaustion is not one ---------
+
+@test "a roster that empties before the round maximum stops exhausted, not out of rounds" {
+    one_member_run ""
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("roster_exhausted") != null')" = "true" ]
+    [ "$(out '.reasons | index("round_max_reached")')" = "null" ]
+    # R21's distinguishability: this run FINISHED its work. A bound firing is
+    # the case that must not read the same way, and the next test is that case.
+    [ "$(out 'has("complete")')" = "true" ]
+    [ "$(out '.complete')" = "true" ]
+}
+
+@test "a run out of rounds with members still undispatched does not read as success" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" --max-rounds 1
+    [ "$status" -eq 0 ]
+    await_member_terminal lead
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("round_max_reached") != null')" = "true" ]
+    # scout never ran, so the roster is NOT exhausted and the run is not done.
+    [ "$(member_state scout)" = "pending" ]
+    [ "$(out '.reasons | index("roster_exhausted")')" = "null" ]
+    [ "$(out '.complete')" = "false" ]
+}
+
+@test "a stop always names at least one reason" {
+    # `stop` with an empty reasons list is the shape R21 forbids: the driver is
+    # told to halt and given nothing to report. Both stop paths are covered.
+    one_member_run ""
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | length > 0')" = "true" ]
+}
+
+# --- R19: the token ceiling -------------------------------------------------
+
+@test "a run whose tokens cross the ceiling stops with the ceiling reason" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    TEAM_FILE_CEILING=10 team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_member_terminal lead
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # The tokens reached the RECORD, not merely the job: a ceiling read off a
+    # total nothing ever writes to would sit at zero and never fire.
+    [ "$(rec '.members[] | select(.name == "lead") | .tokens.input')" = "11" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .tokens.output')" = "7" ]
+    [ "$(rec '.derived.tokens_used')" = "$FIXTURE_MEMBER_TOKENS" ]
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("token_ceiling_reached") != null')" = "true" ]
+    [ "$(out '.complete')" = "false" ]
+    [ "$(out '.ceiling_state')" = "reached" ]
+    # Not the unmeasured reason: this member WAS measured.
+    [ "$(out '.reasons | index("usage_unknown")')" = "null" ]
+    [ "$(out '.members_unmeasured')" = "0" ]
+}
+
+@test "control: the same run under a ceiling nothing crosses continues" {
+    # The control arm for the ceiling. Without it, `token_ceiling_reached` could
+    # be a reason this surface reports unconditionally.
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    TEAM_FILE_CEILING=100000 team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_member_terminal lead
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "continue" ]
+    [ "$(out '.reasons | index("token_ceiling_reached")')" = "null" ]
+    [ "$(out '.ceiling_state')" = "within" ]
+}
+
+@test "no ceiling given means no token bound and no token stop reason" {
+    # KTD20 — absent is absent. The member spends real tokens and nothing
+    # anywhere treats that as approaching a limit.
+    one_member_run ""
+    advance --run-dir "$RUN"
+    [ "$(rec '.derived.tokens_used')" = "$FIXTURE_MEMBER_TOKENS" ]
+    [ "$(out '.reasons | index("token_ceiling_reached")')" = "null" ]
+    [ "$(out '.reasons | index("usage_unknown")')" = "null" ]
+    [ "$(out '.ceiling_state')" = "none" ]
+    # `tokens_remaining` is null rather than a number, and the key is PRESENT:
+    # `.x == null` would have been true on day zero of this field.
+    [ "$(rec '.derived.bounds | has("tokens_remaining")')" = "true" ]
+    [ "$(rec '.derived.bounds.tokens_remaining')" = "null" ]
+}
+
+# --- R21: two conditions in the same interval -------------------------------
+
+@test "two conditions firing in the same interval are BOTH listed" {
+    # THE `elif` TEST. One member, one round allowed, and a ceiling that member
+    # crosses on its own — so `round_max_reached` and `token_ceiling_reached`
+    # are true at the same write. A chain that reports the first condition it
+    # checks passes every other test in this file and fails only this one.
+    one_member_run 10 --max-rounds 1
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("round_max_reached") != null')" = "true" ]
+    [ "$(out '.reasons | index("token_ceiling_reached") != null')" = "true" ]
+    [ "$(out '.reasons | length >= 2')" = "true" ]
+    # And the record says the same thing the response does — the reasons are
+    # derived at the chokepoint, not assembled by the surface (KTD18).
+    [ "$(rec '.derived.stop_reasons | index("round_max_reached") != null')" = "true" ]
+    [ "$(rec '.derived.stop_reasons | index("token_ceiling_reached") != null')" = "true" ]
+}
+
+@test "control: each of those two conditions can fire alone" {
+    # The arm that makes the plural test mean something. If both reasons were
+    # reported on every run, the test above would pass while the surface said
+    # nothing. Here the ceiling is out of reach and only the round bound fires.
+    one_member_run 100000 --max-rounds 1
+    advance --run-dir "$RUN"
+    [ "$(out '.reasons | index("round_max_reached") != null')" = "true" ]
+    [ "$(out '.reasons | index("token_ceiling_reached")')" = "null" ]
+}
+
+# --- R19: between rounds only ------------------------------------------------
+
+@test "a crossed ceiling does not stop a round already in flight" {
+    # The ceiling governs whether MORE calls happen. A round already dispatched
+    # is committed, so it runs to its terminal state and the ceiling overshoots
+    # — accepted, and asserted here so it cannot quietly become a mid-round
+    # abort.
+    one_hang_member 2
+    edit_record '(.members[] | select(.name == "lead") | .tokens.input) = 900
+                 | .bounds.token_ceiling = 10'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(rec '.derived.stop_reasons | index("token_ceiling_reached") != null')" = "true" ]
+    [ "$(out '.intent')" = "waiting" ]
+    assert_has_delay "$output"
+
+    # Control arm: once the round closes, that same crossed ceiling stops the
+    # run — so `waiting` above is about the round being in flight, not about the
+    # ceiling going unread.
+    local h wt pid
+    h="$(member_handle lead)"; wt="$(member_wt lead)"
+    pid="$(bash "$JOBS" state --handle "$h" --cwd "$wt" 2>/dev/null | jq -r '.job.pid')"
+    kill -9 "$pid" 2>/dev/null
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("token_ceiling_reached") != null')" = "true" ]
+}
+
+# --- R30: unmeasured usage ---------------------------------------------------
+
+@test "a completed member with no counts is unmeasured, and stops the loop" {
+    # Unknown is not zero. Treated as zero the bound is advisory while
+    # presenting as active, which is the failure R30 names.
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    TEAM_FILE_CEILING=100000 team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_member_terminal lead
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "continue" ]
+    [ "$(out '.members_unmeasured')" = "0" ]
+
+    # The same run with that member's measurement taken away.
+    edit_record '(.members[] | select(.name == "lead") | .tokens)
+                 = {input:null, output:null}'
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | index("usage_unknown") != null')" = "true" ]
+    [ "$(out 'has("members_unmeasured")')" = "true" ]
+    [ "$(out '.members_unmeasured')" = "1" ]
+}
+
+@test "a wholly unmeasured team reports the ceiling unenforceable, not satisfied" {
+    one_member_run 100000
+    advance --run-dir "$RUN"
+    [ "$(out '.ceiling_state')" = "within" ]
+
+    edit_record '(.members[] | select(.name == "lead") | .tokens)
+                 = {input:null, output:null}'
+    advance --run-dir "$RUN"
+    # "within" would read as satisfied — a ceiling honoured. Nothing was
+    # measured, so nothing can be said about it.
+    [ "$(out '.ceiling_state')" = "unenforceable" ]
+    [ "$(out '.members_unmeasured')" = "1" ]
+}
+
+@test "a launch that never ran leaves the ceiling enforceable" {
+    # The distinction U14 drew and this unit must not undo: a launch that never
+    # happened cannot have spent a token, so it is zero BY CONSTRUCTION and not
+    # an absent measurement. Conflating them halts a run on one bad worktree.
+    dispatch_env "alpha"
+    TEAM_FILE_CEILING=100000 team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/no-such-contract.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_state lead)" = "launch_failed" ]
+    advance --run-dir "$RUN"
+    [ "$(out '.members_unmeasured')" = "0" ]
+    [ "$(out '.reasons | index("usage_unknown")')" = "null" ]
+    [ "$(out '.ceiling_state')" = "within" ]
+}
+
+# --- KTD20: a ceiling of zero is a refusal, not "no ceiling" -----------------
+
+@test "a ceiling of zero on the flag is refused at launch, and creates nothing" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" --token-ceiling 0
+    [ "$status" -eq 2 ]
+    assert_one_object "$output"
+    [ "$(out '.ok')" = "false" ]
+    [ "$(out '.error')" = "token_ceiling_zero" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    refute_exists "$RUN/team.json"
+    refute_exists "$ROOT/r1"
+}
+
+@test "a ceiling of zero stated in the team file is refused the same way" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    TEAM_FILE_CEILING=0 team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "token_ceiling_zero" ]
+    refute_exists "$RUN/team.json"
+}
+
+@test "control: a ceiling of one is accepted, and an absent ceiling is accepted" {
+    # Both control arms for the refusal above: it is about the VALUE zero and
+    # not about a ceiling being stated, nor about one being omitted.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" --token-ceiling 1
+    [ "$status" -eq 0 ]
+    [ "$(rec '.bounds.token_ceiling')" = "1" ]
+
+    dispatch --team-file "$WORK/team.json" --run-id r2 --run-dir "$WORK/run2"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.bounds.token_ceiling' < "$WORK/run2/team.json")" = "0" ]
+}
+
+# --- KTD14: nothing is passed down to a call --------------------------------
+
+@test "no ceiling value reaches a child's argv" {
+    # KTD14. The team's ceiling governs whether MORE calls happen; it is never
+    # applied to one. Measured at the boundary the child itself writes — a
+    # launcher-side assertion cannot see what actually crossed.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" --token-ceiling 99991
+    [ "$status" -eq 0 ]
+    await_invocations 1
+
+    local argv="$FAKE_CLAUDE_RECORD_DIR/argv"
+    refute_in_argv 99991 "$argv"
+    refute_in_argv 'token[-_]?ceiling|max[-_]?tokens|token[-_]?limit' "$argv"
+    # Control arm: this record IS readable and DOES carry this run's argv, so
+    # the two absences above are absences and not an unread file.
+    assert_child_alias alpha
+}
+
+# --- the enumerated no-spend lint over the two libs this unit touches --------
+
+@test "neither team.sh nor team-record.sh carries a forbidden spend word" {
+    refute_spend_words "$LIB/team.sh"
+    refute_spend_words "$LIB/team-record.sh"
+}
+
+@test "control: the spend-word check fails on a file that has one" {
+    mkdir -p "$WORK/plant"
+    cat "$LIB/team.sh" > "$WORK/plant/team.sh"
+    printf 'BUDGET_LIMIT=3\n' >> "$WORK/plant/team.sh"
+    run refute_spend_words "$WORK/plant/team.sh"
+    [ "$status" -ne 0 ]
+}
+
+@test "an empty roster is not a finished run" {
+    # The guard on `roster_exhausted`: "no member is pending" is true of a
+    # record with no members at all, and without the count check a run whose
+    # roster is empty reports itself complete having done nothing.
+    one_member_run ""
+    edit_record '.members = []'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.reasons | index("roster_exhausted")')" = "null" ]
+    [ "$(out '.complete')" = "false" ]
+}
+
+@test "a result record whose counts are not numbers leaves the member unmeasured" {
+    # The job's result record is a FILE, and the counts are read from it rather
+    # than computed here. A string arriving where a number belongs must record
+    # as absent — propagated it would either abort the advance at `tonumber` or
+    # put a string into the total the ceiling is read against.
+    one_member_run 100000
+    local rf
+    rf="$(member_job_dir "$(member_handle lead)" "$(member_wt lead)")/result.json"
+    assert_exists "$rf"
+    edit_json "$rf" '.usage = {input_tokens:"lots", output_tokens:"more"}'
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(rec '.members[] | select(.name == "lead") | .tokens.input')" = "null" ]
+    [ "$(out '.members_unmeasured')" = "1" ]
+    [ "$(out '.ceiling_state')" = "unenforceable" ]
+}
+
+@test "a run with a member still in flight is not complete" {
+    # The case a pending-based `complete` gets wrong: a dispatched member is
+    # not pending either, so "nobody is pending" reads true in the middle of a
+    # live round and the driver is told the run finished while a member runs.
+    one_hang_member 1
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "waiting" ]
+    [ "$(out 'has("complete")')" = "true" ]
+    [ "$(out '.complete')" = "false" ]
+}
+
+@test "a roster that empties on its last permitted round is still complete" {
+    # The other half. A bound firing does not make a finished roster unfinished
+    # — the reasons list says which bounds were touched, and `complete` says
+    # whether any member was left unrun.
+    one_member_run 10 --max-rounds 1
+    advance --run-dir "$RUN"
+    [ "$(out '.intent')" = "stop" ]
+    [ "$(out '.reasons | length >= 2')" = "true" ]
+    [ "$(out '.complete')" = "true" ]
+}
+
+@test "control: the argv check fails when the ceiling really is in there" {
+    # The control arm for the two absences above. An absence proves nothing
+    # until the check is shown failing on the present case — and a grep over a
+    # file that was never written is indistinguishable from a clean one.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" --token-ceiling 99991
+    [ "$status" -eq 0 ]
+    await_invocations 1
+
+    local planted="$WORK/argv.planted"
+    cat "$FAKE_CLAUDE_RECORD_DIR/argv" > "$planted"
+    printf -- '--token-ceiling\n99991\n' >> "$planted"
+    run refute_in_argv 99991 "$planted"
+    [ "$status" -ne 0 ]
+    run refute_in_argv 'token[-_]?ceiling|max[-_]?tokens|token[-_]?limit' "$planted"
+    [ "$status" -ne 0 ]
+}
+
+@test "the roster verb refuses a stated ceiling of zero too" {
+    # The other boundary a ceiling value arrives at. `dispatch` reads the team
+    # file, `roster` takes flags, and a check on only one of them leaves a run
+    # that can still be started with a bound nobody can satisfy.
+    roster --run-id r1 --run-dir "$RUN" --token-ceiling 0 \
+        --member lead --alias sonnet --contract "$WORK/c1.md"
+    [ "$status" -eq 2 ]
+    assert_one_object "$output"
+    [ "$(out '.error')" = "token_ceiling_zero" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    refute_exists "$RUN/team.json"
+    refute_exists "$ROOT/r1"
+}
+
+@test "control: the roster verb accepts a positive ceiling and an absent one" {
+    roster --run-id r1 --run-dir "$RUN" --token-ceiling 5000 \
+        --member lead --alias sonnet --contract "$WORK/c1.md"
+    [ "$status" -eq 0 ]
+    [ "$(rec '.bounds.token_ceiling')" = "5000" ]
+
+    roster --run-id r2 --run-dir "$WORK/run2" \
+        --member lead --alias sonnet --contract "$WORK/c1.md"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.bounds.token_ceiling' < "$WORK/run2/team.json")" = "0" ]
+}
+
+@test "a garbage count in a result file makes no noise about a member that is fine" {
+    # The other half of the non-numeric case. The counts are read from a file,
+    # and a string arriving there must be dropped where it is read — pushed on
+    # to the record layer it is refused there instead, and every advance over
+    # that member then complains on stderr about a member nothing is wrong with.
+    one_member_run 100000
+    local rf
+    rf="$(member_job_dir "$(member_handle lead)" "$(member_wt lead)")/result.json"
+    edit_json "$rf" '.usage = {input_tokens:"lots", output_tokens:"more"}'
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' advance --run-dir '$RUN' 2>'$WORK/adv.err'"
+    [ "$status" -eq 0 ]
+    [ "$(rec '.members[] | select(.name == "lead") | .tokens.input')" = "null" ]
+    if [ -s "$WORK/adv.err" ]; then
+        printf 'the advance complained about a member that is fine:\n%s\n' "$(cat "$WORK/adv.err")" >&2
+        return 1
+    fi
 }
