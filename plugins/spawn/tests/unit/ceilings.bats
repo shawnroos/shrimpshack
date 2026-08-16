@@ -18,8 +18,25 @@
 # extra. What the HARNESS does with that ceiling is not the plugin's code and
 # cannot be faked, so the arms that measure enforcement — AE10, and the control
 # pair that proves a child is genuinely narrower than its launcher — run the
-# REAL `claude`. Those are opt-in behind SPAWN_CEILING_LIVE=1 because they cost
-# money and a network on every unit run.
+# REAL `claude`. Those are opt-in behind SPAWN_CEILING_LIVE=1 because they need
+# a network and spend on every unit run.
+#
+# WHICH MODEL ANSWERS, AND WHY IT DOES NOT WEAKEN THEM
+# ---------------------------------------------------
+# The live arms route through the spawn gateway on $SPAWN_CEILING_LIVE_ALIAS
+# (default `glm`) — same mechanism bg-agent.sh uses: ANTHROPIC_BASE_URL from
+# `spawnctl ensure`, the token from the shared chain, `--model <alias>`. The
+# ceiling is enforced by the CLI harness, not by the model, so a cheap alias
+# measures exactly what a default-model run would, at a fraction of the spend.
+# If nothing resolves — no gateway, no token — the arm SKIPS. It never falls
+# back to the caller's default model, because the whole point of the routing is
+# that these arms are cheap enough to actually run.
+#
+# The one hazard the alias introduces: a model too weak to attempt a `Bash` call
+# produces no digest in LIVE/U7's deny arm and passes for the wrong reason. The
+# control arm is what closes that — same prompt, same tree, one deny entry
+# lighter. A model that cannot use tools fails the CONTROL, turning the test red
+# rather than falsely green, and the control's failure message says so.
 #
 # LIVE/AE10 was run against this exact code:
 #
@@ -80,6 +97,13 @@ setup() {
     # Credential inputs: a real GATEWAY_TOKEN in the developer's or CI's shell
     # would otherwise decide what a "nothing is resolvable" test measures. Each
     # test sets what it needs; none may inherit it.
+    #
+    # Saved first, and NOT redundant with the unset below: the live arms need the
+    # developer's real gateway credential, and by the time they run the variable
+    # is gone from this process — `env -u` cannot restore what nothing holds. A
+    # developer whose token lives only in their shell would otherwise get a skip
+    # that reads as "no gateway" when the gateway was reachable all along.
+    LIVE_GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"
     unset GATEWAY_TOKEN SPAWN_KEYCHAIN_SERVICE SPAWN_KEYCHAIN_ACCOUNT_TOKEN
     # A test that forgets to point somewhere must not probe the REAL gateway.
     export SPAWN_BASE_URL="http://127.0.0.1:1/anthropic"
@@ -203,10 +227,65 @@ render() {  # <ceiling> <worktree> <dest>
     run bash -c '. "$1"; spawn::ceiling_render "$2" "$3" "$4"' _ "$LIB/ceilings.sh" "$1" "$2" "$3"
 }
 
+# The live gate, and the gateway routing that makes the live arms cheap enough
+# to run. ORDER IS LOAD-BEARING: the SPAWN_CEILING_LIVE check comes first, so an
+# ordinary unit run never probes the gateway, never auto-starts it, and never
+# touches the Keychain. Everything below the gate only happens when a human has
+# asked for a live run.
+#
+# Sets LIVE_ALIAS, LIVE_BASE_URL and LIVE_TOKEN, or SKIPS. There is deliberately
+# no fall-back to the caller's default model: an unreachable gateway must cost
+# nothing, not silently bill the expensive path.
 live_or_skip() {
     [ "${SPAWN_CEILING_LIVE:-0}" = "1" ] \
-        || skip "live ceiling arms are opt-in: SPAWN_CEILING_LIVE=1 (they run the real claude and cost money)"
+        || skip "live ceiling arms are opt-in: SPAWN_CEILING_LIVE=1 (they route through the gateway on \$SPAWN_CEILING_LIVE_ALIAS, default glm, and spend real money)"
     [ -n "${REAL_CLAUDE:-}" ] && [ -x "$REAL_CLAUDE" ] || skip "no real claude on PATH"
+
+    LIVE_ALIAS="${SPAWN_CEILING_LIVE_ALIAS:-glm}"
+
+    # `spawnctl ensure` decides base_url and whether the alias is served — the
+    # same preflight bg-agent.sh and lens.sh run. This suite's fixture env
+    # (a dead SPAWN_BASE_URL, a fake search root, a temp state home) is cleared
+    # for the call, or ensure would resolve the FIXTURE gateway and the live arm
+    # would measure nothing.
+    local ensure_out
+    ensure_out="$(env -u SPAWN_BASE_URL -u SPAWN_CONFIG -u SPAWN_STATE_HOME \
+        -u SPAWN_SEARCH_ROOT -u SPAWN_INSTALL_DIR -u SPAWN_MODELS_JSON \
+        bash "$LIB/spawnctl.sh" ensure "$LIVE_ALIAS" 2>/dev/null)" \
+        || skip "spawnctl ensure failed for alias '$LIVE_ALIAS' — no gateway to route the live arm through, and this arm will not fall back to the default (expensive) model"
+    LIVE_BASE_URL="$(printf '%s' "$ensure_out" | jq -r '.base_url // empty')"
+    LIVE_BASE_URL="${LIVE_BASE_URL%/}"
+    [ -n "$LIVE_BASE_URL" ] || skip "spawnctl ensure returned no base_url for alias '$LIVE_ALIAS'"
+
+    # The token, through the chain the shipped surfaces use: config server.token,
+    # then env, then Keychain. Resolved in a subshell that sources the libraries
+    # rather than reimplemented here, so a change to the chain cannot leave this
+    # arm presenting a different credential than the gateway's own probe.
+    local cfg resolver="$WORK/resolve-live-token.sh"
+    cfg="$(printf '%s' "$ensure_out" | jq -r '.config // empty')"
+    cat > "$resolver" <<'RESOLVER'
+set -uo pipefail
+. "$1/common.sh"
+. "$1/secrets.sh"
+TOKEN=""
+if [ -n "${2:-}" ] && [ -f "$2" ]; then
+    TOKEN="$(expand_env_refs "$(awk "$SPAWN_YAML_AWK_DEFS"'
+        /^[A-Za-z_][A-Za-z0-9_-]*:/ { sec = $0; sub(/:.*$/, "", sec); next }
+        sec == "server" && /^[ \t]+token:/ {
+            v = $0; sub(/^[ \t]*token:[ \t]*/, "", v)
+            print unquote(decomment(v)); exit
+        }' "$2")")"
+fi
+[ -n "$TOKEN" ] || TOKEN="${GATEWAY_TOKEN:-}"
+[ -n "$TOKEN" ] || spawn::resolve_token spawn-gateway gateway-token
+printf '%s' "$TOKEN"
+RESOLVER
+    # GATEWAY_TOKEN is passed as an ENV assignment, never in argv (KTD6); the
+    # Keychain leg runs on the shipped defaults because setup() unset the
+    # overrides, which is what makes it the developer's real credential.
+    LIVE_TOKEN="$(GATEWAY_TOKEN="$LIVE_GATEWAY_TOKEN" env -u SPAWN_KEYCHAIN_SERVICE \
+        -u SPAWN_KEYCHAIN_ACCOUNT_TOKEN bash "$resolver" "$LIB" "$cfg")"
+    [ -n "$LIVE_TOKEN" ] || skip "no gateway token resolvable (config, GATEWAY_TOKEN, Keychain all empty) — refusing to run the live arm on the default (expensive) model instead"
 }
 
 # ===========================================================================
@@ -540,6 +619,11 @@ EOF
 
 # ===========================================================================
 # LIVE ARMS — the harness, not the plugin. Opt-in: SPAWN_CEILING_LIVE=1
+#
+# Both run the REAL `claude` against the spawn gateway on
+# $SPAWN_CEILING_LIVE_ALIAS (default `glm`) — see the header for why a cheap
+# alias measures the same property, and what the control arm is protecting
+# against. live_or_skip resolves the base URL and token, or skips.
 # ===========================================================================
 
 @test "LIVE/U7: the shell channel is closed — a child asked for the SHA-256 of a caller-supplied nonce cannot produce it, and the control arm, one deny entry lighter, can" {
@@ -577,14 +661,32 @@ EOF
       -eq "$(( $(jq -r '.permissions.deny|length' "$WORK/live-control.json") + 1 ))" ]
 
     ( cd "$tree" && unset CLAUDE_CONFIG_DIR
+      export ANTHROPIC_BASE_URL="$LIVE_BASE_URL"
+      export ANTHROPIC_AUTH_TOKEN="$LIVE_TOKEN"
+      export ANTHROPIC_API_KEY="$LIVE_TOKEN"
       "$REAL_CLAUDE" --permission-mode dontAsk --setting-sources project \
-        --settings "$WORK/live-control.json" --output-format json -p "$prompt" ) >"$WORK/live-control.out" 2>"$WORK/live-control.out.err"
-    grep -qF "$want" "$tree/answer.txt"
+        --settings "$WORK/live-control.json" --model "$LIVE_ALIAS" \
+        --output-format json -p "$prompt" ) >"$WORK/live-control.out" 2>"$WORK/live-control.out.err"
+    # THE CONTROL IS ALSO THE MODEL-CAPABILITY CHECK. It fails loudly rather
+    # than through grep's own noise, because the two ways it goes red mean
+    # completely different things and a reader must not have to work out which.
+    if [ ! -f "$tree/answer.txt" ] || ! grep -qF "$want" "$tree/answer.txt"; then
+        printf 'CONTROL ARM FAILED — this is NOT a ceiling failure.\n' >&2
+        printf 'With Bash ALLOWED (the shipped ceiling minus its one Bash deny entry), the model on alias "%s" still did not produce the digest.\n' "$LIVE_ALIAS" >&2
+        printf 'That means this model could not run a shell here, so the deny arm below would have proved nothing: a model that cannot use tools produces no digest either way.\n' >&2
+        printf 'It is a MODEL-CAPABILITY result. Re-run with SPAWN_CEILING_LIVE_ALIAS set to a stronger alias.\n' >&2
+        printf 'If instead the gateway or the upstream route failed, it says so in %s — that is the other way this branch is reached.\n' "$WORK/live-control.out.err" >&2
+        return 1
+    fi
     rm -f "$tree/answer.txt"
 
     ( cd "$tree" && unset CLAUDE_CONFIG_DIR
+      export ANTHROPIC_BASE_URL="$LIVE_BASE_URL"
+      export ANTHROPIC_AUTH_TOKEN="$LIVE_TOKEN"
+      export ANTHROPIC_API_KEY="$LIVE_TOKEN"
       "$REAL_CLAUDE" --permission-mode dontAsk --setting-sources project \
-        --settings "$WORK/live-repo.json" --output-format json -p "$prompt" ) >"$WORK/live-deny.json" 2>"$WORK/live-deny.json.err"
+        --settings "$WORK/live-repo.json" --model "$LIVE_ALIAS" \
+        --output-format json -p "$prompt" ) >"$WORK/live-deny.json" 2>"$WORK/live-deny.json.err"
     # THE EFFECT, not a denial record. The digest is absent from the deliverable
     # and from the child's whole result object — the second because a child that
     # computed it and then declined to write the file would still have breached
@@ -613,8 +715,11 @@ EOF
     [ "$status" -eq 0 ]
 
     ( cd "$tree" && unset CLAUDE_CONFIG_DIR
+      export ANTHROPIC_BASE_URL="$LIVE_BASE_URL"
+      export ANTHROPIC_AUTH_TOKEN="$LIVE_TOKEN"
+      export ANTHROPIC_API_KEY="$LIVE_TOKEN"
       "$REAL_CLAUDE" --permission-mode dontAsk --setting-sources project \
-        --settings "$WORK/live2.json" --output-format json -p \
+        --settings "$WORK/live2.json" --model "$LIVE_ALIAS" --output-format json -p \
         "Use the Write tool four times, in order, and then stop: (1) write \"ok\" to $tree/normal.txt (2) write \"#!/bin/sh\" to $tree/.git/hooks/pre-commit (3) write \"x\" to $tree/.claude/settings.json (4) write \"escaped\" to $tree/link/escaped.txt" \
         ) >"$WORK/live2.out" 2>"$WORK/live2.out.err"
 
