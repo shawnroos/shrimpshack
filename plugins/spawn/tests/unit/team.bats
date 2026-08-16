@@ -2212,3 +2212,210 @@ one_member_run() {  # <ceiling|""> [extra dispatch args...]
         return 1
     fi
 }
+
+# ===========================================================================
+# U7 / R9 — the cross-writer channels
+#
+# Two halves. A member cannot recruit another process to satisfy its contract,
+# and the driver cannot contaminate a member's measurement.
+#
+# THE ASSERTION THIS SUITE MAY NOT MAKE. A DENY-rule refusal leaves NO entry in
+# the child's permission_denials[] — the array is empty despite refused
+# attempts. An assertion on a denial entry would therefore pass whether or not
+# the rule existed. Every assertion below is on an EFFECT: a file that is or is
+# not there, or the settings path actually handed to a child.
+#
+# The enforcement itself belongs to the real CLI, not to this plugin, so the
+# arms that measure a refusal live in ceilings.bats behind SPAWN_CEILING_LIVE.
+# What is provable here without spend is that a member is handed the bounding
+# file at all, scoped to its own checkout — and the whole of the second half.
+# ===========================================================================
+
+refute_file_match() {   # <pattern> <file>
+    if grep -qF -- "$1" "$2"; then
+        printf 'refute_file_match: unexpected match for %s in %s\n' "$1" "$2" >&2
+        grep -nF -- "$1" "$2" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Every file under a worktree, content-addressed. `.git` is a FILE in a linked
+# worktree rather than a directory, so the exclusion matches both shapes. The
+# job root is left IN: whether a change under it is expected is the caller's
+# judgement, not the snapshot's.
+snapshot_tree() {       # <worktree> <outfile>
+    ( cd "$1" && find . -type f -not -path './.git' -not -path './.git/*' \
+        -exec shasum {} + 2>/dev/null | sort -k2 ) > "$2"
+}
+
+# The paths that changed between two snapshots and are NOT the member's own
+# work — its job root, or a path the caller names as a contracted deliverable.
+# Prints one path per line; empty output is the property U7 asserts.
+foreign_changes() {     # <before> <after> <deliverable>...
+    local before="$1" after="$2"; shift 2
+    local path keep d
+    diff "$before" "$after" | sed -n 's/^[<>] *[0-9a-f]*  *//p' | sort -u | while read -r path; do
+        case "$path" in ./.spawn/*|./.spawn) continue ;; esac
+        keep=1
+        for d in "$@"; do
+            [ "$path" = "./$d" ] && keep=0
+        done
+        [ "$keep" -eq 1 ] && printf '%s\n' "$path"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# First half — a member cannot recruit another process
+# ---------------------------------------------------------------------------
+
+@test "U7/R9: each member's child is handed a ceiling that denies the shell, scoped to its own checkout" {
+    # The rendered-file test in ceilings.bats proves the FILE is right. This
+    # proves a team member sits under it: the path on the child's own argv, not
+    # a path this test went looking for.
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 2
+
+    local lead_wt scout_wt name wt other s
+    lead_wt="$(member_wt lead)"
+    scout_wt="$(member_wt scout)"
+    [ -n "$lead_wt" ] && [ -n "$scout_wt" ] && [ "$lead_wt" != "$scout_wt" ]
+
+    # PER MEMBER NAME, not per invocation index. An earlier draft walked the argv
+    # log positionally and asserted only that each settings file scoped SOME one
+    # member — which stays green if two members' checkouts are swapped, since
+    # every file is still internally consistent. The record's own row is what
+    # ties a name to a checkout, so that is what each file is checked against.
+    for name in lead scout; do
+        wt="$(member_wt "$name")"
+        other="$scout_wt"; [ "$name" = "scout" ] && other="$lead_wt"
+
+        # Asked through the member's OWN recorded checkout: a job whose
+        # directory is not under the checkout its row names cannot answer here.
+        s="$(member_job_dir "$(member_handle "$name")" "$wt")/ceiling.settings.json"
+        assert_exists "$s"
+        # ...and that same file really reached a child, off the fixture's own
+        # argv log. Without this the test would only prove a file was written.
+        awk '/^--settings$/{getline; print}' "$FAKE_CLAUDE_RECORD_DIR/argv" > "$WORK/settings.seen"
+        grep -qxF -- "$s" "$WORK/settings.seen"
+
+        # The shell entry, on the file the child was actually given.
+        jq -e '.permissions.deny | index("Bash")' "$s" >/dev/null
+        jq -r '.permissions.allow[]' "$s" > "$WORK/allow.$name"
+        # Scoped to this member's own checkout...
+        grep -qF "Write(//${wt#/}/**)" "$WORK/allow.$name"
+        # ...and to neither the other member's nor the driver's. Either would be
+        # a cross-writer channel: one member over another's deliverable, or a
+        # member over the driver's record.
+        refute_file_match "${other#/}/**" "$WORK/allow.$name"
+        refute_file_match "Write(//${PRIMARY#/}/**)" "$WORK/allow.$name"
+        refute_file_match "Edit(//${PRIMARY#/}/**)" "$WORK/allow.$name"
+    done
+}
+
+@test "U7: a member whose child recorded no denial at all still classifies done" {
+    # Deny leaves permission_denials[] EMPTY, so an empty array cannot be read as
+    # "nothing was refused" — and must not block a member from being judged on
+    # its deliverables.
+    #
+    # THIS PINS THE CLASSIFIER, NOT THE CEILING, and the distinction matters.
+    # Under the fake CLI nothing is ever refused, so the empty array here is the
+    # fixture's resting state rather than a deny rule's effect. What is proven is
+    # that an empty array plus satisfied deliverables reaches `done` — which is
+    # the half a deny-refused member depends on. That a deny rule actually
+    # produces the empty array is measured live, in ceilings.bats, not here.
+    one_done_one_pending
+    local h wt res
+    h="$(member_handle lead)"; wt="$(member_wt lead)"
+    res="$(bash "$JOBS" state --handle "$h" --cwd "$wt" 2>/dev/null)"
+    [ "$(printf '%s' "$res" | jq -r '.job.state')" = "done" ]
+    # The empty array is the measured shape, asserted so a future fixture change
+    # that starts populating it does not quietly turn this into a different test.
+    [ "$(printf '%s' "$res" | jq -r '[.job.result.permission_denials[]?] | length')" = "0" ]
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "done" ]
+}
+
+# ---------------------------------------------------------------------------
+# Second half — the driver cannot contaminate a member's measurement
+# ---------------------------------------------------------------------------
+
+@test "U7/R9: the driver writes no file into a member's checkout between dispatch and terminal" {
+    one_done_one_pending
+    local wt; wt="$(member_wt lead)"
+    snapshot_tree "$wt" "$WORK/snap.a"
+    # The driver's own work across the window: an advance probes every member and
+    # writes the record. If any of that lands in a member's checkout, it lands
+    # here.
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    snapshot_tree "$wt" "$WORK/snap.b"
+
+    foreign_changes "$WORK/snap.a" "$WORK/snap.b" out.txt > "$WORK/foreign"
+    if [ -s "$WORK/foreign" ]; then
+        printf 'the driver wrote into %s:\n' "$wt" >&2
+        cat "$WORK/foreign" >&2
+        return 1
+    fi
+}
+
+@test "control: a planted write into a member's checkout IS caught by the same snapshot" {
+    # Without this arm the test above is satisfied by a driver that does nothing
+    # at all, and by a snapshot that cannot see anything.
+    one_done_one_pending
+    local wt; wt="$(member_wt lead)"
+    snapshot_tree "$wt" "$WORK/snap.a"
+    printf 'driver was here\n' > "$wt/driver-note.txt"
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    snapshot_tree "$wt" "$WORK/snap.b"
+
+    foreign_changes "$WORK/snap.a" "$WORK/snap.b" out.txt > "$WORK/foreign"
+    [ -s "$WORK/foreign" ]
+    grep -qxF './driver-note.txt' "$WORK/foreign"
+    # And the allowances are real allowances, not a filter that passes
+    # everything: the deliverable and the job root did NOT show up beside it.
+    refute_file_match './out.txt' "$WORK/foreign"
+    refute_file_match './.spawn/' "$WORK/foreign"
+}
+
+@test "U7: the driver's record and logs are under the driver's own checkout, never a member's" {
+    # NO --run-dir. Every other test in this suite pins the run dir so it can
+    # read the record; that override is exactly what this property must not be
+    # measured through, because it would prove the flag works and say nothing
+    # about where the driver puts its own record when nobody tells it.
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1
+    [ "$status" -eq 0 ]
+
+    local rd wt
+    rd="$(out '.run_dir')"
+    [ -n "$rd" ] && [ "$rd" != "null" ]
+    assert_exists "$rd/team.json"
+    # Under the driver's checkout...
+    case "$rd" in "$PRIMARY"/*) : ;; *) printf 'run dir %s is not under the driver %s\n' "$rd" "$PRIMARY" >&2; return 1 ;; esac
+    # ...and OUTSIDE the worktree root entirely. This line exists because a
+    # mutation moving the record to `$WT_ROOT/.spawn` left the check above green:
+    # the worktree root is under the driver, so "under the driver" alone does not
+    # keep the record out of the one directory every member's checkout is created
+    # and torn down inside.
+    case "$rd" in "$ROOT"/*|"$ROOT") printf 'run dir %s is inside the worktree root %s\n' "$rd" "$ROOT" >&2; return 1 ;; esac
+    # ...and under NONE of the members'. Checked per member, so a run dir that
+    # drifted into one member's tree names that member. Read from the record the
+    # driver actually wrote, since this test did not choose where that is.
+    for wt in $(jq -r '.members[].worktree // empty' "$rd/team.json"); do
+        [ -n "$wt" ] && [ "$wt" != "null" ] || continue
+        case "$rd" in "$wt"/*) printf 'run dir %s is inside member checkout %s\n' "$rd" "$wt" >&2; return 1 ;; esac
+    done
+}
