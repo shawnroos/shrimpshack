@@ -88,18 +88,45 @@ frontmatter() {         # <file>
     done
 }
 
-@test "R1 — the four declared verbs are the command surface" {
+@test "R1 — every declared verb is the command surface, and no shadowing name came back" {
+    # The list, NOT the glob, is the assertion here: R1 says these particular
+    # names are the command surface, so a glob would restate whatever is on
+    # disk and assert nothing. The list therefore has to be maintained — and it
+    # was not. This read "the FOUR declared verbs" over four names while six
+    # commands shipped: `setup.md` was the fifth and `team.md` the sixth, so the
+    # test NAME asserted an invariant its BODY had stopped covering.
+    #
+    # The count check below is what makes the staleness visible next time
+    # instead of silent: a seventh command must fail here and be named, rather
+    # than joining the directory unmentioned.
     local v
-    for v in agent bg-agent session report; do
+    for v in agent bg-agent session report setup team; do
         [ -f "$CMD_DIR/$v.md" ]
     done
+    [ "$(command_names | grep -c .)" -eq 6 ]
+
     # And the shadowing names are gone, not merely joined.
     for v in lens launch status; do
         [ ! -e "$CMD_DIR/$v.md" ]
     done
 }
 
-@test "R2 — the three skills keep their own names" {
+@test "R2 — every implementation skill keeps its own name" {
+    # GLOBBED. This iterated `lens launch status` under the name "the three
+    # skills" while five skill directories shipped — `spawn` and `team-run`
+    # were outside it. The invariant is that no skill directory collides with a
+    # command name (R1 checks the other direction) and that each one really
+    # carries a SKILL.md, which is true of every skill, not of three of them.
+    local d checked=0
+    for d in "$SKILL_DIR"/*/; do
+        [ -d "$d" ] || continue
+        [ -f "$d/SKILL.md" ]
+        checked=$((checked + 1))
+    done
+    # Guard the guard: an empty glob must fail loudly, not pass over nothing.
+    [ "$checked" -ge 5 ]
+    # The three original names are still asserted by hand: they are the ones the
+    # collision fault was about, and losing one must fail here by name.
     local s
     for s in lens launch status; do
         [ -f "$SKILL_DIR/$s/SKILL.md" ]
@@ -369,12 +396,21 @@ CTL
 }
 
 @test "no skill body points at a command name this unit deleted" {
-    local s
-    for s in lens launch status; do
-        refute_file_match '/spawn:status' "$SKILL_DIR/$s/SKILL.md"
-        refute_file_match '/spawn:lens' "$SKILL_DIR/$s/SKILL.md"
-        refute_file_match '/spawn:launch' "$SKILL_DIR/$s/SKILL.md"
+    # GLOBBED, for the third time in this file and for the same reason: it
+    # iterated `lens launch status`, so `spawn/SKILL.md` and `team-run/SKILL.md`
+    # were never scanned. The deleted names are repo-wide — a body anywhere that
+    # tells a reader to run `/spawn:lens` sends them at a command that does not
+    # exist, and which of the five files it lives in changes nothing about that.
+    local d checked=0
+    for d in "$SKILL_DIR"/*/; do
+        [ -f "$d/SKILL.md" ] || continue
+        refute_file_match '/spawn:status' "$d/SKILL.md"
+        refute_file_match '/spawn:lens' "$d/SKILL.md"
+        refute_file_match '/spawn:launch' "$d/SKILL.md"
+        checked=$((checked + 1))
     done
+    # Guard the guard: an empty glob must fail loudly, not pass over nothing.
+    [ "$checked" -ge 5 ]
 }
 
 # --- the harness's own view of the plugin ---------------------------------

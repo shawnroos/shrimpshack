@@ -508,7 +508,7 @@ emit_describe() {
           ok:true, error:null, exit_code:0,
           response_kind:"describe",
           surface:"handle.sh",
-          summary:"What a holder can do with a background job handle: query its state, await a terminal state within a bound, read the supervisor'"'"'s result against the contract, and cancel it. Adds nothing to the record and starts nothing.",
+          summary:"What a holder can do with a background job handle: query its state, await a terminal state within a bound, read the supervisor’s result against the contract, and cancel it. Adds nothing to the record and starts nothing.",
           handle_schema:$hs,
           terminal_states:["done","degraded","failed","cancelled"],
           non_terminal_states:["starting","running"],
@@ -520,7 +520,7 @@ emit_describe() {
              note:"polls until the job is terminal or the bound passes; exit 0 outcome:terminal, exit 6 outcome:deadline with the job still running",
              deadline_default:$ad, interval_default:$ai},
             {name:"result", argument:"--handle <id> [--cwd <dir>]",
-             note:"the supervisor'"'"'s measured record plus the contract copy it was measured against; exit 2 result_pending while the job runs"},
+             note:"the supervisor’s measured record plus the contract copy it was measured against; exit 2 result_pending while the job runs"},
             {name:"cancel", argument:"--handle <id> [--deadline <s>]",
              note:"signals the supervisor and waits for it to record a terminal state; cancelling an already-terminal job is a no-op at exit 0",
              deadline_default:$cd}
@@ -561,9 +561,9 @@ emit_describe() {
             {name:"state",          always:false, note:"the resolved state, relayed from the record layer"},
             {name:"terminal",       always:false, note:"whether that state is one of the four terminal states"},
             {name:"live",           always:false, note:"whether a supervisor process answered the probe"},
-            {name:"job",            always:false, note:"the record layer'"'"'s job object, relayed verbatim"},
+            {name:"job",            always:false, note:"the record layer’s job object, relayed verbatim"},
             {name:"outcome",        always:false, note:"state | terminal | deadline | result | cancelled | already_terminal | unconfirmed"},
-            {name:"result",         always:false, note:"result only: the supervisor'"'"'s measured record; its narrative field carries its own untrusted marking"},
+            {name:"result",         always:false, note:"result only: the supervisor’s measured record; its narrative field carries its own untrusted marking"},
             {name:"contract",       always:false, note:"result only: the contract COPY the supervisor measured against"},
             {name:"cancelled",      always:false, note:"cancel only: whether this call is what stopped it"},
             {name:"help_requested", always:false, note:"true only for --help; present on every error response"}
@@ -573,7 +573,7 @@ emit_describe() {
             "handle_unknown means no job answers to that handle under this worktree. handle_expired means the record is here, terminal, and older than retention_seconds. A crashed job is neither: it resolves to state failed and answers normally.",
             "A job directory removed from disk is indistinguishable from one that never existed, which is why expiry MARKS a record rather than deleting one. Nothing in this file removes a job directory.",
             "cancel delivers a signal to the supervisor and lets it own the reap, the result and the release. Nothing here writes a terminal state, so a cancel racing a launcher cannot drop the one-job lock out from under it.",
-            "result.narrative.text is the model'"'"'s own account and carries the untrusted marking (R19). Everything else in result is measured by the supervisor."
+            "result.narrative.text is the model’s own account and carries the untrusted marking (R19). Everything else in result is measured by the supervisor."
           ]
         }')"
 }

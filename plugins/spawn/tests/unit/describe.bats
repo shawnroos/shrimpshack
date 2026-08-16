@@ -57,10 +57,22 @@ setup() {
     # probe the REAL gateway on 4000.
     export SPAWN_BASE_URL="http://127.0.0.1:1/anthropic"
 
-    # Deliberately NOT in SCRIPTS: the R14 loops resolve a command body through
-    # command_for(), which has no entry for bg-agent.sh. bg-agent is asserted by
-    # the tests that name it.
+    # TWO SURFACES ARE DELIBERATELY NOT IN SCRIPTS, and the reason is the same
+    # for both: they publish a DIFFERENT SHAPE of describe document, so the
+    # loops below would be asserting the wrong contract rather than a stricter
+    # one. Each is asserted by the tests that name it.
+    #
+    #   bg-agent.sh — the R14 loops resolve a command body through command_for(),
+    #                 which has no entry for it.
+    #   team.sh     — measured: 3 exit codes against R10's floor of 5, its
+    #                 exit_codes carry no `origin`, and its `error_values` carry
+    #                 `note` rather than an inline `remedy`, because the remedy
+    #                 for each lives in the shared table check-remedies.py
+    #                 validates. Forcing it into SCRIPTS would fail on three
+    #                 unrelated assertions and teach the next reader to loosen
+    #                 THEM, which is how a floor stops being a floor.
     BG="$LIB/bg-agent.sh"
+    TEAM="$LIB/team.sh"
 
     SCRIPTS=("$LENS" "$LAUNCH" "$CTL")
 }
@@ -128,10 +140,30 @@ command_for() {         # <script>
 # cannot outlive its reason.
 AGREEMENT_EXEMPT="is_error gateway.yaml"
 
+# EXTENDED ADDITIVELY for team.sh, which declares its vocabulary in places the
+# first three surfaces do not have: `modes`, `intents`, `team_file_fields` and
+# the flag table. Every added path carries `?`, so a surface without the key
+# contributes nothing and the three original pairs are untouched.
+#
+# The describe document's OWN TOP-LEVEL KEYS count as declared names. A command
+# body that says "the intents are declared under `intents` in --describe" is
+# naming a key of the contract, and a key of the contract is declared by
+# existing. That is glob-shaped rather than entry-shaped: every surface gets it,
+# so the next command that references a contract key by name does not land here
+# needing a new exemption.
+#
+# A field's declared VALUES count too. `members[].usage` is `measured` or
+# `unknown`, and `unknown` is a sentinel a caller really does receive — reading
+# .values is what lets team.sh DECLARE it rather than have it exempted.
 declared_names() {      # <describe json>
     printf '%s' "$1" | jq -r '
-        [ (.response_fields[]?.name), (.error_values[]?.value),
-          (.verbs[]?.name), (.drift_kinds[]?.name), (.drift_entry_fields[]?) ]
+        [ (.response_fields[]?.name), (.response_fields[]?.values[]?),
+          (.error_values[]?.value),
+          (.verbs[]?.name), (.drift_kinds[]?.name), (.drift_entry_fields[]?),
+          (.modes[]?.name), (.intents[]?.name), (.intents[]?|keys[]),
+          (.team_file_fields[]?.name),
+          (.team_file_fields[]?.member_fields[]?.name),
+          (.flags[]?.name), (keys[]) ]
         | .[]' | sort -u
 }
 
@@ -158,8 +190,16 @@ doc_codes() {           # <command md>
 # a token starting with `-` or `/` is a flag or a slash command. None of those
 # are names --describe declares, and demanding they be declared would push
 # junk into the contract to satisfy a lint.
+#
+# A backticked span containing `$` or `"` is a shell COMMAND LINE, not an
+# identifier. team.md documents its status verb with an INLINE command —
+# `bash "${CLAUDE_PLUGIN_ROOT}/lib/team.sh" status --run-id <id>` — and the
+# truncation above turns that into the token `bash`, which no contract will ever
+# declare. agent.md and session.md never hit it only because they happen to use
+# fenced blocks. Dropped here rather than exempted: `bash` is not a name any
+# surface omitted, it is the extractor reading a command as an identifier.
 doc_tokens() {          # <command md>
-    grep -oE '`[^`]+`' "$1" | tr -d '`' \
+    grep -oE '`[^`]+`' "$1" | grep -vE '[$"]' | tr -d '`' \
         | sed -E 's/[: ].*$//' | grep -E '^[a-z][a-z0-9_.-]*$' | sort -u
 }
 
@@ -519,6 +559,23 @@ start_fixture() {       # <scenario> <aliases> [extra fixture args]
     [ "$status" -eq 0 ]
 }
 
+@test "R14 — team.sh --describe and commands/team.md agree on codes and names" {
+    # SUBSET, the same call report.md made and for the same reason: team.md
+    # carries no exit-code table at all — it tells a reader to run --describe
+    # for one — so `equal` would demand the command grow a table it deliberately
+    # points elsewhere for. Every name it uses must still exist.
+    #
+    # This pair could not be enrolled in EITHER mode until now, and turning it
+    # on is what found the reason: team.sh declared no response_fields, so
+    # `reasons` — a field it emits on every advance — was in no caller-readable
+    # contract anywhere. A consumer reading --describe could not learn a single
+    # field it would actually receive. The block was added to team.sh, and this
+    # is the check that keeps it honest.
+    run agreement_check "$(describe_of "$TEAM")" "$CMD_DIR/team.md" subset
+    [ "$status" -eq 0 ] || printf '%s\n' "$output" >&2
+    [ "$status" -eq 0 ]
+}
+
 @test "R14 — the exempted names are still present, so the exemption cannot outlive its reason" {
     # An exemption list that nothing checks becomes a list of names nobody
     # remembers exempting. Each entry must still appear in some command body;
@@ -656,4 +713,217 @@ start_fixture() {       # <scenario> <aliases> [extra fixture args]
     # over an empty or missing untrusted_fields.
     run refute_match 'narrative\.text' "$untrusted"
     [ "$status" -ne 0 ]
+}
+
+# --- U9: team.sh's contract, which no loop in this file covers ---------------
+#
+# team.sh ships a full describe document and was invisible to this suite: the
+# R10 / exit-code / R12 loops all run over SCRIPTS, and it is not in it (see
+# setup for why). These are the same three properties the loops assert, written
+# against the shape team.sh actually publishes.
+
+@test "U9 — team.sh answers --describe at exit 0 with one object, with no gateway and no config" {
+    [ ! -e "$SPAWN_SEARCH_ROOT/gateway" ]
+    [ -z "${SPAWN_CONFIG:-}" ]
+    run env SPAWN_BASE_URL="http://127.0.0.1:1/anthropic" bash "$TEAM" --describe
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -s 'length')" = "1" ]
+    # CONTROL ARM for the count above, which is an absence assertion: two
+    # objects must read 2, or it would pass over a diagnostic that leaked onto
+    # stdout beside the answer.
+    [ "$(printf '%s\n%s' "$output" "$output" | jq -s 'length')" = "2" ]
+    [ "$(printf '%s' "$output" | jq -r '.ok')" = "true" ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "null" ]
+    [ "$(printf '%s' "$output" | jq -r '.response_kind')" = "describe" ]
+    [ "$(printf '%s' "$output" | jq -r '.surface')" = "team.sh" ]
+    [ "$(printf '%s' "$output" | jq -r '.schema')" = "spawn.response/v1" ]
+    # A usable contract, not an empty shell. The floors are team.sh's own
+    # shape: modes, intents and team_file_fields are vocabulary the first three
+    # surfaces do not have. response_fields is asserted too — it was EMPTY until
+    # the R14 pair below was enrolled and found that `reasons`, a field emitted
+    # on every advance, was in no caller-readable contract anywhere. The floor
+    # is what stops it going back.
+    [ "$(printf '%s' "$output" | jq -r '.verbs | length')" -ge 5 ]
+    [ "$(printf '%s' "$output" | jq -r '.modes | length')" -eq 3 ]
+    [ "$(printf '%s' "$output" | jq -r '.intents | length')" -eq 4 ]
+    [ "$(printf '%s' "$output" | jq -r '.error_values | length')" -ge 8 ]
+    [ "$(printf '%s' "$output" | jq -r '.team_file_fields | length')" -ge 3 ]
+    [ "$(printf '%s' "$output" | jq -r '.response_fields | length')" -ge 20 ]
+}
+
+@test "U9 — team.sh's declared exit enum matches the EX_* constants it defines" {
+    # The same assertion the SCRIPTS loop makes, minus the own/propagated split:
+    # team.sh propagates no code from another surface, so every code it declares
+    # is one it defines.
+    local defined declared
+    defined="$(grep -E '^EX_[A-Z]+=[0-9]+' "$TEAM" | sed -E 's/.*=([0-9]+).*/\1/' | sort -u)"
+    [ -n "$defined" ]
+    declared="$(describe_of "$TEAM" | jq -r '.exit_codes[].code' | sort -u)"
+    [ "$defined" = "$declared" ]
+    # Nothing outside the frozen enum (KTD2).
+    describe_of "$TEAM" | jq -e 'all(.exit_codes[].code; . == 0 or . == 2 or . == 3 or . == 4 or . == 5 or . == 6 or . == 7)' >/dev/null
+}
+
+@test "U9 — every error value team.sh declares carries a distinct, non-empty note" {
+    # team.sh's error_values carry `note`, not an inline `remedy` — the remedy
+    # for each is in the shared table check-remedies.py validates over lib/, and
+    # duplicating it here would give a caller two places to disagree. What this
+    # asserts is the part that is team.sh's own: every value is a snake_case
+    # enum token with real prose, and no two share it. A copy-pasted note is how
+    # two error classes end up indistinguishable to the person reading them.
+    local d n
+    d="$(describe_of "$TEAM")"
+    printf '%s' "$d" | jq -e 'all(.error_values[]; (.value | test("^[a-z][a-z0-9_]*$"))
+                                  and (.note != null) and (.note | length > 20))' >/dev/null
+    n="$(printf '%s' "$d" | jq -r '.error_values | length')"
+    [ "$(printf '%s' "$d" | jq -r '[.error_values[].note] | unique | length')" -eq "$n" ]
+    [ "$(printf '%s' "$d" | jq -r '[.error_values[].value] | unique | length')" -eq "$n" ]
+}
+
+@test "U9 — team.sh declares --describe, and --help is exit 2 with the discriminator" {
+    describe_of "$TEAM" | jq -e '[.flags[].name] | index("--describe") != null' >/dev/null
+    run bash -c "bash '$TEAM' --help 2>/dev/null"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.help_requested')" = "true" ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "usage" ]
+}
+
+@test "U9 — the no-spend lint holds over what team.sh PRINTS, not just its source" {
+    # The source lint lives in lens.bats and now globs lib/. This is the other
+    # half: a spend word could still reach a caller through the shared remedy
+    # table in common.sh, which the source lint of team.sh does not read.
+    run bash -c "bash '$TEAM' --describe 2>/dev/null | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
+    [ "$status" -ne 0 ]
+    run bash -c "bash '$TEAM' --help 2>&1 | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
+    [ "$status" -ne 0 ]
+}
+
+# --- U9: the contract answers under the bash the box actually ships ----------
+#
+# EVERY test in this file — and in every other file in this suite — reaches a
+# script through `bash`, which is bash 5 from Homebrew on PATH. macOS's own
+# /bin/bash is 3.2.57, and that is the interpreter a shebang'd `#!/bin/bash`
+# and any `/bin/bash -c` gets. The suite was structurally blind to the whole
+# class: U4 found `team.sh --describe` wholly broken under 3.2 while every
+# arm here was green, and TWO MORE were broken at the same time and unnoticed.
+#
+# The fault is bash 3.2's `$( )` parser mishandling the `'\''` re-quote idiom
+# inside a single-quoted jq program: the program is split, jq is handed
+# fragments, and the surface answers `ok:false, error:"internal"` with a third
+# of its keys. A caller reading the contract in order to interpret a failure
+# gets a failure instead.
+#
+# STDERR IS ASSERTED, not just the envelope. That is where the jq compile
+# errors go, and a surface that recovered enough to print a plausible object
+# while spraying compiler output at the terminal has still broken KTD5's
+# promise about what reaches a terminal.
+
+# The nine entry points that answer --describe. ENUMERATED on purpose and
+# guarded by the coverage test below: this arm EXECUTES each file, and lib/
+# also holds setup-wire.sh and setup-acquire.sh, which have no --describe guard
+# and do their real work on any argv — writing to the invoking user's HOME. A
+# glob here would have this suite install a gateway.
+bash32_surfaces() {
+    printf '%s\n' lens.sh launch.sh spawnctl.sh bg-agent.sh bg-operator.sh \
+                  bg-repo.sh jobs.sh handle.sh team.sh
+}
+
+@test "U9 — the surface list is complete: every lib owning a --describe dispatch is in it" {
+    # DEFAULT-DENY, and STATIC. The set is derived by grepping for the dispatch
+    # case rather than by running each file, because running them is exactly
+    # what must not be automated here (see bash32_surfaces above). A tenth
+    # surface that adds `--describe)` joins the gate by existing.
+    local derived listed extra
+    derived="$(grep -l '^[[:space:]]*--describe)' "$LIB"/*.sh | xargs -n1 basename | sort)"
+
+    # ONE EXCEPTION, asserted rather than assumed. ceilings.sh owns the case but
+    # is NOT an entry point: it is sourced by bg-operator.sh and bg-repo.sh,
+    # which is how those two answer --describe without owning a case of their
+    # own. If ceilings.sh ever grows a dispatch of its own this fails, and
+    # whoever did it has to decide which side of the line it is on.
+    run bash "$LIB/ceilings.sh" --describe
+    [ -z "$output" ]
+    [ "$status" -eq 0 ]
+    derived="$(printf '%s\n' "$derived" | grep -vx 'ceilings.sh')"
+
+    listed="$(bash32_surfaces | sort)"
+    # Every owner is covered. The reverse is NOT asserted as equality: the list
+    # legitimately holds two files the grep cannot find, and naming them here is
+    # what keeps that legitimate.
+    extra="$(comm -23 <(printf '%s\n' "$derived") <(printf '%s\n' "$listed"))"
+    [ -z "$extra" ] || {
+        printf 'these libs own a --describe dispatch and are NOT in the bash 3.2 gate:\n%s\n' "$extra" >&2
+        return 1
+    }
+    # The two inheritors, named and asserted: they answer --describe through
+    # ceilings.sh, so no grep over their own text finds them, and a third door
+    # added the same way would have to be added here by hand. That is the one
+    # gap this derivation does not close, and it is stated rather than papered
+    # over — the alternative is executing every file in lib/ to find out.
+    printf '%s\n' "$listed" | grep -qx 'bg-operator.sh'
+    printf '%s\n' "$listed" | grep -qx 'bg-repo.sh'
+    run bash -c "grep -c 'SCRIPT_DIR/ceilings.sh' \"\$0\"/*.sh | grep -v ':0$' | wc -l" "$LIB"
+    [ "$(printf '%s' "$output" | tr -d ' ')" = "3" ]
+
+    [ "$(printf '%s\n' "$listed" | grep -c .)" -eq 9 ]
+}
+
+@test "U9 — every surface answers --describe under /bin/bash 3.2, with nothing on stderr" {
+    # A box whose /bin/bash is not 3.x is not the box this gate is about. It
+    # skips by NAME so the skip is visible in the run rather than silent.
+    local ver
+    ver="$(/bin/bash -c 'printf "%s" "${BASH_VERSINFO[0]}"' 2>/dev/null)"
+    [ -n "$ver" ] || skip "/bin/bash is not present"
+    [ "$ver" -le 3 ] || skip "/bin/bash is version $ver, not the 3.2 this gate is about"
+
+    local s out err rc failed=0
+    for s in $(bash32_surfaces); do
+        err="$WORK/err.$s"
+        out="$(env SPAWN_BASE_URL="http://127.0.0.1:1/anthropic" \
+                   /bin/bash "$LIB/$s" --describe 2>"$err")" && rc=0 || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            printf 'BASH32: %s --describe exited %s\n' "$s" "$rc" >&2; failed=1; continue
+        fi
+        if [ "$(printf '%s' "$out" | jq -r '.ok' 2>/dev/null)" != "true" ]; then
+            printf 'BASH32: %s --describe answered ok=%s error=%s\n' "$s" \
+                "$(printf '%s' "$out" | jq -r '.ok' 2>/dev/null)" \
+                "$(printf '%s' "$out" | jq -r '.error' 2>/dev/null)" >&2
+            failed=1
+        fi
+        if [ -s "$err" ]; then
+            printf 'BASH32: %s --describe wrote to stderr:\n' "$s" >&2
+            head -5 "$err" >&2
+            failed=1
+        fi
+    done
+    [ "$failed" -eq 0 ]
+}
+
+@test "U9 — the bash 3.2 answer is the SAME contract as the bash 5 answer" {
+    # ok:true is not enough. The fault mode this gate exists for degrades the
+    # document rather than refusing it — jobs.sh answered with 12 keys where it
+    # declares 24 — so a surface could satisfy the arm above while handing a
+    # caller a contract missing most of what it promises.
+    #
+    # Compared as the WHOLE normalized document, not just its key set: a
+    # degradation that keeps every top-level key while emptying error_values
+    # would pass a keys-only check, and a describe document is static data, so
+    # full equality is the right bar and any inequality is a finding.
+    local ver
+    ver="$(/bin/bash -c 'printf "%s" "${BASH_VERSINFO[0]}"' 2>/dev/null)"
+    [ -n "$ver" ] || skip "/bin/bash is not present"
+    [ "$ver" -le 3 ] || skip "/bin/bash is version $ver, not the 3.2 this gate is about"
+
+    local s a b failed=0
+    for s in $(bash32_surfaces); do
+        a="$(bash      "$LIB/$s" --describe 2>/dev/null | jq -S . 2>/dev/null)"
+        b="$(/bin/bash "$LIB/$s" --describe 2>/dev/null | jq -S . 2>/dev/null)"
+        [ -n "$a" ]   # the bash 5 side must have answered, or this compares two blanks
+        if [ "$a" != "$b" ]; then
+            printf 'BASH32: %s publishes a different contract under 3.2\n' "$s" >&2
+            diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") >&2
+            failed=1
+        fi
+    done
+    [ "$failed" -eq 0 ]
 }

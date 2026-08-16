@@ -28,6 +28,7 @@
 setup() {
     FIX="$(cd "$BATS_TEST_DIRNAME/../fixtures" && pwd)"
     LIB="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
+    HOOKS="$(cd "$BATS_TEST_DIRNAME/../../hooks" && pwd)"
     CTL="$LIB/spawnctl.sh"
     LENS="$LIB/lens.sh"
     LAUNCH="$LIB/launch.sh"
@@ -816,8 +817,13 @@ terminal_sink_lint() {
     #
     # Threshold of 3 code lines: below that, identical bodies are coincidence
     # (`return 0`), not duplication.
+    # BOTH SHIPPED DIRECTORIES. The scan was called with $LIB alone, so
+    # plugins/spawn/hooks/ sat entirely outside it: a hook could carry a
+    # verbatim copy of any lib function and this stayed green. The hook runs on
+    # every prompt, so a stale copy of a lib body there is the worst place for
+    # one — it drifts silently and nothing reads it against its original.
     local report
-    report="$(dupe_scan "$LIB")"
+    report="$(dupe_scan "$LIB" "$HOOKS")"
     if [ -n "$report" ]; then
         echo "$report"
         echo "Move the shared body into common.sh (or secrets.sh) and inherit it."
@@ -825,19 +831,28 @@ terminal_sink_lint() {
     fi
 }
 
-# dupe_scan <dir> — the scan itself, taking the directory to scan so the
+# dupe_scan <dir>... — the scan itself, taking the directories to scan so the
 # self-test below can point it at a THROWAWAY COPY of lib/ instead of planting
 # into the real shipped sources. The previous self-test appended to
 # lib/sanitize.sh and lib/secrets.sh and restored afterwards; correct on the
 # assertion path, but a Ctrl-C or a TERM between the two appends and the restore
 # would have left probe functions in two shipped files, and it made the suite
 # unsafe under `bats -j`.
+#
+# Files are reported as <dir>/<name>, not <name>. No basename is shared across
+# the two directories today; this is written for the day one is. The moment a
+# lib/ and a hooks/ file share a name, a bare basename makes a duplicate between
+# them read as a file duplicating itself, and the two are indistinguishable in
+# the report — so the provenance goes in before it is needed, not after.
 dupe_scan() {
-    python3 - "$1" <<'PYEOF'
+    python3 - "$@" <<'PYEOF'
 import sys, pathlib, re, hashlib
-lib = pathlib.Path(sys.argv[1])
+files = []
+for d in sys.argv[1:]:
+    files.extend(sorted(pathlib.Path(d).glob("*.sh")))
 funcs = {}
-for f in sorted(lib.glob("*.sh")):
+for f in files:
+    label = "%s/%s" % (f.parent.name, f.name)
     lines = f.read_text().split("\n"); i = 0
     while i < len(lines):
         # ONE-LINE BODIES COUNT. The first version matched only a brace that
@@ -849,7 +864,7 @@ for f in sorted(lib.glob("*.sh")):
             b = re.sub(r'\s+', ' ', one.group(2).strip())
             if b:
                 key = hashlib.sha256(b.encode()).hexdigest()
-                funcs.setdefault(key, []).append((f.name, one.group(1), 1))
+                funcs.setdefault(key, []).append((label, one.group(1), 1))
             i += 1
             continue
         m = re.match(r'^([A-Za-z_][A-Za-z0-9_:]*)\(\)\s*\{\s*$', lines[i])
@@ -884,7 +899,7 @@ for f in sorted(lib.glob("*.sh")):
             # with a stated reason rather than reopening the whole class.
             if norm:
                 key = hashlib.sha256("\n".join(norm).encode()).hexdigest()
-                funcs.setdefault(key, []).append((f.name, name, len(norm)))
+                funcs.setdefault(key, []).append((label, name, len(norm)))
             i = j
             continue
         i += 1
@@ -939,6 +954,8 @@ _dupe_plant_nested() {
     echo "$output" | grep -q '_dupe_plant_nested'
 
     # And the real tree is untouched by construction — nothing was written to it.
-    run dupe_scan "$LIB"
+    # Scanned over the same pair the gate uses, so this arm cannot read clean
+    # over a directory the gate is checking.
+    run dupe_scan "$LIB" "$HOOKS"
     [ -z "$output" ]
 }
