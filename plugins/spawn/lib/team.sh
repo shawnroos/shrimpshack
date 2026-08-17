@@ -300,7 +300,17 @@ spawn::team_teardown() {
     local dir="$1" rec run_id name wt real primary admin
     rec="$(spawn::team_record_read "$dir")" || return 1
     run_id="$(printf '%s' "$rec" | jq -r '.run_id')"
-    while IFS='	' read -r name wt; do
+    # ONE FIELD PER LINE. This is the function that DELETES directories, and it
+    # was the last place still reading @tsv into `read`: tab is IFS whitespace,
+    # so a run of tabs collapses and a member with an empty name or worktree
+    # shifts the pair — the next member's name arriving as this one's worktree.
+    # It was safe only because the `[ -n "$wt" ]` guard below happened to absorb
+    # the shifted case, and safe-by-accident is the wrong property for the one
+    # loop whose next step resolves a path for removal. The same trap is
+    # documented twice elsewhere in this file.
+    while IFS= read -r name; do
+        IFS= read -r wt || break
+        [ -n "$name" ] || continue
         [ -n "$wt" ] || continue
         real="$(cd "$(dirname "$wt")" 2>/dev/null && pwd -P)/$(basename "$wt")" || continue
         [ "$(basename "$real")" = "$name" ] || continue
@@ -319,7 +329,7 @@ spawn::team_teardown() {
             [ -n "$admin" ] && rm -rf "$admin" 2>/dev/null
         fi
         printf '%s\n' "$real"
-    done < <(printf '%s' "$rec" | jq -r '.members[] | [.name, .worktree] | @tsv')
+    done < <(printf '%s' "$rec" | jq -r '.members[] | (.name, (.worktree // ""))')
     return 0
 }
 
@@ -618,7 +628,15 @@ team_file_load() {  # <path>
     [ "$MAX_CONC" -gt 0 ] || { SPAWN_TEAM_ERROR="usage"
         spawn::team_fail "--max-concurrent 0 would dispatch nobody and report a round"; }
 
-    while IFS='	' read -r name alias contract skills; do
+    # Line-per-field, the one idiom this file uses for the job. The validator
+    # above already refuses an empty name, alias or contract, so a shift cannot
+    # reach here — but that made this loop's safety depend on a check in another
+    # function, and the trap is documented twice in this file precisely because
+    # it is invisible at the call site.
+    while IFS= read -r name; do
+        IFS= read -r alias || break
+        IFS= read -r contract || break
+        IFS= read -r skills || break
         spawn::team_name_ok "$name" || { SPAWN_TEAM_ERROR="member_name_invalid"
             spawn::team_fail "member name failed the grammar: $name"; }
         case " $seen " in
@@ -628,8 +646,8 @@ team_file_load() {  # <path>
         seen="$seen $name"
         M_NAMES+=("$name"); M_ALIASES+=("$alias"); M_CONTRACTS+=("$contract")
         M_SKILLS+=("$skills"); M_WORKTREES+=("")
-    done < <(jq -r '.members[] | [.name, .alias, .contract,
-                                 ((.skills // []) | join(" "))] | @tsv' "$f" 2>/dev/null)
+    done < <(jq -r '.members[] | (.name, .alias, .contract,
+                                 ((.skills // []) | join(" ")))' "$f" 2>/dev/null)
     [ "${#M_NAMES[@]}" -gt 0 ] || { SPAWN_TEAM_ERROR="team_file_malformed"
         spawn::team_fail "no member in $f could be read as a name, an alias and a contract"; }
 }
@@ -770,7 +788,8 @@ do_dispatch() {
         # caller ends up branching on the wrong one.
         [ "${#M_NAMES[@]}" -gt 0 ] || { SPAWN_TEAM_ERROR="usage"
             spawn::team_fail "every member of $RUN_ID has already been dispatched; advance reports the run's stop reasons"; }
-        do_dispatch_round skip-placement
+        team_revalidate_placements
+        do_dispatch_round
         return 0
     fi
 
@@ -802,6 +821,8 @@ do_dispatch() {
     cat "$TEAM_FILE" > "$TEAM_FILE_COPY" 2>/dev/null || { SPAWN_TEAM_ERROR="record_unwritable"
         spawn::team_fail "the team file could not be copied into $RUN_DIR"; }
 
+    spawn::team_git_exclude "$DRIVER" "$WT_ROOT"
+    team_place_members "$RUN_DIR"
     do_dispatch_round
 }
 
@@ -809,28 +830,26 @@ do_dispatch() {
 # up to the concurrency maximum, and report without waiting. Round 1 arrives
 # here after the record is created and the team file copied; round N+1 arrives
 # with the roster read back out of the record.
-do_dispatch_round() {   # [skip-placement]
-    if [ "${1:-}" != "skip-placement" ]; then
-        spawn::team_git_exclude "$DRIVER" "$WT_ROOT"
-        team_place_members "$RUN_DIR"
-    else
-        # Round N+1: the rows and the checkouts already exist. A member whose
-        # recorded worktree has since gone is treated exactly as an unplaced one
-        # rather than silently launched with an empty --cwd, which bg-agent
-        # reads as the CALLING process's directory.
-        local j=0
-        TEAM_UNPLACED=""
-        while [ "$j" -lt "${#M_NAMES[@]}" ]; do
-            if [ -z "${M_WORKTREES[$j]}" ] || [ ! -d "${M_WORKTREES[$j]}" ]; then
-                M_WORKTREES[$j]=""
-                TEAM_UNPLACED="$TEAM_UNPLACED ${M_NAMES[$j]}"
-                spawn::team_member_set "$RUN_DIR" "${M_NAMES[$j]}" launch_state launch_failed \
-                    || spawn::team_fail "member '${M_NAMES[$j]}' could not be marked launch_failed"
-            fi
-            j=$(( j + 1 ))
-        done
-    fi
+# Round N+1 places nothing: the rows and the checkouts already exist. What it
+# must still do is CHECK them — a member whose recorded worktree has since gone
+# is treated exactly as an unplaced one rather than launched with an empty
+# --cwd, which bg-agent reads as the CALLING process's directory and which has
+# already been measured to make a member claim the driver's own checkout.
+team_revalidate_placements() {
+    local j=0
+    TEAM_UNPLACED=""
+    while [ "$j" -lt "${#M_NAMES[@]}" ]; do
+        if [ -z "${M_WORKTREES[$j]}" ] || [ ! -d "${M_WORKTREES[$j]}" ]; then
+            M_WORKTREES[$j]=""
+            TEAM_UNPLACED="$TEAM_UNPLACED ${M_NAMES[$j]}"
+            spawn::team_member_set "$RUN_DIR" "${M_NAMES[$j]}" launch_state launch_failed \
+                || spawn::team_fail "member '${M_NAMES[$j]}' could not be marked launch_failed"
+        fi
+        j=$(( j + 1 ))
+    done
+}
 
+do_dispatch_round() {
     local name
     for name in $TEAM_UNPLACED; do
         TEAM_LAUNCH_ERRS="$(printf '%s' "$TEAM_LAUNCH_ERRS" | jq -c --arg n "$name" '.[$n] = "worktree_failed"')"
