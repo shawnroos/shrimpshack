@@ -986,6 +986,39 @@ on run argv
 			focus t
 			return "focused=" & (id of t as text)
 
+		else if verb is "set-title" then
+			-- argv: set-title <terminal-ref> <tab|surface> <title>
+			-- `name` is read-only on window, tab and terminal (sdef access="r"), so
+			-- the title is set through `perform action`, which also pins it against
+			-- the shell's own OSC writes. Set and read back in ONE event: the tab
+			-- handle then never crosses the shell boundary, and there is no second
+			-- event for the title to change under.
+			set t to my findTerminal(item 2 of argv)
+			if t is missing value then return "error=surface-not-found"
+			set theScope to item 3 of argv
+			set theTitle to item 4 of argv
+			if theScope is "tab" then
+				perform action ("set_tab_title:" & theTitle) on t
+				-- A terminal exposes no back-pointer to its tab, so the tab is found
+				-- by scanning. Reading the terminal's name here would never match:
+				-- a tab-scope set leaves it at the shell's own title.
+				repeat with w in windows
+					repeat with tb in tabs of w
+						try
+							repeat with tt in terminals of tb
+								if (id of tt as text) is (id of t as text) then
+									return "name=" & (name of tb as text)
+								end if
+							end repeat
+						end try
+					end repeat
+				end repeat
+				return "error=tab-not-found"
+			else
+				perform action ("set_surface_title:" & theTitle) on t
+				return "name=" & (name of t as text)
+			end if
+
 		else if verb is "pid" then
 			set t to my findTerminal(item 2 of argv)
 			if t is missing value then return "error=surface-not-found"
@@ -1138,6 +1171,50 @@ launcher_launch_agent_ghostty() {
   pid="$(_ghostty_field "$out" pid)"
   KICKOFF_OK=1
   step "  $LAUNCH_LABEL: $GHOSTTY_TERM (pid ${pid:-unknown}, launched with the brief)"
+  # Named AFTER the launch because on ghostty creation IS the launch — there is no
+  # surface to name before it. Read LAUNCH_WHERE here, not GHOSTTY_PLACE: a split
+  # whose --from-surface did not resolve fell back to a tab above and rewrote it.
+  _ghostty_name_surface
+}
+
+# Sets the title and confirms it landed. `perform action` returns true when it did
+# nothing — measured on a terminal created ~1s earlier, where the title stayed at the
+# shell's own — so the returned name is the only evidence. The first attempt missing
+# is the expected path, not the exception, which is why this polls rather than
+# retrying once immediately.
+_ghostty_name_surface() {
+  local scope=tab observed i=0
+  [ "$LAUNCH_WHERE" = split ] && scope=surface
+  if ! _ghostty_probe_titles; then
+    note_unnamed "ghostty $LAUNCH_WHERE terminal $GHOSTTY_TERM (no set_tab_title action on this Ghostty)"
+    return
+  fi
+  while [ "$i" -lt 3 ]; do
+    observed="$(_ghostty_field "$(_ghostty_run set-title "$GHOSTTY_TERM" "$scope" "$LABEL")" name)"
+    [ "$observed" = "$LABEL" ] && return
+    i=$((i+1)); sleep 1
+  done
+  # A handle that no longer resolves is not a naming failure: the terminal that set
+  # KICKOFF_OK=1 a moment ago is gone, so the session died between launch and rename.
+  case "$(_ghostty_run set-title "$GHOSTTY_TERM" "$scope" "$LABEL")" in
+    *error=surface-not-found*)
+      KICKOFF_OK=0
+      echo "  ⚠ the ghostty terminal that was just launched no longer exists — the session did not survive" >&2
+      return ;;
+  esac
+  echo "  ⚠ ghostty $LAUNCH_WHERE could not be named (reports '${observed:-}')" >&2
+  note_unnamed "ghostty $LAUNCH_WHERE terminal $GHOSTTY_TERM"
+}
+
+# Probed through the resolved bundle, never a bare `ghostty` on PATH: this script
+# resolves only GHOSTTY_APP (a .app directory) and osascript, and a background
+# agent's PATH may not carry /usr/bin at all. A probe that cannot RUN is not the
+# same as an action that is absent — only the latter means "no naming support".
+_ghostty_probe_titles() {
+  local bin="${GHOSTTY_APP:-}/Contents/MacOS/ghostty" actions
+  [ -x "$bin" ] || return 0
+  actions="$("$bin" +list-actions 2>/dev/null)" || return 0
+  case "$actions" in *set_tab_title*) return 0 ;; *) return 1 ;; esac
 }
 
 # Readiness on ghostty is the pid the terminal reports (KTD-7) — the started signal.

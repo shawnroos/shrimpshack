@@ -245,6 +245,12 @@ grep -qE '"\$HERDR" pane rename ' "$SPINOFF" \
 grep -qE '"\$CMUX" rename-tab .*>/dev/null 2>&1' "$SPINOFF" \
   && bad "cmux rename-tab still discards its error" \
   || ok "cmux rename-tab no longer discards its error"
+grep -q 'set_tab_title' "$SPINOFF" \
+  && ok "ghostty set_tab_title arm present" \
+  || bad "ghostty set_tab_title arm missing from the staged script"
+grep -q 'Contents/MacOS/ghostty' "$SPINOFF" \
+  && ok "ghostty capability probe uses the resolved bundle" \
+  || bad "ghostty probe does not go through the resolved bundle"
 
 echo "-------------------------------------------"
 echo "passed: $PASS   failed: $FAIL"
