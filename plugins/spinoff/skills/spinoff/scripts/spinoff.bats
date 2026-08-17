@@ -379,6 +379,21 @@ run_resolve() {
   grep -q '^pane run ' "$HERDR_ARGV_LOG"
 }
 
+@test "summary: names a surface that went unnamed, inside the relayed block (R12)" {
+  export HERDR_STUB_RENAME_FAIL=1
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  # R12: the summary reports what went unnamed, so the run never implies a name it
+  # did not set. It has to land in the summary block the skill relays verbatim.
+  [[ "$output" == *"went unnamed:"* ]]
+  [[ "$output" == *"herdr tab pane wS:p2"* ]]
+}
+@test "summary: says nothing about naming when every surface took its name" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"went unnamed:"* ]]
+}
+
 @test "herdr tab: places the tab in the LIVE workspace, not a stale HERDR_WORKSPACE_ID" {
   # the env var says wS, but the live pane reports wLIVE — the tab must follow the
   # LIVE workspace (the "spinoff spawned from space A lands in space B" fix).

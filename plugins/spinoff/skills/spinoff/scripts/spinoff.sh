@@ -1899,6 +1899,12 @@ else
   SESS_STATE="open + briefed"
 fi
 VIEWER_NOTE=""; [ "$VIEWER_OK" = "1" ] && VIEWER_NOTE=" (handoff viewer alongside)"
+# Printed inside the relayed block, not via step() or a stderr warning: R12 puts
+# this in the summary, and those two surfaces land above it and beside it.
+if [ -n "$UNNAMED_SURFACES" ]; then
+  echo "  went unnamed:"
+  printf '%s\n' "$UNNAMED_SURFACES"
+fi
 if [ -n "$SURFACE_REF" ] && [ -n "$WORKSPACE_REF" ]; then
   echo "  $LAUNCHER:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session $SESS_STATE$VIEWER_NOTE"
 elif [ -n "$SURFACE_REF" ]; then
