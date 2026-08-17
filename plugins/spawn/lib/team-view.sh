@@ -36,9 +36,23 @@
 TEAM_VIEW_LIMIT="${SPAWN_TEAM_VIEW_LIMIT:-10}"
 TEAM_VIEW_JSON=""
 
-# The last non-empty line of a member's own job log. Free-form text written by
-# the child's CLI, so it is display text and reaches the one sanitizer sink at
-# the bottom of team_view with everything else.
+# The last non-empty line of a member's own job log.
+#
+# TODAY EVERY WRITER OF THAT LOG IS THE SUPERVISOR, writing its own literals —
+# the child's own output goes to child.json and child.err, not here — so this
+# line carries no model prose and calling it "free-form text written by the
+# child's CLI", as this comment once did, invited the wrong conclusion in both
+# directions: that the value is already untrusted, and therefore that piping
+# child.err in here would change nothing.
+#
+# It would change everything. `narrative.text` is the one untrusted field in
+# this plugin and nothing renders it; a log tail carrying model output would put
+# third-party prose into a status render and into the prompt hook that consumes
+# this, which is the laundering both surfaces exist to prevent. It still reaches
+# the sanitizer sink with everything else, because sanitising is about terminal
+# control bytes, not about trust — a sanitised model claim is still a model
+# claim wearing the plugin's voice.
+
 team_view_log_tail() {  # <job dir>
     local f="$1/log"
     [ -f "$f" ] || return 0
@@ -273,10 +287,19 @@ team_view() {           # <record json>
         [ -n "$obj" ] || { idx=$((idx + 1)); continue; }
         objs+=("$obj")
         listed=$((listed + 1)); idx=$((idx + 1))
+    # STARTED MEMBERS FIRST, NEWEST FIRST, then the never-started in roster
+    # order. The cap truncates the TAIL, so the order decides who gets dropped —
+    # and a `| reverse` here put the never-started members at the head, so a
+    # roster larger than the cap omitted exactly the members in flight, which are
+    # the only reason to call status at all. Reverse only the started group, by
+    # sorting that group on a descending key, rather than reversing the whole
+    # list and taking the never-started group with it.
     done < <(printf '%s' "$rec" | jq -c '
-        [ .members[] | . ] | to_entries
-        | sort_by(.value.started_at == null, (.value.started_at // ""))
-        | reverse | .[] | .value' 2>/dev/null)
+        [ .members[] ] | to_entries
+        | ( map(select(.value.started_at != null))
+            | sort_by(.value.started_at) | reverse )
+          + ( map(select(.value.started_at == null)) )
+        | .[] | .value' 2>/dev/null)
 
     if [ "${#objs[@]}" -gt 0 ]; then
         rows="$(printf '%s\n' "${objs[@]}" | jq -sc '.')"

@@ -74,8 +74,31 @@ MAX_FIELD=120
 # context. sanitize_for_display is the plugin's one answer to the first; the
 # second needs the newline and angle-bracket strip, because a value carrying a
 # newline or a closing tag could forge structure around itself.
+#
+# THIS COMPOSES ON THE CHOKEPOINT RATHER THAN REIMPLEMENTING IT. A `tr` byte
+# range strips C0 controls and stops there: a Unicode bidi override (U+202E)
+# is multi-byte and survives it, and this line is printed straight into the
+# user's prompt context, where reversed text is exactly the trick that matters.
+# sanitize.sh strips those; this file used to carry its own weaker copy while
+# the comment above already claimed sanitize_for_display was the answer.
+#
+# Sourced unconditionally and cheaply — 101 lines, no dependencies of its own —
+# because the alternative was reaching it only through the lazy team-lib load,
+# which means a worktree with plain jobs and no team runs never had it at all.
+# Fail open, like everything else here: if it cannot be sourced the fallback
+# below is the old behaviour rather than a broken prompt.
+SPAWN_LIB_DIR="${SPAWN_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)}"
+if [ -n "$SPAWN_LIB_DIR" ] && [ -f "$SPAWN_LIB_DIR/sanitize.sh" ]; then
+    # shellcheck source=../lib/sanitize.sh
+    . "$SPAWN_LIB_DIR/sanitize.sh" 2>/dev/null || true
+fi
+
 clean() {
-    printf '%s' "$1" \
+    local v="$1"
+    if declare -F spawn::sanitize_for_display >/dev/null 2>&1; then
+        v="$(spawn::sanitize_for_display "$v")"
+    fi
+    printf '%s' "$v" \
         | tr -d '\000-\010\013\014\016-\037\177' \
         | tr '\n\r' '  ' \
         | tr -d '<>' \
@@ -203,7 +226,12 @@ if [ -d "$TEAM_ROOT" ]; then
                   ((.derived.stop_reasons // []) | join(", "))
                 ] | @tsv' 2>/dev/null)" || continue
             [ -n "$tsv" ] || continue
-            IFS=$'\t' read -r run_id verdict counts term stops <<< "$tsv"
+            {
+                read -r run_id; read -r verdict; read -r counts
+                read -r term;   read -r stops
+            } <<EOF
+$(printf '%s' "$tsv" | tr '\t' '\n')
+EOF
             [ -n "${stops:-}" ] || stops="none"
             TEAM_LINES="$TEAM_LINES
   DONE $(clean "$run_id"): verdict $(clean "$verdict") · $(clean "$counts") · $(clean "$term") terminal · stopped: $(clean "$stops") · record: $(clean "$rd")/team.json"
@@ -232,7 +260,16 @@ if [ -d "$TEAM_ROOT" ]; then
               ((try ((now - (.created_at | fromdateiso8601)) | floor) catch 0) | tostring)
             ] | @tsv' 2>/dev/null)" || continue
         [ -n "$tsv" ] || continue
-        IFS=$'\t' read -r run_id rounds states prog unmeas elapsed <<< "$tsv"
+        # ONE FIELD PER LINE, not @tsv into `read`. Tab is an IFS *whitespace*
+        # character, so a run of tabs collapses to one delimiter and every field
+        # after an empty one shifts left. `states` is "" for a zero-member
+        # record, which would render the elapsed seconds in the unmeasured slot.
+        {
+            read -r run_id; read -r rounds; read -r states
+            read -r prog;   read -r unmeas; read -r elapsed
+        } <<EOF
+$(printf '%s' "$tsv" | tr '\t' '\n')
+EOF
 
         # NOT marked, and there is no marker write anywhere on this branch. See
         # the block comment above: this line is the whole point of the unit.

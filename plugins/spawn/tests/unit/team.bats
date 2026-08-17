@@ -320,6 +320,48 @@ jq_free_path() {
     assert_exists "$WORK/victim/.git"
 }
 
+@test "a member pointing at a SIBLING worktree's registration does not get it deleted" {
+    # The test above aims the poisoned `.git` at another REPOSITORY's main git
+    # dir, where `common` and `admin` are the same directory and the shape check
+    # refuses. A SIBLING LINKED WORKTREE's registration has exactly the shape the
+    # check permits — `<common>/worktrees/<name>` — so shape alone let a member
+    # name another live session's checkout and have teardown deregister it.
+    # Measured before the fix: the victim's index, HEAD, refs and reflog were
+    # removed and its `git status` became "not a repository".
+    git -C "$PRIMARY" worktree add -q --detach "$WORK/victim-live"
+    printf 'uncommitted\n' > "$WORK/victim-live/WIP.txt"
+    assert_exists "$PRIMARY/.git/worktrees/victim-live"
+
+    three_members
+    [ "$status" -eq 0 ]
+    printf 'gitdir: %s/.git/worktrees/victim-live\n' "$PRIMARY" > "$ROOT/r1/lead/.git"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    # The sibling survives as a REGISTERED worktree, not merely as a directory:
+    # deleting the registration is what kills it, and the checkout would still
+    # be sitting there afterwards looking fine.
+    assert_exists "$PRIMARY/.git/worktrees/victim-live"
+    assert_registered "$WORK/victim-live"
+    grep -qF uncommitted "$WORK/victim-live/WIP.txt"
+}
+
+@test "control: an honest member's own registration IS still removed" {
+    # Without this arm the test above passes on a guard that refuses every
+    # admin dir — which would read as "hostile case blocked" while silently
+    # disabling teardown's deregistration entirely. That exact regression
+    # happened while writing the fix.
+    three_members
+    [ "$status" -eq 0 ]
+    assert_exists "$PRIMARY/.git/worktrees/lead"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    refute_exists "$ROOT/r1/lead"
+    refute_registered "$WORK/nonexistent-never-made"
+    refute_exists "$PRIMARY/.git/worktrees/lead"
+}
+
 @test "control: assert_registered and refute_registered each fail on the case they deny" {
     git -C "$PRIMARY" worktree add --detach -q "$ROOT/registered" HEAD
     run refute_registered "$ROOT/registered"
@@ -396,6 +438,74 @@ jq_free_path() {
     assert_exists "$ROOT/r1/lead/.git"
     assert_exists "$ROOT/r1/mason/.git"
     [ "$(rec '.members | length')" = "3" ]
+}
+
+@test "a second round is dispatched from the RUN ID, and round 1's ledger survives" {
+    # Nothing exercised a second round before this. `dispatch` required
+    # --team-file, so the only invocation that parsed re-created the record:
+    # round 1's ledger was destroyed and every member was re-placed onto its own
+    # existing checkout, which `git worktree add` refuses. attached and
+    # unattended modes could not run a second round at all, while `advance`
+    # printed `continue` and both the skill and the command documented a flag
+    # that did not exist.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.round')" = "1" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .launch_state')" = "dispatched" ]
+    [ "$(rec '.members[] | select(.name == "scout") | .launch_state')" = "pending" ]
+
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.round')" = "2" ]
+    # Round 1's ledger is intact and scout joined round 2 — the two halves of
+    # "continued" as opposed to "restarted".
+    [ "$(rec '.rounds | length')" = "2" ]
+    [ "$(rec '.rounds[0].ordinal')" = "1" ]
+    [ "$(rec '.members[] | select(.name == "scout") | .round')" = "2" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .round')" = "1" ]
+    # lead was NOT re-placed: its handle is the one round 1 gave it.
+    [ -n "$(rec '.members[] | select(.name == "lead") | .handle')" ]
+}
+
+@test "control: a second dispatch with the TEAM FILE is refused, not silently destructive" {
+    # The form that used to wipe the run. It must now refuse rather than
+    # re-create, and refuse BEFORE touching the record.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local before; before="$(rec '.rounds | length')"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "usage" ]
+    [ "$(rec '.rounds | length')" = "$before" ]
+}
+
+@test "dispatch on a run with nothing pending refuses instead of opening an empty round" {
+    # An empty round sits at `running` for ever, because a round with no members
+    # assigned never satisfies "every assigned member is terminal" — the exact
+    # shape that hangs a driver.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 "solo:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(rec '.members[] | select(.name == "solo") | .launch_state')" = "dispatched" ]
+
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "usage" ]
+    [ "$(rec '.rounds | length')" = "1" ]
 }
 
 @test "dispatch reports worktree_failed when nothing reached a launcher, not launch_failed" {
@@ -1040,7 +1150,11 @@ member_state() { rec ".members[] | select(.name == \"$1\") | .launch_state"; }
     [ -n "$re" ]
     [ "$re" != "null" ]
 
-    dispatch --run-id r1
+    # A plain `usage` refusal to compare against. `dispatch --run-id r1` used to
+    # be one, because a run id without a team file was always invalid; it is now
+    # a legitimate second-round invocation, so the contrast has to come from an
+    # invocation that is still genuinely a usage error.
+    dispatch
     [ "$status" -eq 2 ]
     [ "$(out '.error')" = "usage" ]
     local us; us="$(out '.remedy')"
@@ -2141,11 +2255,22 @@ one_member_run() {  # <ceiling|""> [extra dispatch args...]
     assert_child_alias alpha
 }
 
-# --- the enumerated no-spend lint over the two libs this unit touches --------
+# --- the no-spend lint over every team lib, by GLOB ---------------------------
 
-@test "neither team.sh nor team-record.sh carries a forbidden spend word" {
-    refute_spend_words "$LIB/team.sh"
-    refute_spend_words "$LIB/team-record.sh"
+@test "no team lib carries a forbidden spend word" {
+    # GLOBBED, not enumerated. Named, this covered team.sh and team-record.sh
+    # and silently missed team-view.sh — 326 lines added in the same branch —
+    # because a list only covers what someone remembered to add. Every gate in
+    # this repo that globs has auto-enrolled new code and caught real defects;
+    # every gate that enumerates has been quietly incomplete at least once.
+    local f n=0
+    for f in "$LIB"/team*.sh; do
+        [ -f "$f" ] || continue
+        refute_spend_words "$f"
+        n=$(( n + 1 ))
+    done
+    # A glob that matches nothing passes every assertion inside it.
+    [ "$n" -ge 3 ]
 }
 
 @test "control: the spend-word check fails on a file that has one" {

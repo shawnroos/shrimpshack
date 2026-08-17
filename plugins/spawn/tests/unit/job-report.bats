@@ -85,6 +85,31 @@ run_hook() { run /bin/bash -c 'cd "$1" && /bin/bash "$2"' _ "$WORK" "$HOOK"; }
     [[ "$output" == *"job-inject"* ]]
 }
 
+@test "a Unicode bidi override in an emitted field does not reach the prompt" {
+    # This channel prints into the user's prompt context, where a right-to-left
+    # override reverses the text a human reads — the field says one thing and
+    # displays another. A `tr` byte range strips C0 controls and stops there;
+    # U+202E is multi-byte and used to survive, because this file carried its own
+    # weaker copy of the sanitizer while its comment already claimed the shared
+    # chokepoint was the answer. clean() now composes on that chokepoint.
+    make_record "job-bidi$(printf '‮')tail" done true
+    run_hook
+    [ "$status" -eq 0 ]
+    # The override byte sequence is absent...
+    refute_output_match "$(printf '‮')"
+    # ...and the hook still spoke, so the refutation is not passing on silence.
+    [[ "$output" == *"job-bidi"* ]]
+}
+
+@test "control: the bidi refutation fails when the override really is present" {
+    # Without this arm the test above passes on any output that happens not to
+    # contain the byte — including output the hook never produced.
+    run bash -c 'printf "job-bidi‮tail\n"'
+    [ "$status" -eq 0 ]
+    run bash -c 'printf "job-bidi‮tail\n" | grep -qF "$(printf "‮")"'
+    [ "$status" -eq 0 ]
+}
+
 @test "announced exactly once: a second prompt says nothing about the same job" {
     make_record job-once failed false
     run_hook

@@ -84,12 +84,24 @@ def tally($ms): if ($ms | length) == 0 then "pending"
 | (.bounds.token_ceiling) as $tc
 | ($ms | map(select(.launch_state == "dispatched" and .outcome == null)) | length) as $live
 | ($ms | map(select(usage_missing)) | length) as $unm
-| ($ms | map(select(is_done and (usage_missing | not))) | length) as $meas
+# $meas counts members that actually REPORTED a count. A launch_failed member is
+# correctly not `usage_missing` — it never ran, so its zero is a fact — but it
+# reported nothing either, so counting it here made `unenforceable` unreachable
+# the moment one worktree failed: a team whose only real usage was unmeasured
+# would call its ceiling `within` and print the full budget as remaining.
+| ($ms | map(select(is_done and (usage_missing | not)
+                    and (.launch_state != "launch_failed"))) | length) as $meas
 | ([ (if $ru >= $mr then "round_max_reached" else empty end),
      (if ($tc > 0 and $used >= $tc) then "token_ceiling_reached" else empty end),
      (if ($unk and $tc > 0) then "usage_unknown" else empty end) ]) as $hit
 | (($ms | length) > 0 and (($ms | map(.launch_state == "pending") | any) | not)) as $done_roster
-| ($hit + (if $done_roster then ["roster_exhausted"] else [] end)) as $stops
+# A record with NO members stops, and must say why. Without this it reports
+# `stop` with an empty reasons list — R21 asks that every reason a run stopped
+# be named, and "none of them" reads as a surface that forgot rather than a
+# roster that was never populated. Only reachable in the window between the
+# record being created and its first member row, which a crash can leave behind.
+| ($hit + (if $done_roster then ["roster_exhausted"] else [] end)
+        + (if ($ms | length) == 0 then ["roster_empty"] else [] end)) as $stops
 | (.rounds | map(select(.state == "running")) | last) as $act
 | .derived = {
     verdict: tally($ms),

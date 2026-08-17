@@ -82,6 +82,8 @@ remedy_for() {
             printf 'A member name becomes a directory under the run root and is later the only thing teardown removes, so it must match [A-Za-z0-9][A-Za-z0-9._-]* with no dot run. Rename the member named in `detail` and call again.' ;;
         member_unknown)
             printf 'This run has no member by that name. Read `members` in the run record for the names it does have.' ;;
+        field_unknown)
+            printf 'A caller tried to write a member field the record does not accept. The record takes only the fields it derives nothing from — a derived value has no setter, because it is recomputed at the write. This is a bug in the surface rather than in the invocation: report it with the field name in `detail`.' ;;
         record_missing|record_malformed)
             printf 'The run record is absent or unreadable, so nothing can be said about this run — including what it created. Check the run directory named in `detail`; if the record is gone, any worktrees the run made must be removed with `git worktree remove` by hand, because nothing else knows their names.' ;;
         record_unwritable)
@@ -180,9 +182,14 @@ spawn::team_worktree_root() {
         printf '%s' "$SPAWN_TEAM_WORKTREE_ROOT"
         return 0
     fi
+    # One resolver, not two. This derived the absolute common dir with its own
+    # copy of spawn::team_common_dir's normalization, and that normalization is
+    # what teardown's path-shape guard resolves against — a guard a mutation
+    # already proved could delete another repository's `.git`. Two copies of the
+    # rule that decides what a path IS, one of them load-bearing for deletion,
+    # is the drift worth removing.
     local common primary
-    common="$(git -C "${1:-.}" rev-parse --git-common-dir 2>/dev/null)" || return 1
-    case "$common" in /*) : ;; *) common="$(cd "${1:-.}" && cd "$(dirname "$common")" && pwd -P)/$(basename "$common")" ;; esac
+    common="$(spawn::team_common_dir "${1:-.}")" || return 1
     primary="$(dirname "$common")"
     printf '%s/worktrees' "$primary"
 }
@@ -231,17 +238,47 @@ spawn::team_common_dir() {
 # the session whose worktree was deregistered finds out later. Measured on a
 # throwaway repo: one prune deregistered a sibling this run never touched.
 #
-# The returned path is default-denied to `<common>/worktrees/<id>`, so a
-# `--git-dir` answer from a repo shape this does not understand removes nothing.
+# The returned path is default-denied to `<common>/worktrees/<id>`, AND the
+# registration must point back at the worktree being torn down.
+#
+# THE SHAPE ALONE IS NOT ENOUGH, and this is the second time this guard has been
+# reached from an angle it did not cover. `git rev-parse --git-dir` reads the
+# member's own `.git`, which in a linked worktree is a FILE holding one line —
+# `gitdir: <path>` — and a running member can write to its own checkout. The
+# first route pointed that line at another REPOSITORY's main `.git`; the shape
+# check refuses it, because there `common` and `admin` are the same directory.
+# It does NOT refuse a SIBLING LINKED WORKTREE's registration, which has exactly
+# the sanctioned shape — so a member could name another live session's worktree
+# and have teardown deregister it, killing a checkout this run never created.
+# Measured on a throwaway repo: the victim's index, HEAD, refs and reflog were
+# removed and its `git status` became "not a repository".
+#
+# So the answer is not trusted for WHICH worktree it belongs to. Git writes a
+# `gitdir` file inside the registration pointing back at the checkout's `.git`;
+# that file lives under the common git dir, where the ceiling denies the member
+# write access. Requiring it to point back at the worktree we are tearing down
+# makes the member's own `.git` unable to choose the target.
 spawn::team_admin_dir() {
-    local wt="$1" common admin
+    local wt="$1" common admin back back_wt real_wt
     common="$(spawn::team_common_dir "$wt")" || return 1
     admin="$(cd "$wt" 2>/dev/null && git rev-parse --git-dir 2>/dev/null)" || return 1
     case "$admin" in /*) : ;; *) admin="$wt/$admin" ;; esac
     case "$admin" in
-        "$common"/worktrees/?*) printf '%s' "$admin" ;;
+        "$common"/worktrees/?*) : ;;
         *) return 1 ;;
     esac
+    # BOTH sides are resolved before comparing. git writes the physical path
+    # into `gitdir`, and a caller may hold a logical one — on macOS /var is a
+    # symlink to /private/var, so an unresolved comparison refuses the honest
+    # case while still refusing the hostile one, which reads as "the guard
+    # works" and silently disables teardown.
+    back="$(cat "$admin/gitdir" 2>/dev/null)" || return 1
+    back_wt="${back%/.git}"
+    [ "$back_wt" != "$back" ] || return 1
+    back_wt="$(cd "$back_wt" 2>/dev/null && pwd -P)" || return 1
+    real_wt="$(cd "$wt" 2>/dev/null && pwd -P)" || return 1
+    [ "$back_wt" = "$real_wt" ] || return 1
+    printf '%s' "$admin"
 }
 
 spawn::team_primary_of() {
@@ -341,16 +378,16 @@ roster_parse() {
     MODE=""; MAX_CONC=""; MAX_ROUNDS=""; TOKEN_CEILING=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --run-id) RUN_ID="${2:-}"; shift 2 ;;
-            --run-dir) RUN_DIR="${2:-}"; shift 2 ;;
-            --mode) mode="${2:-}"; shift 2 ;;
-            --max-concurrent) mc="${2:-}"; shift 2 ;;
-            --max-rounds) mr="${2:-}"; shift 2 ;;
-            --token-ceiling) tc="${2:-}"; tc_stated="--token-ceiling"; shift 2 ;;
+            --run-id) RUN_ID="${2:-}"; shift 2 || shift ;;
+            --run-dir) RUN_DIR="${2:-}"; shift 2 || shift ;;
+            --mode) mode="${2:-}"; shift 2 || shift ;;
+            --max-concurrent) mc="${2:-}"; shift 2 || shift ;;
+            --max-rounds) mr="${2:-}"; shift 2 || shift ;;
+            --token-ceiling) tc="${2:-}"; tc_stated="--token-ceiling"; shift 2 || shift ;;
             --member)
                 M_NAMES+=("${2:-}"); M_ALIASES+=(""); M_CONTRACTS+=("")
                 M_SKILLS+=(""); M_WORKTREES+=("")
-                last=$(( last + 1 )); shift 2 ;;
+                last=$(( last + 1 )); shift 2 || shift ;;
             --alias|--contract|--skill|--worktree)
                 [ "$last" -ge 0 ] || { SPAWN_TEAM_ERROR="usage"
                     spawn::team_fail "$1 was given before any --member, so it belongs to nobody"; }
@@ -360,7 +397,7 @@ roster_parse() {
                     --worktree) M_WORKTREES[$last]="${2:-}" ;;
                     --skill) M_SKILLS[$last]="${M_SKILLS[$last]} ${2:-}" ;;
                 esac
-                shift 2 ;;
+                shift 2 || shift ;;
             *)
                 usage
                 SPAWN_TEAM_ERROR="usage"
@@ -480,21 +517,25 @@ F_MODE=""; F_CONC=""; F_ROUNDS=""; F_CEILING=""
 dispatch_parse() {
     while [ $# -gt 0 ]; do
         case "$1" in
-            --team-file) TEAM_FILE="${2:-}"; shift 2 ;;
-            --run-id) RUN_ID="${2:-}"; shift 2 ;;
-            --run-dir) RUN_DIR="${2:-}"; shift 2 ;;
-            --mode) F_MODE="${2:-}"; shift 2 ;;
-            --max-concurrent) F_CONC="${2:-}"; shift 2 ;;
-            --max-rounds) F_ROUNDS="${2:-}"; shift 2 ;;
-            --token-ceiling) F_CEILING="${2:-}"; shift 2 ;;
+            --team-file) TEAM_FILE="${2:-}"; shift 2 || shift ;;
+            --run-id) RUN_ID="${2:-}"; shift 2 || shift ;;
+            --run-dir) RUN_DIR="${2:-}"; shift 2 || shift ;;
+            --mode) F_MODE="${2:-}"; shift 2 || shift ;;
+            --max-concurrent) F_CONC="${2:-}"; shift 2 || shift ;;
+            --max-rounds) F_ROUNDS="${2:-}"; shift 2 || shift ;;
+            --token-ceiling) F_CEILING="${2:-}"; shift 2 || shift ;;
             *)
                 usage
                 SPAWN_TEAM_ERROR="usage"
                 spawn::team_fail "unexpected argument: $1" ;;
         esac
     done
-    [ -n "$TEAM_FILE" ] || { SPAWN_TEAM_ERROR="usage"
-        spawn::team_fail "--team-file is required: the team is stated in one file the caller writes"; }
+    # A team file states a NEW run; a run id continues an existing one. One of
+    # the two is required and they are not interchangeable — passing the file
+    # again for a later round would re-create the record and destroy the round
+    # ledger, which is what made a second dispatch wipe a run.
+    [ -n "$TEAM_FILE" ] || [ -n "$RUN_ID" ] || { SPAWN_TEAM_ERROR="usage"
+        spawn::team_fail "--team-file states a new team, or --run-id continues an existing run; one is required"; }
 }
 
 # A whole number, or the caller is told which bound they wrote wrong.
@@ -537,9 +578,19 @@ team_file_load() {  # <path>
         SPAWN_TEAM_ERROR="member_path_forbidden"
         spawn::team_fail "a member in $f names its own path, and placement is not the team file's to choose"
     fi
-    if jq -e 'any(.members[]; ((.alias // "") == "") or ((.contract // "") == ""))' "$f" >/dev/null 2>&1; then
+    # NAME IS CHECKED HERE, NOT LEFT TO THE GRAMMAR LATER. The rows are read as
+    # tab-separated fields, and an absent `.name` renders as an empty LEADING
+    # field — tab is IFS whitespace, so the run of tabs collapses and every
+    # value shifts one place left: the alias becomes the name, the contract
+    # becomes the alias. Measured before this check: a member with no name was
+    # placed at `<root>/<run-id>/<its alias>` and bg-agent was invoked with the
+    # contract path as its `--alias`, so a worktree existed before anything
+    # refused — breaking the refuse-before-create property this function's own
+    # header claims and member_incomplete's remedy states.
+    if jq -e 'any(.members[]; ((.name // "") == "") or ((.alias // "") == "")
+                              or ((.contract // "") == ""))' "$f" >/dev/null 2>&1; then
         SPAWN_TEAM_ERROR="member_incomplete"
-        spawn::team_fail "a member in $f has no alias or no contract"
+        spawn::team_fail "a member in $f has no name, no alias or no contract"
     fi
 
     MODE="$(jq -r '.mode // "attached"' "$f" 2>/dev/null)"
@@ -631,9 +682,98 @@ team_launch_member() {  # <index> <round>
     return 1
 }
 
+# A LATER ROUND IS DISPATCHED FROM THE RECORD, NEVER FROM THE TEAM FILE AGAIN.
+# The caller states the team once (KTD22); re-reading their file here would let
+# an edit between rounds move a target mid-run, which is the whole reason the
+# file is copied at dispatch. So the roster for round N+1 is the members the
+# record still calls `pending`, with the alias, contract and skills the record
+# already holds, and the bounds come from the record too.
+#
+# Members already dispatched are NOT re-placed: their checkouts exist, and
+# `git worktree add` over an existing path fails, which is what made re-passing
+# --team-file destroy a run rather than continue it.
+team_round_load() {     # <run-dir>
+    local rec name alias contract skills
+    rec="$(spawn::team_record_read "$1")" || spawn::team_fail "the run record could not be read"
+    MODE="$(printf '%s' "$rec" | jq -r '.mode')"
+    MAX_CONC="$(printf '%s' "$rec" | jq -r '.bounds.max_concurrent')"
+    MAX_ROUNDS="$(printf '%s' "$rec" | jq -r '.bounds.max_rounds')"
+    TOKEN_CEILING="$(printf '%s' "$rec" | jq -r '.bounds.token_ceiling')"
+    # THE CHECKOUT COMES FROM THE RECORD, and round 2 places nothing. Round 1
+    # already created a worktree for EVERY member, not only the ones it had
+    # concurrency for — so a pending member's checkout exists and its row is
+    # already written. Re-placing would fail on the existing path, and re-adding
+    # the row is refused as a duplicate name, which is what a first attempt at
+    # this did.
+    #
+    # One field per line, not @tsv: an empty field between tabs collapses,
+    # because tab is IFS whitespace.
+    local fields n
+    M_NAMES=(); M_ALIASES=(); M_CONTRACTS=(); M_SKILLS=(); M_WORKTREES=()
+    fields="$(printf '%s' "$rec" | jq -r '.members[] | select(.launch_state == "pending")
+        | (.name, .alias, .contract, ((.skills // []) | join(" ")), .worktree)' 2>/dev/null)"
+    n=0
+    while IFS= read -r name; do
+        IFS= read -r alias || break
+        IFS= read -r contract || break
+        IFS= read -r skills || break
+        IFS= read -r worktree || break
+        [ -n "$name" ] || continue
+        M_NAMES+=("$name"); M_ALIASES+=("$alias"); M_CONTRACTS+=("$contract")
+        M_SKILLS+=("$skills"); M_WORKTREES+=("$worktree")
+        n=$(( n + 1 ))
+    done <<EOF
+$fields
+EOF
+}
+
 do_dispatch() {
     need_jq
     dispatch_parse "$@"
+
+    # WHICH ROUND THIS IS, is decided by whether the RECORD exists — not by
+    # which flags were passed. Naming a run id for a NEW run is legitimate and
+    # every round-1 caller does it, so the flags alone cannot tell the two
+    # apart; the record can.
+    local existing=""
+    if [ -n "$RUN_ID" ]; then
+        team_context
+        [ -n "$RUN_DIR" ] || RUN_DIR="$DRIVER/.spawn/teams/$RUN_ID"
+        [ -f "$(spawn::team_record_path "$RUN_DIR")" ] && existing=yes
+    fi
+
+    # Re-stating the team over a live run would re-create the record and destroy
+    # its round ledger. Refuse before anything is touched.
+    if [ -n "$existing" ] && [ -n "$TEAM_FILE" ]; then
+        SPAWN_TEAM_ERROR="usage"
+        spawn::team_fail "run $RUN_ID already exists; continue it with --run-id alone, or choose a new run id"
+    fi
+
+    # A run id naming no run says so. Without this it falls through to the
+    # team-file path with an empty path and reports "no readable team file at ",
+    # which describes an argument the caller never passed.
+    if [ -z "$existing" ] && [ -z "$TEAM_FILE" ]; then
+        SPAWN_TEAM_ERROR="record_missing"
+        spawn::team_fail "no run record for $RUN_ID at $RUN_DIR; --team-file starts a new run"
+    fi
+
+    # ROUND N+1: the record is the roster.
+    if [ -n "$existing" ]; then
+        team_round_load "$RUN_DIR"
+        TEAM_FILE_COPY="$RUN_DIR/team-file.json"
+        # Nothing left to dispatch is not an error, and it is not a round. A
+        # round opened here would sit at `running` with no members assigned,
+        # which is the shape that hangs a driver for ever.
+        # `usage`, not a new error class: `roster_exhausted` already means
+        # something in this surface — it is a derived STOP REASON — and giving
+        # one name two meanings across the record and the envelope is how a
+        # caller ends up branching on the wrong one.
+        [ "${#M_NAMES[@]}" -gt 0 ] || { SPAWN_TEAM_ERROR="usage"
+            spawn::team_fail "every member of $RUN_ID has already been dispatched; advance reports the run's stop reasons"; }
+        do_dispatch_round skip-placement
+        return 0
+    fi
+
     team_file_load "$TEAM_FILE"
 
     [ -n "$RUN_ID" ] || RUN_ID="$(jq -r '.run_id // empty' "$TEAM_FILE" 2>/dev/null)"
@@ -662,8 +802,34 @@ do_dispatch() {
     cat "$TEAM_FILE" > "$TEAM_FILE_COPY" 2>/dev/null || { SPAWN_TEAM_ERROR="record_unwritable"
         spawn::team_fail "the team file could not be copied into $RUN_DIR"; }
 
-    spawn::team_git_exclude "$DRIVER" "$WT_ROOT"
-    team_place_members "$RUN_DIR"
+    do_dispatch_round
+}
+
+# The half both rounds share: place whatever is unplaced, open a round, launch
+# up to the concurrency maximum, and report without waiting. Round 1 arrives
+# here after the record is created and the team file copied; round N+1 arrives
+# with the roster read back out of the record.
+do_dispatch_round() {   # [skip-placement]
+    if [ "${1:-}" != "skip-placement" ]; then
+        spawn::team_git_exclude "$DRIVER" "$WT_ROOT"
+        team_place_members "$RUN_DIR"
+    else
+        # Round N+1: the rows and the checkouts already exist. A member whose
+        # recorded worktree has since gone is treated exactly as an unplaced one
+        # rather than silently launched with an empty --cwd, which bg-agent
+        # reads as the CALLING process's directory.
+        local j=0
+        TEAM_UNPLACED=""
+        while [ "$j" -lt "${#M_NAMES[@]}" ]; do
+            if [ -z "${M_WORKTREES[$j]}" ] || [ ! -d "${M_WORKTREES[$j]}" ]; then
+                M_WORKTREES[$j]=""
+                TEAM_UNPLACED="$TEAM_UNPLACED ${M_NAMES[$j]}"
+                spawn::team_member_set "$RUN_DIR" "${M_NAMES[$j]}" launch_state launch_failed \
+                    || spawn::team_fail "member '${M_NAMES[$j]}' could not be marked launch_failed"
+            fi
+            j=$(( j + 1 ))
+        done
+    fi
 
     local name
     for name in $TEAM_UNPLACED; do
@@ -750,11 +916,19 @@ ADVANCE_LOCK=""
 ADVANCE_HELD=false
 TEAM_PROBES='[]'
 
-advance_parse() {
+# The run-selecting flags, parsed once. Four verbs took exactly this pair and
+# wrote the loop out four times; the copies had already drifted — teardown was
+# missing --run-id entirely, which is why the one command the skill told a
+# driver to run was refused as an unexpected argument.
+#
+# $1 is what the verb calls itself in its own refusal, so a caller who omits
+# both flags is told which verb wanted them.
+team_run_parse() {      # <verb> <args...>
+    local verb="$1"; shift
     while [ $# -gt 0 ]; do
         case "$1" in
-            --run-id) RUN_ID="${2:-}"; shift 2 ;;
-            --run-dir) RUN_DIR="${2:-}"; shift 2 ;;
+            --run-id) RUN_ID="${2:-}"; shift 2 || shift ;;
+            --run-dir) RUN_DIR="${2:-}"; shift 2 || shift ;;
             *)
                 usage
                 SPAWN_TEAM_ERROR="usage"
@@ -762,11 +936,15 @@ advance_parse() {
         esac
     done
     [ -n "$RUN_ID" ] || [ -n "$RUN_DIR" ] || { SPAWN_TEAM_ERROR="usage"
-        spawn::team_fail "advance takes the run id dispatch returned, or --run-dir"; }
+        spawn::team_fail "$verb takes the run id dispatch returned, or --run-dir"; }
     if [ -n "$RUN_ID" ]; then
         spawn::team_name_ok "$RUN_ID" || { SPAWN_TEAM_ERROR="usage"
             spawn::team_fail "the run id is a directory component and failed the grammar: $RUN_ID"; }
     fi
+}
+
+advance_parse() {
+    team_run_parse advance "$@"
 }
 
 # The child's own deadline, and the same default ceilings.sh reads for it. Kept
@@ -1060,13 +1238,7 @@ do_advance() {
 # ---------------------------------------------------------------------------
 do_status() {
     need_jq
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --run-id) RUN_ID="${2:-}"; shift 2 ;;
-            --run-dir) RUN_DIR="${2:-}"; shift 2 ;;
-            *) usage; SPAWN_TEAM_ERROR="usage"; spawn::team_fail "unexpected argument: $1" ;;
-        esac
-    done
+    team_run_parse status "$@"
     team_context
     [ -n "$RUN_DIR" ] || RUN_DIR="$DRIVER/.spawn/teams/$RUN_ID"
 
@@ -1100,13 +1272,14 @@ do_status() {
 
 do_teardown() {
     need_jq
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --run-dir) RUN_DIR="${2:-}"; shift 2 ;;
-            *) usage; SPAWN_TEAM_ERROR="usage"; spawn::team_fail "unexpected argument: $1" ;;
-        esac
-    done
-    [ -n "$RUN_DIR" ] || { SPAWN_TEAM_ERROR="usage"; spawn::team_fail "--run-dir is required"; }
+    # KTD22 — every verb after dispatch takes the run id. teardown took only
+    # --run-dir, so the one command the skill and the command file both told a
+    # driver to run was refused as an unexpected argument.
+    team_run_parse teardown "$@"
+    if [ -z "$RUN_DIR" ]; then
+        team_context
+        RUN_DIR="$DRIVER/.spawn/teams/$RUN_ID"
+    fi
 
     local rec removed obj
     if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
