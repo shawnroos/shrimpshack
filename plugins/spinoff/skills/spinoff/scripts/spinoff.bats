@@ -22,6 +22,11 @@ setup() {
 #!/usr/bin/env bash
 [ -n "${CMUX_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$CMUX_ARGV_LOG"
 case "$1" in
+  rename-tab)
+    # CMUX_STUB_RENAME_FAIL=1 rejects the way a real missing surface does.
+    if [ "${CMUX_STUB_RENAME_FAIL:-0}" = 1 ]; then
+      echo 'Error: surface not found' >&2; exit 1
+    fi ;;
   tree)          printf 'pane pane:1\n'; printf 'surface surface:9 [terminal]\n' ;;
   new-surface)   printf 'created surface:42\n' ;;
   new-workspace) printf 'created workspace:7\n' ;;
@@ -256,6 +261,28 @@ run_resolve() {
   run bash "$SCRIPT" --name feat --label -bad --handoff /dev/null
   [ "$status" -ne 0 ]
   [[ "$output" == *"--label must not start with '-'"* ]]
+}
+
+@test "cmux: a rejected rename warns and does not fail the run (AE5)" {
+  local repo="$BATS_TEST_TMPDIR/crepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  run env PATH="$STUBDIR:$PATH" \
+          CMUX_STUB_RENAME_FAIL=1 \
+          CMUX_WORKSPACE_ID=workspace:99 \
+          HERDR_ENV= \
+      bash "$SCRIPT" --name ctestx --label testlabel --handoff "$handoff" --repo "$repo" --target tab
+  # Naming is cosmetic: the worktree and the briefed session must survive it.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not be named"* ]]
 }
 
 @test "behavior-preservation: cmux --target tab emits the pre-seam CLI call shape" {

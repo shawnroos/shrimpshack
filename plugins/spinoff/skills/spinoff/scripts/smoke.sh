@@ -242,6 +242,9 @@ esac
 grep -qE '"\$HERDR" pane rename ' "$SPINOFF" \
   && ok "herdr pane rename call present" \
   || bad "herdr pane rename call missing from the herdr launch path"
+grep -qE '"\$CMUX" rename-tab .*>/dev/null 2>&1' "$SPINOFF" \
+  && bad "cmux rename-tab still discards its error" \
+  || ok "cmux rename-tab no longer discards its error"
 
 echo "-------------------------------------------"
 echo "passed: $PASS   failed: $FAIL"

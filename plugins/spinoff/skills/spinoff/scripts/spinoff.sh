@@ -419,7 +419,13 @@ launcher_launch_agent_cmux() {
   LB_READY=0
   local err
   local -a WSA=(); [ -n "${LAUNCH_WS:-}" ] && WSA=(--workspace "$LAUNCH_WS")
-  "$CMUX" rename-tab --surface "$LAUNCH_SFC" "${WSA[@]}" --title "$LABEL" >/dev/null 2>&1
+  # Not silenced. This call spent a release discarding its own errors, so a rename
+  # that never landed was indistinguishable from one that did.
+  local rerr
+  if ! rerr="$("$CMUX" rename-tab --surface "$LAUNCH_SFC" "${WSA[@]}" --title "$LABEL" 2>&1)"; then
+    echo "  ⚠ cmux surface could not be named: $rerr" >&2
+    note_unnamed "cmux $LAUNCH_WHERE surface $LAUNCH_SFC"
+  fi
   if ! err="$("$CMUX" send --surface "$LAUNCH_SFC" "${WSA[@]}" "$LAUNCH_CMD" 2>&1)"; then
     KICKOFF_OK=0
     echo "  ⚠ cmux send failed while launching the briefed session: $err" >&2
