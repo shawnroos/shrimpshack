@@ -72,17 +72,37 @@ team_view_probe() {     # <launch_state> <handle> <worktree>
         TV_STATE="unresolvable"; TV_ERR="worktree_missing"; return 0
     fi
     out="$(bash "$JOBS_SH" state --handle "$handle" --cwd "$wt" 2>/dev/null)"
-    TV_STATE="$(printf '%s' "$out" | jq -r '.job.state // empty' 2>/dev/null)"
+    # ONE jq over an answer already in memory, not one per field. This runs on
+    # the prompt-submit path, once per member per run: at the shipped bounds
+    # (12 members x 4 runs) the field-at-a-time shape cost 4.7s of forks alone
+    # against a 5s budget, so the hook could exceed its deadline before probing
+    # anything. Measured on this box; the tab split is what keeps it one fork.
+    # ONE FIELD PER LINE, never @tsv into `read`. Tab is an IFS *whitespace*
+    # character, so a run of tabs collapses to one delimiter and every field
+    # after an empty one shifts left — an absent `error` silently becomes the
+    # state_source. Line-per-field has no such collapse: `read` returns an empty
+    # string for an empty line.
+    local fields
+    fields="$(printf '%s' "$out" | jq -r '(.job.state // ""), (.error // ""),
+        (.job.state_source // "probe"), ((.job.live // false) | tostring),
+        (.job.job_dir // "")' 2>/dev/null)"
+    {
+        read -r TV_STATE
+        read -r TV_ERR
+        read -r TV_SOURCE
+        read -r TV_LIVE
+        read -r TV_JOBDIR
+    } <<EOF
+$fields
+EOF
     if [ -z "$TV_STATE" ]; then
         TV_STATE="unresolvable"
-        TV_ERR="$(printf '%s' "$out" | jq -r '.error // empty' 2>/dev/null)"
         [ -n "$TV_ERR" ] || TV_ERR="handle_unknown"
+        TV_SOURCE=""; TV_LIVE=false; TV_JOBDIR=""
         return 0
     fi
-    TV_SOURCE="$(printf '%s' "$out" | jq -r '.job.state_source // "probe"' 2>/dev/null)"
-    TV_LIVE="$(printf '%s' "$out" | jq -r '(.job.live // false) | tostring' 2>/dev/null)"
+    TV_ERR=""
     case "$TV_LIVE" in true|false) ;; *) TV_LIVE=false ;; esac
-    TV_JOBDIR="$(printf '%s' "$out" | jq -r '.job.job_dir // empty' 2>/dev/null)"
     return 0
 }
 
@@ -136,14 +156,31 @@ team_view_deliverables() {  # <job dir> <contract path> <worktree>
 team_view_row() {       # <index> <member json>
     local idx="$1" m="$2" name ls handle wt contract alias round started
     local deliv elapsed="" last="" epoch term=false ti="null" to="null" usage="unknown"
-    name="$(printf '%s' "$m" | jq -r '.name // ""')"
-    ls="$(printf '%s' "$m" | jq -r '.launch_state // ""')"
-    handle="$(printf '%s' "$m" | jq -r '.handle // ""')"
-    wt="$(printf '%s' "$m" | jq -r '.worktree // ""')"
-    contract="$(printf '%s' "$m" | jq -r '.contract // ""')"
-    alias="$(printf '%s' "$m" | jq -r '.alias // ""')"
-    round="$(printf '%s' "$m" | jq -r 'if .round == null then "" else (.round | tostring) end')"
-    started="$(printf '%s' "$m" | jq -r '.started_at // ""')"
+    # One fork over one in-memory object, one field per line — see the note in
+    # team_view_probe for why this is not @tsv, and why the fork count matters
+    # on a path that runs per member per run on every prompt submit.
+    local mfields
+    mfields="$(printf '%s' "$m" | jq -r '(.name // ""), (.launch_state // ""),
+        (.handle // ""), (.worktree // ""), (.contract // ""), (.alias // ""),
+        (if .round == null then "" else (.round | tostring) end),
+        (.started_at // ""), ((.outcome != null) | tostring),
+        (.tokens.input // "null" | tostring), (.tokens.output // "null" | tostring)')"
+    local has_outcome
+    {
+        read -r name
+        read -r ls
+        read -r handle
+        read -r wt
+        read -r contract
+        read -r alias
+        read -r round
+        read -r started
+        read -r has_outcome
+        read -r ti
+        read -r to
+    } <<EOF
+$mfields
+EOF
 
     team_view_probe "$ls" "$handle" "$wt"
     deliv="$(team_view_deliverables "$TV_JOBDIR" "$contract" "$wt")"
@@ -158,10 +195,8 @@ team_view_row() {       # <index> <member json>
     # usage as unknown, NEVER as a number — the child emits usage only when it
     # finishes, so a count on a live member is a leftover, not a measurement.
     # The record's counts are believed only once the record also says terminal.
-    if [ "$ls" = "launch_failed" ] || printf '%s' "$m" | jq -e '.outcome != null' >/dev/null 2>&1; then
+    if [ "$ls" = "launch_failed" ] || [ "$has_outcome" = "true" ]; then
         term=true
-        ti="$(printf '%s' "$m" | jq -c '.tokens.input // null')"
-        to="$(printf '%s' "$m" | jq -c '.tokens.output // null')"
         [ "$ti" = "null" ] || [ "$to" = "null" ] || usage="measured"
     fi
     [ "$usage" = "measured" ] || { ti="null"; to="null"; }
