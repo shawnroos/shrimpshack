@@ -49,7 +49,7 @@
     {
       "name": "spinoff",
       "description": "Fork the current thread of work into its own place \u2014 takes the topic/plan/idea just discussed and moves it into a fresh git worktree with a new, already-briefed Claude session, so the current session stays focused and the new one picks up the context. Command-invoked only via /start-session, /start-split, /start-workspace, or the /start alias: branches a worktree (current HEAD or develop), writes a handoff doc linking back to the originating session's transcript, carries over the whole docs/ tree plus local config dotfiles (.env, .envrc, .tool-versions, .nvmrc), and launches Claude with the brief already attached as its opening prompt \u2014 in a new tab, in a split beside the pane you're in, or in a brand-new two-pane workspace with the handoff alongside. The mechanical work runs in a background agent so it doesn't consume the originating session's context. The receiving session is told to treat the handoff as directional author-intent \u2014 enough to orient and start, with the code and tests as the source of truth \u2014 both in the brief and via a self-declaring banner on the doc itself. Launches under herdr, cmux or Ghostty, auto-detected; the Ghostty path is AppleScript-driven, so it needs macOS Automation permission and cannot auto-answer Claude's MCP trust prompt.",
-      "version": "0.9.2",
+      "version": "0.10.0",
       "author": {
         "name": "Shawn Roos"
       },
