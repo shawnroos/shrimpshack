@@ -22,6 +22,11 @@ setup() {
 #!/usr/bin/env bash
 [ -n "${CMUX_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$CMUX_ARGV_LOG"
 case "$1" in
+  rename-tab)
+    # CMUX_STUB_RENAME_FAIL=1 rejects the way a real missing surface does.
+    if [ "${CMUX_STUB_RENAME_FAIL:-0}" = 1 ]; then
+      echo 'Error: surface not found' >&2; exit 1
+    fi ;;
   tree)          printf 'pane pane:1\n'; printf 'surface surface:9 [terminal]\n' ;;
   new-surface)   printf 'created surface:42\n' ;;
   new-workspace) printf 'created workspace:7\n' ;;
@@ -78,6 +83,22 @@ case "$1 $2" in
     else
       printf '%s\n' '╭─────────╮' '  ? for shortcuts · shift+tab to cycle'
     fi ;;
+  "pane rename")
+    # Echoes back what it stored, the way the real CLI does, so the caller's
+    # read-back has something to compare against. HERDR_STUB_RENAME_FAIL=1 makes it
+    # reject the way a real pane-not-found does: exit 1 with a JSON error payload.
+    if [ "${HERDR_STUB_RENAME_FAIL:-0}" = 1 ]; then
+      echo '{"error":{"code":"pane_not_found","message":"pane not found"}}'; exit 1
+    fi
+    # Exits 0 while storing something OTHER than what was asked for — the silent
+    # mangle the read-back exists to catch. Without this the read-back branch has
+    # no test that can fail.
+    if [ "${HERDR_STUB_RENAME_MISMATCH:-0}" = 1 ]; then
+      shift 2; printf '{"result":{"pane":{"pane_id":"%s","label":"truncated"}}}\n' "$1"; exit 0
+    fi
+    shift 2   # drop "pane rename"; $1 is the pane id, $2.. the label
+    pane_id="$1"; shift
+    printf '{"result":{"pane":{"pane_id":"%s","label":"%s"}}}\n' "$pane_id" "$*" ;;
   *) : ;;  # pane run / pane close / workspace focus / agent send / pane send-keys → ok
 esac
 exit 0
@@ -248,6 +269,28 @@ run_resolve() {
   [[ "$output" == *"--label must not start with '-'"* ]]
 }
 
+@test "cmux: a rejected rename warns and does not fail the run (AE5)" {
+  local repo="$BATS_TEST_TMPDIR/crepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  run env PATH="$STUBDIR:$PATH" \
+          CMUX_STUB_RENAME_FAIL=1 \
+          CMUX_WORKSPACE_ID=workspace:99 \
+          HERDR_ENV= \
+      bash "$SCRIPT" --name ctestx --label testlabel --handoff "$handoff" --repo "$repo" --target tab
+  # Naming is cosmetic: the worktree and the briefed session must survive it.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not be named"* ]]
+}
+
 @test "behavior-preservation: cmux --target tab emits the pre-seam CLI call shape" {
   # A throwaway git repo to spin off from.
   local repo="$BATS_TEST_TMPDIR/repo"
@@ -312,6 +355,68 @@ run_resolve() {
   # (which splits a pane in the CURRENT tab — the bug this replaces).
   grep -qE "^pane run wS:p2 cd '.*/worktrees/htab' && claude --name 'testlabel' \"\\\$\(cat '.*\.spinoff-brief'\)\"$" "$HERDR_ARGV_LOG"
   ! grep -q "^agent start" "$HERDR_ARGV_LOG"
+}
+
+@test "herdr: names the pane, passing a two-word label as ONE argument (AE6)" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  # The label is a bare variadic positional on this call, so a label that
+  # word-splits would arrive as two argv items and store only the first.
+  grep -qxF "pane rename wS:p2 testlabel" "$HERDR_ARGV_LOG"
+}
+@test "herdr: names the pane BEFORE running claude into it (KTD2)" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  local rename_at run_at
+  rename_at="$(grep -n '^pane rename ' "$HERDR_ARGV_LOG" | head -1 | cut -d: -f1)"
+  run_at="$(grep -n '^pane run ' "$HERDR_ARGV_LOG" | head -1 | cut -d: -f1)"
+  [ -n "$rename_at" ] && [ -n "$run_at" ]
+  # After the launch the pane holds a live shell writing its own title; naming
+  # first is what keeps the label from racing it.
+  [ "$rename_at" -lt "$run_at" ]
+}
+@test "herdr: a rejected rename warns, keeps the session briefed, and reports the surface (AE5)" {
+  export HERDR_STUB_RENAME_FAIL=1
+  run_herdr_tab
+  # A cosmetic failure must not cost the worktree or the briefed session.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not be named"* ]]
+  # the launch still happened (the summary line for the unnamed surface is U5's)
+  grep -q '^pane run ' "$HERDR_ARGV_LOG"
+}
+
+@test "summary: names a surface that went unnamed, inside the relayed block (R12)" {
+  export HERDR_STUB_RENAME_FAIL=1
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  # R12: the summary reports what went unnamed, so the run never implies a name it
+  # did not set. It has to land in the summary block the skill relays verbatim.
+  [[ "$output" == *"went unnamed:"* ]]
+  [[ "$output" == *"herdr tab pane wS:p2"* ]]
+}
+@test "summary: says nothing about naming when every surface took its name" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"went unnamed:"* ]]
+}
+
+@test "herdr workspace: the handoff viewer pane is named Handoff, not the work label (R14)" {
+  run_herdr_workspace
+  [ "$status" -eq 0 ]
+  # The viewer holds the brief, not the work. Two identically-named splits beside
+  # each other is the thing this convention exists to stop.
+  grep -qxF "pane rename wS:pB Handoff" "$HERDR_ARGV_LOG"
+  grep -qxF "pane rename wS:p2 testlabel" "$HERDR_ARGV_LOG"
+}
+
+@test "herdr: a rename that stores a DIFFERENT label is caught by the read-back (R12)" {
+  export HERDR_STUB_RENAME_MISMATCH=1
+  run_herdr_tab
+  # Exit 0 from the backend is not evidence the name landed — that is the whole
+  # premise of this change. The read-back must notice and report the surface.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reports the name"* ]]
+  [[ "$output" == *"went unnamed:"* ]]
 }
 
 @test "herdr tab: places the tab in the LIVE workspace, not a stale HERDR_WORKSPACE_ID" {
