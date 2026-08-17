@@ -1341,16 +1341,28 @@ CUR_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 BRANCH="$PREFIX/$NAME"
 WORKTREE="$MAIN_ROOT/worktrees/$NAME"
 
-# Display name for the cmux tab/workspace: a short label that captures BOTH the
-# workspace (repo) this was forked from AND the work it's for, so a glance at the
-# tab tells you where it came from and what it's for. The skill passes a curated
-# short --label; absent that, default to <repo>/<name>.
-[ -n "$LABEL" ] || LABEL="$(basename "$MAIN_ROOT")/$NAME"
+# Display name for every surface this run opens. The convention is `Ticket: Title`;
+# the skill resolves the ticket and passes the whole thing as --label. Absent that,
+# the default is the de-kebabed name with NO repo token: the pre-colon slot is
+# reserved for a real ticket, so a label without one is the signal that the work is
+# untracked. The raw-$NAME fallback is load-bearing — a label that resolved to
+# empty would pin a blank tab, which reads worse than any default.
+if [ -z "$LABEL" ]; then
+  _lbl="${NAME//-/ }"
+  _lbl="${_lbl#"${_lbl%%[![:space:]]*}"}"
+  _lbl="${_lbl%"${_lbl##*[![:space:]]}"}"
+  if [ -n "$_lbl" ]; then
+    LABEL="$(printf '%s' "${_lbl:0:1}" | tr '[:lower:]' '[:upper:]')${_lbl:1}"
+  else
+    LABEL="$NAME"
+  fi
+  unset _lbl
+fi
 
 step "repo:        $MAIN_ROOT"
 step "new branch:  $BRANCH"
 step "worktree:    $WORKTREE"
-step "label:       $LABEL"
+step "label:       $LABEL"   # requested, not yet applied — surfaces are named at launch
 
 [ -e "$WORKTREE" ] && die "worktree path already exists: $WORKTREE"
 if git -C "$MAIN_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -1566,6 +1578,11 @@ LEFT_PANE=""; WS=""  # cmux discovery scratch (set by the cmux verbs)
 HERDR_PANE=""        # herdr agent pane id (set by launcher_launch_agent_herdr)
 # Backend-neutral refs the launch verbs hand off to each other:
 LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""; LAUNCH_RUN_PANE=""; HERDR_WS_SOURCE=""
+# One human-readable surface descriptor per line, appended by every backend that
+# fails to name a surface and read by the summary. Declared here, once, because
+# three producers write it — without a single declared shape they invent three.
+UNNAMED_SURFACES=""
+note_unnamed() { UNNAMED_SURFACES="${UNNAMED_SURFACES}${UNNAMED_SURFACES:+$'\n'}  - $1"; }
 # Short pointer, not the full directional prose. The "treat the handoff as
 # directional" framing already lives authoritatively in every generated handoff
 # (the banner injected above + the handoff body), so the brief only points at it.

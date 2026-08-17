@@ -61,18 +61,37 @@ run --name feat-compat --handoff "$HANDOFF" >/dev/null 2>&1
   && ok "old-only flags still create worktree + handoff" \
   || bad "back-compat worktree/handoff missing"
 
-# 5. Label default → "<repo-basename>/<name>" when --label omitted.
-repo_base="$(basename "$WORK")"
-out="$(run --name feat-deflabel --handoff "$HANDOFF")"
-echo "$out" | grep -qE "label: +$repo_base/feat-deflabel" \
-  && ok "label defaults to <repo>/<name>" \
+# 5. Label default → de-kebabed <name> when --label omitted. The repo token is
+#    deliberately absent: the pre-colon slot is reserved for a real ticket, so a
+#    label with no "Ticket: " prefix is the signal that the work is untracked.
+out="$(run --name tab-naming-convention --handoff "$HANDOFF")"
+echo "$out" | grep -qE 'label: +Tab naming convention *$' \
+  && ok "label defaults to de-kebabed <name>" \
   || bad "default label wrong: $(echo "$out" | grep -i 'label:' || echo '<none>')"
+repo_base="$(basename "$WORK")"
+echo "$out" | grep -qE "label: +.*$repo_base" \
+  && bad "default label still carries the repo token" \
+  || ok "default label carries no repo token"
 
-# 6. Explicit --label is used verbatim.
+# 5b. A $NAME that de-kebabs to nothing falls back to the raw $NAME, so the label
+#     is never empty and no backend is called with an empty title.
+out="$(run --name '---' --handoff "$HANDOFF" 2>&1 || true)"
+echo "$out" | grep -qE 'label: +---' \
+  && ok "underivable title falls back to the raw name" \
+  || bad "empty-title fallback wrong: $(echo "$out" | grep -i 'label:' || echo '<none>')"
+echo "$out" | grep -qE 'label: +$' \
+  && bad "label printed empty" \
+  || ok "label is never printed empty"
+
+# 6. Explicit --label is used verbatim, including a ticketed one with a colon.
 out="$(run --name feat-label --handoff "$HANDOFF" --label 'smoke·work')"
 echo "$out" | grep -qE 'label: +smoke·work' \
   && ok "explicit --label used verbatim" \
   || bad "explicit label wrong: $(echo "$out" | grep -i 'label:' || echo '<none>')"
+out="$(run --name feat-ticket --handoff "$HANDOFF" --label 'WEB-2757: Remove Logo')"
+echo "$out" | grep -qE 'label: +WEB-2757: Remove Logo *$' \
+  && ok "ticketed label survives colon and spaces" \
+  || bad "ticketed label wrong: $(echo "$out" | grep -i 'label:' || echo '<none>')"
 
 # 7. --repo roots the worktree in the named repo from a NON-repo cwd.
 OUTSIDE="$(mktemp -d)"            # not a git repo
