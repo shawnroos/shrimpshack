@@ -362,6 +362,7 @@ do_describe() {
         {name:"run_id",             always:false, note:"names the run; every verb after dispatch takes it"},
         {name:"run_dir",            always:false, note:"where the one run record lives"},
         {name:"members",            always:false, note:"one row per member, by name, in roster order"},
+        {name:"members[].round",    always:false, note:"the round this member was dispatched in, or null while it is still pending. dispatch lists EVERY member, not only the ones it just started, so this is what tells a caller which of them the current answer is about"},
         {name:"members[].usage",    always:false, values:["measured","unknown"],
                                     note:"whether this member’s token counts were read from the CLI’s own result envelope. `unknown` is not zero: a running member has spent tokens nobody has counted, and treating it as zero is how a ceiling fails to fire"},
         {name:"removed",            always:false, note:"teardown only: the worktrees removed, by member name"},

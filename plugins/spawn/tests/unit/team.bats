@@ -468,6 +468,12 @@ jq_free_path() {
     [ "$(rec '.rounds[0].ordinal')" = "1" ]
     [ "$(rec '.members[] | select(.name == "scout") | .round')" = "2" ]
     [ "$(rec '.members[] | select(.name == "lead") | .round')" = "1" ]
+    # The RESPONSE must carry it too, not only the record. dispatch lists EVERY
+    # member, so without a per-member round a caller reading the response cannot
+    # tell which of them this answer is about — it sees three names and one
+    # top-level round number.
+    [ "$(out '.members[] | select(.name == "scout") | .round')" = "2" ]
+    [ "$(out '.members[] | select(.name == "lead") | .round')" = "1" ]
     # lead was NOT re-placed: its handle is the one round 1 gave it.
     [ -n "$(rec '.members[] | select(.name == "lead") | .handle')" ]
 }

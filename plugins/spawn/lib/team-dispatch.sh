@@ -531,7 +531,7 @@ do_dispatch_round() {
           dispatched: ([ .members[] | select(.launch_state == "dispatched") ] | length),
           pending: ([ .members[] | select(.launch_state == "pending") ] | length),
           members: [ .members[] | {name, alias, worktree, launch_state, handle,
-                                   skills, error: ($le[.name] // null)} ]}')" \
+                                   round, skills, error: ($le[.name] // null)} ]}')" \
         || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the round could not be encoded"; }
     emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the round encoded to nothing"; }
     exit "$code"
