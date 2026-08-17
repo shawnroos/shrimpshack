@@ -239,15 +239,18 @@ esac
 # 17. Naming calls are present on every backend that supports them. (Static —
 #     a real launcher run is out of scope for the dependency-free smoke; the
 #     behavioural assertions for these live in spinoff.bats.)
-grep -qE '"\$HERDR" pane rename ' "$SPINOFF" \
-  && ok "herdr pane rename call present" \
+grep -qE '"\$HERDR" pane rename "\$pane"' "$SPINOFF" \
+  && ok "herdr pane rename call present in the launch path" \
   || bad "herdr pane rename call missing from the herdr launch path"
-grep -qE '"\$CMUX" rename-tab .*>/dev/null 2>&1' "$SPINOFF" \
+grep -qE '"\$CMUX" rename-tab .*(>/dev/null|2>/dev/null|2>&1 >)' "$SPINOFF" \
   && bad "cmux rename-tab still discards its error" \
   || ok "cmux rename-tab no longer discards its error"
-grep -q 'set_tab_title' "$SPINOFF" \
-  && ok "ghostty set_tab_title arm present" \
-  || bad "ghostty set_tab_title arm missing from the staged script"
+grep -qE 'verb is "set-title"' "$SPINOFF" \
+  && ok "ghostty set-title verb arm present" \
+  || bad "ghostty set-title verb arm missing from the staged script"
+grep -qE 'perform action \("set_tab_title:' "$SPINOFF" \
+  && ok "ghostty tab-scope action present" \
+  || bad "ghostty tab-scope perform action missing"
 grep -q 'Contents/MacOS/ghostty' "$SPINOFF" \
   && ok "ghostty capability probe uses the resolved bundle" \
   || bad "ghostty probe does not go through the resolved bundle"

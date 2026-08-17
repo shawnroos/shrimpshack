@@ -90,6 +90,12 @@ case "$1 $2" in
     if [ "${HERDR_STUB_RENAME_FAIL:-0}" = 1 ]; then
       echo '{"error":{"code":"pane_not_found","message":"pane not found"}}'; exit 1
     fi
+    # Exits 0 while storing something OTHER than what was asked for — the silent
+    # mangle the read-back exists to catch. Without this the read-back branch has
+    # no test that can fail.
+    if [ "${HERDR_STUB_RENAME_MISMATCH:-0}" = 1 ]; then
+      shift 2; printf '{"result":{"pane":{"pane_id":"%s","label":"truncated"}}}\n' "$1"; exit 0
+    fi
     shift 2   # drop "pane rename"; $1 is the pane id, $2.. the label
     pane_id="$1"; shift
     printf '{"result":{"pane":{"pane_id":"%s","label":"%s"}}}\n' "$pane_id" "$*" ;;
@@ -401,6 +407,16 @@ run_resolve() {
   # each other is the thing this convention exists to stop.
   grep -qxF "pane rename wS:pB Handoff" "$HERDR_ARGV_LOG"
   grep -qxF "pane rename wS:p2 testlabel" "$HERDR_ARGV_LOG"
+}
+
+@test "herdr: a rename that stores a DIFFERENT label is caught by the read-back (R12)" {
+  export HERDR_STUB_RENAME_MISMATCH=1
+  run_herdr_tab
+  # Exit 0 from the backend is not evidence the name landed — that is the whole
+  # premise of this change. The read-back must notice and report the surface.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reports the name"* ]]
+  [[ "$output" == *"went unnamed:"* ]]
 }
 
 @test "herdr tab: places the tab in the LIVE workspace, not a stale HERDR_WORKSPACE_ID" {

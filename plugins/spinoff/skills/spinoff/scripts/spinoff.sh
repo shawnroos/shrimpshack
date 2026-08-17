@@ -493,6 +493,13 @@ launcher_open_viewer_cmux() {
   if [ -n "$RIGHT_PANE" ]; then
     if "$CMUX" open "$HANDOFF_DST" --pane "$RIGHT_PANE" --workspace "$LAUNCH_WS" --no-focus >/dev/null 2>&1; then
       VIEWER_OK=1
+      # R14 applies to every backend. Whether rename-tab accepts a PANE ref (this
+      # is `new-pane`, not `new-surface`) is unverified, so attempt it and report
+      # the surface honestly when it does not take, rather than assume either way.
+      local verr
+      if ! verr="$("$CMUX" rename-tab --surface "$RIGHT_PANE" --workspace "$LAUNCH_WS" --title "$VIEWER_LABEL" 2>&1)"; then
+        note_unnamed "cmux handoff viewer pane $RIGHT_PANE"
+      fi
       step "  handoff viewer: $RIGHT_PANE"
     else
       echo "  ⚠ opened right pane but could not render the handoff viewer" >&2
@@ -731,12 +738,13 @@ launcher_launch_agent_herdr() {
   # object from the tab's and the workspace's, and it is unnamed on all three today.
   # The label is a bare variadic positional here, so it must stay ONE quoted word;
   # an end-of-options `--` is NOT consumed and would land in the label.
-  local rerr rlabel
-  if ! rerr="$("$HERDR" pane rename "$pane" "$LABEL" 2>&1)"; then
-    echo "  ⚠ herdr pane could not be named: $rerr" >&2
+  local rout rlabel
+  if ! rout="$("$HERDR" pane rename "$pane" "$LABEL" 2>&1)"; then
+    echo "  ⚠ herdr pane could not be named: $rout" >&2
     note_unnamed "herdr $LAUNCH_WHERE pane $pane"
   else
-    rlabel="$(printf '%s' "$rerr" | _herdr_json 'result.pane.label')"
+    # Same variable carries the success body — the reply echoes what it stored.
+    rlabel="$(printf '%s' "$rout" | _herdr_json 'result.pane.label')"
     if [ "$rlabel" != "$LABEL" ]; then
       echo "  ⚠ herdr pane $pane reports the name '$rlabel', not '$LABEL'" >&2
       note_unnamed "herdr $LAUNCH_WHERE pane $pane"
@@ -1187,31 +1195,50 @@ launcher_launch_agent_ghostty() {
 # is the expected path, not the exception, which is why this polls rather than
 # retrying once immediately.
 _ghostty_name_surface() {
-  local scope=tab observed i=0
+  local scope=tab
   [ "$LAUNCH_WHERE" = split ] && scope=surface
   if ! _ghostty_probe_titles; then
     note_unnamed "ghostty $LAUNCH_WHERE terminal $GHOSTTY_TERM (no set_tab_title action on this Ghostty)"
     return
   fi
-  local out
+  _ghostty_set_title "$GHOSTTY_TERM" "$scope" "$LABEL" && return
+  case "$_GST_STATE" in
+    dead)
+      KICKOFF_OK=0
+      # Clear the handle too: launcher_wait_ready_ghostty guards on it being
+      # non-empty, and a dead-but-set handle makes it poll for a pid that can
+      # never come until the 180s ceiling — three silent minutes confirming a
+      # death the run has already diagnosed.
+      GHOSTTY_TERM=""
+      echo "  ⚠ the ghostty terminal that was just launched no longer exists — the session did not survive" >&2
+      return ;;
+  esac
+  echo "  ⚠ ghostty $LAUNCH_WHERE could not be named (reports '${_GST_OBSERVED:-}')" >&2
+  note_unnamed "ghostty $LAUNCH_WHERE terminal $GHOSTTY_TERM"
+}
+
+# Sets a title and returns 0 only when the backend reports the title actually landed.
+# Sets $_GST_STATE to `dead` when the handle no longer resolves, so a caller that
+# cares about liveness can tell that apart from a title that would not stick.
+# Retries because `perform action` returns true when it did nothing: measured on a
+# terminal created ~1s earlier, where the title stayed at the shell's own. A first
+# miss is the expected path, not the exception.
+_ghostty_set_title() {
+  local term="$1" scope="$2" want="$3" out i=0
+  _GST_STATE=ok; _GST_OBSERVED=""
   while [ "$i" -lt 3 ]; do
-    out="$(_ghostty_run set-title "$GHOSTTY_TERM" "$scope" "$LABEL")"
-    # A handle that no longer resolves is not a naming failure: the terminal that
-    # set KICKOFF_OK=1 a moment ago is gone, so the session died between launch and
-    # rename. Checked on the FIRST reply — retrying a dead handle only delays the
-    # report, and the run must stop claiming the session is briefed.
+    out="$(_ghostty_run set-title "$term" "$scope" "$want")"
+    # A dead handle is reported on the FIRST reply, not after the retries: retrying
+    # something already gone only delays the report.
     case "$out" in
-      *error=surface-not-found*)
-        KICKOFF_OK=0
-        echo "  ⚠ the ghostty terminal that was just launched no longer exists — the session did not survive" >&2
-        return ;;
+      *error=surface-not-found*) _GST_STATE=dead; return 1 ;;
     esac
-    observed="$(_ghostty_field "$out" name)"
-    [ "$observed" = "$LABEL" ] && return
+    _GST_OBSERVED="$(_ghostty_field "$out" name)"
+    [ "$_GST_OBSERVED" = "$want" ] && return 0
     i=$((i+1)); sleep 1
   done
-  echo "  ⚠ ghostty $LAUNCH_WHERE could not be named (reports '${observed:-}')" >&2
-  note_unnamed "ghostty $LAUNCH_WHERE terminal $GHOSTTY_TERM"
+  _GST_STATE=mismatch
+  return 1
 }
 
 # Probed through the resolved bundle, never a bare `ghostty` on PATH: this script
@@ -1277,7 +1304,9 @@ launcher_open_viewer_ghostty() {
   if [ -n "$view" ]; then
     VIEWER_OK=1
     # Fixed name, same reason as the herdr viewer. Its own surface, so surface scope.
-    _ghostty_field "$(_ghostty_run set-title "$view" surface "$VIEWER_LABEL")" name >/dev/null \
+    # Goes through the shared setter: a bare `_ghostty_field … || note_unnamed` could
+    # never fire, because _ghostty_field ends in `head` and always exits 0.
+    _ghostty_set_title "$view" surface "$VIEWER_LABEL" \
       || note_unnamed "ghostty handoff viewer terminal $view"
     # Leave the user in the agent, not in the pager — the equivalent of the other
     # backends' --no-focus on the viewer split. Separate Apple event, for the reason
@@ -1349,7 +1378,9 @@ FORCED_LAUNCHER="$LAUNCHER"
 # on herdr 0.8.0 a leading '-' is in fact accepted there as a positional, so this
 # guard is belt-and-braces against a future backend that parses it as a flag, not a
 # live hazard. Kept because the label now reaches more positional call sites, not
-# fewer. (The derived default can't start with '-', so this only guards user input.)
+# fewer. NOTE: this runs before the default is derived, so it guards user input only —
+# `--name '---'` de-kebabs to nothing and falls back to a raw '---' label that never
+# passes through here.
 case "$LABEL" in -*) die "--label must not start with '-' (got: $LABEL)" ;; esac
 [ -n "$HANDOFF_SRC" ] || die "missing --handoff <path-to-handoff.md>"
 [ -f "$HANDOFF_SRC" ] || die "handoff file not found: $HANDOFF_SRC"
