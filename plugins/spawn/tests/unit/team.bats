@@ -398,6 +398,41 @@ jq_free_path() {
     [ "$(rec '.members | length')" = "3" ]
 }
 
+@test "dispatch reports worktree_failed when nothing reached a launcher, not launch_failed" {
+    # Both causes exit 5, so the ERROR VALUE is the only thing telling a caller
+    # which recovery to attempt. Reporting launch_failed here hands them "its
+    # launcher refused it" for a member whose checkout was never created — a
+    # launcher that was never invoked cannot have refused anything.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" single-round 2 "solo:alpha:$WORK/c.json"
+    # The destination for the one member is occupied by a plain file.
+    mkdir -p "$ROOT/rwt"
+    printf 'in the way\n' > "$ROOT/rwt/solo"
+
+    dispatch --team-file "$WORK/team.json" --run-id rwt --run-dir "$WORK/rwt"
+    [ "$status" -eq 5 ]
+    assert_one_object "$output"
+    [ "$(out '.error')" = "worktree_failed" ]
+    # Both directions: the wrong sentence is absent AND the right one is
+    # present, because absence alone passes on an empty remedy.
+    refute_file_match "its launcher refused it" <(out '.remedy')
+    out '.remedy' | grep -qF 'has no checkout'
+}
+
+@test "control: dispatch still reports launch_failed when a launcher really did refuse" {
+    # Placement SUCCEEDS here, so the failure comes from the launcher. Without
+    # this arm the test above passes on a surface that always says
+    # worktree_failed regardless of cause.
+    dispatch_env "alpha"
+    team_file "$WORK/team.json" single-round 2 "solo:alpha:$WORK/absent-contract.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id rlf --run-dir "$WORK/rlf"
+    [ "$status" -eq 5 ]
+    [ "$(out '.error')" = "launch_failed" ]
+    [ "$(out '.members[] | select(.name == "solo") | .error')" != "worktree_failed" ]
+}
+
 @test "worktree_failed carries its own non-empty remedy, distinct from usage's" {
     mkdir -p "$ROOT/r1"
     printf 'in the way\n' > "$ROOT/r1/lead"

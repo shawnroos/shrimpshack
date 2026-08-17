@@ -698,8 +698,17 @@ do_dispatch() {
     rec="$(spawn::team_record_read "$RUN_DIR")" || spawn::team_fail "the run record could not be read back"
     bad="$(printf '%s' "$TEAM_LAUNCH_ERRS" | jq -r 'keys | join(" ")')"
     if [ -n "$bad" ]; then
-        err='"launch_failed"'; code="$EX_UPSTREAM"
-        rem="$(remedy_for launch_failed)"
+        code="$EX_UPSTREAM"
+        # A member with no checkout never reached a launcher, so reporting
+        # launch_failed hands the caller launch_failed's remedy — "its launcher
+        # refused it" — when the real fix is to free the path or tear the run
+        # down. The two causes share exit 5 and are told apart only here; the
+        # per-member error already carries the truth either way.
+        if printf '%s' "$TEAM_LAUNCH_ERRS" | jq -e '[.[]] | all(. == "worktree_failed")' >/dev/null 2>&1; then
+            err='"worktree_failed"'; rem="$(remedy_for worktree_failed)"
+        else
+            err='"launch_failed"'; rem="$(remedy_for launch_failed)"
+        fi
     fi
     obj="$(printf '%s' "$rec" | jq -c --arg id "$RUN_ID" --arg d "$RUN_DIR" \
         --arg tf "$TEAM_FILE_COPY" --arg f "$bad" --arg r "$rem" \
