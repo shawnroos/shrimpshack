@@ -394,6 +394,15 @@ run_resolve() {
   [[ "$output" != *"went unnamed:"* ]]
 }
 
+@test "herdr workspace: the handoff viewer pane is named Handoff, not the work label (R14)" {
+  run_herdr_workspace
+  [ "$status" -eq 0 ]
+  # The viewer holds the brief, not the work. Two identically-named splits beside
+  # each other is the thing this convention exists to stop.
+  grep -qxF "pane rename wS:pB Handoff" "$HERDR_ARGV_LOG"
+  grep -qxF "pane rename wS:p2 testlabel" "$HERDR_ARGV_LOG"
+}
+
 @test "herdr tab: places the tab in the LIVE workspace, not a stale HERDR_WORKSPACE_ID" {
   # the env var says wS, but the live pane reports wLIVE — the tab must follow the
   # LIVE workspace (the "spinoff spawned from space A lands in space B" fix).

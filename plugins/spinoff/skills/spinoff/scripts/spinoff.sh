@@ -857,6 +857,10 @@ launcher_open_viewer_herdr() {
     "$HERDR" pane run "$view" "bat --paging=always '$HANDOFF_DST'" >/dev/null 2>&1 && VIEWER_OK=1
   fi
   if [ "$VIEWER_OK" = "1" ]; then
+    # A fixed name, not the work label: the viewer holds the brief, not the work, and
+    # two identically-named splits side by side is the problem this convention fixes.
+    "$HERDR" pane rename "$view" "$VIEWER_LABEL" >/dev/null 2>&1 \
+      || note_unnamed "herdr handoff viewer pane $view"
     step "  handoff viewer: $view"
   else
     echo "  ⚠ opened a right pane but no markdown pager (glow/bat) is available — skipping the handoff render" >&2
@@ -1268,6 +1272,9 @@ launcher_open_viewer_ghostty() {
   view="$(_ghostty_field "$out" terminal)"
   if [ -n "$view" ]; then
     VIEWER_OK=1
+    # Fixed name, same reason as the herdr viewer. Its own surface, so surface scope.
+    _ghostty_field "$(_ghostty_run set-title "$view" surface "$VIEWER_LABEL")" name >/dev/null \
+      || note_unnamed "ghostty handoff viewer terminal $view"
     # Leave the user in the agent, not in the pager — the equivalent of the other
     # backends' --no-focus on the viewer split. Separate Apple event, for the reason
     # given in the split verb. Best-effort.
@@ -1682,6 +1689,7 @@ LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""; LAUNCH_RUN_PANE="
 # fails to name a surface and read by the summary. Declared here, once, because
 # three producers write it — without a single declared shape they invent three.
 UNNAMED_SURFACES=""
+VIEWER_LABEL="Handoff"
 note_unnamed() { UNNAMED_SURFACES="${UNNAMED_SURFACES}${UNNAMED_SURFACES:+$'\n'}  - $1"; }
 # Short pointer, not the full directional prose. The "treat the handoff as
 # directional" framing already lives authoritatively in every generated handoff
