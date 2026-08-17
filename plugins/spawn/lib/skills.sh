@@ -160,13 +160,18 @@ spawn::skill_selfcontained() {
 #
 # Returns non-zero when a link it meant to drop is still there — that link is the
 # thing the ceiling refuses, so a caller must be able to see it.
-spawn::skill_prune_escaping_links() {
-    local dir="$1" name="$2" report kind rel rc=0
-    report="$(python3 - "$dir" <<'PY'
+# The program is bound to a variable by a heredoc at TOP LEVEL and passed with
+# `-c`, never fed by a heredoc inside `$( )`. bash 3.2's parser does not find a
+# heredoc delimiter nested in a command substitution: it scans past it to EOF and
+# the whole file becomes a syntax error, so every function BELOW this point stops
+# existing. It parses on bash 5, which is how it reaches a suite green — and on a
+# stock macOS `#!/usr/bin/env bash` is 3.2, where skill provisioning would then be
+# silently absent rather than failing.
+SPAWN_SKILL_PRUNE_PY='
 import os, sys
 
 # The invariant, stated once: a link is kept only when the path it RESOLVES to
-# is the root or lives under it. Resolving the target's parent instead would
+# is the root or lives under it. Resolving the target'"'"'s parent instead would
 # read a chain whose next hop leaves as safe.
 root = os.path.realpath(sys.argv[1])
 for base, dirs, files in os.walk(root, followlinks=False):
@@ -184,8 +189,11 @@ for base, dirs, files in os.walk(root, followlinks=False):
             print("failed\t" + rel)
         else:
             print("pruned\t" + rel)
-PY
-    )" || {
+'
+
+spawn::skill_prune_escaping_links() {
+    local dir="$1" name="$2" report kind rel rc=0
+    report="$(python3 -c "$SPAWN_SKILL_PRUNE_PY" "$dir")" || {
         printf 'skill_prune_unreadable\t%s\n' "$(spawn::sanitize_for_display "$name")" >&2
         return 1
     }
