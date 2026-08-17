@@ -313,13 +313,35 @@ Pick `--name` from the workstream's topic (kebab-case, e.g. `crop-snapping`,
 suffix. Pick `--target` from the command: `tab` for `/start-session` (or
 `/start`), `split` for `/start-split`, `workspace` for `/start-workspace`.
 
-Also pass `--label` — the **short display name** for the new tab/split/workspace.
-It should capture both the **workspace** (where this forked from) and the **work**,
-at a glance, e.g. `slate·crop-snap` or `auto·recipes`. Keep it short (~24 chars):
-a short workspace token (usually the repo, abbreviated if long) + a `·`/`/`/`:`
-separator + a tight form of the work. If you omit `--label`, the script defaults
-to `<repo-basename>/<name>`, which is correct but often longer than ideal — prefer
-passing a curated short one.
+Also pass `--label` — the display name for **every** surface the run opens: the
+tab, the split, the workspace, and the Claude session itself. The convention is:
+
+```
+Ticket: Title          WEB-2757: Remove Logo
+Title                  Remove Logo            ← no ticket
+```
+
+**Resolve the ticket here, before dispatch.** The script has no Linear access and
+never looks one up; it applies whatever label you hand it. Take the ticket from
+the work you are already discussing. If you do not have one and the work warrants
+tracking, you may look it up in Linear, or create one — **but ask first before
+creating a ticket.** Never block the spinoff on it: if Linear is slow, errors, or
+returns nothing, drop the ticket and pass the bare title. A missing ticket is not
+a failure, it is information — a label with no `Ticket: ` prefix is how an
+untracked piece of work announces itself at a glance.
+
+Do not put a repo token in the label. The pre-colon slot belongs to a real ticket,
+and the working directory already carries the repo. If you omit `--label` the
+script derives one from `--name` (`tab-naming-convention` → `Tab naming
+convention`), which is the right answer whenever there is no ticket — so omitting
+it is fine, and passing `--label` is for when you have a ticket or a better title.
+
+Length: keep the title tight, but do not truncate to hit a number. Tab chrome
+elides what it cannot fit, and a name that survives elision beats one that was
+already cut short.
+
+The handoff viewer pane is named `Handoff` by the script — do not pass a label for
+it, and do not try to name it yourself.
 
 **For `--target split`, you MUST also pass `--from-surface <id>` — resolved here, in
 the main session.** The script splits off *that* surface, and it can't read it from
@@ -401,7 +423,7 @@ HERDR_BIN="<absolute path from `command -v herdr` here>" \
 CMUX_BIN="<absolute path from `command -v cmux` here>" \
 bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   --name "<kebab-feature-name>" \
-  --label "<short workspace·work label>" \
+  --label "<Ticket: Title, or just Title when there is no ticket>" \
   --handoff /tmp/spinoff-handoff.md \
   --target <tab|workspace|split> \
   --session-transcript "<resolved transcript path>" \
