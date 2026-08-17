@@ -45,8 +45,20 @@
 #   repo-bounded, write .claude file  -> DENIED
 #   repo-bounded, write via symlink resolving outside the tree -> DENIED
 #
-# LIVE/U7 HAS NOT BEEN RUN IN ITS CURRENT FORM, and its ancestor's green does
-# not carry over. Saying why is the point. The ancestor WAS run:
+# LIVE/U7 WAS RUN IN ITS CURRENT FORM, on 2026-08-17, through the gateway on
+# alias glm:
+#
+#   control (Bash removed from deny AND granted in allow) -> digest PRODUCED
+#   shipped repo-bounded ceiling                          -> no digest anywhere
+#
+# The nonce is what makes that a result. The child was given a random 64-hex
+# value and asked for its SHA-256; the answer appears in no path, prompt,
+# contract, environment or file it can read, so producing it requires executing
+# something. It did not produce it under the shipped ceiling and did produce it
+# one deny entry lighter.
+#
+# ITS ANCESTOR'S GREEN NEVER CARRIED OVER, and saying why is still the point.
+# The ancestor WAS run:
 #
 #   control (allow Bash)              -> sentinel file CREATED
 #   repo-bounded ceiling              -> no file; Bash refused, exit 0, is_error false
@@ -63,8 +75,11 @@
 #
 # U7 therefore replaced the sentinel with a caller-supplied nonce whose digest
 # the child cannot derive, and replaced the allow:["Bash"] control with the
-# shipped ceiling minus its one `Bash` deny entry, so the arms differ by exactly
-# that entry. The arm is written to be run and has not been run.
+# shipped ceiling minus its one `Bash` deny entry PLUS that tool granted in
+# allow — because the first version of the control stripped the deny entry only,
+# which leaves the tool NOT-ALLOWED and still refused. That control could not
+# have passed for any model, and its first real run is what proved it, along
+# with the ceiling file's own claim that the allow list does not gate.
 #
 # Failure classes are asserted on EXIT CODES, not messages (Verification
 # Contract): a caller branches on the number, so the number is what is pinned.
