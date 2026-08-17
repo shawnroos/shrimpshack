@@ -1193,19 +1193,23 @@ _ghostty_name_surface() {
     note_unnamed "ghostty $LAUNCH_WHERE terminal $GHOSTTY_TERM (no set_tab_title action on this Ghostty)"
     return
   fi
+  local out
   while [ "$i" -lt 3 ]; do
-    observed="$(_ghostty_field "$(_ghostty_run set-title "$GHOSTTY_TERM" "$scope" "$LABEL")" name)"
+    out="$(_ghostty_run set-title "$GHOSTTY_TERM" "$scope" "$LABEL")"
+    # A handle that no longer resolves is not a naming failure: the terminal that
+    # set KICKOFF_OK=1 a moment ago is gone, so the session died between launch and
+    # rename. Checked on the FIRST reply — retrying a dead handle only delays the
+    # report, and the run must stop claiming the session is briefed.
+    case "$out" in
+      *error=surface-not-found*)
+        KICKOFF_OK=0
+        echo "  ⚠ the ghostty terminal that was just launched no longer exists — the session did not survive" >&2
+        return ;;
+    esac
+    observed="$(_ghostty_field "$out" name)"
     [ "$observed" = "$LABEL" ] && return
     i=$((i+1)); sleep 1
   done
-  # A handle that no longer resolves is not a naming failure: the terminal that set
-  # KICKOFF_OK=1 a moment ago is gone, so the session died between launch and rename.
-  case "$(_ghostty_run set-title "$GHOSTTY_TERM" "$scope" "$LABEL")" in
-    *error=surface-not-found*)
-      KICKOFF_OK=0
-      echo "  ⚠ the ghostty terminal that was just launched no longer exists — the session did not survive" >&2
-      return ;;
-  esac
   echo "  ⚠ ghostty $LAUNCH_WHERE could not be named (reports '${observed:-}')" >&2
   note_unnamed "ghostty $LAUNCH_WHERE terminal $GHOSTTY_TERM"
 }
