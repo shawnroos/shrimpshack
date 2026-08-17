@@ -236,6 +236,13 @@ case "$kickoff_line" in
   *) bad "KICKOFF no longer starts with the resubmit-guard substring" ;;
 esac
 
+# 17. Naming calls are present on every backend that supports them. (Static —
+#     a real launcher run is out of scope for the dependency-free smoke; the
+#     behavioural assertions for these live in spinoff.bats.)
+grep -qE '"\$HERDR" pane rename ' "$SPINOFF" \
+  && ok "herdr pane rename call present" \
+  || bad "herdr pane rename call missing from the herdr launch path"
+
 echo "-------------------------------------------"
 echo "passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]

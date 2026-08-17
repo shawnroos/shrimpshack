@@ -719,6 +719,23 @@ launcher_launch_agent_herdr() {
     echo "  ⚠ no herdr pane resolved to launch claude into" >&2
     HERDR_PANE=""; LAUNCH_SFC=""; SURFACE_REF=""; return
   fi
+  # Name the pane BEFORE the launch: afterwards it holds a live shell writing its
+  # own title, and `pane rename` claims no pin against that. This runs for the tab
+  # and workspace targets too, not only the split — a pane's label is a distinct
+  # object from the tab's and the workspace's, and it is unnamed on all three today.
+  # The label is a bare variadic positional here, so it must stay ONE quoted word;
+  # an end-of-options `--` is NOT consumed and would land in the label.
+  local rerr rlabel
+  if ! rerr="$("$HERDR" pane rename "$pane" "$LABEL" 2>&1)"; then
+    echo "  ⚠ herdr pane could not be named: $rerr" >&2
+    note_unnamed "herdr $LAUNCH_WHERE pane $pane"
+  else
+    rlabel="$(printf '%s' "$rerr" | _herdr_json 'result.pane.label')"
+    if [ "$rlabel" != "$LABEL" ]; then
+      echo "  ⚠ herdr pane $pane reports the name '$rlabel', not '$LABEL'" >&2
+      note_unnamed "herdr $LAUNCH_WHERE pane $pane"
+    fi
+  fi
   # The brief rides this command as claude's positional prompt (read from the brief
   # file), so a successful run IS a successful briefing. Errors are surfaced, not
   # discarded — silent failure here is what shipped unbriefed sessions as successes.
@@ -1234,11 +1251,11 @@ esac
 FORCED_LAUNCHER="$LAUNCHER"
 
 [ -n "$NAME" ] || die "missing --name <kebab-feature-name>"
-# A curated --label is passed to `herdr agent start "$LABEL"` as a BARE positional
-# (before flags), so a leading '-' would be misparsed as an option — the hazard the
-# cmux path sidesteps with `--title`. Reject it early with a clear message rather
-# than letting `agent start` fail obscurely. (The default label, set later from the
-# repo basename + name, can't start with '-', so this only guards user input.)
+# $LABEL reaches `herdr pane rename "$pane" "$LABEL"` as a BARE positional. Measured
+# on herdr 0.8.0 a leading '-' is in fact accepted there as a positional, so this
+# guard is belt-and-braces against a future backend that parses it as a flag, not a
+# live hazard. Kept because the label now reaches more positional call sites, not
+# fewer. (The derived default can't start with '-', so this only guards user input.)
 case "$LABEL" in -*) die "--label must not start with '-' (got: $LABEL)" ;; esac
 [ -n "$HANDOFF_SRC" ] || die "missing --handoff <path-to-handoff.md>"
 [ -f "$HANDOFF_SRC" ] || die "handoff file not found: $HANDOFF_SRC"
