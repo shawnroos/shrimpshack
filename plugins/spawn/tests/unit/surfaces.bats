@@ -70,11 +70,11 @@ frontmatter() {         # <file>
     # collision check vacuously true, which is the false-green shape here.
     run bash -c "$(declare -f command_names); CMD_DIR='$CMD_DIR'; command_names | grep -c ."
     [ "$status" -eq 0 ]
-    [ "$output" -ge 4 ]
+    [ "$output" -ge 6 ]
 
     run bash -c "$(declare -f skill_names); SKILL_DIR='$SKILL_DIR'; skill_names | grep -c ."
     [ "$status" -eq 0 ]
-    [ "$output" -ge 3 ]
+    [ "$output" -ge 5 ]
 
     local c s
     for c in $(command_names); do
@@ -88,18 +88,45 @@ frontmatter() {         # <file>
     done
 }
 
-@test "R1 — the four declared verbs are the command surface" {
+@test "R1 — every declared verb is the command surface, and no shadowing name came back" {
+    # The list, NOT the glob, is the assertion here: R1 says these particular
+    # names are the command surface, so a glob would restate whatever is on
+    # disk and assert nothing. The list therefore has to be maintained — and it
+    # was not. This read "the FOUR declared verbs" over four names while six
+    # commands shipped: `setup.md` was the fifth and `team.md` the sixth, so the
+    # test NAME asserted an invariant its BODY had stopped covering.
+    #
+    # The count check below is what makes the staleness visible next time
+    # instead of silent: a seventh command must fail here and be named, rather
+    # than joining the directory unmentioned.
     local v
-    for v in agent bg-agent session report; do
+    for v in agent bg-agent session report setup team; do
         [ -f "$CMD_DIR/$v.md" ]
     done
+    [ "$(command_names | grep -c .)" -eq 6 ]
+
     # And the shadowing names are gone, not merely joined.
     for v in lens launch status; do
         [ ! -e "$CMD_DIR/$v.md" ]
     done
 }
 
-@test "R2 — the three skills keep their own names" {
+@test "R2 — every implementation skill keeps its own name" {
+    # GLOBBED. This iterated `lens launch status` under the name "the three
+    # skills" while five skill directories shipped — `spawn` and `team-run`
+    # were outside it. The invariant is that no skill directory collides with a
+    # command name (R1 checks the other direction) and that each one really
+    # carries a SKILL.md, which is true of every skill, not of three of them.
+    local d checked=0
+    for d in "$SKILL_DIR"/*/; do
+        [ -d "$d" ] || continue
+        [ -f "$d/SKILL.md" ]
+        checked=$((checked + 1))
+    done
+    # Guard the guard: an empty glob must fail loudly, not pass over nothing.
+    [ "$checked" -ge 5 ]
+    # The three original names are still asserted by hand: they are the ones the
+    # collision fault was about, and losing one must fail here by name.
     local s
     for s in lens launch status; do
         [ -f "$SKILL_DIR/$s/SKILL.md" ]
@@ -158,6 +185,7 @@ frontmatter() {         # <file>
         "session:lib/launch.sh"
         "bg-agent:lib/bg-agent.sh"
         "report:lib/spawnctl.sh"
+        "team:lib/team.sh"
     )
     local pair name script
     for pair in "${pairs[@]}"; do
@@ -196,6 +224,85 @@ frontmatter() {         # <file>
     for f in "$CMD_DIR"/*.md; do
         [ -f "$f" ] || continue
         grep -qF '$ARGUMENTS' "$f"
+    done
+}
+
+# --- U16: the team surface ------------------------------------------------
+#
+# STATIC ONLY, AND SAID PLAINLY. Nothing here runs a model, so none of it can
+# show that a live session follows the loop, picks a sane cap, actually issues
+# the wakeup, or reports honestly. Those are uncheckable in this repo and are
+# named as such in the plan rather than covered by a test that looks like it
+# covers them. What IS checkable is that the two surfaces exist, name the right
+# script, carry the namespaced wake prompt, and handle four intents rather than
+# the three an earlier draft shipped.
+
+# Every line in <file> where ScheduleWakeup is called with a quoted prompt.
+# The prose mentions of the tool name — "the wakeup is this skill's call" —
+# carry no prompt and are not what this is about.
+wake_prompt_lines() {   # <file>
+    grep -n 'ScheduleWakeup(.*"' "$1"
+}
+
+@test "U16 — every armed wake prompt is the namespaced /spawn:team form" {
+    # A bare command name fired from ScheduleWakeup resolves to nothing. The
+    # command and the skill both quote the prompt, so both are scanned.
+    local f found=0 line
+    for f in "$CMD_DIR/team.md" "$SKILL_DIR/team-run/SKILL.md"; do
+        [ -f "$f" ]
+        while IFS= read -r line; do
+            found=$((found + 1))
+            case "$line" in
+                */spawn:team*) ;;
+                *)
+                    printf '%s: wake prompt is not namespaced: %s\n' "$f" "$line" >&2
+                    return 1
+                    ;;
+            esac
+        done < <(wake_prompt_lines "$f")
+    done
+    # Vacuity guard: a rotted matcher that finds no arming instruction at all
+    # would otherwise pass this test for exactly the wrong reason.
+    [ "$found" -ge 2 ]
+
+    # NOT VACUOUS, part two: the matcher must still fire on the bare-name shape
+    # it exists to reject. Same synthetic-control pattern the setup.md gate uses.
+    local control="$BATS_TEST_TMPDIR/bare-wake.md"
+    cat > "$control" <<'CTL'
+ScheduleWakeup(intent.delay, "team <run-id>")
+CTL
+    run bash -c "$(declare -f wake_prompt_lines); wake_prompt_lines '$control'"
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | grep -qF 'ScheduleWakeup'
+    refute_file_match '/spawn:team' "$control"
+}
+
+@test "U16 — both team surfaces name the namespaced command" {
+    grep -qF '/spawn:team' "$CMD_DIR/team.md"
+    grep -qF '/spawn:team' "$SKILL_DIR/team-run/SKILL.md"
+}
+
+@test "U16 — the team-run body names all four intents" {
+    # PRESENCE ONLY, and it cannot prove correct handling of any of them. It
+    # goes red on the omission this plan itself shipped in an earlier draft: a
+    # body that handled three intents of four.
+    #
+    # THE ROW, NOT THE WORD. The first version of this asserted each intent word
+    # appeared anywhere in the body, and deleting the whole `waiting` row from
+    # the dispatch table left it GREEN — every one of those four words also
+    # appears in surrounding prose, so "the body mentions waiting" was true of a
+    # body that had stopped dispatching on it. The table row is where an intent
+    # is actually given an action, so that is what is pinned.
+    local md="$SKILL_DIR/team-run/SKILL.md"
+    [ -f "$md" ]
+    local body w
+    body="$(awk 'NR==1 && $0=="---" { inb=1; next } inb && $0=="---" { inb=0; next } !inb' "$md")"
+    [ -n "$body" ]
+    for w in continue waiting stop noop; do
+        if ! printf '%s\n' "$body" | grep -q "^| \`$w\` |"; then
+            printf 'team-run/SKILL.md has no dispatch-table row for the `%s` intent\n' "$w" >&2
+            return 1
+        fi
     done
 }
 
@@ -240,7 +347,7 @@ frontmatter() {         # <file>
     done
     # Guard the guard: if the glob ever matches nothing, this must fail loudly
     # rather than pass over an empty loop.
-    [ "$checked" -ge 3 ]
+    [ "$checked" -ge 4 ]
 }
 
 @test "every implementation skill is hidden from the slash menu" {
@@ -285,16 +392,25 @@ frontmatter() {         # <file>
         checked=$((checked + 1))
     done
     # Guard the guard: an empty loop must fail loudly, not pass silently.
-    [ "$checked" -ge 3 ]
+    [ "$checked" -ge 4 ]
 }
 
 @test "no skill body points at a command name this unit deleted" {
-    local s
-    for s in lens launch status; do
-        refute_file_match '/spawn:status' "$SKILL_DIR/$s/SKILL.md"
-        refute_file_match '/spawn:lens' "$SKILL_DIR/$s/SKILL.md"
-        refute_file_match '/spawn:launch' "$SKILL_DIR/$s/SKILL.md"
+    # GLOBBED, for the third time in this file and for the same reason: it
+    # iterated `lens launch status`, so `spawn/SKILL.md` and `team-run/SKILL.md`
+    # were never scanned. The deleted names are repo-wide — a body anywhere that
+    # tells a reader to run `/spawn:lens` sends them at a command that does not
+    # exist, and which of the five files it lives in changes nothing about that.
+    local d checked=0
+    for d in "$SKILL_DIR"/*/; do
+        [ -f "$d/SKILL.md" ] || continue
+        refute_file_match '/spawn:status' "$d/SKILL.md"
+        refute_file_match '/spawn:lens' "$d/SKILL.md"
+        refute_file_match '/spawn:launch' "$d/SKILL.md"
+        checked=$((checked + 1))
     done
+    # Guard the guard: an empty glob must fail loudly, not pass over nothing.
+    [ "$checked" -ge 5 ]
 }
 
 # --- the harness's own view of the plugin ---------------------------------

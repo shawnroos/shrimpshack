@@ -635,13 +635,13 @@ emit_describe() {
             {name:"handle",          always:false, note:"the job handle this call is about"},
             {name:"job",             always:false, note:"the job record: paths, argv_marker, pid, state, state_source, live"},
             {name:"running_handle",  always:false, note:"refusal only: the job already holding this worktree"},
-            {name:"running_state",   always:false, note:"refusal only: that job'"'"'s probed state"},
+            {name:"running_state",   always:false, note:"refusal only: that job’s probed state"},
             {name:"help_requested",  always:false, note:"true only for --help; present on every error response"}
           ],
           notes:[
             "state_source:\"probe\" means the answer came from kill -0 plus the argv check; \"record\" means the job had already been released into a terminal state.",
             "A status file claiming running for a pid that is gone, or for a pid whose argv does not carry argv_marker, resolves to failed. The file is a claim (KTD6).",
-            "done is never written by this layer: it requires the contract'"'"'s deliverables checked against a pre-job baseline, which belongs to the supervisor."
+            "done is never written by this layer: it requires the contract’s deliverables checked against a pre-job baseline, which belongs to the supervisor."
           ]
         }')"
 }

@@ -25,6 +25,7 @@ setup() {
     LENS="$LIB/lens.sh"
     LAUNCH="$LIB/launch.sh"
     CTL="$LIB/spawnctl.sh"
+    TEAM="$LIB/team.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-env.XXXXXX")"
     WORK="$(cd "$WORK" && pwd -P)"
     GW_PID=""
@@ -44,6 +45,26 @@ setup() {
     # probe the REAL gateway on 4000 — the same guard lens.bats sets.
     export SPAWN_BASE_URL="http://127.0.0.1:1/anthropic"
     TOKEN="tok-env-s3cr3t-4b1c"
+
+    # team.sh is the fourth surface, and unlike the other three it needs a git
+    # repository to answer at all — `roster` resolves the driver's own worktree
+    # before it will write anything. Its own suite is where the team behaviour
+    # is tested; what belongs HERE is that its responses carry the same envelope
+    # as the other three, which is the promise a Bash-only consumer relies on
+    # when it calls a surface it has never called before.
+    #
+    # Own repo, own worktree root, both under $WORK, so nothing reaches the
+    # checkout this suite is running inside.
+    PRIMARY="$WORK/proj"
+    mkdir -p "$PRIMARY"
+    git -C "$PRIMARY" init -q
+    git -C "$PRIMARY" config user.email t@example.com
+    git -C "$PRIMARY" config user.name tester
+    printf 'seed\n' > "$PRIMARY/README.md"
+    git -C "$PRIMARY" add README.md
+    git -C "$PRIMARY" commit -qm seed
+    export SPAWN_TEAM_WORKTREE_ROOT="$PRIMARY/worktrees"
+    printf 'a contract\n' > "$WORK/contract.md"
 }
 
 teardown() {
@@ -167,6 +188,11 @@ jq_free_path() {
     [ "$status" -eq 2 ]
     assert_envelope "$output" 2
     [ "$(echo "$output" | jq -r '.error')" = "usage" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' no-such-verb 2>/dev/null"
+    [ "$status" -eq 2 ]
+    assert_envelope "$output" 2
+    [ "$(echo "$output" | jq -r '.error')" = "usage" ]
 }
 
 @test "R23: every script's HELP response carries the envelope" {
@@ -178,6 +204,38 @@ jq_free_path() {
 
     run bash -c "bash '$CTL' --help 2>/dev/null"
     assert_envelope "$output" "$status"
+
+    run bash -c "bash '$TEAM' --help 2>/dev/null"
+    assert_envelope "$output" "$status"
+    # The discriminator AE6 is about, on the fourth surface: --help is exit 2
+    # like a usage error, so the only thing separating "somebody asked" from
+    # "somebody got it wrong" is this field.
+    [ "$status" -eq 2 ]
+    [ "$(echo "$output" | jq -r '.help_requested')" = "true" ]
+    [ "$(echo "$output" | jq -r '.error')" = "usage" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' no-such-verb 2>/dev/null"
+    [ "$(echo "$output" | jq -r '.help_requested')" = "false" ]
+}
+
+@test "R23: team.sh's SUCCESS response carries the envelope and the plugin marking" {
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' roster --run-id r1 --run-dir '$WORK/run' \
+        --member lead --alias alpha --contract '$WORK/contract.md' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    assert_envelope "$output" 0
+    # The team surface narrates nothing a model wrote — the roster is the
+    # plugin's own record of what the caller asked for.
+    [ "$(echo "$output" | jq -r '.content_trust')" = "plugin-authored" ]
+    [ "$(echo "$output" | jq -r '.run_id')" = "r1" ]
+}
+
+@test "R23: team.sh --describe carries the envelope, with no gateway and no config" {
+    [ -z "${SPAWN_CONFIG:-}" ]
+    run bash "$TEAM" --describe
+    [ "$status" -eq 0 ]
+    assert_envelope "$output" 0
+    [ "$(echo "$output" | jq -r '.response_kind')" = "describe" ]
+    [ "$(echo "$output" | jq -r '.surface')" = "team.sh" ]
 }
 
 @test "R23: the lens's SUCCESS response carries the envelope and the untrusted marking" {
@@ -246,6 +304,13 @@ jq_free_path() {
     [ "$status" -eq 2 ]
     assert_envelope "$output" 2
     [ "$(echo "$output" | jq -r '.verb')" = "status" ]
+
+    # team.sh: a FOURTH hand-written encoder, and the one with the most fields
+    # to get wrong — its envelope carries nineteen nullable payload keys.
+    run env PATH="$nojq" bash -c "cd '$PRIMARY' && bash '$TEAM' roster --run-id r1 2>/dev/null"
+    [ "$status" -eq 2 ]
+    assert_envelope "$output" 2
+    [ "$(echo "$output" | jq -r '.error')" = "usage" ]
 }
 
 @test "R12/R23: every failure carries a remedy, on every encoder tier" {

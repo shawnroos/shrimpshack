@@ -26,6 +26,32 @@
         "sol": "gpt-sol",
         "sol-pro": "gpt-sol-pro"
       }
+    },
+    "gemini": {
+      "default": "gemini",
+      "tiers": {
+        "3.7-flash": "gemini",
+        "flash": "gemini",
+        "pro": "gemini-pro"
+      }
+    },
+    "grok": {
+      "default": "grok",
+      "tiers": {
+        "4.6": "grok"
+      }
+    },
+    "deepseek": {
+      "default": "deepseek",
+      "tiers": {
+        "v4-pro": "deepseek"
+      }
+    },
+    "qwen": {
+      "default": "qwen",
+      "tiers": {
+        "3.8-max": "qwen"
+      }
     }
   },
   "no_family_alias": "default",
@@ -111,6 +137,46 @@
         "openrouter/z-ai/glm-5.2"
       ],
       "chain": true
+    },
+    "gemini": {
+      "context_window": 1048576,
+      "output_window": 65536,
+      "source": "upstream model card — the OpenRouter models endpoint reports context_length 1048576 for google/gemini-3.7-flash, read 2026-08-14. gateway.yaml carries no window comment for this alias.",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 65536 for google/gemini-3.7-flash, read 2026-08-14.",
+      "model": "openrouter/google/gemini-3.7-flash",
+      "chain": false
+    },
+    "gemini-pro": {
+      "context_window": 1048576,
+      "output_window": 32000,
+      "source": "NOT in the OpenRouter public models listing as of 2026-08-14 — no id there contains both '3.1' and 'pro' — yet a live round-trip through the gateway on this alias succeeded (exit 0, usage reported). So the listing is not authoritative for this account and the alias is real. Context under-declared from the nearest documented sibling, google/gemini-3.7-flash (1048576). Correct this entry the moment the id appears upstream.",
+      "output_source": "no published completion cap — the id is absent from the OpenRouter listing, so this declares the 32000 default the note prescribes rather than guessing high.",
+      "model": "openrouter/google/gemini-3.1-pro-preview",
+      "chain": false
+    },
+    "grok": {
+      "context_window": 500000,
+      "output_window": 32000,
+      "source": "upstream model card — the OpenRouter models endpoint reports context_length 500000 for x-ai/grok-4.6, read 2026-08-14.",
+      "output_source": "upstream model card — the OpenRouter models endpoint publishes no top_provider.max_completion_tokens for x-ai/grok-4.6 (read 2026-08-14), so this declares the 32000 default rather than guessing high.",
+      "model": "openrouter/x-ai/grok-4.6",
+      "chain": false
+    },
+    "deepseek": {
+      "context_window": 1048576,
+      "output_window": 384000,
+      "source": "upstream model card — the OpenRouter models endpoint reports context_length 1048576 for deepseek/deepseek-v4-pro-0813, read 2026-08-14.",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 384000 for deepseek/deepseek-v4-pro-0813, read 2026-08-14.",
+      "model": "openrouter/deepseek/deepseek-v4-pro-0813",
+      "chain": false
+    },
+    "qwen": {
+      "context_window": 1000000,
+      "output_window": 131072,
+      "source": "upstream model card — the OpenRouter models endpoint reports context_length 1000000 for qwen/qwen3.8-max, read 2026-08-14.",
+      "output_source": "upstream model card — the OpenRouter models endpoint reports top_provider.max_completion_tokens 131072 for qwen/qwen3.8-max, read 2026-08-14.",
+      "model": "openrouter/qwen/qwen3.8-max",
+      "chain": false
     }
   }
 }

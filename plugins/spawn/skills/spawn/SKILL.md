@@ -5,7 +5,7 @@ description: >
   be involved and it is not yet obvious HOW — a second opinion, a session on a
   different model, unattended background work, or just "is the gateway up". This is
   the one spawn skill that IS conversationally triggerable; the others
-  (lens, launch, status) are invoked by name only. It decides and delegates; it does
+  (lens, launch, status, team-run) are invoked by name only. It decides and delegates; it does
   not run the model call itself. Also the reference for `bg-agent`, whose contract is
   the easiest thing in this plugin to get wrong.
 allowed-tools: Bash, Read
@@ -13,7 +13,7 @@ allowed-tools: Bash, Read
 
 # Choosing a spawn surface
 
-Four surfaces, and the wrong one is usually not an error — it is a quiet waste. A
+Five surfaces, and the wrong one is usually not an error — it is a quiet waste. A
 one-shot question sent as a background job costs a supervised worktree and fifteen
 minutes; an hour of unattended work sent as a one-shot returns a paragraph of
 plausible prose and nothing on disk.
@@ -31,6 +31,7 @@ Ask what you want to be true when the call returns.
 | an answer, now | `/spawn:agent` | text, as data, in one turn |
 | to work *inside* another model | `/spawn:session` | a resumable session + an attach command |
 | work done while you do something else | `/spawn:bg-agent` | a handle, immediately; a verdict later |
+| several models on it at once | `/spawn:team` | a run id; a per-member verdict, round by round |
 | to know whether any of this will work | `/spawn:report` | liveness, served aliases, running jobs |
 
 Three questions settle almost every case:
@@ -245,6 +246,32 @@ absent is not done however confidently the narrative describes it.
 `/spawn:report` lists this worktree's jobs with their probed state — probed, not
 claimed, the same discipline the gateway's own liveness uses. A handle is findable
 by someone who never saw it printed.
+
+## Several models at once: `/spawn:team`
+
+One background job is one model against one contract. When the work wants **several named
+members at once** — a different model on each, its own contract each, and a verdict per
+member rather than one merged answer — that is a team, not four `bg-agent` calls you then
+have to correlate by hand.
+
+What the surface adds over doing it yourself: each member gets its own worktree, so they
+cannot overwrite each other; the roster is dispatched in bounded rounds rather than all at
+once; and one record on disk carries every member's probed state, deliverable checklist and
+token usage, so the run is readable by a session that never saw it start.
+
+Three modes, and the mode is the whole decision:
+
+- **`single-round`** — dispatch everyone once and walk away. No driver, no timer. A roster
+  larger than the concurrency maximum is refused outright, because nothing would advance the
+  remainder.
+- **`attached`** — a round at a time, handing control back between rounds so a person sees
+  round N's verdict before round N+1 commits.
+- **`unattended`** — the same rounds with nobody watching between them.
+
+`/spawn:team` fronts all three, and takes either a team file to start a run or a run id to
+re-enter one. Its own body carries the loop; everything above is only enough to choose it.
+The contract — the team file's shape, the bound flags, the four intents — is declared by
+`bash "${CLAUDE_PLUGIN_ROOT}/lib/team.sh" --describe`, not by this skill.
 
 ## Before any of it
 

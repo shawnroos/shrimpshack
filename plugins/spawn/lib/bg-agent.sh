@@ -243,29 +243,13 @@ validate_deliverable() {
 }
 
 # ---------------------------------------------------------------------------
-# THE PRE-JOB BASELINE (KTD9).
-#
-# A pre-existing file must not satisfy a contract, so every deliverable is
-# fingerprinted BEFORE the child starts and the after-state is compared against
-# that record. `absent` is a fingerprint like any other, which is what makes
-# "was not there, now is" and "was there, was rewritten" both count while "was
-# there, untouched" does not.
-#
-# cksum is POSIX and needs no interpreter; it is fed on STDIN so its output
-# carries no filename. A directory fingerprints as its sorted listing, which
-# catches an added or removed entry but not a rewritten byte inside one — said
-# here rather than left for a reader to discover, because a contract naming a
-# directory is weaker than one naming files.
+# THE PRE-JOB BASELINE (KTD9). The comparison itself — fingerprint_path,
+# fingerprint_of and deliverable_state — lives in common.sh, because the view
+# that reports a RUNNING member reads the same baseline this file writes, and a
+# second copy of the comparison is how the two would come to disagree about
+# whether a file counts as progress. Only the baseline's CAPTURE is here: it
+# happens once, at launch, and nothing else writes one.
 # ---------------------------------------------------------------------------
-fingerprint_path() {    # <absolute path>
-    if [ -f "$1" ]; then
-        printf 'f:%s' "$(cksum < "$1" 2>/dev/null)"
-    elif [ -d "$1" ]; then
-        printf 'd:%s' "$(find "$1" 2>/dev/null | LC_ALL=C sort | cksum 2>/dev/null)"
-    else
-        printf 'absent'
-    fi
-}
 
 # Writes "<fingerprint>\t<relative path>" per deliverable, reading the paths
 # from a one-per-line list file. Tab-separated because a fingerprint contains
@@ -279,10 +263,6 @@ write_fingerprints() {  # <worktree> <list file> <destination>
         printf '%s\t%s\n' "$(fingerprint_path "$tree/$rel")" "$rel" >> "$dest" || return 1
     done < "$list"
     return 0
-}
-
-fingerprint_of() {      # <record file> <relative path>
-    awk -F '\t' -v want="$2" '$2 == want { print $1; exit }' "$1" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -740,6 +720,12 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
     local dir="$SUP_JOB_DIR"
     local denials='[]' narrative="" session_id="" changed='[]' deliv='[]'
     local verify_rc='null' verify_ran=false reasons='[]'
+    # An absent measurement is null, never 0 — a reader that cannot tell them
+    # apart reports an unmeasured ceiling as a satisfied one. Defaulted out here
+    # because the contract-fault path writes a record before any child exists,
+    # and reset again below because a child that died before writing leaves
+    # child.json present but EMPTY, on which jq prints nothing and exits 0.
+    local usage_json='{"input_tokens":null,"output_tokens":null}'
 
     if [ -f "$dir/child.json" ]; then
         denials="$(jq -c 'if type == "object" and (.permission_denials | type) == "array" then .permission_denials else [] end' < "$dir/child.json" 2>/dev/null)"
@@ -747,6 +733,11 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         narrative="$(jq -r 'if type == "object" then (.result // "") else "" end' < "$dir/child.json" 2>/dev/null)"
         session_id="$(jq -r '.session_id // empty' < "$dir/child.json" 2>/dev/null)"
         case "$session_id" in ""|*[!A-Za-z0-9._-]*) session_id="" ;; esac
+        usage_json="$(jq -c 'def num(v): if (v | type) == "number" then v else null end;
+            (if type == "object" and (.usage | type) == "object" then .usage else {} end)
+            | {input_tokens: num(.input_tokens), output_tokens: num(.output_tokens)}' \
+            < "$dir/child.json" 2>/dev/null)"
+        [ -n "$usage_json" ] || usage_json='{"input_tokens":null,"output_tokens":null}'
     fi
 
     changed="$(changed_since_baseline "$SUP_WORKTREE" "$dir/baseline.marker" "$(dirname "$dir")" "$dir/baseline.git" \
@@ -761,16 +752,11 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
     # answer there, and it can never read as satisfied because `all` over an
     # empty array is guarded by the length check below.
     [ -f "$dir/deliverables.list" ] || : > "$dir/deliverables.list" 2>/dev/null
-    local rel before after was_present is_present is_changed all_ok=true
+    local rel all_ok=true
     deliv="$( { while IFS= read -r rel; do
             [ -n "$rel" ] || continue
-            before="$(fingerprint_of "$dir/baseline.deliverables" "$rel")"
-            [ -n "$before" ] || before="absent"
-            after="$(fingerprint_path "$SUP_WORKTREE/$rel")"
-            if [ "$before" = "absent" ]; then was_present=false; else was_present=true; fi
-            if [ "$after" = "absent" ]; then is_present=false; else is_present=true; fi
-            if [ "$after" != "$before" ] && [ "$is_present" = true ]; then is_changed=true; else is_changed=false; fi
-            printf '%s\t%s\t%s\t%s\n' "$rel" "$was_present" "$is_present" "$is_changed"
+            printf '%s\t%s\n' "$rel" \
+                "$(deliverable_state "$dir/baseline.deliverables" "$SUP_WORKTREE" "$rel")"
         done < "$dir/deliverables.list"; } \
         | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t"))
                    | map({path:.[0],
@@ -812,7 +798,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         --arg tp "$SPAWN_TRUST_PLUGIN" --arg np "$SPAWN_NOTICE_PLUGIN" \
         --argjson dn "$denials" --argjson ch "$changed" --argjson dl "$deliv" \
         --argjson vr "$verify_rc" --argjson vran "$verify_ran" \
-        --argjson ok "$all_ok" --argjson rs "$reasons" \
+        --argjson ok "$all_ok" --argjson rs "$reasons" --argjson us "$usage_json" \
         --arg rc "$child_rc" --argjson ie "$child_ie" '{
           schema:$js, job_id:$h, alias:$a, ceiling:$c,
           worktree:$w, cwd:$cw,
@@ -827,6 +813,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
           verification:{command:(if $vc == "" then null else $vc end),
                         ran:$vran, exit_code:$vr},
           degraded_reasons:$rs,
+          usage:$us,
           narrative:{text:(if $n == "" then null else $n end),
                      content_trust:$tm, content_notice:$nm},
           notification:('"$notif_env"' + {
@@ -925,11 +912,22 @@ supervisor_main() {
         SUP_SKILL_MANIFEST="$dir/skills.provisioned"
         spawn::skill_git_exclude "$SUP_WORKTREE"
         if ! spawn::skill_provision "$SUP_WORKTREE" "$SUP_SKILL_MANIFEST" "${SUP_SKILLS[@]}" 2>>"$dir/skills.err"; then
-            # The first diagnostic names WHICH skill and why. Without it the
-            # reason says only that something failed, and the reader has to go
-            # find a file to learn anything at all.
-            local first; first="$(head -n 1 "$dir/skills.err" 2>/dev/null | tr '\t' ' ')"
-            sup_reason "one or more requested skills could not be provisioned${first:+ (${first})}; see skills.err"
+            # WHICH skills, from the manifest, and WHY, from the first
+            # diagnostic. The set is derived from what actually LANDED rather
+            # than by parsing skills.err, so a reworded diagnostic cannot
+            # silently empty it; the diagnostic is then appended as context,
+            # because a reader told only which skill is missing still has to
+            # open a file to learn anything about the cause.
+            local landed="" missing="" want bare first
+            [ -f "$SUP_SKILL_MANIFEST" ] && landed=" $(sed 's|.*/||' "$SUP_SKILL_MANIFEST" | tr '\n' ' ')"
+            for want in "${SUP_SKILLS[@]}"; do
+                bare="${want##*:}"
+                case "$landed" in *" $bare "*) continue ;; esac
+                missing="${missing:+$missing }$(spawn::sanitize_for_display "$want")"
+            done
+            first="$(head -n 1 "$dir/skills.err" 2>/dev/null | tr '\t' ' ')"
+            first="$(spawn::sanitize_for_display "$first")"
+            sup_reason "these skills could not be provisioned and the job ran without them: ${missing:-see skills.err}${first:+ (${first})}"
         fi
         printf '%s\n' "${SUP_SKILLS[@]}" > "$dir/skills.requested"
     fi
@@ -1031,7 +1029,7 @@ supervisor_main() {
     fi
 
     # The three effect signals, each independent of the others.
-    local DENIALS=0 VERIFY_RC=0 SATISFIED=0 rel before after
+    local DENIALS=0 VERIFY_RC=0 SATISFIED=0 rel dstate is_present is_changed
     [ -f "$dir/child.json" ] && DENIALS="$(jq -r 'if type == "object" and (.permission_denials | type) == "array" then (.permission_denials | length) else 0 end' < "$dir/child.json" 2>/dev/null)"
     [[ "$DENIALS" =~ ^[0-9]+$ ]] || DENIALS=0
     if [ -f "$dir/verify.rc" ]; then
@@ -1041,13 +1039,12 @@ supervisor_main() {
     SATISFIED=1
     while IFS= read -r rel; do
         [ -n "$rel" ] || continue
-        before="$(fingerprint_of "$dir/baseline.deliverables" "$rel")"
-        [ -n "$before" ] || before="absent"
-        after="$(fingerprint_path "$SUP_WORKTREE/$rel")"
-        if [ "$after" = "absent" ]; then
+        dstate="$(deliverable_state "$dir/baseline.deliverables" "$SUP_WORKTREE" "$rel")"
+        IFS='	' read -r _ is_present is_changed <<< "$dstate"
+        if [ "$is_present" != true ]; then
             SATISFIED=0
             sup_reason "the contract names '$rel', and it is not there"
-        elif [ "$after" = "$before" ]; then
+        elif [ "$is_changed" != true ]; then
             SATISFIED=0
             sup_reason "the contract names '$rel', and it is byte-for-byte what it was before the job started"
         fi
@@ -1134,6 +1131,8 @@ emit_describe() {
             {name:"--alias",    value:"name", required:true,  default:null, note:"exactly one resolved alias; a chain alias is refused before any network call"},
             {name:"--contract", value:"file", required:true,  default:null, note:"the contract, one JSON object; copied into the job directory so a later edit cannot move the target"},
             {name:"--cwd",      value:"dir",  required:false, default:"the process working directory", note:"the directory the child runs in; its worktree is what the ceiling is scoped to and what holds the one-job lock"},
+            {name:"--skill",    value:"name", required:false, default:null, repeatable:true, note:"a skill the child is to have; repeat the flag for several. The child runs with --setting-sources project and inherits no skill the operator has, so each named skill is copied into the worktree the job runs in, where the child can read it and the ceiling denies editing it, and is removed when the job ends. A skill that cannot be provisioned is named in the degraded_reasons[] of the job record and the job still runs"},
+            {name:"--allow",    value:"rule", required:false, default:null, repeatable:true, note:"one extra permission rule to widen the ceiling by, for this job only; repeat the flag for several. The shipped default is never edited. A rule the ceiling refuses to grant fails the job outright rather than running it quietly narrower than asked, because a job silently missing a capability it was promised returns a confident wrong answer"},
             {name:"--help",     value:null,   required:false, default:null, note:"exit 2 with help_requested:true — not a usage error"},
             {name:"--describe", value:null,   required:false, default:null, note:"this document; exit 0; needs no gateway and no config"}
           ],
@@ -1157,6 +1156,7 @@ emit_describe() {
             "started_at","ended_at","terminal_state","child_exit_code",
             "permission_denials","changed_files","deliverables",
             "deliverables_satisfied","verification.exit_code",
+            "usage.input_tokens","usage.output_tokens",
             "notification.terminal_state","notification.deliverables_satisfied",
             "notification.permission_denial_count"
           ],
