@@ -1827,6 +1827,190 @@ one_done_one_pending() {
 }
 
 # ---------------------------------------------------------------------------
+# U2 — a terminal non-success outcome always carries a cause (R1, R3, R4, R5)
+#
+# The cause lives on the member ROW, so every assertion below reads the RECORD
+# through `member_failure`. The response's `error` is a PROJECTION of
+# `failure.error` (KTD2), so a response-only assertion cannot tell a recorded
+# cause from an unrecorded one.
+# ---------------------------------------------------------------------------
+
+member_failure() { rec ".members[] | select(.name == \"$1\") | .failure"; }
+
+# refute_json_key <json> <key> — fails as a PLAIN command. `! jq -e` would be
+# exempted from set -e by POSIX and could never redden a bats test.
+refute_json_key() {
+    if [ "$(printf '%s' "$1" | jq -r 'if type == "object" then has("'"$2"'") else "notobject" end' 2>/dev/null)" != "false" ]; then
+        printf 'refute_json_key: %s is present on, or the input is not, %s\n' "$2" "$1" >&2
+        return 1
+    fi
+    return 0
+}
+
+assert_json_key() {
+    if [ "$(printf '%s' "$1" | jq -r 'if type == "object" then has("'"$2"'") else "notobject" end' 2>/dev/null)" != "true" ]; then
+        printf 'assert_json_key: %s is absent from %s\n' "$2" "$1" >&2
+        return 1
+    fi
+    return 0
+}
+
+# One dispatched member whose child exits 1 — the supervisor classifies that
+# `failed` and writes its own account of why.
+one_failing_member() {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=fail
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    await_member_terminal lead
+}
+
+# One dispatched member whose child exits 0 and produces nothing the contract
+# names — `degraded` (KTD8), classified by effect and not by the exit status.
+one_degraded_member() {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    await_member_terminal lead
+}
+
+@test "a member whose child exits non-zero records the supervisor's own account of why" {
+    one_failing_member
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "failed" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "failed" ]
+    # The supervisor's sentence, relayed verbatim — not a taxonomy this layer
+    # invented.
+    [ "$(printf '%s' "$f" | jq -r '.detail')" = "the child under the 'repo-bounded' ceiling exited 1, so no work is claimed" ]
+    [ "$(printf '%s' "$f" | jq -r '.child_exit_code')" = "1" ]
+    [ "$(printf '%s' "$f" | jq -r '.degraded_reasons | length > 0')" = "true" ]
+    # KTD2: the response's error is the same value, read from the same place.
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "failed" ]
+}
+
+@test "a member that reaches degraded carries a non-null cause with its reasons" {
+    one_degraded_member
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "degraded" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "degraded" ]
+    [ "$(printf '%s' "$f" | jq -r '.degraded_reasons | length > 0')" = "true" ]
+    [ "$(printf '%s' "$f" | jq -r '.detail | length > 0')" = "true" ]
+}
+
+@test "the cause holds no narrative, and the absence assertion can fail" {
+    one_failing_member
+    advance --run-dir "$RUN"
+    local f; f="$(member_failure lead)"
+    # KTD3: `detail` and `degraded_reasons` are the SUPERVISOR's words. The
+    # child's own account of itself is never relayed as a cause.
+    refute_json_key "$f" narrative
+    # The control arm: the same helper on a key that IS there must redden.
+    run refute_json_key "$f" detail
+    [ "$status" -ne 0 ]
+    run assert_json_key "$f" narrative
+    [ "$status" -ne 0 ]
+    assert_json_key "$f" detail
+}
+
+@test "a member that reaches done carries a null cause" {
+    one_done_one_pending
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_failure lead)" = "null" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "null" ]
+}
+
+@test "a member still running carries a null cause" {
+    one_hang_member 1
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .state')" = "running" ]
+    [ "$(member_outcome lead)" = "null" ]
+    [ "$(member_failure lead)" = "null" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "null" ]
+}
+
+@test "handle_unknown is recorded as the cause, not only reported" {
+    one_hang_member 1
+    edit_record '.members |= map(if .name == "lead"
+                                 then .handle = "job-19700101T000000Z-9999" else . end)'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "handle_unknown" ]
+    [ "$(member_outcome lead)" = "failed" ]
+    [ "$(member_failure lead | jq -r '.error')" = "handle_unknown" ]
+}
+
+@test "a refused result read is recorded as the cause and the probe's own state stands" {
+    one_failing_member
+    local h wt jd
+    h="$(member_handle lead)"; wt="$(member_wt lead)"
+    jd="$(member_job_dir "$h" "$wt")"
+    assert_exists "$jd/result.json"
+    # The job ran and its record is no longer readable — which is not the same
+    # as no answer.
+    rm -f "$jd/result.json"
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "result_missing" ]
+    # Nothing was read, so there is nothing to relay — absent is null, never ""
+    # and never a missing key. `jq -r '.detail'` prints "null" for a key that is
+    # not there at all, so PRESENCE is pinned separately from the value.
+    assert_json_key "$f" detail
+    assert_json_key "$f" child_exit_code
+    assert_json_key "$f" degraded_reasons
+    [ "$(printf '%s' "$f" | jq -r '.detail')" = "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.child_exit_code')" = "null" ]
+    # The probe's own state is the outcome; the refusal is not an outcome.
+    [ "$(member_outcome lead)" = "failed" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "result_missing" ]
+}
+
+@test "a member with no checkout records worktree_missing, not only reports it" {
+    one_hang_member 1
+    edit_record '.members |= map(.worktree = "")'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "worktree_missing" ]
+    [ "$(member_failure lead | jq -r '.error')" = "worktree_missing" ]
+    # A missing checkout is not an outcome the supervisor reported, so the
+    # member's own outcome is left alone.
+    [ "$(member_outcome lead)" = "null" ]
+}
+
+@test "the cause outlives the member's worktree (R3)" {
+    one_failing_member
+    advance --run-dir "$RUN"
+    [ "$(member_failure lead)" != "null" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    refute_exists "$ROOT/r1/lead"
+    # Read from team.json with the checkout gone — the record is the single
+    # source of truth for why a member failed.
+    [ "$(member_failure lead | jq -r '.error')" = "failed" ]
+    [ "$(member_failure lead | jq -r '.child_exit_code')" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
 # Persist before signal, and the envelope
 # ---------------------------------------------------------------------------
 
