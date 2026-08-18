@@ -162,6 +162,39 @@ team_record_usage() {   # <name> <handle.sh result object>
     done
 }
 
+# Why a member did not come back with work, written to its own row. The cause is
+# ONE object so a reader cannot get the verdict and the reason from two places
+# and find them disagreeing; the response's `error` is a projection of
+# `.error` here, taken from the same call (KTD2).
+#
+# Only facts this plugin established: `detail` and `degraded_reasons` are the
+# SUPERVISOR's own words about what it measured. The child's `narrative` is
+# excluded on purpose — it is the model's account of itself, and the team layer
+# never forwards that as a cause (KTD3).
+#
+# An absent sub-field is null and never "" or 0: a reader that cannot tell an
+# unmeasured exit code from a zero one reports a clean exit on a job nobody
+# measured (KTD4). jq's `//` keeps a real 0 and a real [] because both are
+# truthy there.
+#
+# WRITTEN BEFORE THE OUTCOME, for the same reason team_record_usage is: each set
+# is its own recompute-and-write, so an outcome landing first leaves a reader
+# catching the run between the two writes looking at a TERMINAL member with no
+# cause — the exact shape this unit exists to remove.
+team_record_failure() {  # <name> <error> <handle.sh result object|"">
+    local name="$1" error="$2" res="$3" obj
+    obj="$(printf '%s' "${res:-null}" | jq -c --arg e "$error" '
+        (if type == "object" then (.result // {}) else {} end)
+        | {error:$e,
+           detail:(.detail // null),
+           child_exit_code:(.child_exit_code // null),
+           degraded_reasons:(.degraded_reasons // null)}' 2>/dev/null)"
+    [ -n "$obj" ] || obj="$(jq -nc --arg e "$error" \
+        '{error:$e, detail:null, child_exit_code:null, degraded_reasons:null}')"
+    spawn::team_member_set "$RUN_DIR" "$name" failure "$obj" \
+        || say "team: '$name' failed with $error and the cause could not be recorded"
+}
+
 # One member, probed in ITS OWN worktree, and its outcome recorded if it has
 # reached one. The three answers handle.sh gives are kept apart: handle_unknown
 # and handle_expired ride the member's row as errors, and a `state` of failed is
@@ -174,6 +207,10 @@ team_probe_member() {   # <name> <handle> <worktree>
     # driver's one-job lock. A member with no checkout is reported, never
     # probed.
     if [ -z "$wt" ] || [ ! -d "$wt" ]; then
+        # The cause goes on the row as well as into the response. The member's
+        # own outcome is left alone: a missing checkout is not an outcome the
+        # supervisor reported.
+        team_record_failure "$name" "worktree_missing" ""
         team_probe_row "$name" "unknown" null "worktree_missing"
         return 0
     fi
@@ -185,6 +222,7 @@ team_probe_member() {   # <name> <handle> <worktree>
         # Terminal, because nothing can ever answer for this member again. Left
         # non-terminal it would hold its round open for ever, and R6 concludes a
         # round only when every member in it is terminal.
+        team_record_failure "$name" "$err" ""
         spawn::team_member_set "$RUN_DIR" "$name" outcome failed \
             || say "team: '$name' answered $err and its outcome could not be recorded"
         team_probe_row "$name" "failed" '"failed"' "$err"
@@ -205,6 +243,13 @@ team_probe_member() {   # <name> <handle> <worktree>
         # longer readable — which is not the same as no answer. The probe's own
         # state stands as the outcome and the refusal rides the row.
         err="$(printf '%s' "$res" | jq -r '.error // empty' 2>/dev/null)"
+    fi
+    # THE GATE. One condition on the OUTCOME, never a branch per known cause:
+    # an enumerated list of the causes we happen to know today is how the next
+    # one falls out silently, which is the defect this unit closes.
+    if [ "$outcome" != "done" ] || [ -n "$err" ]; then
+        err="${err:-$outcome}"
+        team_record_failure "$name" "$err" "$res"
     fi
     spawn::team_member_set "$RUN_DIR" "$name" outcome "$outcome" \
         || say "team: '$name' reached $outcome and it could not be recorded"
