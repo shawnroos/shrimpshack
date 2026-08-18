@@ -61,6 +61,24 @@ roster_parse() {
     [ "$last" -ge 0 ] || { SPAWN_TEAM_ERROR="usage"; spawn::team_fail "a team needs at least one --member"; }
 }
 
+# The cause on the ROW, in the same four-key shape team_record_failure writes on
+# the probe side: an operator reads one object per member, whichever layer wrote
+# it. `detail` is the launcher's own sentence, taken from where bg-agent puts it
+# — top level of its refusal, not under `.result` as a finished job's is. A
+# launch that never started has no child and nothing degraded, so those two are
+# null on this path by fact rather than by omission.
+team_record_launch_failure() {  # <name> <error> <bg-agent refusal json|"">
+    local name="$1" error="$2" out="$3" obj
+    obj="$(printf '%s' "${out:-null}" | jq -c --arg e "$error" '
+        (if type == "object" then . else {} end)
+        | {error:$e, detail:(.detail // null),
+           child_exit_code:null, degraded_reasons:null}' 2>/dev/null)"
+    [ -n "$obj" ] || obj="$(jq -nc --arg e "$error" \
+        '{error:$e, detail:null, child_exit_code:null, degraded_reasons:null}')"
+    spawn::team_member_set "$RUN_DIR" "$name" failure "$obj" \
+        || say "team: '$name' was not launched ($error) and the cause could not be recorded"
+}
+
 # Creates each member's checkout and writes its provisional row, in roster
 # order. Members whose checkout could not be made are left in TEAM_UNPLACED, and
 # their M_WORKTREES entry is emptied — a launch reads that array, and an empty
@@ -85,6 +103,9 @@ team_place_members() {  # <run-dir>
             || spawn::team_fail "member '$name' could not be recorded"
         if [ -z "$worktree" ]; then
             TEAM_UNPLACED="$TEAM_UNPLACED $name"
+            # BEFORE the state, for the reader that catches the run between the
+            # two writes: nobody may see `launch_failed` with no findable cause.
+            team_record_launch_failure "$name" worktree_failed ""
             spawn::team_member_set "$dir" "$name" launch_state launch_failed \
                 || spawn::team_fail "member '$name' could not be marked launch_failed"
         fi
@@ -139,8 +160,8 @@ do_roster() {
           team_file: null, round: null, dispatched: null,
           pending: ([ .members[] | select(.launch_state == "pending") ] | length),
           members: [ .members[] | {name, alias, worktree, launch_state, handle,
-                                   skills, error: (if .launch_state == "launch_failed"
-                                                   then "worktree_failed" else null end)} ]}')" \
+                                   skills, failure,
+                                   error: (.failure.error // null)} ]}')" \
         || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the roster could not be encoded"; }
     emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the roster encoded to nothing"; }
     exit "$code"
@@ -315,6 +336,10 @@ team_launch_member() {  # <index> <round>
     # ever. The advance then answers `waiting` on a round nothing can finish.
     spawn::team_member_set "$RUN_DIR" "$name" round "$round" \
         || spawn::team_fail "member '$name' failed to launch and its round could not be recorded"
+    # The cause goes on the ROW, and before the state for the same reason the
+    # round does. TEAM_LAUNCH_ERRS dies with this process; the record is what a
+    # caller still has after it.
+    team_record_launch_failure "$name" "$err" "$out"
     spawn::team_member_set "$RUN_DIR" "$name" launch_state launch_failed \
         || spawn::team_fail "member '$name' failed to launch and could not be marked launch_failed"
     TEAM_LAUNCH_ERRS="$(printf '%s' "$TEAM_LAUNCH_ERRS" | jq -c --arg n "$name" --arg e "$err" '.[$n] = $e')"
@@ -464,6 +489,7 @@ team_revalidate_placements() {
         if [ -z "${M_WORKTREES[$j]}" ] || [ ! -d "${M_WORKTREES[$j]}" ]; then
             M_WORKTREES[$j]=""
             TEAM_UNPLACED="$TEAM_UNPLACED ${M_NAMES[$j]}"
+            team_record_launch_failure "${M_NAMES[$j]}" worktree_failed ""
             spawn::team_member_set "$RUN_DIR" "${M_NAMES[$j]}" launch_state launch_failed \
                 || spawn::team_fail "member '${M_NAMES[$j]}' could not be marked launch_failed"
         fi
@@ -530,8 +556,15 @@ do_dispatch_round() {
           removed: null,
           dispatched: ([ .members[] | select(.launch_state == "dispatched") ] | length),
           pending: ([ .members[] | select(.launch_state == "pending") ] | length),
+          # The recorded cause first, the in-process accumulator only as a
+          # fallback for a launch whose record write did not land. $le holds
+          # the launches of THIS process alone, so a member that failed in an
+          # earlier round read as error:null beside a non-null failure (KTD2).
+          # No apostrophes here: this jq program is a single-quoted shell
+          # string, and one would close it.
           members: [ .members[] | {name, alias, worktree, launch_state, handle,
-                                   round, skills, error: ($le[.name] // null)} ]}')" \
+                                   round, skills, failure,
+                                   error: (.failure.error // $le[.name] // null)} ]}')" \
         || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the round could not be encoded"; }
     emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the round encoded to nothing"; }
     exit "$code"

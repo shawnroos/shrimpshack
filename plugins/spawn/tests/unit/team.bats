@@ -2011,6 +2011,114 @@ one_degraded_member() {
 }
 
 # ---------------------------------------------------------------------------
+# U3 — a member that never launched names its refusal in the RECORD (R2, R3)
+#
+# The dispatch-side twin of the section above. `TEAM_LAUNCH_ERRS` is an
+# in-process accumulator that dies with the process, so a caller who reads
+# `team.json` afterwards — the single source of truth — had no way to say why a
+# member never started. Every assertion below reads the ROW.
+# ---------------------------------------------------------------------------
+
+@test "a launcher's refusal rides the member's row, not only the response" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    # lead's contract does not exist, so bg-agent refuses that one launch.
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/no-such-contract.json" "scout:beta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "dispatched" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "contract_invalid" ]
+    # The launcher's own sentence, relayed rather than re-invented here.
+    [ "$(printf '%s' "$f" | jq -r '.detail | length > 0')" = "true" ]
+    # A launch that never started has no child and nothing degraded. Absent is
+    # null and never a missing key: `jq -r` prints "null" for both, so PRESENCE
+    # is pinned apart from the value.
+    assert_json_key "$f" detail
+    assert_json_key "$f" child_exit_code
+    assert_json_key "$f" degraded_reasons
+    [ "$(printf '%s' "$f" | jq -r '.child_exit_code')" = "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.degraded_reasons')" = "null" ]
+
+    # The member that DID launch carries no cause, and it is the only one that
+    # does not: one failed launch marks one row.
+    [ "$(member_failure scout)" = "null" ]
+    [ "$(rec '[.members[] | select(.failure != null)] | length')" = "1" ]
+
+    # KTD2 — the response's error is a projection of the same value.
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "contract_invalid" ]
+    [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "contract_invalid" ]
+    [ "$(out '.members[] | select(.name == "scout") | .failure')" = "null" ]
+}
+
+@test "the launch refusal outlives the member's worktree (R3)" {
+    dispatch_env "alpha"
+    team_file "$WORK/team.json" single-round 2 "solo:alpha:$WORK/absent-contract.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_failure solo | jq -r '.error')" = "contract_invalid" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    refute_exists "$ROOT/r1/solo"
+    # Read from team.json with the checkout gone.
+    [ "$(member_failure solo | jq -r '.error')" = "contract_invalid" ]
+}
+
+@test "a member whose checkout could not be created records worktree_failed on its row" {
+    mkdir -p "$ROOT/r1"
+    printf 'in the way\n' > "$ROOT/r1/lead"
+    roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.md" \
+        --member scout --alias haiku --contract "$WORK/c2.md"
+    [ "$status" -eq 5 ]
+    [ "$(member_state lead)" = "launch_failed" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "worktree_failed" ]
+    assert_json_key "$f" detail
+    assert_json_key "$f" child_exit_code
+    assert_json_key "$f" degraded_reasons
+    [ "$(member_failure scout)" = "null" ]
+    [ "$(rec '[.members[] | select(.failure != null)] | length')" = "1" ]
+
+    # The roster's response reads the row rather than asserting the cause on its
+    # own, so the two can no longer disagree.
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "worktree_failed" ]
+    [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "worktree_failed" ]
+    [ "$(out '.members[] | select(.name == "scout") | .failure')" = "null" ]
+}
+
+@test "a checkout that vanished between rounds records worktree_failed on its row" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state scout)" = "pending" ]
+    [ "$(member_failure scout)" = "null" ]
+
+    # Round 2 places nothing, so a checkout lost between rounds is caught by the
+    # revalidation and nowhere else.
+    rm -rf "$(member_wt scout)"
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 5 ]
+    [ "$(member_state scout)" = "launch_failed" ]
+    [ "$(member_failure scout | jq -r '.error')" = "worktree_failed" ]
+    [ "$(out '.members[] | select(.name == "scout") | .error')" = "worktree_failed" ]
+    [ "$(out '.members[] | select(.name == "scout") | .failure.error')" = "worktree_failed" ]
+    # lead launched in round 1, and another member's lost checkout is not its
+    # cause.
+    [ "$(member_failure lead)" = "null" ]
+}
+
+# ---------------------------------------------------------------------------
 # Persist before signal, and the envelope
 # ---------------------------------------------------------------------------
 
@@ -2796,4 +2904,31 @@ foreign_changes() {     # <before> <after> <deliverable>...
         [ -n "$wt" ] && [ "$wt" != "null" ] || continue
         case "$rd" in "$wt"/*) printf 'run dir %s is inside member checkout %s\n' "$rd" "$wt" >&2; return 1 ;; esac
     done
+}
+
+# KTD2 — a response's `error` is a PROJECTION of the row's cause, so the two can
+# never disagree. The accumulator behind it holds only THIS process's launch
+# errors, so a member that failed in an EARLIER round read as error:null beside
+# a non-null failure: the response denied a cause the record was holding.
+#
+# Three members and a concurrency of one, because a launch that FAILS consumes
+# no slot — with two members the first round swallows both and there is no
+# second round to test.
+@test "a member that failed to launch in an earlier round still names its cause in a later round's response" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/no-such-contract.json" \
+        "scout:beta:$WORK/c.json" \
+        "third:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" --max-concurrent 1
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_failure lead | jq -r '.error')" = "contract_invalid" ]
+
+    dispatch --run-id r1 --run-dir "$RUN" --max-concurrent 1
+    assert_one_object "$output"
+    [ "$(out '.ok')" = "true" ]
+    [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "contract_invalid" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "contract_invalid" ]
 }
