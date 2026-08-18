@@ -321,3 +321,50 @@ seed() {                # a two-member record with one open round
     [ "$(field '.rounds[0].tokens.unknown')" = "true" ]
     [ "$(field '.derived.continue')" = "false" ]
 }
+
+@test "a member's failure cause round-trips as an object, not a string" {
+    seed
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"kind":"contract_unmet","detail":"the judge withheld a verdict","at":"2026-08-14T10:20:00Z","source":"supervisor"}'
+
+    [ "$(field '.members[0].failure | type')" = "object" ]
+    [ "$(field '.members[0].failure.kind')" = "contract_unmet" ]
+    [ "$(field '.members[0].failure.detail')" = "the judge withheld a verdict" ]
+    [ "$(field '.members[0].failure.at')" = "2026-08-14T10:20:00Z" ]
+    [ "$(field '.members[0].failure.source')" = "supervisor" ]
+    # The other member is untouched, so the write is addressed by name.
+    [ "$(field '.members[1].failure')" = "null" ]
+}
+
+@test "a member's retired attempts round-trip as an ordered array" {
+    seed
+    tr_ spawn::team_member_set "$RUN" lead attempts \
+        '[{"round":1,"outcome":"failed","failure":{"kind":"launch_failed"}},{"round":2,"outcome":"failed","failure":{"kind":"timeout"}}]'
+
+    [ "$(field '.members[0].attempts | type')" = "array" ]
+    [ "$(field '.members[0].attempts | length')" = "2" ]
+    [ "$(field '.members[0].attempts[0].round')" = "1" ]
+    [ "$(field '.members[0].attempts[0].failure.kind')" = "launch_failed" ]
+    [ "$(field '.members[0].attempts[1].round')" = "2" ]
+    [ "$(field '.members[0].attempts[1].failure.kind')" = "timeout" ]
+}
+
+@test "a fresh member row carries a null cause and no retired attempts" {
+    seed
+    # `has` and not just the value: jq prints null for an ABSENT key too, and
+    # KTD4 keeps absent and null distinct.
+    [ "$(field '.members[0] | has("failure")')" = "true" ]
+    [ "$(field '.members[0].failure')" = "null" ]
+    [ "$(field '.members[0] | has("attempts")')" = "true" ]
+    [ "$(field '.members[0].attempts | type')" = "array" ]
+    [ "$(field '.members[0].attempts | length')" = "0" ]
+}
+
+@test "a cause cleared back to null is JSON null, never the string null" {
+    seed
+    tr_ spawn::team_member_set "$RUN" lead failure '{"kind":"timeout"}'
+    [ "$(field '.members[0].failure | type')" = "object" ]
+    tr_ spawn::team_member_set "$RUN" lead failure null
+    [ "$(field '.members[0].failure | type')" = "null" ]
+    refute_file_match '"failure":"null"' "$RUN/team.json"
+}

@@ -203,7 +203,7 @@ spawn::team_member_add() {
         '.members += [{name:$n, alias:$a, worktree:$w, contract:$c,
                        skills:($sk | split(" ") | map(select(length > 0))),
                        launch_state:"pending", handle:null, round:null,
-                       started_at:null, outcome:null,
+                       started_at:null, outcome:null, failure:null, attempts:[],
                        tokens:{input:null, output:null}}]')" || {
         SPAWN_TEAM_ERROR="record_unwritable"
         say "team record: could not encode the member row for '$name'"
@@ -216,6 +216,7 @@ spawn::team_member_set() {
     local dir="$1" name="$2" fld="$3" value="$4" cur raw
     case "$fld" in
         launch_state|handle|round|started_at|outcome|tokens_input|tokens_output) ;;
+        failure|attempts) ;;
         *)
             SPAWN_TEAM_ERROR="field_unknown"
             say "team record: '$fld' is not a writable member field"
@@ -235,6 +236,7 @@ spawn::team_member_set() {
           if .name != $n then .
           elif $f == "tokens_input" then .tokens.input = val
           elif $f == "tokens_output" then .tokens.output = val
+          elif ($f == "failure" or $f == "attempts") then .[$f] = ($v | fromjson)
           else .[$f] = val end)')" || {
         SPAWN_TEAM_ERROR="usage"
         say "team record: '$value' is not a valid value for '$fld'"
