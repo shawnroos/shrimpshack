@@ -41,20 +41,74 @@ setup() {
 }
 
 teardown() {
-    [ -n "${GW_PID:-}" ] && { kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; }
+    sweep_preamble
+    sweep_work
+    rm -rf "$WORK"
+}
+
+# The two kills that must land BEFORE the sweep. Split out of teardown so the
+# invariant test can run teardown's real sequence rather than an approximation
+# of it — the ordering is load-bearing and the timing is what the race turns on.
+sweep_preamble() {
+    # `wait` on a TERMed job exits 143. Swallowed on purpose: that is this
+    # function reaping what it just killed, not a failure to report.
+    if [ -n "${GW_PID:-}" ]; then
+        kill "$GW_PID" 2>/dev/null
+        wait "$GW_PID" 2>/dev/null || :
+    fi
     # A `hang` child execs `sleep 600` and keeps NOTHING of $WORK in its argv, so
     # the sweep below cannot see it. Its pid is the only handle on it, and the
     # fixture writes that down for exactly this reason.
     if [ -f "${FAKE_CLAUDE_RECORD_DIR:-/nonexistent}/pid" ]; then
         while read -r p; do
-            [ -n "$p" ] && kill -9 "$p" 2>/dev/null
+            if [ -n "$p" ]; then kill -9 "$p" 2>/dev/null || :; fi
         done < "$FAKE_CLAUDE_RECORD_DIR/pid"
     fi
+    return 0
+}
+
+# sweep_work — leave no live process holding $WORK.
+#
+# ONE SNAPSHOT IS NOT A SWEEP. A single `pgrep`, kill that list, done, is stale
+# the instant it is taken: bg-agent.sh nohup's the supervisor on its own clock
+# after dispatch returns (lib/bg-agent.sh:602) and forks a `jobs.sh log` child
+# per log line (lib/bg-agent.sh:415), so a process born after the snapshot is
+# never signalled — and the `rm -rf` that follows then walks a tree that
+# process is still writing into, which is the "Directory not empty" this file
+# used to fail with. So: re-sweep until a pass sees NOTHING. The clean pass IS
+# the wait; these are not our children, so `wait` cannot be used on them.
+#
+# EVERY signal is scoped to this test's own mktemp $WORK path. Never signal by
+# script name: other sessions on the same box run these same scripts, and a
+# name-scoped kill takes their work with it.
+#
+# On an exhausted budget this prints the survivors and returns 1. Measured: a
+# non-zero return from HERE is swallowed by teardown, whose status comes from the
+# `rm -rf` after it, so the printf is what a reader actually gets. The return
+# code earns its place with a direct caller that checks it — the invariant test
+# below does.
+sweep_work() {
+    local pass p found
+    for pass in $(seq 1 25); do
+        found=0
+        for p in $(pgrep -f "$WORK" 2>/dev/null); do
+            [ "$p" = "$$" ] && continue
+            found=1
+            # `|| :` because a pid can exit between the pgrep and this kill, and
+            # kill then returns 1. A bats test body runs under errexit, so an
+            # unguarded kill aborts the sweep mid-pass — measured, as a failure
+            # of this very test in a full-file run.
+            kill -9 "$p" 2>/dev/null || :
+        done
+        if [ "$found" -eq 0 ]; then return 0; fi
+        sleep 0.1
+    done
+    printf 'sweep_work: processes still hold %s after 25 passes:\n' "$WORK" >&2
     for p in $(pgrep -f "$WORK" 2>/dev/null); do
         [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
-    rm -rf "$WORK"
+        ps -o pid=,args= -p "$p" 2>/dev/null
+    done >&2
+    return 1
 }
 
 # roster <args...> — always run from inside the temp checkout, never the real one.
@@ -1320,6 +1374,107 @@ member_state() { rec ".members[] | select(.name == \"$1\") | .launch_state"; }
     [ "$(out '.mode')" = "unattended" ]
     [ "$(out '.dispatched')" = "1" ]
     [ "$(out '.pending')" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# The teardown's own invariant
+# ---------------------------------------------------------------------------
+
+work_holders() {    # pids holding $WORK in argv, this shell excluded
+    local p out=""
+    for p in $(pgrep -f "$WORK" 2>/dev/null); do
+        [ "$p" = "$$" ] && continue
+        out="${out:+$out }$p"
+    done
+    printf '%s' "$out"
+}
+
+work_holder_args() {
+    local p
+    for p in $(work_holders); do ps -o args= -p "$p" 2>/dev/null; done
+}
+
+# The arming control. The fixture gateway also carries $WORK in its argv, so
+# "something matches" proves nothing — this pins a live SUPERVISOR, the process
+# whose post-dispatch forking is what a single-pass sweep misses.
+assert_supervisor_held() {
+    if ! work_holder_args | grep -q 'spawn-bg-agent='; then
+        printf 'assert_supervisor_held: no live supervisor holds %s, so the race is not armed\n' "$WORK" >&2
+        work_holder_args >&2
+        return 1
+    fi
+    return 0
+}
+
+# The window `rm -rf` needs, not a single instant. rm walks the tree over finite
+# time and a writer at ANY point in that walk breaks it, so this watches rather
+# than samples. It also has to: the late forks are `jobs.sh log` children that
+# live tens of milliseconds — a single probe costs more than that and reports
+# clean over a real violation.
+refute_work_held() {
+    local i h
+    for i in $(seq 1 25); do
+        h="$(work_holders)"
+        if [ -n "$h" ]; then
+            printf 'refute_work_held: pass %s — these processes still hold %s: %s\n' \
+                "$i" "$WORK" "$h" >&2
+            work_holder_args >&2
+            return 1
+        fi
+        sleep 0.04
+    done
+    return 0
+}
+
+# A supervisor's fork burst, made deterministic. bg-agent.sh's `job_log` forks
+# `bash "$JOBS" log --cwd <worktree-under-$WORK>` once per log line
+# (lib/bg-agent.sh:415), so a live supervisor is a process holding $WORK that
+# keeps minting further processes holding $WORK. Real dispatch reaches this
+# state at an offset no test can pin; this pins it.
+#
+# THE PARENT ITSELF HOLDS $WORK, on purpose. A forker the sweep could not see
+# would be a shape the plugin does not have, and a test built on one would prove
+# nothing about it: here a sweep that reaches a genuinely clean pass has killed
+# the forker too, so nothing can appear afterwards. What the burst defeats is a
+# sweep that takes ONE snapshot — every child minted between that snapshot and
+# the kill reaching the forker is never signalled.
+#
+# Children run a SCRIPT FILE rather than `bash -c "sleep 2" <name>`, because bash
+# exec-optimizes the latter into a bare `sleep 2` whose argv keeps no path at all
+# — measured, and it makes the child invisible to the very sweep under test.
+arm_fork_burst() {
+    printf 'sleep 2\n' > "$WORK/burst-child.sh"
+    {
+        printf 'while :; do\n'
+        printf '    bash %s &\n' "$WORK/burst-child.sh"
+        printf '    sleep 0.005\n'
+        printf 'done\n'
+    } > "$WORK/burst.sh"
+    bash "$WORK/burst.sh" &
+    # Let the burst reach steady state, so the sweep meets a running forker
+    # rather than one that has not minted anything yet.
+    sleep 0.3
+}
+
+@test "after the sweep no live process holds the run's own work root" {
+    dispatch_env "alpha,beta,gamma,delta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 4 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json" \
+        "mason:gamma:$WORK/c.json" "clerk:delta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+
+    # Await nothing. dispatch returns while the supervisors are still coming up
+    # (KTD17), which is the state 37 tests in this file leave behind — and the
+    # exact window in which a one-shot snapshot goes stale.
+    assert_supervisor_held
+    arm_fork_burst
+    sweep_preamble
+    sweep_work
+    # Judged over the whole window `rm -rf` needs, because rm walks the tree over
+    # finite time and a writer at ANY point in that walk breaks it.
+    refute_work_held
 }
 
 # ---------------------------------------------------------------------------
