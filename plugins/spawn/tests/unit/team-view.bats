@@ -57,6 +57,14 @@ refute_output_contains() {
     return 0
 }
 
+assert_json_key() {
+    if [ "$(printf '%s' "$1" | jq -r 'if type == "object" then has("'"$2"'") else "notobject" end' 2>/dev/null)" != "true" ]; then
+        printf 'assert_json_key: %s is absent from %s\n' "$2" "$1" >&2
+        return 1
+    fi
+    return 0
+}
+
 assert_output_contains() {
     if ! printf '%s' "$1" | grep -qF -- "$2"; then
         printf 'assert_output_contains: %s is missing\n' "$2" >&2
@@ -589,4 +597,74 @@ PYEOF
     [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .live')" = "false" ]
     [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .terminal')" = "false" ]
     [ "$(printf '%s' "$output" | jq -r '.pending')" = "1" ]
+}
+
+# --- U10 (failure-reporting plan): the cause and the served model on status ---
+#
+# The prefix says which U10: this file's older tests are the status verb's own
+# unit from a different plan, and the tests below are the failure-reporting
+# plan's U10. Same label, different plan, so evidence has to name which.
+
+@test "U10-cause: a failed member's status row carries the failure object, not only an error string" {
+    three_dispatched
+    rec_set lead failure \
+        '{"error":"child_failed","detail":"the child exited 3 before writing out1.txt","child_exit_code":3,"degraded_reasons":[]}'
+    rec_set lead outcome failed
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    # KEY PRESENCE as well as value: `.failure.detail` reads null on a row with
+    # no such key at all, which cannot fail on day zero.
+    assert_json_key "$row" failure
+    [ "$(printf '%s' "$row" | jq -r '.failure.detail')" = "the child exited 3 before writing out1.txt" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.error')" = "child_failed" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.child_exit_code')" = "3" ]
+}
+
+@test "U10-cause: a member served by another model carries served_model in its status row" {
+    three_dispatched
+    rec_set lead served_model claude-3-5-haiku-20241022
+    rec_set lead outcome degraded
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" served_model
+    [ "$(printf '%s' "$row" | jq -r '.served_model')" = "claude-3-5-haiku-20241022" ]
+    # And it is NOT the alias the member asked for — the whole point of the field.
+    [ "$(printf '%s' "$row" | jq -r '.alias')" = "sonnet" ]
+}
+
+@test "U10-cause: a member that succeeded carries failure null, and the key is there" {
+    three_dispatched
+    rec_set lead outcome succeeded
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" failure
+    [ "$(printf '%s' "$row" | jq -r '.failure | type')" = "null" ]
+}
+
+@test "U10-cause: a never-dispatched member carries failure null and served_model null, never its alias" {
+    contract "$WORK/c1.json" out1.txt
+    team_cmd roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.json"
+    [ "$status" -eq 0 ]
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" failure
+    assert_json_key "$row" served_model
+    [ "$(printf '%s' "$row" | jq -r '.failure | type')" = "null" ]
+    [ "$(printf '%s' "$row" | jq -r '.served_model | type')" = "null" ]
+    # ABSENT IS NULL. A row that filled the field from the request would read
+    # `sonnet` here and claim an attribution nothing measured.
+    [ "$(printf '%s' "$row" | jq -r '.launch_state')" = "pending" ]
 }

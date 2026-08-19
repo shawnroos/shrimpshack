@@ -183,8 +183,9 @@ team_view_row() {       # <index> <member json>
         (.handle // ""), (.worktree // ""), (.contract // ""), (.alias // ""),
         (if .round == null then "" else (.round | tostring) end),
         (.started_at // ""), ((.outcome != null) | tostring),
-        (.tokens.input // "null" | tostring), (.tokens.output // "null" | tostring)')"
-    local has_outcome
+        (.tokens.input // "null" | tostring), (.tokens.output // "null" | tostring),
+        (.failure | tojson), (.served_model | tojson)')"
+    local has_outcome fail_json sm_json
     {
         read -r name
         read -r ls
@@ -197,6 +198,10 @@ team_view_row() {       # <index> <member json>
         read -r has_outcome
         read -r ti
         read -r to
+        # tojson, never a raw read: `failure` is an OBJECT, and jq -r would
+        # pretty-print it across lines and shift every read after it.
+        read -r fail_json
+        read -r sm_json
     } <<EOF
 $mfields
 EOF
@@ -220,16 +225,24 @@ EOF
     fi
     [ "$usage" = "measured" ] || { ti="null"; to="null"; }
 
+    # `error` stays PROBE-derived here, unlike the advance response, which
+    # projects failure.error over it. The two can disagree on this surface — a
+    # member that failed in an earlier round and whose worktree is now gone
+    # reads error:worktree_missing beside failure.error:child_failed — and that
+    # is the honest pair: what this call could resolve, beside what settled the
+    # member. Collapsing one into the other would lose the live reading.
     jq -nc --arg n "$name" --arg a "$alias" --arg w "$wt" --arg ls "$ls" \
         --arg h "$handle" --arg st "$TV_STATE" --arg src "$TV_SOURCE" \
         --arg e "$TV_ERR" --arg r "$round" --arg sa "$started" --arg el "$elapsed" \
         --arg ll "$last" --arg us "$usage" --argjson idx "$idx" \
         --argjson live "$TV_LIVE" --argjson term "$term" \
-        --argjson dl "$deliv" --argjson ti "$ti" --argjson to "$to" '{
+        --argjson dl "$deliv" --argjson ti "$ti" --argjson to "$to" \
+        --argjson fail "${fail_json:-null}" --argjson sm "${sm_json:-null}" '{
           idx:$idx, name:$n, alias:$a, worktree:$w, launch_state:$ls,
           handle:(if $h == "" then null else $h end),
           state:$st, state_source:$src, live:$live, terminal:$term,
           error:(if $e == "" then null else $e end),
+          failure:$fail, served_model:$sm,
           round:(if $r == "" then null else ($r | tonumber?) end),
           started_at:(if $sa == "" then null else $sa end),
           elapsed_seconds:(if $el == "" then null else ($el | tonumber?) end),

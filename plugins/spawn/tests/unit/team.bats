@@ -3767,3 +3767,47 @@ reporting_section() {
     # they did not ask for. A driver that never prints it makes the field moot.
     skill_body | grep -qF 'served_model'
 }
+
+# --- U10 (failure-reporting plan): status carries the cause -----------------
+
+@test "--describe says the cause and the served model reach the status surface too" {
+    local d
+    d="$(describe_json)"
+    [ -n "$d" ]
+    local f
+    for f in 'members[].failure' 'members[].served_model'; do
+        if [ "$(printf '%s' "$d" | jq -r --arg f "$f" \
+                '[.response_fields[].name] | index($f) != null')" != "true" ]; then
+            printf -- '--describe declares no %s\n' "$f" >&2
+            return 1
+        fi
+    done
+    # THE NOTE, not only the name. Both fields were already declared as advance
+    # only, so a name check alone passes over the declaration that is wrong.
+    if ! printf '%s' "$d" | jq -r '.response_fields[]
+            | select(.name == "members[].served_model") | .note' | grep -qF 'status'; then
+        printf -- '--describe still does not say status carries served_model\n' >&2
+        return 1
+    fi
+    if printf '%s' "$d" | jq -r '.response_fields[]
+            | select(.name == "members[].served_model") | .note' | grep -qiF 'advance only'; then
+        printf -- '--describe still calls served_model advance only\n' >&2
+        return 1
+    fi
+}
+
+@test "the reporting section no longer tells the driver that status carries no cause" {
+    local sec
+    sec="$(reporting_section)"
+    [ -n "$sec" ]
+    if printf '%s' "$sec" | grep -qiE 'carries no cause|no cause and no served model'; then
+        printf 'the reporting section still says status carries no cause:\n%s\n' "$sec" >&2
+        return 1
+    fi
+    # PRESENCE too: deleting the sentence would pass an absence-only check and
+    # leave the driver with nothing said about status at all.
+    if ! printf '%s' "$sec" | grep -qF 'status'; then
+        printf 'the reporting section no longer mentions status:\n%s\n' "$sec" >&2
+        return 1
+    fi
+}
