@@ -15,6 +15,13 @@ teardown() { rm -rf "$WORK"; }
 
 tr_() { bash -c '. "$1"; shift; "$@"' _ "$LIB/team-record.sh" "$@"; }
 
+# The refusal VALUE a failed record call left behind. tr_ runs in a command
+# substitution, so the callee's SPAWN_TEAM_ERROR never reaches this shell.
+tr_err() {
+    bash -c '. "$1"; shift; "$@" >/dev/null 2>&1; printf "%s" "$SPAWN_TEAM_ERROR"' \
+        _ "$LIB/team-record.sh" "$@"
+}
+
 # Negatives go through helpers that fail as PLAIN COMMANDS. `! grep …` does not
 # fail a bats test — POSIX exempts a pipeline beginning with `!`, and three
 # assertions in this repo passed while what they guarded was false.
@@ -367,4 +374,237 @@ seed() {                # a two-member record with one open round
     tr_ spawn::team_member_set "$RUN" lead failure null
     [ "$(field '.members[0].failure | type')" = "null" ]
     refute_file_match '"failure":"null"' "$RUN/team.json"
+}
+
+# ===========================================================================
+# U5 — rotating a failed attempt out of the live row (R8, R9, R10, KTD6-KTD8)
+#
+# The rotation is ONE read-modify-write. A half-applied rotation is the failure
+# mode this block exists to pin: between an outcome being nulled and the
+# launch_state flipping, a concurrent advance sees a dispatched member with a
+# null outcome and a null handle, answers handle_unknown, and writes an outcome
+# into the middle of the rotation.
+# ===========================================================================
+
+# A member that ran, spent tokens and failed, in a round of its own.
+seed_failed() {         # <member> <round>
+    tr_ spawn::team_member_set "$RUN" "$1" round "$2"
+    tr_ spawn::team_member_set "$RUN" "$1" launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" "$1" handle "job-2026081$2T101500Z-1234"
+    tr_ spawn::team_member_set "$RUN" "$1" started_at "2026-08-1${2}T10:15:00Z"
+    tr_ spawn::team_member_set "$RUN" "$1" tokens_input 100
+    tr_ spawn::team_member_set "$RUN" "$1" tokens_output 50
+    tr_ spawn::team_member_set "$RUN" "$1" failure \
+        '{"kind":"contract_unmet","detail":"no verdict","source":"supervisor"}'
+    tr_ spawn::team_member_set "$RUN" "$1" outcome failed
+}
+
+@test "rotating a failed member appends one attempt holding its handle, outcome and cause" {
+    seed
+    seed_failed lead 1
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    [ "$(field '.members[0].attempts | length')" = "1" ]
+    [ "$(field '.members[0].attempts[0].round')" = "1" ]
+    [ "$(field '.members[0].attempts[0].handle')" = "job-20260811T101500Z-1234" ]
+    [ "$(field '.members[0].attempts[0].outcome')" = "failed" ]
+    [ "$(field '.members[0].attempts[0].failure.kind')" = "contract_unmet" ]
+    [ "$(field '.members[0].attempts[0].tokens.input')" = "100" ]
+    [ "$(field '.members[0].attempts[0].tokens.output')" = "50" ]
+    [ "$(field '.members[0].launch_state')" = "retry_pending" ]
+    # The other member is untouched, so the rotation is addressed by name.
+    [ "$(field '.members[1].attempts | length')" = "0" ]
+    [ "$(field '.members[1].launch_state')" = "pending" ]
+}
+
+@test "after a rotation the live row carries no handle, outcome, cause, round, start or tokens" {
+    seed
+    seed_failed lead 1
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    # KEY PRESENCE as well as value: jq prints null for an absent key too, and a
+    # rotation that DELETED these would read identically on the value alone.
+    for k in handle outcome failure round started_at tokens; do
+        [ "$(field ".members[0] | has(\"$k\")")" = "true" ]
+    done
+    [ "$(field '.members[0].handle')" = "null" ]
+    [ "$(field '.members[0].outcome')" = "null" ]
+    [ "$(field '.members[0].failure')" = "null" ]
+    [ "$(field '.members[0].round')" = "null" ]
+    [ "$(field '.members[0].started_at')" = "null" ]
+    [ "$(field '.members[0].tokens.input')" = "null" ]
+    [ "$(field '.members[0].tokens.output')" = "null" ]
+    # Placement survives: a later round relaunches from the checkout the record
+    # already names and places nothing.
+    [ "$(field '.members[0].worktree')" = "$WORK/wt/lead" ]
+    [ "$(field '.members[0].alias')" = "sonnet" ]
+    [ "$(field '.members[0].contract')" = "$WORK/c1.md" ]
+    [ "$(field '.members[0].skills | length')" = "2" ]
+    refute_file_match '"outcome":"null"' "$RUN/team.json"
+}
+
+@test "a second rotation appends a second attempt and keeps the first, in order" {
+    seed
+    seed_failed lead 1
+    tr_ spawn::team_member_rotate "$RUN" lead
+    tr_ spawn::team_round_open "$RUN"
+    seed_failed lead 2
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    [ "$(field '.members[0].attempts | length')" = "2" ]
+    [ "$(field '.members[0].attempts[0].round')" = "1" ]
+    [ "$(field '.members[0].attempts[1].round')" = "2" ]
+    [ "$(field '.members[0].launch_state')" = "retry_pending" ]
+}
+
+@test "rotating a member this run does not have is refused and changes nothing" {
+    seed
+    seed_failed lead 1
+    local before; before="$(cat "$RUN/team.json")"
+
+    # The specific refusal, not merely a non-zero status: a missing function
+    # exits 127 and would satisfy `status -ne 0` on a rotation that does not exist.
+    [ "$(tr_err spawn::team_member_rotate "$RUN" ghost)" = "member_unknown" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+# A one-member run, so `retry_pending` is the ONLY thing that can make the
+# roster look unfinished — with a second pending member the assertions below
+# would pass on that member alone.
+seed_solo() {
+    tr_ spawn::team_record_new "$RUN" run-5 attached 2 3 100000
+    tr_ spawn::team_member_add "$RUN" lead sonnet "$WORK/wt/lead" "$WORK/c1.md" ""
+    tr_ spawn::team_round_open "$RUN"
+}
+
+@test "rotating the only member of a closed round leaves that round finished, with its close time and verdict" {
+    seed_solo
+    seed_failed lead 1
+    [ "$(field '.rounds[0].state')" = "finished" ]
+    local closed verdict
+    closed="$(field '.rounds[0].closed_at')"
+    verdict="$(field '.rounds[0].verdict')"
+    [ "$closed" != "null" ]
+    [ "$verdict" = "fail" ]
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    # THE DEADLOCK CASE. A round that flips back to running has a null closed_at
+    # and parks every later advance at `waiting` for ever.
+    [ "$(field '.rounds[0].state')" = "finished" ]
+    [ "$(field '.rounds[0].closed_at')" = "$closed" ]
+    [ "$(field '.rounds[0].verdict')" = "$verdict" ]
+    [ "$(field '.rounds[0].members | index("lead")')" != "null" ]
+    [ "$(field '.derived.active_round')" = "null" ]
+}
+
+@test "rotating a member whose launch failed leaves its round finished too" {
+    seed_solo
+    tr_ spawn::team_member_set "$RUN" lead round 1
+    tr_ spawn::team_member_set "$RUN" lead failure '{"kind":"launch_failed"}'
+    tr_ spawn::team_member_set "$RUN" lead launch_state launch_failed
+    [ "$(field '.rounds[0].state')" = "finished" ]
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    # A retired attempt carries no launch_state of its own, so a union that read
+    # one off the entry would call this attempt not-done and reopen its round.
+    [ "$(field '.rounds[0].state')" = "finished" ]
+    [ "$(field '.rounds[0].verdict')" = "fail" ]
+    [ "$(field '.derived.usage_unknown')" = "false" ]
+}
+
+@test "rotating one member of a mixed round leaves that round mixed, not pass" {
+    seed
+    tr_ spawn::team_member_set "$RUN" scout round 1
+    tr_ spawn::team_member_set "$RUN" scout launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" scout tokens_input 10
+    tr_ spawn::team_member_set "$RUN" scout tokens_output 5
+    tr_ spawn::team_member_set "$RUN" scout outcome done
+    seed_failed lead 1
+    [ "$(field '.rounds[0].verdict')" = "mixed" ]
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    [ "$(field '.rounds[0].verdict')" = "mixed" ]
+    [ "$(field '.rounds[0].members | length')" = "2" ]
+}
+
+@test "a rotation does not return the retired attempt's spend to the run" {
+    seed_solo
+    seed_failed lead 1
+    [ "$(field '.derived.tokens_used')" = "150" ]
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    # KTD8: a ceiling that forgot the retired spend lets a retry loop spend past
+    # it for ever.
+    [ "$(field '.derived.tokens_used')" = "150" ]
+    [ "$(field '.derived.bounds.tokens_used')" = "150" ]
+    [ "$(field '.derived.bounds.tokens_remaining')" = "99850" ]
+    [ "$(field '.rounds[0].tokens.total')" = "150" ]
+}
+
+@test "a member at retry_pending is not done, and its run is neither complete nor roster-exhausted" {
+    seed_solo
+    seed_failed lead 1
+    [ "$(field '.derived.complete')" = "true" ]
+    [ "$(field '.derived.stop_reasons | index("roster_exhausted")')" != "null" ]
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    # `is_done` itself is unchanged: a retry_pending member has a null outcome
+    # and is not launch_failed, so it falls out of the existing definition.
+    [ "$(field '.derived.complete')" = "false" ]
+    [ "$(field '.derived.members_terminal')" = "0" ]
+    [ "$(field '.derived.stop_reasons | index("roster_exhausted")')" = "null" ]
+    [ "$(field '.derived.dispatch_allowed')" = "true" ]
+    [ "$(field '.derived.verdict')" = "pending" ]
+}
+
+@test "the derive jq still defines is_done without naming retry_pending" {
+    refute_file_match 'def is_done:.*retry_pending' "$LIB/team-record.sh"
+    grep -q 'def is_done: (.outcome != null) or (.launch_state == "launch_failed");' "$LIB/team-record.sh"
+}
+
+@test "a rotation does not launder an attempt that ran and reported nothing" {
+    seed_solo
+    tr_ spawn::team_member_set "$RUN" lead round 1
+    tr_ spawn::team_member_set "$RUN" lead launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" lead outcome failed
+    [ "$(field '.derived.usage_unknown')" = "true" ]
+    [ "$(field '.derived.members_unmeasured')" = "1" ]
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    # An attempt that RAN and reported no count is unmeasured spend the ceiling
+    # cannot be enforced against; a rotation that dropped it would report the
+    # run as fully measured and let the ceiling read as a total.
+    [ "$(field '.derived.usage_unknown')" = "true" ]
+    [ "$(field '.derived.members_unmeasured')" = "1" ]
+    [ "$(field '.derived.stop_reasons | index("usage_unknown")')" != "null" ]
+    [ "$(field '.rounds[0].tokens.unknown')" = "true" ]
+}
+
+@test "a retired attempt is still a real measurement, so the ceiling stays enforceable" {
+    seed
+    tr_ spawn::team_member_set "$RUN" lead round 1
+    tr_ spawn::team_member_set "$RUN" lead launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" lead tokens_input 100
+    tr_ spawn::team_member_set "$RUN" lead tokens_output 50
+    tr_ spawn::team_member_set "$RUN" lead outcome failed
+    tr_ spawn::team_member_set "$RUN" scout round 1
+    tr_ spawn::team_member_set "$RUN" scout launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" scout outcome done
+    [ "$(field '.derived.ceiling_state')" = "within" ]
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    # The only member that ever REPORTED a count is now a retired attempt. Read
+    # off the live rows alone the run has no measurement at all, and the ceiling
+    # reads `unenforceable` — a run whose one real bill is on the record.
+    [ "$(field '.derived.members_unmeasured')" = "1" ]
+    [ "$(field '.derived.ceiling_state')" = "within" ]
 }

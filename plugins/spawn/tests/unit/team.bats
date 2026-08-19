@@ -938,7 +938,8 @@ member_state() { rec ".members[] | select(.name == \"$1\") | .launch_state"; }
         "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
     dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
     assert_one_object "$output"
-    [ "$(out '.dispatched')" = "1" ]
+    # `dispatched` counts every member in that launch_state, scout included —
+    # the round-2 roster is read off the record instead.
     [ "$(member_state lead)" = "dispatched" ]
     [ "$(member_state scout)" = "launch_failed" ]
     [ "$(out '.members[] | select(.name == "scout") | .error')" = "job_already_running" ]
@@ -3080,4 +3081,257 @@ two_settled_then_one() {    # <mode for the third member>
     [ "$(out '.members[] | select(.name == "lead") | .launch_state')" = "launch_failed" ]
     [ "$(out '.members[] | select(.name == "lead") | .error')" = "contract_invalid" ]
     [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "contract_invalid" ]
+}
+
+# ===========================================================================
+# U5 — retry one failed member in place (R8, R9, R10, KTD6, KTD7, KTD8)
+#
+# A retried member takes `retry_pending`, a launch_state of its own. Flipping it
+# back to `pending` would make a member on its second attempt indistinguishable
+# from one never tried, and the retired attempt is what the ceiling and the
+# closed round are still counted from.
+# ===========================================================================
+
+tr_() { bash -c '. "$1"; shift; "$@"' _ "$LIB/team-record.sh" "$@"; }
+
+retry() {           # <args...> — always from inside the temp checkout
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' retry $* 2>/dev/null"
+}
+
+# A run whose one dispatched member spent tokens and failed. Built through the
+# record rather than a child, so the refusal tests do not need a gateway.
+seed_failed_run() {     # [max-rounds] [ceiling]
+    contract_file "$WORK/c.json" out.txt
+    roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias alpha --contract "$WORK/c.json" \
+        --member scout --alias beta --contract "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    tr_ spawn::team_round_open "$RUN"
+    tr_ spawn::team_member_set "$RUN" scout round 1
+    tr_ spawn::team_member_set "$RUN" scout launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" scout tokens_input 10
+    tr_ spawn::team_member_set "$RUN" scout tokens_output 5
+    tr_ spawn::team_member_set "$RUN" scout outcome done
+    tr_ spawn::team_member_set "$RUN" lead round 1
+    tr_ spawn::team_member_set "$RUN" lead launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" lead handle job-20260818T101500Z-9
+    tr_ spawn::team_member_set "$RUN" lead tokens_input 100
+    tr_ spawn::team_member_set "$RUN" lead tokens_output 50
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"kind":"contract_unmet","detail":"no verdict","source":"supervisor"}'
+    tr_ spawn::team_member_set "$RUN" lead outcome failed
+}
+
+@test "retry returns a failed member to the roster and keeps the attempt it replaces" {
+    seed_failed_run
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.ok')" = "true" ]
+    [ "$(out '.error')" = "null" ]
+
+    [ "$(member_state lead)" = "retry_pending" ]
+    [ "$(member_outcome lead)" = "null" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .attempts | length')" = "1" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .attempts[0].failure.kind')" = "contract_unmet" ]
+    # R9 — the round it failed in stays closed, with its verdict.
+    [ "$(rec '.rounds[0].state')" = "finished" ]
+    [ "$(rec '.rounds[0].verdict')" = "mixed" ]
+    # KTD8 — the retired spend is still on the run.
+    [ "$(rec '.derived.tokens_used')" = "165" ]
+    [ "$(member_state scout)" = "dispatched" ]
+}
+
+@test "every response counts a member waiting to retry as pending" {
+    seed_failed_run
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 0 ]
+    [ "$(out '.pending')" = "1" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' status --run-id r1 --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(out '.pending')" = "1" ]
+
+    advance --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.pending')" = "1" ]
+    # The roster is not exhausted, so the run has somewhere to go.
+    [ "$(out '.intent')" = "continue" ]
+    [ "$(out '.reasons | index("roster_exhausted")')" = "null" ]
+}
+
+@test "retry on a member that finished is refused, and the record is unchanged" {
+    seed_failed_run
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member scout
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "member_not_failed" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry on a member still in flight is refused" {
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" scout outcome null
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member scout
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "member_not_failed" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry on a member this run does not have is refused" {
+    seed_failed_run
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member ghost
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "member_unknown" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry names the member it wants" {
+    seed_failed_run
+    retry --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "usage" ]
+    [ "$(out '.detail | test("--member")')" = "true" ]
+}
+
+@test "retry is refused once the round maximum has fired" {
+    seed_failed_run
+    tr_ spawn::team_round_open "$RUN"
+    tr_ spawn::team_round_open "$RUN"
+    [ "$(rec '.derived.stop_reasons | index("round_max_reached")')" != "null" ]
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "run_bound_reached" ]
+    [ "$(out '.detail | test("round_max_reached")')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry is refused once the token ceiling has been reached" {
+    contract_file "$WORK/c.json" out.txt
+    roster --run-id r2 --run-dir "$RUN" --token-ceiling 120 \
+        --member lead --alias alpha --contract "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    tr_ spawn::team_round_open "$RUN"
+    tr_ spawn::team_member_set "$RUN" lead round 1
+    tr_ spawn::team_member_set "$RUN" lead launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" lead tokens_input 100
+    tr_ spawn::team_member_set "$RUN" lead tokens_output 50
+    tr_ spawn::team_member_set "$RUN" lead outcome failed
+    [ "$(rec '.derived.ceiling_state')" = "reached" ]
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r2 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "run_bound_reached" ]
+    [ "$(out '.detail | test("token_ceiling_reached")')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry waits for an advance holding the run lock rather than interleaving" {
+    seed_failed_run
+    # A live holder: this shell's own pid, which team_lock_take probes with
+    # kill -0 and finds alive.
+    mkdir -p "$RUN/advance.lock"
+    printf '%s\n' "$$" > "$RUN/advance.lock/pid"
+
+    bash -c "cd '$PRIMARY' && bash '$TEAM' retry --run-id r1 --run-dir '$RUN' --member lead >'$WORK/retry.out' 2>/dev/null" &
+    local pid=$!
+    sleep 1
+    # Still held: the rotation has not been applied behind the lock.
+    [ "$(member_state lead)" = "dispatched" ]
+    rm -rf "$RUN/advance.lock"
+    wait "$pid"
+
+    [ "$(member_state lead)" = "retry_pending" ]
+    [ "$(member_outcome lead)" = "null" ]
+    [ "$(jq -r '.ok' < "$WORK/retry.out")" = "true" ]
+}
+
+@test "retry gives up rather than waiting for ever on a lock nobody releases" {
+    seed_failed_run
+    mkdir -p "$RUN/advance.lock"
+    printf '%s\n' "$$" > "$RUN/advance.lock/pid"
+
+    export SPAWN_TEAM_RETRY_LOCK_WAIT=1
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "run_busy" ]
+    [ "$(member_state lead)" = "dispatched" ]
+}
+
+@test "the next round dispatches the retried member, and only it" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/absent.json" "scout:beta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    # lead names a contract that is not there, so its launcher refuses it and
+    # the round goes on without it (R5).
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    await_member_terminal scout
+    advance --run-id r1 --run-dir "$RUN"
+    [ "$(rec '.rounds[0].state')" = "finished" ]
+
+    # The contract arrives, and the operator retries that one member.
+    contract_file "$WORK/absent.json" out.txt
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 0 ]
+    [ "$(member_state lead)" = "retry_pending" ]
+
+    local before; before="$(argv_count)"
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # `dispatched` counts every member in that launch_state, scout included —
+    # the round-2 roster is read off the record instead.
+    [ "$(member_state lead)" = "dispatched" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .round')" = "2" ]
+    # R10 — the second attempt is an ordinary round against the run's bounds.
+    [ "$(rec '.derived.bounds.rounds_used')" = "2" ]
+    await_invocations $(( before + 1 ))
+    assert_child_alias alpha
+    # EXACTLY one more child, and round 2 holds exactly one member: scout is
+    # done and was not re-dispatched. (beta already appears in the argv from
+    # round 1, so its absence is not what proves this.)
+    [ "$(argv_count)" = "$(( before + 1 ))" ]
+    [ "$(rec '.rounds[1].members | join(",")')" = "lead" ]
+}
+
+@test "the dispatch response counts a member held back at retry_pending as pending" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    roster --run-id r1 --run-dir "$RUN" --max-concurrent 1 \
+        --member lead --alias alpha --contract "$WORK/c.json" \
+        --member scout --alias beta --contract "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    tr_ spawn::team_round_open "$RUN"
+    local m
+    for m in lead scout; do
+        tr_ spawn::team_member_set "$RUN" "$m" round 1
+        tr_ spawn::team_member_set "$RUN" "$m" launch_state dispatched
+        tr_ spawn::team_member_set "$RUN" "$m" tokens_input 10
+        tr_ spawn::team_member_set "$RUN" "$m" tokens_output 5
+        tr_ spawn::team_member_set "$RUN" "$m" outcome failed
+        retry --run-id r1 --run-dir "$RUN" --member "$m"
+        [ "$status" -eq 0 ]
+    done
+    team_file "$RUN/team-file.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.dispatched')" = "1" ]
+    # The member the concurrency maximum held back is still waiting to retry,
+    # and a response reporting `pending: 0` beside it would read as a run with
+    # nowhere left to go.
+    [ "$(out '.pending')" = "1" ]
 }

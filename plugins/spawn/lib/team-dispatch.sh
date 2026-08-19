@@ -158,7 +158,8 @@ do_roster() {
                    else ("no worktree could be created for: " + $f) end),
           run_id: $id, run_dir: $d, removed: null, mode: .mode,
           team_file: null, round: null, dispatched: null,
-          pending: ([ .members[] | select(.launch_state == "pending") ] | length),
+          pending: ([ .members[] | select(.launch_state == "pending"
+                                          or .launch_state == "retry_pending") ] | length),
           members: [ .members[] | {name, alias, worktree, launch_state, handle,
                                    skills, failure,
                                    error: (.failure.error // null)} ]}')" \
@@ -375,7 +376,8 @@ team_round_load() {     # <run-dir>
     # because tab is IFS whitespace.
     local fields n
     M_NAMES=(); M_ALIASES=(); M_CONTRACTS=(); M_SKILLS=(); M_WORKTREES=()
-    fields="$(printf '%s' "$rec" | jq -r '.members[] | select(.launch_state == "pending")
+    fields="$(printf '%s' "$rec" | jq -r '.members[]
+        | select(.launch_state == "pending" or .launch_state == "retry_pending")
         | (.name, .alias, .contract, ((.skills // []) | join(" ")), .worktree)' 2>/dev/null)"
     n=0
     while IFS= read -r name; do
@@ -555,7 +557,8 @@ do_dispatch_round() {
           run_id: $id, run_dir: $d, team_file: $tf, mode: .mode, round: $rd,
           removed: null,
           dispatched: ([ .members[] | select(.launch_state == "dispatched") ] | length),
-          pending: ([ .members[] | select(.launch_state == "pending") ] | length),
+          pending: ([ .members[] | select(.launch_state == "pending"
+                                          or .launch_state == "retry_pending") ] | length),
           # The recorded cause first, the in-process accumulator only as a
           # fallback for a launch whose record write did not land. $le holds
           # the launches of THIS process alone, so a member that failed in an
