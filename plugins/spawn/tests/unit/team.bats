@@ -749,7 +749,7 @@ dispatch_env() {    # <alias,alias,...> — the fixture gateway and fixture CLI
     export SPAWN_START_TIMEOUT=10 SPAWN_LOCK_TIMEOUT=30
     unset SPAWN_INSTALL_DIR SPAWN_CONFIG SPAWN_MODELS_JSON SPAWN_CLAUDE_BIN
     unset SPAWN_BG_TIMEOUT SPAWN_JOB_ROOT
-    unset FAKE_CLAUDE_MODE FAKE_CLAUDE_WRITE FAKE_CLAUDE_DENIALS
+    unset FAKE_CLAUDE_MODE FAKE_CLAUDE_WRITE FAKE_CLAUDE_DENIALS FAKE_CLAUDE_MODEL_USAGE
     export CLAUDE_CONFIG_DIR="$WORK/claude-home"; mkdir -p "$CLAUDE_CONFIG_DIR"
     export FAKE_CLAUDE_RECORD_DIR="$WORK/rec"; mkdir -p "$FAKE_CLAUDE_RECORD_DIR"
     export SPAWN_SKILLS_HOME="$WORK/skills-home"
@@ -3178,7 +3178,7 @@ two_settled_then_one() {    # <mode for the third member>
     # R6 — a reader must not be able to tell "not reported" from "not run" by
     # the shape of a row.
     [ "$(out '[.members[] | keys_unsorted | join(",")] | unique | length')" = "1" ]
-    [ "$(out '.members[0] | keys_unsorted | sort | join(",")')" = "error,failure,launch_state,name,outcome,state,tokens" ]
+    [ "$(out '.members[0] | keys_unsorted | sort | join(",")')" = "error,failure,launch_state,name,outcome,served_model,state,tokens" ]
 }
 
 @test "a member that never launched appears in the advance response with its cause" {
@@ -3453,4 +3453,142 @@ seed_failed_run() {     # [max-rounds] [ceiling]
     # and a response reporting `pending: 0` beside it would read as a run with
     # nowhere left to go.
     [ "$(out '.pending')" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# U9 — a member's output is attributed to the model that SERVED it (R15-R17)
+#
+# The incident: four members were rejected with unrecognized_model by Claude
+# Code's own SDK-path validation, and one of them produced its deliverable
+# anyway — the child had fallen back to a default model. Its terminal state was
+# `done`, so the record carried a byline no model in the roster wrote.
+#
+# The requested alias proves nothing. The child's own modelUsage receipt is
+# keyed by the served model id, and that key is the only attribution the
+# envelope holds (KTD10).
+# ---------------------------------------------------------------------------
+
+member_served() { rec ".members[] | select(.name == \"$1\") | .served_model"; }
+
+# One dispatched member that satisfies its contract — so `done` is what it would
+# reach on any ground other than the served model — with the child's receipt
+# under the test's control.
+one_member_serving() {  # <modelUsage JSON|"">
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    [ -z "$1" ] || export FAKE_CLAUDE_MODEL_USAGE="$1"
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    await_member_terminal lead
+}
+
+@test "a member served by a model other than its alias is degraded and names both" {
+    one_member_serving '{"impostor-model":{"canonicalModel":"impostor-model","provider":"firstParty"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # Every other signal says done: the deliverable is there and changed, the
+    # ceiling refused nothing, no verification ran. Only the substitution is
+    # left to decide this, so a green here cannot come from another cause.
+    [ "$(member_outcome lead)" = "degraded" ]
+    [ "$(member_served lead)" = "impostor-model" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "degraded" ]
+    # BOTH names, so a reader can see what was asked for beside what answered.
+    [ "$(printf '%s' "$f" | jq -r '[.degraded_reasons[] | select(test("alpha"))] | length > 0')" = "true" ]
+    [ "$(printf '%s' "$f" | jq -r '[.degraded_reasons[] | select(test("impostor-model"))] | length > 0')" = "true" ]
+}
+
+@test "a member served by the model it asked for records it and is not degraded" {
+    one_member_serving '{"alpha":{"canonicalModel":"alpha","provider":"firstParty"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_served lead)" = "alpha" ]
+    [ "$(member_failure lead)" = "null" ]
+}
+
+@test "a child that reports no modelUsage leaves served_model null, not the alias" {
+    one_member_serving ""
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # Unknown is not a mismatch, so nothing is degraded by it (KTD4).
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_served lead)" = "null" ]
+    # `jq -r` prints "null" for a key measured null AND for one never written,
+    # so PRESENCE is pinned apart from the value.
+    assert_json_key "$(rec ".members[] | select(.name == \"lead\")")" served_model
+    [ "$(member_failure lead)" = "null" ]
+}
+
+@test "several modelUsage keys resolve to the first one, not the first sorted" {
+    # zeta is first in document order and last in sorted order: a read that
+    # sorted would answer alpha-decoy, which is also the requested alias, so a
+    # sorting read would additionally report a match that did not happen.
+    one_member_serving '{"zeta-served":{"canonicalModel":"zeta-served"},"alpha-decoy":{"canonicalModel":"alpha-decoy"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_served lead)" = "zeta-served" ]
+    [ "$(member_outcome lead)" = "degraded" ]
+}
+
+@test "the served model reaches the advance response's member entry" {
+    one_member_serving '{"impostor-model":{"canonicalModel":"impostor-model"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .served_model')" = "impostor-model" ]
+    assert_json_key "$(out '.members[] | select(.name == "lead")' | jq -c .)" served_model
+}
+
+@test "the served model outlives the member's worktree, like the cause" {
+    one_member_serving '{"impostor-model":{"canonicalModel":"impostor-model"}}'
+    advance --run-dir "$RUN"
+    [ "$(member_served lead)" = "impostor-model" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    refute_exists "$ROOT/r1/lead"
+    [ "$(member_served lead)" = "impostor-model" ]
+}
+
+@test "a member degraded by substitution still carries its cause (R1)" {
+    one_member_serving '{"impostor-model":{"canonicalModel":"impostor-model"}}'
+    advance --run-dir "$RUN"
+    local f; f="$(member_failure lead)"
+    # The two mechanisms do not mask each other: the substitution is what made
+    # this degraded, and the cause U2 writes is still whole.
+    [ "$f" != "null" ]
+    assert_json_key "$f" detail
+    assert_json_key "$f" child_exit_code
+    assert_json_key "$f" degraded_reasons
+    [ "$(printf '%s' "$f" | jq -r '.detail | length > 0')" = "true" ]
+    [ "$(printf '%s' "$f" | jq -r '.child_exit_code')" = "0" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "degraded" ]
+}
+
+@test "the entry's canonicalModel is preferred over the key it sits under" {
+    # The key and the canonical id are not always the same string — the receipt
+    # names both, and canonicalModel is the one that identifies the model rather
+    # than the route it was reached by.
+    one_member_serving '{"gateway-alias-key":{"canonicalModel":"real-served-id","provider":"firstParty"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_served lead)" = "real-served-id" ]
+    # Neither name is the requested alias, so this is still a substitution.
+    [ "$(member_outcome lead)" = "degraded" ]
+}
+
+@test "a receipt whose key differs but whose canonicalModel is the alias is no substitution" {
+    # The route the model was reached by is not the model. Comparing the KEY
+    # here would degrade a member that ran on exactly what it asked for.
+    one_member_serving '{"route-key-not-a-model":{"canonicalModel":"alpha","provider":"firstParty"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_served lead)" = "alpha" ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_failure lead)" = "null" ]
 }

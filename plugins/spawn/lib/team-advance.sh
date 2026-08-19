@@ -162,6 +162,25 @@ team_record_usage() {   # <name> <handle.sh result object>
     done
 }
 
+# The model that ANSWERED, lifted out of the member's own result record (R15).
+# The supervisor took it from the child's own modelUsage receipt; nothing here
+# re-derives it, and the requested alias is never substituted for it — a row
+# that restated the request would be the byline the incident shipped.
+#
+# WRITTEN BEFORE THE OUTCOME, for the same reason team_record_usage is: each set
+# is its own recompute-and-write, and an outcome landing first leaves a reader
+# looking at a terminal member with no attribution.
+#
+# A non-string is not written at all rather than written null: absent is already
+# the field's initial value, and an absence must never overwrite a measurement.
+team_record_served() {  # <name> <handle.sh result object>
+    local name="$1" res="$2" v
+    v="$(printf '%s' "$res" | jq -r '.result.served_model | strings // empty' 2>/dev/null)"
+    [ -n "$v" ] || return 0
+    spawn::team_member_set "$RUN_DIR" "$name" served_model "$v" \
+        || say "team: '$name' was served by $v and it could not be recorded"
+}
+
 # Why a member did not come back with work, written to its own row. The cause is
 # ONE object so a reader cannot get the verdict and the reason from two places
 # and find them disagreeing; the response's `error` is a projection of
@@ -238,6 +257,7 @@ team_probe_member() {   # <name> <handle> <worktree>
         outcome="$(printf '%s' "$res" | jq -r '.terminal_state // empty' 2>/dev/null)"
         [ -n "$outcome" ] || outcome="$state"
         team_record_usage "$name" "$res"
+        team_record_served "$name" "$res"
     else
         # handle_expired and result_missing say the job ran and its record is no
         # longer readable — which is not the same as no answer. The probe's own
@@ -297,6 +317,7 @@ team_emit_intent() {    # <record> <intent> <reasons-json> <delay|""> <detail>
                        outcome:(if $p == null or $p.outcome == null
                                 then $m.outcome else $p.outcome end),
                        tokens:$m.tokens,
+                       served_model:$m.served_model,
                        failure:$m.failure,
                        error:($m.failure.error // $p.error // null)} ]}
         + (if $dl == "" then {} else {delay:($dl | tonumber)} end)')" \

@@ -231,6 +231,7 @@ spawn::team_member_add() {
                        skills:($sk | split(" ") | map(select(length > 0))),
                        launch_state:"pending", handle:null, round:null,
                        started_at:null, outcome:null, failure:null, attempts:[],
+                       served_model:null,
                        tokens:{input:null, output:null}}]')" || {
         SPAWN_TEAM_ERROR="record_unwritable"
         say "team record: could not encode the member row for '$name'"
@@ -243,6 +244,7 @@ spawn::team_member_set() {
     local dir="$1" name="$2" fld="$3" value="$4" cur raw
     case "$fld" in
         launch_state|handle|round|started_at|outcome|tokens_input|tokens_output) ;;
+        served_model) ;;
         failure|attempts) ;;
         *)
             SPAWN_TEAM_ERROR="field_unknown"
@@ -296,7 +298,9 @@ spawn::team_round_open() {
 # its round. The same window against the ceiling counts the retired spend twice.
 #
 # alias, contract, skills and worktree SURVIVE: a later round places nothing and
-# relaunches from the checkout the record already names.
+# relaunches from the checkout the record already names. served_model does NOT:
+# it is a measurement of the attempt being retired, and left standing it would
+# attribute the NEXT attempt's output to whatever answered the last one.
 spawn::team_member_rotate() {
     local dir="$1" name="$2" cur raw
     cur="$(spawn::team_record_read "$dir")" || return 1
@@ -310,10 +314,11 @@ spawn::team_member_rotate() {
           if .name != $n then .
           else . + {attempts: ((.attempts // [])
                        + [{round: .round, handle: .handle, outcome: .outcome,
-                           failure: .failure, tokens: .tokens}]),
+                           failure: .failure, tokens: .tokens,
+                       served_model: .served_model}]),
                     launch_state: "retry_pending",
                     handle: null, outcome: null, started_at: null,
-                    round: null, failure: null,
+                    round: null, failure: null, served_model: null,
                     tokens: {input: null, output: null}}
           end)')" || {
         SPAWN_TEAM_ERROR="record_unwritable"
