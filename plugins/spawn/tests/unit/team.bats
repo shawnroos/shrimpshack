@@ -228,7 +228,8 @@ jq_free_path() {
     run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
     [ "$status" -eq 0 ]
     assert_one_object "$output"
-    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "3" ]
+    # Four, not three: the run's own emptied root is removed with them (R11).
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "4" ]
 
     # What the record named is gone...
     refute_exists "$ROOT/r1/lead"
@@ -265,7 +266,7 @@ jq_free_path() {
     [ "$status" -eq 0 ]
     assert_one_object "$output"
     [ "$(printf '%s' "$output" | jq -r '.ok')" = "true" ]
-    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "2" ]
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "3" ]
     refute_exists "$ROOT/r1/lead"
     refute_exists "$ROOT/r1/mason"
 }
@@ -291,7 +292,7 @@ jq_free_path() {
 
     run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "3" ]
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "4" ]
 
     # Our own member: gone from disk AND deregistered.
     refute_exists "$ROOT/r1/lead"
@@ -397,7 +398,7 @@ jq_free_path() {
     [ "$status" -eq 0 ]
     run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "1" ]
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "2" ]
     refute_exists "$ROOT/r1/lead"
 }
 
@@ -412,6 +413,124 @@ jq_free_path() {
     run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
     [ "$status" -eq 0 ]
     assert_exists "$ROOT/r1/not-a-member/keep.txt"
+}
+
+# ===========================================================================
+# R11, R12 — the run's own worktree root does not outlive the run
+# ===========================================================================
+
+@test "teardown removes the run's own empty root and names it in removed" {
+    three_members
+    [ "$status" -eq 0 ]
+    assert_exists "$ROOT/r1"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    refute_exists "$ROOT/r1"
+    # NAMED, not merely counted: the operator reads `removed` to know what went.
+    [ "$(printf '%s' "$output" | jq -r --arg r "$ROOT/r1" '.removed | index($r) != null')" = "true" ]
+    # The worktrees/ directory the run's root sat in is not the run's to remove.
+    assert_exists "$ROOT"
+}
+
+@test "teardown leaves a run root that still holds an unrelated file, and still succeeds" {
+    three_members
+    [ "$status" -eq 0 ]
+    # Somebody else's file inside the run's root. `rmdir` refuses a non-empty
+    # directory, which is why it is the verb here (KTD9).
+    printf 'not ours\n' > "$ROOT/r1/stray.txt"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r '.ok')" = "true" ]
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "3" ]
+    assert_exists "$ROOT/r1"
+    assert_exists "$ROOT/r1/stray.txt"
+    [ "$(cat "$ROOT/r1/stray.txt")" = "not ours" ]
+}
+
+@test "the run-root prune refuses a root whose basename is not the run id" {
+    # Not reachable through the teardown verb: both ways a root is resolved —
+    # the parent of a shape-checked member path, and the configured-root
+    # fallback — already make the basename the run id. The guard is called
+    # directly so it is proved rather than assumed (KTD9).
+    mkdir -p "$ROOT/notr1"
+    run bash -c ". '$LIB/team-worktree.sh' && spawn::team_run_root_prune '$ROOT/notr1' r1"
+    [ "$status" -eq 1 ]
+    assert_exists "$ROOT/notr1"
+
+    run bash -c ". '$LIB/team-worktree.sh' && spawn::team_run_root_prune '$ROOT/notr1' notr1"
+    [ "$status" -eq 0 ]
+    refute_exists "$ROOT/notr1"
+}
+
+@test "teardown removes the run root when no member row names a worktree" {
+    # The all-unplaced shape. No member row carries a path, so the root cannot
+    # be read off one — it comes from the configured worktree root and the run
+    # id. The root is made unwritable so every checkout fails and NOTHING is
+    # left inside it; `rmdir` needs write on the parent, not on the root.
+    mkdir -p "$ROOT/r1"
+    chmod 555 "$ROOT/r1"
+    three_members
+    [ "$status" -eq 5 ]
+    [ "$(rec '.members[0].worktree')" = "" ]
+    [ "$(rec '.members[2].worktree')" = "" ]
+    assert_exists "$ROOT/r1"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r --arg r "$ROOT/r1" '.removed | index($r) != null')" = "true" ]
+    refute_exists "$ROOT/r1"
+}
+
+@test "teardown removes the root the member paths name, not the configured one" {
+    # The two ways a root is resolved normally land on the same directory, so
+    # neither is proved while they agree. An explicit --worktree puts the run's
+    # members somewhere the configured root does not point, which is the only
+    # shape that tells the parent-of-the-member-path rule from the fallback.
+    roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.md" --worktree "$WORK/alt/r1/lead"
+    [ "$status" -eq 0 ]
+    assert_exists "$WORK/alt/r1/lead/.git"
+    refute_exists "$ROOT/r1"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r --arg r "$WORK/alt/r1" '.removed | index($r) != null')" = "true" ]
+    refute_exists "$WORK/alt/r1"
+    # One level only: the directory the run's root sat in is not the run's.
+    assert_exists "$WORK/alt"
+}
+
+@test "a dispatch that places no member leaves no run root behind" {
+    # Runs 1 and 2 of the incident: every member failed to get a checkout,
+    # teardown was never called, and the empty root stayed beside real
+    # worktrees where `wtl` finds it.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" single-round 2 "solo:alpha:$WORK/c.json"
+    mkdir -p "$ROOT/rz"
+    chmod 555 "$ROOT/rz"
+
+    dispatch --team-file "$WORK/team.json" --run-id rz --run-dir "$WORK/rz"
+    [ "$status" -eq 5 ]
+    [ "$(out '.error')" = "worktree_failed" ]
+    refute_exists "$ROOT/rz"
+}
+
+@test "control: a dispatch that places a member leaves the run root in place" {
+    # The control arm for the case above — it proves the removal is about the
+    # root being EMPTY and not about dispatch removing its root whenever a
+    # member failed.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id rk --run-dir "$WORK/rk"
+    [ "$status" -eq 0 ]
+    assert_exists "$ROOT/rk"
+    assert_exists "$ROOT/rk/lead/.git"
 }
 
 # ===========================================================================

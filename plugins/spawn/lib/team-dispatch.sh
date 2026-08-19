@@ -472,6 +472,17 @@ do_dispatch() {
 
     spawn::team_git_exclude "$DRIVER" "$WT_ROOT"
     team_place_members "$RUN_DIR"
+    # R12. A fresh run that placed NOBODY made a root and put nothing in it, and
+    # teardown is operator-invoked — so without this the empty directory sits in
+    # the same namespace as real worktrees until somebody notices it. Dispatch
+    # knows the root it made; it does not need the record to name it. `rmdir`
+    # inside the prune refuses a root anything else is using.
+    local k=0 placed=""
+    while [ "$k" -lt "${#M_WORKTREES[@]}" ]; do
+        [ -n "${M_WORKTREES[$k]}" ] && { placed=yes; break; }
+        k=$(( k + 1 ))
+    done
+    [ -n "$placed" ] || spawn::team_run_root_prune "$WT_ROOT/$RUN_ID" "$RUN_ID" || :
     do_dispatch_round
 }
 
