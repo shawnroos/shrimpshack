@@ -570,3 +570,23 @@ sys.exit(bad)
 PYEOF
     [ "$status" -eq 0 ]
 }
+
+@test "a member waiting to retry renders as retrying, not as unresolvable" {
+    three_dispatched
+    rec_set lead attempts \
+        '[{"round":1,"handle":"job-x","outcome":"failed","failure":{"kind":"contract_unmet"},"tokens":{"input":10,"output":5}}]'
+    rec_set lead handle null
+    rec_set lead round null
+    rec_set lead launch_state retry_pending
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # A retried member holds no handle, so the probe below the state arm would
+    # answer worktree_missing on a member the record accounts for exactly.
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .state')" = "retrying" ]
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .state_source')" = "record" ]
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .error')" = "null" ]
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .live')" = "false" ]
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .terminal')" = "false" ]
+    [ "$(printf '%s' "$output" | jq -r '.pending')" = "1" ]
+}

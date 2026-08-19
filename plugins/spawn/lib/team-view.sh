@@ -76,6 +76,11 @@ team_view_probe() {     # <launch_state> <handle> <worktree>
     case "$ls" in
         pending)
             TV_STATE="pending"; TV_SOURCE="record"; return 0 ;;
+        retry_pending)
+            # A member waiting for its next attempt holds no handle, so falling
+            # through to the probe below would report it worktree_missing or
+            # unresolvable — a member the record can account for exactly.
+            TV_STATE="retrying"; TV_SOURCE="record"; return 0 ;;
         launch_failed)
             # R5: the launcher's specific error rides dispatch's response and is
             # not in the record, so this surface can say THAT a member failed to

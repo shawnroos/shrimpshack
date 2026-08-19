@@ -274,7 +274,8 @@ team_emit_intent() {    # <record> <intent> <reasons-json> <delay|""> <detail>
           round_state:(if (.rounds | length) == 0 then null else (.rounds | last | .state) end),
           team_file:null, removed:null,
           dispatched:([ .members[] | select(.launch_state == "dispatched") ] | length),
-          pending:([ .members[] | select(.launch_state == "pending") ] | length),
+          pending:([ .members[] | select(.launch_state == "pending"
+                                         or .launch_state == "retry_pending") ] | length),
           # THE WHOLE ROSTER, from the record and not from this call probes
           # (KTD5). The probe loop looks only at members with a null outcome,
           # so a list built from the probes dropped every member that settled
@@ -370,4 +371,155 @@ do_advance() {
     # record does not back.
     team_lock_release
     team_emit_intent "$rec" "$intent" "$reasons" "$delay" ""
+}
+
+# ---------------------------------------------------------------------------
+# retry — return one failed member to the dispatch roster (U5, R8, R9, R10)
+#
+# The member takes `retry_pending`, a launch_state of its own (KTD6). Back at
+# `pending` it would be indistinguishable from a member never tried, and the
+# retired attempt is what the ceiling and the closed round are still counted
+# from.
+#
+# THIS VERB DISPATCHES NOTHING. The retried member is picked up by the ordinary
+# round machinery on the next dispatch, against the same round maximum, token
+# ceiling and concurrency maximum as a first attempt — so no bound gets a retry
+# case (KTD8).
+#
+# It takes the run ADVANCE LOCK, the same one do_advance holds while it probes
+# and writes. The rotation is one atomic write against itself but not ordered
+# against an advance that probes the member on either side of it: an advance
+# holding a pre-rotation read answers handle_unknown and writes an outcome onto
+# a row the rotation has already cleared.
+#
+# And it WAITS for that lock where advance answers `noop`. An advance is
+# re-entered by a driver that will call again; a retry is an operator action
+# with nothing to re-enter it, so a live advance is a delay and not an answer.
+# ---------------------------------------------------------------------------
+RETRY_MEMBER=""
+
+retry_lock_wait() {
+    local w="${SPAWN_TEAM_RETRY_LOCK_WAIT:-30}"
+    case "$w" in ''|*[!0-9]*) w=30 ;; esac
+    [ "$w" -gt 0 ] || w=30
+    printf '%s' "$w"
+}
+
+retry_parse() {
+    local rest=()
+    RETRY_MEMBER=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --member) RETRY_MEMBER="${2:-}"; shift 2 || shift ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    team_run_parse retry ${rest[@]+"${rest[@]}"}
+    [ -n "$RETRY_MEMBER" ] || { SPAWN_TEAM_ERROR="usage"
+        spawn::team_fail "retry takes --member: it returns ONE member to the roster, never the team"; }
+}
+
+# The refusals, read off a record already in hand. Kept apart from the write so
+# every one of them answers before the lock is taken and before anything moves.
+retry_check() {         # <record json>
+    local rec="$1" state fired
+    if ! printf '%s' "$rec" | jq -e --arg n "$RETRY_MEMBER" \
+            'any(.members[]; .name == $n)' >/dev/null 2>&1; then
+        SPAWN_TEAM_ERROR="member_unknown"
+        spawn::team_fail "this run has no member named $RETRY_MEMBER"
+    fi
+    # A retry replaces a settled non-success attempt. A member still in flight
+    # has an attempt to finish, and one that finished has nothing to replace.
+    state="$(printf '%s' "$rec" | jq -r --arg n "$RETRY_MEMBER" '.members[]
+        | select(.name == $n)
+        | if .outcome == "done" then "done"
+          elif (.outcome != null) or (.launch_state == "launch_failed") then "retryable"
+          else "unfinished" end')"
+    [ "$state" = "retryable" ] || { SPAWN_TEAM_ERROR="member_not_failed"
+        spawn::team_fail "member $RETRY_MEMBER is $state, and a retry replaces a settled non-success attempt"; }
+    # R10 — a retry is an attempt the run has to pay for, so a run whose bounds
+    # already fired may not admit one. Read from the chokepoint (KTD18), and
+    # only the BOUNDS: `roster_exhausted` is true of every finished run, which
+    # is exactly the run a legitimate retry targets.
+    fired="$(printf '%s' "$rec" | jq -r '[ .derived.stop_reasons[]
+        | select(. == "round_max_reached" or . == "token_ceiling_reached") ] | join(", ")')"
+    [ -z "$fired" ] || { SPAWN_TEAM_ERROR="run_bound_reached"
+        spawn::team_fail "this run has already stopped: $fired"; }
+}
+
+do_retry() {
+    need_jq
+    retry_parse "$@"
+    team_context
+    [ -n "$RUN_DIR" ] || RUN_DIR="$DRIVER/.spawn/teams/$RUN_ID"
+    ADVANCE_LOCK="$RUN_DIR/advance.lock"
+
+    local rec waited=0 limit
+    if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
+        spawn::team_record_refusal "$RUN_DIR"
+        spawn::team_fail "no readable run record at $RUN_DIR"
+    fi
+    [ -n "$RUN_ID" ] || RUN_ID="$(printf '%s' "$rec" | jq -r '.run_id')"
+    retry_check "$rec"
+
+    limit="$(retry_lock_wait)"
+    until team_lock_take; do
+        waited=$(( waited + 1 ))
+        if [ "$waited" -ge "$limit" ]; then
+            SPAWN_TEAM_ERROR="run_busy"
+            spawn::team_fail "an advance has held the lock on $RUN_ID for ${waited}s and nothing was changed"
+        fi
+        sleep 1
+    done
+    # RELEASE ON ANY EXIT FROM HERE ON. The re-check below can refuse — an
+    # advance settling a SIBLING member during the wait can push the run past
+    # its ceiling, and a second operator retry can rotate this member first —
+    # and spawn::team_fail exits without unwinding. Release is idempotent, so
+    # the explicit calls below stay correct.
+    trap team_lock_release EXIT
+
+    # RE-READ AND RE-CHECK UNDER THE LOCK. The record answered above was read
+    # before the lock, so an advance that finished in the wait window may have
+    # settled the very member this call is about.
+    if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
+        team_lock_release
+        spawn::team_record_refusal "$RUN_DIR"
+        spawn::team_fail "no readable run record at $RUN_DIR"
+    fi
+    retry_check "$rec"
+
+    if ! spawn::team_member_rotate "$RUN_DIR" "$RETRY_MEMBER"; then
+        team_lock_release
+        spawn::team_fail "member $RETRY_MEMBER could not be returned to the roster"
+    fi
+    if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
+        team_lock_release
+        spawn::team_record_refusal "$RUN_DIR"
+        spawn::team_fail "the run record could not be read back after the rotation"
+    fi
+    team_lock_release
+
+    local obj
+    obj="$(printf '%s' "$rec" | jq -c --arg id "$RUN_ID" --arg d "$RUN_DIR" \
+        --arg n "$RETRY_MEMBER" \
+        "$(spawn::envelope_jq plugin)"' + {
+          ok:true, error:null, remedy:null, exit_code:0,
+          response_kind:"team-retry",
+          detail:null, run_id:$id, run_dir:$d, member:$n, mode:.mode,
+          intent:null, reasons:null,
+          complete:.derived.complete,
+          ceiling_state:.derived.ceiling_state,
+          members_unmeasured:.derived.members_unmeasured,
+          round:(if (.rounds | length) == 0 then null else (.rounds | last | .ordinal) end),
+          round_state:(if (.rounds | length) == 0 then null else (.rounds | last | .state) end),
+          team_file:null, removed:null,
+          dispatched:([ .members[] | select(.launch_state == "dispatched") ] | length),
+          pending:([ .members[] | select(.launch_state == "pending"
+                                         or .launch_state == "retry_pending") ] | length),
+          members:[ .members[] | {name, launch_state, outcome, tokens, failure,
+                                  attempts:((.attempts // []) | length),
+                                  error:(.failure.error // null)} ]}')" \
+        || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the retry could not be encoded"; }
+    emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the retry encoded to nothing"; }
+    exit "$EX_OK"
 }
