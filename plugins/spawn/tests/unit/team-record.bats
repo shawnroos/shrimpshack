@@ -608,3 +608,47 @@ seed_solo() {
     [ "$(field '.derived.members_unmeasured')" = "1" ]
     [ "$(field '.derived.ceiling_state')" = "within" ]
 }
+
+# ===========================================================================
+# U9 — the model that SERVED a member, on the member's own row (R15, R17)
+#
+# A plain string, so it takes the value arm and not the fromjson one: written
+# as the served model id, cleared as JSON null, never as the string "null".
+# ===========================================================================
+
+@test "a member's served model round-trips as a string and clears to JSON null" {
+    seed
+    tr_ spawn::team_member_set "$RUN" lead served_model "impostor-model"
+    [ "$(field '.members[0].served_model | type')" = "string" ]
+    [ "$(field '.members[0].served_model')" = "impostor-model" ]
+    # The other member is untouched, so the write is addressed by name.
+    [ "$(field '.members[1].served_model')" = "null" ]
+
+    tr_ spawn::team_member_set "$RUN" lead served_model null
+    [ "$(field '.members[0].served_model | type')" = "null" ]
+    refute_file_match '"served_model":"null"' "$RUN/team.json"
+}
+
+@test "a fresh member row carries a served_model key holding null" {
+    seed
+    # `has` and not just the value: jq prints null for an ABSENT key too, and a
+    # reader that cannot tell them apart reports an unmeasured attribution as a
+    # measured one (KTD4).
+    [ "$(field '.members[0] | has("served_model")')" = "true" ]
+    [ "$(field '.members[0].served_model')" = "null" ]
+}
+
+@test "rotating a member retires its served model with the attempt and clears the row" {
+    seed
+    seed_failed lead 1
+    tr_ spawn::team_member_set "$RUN" lead served_model "impostor-model"
+
+    tr_ spawn::team_member_rotate "$RUN" lead
+
+    # The retired attempt keeps it: that IS what answered that attempt.
+    [ "$(field '.members[0].attempts[0].served_model')" = "impostor-model" ]
+    # The live row does not: the next attempt has not run, and a served model
+    # left standing would attribute its output to the last one.
+    [ "$(field '.members[0] | has("served_model")')" = "true" ]
+    [ "$(field '.members[0].served_model')" = "null" ]
+}
