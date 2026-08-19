@@ -87,7 +87,7 @@ The cause is the supervisor's own classification of the member, which is why it 
 
 Where `members[].served_model` names a model other than the alias the member asked for, say so and name both. The member answered on something it did not ask to run on, and only the reader can decide whether that answer still counts.
 
-`status` is the other view, not the same one: per-member progress against the deliverable checklist, elapsed and the last log line. It carries no cause and no served model. Read those from the `advance` envelope, or from `retry`'s.
+`status` is the other view, not the same one: per-member progress against the deliverable checklist, elapsed and the last log line. It carries the cause and the served model too, in the same `members[].failure` and `members[].served_model` fields, read from the run record — so a member that failed rounds ago still names why on this surface. Its `members[].error` is the state this call could probe, not a projection of `failure.error`: where the two disagree, report both. `retry`'s envelope carries the cause but no served model.
 
 Plus the round position, the unmeasured count, and on `stop` the reason list. The modes differ in *when*:
 
