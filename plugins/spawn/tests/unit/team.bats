@@ -3592,3 +3592,178 @@ one_member_serving() {  # <modelUsage JSON|"">
     [ "$(member_outcome lead)" = "done" ]
     [ "$(member_failure lead)" = "null" ]
 }
+
+# ===========================================================================
+# U7 — the surface contracts describe what changed (R13, R14)
+#
+# WHY THESE ARE HERE. A field a caller cannot learn about from `--describe` is
+# a field nobody reads. `members[].failure` is the whole point of this plan and
+# it shipped in U2 with nothing declaring it; `served_model` shipped in U9 the
+# same way. The reporting instruction in the driver skill is the other half:
+# the cause existed on the record and the skill told the driver to print
+# "probed fields only", so it never reached the operator.
+# ===========================================================================
+
+describe_json() {
+    bash "$TEAM" --describe 2>/dev/null
+}
+
+# assert_response_field <json> <name> — declared exactly once, with real prose.
+assert_response_field() {
+    local n
+    n="$(printf '%s' "$1" | jq -r --arg f "$2" \
+        '[.response_fields[] | select(.name == $f) | select(.note != null and (.note | length > 20))] | length')"
+    if [ "$n" != "1" ]; then
+        printf 'assert_response_field: %s is declared %s times with usable prose, want 1\n' "$2" "$n" >&2
+        return 1
+    fi
+    return 0
+}
+
+@test "--describe declares every member field this plan added" {
+    local d
+    d="$(describe_json)"
+    assert_one_object "$d"
+    assert_response_field "$d" 'members[].failure'
+    assert_response_field "$d" 'members[].served_model'
+    assert_response_field "$d" 'members[].attempts'
+    # The cause a caller branches on is the projection, not the object, so the
+    # contract has to name it too.
+    assert_response_field "$d" 'members[].error'
+}
+
+@test "--describe says a member's cause is an object with the four keys the record writes" {
+    # A note saying only "the cause" leaves a reader to guess the shape, and the
+    # shape is what they have to index. These four keys are what
+    # team_record_failure and team_record_launch_failure both write.
+    local note k
+    note="$(describe_json | jq -r '.response_fields[] | select(.name == "members[].failure") | .note')"
+    for k in error detail child_exit_code degraded_reasons; do
+        if ! printf '%s' "$note" | grep -qF -- "$k"; then
+            printf 'the members[].failure note does not name the key %s: %s\n' "$k" "$note" >&2
+            return 1
+        fi
+    done
+}
+
+@test "every declared error value maps to the exit code it declares, and back" {
+    # spawn::team_code_for is a wildcard case, so the two sides cannot be
+    # compared as two lists. They are compared by BEHAVIOUR: ask the function
+    # for each declared value and require the declared code. The reverse arm is
+    # the list one — a value the function names explicitly and the contract
+    # never mentions is a code no caller can anticipate.
+    local d v c want
+    d="$(describe_json)"
+    [ "$(printf '%s' "$d" | jq -r '.error_values | length')" -ge 10 ]
+    while read -r v want; do
+        c="$(bash -c ". '$TEAM' >/dev/null 2>&1; spawn::team_code_for '$v'")"
+        if [ "$c" != "$want" ]; then
+            printf 'error value %s: --describe says exit_code %s, spawn::team_code_for says %s\n' \
+                "$v" "$want" "$c" >&2
+            return 1
+        fi
+    done < <(printf '%s' "$d" | jq -r '.error_values[] | "\(.value) \(.exit_code)"')
+
+    # Reverse: every value the function names in its own case arms is declared.
+    local named
+    named="$(sed -n '/^spawn::team_code_for()/,/^}/p' "$TEAM" \
+        | sed -n 's/^ *\([a-z_|]*\)) *printf.*/\1/p' | tr '|' '\n' | grep -v '^\*$' | grep -v '^$')"
+    for v in $named; do
+        if [ "$(printf '%s' "$d" | jq -r --arg v "$v" '[.error_values[] | select(.value == $v)] | length')" != "1" ]; then
+            printf 'spawn::team_code_for names %s and --describe declares no such error value\n' "$v" >&2
+            return 1
+        fi
+    done
+
+    # The other reverse arm, and the one that carries the weight. The case above
+    # names two values and falls everything else through to EX_USAGE, so a check
+    # written only against its arms guards 2 of the 14 declared values: deleting
+    # any of the other 12 from the contract reddens nothing. The code-side set of
+    # values this surface can actually hand a caller is the set it ASSIGNS, so
+    # that is what the contract is compared against.
+    #
+    # ONE WAY ONLY. launch_failed is declared and never literal-assigned — it
+    # reaches a member row through team_record_launch_failure — so demanding
+    # declared-implies-assigned would redden correct code.
+    local assigned
+    assigned="$(grep -ohE 'SPAWN_TEAM_ERROR="[a-z_]+"' "$LIB"/team*.sh | sed 's/.*="//;s/"//' | sort -u)"
+    [ -n "$assigned" ]
+    for v in $assigned; do
+        if [ "$(printf '%s' "$d" | jq -r --arg v "$v" \
+                '[(.error_values[].value), (.exit_codes[].error)] | map(select(. == $v)) | length')" -lt 1 ]; then
+            printf 'lib/team*.sh can set error %s and --describe declares it nowhere\n' "$v" >&2
+            return 1
+        fi
+    done
+}
+
+# --- the driver skill's reporting instruction (R14) -------------------------
+
+skill_body() {   # the body only: frontmatter prose is not an instruction
+    awk 'NR==1 && $0=="---" { inb=1; next } inb && $0=="---" { inb=0; next } !inb' \
+        "$LIB/../skills/team-run/SKILL.md"
+}
+
+# The "Reporting between rounds" section alone. An instruction that lands
+# anywhere else in the file is not the one the driver follows when reporting.
+reporting_section() {
+    skill_body | awk '/^### Reporting between rounds/ { on=1; next } on && /^#/ { exit } on'
+}
+
+@test "the reporting section tells the driver to report EVERY member, not the probed ones" {
+    local sec
+    sec="$(reporting_section)"
+    [ -n "$sec" ]
+    if ! printf '%s' "$sec" | grep -qiE 'every member'; then
+        printf 'the reporting section never says to report every member:\n%s\n' "$sec" >&2
+        return 1
+    fi
+}
+
+@test "the reporting section names a failed member's CAUSE in the per-member list" {
+    # PRESENCE, deliberately. An edit that only deletes "probed fields only"
+    # leaves a per-member list with no cause in it and would pass an
+    # absence-only check, which is exactly the state this plan is fixing.
+    local sec
+    sec="$(reporting_section)"
+    [ -n "$sec" ]
+    local f
+    # The two fields the cause actually lives in, by name. Prose about "the
+    # cause" with no field in it leaves a driver to hunt for one.
+    for f in 'members[].error' 'members[].failure'; do
+        if ! printf '%s' "$sec" | grep -qF -- "$f"; then
+            printf 'the reporting section does not name %s:\n%s\n' "$f" "$sec" >&2
+            return 1
+        fi
+    done
+    if ! printf '%s' "$sec" | grep -qiE 'cause'; then
+        printf 'the reporting section does not name a members cause:\n%s\n' "$sec" >&2
+        return 1
+    fi
+}
+
+@test "the reporting section still forbids forwarding a member's narrative as fact" {
+    # Load-bearing and easy to lose in a rewrite of this section: the cause is
+    # the SUPERVISORS classification and may be reported; the members own
+    # account of itself may not.
+    skill_body | grep -qiE 'narrative'
+}
+
+@test "the reporting section no longer says probed fields only" {
+    refute_file_match 'Probed fields only' "$LIB/../skills/team-run/SKILL.md"
+}
+
+@test "the skill tells the driver what retry is for on a mixed stop" {
+    local body
+    body="$(skill_body)"
+    printf '%s' "$body" | grep -qF 'retry --run-id'
+    # And it says the thing a driver would otherwise get wrong: retry only
+    # returns the member to the roster, so a round still has to be dispatched.
+    printf '%s' "$body" | grep -qiE 'retry[^.]*dispatches nothing|dispatches nothing[^.]*retry'
+}
+
+@test "the skill tells the driver to report a model substitution" {
+    # served_model exists so the operator learns their review ran on a model
+    # they did not ask for. A driver that never prints it makes the field moot.
+    skill_body | grep -qF 'served_model'
+}

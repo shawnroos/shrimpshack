@@ -375,7 +375,10 @@ do_describe() {
         {name:"members[].usage",    always:false, values:["measured","unknown"],
                                     note:"whether this member’s token counts were read from the CLI’s own result envelope. `unknown` is not zero: a running member has spent tokens nobody has counted, and treating it as zero is how a ceiling fails to fire"},
         {name:"member",             always:false, note:"retry only: the member returned to the roster"},
-        {name:"members[].attempts",  always:false, note:"how many attempts this member has retired. Each retry appends one, holding that attempt round, handle, outcome, cause and token counts, so a retry never destroys the cause it replaces"},
+        {name:"members[].attempts", always:false, note:"the attempts this member has retired. An ARRAY on the run record, each entry holding that attempt’s round, handle, outcome, cause and token counts; the retry response projects it as a COUNT of that array. A retry appends one, so it never destroys the cause it replaces"},
+        {name:"members[].failure",  always:false, note:"why this member did not succeed, or null. ONE object with four keys — error, detail, child_exit_code, degraded_reasons — written by whichever layer settled the member: the launcher on a refusal it gave, the probe on a terminal state it read. It lives on the run record, so it outlives teardown of the member’s worktree, which is where the child’s own account of itself was"},
+        {name:"members[].error",    always:false, note:"the enum value to branch on, projected from members[].failure.error. Never prose. A member carrying a cause carries that cause’s value here, so a reader never has to reach into the object to decide what happened"},
+        {name:"members[].served_model", always:false, note:"advance only: the model that actually answered this member, read from the child’s own receipt. null is UNKNOWN and never the alias the member asked for. A value differing from that alias degrades the member and names BOTH models in members[].failure.degraded_reasons"},
         {name:"removed",            always:false, note:"teardown only: the worktrees removed, by member name"},
         {name:"team_file",          always:false, note:"the copy taken at dispatch, not the caller’s original"},
         {name:"mode",               always:false, note:"single-round | attached | unattended"},
@@ -444,7 +447,13 @@ do_describe() {
         {value:"launch_failed",         exit_code:5, note:"a member’s launcher refused it; that member carries the launcher’s own error value"},
         {value:"member_not_failed",     exit_code:2, note:"retry was given a member that finished, or one still in flight; a retry replaces a settled non-success attempt"},
         {value:"run_bound_reached",     exit_code:2, note:"retry was asked of a run whose round maximum or token ceiling has already fired; nothing was changed"},
-        {value:"run_busy",              exit_code:2, note:"retry waited out an advance holding this run lock; nothing was changed"}
+        {value:"run_busy",              exit_code:2, note:"retry waited out an advance holding this run lock; nothing was changed"},
+        {value:"member_unknown",        exit_code:2, note:"a verb was given a member name this run does not have; members lists the names it does"},
+        {value:"token_ceiling_zero",    exit_code:2, note:"a ceiling of zero stops a run before its first round, so it would report a finished team having dispatched nobody"},
+        {value:"record_missing",        exit_code:2, note:"there is no run record at the run directory, so nothing can be said about this run"},
+        {value:"record_malformed",      exit_code:2, note:"the run record is there and does not read as one JSON object"},
+        {value:"record_unwritable",     exit_code:2, note:"the run record could not be written, so the run was not started rather than started unrecorded"},
+        {value:"field_unknown",         exit_code:2, note:"a member field the record does not accept was written. A bug in this surface rather than in the invocation, and detail names the field"}
       ],
       notes:[
         "dispatch returns while the round is in flight. Nothing here waits, polls or reaps: each member runs behind the supervisor bg-agent detaches for it, and the run record is how the round is read afterwards.",
