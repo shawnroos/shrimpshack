@@ -62,7 +62,7 @@ _base() {
   printf 'HEAD'
 }
 
-ASK_PLAN='This plan has more than one implementation unit, and records no pull-request strategy yet. Decide now, while the dependency graph is fresh: do these units land as a stack of dependent pull requests, or as one pull request? Both answers are fine — "one pull request, because this is one logical change" is correct whenever the work does not decompose into independently reviewable steps. Record the decision in the plan under a heading containing the words "PR & landing strategy", naming the layers in dependency order or the reason it is one — that heading is what stops this question being asked again. `gh stack` is available for the stacked case; ce-commit-push-pr already knows how to submit one.'
+ASK_PLAN='This plan looks like it has several implementation units and records no pull-request strategy yet. Decide now, while the dependency graph is fresh: do these units land as a stack of dependent pull requests, or as one pull request? Both answers are fine — "one pull request, because this is one logical change" is correct whenever the work does not decompose into independently reviewable steps. Record the decision in the plan under a heading containing the words "PR & landing strategy", naming the layers in dependency order or the reason it is one — that heading is what stops this question being asked again. `gh stack` is available for the stacked case; ce-commit-push-pr already knows how to submit one.'
 
 ASK_PR='This branch is becoming a single pull request. Does the change decompose into dependent, independently reviewable steps that would be easier to review as a stack? This hook does not stop the command, so if the pull request has already opened, `gh stack` can still restack the work. If it does not decompose, say so and carry on — one pull request for one logical change is the right answer and this is only a question.'
 
@@ -82,7 +82,7 @@ case "$MODE" in
     units="$(grep -ciE '(^### U|<h3[^>]*>[[:space:]]*U)[0-9]+[.:) ]' "$path" 2>/dev/null || true)"; units="${units:-0}"
     if [ "$units" -eq 1 ]; then _suppress "$EVENT" "single-unit plan"; fi
     if [ "$units" -ge 2 ] || [ "$units" -eq 0 ]; then
-      if grep -qiE 'landing strategy|pull-request strategy|pr strategy|pr & landing|stack of' "$path" 2>/dev/null; then
+      if grep -qiE 'landing strategy|pull-request strategy|pr strategy|pr & landing' "$path" 2>/dev/null; then
         _suppress "$EVENT" "plan already records a pull-request strategy"
       fi
       _emit "$EVENT" "$ASK_PLAN"
