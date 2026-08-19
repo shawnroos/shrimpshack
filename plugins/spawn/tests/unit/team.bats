@@ -2932,3 +2932,152 @@ foreign_changes() {     # <before> <after> <deliverable>...
     [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "contract_invalid" ]
     [ "$(out '.members[] | select(.name == "lead") | .error')" = "contract_invalid" ]
 }
+
+# ---------------------------------------------------------------------------
+# U4 — the advance response lists EVERY member of the run (R6, R7)
+#
+# The response's member list was built from this call's probes alone, and the
+# probe loop selects only members with a null outcome. So a member that settled
+# on an earlier advance vanished from every later response: a run reporting
+# `dispatched: 3` listed ONE member, and a reader could not tell "not reported"
+# from "not run". The record holds all three, so the response is built from the
+# record after the write and the probe supplies only this call's answers.
+# ---------------------------------------------------------------------------
+
+# Two members that finish in round 1, and a third dispatched in round 2 under a
+# caller-chosen mode. The advance under test is the SECOND one: by then lead and
+# scout are settled, and the probe loop looks at nobody but the third member.
+two_settled_then_one() {    # <mode for the third member>
+    dispatch_env "alpha,beta,gamma"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json" "mason:gamma:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state mason)" = "pending" ]
+    await_invocations 2
+    await_member_terminal lead
+    await_member_terminal scout
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "continue" ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_outcome scout)" = "done" ]
+
+    unset FAKE_CLAUDE_WRITE
+    export FAKE_CLAUDE_MODE="$1"
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state mason)" = "dispatched" ]
+    await_invocations 3
+}
+
+@test "the second advance lists every member of the run, not only the ones it probed" {
+    two_settled_then_one fail
+    await_member_terminal mason
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.members | length')" = "3" ]
+    [ "$(out '[.members[].name] | sort | join(",")')" = "lead,mason,scout"  ]
+    # The two settled members carry the outcome the record holds, from a call
+    # that probed neither of them.
+    [ "$(out '.members[] | select(.name == "lead") | .outcome')" = "done" ]
+    [ "$(out '.members[] | select(.name == "scout") | .outcome')" = "done" ]
+    [ "$(out '.members[] | select(.name == "mason") | .outcome')" = "failed" ]
+}
+
+@test "the failed member's row carries the whole cause, not only an error string" {
+    two_settled_then_one fail
+    await_member_terminal mason
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "mason")')"
+    assert_json_key "$row" failure
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "failed" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.error')" = "failed" ]
+    # AE1 — the supervisor's own sentence reaches the operator's screen. An
+    # error value alone does not carry it.
+    [ "$(printf '%s' "$row" | jq -r '.failure.detail | length > 0')" = "true" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.child_exit_code')" = "1" ]
+    # A member that came back with work carries a null cause, and the key is
+    # there to be read.
+    local ok_row
+    ok_row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$ok_row" failure
+    [ "$(printf '%s' "$ok_row" | jq -r '.failure')" = "null" ]
+}
+
+@test "the member list and the run's own verdict describe the same run" {
+    two_settled_then_one fail
+    await_member_terminal mason
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # R7 — `mixed` must be readable as two successes and one failure from the
+    # response alone.
+    [ "$(rec '.derived.verdict')" = "mixed" ]
+    [ "$(out '[.members[] | select(.outcome == "done")] | length')" = "2" ]
+    [ "$(out '[.members[] | select(.outcome != null and .outcome != "done")] | length')" = "1" ]
+    [ "$(out '[.members[] | select(.outcome != null and .outcome != "done" and .error != null)] | length')" = "1" ]
+}
+
+@test "the response's dispatched count equals the rows that say dispatched" {
+    two_settled_then_one fail
+    await_member_terminal mason
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # The live shape this unit closes: a count of 3 beside a list of 1.
+    [ "$(out '.dispatched')" = "3" ]
+    [ "$(out '[.members[] | select(.launch_state == "dispatched")] | length')" = "3" ]
+}
+
+@test "a member still in flight reports its live state beside members the record settled" {
+    two_settled_then_one hang
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "waiting" ]
+    [ "$(out '.members | length')" = "3" ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "mason")')"
+    # The probe answers for the member it probed, and the record answers for the
+    # two it did not.
+    [ "$(printf '%s' "$row" | jq -r '.state')" = "running" ]
+    assert_json_key "$row" outcome
+    [ "$(printf '%s' "$row" | jq -r '.outcome')" = "null" ]
+    [ "$(out '.members[] | select(.name == "lead") | .outcome')" = "done" ]
+    [ "$(out '.members[] | select(.name == "scout") | .outcome')" = "done" ]
+}
+
+@test "every row carries the same fields, probed this call or not" {
+    two_settled_then_one hang
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # R6 — a reader must not be able to tell "not reported" from "not run" by
+    # the shape of a row.
+    [ "$(out '[.members[] | keys_unsorted | join(",")] | unique | length')" = "1" ]
+    [ "$(out '.members[0] | keys_unsorted | sort | join(",")')" = "error,failure,launch_state,name,outcome,state,tokens" ]
+}
+
+@test "a member that never launched appears in the advance response with its cause" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/no-such-contract.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    await_invocations 1
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members | length')" = "2" ]
+    # A launch that failed is never probed — its row comes from the record or
+    # from nowhere.
+    [ "$(out '.members[] | select(.name == "lead") | .launch_state')" = "launch_failed" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "contract_invalid" ]
+    [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "contract_invalid" ]
+}

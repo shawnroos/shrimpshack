@@ -275,7 +275,29 @@ team_emit_intent() {    # <record> <intent> <reasons-json> <delay|""> <detail>
           team_file:null, removed:null,
           dispatched:([ .members[] | select(.launch_state == "dispatched") ] | length),
           pending:([ .members[] | select(.launch_state == "pending") ] | length),
-          members:$ms}
+          # THE WHOLE ROSTER, from the record and not from this call probes
+          # (KTD5). The probe loop looks only at members with a null outcome,
+          # so a list built from the probes dropped every member that settled
+          # on an earlier advance: a response naming ONE member beside
+          # dispatched:3, where a reader cannot tell "not reported" from "not
+          # run".
+          #
+          # The record supplies the settled members and the probe supplies this
+          # call answers; the probe wins where both speak, because a live state
+          # is something no record holds and neither is worktree_missing.
+          # error stays a projection of failure.error (KTD2).
+          # No apostrophes here: this jq program is a single-quoted shell
+          # string, and one would close it.
+          members:[ .members[] as $m
+                    | ($ms | map(select(.name == $m.name)) | last) as $p
+                    | {name:$m.name,
+                       state:(if $p == null then $m.outcome else $p.state end),
+                       launch_state:$m.launch_state,
+                       outcome:(if $p == null or $p.outcome == null
+                                then $m.outcome else $p.outcome end),
+                       tokens:$m.tokens,
+                       failure:$m.failure,
+                       error:($m.failure.error // $p.error // null)} ]}
         + (if $dl == "" then {} else {delay:($dl | tonumber)} end)')" \
         || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the intent could not be encoded"; }
     emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the intent encoded to nothing"; }
