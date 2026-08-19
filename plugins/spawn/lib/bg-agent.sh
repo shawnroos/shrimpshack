@@ -681,6 +681,29 @@ sup_cancel() {
     exit 0
 }
 
+# The model that ANSWERED, from the child's own receipt (KTD10). The envelope
+# has no top-level model field, so modelUsage's first key is the only
+# attribution it holds; canonicalModel wins over the key when the entry carries
+# it, because a gateway alias can be the key while the canonical id names what
+# actually ran.
+#
+# ONE definition, called from both readers. Two copies of this program drift the
+# first time one is tuned, and the two readers decide different things: one
+# writes served_model into the record, the other decides whether the job is
+# degraded for a substitution. Disagreeing about which model answered is the
+# defect this whole surface exists to close.
+#
+# Absent, unreadable or empty is EMPTY, never $ALIAS — restating the request as
+# a measurement is exactly the byline the incident shipped.
+sup_served_model() {    # <child.json path>
+    [ -f "$1" ] || return 0
+    jq -r 'if type == "object" and (.modelUsage | type) == "object"
+        then (.modelUsage | to_entries | .[0]
+              | (if (.value | type) == "object" and (.value.canonicalModel | type) == "string"
+                 then .value.canonicalModel else .key end))
+        else empty end' < "$1" 2>/dev/null | head -1
+}
+
 # The trusted record (R21). Written by this process, from measurement, into the
 # job directory 0600. The model's account rides along in `narrative`, carrying
 # the untrusted marking as a nested constant so a consumer can tell per field
@@ -715,7 +738,7 @@ sup_cancel() {
 # `terminal_state` and `deliverables_satisfied`, both restated inside the
 # notification and both named in `detail`. `ok:false` here would also be
 # unreachable: if the supervisor could not measure, there is no record at all.
-sup_write_result() {    # <terminal state> <child exit code> <child is_error> <detail>
+sup_write_result() {    # <terminal state> <child exit code> <child is_error> <detail> [<served model>]
     local state="$1" child_rc="$2" child_ie="$3" detail="$4"
     local dir="$SUP_JOB_DIR"
     local denials='[]' narrative="" session_id="" changed='[]' deliv='[]'
@@ -726,12 +749,12 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
     # and reset again below because a child that died before writing leaves
     # child.json present but EMPTY, on which jq prints nothing and exits 0.
     local usage_json='{"input_tokens":null,"output_tokens":null}'
-    # The model that ANSWERED, from the child's own receipt. The envelope has no
-    # top-level model field, so modelUsage's first key is the only attribution
-    # it holds (KTD10). Unreadable is empty and lands as null: writing $ALIAS
-    # here would restate the request as a measurement, which is the byline the
-    # incident shipped.
+    # Taken from the caller when it already read it, so the completion path does
+    # not fork jq twice over the same file for the same answer. PRESENCE, not
+    # emptiness, selects: empty is a valid served model meaning unknown, and
+    # testing for non-empty would silently re-read on every unknown.
     local served=""
+    [ $# -ge 5 ] && served="$5"
 
     if [ -f "$dir/child.json" ]; then
         denials="$(jq -c 'if type == "object" and (.permission_denials | type) == "array" then .permission_denials else [] end' < "$dir/child.json" 2>/dev/null)"
@@ -744,11 +767,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
             | {input_tokens: num(.input_tokens), output_tokens: num(.output_tokens)}' \
             < "$dir/child.json" 2>/dev/null)"
         [ -n "$usage_json" ] || usage_json='{"input_tokens":null,"output_tokens":null}'
-        served="$(jq -r 'if type == "object" and (.modelUsage | type) == "object"
-            then (.modelUsage | to_entries | .[0]
-                  | (if (.value | type) == "object" and (.value.canonicalModel | type) == "string"
-                     then .value.canonicalModel else .key end))
-            else empty end' < "$dir/child.json" 2>/dev/null | head -1)"
+        [ $# -ge 5 ] || served="$(sup_served_model "$dir/child.json")"
     fi
 
     changed="$(changed_since_baseline "$SUP_WORKTREE" "$dir/baseline.marker" "$(dirname "$dir")" "$dir/baseline.git" \
@@ -1074,13 +1093,7 @@ supervisor_main() {
     # unknown as a mismatch would degrade every job whose child reports no
     # receipt.
     local SUBST=0 SERVED=""
-    if [ -f "$dir/child.json" ]; then
-        SERVED="$(jq -r 'if type == "object" and (.modelUsage | type) == "object"
-            then (.modelUsage | to_entries | .[0]
-                  | (if (.value | type) == "object" and (.value.canonicalModel | type) == "string"
-                     then .value.canonicalModel else .key end))
-            else empty end' < "$dir/child.json" 2>/dev/null | head -1)"
-    fi
+    SERVED="$(sup_served_model "$dir/child.json")"
     if [ -n "$SERVED" ] && [ -n "$ALIAS" ] && [ "$SERVED" != "$ALIAS" ]; then
         SUBST=1
         sup_reason "the job asked for '$ALIAS' and the child's own receipt says '$SERVED' answered, so this output is not attributable to the model the contract named"
@@ -1107,7 +1120,7 @@ supervisor_main() {
     [ -n "$SUP_SKILL_MANIFEST" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
 
     printf 'finished at %s in state %s\n' "$(now_utc)" "$STATE" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
-    sup_write_result "$STATE" "$CHILD_RC" "$CHILD_IE" "$DETAIL"
+    sup_write_result "$STATE" "$CHILD_RC" "$CHILD_IE" "$DETAIL" "$SERVED"
     sup_release_once "$STATE" "$DETAIL"
     exit 0
 }

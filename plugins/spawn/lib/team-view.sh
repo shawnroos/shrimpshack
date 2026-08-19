@@ -225,12 +225,16 @@ EOF
     fi
     [ "$usage" = "measured" ] || { ti="null"; to="null"; }
 
-    # `error` stays PROBE-derived here, unlike the advance response, which
-    # projects failure.error over it. The two can disagree on this surface — a
-    # member that failed in an earlier round and whose worktree is now gone
-    # reads error:worktree_missing beside failure.error:child_failed — and that
-    # is the honest pair: what this call could resolve, beside what settled the
-    # member. Collapsing one into the other would lose the live reading.
+    # The PROBE's answer first, the recorded cause behind it. Measured live: a
+    # member that degraded reported error:null here beside a real failure.detail,
+    # because the probe resolved it fine and had nothing of its own to say — and
+    # a reader who sees error:null next to a cause reads "no error", which is
+    # the whole defect this surface was changed to remove.
+    #
+    # The probe still WINS where it speaks: worktree_missing is a fact about
+    # right now that no record holds, and it must not be masked by a cause that
+    # settled rounds ago. The two only ever differ when both have something to
+    # say, and then the live reading is the more urgent one.
     jq -nc --arg n "$name" --arg a "$alias" --arg w "$wt" --arg ls "$ls" \
         --arg h "$handle" --arg st "$TV_STATE" --arg src "$TV_SOURCE" \
         --arg e "$TV_ERR" --arg r "$round" --arg sa "$started" --arg el "$elapsed" \
@@ -241,7 +245,7 @@ EOF
           idx:$idx, name:$n, alias:$a, worktree:$w, launch_state:$ls,
           handle:(if $h == "" then null else $h end),
           state:$st, state_source:$src, live:$live, terminal:$term,
-          error:(if $e == "" then null else $e end),
+          error:(if $e != "" then $e else ($fail.error // null) end),
           failure:$fail, served_model:$sm,
           round:(if $r == "" then null else ($r | tonumber?) end),
           started_at:(if $sa == "" then null else $sa end),

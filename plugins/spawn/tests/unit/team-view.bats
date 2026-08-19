@@ -668,3 +668,44 @@ PYEOF
     # `sonnet` here and claim an attribution nothing measured.
     [ "$(printf '%s' "$row" | jq -r '.launch_state')" = "pending" ]
 }
+
+# MEASURED ON A LIVE RUN, not imagined. A degraded member reported error:null
+# on this surface beside a populated failure.detail, because the probe resolved
+# it cleanly and had nothing of its own to say. A reader seeing error:null next
+# to a cause reads "no error" — the defect this branch exists to remove. The
+# advance envelope said "degraded" for the same member at the same moment.
+#
+# `pending` is the reachable way to force a SILENT probe here: that arm returns
+# with TV_ERR empty, which is the same condition a cleanly-resolved terminal job
+# produces live. The rule under test is the projection, not the arm.
+@test "U10-cause: a silent probe lets the recorded cause reach error" {
+    three_dispatched
+    rec_set lead launch_state pending
+    rec_set lead failure \
+        '{"error":"degraded","detail":"the child exited 0, which is not evidence work happened","child_exit_code":0,"degraded_reasons":["the contract names out1.txt, and it is not there"]}'
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" error
+    [ "$(printf '%s' "$row" | jq -r '.failure.detail')" != "null" ]
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "degraded" ]
+}
+
+# The probe still WINS where it speaks. worktree_missing is a fact about right
+# now that no record holds, and a cause that settled rounds ago must not mask it.
+@test "U10-cause: a live probe answer outranks the recorded cause on status" {
+    three_dispatched
+    rec_set lead failure \
+        '{"error":"child_failed","detail":"the child exited 3","child_exit_code":3,"degraded_reasons":[]}'
+    rec_set lead outcome failed
+    rm -rf "$(wt_of lead)"
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "worktree_missing" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.error')" = "child_failed" ]
+}
