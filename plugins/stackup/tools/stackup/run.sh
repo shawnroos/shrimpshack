@@ -17,14 +17,20 @@ set -uo pipefail
 MODE="${1:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUDIT="${STACKUP_AUDIT:-}"
+case "$MODE" in plan) EVENT="PostToolUse" ;; pr) EVENT="PreToolUse" ;; *) exit 0 ;; esac
 
-TMPIN="$(mktemp)" || exit 0
-trap 'rm -f "$TMPIN"' EXIT
-cat > "$TMPIN"
-[ -s "$TMPIN" ] || exit 0
+# Without jq nothing can be parsed and both hooks go quiet for good. That is the
+# whole-plugin death mode, so it must be visible to the one switch built to see
+# silence — hence this sits above every other bail.
+if ! command -v jq >/dev/null 2>&1; then
+  [ -n "$AUDIT" ] && printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"stackup audit: jq is not on PATH, so stackup cannot read hook payloads and will never ask."}}\n' "$EVENT"
+  exit 0
+fi
 
-# Piping the payload through a variable mangles backslashes; read from the file.
-_field() { jq -r "$1 // empty" < "$TMPIN" 2>/dev/null; }
+# Reads stdin directly: this runs before every shell command, so a temp file
+# would cost a fork and a disk write on each one. Stdin is consumed by the first
+# read, so each branch below reads exactly one field, once.
+_field() { jq -r "$1 // empty" 2>/dev/null; }
 
 _emit() {
   local event="$1" text="$2"
@@ -42,24 +48,38 @@ _suppress() {
   exit 0
 }
 
-ASK_PLAN='This plan has more than one implementation unit, and records no pull-request strategy yet. Decide now, while the dependency graph is fresh: do these units land as a stack of dependent pull requests, or as one pull request? Both answers are fine — "one pull request, because this is one logical change" is correct whenever the work does not decompose into independently reviewable steps. Record the decision in the plan, naming the layers in dependency order or the reason it is one. `gh stack` is available for the stacked case; ce-commit-push-pr already knows how to submit one.'
+# origin/HEAD is unset on plenty of clones, so a hardcoded origin/main names a
+# ref that does not exist on a master-default repo: the diff fails, the count
+# reads 0, and the single-file suppression silently never fires. Verify each
+# candidate. Ported from plugins/lint-router/tools/lint-router/run.sh.
+_base() {
+  local b c
+  b="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
+  [ -n "$b" ] && { printf '%s' "$b"; return; }
+  for c in origin/main origin/master main master; do
+    git rev-parse --verify --quiet "$c" >/dev/null 2>&1 && { printf '%s' "$c"; return; }
+  done
+  printf 'HEAD'
+}
 
-ASK_PR='This branch is about to become a single pull request. Before it does: does this change decompose into dependent, independently reviewable steps that would be easier to review as a stack? If it does, `gh stack` can build one and ce-commit-push-pr can submit it. If it does not, say so and carry on — one pull request for one logical change is the right answer and this is only a question.'
+ASK_PLAN='This plan has more than one implementation unit, and records no pull-request strategy yet. Decide now, while the dependency graph is fresh: do these units land as a stack of dependent pull requests, or as one pull request? Both answers are fine — "one pull request, because this is one logical change" is correct whenever the work does not decompose into independently reviewable steps. Record the decision in the plan under a heading containing the words "PR & landing strategy", naming the layers in dependency order or the reason it is one — that heading is what stops this question being asked again. `gh stack` is available for the stacked case; ce-commit-push-pr already knows how to submit one.'
+
+ASK_PR='This branch is becoming a single pull request. Does the change decompose into dependent, independently reviewable steps that would be easier to review as a stack? This hook does not stop the command, so if the pull request has already opened, `gh stack` can still restack the work. If it does not decompose, say so and carry on — one pull request for one logical change is the right answer and this is only a question.'
 
 case "$MODE" in
   plan)
-    EVENT="PostToolUse"
     path="$(_field '.tool_input.file_path')"
     [ -n "$path" ] || exit 0
     case "$path" in
-      */plans/*.md) ;;
+      */plans/*.md|*/plans/*.html) ;;
       *) exit 0 ;;
     esac
     # Unreadable or uncountable is uncertain, and uncertain fires.
     if [ ! -r "$path" ]; then _emit "$EVENT" "$ASK_PLAN"; fi
     # grep -c prints a count AND exits 1 on zero matches, so `|| echo 0` would
     # append a second line and make every integer test below fail.
-    units="$(grep -c '^### U' "$path" 2>/dev/null || true)"; units="${units:-0}"
+    # HTML plans carry the same unit IDs inside heading markup.
+    units="$(grep -ciE '(^### U|<h3[^>]*>[[:space:]]*U)[0-9]+[.:) ]' "$path" 2>/dev/null || true)"; units="${units:-0}"
     if [ "$units" -eq 1 ]; then _suppress "$EVENT" "single-unit plan"; fi
     if [ "$units" -ge 2 ] || [ "$units" -eq 0 ]; then
       if grep -qiE 'landing strategy|pull-request strategy|pr strategy|pr & landing|stack of' "$path" 2>/dev/null; then
@@ -70,16 +90,16 @@ case "$MODE" in
     exit 0
     ;;
   pr)
-    EVENT="PreToolUse"
     cmd="$(_field '.tool_input.command')"
     [ -n "$cmd" ] || exit 0
     # Cheap string match first. No git or gh subprocess may run until this
     # passes: this hook runs before every shell command.
-    printf '%s' "$cmd" | grep -qE 'gh[[:space:]]+pr[[:space:]]+create' || exit 0
-    printf '%s' "$cmd" | grep -qE 'gh[[:space:]]+stack' && exit 0
+    # Builtin match, no fork: this is the hottest line in the file. [[:space:]]
+    # covers newlines, so a multi-line command still matches.
+    [[ "$cmd" =~ gh[[:space:]]+pr[[:space:]]+create ]] || exit 0
+    [[ "$cmd" =~ gh[[:space:]]+stack ]] && exit 0
     if git rev-parse --git-dir >/dev/null 2>&1; then
-      base="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/main)"
-      changed="$(git diff --name-only "$base"...HEAD 2>/dev/null | wc -l | tr -d '[:space:]')"; changed="${changed:-0}"
+      changed="$(git diff --name-only "$(_base)"...HEAD 2>/dev/null | wc -l | tr -d '[:space:]')"; changed="${changed:-0}"
       # Only a confident "too small" suppresses; a failed diff reads as 0 and falls through.
       if [ "$changed" -eq 1 ]; then _suppress "$EVENT" "single-file change"; fi
     fi

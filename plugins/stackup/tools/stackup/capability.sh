@@ -10,7 +10,12 @@ STATE_DIR="${STACKUP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.claude/state}/stackup}"
 
 _key() {
   local remote
-  remote="$(git remote get-url origin 2>/dev/null || echo "no-remote")"
+  # Falling back to a constant would give every remote-less repo the same key, so
+  # one record-unavailable would silence the ask in all of them.
+  remote="$(git remote get-url origin 2>/dev/null)"
+  [ -n "$remote" ] || remote="$(git remote -v 2>/dev/null | awk 'NR==1{print $2}')"
+  [ -n "$remote" ] || remote="$(git rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$remote" ] || remote="$PWD"
   printf '%s' "$remote" | shasum | cut -d' ' -f1
 }
 

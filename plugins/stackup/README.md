@@ -45,6 +45,15 @@ tools/stackup/capability.sh forget               # start asking again
 The record lives under `${XDG_STATE_HOME:-~/.claude/state}/stackup`, keyed by
 the repository's origin URL.
 
+## Requirements
+
+`jq` must be on PATH. Without it neither hook can read its payload, and both go
+quiet permanently — silently, like every other failure here. `STACKUP_AUDIT=1`
+reports this specific case, so it is the first thing to check.
+
+`git` is needed only for the pull-request hook's size check and the capability
+record; without it the hook simply asks.
+
 ## When it is not asking and you think it should
 
 Both hooks exit 0 on every path, so silence is indistinguishable from a broken
@@ -56,6 +65,8 @@ with the reason it stayed quiet.
 ```
 cd tools/stackup && bats tests/stackup.bats
 ```
+
+Needs bats 1.5 or newer (the suite uses `run --separate-stderr`).
 
 Every assertion is on emitted output, never on exit status — an exit-code
 assertion would hold whether or not the ask fired. There is no CI in this
