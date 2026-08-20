@@ -250,6 +250,35 @@ REFLECT_MEMORY_DIR="$ROOT/nope" REFLECT_DOC_STORE="$D6/store" REFLECT_RUN_NO_REC
   bash "$RR" >/dev/null 2>&1; MRC=$?
 check "a missing memory dir is a hard error, not a silent empty run" '[ "$MRC" != "0" ]'
 
+echo "== retro backlog tally (U6/R13) =="
+D7="$ROOT/g"; new_store "$D7"
+mkdir -p "$D7/mem/.retro"
+for i in 1 2 3; do
+  printf -- '---\nname: r%s\ndisposition: open\nsurface: plugin\n---\nb\n' "$i" > "$D7/mem/.retro/r$i.md"
+done
+R1="$(run_rr "$D7" --trigger t1 2>&1)"
+LOG1="$(tail -1 "$D7/mem/REFLECT.log")"
+# The field goes LAST so every existing positional reader keeps working.
+check "retro_captured is the final field of the log line" \
+  'echo "$LOG1" | grep -q "triggers_pruned=0 retro_captured=3$"'
+check "three fresh items count as three captured" 'echo "$LOG1" | grep -q "retro_captured=3"'
+check "below the threshold the summary says nothing about the backlog" \
+  '! echo "$R1" | grep -q "retro backlog:"'
+# The count is an observed effect, not a constant: nothing changed between runs,
+# so the second run must report zero even though three items still exist.
+R2="$(run_rr "$D7" --trigger t2 2>&1)"
+LOG2="$(tail -1 "$D7/mem/REFLECT.log")"
+check "an unchanged backlog captures nothing on the next run" \
+  'echo "$LOG2" | grep -q "retro_captured=0"'
+R3="$(REFLECT_RETRO_OPEN_THRESHOLD=2 run_rr "$D7" --trigger t3 2>&1)"
+check "at or above the threshold the open count surfaces" \
+  'echo "$R3" | grep -q "retro backlog: 3 open"'
+printf -- '---\nname: r1\ndisposition: fixed\nsurface: plugin\n---\nb\n' > "$D7/mem/.retro/r1.md"
+R4="$(REFLECT_RETRO_OPEN_THRESHOLD=2 run_rr "$D7" --trigger t4 2>&1)"
+check "closing an item lowers the open count" 'echo "$R4" | grep -q "retro backlog: 2 open"'
+check "a store with no .retro dir still logs the field rather than omitting it" \
+  'run_rr "$D6" --trigger t5 >/dev/null 2>&1; tail -1 "$D6/mem/REFLECT.log" | grep -q "retro_captured=0"'
+
 echo
 echo "reflect_run_test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

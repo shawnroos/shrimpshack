@@ -1,5 +1,5 @@
 {
-  "description": "reflect plugin hooks. SessionStart re-renders MEMORY.md as the activation-ranked hot tier so the auto-loaded index self-heals under the load budget (cheap, fail-open, write-skips when unchanged). UserPromptSubmit runs once-per-session seeded recall (qmd vsearch, fail-safe \u2014 never blocks the prompt, exits 0 on any error/timeout/absence). SessionStart ALSO compiles declared triggers into TRIGGERS.json as its own entry with its own timeout and its own mtime-based skip \u2014 never inside the renderer, whose byte-identical early return would skip it on an unchanged store. A second PostToolUse Bash entry runs trigger-nudge.sh, which surfaces a pointer nudge (never a body) when a memory's declared trigger matches the command just run; it emits the hookSpecificOutput JSON shape, since raw stdout is an injection channel for UserPromptSubmit only. PostToolUse + PreToolUse fire the reflect-trigger flag at completion boundaries (PR create/merge, ExitPlanMode, all-todos-done, task-completed) so /reflect runs its hygiene pass \u2014 hook input arrives as JSON on STDIN, so the gated matchers parse stdin with jq and exit 0 when jq is absent. ($TOOL_INPUT is NOT interpolated for \"type\": \"command\" hooks like these \u2014 it exists only for \"type\": \"prompt\" hooks; using it here greps an empty string and never fires.) All hooks fail-open and exit 0; hook arrays merge additively with the user's settings and other plugins. Paths resolve via ${CLAUDE_PLUGIN_ROOT}.",
+  "description": "reflect plugin hooks. SessionStart re-renders MEMORY.md as the activation-ranked hot tier so the auto-loaded index self-heals under the load budget (cheap, fail-open, write-skips when unchanged). UserPromptSubmit runs once-per-session seeded recall (qmd vsearch, fail-safe \u2014 never blocks the prompt, exits 0 on any error/timeout/absence). SessionStart ALSO compiles declared triggers into TRIGGERS.json as its own entry with its own timeout and its own mtime-based skip \u2014 never inside the renderer, whose byte-identical early return would skip it on an unchanged store. A second PostToolUse Bash entry runs trigger-nudge.sh, which surfaces a pointer nudge (never a body) when a memory's declared trigger matches the command just run; it emits the hookSpecificOutput JSON shape, since raw stdout is an injection channel for UserPromptSubmit only. PostToolUse + PreToolUse fire the reflect-trigger flag at completion boundaries (PR create/merge, ExitPlanMode, all-todos-done, task-completed) so /reflect runs its hygiene pass \u2014 hook input arrives as JSON on STDIN, so the gated matchers parse stdin with jq and exit 0 when jq is absent. ($TOOL_INPUT is NOT interpolated for \"type\": \"command\" hooks like these \u2014 it exists only for \"type\": \"prompt\" hooks; using it here greps an empty string and never fires.) PreCompact + SessionEnd run retro-queue.sh, which appends one tab-separated line to $HOME/.claude/.retro-queue naming the session and its transcript so vent material survives compaction and session end. It stashes and exits \u2014 it never reads a transcript, so the cursor field is written empty and the reflect drain stamps it later. One printf of one line per record keeps concurrent sessions' appends atomic, and umask 077 keeps the queue (a running index of every project path worked in) off the world-readable default. Both are \"type\": \"command\" like everything else here \u2014 a \"type\": \"prompt\" hook on a frequent event consumes a turn per firing and, in a background subagent, ends the agent permanently. All hooks fail-open and exit 0; hook arrays merge additively with the user's settings and other plugins. Paths resolve via ${CLAUDE_PLUGIN_ROOT}.",
   "hooks": {
     "SessionStart": [
       {
@@ -59,6 +59,28 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/reflect-trigger.sh\" ExitPlanMode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"${CLAUDE_PLUGIN_ROOT}/hooks/retro-queue.sh\" ] && \"${CLAUDE_PLUGIN_ROOT}/hooks/retro-queue.sh\" || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"${CLAUDE_PLUGIN_ROOT}/hooks/retro-queue.sh\" ] && \"${CLAUDE_PLUGIN_ROOT}/hooks/retro-queue.sh\" || true",
             "timeout": 5
           }
         ]

@@ -231,11 +231,37 @@ for root in ${SCAN_ROOTS+"${SCAN_ROOTS[@]}"}; do
   done < <(git -C "$root" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
 done
 
+# ------------------------------------------------------------- retro backlog counts
+# Observed off disk, never passed in. A before/after snapshot here would always
+# read zero: the agent writes retro items during pass 2 judgment, which finishes
+# before this script is invoked. retro.py owns the window instead.
+# `unknown`, never a smoothed 0. Collapsing a broken counts() into "0" makes a
+# permanently broken tally indistinguishable from a permanently clean store —
+# the same defect this script already refuses for `embedded`.
+RETRO_COUNTS="$(python3 "$HERE/retro.py" counts "$MEMORY_DIR" 2>/dev/null)" || RETRO_COUNTS=""
+RETRO_CAPTURED=unknown
+RETRO_OPEN=0
+case "$RETRO_COUNTS" in
+  *[0-9]" "*[0-9]*)
+    _cap="${RETRO_COUNTS%% *}"; _opn="${RETRO_COUNTS##* }"
+    case "$_cap$_opn" in
+      *[!0-9]*) ;;
+      *) RETRO_CAPTURED="$_cap"; RETRO_OPEN="$_opn" ;;
+    esac
+    ;;
+esac
+
+# R13. Measured: the vent bar yields about two items a week, so ten open items is
+# roughly five weeks of un-worked backlog - the point at which it earns a line.
+# Below it the summary stays silent; a backlog that nags at three items gets muted.
+RETRO_OPEN_THRESHOLD="${REFLECT_RETRO_OPEN_THRESHOLD:-10}"
+
 # ------------------------------------------------------------------------ pass 10
-LOG_LINE="$TS $TRIGGER updated=$UPDATED saved=$SAVED merged=$MERGED retired=$RETIRED compounded=$COMPOUNDED index_tightened=$INDEX_TIGHTENED captured=$CAPTURED embedded=$EMBEDDED worktrees_removed=0 triggers_declared=$TRIG_DECL triggers_pruned=$TRIG_PRUNED"
+LOG_LINE="$TS $TRIGGER updated=$UPDATED saved=$SAVED merged=$MERGED retired=$RETIRED compounded=$COMPOUNDED index_tightened=$INDEX_TIGHTENED captured=$CAPTURED embedded=$EMBEDDED worktrees_removed=0 triggers_declared=$TRIG_DECL triggers_pruned=$TRIG_PRUNED retro_captured=$RETRO_CAPTURED"
 echo "$LOG_LINE" >> "$MEMORY_DIR/REFLECT.log"
 
 echo "updated=$UPDATED captured=$CAPTURED index_tightened=$INDEX_TIGHTENED lint=$LINT_OK embedded=$EMBEDDED"
+[ "$RETRO_OPEN" -ge "$RETRO_OPEN_THRESHOLD" ] && echo "retro backlog: $RETRO_OPEN open - /reflect:reflect-retro"
 [ -n "$MISSING" ] && echo "missing_memories:$MISSING"
 if [ -n "$WT_REPORT" ]; then
   echo "worktrees (scan only — nothing removed; DIRTY + MERGED needs your call):$WT_REPORT"
