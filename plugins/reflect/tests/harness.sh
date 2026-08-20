@@ -1366,6 +1366,13 @@ check "retro_test.py: all assertions pass" '[ "$RETRORC" = "0" ]'
 check "retro_test.py: reports a non-empty tally" \
   'grep -q "retro_test: [1-9][0-9]* passed, 0 failed" "$RETROOUT"'
 
+echo "== retro capture hooks (PreCompact/SessionEnd queue) =="
+RQOUT="$ROOT/retro_queue_test.out"
+bash "$REPO/tests/retro_queue_test.sh" > "$RQOUT" 2>&1; RQRC=$?
+check "retro_queue_test.sh: all assertions pass" '[ "$RQRC" = "0" ]'
+check "retro_queue_test.sh: reports a non-empty tally" \
+  'grep -q "retro_queue_test: [1-9][0-9]* passed, 0 failed" "$RQOUT"'
+
 # ---------------------------------------------------------------------- report
 echo
 echo "harness: $PASS passed, $FAIL failed"
