@@ -40,11 +40,29 @@ for r in sorted(rows, key=lambda r: r["frontmatter"].get("opened", "")):
 
 Expect **5–20 open items across a handful of surfaces**. The backlog takes on about two new items a week and one queue drain yields 0–4. Hundreds of items means something is wrong with capture, not that you should skim.
 
-## 2. Run the probes first — when the probe runner exists
+## 2. Run the probes first
 
-An item may carry a probe: stored shell that proves the thing is fixed. When the probe runner exists, it runs here and nowhere else — over the whole open backlog, through the same list entry point, before you read anything. Whatever it proves fixed is already closed by the time you start, so you spend your attention on what is actually still broken.
+An item may carry a probe: stored shell that proves the thing is fixed. It runs here and nowhere else — over the whole open backlog, before you read anything. Whatever it proves fixed is already closed by the time you start, so you spend your attention on what is actually still broken.
 
-It does not exist yet. Today every item closes on what you can show, and the disposition machine already supports that.
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/retro.py" probe "$STORE"
+```
+
+**A probe runs only after Shawn has approved its text, and approving is his call, not yours.** A probe is shell some earlier session wrote while reading a transcript — including transcripts from repos nobody reviewed. It runs with his full privileges. So for each open item carrying an unapproved probe, print the probe text verbatim, say which item it belongs to, and ask. Record only what he approves:
+
+```bash
+PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/scripts" python3 -c \
+  "import retro; i = retro.read_item(STORE, NAME); \
+   retro.record_probe_approval(STORE, NAME, retro.probe_hash(i['probe']))"
+```
+
+The hash pins the bytes he saw. Edit the probe afterwards and it is unapproved again, which is the point.
+
+**What the runner proves, and what it does not.** A probe closes its item only by printing a line equal to `RETRO-FIXED` plus a nonce minted for that one execution — never by exiting zero, which proves nothing here (`timeout` does not exist on this machine and fails while the shell reports success; `cp`, `mv` and `rm` are aliased interactive and no-op at exit zero). The nonce stops a *stale* proof and stops forwarded tool output from forging one, because it cannot appear in anything written before the run.
+
+It does **not** make the probe honest. The probe holds the nonce in its own environment, so any approved probe can close its item with a bare `echo`. The thing standing between a wrong probe and a falsely-closed item is the approval above — his eyes on the text. Treat the nonce as replay protection, not as proof.
+
+An item with no probe is never auto-closed. It waits for step 4.
 
 If the backlog looks thin and the queue has not been vented recently, run `/reflect` first — that is the pass that turns queued session material into items. Do not drain the queue from here; a drain outside the vent pass discards the candidates it hands back.
 

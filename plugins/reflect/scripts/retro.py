@@ -357,8 +357,11 @@ def record_probe_approval(store_dir, name, digest, approved=None):
 #    `cp`/`mv`/`rm` are aliased `-i` and no-op at exit 0. This plugin has already
 #    shipped a tally keyed on exit status that reported `embedded=5 failed=0`
 #    over zero work. Requiring the token to own its line stops a probe echoing
-#    its own source; it does NOT stop forwarded tool output that happens to
-#    contain the token — only a nonce minted after the probe was authored does.
+#    its own source, and the nonce stops both a stale proof and forwarded tool
+#    output forging one, because it cannot appear in anything written before the
+#    run. It does NOT make the probe honest: the probe holds the nonce in its own
+#    environment, so any approved probe can close its item with a bare `echo`.
+#    The nonce is replay protection. Property 2 is the actual proof.
 # 2. First execution requires an approval recorded against a hash of the probe
 #    text. Nothing here prompts: an unapproved probe is refused, never asked
 #    about. The approval decision belongs to the attended `/reflect:reflect-retro`
