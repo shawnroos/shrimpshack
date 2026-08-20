@@ -13,8 +13,7 @@ trigger compilation all read it. qmd skips dot-directories too (verified against
 the live binary). So one directory name buys index exclusion, recall exclusion
 and trigger exclusion with no code change in any consumer (R5).
 
-The consequence is the reason `list_items` exists: NO search surface over the
-backlog exists at all. Every read of the backlog goes through this file.
+The consequence is the reason `list_items` exists — see its docstring.
 
 WHY THE PROBE LIVES IN THE BODY (KTD3)
 --------------------------------------
@@ -261,6 +260,21 @@ def write_item(store_dir, name, description, surface, thing, symptom,
     return path
 
 
+def _update(store_dir, name, **fields):
+    """Read once, splice each field, write once. The shared body of every writer.
+
+    Callers keep their own validation: this helper never decides whether a write
+    is allowed, only how it lands. Splice order follows keyword order, so an
+    item's on-disk field order is the order the caller names them in.
+    """
+    item = read_item(store_dir, name)
+    text = item["text"]
+    for key, value in fields.items():
+        text = _splice(text, key, value)
+    _write_atomic(item["path"], text)
+    return item["path"]
+
+
 def set_disposition(store_dir, name, disposition, proof):
     """Move an item between dispositions. The proof is not optional (R4).
 
@@ -273,11 +287,8 @@ def set_disposition(store_dir, name, disposition, proof):
     if not (proof or "").strip():
         raise RetroError(
             f"moving {name!r} to {disposition!r} needs a proof naming what closed it")
-    item = read_item(store_dir, name)
-    text = _splice(item["text"], "disposition", disposition)
-    text = _splice(text, "proof", " ".join(proof.split()))
-    _write_atomic(item["path"], text)
-    return item["path"]
+    return _update(store_dir, name,
+                   disposition=disposition, proof=" ".join(proof.split()))
 
 
 def append_session(store_dir, name, session_id):
@@ -288,18 +299,13 @@ def append_session(store_dir, name, session_id):
     if session_id in current:
         return item["path"]
     current.append(session_id)
-    _write_atomic(item["path"],
-                  _splice(item["text"], "sessions", ", ".join(current)))
-    return item["path"]
+    return _update(store_dir, name, sessions=", ".join(current))
 
 
 def record_probe_approval(store_dir, name, digest, approved=None):
-    item = read_item(store_dir, name)
-    text = _splice(item["text"], "probe_approved",
-                   approved or time.strftime("%Y-%m-%d"))
-    text = _splice(text, "probe_hash", digest)
-    _write_atomic(item["path"], text)
-    return item["path"]
+    return _update(store_dir, name,
+                   probe_approved=approved or time.strftime("%Y-%m-%d"),
+                   probe_hash=digest)
 
 
 # ------------------------------------------------------- the probe runner (U4)
@@ -356,13 +362,10 @@ def probe_is_approved(item):
 
 
 def record_probe_run(store_dir, name, result, detail, ran=None):
-    item = read_item(store_dir, name)
-    text = _splice(item["text"], "probe_result", result)
-    text = _splice(text, "probe_ran",
-                   ran or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-    text = _splice(text, "probe_detail", _one_line(detail))
-    _write_atomic(item["path"], text)
-    return item["path"]
+    return _update(store_dir, name,
+                   probe_result=result,
+                   probe_ran=ran or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                   probe_detail=_one_line(detail))
 
 
 def _kill_group(proc):
