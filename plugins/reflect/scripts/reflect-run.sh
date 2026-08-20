@@ -235,11 +235,21 @@ done
 # Observed off disk, never passed in. A before/after snapshot here would always
 # read zero: the agent writes retro items during pass 2 judgment, which finishes
 # before this script is invoked. retro.py owns the window instead.
-RETRO_COUNTS="$(python3 "$HERE/retro.py" counts "$MEMORY_DIR" 2>/dev/null || echo "0 0")"
-RETRO_CAPTURED="${RETRO_COUNTS%% *}"
-RETRO_OPEN="${RETRO_COUNTS##* }"
-case "$RETRO_CAPTURED" in ''|*[!0-9]*) RETRO_CAPTURED=0 ;; esac
-case "$RETRO_OPEN" in ''|*[!0-9]*) RETRO_OPEN=0 ;; esac
+# `unknown`, never a smoothed 0. Collapsing a broken counts() into "0" makes a
+# permanently broken tally indistinguishable from a permanently clean store —
+# the same defect this script already refuses for `embedded`.
+RETRO_COUNTS="$(python3 "$HERE/retro.py" counts "$MEMORY_DIR" 2>/dev/null)" || RETRO_COUNTS=""
+RETRO_CAPTURED=unknown
+RETRO_OPEN=0
+case "$RETRO_COUNTS" in
+  *[0-9]" "*[0-9]*)
+    _cap="${RETRO_COUNTS%% *}"; _opn="${RETRO_COUNTS##* }"
+    case "$_cap$_opn" in
+      *[!0-9]*) ;;
+      *) RETRO_CAPTURED="$_cap"; RETRO_OPEN="$_opn" ;;
+    esac
+    ;;
+esac
 
 # R13. Measured: the vent bar yields about two items a week, so ten open items is
 # roughly five weeks of un-worked backlog - the point at which it earns a line.

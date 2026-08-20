@@ -44,6 +44,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "scoped-memory"))
@@ -70,12 +71,30 @@ def retro_dir(store_dir):
     return os.path.join(store_dir, RETRO_DIRNAME)
 
 
+#: Every read, write and update resolves its path through `item_path`, so one
+#: guard here is the whole containment: a name is a slug, never a path. A leading
+#: dot is out because `.retro/.x.md` is invisible to `list_items`, which is the
+#: only view of the backlog — an item nothing can list is an item nothing can
+#: close.
+_SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
 def item_path(store_dir, name):
+    if not isinstance(name, str) or not _SLUG.match(name) or ".." in name:
+        raise RetroError(f"item name {name!r} is not a retro slug")
     return os.path.join(retro_dir(store_dir), name + ".md")
 
 
 def probe_hash(text):
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def _flat(value):
+    # Every frontmatter field this module writes is ONE line. A newline in a
+    # composed field would otherwise close the block early: the keys below it
+    # stop parsing, and an item missing `disposition` is invisible to the open
+    # view that exists to work it.
+    return " ".join(str("" if value is None else value).split())
 
 
 def _ensure_dir(store_dir):
@@ -214,7 +233,7 @@ def _splice(text, key, value):
             break
     if close is None:
         raise RetroError("item has an unterminated frontmatter fence")
-    new = f"{key}: {value}\n"
+    new = f"{key}: {_flat(value)}\n"
     for i in range(1, close):
         if re.match(rf"^{re.escape(key)}\s*:", lines[i]):
             lines[i] = new
@@ -223,39 +242,57 @@ def _splice(text, key, value):
     return "".join(lines)
 
 
+#: Birth state is not a caller's to choose. The vent pass composes items from
+#: transcripts nobody reviewed, so an item born `fixed`, or born carrying its own
+#: `probe_approved`/`probe_hash`, would clear both writer invariants before any
+#: reader ever saw it — and a pre-approved probe is execution at the next retro
+#: session. `set_disposition` and `record_probe_approval` own these fields.
+_BIRTH_FORBIDDEN = ("disposition", "probe_approved", "probe_hash")
+
+
 def write_item(store_dir, name, description, surface, thing, symptom,
-               probe=None, sessions=(), capture="live", disposition="open",
-               opened=None, links=(), cost=None):
-    if disposition not in DISPOSITIONS:
+               probe=None, sessions=(), capture="live",
+               opened=None, links=(), cost=None, **forbidden):
+    if forbidden:
         raise RetroError(
-            f"disposition {disposition!r} is not one of {', '.join(DISPOSITIONS)}")
+            "write_item creates open, unapproved items only; "
+            f"{', '.join(sorted(forbidden))} is not a caller's to set"
+            if any(k in _BIRTH_FORBIDDEN for k in forbidden)
+            else f"unknown argument(s): {', '.join(sorted(forbidden))}")
     if surface not in SURFACES:
         raise RetroError(f"surface {surface!r} is not one of {', '.join(SURFACES)}")
+    path = item_path(store_dir, name)
     d = _ensure_dir(store_dir)
+    # redact then flatten: redaction reads the raw bytes a pattern was written
+    # against, and only then is the result collapsed onto its one line. The probe
+    # is deliberately absent from this — the approval hash covers those exact
+    # bytes, and rewriting them would break both the hash and working shell.
+    def field(value):
+        return _flat(redact(str("" if value is None else value)))
+
     head = [
         "---",
         f"name: {name}",
-        f"description: {description}",
-        f"disposition: {disposition}",
+        f"description: {field(description)}",
+        "disposition: open",
         f"surface: {surface}",
-        f"thing: {thing}",
-        f"opened: {opened or time.strftime('%Y-%m-%d')}",
-        f"sessions: {', '.join(sessions)}",
-        f"capture: {capture}",
+        f"thing: {field(thing)}",
+        f"opened: {_flat(opened or time.strftime('%Y-%m-%d'))}",
+        f"sessions: {', '.join(_flat(s) for s in sessions)}",
+        f"capture: {_flat(capture)}",
         "metadata:",
         "  type: retro",
         "---",
         "",
-        symptom,
+        field(symptom),
         "",
     ]
     if cost:
-        head += [f"Cost so far: {cost}", ""]
+        head += [f"Cost so far: {field(cost)}", ""]
     if links:
-        head += ["Related: " + " ".join(f"[[{l}]]" for l in links), ""]
+        head += ["Related: " + " ".join(f"[[{_flat(l)}]]" for l in links), ""]
     if probe is not None:
         head += [PROBE_HEADING, "", _FENCE_OPEN, probe, _FENCE_CLOSE, ""]
-    path = os.path.join(d, name + ".md")
     _write_atomic(path, "\n".join(head))
     return path
 
@@ -288,7 +325,7 @@ def set_disposition(store_dir, name, disposition, proof):
         raise RetroError(
             f"moving {name!r} to {disposition!r} needs a proof naming what closed it")
     return _update(store_dir, name,
-                   disposition=disposition, proof=" ".join(proof.split()))
+                   disposition=disposition, proof=_flat(redact(proof)))
 
 
 def append_session(store_dir, name, session_id):
@@ -496,20 +533,33 @@ MAX_EXCERPT_CHARS = 600
 
 _REDACTED = "[redacted]"
 
-# Applied to every excerpt this module returns, AFTER truncation. The drain
+# Applied to every excerpt this module returns, BEFORE truncation. The drain
 # reads whole transcripts of sessions nobody reviewed, from every project
 # including work repos, and a retro item is precisely what later gets pasted
 # into an issue — so a credential that appeared once in an error message would
 # otherwise become durable and travel.
+#
+# Order matters against truncation: cutting first can leave a JWT with two
+# segments or a key block with no END line, neither of which matches any more —
+# and the survivor reads as safe because the text around it says `[redacted]`.
 _SECRET_PATTERNS = (
-    re.compile(r"-----BEGIN[^-\n]*PRIVATE KEY-----"),
-    re.compile(r"\b(?:sk|rk)-[A-Za-z0-9_-]{16,}"),
+    # The whole block, and an unterminated one too: truncation routinely takes
+    # the END line off, and a body without its footer is still a private key.
+    re.compile(r"-----BEGIN[^-\n]*PRIVATE KEY-----[\s\S]*?"
+               r"(?:-----END[^-\n]*-----|\Z)"),
+    re.compile(r"\b(?:sk|rk)[-_][A-Za-z0-9_-]{16,}"),
     re.compile(r"\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{16,}"),
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"),
-    re.compile(r"(?i)\b(?:authorization|bearer|token|secret|password|passwd|"
+    # No leading \b on the keyword: `aws_secret=` puts a word character before
+    # `secret`, so an anchored rule reads straight past the commonest form.
+    re.compile(r"(?i)(?:authorization|bearer|token|secret|password|passwd|"
                r"api[_-]?key|access[_-]?key|credential)s?\b\s*[:=]\s*\S+"),
+    # user:password in a URL. Only the credentials go; the scheme and host stay,
+    # because a redacted failure nobody can locate is not a usable candidate.
+    re.compile(r"(?<=://)[^\s/:@]+:[^\s/@]+(?=@)"),
     re.compile(r"\b[A-Fa-f0-9]{40,}\b"),
 )
 
@@ -658,14 +708,14 @@ def scan_transcript(path, cursor_uuid="", max_candidates=MAX_CANDIDATES,
         branch = rec.get("gitBranch") or branch
         hits = _failures(rec, tool_names)
         for kind, tool, text in hits:
-            excerpt = redact(text[:max_excerpt_chars])
+            clean = redact(text)
             item = {
                 "uuid": rec.get("uuid", ""),
                 "timestamp": rec.get("timestamp", ""),
                 "kind": kind,
                 "tool": tool,
-                "excerpt": excerpt,
-                "truncated": len(text) > max_excerpt_chars,
+                "excerpt": clean[:max_excerpt_chars],
+                "truncated": len(clean) > max_excerpt_chars,
             }
             whole_found += 1
             if len(whole) < max_candidates:
@@ -718,13 +768,20 @@ def drain(queue=None, live_session_id=_FROM_ENV, now=None, expiry_days=EXPIRY_DA
     Two fates, and the record's session decides which — never its `event`, since
     a SessionEnd record can belong to a session that is still live:
 
-    - the live session's record is KEPT with its cursor stamped to the
-      transcript's current tail. That stamp is the only non-empty cursor the
-      system ever produces (the hook always writes it empty), and it is what
-      makes a second compaction collapse into a cursor advance instead of a
-      second record. It also stops the eventual drain of this session from
-      re-surfacing friction the live vent pass already wrote items for.
-    - every other record is drained and dropped.
+    - the live session's record is KEPT. Its cursor advances to the transcript's
+      current tail, which is the only non-empty cursor the system ever produces
+      (the hook always writes it empty), and it is what makes a second
+      compaction collapse into a cursor advance instead of a second record. It
+      also stops the eventual drain of this session from re-surfacing friction
+      the live vent pass already wrote items for.
+    - UNLESS one of that session's records is a PreCompact: then the cursor is
+      HELD where it was. A PreCompact record exists precisely because the agent
+      is about to lose its view of what just failed, so the live vent pass
+      cannot have seen that span — and advancing past it would put the material
+      out of reach of every later drain too.
+    - every other record is drained and dropped, except one whose scan hit the
+      candidate cap: that record is kept, cursor on the last candidate actually
+      returned, so the remainder is read on the next drain instead of lost.
 
     Plus the three hygiene drops: expired, transcript gone, unparseable.
     """
@@ -756,6 +813,8 @@ def drain(queue=None, live_session_id=_FROM_ENV, now=None, expiry_days=EXPIRY_DA
         "sessions_seen": len(order),
         "collapsed": 0,
         "stamped": 0,
+        "held": 0,
+        "kept_capped": 0,
         "dropped_malformed": malformed,
         "dropped_missing": [],
         "dropped_expired": [],
@@ -785,9 +844,14 @@ def drain(queue=None, live_session_id=_FROM_ENV, now=None, expiry_days=EXPIRY_DA
                 result["dropped_missing"].append(
                     {"session_id": sid, "transcript_path": tpath, "live": True})
                 continue
-            rec["cursor_uuid"] = transcript_tail_uuid(tpath) or cursor
+            compacted = any(r.get("event", "").startswith("PreCompact")
+                            for r in recs)
+            if compacted:
+                result["held"] += 1
+            else:
+                rec["cursor_uuid"] = transcript_tail_uuid(tpath) or cursor
+                result["stamped"] += 1
             keep.append(format_queue_line(rec))
-            result["stamped"] += 1
             continue
 
         stamp = _epoch(rec.get("ts", ""))
@@ -817,6 +881,16 @@ def drain(queue=None, live_session_id=_FROM_ENV, now=None, expiry_days=EXPIRY_DA
             "capture": "drained",
         })
         result["drained"].append(scan)
+        # A capped scan leaves candidates behind and nothing else remembers this
+        # session, so dropping the record loses them outright. Keep it, resumed
+        # at the last candidate actually returned. An empty uuid is no resume
+        # point — that record would re-scan from the top every drain until it
+        # expired, which is worse than the loss — so it drops as before.
+        resume = scan["candidates"][-1]["uuid"] if scan["candidates"] else ""
+        if scan["candidates_dropped"] > 0 and resume:
+            rec["cursor_uuid"] = resume
+            keep.append(format_queue_line(rec))
+            result["kept_capped"] += 1
 
     result["kept"] = len(keep)
     current = read_queue_lines(path)
@@ -843,9 +917,11 @@ def counts(store_dir, log_path=None):
     try:
         with open(log_path, encoding="utf-8", errors="replace") as fh:
             last = [ln for ln in fh if ln.strip()][-1]
-        since = calendar.timegm(time.strptime(last.split(" ", 1)[0][:19],
-                                              "%Y-%m-%dT%H:%M:%S"))
-        since -= time.altzone if time.daylight else time.timezone
+        # The stamp is `date -Iseconds`: local time carrying its own offset. Read
+        # the offset it already has rather than slicing it off and guessing —
+        # guessing put `since` in the future, which reports zero forever and
+        # reads exactly like a run that captured nothing.
+        since = datetime.fromisoformat(last.split(" ", 1)[0]).timestamp()
     except Exception:
         since = 0.0
 
@@ -853,7 +929,11 @@ def counts(store_dir, log_path=None):
     opened = 0
     for row in list_items(store_dir):
         try:
-            if os.path.getmtime(row["path"]) > since:
+            # Whole seconds on both sides: the REFLECT.log stamp carries
+            # 1-second resolution, so a sub-second mtime inside the log's own
+            # second would otherwise read as "newer than the last run" on every
+            # subsequent run, recounting that item forever.
+            if int(os.path.getmtime(row["path"])) > int(since):
                 captured += 1
         except OSError:
             continue

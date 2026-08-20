@@ -11,6 +11,7 @@ a tempdir. Run: `python3 tests/retro_test.py`.
 """
 import os
 import shutil
+import json
 import subprocess
 import sys
 import tempfile
@@ -120,17 +121,105 @@ with tempfile.TemporaryDirectory() as store:
 print("== the single writer ==")
 
 with tempfile.TemporaryDirectory() as store:
-    err = None
-    try:
-        retro.write_item(store, name="retro_bad", description="Fifth value.",
-                         surface="plugin", thing="x", symptom="y",
-                         disposition="deferred")
-    except retro.RetroError as exc:
-        err = str(exc)
-    check("a fifth disposition value is rejected at write time",
-          err is not None and "deferred" in err)
-    check("...and the rejected item was never written",
+    # The vent pass composes items from transcripts nobody reviewed, so birth
+    # state is an attack surface: an item born `fixed`, or born carrying its own
+    # probe approval, would bypass both writer invariants before any reader sees
+    # it. Every one of these must be refused AND leave no file behind.
+    def birth_refused(**kw):
+        try:
+            retro.write_item(store, name="retro_bad", description="Birth state.",
+                             surface="plugin", thing="x", symptom="y", **kw)
+        except retro.RetroError:
+            return True
+        except Exception:
+            return False
+        return False
+
+    check("write_item refuses a caller-supplied disposition",
+          birth_refused(disposition="fixed"))
+    check("...including the one it would have written anyway",
+          birth_refused(disposition="open"))
+    check("...and a fifth disposition value is refused the same way",
+          birth_refused(disposition="deferred"))
+    check("...and refuses a caller-supplied probe approval",
+          birth_refused(probe_approved="2026-08-20"))
+    check("...and a caller-supplied probe hash",
+          birth_refused(probe_hash="deadbeef"))
+    check("...and none of the refused items was written",
           not os.path.exists(os.path.join(retro.retro_dir(store), "retro_bad.md")))
+
+with tempfile.TemporaryDirectory() as store:
+    retro.write_item(store, name="retro_born", description="Born open.",
+                     surface="plugin", thing="x", symptom="y", probe=PROBE_TEXT)
+    fm = retro.read_item(store, "retro_born")["frontmatter"]
+    check("an item is born open", fm.get("disposition") == "open")
+    check("...and born with no probe approval on it",
+          "probe_approved" not in fm and "probe_hash" not in fm)
+    check("...and record_probe_approval is what puts one there",
+          retro.record_probe_approval(store, "retro_born",
+                                      retro.probe_hash(PROBE_TEXT))
+          and retro.read_item(store, "retro_born")["frontmatter"].get("probe_hash")
+          == retro.probe_hash(PROBE_TEXT))
+
+with tempfile.TemporaryDirectory() as store:
+    def name_refused(name):
+        try:
+            retro.write_item(store, name=name, description="Escape.",
+                             surface="plugin", thing="x", symptom="y")
+        except retro.RetroError:
+            return True
+        except Exception:
+            return False
+        return False
+
+    check("a name that climbs out of .retro/ is refused", name_refused("../escaped"))
+    check("...and wrote nothing into the store proper",
+          not os.path.exists(os.path.join(store, "escaped.md")))
+    check("...a name with a path separator is refused", name_refused("sub/item"))
+    check("...an absolute name is refused", name_refused("/tmp/retro_abs"))
+    check("...a dot-leading name is refused", name_refused(".hidden"))
+    check("...a bare `..` is refused", name_refused(".."))
+    check("...an empty name is refused", name_refused(""))
+
+    def read_refused(name):
+        try:
+            retro.read_item(store, name)
+        except retro.RetroError:
+            return True
+        except Exception:
+            return False
+        return False
+
+    plant(store, "retro_present", "---\nname: retro_present\n---\n\nb\n")
+    check("...and the same guard covers the reader, which still reads a real item",
+          read_refused("../../etc/passwd") and read_refused("sub/item")
+          and not read_refused("retro_present"))
+
+with tempfile.TemporaryDirectory() as store:
+    # A newline in any single-line field closes the frontmatter block early: the
+    # keys below the injected `---` stop parsing, and the item silently drops out
+    # of every `disposition="open"` view that is supposed to work it.
+    retro.write_item(store, name="retro_flat",
+                     description="desc\n---\nx: 1", surface="plugin",
+                     thing="thing\nmore", symptom="sym", sessions=["a\nb"],
+                     capture="live\nx", cost="2h\n---")
+    fm = retro.read_item(store, "retro_flat")["frontmatter"]
+    check("a newline in a field cannot truncate the frontmatter block",
+          fm.get("disposition") == "open" and fm.get("surface") == "plugin")
+    check("...and the item is still visible to the open view",
+          [i["name"] for i in retro.list_items(store, disposition="open")]
+          == ["retro_flat"])
+    check("...and the field itself is collapsed to one line",
+          fm.get("description") == "desc --- x: 1")
+
+with tempfile.TemporaryDirectory() as store:
+    retro.write_item(store, name="retro_flat_proof", description="Proof.",
+                     surface="plugin", thing="x", symptom="y")
+    retro.set_disposition(store, "retro_flat_proof", "wontfix",
+                          proof="operator: no\n---\ndisposition: fixed")
+    fm = retro.read_item(store, "retro_flat_proof")["frontmatter"]
+    check("a newline in a proof cannot forge a second disposition line",
+          fm.get("disposition") == "wontfix")
 
 with tempfile.TemporaryDirectory() as store:
     retro.write_item(store, name="retro_move", description="Move me.",
@@ -308,6 +397,18 @@ def queue_lines(path):
     return [ln for ln in open(path, encoding="utf-8").read().splitlines() if ln.strip()]
 
 
+def drained_uuids(out, session=None):
+    """Candidate uuids of the first drained session, or [] when nothing drained.
+
+    A missing drain is the exact failure several of these tests are looking for,
+    so it must read as an empty list rather than abort the file and hide every
+    assertion after it.
+    """
+    rows = [r for r in out["drained"]
+            if session is None or r["session_id"] == session]
+    return [c["uuid"] for c in rows[0]["candidates"]] if rows else []
+
+
 check("a five-field queue line parses into the five named fields",
       retro.parse_queue_line(qline("s1", "/t.jsonl")) ==
       {"session_id": "s1", "transcript_path": "/t.jsonl", "cursor_uuid": "",
@@ -380,6 +481,19 @@ with tempfile.TemporaryDirectory() as d:
           and r["candidates_dropped"] == 1)
     check("...so a truncated drain is distinguishable from a quiet session",
           r["candidates_dropped"] > 0)
+    # Dropping the record here would make the remainder unreachable: nothing
+    # else remembers the session, so the capped tail would be lost outright.
+    kept = queue_lines(q)
+    check("...and the capped record survives with its cursor on the last one seen",
+          len(kept) == 1
+          and retro.parse_queue_line(kept[0])["cursor_uuid"] == "u5")
+    second = retro.drain(queue=q, live_session_id="live-session", now=NOW,
+                         max_candidates=2)
+    check("...so the next drain returns the remainder rather than losing it",
+          drained_uuids(second) == ["u7"]
+          and second["drained"][0]["candidates_dropped"] == 0)
+    check("...and the queue is empty once the whole transcript is spent",
+          queue_lines(q) == [])
 
 with tempfile.TemporaryDirectory() as d:
     q = write_queue(d, qline(DRAINED_SESSION, DRAINED))
@@ -390,6 +504,96 @@ with tempfile.TemporaryDirectory() as d:
           all(len(c["excerpt"]) <= 40 + len("[redacted]") for c in r["candidates"]))
     check("...and the truncation is reported, not silent",
           r["excerpts_truncated"] >= 1)
+
+
+print("== redaction ==")
+
+FAKE_KEY_BODY = "MIIEowIBAAKCAQEAx" + "Q" * 60
+FAKE_KEY = ("-----BEGIN RSA PRIVATE KEY-----\n" + FAKE_KEY_BODY
+            + "\n-----END RSA PRIVATE KEY-----")
+FAKE_JWT = ("eyJhbGciOiJIUzI1NiJ9." + "A" * 40 + "." + "B" * 43)
+
+check("a private key block is redacted body and all, not just its header line",
+      FAKE_KEY_BODY not in retro.redact("before " + FAKE_KEY + " after"))
+check("...and an unterminated key block is redacted too, since truncation eats END",
+      FAKE_KEY_BODY not in retro.redact(
+          "-----BEGIN RSA PRIVATE KEY-----\n" + FAKE_KEY_BODY))
+check("...and the surrounding text survives",
+      retro.redact("before " + FAKE_KEY + " after").startswith("before ")
+      and retro.redact("before " + FAKE_KEY + " after").endswith(" after"))
+check("an underscore-form provider key is redacted",
+      "sk_live_" not in retro.redact("key sk_live_0123456789abcdefghij"))
+check("...and the hyphen form still is",
+      "sk-" not in retro.redact("key sk-0123456789abcdefghij"))
+check("an aws_secret= assignment is redacted despite the underscore prefix",
+      "wJalrXUtnFEMI" not in retro.redact(
+          "aws_secret=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"))
+check("a Google API key is redacted",
+      "AIza" not in retro.redact("AIzaSyA" + "b" * 32))
+check("credentials embedded in a URL are redacted",
+      "hunter2" not in retro.redact("postgres://admin:hunter2@db.example.com/app"))
+check("...and the host is still readable so the failure remains diagnosable",
+      "db.example.com" in retro.redact(
+          "postgres://admin:hunter2@db.example.com/app"))
+
+
+print("== redaction reaches the item writers ==")
+
+with tempfile.TemporaryDirectory() as store:
+    retro.write_item(store, name="retro_secretish",
+                     description="deploy failed with " + FAKE_JWT,
+                     surface="harness", thing="deploy.sh token=" + FAKE_JWT,
+                     symptom="server said sk_live_0123456789abcdefghij",
+                     cost="1h chasing " + FAKE_JWT)
+    text = open(os.path.join(retro.retro_dir(store), "retro_secretish.md"),
+                encoding="utf-8").read()
+    check("a credential in a composed description never lands in the item",
+          "eyJhbGciOiJIUzI1NiJ9" not in text)
+    check("...nor in the thing, the symptom or the cost",
+          "sk_live_" not in text and text.count("[redacted]") >= 3)
+    retro.set_disposition(store, "retro_secretish", "wontfix",
+                          proof="operator: rotated sk_live_0123456789abcdefghij")
+    check("...nor in a proof recorded on the way out",
+          "sk_live_" not in open(
+              os.path.join(retro.retro_dir(store), "retro_secretish.md"),
+              encoding="utf-8").read())
+
+with tempfile.TemporaryDirectory() as store:
+    # Redaction must not touch the probe: the approval hash covers those exact
+    # bytes, and rewriting them would break working shell as well as the hash.
+    keyish = 'echo "token=abc123" && echo "RETRO-FIXED $RETRO_NONCE"'
+    retro.write_item(store, name="retro_probe_bytes", description="Probe bytes.",
+                     surface="plugin", thing="x", symptom="y", probe=keyish)
+    check("the probe is stored byte-identically, never redacted",
+          retro.read_item(store, "retro_probe_bytes")["probe"] == keyish)
+
+
+print("== the excerpt is redacted before it is truncated ==")
+
+with tempfile.TemporaryDirectory() as d:
+    tpath = os.path.join(d, "jwt.jsonl")
+    with open(tpath, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "uuid": "j1", "type": "assistant", "timestamp": "2026-08-18T09:00:00Z",
+            "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash"}]}}) + "\n")
+        fh.write(json.dumps({
+            "uuid": "j2", "type": "user", "timestamp": "2026-08-18T09:00:01Z",
+            "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+                 "content": "auth rejected: Bearer " + FAKE_JWT
+                            + " " + "tail padding " * 20}]}}) + "\n")
+    q = write_queue(d, qline("jwt-session", tpath, ts="2026-08-19T09:00:00Z"))
+    # Cut inside the payload, so the surviving text is no longer JWT-shaped:
+    # after truncation the pattern cannot match it at all.
+    cut = len("auth rejected: Bearer eyJhbGciOiJIUzI1NiJ9.") + 20
+    out = retro.drain(queue=q, live_session_id="live", now=NOW,
+                      max_excerpt_chars=cut)
+    excerpt = out["drained"][0]["candidates"][0]["excerpt"]
+    check("a JWT cut in half by the excerpt ceiling is still redacted",
+          "eyJhbGciOiJIUzI1NiJ9" not in excerpt)
+    check("...and the failure text around it survives",
+          "auth rejected" in excerpt)
 
 
 print("== queue hygiene ==")
@@ -466,31 +670,68 @@ with tempfile.TemporaryDirectory() as d:
 print("== the live session's record ==")
 
 with tempfile.TemporaryDirectory() as d:
-    q = write_queue(d, qline(DRAINED_SESSION, DRAINED))
+    # A PreCompact record exists because the agent is about to lose its view of
+    # what just failed. Advancing this session's cursor past that span would make
+    # the failures unreachable to every later drain as well — the record would
+    # then have cost a queue line and yielded nothing, ever.
+    q = write_queue(d, qline(DRAINED_SESSION, DRAINED, event="PreCompact:auto"))
     out = retro.drain(queue=q, live_session_id=DRAINED_SESSION, now=NOW)
     check("the live session is never drained — the live vent pass owns it",
-          out["drained"] == [] and out["stamped"] == 1)
+          out["drained"] == [] and out["kept"] == 1)
     kept = retro.parse_queue_line(queue_lines(q)[0])
-    check("...its record survives with the cursor stamped to the transcript tail",
-          kept["cursor_uuid"] == "u7")
+    check("...and a compacted live session keeps its cursor behind the lost span",
+          kept["cursor_uuid"] == "" and out["held"] == 1 and out["stamped"] == 0)
     again = retro.drain(queue=q, live_session_id=DRAINED_SESSION, now=NOW)
     check("...and a second drain in the same session changes nothing",
-          again["stamped"] == 1 and again["drained"] == []
-          and retro.parse_queue_line(queue_lines(q)[0])["cursor_uuid"] == "u7")
+          again["held"] == 1 and again["drained"] == []
+          and retro.parse_queue_line(queue_lines(q)[0])["cursor_uuid"] == "")
+    later = retro.drain(queue=q, live_session_id="someone-else", now=NOW)
+    check("...so once the session ends the pre-compaction failures still drain",
+          drained_uuids(later) == ["u3", "u5", "u7"])
+
+with tempfile.TemporaryDirectory() as d:
+    q = write_queue(d, qline(DRAINED_SESSION, DRAINED, cursor="u3",
+                             event="PreCompact:auto"))
+    out = retro.drain(queue=q, live_session_id=DRAINED_SESSION, now=NOW)
+    check("a held cursor is held where it was, not reset",
+          retro.parse_queue_line(queue_lines(q)[0])["cursor_uuid"] == "u3"
+          and out["held"] == 1)
+    later = retro.drain(queue=q, live_session_id="someone-else", now=NOW)
+    check("...and the next drain resumes from it",
+          drained_uuids(later) == ["u5", "u7"])
+
+with tempfile.TemporaryDirectory() as d:
+    # No compaction, so nothing was lost from the agent's view: the live vent
+    # pass really has seen this material and the cursor may advance past it.
+    q = write_queue(d, qline(DRAINED_SESSION, DRAINED, event="SessionEnd:clear"))
+    out = retro.drain(queue=q, live_session_id=DRAINED_SESSION, now=NOW)
+    check("an uncompacted live session still stamps its cursor to the tail",
+          retro.parse_queue_line(queue_lines(q)[0])["cursor_uuid"] == "u7"
+          and out["stamped"] == 1 and out["held"] == 0)
+
+with tempfile.TemporaryDirectory() as d:
+    q = write_queue(d, qline(DRAINED_SESSION, DRAINED, event="SessionEnd:clear",
+                             ts="2026-08-18T09:30:00Z"),
+                    qline(DRAINED_SESSION, DRAINED, event="PreCompact:auto",
+                          ts="2026-08-18T11:00:00Z"))
+    out = retro.drain(queue=q, live_session_id=DRAINED_SESSION, now=NOW)
+    check("one PreCompact among the collapsed records holds the whole group",
+          out["held"] == 1 and out["stamped"] == 0
+          and retro.parse_queue_line(queue_lines(q)[0])["cursor_uuid"] == "")
 
 with tempfile.TemporaryDirectory() as d:
     q = write_queue(d,
                     qline(DRAINED_SESSION, DRAINED, ts="2026-08-18T09:30:00Z"),
                     qline(DRAINED_SESSION, DRAINED, ts="2026-08-18T11:00:00Z"))
     out = retro.drain(queue=q, live_session_id=DRAINED_SESSION, now=NOW)
-    check("a session that compacts twice collapses to one stamped record",
-          len(queue_lines(q)) == 1 and out["collapsed"] == 1)
+    check("a session that compacts twice collapses to one kept record",
+          len(queue_lines(q)) == 1 and out["collapsed"] == 1 and out["kept"] == 1)
 
 with tempfile.TemporaryDirectory() as d:
     q = write_queue(d, qline("old-live", DRAINED, ts="2026-07-01T09:00:00Z"))
     out = retro.drain(queue=q, live_session_id="old-live", now=NOW, expiry_days=14)
     check("the live session's record is never expired out from under it",
-          out["stamped"] == 1 and out["dropped_expired"] == [])
+          out["kept"] == 1 and out["dropped_expired"] == [])
 
 with tempfile.TemporaryDirectory() as d:
     q = write_queue(d, qline(DRAINED_SESSION, DRAINED))
@@ -687,6 +928,51 @@ with tempfile.TemporaryDirectory() as store:
     check("a run that proves nothing still records what ran and what it printed",
           bool(fm.get("probe_ran")) and "hello" in (fm.get("probe_detail") or "")
           and fm.get("probe_result") == "unproven")
+
+
+# ------------------------------------------------------------- the capture window
+#
+# `counts` reads the previous REFLECT.log stamp and counts items touched since.
+# The stamp is LOCAL time carrying its own offset, so the arithmetic is where the
+# whole tally lives or dies: a `since` pushed into the future reports zero
+# forever, which reads exactly like a reflect run that captured nothing.
+print("== the capture window ==")
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+with tempfile.TemporaryDirectory() as store:
+    retro.write_item(store, name="retro_touched", description="Touched.",
+                     surface="plugin", thing="x", symptom="y")
+    log = os.path.join(store, "REFLECT.log")
+    # An explicit non-UTC offset, built from epoch arithmetic: the stamp means
+    # one hour ago on any box, whatever this machine's own zone is.
+    stamp = datetime.fromtimestamp(time.time() - 3600,
+                                   timezone(timedelta(hours=2))).isoformat()
+    with open(log, "w", encoding="utf-8") as fh:
+        fh.write("2026-01-01T00:00:00+02:00 boot retro_captured=0\n")
+        fh.write(stamp + " t1 updated=0 retro_captured=0\n")
+    captured, opened = retro.counts(store)
+    check("an item touched since the last reflect line counts as captured",
+          captured == 1)
+    check("...and it counts as open", opened == 1)
+    old = time.time() - 7200
+    os.utime(retro.item_path(store, "retro_touched"), (old, old))
+    check("...while an item older than that line does not",
+          retro.counts(store) == (0, 1))
+
+with tempfile.TemporaryDirectory() as store:
+    retro.write_item(store, name="retro_nolog", description="No log.",
+                     surface="plugin", thing="x", symptom="y")
+    check("with no REFLECT.log every item counts as captured",
+          retro.counts(store) == (1, 1))
+
+with tempfile.TemporaryDirectory() as store:
+    retro.write_item(store, name="retro_badstamp", description="Bad stamp.",
+                     surface="plugin", thing="x", symptom="y")
+    with open(os.path.join(store, "REFLECT.log"), "w", encoding="utf-8") as fh:
+        fh.write("not-a-timestamp t1 retro_captured=0\n")
+    check("an unparseable stamp counts everything rather than silently nothing",
+          retro.counts(store) == (1, 1))
 
 
 # ------------------------------------------------- KTD9: the execution boundary
