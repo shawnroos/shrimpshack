@@ -231,11 +231,27 @@ for root in ${SCAN_ROOTS+"${SCAN_ROOTS[@]}"}; do
   done < <(git -C "$root" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
 done
 
+# ------------------------------------------------------------- retro backlog counts
+# Observed off disk, never passed in. A before/after snapshot here would always
+# read zero: the agent writes retro items during pass 2 judgment, which finishes
+# before this script is invoked. retro.py owns the window instead.
+RETRO_COUNTS="$(python3 "$HERE/retro.py" counts "$MEMORY_DIR" 2>/dev/null || echo "0 0")"
+RETRO_CAPTURED="${RETRO_COUNTS%% *}"
+RETRO_OPEN="${RETRO_COUNTS##* }"
+case "$RETRO_CAPTURED" in ''|*[!0-9]*) RETRO_CAPTURED=0 ;; esac
+case "$RETRO_OPEN" in ''|*[!0-9]*) RETRO_OPEN=0 ;; esac
+
+# R13. Measured: the vent bar yields about two items a week, so ten open items is
+# roughly five weeks of un-worked backlog - the point at which it earns a line.
+# Below it the summary stays silent; a backlog that nags at three items gets muted.
+RETRO_OPEN_THRESHOLD="${REFLECT_RETRO_OPEN_THRESHOLD:-10}"
+
 # ------------------------------------------------------------------------ pass 10
-LOG_LINE="$TS $TRIGGER updated=$UPDATED saved=$SAVED merged=$MERGED retired=$RETIRED compounded=$COMPOUNDED index_tightened=$INDEX_TIGHTENED captured=$CAPTURED embedded=$EMBEDDED worktrees_removed=0 triggers_declared=$TRIG_DECL triggers_pruned=$TRIG_PRUNED"
+LOG_LINE="$TS $TRIGGER updated=$UPDATED saved=$SAVED merged=$MERGED retired=$RETIRED compounded=$COMPOUNDED index_tightened=$INDEX_TIGHTENED captured=$CAPTURED embedded=$EMBEDDED worktrees_removed=0 triggers_declared=$TRIG_DECL triggers_pruned=$TRIG_PRUNED retro_captured=$RETRO_CAPTURED"
 echo "$LOG_LINE" >> "$MEMORY_DIR/REFLECT.log"
 
 echo "updated=$UPDATED captured=$CAPTURED index_tightened=$INDEX_TIGHTENED lint=$LINT_OK embedded=$EMBEDDED"
+[ "$RETRO_OPEN" -ge "$RETRO_OPEN_THRESHOLD" ] && echo "retro backlog: $RETRO_OPEN open - /reflect:reflect-retro"
 [ -n "$MISSING" ] && echo "missing_memories:$MISSING"
 if [ -n "$WT_REPORT" ]; then
   echo "worktrees (scan only — nothing removed; DIRTY + MERGED needs your call):$WT_REPORT"

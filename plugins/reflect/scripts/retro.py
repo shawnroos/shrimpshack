@@ -826,6 +826,39 @@ def drain(queue=None, live_session_id=_FROM_ENV, now=None, expiry_days=EXPIRY_DA
     return result
 
 
+def counts(store_dir, log_path=None):
+    """`(captured, open)` for the reflect runner's tally and its R13 line.
+
+    `captured` is items written or bumped since the previous REFLECT.log entry,
+    read off mtime. The runner cannot snapshot before/after instead: the agent
+    writes retro items during pass 2 judgment, which finishes before the runner
+    is ever invoked, so a snapshot taken inside it would always see zero.
+    """
+    if log_path is None:
+        log_path = os.path.join(store_dir, "REFLECT.log")
+    since = 0.0
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            last = [ln for ln in fh if ln.strip()][-1]
+        since = calendar.timegm(time.strptime(last.split(" ", 1)[0][:19],
+                                              "%Y-%m-%dT%H:%M:%S"))
+        since -= time.altzone if time.daylight else time.timezone
+    except Exception:
+        since = 0.0
+
+    captured = 0
+    opened = 0
+    for row in list_items(store_dir):
+        try:
+            if os.path.getmtime(row["path"]) > since:
+                captured += 1
+        except OSError:
+            continue
+        if row["frontmatter"].get("disposition") == "open":
+            opened += 1
+    return captured, opened
+
+
 if __name__ == "__main__":
     # `probe` is the attended entry point (KTD9): it is invoked by hand inside
     # /reflect:reflect-retro and by nothing else. tests/probe_boundary_check.sh
@@ -837,6 +870,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "drain":
         json.dump(drain(), sys.stdout, indent=1)
         print()
+        sys.exit(0)
+    if len(sys.argv) > 2 and sys.argv[1] == "counts":
+        print("%d %d" % counts(sys.argv[2]))
         sys.exit(0)
     store = (sys.argv[1] if len(sys.argv) > 1
              else os.environ.get("MEMORY_DIR") or os.path.expanduser(
