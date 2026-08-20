@@ -1358,6 +1358,14 @@ check "reflect_run_test.sh: reports a non-empty tally" 'grep -q "reflect_run_tes
 check "the runner matches last_used the same whitespace-tolerant way the reader does" \
   'grep -q "last_used\[ .t\]\*:" "$SCRIPTS/reflect-run.sh"'
 
+# ------------------------------------------------------------- retro backlog
+echo "== retro backlog (item format, single writer, list) =="
+RETROOUT="$ROOT/retro_test.out"
+python3 "$REPO/tests/retro_test.py" > "$RETROOUT" 2>&1; RETRORC=$?
+check "retro_test.py: all assertions pass" '[ "$RETRORC" = "0" ]'
+check "retro_test.py: reports a non-empty tally" \
+  'grep -q "retro_test: [1-9][0-9]* passed, 0 failed" "$RETROOUT"'
+
 # ---------------------------------------------------------------------- report
 echo
 echo "harness: $PASS passed, $FAIL failed"
