@@ -78,7 +78,37 @@ Deleting a memory because it is *wrong* — contradicted by a newer one, or a du
 absorbed into a stronger entry. Capacity is never a reason to delete; that is what the
 hot/cold split is for.
 
+## Retro
+
+### Retro item
+A record of tool friction: a plugin, skill, hook, script or harness behaviour that got in
+the way and would get in the way again unchanged. It answers "what should we fix", where a
+Memory answers "how should I work". Items live in a dot-directory inside the Store, so
+nothing indexes, recalls or triggers on them — they are review-time reading.
+
+### Backlog
+Every retro item whose Disposition is still `open`. It is worked down by
+`/reflect:reflect-retro`, never filtered by recency: staleness is sort order, because a
+recent window would hide the item that has been re-derived most often.
+
+### Disposition
+A retro item's state: `open`, `fixed`, `culled`, or `wontfix`. An item leaves the Backlog
+only by moving out of `open`, and only with a recorded proof of what closed it.
+
+### Probe
+A shell check stored on a retro item that proves the friction is gone. It proves it by
+printing a token carrying a nonce generated for that one execution — never by exiting
+zero, which on this machine proves nothing. Probes run only inside the manual retro
+session, and only after the operator has approved the text.
+
+### Vent pass
+The part of a reflect run that asks what got in the way and writes retro items. It writes
+nothing when the answer is nothing.
+
 ## Flagged ambiguities
 
 - "Recall" had been used both for the layered lookup and for the automatic surfacing that
   follows a trigger match — these are distinct: the latter is a Nudge.
+- Retirement and a `culled` Disposition are different acts on different things.
+  Retirement deletes a *memory* because it is wrong. Culled records that a *tool* was
+  deleted — the retro concluded the thing itself should go. Neither is about capacity.
