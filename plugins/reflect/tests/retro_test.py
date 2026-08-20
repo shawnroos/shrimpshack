@@ -10,9 +10,11 @@ Needs no qmd and no network, and never touches the live store — every fixture 
 a tempdir. Run: `python3 tests/retro_test.py`.
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)                       # plugins/reflect
@@ -523,6 +525,201 @@ with tempfile.TemporaryDirectory() as d:
           out["drained"][0]["candidates_returned"] == 0
           and out["drained"][0]["candidates_dropped"] == 0
           and out["drained"][0]["cursor_found"] is True)
+
+
+# ------------------------------------------------------------- the probe runner
+#
+# Every assertion here is on disposition ON DISK, on a sentinel file the probe
+# would have created, or on a live pid — never on a return code. The runner's own
+# report is a convenience; the item file is the truth.
+print("== the probe runner (default-deny) ==")
+
+BASH = "/bin/bash"                       # VC6: pin the binary these probes get.
+
+
+def probe_item(store, name, probe, approve=True):
+    retro.write_item(store, name=name, description=name, surface="plugin",
+                     thing="x", symptom="y", probe=probe)
+    if approve:
+        retro.record_probe_approval(store, name, retro.probe_hash(probe))
+    return name
+
+
+def disposition(store, name):
+    return retro.read_item(store, name)["frontmatter"].get("disposition")
+
+
+def run_one(store, name, probe, approve=True, budget=30):
+    probe_item(store, name, probe, approve=approve)
+    return retro.run_probe(store, name, budget=budget)
+
+
+CLOSING = 'echo before\necho "RETRO-FIXED $RETRO_NONCE"\necho after'
+
+with tempfile.TemporaryDirectory() as store:
+    run_one(store, "retro_closes", CLOSING)
+    check("a whole line equal to RETRO-FIXED <nonce> among other output closes the item",
+          disposition(store, "retro_closes") == "fixed")
+    check("...and the close carries a recorded proof",
+          bool(retro.read_item(store, "retro_closes")["frontmatter"].get("proof")))
+
+with tempfile.TemporaryDirectory() as store:
+    run_one(store, "retro_exit1", 'echo "RETRO-FIXED $RETRO_NONCE"\nexit 1')
+    check("the right line with a non-zero exit leaves the item open",
+          disposition(store, "retro_exit1") == "open")
+
+with tempfile.TemporaryDirectory() as store:
+    run_one(store, "retro_silent", "exit 0")
+    check("no output and exit 0 leaves the item open",
+          disposition(store, "retro_silent") == "open")
+
+with tempfile.TemporaryDirectory() as store:
+    # The `timeout`-does-not-exist trap: the token is an argument to a binary
+    # that is not there, so nothing prints and the shell exits 127.
+    run_one(store, "retro_nobinary",
+            'retro-no-such-binary-xyzzy "RETRO-FIXED $RETRO_NONCE"')
+    check("a probe invoking a non-existent binary leaves the item open",
+          disposition(store, "retro_nobinary") == "open")
+
+with tempfile.TemporaryDirectory() as store:
+    run_one(store, "retro_stderr", 'echo "RETRO-FIXED $RETRO_NONCE" >&2')
+    check("the right line on stderr leaves the item open",
+          disposition(store, "retro_stderr") == "open")
+
+with tempfile.TemporaryDirectory() as store:
+    # The forged-token case: a probe re-runs the broken tool and forwards its
+    # output, and that output is shaped by material the operator never wrote.
+    run_one(store, "retro_forged", '%s -c "echo RETRO-FIXED"' % BASH)
+    check("forwarded output carrying a bare RETRO-FIXED line leaves the item open",
+          disposition(store, "retro_forged") == "open")
+
+with tempfile.TemporaryDirectory() as store:
+    run_one(store, "retro_substring",
+            'echo "prefix RETRO-FIXED $RETRO_NONCE suffix"')
+    check("the token as a substring of a longer line leaves the item open",
+          disposition(store, "retro_substring") == "open")
+
+with tempfile.TemporaryDirectory() as store:
+    saved = os.path.join(store, "seen-nonce")
+    stale = ('if [ -s "%s" ]; then echo "RETRO-FIXED $(cat %s)"; '
+             'else printf %%s "$RETRO_NONCE" > "%s"; fi' % (saved, saved, saved))
+    probe_item(store, "retro_stale", stale)
+    retro.run_probe(store, "retro_stale", budget=30)
+    check("a probe that only stores the nonce closes nothing",
+          disposition(store, "retro_stale") == "open")
+    retro.run_probe(store, "retro_stale", budget=30)
+    check("...and replaying that nonce on the next execution still leaves it open",
+          disposition(store, "retro_stale") == "open")
+
+with tempfile.TemporaryDirectory() as store:
+    sentinel = os.path.join(store, "it-ran")
+    body = 'touch "%s"\necho "RETRO-FIXED $RETRO_NONCE"' % sentinel
+    probe_item(store, "retro_unapproved", body, approve=False)
+    retro.run_probe(store, "retro_unapproved", budget=30)
+    check("an unapproved probe is never executed",
+          not os.path.exists(sentinel))
+    check("...and its item stays open",
+          disposition(store, "retro_unapproved") == "open")
+    check("...and the refusal is recorded on the item",
+          retro.read_item(store, "retro_unapproved")["frontmatter"]
+          .get("probe_result") == "unapproved")
+
+with tempfile.TemporaryDirectory() as store:
+    sentinel = os.path.join(store, "it-ran")
+    body = 'touch "%s"\necho "RETRO-FIXED $RETRO_NONCE"' % sentinel
+    retro.write_item(store, name="retro_edited", description="edited",
+                     surface="plugin", thing="x", symptom="y", probe=body)
+    retro.record_probe_approval(store, "retro_edited",
+                                retro.probe_hash("a different probe"))
+    retro.run_probe(store, "retro_edited", budget=30)
+    check("a probe whose recorded hash no longer matches is never executed",
+          not os.path.exists(sentinel))
+    check("...and its item stays open",
+          disposition(store, "retro_edited") == "open")
+    retro.record_probe_approval(store, "retro_edited", retro.probe_hash(body))
+    retro.run_probe(store, "retro_edited", budget=30)
+    check("...until it is approved again, after which it runs and can close",
+          os.path.exists(sentinel) and disposition(store, "retro_edited") == "fixed")
+
+with tempfile.TemporaryDirectory() as store:
+    pidfile = os.path.join(store, "grandchild.pid")
+    slow = ('( sleep 45 ) &\n'
+            'echo $! > "%s"\n'
+            'sleep 45\n'
+            'echo "RETRO-FIXED $RETRO_NONCE"' % pidfile)
+    probe_item(store, "retro_slow", slow)
+    retro.run_probe(store, "retro_slow", budget=2)
+    check("a probe that sleeps past the budget leaves its item open",
+          disposition(store, "retro_slow") == "open")
+    gone = False
+    if os.path.exists(pidfile):
+        gpid = int(open(pidfile).read().strip() or 0)
+        for _ in range(40):
+            try:
+                os.kill(gpid, 0)
+            except ProcessLookupError:
+                gone = True
+                break
+            except PermissionError:
+                break
+            time.sleep(0.1)
+    check("...and the grandchild in its process group is killed with it", gone)
+
+with tempfile.TemporaryDirectory() as store:
+    retro.write_item(store, name="retro_bare", description="no probe",
+                     surface="harness", thing="x", symptom="y")
+    probe_item(store, "retro_proves", CLOSING)
+    out = retro.run_probes(store, budget=30)
+    check("a whole-backlog run never closes an item that carries no probe",
+          disposition(store, "retro_bare") == "open")
+    check("...while the item whose probe proved fixed is closed",
+          disposition(store, "retro_proves") == "fixed")
+    check("...and the run reports what it attempted",
+          out["attempted"] == 1 and out["closed"] == 1)
+    closed = [i for i in retro.list_items(store)
+              if i["frontmatter"].get("disposition") != "open"]
+    check("no item is closed without a recorded proof (invariant, not a field check)",
+          all(i["frontmatter"].get("proof") for i in closed))
+
+with tempfile.TemporaryDirectory() as store:
+    run_one(store, "retro_recorded", 'echo hello\nexit 3')
+    fm = retro.read_item(store, "retro_recorded")["frontmatter"]
+    check("a run that proves nothing still records what ran and what it printed",
+          bool(fm.get("probe_ran")) and "hello" in (fm.get("probe_detail") or "")
+          and fm.get("probe_result") == "unproven")
+
+
+# ------------------------------------------------- KTD9: the execution boundary
+#
+# The check that keeps probes attended is itself a shipped script, so this test
+# runs the SAME expression the harness runs rather than a restatement of it.
+print("== the execution boundary (KTD9) ==")
+
+BOUNDARY = os.path.join(HERE, "probe_boundary_check.sh")
+
+with tempfile.TemporaryDirectory() as tmp:
+    clean = subprocess.run([BASH, BOUNDARY, REPO], capture_output=True, text=True)
+    check("the boundary check passes against the plugin as it ships",
+          clean.returncode == 0)
+
+    copy = os.path.join(tmp, "reflect")
+    os.makedirs(copy)
+    shutil.copytree(os.path.join(REPO, "hooks"), os.path.join(copy, "hooks"))
+    os.makedirs(os.path.join(copy, "scripts"))
+    shutil.copy(os.path.join(REPO, "scripts", "reflect-run.sh"),
+                os.path.join(copy, "scripts", "reflect-run.sh"))
+    hook = os.path.join(copy, "hooks", "retro-queue.sh")
+    with open(hook, "a", encoding="utf-8") as fh:
+        fh.write('\npython3 "$D/retro.py" probe "$STORE" || true\n')
+    wired = subprocess.run([BASH, BOUNDARY, copy], capture_output=True, text=True)
+    check("...and fails when a hook is made to reference the probe entry point",
+          wired.returncode != 0)
+
+    missing = subprocess.run([BASH, BOUNDARY, os.path.join(tmp, "not-a-plugin")],
+                             capture_output=True, text=True)
+    check("...and fails rather than passing green when its search targets are gone",
+          missing.returncode != 0)
+
 
 print()
 print(f"retro_test: {PASS} passed, {FAIL} failed")

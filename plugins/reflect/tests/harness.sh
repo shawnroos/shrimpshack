@@ -1388,6 +1388,12 @@ check "retro_test.py: all assertions pass" '[ "$RETRORC" = "0" ]'
 check "retro_test.py: reports a non-empty tally" \
   'grep -q "retro_test: [1-9][0-9]* passed, 0 failed" "$RETROOUT"'
 
+# KTD9: probes are attended shell. A hook or an automatic pass reaching the probe
+# entry point converts stored agent-authored shell to unattended execution, and
+# nothing else in the suite would fail when it does.
+check "no hook and no automatic pass references the probe entry point (KTD9)" \
+  'bash "$REPO/tests/probe_boundary_check.sh" "$REPO" > "$ROOT/probe_boundary.out" 2>&1'
+
 echo "== retro capture hooks (PreCompact/SessionEnd queue) =="
 RQOUT="$ROOT/retro_queue_test.out"
 bash "$REPO/tests/retro_queue_test.sh" > "$RQOUT" 2>&1; RQRC=$?

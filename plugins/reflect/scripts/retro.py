@@ -31,14 +31,17 @@ WHY ONE WRITER
 `set_disposition` is the only way an item leaves `open`, and it requires a proof
 argument naming what closed it. That makes "no item is closed without a recorded
 proof" an invariant testable at the writer, rather than a convention two callers
-happen to follow. `append_session` and `record_probe_approval` cover every
-non-disposition update. Nothing else edits an item file.
+happen to follow. `append_session`, `record_probe_approval` and `record_probe_run`
+cover every non-disposition update. Nothing else edits an item file.
 """
 import calendar
 import hashlib
 import json
 import os
 import re
+import secrets
+import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -298,6 +301,158 @@ def record_probe_approval(store_dir, name, digest, approved=None):
     _write_atomic(item["path"], text)
     return item["path"]
 
+
+# ------------------------------------------------------- the probe runner (U4)
+#
+# A probe is stored shell, authored by an agent from transcript material the
+# operator never wrote, executed later with the operator's full privileges. Three
+# properties carry that risk, and all three are enforced here rather than stated:
+#
+# 1. Auto-close is default-deny, proven by a per-execution nonce (KTD4). Exit
+#    status proves nothing on this machine: `timeout` does not exist, so
+#    `timeout 480 bash foo.sh` fails command-not-found AND the shell reports 0;
+#    `cp`/`mv`/`rm` are aliased `-i` and no-op at exit 0. This plugin has already
+#    shipped a tally keyed on exit status that reported `embedded=5 failed=0`
+#    over zero work. Requiring the token to own its line stops a probe echoing
+#    its own source; it does NOT stop forwarded tool output that happens to
+#    contain the token — only a nonce minted after the probe was authored does.
+# 2. First execution requires an approval recorded against a hash of the probe
+#    text. Nothing here prompts: an unapproved probe is refused, never asked
+#    about. The approval decision belongs to the attended `/reflect:reflect-retro`
+#    session, which shows the text and calls `record_probe_approval`.
+# 3. Execution is attended (KTD9). Nothing under `hooks/` and nothing in
+#    `reflect-run.sh` may reference this entry point, and
+#    `tests/probe_boundary_check.sh` fails the harness if that changes.
+
+PROBE_TOKEN = "RETRO-FIXED"
+
+#: Absolute, not `bash`: a probe must not get whichever shell a PATH happens to
+#: resolve, and the tests pin the same binary.
+PROBE_SHELL = "/bin/bash"
+
+PROBE_BUDGET_SECONDS = 120
+
+#: A probe can double-fork out of its process group, survive the group kill, and
+#: hold the stdout pipe open forever. After this second wait the output is
+#: abandoned — an unkillable probe must not wedge the run it was called from.
+PROBE_REAP_SECONDS = 5
+
+PROBE_DETAIL_CHARS = 400
+
+
+def _one_line(text, limit=PROBE_DETAIL_CHARS):
+    # Redact BEFORE storing: a probe re-runs the broken tool, and a credential
+    # in that tool's error output would otherwise become durable in an item that
+    # later gets pasted into an issue. Collapsed to one line because `_splice`
+    # writes a single frontmatter line.
+    return " ".join(redact(text or "").split())[:limit]
+
+
+def probe_is_approved(item):
+    """Approved, and approved for THIS text (KTD9). An edited probe is neither."""
+    fm = item["frontmatter"]
+    return (bool(fm.get("probe_approved"))
+            and fm.get("probe_hash") == probe_hash(item["probe"]))
+
+
+def record_probe_run(store_dir, name, result, detail, ran=None):
+    item = read_item(store_dir, name)
+    text = _splice(item["text"], "probe_result", result)
+    text = _splice(text, "probe_ran",
+                   ran or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    text = _splice(text, "probe_detail", _one_line(detail))
+    _write_atomic(item["path"], text)
+    return item["path"]
+
+
+def _kill_group(proc):
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except OSError:
+        # The group is gone, or getpgid raced the exit. Fall back to the direct
+        # child so a failure here can never leave the runner waiting.
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+def run_probe(store_dir, name, budget=PROBE_BUDGET_SECONDS, cwd=None):
+    """Execute one item's probe and close the item only on positive proof (R4).
+
+    Returns what happened; the item file is the authority. Every outcome other
+    than `proven` leaves the item `open`, including a non-zero exit, empty
+    stdout, a nonce-less or stale token, a timeout, and a probe that could not
+    start. Nothing here raises on a bad probe — a review-time run over the whole
+    backlog must not stop at the first hostile item.
+    """
+    item = read_item(store_dir, name)
+    probe = item["probe"]
+    if probe is None or not probe.strip():
+        return {"name": name, "result": "no-probe", "ran": False, "closed": False,
+                "exit": None}
+    if not probe_is_approved(item):
+        record_probe_run(store_dir, name, "unapproved",
+                         "probe text has no matching approval; not executed")
+        return {"name": name, "result": "unapproved", "ran": False,
+                "closed": False, "exit": None}
+
+    nonce = secrets.token_hex(16)
+    env = dict(os.environ)
+    env["RETRO_NONCE"] = nonce
+    try:
+        # start_new_session: the probe leads its own process group, so the
+        # timeout path can kill what it spawned. `subprocess.run(timeout=)`
+        # SIGKILLs the direct child and orphans every grandchild — a defect this
+        # plugin already fixed once in the qmd guard.
+        proc = subprocess.Popen(
+            [PROBE_SHELL, "-c", probe], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, errors="replace", env=env,
+            cwd=cwd, start_new_session=True)
+    except OSError as exc:
+        record_probe_run(store_dir, name, "start-failed", str(exc))
+        return {"name": name, "result": "start-failed", "ran": False,
+                "closed": False, "exit": None}
+
+    timed_out = False
+    try:
+        out, err = proc.communicate(timeout=budget)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_group(proc)
+        try:
+            out, err = proc.communicate(timeout=PROBE_REAP_SECONDS)
+        except subprocess.TimeoutExpired:
+            out, err = "", ""
+
+    proven = (not timed_out and proc.returncode == 0
+              and any(line == f"{PROBE_TOKEN} {nonce}"
+                      for line in (out or "").splitlines()))
+    result = "proven" if proven else ("timeout" if timed_out else "unproven")
+    detail = (f"budget {budget}s exceeded; process group killed" if timed_out
+              else f"exit {proc.returncode}; stdout: {_one_line(out)}"
+                   f" | stderr: {_one_line(err)}")
+    record_probe_run(store_dir, name, result, detail)
+    if proven:
+        set_disposition(
+            store_dir, name, "fixed",
+            f"probe exited 0 and printed {PROBE_TOKEN} with this run's nonce")
+    return {"name": name, "result": result, "ran": True, "closed": proven,
+            "exit": None if timed_out else proc.returncode}
+
+
+def run_probes(store_dir, budget=PROBE_BUDGET_SECONDS, cwd=None):
+    """Run every open item's probe. Items without one are left untouched."""
+    out = {"attempted": 0, "closed": 0, "skipped": 0, "runs": []}
+    for row in list_items(store_dir, disposition="open"):
+        res = run_probe(store_dir, row["name"], budget=budget, cwd=cwd)
+        if res["result"] == "no-probe":
+            out["skipped"] += 1
+            continue
+        out["attempted"] += 1
+        out["closed"] += 1 if res["closed"] else 0
+        out["runs"].append(res)
+    return out
 
 
 
@@ -672,6 +827,13 @@ def drain(queue=None, live_session_id=_FROM_ENV, now=None, expiry_days=EXPIRY_DA
 
 
 if __name__ == "__main__":
+    # `probe` is the attended entry point (KTD9): it is invoked by hand inside
+    # /reflect:reflect-retro and by nothing else. tests/probe_boundary_check.sh
+    # fails the harness if a hook or reflect-run.sh ever names it.
+    if len(sys.argv) > 2 and sys.argv[1] == "probe":
+        json.dump(run_probes(sys.argv[2]), sys.stdout, indent=1)
+        print()
+        sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "drain":
         json.dump(drain(), sys.stdout, indent=1)
         print()
