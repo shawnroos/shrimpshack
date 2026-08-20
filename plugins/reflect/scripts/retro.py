@@ -34,7 +34,9 @@ proof" an invariant testable at the writer, rather than a convention two callers
 happen to follow. `append_session` and `record_probe_approval` cover every
 non-disposition update. Nothing else edits an item file.
 """
+import calendar
 import hashlib
+import json
 import os
 import re
 import sys
@@ -297,7 +299,383 @@ def record_probe_approval(store_dir, name, digest, approved=None):
     return item["path"]
 
 
+
+
+# ---------------------------------------------------------------- the drain (U3)
+#
+# WHY THIS FILE DOES NO EXTRACTION
+# --------------------------------
+# The hooks queue rather than capture because a command hook cannot exercise
+# judgment (KTD6). Moving that judgment here would only relocate the same
+# problem: deciding whether a tool or the work was at fault is not a pattern
+# match. So `drain` returns BOUNDED CANDIDATE MATERIAL and the agent decides
+# what qualifies.
+#
+# The bound is the whole point. A drained transcript is a full pre-compaction
+# session — 28 MB was the largest measured on this machine — arriving inside a
+# reflect run whose output contract is silence. Every return therefore says how
+# much it dropped: a silently truncated drain that reads like a quiet session is
+# the failure this exists to prevent.
+
+QUEUE_ENV = "REFLECT_RETRO_QUEUE"
+QUEUE_DEFAULT = "~/.claude/.retro-queue"
+
+#: The five fields `retro-queue.sh` writes, stored literally. There is no
+#: encoding to decode: the hook strips tabs and newlines rather than escaping
+#: them, deliberately, so a path containing a backslash survives intact.
+QUEUE_FIELDS = ("session_id", "transcript_path", "cursor_uuid", "event", "ts")
+
+#: Measured 2026-08-20 over the ten most recent transcripts on this machine
+#: (2026-07-05 to 2026-08-20, ~46 days): the vent bar would have produced 13
+#: items, 0-4 per transcript, about two a week. Reflect runs far more often than
+#: fortnightly, so 14 days covers the real gap between runs with room to spare
+#: while staying well inside Claude Code's own transcript pruning (~30 days),
+#: past which a record can only be dropped as missing anyway.
+EXPIRY_DAYS = 14
+
+MAX_CANDIDATES = 40
+MAX_EXCERPT_CHARS = 600
+
+_REDACTED = "[redacted]"
+
+# Applied to every excerpt this module returns, AFTER truncation. The drain
+# reads whole transcripts of sessions nobody reviewed, from every project
+# including work repos, and a retro item is precisely what later gets pasted
+# into an issue — so a credential that appeared once in an error message would
+# otherwise become durable and travel.
+_SECRET_PATTERNS = (
+    re.compile(r"-----BEGIN[^-\n]*PRIVATE KEY-----"),
+    re.compile(r"\b(?:sk|rk)-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{16,}"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"),
+    re.compile(r"(?i)\b(?:authorization|bearer|token|secret|password|passwd|"
+               r"api[_-]?key|access[_-]?key|credential)s?\b\s*[:=]\s*\S+"),
+    re.compile(r"\b[A-Fa-f0-9]{40,}\b"),
+)
+
+
+def redact(text):
+    out = text or ""
+    for pat in _SECRET_PATTERNS:
+        out = pat.sub(_REDACTED, out)
+    return out
+
+
+#: `live_session_id=None` means "explicitly unknown"; this default means "ask the
+#: harness". Collapsing the two would make an explicit unknown silently resolve
+#: to whatever session the drain happens to run inside.
+_FROM_ENV = object()
+
+
+def queue_file(path=None):
+    return path or os.environ.get(QUEUE_ENV) or os.path.expanduser(QUEUE_DEFAULT)
+
+
+def live_session():
+    """The session this process is running in, or None when the harness is silent.
+
+    None means "drain everything and say so", never "skip everything": a silent
+    skip is lost signal, while a duplicate candidate is absorbed by the bar.
+    """
+    return (os.environ.get("CLAUDE_CODE_SESSION_ID")
+            or os.environ.get("CLAUDE_SESSION_ID") or None) or None
+
+
+def parse_queue_line(line):
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) != len(QUEUE_FIELDS) or not parts[0] or not parts[1]:
+        return None
+    return dict(zip(QUEUE_FIELDS, parts))
+
+
+def format_queue_line(rec):
+    return "\t".join(rec.get(f, "") for f in QUEUE_FIELDS)
+
+
+def read_queue_lines(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return [ln for ln in fh.read().splitlines() if ln.strip()]
+    except OSError:
+        return []
+
+
+def merge_queue_lines(first_read, keep, current):
+    """Survivors, plus anything appended while the drain was reading transcripts.
+
+    Scanning a queue's worth of transcripts takes seconds, and other sessions
+    append to this one file throughout (the reason KTD8 makes each append a
+    single atomic write). A read-once-then-replace would silently delete every
+    record written in that window.
+    """
+    if current[:len(first_read)] == first_read:
+        tail = current[len(first_read):]
+    else:
+        seen = set(first_read)
+        tail = [ln for ln in current if ln not in seen]
+    return list(keep) + [ln for ln in tail if ln not in set(keep)]
+
+
+def _iter_transcript(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict):
+                yield rec
+
+
+def _block_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict) and isinstance(b.get("text"), str):
+                parts.append(b["text"])
+            elif isinstance(b, str):
+                parts.append(b)
+        return "\n".join(parts)
+    return "" if content is None else str(content)
+
+
+def _failures(rec, tool_names):
+    """Failure-shaped material in one transcript record, or an empty list.
+
+    Failure-shaped ONLY. Ordinary successful turns are never returned: the drain
+    path may write an item only for an explicit tool failure it can name, so an
+    ordinary turn cannot justify one — it would add material (and user prompts
+    are where secrets live) for no item it could produce.
+    """
+    out = []
+    msg = rec.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("id"):
+                tool_names[block["id"]] = block.get("name") or ""
+            elif block.get("type") == "tool_result" and block.get("is_error"):
+                out.append(("tool_error",
+                            tool_names.get(block.get("tool_use_id"), ""),
+                            _block_text(block.get("content"))))
+    if rec.get("type") == "system":
+        errs = rec.get("hookErrors")
+        if errs:
+            out.append(("hook_error", "hook", _block_text(errs)))
+        elif rec.get("level") == "error":
+            out.append(("system_error", "", _block_text(rec.get("content"))))
+    return out
+
+
+def scan_transcript(path, cursor_uuid="", max_candidates=MAX_CANDIDATES,
+                    max_excerpt_chars=MAX_EXCERPT_CHARS):
+    """Bounded failure-shaped candidates from one transcript, after `cursor_uuid`.
+
+    A cursor that is not in the transcript falls back to the whole file with
+    `cursor_found` false. A skip-until-found loop that never matches returns
+    zero candidates, which reads exactly like a quiet session — the one thing
+    the bound must never be mistaken for.
+    """
+    tool_names = {}
+    after, whole = [], []
+    found = not cursor_uuid
+    after_found = whole_found = 0
+    scanned = 0
+    last_uuid = ""
+    cwd = branch = ""
+    for rec in _iter_transcript(path):
+        scanned += 1
+        if rec.get("uuid"):
+            last_uuid = rec["uuid"]
+        cwd = rec.get("cwd") or cwd
+        branch = rec.get("gitBranch") or branch
+        hits = _failures(rec, tool_names)
+        for kind, tool, text in hits:
+            excerpt = redact(text[:max_excerpt_chars])
+            item = {
+                "uuid": rec.get("uuid", ""),
+                "timestamp": rec.get("timestamp", ""),
+                "kind": kind,
+                "tool": tool,
+                "excerpt": excerpt,
+                "truncated": len(text) > max_excerpt_chars,
+            }
+            whole_found += 1
+            if len(whole) < max_candidates:
+                whole.append(item)
+            if found:
+                after_found += 1
+                if len(after) < max_candidates:
+                    after.append(item)
+        # After the hits, so the cursor record itself is never re-reported.
+        if not found and rec.get("uuid") == cursor_uuid:
+            found = True
+    candidates = after if found else whole
+    total = after_found if found else whole_found
+    return {
+        "candidates": candidates,
+        "candidates_found": total,
+        "candidates_returned": len(candidates),
+        "candidates_dropped": total - len(candidates),
+        "excerpts_truncated": sum(1 for c in candidates if c["truncated"]),
+        "records_scanned": scanned,
+        "last_uuid": last_uuid,
+        "cursor_found": bool(found or not cursor_uuid),
+        "cwd": cwd,
+        "git_branch": branch,
+    }
+
+
+def transcript_tail_uuid(path):
+    last = ""
+    for rec in _iter_transcript(path):
+        if rec.get("uuid"):
+            last = rec["uuid"]
+    return last
+
+
+def _epoch(ts):
+    # timegm, not mktime: the hook stamps UTC, and mktime would read it as local
+    # time and shift the expiry bound by the offset — silently, and by an hour
+    # more or less depending on the season.
+    try:
+        return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+    except (ValueError, TypeError):
+        return None
+
+
+def drain(queue=None, live_session_id=_FROM_ENV, now=None, expiry_days=EXPIRY_DAYS,
+          max_candidates=MAX_CANDIDATES, max_excerpt_chars=MAX_EXCERPT_CHARS):
+    """Read the queue, hand back bounded candidate material, leave the queue clean.
+
+    Two fates, and the record's session decides which — never its `event`, since
+    a SessionEnd record can belong to a session that is still live:
+
+    - the live session's record is KEPT with its cursor stamped to the
+      transcript's current tail. That stamp is the only non-empty cursor the
+      system ever produces (the hook always writes it empty), and it is what
+      makes a second compaction collapse into a cursor advance instead of a
+      second record. It also stops the eventual drain of this session from
+      re-surfacing friction the live vent pass already wrote items for.
+    - every other record is drained and dropped.
+
+    Plus the three hygiene drops: expired, transcript gone, unparseable.
+    """
+    path = queue_file(queue)
+    if live_session_id is _FROM_ENV:
+        live_session_id = live_session()
+    now = now if now is not None else time.time()
+    cutoff = now - expiry_days * 86400
+
+    first_read = read_queue_lines(path)
+    groups, order, malformed = {}, [], 0
+    for line in first_read:
+        rec = parse_queue_line(line)
+        if rec is None:
+            malformed += 1
+            continue
+        sid = rec["session_id"]
+        if sid not in groups:
+            groups[sid] = []
+            order.append(sid)
+        groups[sid].append(rec)
+
+    result = {
+        "queue": path,
+        "live_session": live_session_id,
+        "live_session_known": bool(live_session_id),
+        "expiry_days": expiry_days,
+        "records_seen": len(first_read),
+        "sessions_seen": len(order),
+        "collapsed": 0,
+        "stamped": 0,
+        "dropped_malformed": malformed,
+        "dropped_missing": [],
+        "dropped_expired": [],
+        "drained": [],
+        "kept": 0,
+    }
+    keep = []
+
+    for sid in order:
+        recs = groups[sid]
+        result["collapsed"] += len(recs) - 1
+        newest = max(recs, key=lambda r: r.get("ts", ""))
+        # Furthest-advanced cursor wins: only a previous drain writes one, so at
+        # most one record in the group carries it.
+        stamped = [r for r in recs if r.get("cursor_uuid")]
+        cursor = (max(stamped, key=lambda r: r.get("ts", ""))["cursor_uuid"]
+                  if stamped else "")
+        rec = dict(newest)
+        rec["cursor_uuid"] = cursor
+        events = ", ".join(r.get("event", "") for r in recs if r.get("event"))
+        tpath = rec["transcript_path"]
+        exists = os.path.exists(tpath)
+        is_live = bool(live_session_id) and sid == live_session_id
+
+        if is_live:
+            if not exists:
+                result["dropped_missing"].append(
+                    {"session_id": sid, "transcript_path": tpath, "live": True})
+                continue
+            rec["cursor_uuid"] = transcript_tail_uuid(tpath) or cursor
+            keep.append(format_queue_line(rec))
+            result["stamped"] += 1
+            continue
+
+        stamp = _epoch(rec.get("ts", ""))
+        if stamp is not None and stamp < cutoff:
+            result["dropped_expired"].append(
+                {"session_id": sid, "ts": rec.get("ts", ""),
+                 "records": len(recs)})
+            continue
+        if not exists:
+            result["dropped_missing"].append(
+                {"session_id": sid, "transcript_path": tpath, "live": False})
+            continue
+
+        try:
+            scan = scan_transcript(tpath, cursor, max_candidates,
+                                   max_excerpt_chars)
+        except OSError:
+            result["dropped_missing"].append(
+                {"session_id": sid, "transcript_path": tpath, "live": False})
+            continue
+        scan.update({
+            "session_id": sid,
+            "event": events,
+            "ts": rec.get("ts", ""),
+            "cursor_uuid": cursor,
+            "records_collapsed": len(recs),
+            "capture": "drained",
+        })
+        result["drained"].append(scan)
+
+    result["kept"] = len(keep)
+    current = read_queue_lines(path)
+    final = merge_queue_lines(first_read, keep, current)
+    if final or os.path.exists(path):
+        d = os.path.dirname(path)
+        if d and not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+        _write_atomic(path, "".join(ln + "\n" for ln in final))
+    return result
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "drain":
+        json.dump(drain(), sys.stdout, indent=1)
+        print()
+        sys.exit(0)
     store = (sys.argv[1] if len(sys.argv) > 1
              else os.environ.get("MEMORY_DIR") or os.path.expanduser(
                  "~/.claude/projects/-"

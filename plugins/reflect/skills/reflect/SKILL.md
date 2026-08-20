@@ -214,7 +214,60 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory/triggers.py add \
 
 It validates each pattern before writing, refuses to clobber an existing block without `--replace`, recompiles the manifest, and **preserves the file's mtime**. That last part is why hand-editing is wrong: activation reads mtime as "last reinforcement", so hand-editing 200 files would spike 200 activations, reshuffle the index's hot/cold cut and lower those memories' recall floors — surfacing them more for no reason but the write. The same rule holds for any future bulk frontmatter edit.
 
-Tally: `updated=N saved=M triggers_declared=T triggers_pruned=P`.
+**The vent pass — what got in the way that a tool should have handled.** A memory answers "how should I work"; this answers "what should we fix". It lives here because Pass 2 already holds the session's context and already writes memory-dir files, and it runs before Pass 6 so the same run's render sees the store as it now is. It writes **retro items**, and writes nothing when the answer is nothing.
+
+Retro items live in `<memory-dir>/.retro/`. They are not memories: nothing indexes them, nothing recalls them, and the only way to see the backlog is the list entry point below. `/reflect:reflect-retro` is what works them down.
+
+**The bar. An item qualifies when all three hold:**
+
+1. The friction came from a **tool** — a plugin, skill, hook, script, or harness behaviour — rather than from the work itself.
+2. A future session would hit it again unchanged.
+3. It is nameable as a specific thing, not a mood.
+
+**Explicitly excluded:** a mistake you made and corrected; a one-off environment hiccup; a task that was simply hard; and anything already `open` in the backlog for the same thing. That last case **bumps the existing item's session list — it never writes a second item**:
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py            # list the open backlog
+PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/scripts" python3 -c \
+  "import retro; retro.append_session(STORE, NAME, SESSION_ID)"
+```
+
+The bar is deliberately narrow. The cost of a missed item is one repeat; the cost of a noisy backlog is the whole feature, because a backlog nobody trusts gets skipped.
+
+**Never paste raw material.** An item states the friction **in your own words**. It never carries raw transcript excerpts, raw command output, environment values, tokens, or file contents, and a probe never embeds a literal credential. The hooks fire in every project including work repos, the drain reads whole transcripts of sessions nobody reviewed, and a retro item is precisely what later gets pasted into an issue or a PR — so a credential that appeared once in an error message would otherwise become durable and travel.
+
+**Provenance.** Every item records `capture: live` or `capture: drained`.
+
+- `live` — this session's own friction, which you watched happen. Apply the bar as stated.
+- `drained` — friction read cold out of another session's transcript. **Narrower rule: write an item only when the transcript contains an explicit tool failure you can name** — a non-zero exit, an error message, a documented path that did not exist — never on general judgment. An agent reading a stranger's transcript in an unrelated repo cannot judge "would a future session hit this again unchanged", so the retro session weights a `drained` item accordingly.
+
+**Drain the queue first.** The `PreCompact` / `SessionEnd` hooks stash a transcript reference so material survives compaction and session end; this is the pass that spends it:
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py drain
+```
+
+It prints one JSON result and does **no extraction** — deciding whether a tool or the work was at fault is judgment, which is the whole reason the hooks queue rather than capture. It hands back bounded candidate material and you decide what qualifies. Read its counts, do not re-derive them:
+
+- `drained[]` — one entry per session, each with failure-shaped `candidates` (tool errors, non-zero exits, hook errors) plus the session's `cwd` and `git_branch`.
+- `candidates_dropped` / `excerpts_truncated` — **how much the cap threw away.** Non-zero means there was more friction than you are looking at. A truncated drain must never be read as a quiet session.
+- `cursor_found: false` — the resume point was gone, so the whole transcript was re-read; expect material you have already seen.
+- `dropped_missing` / `dropped_expired` / `dropped_malformed` — records that could not be spent. A transcript Claude Code has pruned is dropped, never retried. Records older than the expiry bound (14 days) are dropped: capture is bounded, so a session nobody reflects on within a fortnight is lost signal, by design.
+
+The live session's own record is never drained — it is stamped and left for the next run, because this pass already has that session in context.
+
+**Write items through the writer, never by hand** (`retro.py` is the single writer, and the only thing that can close an item is a recorded proof):
+
+```
+PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/scripts" python3 -c \
+  "import retro; retro.write_item(STORE, name=..., description=...,
+   surface='plugin'|'skill'|'harness'|'codebase', thing=..., symptom=...,
+   sessions=[...], capture='live'|'drained', probe=None)"
+```
+
+**This pass adds no visible output.** The output contract still holds: two visible units, never a narration of passes.
+
+Tally: `updated=N saved=M triggers_declared=T triggers_pruned=P retro_captured=R`. `retro_captured` counts **items written or bumped**, never candidates read or records drained — the same "every count means an observed effect, never a step that ran" rule as every other tally here.
 
 ### 3. Memory merge pass
 - Scan `MEMORY.md` for entries with overlapping topics (same subject area, similar guidance)
