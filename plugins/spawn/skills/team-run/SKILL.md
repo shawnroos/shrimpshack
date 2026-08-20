@@ -81,7 +81,13 @@ Only `waiting` carries a `delay`, and nothing else should look for one. A `conti
 
 **Every member the advance envelope lists, not only the ones this advance probed.** `advance` builds its member list from the record, so a member that settled two rounds ago is still in it. A report built from the probes alone named one member beside `dispatched: 3`, and a reader could not tell "not reported" from "not run".
 
-Per member, from the advance envelope: its name, its state, its token counts or `unknown`, and — for any member that did not succeed — **its cause**. The cause is `members[].error`, the value to branch on, plus `members[].failure.detail`, the sentence. Report both. A failed member reported with no cause leaves the reader nothing to act on but guessing, and guessing is what this loop exists to remove.
+Per member, from the advance envelope: its name, its state, its token counts or `unknown`, and — for any member that did not succeed — **its cause**. The cause is three fields, not one:
+
+- `members[].error` — the value to branch on.
+- `members[].failure.degraded_reasons[]` — **what actually went wrong**, named specifically: which deliverable is missing, which tool call the ceiling refused, which model answered instead of the one asked for. Report these.
+- `members[].failure.detail` — one sentence of context. On a `degraded` member it is the same boilerplate for every cause, so it is the weakest of the three: report it, never as a substitute for the reasons above.
+
+A failed member reported with no cause leaves the reader nothing to act on but guessing, and guessing is what this loop exists to remove. A member reported with only `detail` is barely better: "measured against the contract this job is degraded" does not say which deliverable was missing, and the reason list does.
 
 The cause is the supervisor's own classification of the member, which is why it may be stated as fact. The member's account of itself is not, and the rule below still holds over it.
 

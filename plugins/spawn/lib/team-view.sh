@@ -82,9 +82,11 @@ team_view_probe() {     # <launch_state> <handle> <worktree>
             # unresolvable — a member the record can account for exactly.
             TV_STATE="retrying"; TV_SOURCE="record"; return 0 ;;
         launch_failed)
-            # R5: the launcher's specific error rides dispatch's response and is
-            # not in the record, so this surface can say THAT a member failed to
-            # launch and not why. Inventing a reason would be worse than the gap.
+            # The launcher's own error IS in the record now, so this arm states
+            # the category and the projection below prefers the recorded cause
+            # over it. Before that write existed this surface could only say
+            # THAT a member failed to launch; saying contract_invalid when the
+            # record holds contract_invalid is not inventing a reason.
             TV_STATE="failed"; TV_SOURCE="record"; TV_ERR="launch_failed"; return 0 ;;
     esac
     if [ -z "$handle" ] || [ -z "$wt" ] || [ ! -d "$wt" ]; then
@@ -225,6 +227,11 @@ EOF
     fi
     [ "$usage" = "measured" ] || { ti="null"; to="null"; }
 
+    # launch_failed is the one probe answer the record BEATS: it is a category,
+    # and the record holds the launcher's own value for the same event, so
+    # contract_invalid is strictly better than launch_failed and equally
+    # current. Every other probe answer wins, because it is about NOW.
+    #
     # The PROBE's answer first, the recorded cause behind it. Measured live: a
     # member that degraded reported error:null here beside a real failure.detail,
     # because the probe resolved it fine and had nothing of its own to say — and
@@ -245,7 +252,9 @@ EOF
           idx:$idx, name:$n, alias:$a, worktree:$w, launch_state:$ls,
           handle:(if $h == "" then null else $h end),
           state:$st, state_source:$src, live:$live, terminal:$term,
-          error:(if $e != "" then $e else ($fail.error // null) end),
+          error:(if $e == "launch_failed" then ($fail.error // $e)
+                 elif $e != "" then $e
+                 else ($fail.error // null) end),
           failure:$fail, served_model:$sm,
           round:(if $r == "" then null else ($r | tonumber?) end),
           started_at:(if $sa == "" then null else $sa end),

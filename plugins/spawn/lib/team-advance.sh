@@ -459,11 +459,18 @@ retry_check() {         # <record json>
     [ "$state" = "retryable" ] || { SPAWN_TEAM_ERROR="member_not_failed"
         spawn::team_fail "member $RETRY_MEMBER is $state, and a retry replaces a settled non-success attempt"; }
     # R10 — a retry is an attempt the run has to pay for, so a run whose bounds
-    # already fired may not admit one. Read from the chokepoint (KTD18), and
-    # only the BOUNDS: `roster_exhausted` is true of every finished run, which
-    # is exactly the run a legitimate retry targets.
+    # already fired may not admit one. Read from the chokepoint (KTD18).
+    # `roster_exhausted` is true of every finished run, which is exactly the run
+    # a legitimate retry targets, and `roster_empty` of a run with no members.
+    # EXCLUDE the two roster reasons, never ENUMERATE the bounds. dispatch_allowed
+    # requires the bound set to be EMPTY, so any reason outside those two blocks
+    # the round this retry needs — and an enumerated pair silently omitted
+    # usage_unknown, which a retired attempt with null tokens holds true for
+    # ever. Retry then answered ok and parked the member at retry_pending on a
+    # run no advance could ever dispatch. A bound added later is refused here by
+    # default rather than becoming the same trap.
     fired="$(printf '%s' "$rec" | jq -r '[ .derived.stop_reasons[]
-        | select(. == "round_max_reached" or . == "token_ceiling_reached") ] | join(", ")')"
+        | select(. != "roster_exhausted" and . != "roster_empty") ] | join(", ")')"
     [ -z "$fired" ] || { SPAWN_TEAM_ERROR="run_bound_reached"
         spawn::team_fail "this run has already stopped: $fired"; }
 }

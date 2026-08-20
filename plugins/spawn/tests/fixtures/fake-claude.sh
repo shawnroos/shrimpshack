@@ -161,6 +161,9 @@ if [[ "$output_format" == "json" ]]; then
   python3 - "$SESSION_ID" "$RESULT_TEXT" "$model" "$MODE" "$DENIALS" "$MODEL_USAGE" <<'PY'
 import json, sys
 session_id, result, model, mode, denials, model_usage = sys.argv[1:7]
+# An UNSET fixture var arrives as the empty string and must leave the key off
+# entirely; only an explicitly-set JSON object reaches the emit below.
+model_usage = model_usage if model_usage else None
 try:
     denials = json.loads(denials)
 except ValueError:
@@ -195,7 +198,12 @@ envelope = {
 }
 # Key ORDER is preserved through json.dumps, so a test can pin which key the
 # supervisor takes as the served model rather than which one sorts first.
-if model_usage:
+# `is not None`, never truthiness: an EMPTY object is a shape the real envelope
+# can carry, and it is the one that broke the supervisor's reader — to_entries
+# on it yields [], and a bare .[0] on that prints the string "null". A fixture
+# that dropped the key on empty could not reach that path at all, so the test
+# for it passed against the bug.
+if model_usage is not None:
     envelope["modelUsage"] = model_usage
 print(json.dumps(envelope))
 PY

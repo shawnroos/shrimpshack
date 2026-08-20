@@ -1111,8 +1111,10 @@ member_state() { rec ".members[] | select(.name == \"$1\") | .launch_state"; }
         "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
     dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
     assert_one_object "$output"
-    # `dispatched` counts every member in that launch_state, scout included —
-    # the round-2 roster is read off the record instead.
+    # scout is launch_failed, so `dispatched` is lead alone. This count is the
+    # roster-versus-count disagreement this branch exists to close, so it is
+    # asserted here rather than left to the member states below.
+    [ "$(out '.dispatched')" = "1" ]
     [ "$(member_state lead)" = "dispatched" ]
     [ "$(member_state scout)" = "launch_failed" ]
     [ "$(out '.members[] | select(.name == "scout") | .error')" = "job_already_running" ]
@@ -3488,6 +3490,33 @@ seed_failed_run() {     # [max-rounds] [ceiling]
     [ "$(cat "$RUN/team.json")" = "$before" ]
 }
 
+# usage_unknown is a BOUND, not a roster fact: dispatch_allowed requires the
+# bound set empty, so a run holding it can never open the round a retry needs.
+# An enumerated pair of bounds let this one through, and retry answered ok while
+# parking the member at retry_pending for ever. A member that ran and reported
+# no counts holds it true, which is exactly a member somebody wants to retry.
+@test "retry is refused while an unmeasured attempt blocks every dispatch" {
+    contract_file "$WORK/c.json" out.txt
+    roster --run-id r9 --run-dir "$RUN" --token-ceiling 100000 \
+        --member lead --alias alpha --contract "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    tr_ spawn::team_round_open "$RUN"
+    tr_ spawn::team_member_set "$RUN" lead round 1
+    tr_ spawn::team_member_set "$RUN" lead launch_state dispatched
+    # Terminal, and it reported NO counts — usage_unknown, not the ceiling.
+    tr_ spawn::team_member_set "$RUN" lead outcome failed
+    [ "$(rec '.derived.stop_reasons | index("usage_unknown") != null')" = "true" ]
+    [ "$(rec '.derived.stop_reasons | index("token_ceiling_reached")')" = "null" ]
+    [ "$(rec '.derived.dispatch_allowed')" = "false" ]
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r9 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "run_bound_reached" ]
+    [ "$(out '.detail | test("usage_unknown")')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
 @test "retry is refused once the token ceiling has been reached" {
     contract_file "$WORK/c.json" out.txt
     roster --run-id r2 --run-dir "$RUN" --token-ceiling 120 \
@@ -3638,6 +3667,20 @@ one_member_serving() {  # <modelUsage JSON|"">
     [ "$status" -eq 0 ]
     await_invocations 1
     await_member_terminal lead
+}
+
+# An EMPTY modelUsage is the shape that broke this: to_entries yields [], .[0]
+# on that is jq null, and `jq -r` prints it as the four-character string "null".
+# That is non-empty, so the substitution gate read it as a model differing from
+# the alias and degraded a job for a mismatch that never happened — a served
+# model nothing measured, in the record, tripping a gate. Absent stays null.
+@test "an empty modelUsage records no served model and degrades nothing" {
+    one_member_serving '{}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_served lead)" = "null" ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_failure lead)" = "null" ]
 }
 
 @test "a member served by a model other than its alias is degraded and names both" {

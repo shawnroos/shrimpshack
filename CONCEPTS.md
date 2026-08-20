@@ -112,3 +112,22 @@ nothing when the answer is nothing.
 - Retirement and a `culled` Disposition are different acts on different things.
   Retirement deletes a *memory* because it is wrong. Culled records that a *tool* was
   deleted — the retro concluded the thing itself should go. Neither is about capacity.
+
+## Spawn teams
+
+### Cause
+Why a member of a team run did not succeed, composed only of facts the plugin itself
+established — the supervisor's own account, the child's exit code, and the reasons it
+recorded for degrading. It is written into the run record, so it outlives the member's
+worktree and the job record that worktree held. The model's own narrative is not part of
+it; that is the child's text, not the plugin's finding.
+
+### Attempt
+One retired try at a member's work: the round it ran in, the job it ran as, the outcome it
+reached and the cause it carried. A member accumulates attempts; nothing a retry replaces
+is discarded.
+
+### Rotation
+Retiring a member's current try into its attempt history and returning the member to the
+roster. It is one write, not a sequence, because a reader that catches it half-applied sees
+a member that is neither finished nor retryable.

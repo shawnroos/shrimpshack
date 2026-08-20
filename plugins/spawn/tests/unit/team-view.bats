@@ -709,3 +709,32 @@ PYEOF
     [ "$(printf '%s' "$row" | jq -r '.error')" = "worktree_missing" ]
     [ "$(printf '%s' "$row" | jq -r '.failure.error')" = "child_failed" ]
 }
+
+# The record holds the launcher's OWN value for a failed launch (U3). The probe
+# arm can only say the category, so a status row that stopped at launch_failed
+# was hiding a contract_invalid the record was already holding.
+@test "U10-cause: a launch failure shows the launcher's own error, not the category" {
+    three_dispatched
+    rec_set lead launch_state launch_failed
+    rec_set lead failure '{"error":"contract_invalid","detail":"the contract named by this member does not parse","child_exit_code":null,"degraded_reasons":null}'
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "contract_invalid" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.error')" = "contract_invalid" ]
+}
+
+# A launch that failed before any launcher answered has no recorded cause, so
+# the category is all there is and must still be reported.
+@test "U10-cause: a launch failure with no recorded cause still reports the category" {
+    three_dispatched
+    rec_set lead launch_state launch_failed
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "launch_failed" ]
+}

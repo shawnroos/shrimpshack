@@ -697,8 +697,14 @@ sup_cancel() {
 # a measurement is exactly the byline the incident shipped.
 sup_served_model() {    # <child.json path>
     [ -f "$1" ] || return 0
+    # `.[0] // empty`, never a bare `.[0]`: to_entries on an EMPTY modelUsage
+    # yields [], and .[0] on that is jq null, which `jq -r` prints as the
+    # four-character string "null". That lands in the record as a served model
+    # nothing measured, and it is non-empty, so the substitution gate below
+    # reads it as a model that differs from the alias and degrades a job for a
+    # mismatch that never happened. Measured, not theorised.
     jq -r 'if type == "object" and (.modelUsage | type) == "object"
-        then (.modelUsage | to_entries | .[0]
+        then (.modelUsage | to_entries | .[0] // empty
               | (if (.value | type) == "object" and (.value.canonicalModel | type) == "string"
                  then .value.canonicalModel else .key end))
         else empty end' < "$1" 2>/dev/null | head -1
