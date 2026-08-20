@@ -8,6 +8,8 @@ Someone just interrupted you because you are doing something wrong and you never
 
 **Not `/memories`.** `/memories <topic>` takes an argument, is deliberate study of a subject you or the user chose, and stops nothing. `/reflect-regroup` (the plan calls it `/reflect regroup`) takes no argument, is human-invoked mid-task, and its first instruction is to stop. See `commands/memories.md`.
 
+**Not `/reflect-retro`.** `/reflect-retro` is a scheduled working session on the retro backlog: read every open item, fix or cull the tool that caused it, record the disposition. It is planned, it is about tools, and it leaves the backlog smaller. `/reflect-regroup` is an unplanned stop, is about the action you are taking right now, and changes your course rather than your tools. See `commands/reflect-retro.md`.
+
 **Not an enforcement mechanism.** `/reflect-regroup` serves the agent that never looked. It is not a fix for the agent that had a memory, stated its lesson, and violated it anyway — that is a model behavior, decided permanently out of scope (plan Open Question 1). Do not read this command, or later extend it, as a compliance check.
 
 ---

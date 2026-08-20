@@ -1334,13 +1334,35 @@ $SR_CLEAN python3 "$REPO/tests/regroup_cmd_test.py" > "$RGOUT" 2>&1; RGRC=$?
 check "regroup_cmd_test.py: all assertions pass" '[ "$RGRC" = "0" ]'
 check "regroup_cmd_test.py: reports a non-empty tally" 'grep -q "regroup_cmd_test: [1-9][0-9]* passed, 0 failed" "$RGOUT"'
 
-check "both command files exist and are distinct" \
-  '[ -f "$REPO/commands/memories.md" ] && [ -f "$REPO/commands/reflect-regroup.md" ]'
+check "all three command files exist and are distinct" \
+  '[ -f "$REPO/commands/memories.md" ] && [ -f "$REPO/commands/reflect-regroup.md" ] \
+   && [ -f "$REPO/commands/reflect-retro.md" ]'
 # The scope split is the design: /memories takes a topic and stops nothing;
-# /reflect regroup takes none and stops first. If either file stops naming the
-# other, the two commands have started to blur.
+# /reflect regroup takes none and stops first; /reflect-retro is planned and
+# works a backlog down. If any file stops naming the others, they have blurred.
 check "each command file cross-references the other (scope split held)" \
   'grep -qi "regroup" "$REPO/commands/memories.md" && grep -qi "memories" "$REPO/commands/reflect-regroup.md"'
+check "reflect-retro names both siblings, and both name it (three-way split held)" \
+  'grep -q "reflect-retro" "$REPO/commands/memories.md" \
+   && grep -q "reflect-retro" "$REPO/commands/reflect-regroup.md" \
+   && grep -qi "memories" "$REPO/commands/reflect-retro.md" \
+   && grep -qi "regroup" "$REPO/commands/reflect-retro.md"'
+# One key, matching the other three command files. A stray name:/allowed-tools:
+# changes how the harness loads the command, silently.
+check "reflect-retro.md frontmatter carries exactly one key" \
+  '[ "$(awk "NR>1 && /^---$/{exit} NR>1 && /^[a-z_-]+:/{n++} END{print n+0}" \
+        "$REPO/commands/reflect-retro.md")" = "1" ]'
+# R8/R9: the command is defined by what it is NOT. Lose the boundaries and it
+# drifts into being a second /reflect.
+check "reflect-retro.md argues its scope boundary against /reflect and /memories" \
+  'grep -q "Not \`/reflect\`" "$REPO/commands/reflect-retro.md" \
+   && grep -q "Not \`/memories\`" "$REPO/commands/reflect-retro.md" \
+   && grep -q "Not a report" "$REPO/commands/reflect-retro.md"'
+# A command and a skill sharing a name means the command wins and the skill
+# never loads — silently, with no error anywhere.
+check "no skill shares the name reflect-retro (command would shadow it)" \
+  '[ ! -e "$REPO/skills/reflect-retro" ] \
+   && ! grep -rqx "name: reflect-retro" "$REPO"/skills/*/SKILL.md'
 
 # ------------------------------------------------------------- reflect runner
 # Its own file, not more lines here: this suite is already ~1350 lines and review
