@@ -69,7 +69,7 @@
     {
       "name": "comment-cut",
       "description": "Cut comment bloat out of a branch without losing the comments that matter \u2014 four keep-rules, each needing a failure that nothing reports AND a tempting edit that would cause it, because a visible bug is a missing test rather than a comment; specs default to zero on the principle that a red test is not a silent failure",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Shawn Roos"
       },

@@ -86,7 +86,21 @@ pipe the compiler through `tail`, which replaces its exit status with the pager'
 Verify which project actually covers what. An app tsconfig frequently excludes specs; if specs are
 in scope, they need their own run.
 
-**c. Invariant-signal scan (the only gate for over-compression).** After each judgement slice,
+**c. Lint the changed files. The minify proof is blind here.** A comment that is the SOLE
+content of an otherwise-empty block is load-bearing: `no-empty` permits a block containing a
+comment, so deleting it turns legal code into a lint error. Minified output is identical either
+way, and both typecheck projects pass, so ONLY lint catches it:
+
+```bash
+git diff --name-only $BASE..HEAD | grep '\.ts$' | tr '\n' '\0' | xargs -0 npx eslint --no-warn-ignored
+```
+
+Measured: one such deletion turned CI red after every other gate passed. **The fix is to restore
+the comment, not delete the block** — a deliberately-empty block is exactly where a comment earns
+its keep, because the tempting edit is to fill it in or remove it, and either silently changes
+what the surrounding code proves.
+
+**d. Invariant-signal scan (the only gate for over-compression).** After each judgement slice,
 grep the slice's **removed** comment lines for invariant language:
 
 ```
