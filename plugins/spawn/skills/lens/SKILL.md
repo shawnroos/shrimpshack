@@ -46,8 +46,13 @@ There is no Claude Code agent loop on the far side of this call (KTD1). It is a 
    - `--max-tokens N` — response cap. Default 8192 (`SPAWN_LENS_MAX_TOKENS`).
    - `--timeout SECONDS` — total deadline for the call. Default 600 (`SPAWN_LENS_TIMEOUT`).
    - `--output-file <path>` — always write the response text to this path instead of inlining it.
+   - `--describe` — the machine-readable contract, exit 0, no gateway and no config needed.
 
    The gateway is started for you if it is down; you do not need to check first.
+
+   **`--describe` also declares which alias to pass, and that resolution is not yours to guess.** Its `families` block gives each family's default alias and its tier-name-to-alias map, spelled the way prose spells a tier; `no_family_alias` is what prose naming no family resolves to; `chain_policy` says which surfaces accept a chain alias, and this one does. All three scripts answer from the same table, so a family or tier served here is served everywhere. If prose names a family or tier that block does not list, **fail loudly and name the served aliases** — do not quietly fall back to the default, which returns an answer from a model nobody asked for.
+
+   Where this body and `--describe` disagree, `--describe` is right and this body is stale.
 
 3. Read the exit code. KTD2 owns the enum — these are the same codes every script in this plugin uses; what follows is what each one means *here*:
 

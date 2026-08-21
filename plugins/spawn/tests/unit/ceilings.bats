@@ -984,16 +984,20 @@ print('LEAKED' if '$t' in d['permissions']['allow'] else 'CLEAN')"
 }
 
 @test "the deny list carries every tool family that must not reach an unattended job" {
-    # THE DENY LIST IS THE ENFORCEMENT — measured by effect, not read off the file:
-    # with Bash in neither allow nor deny, a child RAN a shell command and the file
-    # appeared; adding "Bash" to deny blocked it; --allowedTools did not; and
-    # --permission-mode default did not either. So a tool is permitted unless it is
-    # DENIED, and this list is the whole boundary.
+    # BOTH LISTS GATE, and the comment that used to sit here said otherwise. It
+    # claimed the deny list was the whole boundary and that a tool in neither list
+    # RAN. Retracted: re-measured 2026-08-16 on the real CLI, three arms differing
+    # only in this file — Bash in `deny` was refused with permission_denials EMPTY;
+    # Bash removed from `deny` ONLY was STILL refused, recorded ["Bash"]; only
+    # removing from `deny` AND adding to `allow` let the shell run. The retracted
+    # evidence was fabricable: a child holding worktree-scoped Write can produce
+    # `echo P > f.txt`'s file with no shell at all.
     #
-    # It is an ENUMERATION and therefore cannot close the class — a tool the harness
-    # adds tomorrow is permitted until its name appears here. That is a property of
-    # the only mechanism available, not a choice, and it is why this test pins the
-    # names rather than pretending a rule covers them.
+    # So a name absent from both lists is NOT-ALLOWED, which is a refusal. Deny is
+    # still the right place for these: it is directly assertable in the rendered
+    # file, whereas omission's protection lasts only as long as defaultMode stays
+    # dontAsk — which is why this test pins the names rather than trusting the
+    # default to hold.
     local perms; perms="$(cd "$BATS_TEST_DIRNAME/../../permissions" && pwd)"
     run python3 -c "
 import json,sys

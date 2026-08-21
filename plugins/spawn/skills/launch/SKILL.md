@@ -38,8 +38,13 @@ The plugin never opens a terminal. It runs the seed prompt headlessly through `c
    - `--alias <name>` — **required.** Must be served by the gateway; grammar `[A-Za-z0-9._-]+`, checked before any network call and before the alias is ever put into the attach command. `/spawn:report` lists what is served.
    - `--prompt-file <path>` — read the seed prompt from a file instead of stdin.
    - `--cwd <dir>` — the session's project directory. Defaults to the current directory. It is resolved to its physical path, so the transcript path in the handle is reproducible from anywhere.
+   - `--describe` — the machine-readable contract, exit 0, no gateway and no config needed.
 
    The seed prompt must be non-empty: a session seeded with nothing is not worth a handle.
+
+   **`--describe` also declares which alias to pass.** Its `families` block gives each family's default alias and its tier-name-to-alias map, spelled the way prose spells a tier; `no_family_alias` is what prose naming no family resolves to; `chain_policy` says which surfaces accept a chain alias, and this one does. All three scripts answer from the same table. If prose names a family or tier that block does not list, **fail loudly and name the served aliases** rather than resolving to the default — a session materialized on a model nobody asked for is worse than a refusal, because the handle looks correct.
+
+   Where this body and `--describe` disagree, `--describe` is right and this body is stale.
 
 3. Read the exit code. KTD2 owns the enum — what each code means *here*:
 
