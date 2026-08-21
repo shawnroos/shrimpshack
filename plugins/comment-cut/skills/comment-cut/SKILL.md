@@ -15,6 +15,11 @@ comment lines but re-added 3,132 as tightened rewrites — 88% of the deleted vo
 back in rewritten form. The keep side of this skill is therefore deliberately narrow:
 few rules, each with a test that is hard to invoke loosely.
 
+Version 0.2.0's tests were still too loose, and two independent model reviews found the same
+hole: "without this, X happens and nothing tells you" admits almost anything, because almost
+every defect is silent *to the compiler*. Each rule below now needs a failure nothing reports
+**and** a tempting edit that would cause it.
+
 ## Before anything: resolve the bar
 
 The keep/cut bar lives in the **target repo**, never in this plugin. Resolve in order:
@@ -144,28 +149,44 @@ relationship, or what the code does is a restatement wearing a haircut — delet
 
 ### Keep-rules. Four. Each has a test.
 
-1. **Silent-failure guard.** The comment names a way the code goes wrong with **no error, no
-   red test, no type failure** — a swallowing `catch`, a config precondition that ships the
-   feature dark, a stale read that bakes the wrong mask, a leaked resource. *Test: can you
-   finish the sentence "without this, X happens and nothing tells you"? If the failure would
-   throw, fail a test, or fail to compile, the comment is not load-bearing — delete it.*
-2. **Measured or tuned constant, at the constant** — with its unit/coordinate space and the
-   direction not to move it ("12px clipped the descender; don't drop below 16px line-height").
-   Instrumented field data counts (captured timings, byte sizes). *Test: the number is not
-   derivable from the code and re-measuring it costs real work.*
-3. **External-world workaround** — a browser bug, an endpoint's behavior, a library quirk
-   ("Bria caps but doesn't upscale", "toObservable throws at construction against a plain
-   value"). *Test: the reason lives outside the repo, so no amount of reading the code
-   reveals it.*
-4. **Consumed-contract JSDoc** — on a symbol that is exported **and consumed outside its
-   module**, and only for what the types don't say: throws, non-obvious return shape, unit
-   semantics. *Test: name a consumer file outside the module. A field, private method, or
-   provider on an internal service is not public API; DI wiring is greppable.*
+1. **Silent local footgun.** Two conditions, both required. **(a) Nothing reports it:**
+   breaking this turns no test red, throws nothing, fails no compile, and no user or QA sees
+   a wrong result. *A visible bug is not a silent failure — write the test instead.*
+   **(b) There is a tempting edit:** name the locally plausible change that would cause it.
+   The comment sits at that exact statement. *Test: if you cannot name the edit someone would
+   reasonably make, there is no trap to warn about — delete it.* Almost every UI defect is
+   silent to the compiler, which is why (a) alone admitted essays; (b) is what closes it.
+2. **Measured evidence at a named constant.** The constant already carries the clearest
+   domain name available, and the comment adds what a name cannot: the measured population or
+   incident, the observed failure boundary, the unit or coordinate space when ambiguous, and
+   the unsafe direction of change. *Test: strip the comment — does the name alone lose
+   evidence, or only lose English?* A comment that restates the name in prose, narrates the
+   formula, or asserts an adjective like "usable" is a restatement. Delete it.
+   `BRUSH_SIZE_AT_1X = 0.08` with "zoom becomes the size control" is the archetype: the name
+   already says it and no measurement is recorded.
+3. **Specific external incompatibility.** A named upstream defect, undocumented behaviour,
+   or version-sensitive quirk that makes the local code look unnecessary or wrong — name the
+   browser, endpoint, library, runner or version, and the behaviour observed. *Test: does the
+   code look like it could be simplified until you know this?* External provenance is
+   necessary but not sufficient: "standalone components default to `display: inline`" is
+   ordinary platform behaviour next to a `display: block` declaration that already says so.
+   Teaching the framework is not a keep.
+4. **External caller obligation.** On a symbol exported and used outside its owning
+   subtree, and only where a caller must honour behaviour the type cannot express, and misuse
+   is caught by neither compilation nor an existing test. *Test: name the consumer file AND
+   the obligation it would violate.* Naming a consumer proves reach, not necessity — measured
+   on one contract file, 2 of 41 JSDoc blocks passed the consumer test and neither passed
+   this one. Prefer a stronger type over prose. A dictionary definition of a string-literal
+   union, a default expressible in code, or a "read by X" pointer is not an obligation.
 
 Everything else goes: restating the declaration or the language, narration of the next line,
 design/rationale essays, alternative-history ("we tried X and removed it" compresses to the
 one do-not-reintroduce clause **only if** it passes rule 1 or 3), banner headers,
-commented-out code, changelog and attribution notes.
+commented-out code, changelog and attribution notes, **framework tutorials** (how Angular,
+RxJS or the test runner works), **find-usages pointers** ("read by X", "fires on Y"),
+**dictionary definitions of string-literal unions**, **file-header essays** cataloguing what a
+file covers, and **design or review transcripts** — round labels, mutation records,
+old-fixture histories, layout tours.
 
 ### Ticket ids and plan ids
 
@@ -175,27 +196,34 @@ Everywhere else, strip the id and keep the sentence if the sentence passes a kee
 "Sole pointer to a constraint recorded nowhere else" is not an exception — if the constraint
 is real, state it in the comment; then the id adds nothing.
 
-### Spec files
+### Spec files — default zero
 
-Specs are where loose keep-rules go to multiply — on the measured subtree, 56% of all
-surviving comments were in specs. "Why-this-fixture / why-this-mock" is not a keep-rule; it
-justified thousands of lines of mock narration. The only spec keep is rule 1 in test form:
+Specs were 56% of survivors on the measured subtree. The rule that gets them there is one
+sentence, and it is the sharpest thing two independent reviews produced:
 
-- **Keep**: a comment naming how the test would **pass wrongly** or die non-obviously without
-  the knowledge — a fixture field whose absence silently keeps the wrong code path ("a
-  fixture missing `objectPickerSource` keeps the tab surface and proves nothing"), a flag
-  that must be seeded before construction, a harness constraint that throws on the second
-  `makeService()`, an IEEE754 near-tie chosen on purpose.
-- **Cut**: step narration (`// Fresh (no strokes) → defaults reset`, `// In-memory should be
-  empty`, `// Fire two calls before either settles`) — the `it()` title and the assertions
-  carry it. Helper docblocks (`/** Build a failed prediction. */`). Mock descriptions that
-  restate the stub's code. File-header "spec wall" essays cataloguing what the file covers —
-  the `describe` tree is that catalogue.
-- **Derivations**: a magic-number assertion earns **one arithmetic line at most**
-  (`// 144/1600 ≈ 9%: above the 2% EMPTY cutoff`). A multi-line geometry walkthrough is a
-  workaround for unreadable fixtures — compress to the one line and flag the file for a
-  named-constant refactor in the report. Comments-only passes don't fix test code; they also
-  don't grandfather prose that exists because the test code needs fixing.
+> **A red test is not a silent failure.**
+
+If breaking the production code turns this test red, a comment explaining that invariant is
+redundant *with the test itself*. Behaviour goes in the `it()` title, intent goes in fixture and
+helper names, and a branch guarantee goes in an executable precondition assertion. Measured
+example: a five-line comment explained a threshold relationship two lines above
+`expect(boxAreaFrac(oversized)).toBeGreaterThan(DEFAULT_MAX_BOX_FRAC)` — the assertion was
+already stronger than the prose, and cannot drift out of date.
+
+**The only two spec keeps:**
+
+- An **open ticket on disabled work** — an `xit` under a named ticket, "restore when X lands".
+- A **specific runner or platform incompatibility** that cannot be encoded in the harness —
+  e.g. "Karma's Linux headless Chrome rejects `fetch` of blob: and data: URLs, so real mask
+  URLs cannot be used here." Without it the stub looks pointlessly complicated.
+
+**Everything else in a spec goes**, including the tempting ones: setup and assertion narration,
+regression history, "how the production code fails" (that is what the red test says), mock-shape
+descriptions, and framework gotchas.
+
+**Zero arithmetic in specs.** Replace a derivation with named operands, a helper, a matcher, or
+a precondition assertion. A comments-only pass deletes the prose and reports the refactor the
+file needs — it does not grandfather the prose because the refactor is out of scope.
 
 ### No pointers. To anything.
 
