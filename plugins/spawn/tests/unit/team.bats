@@ -41,20 +41,74 @@ setup() {
 }
 
 teardown() {
-    [ -n "${GW_PID:-}" ] && { kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; }
+    sweep_preamble
+    sweep_work
+    rm -rf "$WORK"
+}
+
+# The two kills that must land BEFORE the sweep. Split out of teardown so the
+# invariant test can run teardown's real sequence rather than an approximation
+# of it — the ordering is load-bearing and the timing is what the race turns on.
+sweep_preamble() {
+    # `wait` on a TERMed job exits 143. Swallowed on purpose: that is this
+    # function reaping what it just killed, not a failure to report.
+    if [ -n "${GW_PID:-}" ]; then
+        kill "$GW_PID" 2>/dev/null
+        wait "$GW_PID" 2>/dev/null || :
+    fi
     # A `hang` child execs `sleep 600` and keeps NOTHING of $WORK in its argv, so
     # the sweep below cannot see it. Its pid is the only handle on it, and the
     # fixture writes that down for exactly this reason.
     if [ -f "${FAKE_CLAUDE_RECORD_DIR:-/nonexistent}/pid" ]; then
         while read -r p; do
-            [ -n "$p" ] && kill -9 "$p" 2>/dev/null
+            if [ -n "$p" ]; then kill -9 "$p" 2>/dev/null || :; fi
         done < "$FAKE_CLAUDE_RECORD_DIR/pid"
     fi
+    return 0
+}
+
+# sweep_work — leave no live process holding $WORK.
+#
+# ONE SNAPSHOT IS NOT A SWEEP. A single `pgrep`, kill that list, done, is stale
+# the instant it is taken: bg-agent.sh nohup's the supervisor on its own clock
+# after dispatch returns (lib/bg-agent.sh:602) and forks a `jobs.sh log` child
+# per log line (lib/bg-agent.sh:415), so a process born after the snapshot is
+# never signalled — and the `rm -rf` that follows then walks a tree that
+# process is still writing into, which is the "Directory not empty" this file
+# used to fail with. So: re-sweep until a pass sees NOTHING. The clean pass IS
+# the wait; these are not our children, so `wait` cannot be used on them.
+#
+# EVERY signal is scoped to this test's own mktemp $WORK path. Never signal by
+# script name: other sessions on the same box run these same scripts, and a
+# name-scoped kill takes their work with it.
+#
+# On an exhausted budget this prints the survivors and returns 1. Measured: a
+# non-zero return from HERE is swallowed by teardown, whose status comes from the
+# `rm -rf` after it, so the printf is what a reader actually gets. The return
+# code earns its place with a direct caller that checks it — the invariant test
+# below does.
+sweep_work() {
+    local pass p found
+    for pass in $(seq 1 25); do
+        found=0
+        for p in $(pgrep -f "$WORK" 2>/dev/null); do
+            [ "$p" = "$$" ] && continue
+            found=1
+            # `|| :` because a pid can exit between the pgrep and this kill, and
+            # kill then returns 1. A bats test body runs under errexit, so an
+            # unguarded kill aborts the sweep mid-pass — measured, as a failure
+            # of this very test in a full-file run.
+            kill -9 "$p" 2>/dev/null || :
+        done
+        if [ "$found" -eq 0 ]; then return 0; fi
+        sleep 0.1
+    done
+    printf 'sweep_work: processes still hold %s after 25 passes:\n' "$WORK" >&2
     for p in $(pgrep -f "$WORK" 2>/dev/null); do
         [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
-    rm -rf "$WORK"
+        ps -o pid=,args= -p "$p" 2>/dev/null
+    done >&2
+    return 1
 }
 
 # roster <args...> — always run from inside the temp checkout, never the real one.
@@ -228,7 +282,8 @@ jq_free_path() {
     run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
     [ "$status" -eq 0 ]
     assert_one_object "$output"
-    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "3" ]
+    # Four, not three: the run's own emptied root is removed with them (R11).
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "4" ]
 
     # What the record named is gone...
     refute_exists "$ROOT/r1/lead"
@@ -265,7 +320,7 @@ jq_free_path() {
     [ "$status" -eq 0 ]
     assert_one_object "$output"
     [ "$(printf '%s' "$output" | jq -r '.ok')" = "true" ]
-    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "2" ]
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "3" ]
     refute_exists "$ROOT/r1/lead"
     refute_exists "$ROOT/r1/mason"
 }
@@ -291,7 +346,7 @@ jq_free_path() {
 
     run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "3" ]
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "4" ]
 
     # Our own member: gone from disk AND deregistered.
     refute_exists "$ROOT/r1/lead"
@@ -397,7 +452,7 @@ jq_free_path() {
     [ "$status" -eq 0 ]
     run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "1" ]
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "2" ]
     refute_exists "$ROOT/r1/lead"
 }
 
@@ -412,6 +467,124 @@ jq_free_path() {
     run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
     [ "$status" -eq 0 ]
     assert_exists "$ROOT/r1/not-a-member/keep.txt"
+}
+
+# ===========================================================================
+# R11, R12 — the run's own worktree root does not outlive the run
+# ===========================================================================
+
+@test "teardown removes the run's own empty root and names it in removed" {
+    three_members
+    [ "$status" -eq 0 ]
+    assert_exists "$ROOT/r1"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    refute_exists "$ROOT/r1"
+    # NAMED, not merely counted: the operator reads `removed` to know what went.
+    [ "$(printf '%s' "$output" | jq -r --arg r "$ROOT/r1" '.removed | index($r) != null')" = "true" ]
+    # The worktrees/ directory the run's root sat in is not the run's to remove.
+    assert_exists "$ROOT"
+}
+
+@test "teardown leaves a run root that still holds an unrelated file, and still succeeds" {
+    three_members
+    [ "$status" -eq 0 ]
+    # Somebody else's file inside the run's root. `rmdir` refuses a non-empty
+    # directory, which is why it is the verb here (KTD9).
+    printf 'not ours\n' > "$ROOT/r1/stray.txt"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r '.ok')" = "true" ]
+    [ "$(printf '%s' "$output" | jq -r '.removed | length')" = "3" ]
+    assert_exists "$ROOT/r1"
+    assert_exists "$ROOT/r1/stray.txt"
+    [ "$(cat "$ROOT/r1/stray.txt")" = "not ours" ]
+}
+
+@test "the run-root prune refuses a root whose basename is not the run id" {
+    # Not reachable through the teardown verb: both ways a root is resolved —
+    # the parent of a shape-checked member path, and the configured-root
+    # fallback — already make the basename the run id. The guard is called
+    # directly so it is proved rather than assumed (KTD9).
+    mkdir -p "$ROOT/notr1"
+    run bash -c ". '$LIB/team-worktree.sh' && spawn::team_run_root_prune '$ROOT/notr1' r1"
+    [ "$status" -eq 1 ]
+    assert_exists "$ROOT/notr1"
+
+    run bash -c ". '$LIB/team-worktree.sh' && spawn::team_run_root_prune '$ROOT/notr1' notr1"
+    [ "$status" -eq 0 ]
+    refute_exists "$ROOT/notr1"
+}
+
+@test "teardown removes the run root when no member row names a worktree" {
+    # The all-unplaced shape. No member row carries a path, so the root cannot
+    # be read off one — it comes from the configured worktree root and the run
+    # id. The root is made unwritable so every checkout fails and NOTHING is
+    # left inside it; `rmdir` needs write on the parent, not on the root.
+    mkdir -p "$ROOT/r1"
+    chmod 555 "$ROOT/r1"
+    three_members
+    [ "$status" -eq 5 ]
+    [ "$(rec '.members[0].worktree')" = "" ]
+    [ "$(rec '.members[2].worktree')" = "" ]
+    assert_exists "$ROOT/r1"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r --arg r "$ROOT/r1" '.removed | index($r) != null')" = "true" ]
+    refute_exists "$ROOT/r1"
+}
+
+@test "teardown removes the root the member paths name, not the configured one" {
+    # The two ways a root is resolved normally land on the same directory, so
+    # neither is proved while they agree. An explicit --worktree puts the run's
+    # members somewhere the configured root does not point, which is the only
+    # shape that tells the parent-of-the-member-path rule from the fallback.
+    roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.md" --worktree "$WORK/alt/r1/lead"
+    [ "$status" -eq 0 ]
+    assert_exists "$WORK/alt/r1/lead/.git"
+    refute_exists "$ROOT/r1"
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r --arg r "$WORK/alt/r1" '.removed | index($r) != null')" = "true" ]
+    refute_exists "$WORK/alt/r1"
+    # One level only: the directory the run's root sat in is not the run's.
+    assert_exists "$WORK/alt"
+}
+
+@test "a dispatch that places no member leaves no run root behind" {
+    # Runs 1 and 2 of the incident: every member failed to get a checkout,
+    # teardown was never called, and the empty root stayed beside real
+    # worktrees where `wtl` finds it.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" single-round 2 "solo:alpha:$WORK/c.json"
+    mkdir -p "$ROOT/rz"
+    chmod 555 "$ROOT/rz"
+
+    dispatch --team-file "$WORK/team.json" --run-id rz --run-dir "$WORK/rz"
+    [ "$status" -eq 5 ]
+    [ "$(out '.error')" = "worktree_failed" ]
+    refute_exists "$ROOT/rz"
+}
+
+@test "control: a dispatch that places a member leaves the run root in place" {
+    # The control arm for the case above — it proves the removal is about the
+    # root being EMPTY and not about dispatch removing its root whenever a
+    # member failed.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id rk --run-dir "$WORK/rk"
+    [ "$status" -eq 0 ]
+    assert_exists "$ROOT/rk"
+    assert_exists "$ROOT/rk/lead/.git"
 }
 
 # ===========================================================================
@@ -630,7 +803,7 @@ dispatch_env() {    # <alias,alias,...> — the fixture gateway and fixture CLI
     export SPAWN_START_TIMEOUT=10 SPAWN_LOCK_TIMEOUT=30
     unset SPAWN_INSTALL_DIR SPAWN_CONFIG SPAWN_MODELS_JSON SPAWN_CLAUDE_BIN
     unset SPAWN_BG_TIMEOUT SPAWN_JOB_ROOT
-    unset FAKE_CLAUDE_MODE FAKE_CLAUDE_WRITE FAKE_CLAUDE_DENIALS
+    unset FAKE_CLAUDE_MODE FAKE_CLAUDE_WRITE FAKE_CLAUDE_DENIALS FAKE_CLAUDE_MODEL_USAGE
     export CLAUDE_CONFIG_DIR="$WORK/claude-home"; mkdir -p "$CLAUDE_CONFIG_DIR"
     export FAKE_CLAUDE_RECORD_DIR="$WORK/rec"; mkdir -p "$FAKE_CLAUDE_RECORD_DIR"
     export SPAWN_SKILLS_HOME="$WORK/skills-home"
@@ -938,6 +1111,9 @@ member_state() { rec ".members[] | select(.name == \"$1\") | .launch_state"; }
         "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
     dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
     assert_one_object "$output"
+    # scout is launch_failed, so `dispatched` is lead alone. This count is the
+    # roster-versus-count disagreement this branch exists to close, so it is
+    # asserted here rather than left to the member states below.
     [ "$(out '.dispatched')" = "1" ]
     [ "$(member_state lead)" = "dispatched" ]
     [ "$(member_state scout)" = "launch_failed" ]
@@ -1200,6 +1376,107 @@ member_state() { rec ".members[] | select(.name == \"$1\") | .launch_state"; }
     [ "$(out '.mode')" = "unattended" ]
     [ "$(out '.dispatched')" = "1" ]
     [ "$(out '.pending')" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# The teardown's own invariant
+# ---------------------------------------------------------------------------
+
+work_holders() {    # pids holding $WORK in argv, this shell excluded
+    local p out=""
+    for p in $(pgrep -f "$WORK" 2>/dev/null); do
+        [ "$p" = "$$" ] && continue
+        out="${out:+$out }$p"
+    done
+    printf '%s' "$out"
+}
+
+work_holder_args() {
+    local p
+    for p in $(work_holders); do ps -o args= -p "$p" 2>/dev/null; done
+}
+
+# The arming control. The fixture gateway also carries $WORK in its argv, so
+# "something matches" proves nothing — this pins a live SUPERVISOR, the process
+# whose post-dispatch forking is what a single-pass sweep misses.
+assert_supervisor_held() {
+    if ! work_holder_args | grep -q 'spawn-bg-agent='; then
+        printf 'assert_supervisor_held: no live supervisor holds %s, so the race is not armed\n' "$WORK" >&2
+        work_holder_args >&2
+        return 1
+    fi
+    return 0
+}
+
+# The window `rm -rf` needs, not a single instant. rm walks the tree over finite
+# time and a writer at ANY point in that walk breaks it, so this watches rather
+# than samples. It also has to: the late forks are `jobs.sh log` children that
+# live tens of milliseconds — a single probe costs more than that and reports
+# clean over a real violation.
+refute_work_held() {
+    local i h
+    for i in $(seq 1 25); do
+        h="$(work_holders)"
+        if [ -n "$h" ]; then
+            printf 'refute_work_held: pass %s — these processes still hold %s: %s\n' \
+                "$i" "$WORK" "$h" >&2
+            work_holder_args >&2
+            return 1
+        fi
+        sleep 0.04
+    done
+    return 0
+}
+
+# A supervisor's fork burst, made deterministic. bg-agent.sh's `job_log` forks
+# `bash "$JOBS" log --cwd <worktree-under-$WORK>` once per log line
+# (lib/bg-agent.sh:415), so a live supervisor is a process holding $WORK that
+# keeps minting further processes holding $WORK. Real dispatch reaches this
+# state at an offset no test can pin; this pins it.
+#
+# THE PARENT ITSELF HOLDS $WORK, on purpose. A forker the sweep could not see
+# would be a shape the plugin does not have, and a test built on one would prove
+# nothing about it: here a sweep that reaches a genuinely clean pass has killed
+# the forker too, so nothing can appear afterwards. What the burst defeats is a
+# sweep that takes ONE snapshot — every child minted between that snapshot and
+# the kill reaching the forker is never signalled.
+#
+# Children run a SCRIPT FILE rather than `bash -c "sleep 2" <name>`, because bash
+# exec-optimizes the latter into a bare `sleep 2` whose argv keeps no path at all
+# — measured, and it makes the child invisible to the very sweep under test.
+arm_fork_burst() {
+    printf 'sleep 2\n' > "$WORK/burst-child.sh"
+    {
+        printf 'while :; do\n'
+        printf '    bash %s &\n' "$WORK/burst-child.sh"
+        printf '    sleep 0.005\n'
+        printf 'done\n'
+    } > "$WORK/burst.sh"
+    bash "$WORK/burst.sh" &
+    # Let the burst reach steady state, so the sweep meets a running forker
+    # rather than one that has not minted anything yet.
+    sleep 0.3
+}
+
+@test "after the sweep no live process holds the run's own work root" {
+    dispatch_env "alpha,beta,gamma,delta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 4 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json" \
+        "mason:gamma:$WORK/c.json" "clerk:delta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+
+    # Await nothing. dispatch returns while the supervisors are still coming up
+    # (KTD17), which is the state 37 tests in this file leave behind — and the
+    # exact window in which a one-shot snapshot goes stale.
+    assert_supervisor_held
+    arm_fork_burst
+    sweep_preamble
+    sweep_work
+    # Judged over the whole window `rm -rf` needs, because rm walks the tree over
+    # finite time and a writer at ANY point in that walk breaks it.
+    refute_work_held
 }
 
 # ---------------------------------------------------------------------------
@@ -1824,6 +2101,298 @@ one_done_one_pending() {
     [ "$(out '.ok')" = "true" ]
     [ "$(out '.error')" = "null" ]
     [ "$(out '.intent')" = "stop" ]
+}
+
+# ---------------------------------------------------------------------------
+# U2 — a terminal non-success outcome always carries a cause (R1, R3, R4, R5)
+#
+# The cause lives on the member ROW, so every assertion below reads the RECORD
+# through `member_failure`. The response's `error` is a PROJECTION of
+# `failure.error` (KTD2), so a response-only assertion cannot tell a recorded
+# cause from an unrecorded one.
+# ---------------------------------------------------------------------------
+
+member_failure() { rec ".members[] | select(.name == \"$1\") | .failure"; }
+
+# refute_json_key <json> <key> — fails as a PLAIN command. `! jq -e` would be
+# exempted from set -e by POSIX and could never redden a bats test.
+refute_json_key() {
+    if [ "$(printf '%s' "$1" | jq -r 'if type == "object" then has("'"$2"'") else "notobject" end' 2>/dev/null)" != "false" ]; then
+        printf 'refute_json_key: %s is present on, or the input is not, %s\n' "$2" "$1" >&2
+        return 1
+    fi
+    return 0
+}
+
+assert_json_key() {
+    if [ "$(printf '%s' "$1" | jq -r 'if type == "object" then has("'"$2"'") else "notobject" end' 2>/dev/null)" != "true" ]; then
+        printf 'assert_json_key: %s is absent from %s\n' "$2" "$1" >&2
+        return 1
+    fi
+    return 0
+}
+
+# One dispatched member whose child exits 1 — the supervisor classifies that
+# `failed` and writes its own account of why.
+one_failing_member() {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=fail
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    await_member_terminal lead
+}
+
+# One dispatched member whose child exits 0 and produces nothing the contract
+# names — `degraded` (KTD8), classified by effect and not by the exit status.
+one_degraded_member() {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    await_member_terminal lead
+}
+
+@test "a member whose child exits non-zero records the supervisor's own account of why" {
+    one_failing_member
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "failed" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "failed" ]
+    # The supervisor's sentence, relayed verbatim — not a taxonomy this layer
+    # invented.
+    [ "$(printf '%s' "$f" | jq -r '.detail')" = "the child under the 'repo-bounded' ceiling exited 1, so no work is claimed" ]
+    [ "$(printf '%s' "$f" | jq -r '.child_exit_code')" = "1" ]
+    [ "$(printf '%s' "$f" | jq -r '.degraded_reasons | length > 0')" = "true" ]
+    # KTD2: the response's error is the same value, read from the same place.
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "failed" ]
+}
+
+@test "a member that reaches degraded carries a non-null cause with its reasons" {
+    one_degraded_member
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "degraded" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "degraded" ]
+    [ "$(printf '%s' "$f" | jq -r '.degraded_reasons | length > 0')" = "true" ]
+    [ "$(printf '%s' "$f" | jq -r '.detail | length > 0')" = "true" ]
+}
+
+@test "the cause holds no narrative, and the absence assertion can fail" {
+    one_failing_member
+    advance --run-dir "$RUN"
+    local f; f="$(member_failure lead)"
+    # KTD3: `detail` and `degraded_reasons` are the SUPERVISOR's words. The
+    # child's own account of itself is never relayed as a cause.
+    refute_json_key "$f" narrative
+    # The control arm: the same helper on a key that IS there must redden.
+    run refute_json_key "$f" detail
+    [ "$status" -ne 0 ]
+    run assert_json_key "$f" narrative
+    [ "$status" -ne 0 ]
+    assert_json_key "$f" detail
+}
+
+@test "a member that reaches done carries a null cause" {
+    one_done_one_pending
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_failure lead)" = "null" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "null" ]
+}
+
+@test "a member still running carries a null cause" {
+    one_hang_member 1
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .state')" = "running" ]
+    [ "$(member_outcome lead)" = "null" ]
+    [ "$(member_failure lead)" = "null" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "null" ]
+}
+
+@test "handle_unknown is recorded as the cause, not only reported" {
+    one_hang_member 1
+    edit_record '.members |= map(if .name == "lead"
+                                 then .handle = "job-19700101T000000Z-9999" else . end)'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "handle_unknown" ]
+    [ "$(member_outcome lead)" = "failed" ]
+    [ "$(member_failure lead | jq -r '.error')" = "handle_unknown" ]
+}
+
+@test "a refused result read is recorded as the cause and the probe's own state stands" {
+    one_failing_member
+    local h wt jd
+    h="$(member_handle lead)"; wt="$(member_wt lead)"
+    jd="$(member_job_dir "$h" "$wt")"
+    assert_exists "$jd/result.json"
+    # The job ran and its record is no longer readable — which is not the same
+    # as no answer.
+    rm -f "$jd/result.json"
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "result_missing" ]
+    # Nothing was read, so there is nothing to relay — absent is null, never ""
+    # and never a missing key. `jq -r '.detail'` prints "null" for a key that is
+    # not there at all, so PRESENCE is pinned separately from the value.
+    assert_json_key "$f" detail
+    assert_json_key "$f" child_exit_code
+    assert_json_key "$f" degraded_reasons
+    [ "$(printf '%s' "$f" | jq -r '.detail')" = "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.child_exit_code')" = "null" ]
+    # The probe's own state is the outcome; the refusal is not an outcome.
+    [ "$(member_outcome lead)" = "failed" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "result_missing" ]
+}
+
+@test "a member with no checkout records worktree_missing, not only reports it" {
+    one_hang_member 1
+    edit_record '.members |= map(.worktree = "")'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "worktree_missing" ]
+    [ "$(member_failure lead | jq -r '.error')" = "worktree_missing" ]
+    # A missing checkout is not an outcome the supervisor reported, so the
+    # member's own outcome is left alone.
+    [ "$(member_outcome lead)" = "null" ]
+}
+
+@test "the cause outlives the member's worktree (R3)" {
+    one_failing_member
+    advance --run-dir "$RUN"
+    [ "$(member_failure lead)" != "null" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    refute_exists "$ROOT/r1/lead"
+    # Read from team.json with the checkout gone — the record is the single
+    # source of truth for why a member failed.
+    [ "$(member_failure lead | jq -r '.error')" = "failed" ]
+    [ "$(member_failure lead | jq -r '.child_exit_code')" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# U3 — a member that never launched names its refusal in the RECORD (R2, R3)
+#
+# The dispatch-side twin of the section above. `TEAM_LAUNCH_ERRS` is an
+# in-process accumulator that dies with the process, so a caller who reads
+# `team.json` afterwards — the single source of truth — had no way to say why a
+# member never started. Every assertion below reads the ROW.
+# ---------------------------------------------------------------------------
+
+@test "a launcher's refusal rides the member's row, not only the response" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    # lead's contract does not exist, so bg-agent refuses that one launch.
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/no-such-contract.json" "scout:beta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "dispatched" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "contract_invalid" ]
+    # The launcher's own sentence, relayed rather than re-invented here.
+    [ "$(printf '%s' "$f" | jq -r '.detail | length > 0')" = "true" ]
+    # A launch that never started has no child and nothing degraded. Absent is
+    # null and never a missing key: `jq -r` prints "null" for both, so PRESENCE
+    # is pinned apart from the value.
+    assert_json_key "$f" detail
+    assert_json_key "$f" child_exit_code
+    assert_json_key "$f" degraded_reasons
+    [ "$(printf '%s' "$f" | jq -r '.child_exit_code')" = "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.degraded_reasons')" = "null" ]
+
+    # The member that DID launch carries no cause, and it is the only one that
+    # does not: one failed launch marks one row.
+    [ "$(member_failure scout)" = "null" ]
+    [ "$(rec '[.members[] | select(.failure != null)] | length')" = "1" ]
+
+    # KTD2 — the response's error is a projection of the same value.
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "contract_invalid" ]
+    [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "contract_invalid" ]
+    [ "$(out '.members[] | select(.name == "scout") | .failure')" = "null" ]
+}
+
+@test "the launch refusal outlives the member's worktree (R3)" {
+    dispatch_env "alpha"
+    team_file "$WORK/team.json" single-round 2 "solo:alpha:$WORK/absent-contract.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_failure solo | jq -r '.error')" = "contract_invalid" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    refute_exists "$ROOT/r1/solo"
+    # Read from team.json with the checkout gone.
+    [ "$(member_failure solo | jq -r '.error')" = "contract_invalid" ]
+}
+
+@test "a member whose checkout could not be created records worktree_failed on its row" {
+    mkdir -p "$ROOT/r1"
+    printf 'in the way\n' > "$ROOT/r1/lead"
+    roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.md" \
+        --member scout --alias haiku --contract "$WORK/c2.md"
+    [ "$status" -eq 5 ]
+    [ "$(member_state lead)" = "launch_failed" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "worktree_failed" ]
+    assert_json_key "$f" detail
+    assert_json_key "$f" child_exit_code
+    assert_json_key "$f" degraded_reasons
+    [ "$(member_failure scout)" = "null" ]
+    [ "$(rec '[.members[] | select(.failure != null)] | length')" = "1" ]
+
+    # The roster's response reads the row rather than asserting the cause on its
+    # own, so the two can no longer disagree.
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "worktree_failed" ]
+    [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "worktree_failed" ]
+    [ "$(out '.members[] | select(.name == "scout") | .failure')" = "null" ]
+}
+
+@test "a checkout that vanished between rounds records worktree_failed on its row" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state scout)" = "pending" ]
+    [ "$(member_failure scout)" = "null" ]
+
+    # Round 2 places nothing, so a checkout lost between rounds is caught by the
+    # revalidation and nowhere else.
+    rm -rf "$(member_wt scout)"
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 5 ]
+    [ "$(member_state scout)" = "launch_failed" ]
+    [ "$(member_failure scout | jq -r '.error')" = "worktree_failed" ]
+    [ "$(out '.members[] | select(.name == "scout") | .error')" = "worktree_failed" ]
+    [ "$(out '.members[] | select(.name == "scout") | .failure.error')" = "worktree_failed" ]
+    # lead launched in round 1, and another member's lost checkout is not its
+    # cause.
+    [ "$(member_failure lead)" = "null" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -2612,4 +3181,831 @@ foreign_changes() {     # <before> <after> <deliverable>...
         [ -n "$wt" ] && [ "$wt" != "null" ] || continue
         case "$rd" in "$wt"/*) printf 'run dir %s is inside member checkout %s\n' "$rd" "$wt" >&2; return 1 ;; esac
     done
+}
+
+# KTD2 — a response's `error` is a PROJECTION of the row's cause, so the two can
+# never disagree. The accumulator behind it holds only THIS process's launch
+# errors, so a member that failed in an EARLIER round read as error:null beside
+# a non-null failure: the response denied a cause the record was holding.
+#
+# Three members and a concurrency of one, because a launch that FAILS consumes
+# no slot — with two members the first round swallows both and there is no
+# second round to test.
+@test "a member that failed to launch in an earlier round still names its cause in a later round's response" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/no-such-contract.json" \
+        "scout:beta:$WORK/c.json" \
+        "third:alpha:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN" --max-concurrent 1
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_failure lead | jq -r '.error')" = "contract_invalid" ]
+
+    dispatch --run-id r1 --run-dir "$RUN" --max-concurrent 1
+    assert_one_object "$output"
+    [ "$(out '.ok')" = "true" ]
+    [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "contract_invalid" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "contract_invalid" ]
+}
+
+# ---------------------------------------------------------------------------
+# U4 — the advance response lists EVERY member of the run (R6, R7)
+#
+# The response's member list was built from this call's probes alone, and the
+# probe loop selects only members with a null outcome. So a member that settled
+# on an earlier advance vanished from every later response: a run reporting
+# `dispatched: 3` listed ONE member, and a reader could not tell "not reported"
+# from "not run". The record holds all three, so the response is built from the
+# record after the write and the probe supplies only this call's answers.
+# ---------------------------------------------------------------------------
+
+# Two members that finish in round 1, and a third dispatched in round 2 under a
+# caller-chosen mode. The advance under test is the SECOND one: by then lead and
+# scout are settled, and the probe loop looks at nobody but the third member.
+two_settled_then_one() {    # <mode for the third member>
+    dispatch_env "alpha,beta,gamma"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json" "mason:gamma:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state mason)" = "pending" ]
+    await_invocations 2
+    await_member_terminal lead
+    await_member_terminal scout
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "continue" ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_outcome scout)" = "done" ]
+
+    unset FAKE_CLAUDE_WRITE
+    export FAKE_CLAUDE_MODE="$1"
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state mason)" = "dispatched" ]
+    await_invocations 3
+}
+
+@test "the second advance lists every member of the run, not only the ones it probed" {
+    two_settled_then_one fail
+    await_member_terminal mason
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.members | length')" = "3" ]
+    [ "$(out '[.members[].name] | sort | join(",")')" = "lead,mason,scout"  ]
+    # The two settled members carry the outcome the record holds, from a call
+    # that probed neither of them.
+    [ "$(out '.members[] | select(.name == "lead") | .outcome')" = "done" ]
+    [ "$(out '.members[] | select(.name == "scout") | .outcome')" = "done" ]
+    [ "$(out '.members[] | select(.name == "mason") | .outcome')" = "failed" ]
+}
+
+@test "the failed member's row carries the whole cause, not only an error string" {
+    two_settled_then_one fail
+    await_member_terminal mason
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "mason")')"
+    assert_json_key "$row" failure
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "failed" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.error')" = "failed" ]
+    # AE1 — the supervisor's own sentence reaches the operator's screen. An
+    # error value alone does not carry it.
+    [ "$(printf '%s' "$row" | jq -r '.failure.detail | length > 0')" = "true" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.child_exit_code')" = "1" ]
+    # A member that came back with work carries a null cause, and the key is
+    # there to be read.
+    local ok_row
+    ok_row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$ok_row" failure
+    [ "$(printf '%s' "$ok_row" | jq -r '.failure')" = "null" ]
+}
+
+@test "the member list and the run's own verdict describe the same run" {
+    two_settled_then_one fail
+    await_member_terminal mason
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # R7 — `mixed` must be readable as two successes and one failure from the
+    # response alone.
+    [ "$(rec '.derived.verdict')" = "mixed" ]
+    [ "$(out '[.members[] | select(.outcome == "done")] | length')" = "2" ]
+    [ "$(out '[.members[] | select(.outcome != null and .outcome != "done")] | length')" = "1" ]
+    [ "$(out '[.members[] | select(.outcome != null and .outcome != "done" and .error != null)] | length')" = "1" ]
+}
+
+@test "the response's dispatched count equals the rows that say dispatched" {
+    two_settled_then_one fail
+    await_member_terminal mason
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # The live shape this unit closes: a count of 3 beside a list of 1.
+    [ "$(out '.dispatched')" = "3" ]
+    [ "$(out '[.members[] | select(.launch_state == "dispatched")] | length')" = "3" ]
+}
+
+@test "a member still in flight reports its live state beside members the record settled" {
+    two_settled_then_one hang
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.intent')" = "waiting" ]
+    [ "$(out '.members | length')" = "3" ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "mason")')"
+    # The probe answers for the member it probed, and the record answers for the
+    # two it did not.
+    [ "$(printf '%s' "$row" | jq -r '.state')" = "running" ]
+    assert_json_key "$row" outcome
+    [ "$(printf '%s' "$row" | jq -r '.outcome')" = "null" ]
+    [ "$(out '.members[] | select(.name == "lead") | .outcome')" = "done" ]
+    [ "$(out '.members[] | select(.name == "scout") | .outcome')" = "done" ]
+}
+
+@test "every row carries the same fields, probed this call or not" {
+    two_settled_then_one hang
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # R6 — a reader must not be able to tell "not reported" from "not run" by
+    # the shape of a row.
+    [ "$(out '[.members[] | keys_unsorted | join(",")] | unique | length')" = "1" ]
+    [ "$(out '.members[0] | keys_unsorted | sort | join(",")')" = "error,failure,launch_state,name,outcome,served_model,state,tokens" ]
+}
+
+@test "a member that never launched appears in the advance response with its cause" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/no-such-contract.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    await_invocations 1
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members | length')" = "2" ]
+    # A launch that failed is never probed — its row comes from the record or
+    # from nowhere.
+    [ "$(out '.members[] | select(.name == "lead") | .launch_state')" = "launch_failed" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "contract_invalid" ]
+    [ "$(out '.members[] | select(.name == "lead") | .failure.error')" = "contract_invalid" ]
+}
+
+# ===========================================================================
+# U5 — retry one failed member in place (R8, R9, R10, KTD6, KTD7, KTD8)
+#
+# A retried member takes `retry_pending`, a launch_state of its own. Flipping it
+# back to `pending` would make a member on its second attempt indistinguishable
+# from one never tried, and the retired attempt is what the ceiling and the
+# closed round are still counted from.
+# ===========================================================================
+
+tr_() { bash -c '. "$1"; shift; "$@"' _ "$LIB/team-record.sh" "$@"; }
+
+retry() {           # <args...> — always from inside the temp checkout
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' retry $* 2>/dev/null"
+}
+
+# A run whose one dispatched member spent tokens and failed. Built through the
+# record rather than a child, so the refusal tests do not need a gateway.
+seed_failed_run() {     # [max-rounds] [ceiling]
+    contract_file "$WORK/c.json" out.txt
+    roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias alpha --contract "$WORK/c.json" \
+        --member scout --alias beta --contract "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    tr_ spawn::team_round_open "$RUN"
+    tr_ spawn::team_member_set "$RUN" scout round 1
+    tr_ spawn::team_member_set "$RUN" scout launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" scout tokens_input 10
+    tr_ spawn::team_member_set "$RUN" scout tokens_output 5
+    tr_ spawn::team_member_set "$RUN" scout outcome done
+    tr_ spawn::team_member_set "$RUN" lead round 1
+    tr_ spawn::team_member_set "$RUN" lead launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" lead handle job-20260818T101500Z-9
+    tr_ spawn::team_member_set "$RUN" lead tokens_input 100
+    tr_ spawn::team_member_set "$RUN" lead tokens_output 50
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"kind":"contract_unmet","detail":"no verdict","source":"supervisor"}'
+    tr_ spawn::team_member_set "$RUN" lead outcome failed
+}
+
+@test "retry returns a failed member to the roster and keeps the attempt it replaces" {
+    seed_failed_run
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 0 ]
+    assert_one_object "$output"
+    [ "$(out '.ok')" = "true" ]
+    [ "$(out '.error')" = "null" ]
+
+    [ "$(member_state lead)" = "retry_pending" ]
+    [ "$(member_outcome lead)" = "null" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .attempts | length')" = "1" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .attempts[0].failure.kind')" = "contract_unmet" ]
+    # R9 — the round it failed in stays closed, with its verdict.
+    [ "$(rec '.rounds[0].state')" = "finished" ]
+    [ "$(rec '.rounds[0].verdict')" = "mixed" ]
+    # KTD8 — the retired spend is still on the run.
+    [ "$(rec '.derived.tokens_used')" = "165" ]
+    [ "$(member_state scout)" = "dispatched" ]
+}
+
+@test "every response counts a member waiting to retry as pending" {
+    seed_failed_run
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 0 ]
+    [ "$(out '.pending')" = "1" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' status --run-id r1 --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(out '.pending')" = "1" ]
+
+    advance --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.pending')" = "1" ]
+    # The roster is not exhausted, so the run has somewhere to go.
+    [ "$(out '.intent')" = "continue" ]
+    [ "$(out '.reasons | index("roster_exhausted")')" = "null" ]
+}
+
+@test "retry on a member that finished is refused, and the record is unchanged" {
+    seed_failed_run
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member scout
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "member_not_failed" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry on a member still in flight is refused" {
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" scout outcome null
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member scout
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "member_not_failed" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry on a member this run does not have is refused" {
+    seed_failed_run
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member ghost
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "member_unknown" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry names the member it wants" {
+    seed_failed_run
+    retry --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "usage" ]
+    [ "$(out '.detail | test("--member")')" = "true" ]
+}
+
+@test "retry is refused once the round maximum has fired" {
+    seed_failed_run
+    tr_ spawn::team_round_open "$RUN"
+    tr_ spawn::team_round_open "$RUN"
+    [ "$(rec '.derived.stop_reasons | index("round_max_reached")')" != "null" ]
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "run_bound_reached" ]
+    [ "$(out '.detail | test("round_max_reached")')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+# usage_unknown is a BOUND, not a roster fact: dispatch_allowed requires the
+# bound set empty, so a run holding it can never open the round a retry needs.
+# An enumerated pair of bounds let this one through, and retry answered ok while
+# parking the member at retry_pending for ever. A member that ran and reported
+# no counts holds it true, which is exactly a member somebody wants to retry.
+@test "retry is refused while an unmeasured attempt blocks every dispatch" {
+    contract_file "$WORK/c.json" out.txt
+    roster --run-id r9 --run-dir "$RUN" --token-ceiling 100000 \
+        --member lead --alias alpha --contract "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    tr_ spawn::team_round_open "$RUN"
+    tr_ spawn::team_member_set "$RUN" lead round 1
+    tr_ spawn::team_member_set "$RUN" lead launch_state dispatched
+    # Terminal, and it reported NO counts — usage_unknown, not the ceiling.
+    tr_ spawn::team_member_set "$RUN" lead outcome failed
+    [ "$(rec '.derived.stop_reasons | index("usage_unknown") != null')" = "true" ]
+    [ "$(rec '.derived.stop_reasons | index("token_ceiling_reached")')" = "null" ]
+    [ "$(rec '.derived.dispatch_allowed')" = "false" ]
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r9 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "run_bound_reached" ]
+    [ "$(out '.detail | test("usage_unknown")')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry is refused once the token ceiling has been reached" {
+    contract_file "$WORK/c.json" out.txt
+    roster --run-id r2 --run-dir "$RUN" --token-ceiling 120 \
+        --member lead --alias alpha --contract "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    tr_ spawn::team_round_open "$RUN"
+    tr_ spawn::team_member_set "$RUN" lead round 1
+    tr_ spawn::team_member_set "$RUN" lead launch_state dispatched
+    tr_ spawn::team_member_set "$RUN" lead tokens_input 100
+    tr_ spawn::team_member_set "$RUN" lead tokens_output 50
+    tr_ spawn::team_member_set "$RUN" lead outcome failed
+    [ "$(rec '.derived.ceiling_state')" = "reached" ]
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r2 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "run_bound_reached" ]
+    [ "$(out '.detail | test("token_ceiling_reached")')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry waits for an advance holding the run lock rather than interleaving" {
+    seed_failed_run
+    # A live holder: this shell's own pid, which team_lock_take probes with
+    # kill -0 and finds alive.
+    mkdir -p "$RUN/advance.lock"
+    printf '%s\n' "$$" > "$RUN/advance.lock/pid"
+
+    bash -c "cd '$PRIMARY' && bash '$TEAM' retry --run-id r1 --run-dir '$RUN' --member lead >'$WORK/retry.out' 2>/dev/null" &
+    local pid=$!
+    sleep 1
+    # Still held: the rotation has not been applied behind the lock.
+    [ "$(member_state lead)" = "dispatched" ]
+    rm -rf "$RUN/advance.lock"
+    wait "$pid"
+
+    [ "$(member_state lead)" = "retry_pending" ]
+    [ "$(member_outcome lead)" = "null" ]
+    [ "$(jq -r '.ok' < "$WORK/retry.out")" = "true" ]
+}
+
+@test "retry gives up rather than waiting for ever on a lock nobody releases" {
+    seed_failed_run
+    mkdir -p "$RUN/advance.lock"
+    printf '%s\n' "$$" > "$RUN/advance.lock/pid"
+
+    export SPAWN_TEAM_RETRY_LOCK_WAIT=1
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "run_busy" ]
+    [ "$(member_state lead)" = "dispatched" ]
+}
+
+@test "the next round dispatches the retried member, and only it" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/absent.json" "scout:beta:$WORK/c.json"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    # lead names a contract that is not there, so its launcher refuses it and
+    # the round goes on without it (R5).
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    await_member_terminal scout
+    advance --run-id r1 --run-dir "$RUN"
+    [ "$(rec '.rounds[0].state')" = "finished" ]
+
+    # The contract arrives, and the operator retries that one member.
+    contract_file "$WORK/absent.json" out.txt
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 0 ]
+    [ "$(member_state lead)" = "retry_pending" ]
+
+    local before; before="$(argv_count)"
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # `dispatched` counts every member in that launch_state, scout included —
+    # the round-2 roster is read off the record instead.
+    [ "$(member_state lead)" = "dispatched" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .round')" = "2" ]
+    # R10 — the second attempt is an ordinary round against the run's bounds.
+    [ "$(rec '.derived.bounds.rounds_used')" = "2" ]
+    await_invocations $(( before + 1 ))
+    assert_child_alias alpha
+    # EXACTLY one more child, and round 2 holds exactly one member: scout is
+    # done and was not re-dispatched. (beta already appears in the argv from
+    # round 1, so its absence is not what proves this.)
+    [ "$(argv_count)" = "$(( before + 1 ))" ]
+    [ "$(rec '.rounds[1].members | join(",")')" = "lead" ]
+}
+
+@test "the dispatch response counts a member held back at retry_pending as pending" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    roster --run-id r1 --run-dir "$RUN" --max-concurrent 1 \
+        --member lead --alias alpha --contract "$WORK/c.json" \
+        --member scout --alias beta --contract "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    tr_ spawn::team_round_open "$RUN"
+    local m
+    for m in lead scout; do
+        tr_ spawn::team_member_set "$RUN" "$m" round 1
+        tr_ spawn::team_member_set "$RUN" "$m" launch_state dispatched
+        tr_ spawn::team_member_set "$RUN" "$m" tokens_input 10
+        tr_ spawn::team_member_set "$RUN" "$m" tokens_output 5
+        tr_ spawn::team_member_set "$RUN" "$m" outcome failed
+        retry --run-id r1 --run-dir "$RUN" --member "$m"
+        [ "$status" -eq 0 ]
+    done
+    team_file "$RUN/team-file.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json"
+
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.dispatched')" = "1" ]
+    # The member the concurrency maximum held back is still waiting to retry,
+    # and a response reporting `pending: 0` beside it would read as a run with
+    # nowhere left to go.
+    [ "$(out '.pending')" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# U9 — a member's output is attributed to the model that SERVED it (R15-R17)
+#
+# The incident: four members were rejected with unrecognized_model by Claude
+# Code's own SDK-path validation, and one of them produced its deliverable
+# anyway — the child had fallen back to a default model. Its terminal state was
+# `done`, so the record carried a byline no model in the roster wrote.
+#
+# The requested alias proves nothing. The child's own modelUsage receipt is
+# keyed by the served model id, and that key is the only attribution the
+# envelope holds (KTD10).
+# ---------------------------------------------------------------------------
+
+member_served() { rec ".members[] | select(.name == \"$1\") | .served_model"; }
+
+# One dispatched member that satisfies its contract — so `done` is what it would
+# reach on any ground other than the served model — with the child's receipt
+# under the test's control.
+one_member_serving() {  # <modelUsage JSON|"">
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    [ -z "$1" ] || export FAKE_CLAUDE_MODEL_USAGE="$1"
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    await_member_terminal lead
+}
+
+# An EMPTY modelUsage is the shape that broke this: to_entries yields [], .[0]
+# on that is jq null, and `jq -r` prints it as the four-character string "null".
+# That is non-empty, so the substitution gate read it as a model differing from
+# the alias and degraded a job for a mismatch that never happened — a served
+# model nothing measured, in the record, tripping a gate. Absent stays null.
+@test "an empty modelUsage records no served model and degrades nothing" {
+    one_member_serving '{}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_served lead)" = "null" ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_failure lead)" = "null" ]
+}
+
+@test "a member served by a model other than its alias is degraded and names both" {
+    one_member_serving '{"impostor-model":{"canonicalModel":"impostor-model","provider":"firstParty"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # Every other signal says done: the deliverable is there and changed, the
+    # ceiling refused nothing, no verification ran. Only the substitution is
+    # left to decide this, so a green here cannot come from another cause.
+    [ "$(member_outcome lead)" = "degraded" ]
+    [ "$(member_served lead)" = "impostor-model" ]
+
+    local f; f="$(member_failure lead)"
+    [ "$f" != "null" ]
+    [ "$(printf '%s' "$f" | jq -r '.error')" = "degraded" ]
+    # BOTH names, so a reader can see what was asked for beside what answered.
+    [ "$(printf '%s' "$f" | jq -r '[.degraded_reasons[] | select(test("alpha"))] | length > 0')" = "true" ]
+    [ "$(printf '%s' "$f" | jq -r '[.degraded_reasons[] | select(test("impostor-model"))] | length > 0')" = "true" ]
+}
+
+@test "a member served by the model it asked for records it and is not degraded" {
+    one_member_serving '{"alpha":{"canonicalModel":"alpha","provider":"firstParty"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_served lead)" = "alpha" ]
+    [ "$(member_failure lead)" = "null" ]
+}
+
+@test "a child that reports no modelUsage leaves served_model null, not the alias" {
+    one_member_serving ""
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # Unknown is not a mismatch, so nothing is degraded by it (KTD4).
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_served lead)" = "null" ]
+    # `jq -r` prints "null" for a key measured null AND for one never written,
+    # so PRESENCE is pinned apart from the value.
+    assert_json_key "$(rec ".members[] | select(.name == \"lead\")")" served_model
+    [ "$(member_failure lead)" = "null" ]
+}
+
+@test "several modelUsage keys resolve to the first one, not the first sorted" {
+    # zeta is first in document order and last in sorted order: a read that
+    # sorted would answer alpha-decoy, which is also the requested alias, so a
+    # sorting read would additionally report a match that did not happen.
+    one_member_serving '{"zeta-served":{"canonicalModel":"zeta-served"},"alpha-decoy":{"canonicalModel":"alpha-decoy"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_served lead)" = "zeta-served" ]
+    [ "$(member_outcome lead)" = "degraded" ]
+}
+
+@test "the served model reaches the advance response's member entry" {
+    one_member_serving '{"impostor-model":{"canonicalModel":"impostor-model"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.members[] | select(.name == "lead") | .served_model')" = "impostor-model" ]
+    assert_json_key "$(out '.members[] | select(.name == "lead")' | jq -c .)" served_model
+}
+
+@test "the served model outlives the member's worktree, like the cause" {
+    one_member_serving '{"impostor-model":{"canonicalModel":"impostor-model"}}'
+    advance --run-dir "$RUN"
+    [ "$(member_served lead)" = "impostor-model" ]
+
+    run bash -c "cd '$PRIMARY' && bash '$TEAM' teardown --run-dir '$RUN' 2>/dev/null"
+    [ "$status" -eq 0 ]
+    refute_exists "$ROOT/r1/lead"
+    [ "$(member_served lead)" = "impostor-model" ]
+}
+
+@test "a member degraded by substitution still carries its cause (R1)" {
+    one_member_serving '{"impostor-model":{"canonicalModel":"impostor-model"}}'
+    advance --run-dir "$RUN"
+    local f; f="$(member_failure lead)"
+    # The two mechanisms do not mask each other: the substitution is what made
+    # this degraded, and the cause U2 writes is still whole.
+    [ "$f" != "null" ]
+    assert_json_key "$f" detail
+    assert_json_key "$f" child_exit_code
+    assert_json_key "$f" degraded_reasons
+    [ "$(printf '%s' "$f" | jq -r '.detail | length > 0')" = "true" ]
+    [ "$(printf '%s' "$f" | jq -r '.child_exit_code')" = "0" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "degraded" ]
+}
+
+@test "the entry's canonicalModel is preferred over the key it sits under" {
+    # The key and the canonical id are not always the same string — the receipt
+    # names both, and canonicalModel is the one that identifies the model rather
+    # than the route it was reached by.
+    one_member_serving '{"gateway-alias-key":{"canonicalModel":"real-served-id","provider":"firstParty"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_served lead)" = "real-served-id" ]
+    # Neither name is the requested alias, so this is still a substitution.
+    [ "$(member_outcome lead)" = "degraded" ]
+}
+
+@test "a receipt whose key differs but whose canonicalModel is the alias is no substitution" {
+    # The route the model was reached by is not the model. Comparing the KEY
+    # here would degrade a member that ran on exactly what it asked for.
+    one_member_serving '{"route-key-not-a-model":{"canonicalModel":"alpha","provider":"firstParty"}}'
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_served lead)" = "alpha" ]
+    [ "$(member_outcome lead)" = "done" ]
+    [ "$(member_failure lead)" = "null" ]
+}
+
+# ===========================================================================
+# U7 — the surface contracts describe what changed (R13, R14)
+#
+# WHY THESE ARE HERE. A field a caller cannot learn about from `--describe` is
+# a field nobody reads. `members[].failure` is the whole point of this plan and
+# it shipped in U2 with nothing declaring it; `served_model` shipped in U9 the
+# same way. The reporting instruction in the driver skill is the other half:
+# the cause existed on the record and the skill told the driver to print
+# "probed fields only", so it never reached the operator.
+# ===========================================================================
+
+describe_json() {
+    bash "$TEAM" --describe 2>/dev/null
+}
+
+# assert_response_field <json> <name> — declared exactly once, with real prose.
+assert_response_field() {
+    local n
+    n="$(printf '%s' "$1" | jq -r --arg f "$2" \
+        '[.response_fields[] | select(.name == $f) | select(.note != null and (.note | length > 20))] | length')"
+    if [ "$n" != "1" ]; then
+        printf 'assert_response_field: %s is declared %s times with usable prose, want 1\n' "$2" "$n" >&2
+        return 1
+    fi
+    return 0
+}
+
+@test "--describe declares every member field this plan added" {
+    local d
+    d="$(describe_json)"
+    assert_one_object "$d"
+    assert_response_field "$d" 'members[].failure'
+    assert_response_field "$d" 'members[].served_model'
+    assert_response_field "$d" 'members[].attempts'
+    # The cause a caller branches on is the projection, not the object, so the
+    # contract has to name it too.
+    assert_response_field "$d" 'members[].error'
+}
+
+@test "--describe says a member's cause is an object with the four keys the record writes" {
+    # A note saying only "the cause" leaves a reader to guess the shape, and the
+    # shape is what they have to index. These four keys are what
+    # team_record_failure and team_record_launch_failure both write.
+    local note k
+    note="$(describe_json | jq -r '.response_fields[] | select(.name == "members[].failure") | .note')"
+    for k in error detail child_exit_code degraded_reasons; do
+        if ! printf '%s' "$note" | grep -qF -- "$k"; then
+            printf 'the members[].failure note does not name the key %s: %s\n' "$k" "$note" >&2
+            return 1
+        fi
+    done
+}
+
+@test "every declared error value maps to the exit code it declares, and back" {
+    # spawn::team_code_for is a wildcard case, so the two sides cannot be
+    # compared as two lists. They are compared by BEHAVIOUR: ask the function
+    # for each declared value and require the declared code. The reverse arm is
+    # the list one — a value the function names explicitly and the contract
+    # never mentions is a code no caller can anticipate.
+    local d v c want
+    d="$(describe_json)"
+    [ "$(printf '%s' "$d" | jq -r '.error_values | length')" -ge 10 ]
+    while read -r v want; do
+        c="$(bash -c ". '$TEAM' >/dev/null 2>&1; spawn::team_code_for '$v'")"
+        if [ "$c" != "$want" ]; then
+            printf 'error value %s: --describe says exit_code %s, spawn::team_code_for says %s\n' \
+                "$v" "$want" "$c" >&2
+            return 1
+        fi
+    done < <(printf '%s' "$d" | jq -r '.error_values[] | "\(.value) \(.exit_code)"')
+
+    # Reverse: every value the function names in its own case arms is declared.
+    local named
+    named="$(sed -n '/^spawn::team_code_for()/,/^}/p' "$TEAM" \
+        | sed -n 's/^ *\([a-z_|]*\)) *printf.*/\1/p' | tr '|' '\n' | grep -v '^\*$' | grep -v '^$')"
+    for v in $named; do
+        if [ "$(printf '%s' "$d" | jq -r --arg v "$v" '[.error_values[] | select(.value == $v)] | length')" != "1" ]; then
+            printf 'spawn::team_code_for names %s and --describe declares no such error value\n' "$v" >&2
+            return 1
+        fi
+    done
+
+    # The other reverse arm, and the one that carries the weight. The case above
+    # names two values and falls everything else through to EX_USAGE, so a check
+    # written only against its arms guards 2 of the 14 declared values: deleting
+    # any of the other 12 from the contract reddens nothing. The code-side set of
+    # values this surface can actually hand a caller is the set it ASSIGNS, so
+    # that is what the contract is compared against.
+    #
+    # ONE WAY ONLY. launch_failed is declared and never literal-assigned — it
+    # reaches a member row through team_record_launch_failure — so demanding
+    # declared-implies-assigned would redden correct code.
+    local assigned
+    assigned="$(grep -ohE 'SPAWN_TEAM_ERROR="[a-z_]+"' "$LIB"/team*.sh | sed 's/.*="//;s/"//' | sort -u)"
+    [ -n "$assigned" ]
+    for v in $assigned; do
+        if [ "$(printf '%s' "$d" | jq -r --arg v "$v" \
+                '[(.error_values[].value), (.exit_codes[].error)] | map(select(. == $v)) | length')" -lt 1 ]; then
+            printf 'lib/team*.sh can set error %s and --describe declares it nowhere\n' "$v" >&2
+            return 1
+        fi
+    done
+}
+
+# --- the driver skill's reporting instruction (R14) -------------------------
+
+skill_body() {   # the body only: frontmatter prose is not an instruction
+    awk 'NR==1 && $0=="---" { inb=1; next } inb && $0=="---" { inb=0; next } !inb' \
+        "$LIB/../skills/team-run/SKILL.md"
+}
+
+# The "Reporting between rounds" section alone. An instruction that lands
+# anywhere else in the file is not the one the driver follows when reporting.
+reporting_section() {
+    skill_body | awk '/^### Reporting between rounds/ { on=1; next } on && /^#/ { exit } on'
+}
+
+@test "the reporting section tells the driver to report EVERY member, not the probed ones" {
+    local sec
+    sec="$(reporting_section)"
+    [ -n "$sec" ]
+    if ! printf '%s' "$sec" | grep -qiE 'every member'; then
+        printf 'the reporting section never says to report every member:\n%s\n' "$sec" >&2
+        return 1
+    fi
+}
+
+@test "the reporting section names a failed member's CAUSE in the per-member list" {
+    # PRESENCE, deliberately. An edit that only deletes "probed fields only"
+    # leaves a per-member list with no cause in it and would pass an
+    # absence-only check, which is exactly the state this plan is fixing.
+    local sec
+    sec="$(reporting_section)"
+    [ -n "$sec" ]
+    local f
+    # The two fields the cause actually lives in, by name. Prose about "the
+    # cause" with no field in it leaves a driver to hunt for one.
+    for f in 'members[].error' 'members[].failure'; do
+        if ! printf '%s' "$sec" | grep -qF -- "$f"; then
+            printf 'the reporting section does not name %s:\n%s\n' "$f" "$sec" >&2
+            return 1
+        fi
+    done
+    if ! printf '%s' "$sec" | grep -qiE 'cause'; then
+        printf 'the reporting section does not name a members cause:\n%s\n' "$sec" >&2
+        return 1
+    fi
+}
+
+@test "the reporting section still forbids forwarding a member's narrative as fact" {
+    # Load-bearing and easy to lose in a rewrite of this section: the cause is
+    # the SUPERVISORS classification and may be reported; the members own
+    # account of itself may not.
+    skill_body | grep -qiE 'narrative'
+}
+
+@test "the reporting section no longer says probed fields only" {
+    refute_file_match 'Probed fields only' "$LIB/../skills/team-run/SKILL.md"
+}
+
+@test "the skill tells the driver what retry is for on a mixed stop" {
+    local body
+    body="$(skill_body)"
+    printf '%s' "$body" | grep -qF 'retry --run-id'
+    # And it says the thing a driver would otherwise get wrong: retry only
+    # returns the member to the roster, so a round still has to be dispatched.
+    printf '%s' "$body" | grep -qiE 'retry[^.]*dispatches nothing|dispatches nothing[^.]*retry'
+}
+
+@test "the skill tells the driver to report a model substitution" {
+    # served_model exists so the operator learns their review ran on a model
+    # they did not ask for. A driver that never prints it makes the field moot.
+    skill_body | grep -qF 'served_model'
+}
+
+# --- U10 (failure-reporting plan): status carries the cause -----------------
+
+@test "--describe says the cause and the served model reach the status surface too" {
+    local d
+    d="$(describe_json)"
+    [ -n "$d" ]
+    local f
+    for f in 'members[].failure' 'members[].served_model'; do
+        if [ "$(printf '%s' "$d" | jq -r --arg f "$f" \
+                '[.response_fields[].name] | index($f) != null')" != "true" ]; then
+            printf -- '--describe declares no %s\n' "$f" >&2
+            return 1
+        fi
+    done
+    # THE NOTE, not only the name. Both fields were already declared as advance
+    # only, so a name check alone passes over the declaration that is wrong.
+    if ! printf '%s' "$d" | jq -r '.response_fields[]
+            | select(.name == "members[].served_model") | .note' | grep -qF 'status'; then
+        printf -- '--describe still does not say status carries served_model\n' >&2
+        return 1
+    fi
+    if printf '%s' "$d" | jq -r '.response_fields[]
+            | select(.name == "members[].served_model") | .note' | grep -qiF 'advance only'; then
+        printf -- '--describe still calls served_model advance only\n' >&2
+        return 1
+    fi
+}
+
+@test "the reporting section no longer tells the driver that status carries no cause" {
+    local sec
+    sec="$(reporting_section)"
+    [ -n "$sec" ]
+    if printf '%s' "$sec" | grep -qiE 'carries no cause|no cause and no served model'; then
+        printf 'the reporting section still says status carries no cause:\n%s\n' "$sec" >&2
+        return 1
+    fi
+    # PRESENCE too: deleting the sentence would pass an absence-only check and
+    # leave the driver with nothing said about status at all.
+    if ! printf '%s' "$sec" | grep -qF 'status'; then
+        printf 'the reporting section no longer mentions status:\n%s\n' "$sec" >&2
+        return 1
+    fi
 }

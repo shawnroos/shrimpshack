@@ -162,6 +162,58 @@ team_record_usage() {   # <name> <handle.sh result object>
     done
 }
 
+# The model that ANSWERED, lifted out of the member's own result record (R15).
+# The supervisor took it from the child's own modelUsage receipt; nothing here
+# re-derives it, and the requested alias is never substituted for it — a row
+# that restated the request would be the byline the incident shipped.
+#
+# WRITTEN BEFORE THE OUTCOME, for the same reason team_record_usage is: each set
+# is its own recompute-and-write, and an outcome landing first leaves a reader
+# looking at a terminal member with no attribution.
+#
+# A non-string is not written at all rather than written null: absent is already
+# the field's initial value, and an absence must never overwrite a measurement.
+team_record_served() {  # <name> <handle.sh result object>
+    local name="$1" res="$2" v
+    v="$(printf '%s' "$res" | jq -r '.result.served_model | strings // empty' 2>/dev/null)"
+    [ -n "$v" ] || return 0
+    spawn::team_member_set "$RUN_DIR" "$name" served_model "$v" \
+        || say "team: '$name' was served by $v and it could not be recorded"
+}
+
+# Why a member did not come back with work, written to its own row. The cause is
+# ONE object so a reader cannot get the verdict and the reason from two places
+# and find them disagreeing; the response's `error` is a projection of
+# `.error` here, taken from the same call (KTD2).
+#
+# Only facts this plugin established: `detail` and `degraded_reasons` are the
+# SUPERVISOR's own words about what it measured. The child's `narrative` is
+# excluded on purpose — it is the model's account of itself, and the team layer
+# never forwards that as a cause (KTD3).
+#
+# An absent sub-field is null and never "" or 0: a reader that cannot tell an
+# unmeasured exit code from a zero one reports a clean exit on a job nobody
+# measured (KTD4). jq's `//` keeps a real 0 and a real [] because both are
+# truthy there.
+#
+# WRITTEN BEFORE THE OUTCOME, for the same reason team_record_usage is: each set
+# is its own recompute-and-write, so an outcome landing first leaves a reader
+# catching the run between the two writes looking at a TERMINAL member with no
+# cause — the exact shape this unit exists to remove.
+team_record_failure() {  # <name> <error> <handle.sh result object|"">
+    local name="$1" error="$2" res="$3" obj
+    obj="$(printf '%s' "${res:-null}" | jq -c --arg e "$error" '
+        (if type == "object" then (.result // {}) else {} end)
+        | {error:$e,
+           detail:(.detail // null),
+           child_exit_code:(.child_exit_code // null),
+           degraded_reasons:(.degraded_reasons // null)}' 2>/dev/null)"
+    [ -n "$obj" ] || obj="$(jq -nc --arg e "$error" \
+        '{error:$e, detail:null, child_exit_code:null, degraded_reasons:null}')"
+    spawn::team_member_set "$RUN_DIR" "$name" failure "$obj" \
+        || say "team: '$name' failed with $error and the cause could not be recorded"
+}
+
 # One member, probed in ITS OWN worktree, and its outcome recorded if it has
 # reached one. The three answers handle.sh gives are kept apart: handle_unknown
 # and handle_expired ride the member's row as errors, and a `state` of failed is
@@ -174,6 +226,10 @@ team_probe_member() {   # <name> <handle> <worktree>
     # driver's one-job lock. A member with no checkout is reported, never
     # probed.
     if [ -z "$wt" ] || [ ! -d "$wt" ]; then
+        # The cause goes on the row as well as into the response. The member's
+        # own outcome is left alone: a missing checkout is not an outcome the
+        # supervisor reported.
+        team_record_failure "$name" "worktree_missing" ""
         team_probe_row "$name" "unknown" null "worktree_missing"
         return 0
     fi
@@ -185,6 +241,7 @@ team_probe_member() {   # <name> <handle> <worktree>
         # Terminal, because nothing can ever answer for this member again. Left
         # non-terminal it would hold its round open for ever, and R6 concludes a
         # round only when every member in it is terminal.
+        team_record_failure "$name" "$err" ""
         spawn::team_member_set "$RUN_DIR" "$name" outcome failed \
             || say "team: '$name' answered $err and its outcome could not be recorded"
         team_probe_row "$name" "failed" '"failed"' "$err"
@@ -200,11 +257,19 @@ team_probe_member() {   # <name> <handle> <worktree>
         outcome="$(printf '%s' "$res" | jq -r '.terminal_state // empty' 2>/dev/null)"
         [ -n "$outcome" ] || outcome="$state"
         team_record_usage "$name" "$res"
+        team_record_served "$name" "$res"
     else
         # handle_expired and result_missing say the job ran and its record is no
         # longer readable — which is not the same as no answer. The probe's own
         # state stands as the outcome and the refusal rides the row.
         err="$(printf '%s' "$res" | jq -r '.error // empty' 2>/dev/null)"
+    fi
+    # THE GATE. One condition on the OUTCOME, never a branch per known cause:
+    # an enumerated list of the causes we happen to know today is how the next
+    # one falls out silently, which is the defect this unit closes.
+    if [ "$outcome" != "done" ] || [ -n "$err" ]; then
+        err="${err:-$outcome}"
+        team_record_failure "$name" "$err" "$res"
     fi
     spawn::team_member_set "$RUN_DIR" "$name" outcome "$outcome" \
         || say "team: '$name' reached $outcome and it could not be recorded"
@@ -229,8 +294,32 @@ team_emit_intent() {    # <record> <intent> <reasons-json> <delay|""> <detail>
           round_state:(if (.rounds | length) == 0 then null else (.rounds | last | .state) end),
           team_file:null, removed:null,
           dispatched:([ .members[] | select(.launch_state == "dispatched") ] | length),
-          pending:([ .members[] | select(.launch_state == "pending") ] | length),
-          members:$ms}
+          pending:([ .members[] | select(.launch_state == "pending"
+                                         or .launch_state == "retry_pending") ] | length),
+          # THE WHOLE ROSTER, from the record and not from this call probes
+          # (KTD5). The probe loop looks only at members with a null outcome,
+          # so a list built from the probes dropped every member that settled
+          # on an earlier advance: a response naming ONE member beside
+          # dispatched:3, where a reader cannot tell "not reported" from "not
+          # run".
+          #
+          # The record supplies the settled members and the probe supplies this
+          # call answers; the probe wins where both speak, because a live state
+          # is something no record holds and neither is worktree_missing.
+          # error stays a projection of failure.error (KTD2).
+          # No apostrophes here: this jq program is a single-quoted shell
+          # string, and one would close it.
+          members:[ .members[] as $m
+                    | ($ms | map(select(.name == $m.name)) | last) as $p
+                    | {name:$m.name,
+                       state:(if $p == null then $m.outcome else $p.state end),
+                       launch_state:$m.launch_state,
+                       outcome:(if $p == null or $p.outcome == null
+                                then $m.outcome else $p.outcome end),
+                       tokens:$m.tokens,
+                       served_model:$m.served_model,
+                       failure:$m.failure,
+                       error:($m.failure.error // $p.error // null)} ]}
         + (if $dl == "" then {} else {delay:($dl | tonumber)} end)')" \
         || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the intent could not be encoded"; }
     emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the intent encoded to nothing"; }
@@ -303,4 +392,162 @@ do_advance() {
     # record does not back.
     team_lock_release
     team_emit_intent "$rec" "$intent" "$reasons" "$delay" ""
+}
+
+# ---------------------------------------------------------------------------
+# retry — return one failed member to the dispatch roster (U5, R8, R9, R10)
+#
+# The member takes `retry_pending`, a launch_state of its own (KTD6). Back at
+# `pending` it would be indistinguishable from a member never tried, and the
+# retired attempt is what the ceiling and the closed round are still counted
+# from.
+#
+# THIS VERB DISPATCHES NOTHING. The retried member is picked up by the ordinary
+# round machinery on the next dispatch, against the same round maximum, token
+# ceiling and concurrency maximum as a first attempt — so no bound gets a retry
+# case (KTD8).
+#
+# It takes the run ADVANCE LOCK, the same one do_advance holds while it probes
+# and writes. The rotation is one atomic write against itself but not ordered
+# against an advance that probes the member on either side of it: an advance
+# holding a pre-rotation read answers handle_unknown and writes an outcome onto
+# a row the rotation has already cleared.
+#
+# And it WAITS for that lock where advance answers `noop`. An advance is
+# re-entered by a driver that will call again; a retry is an operator action
+# with nothing to re-enter it, so a live advance is a delay and not an answer.
+# ---------------------------------------------------------------------------
+RETRY_MEMBER=""
+
+retry_lock_wait() {
+    local w="${SPAWN_TEAM_RETRY_LOCK_WAIT:-30}"
+    case "$w" in ''|*[!0-9]*) w=30 ;; esac
+    [ "$w" -gt 0 ] || w=30
+    printf '%s' "$w"
+}
+
+retry_parse() {
+    local rest=()
+    RETRY_MEMBER=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --member) RETRY_MEMBER="${2:-}"; shift 2 || shift ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    team_run_parse retry ${rest[@]+"${rest[@]}"}
+    [ -n "$RETRY_MEMBER" ] || { SPAWN_TEAM_ERROR="usage"
+        spawn::team_fail "retry takes --member: it returns ONE member to the roster, never the team"; }
+}
+
+# The refusals, read off a record already in hand. Kept apart from the write so
+# every one of them answers before the lock is taken and before anything moves.
+retry_check() {         # <record json>
+    local rec="$1" state fired
+    if ! printf '%s' "$rec" | jq -e --arg n "$RETRY_MEMBER" \
+            'any(.members[]; .name == $n)' >/dev/null 2>&1; then
+        SPAWN_TEAM_ERROR="member_unknown"
+        spawn::team_fail "this run has no member named $RETRY_MEMBER"
+    fi
+    # A retry replaces a settled non-success attempt. A member still in flight
+    # has an attempt to finish, and one that finished has nothing to replace.
+    state="$(printf '%s' "$rec" | jq -r --arg n "$RETRY_MEMBER" '.members[]
+        | select(.name == $n)
+        | if .outcome == "done" then "done"
+          elif (.outcome != null) or (.launch_state == "launch_failed") then "retryable"
+          else "unfinished" end')"
+    [ "$state" = "retryable" ] || { SPAWN_TEAM_ERROR="member_not_failed"
+        spawn::team_fail "member $RETRY_MEMBER is $state, and a retry replaces a settled non-success attempt"; }
+    # R10 — a retry is an attempt the run has to pay for, so a run whose bounds
+    # already fired may not admit one. Read from the chokepoint (KTD18).
+    # `roster_exhausted` is true of every finished run, which is exactly the run
+    # a legitimate retry targets, and `roster_empty` of a run with no members.
+    # EXCLUDE the two roster reasons, never ENUMERATE the bounds. dispatch_allowed
+    # requires the bound set to be EMPTY, so any reason outside those two blocks
+    # the round this retry needs — and an enumerated pair silently omitted
+    # usage_unknown, which a retired attempt with null tokens holds true for
+    # ever. Retry then answered ok and parked the member at retry_pending on a
+    # run no advance could ever dispatch. A bound added later is refused here by
+    # default rather than becoming the same trap.
+    fired="$(printf '%s' "$rec" | jq -r '[ .derived.stop_reasons[]
+        | select(. != "roster_exhausted" and . != "roster_empty") ] | join(", ")')"
+    [ -z "$fired" ] || { SPAWN_TEAM_ERROR="run_bound_reached"
+        spawn::team_fail "this run has already stopped: $fired"; }
+}
+
+do_retry() {
+    need_jq
+    retry_parse "$@"
+    team_context
+    [ -n "$RUN_DIR" ] || RUN_DIR="$DRIVER/.spawn/teams/$RUN_ID"
+    ADVANCE_LOCK="$RUN_DIR/advance.lock"
+
+    local rec waited=0 limit
+    if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
+        spawn::team_record_refusal "$RUN_DIR"
+        spawn::team_fail "no readable run record at $RUN_DIR"
+    fi
+    [ -n "$RUN_ID" ] || RUN_ID="$(printf '%s' "$rec" | jq -r '.run_id')"
+    retry_check "$rec"
+
+    limit="$(retry_lock_wait)"
+    until team_lock_take; do
+        waited=$(( waited + 1 ))
+        if [ "$waited" -ge "$limit" ]; then
+            SPAWN_TEAM_ERROR="run_busy"
+            spawn::team_fail "an advance has held the lock on $RUN_ID for ${waited}s and nothing was changed"
+        fi
+        sleep 1
+    done
+    # RELEASE ON ANY EXIT FROM HERE ON. The re-check below can refuse — an
+    # advance settling a SIBLING member during the wait can push the run past
+    # its ceiling, and a second operator retry can rotate this member first —
+    # and spawn::team_fail exits without unwinding. Release is idempotent, so
+    # the explicit calls below stay correct.
+    trap team_lock_release EXIT
+
+    # RE-READ AND RE-CHECK UNDER THE LOCK. The record answered above was read
+    # before the lock, so an advance that finished in the wait window may have
+    # settled the very member this call is about.
+    if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
+        team_lock_release
+        spawn::team_record_refusal "$RUN_DIR"
+        spawn::team_fail "no readable run record at $RUN_DIR"
+    fi
+    retry_check "$rec"
+
+    if ! spawn::team_member_rotate "$RUN_DIR" "$RETRY_MEMBER"; then
+        team_lock_release
+        spawn::team_fail "member $RETRY_MEMBER could not be returned to the roster"
+    fi
+    if ! rec="$(spawn::team_record_read "$RUN_DIR")"; then
+        team_lock_release
+        spawn::team_record_refusal "$RUN_DIR"
+        spawn::team_fail "the run record could not be read back after the rotation"
+    fi
+    team_lock_release
+
+    local obj
+    obj="$(printf '%s' "$rec" | jq -c --arg id "$RUN_ID" --arg d "$RUN_DIR" \
+        --arg n "$RETRY_MEMBER" \
+        "$(spawn::envelope_jq plugin)"' + {
+          ok:true, error:null, remedy:null, exit_code:0,
+          response_kind:"team-retry",
+          detail:null, run_id:$id, run_dir:$d, member:$n, mode:.mode,
+          intent:null, reasons:null,
+          complete:.derived.complete,
+          ceiling_state:.derived.ceiling_state,
+          members_unmeasured:.derived.members_unmeasured,
+          round:(if (.rounds | length) == 0 then null else (.rounds | last | .ordinal) end),
+          round_state:(if (.rounds | length) == 0 then null else (.rounds | last | .state) end),
+          team_file:null, removed:null,
+          dispatched:([ .members[] | select(.launch_state == "dispatched") ] | length),
+          pending:([ .members[] | select(.launch_state == "pending"
+                                         or .launch_state == "retry_pending") ] | length),
+          members:[ .members[] | {name, launch_state, outcome, tokens, failure,
+                                  attempts:((.attempts // []) | length),
+                                  error:(.failure.error // null)} ]}')" \
+        || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the retry could not be encoded"; }
+    emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the retry encoded to nothing"; }
+    exit "$EX_OK"
 }

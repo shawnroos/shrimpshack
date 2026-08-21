@@ -57,6 +57,14 @@ refute_output_contains() {
     return 0
 }
 
+assert_json_key() {
+    if [ "$(printf '%s' "$1" | jq -r 'if type == "object" then has("'"$2"'") else "notobject" end' 2>/dev/null)" != "true" ]; then
+        printf 'assert_json_key: %s is absent from %s\n' "$2" "$1" >&2
+        return 1
+    fi
+    return 0
+}
+
 assert_output_contains() {
     if ! printf '%s' "$1" | grep -qF -- "$2"; then
         printf 'assert_output_contains: %s is missing\n' "$2" >&2
@@ -569,4 +577,164 @@ for group in funcs.values():
 sys.exit(bad)
 PYEOF
     [ "$status" -eq 0 ]
+}
+
+@test "a member waiting to retry renders as retrying, not as unresolvable" {
+    three_dispatched
+    rec_set lead attempts \
+        '[{"round":1,"handle":"job-x","outcome":"failed","failure":{"kind":"contract_unmet"},"tokens":{"input":10,"output":5}}]'
+    rec_set lead handle null
+    rec_set lead round null
+    rec_set lead launch_state retry_pending
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    # A retried member holds no handle, so the probe below the state arm would
+    # answer worktree_missing on a member the record accounts for exactly.
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .state')" = "retrying" ]
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .state_source')" = "record" ]
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .error')" = "null" ]
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .live')" = "false" ]
+    [ "$(printf '%s' "$output" | jq -r '.members[] | select(.name == "lead") | .terminal')" = "false" ]
+    [ "$(printf '%s' "$output" | jq -r '.pending')" = "1" ]
+}
+
+# --- U10 (failure-reporting plan): the cause and the served model on status ---
+#
+# The prefix says which U10: this file's older tests are the status verb's own
+# unit from a different plan, and the tests below are the failure-reporting
+# plan's U10. Same label, different plan, so evidence has to name which.
+
+@test "U10-cause: a failed member's status row carries the failure object, not only an error string" {
+    three_dispatched
+    rec_set lead failure \
+        '{"error":"child_failed","detail":"the child exited 3 before writing out1.txt","child_exit_code":3,"degraded_reasons":[]}'
+    rec_set lead outcome failed
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    # KEY PRESENCE as well as value: `.failure.detail` reads null on a row with
+    # no such key at all, which cannot fail on day zero.
+    assert_json_key "$row" failure
+    [ "$(printf '%s' "$row" | jq -r '.failure.detail')" = "the child exited 3 before writing out1.txt" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.error')" = "child_failed" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.child_exit_code')" = "3" ]
+}
+
+@test "U10-cause: a member served by another model carries served_model in its status row" {
+    three_dispatched
+    rec_set lead served_model claude-3-5-haiku-20241022
+    rec_set lead outcome degraded
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" served_model
+    [ "$(printf '%s' "$row" | jq -r '.served_model')" = "claude-3-5-haiku-20241022" ]
+    # And it is NOT the alias the member asked for — the whole point of the field.
+    [ "$(printf '%s' "$row" | jq -r '.alias')" = "sonnet" ]
+}
+
+@test "U10-cause: a member that succeeded carries failure null, and the key is there" {
+    three_dispatched
+    rec_set lead outcome succeeded
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" failure
+    [ "$(printf '%s' "$row" | jq -r '.failure | type')" = "null" ]
+}
+
+@test "U10-cause: a never-dispatched member carries failure null and served_model null, never its alias" {
+    contract "$WORK/c1.json" out1.txt
+    team_cmd roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.json"
+    [ "$status" -eq 0 ]
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" failure
+    assert_json_key "$row" served_model
+    [ "$(printf '%s' "$row" | jq -r '.failure | type')" = "null" ]
+    [ "$(printf '%s' "$row" | jq -r '.served_model | type')" = "null" ]
+    # ABSENT IS NULL. A row that filled the field from the request would read
+    # `sonnet` here and claim an attribution nothing measured.
+    [ "$(printf '%s' "$row" | jq -r '.launch_state')" = "pending" ]
+}
+
+# MEASURED ON A LIVE RUN, not imagined. A degraded member reported error:null
+# on this surface beside a populated failure.detail, because the probe resolved
+# it cleanly and had nothing of its own to say. A reader seeing error:null next
+# to a cause reads "no error" — the defect this branch exists to remove. The
+# advance envelope said "degraded" for the same member at the same moment.
+#
+# `pending` is the reachable way to force a SILENT probe here: that arm returns
+# with TV_ERR empty, which is the same condition a cleanly-resolved terminal job
+# produces live. The rule under test is the projection, not the arm.
+@test "U10-cause: a silent probe lets the recorded cause reach error" {
+    three_dispatched
+    rec_set lead launch_state pending
+    rec_set lead failure \
+        '{"error":"degraded","detail":"the child exited 0, which is not evidence work happened","child_exit_code":0,"degraded_reasons":["the contract names out1.txt, and it is not there"]}'
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" error
+    [ "$(printf '%s' "$row" | jq -r '.failure.detail')" != "null" ]
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "degraded" ]
+}
+
+# The probe still WINS where it speaks. worktree_missing is a fact about right
+# now that no record holds, and a cause that settled rounds ago must not mask it.
+@test "U10-cause: a live probe answer outranks the recorded cause on status" {
+    three_dispatched
+    rec_set lead failure \
+        '{"error":"child_failed","detail":"the child exited 3","child_exit_code":3,"degraded_reasons":[]}'
+    rec_set lead outcome failed
+    rm -rf "$(wt_of lead)"
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "worktree_missing" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.error')" = "child_failed" ]
+}
+
+# The record holds the launcher's OWN value for a failed launch (U3). The probe
+# arm can only say the category, so a status row that stopped at launch_failed
+# was hiding a contract_invalid the record was already holding.
+@test "U10-cause: a launch failure shows the launcher's own error, not the category" {
+    three_dispatched
+    rec_set lead launch_state launch_failed
+    rec_set lead failure '{"error":"contract_invalid","detail":"the contract named by this member does not parse","child_exit_code":null,"degraded_reasons":null}'
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "contract_invalid" ]
+    [ "$(printf '%s' "$row" | jq -r '.failure.error')" = "contract_invalid" ]
+}
+
+# A launch that failed before any launcher answered has no recorded cause, so
+# the category is all there is and must still be reported.
+@test "U10-cause: a launch failure with no recorded cause still reports the category" {
+    three_dispatched
+    rec_set lead launch_state launch_failed
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    [ "$(printf '%s' "$row" | jq -r '.error')" = "launch_failed" ]
 }

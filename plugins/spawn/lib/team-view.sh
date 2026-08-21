@@ -76,10 +76,17 @@ team_view_probe() {     # <launch_state> <handle> <worktree>
     case "$ls" in
         pending)
             TV_STATE="pending"; TV_SOURCE="record"; return 0 ;;
+        retry_pending)
+            # A member waiting for its next attempt holds no handle, so falling
+            # through to the probe below would report it worktree_missing or
+            # unresolvable — a member the record can account for exactly.
+            TV_STATE="retrying"; TV_SOURCE="record"; return 0 ;;
         launch_failed)
-            # R5: the launcher's specific error rides dispatch's response and is
-            # not in the record, so this surface can say THAT a member failed to
-            # launch and not why. Inventing a reason would be worse than the gap.
+            # The launcher's own error IS in the record now, so this arm states
+            # the category and the projection below prefers the recorded cause
+            # over it. Before that write existed this surface could only say
+            # THAT a member failed to launch; saying contract_invalid when the
+            # record holds contract_invalid is not inventing a reason.
             TV_STATE="failed"; TV_SOURCE="record"; TV_ERR="launch_failed"; return 0 ;;
     esac
     if [ -z "$handle" ] || [ -z "$wt" ] || [ ! -d "$wt" ]; then
@@ -178,8 +185,9 @@ team_view_row() {       # <index> <member json>
         (.handle // ""), (.worktree // ""), (.contract // ""), (.alias // ""),
         (if .round == null then "" else (.round | tostring) end),
         (.started_at // ""), ((.outcome != null) | tostring),
-        (.tokens.input // "null" | tostring), (.tokens.output // "null" | tostring)')"
-    local has_outcome
+        (.tokens.input // "null" | tostring), (.tokens.output // "null" | tostring),
+        (.failure | tojson), (.served_model | tojson)')"
+    local has_outcome fail_json sm_json
     {
         read -r name
         read -r ls
@@ -192,6 +200,10 @@ team_view_row() {       # <index> <member json>
         read -r has_outcome
         read -r ti
         read -r to
+        # tojson, never a raw read: `failure` is an OBJECT, and jq -r would
+        # pretty-print it across lines and shift every read after it.
+        read -r fail_json
+        read -r sm_json
     } <<EOF
 $mfields
 EOF
@@ -215,16 +227,35 @@ EOF
     fi
     [ "$usage" = "measured" ] || { ti="null"; to="null"; }
 
+    # launch_failed is the one probe answer the record BEATS: it is a category,
+    # and the record holds the launcher's own value for the same event, so
+    # contract_invalid is strictly better than launch_failed and equally
+    # current. Every other probe answer wins, because it is about NOW.
+    #
+    # The PROBE's answer first, the recorded cause behind it. Measured live: a
+    # member that degraded reported error:null here beside a real failure.detail,
+    # because the probe resolved it fine and had nothing of its own to say — and
+    # a reader who sees error:null next to a cause reads "no error", which is
+    # the whole defect this surface was changed to remove.
+    #
+    # The probe still WINS where it speaks: worktree_missing is a fact about
+    # right now that no record holds, and it must not be masked by a cause that
+    # settled rounds ago. The two only ever differ when both have something to
+    # say, and then the live reading is the more urgent one.
     jq -nc --arg n "$name" --arg a "$alias" --arg w "$wt" --arg ls "$ls" \
         --arg h "$handle" --arg st "$TV_STATE" --arg src "$TV_SOURCE" \
         --arg e "$TV_ERR" --arg r "$round" --arg sa "$started" --arg el "$elapsed" \
         --arg ll "$last" --arg us "$usage" --argjson idx "$idx" \
         --argjson live "$TV_LIVE" --argjson term "$term" \
-        --argjson dl "$deliv" --argjson ti "$ti" --argjson to "$to" '{
+        --argjson dl "$deliv" --argjson ti "$ti" --argjson to "$to" \
+        --argjson fail "${fail_json:-null}" --argjson sm "${sm_json:-null}" '{
           idx:$idx, name:$n, alias:$a, worktree:$w, launch_state:$ls,
           handle:(if $h == "" then null else $h end),
           state:$st, state_source:$src, live:$live, terminal:$term,
-          error:(if $e == "" then null else $e end),
+          error:(if $e == "launch_failed" then ($fail.error // $e)
+                 elif $e != "" then $e
+                 else ($fail.error // null) end),
+          failure:$fail, served_model:$sm,
           round:(if $r == "" then null else ($r | tonumber?) end),
           started_at:(if $sa == "" then null else $sa end),
           elapsed_seconds:(if $el == "" then null else ($el | tonumber?) end),

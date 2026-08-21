@@ -138,6 +138,22 @@ spawn::team_admin_dir() {
     printf '%s' "$admin"
 }
 
+# spawn::team_run_root_prune <root> <run-id> — remove the run's own worktree
+# root, or refuse.
+#
+# The SAME default-deny shape test as the member paths, one level up (KTD9): a
+# path is only this run's root when its basename is the run id. `rmdir` is the
+# verb because it FAILS on a non-empty directory rather than recursing — a root
+# somebody else left a file in is not this run's to take, and no expansion of
+# this function can become a recursive delete under an armed run.
+spawn::team_run_root_prune() {
+    local root="$1" run_id="$2" real
+    [ -n "$root" ] && [ -n "$run_id" ] || return 1
+    real="$(cd "$root" 2>/dev/null && pwd -P)" || return 1
+    [ "$(basename "$real")" = "$run_id" ] || return 1
+    rmdir "$real" 2>/dev/null || return 1
+}
+
 spawn::team_primary_of() {
     local common
     common="$(spawn::team_common_dir "$1")" || return 1
@@ -154,7 +170,7 @@ spawn::team_primary_of() {
 # `spawn::skill_unprovision`'s argument one layer up, where the thing at risk is
 # a worktree holding uncommitted work rather than a copied skill.
 spawn::team_teardown() {
-    local dir="$1" rec run_id name wt real primary admin
+    local dir="$1" rec run_id name wt real primary admin root=""
     rec="$(spawn::team_record_read "$dir")" || return 1
     run_id="$(printf '%s' "$rec" | jq -r '.run_id')"
     # ONE FIELD PER LINE. This is the function that DELETES directories, and it
@@ -172,6 +188,10 @@ spawn::team_teardown() {
         real="$(cd "$(dirname "$wt")" 2>/dev/null && pwd -P)/$(basename "$wt")" || continue
         [ "$(basename "$real")" = "$name" ] || continue
         [ "$(basename "$(dirname "$real")")" = "$run_id" ] || continue
+        # Taken here, after both shape checks and BEFORE the removal can fail:
+        # the root is the parent of a path the roster made, and a member git
+        # refuses to remove must not cost us the root's own line.
+        [ -n "$root" ] || root="$(dirname "$real")"
         primary="$(spawn::team_primary_of "$real")" || continue
         # Read BEFORE the removal: once the directory is gone there is nothing
         # left to resolve the registration from.
@@ -187,6 +207,19 @@ spawn::team_teardown() {
         fi
         printf '%s\n' "$real"
     done < <(printf '%s' "$rec" | jq -r '.members[] | (.name, (.worktree // ""))')
+    # NO RECORD FIELD NAMES THE RUN ROOT — the record names member checkouts,
+    # and `do_teardown` works from the RECORD directory, which is not the
+    # checkout directory. So the root is the parent of the member paths. When no
+    # member has one — every checkout failed, which is the case that left five
+    # empty directories beside real worktrees — it is the configured root and
+    # the run id, the same two pieces the roster joined to make it.
+    # The resolver's failure is NOT a fallback: an empty answer joined to the
+    # run id is `/<run-id>`, whose basename passes the shape test.
+    if [ -z "$root" ]; then
+        local cfg
+        cfg="$(spawn::team_worktree_root "$dir")" && [ -n "$cfg" ] && root="$cfg/$run_id"
+    fi
+    spawn::team_run_root_prune "$root" "$run_id" && printf '%s\n' "$root"
     return 0
 }
 

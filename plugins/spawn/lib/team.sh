@@ -88,6 +88,12 @@ remedy_for() {
             printf 'A member name becomes a directory under the run root and is later the only thing teardown removes, so it must match [A-Za-z0-9][A-Za-z0-9._-]* with no dot run. Rename the member named in `detail` and call again.' ;;
         member_unknown)
             printf 'This run has no member by that name. Read `members` in the run record for the names it does have.' ;;
+        member_not_failed)
+            printf 'A retry replaces one settled non-success attempt, and the member named in `detail` has no such attempt: it either finished successfully or is still in flight. Read `members` for its state — run `advance` first if it is still running, and nothing needs retrying if it is done.' ;;
+        run_bound_reached)
+            printf 'A retry is another attempt this run would have to pay for, and the bound named in `detail` has already fired — so admitting one would take the run past a limit the caller set. Nothing was changed. Raise that bound on a NEW run, or read `status` and accept the run as it stands.' ;;
+        run_busy)
+            printf 'An advance held this run lock for the whole wait, so the retry was refused rather than interleaved with a call that is probing the same member. Nothing was changed. Let the advance finish and call again; if no advance is running, the lock directory named in `detail` is stale and its holder is gone.' ;;
         field_unknown)
             printf 'A caller tried to write a member field the record does not accept. The record takes only the fields it derives nothing from — a derived value has no setter, because it is recomputed at the write. This is a bug in the surface rather than in the invocation: report it with the field name in `detail`.' ;;
         record_missing|record_malformed)
@@ -185,6 +191,7 @@ team.sh dispatch --team-file <path> [--run-id <id>] [--run-dir <dir>]
                  [--max-concurrent N] [--max-rounds N] [--token-ceiling N]
 team.sh advance  --run-id <id> | --run-dir <dir>
 team.sh status   --run-id <id> | --run-dir <dir>
+team.sh retry    --run-id <id> | --run-dir <dir> --member <name>
 team.sh teardown --run-dir <dir>
 team.sh --describe
 USAGE
@@ -297,7 +304,8 @@ do_status() {
           round_state:(if (.rounds | length) == 0 then null else (.rounds | last | .state) end),
           team_file:null, removed:null, intent:null, reasons:null,
           dispatched:([ .members[] | select(.launch_state == "dispatched") ] | length),
-          pending:([ .members[] | select(.launch_state == "pending") ] | length)}
+          pending:([ .members[] | select(.launch_state == "pending"
+                                         or .launch_state == "retry_pending") ] | length)}
         + $v')" \
         || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the status could not be encoded"; }
     emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the status encoded to nothing"; }
@@ -348,6 +356,7 @@ do_describe() {
         {name:"dispatch", note:"one round, then exit — up to the concurrency maximum, in roster order, and no waiting"},
         {name:"advance",  note:"one advance of the run: probe every member in flight, record what finished, and print an intent. Dispatches nothing and schedules nothing"},
         {name:"status",   note:"what every member is doing, probed at the moment of asking: resolved state, elapsed, a per-path deliverable checklist, token usage or `unknown`, and the last line of its own job log — plus a mermaid diagram of the round ledger built from those same rows. Reads only: it writes nothing and moves no run"},
+        {name:"retry",    note:"return ONE member that reached a settled non-success state to the dispatch roster, without re-dispatching the team. The attempt it replaces is kept, so the round it failed in keeps its verdict and the run keeps that attempt token total. Dispatches nothing: the next round picks the member up against the same bounds as a first attempt"},
         {name:"teardown", note:"remove the worktrees the run record names, and only those"}
       ],
       response_fields:[
@@ -365,6 +374,11 @@ do_describe() {
         {name:"members[].round",    always:false, note:"the round this member was dispatched in, or null while it is still pending. dispatch lists EVERY member, not only the ones it just started, so this is what tells a caller which of them the current answer is about"},
         {name:"members[].usage",    always:false, values:["measured","unknown"],
                                     note:"whether this member’s token counts were read from the CLI’s own result envelope. `unknown` is not zero: a running member has spent tokens nobody has counted, and treating it as zero is how a ceiling fails to fire"},
+        {name:"member",             always:false, note:"retry only: the member returned to the roster"},
+        {name:"members[].attempts", always:false, note:"the attempts this member has retired. An ARRAY on the run record, each entry holding that attempt’s round, handle, outcome, cause and token counts; the retry response projects it as a COUNT of that array. A retry appends one, so it never destroys the cause it replaces"},
+        {name:"members[].failure",  always:false, note:"why this member did not succeed, or null. ONE object with four keys — error, detail, child_exit_code, degraded_reasons — written by whichever layer settled the member: the launcher on a refusal it gave, the probe on a terminal state it read. It lives on the run record, so it outlives teardown of the member’s worktree, which is where the child’s own account of itself was. advance, retry and status all carry it"},
+        {name:"members[].error",    always:false, note:"the enum value to branch on, projected from members[].failure.error. Never prose. A member carrying a cause carries that cause’s value here, so a reader never has to reach into the object to decide what happened"},
+        {name:"members[].served_model", always:false, note:"the model that actually answered this member, read from the child’s own receipt. null is UNKNOWN and never the alias the member asked for. A value differing from that alias degrades the member and names BOTH models in members[].failure.degraded_reasons. advance and status carry it; retry does not"},
         {name:"removed",            always:false, note:"teardown only: the worktrees removed, by member name"},
         {name:"team_file",          always:false, note:"the copy taken at dispatch, not the caller’s original"},
         {name:"mode",               always:false, note:"single-round | attached | unattended"},
@@ -430,7 +444,16 @@ do_describe() {
         {value:"roster_exceeds_round",  exit_code:2, note:"single-round was given more members than one round can hold; nothing was created"},
         {value:"driver_worktree",       exit_code:2, note:"a member was placed in the driver’s own checkout"},
         {value:"worktree_failed",       exit_code:5, note:"a member has no checkout; the rest of the roster is intact"},
-        {value:"launch_failed",         exit_code:5, note:"a member’s launcher refused it; that member carries the launcher’s own error value"}
+        {value:"launch_failed",         exit_code:5, note:"a member’s launcher refused it; that member carries the launcher’s own error value"},
+        {value:"member_not_failed",     exit_code:2, note:"retry was given a member that finished, or one still in flight; a retry replaces a settled non-success attempt"},
+        {value:"run_bound_reached",     exit_code:2, note:"retry was asked of a run whose round maximum or token ceiling has already fired; nothing was changed"},
+        {value:"run_busy",              exit_code:2, note:"retry waited out an advance holding this run lock; nothing was changed"},
+        {value:"member_unknown",        exit_code:2, note:"a verb was given a member name this run does not have; members lists the names it does"},
+        {value:"token_ceiling_zero",    exit_code:2, note:"a ceiling of zero stops a run before its first round, so it would report a finished team having dispatched nobody"},
+        {value:"record_missing",        exit_code:2, note:"there is no run record at the run directory, so nothing can be said about this run"},
+        {value:"record_malformed",      exit_code:2, note:"the run record is there and does not read as one JSON object"},
+        {value:"record_unwritable",     exit_code:2, note:"the run record could not be written, so the run was not started rather than started unrecorded"},
+        {value:"field_unknown",         exit_code:2, note:"a member field the record does not accept was written. A bug in this surface rather than in the invocation, and detail names the field"}
       ],
       notes:[
         "dispatch returns while the round is in flight. Nothing here waits, polls or reaps: each member runs behind the supervisor bg-agent detaches for it, and the run record is how the round is read afterwards.",
@@ -449,17 +472,18 @@ main() {
         dispatch) do_dispatch "$@" ;;
         advance) do_advance "$@" ;;
         status) do_status "$@" ;;
+        retry) do_retry "$@" ;;
         teardown) do_teardown "$@" ;;
         --describe) do_describe ;;
         -h|--help)
             HELP_REQUESTED=true
             usage
             SPAWN_TEAM_ERROR="usage"
-            spawn::team_fail "no verb given: this surface answers 'roster', 'dispatch', 'advance', 'status' and 'teardown'" ;;
+            spawn::team_fail "no verb given: this surface answers 'roster', 'dispatch', 'advance', 'status', 'retry' and 'teardown'" ;;
         *)
             usage
             SPAWN_TEAM_ERROR="usage"
-            spawn::team_fail "unknown verb — this surface answers 'roster', 'dispatch', 'advance', 'status' and 'teardown'" ;;
+            spawn::team_fail "unknown verb — this surface answers 'roster', 'dispatch', 'advance', 'status', 'retry' and 'teardown'" ;;
     esac
 }
 

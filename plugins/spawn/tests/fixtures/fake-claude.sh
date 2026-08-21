@@ -42,6 +42,15 @@
 #                            observe without believing the model. Malformed JSON
 #                            here is a fixture bug and exits 64 rather than
 #                            emitting an object the caller cannot parse.
+#   FAKE_CLAUDE_MODEL_USAGE  a JSON OBJECT placed verbatim in the result JSON's
+#                            modelUsage field. Emitted ONLY when set: the real
+#                            envelope carries no top-level served model, so
+#                            modelUsage's first KEY is the only attribution
+#                            there is, and a fixture that always emitted one
+#                            would make every existing team test assert a served
+#                            model none of them was written for. Malformed JSON
+#                            or a non-object exits 64 rather than emitting an
+#                            object the caller cannot parse.
 #   FAKE_CLAUDE_WRITE        space-separated relative paths to create under $PWD
 #                            before answering. This is how a test gives a job a
 #                            real side effect: U9 classifies by EFFECT against a
@@ -60,6 +69,7 @@ REC_DIR="${FAKE_CLAUDE_RECORD_DIR:-${TMPDIR:-/tmp}/fake-claude-record}"
 SESSION_ID="${FAKE_CLAUDE_SESSION_ID:-11111111-2222-3333-4444-555555555555}"
 RESULT_TEXT="${FAKE_CLAUDE_RESULT_TEXT:-fixture seed answer}"
 DENIALS="${FAKE_CLAUDE_DENIALS:-[]}"
+MODEL_USAGE="${FAKE_CLAUDE_MODEL_USAGE:-}"
 
 mkdir -p "$REC_DIR"
 
@@ -148,9 +158,12 @@ if [[ "$output_format" == "json" ]]; then
   # In error mode the CLI exits 0 but the result object says the turn FAILED —
   # a real shape (`claude -p` reports tool/turn failures this way), and the one
   # launch.sh's is_error branch exists for (R8).
-  python3 - "$SESSION_ID" "$RESULT_TEXT" "$model" "$MODE" "$DENIALS" <<'PY'
+  python3 - "$SESSION_ID" "$RESULT_TEXT" "$model" "$MODE" "$DENIALS" "$MODEL_USAGE" <<'PY'
 import json, sys
-session_id, result, model, mode, denials = sys.argv[1:6]
+session_id, result, model, mode, denials, model_usage = sys.argv[1:7]
+# An UNSET fixture var arrives as the empty string and must leave the key off
+# entirely; only an explicitly-set JSON object reaches the emit below.
+model_usage = model_usage if model_usage else None
 try:
     denials = json.loads(denials)
 except ValueError:
@@ -159,7 +172,16 @@ except ValueError:
 if not isinstance(denials, list):
     sys.stderr.write("fake-claude: FAKE_CLAUDE_DENIALS must be a JSON array\n")
     sys.exit(64)
-print(json.dumps({
+if model_usage:
+    try:
+        model_usage = json.loads(model_usage)
+    except ValueError:
+        sys.stderr.write("fake-claude: FAKE_CLAUDE_MODEL_USAGE is not valid JSON\n")
+        sys.exit(64)
+    if not isinstance(model_usage, dict):
+        sys.stderr.write("fake-claude: FAKE_CLAUDE_MODEL_USAGE must be a JSON object\n")
+        sys.exit(64)
+envelope = {
     "type": "result",
     "subtype": "error_during_execution" if mode == "error" else "success",
     "is_error": mode == "error",
@@ -173,7 +195,17 @@ print(json.dumps({
     # at all, which is why this array is a real signal and not a complete one.
     "permission_denials": denials,
     "usage": {"input_tokens": 11, "output_tokens": 7},
-}))
+}
+# Key ORDER is preserved through json.dumps, so a test can pin which key the
+# supervisor takes as the served model rather than which one sorts first.
+# `is not None`, never truthiness: an EMPTY object is a shape the real envelope
+# can carry, and it is the one that broke the supervisor's reader — to_entries
+# on it yields [], and a bare .[0] on that prints the string "null". A fixture
+# that dropped the key on empty could not reach that path at all, so the test
+# for it passed against the bug.
+if model_usage is not None:
+    envelope["modelUsage"] = model_usage
+print(json.dumps(envelope))
 PY
 else
   printf '%s\n' "$RESULT_TEXT"

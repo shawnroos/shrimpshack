@@ -46,7 +46,7 @@ Ordered, per round:
 2. **Dispatch.** New run: `dispatch --team-file <path>`, which returns the run id. Later rounds: `dispatch --run-id <run-id>`. The response says how many members remain.
 3. **Advance.** `advance --run-id <run-id>` — exactly one call, and the only place anything is learned about the round.
 4. **Act on the intent.** Four intents, four actions, no gaps.
-5. **Report.** From the advance envelope and `status --run-id <run-id>`.
+5. **Report.** Every member, from the advance envelope; `status --run-id <run-id>` adds the progress view.
 
 ### The four intents
 
@@ -60,6 +60,8 @@ Ordered, per round:
 `continue` is the **only** intent that ever permits a dispatch. Acting on `waiting` as though it were `continue` is precisely the bug the intent exists to prevent: the concurrency maximum bounds members *in flight*, so a dispatch on `waiting` overruns it.
 
 On `stop`, distinguish roster-exhausted from a bound. A run stopped by its round maximum or its token ceiling has not finished its work, and the report must not read as success. `reasons` lists every condition that fired, not the first one.
+
+A `stop` can carry a mixed verdict — some members done, some failed. `team.sh retry --run-id <run-id> --member <name>` returns ONE settled non-success member to the roster. It **dispatches nothing**: the member goes back to pending, so a retry has to be followed by the ordinary dispatch-and-advance round. The attempt it replaces is kept in `members[].attempts`, so retrying never destroys the cause you just reported. Retry the members whose cause says another attempt could land — a refused launch, a substituted model — and leave the ones whose cause says it cannot. Never retry the whole team by re-dispatching the run.
 
 ### Arming, in unattended mode only
 
@@ -77,7 +79,23 @@ Only `waiting` carries a `delay`, and nothing else should look for one. A `conti
 
 ### Reporting between rounds
 
-Probed fields only. Per member: its name, its resolved state, its deliverable-checklist summary, and its token counts or `unknown`. Plus the round position, the unmeasured count, and on `stop` the reason list. The modes differ in *when*:
+**Every member the advance envelope lists, not only the ones this advance probed.** `advance` builds its member list from the record, so a member that settled two rounds ago is still in it. A report built from the probes alone named one member beside `dispatched: 3`, and a reader could not tell "not reported" from "not run".
+
+Per member, from the advance envelope: its name, its state, its token counts or `unknown`, and — for any member that did not succeed — **its cause**. The cause is three fields, not one:
+
+- `members[].error` — the value to branch on.
+- `members[].failure.degraded_reasons[]` — **what actually went wrong**, named specifically: which deliverable is missing, which tool call the ceiling refused, which model answered instead of the one asked for. Report these.
+- `members[].failure.detail` — one sentence of context. On a `degraded` member it is the same boilerplate for every cause, so it is the weakest of the three: report it, never as a substitute for the reasons above.
+
+A failed member reported with no cause leaves the reader nothing to act on but guessing, and guessing is what this loop exists to remove. A member reported with only `detail` is barely better: "measured against the contract this job is degraded" does not say which deliverable was missing, and the reason list does.
+
+The cause is the supervisor's own classification of the member, which is why it may be stated as fact. The member's account of itself is not, and the rule below still holds over it.
+
+Where `members[].served_model` names a model other than the alias the member asked for, say so and name both. The member answered on something it did not ask to run on, and only the reader can decide whether that answer still counts.
+
+`status` is the other view, not the same one: per-member progress against the deliverable checklist, elapsed and the last log line. It carries the cause and the served model too, in the same `members[].failure` and `members[].served_model` fields, read from the run record — so a member that failed rounds ago still names why on this surface. Its `members[].error` is the state this call could probe, not a projection of `failure.error`: where the two disagree, report both. `retry`'s envelope carries the cause but no served model.
+
+Plus the round position, the unmeasured count, and on `stop` the reason list. The modes differ in *when*:
 
 - **attached** — every round, then hand back.
 - **unattended** — on `stop`, and on any refusal it cannot act on. The rounds in between are the in-flight line that repeats on every prompt unasked.

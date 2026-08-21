@@ -64,8 +64,26 @@ def tally($ms): if ($ms | length) == 0 then "pending"
   else "fail" end;
 . as $rec
 | ($rec.members) as $ms
+# The participants of a round are the union of the live rows holding that ordinal
+# and the RETIRED ATTEMPTS holding it (KTD7). A rotation clears the live row, so
+# a chokepoint reading live rows alone deletes a member from its own closed
+# round: a mixed round re-reads as pass, and a round whose every member was
+# retried flips back to running with closed_at nulled, which parks advance at
+# waiting for ever.
+#
+# An attempt entry carries no launch_state of its own, and is_done is not
+# rewritten to know about attempts. So the synthesis states the fact an attempt
+# already IS: it is retired, therefore terminal. An entry with no outcome
+# produced nothing and is zero BY CONSTRUCTION, which is exactly what
+# launch_failed means to the arithmetic below; an entry with an outcome is
+# measured on the ordinary terms.
+| ($ms | map(. as $m | (.attempts // [])[]
+             | . + {name: $m.name,
+                    launch_state: (if .outcome == null
+                                   then "launch_failed" else "retired" end)})) as $hist
+| ($ms + $hist) as $all
 | .rounds |= [ .[] as $r
-    | ($ms | map(select(.round == $r.ordinal))) as $rm
+    | ($all | map(select(.round == $r.ordinal))) as $rm
     | (if ($rm | length) > 0 and ($rm | map(is_done) | all)
        then "finished" else "running" end) as $st
     | $r
@@ -77,24 +95,32 @@ def tally($ms): if ($ms | length) == 0 then "pending"
                   output: ($rm | map(.tokens.output // 0) | add // 0),
                   total: ($rm | map(spent) | add // 0),
                   unknown: ($rm | map(usage_missing) | any)}} ]
-| ($ms | map(spent) | add // 0) as $used
-| ($ms | map(usage_missing) | any) as $unk
+# TOKEN ACCOUNTING READS THE UNION; ROSTER ACCOUNTING READS THE LIVE ROWS
+# (KTD8). A retry that returned the retired spend to zero would let a retry loop
+# spend past the ceiling for ever.
+| ($all | map(spent) | add // 0) as $used
+| ($all | map(usage_missing) | any) as $unk
 | (.rounds | length) as $ru
 | (.bounds.max_rounds) as $mr
 | (.bounds.token_ceiling) as $tc
 | ($ms | map(select(.launch_state == "dispatched" and .outcome == null)) | length) as $live
-| ($ms | map(select(usage_missing)) | length) as $unm
+| ($all | map(select(usage_missing)) | length) as $unm
 # $meas counts members that actually REPORTED a count. A launch_failed member is
 # correctly not `usage_missing` — it never ran, so its zero is a fact — but it
 # reported nothing either, so counting it here made `unenforceable` unreachable
 # the moment one worktree failed: a team whose only real usage was unmeasured
 # would call its ceiling `within` and print the full budget as remaining.
-| ($ms | map(select(is_done and (usage_missing | not)
-                    and (.launch_state != "launch_failed"))) | length) as $meas
+| ($all | map(select(is_done and (usage_missing | not)
+                     and (.launch_state != "launch_failed"))) | length) as $meas
 | ([ (if $ru >= $mr then "round_max_reached" else empty end),
      (if ($tc > 0 and $used >= $tc) then "token_ceiling_reached" else empty end),
      (if ($unk and $tc > 0) then "usage_unknown" else empty end) ]) as $hit
-| (($ms | length) > 0 and (($ms | map(.launch_state == "pending") | any) | not)) as $done_roster
+# retry_pending is a ROSTER state, not a finished one: a member waiting for its
+# next attempt is undispatched work, so the roster is not exhausted and dispatch
+# is still allowed for it.
+| (($ms | length) > 0
+   and (($ms | map(.launch_state == "pending" or .launch_state == "retry_pending")
+             | any) | not)) as $done_roster
 # A record with NO members stops, and must say why. Without this it reports
 # `stop` with an empty reasons list — R21 asks that every reason a run stopped
 # be named, and "none of them" reads as a surface that forgot rather than a
@@ -109,7 +135,8 @@ def tally($ms): if ($ms | length) == 0 then "pending"
     active_round: (if $act == null then null else $act.ordinal end),
     active_round_state: (if $act == null then null else $act.state end),
     dispatch_allowed: (($hit | length) == 0 and $act == null
-                       and ($ms | map(.launch_state == "pending") | any)),
+                       and ($ms | map(.launch_state == "pending"
+                                      or .launch_state == "retry_pending") | any)),
     stop_reasons: $stops,
     complete: (($ms | length) > 0 and ($ms | map(is_done) | all)),
     ceiling_state: (if $tc <= 0 then "none"
@@ -203,7 +230,8 @@ spawn::team_member_add() {
         '.members += [{name:$n, alias:$a, worktree:$w, contract:$c,
                        skills:($sk | split(" ") | map(select(length > 0))),
                        launch_state:"pending", handle:null, round:null,
-                       started_at:null, outcome:null,
+                       started_at:null, outcome:null, failure:null, attempts:[],
+                       served_model:null,
                        tokens:{input:null, output:null}}]')" || {
         SPAWN_TEAM_ERROR="record_unwritable"
         say "team record: could not encode the member row for '$name'"
@@ -216,6 +244,8 @@ spawn::team_member_set() {
     local dir="$1" name="$2" fld="$3" value="$4" cur raw
     case "$fld" in
         launch_state|handle|round|started_at|outcome|tokens_input|tokens_output) ;;
+        served_model) ;;
+        failure|attempts) ;;
         *)
             SPAWN_TEAM_ERROR="field_unknown"
             say "team record: '$fld' is not a writable member field"
@@ -235,6 +265,7 @@ spawn::team_member_set() {
           if .name != $n then .
           elif $f == "tokens_input" then .tokens.input = val
           elif $f == "tokens_output" then .tokens.output = val
+          elif ($f == "failure" or $f == "attempts") then .[$f] = ($v | fromjson)
           else .[$f] = val end)')" || {
         SPAWN_TEAM_ERROR="usage"
         say "team record: '$value' is not a valid value for '$fld'"
@@ -250,6 +281,48 @@ spawn::team_round_open() {
         '.rounds += [{ordinal:((.rounds | length) + 1), opened_at:$at, closed_at:null}]')" || {
         SPAWN_TEAM_ERROR="record_unwritable"
         say "team record: could not open a round"
+        return 1
+    }
+    spawn::team_record_write "$dir" "$raw"
+}
+
+# Rotate one member's failed attempt out of its live row (KTD6, KTD7, R8, R9).
+#
+# ONE read-modify-write, never a sequence of spawn::team_member_set calls. Each
+# of those is its own write, and a rotation spread over six of them is visible
+# half-applied: between the outcome being nulled and launch_state flipping, the
+# member matches an advance probe select — dispatched with a null outcome —
+# while holding a null handle, so the advance answers handle_unknown and writes
+# an outcome into the middle of the rotation. The member then sits at
+# retry_pending with a non-null outcome, which reads as done and never closes
+# its round. The same window against the ceiling counts the retired spend twice.
+#
+# alias, contract, skills and worktree SURVIVE: a later round places nothing and
+# relaunches from the checkout the record already names. served_model does NOT:
+# it is a measurement of the attempt being retired, and left standing it would
+# attribute the NEXT attempt's output to whatever answered the last one.
+spawn::team_member_rotate() {
+    local dir="$1" name="$2" cur raw
+    cur="$(spawn::team_record_read "$dir")" || return 1
+    if ! printf '%s' "$cur" | jq -e --arg n "$name" 'any(.members[]; .name == $n)' >/dev/null 2>&1; then
+        SPAWN_TEAM_ERROR="member_unknown"
+        say "team record: this run has no member named '$name'"
+        return 1
+    fi
+    raw="$(printf '%s' "$cur" | jq -c --arg n "$name" '
+        .members |= map(
+          if .name != $n then .
+          else . + {attempts: ((.attempts // [])
+                       + [{round: .round, handle: .handle, outcome: .outcome,
+                           failure: .failure, tokens: .tokens,
+                       served_model: .served_model}]),
+                    launch_state: "retry_pending",
+                    handle: null, outcome: null, started_at: null,
+                    round: null, failure: null, served_model: null,
+                    tokens: {input: null, output: null}}
+          end)')" || {
+        SPAWN_TEAM_ERROR="record_unwritable"
+        say "team record: could not rotate the member row for '$name'"
         return 1
     }
     spawn::team_record_write "$dir" "$raw"
