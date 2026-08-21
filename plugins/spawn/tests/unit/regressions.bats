@@ -18,6 +18,7 @@ setup() {
     LAUNCH="$LIB/launch.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-regress.XXXXXX")"
     WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     TOKEN="tok-regress-123"
     GW_PID=""
 
@@ -35,10 +36,7 @@ setup() {
 teardown() {
     [ -n "${GW_PID:-}" ] && { kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; }
     local p
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 

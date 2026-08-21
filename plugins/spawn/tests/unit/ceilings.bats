@@ -92,6 +92,8 @@ setup() {
     REPO="$LIB/bg-repo.sh"
 
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-ceil.XXXXXX")"
+
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     # PHYSICAL path. On macOS /tmp is a symlink to /private/tmp, and the
     # rendered permission rules are matched against the path the CLI resolves —
     # a logical path here would compare unequal for a reason that has nothing
@@ -155,10 +157,7 @@ teardown() {
     fi
     # Leave no stray process: every fixture process this suite starts carries
     # $WORK in its argv.
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 

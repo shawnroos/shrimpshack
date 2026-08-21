@@ -25,6 +25,8 @@ setup() {
     HANDLE_SH="$LIB/handle.sh"
 
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-handle.XXXXXX")"
+
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     # PHYSICAL path. On macOS /tmp is a symlink to /private/tmp and the record
     # layer resolves the worktree with `pwd -P`, so a logical path here would
     # compare unequal to what the script recorded for a reason that has nothing
@@ -82,10 +84,7 @@ FIXTURE
 teardown() {
     # Leave no stray process. Every fixture process this suite starts carries
     # $WORK in its argv, so this reaps the ones a failing test never got to.
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 
