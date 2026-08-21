@@ -17,6 +17,7 @@ setup() {
     CTL="$LIB/spawnctl.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-lens.XXXXXX")"
     WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     TOKEN="tok-lens-s3cr3t-9f2a"
     GW_PID=""
     SPILLS=()
@@ -62,10 +63,7 @@ teardown() {
     for f in "${SPILLS[@]:-}"; do
         [ -n "$f" ] && rm -f "$f"
     done
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 

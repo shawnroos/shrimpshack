@@ -15,6 +15,7 @@ setup() {
     LIB="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
     LAUNCH="$LIB/launch.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-launch.XXXXXX")"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     # PHYSICAL path. On macOS /tmp is a symlink to /private/tmp, and the whole
     # unit turns on an encoded cwd matching what the child recorded as $PWD — a
     # logical path here would encode differently and fail for a reason that has
@@ -74,10 +75,7 @@ teardown() {
         kill "$GW_PID" 2>/dev/null || true
         wait "$GW_PID" 2>/dev/null || true
     fi
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 

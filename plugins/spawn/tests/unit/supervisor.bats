@@ -34,6 +34,8 @@ setup() {
     JOBS="$LIB/jobs.sh"
 
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-sup.XXXXXX")"
+
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     # PHYSICAL path. On macOS /tmp is a symlink to /private/tmp, and the
     # rendered permission rules and the job lock are both keyed on the path the
     # tools resolve — a logical path here compares unequal for a reason that has
@@ -81,10 +83,7 @@ teardown() {
         kill "$GW_PID" 2>/dev/null || true
         wait "$GW_PID" 2>/dev/null || true
     fi
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 

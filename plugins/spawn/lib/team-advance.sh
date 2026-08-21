@@ -226,11 +226,20 @@ team_probe_member() {   # <name> <handle> <worktree>
     # driver's one-job lock. A member with no checkout is reported, never
     # probed.
     if [ -z "$wt" ] || [ ! -d "$wt" ]; then
-        # The cause goes on the row as well as into the response. The member's
-        # own outcome is left alone: a missing checkout is not an outcome the
-        # supervisor reported.
+        # TERMINAL, for the same reason handle_unknown is: nothing can ever
+        # answer for this member again. Its checkout is where the job record
+        # lives, and no later round revisits it — team_revalidate_placements
+        # walks the roster a NEW round loaded, which selects pending and
+        # retry_pending only. Left non-terminal the member held its round open
+        # for ever and advance answered waiting on a round nothing could finish.
+        #
+        # The outcome is failed rather than a state of its own: the member
+        # produced no work and never will, which is what every other terminal
+        # non-success means here. The cause on the row says it was the checkout.
         team_record_failure "$name" "worktree_missing" ""
-        team_probe_row "$name" "unknown" null "worktree_missing"
+        spawn::team_member_set "$RUN_DIR" "$name" outcome failed \
+            || say "team: '$name' lost its checkout and its outcome could not be recorded"
+        team_probe_row "$name" "unknown" '"failed"' "worktree_missing"
         return 0
     fi
     out="$(bash "$JOBS_SH" state --handle "$handle" --cwd "$wt" 2>/dev/null)"

@@ -19,6 +19,7 @@ setup() {
     LIB="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
     TEAM="$LIB/team.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-tview.XXXXXX")"; WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     # A FILE, not a variable: every helper below runs inside $( ), and an
     # assignment in a command substitution never reaches this shell — the first
     # version of this recorded three pids per test and killed none of them.
@@ -40,10 +41,7 @@ setup() {
 
 teardown() {
     while read -r p; do [ -n "$p" ] && kill -9 "$p" 2>/dev/null; done < "$PIDFILE"
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 

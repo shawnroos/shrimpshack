@@ -23,6 +23,7 @@ setup() {
     CTL="$LIB/spawnctl.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-ctl.XXXXXX")"
     WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     TOKEN="tok-ctl-123"
     GW_PID=""
     HELPER_PIDS=()
@@ -79,10 +80,7 @@ teardown() {
     done
     # Any gateway this test spawned lives under $WORK, so its argv carries the
     # path; nothing outside the test can match.
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 

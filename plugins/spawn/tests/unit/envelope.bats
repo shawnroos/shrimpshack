@@ -28,6 +28,7 @@ setup() {
     TEAM="$LIB/team.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-env.XXXXXX")"
     WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     GW_PID=""
 
     export SPAWN_STATE_HOME="$WORK"
@@ -72,10 +73,7 @@ teardown() {
         kill "$GW_PID" 2>/dev/null || true
         wait "$GW_PID" 2>/dev/null || true
     fi
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 

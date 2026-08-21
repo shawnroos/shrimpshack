@@ -25,6 +25,7 @@ setup() {
     BG="$LIB/bg-agent.sh"
     GW_PID=""
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-team.XXXXXX")"; WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
 
     PRIMARY="$WORK/proj"
     mkdir -p "$PRIMARY"
@@ -67,49 +68,6 @@ sweep_preamble() {
     return 0
 }
 
-# sweep_work — leave no live process holding $WORK.
-#
-# ONE SNAPSHOT IS NOT A SWEEP. A single `pgrep`, kill that list, done, is stale
-# the instant it is taken: bg-agent.sh nohup's the supervisor on its own clock
-# after dispatch returns (lib/bg-agent.sh:602) and forks a `jobs.sh log` child
-# per log line (lib/bg-agent.sh:415), so a process born after the snapshot is
-# never signalled — and the `rm -rf` that follows then walks a tree that
-# process is still writing into, which is the "Directory not empty" this file
-# used to fail with. So: re-sweep until a pass sees NOTHING. The clean pass IS
-# the wait; these are not our children, so `wait` cannot be used on them.
-#
-# EVERY signal is scoped to this test's own mktemp $WORK path. Never signal by
-# script name: other sessions on the same box run these same scripts, and a
-# name-scoped kill takes their work with it.
-#
-# On an exhausted budget this prints the survivors and returns 1. Measured: a
-# non-zero return from HERE is swallowed by teardown, whose status comes from the
-# `rm -rf` after it, so the printf is what a reader actually gets. The return
-# code earns its place with a direct caller that checks it — the invariant test
-# below does.
-sweep_work() {
-    local pass p found
-    for pass in $(seq 1 25); do
-        found=0
-        for p in $(pgrep -f "$WORK" 2>/dev/null); do
-            [ "$p" = "$$" ] && continue
-            found=1
-            # `|| :` because a pid can exit between the pgrep and this kill, and
-            # kill then returns 1. A bats test body runs under errexit, so an
-            # unguarded kill aborts the sweep mid-pass — measured, as a failure
-            # of this very test in a full-file run.
-            kill -9 "$p" 2>/dev/null || :
-        done
-        if [ "$found" -eq 0 ]; then return 0; fi
-        sleep 0.1
-    done
-    printf 'sweep_work: processes still hold %s after 25 passes:\n' "$WORK" >&2
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        ps -o pid=,args= -p "$p" 2>/dev/null
-    done >&2
-    return 1
-}
 
 # roster <args...> — always run from inside the temp checkout, never the real one.
 roster() {
@@ -2261,6 +2219,30 @@ one_degraded_member() {
     [ "$(out '.members[] | select(.name == "lead") | .error')" = "result_missing" ]
 }
 
+# The round must be able to CLOSE. A member whose checkout is gone can never be
+# answered for again — its job record lived in that checkout, and no later round
+# revisits it, because revalidate walks only the roster a new round loaded. Left
+# non-terminal it held its round open and advance answered waiting for ever.
+@test "a member that lost its checkout is terminal, so its round can finish" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    rm -rf "$(member_wt lead)"
+
+    advance --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_outcome lead)" = "failed" ]
+    [ "$(member_failure lead | jq -r '.error')" = "worktree_missing" ]
+    # The point of the whole test: the round is finished and the run is complete,
+    # so advance is not parked on a member nothing can resolve.
+    [ "$(rec '.derived.complete')" = "true" ]
+    [ "$(out '.intent')" != "waiting" ]
+}
+
 @test "a member with no checkout records worktree_missing, not only reports it" {
     one_hang_member 1
     edit_record '.members |= map(.worktree = "")'
@@ -2268,9 +2250,10 @@ one_degraded_member() {
     [ "$status" -eq 0 ]
     [ "$(out '.members[] | select(.name == "lead") | .error')" = "worktree_missing" ]
     [ "$(member_failure lead | jq -r '.error')" = "worktree_missing" ]
-    # A missing checkout is not an outcome the supervisor reported, so the
-    # member's own outcome is left alone.
-    [ "$(member_outcome lead)" = "null" ]
+    # Terminal: nothing can answer for this member again, so its round must be
+    # able to close. The cause on the row is what says the checkout was the
+    # reason, rather than the outcome carrying a state of its own.
+    [ "$(member_outcome lead)" = "failed" ]
 }
 
 @test "the cause outlives the member's worktree (R3)" {
