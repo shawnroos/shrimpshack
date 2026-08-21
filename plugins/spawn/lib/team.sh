@@ -80,6 +80,8 @@ remedy_for() {
     case "$1" in
         worktree_failed)
             printf 'The member has no checkout, so it cannot be dispatched; the rest of the roster is intact and its worktrees exist. Read `detail` for what git said — a path already in use and a full disk are the two that happen. Free the path named there (`git worktree list` shows what holds it) or run `teardown` on the run id, then call again. Retrying unchanged repeats the same failure.' ;;
+        worktree_missing)
+            printf 'The member had a checkout and it is gone, so the member is settled `failed` rather than left holding its round open on something no later round revisits. Do NOT retry it: a later round reuses the path already on the record and never re-places a member, so the retry dispatches into a directory that is not there. Read `detail` for the path — something outside this run removed it. Start a new run for the work.' ;;
         driver_worktree)
             printf 'A member may not run in the worktree the driver is running in: they would contend for the one-job-per-worktree lock and write into the tree the driver reads its own record from. Drop the --worktree flag and let the roster place the member, or name a path that is not this checkout.' ;;
         member_duplicate)
@@ -444,6 +446,7 @@ do_describe() {
         {value:"roster_exceeds_round",  exit_code:2, note:"single-round was given more members than one round can hold; nothing was created"},
         {value:"driver_worktree",       exit_code:2, note:"a member was placed in the driver’s own checkout"},
         {value:"worktree_failed",       exit_code:5, note:"a member has no checkout; the rest of the roster is intact"},
+        {value:"worktree_missing",      exit_code:5, note:"a member’s checkout was placed and is gone; the member is settled failed rather than left holding its round open, and a retry cannot restore it because a later round reuses the path already on the record"},
         {value:"launch_failed",         exit_code:5, note:"a member’s launcher refused it; that member carries the launcher’s own error value"},
         {value:"member_not_failed",     exit_code:2, note:"retry was given a member that finished, or one still in flight; a retry replaces a settled non-success attempt"},
         {value:"run_bound_reached",     exit_code:2, note:"retry was asked of a run whose round maximum or token ceiling has already fired; nothing was changed"},

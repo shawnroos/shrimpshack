@@ -63,6 +63,15 @@ On `stop`, distinguish roster-exhausted from a bound. A run stopped by its round
 
 A `stop` can carry a mixed verdict — some members done, some failed. `team.sh retry --run-id <run-id> --member <name>` returns ONE settled non-success member to the roster. It **dispatches nothing**: the member goes back to pending, so a retry has to be followed by the ordinary dispatch-and-advance round. The attempt it replaces is kept in `members[].attempts`, so retrying never destroys the cause you just reported. Retry the members whose cause says another attempt could land — a refused launch, a substituted model — and leave the ones whose cause says it cannot. Never retry the whole team by re-dispatching the run.
 
+Four refusals come back from `retry`, all exit 2, and each is a different fact to relay rather than work around:
+
+- `member_not_failed` — that member finished, or is still in flight. A retry replaces a settled non-success attempt and nothing else.
+- `run_bound_reached` — the run's round maximum or token ceiling has already fired. Nothing was changed, and retrying into a stopped run is not how it resumes.
+- `run_busy` — an advance holds the run lock. Nothing was changed; come back after that advance prints its intent.
+- `member_unknown` — this run has no member by that name, and `members` lists the ones it does.
+
+**Do not retry a member whose cause is `worktree_missing`.** The cause is terminal — the member is recorded `failed` so its round closes rather than staying open on something no later round revisits — and `retry` will nonetheless ACCEPT it, because `failed` is a settled non-success like any other. It cannot work: a later round reuses the checkout path already on the record and never re-places a member, so the retry dispatches into a directory that is gone and fails the same way. This is one of the causes that says another attempt cannot land. Report the failure and, if the work still matters, start a new run.
+
 ### Arming, in unattended mode only
 
 On `waiting`, arm exactly one wakeup:
@@ -93,13 +102,20 @@ The cause is the supervisor's own classification of the member, which is why it 
 
 Where `members[].served_model` names a model other than the alias the member asked for, say so and name both. The member answered on something it did not ask to run on, and only the reader can decide whether that answer still counts.
 
-`status` is the other view, not the same one: per-member progress against the deliverable checklist, elapsed and the last log line. It carries the cause and the served model too, in the same `members[].failure` and `members[].served_model` fields, read from the run record — so a member that failed rounds ago still names why on this surface. Its `members[].error` is the state this call could probe, not a projection of `failure.error`: where the two disagree, report both. `retry`'s envelope carries the cause but no served model.
+`status` is the other view, not the same one: per-member progress against the deliverable checklist, elapsed, the last log line, and a `diagram` — a mermaid rendering of the round ledger built from those same rows, which is the cheapest way to show a reader where a run stands. It writes nothing and moves no run, so it is safe to call at any point. It carries the cause and the served model too, in the same `members[].failure` and `members[].served_model` fields, read from the run record — so a member that failed rounds ago still names why on this surface. Its `members[].error` is the state this call could probe, not a projection of `failure.error`: where the two disagree, report both. `retry`'s envelope carries the cause but no served model.
 
 Plus the round position, the unmeasured count, and on `stop` the reason list. The modes differ in *when*:
 
 - **attached** — every round, then hand back.
 - **unattended** — on `stop`, and on any refusal it cannot act on. The rounds in between are the in-flight line that repeats on every prompt unasked.
 - **single-round** — once, at dispatch.
+
+## The two verbs the loop never calls by itself
+
+Both are real verbs on `team.sh`; neither belongs in the per-round loop above.
+
+- **`roster`** places members and writes their provisional rows, and **dispatches nothing**. `dispatch` does this for you on a new run, so you reach for `roster` only when you want the placements to exist and be inspectable before anything launches. Running it does not start a round.
+- **`teardown --run-id <run-id>`** removes the worktrees the record names, **and only those**. It is the run's cleanup, not part of finishing it: call it when the caller is done reading the members' work, never between rounds and never automatically on `stop`. A member's cause survives it — `members[].failure` lives on the run record, which is the reason the cause was put there rather than left in the worktree.
 
 ## What happens if the session dies
 
