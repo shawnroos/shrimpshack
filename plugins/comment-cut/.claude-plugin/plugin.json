@@ -1,0 +1,17 @@
+{
+  "name": "comment-cut",
+  "description": "Cut comment bloat out of a branch without losing the comments that matter. Sweeps the mechanical classes, then judges area by area against four narrow keep-rules, each with a test that is hard to invoke loosely: a silent-failure guard, a measured constant at the constant, an external-world workaround, and JSDoc on a contract consumed outside its module. The default action is delete, not tighten, because tightening converts deletes into rewrites. Verification is the point: a comments-only change is proven by comparing esbuild minified output, so a stray string-literal or logic edit cannot pass, and an invariant-signal scan over every removed line catches the over-cut that typechecks and tests cannot see. Reads its keep/cut bar from the target repo, never from a copy baked into the plugin.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Shawn Roos",
+    "email": "shawn@slateteams.com"
+  },
+  "keywords": [
+    "comments",
+    "cleanup",
+    "refactor",
+    "code-quality",
+    "diff"
+  ],
+  "skills": "./skills"
+}
