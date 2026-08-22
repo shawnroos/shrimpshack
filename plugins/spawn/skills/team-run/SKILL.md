@@ -32,6 +32,19 @@ Decide from the argument, never from memory.
 - **A run id** → re-entry. Call `advance` first; never dispatch first. A terminal record means report the outcome and stop — never restart it, never dispatch into it. A run id the record layer does not know gets that layer's own answer relayed as written: unknown, expired and failed are three different facts.
 - **No run id** → a new run, from a team file the caller supplies. Read `mode` from the file and branch.
 
+### On a new run, check every member is equipped before you dispatch
+
+A member IS a `bg-agent` job, so it starts with nothing you have: not your skills, not your tools beyond the ceiling's floor, not the conventions this session has been reading. That is silent — a member with no method provisioned does not refuse the work, it **improvises something shaped like the method** and files a narrative that reads correct.
+
+So read the roster before the first dispatch and, per member, ask what its contract names. A member asked to apply a review process, a house convention or a named checklist needs that skill in its own `skills` array — a member field, per member, and no other member gets them. **A team file whose members name a method and carry no `skills` is the common case, and it is usually a gap rather than a decision.** Fill it, and say in your report which members you equipped and why: a skill the caller wrote into the team file is their instruction, a skill you added is your judgment, and if a member comes back wrong that distinction is the first thing worth knowing.
+
+Two things to check while you are there, because both are silent:
+
+- **A skill name that does not resolve still dispatches.** It lands in that member's `failure.degraded_reasons[]` rather than refusing the run, so a typo yields a member running without the method it was promised — and it will report as though it had one.
+- **A member has no Bash.** It can read, search and write inside its own worktree, but it cannot run a build, a test, a linter or `git`. A skill whose method is "run the checker and report the output" cannot be followed — and the member will report on the part it could do. If a command has to run, put it in the member's contract as `verify`, which the supervisor runs itself.
+
+The team surface passes no `--allow`, so every member runs on the ceiling's floor: `Read`, `Write`, `Edit`, `Grep` and `Glob`, scoped to its own worktree. That is enough for a member to find its own inputs; it is not enough to execute anything.
+
 ## single-round: dispatch once, arm nothing
 
 One `dispatch`, report the roster, stop. There is no driver, no advance and no timer here — the per-member supervisors own their deadlines and their records, and the terminal announcement reports the outcome whenever the caller comes back.

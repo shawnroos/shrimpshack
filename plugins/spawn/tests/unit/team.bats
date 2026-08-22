@@ -3949,6 +3949,66 @@ reporting_section() {
     skill_body | grep -qF 'served_model'
 }
 
+# --- equipping a member (the skills field is a contract nobody was told to use)
+
+# The member `skills` field has been declared in --describe since the team
+# surface shipped, and NO doc told the driver to populate it — so a driver only
+# equipped members when a human said "give it the review skill" out loud. An
+# unequipped member does not refuse the work; it improvises the method and files
+# a narrative that reads correct. These pin the instruction, not the wording.
+
+@test "the skill tells the driver to equip members BEFORE the first dispatch" {
+    local body
+    body="$(skill_body)"
+    # The field by name: prose about "the skills it needs" with no field name
+    # leaves a driver nowhere to put the answer.
+    printf '%s' "$body" | grep -qF 'skills'
+    # And that it is a pre-dispatch step. A nudge that only appears in the
+    # reporting section fires after the member has already run unequipped.
+    if ! printf '%s' "$body" | grep -qiE 'equipped|equip'; then
+        printf 'the skill never tells the driver to equip a member\n' >&2
+        return 1
+    fi
+}
+
+# The equip section alone. Scoped deliberately: an unscoped grep for
+# `degraded_reasons` passes on the REPORTING section's mention of the same field,
+# so deleting this whole section left the warning test green — measured, by
+# deleting it. A check that survives the removal of what it checks is not one.
+equip_section() {
+    skill_body | awk '/^### On a new run, check every member is equipped/ { on=1; next }
+                      on && /^#/ { exit } on'
+}
+
+@test "the skill warns that an unresolvable skill name still dispatches" {
+    # The trap that produces a confident report from an unequipped member: the
+    # name is recorded in degraded_reasons[] and the member runs anyway. A
+    # driver who thinks a typo refuses the run will not check for it.
+    local sec
+    sec="$(equip_section)"
+    [ -n "$sec" ]
+    printf '%s' "$sec" | grep -qiE 'degraded_reasons|does not resolve|unresolvable'
+}
+
+@test "no spawn doc claims a child has no Grep or Glob" {
+    # RETRACTED 2026-08-22, measured through the real path: a child found a
+    # random nonce in one of sixty files with Grep, and listed exactly the ten
+    # paths matching a pattern with Glob — both done, zero denials. The claim
+    # survived in five places and steered callers AWAY from the one surface
+    # built for discovery, so it is pinned absent rather than trusted to stay
+    # fixed. Checked over the whole plugin, not just this skill's file.
+    local root="$LIB/.." f hits=0
+    for f in "$root"/skills/*/SKILL.md "$root"/commands/*.md \
+             "$root"/permissions/*.json; do
+        [ -f "$f" ] || continue
+        if grep -qiE 'no Glob and no Grep|NO Grep and NO Glob|has NEITHER|no search tools' "$f"; then
+            printf 'stale capability claim in %s\n' "$(basename "$f")" >&2
+            hits=1
+        fi
+    done
+    [ "$hits" -eq 0 ]
+}
+
 # --- U10 (failure-reporting plan): status carries the cause -----------------
 
 @test "--describe says the cause and the served model reach the status surface too" {
