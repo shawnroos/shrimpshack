@@ -81,31 +81,72 @@ by the deny list looks, in the record, like a job that simply did not try — wh
 why classification also measures effect against the pre-job baseline, and why you
 judge the job by its deliverables rather than by an empty denial array.
 
-**A real child also has no `Glob` and no `Grep`**, though both are named in the
-allow list — inert on this harness version. Do not plan a job around them.
+**A real child DOES get `Grep` and `Glob`**, and an earlier version of this skill
+said the opposite — that both were named in the allow list and inert. Retracted,
+and re-measured 2026-08-22 through the real path: a child asked for a random nonce
+hidden in one of sixty files found it with `Grep`, and a second job listed exactly
+the ten paths matching a pattern with `Glob`. Both `done`, zero denials. So a job
+CAN find inputs you did not name — plan on it.
 
-## Giving a background job the skills it needs
+## Equipping the job: do this on every dispatch
 
-A `bg-agent` child does NOT inherit your skills. It runs with its own narrow
-settings, so a job told to "run ce-code-review" has no such skill and will
-improvise something shaped like one — which reads like the real thing in the
-narrative and is not. Pass `--skill <name>` (repeatable); the supervisor copies
-that skill where the child can read it, and removes it when the job ends.
+**A dispatched agent starts with nothing you have.** Not your skills, not your
+tools beyond the ceiling's floor, not the plugin conventions you have been
+reading all session. That is the default, and it is silent — nothing warns you
+that the job you just started cannot do the thing you named.
 
-**Two sources, one flag, and the difference is worth stating.**
+So **equipping is a step in every dispatch, not a favour you do when asked.**
+Work out what the job needs and pass it. A caller who does not mention skills has
+not declined them; they have delegated the judgment to you, the same way they
+delegated the alias and the contract. Waiting to be asked is how a job that could
+have worked returns something shaped like the answer instead.
+
+The failure this prevents is specific and it does not look like a failure. A job
+told to "run ce-code-review" with no such skill provisioned does not stop and say
+so — it **improvises something shaped like a review**, and the narrative reads
+exactly like the real thing. You get a confident report from a job that never had
+the method. Same for a job asked to follow a convention it was never handed.
+
+### The three questions, asked every time
+
+1. **What method does this task name?** A skill, a review process, a house
+   convention, a checklist. If the task names one, the job needs it provisioned —
+   `--skill <name>` (repeatable), which copies it where the child can read it and
+   removes it when the job ends. `plugin:skill` form is supported.
+2. **What must it reach that the floor does not give?** The ceiling grants
+   `Read`/`Write`/`Edit`/`Grep`/`Glob` in the worktree, and no shell. `--allow <TOOL>` widens
+   this job's own copy. Grant only what the work needs.
+3. **What context does it not have?** It cannot see this conversation, your
+   session, or anything you have not put in the contract or the worktree. What is
+   obvious to you now is absent there.
+
+**When the answer to all three is "nothing", say that in your summary.** An
+explicit "no skills needed, floor tools sufficient" is a judgment the reader can
+check. Silence is indistinguishable from not having asked.
+
+### Name what you provisioned, and whose call it was
 
 - **The caller named it.** Honour it exactly, including the `plugin:skill` form.
 - **You judged the task needs it.** Add it — and say so in your summary. A skill
   you chose is your judgment; a skill they named is their instruction. If the job
   goes wrong, that distinction is the first thing worth knowing.
 
-**Before you provision a skill, check it can actually run there.** The child has
-**no Bash**, and — measured through the real path, against this plugin's own
-allow list — **no Glob and no Grep either**. It can Read, Write and Edit inside
-the worktree, and
-nothing else. So:
+**A name that does not resolve is not provisioned, and the job still runs.** An
+unresolvable skill is recorded in the job record's `degraded_reasons[]` rather
+than refusing the dispatch — so a typo yields a job running without the method it
+was promised. Skills resolve from your own `~/.claude/skills` and from installed
+plugins' skills; a name you guessed at is worth checking before you rely on it,
+and the reason a skill was refused is in that list rather than in the narrative.
 
-- a skill that reads files, greps, and writes a report → works
+### Check it can actually run there before you provision it
+
+A skill provisioned into a job that cannot execute it is worse than no skill: the
+job follows as much of the method as its tools allow and reports on that.
+
+The child can Read, Write, Edit, `Grep` and `Glob` inside the worktree. It has
+**no Bash** — no build, no test run, no linter, no `git`. So:
+
+- a skill that reads files, searches for its own inputs, and writes a report → works
 - a skill that runs a build, a test, a linter, or `git` → will half-work, which
   is worse than failing, because the job reports what it managed rather than what
   it could not do
@@ -128,7 +169,7 @@ limitation only after the answer comes back thin.
 | Surface | What the far side can do |
 |---|---|
 | `agent` | **Nothing.** One message in, one answer out. No file reads, no commands, no second turn. |
-| `bg-agent` | `Read`, `Write`, `Edit` **scoped to the worktree**. The allow list also names `Glob` and `Grep`, but a real child has NEITHER — measured, so do not plan a job around them. **No `Bash`** — it cannot run a command, a test, or `git log`. Version-control internals, hooks and agent configuration are denied outright; a path that resolves outside the worktree — an escaping symlink included — falls outside the allow and is refused. |
+| `bg-agent` | `Read`, `Write`, `Edit`, `Grep`, `Glob` — all **scoped to the worktree**, and search really works there (measured), so a job can find inputs you did not name. **No `Bash`** — it cannot run a command, a test, or `git log`. Version-control internals, hooks and agent configuration are denied outright; a path that resolves outside the worktree — an escaping symlink included — falls outside the allow and is refused. |
 | `session` | Claude Code's full loop under **your own** permissions in the directory you pin. |
 
 ### The trap: an `agent` reviewer only sees what you thought to include
@@ -152,11 +193,14 @@ evidence for your own reviewer.
 did not send it, so it can chase what you did not anticipate, and its findings are
 checked against a contract rather than accepted as prose.
 
-Two limits on how far it can chase, and both bite exactly the review you wanted it
-for. It reads with `Read` and **has no search tools** — `Glob` and `Grep` are named
-in the allow list and are inert on this harness, measured — so it cannot sweep for a
-caller it has not been pointed at. And it has **no shell**, so a question only a
-command can answer — a test run, a `git log` — is not one it can go and settle.
+It can **search**, not just read: `Grep` and `Glob` work there (measured), so it
+really can go and find the caller you forgot rather than only opening what you
+named. That is the whole reason to reach for it over `agent` for review work.
+
+One limit, and it is a hard one: **no shell.** A question only a command can answer
+— does the test pass, what does `git log` say — is not one it can go and settle,
+however much of the codebase it can read. That is what the contract's `verify` is
+for: the supervisor runs the command and its exit code is evidence.
 
 ### Grant the least that lets the work happen
 
@@ -165,9 +209,10 @@ ceiling applies is fixed by which file ran. So the choice of surface **is** the
 choice of permissions, and it is worth making deliberately rather than by habit:
 
 - **Judgement on material you can hand over** → `agent`. Nothing can be touched.
-- **Investigation or review of files you can name** → `bg-agent`. It can read them,
-  and it can write inside the worktree, so scope the contract to what you actually
-  want changed and let the deliverables check hold it.
+- **Investigation, review, or anything needing discovery** → `bg-agent`. It can read
+  and search the worktree, so it can chase what you did not name; it can also write
+  there, so scope the contract to what you actually want changed and let the
+  deliverables check hold it.
 - **Work you intend to supervise interactively** → `session`, understanding it
   carries your permissions and a third-party model is choosing the actions.
 

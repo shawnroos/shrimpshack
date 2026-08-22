@@ -33,6 +33,12 @@ bash "${CLAUDE_PLUGIN_ROOT}/lib/team.sh" --describe
 
    **`single-round` dispatches once and arms nothing.** Report the roster and stop: there is no driver, no advance and no timer, and the per-member supervisors own their own deadlines. A single-round team file whose roster is larger than the concurrency maximum is **refused by the script** — exit 2, error `roster_exceeds_round`, and nothing is created. Relay that refusal; it is not yours to work around, and the run cannot be made to work by starting it anyway.
 
+## Equip every member before the first dispatch
+
+This is part of starting a run, not a favour you do when asked. A member is a background job of its own, so it inherits nothing you have — not your skills, not this conversation, not the conventions you have been following. A member asked to apply a named method with no skill provisioned does not refuse the work; it **improvises something shaped like the method** and files a narrative that reads correct. Each member carries its own `skills` array in the team file, and no other member gets them. A roster whose members name a method and carry no `skills` is usually a gap rather than a decision — fill it, and say in your report which members you equipped and why. A skill the caller wrote in is their instruction; one you added is your judgment.
+
+Two silent traps while you are there. **An unresolvable skill name still dispatches** — it lands in that member's `failure.degraded_reasons[]` and the member runs without the method it was promised. And **a member has no shell**: it can read, search and write in its own worktree, but a method whose step is "run the checker" cannot be followed, so put the command in that member's contract as its verify step and let the supervisor run it.
+
 **Four intents come back from `advance`, and each has exactly one action.** They are declared under `intents` in `--describe`; act on the intent word, never on prose:
 
 | Intent | What it means | What you do |
