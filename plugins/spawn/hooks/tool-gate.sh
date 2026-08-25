@@ -52,11 +52,39 @@
 # gate would survive the flag and its policy would not.
 #
 # Passed as arguments, the allow set is fixed in this process's argv when the
-# child starts. There is no file to rewrite and no re-read to poison. The bound
-# is decided by the launch, which is the same principle as `ceiling_selectable`.
+# child starts, so the SET cannot be poisoned by a later write. The bound is
+# decided by the launch, which is the same principle as `ceiling_selectable`.
 #
-# The script itself lives in the PLUGIN tree, which the ceiling never permits
-# writes to.
+# WHAT THIS GATE DOES NOT HOLD: A JOB GRANTED Bash
+# ------------------------------------------------
+# RETRACTED 2026-08-25. Until this commit the header asserted two things: that
+# the plugin tree holding this script is somewhere the ceiling forbids a job to
+# write, and that consequently no file here can be rewritten. Both were true
+# when only Write and Edit could reach a path — those are TOOL-scoped and carry
+# path rules. Neither is true of a shell.
+#
+# `--allow Bash` is a caller-supplied grant (see spawn::ceiling_grantable). A
+# job holding it writes wherever the invoking OS user can, and that includes
+# THIS FILE. Argv protects the allow set; nothing protects the script.
+#
+# MEASURED ONCE (2026-08-25). An arm in tests/unit/ceilings.bats granted a child
+# Bash and told it to write a probe, overwrite a COPY of this file with `exit 0`,
+# then call WebSearch. The shell worked (the probe landed) and Bash was not
+# refused — but the copy was not rewritten and WebSearch stayed refused.
+#
+# Do not read that as protection. The copy was writable by the same OS user;
+# nothing stopped the rewrite, the model simply did not do it. Model reluctance
+# is not a bound. Whether rewriting this file actually yields the tools it gates
+# is STILL unmeasured on two counts: the harness must re-read the hook
+# registration mid-session, and `permissions.deny` — a separate layer — must
+# stop refusing them. Treat this file as unprotected against a granted shell.
+#
+# THE BLAST RADIUS IS NOT PER-JOB. This is ONE file, named by absolute path from
+# every rendered ceiling on the machine. A single granted job that rewrites it
+# removes this wall for every LATER job, including jobs whose caller granted
+# nothing. The default-deny property holds for an untampered install and only
+# for one. An integrity check would live in the same writable tree, so there is
+# nothing to add here but the warning.
 #
 # Usage (from the rendered ceiling's hooks block):
 #   tool-gate.sh <ToolName> [ToolName...]

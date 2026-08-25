@@ -51,11 +51,15 @@ when it turns out you needed tools or persistence, not in anticipation.
 
 ## What a background job can ACTUALLY do — measured by effect
 
-**A job cannot run shell commands, spawn agents, schedule work, or reach the
-network.** Bash, Agent, Workflow, Task*, Cron*, ScheduleWakeup, Monitor,
+**By default a job cannot run shell commands, spawn agents, schedule work, or
+reach the network.** Agent, Workflow, Task*, Cron*, ScheduleWakeup, Monitor,
 WebFetch, SendMessage, RemoteTrigger, PushNotification, ShareOnboardingGuide,
 NotebookEdit and the worktree-moving tools are all explicitly denied. It can
-Read, Write and Edit inside the worktree, and that is the job.
+Read, Write and Edit inside the worktree, plus Glob and Grep, and that is the job.
+
+**`Bash` is off by default and grantable on request** — `--allow Bash`; see
+the cost below. WebSearch is the other grantable tool. Everything else above
+stays refused.
 
 **Know how that boundary is built, because it changes what you can trust.** BOTH
 lists gate. An earlier version of this section said otherwise — that the deny list
@@ -65,7 +69,7 @@ the real CLI, three arms differing only in the permission file:
 
 | ceiling | Bash | `permission_denials` |
 |---|---|---|
-| shipped, `Bash` in `deny` | refused | `[]` |
+| `Bash` in `deny` (the shipped default before it became grantable) | refused | `[]` |
 | `Bash` removed from `deny` only | **still refused** | `["Bash"]` |
 | removed from `deny` AND added to `allow` | ran | — |
 
@@ -144,16 +148,24 @@ A skill provisioned into a job that cannot execute it is worse than no skill: th
 job follows as much of the method as its tools allow and reports on that.
 
 The child can Read, Write, Edit, `Grep` and `Glob` inside the worktree. It has
-**no Bash** — no build, no test run, no linter, no `git`. So:
+**no Bash unless you grant it** — so by default no build, no test run, no linter,
+no `git`. So:
 
 - a skill that reads files, searches for its own inputs, and writes a report → works
-- a skill that runs a build, a test, a linter, or `git` → will half-work, which
-  is worse than failing, because the job reports what it managed rather than what
-  it could not do
+- a skill that runs a build, a test, a linter, or `git` → will half-work without a
+  grant, which is worse than failing, because the job reports what it managed
+  rather than what it could not do
 
-If the task genuinely needs a command run, that is what the contract's `verify`
-is for: the SUPERVISOR runs it after the child exits, and its exit code is
-evidence rather than narrative.
+Two ways to give it a command. One command at the END → the contract's `verify`,
+which the SUPERVISOR runs after the child exits, making its exit code evidence
+rather than narrative. A shell DURING the work → `--allow Bash`, and read what
+that costs below, because it is not a narrower ceiling, it is none.
+
+Two ways to give it a command. If the task needs one command run at the END, use
+the contract's `verify`: the SUPERVISOR runs it after the child exits, and its
+exit code is evidence rather than narrative. If the task needs a shell DURING the
+work, pass `--allow Bash` — and read what that costs, below, because it is not a
+narrower ceiling, it is none.
 
 **Deliverables go in the worktree, never in `.spawn/`.** That directory is the
 supervisor's — the job record, the baseline, the provisioned skills — and the
@@ -169,7 +181,7 @@ limitation only after the answer comes back thin.
 | Surface | What the far side can do |
 |---|---|
 | `agent` | **Nothing.** One message in, one answer out. No file reads, no commands, no second turn. |
-| `bg-agent` | `Read`, `Write`, `Edit`, `Grep`, `Glob` — all **scoped to the worktree**, and search really works there (measured), so a job can find inputs you did not name. **No `Bash`** — it cannot run a command, a test, or `git log`. Version-control internals, hooks and agent configuration are denied outright; a path that resolves outside the worktree — an escaping symlink included — falls outside the allow and is refused. |
+| `bg-agent` | `Read`, `Write`, `Edit`, `Grep`, `Glob` — all **scoped to the worktree**, and search really works there (measured), so a job can find inputs you did not name. **No `Bash` by default** — it cannot run a command, a test, or `git log` unless you pass `--allow Bash`, which grants a full shell and ends every other bound (see the cost above). Version-control internals, hooks and agent configuration are denied outright; a path that resolves outside the worktree — an escaping symlink included — falls outside the allow and is refused. |
 | `session` | Claude Code's full loop under **your own** permissions in the directory you pin. |
 
 ### The trap: an `agent` reviewer only sees what you thought to include

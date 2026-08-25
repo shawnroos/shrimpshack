@@ -173,7 +173,11 @@ contract() {
 # launcher so a caller can assert on $status first.
 start_job() {   # <contract file> [extra launcher args...]
     local c="$1"; shift
-    run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" 2>/dev/null' \
+    # "${@:4}" is what makes the documented extra-args half real: without it the
+    # trailing arguments were accepted by the signature and silently dropped, so
+    # a caller passing --allow would have measured an ungranted job and called it
+    # a grant.
+    run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" "${@:4}" 2>/dev/null' \
         _ "$BG" "$PROJ" "$c" "$@"
     HANDLE="$(printf '%s' "$output" | jq -r '.handle // empty' 2>/dev/null)"
     JOB_DIR="$(printf '%s' "$output" | jq -r '.job.job_dir // empty' 2>/dev/null)"
@@ -228,6 +232,110 @@ result_field() {    # <jq path>
     [ "$(result_field '.permission_denials[0].tool_name')" = "Bash" ]
     [ "$(result_field '.deliverables_satisfied')" = "false" ]
     [ "$(result_field '.degraded_reasons | length')" -ge 1 ]
+}
+
+@test "a Bash grant survives the launcher-to-supervisor fork and reaches the ceiling" {
+    # THE HOP IS THE RISK, NOT THE GRANT. --allow is parsed in the LAUNCHER and
+    # applied in a separate detached SUPERVISOR process; bg-agent.sh's own
+    # comment records --skill being parsed, populated, and arriving empty on the
+    # far side, so provisioning silently never ran. A grant that fails the same
+    # way leaves the job running narrower than the caller was promised, with
+    # nothing in the record saying so.
+    #
+    # grants.applied is written BY THE SUPERVISOR, only when its own SUP_GRANTS
+    # is non-empty — so its contents are proof the flag crossed the fork, not
+    # proof the launcher parsed it.
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json" --allow Bash
+    [ "$status" -eq 0 ]
+    [ -n "$HANDLE" ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    [ -f "$JOB_DIR/grants.applied" ] \
+        || { echo "no grants.applied — the grant did not reach the supervisor"; return 1; }
+    run cat "$JOB_DIR/grants.applied"
+    [ "$output" = "Bash" ]
+
+    # And it landed in BOTH layers of the job's own rendered ceiling.
+    run python3 -c "
+import json
+d=json.load(open('$JOB_DIR/ceiling.settings.json'))
+allow='Bash' in d['permissions']['allow']
+gate='Bash' in d['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()[1:]
+print('BOTH' if allow and gate else ('allow=%s gate=%s' % (allow, gate)))"
+    [ "$output" = "BOTH" ]
+
+    # R8 — and the record says so, in both the record and the notification a
+    # reader consumes on its own.
+    [ "$(result_field '.grants | join(",")')" = "Bash" ]
+    [ "$(result_field '.notification.grants | join(",")')" = "Bash" ]
+}
+
+@test "R8: the grants field is the supervisor's, not a file the job could rewrite" {
+    # The forgeability case. grants.applied lives in the job dir under
+    # <worktree>/.spawn, which a Bash-granted job can write. The record must come
+    # from the supervisor's own memory, so tampering with that file cannot change
+    # what the record reports.
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json" --allow Bash
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    # What a granted job could do to its own accounting.
+    printf 'WebSearch\nAgent\n' > "$JOB_DIR/grants.applied"
+    [ "$(result_field '.grants | join(",")')" = "Bash" ] \
+        || { echo "the record followed the tampered file"; return 1; }
+}
+
+@test "R8: an ungranted job records an empty grants array, not a null and not an absent key" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    [ "$(result_field '.grants | type')" = "array" ]
+    [ "$(result_field '.grants | length')" = "0" ]
+    [ "$(result_field '.notification.grants | length')" = "0" ]
+}
+
+@test "R8: --describe lists grants as a trusted field" {
+    # It is the supervisor's own record of what it applied, so a reader may act
+    # on it without believing the model.
+    run bash "$BG" --describe
+    [ "$status" -eq 0 ]
+    run bash -c 'printf "%s" "$1" | jq -r ".trusted_fields | index(\"grants\") != null"' _ "$output"
+    [ "$output" = "true" ]
+}
+
+@test "an ungranted job's ceiling names Bash in neither layer" {
+    # The control for the arm above. Same path, no --allow: the record carries no
+    # grant and the rendered ceiling is unchanged, so the arm above is measuring
+    # the flag rather than the default.
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    refute_exists "$JOB_DIR/grants.applied"
+    run python3 -c "
+import json
+d=json.load(open('$JOB_DIR/ceiling.settings.json'))
+allow='Bash' in d['permissions']['allow']
+gate='Bash' in d['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()[1:]
+print('NEITHER' if not allow and not gate else ('allow=%s gate=%s' % (allow, gate)))"
+    [ "$output" = "NEITHER" ]
 }
 
 @test "AE5: a refusal keeps a job out of done even when the deliverable landed" {

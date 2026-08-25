@@ -810,6 +810,17 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         [ "$verify_rc" = "null" ] || verify_ran=true
     fi
 
+    # The grants this job was given, FROM THE SUPERVISOR'S OWN MEMORY — never
+    # re-read from grants.applied. That file sits in the job dir under
+    # <worktree>/.spawn, which a Bash-granted job can write, so re-reading it
+    # would let exactly the jobs this field exists to expose rewrite it. Same
+    # discipline as permission_denial_count: the supervisor's measurement, not a
+    # file the child could reach.
+    local grants
+    grants="$(printf '%s\n' ${SUP_GRANTS[@]+"${SUP_GRANTS[@]}"} \
+        | jq -Rsc 'split("\n") | map(select(length > 0))')"
+    [ -n "$grants" ] || grants='[]'
+
     reasons="$(printf '%s\n' "${SUP_REASONS:-}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
     [ -n "$reasons" ] || reasons='[]'
 
@@ -836,9 +847,10 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         --argjson dn "$denials" --argjson ch "$changed" --argjson dl "$deliv" \
         --argjson vr "$verify_rc" --argjson vran "$verify_ran" \
         --argjson ok "$all_ok" --argjson rs "$reasons" --argjson us "$usage_json" \
+        --argjson gr "$grants" \
         --arg rc "$child_rc" --argjson ie "$child_ie" '{
           schema:$js, job_id:$h, alias:$a,
-          served_model:(if $sm == "" then null else $sm end), ceiling:$c,
+          served_model:(if $sm == "" then null else $sm end), ceiling:$c, grants:$gr,
           worktree:$w, cwd:$cw,
           content_trust:$tp, content_notice:$np,
           started_at:(if $st == "" then null else $st end), ended_at:$en,
@@ -861,7 +873,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
                     + (if $ok then "; every deliverable the contract named is satisfied"
                        else "; not every deliverable the contract named is satisfied" end)
                     + ". This says the job ENDED, not that it succeeded — read terminal_state and deliverables_satisfied."),
-            job_id:$h, alias:$a, worktree:$w, result_file:$rf,
+            job_id:$h, alias:$a, worktree:$w, result_file:$rf, grants:$gr,
             terminal_state:$s, deliverables_satisfied:$ok,
             ended_at:$en,
             permission_denial_count:($dn|length),
@@ -1208,7 +1220,7 @@ emit_describe() {
             {value:"launch_failed",       exit_code:5, note:"the supervisor could not be detached or adopted; the record was released"}
           ],
           trusted_fields:[
-            "started_at","ended_at","terminal_state","child_exit_code","served_model",
+            "started_at","ended_at","terminal_state","child_exit_code","served_model","grants",
             "permission_denials","changed_files","deliverables",
             "deliverables_satisfied","verification.exit_code",
             "usage.input_tokens","usage.output_tokens",

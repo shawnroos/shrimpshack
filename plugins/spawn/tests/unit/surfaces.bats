@@ -413,6 +413,57 @@ CTL
     [ "$checked" -ge 5 ]
 }
 
+@test "a doc that tells a caller about Bash also tells them it is grantable" {
+    # THE INVARIANT, not the wording. Bash became grantable on 2026-08-25, and
+    # before that these docs told a caller flatly that a bg-agent child has no
+    # Bash — wrong in the direction that costs work, because a reader believes
+    # the capability is unreachable and routes around a surface that has it.
+    #
+    # Banning phrases does not express that. "no Bash" appears in the CORRECT
+    # sentence "no Bash unless you grant it", and "cannot run shell commands"
+    # appears in the correct "by default a job cannot run shell commands" — a
+    # substring pin fails on both while the defect it names is absent. So the
+    # rule is co-occurrence: a doc may say whatever it likes about Bash as long
+    # as it also names the flag that grants it.
+    #
+    # An EXPLICIT file list, not a walk of the doc tree. README.md documents
+    # neither --allow nor the older WebSearch grant, so a tree-wide pin would
+    # drag a staleness this change did not create into scope.
+    local f
+    for f in "$CMD_DIR/bg-agent.md" "$SKILL_DIR/spawn/SKILL.md"; do
+        grep -qF 'Bash' "$f" || continue
+        grep -qF -- '--allow Bash' "$f" \
+            || { echo "$f discusses Bash without naming --allow Bash"; return 1; }
+    done
+}
+
+@test "no doc still carries the retracted permission model" {
+    # These two claims were measured false and are load-bearing next to a Bash
+    # grant: a reader who believes the allow list is inert concludes that adding
+    # a tool to it is pointless, and that omission is permissive. Unlike the
+    # co-occurrence rule above, these are exact retracted sentences that have no
+    # correct form — banning them cannot catch honest prose.
+    local f
+    for f in "$CMD_DIR/bg-agent.md" "$SKILL_DIR/spawn/SKILL.md"; do
+        refute_file_match 'the allow list constrains nothing on its own' "$f"
+        refute_file_match 'deny list is the whole enforcement' "$f"
+    done
+}
+
+@test "the grantable tools a doc names match the ones the code grants" {
+    # A doc that drifts from spawn::ceiling_grantable is how a caller learns the
+    # wrong ceiling — either asking for a tool that will refuse and kill the job,
+    # or not asking for one that would have worked. Read the arm out of the code
+    # and require each name to appear in the command doc.
+    local lib; lib="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
+    local t
+    for t in $(bash -c '. "$1"; for t in WebSearch Bash Agent CronCreate WebFetch NotARealTool; do
+                            spawn::ceiling_grantable "$t" && printf "%s\n" "$t"; done' _ "$lib/ceilings.sh"); do
+        grep -q -- "$t" "$CMD_DIR/bg-agent.md" \
+            || { echo "code grants '$t' but commands/bg-agent.md never names it"; return 1; }
+    done
+}
+
 # --- the harness's own view of the plugin ---------------------------------
 
 @test "claude plugin validate reports Validation passed" {
