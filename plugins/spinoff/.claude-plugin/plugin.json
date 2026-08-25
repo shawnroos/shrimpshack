@@ -1,7 +1,7 @@
 {
   "name": "spinoff",
   "description": "Fork the current thread of work into its own place: takes the topic/plan/idea just discussed and moves it into a fresh git worktree with a new, already-briefed Claude session — so the current session stays focused and the new one picks up the context. Command-invoked only via /start-session, /start-split, /start-workspace, or the /start alias. Branches a worktree (from current HEAD or develop), writes a handoff doc linking back to the originating session's transcript, carries over recent plan/brainstorm docs, and launches Claude with the brief already attached — in a new tab, in a split beside the pane you're in, or in a brand-new two-pane workspace with the handoff alongside. Works under herdr, cmux or Ghostty, auto-detected. The mechanical work runs in a background agent so it doesn't consume the originating session's context.",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "author": {
     "name": "Shawn Roos",
     "email": "shawn@slateteams.com"

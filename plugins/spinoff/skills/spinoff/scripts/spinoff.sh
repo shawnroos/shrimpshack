@@ -139,9 +139,66 @@ resolve_bin_rejected() { [ -n "${2:-}" ] && [ -z "${1:-}" ] && printf '%s' "$2";
 # dialog, which is why this checks the RESOLVED $OSASCRIPT (already validated as a
 # regular executable file by resolve_bin) instead of running it. $GHOSTTY_APP and
 # $OSASCRIPT are resolved next to $HERDR / $CMUX, below.
-_herdr_probe() { [ -n "${HERDR:-}" ] && "$HERDR" status server 2>/dev/null | grep -qi 'running'; }
+# herdr must NEVER be piped into an early-exiting reader to decide liveness. `grep -q`
+# exits the instant it matches and closes the pipe, so herdr dies mid-write and exits
+# non-zero — and under the `set -o pipefail` at the top of this file that non-zero
+# becomes the pipeline's status, so the probe returns FALSE on a match that already
+# succeeded. Measured 80-94 failures per 300 against a live server before this change.
+#
+# Do not look for one exit code: the signature is not stable across herdr releases.
+# Observed 101 (a Rust broken-pipe panic, `failed printing to stdout`) on 0.8.0, and
+# 141 (plain SIGPIPE, no stderr at all) on 0.8.2. Capture first, then test the text —
+# that is correct for any of them, because no exit status reaches a conditional.
+#
+# The match is an exact `status: running` LINE, not a substring: the old
+# `grep -qi running` also accepted "not running". herdr prints several lines, so the
+# line may not be the first one.
+_herdr_probe() {
+  [ -n "${HERDR:-}" ] || return 1
+  local _err
+  _err="$(mktemp 2>/dev/null)" || _err="${TMPDIR:-/tmp}/spinoff-herdr-probe.$$"
+  HERDR_PROBE_ERR_LOST=0
+  if : > "$_err" 2>/dev/null; then
+    HERDR_PROBE_OUT="$("$HERDR" status server 2>"$_err" || true)"
+    HERDR_PROBE_ERR="$(cat "$_err" 2>/dev/null || true)"
+    rm -f "$_err"
+  else
+    # No writable scratch file. Keep stdout (the match input) intact, but record that
+    # stderr was DROPPED rather than let the report claim herdr printed nothing —
+    # that would be a fresh false assertion, the class this change exists to remove.
+    HERDR_PROBE_OUT="$("$HERDR" status server 2>/dev/null || true)"
+    HERDR_PROBE_ERR=""
+    HERDR_PROBE_ERR_LOST=1
+  fi
+  # Wrapping both sides in newlines lets one pattern match an exact line anywhere.
+  case $'\n'"$HERDR_PROBE_OUT"$'\n' in
+    *$'\nstatus: running\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 _cmux_probe()  { [ -n "${CMUX:-}" ] && [ -x "$CMUX" ]; }
 _ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
+
+# The exit-5 evidence, split into a predicate and a printer because the two report
+# sites need the presence answer BEFORE they print — one leads with a header, the
+# other with a sentence — and each words the empty case for its own register.
+_herdr_probe_said_something() {
+  [ -n "${HERDR_PROBE_OUT:-}" ] || [ -n "${HERDR_PROBE_ERR:-}" ] || [ "${HERDR_PROBE_ERR_LOST:-0}" = 1 ]
+}
+# Pads EVERY line, not the string. herdr answers with five lines, so padding once left
+# four of them flush against the margin and broke the block SKILL.md relays verbatim.
+_herdr_probe_evidence() {
+  local pad="$1" _l
+  if [ -n "${HERDR_PROBE_OUT:-}" ]; then
+    while IFS= read -r _l; do printf '%s%s\n' "$pad" "$_l" >&2; done <<<"$HERDR_PROBE_OUT"
+  fi
+  if [ -n "${HERDR_PROBE_ERR:-}" ]; then
+    while IFS= read -r _l; do printf '%s%s\n' "$pad" "$_l" >&2; done <<<"$HERDR_PROBE_ERR"
+  fi
+  [ "${HERDR_PROBE_ERR_LOST:-0}" = 1 ] \
+    && printf '%s(stderr could not be captured — no writable scratch file)\n' "$pad" >&2
+  return 0
+}
 
 # ---- announced-but-unresolvable record (R5, R6, R17, KTD-3, KTD-8, KTD-9) ----
 # An environment that DELIBERATELY announces a multiplexer, plus a binary we could not
@@ -174,6 +231,9 @@ _ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
 # binary whose probe merely failed DOES reach it and records only $ANNOUNCED_*, never
 # $LOUD_*. That is now a LOUD exit 5, not a silent exit 0: $ANNOUNCED_* alone is
 # enough to fail the run, and $LOUD_* only chooses which failure it is.
+HERDR_PROBE_OUT="" # what the last _herdr_probe read on stdout — the exit-5 evidence
+HERDR_PROBE_ERR="" # and on stderr, where herdr reports an unreachable server
+HERDR_PROBE_ERR_LOST=0 # 1 when stderr was dropped, so the report says so
 LOUD_BIN=""        # binary an announcement asked for that resolution could not find
 LOUD_ANNOUNCE=""   # the env var that announced it, rendered for a human
 LOUD_OVERRIDE=""   # the env var that pins it explicitly
@@ -230,7 +290,7 @@ _record_loud() {
 resolve_launcher() {
   case "$LAUNCHER" in
     herdr) if _herdr_probe; then LAUNCHER=herdr; return; fi
-           echo "  ⚠ --launcher herdr requested but the herdr server isn't reachable — falling back to auto-detection" >&2 ;;
+           echo "  ⚠ --launcher herdr requested but herdr did not report a running server — falling back to auto-detection" >&2 ;;
     cmux)  if _cmux_probe; then LAUNCHER=cmux; return; fi
            echo "  ⚠ --launcher cmux requested but the cmux CLI isn't available — falling back to auto-detection" >&2 ;;
     ghostty) if _ghostty_probe; then LAUNCHER=ghostty; return; fi
@@ -272,7 +332,7 @@ resolve_launcher() {
   # when herdr's server is dead, so that exact run has BOTH a forced ghostty and a live
   # HERDR_ENV=1. Recording ghostty first would replace herdr's diagnosis — which hands
   # over `herdr status server`, the one command that separates a stopped server from a
-  # socket this process cannot reach — with a ghostty message that has no remedy at all.
+  # server did not report running — with a ghostty message that has no remedy at all.
   # The exit code is 5 either way, so nothing checking status would have caught that.
   # Whatever announced a cause worth acting on keeps the message.
   #
@@ -1809,22 +1869,28 @@ if [ "$ANNOUNCED_UNLAUNCHED" = 1 ] && [ -n "$LOUD_BIN" ]; then
 elif [ "$ANNOUNCED_UNLAUNCHED" = 1 ]; then
   # The other side of the gate: the binary resolved, so there is nothing to fix on
   # $PATH — the backend itself would not take the launch. Today that means herdr's
-  # server is not running (`_herdr_probe` greps `status server` for "running"). The
+  # server is not running (`_herdr_probe` matches a `status: running` line). The
   # first line is deliberately cause-NEUTRAL so it stays true if a future backend
   # reaches this branch for some other reason; the named remedy follows it as the
   # known cause rather than the definition of the failure.
   echo "  ⚠ \`$ANNOUNCED_BIN\` announced this session ($ANNOUNCED_BY) but would not take the launch —" >&2
   echo "    NOT launching, and NOT calling that a skip. The worktree and handoff are still made." >&2
   if [ "$ANNOUNCED_BIN" = herdr ]; then
-    # TWO causes, and the second is the common one. The server may genuinely be
-    # stopped — or it may be running fine and simply unreachable from THIS process:
-    # a background agent's environment does not always carry what `herdr status
-    # server` needs to find the socket, and that probe then fails while the user's
-    # herdr is perfectly alive. Saying only "start the server" sends someone to
-    # restart something that is already running, so name both.
-    echo "    the binary resolved fine; its server did not answer THIS process." >&2
-    echo "    check \`herdr status server\` here — if it reports running, the server is fine" >&2
-    echo "    and this process just can't reach it (a detached/background shell often can't)." >&2
+    # Report the EVIDENCE, never a mechanism. The previous wording asserted the server
+    # "did not answer THIS process" and blamed a detached shell — a cause nobody had
+    # established. It sent three separate sessions hunting a socket-reachability
+    # problem that did not exist, because `herdr status server` answers `running`
+    # right before and after a failing run, which the message framed as CONFIRMING
+    # the theory rather than refuting it. Print what herdr actually said and stop.
+    echo "    the binary resolved fine; herdr did not report a running server." >&2
+    if _herdr_probe_said_something; then
+      echo "    herdr reported:" >&2
+      _herdr_probe_evidence "      "
+    else
+      echo "    herdr printed nothing on stdout or stderr." >&2
+    fi
+    echo "    the probe needs a \`status: running\` line and did not get one. If the server is" >&2
+    echo "    down, start it and re-run; otherwise use the manual line below." >&2
   elif [ "$ANNOUNCED_BIN" = ghostty ]; then
     # Ghostty has no server to be up or down: `_ghostty_probe` fails ONLY when the .app
     # or osascript did not resolve. Saying "the binary resolved fine" here would be
@@ -2031,11 +2097,14 @@ if [ "${ANNOUNCED_UNLAUNCHED:-0}" = "1" ]; then
   echo "⚠ NO SESSION WAS LAUNCHED — \`$ANNOUNCED_BIN\` would not take it." >&2
   echo "  This session announced it ($ANNOUNCED_BY), so this is a failure, not a skip." >&2
   if [ "$ANNOUNCED_BIN" = herdr ]; then
-    echo "  The binary resolved; its server did not answer this process. Either it is stopped —" >&2
-    echo "  start it — or it is running and this shell cannot reach its socket, which is what" >&2
-    echo "  happens when the script runs detached from the session that owns herdr. Run" >&2
-    echo "  \`herdr status server\` here to tell the two apart, fix whichever it is, then re-run" >&2
-    echo "  — but the worktree and branch already exist, so re-run with a NEW --name," >&2
+    echo "  The binary resolved; herdr did not report a running server. What it printed:" >&2
+    if _herdr_probe_said_something; then
+      _herdr_probe_evidence "    "
+    else
+      echo "    (nothing, on either stream)" >&2
+    fi
+    echo "  The probe needs a \`status: running\` line and did not get one. If the server is down," >&2
+    echo "  start it, then re-run — but the worktree and branch already exist, so use a NEW --name," >&2
   elif [ "$ANNOUNCED_BIN" = ghostty ]; then
     echo "  Ghostty could not be driven: the ⚠ above names what was missing — the .app itself," >&2
     echo "  or osascript (\$OSASCRIPT_BIN pins it). There is no ghostty server to start. Fix" >&2
