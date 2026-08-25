@@ -1836,22 +1836,28 @@ if [ "$ANNOUNCED_UNLAUNCHED" = 1 ] && [ -n "$LOUD_BIN" ]; then
 elif [ "$ANNOUNCED_UNLAUNCHED" = 1 ]; then
   # The other side of the gate: the binary resolved, so there is nothing to fix on
   # $PATH — the backend itself would not take the launch. Today that means herdr's
-  # server is not running (`_herdr_probe` greps `status server` for "running"). The
+  # server is not running (`_herdr_probe` matches a `status: running` line). The
   # first line is deliberately cause-NEUTRAL so it stays true if a future backend
   # reaches this branch for some other reason; the named remedy follows it as the
   # known cause rather than the definition of the failure.
   echo "  ⚠ \`$ANNOUNCED_BIN\` announced this session ($ANNOUNCED_BY) but would not take the launch —" >&2
   echo "    NOT launching, and NOT calling that a skip. The worktree and handoff are still made." >&2
   if [ "$ANNOUNCED_BIN" = herdr ]; then
-    # TWO causes, and the second is the common one. The server may genuinely be
-    # stopped — or it may be running fine and simply unreachable from THIS process:
-    # a background agent's environment does not always carry what `herdr status
-    # server` needs to find the socket, and that probe then fails while the user's
-    # herdr is perfectly alive. Saying only "start the server" sends someone to
-    # restart something that is already running, so name both.
-    echo "    the binary resolved fine; its server did not answer THIS process." >&2
-    echo "    check \`herdr status server\` here — if it reports running, the server is fine" >&2
-    echo "    and this process just can't reach it (a detached/background shell often can't)." >&2
+    # Report the EVIDENCE, never a mechanism. The previous wording asserted the server
+    # "did not answer THIS process" and blamed a detached shell — a cause nobody had
+    # established. It sent three separate sessions hunting a socket-reachability
+    # problem that did not exist, because `herdr status server` answers `running`
+    # right before and after a failing run, which the message framed as CONFIRMING
+    # the theory rather than refuting it. Print what herdr actually said and stop.
+    echo "    the binary resolved fine; herdr did not report a running server." >&2
+    if [ -n "${HERDR_PROBE_OUT:-}" ] || [ -n "${HERDR_PROBE_ERR:-}" ]; then
+      echo "    herdr reported:" >&2
+      [ -n "${HERDR_PROBE_OUT:-}" ] && printf '      %s\n' "$HERDR_PROBE_OUT" >&2
+      [ -n "${HERDR_PROBE_ERR:-}" ] && printf '      %s\n' "$HERDR_PROBE_ERR" >&2
+    else
+      echo "    herdr printed nothing on stdout or stderr." >&2
+    fi
+    echo "    check \`herdr status server\` here to see the current state." >&2
   elif [ "$ANNOUNCED_BIN" = ghostty ]; then
     # Ghostty has no server to be up or down: `_ghostty_probe` fails ONLY when the .app
     # or osascript did not resolve. Saying "the binary resolved fine" here would be
@@ -2058,11 +2064,15 @@ if [ "${ANNOUNCED_UNLAUNCHED:-0}" = "1" ]; then
   echo "⚠ NO SESSION WAS LAUNCHED — \`$ANNOUNCED_BIN\` would not take it." >&2
   echo "  This session announced it ($ANNOUNCED_BY), so this is a failure, not a skip." >&2
   if [ "$ANNOUNCED_BIN" = herdr ]; then
-    echo "  The binary resolved; its server did not answer this process. Either it is stopped —" >&2
-    echo "  start it — or it is running and this shell cannot reach its socket, which is what" >&2
-    echo "  happens when the script runs detached from the session that owns herdr. Run" >&2
-    echo "  \`herdr status server\` here to tell the two apart, fix whichever it is, then re-run" >&2
-    echo "  — but the worktree and branch already exist, so re-run with a NEW --name," >&2
+    echo "  The binary resolved; herdr did not report a running server. What it printed:" >&2
+    if [ -n "${HERDR_PROBE_OUT:-}" ] || [ -n "${HERDR_PROBE_ERR:-}" ]; then
+      [ -n "${HERDR_PROBE_OUT:-}" ] && printf '    %s\n' "$HERDR_PROBE_OUT" >&2
+      [ -n "${HERDR_PROBE_ERR:-}" ] && printf '    %s\n' "$HERDR_PROBE_ERR" >&2
+    else
+      echo "    (nothing, on either stream)" >&2
+    fi
+    echo "  Run \`herdr status server\` here to see the current state, fix what it shows, then" >&2
+    echo "  re-run — but the worktree and branch already exist, so re-run with a NEW --name," >&2
   elif [ "$ANNOUNCED_BIN" = ghostty ]; then
     echo "  Ghostty could not be driven: the ⚠ above names what was missing — the .app itself," >&2
     echo "  or osascript (\$OSASCRIPT_BIN pins it). There is no ghostty server to start. Fix" >&2

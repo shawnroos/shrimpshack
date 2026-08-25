@@ -841,6 +841,47 @@ run_unresolvable() {
   [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
 }
 
+@test "exit 5: the message quotes herdr's stdout instead of naming a mechanism" {
+  # The old text asserted the server "did not answer THIS process" and blamed a
+  # detached shell. Nobody had established that, and `herdr status server` answers
+  # `running` right before and after a failing run — so the message framed its own
+  # refutation as confirmation and sent three sessions after a socket bug that did
+  # not exist. Whatever herdr actually said is the only honest content here.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_STATUS_OUT='status: not running'
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"status: not running"* ]]
+}
+
+@test "exit 5: stderr is quoted too — it is where a dead server reports itself" {
+  # The probe matches on stdout only, but herdr writes an unreachable server to
+  # stderr. Discarding it would leave the evidence line empty in exactly the case
+  # the message exists for, and then claim herdr printed nothing — a fresh false
+  # assertion replacing the one this change removes.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"status: unreachable"* ]]
+}
+
+@test "exit 5: silence on both streams is reported as silence, not inferred" {
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_STATUS_OUT=
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"nothing"* ]]
+}
+
+@test "exit 5: no herdr path asserts a detached shell or an unanswered process" {
+  # The class, not the two instances. Any exit-5 herdr run must be free of both
+  # phrases; a future edit that reintroduces either in one branch trips this.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 5 ]
+  [[ "$output" != *"detached"* ]]
+  [[ "$output" != *"did not answer"* ]]
+  [[ "$output" != *"cannot reach its socket"* ]]
+}
+
 @test "loud: the probe-failed summary says INCOMPLETE and never prints a tick" {
   # Same regression KTD-5 pinned for exit 4: teaching the tail exit but not the header
   # prints "✓ Spinoff complete" above a failing status, in the block the skill relays
