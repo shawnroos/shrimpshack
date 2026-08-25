@@ -429,12 +429,20 @@ CTL
     # An EXPLICIT file list, not a walk of the doc tree. README.md documents
     # neither --allow nor the older WebSearch grant, so a tree-wide pin would
     # drag a staleness this change did not create into scope.
-    local f
+    # The `continue` below is what makes this test able to assert nothing at all:
+    # if a future rewrite stopped naming Bash in both files, every iteration would
+    # skip and the test would pass having checked nothing. Count the files that
+    # actually fired and fail when none did — the same can't-fail hole this change
+    # already closed three times elsewhere.
+    local f matched=0
     for f in "$CMD_DIR/bg-agent.md" "$SKILL_DIR/spawn/SKILL.md"; do
         grep -qF 'Bash' "$f" || continue
+        matched=$((matched + 1))
         grep -qF -- '--allow Bash' "$f" \
             || { echo "$f discusses Bash without naming --allow Bash"; return 1; }
     done
+    [ "$matched" -gt 0 ] \
+        || { echo "no shipped doc mentions Bash at all — this test asserted nothing"; return 1; }
 }
 
 @test "no doc still carries the retracted permission model" {
@@ -455,10 +463,20 @@ CTL
     # wrong ceiling — either asking for a tool that will refuse and kill the job,
     # or not asking for one that would have worked. Read the arm out of the code
     # and require each name to appear in the command doc.
+    # Read the grantable names OUT OF THE CASE ARM, never from a list written
+    # here. Probing a hardcoded set of candidates would never ask about the next
+    # tool someone makes grantable — the drift this test exists to catch is
+    # exactly a new name the docs do not mention.
     local lib; lib="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
+    local names
+    names="$(sed -n '/^spawn::ceiling_grantable()/,/^}/p' "$lib/ceilings.sh" \
+        | sed -n 's/^[[:space:]]*\([A-Za-z|]*\))[[:space:]]*return 0[[:space:]]*;;.*/\1/p' \
+        | tr '|' '\n' | grep -v '^$')"
+    [ -n "$names" ] \
+        || { echo "could not read any grantable name out of spawn::ceiling_grantable"; return 1; }
+
     local t
-    for t in $(bash -c '. "$1"; for t in WebSearch Bash Agent CronCreate WebFetch NotARealTool; do
-                            spawn::ceiling_grantable "$t" && printf "%s\n" "$t"; done' _ "$lib/ceilings.sh"); do
+    for t in $names; do
         grep -q -- "$t" "$CMD_DIR/bg-agent.md" \
             || { echo "code grants '$t' but commands/bg-agent.md never names it"; return 1; }
     done

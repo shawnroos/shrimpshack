@@ -220,6 +220,10 @@ The ceiling is chosen by which surface you reach, not selected by a flag: which
 ceiling applies is fixed by which file ran. So the choice of surface **is** the
 choice of permissions, and it is worth making deliberately rather than by habit:
 
+It has **no shell unless you grant one**. A question only a command can answer —
+a test run, a `git log` — needs either the contract's `verify` hook or
+`--allow Bash`, whose cost is below.
+
 - **Judgement on material you can hand over** → `agent`. Nothing can be touched.
 - **Investigation, review, or anything needing discovery** → `bg-agent`. It can read
   and search the worktree, so it can chase what you did not name; it can also write
@@ -242,6 +246,38 @@ promised returns a confident wrong answer.
 Name the tool you need and nothing more. Granting `Bash` back hands the job the one
 capability the rest of the ceiling exists to remove: the ability to have some other
 process produce the deliverable, which is then not the thing that was measured.
+
+### What granting `Bash` actually costs
+
+Say this to whoever asked, before you pass the flag. `--allow Bash` is not a wider
+ceiling — it is **no** ceiling, and the reason is mechanical rather than a matter
+of degree.
+
+Every other bound on a background job is **tool-scoped**. `Write(//<worktree>/**)`
+binds the `Write` tool. A shell is not that tool, so none of those rules reach it.
+A granted job runs commands as you, which means:
+
+- it reaches the plugin's own tool gate, its rendered ceiling, and its own job
+  record — all writable by the user who launched it;
+- it holds the gateway token, which the supervisor exports into the child's
+  environment as `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`, plus anything else
+  that user can read — `~/.claude`, SSH keys, push rights;
+- the blast radius **outlives the job**: the tool gate is one shared file, so a
+  granted job that rewrites it removes the default-deny layer for later jobs whose
+  caller granted nothing.
+
+Measured 2026-08-25: a granted child ran a shell command, was told to disarm its
+own gate copy, and did not — but that file was writable and nothing stopped it, so
+that is the model declining, not a bound. Do not read it as protection.
+
+There is **no command-scoped form**. `--allow "Bash(npm test:*)"` is refused: the
+gate matches the bare tool name, and the grant writes bare `Bash` into the allow
+list, which subsumes any scoped rule beside it. Pointing `SPAWN_CEILING_CONFIG_REPO`
+at your own settings file does not produce one either.
+
+So: prefer the contract's `verify` hook when one command at the end would do. Reach
+for the grant when the work genuinely needs a shell throughout, and say in your
+summary that you granted it.
 
 ## `bg-agent`: the contract is the whole point
 
@@ -339,6 +375,8 @@ absent is not done however confidently the narrative describes it.
 - **The ceiling is `repo-bounded` and is not selectable.** `--allow` widens that
   job's copy of it; nothing selects a different one. The job runs inside the current
   worktree, so work that needs to reach outside it is not a background job.
+  Granting `Bash` is the exception worth naming: it does not widen the bound, it
+  removes it (see the cost above).
 - **The child deadline is 900s.** Longer work needs splitting, not a bigger number.
 - **One job per worktree.** A second start is refused with `job_already_running`,
   and the response names the one already there in `running_handle`.

@@ -241,6 +241,17 @@ render() {  # <ceiling> <worktree> <dest>
     run bash -c '. "$1"; spawn::ceiling_render "$2" "$3" "$4"' _ "$LIB/ceilings.sh" "$1" "$2" "$3"
 }
 
+# The gate's allow set, read out of a rendered ceiling's hook argv. Parameterized
+# rather than re-declared per test: two copies of this closed over $proj and drifted
+# apart the moment a third test wanted a different path.
+gate_args() {   # <rendered ceiling path>
+    python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(' '.join(d['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()[1:]))" "$1"
+}
+
+
 # The live gate, and the gateway routing that makes the live arms cheap enough
 # to run. ORDER IS LOAD-BEARING: the SPAWN_CEILING_LIVE check comes first, so an
 # ordinary unit run never probes the gateway, never auto-starts it, and never
@@ -1049,17 +1060,13 @@ print('DENIED' if 'WebSearch' in d['permissions']['deny'] else 'GRANTABLE')"
     render repo-bounded "$proj" "$proj/c.json"
     [ "$status" -eq 0 ]
 
-    gate_args() { python3 -c "
-import json
-d=json.load(open('$proj/c.json'))
-print(' '.join(d['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()[1:]))"; }
 
     # Absent in BOTH layers before the grant. An ungranted job is unchanged.
     run python3 -c "
 import json
 print('PRESENT' if 'Bash' in json.load(open('$proj/c.json'))['permissions']['allow'] else 'ABSENT')"
     [ "$output" = "ABSENT" ]
-    run gate_args
+    run gate_args "$proj/c.json"
     refute_file_match 'Bash' <(printf '%s\n' "$output")
 
     run bash -c '. "$1"; spawn::ceiling_grant "$2" Bash' _ "$LIB/ceilings.sh" "$proj/c.json"
@@ -1069,7 +1076,7 @@ print('PRESENT' if 'Bash' in json.load(open('$proj/c.json'))['permissions']['all
 import json
 print('YES' if 'Bash' in json.load(open('$proj/c.json'))['permissions']['allow'] else 'NO')"
     [ "$output" = "YES" ]
-    run gate_args
+    run gate_args "$proj/c.json"
     [[ "$output" == *Bash* ]]
 
     # R25 — the SHIPPED default is only ever read. Parsed, not grepped: the
@@ -1285,17 +1292,13 @@ import json; print('GATED' if json.load(open('$proj/c.json')).get('hooks') else 
     local proj="$WORK/grantboth"; mkdir -p "$proj"
     render repo-bounded "$proj" "$proj/c.json"
     [ "$status" -eq 0 ]
-    gate_args() { python3 -c "
-import json
-d=json.load(open('$proj/c.json'))
-print(' '.join(d['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()[1:]))"; }
 
-    run gate_args
+    run gate_args "$proj/c.json"
     refute_file_match 'WebSearch' <(printf '%s\n' "$output")   # absent before
 
     run bash -c '. "$1"; spawn::ceiling_grant "$2" WebSearch' _ "$LIB/ceilings.sh" "$proj/c.json"
     [ "$status" -eq 0 ]
-    run gate_args
+    run gate_args "$proj/c.json"
     [[ "$output" == *WebSearch* ]]
 }
 
@@ -1405,6 +1408,10 @@ print('DENIED' if any(x.get('tool_name')=='WebSearch' for x in d.get('permission
     run bash -c '. "$1"; spawn::ceiling_grant "$2" Bash' _ "$LIB/ceilings.sh" "$tree/granted.json"
     [ "$status" -eq 0 ]
 
+    # The file effect is captured INSIDE the loop, per arm. The loop deletes the
+    # sentinel before each arm, so a check after the loop can only ever see the
+    # granted arm's result — an earlier version asserted `sentinel.txt.ungranted`,
+    # a path nothing creates, and so proved nothing about the ungranted half.
     local arm
     for arm in ungranted granted; do
         rm -f "$tree/sentinel.txt"
@@ -1416,11 +1423,16 @@ print('DENIED' if any(x.get('tool_name')=='WebSearch' for x in d.get('permission
         # An errored child denies nothing and proves nothing.
         [ "$(jq -r '.is_error' "$WORK/bash.$arm.json")" = "false" ] \
             || { echo "$arm arm errored: $(cat "$WORK/bash.$arm.err")"; return 1; }
+        if [ -f "$tree/sentinel.txt" ]; then
+            cp "$tree/sentinel.txt" "$WORK/sentinel.$arm"
+        else
+            rm -f "$WORK/sentinel.$arm"
+        fi
     done
 
-    # UNGRANTED: no sentinel, and the refusal is on the record the model does
-    # not author.
-    refute_exists "$tree/sentinel.txt.ungranted"
+    # UNGRANTED: the shell did not run — no sentinel from that arm — and the
+    # refusal is on the record the model does not author.
+    refute_exists "$WORK/sentinel.ungranted"
     run python3 -c "
 import json
 d=json.load(open('$WORK/bash.ungranted.json'))
@@ -1429,8 +1441,8 @@ print('DENIED' if any(x.get('tool_name')=='Bash' for x in d.get('permission_deni
 
     # GRANTED: the nonce is on disk. Asserted on content, not existence — an
     # empty file the model touched some other way would satisfy existence.
-    [ -f "$tree/sentinel.txt" ] || { echo "granted Bash did not run"; return 1; }
-    run cat "$tree/sentinel.txt"
+    [ -f "$WORK/sentinel.granted" ] || { echo "granted Bash did not run"; return 1; }
+    run cat "$WORK/sentinel.granted"
     [ "$output" = "$nonce" ] || { echo "sentinel holds '$output', not the nonce"; return 1; }
     # No Bash denial. NOT "denials is empty" — an unrelated refused tool would
     # fail this arm for a reason that has nothing to do with the grant.

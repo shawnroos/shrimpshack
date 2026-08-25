@@ -274,23 +274,47 @@ print('BOTH' if allow and gate else ('allow=%s gate=%s' % (allow, gate)))"
     [ "$(result_field '.notification.grants | join(",")')" = "Bash" ]
 }
 
-@test "R8: the grants field is the supervisor's, not a file the job could rewrite" {
-    # The forgeability case. grants.applied lives in the job dir under
-    # <worktree>/.spawn, which a Bash-granted job can write. The record must come
-    # from the supervisor's own memory, so tampering with that file cannot change
-    # what the record reports.
+@test "R8: the grants field is sourced from memory, not from the job's own directory" {
+    # THE FORGEABILITY PROPERTY, asserted where it can actually fail.
+    #
+    # An earlier version of this test wrote a forged grants.applied AFTER
+    # await_terminal returned — which is after result.json is already on disk, so
+    # the assertion held no matter what the writer did. It could not fail. The
+    # tamper is untimeable from out here: the supervisor writes that file itself,
+    # microseconds before the record.
+    #
+    # So the property is pinned at the source instead. `grants` must come from the
+    # in-memory array; the moment the writer re-reads the job directory, a
+    # Bash-granted job can rewrite its own accounting.
+    local bg; bg="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)/bg-agent.sh"
+    # Comments stripped FIRST. The writer's own comment says it never re-reads
+    # grants.applied, and an unfiltered grep matched that sentence — this test
+    # failed against code that was already correct, which is the same
+    # prose-matching trap it exists to guard against.
+    run bash -c "sed -n '/^sup_write_result()/,/^}/p' '$bg' | grep -v '^[[:space:]]*#' | grep -c 'grants.applied'"
+    [ "$output" = "0" ] \
+        || { echo "sup_write_result reads grants.applied — the record is forgeable"; return 1; }
+    run bash -c "sed -n '/^sup_write_result()/,/^}/p' '$bg' | grep -c 'SUP_GRANTS_APPLIED'"
+    [ "$output" != "0" ] \
+        || { echo "sup_write_result no longer sources grants from memory"; return 1; }
+}
+
+@test "R8: a REFUSED grant is recorded as no grant, not as the grant that was asked for" {
+    # The record answers "what did this job hold", not "what did its caller type".
+    # A refused grant still writes a result — the job fails and nothing runs — so
+    # reporting the request here would tell a reader the job held a capability it
+    # was explicitly denied.
     start_fixture healthy "alpha"
     contract "$WORK/c.json" "create out.txt" "out.txt"
-    export FAKE_CLAUDE_WRITE="out.txt"
 
-    start_job "$WORK/c.json" --allow Bash
+    start_job "$WORK/c.json" --allow Agent
     [ "$status" -eq 0 ]
-    [ "$(await_terminal "$HANDLE")" = "done" ]
+    [ "$(await_terminal "$HANDLE")" = "failed" ]
 
-    # What a granted job could do to its own accounting.
-    printf 'WebSearch\nAgent\n' > "$JOB_DIR/grants.applied"
-    [ "$(result_field '.grants | join(",")')" = "Bash" ] \
-        || { echo "the record followed the tampered file"; return 1; }
+    [ "$(result_field '.grants | length')" = "0" ] \
+        || { echo "a refused grant was recorded as granted: $(result_field '.grants | join(",")')"; return 1; }
+    [ "$(result_field '.notification.grants | length')" = "0" ]
+    refute_exists "$JOB_DIR/grants.applied"
 }
 
 @test "R8: an ungranted job records an empty grants array, not a null and not an absent key" {
