@@ -139,7 +139,32 @@ resolve_bin_rejected() { [ -n "${2:-}" ] && [ -z "${1:-}" ] && printf '%s' "$2";
 # dialog, which is why this checks the RESOLVED $OSASCRIPT (already validated as a
 # regular executable file by resolve_bin) instead of running it. $GHOSTTY_APP and
 # $OSASCRIPT are resolved next to $HERDR / $CMUX, below.
-_herdr_probe() { [ -n "${HERDR:-}" ] && "$HERDR" status server 2>/dev/null | grep -qi 'running'; }
+# herdr must NEVER be piped into an early-exiting reader to decide liveness. `grep -q`
+# exits on match and closes the pipe; herdr is Rust, which sets SIGPIPE to SIG_IGN, so
+# it takes EPIPE and PANICS with exit 101 instead of dying on signal 141. Under the
+# `set -o pipefail` at the top of this file that 101 becomes the pipeline's status, so
+# the probe returned false on a match that had already succeeded — measured 8/200 and
+# 62/200 failures against a live server. Capture first, then test the text: the exit
+# status must not reach a conditional. The match is an exact `status: running` LINE,
+# not a substring, because the old `grep -qi running` also accepted "not running".
+_herdr_probe() {
+  [ -n "${HERDR:-}" ] || return 1
+  local _err
+  _err="$(mktemp 2>/dev/null)" || _err=""
+  if [ -n "$_err" ]; then
+    HERDR_PROBE_OUT="$("$HERDR" status server 2>"$_err" || true)"
+    HERDR_PROBE_ERR="$(cat "$_err" 2>/dev/null || true)"
+    rm -f "$_err"
+  else
+    HERDR_PROBE_OUT="$("$HERDR" status server 2>/dev/null || true)"
+    HERDR_PROBE_ERR=""
+  fi
+  # Wrapping both sides in newlines lets one pattern match an exact line anywhere.
+  case $'\n'"$HERDR_PROBE_OUT"$'\n' in
+    *$'\nstatus: running\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 _cmux_probe()  { [ -n "${CMUX:-}" ] && [ -x "$CMUX" ]; }
 _ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
 
@@ -174,6 +199,8 @@ _ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
 # binary whose probe merely failed DOES reach it and records only $ANNOUNCED_*, never
 # $LOUD_*. That is now a LOUD exit 5, not a silent exit 0: $ANNOUNCED_* alone is
 # enough to fail the run, and $LOUD_* only chooses which failure it is.
+HERDR_PROBE_OUT="" # what the last _herdr_probe read on stdout — the exit-5 evidence
+HERDR_PROBE_ERR="" # and on stderr, where herdr reports an unreachable server
 LOUD_BIN=""        # binary an announcement asked for that resolution could not find
 LOUD_ANNOUNCE=""   # the env var that announced it, rendered for a human
 LOUD_OVERRIDE=""   # the env var that pins it explicitly

@@ -48,7 +48,17 @@ STUB
   cat > "$STUBDIR/herdr" <<'STUB'
 #!/usr/bin/env bash
 if [ "$1" = status ] && [ "$2" = server ]; then
-  if [ "${HERDR_STUB_LIVE:-0}" = 1 ]; then echo "status: running"; exit 0
+  # Two knobs, both defaulting to the original behaviour so existing tests are
+  # untouched. HERDR_STUB_STATUS_RC makes the stub exit non-zero AFTER printing —
+  # the real herdr does this at 101 (Rust ignores SIGPIPE, so a closed pipe is a
+  # panic, not signal 141). HERDR_STUB_STATUS_OUT overrides the stdout text; set
+  # but empty means print nothing. Without the text knob the dead arm only ever
+  # writes to stderr, so a `status: not running` stdout case is inexpressible.
+  if [ -n "${HERDR_STUB_STATUS_OUT+x}" ]; then
+    [ -n "$HERDR_STUB_STATUS_OUT" ] && printf '%s\n' "$HERDR_STUB_STATUS_OUT"
+    exit "${HERDR_STUB_STATUS_RC:-0}"
+  fi
+  if [ "${HERDR_STUB_LIVE:-0}" = 1 ]; then echo "status: running"; exit "${HERDR_STUB_STATUS_RC:-0}"
   else echo "status: unreachable" >&2; exit 1; fi
 fi
 [ -n "${HERDR_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$HERDR_ARGV_LOG"
@@ -255,6 +265,46 @@ run_resolve() {
   [ "$status" -eq 0 ]
   [ "$output" != herdr ]      # fell back rather than dying
   [ "$output" = cmux ]        # to cmux, since it's available
+}
+
+@test "probe: herdr exits 101 AFTER printing running -> still herdr (pipefail race)" {
+  # The defect this suite could not previously express. `grep -q` exits the instant
+  # it matches and closes the pipe; herdr is Rust, which sets SIGPIPE to SIG_IGN, so
+  # it takes EPIPE, panics, and exits 101 rather than dying on signal 141. Under
+  # `set -o pipefail` that 101 became the pipeline's status, so the probe reported
+  # "not running" on a match that had already succeeded. Measured 8/200 and 62/200
+  # against the live server before the fix; deterministic here.
+  export HERDR_STUB_LIVE=1 HERDR_STUB_STATUS_RC=101 HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = herdr ]
+}
+
+@test "probe: a forced --launcher herdr also survives the exit-101 print" {
+  # The other call site. resolve_launcher probes twice — once for a forced backend
+  # and once for env auto-detection — so pinning only the auto path would leave the
+  # flag route open to the same race.
+  export HERDR_STUB_LIVE=1 HERDR_STUB_STATUS_RC=101 HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve herdr
+  [ "$status" -eq 0 ]
+  [ "$output" = herdr ]
+}
+
+@test "probe: 'status: not running' is NOT a live server" {
+  # The false positive the anchored match closes. The pre-fix probe was
+  # `grep -qi 'running'` — a bare case-insensitive substring, which "not running"
+  # satisfies. Any loosening of the match back toward a substring re-opens this.
+  export HERDR_STUB_STATUS_OUT='status: not running' HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" != herdr ]
+}
+
+@test "probe: empty herdr output is NOT a live server" {
+  export HERDR_STUB_STATUS_OUT= HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" != herdr ]
 }
 
 @test "--launcher bogus dies with a clear message" {
