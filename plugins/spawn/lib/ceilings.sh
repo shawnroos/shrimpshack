@@ -338,10 +338,24 @@ raw = open(dest).read()
 # The shipped files carry // comments, which json rejects; strip for the read and
 # write back plain JSON. The rendered copy is the job's, not a file a human edits.
 data = json.loads(re.sub(r'^\s*//.*$', '', raw, flags=re.M))
-allow = data.setdefault("permissions", {}).setdefault("allow", [])
+perms = data.setdefault("permissions", {})
+allow = perms.setdefault("allow", [])
+deny = perms.setdefault("deny", [])
 for t in tools:
     if t not in allow:
         allow.append(t)
+# A DENY BEATS AN ALLOW, so the grant must clear the deny entry too — in the
+# job's own copy only. The shipped default no longer denies a grantable tool,
+# but a user pointing SPAWN_CEILING_CONFIG_REPO at their own file may still
+# deny it, and then a grant would extend the allow list AND the gate argv and
+# be refused anyway: applied on paper, refused in practice, with nothing in the
+# record saying which layer said no. Only the bare tool name is removed; a
+# scoped rule like Bash(rm:*) is a different entry and is deliberately left in
+# place, because dropping a caller's own narrowing is not this function's call.
+while any(t in deny for t in tools):
+    for t in tools:
+        if t in deny:
+            deny.remove(t)
 json.dump(data, open(dest, "w"), indent=2)
 PYG
 

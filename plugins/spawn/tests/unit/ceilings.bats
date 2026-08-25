@@ -1101,6 +1101,37 @@ print('DENIED' if 'Bash' in d['permissions']['deny'] else 'GRANTABLE')"
     [ "$output" = "GRANTABLE" ]
 }
 
+@test "a grant clears a deny the caller's OWN ceiling carries, or it clears two of three" {
+    # R25 lets a user point SPAWN_CEILING_CONFIG_REPO at their own settings. If
+    # that file denies Bash, a grant that only extended the allow list and the
+    # gate argv would be refused anyway — deny beats allow — and the record would
+    # not say which layer said no. The job's OWN copy is widened; the user's file
+    # on disk is never touched.
+    local proj="$WORK/grantdeny"; mkdir -p "$proj"
+    render repo-bounded "$proj" "$proj/c.json"
+    [ "$status" -eq 0 ]
+
+    # Stand in for a user ceiling that denies the tool being granted.
+    python3 -c "
+import json
+p='$proj/c.json'
+d=json.load(open(p))
+d['permissions']['deny'].append('Bash')
+json.dump(d,open(p,'w'),indent=2)"
+
+    run bash -c '. "$1"; spawn::ceiling_grant "$2" Bash' _ "$LIB/ceilings.sh" "$proj/c.json"
+    [ "$status" -eq 0 ]
+
+    run python3 -c "
+import json
+d=json.load(open('$proj/c.json'))
+p=d['permissions']
+gate=d['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()[1:]
+print('CLEARED' if ('Bash' in p['allow'] and 'Bash' not in p['deny'] and 'Bash' in gate)
+      else 'allow=%s deny=%s gate=%s' % ('Bash' in p['allow'], 'Bash' in p['deny'], 'Bash' in gate))"
+    [ "$output" = "CLEARED" ]
+}
+
 @test "a command-scoped Bash grant is refused, and says why" {
     # KTD2/KTD6: no command-scoped shell grant exists. The gate matches the bare
     # tool NAME, and the grant writes the bare name into permissions.allow, which
