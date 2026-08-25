@@ -1097,3 +1097,156 @@ assert_deny_group() {
     printf '%s' "$output" | grep -qF 'SendMessage'
     printf '%s' "$output" | grep -qF 'messaging and scheduling'
 }
+
+# ===========================================================================
+# THE TOOL GATE — the outer wall (hooks/tool-gate.sh)
+# ===========================================================================
+# The permission block is real enforcement (measured 2026-08-14, five configs),
+# but a permission-BYPASS flag defeats it. The gate holds even then, which is the
+# only reason it exists. Two things therefore need asserting and neither is the
+# gate's own prose: that no bypass flag is ever handed to a child, and that a
+# tool absent from the allow set is refused by EFFECT.
+
+@test "no ceiling ever hands a child a permission-bypass flag" {
+    # THE LOAD-BEARING PROPERTY of the inner layer, and nothing asserted it
+    # before. Upstream #50303: any bypass flag defeats tool restrictions
+    # entirely. A future edit adding one to fix an unattended hang would turn a
+    # real boundary into none while every other test here stayed green.
+    local c
+    for c in operator repo-bounded; do
+        run bash -c '. "$1"; spawn::ceiling_flags "$2" /tmp/x.json; printf "%s\n" "${SPAWN_CEILING_FLAGS[@]}"' \
+            _ "$LIB/ceilings.sh" "$c"
+        [ "$status" -eq 0 ]
+        printf '%s\n' "$output" > "$WORK/flags.$c"
+        refute_file_match 'dangerously' "$WORK/flags.$c"
+        refute_file_match 'bypassPermissions' "$WORK/flags.$c"
+        refute_file_match 'acceptEdits' "$WORK/flags.$c"
+    done
+}
+
+@test "the repo-bounded render installs a catch-all tool gate over an allow set" {
+    local proj="$WORK/gateproj"; mkdir -p "$proj"
+    render repo-bounded "$proj" "$proj/c.json"
+    [ "$status" -eq 0 ]
+
+    # Parsed, never grepped: this file's own comment discusses the gate, so a
+    # whole-file grep would match prose over code — the trap already recorded
+    # in this suite.
+    run python3 -c "
+import json
+d=json.load(open('$proj/c.json'))
+h=d.get('hooks',{}).get('PreToolUse',[])
+cmd = h[0]['hooks'][0]['command'] if len(h)==1 else ''
+args = cmd.split()[1:]
+ok = (len(h)==1 and h[0].get('matcher')=='*'
+      and h[0]['hooks'][0]['type']=='command'
+      and 'tool-gate.sh' in cmd
+      and 'Read' in args and 'Write' in args
+      # Default-deny: the dangerous families are absent by ABSENCE, not listed.
+      and not {'Bash','Agent','WebSearch','WebFetch'} & set(args))
+print('GATED' if ok else 'UNGATED')"
+    [ "$output" = "GATED" ]
+
+    # THE ALLOW SET IS ARGV, NOT A FILE. A policy file would be re-read on every
+    # tool call, so a job under a bypass flag could rewrite it mid-run and grant
+    # itself Bash — .spawn sits INSIDE the worktree and is protected only by the
+    # deny rules a bypass flag defeats. argv is fixed when the child starts.
+    [ ! -f "$proj/c.json.allow" ]
+}
+
+@test "the operator ceiling is deliberately NOT gated" {
+    # A human invoked it and is present to answer for it. Narrowing it here would
+    # break the override point without protecting anyone who is not watching.
+    local proj="$WORK/opgate"; mkdir -p "$proj"
+    render operator "$proj" "$proj/c.json"
+    [ "$status" -eq 0 ]
+    run python3 -c "
+import json; print('GATED' if json.load(open('$proj/c.json')).get('hooks') else 'UNGATED')"
+    [ "$output" = "UNGATED" ]
+}
+
+@test "a grant clears BOTH layers — the allow list and the gate's allow set" {
+    # The silent-break case. The gate default-denies by NAME, so a tool added
+    # only to permissions.allow would pass the permission layer and be refused by
+    # the gate: a grant that reads as applied and is not.
+    local proj="$WORK/grantboth"; mkdir -p "$proj"
+    render repo-bounded "$proj" "$proj/c.json"
+    [ "$status" -eq 0 ]
+    gate_args() { python3 -c "
+import json
+d=json.load(open('$proj/c.json'))
+print(' '.join(d['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()[1:]))"; }
+
+    run gate_args
+    refute_file_match 'WebSearch' <(printf '%s\n' "$output")   # absent before
+
+    run bash -c '. "$1"; spawn::ceiling_grant "$2" WebSearch' _ "$LIB/ceilings.sh" "$proj/c.json"
+    [ "$status" -eq 0 ]
+    run gate_args
+    [[ "$output" == *WebSearch* ]]
+}
+
+@test "the gate FAILS CLOSED on an empty allow set" {
+    # A gate that fails open is not a gate. A caller that forgets its arguments
+    # must get a refusal, never a pass-through.
+    local gate; gate="$(cd "$BATS_TEST_DIRNAME/../../hooks" && pwd)/tool-gate.sh"
+    run bash -c "printf '%s' '{\"tool_name\":\"Read\"}' | '$gate'"
+    [ "$status" -eq 2 ]
+    # Allowed tool, non-empty set -> 0. Proves the 2 above is the guard, not a
+    # script that refuses everything.
+    run bash -c "printf '%s' '{\"tool_name\":\"Read\"}' | '$gate' Read Write"
+    [ "$status" -eq 0 ]
+}
+
+@test "the gate refuses a malformed payload and an unnamed tool" {
+    local gate; gate="$(cd "$BATS_TEST_DIRNAME/../../hooks" && pwd)/tool-gate.sh"
+    run bash -c "printf '%s' 'not json' | '$gate' Read"
+    [ "$status" -eq 2 ]
+    run bash -c "printf '%s' '{}' | '$gate' Read"
+    [ "$status" -eq 2 ]
+    run bash -c "printf '%s' '{\"tool_name\":\"Bash\"}' | '$gate' Read"
+    [ "$status" -eq 2 ]
+}
+
+@test "a glob in the allow set does not become a wildcard permit" {
+    # Comparison is literal `=`. A `case` pattern would let a stray * permit
+    # everything — precisely what this gate exists to prevent.
+    local gate; gate="$(cd "$BATS_TEST_DIRNAME/../../hooks" && pwd)/tool-gate.sh"
+    run bash -c "printf '%s' '{\"tool_name\":\"Bash\"}' | '$gate' '*'"
+    [ "$status" -eq 2 ]
+}
+
+@test "LIVE: the gate refuses a tool the DENY LIST PERMITS, even under a bypass flag" {
+    live_or_skip
+    # UNCONFOUNDED BY CONSTRUCTION. Bash is in the deny list, so blocking Bash
+    # would prove nothing about the gate. WebSearch is deliberately NOT denied
+    # (it is the one grantable tool) and is absent from the gate's allow set —
+    # so a refusal here can only be the gate. Asserted on permission_denials[],
+    # a record the model does not author.
+    local proj="$WORK/liveg"; mkdir -p "$proj"; ( cd "$proj" && git init -q . )
+    render repo-bounded "$proj" "$proj/c.json"
+    [ "$status" -eq 0 ]
+
+    local mode
+    for mode in dontAsk bypassPermissions; do
+        # CLAUDE_CONFIG_DIR is pointed at scratch by setup(), which leaves the
+        # real CLI unauthenticated ("Not logged in"). Every live arm here unsets
+        # it in a subshell; measured the hard way — without this the child errors
+        # before any tool call and the denial assertion fails for a reason that
+        # has nothing to do with the gate.
+        ( cd "$proj" && unset CLAUDE_CONFIG_DIR
+          "$REAL_CLAUDE" -p --settings "$proj/c.json" \
+              --setting-sources project --permission-mode "$mode" \
+              --output-format json \
+              "Use your WebSearch tool to search for \"anthropic\". Then reply DONE." \
+        ) > "$WORK/live.$mode.json" 2>"$WORK/live.$mode.err" || true
+
+        # The turn must have actually happened; an errored child denies nothing.
+        [ "$(jq -r '.is_error' "$WORK/live.$mode.json")" = "false" ]
+        run python3 -c "
+import json
+d=json.load(open('$WORK/live.$mode.json'))
+print('DENIED' if any(x.get('tool_name')=='WebSearch' for x in d.get('permission_denials',[])) else 'RAN')"
+        [ "$output" = "DENIED" ]
+    done
+}
