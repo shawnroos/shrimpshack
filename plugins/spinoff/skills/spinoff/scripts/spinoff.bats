@@ -58,7 +58,14 @@ if [ "$1" = status ] && [ "$2" = server ]; then
     [ -n "$HERDR_STUB_STATUS_OUT" ] && printf '%s\n' "$HERDR_STUB_STATUS_OUT"
     exit "${HERDR_STUB_STATUS_RC:-0}"
   fi
-  if [ "${HERDR_STUB_LIVE:-0}" = 1 ]; then echo "status: running"; exit "${HERDR_STUB_STATUS_RC:-0}"
+  # FIVE lines, matching real `herdr status server`. A one-line stub cannot tell an
+  # exact-LINE match from whole-output equality: mutating the probe to
+  # `[ "$OUT" = 'status: running' ]` — which rejects every real server — kept the whole
+  # suite green while the stub printed one line.
+  if [ "${HERDR_STUB_LIVE:-0}" = 1 ]; then
+    printf '%s\n' "status: running" "version: 0.8.2" "protocol: 20" "compatible: yes" \
+                  "socket: /Users/test/.config/herdr/herdr.sock"
+    exit "${HERDR_STUB_STATUS_RC:-0}"
   else echo "status: unreachable" >&2; exit 1; fi
 fi
 [ -n "${HERDR_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$HERDR_ARGV_LOG"
@@ -267,20 +274,23 @@ run_resolve() {
   [ "$output" = cmux ]        # to cmux, since it's available
 }
 
-@test "probe: herdr exits 101 AFTER printing running -> still herdr (pipefail race)" {
+@test "probe: herdr exits NON-ZERO after printing running -> still herdr (pipefail race)" {
   # The defect this suite could not previously express. `grep -q` exits the instant
-  # it matches and closes the pipe; herdr is Rust, which sets SIGPIPE to SIG_IGN, so
-  # it takes EPIPE, panics, and exits 101 rather than dying on signal 141. Under
-  # `set -o pipefail` that 101 became the pipeline's status, so the probe reported
-  # "not running" on a match that had already succeeded. Measured 8/200 and 62/200
-  # against the live server before the fix; deterministic here.
+  # it matches and closes the pipe, so herdr dies mid-write and exits non-zero. Under
+  # `set -o pipefail` that becomes the pipeline's status, so the probe reported
+  # "not running" on a match that had already succeeded. Measured 80-94 per 300 against
+  # the live server before the fix; deterministic here.
+  #
+  # The exit CODE is deliberately not the contract — it moved between herdr releases
+  # (101, a Rust broken-pipe panic, on 0.8.0; 141, plain SIGPIPE, on 0.8.2). 101 is the
+  # stub value because it is the harder case: a code no reader ties to a broken pipe.
   export HERDR_STUB_LIVE=1 HERDR_STUB_STATUS_RC=101 HERDR_ENV=1 CMUX_WORKSPACE_ID=
   run run_resolve auto
   [ "$status" -eq 0 ]
   [ "$output" = herdr ]
 }
 
-@test "probe: a forced --launcher herdr also survives the exit-101 print" {
+@test "probe: a forced --launcher herdr also survives the non-zero print" {
   # The other call site. resolve_launcher probes twice — once for a forced backend
   # and once for env auto-detection — so pinning only the auto path would leave the
   # flag route open to the same race.
@@ -304,7 +314,33 @@ run_resolve() {
   export HERDR_STUB_STATUS_OUT= HERDR_ENV=1 CMUX_WORKSPACE_ID=
   run run_resolve auto
   [ "$status" -eq 0 ]
-  [ "$output" != herdr ]
+  [ "$output" = none ]
+}
+
+@test "probe: the running LINE is found when it is not the first line" {
+  # Guards the difference between an exact-line match and whole-output equality.
+  # Without this, a probe that only accepts output equal to `status: running` — and
+  # therefore rejects every real herdr — passes the suite.
+  export HERDR_STUB_STATUS_OUT='warning: config reloaded
+status: running
+version: 0.8.2' HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = herdr ]
+}
+
+@test "probe: near-miss shapes the exact match rejects, one per line" {
+  # The match tightened from `grep -qi running` to an exact lowercase line, which is a
+  # real new dependency on herdr's wording. Pin it deliberately: if a future herdr
+  # capitalises or pads the key, THESE go red and name the cause, instead of the
+  # spurious exit 5 coming back with no test to explain it.
+  local shape
+  for shape in 'Status: running' '  status: running' 'status: running ' 'status:running'; do
+    export HERDR_STUB_STATUS_OUT="$shape" HERDR_ENV=1 CMUX_WORKSPACE_ID=
+    run run_resolve auto
+    [ "$status" -eq 0 ]
+    [ "$output" = none ] || { echo "accepted near-miss: <$shape>"; return 1; }
+  done
 }
 
 @test "--launcher bogus dies with a clear message" {
@@ -814,9 +850,12 @@ run_unresolvable() {
   # useless here — the old step line this diff removed contained both, so asserting
   # them would pass against the very implementation this test exists to reject.
   [[ "$output" == *'`herdr` announced this session (HERDR_ENV=1) but would not take the launch'* ]]
-  # The remedy is starting the server — NOT setting a binary path. Borrowing exit 4's
-  # diagnosis here would send the user to fix a $PATH that is already correct.
-  [[ "$output" == *"herdr status server"* ]]
+  # The remedy is the SERVER — NOT a binary path. Borrowing exit 4's diagnosis here
+  # would send the user to fix a $PATH that is already correct. Asserted by meaning,
+  # not by naming `herdr status server`: that command is what the probe already ran and
+  # quoted, so telling the reader to run it again was the dead end this replaced.
+  [[ "$output" == *"If the server is down"* ]]
+  [[ "$output" == *"status: running"* ]]
   [[ "$output" != *"could not resolve"* ]]
   [[ "$output" != *"SPINOFF_BIN_PATHS"* ]]
   # A retrying caller must be told the worktree is already there; re-running the same
@@ -850,7 +889,10 @@ run_unresolvable() {
   LOUD_STUBS=herdr
   run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_STATUS_OUT='status: not running'
   [ "$status" -eq 5 ]
-  [[ "$output" == *"status: not running"* ]]
+  # BOTH report sites must carry it: the mid-run ⚠ and the end-of-run tail. A single
+  # occurrence would still pass if a future edit dropped one of them, and the two
+  # sites drifting apart is the failure mode the shared helper exists to prevent.
+  [ "$(grep -cF 'status: not running' <<<"$output")" -ge 2 ]
 }
 
 @test "exit 5: stderr is quoted too — it is where a dead server reports itself" {
@@ -868,7 +910,48 @@ run_unresolvable() {
   LOUD_STUBS=herdr
   run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_STATUS_OUT=
   [ "$status" -eq 5 ]
-  [[ "$output" == *"nothing"* ]]
+  # Both sites, and a needle specific to the empty case — a bare "nothing" appears at
+  # two unrelated places, so deleting one report site still passed.
+  [ "$(grep -cE 'printed nothing on stdout or stderr|\(nothing, on either stream\)' <<<"$output")" -ge 2 ]
+}
+
+@test "exit 5: every quoted evidence line carries the block indent" {
+  # Real herdr answers with five lines. Padding the STRING instead of each LINE left
+  # four of them flush against the margin, inside the block the skill relays verbatim.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_STATUS_OUT='status: stopped
+version: 0.8.2
+socket: /tmp/h.sock'
+  [ "$status" -eq 5 ]
+  # the trailing lines must never appear column-zero
+  [ "$(grep -c '^version: 0.8.2' <<<"$output")" -eq 0 ]
+  [ "$(grep -c '^socket: /tmp/h.sock' <<<"$output")" -eq 0 ]
+  # ...and must still be present, indented, at both report sites
+  [ "$(grep -cE '^[[:space:]]+version: 0\.8\.2$' <<<"$output")" -ge 2 ]
+}
+
+@test "probe: an unusable scratch file reports lost stderr, never silence" {
+  # The fallback path keeps stdout (the match input) but cannot capture stderr.
+  # Claiming silence there would be a fresh false assertion — the class this change
+  # exists to remove — so it must name the loss instead. Driven at the function level:
+  # the full-run helper pins its own PATH, so a failing `mktemp` cannot be shadowed in.
+  MKTMP="$BATS_TEST_TMPDIR/mkfail"; mkdir -p "$MKTMP"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$MKTMP/mktemp"; chmod +x "$MKTMP/mktemp"
+  run env PATH="$MKTMP:$PATH" TMPDIR=/nonexistent-scratch-dir SPINOFF_TEST_SOURCE=1 \
+      bash -c '
+        source "$1" 2>/dev/null
+        HERDR="$2"
+        _herdr_probe
+        echo "LOST=${HERDR_PROBE_ERR_LOST}"
+        _herdr_probe_said_something && echo "SAID=yes"
+        _herdr_probe_evidence "  "
+      ' _ "$SCRIPT" "$HERDR_BIN"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"LOST=1"* ]]
+  # it must still count as having something to report, so the caller does not fall
+  # through to the "printed nothing" wording
+  [[ "$output" == *"SAID=yes"* ]]
+  [[ "$output" == *"stderr could not be captured"* ]]
 }
 
 @test "exit 5: no herdr path asserts a detached shell or an unanswered process" {
@@ -920,7 +1003,8 @@ run_unresolvable() {
                    OSASCRIPT_BIN=/nonexistent/osascript
   [ "$status" -eq 5 ]
   [[ "$output" == *"announced this session (HERDR_ENV=1)"* ]]
-  [[ "$output" == *"herdr status server"* ]]
+  # herdr's branch specifically — ghostty's says nothing about a running server
+  [[ "$output" == *"did not report a running server"* ]]
   [[ "$output" != *"announced this session (--launcher ghostty)"* ]]
   [[ "$output" != *"osascript was not found"* ]]
 }

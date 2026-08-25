@@ -68,9 +68,10 @@ detection:
   inside herdr-running-in-ghostty, and a multiplexer that announced itself owns the
   session — opening a bare ghostty window would be the wrong recovery. That
   suppression is also the direct route to **exit 5**: an announced multiplexer whose
-  probe fails has nowhere left to go. The `⚠` quotes what the backend printed rather
-  than naming a cause — read it, then act on what it says, or pass
-  `--launcher ghostty` when you actually want a bare window.
+  probe fails has nowhere left to go. For herdr the `⚠` quotes what the backend
+  printed rather than naming a cause — read it, then act on what it says. Ghostty and
+  any other backend name only what was missing. Pass `--launcher ghostty` when you
+  actually want a bare window.
 - **`--launcher herdr` / `cmux` / `ghostty`** — force that backend, but it's *still*
   probed; if the probe fails it falls back to auto-detection rather than hard-erroring.
   But the flag itself counts as announcing a backend, so if that fallback also lands on
@@ -514,13 +515,9 @@ continues in the new surface.
   `HERDR_ENV=0` is
   *not* this case: an announcement that is switched off announces nothing, so it stays
   a silent exit 0. Ghostty is deliberately not used as the recovery for either.
-  Historical note, because it cost three sessions: until 0.10.1 this exit fired
-  *spuriously*. The probe piped `herdr status server` into `grep -q`, which exits on
-  match and closes the pipe; herdr is Rust, so it ignores `SIGPIPE`, takes `EPIPE`,
-  and panics with exit **101** — not signal 141, which is why nobody recognised it.
-  Under `pipefail` that 101 became the pipeline's status and a live server read as
-  dead. The message then blamed a detached shell, which was never the cause. If you
-  see a spurious exit 5 again, suspect the probe's shape before the socket.
+  Until 0.10.1 this exit also fired *spuriously*, and the message blamed a cause that
+  was never real. If exit 5 appears while the server is plainly up, do not theorise —
+  relay the quoted text and say the probe disagreed with it.
 - **An announced backend whose binary can't be found** (`HERDR_ENV=1` or
   `CMUX_WORKSPACE_ID` set, but `herdr`/`cmux` doesn't resolve): a different outcome
   from the one above, and deliberately not silent. The summary block says
