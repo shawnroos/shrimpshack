@@ -75,6 +75,27 @@ EOF
 run_fake "$_d" 1
 check "a test file cannot delete outside its sandbox" "[ -f '$_d/victim/keep.txt' ]"
 
+# --- a stray git write cannot reach a repo outside the sandbox ---
+# This is not hypothetical: an unguarded `cd` in a test left
+# `git update-ref refs/remotes/origin/main` running in the real repository, and
+# it moved that ref.
+_d="$(fake_plugin refwrite)"
+mkdir -p "$_d/victim"
+( cd "$_d/victim" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  echo x > f.txt; git add f.txt; git commit -qm seed
+  git update-ref refs/remotes/origin/main HEAD )
+_before="$(git -C "$_d/victim" rev-parse refs/remotes/origin/main)"
+cat > "$_d/tests/a_test.sh" <<'EOF'
+cd ../victim 2>/dev/null
+git update-ref refs/remotes/origin/main "$(git rev-parse HEAD 2>/dev/null)" 2>/dev/null
+check_eq "fake assertion" "1" "1"
+EOF
+run_fake "$_d" 1
+_after="$(git -C "$_d/victim" rev-parse refs/remotes/origin/main)"
+check_eq "a test file cannot move another repo's refs" "$_before" "$_after"
+
 # --- losing a whole test file must trip the count, which the floor cannot see ---
 _d="$(fake_plugin dropped)"
 cat > "$_d/tests/a_test.sh" <<'EOF'

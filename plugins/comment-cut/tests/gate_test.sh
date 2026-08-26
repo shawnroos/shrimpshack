@@ -91,7 +91,7 @@ check_eq "a different finding set denies again" "deny" "$(decision "$(fire "$_r"
 # ---------- pre-existing bloat is not this change's problem ----------
 _r="$(newrepo preexisting)"
 printf '%s' "$_bloat" > "$_r/old.ts"
-(cd "$_r" && git add old.ts && git commit -qm "bloat lands")
+( cd "$_r" || exit 1; git add old.ts; git commit -qm "bloat lands" )
 printf '%s\nexport const c = 3;\n' "$_bloat" > "$_r/old.ts"
 (cd "$_r" && git add old.ts)
 allowed "an unrelated edit beside an old banner is allowed" "$_r" 'git commit -m "x"' 
@@ -101,7 +101,7 @@ allowed "an unrelated edit beside an old banner is allowed" "$_r" 'git commit -m
 # -am is the common spelling and an earlier flag pattern matched only -ma.
 _r="$(newrepo commitall)"
 printf '%s' "$_clean" > "$_r/tracked.ts"
-(cd "$_r" && git add tracked.ts && git commit -qm "clean tracked file")
+( cd "$_r" || exit 1; git add tracked.ts; git commit -qm "clean tracked file" )
 printf '%s' "$_bloat" > "$_r/tracked.ts"   # modified, NOT staged
 allowed "plain commit ignores an unstaged edit" "$_r" 'git commit -m "x"' 
 check_eq "commit -am denies on that same unstaged edit" "deny" \
@@ -109,7 +109,7 @@ check_eq "commit -am denies on that same unstaged edit" "deny" \
 
 _r="$(newrepo commitall2)"
 printf '%s' "$_clean" > "$_r/tracked.ts"
-(cd "$_r" && git add tracked.ts && git commit -qm "clean tracked file")
+( cd "$_r" || exit 1; git add tracked.ts; git commit -qm "clean tracked file" )
 printf '%s' "$_bloat" > "$_r/tracked.ts"
 check_eq "commit -a denies too" "deny" "$(decision "$(fire "$_r" 'git commit -a -m "x"')")"
 
@@ -139,7 +139,7 @@ check_eq "...but commit -a does judge it" "deny" \
 
 # ---------- finishing a merge is not this commit's bloat ----------
 _r="$(newrepo mergecommit)"
-(cd "$_r" && git branch -M main && git checkout -qb side)
+( cd "$_r" || exit 1; git branch -M main; git checkout -qb side )
 printf '%s' "$_bloat" > "$_r/theirs.ts"
 (cd "$_r" && git add theirs.ts && git commit -qm "side adds bloat"
  git checkout -q main && printf 'export const z = 1;\n' > other.ts
@@ -150,7 +150,7 @@ allowed "finishing a merge is not denied over the incoming branch" "$_r" 'git co
 
 # ---------- user diff config must not silently disable the gate ----------
 _r="$(newrepo noprefix)"
-(cd "$_r" && git config diff.noprefix true && git config diff.mnemonicPrefix true)
+( cd "$_r" || exit 1; git config diff.noprefix true; git config diff.mnemonicPrefix true )
 printf '%s' "$_bloat" > "$_r/new.ts"; (cd "$_r" && git add new.ts)
 check_eq "denies even with diff.noprefix and mnemonicPrefix set" "deny" \
   "$(decision "$(fire "$_r" 'git commit -m "x"')")"
@@ -164,7 +164,7 @@ check_eq "denies on a path containing a space" "deny" \
 # ---------- --allow-empty is not the -a flag ----------
 _r="$(newrepo allowempty)"
 printf '%s' "$_clean" > "$_r/tracked.ts"
-(cd "$_r" && git add tracked.ts && git commit -qm clean)
+( cd "$_r" || exit 1; git add tracked.ts; git commit -qm clean )
 printf '%s' "$_bloat" > "$_r/tracked.ts"   # unstaged
 allowed "--allow-empty does not pull in unstaged edits" "$_r" 'git commit --allow-empty -m "x"'
 
@@ -182,12 +182,18 @@ allowed "an unrelated command does not fire" "$_r" 'ls -la'
 # gh pr create sees the branch range, not the index — the bloat here is already
 # committed, which is exactly the case a staged-only file set would miss.
 _r="$(newrepo prshape)"
-(cd "$_r" && git branch -M main && git remote add origin . 2>/dev/null
- git update-ref refs/remotes/origin/main HEAD
- git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
- git checkout -qb feature)
+# `cd` first, on its own, with `|| exit`. These lines write REFS: chaining only
+# the first of them to the cd left `git update-ref refs/remotes/origin/main` to
+# run in whatever directory the shell happened to be in, and it moved the real
+# repository's origin/main once.
+( cd "$_r" || exit 1
+  git branch -M main
+  git remote add origin . 2>/dev/null
+  git update-ref refs/remotes/origin/main HEAD
+  git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  git checkout -qb feature )
 printf '%s' "$_bloat" > "$_r/new.ts"
-(cd "$_r" && git add new.ts && git commit -qm "adds bloat")
+( cd "$_r" || exit 1; git add new.ts; git commit -qm "adds bloat" )
 check_eq "gh pr create denies on already-committed bloat" "deny" \
   "$(decision "$(fire "$_r" 'gh pr create --fill')")"
 
@@ -234,7 +240,7 @@ chmod u+w "$_r/.git" 2>/dev/null
 
 # ---------- a linked worktree, where .git is a file ----------
 _r="$(newrepo worktree)"
-(cd "$_r" && git worktree add -q -b wt "$_g/wt" 2>/dev/null)
+( cd "$_r" || exit 1; git worktree add -q -b wt "$_g/wt" 2>/dev/null )
 touch "$_g/wt/.comment-cut-gate"
 printf '%s' "$_bloat" > "$_g/wt/new.ts"; (cd "$_g/wt" && git add new.ts)
 check "the worktree's .git is a file, not a directory" "[ -f '$_g/wt/.git' ]"
