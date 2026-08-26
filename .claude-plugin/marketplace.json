@@ -68,8 +68,8 @@
     },
     {
       "name": "comment-cut",
-      "description": "Cut comment bloat out of a branch without losing the comments that matter — four keep-rules, each needing a failure that nothing reports AND a tempting edit that would cause it, because a visible bug is a missing test rather than a comment; specs default to zero on the principle that a red test is not a silent failure",
-      "version": "0.3.1",
+      "description": "Cut comment bloat out of a branch without losing the comments that matter — four keep-rules, each needing a failure that nothing reports AND a tempting edit that would cause it, because a visible bug is a missing test rather than a comment; specs default to zero on the principle that a red test is not a silent failure. Reachable as /comment-cut:cut, and a PreToolUse gate stops a commit or a PR once when the change adds bloat on the lines it touches — opt-in per repo, fail-open on every path, and the retry always proceeds",
+      "version": "0.4.0",
       "author": {
         "name": "Shawn Roos"
       },

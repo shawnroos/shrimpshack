@@ -1,6 +1,6 @@
 ---
 name: comment-cut
-description: Cut comment bloat out of a branch without losing the comments that matter. Scopes the diff against a base ref, sweeps the mechanical classes, then works area by area doing the judgement cut, proving at every step that only comments changed. Use when a branch or PR has been flagged for comment bloat, when an AI-generated subtree has grown a high comment-to-code ratio, or when asked to apply a why-only comment bar to existing code. Not for writing new comments, and not a linter.
+description: Cut comment bloat out of a branch without losing the comments that matter. Scopes the diff against a base ref, sweeps the mechanical classes, then works area by area doing the judgement cut, proving at every step that only comments changed. Use when a branch or PR has been flagged for comment bloat, when an AI-generated subtree has grown a high comment-to-code ratio, or when asked to apply a why-only comment bar to existing code. Not for writing new comments, and not a linter. Invoked by name only (via the Skill tool, or by a person naming this skill) — do NOT trigger this skill from conversational phrasing on your own; `/comment-cut:cut` is the conversational front door and carries its own instructions.
 ---
 
 # comment-cut
@@ -123,7 +123,7 @@ Deletions and ref-strips only. No judgement, no rewording. Run the bundled detec
 diff — **never repo-wide**, which reports pre-existing hits outside scope and can never reach zero:
 
 ```bash
-git diff --name-only $BASE..HEAD -- $SCOPE | grep '\.ts$' | xargs tools/comment-cut/run.sh
+git diff --name-only $BASE..HEAD -- $SCOPE | grep '\.ts$' | xargs "$CLAUDE_PLUGIN_ROOT/tools/comment-cut/run.sh"
 ```
 
 The detector covers `.ts`-family extensions only; stylesheets and templates need explicit greps
@@ -276,7 +276,7 @@ Fanning out works, but only behind the gates above. Observed failure modes, all 
 
 ## Self-test
 
-`tools/comment-cut/run.sh --self-test` must prove **both** directions: every mechanical class
+`"$CLAUDE_PLUGIN_ROOT/tools/comment-cut/run.sh" --self-test` must prove **both** directions: every mechanical class
 still fires, and every keeper stays silent. A detector that only proves it fires can ship green
 while shredding load-bearing comments.
 
