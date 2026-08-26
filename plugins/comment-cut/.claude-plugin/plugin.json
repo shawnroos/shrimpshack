@@ -14,5 +14,6 @@
     "diff"
   ],
   "skills": "./skills",
-  "commands": "./commands"
+  "commands": "./commands",
+  "hooks": "./.claude/hooks/hooks.json"
 }

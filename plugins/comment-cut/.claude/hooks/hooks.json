@@ -1,0 +1,17 @@
+{
+  "description": "comment-cut plugin hooks. PreToolUse(Bash) runs gate.sh, which stops a `git commit` or `gh pr create` ONCE when the change adds comment bloat on the lines it touches, and lets the retry through — deny-once keyed on a digest of the finding set, so it interrupts but can never refuse. The gate is OPT-IN per repository: without a `.comment-cut-gate` marker in the repo it is a silent no-op, so a personal comment bar is never imposed on a team repo (the posture lint-router already established here). It reads the payload from stdin with jq, because $TOOL_INPUT is NOT interpolated for \"command\" hooks and reading it there greps an empty string and never fires. Findings are intersected with the added lines from `git diff -U0` — check.py walks whole files, so an unfiltered run would deny on comments the author never wrote. Every path but the single deny exits 0 with no output: a missing jq/git/python, an unreadable checker, an unparseable payload, a non-git directory, a failed marker write, or any internal error all produce silence, because this runs ahead of every Bash call and a bug here would cost the user their commit. COMMENT_CUT_GATE_OFF=1 silences it session-wide. Paths resolve via ${CLAUDE_PLUGIN_ROOT}; hook arrays merge additively with the user's settings and other plugins.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.sh\" ] && \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.sh\" || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
