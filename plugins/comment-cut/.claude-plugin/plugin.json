@@ -13,5 +13,6 @@
     "code-quality",
     "diff"
   ],
-  "skills": "./skills"
+  "skills": "./skills",
+  "commands": "./commands"
 }
