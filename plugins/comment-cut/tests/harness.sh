@@ -17,50 +17,69 @@ export CHECK="$TOOLS/check.py"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS+1)); echo "  ok   - $1"; }
-bad() { FAIL=$((FAIL+1)); echo "  FAIL - $1" >&2; }
+# Results cross the subshell boundary as lines in this file, not as variables.
+RESULTS="$(mktemp "${TMPDIR:-/tmp}/cc-results.XXXXXX")"
 
-# check <name> <shell-expr> — the expr is evaluated; non-zero is a failure.
+ok()  { printf 'ok\t%s\n'   "$1" >> "$RESULTS"; echo "  ok   - $1"; }
+bad() { printf 'FAIL\t%s\n' "$1" >> "$RESULTS"; echo "  FAIL - $1" >&2; }
+
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
-# check_eq <name> <expected> <actual>
 check_eq() {
   if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (expected '$2', got '$3')"; fi
 }
 
-export -f ok bad check check_eq
-
-# A floor. Two empty globs, a failed cd, or a suite that silently stopped
-# collecting all produce zero assertions, and zero failures reads identical to
-# a clean run. The floor is what makes "green" mean the suite actually ran.
 MIN_ASSERTIONS=${MIN_ASSERTIONS:-30}
 
+# The suite's own file count. A test file that stops being collected -- renamed,
+# deleted, or unreadable -- must fail rather than quietly shrink the run.
+EXPECT_FILES=${EXPECT_FILES:-5}
+
+# A scratch cwd for every test file. Test files create repos and cd around; a
+# `cd` that leaks, or a half-parsed file whose cleanup runs against the wrong
+# directory, must not be able to reach the repo this plugin lives in. A parse
+# error in one test file deleted a source file before this existed.
+SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/cc-sandbox.XXXXXX")"
+
 run_suite() {
-  local f
-  local found=0
+  local f before after found=0
   for f in "$PLUGIN"/tests/*_test.sh; do
     [ -e "$f" ] || continue
     found=$((found+1))
     echo
     echo "== $(basename "$f")"
-    # shellcheck disable=SC1090
-    source "$f"
+    before="$(wc -l < "$RESULTS")"
+    # Subshell + pinned cwd: the file cannot change the harness's directory,
+    # clobber its variables, or exit the run out from under the verdict.
+    ( cd "$SANDBOX" || exit 1
+      # shellcheck disable=SC1090
+      source "$f" ) || bad "$(basename "$f") failed to load"
+    after="$(wc -l < "$RESULTS")"
+    [ "$after" -gt "$before" ] || bad "$(basename "$f") contributed no assertions"
   done
-  if [ "$found" -eq 0 ]; then
-    echo "no test files found beside harness.sh" >&2
-    exit 1
-  fi
+  check_eq "test files collected" "$EXPECT_FILES" "$found"
 }
 
+# The verdict lives in the trap, not at the bottom of the script, so no early
+# exit inside a sourced file can bypass it.
+finish() {
+  # awk, not `grep -c || echo 0`: grep exits 1 on zero matches, so the fallback
+  # appends a second count and the arithmetic below breaks.
+  PASS="$(awk '$1=="ok"{n++} END{print n+0}'   "$RESULTS" 2>/dev/null)"
+  FAIL="$(awk '$1=="FAIL"{n++} END{print n+0}' "$RESULTS" 2>/dev/null)"
+  local total=$((PASS+FAIL))
+  rm -rf "$SANDBOX" "$RESULTS"
+
+  echo
+  echo "comment-cut: $PASS passed, $FAIL failed ($total assertions)"
+
+  if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
+    echo "FLOOR: only $total assertions ran, expected at least $MIN_ASSERTIONS" >&2
+    exit 1
+  fi
+  [ "$FAIL" -eq 0 ] || exit 1
+  exit 0
+}
+trap finish EXIT
+
 run_suite
-
-TOTAL=$((PASS+FAIL))
-echo
-echo "comment-cut: $PASS passed, $FAIL failed ($TOTAL assertions)"
-
-if [ "$TOTAL" -lt "$MIN_ASSERTIONS" ]; then
-  echo "FLOOR: only $TOTAL assertions ran, expected at least $MIN_ASSERTIONS" >&2
-  exit 1
-fi
-
-[ "$FAIL" -eq 0 ] || exit 1

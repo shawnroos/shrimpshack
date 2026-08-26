@@ -9,7 +9,7 @@ tempfile-based self-test never touches.
   render.py           # write the fixture files
   render.py --check   # print nothing and exit 0 when they match, diff and 1 when not
 """
-import re
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -23,10 +23,10 @@ HEADER = {
 
 
 def lists():
-    src = re.sub(r'^if __name__.*\n(?:\s+.*\n)*', '', CHECK.read_text(), flags=re.M)
-    ns = {}
-    exec(compile(src, 'check.py', 'exec'), ns)
-    return [c[0] for c in ns['FIXTURES']], list(ns['KEEPERS'])
+    spec = importlib.util.spec_from_file_location('comment_cut_check', CHECK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return [c[0] for c in mod.FIXTURES], list(mod.KEEPERS)
 
 
 def render(name, cases):

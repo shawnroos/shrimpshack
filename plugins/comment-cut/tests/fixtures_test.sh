@@ -15,7 +15,7 @@ check "keepers fixture exists"   "[ -r '$FIX/keepers.ts' ]"
 _bad="$(python3 "$CHECK" --porcelain "$FIX/known-bad.ts" 2>/dev/null)"
 check "known-bad.ts is flagged" "[ -n \"\$_bad\" ]"
 
-for kind in banner ticket-label changelog commented-out restates; do
+for kind in banner ticket-label changelog commented-out restates narrates; do
   check "known-bad.ts fires $kind" "printf '%s' \"\$_bad\" | grep -q ':$kind\$'"
 done
 
@@ -27,15 +27,19 @@ check_eq "keepers.ts exits 0" "0" "$?"
 
 # --- parity: the checked-in fixtures are what the inline lists render to ---
 # render.py --check is the single source of truth. It exits 1 and names the file
-# when a fixture and its inline list disagree, which is the drift this suite
-# exists to catch -- the first run of this assertion found real drift in both
-# files, dating from when they were hand-mirrored.
+# when a fixture and its inline list disagree.
 python3 "$TOOLS/fixtures/render.py" --check >/dev/null 2>&1
 check_eq "checked-in fixtures match the inline lists" "0" "$?"
 
 _drift="$(python3 "$TOOLS/fixtures/render.py" --check 2>&1)"
 check_eq "render --check is silent when they match" "" "$_drift"
 
-# Every inline case must reach a fixture file, not just the ones already there.
-_n_bad="$(python3 "$CHECK" --porcelain "$FIX/known-bad.ts" 2>/dev/null | grep -c .)"
-check "known-bad.ts flags at least 8 lines" "[ \"$_n_bad\" -ge 8 ]"
+# Derive the expected count from the inline list. A fixed floor equal to today's
+# count cannot grow: a new inline case that never fires would keep this green.
+_want="$(python3 -c "
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('c', '$CHECK')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(len(m.FIXTURES))" 2>/dev/null)"
+_n_bad="$(python3 "$CHECK" --porcelain "$FIX/known-bad.ts" 2>/dev/null | grep -cE '^.+:[0-9]+:[a-z-]+$')"
+check_eq "every inline FIXTURES case fires in known-bad.ts" "$_want" "$_n_bad"
