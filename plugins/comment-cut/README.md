@@ -35,6 +35,12 @@ Two ways to turn it off again:
 - **One repo** — delete its `.comment-cut-gate`.
 - **Everywhere, for this session** — set `COMMENT_CUT_GATE_OFF=1`.
 
+What it deliberately does not judge:
+
+- **Comments the change did not add.** Findings are intersected with the lines the change introduces, so a pre-existing banner in a file you touched for another reason will not stop you.
+- **The worktree, on a plain commit.** `git commit` lands the index, so the gate scans the indexed content. A file staged clean and then edited is judged on what is actually being committed. `git commit -a` judges the working tree, because that is what it lands.
+- **A merge you are finishing.** Completing a merge stages the incoming branch's whole delta; those are not your comments.
+
 Two limits worth knowing. The gate only sees commands issued inside a Claude session; a commit you type in a terminal is not gated. And it fails open on everything — no `jq`, no `git`, no python, an unreadable checker, a malformed payload, a git dir it cannot write — because it runs ahead of every Bash call, and a bug there would cost you a commit.
 
 ## The detector on its own
@@ -59,6 +65,8 @@ bash tests/harness.sh
 
 Covers the detector's both-directions self-test, the fixture files end to end, fixture-to-inline-list parity, the porcelain-versus-default exit contract, and the gate — its deny path, its allow-on-retry, its opt-in, and every fail-open path including a linked worktree and an unwritable git dir.
 
-The harness asserts a floor on how many assertions ran. A failed `cd` or an empty glob otherwise produces zero assertions, and zero failures reads exactly like a clean run.
+Each test file runs in a subshell with its cwd pinned to a scratch directory. That is not tidiness: before it, a parse error in one test file deleted `skills/comment-cut/SKILL.md`, because sourced files ran in the harness's own shell and the repo's own directory. `harness_meta_test.sh` runs the harness against deliberately broken fake plugins to prove that guard, and the ones beside it — a file that fails to parse, a file that asserts nothing, and an `exit` that would otherwise discard a recorded failure are all failures now, not quietly shorter runs.
+
+The harness also asserts a floor on how many assertions ran and how many files were collected. A failed `cd` or an empty glob otherwise produces zero assertions, and zero failures reads exactly like a clean run.
 
 The `.ts` fixtures are generated from the inline lists in `check.py` by `tools/comment-cut/fixtures/render.py`; the suite fails if the checked-in copies have drifted. Before trusting a change to the detector, mutate it and watch the suite go red — a mutation that stays green means nothing is checking that rule.
