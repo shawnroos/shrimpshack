@@ -215,8 +215,16 @@ suggestion, not a directive.>
 <The script fills this in — leave a placeholder line `<!-- SESSION -->`.>
 ```
 
-Write it to `/tmp/spinoff-handoff.md`. Keep it tight and real — a handoff
-that reads like genuine working notes beats a padded template every time.
+Write it to a **session-isolated path** — your session's scratchpad directory when
+the harness gives you one, otherwise `/tmp/spinoff-handoff-<kebab-feature-name>.md`.
+Never a bare `/tmp/spinoff-handoff.md`: that name is shared by every session on the
+machine, so a concurrent spinoff overwrites it between your write and the script's
+read, and the new session wakes up briefed on someone else's work. That failure is
+silent — the run still exits 0 with a tab open. Observed on 2026-06-28, when a
+Brand Foundry handoff was clobbered by an unrelated one seconds before launch.
+
+Keep it tight and real — a handoff that reads like genuine working notes beats a
+padded template every time.
 
 Write it as **directional intent**, not a spec: convey enough information,
 direction, and author intent for the new session to *start*, with the code and
@@ -426,7 +434,7 @@ CMUX_BIN="<absolute path from `command -v cmux` here>" \
 bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   --name "<kebab-feature-name>" \
   --label "<Ticket: Title, or just Title when there is no ticket>" \
-  --handoff /tmp/spinoff-handoff.md \
+  --handoff "<the session-isolated handoff path you wrote above>" \
   --target <tab|workspace|split> \
   --session-transcript "<resolved transcript path>" \
   --session-cwd "<resolved cwd>" \
