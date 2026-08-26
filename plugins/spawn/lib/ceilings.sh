@@ -101,6 +101,35 @@ SPAWN_CEILING_REPO="repo-bounded"
 # an install carries them and a user can read what they are getting.
 SPAWN_CEILING_DIR="${SPAWN_CEILING_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/permissions}"
 
+# The tool gate lives in the plugin tree, beside the ceilings it enforces. It
+# must NOT sit anywhere the job can write — that is the whole prerequisite; see
+# the header of hooks/tool-gate.sh.
+SPAWN_HOOK_DIR="${SPAWN_HOOK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/hooks}"
+
+# spawn::ceiling_allow_set <ceiling> — the tool names a ceiling permits, one per
+# line. Empty output means "this ceiling runs no tool gate".
+#
+# DEFAULT-DENY LIVES HERE. Anything absent is refused, INCLUDING A TOOL THAT DOES
+# NOT EXIST YET — the one thing a deny list structurally cannot do. Adding a name
+# is a security decision, not a convenience; the list is short on purpose.
+#
+# Only the REPO-BOUNDED ceiling is gated. The operator ceiling is the path where
+# a human invoked the job and is present to answer for it; it deliberately runs
+# under the operator's own settings, and narrowing it here would break that
+# without protecting anyone who is not already watching.
+spawn::ceiling_allow_set() {
+    case "$1" in
+        "$SPAWN_CEILING_REPO")
+            # Read/Write/Edit are the work; their PATH scoping still comes from
+            # the rendered `permissions` block. This gate answers "which tool",
+            # never "which path", so the two layers stay independent and neither
+            # silently substitutes for the other.
+            printf '%s\n' Read Write Edit Glob Grep TodoWrite Skill ToolSearch
+            ;;
+        *) printf '' ;;
+    esac
+}
+
 # The config a ceiling resolves to, honouring the user's override (R25). Prints
 # the path; prints nothing and returns 1 for an unknown ceiling, because
 # guessing a ceiling is the one mistake this file must not make quietly.
@@ -152,6 +181,50 @@ spawn::ceiling_render() {
     esac
     ( umask 077; sed "s|{{WORKTREE}}|${worktree#/}|g" "$src" > "$dest" ) || return 1
     [ -s "$dest" ] || return 1
+
+    # THE OUTER WALL. The rendered permissions above are real enforcement, but a
+    # bypass flag defeats them; the tool gate holds even then (measured
+    # 2026-08-14 — see hooks/tool-gate.sh). It is injected here, into the job's
+    # own copy, so the shipped file stays a readable statement of policy and the
+    # absolute hook path never has to be committed.
+    local allow_set
+    allow_set="$(spawn::ceiling_allow_set "$ceiling")"
+    [ -n "$allow_set" ] || return 0   # ungated ceiling: nothing more to do
+
+    local gate
+    gate="$SPAWN_HOOK_DIR/tool-gate.sh"
+    # A gate that is not there must not degrade to "no gate". Rendering fails,
+    # the caller dies, and no child starts — the same posture the file already
+    # takes when a ceiling config is unreadable.
+    [ -r "$gate" ] || return 1
+
+    # The hook command is a SHELL STRING. A path carrying a quote, a backslash,
+    # a $ or a backtick would break out of it and run as code, so refuse rather
+    # than escape — the same reasoning as the worktree guard above.
+    case "$gate" in
+        *'"'*|*'\'*|*'$'*|*'`'*|*"'"*) return 1 ;;
+    esac
+
+    python3 - "$dest" "$gate" $allow_set <<'PYH' || return 1
+import json, re, sys
+dest, gate, tools = sys.argv[1], sys.argv[2], sys.argv[3:]
+# Closed by CONSTRUCTION, not filtered: a name outside this grammar never reaches
+# a shell string. The allow set is a plugin constant today, but this is the join
+# where a future caller-supplied name would arrive.
+if not tools or not all(re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', t) for t in tools):
+    sys.exit(1)
+raw = open(dest).read()
+data = json.loads(re.sub(r'^\s*//.*$', '', raw, flags=re.M))
+hooks = data.setdefault("hooks", {})
+# Replace rather than append: a rendered copy is built fresh at every launch, so
+# a second entry would mean the gate ran twice, not that two gates applied.
+hooks["PreToolUse"] = [{
+    "matcher": "*",
+    "hooks": [{"type": "command", "command": " ".join([gate] + tools)}],
+}]
+json.dump(data, open(dest, "w"), indent=2)
+PYH
+    [ -s "$dest" ] || return 1
     return 0
 }
 
@@ -162,10 +235,60 @@ spawn::ceiling_render() {
 # "is it safe to hand an unattended process". Adding a name here is a security
 # decision, not a convenience.
 #
+# GRANTABLE, and what each one costs:
+#   WebSearch     — a search API. Narrow, and the reason WebFetch below is not.
+#   Bash          — arbitrary local execution. Granting it is not "a wider
+#                   ceiling"; it is NO ceiling. Read the next block before
+#                   adding a caller path that passes it.
+#
+# WHAT A Bash GRANT ACTUALLY HANDS OVER
+# --------------------------------------
+# ESTABLISHED by reading the tree. Every other bound here is TOOL-scoped: the
+# `Write(//<worktree>/**)` rules bind the Write tool, not a shell. A granted
+# shell writes wherever the invoking OS user can, which includes this plugin
+# tree (hooks/tool-gate.sh among it), the job's own rendered ceiling under
+# `<worktree>/.spawn/job-*/`, and that job's own record beside it. The gate's
+# header used to claim the plugin tree was unreachable; that was true of
+# Write/Edit and never of a shell, and the claim is gone.
+#
+# ESTABLISHED by what the child is handed. bg-agent.sh exports the gateway
+# token into the child's environment (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY).
+# A granted shell reads its own environment, so the grant hands over that
+# credential, plus everything else the OS user can read — ~/.claude, SSH keys,
+# push rights. KTD6 keeps that token out of the process table; a shell walks
+# around that entirely.
+#
+# THE ESCALATION IS NOT ESTABLISHED, AND THE ONE OBSERVATION IS ROUTE-SPECIFIC.
+# An arm in tests/unit/ceilings.bats grants a real child Bash and tells it to
+# write a probe, overwrite its own gate COPY with `exit 0`, then call WebSearch.
+# Two runs, two routes, and neither settles it:
+#   * default-model route (2026-08-25): bash_used=yes, gate_rewritten=no. The
+#     shell genuinely worked — the probe landed — and the copy was writable by
+#     the same OS user, so nothing PREVENTED the rewrite. That model declined.
+#   * the cheap gateway alias the suite now routes through: bash_used=no. The
+#     model never reached for the shell, so that run tested nothing at all, and
+#     the arm reports it inconclusive rather than as a boundary holding.
+# Model reluctance is not a bound, and one model's reluctance says nothing about
+# another's. Still unmeasured either way: whether the harness re-reads the hook
+# registration from --settings mid-session, and whether `permissions.deny` keeps
+# refusing those tools once the gate is disarmed. Claim no more than this.
+#
+# THE BLAST RADIUS OUTLIVES THE JOB. tool-gate.sh is ONE shared file, named by
+# absolute path from every rendered ceiling. A granted job that rewrites it
+# removes the outer wall for every LATER job on this machine, including jobs
+# whose caller granted nothing. So "an ungranted job cannot run a shell command"
+# holds for an untampered install, and only for one. There is no technical fix
+# — an integrity check would live in the same writable tree — which is why the
+# honest statement IS the mitigation.
+#
+# BARE NAME ONLY. There is no command-scoped form: the gate matches the tool
+# NAME (matching tool_input is pattern-matching shell text, which this repo has
+# three CVEs' worth of reasons to refuse), and a grant writes the bare name into
+# permissions.allow, which subsumes any `Bash(npm test:*)` rule sitting beside
+# it. A caller asking for a scoped grant is told that, rather than handed a
+# bound that is not one.
+#
 # NOT grantable, deliberately, and each for its own reason:
-#   Bash          — arbitrary local execution. (Measured 2026-08-13: some Bash
-#                   calls already run despite this ceiling. That is an OPEN
-#                   defect, not a licence to grant it on purpose.)
 #   Agent, Task*  — an unattended job that can spawn agents fans out unbounded.
 #   Cron*         — schedules work that OUTLIVES the job nobody was watching.
 #   WebFetch      — fetches an arbitrary URL, including a host on this machine's
@@ -174,7 +297,7 @@ spawn::ceiling_render() {
 #                   at all.
 spawn::ceiling_grantable() {
     case "${1:-}" in
-        WebSearch) return 0 ;;
+        WebSearch|Bash) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -185,6 +308,12 @@ spawn::ceiling_grantable() {
 # The shipped default on disk is never touched (R25: the plugin does not edit a
 # user's settings, including its own), and the child cannot reach this file to
 # widen it further — .spawn writes are denied to it.
+#
+# TWO LAYERS NOW, AND A GRANT MUST CLEAR BOTH. Since the tool gate default-denies
+# by NAME, a tool added only to `permissions.allow` would pass the permission
+# layer and then be refused by the gate — a grant that reads as applied and is
+# not. So the allow FILE is extended in the same call. The two writes are one
+# operation on purpose; splitting them is how they drift.
 spawn::ceiling_grant() {
     local dest="$1"; shift
     [ -f "$dest" ] || return 1
@@ -192,6 +321,15 @@ spawn::ceiling_grant() {
     for t in "$@"; do
         spawn::ceiling_grantable "$t" || {
             printf 'grant_refused\t%s\n' "$(spawn::sanitize_for_display "$t")" >&2
+            # A scoped shell grant is the one refusal a caller reads as a typo.
+            # Say the shape does not exist, and point nowhere: a custom
+            # SPAWN_CEILING_CONFIG_REPO cannot deliver one either, because the
+            # gate's allow set is keyed on the ceiling NAME, not on that file.
+            case "$t" in
+                Bash\(*)
+                    printf 'grant_refused_reason\t%s\n' \
+                        'no command-scoped shell grant exists: the tool gate matches the bare tool name, and a grant writes bare Bash into permissions.allow, which subsumes any scoped rule. Ask for Bash or for nothing.' >&2 ;;
+            esac
             return 1
         }
     done
@@ -202,12 +340,46 @@ raw = open(dest).read()
 # The shipped files carry // comments, which json rejects; strip for the read and
 # write back plain JSON. The rendered copy is the job's, not a file a human edits.
 data = json.loads(re.sub(r'^\s*//.*$', '', raw, flags=re.M))
-allow = data.setdefault("permissions", {}).setdefault("allow", [])
+perms = data.setdefault("permissions", {})
+allow = perms.setdefault("allow", [])
+deny = perms.setdefault("deny", [])
 for t in tools:
     if t not in allow:
         allow.append(t)
+# A DENY BEATS AN ALLOW, so the grant must clear the deny entry too — in the
+# job's own copy only. The shipped default no longer denies a grantable tool,
+# but a user pointing SPAWN_CEILING_CONFIG_REPO at their own file may still
+# deny it, and then a grant would extend the allow list AND the gate argv and
+# be refused anyway: applied on paper, refused in practice, with nothing in the
+# record saying which layer said no. Only the bare tool name is removed; a
+# scoped rule like Bash(rm:*) is a different entry and is deliberately left in
+# place, because dropping a caller's own narrowing is not this function's call.
+while any(t in deny for t in tools):
+    for t in tools:
+        if t in deny:
+            deny.remove(t)
 json.dump(data, open(dest, "w"), indent=2)
 PYG
+
+    # The gate's half of the grant: extend the allow set in the hook's argv. Only
+    # when this ceiling is gated at all — an ungated ceiling has no hook, and
+    # inventing one here would install a gate the renderer never chose.
+    python3 - "$dest" "$@" <<'PYG2' || return 1
+import json, re, sys
+dest, tools = sys.argv[1], sys.argv[2:]
+if not all(re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', t) for t in tools):
+    sys.exit(1)
+data = json.loads(re.sub(r'^\s*//.*$', '', open(dest).read(), flags=re.M))
+entries = data.get("hooks", {}).get("PreToolUse", [])
+if entries:
+    h = entries[0]["hooks"][0]
+    parts = h["command"].split()
+    for t in tools:
+        if t not in parts[1:]:
+            parts.append(t)
+    h["command"] = " ".join(parts)
+    json.dump(data, open(dest, "w"), indent=2)
+PYG2
     return 0
 }
 

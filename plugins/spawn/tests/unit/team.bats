@@ -3051,8 +3051,18 @@ foreign_changes() {     # <before> <after> <deliverable>...
         awk '/^--settings$/{getline; print}' "$FAKE_CLAUDE_RECORD_DIR/argv" > "$WORK/settings.seen"
         grep -qxF -- "$s" "$WORK/settings.seen"
 
-        # The shell entry, on the file the child was actually given.
-        jq -e '.permissions.deny | index("Bash")' "$s" >/dev/null
+        # The shell is UNREACHABLE, on the file the child was actually given.
+        # Asserted as absence from both gating layers rather than presence in
+        # `deny`: Bash left the deny list on 2026-08-25 when it became grantable
+        # (a deny would beat the grant), and the team surface passes no --allow at
+        # all, so a member is ungranted by construction. The bound a member relies
+        # on is the allow list plus the tool gate, and that is what this checks.
+        jq -e '.permissions.deny | index("Bash") | not' "$s" >/dev/null \
+            || { echo "Bash is back in a member's deny list — that would break the grant path"; return 1; }
+        jq -e '[.permissions.allow[] | select(. == "Bash" or startswith("Bash("))] | length == 0' "$s" >/dev/null \
+            || { echo "a team member was handed Bash in its allow list"; return 1; }
+        jq -e '[.hooks.PreToolUse[0].hooks[0].command | split(" ") | .[1:][] | select(. == "Bash")] | length == 0' "$s" >/dev/null \
+            || { echo "a team member's tool gate permits Bash"; return 1; }
         jq -r '.permissions.allow[]' "$s" > "$WORK/allow.$name"
         # Scoped to this member's own checkout...
         grep -qF "Write(//${wt#/}/**)" "$WORK/allow.$name"

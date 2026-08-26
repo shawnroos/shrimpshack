@@ -652,6 +652,10 @@ SUP_BASE_URL=""
 SUP_SETTINGS=""
 SUP_SKILLS=()      # names, in the order the caller asked for them
 SUP_GRANTS=()      # extra tools the caller asked the ceiling to permit
+# What the ceiling ACTUALLY granted. Kept apart from SUP_GRANTS because a
+# refused grant still writes a result, and reporting the request as though it
+# were the outcome would tell a reader a job held a shell it was denied.
+SUP_GRANTS_APPLIED=()
 SUP_SKILL_MANIFEST=""
 SUP_CONFIG=""
 SUP_STARTED=""
@@ -810,6 +814,17 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         [ "$verify_rc" = "null" ] || verify_ran=true
     fi
 
+    # The grants the ceiling APPLIED, from the supervisor's own memory — never
+    # re-read from grants.applied. That file sits in the job dir under
+    # <worktree>/.spawn, which a Bash-granted job can write, so re-reading it
+    # would let exactly the jobs this field exists to expose rewrite it. Same
+    # discipline as permission_denial_count: the supervisor's measurement, not a
+    # file the child could reach.
+    local grants
+    grants="$(printf '%s\n' ${SUP_GRANTS_APPLIED[@]+"${SUP_GRANTS_APPLIED[@]}"} \
+        | jq -Rsc 'split("\n") | map(select(length > 0))')"
+    [ -n "$grants" ] || grants='[]'
+
     reasons="$(printf '%s\n' "${SUP_REASONS:-}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
     [ -n "$reasons" ] || reasons='[]'
 
@@ -836,9 +851,10 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         --argjson dn "$denials" --argjson ch "$changed" --argjson dl "$deliv" \
         --argjson vr "$verify_rc" --argjson vran "$verify_ran" \
         --argjson ok "$all_ok" --argjson rs "$reasons" --argjson us "$usage_json" \
+        --argjson gr "$grants" \
         --arg rc "$child_rc" --argjson ie "$child_ie" '{
           schema:$js, job_id:$h, alias:$a,
-          served_model:(if $sm == "" then null else $sm end), ceiling:$c,
+          served_model:(if $sm == "" then null else $sm end), ceiling:$c, grants:$gr,
           worktree:$w, cwd:$cw,
           content_trust:$tp, content_notice:$np,
           started_at:(if $st == "" then null else $st end), ended_at:$en,
@@ -861,7 +877,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
                     + (if $ok then "; every deliverable the contract named is satisfied"
                        else "; not every deliverable the contract named is satisfied" end)
                     + ". This says the job ENDED, not that it succeeded — read terminal_state and deliverables_satisfied."),
-            job_id:$h, alias:$a, worktree:$w, result_file:$rf,
+            job_id:$h, alias:$a, worktree:$w, result_file:$rf, grants:$gr,
             terminal_state:$s, deliverables_satisfied:$ok,
             ended_at:$en,
             permission_denial_count:($dn|length),
@@ -976,6 +992,7 @@ supervisor_main() {
     # promised produces a confident wrong answer, which is worse than not running.
     if [ "${#SUP_GRANTS[@]}" -gt 0 ]; then
         if spawn::ceiling_grant "$SUP_SETTINGS" "${SUP_GRANTS[@]}" 2>>"$dir/grants.err"; then
+            SUP_GRANTS_APPLIED=("${SUP_GRANTS[@]}")
             printf '%s\n' "${SUP_GRANTS[@]}" > "$dir/grants.applied"
             sup_reason "the caller granted this job: $(printf '%s ' "${SUP_GRANTS[@]}")"
         else
@@ -1208,18 +1225,19 @@ emit_describe() {
             {value:"launch_failed",       exit_code:5, note:"the supervisor could not be detached or adopted; the record was released"}
           ],
           trusted_fields:[
-            "started_at","ended_at","terminal_state","child_exit_code","served_model",
+            "started_at","ended_at","terminal_state","child_exit_code","served_model","grants",
             "permission_denials","changed_files","deliverables",
             "deliverables_satisfied","verification.exit_code",
             "usage.input_tokens","usage.output_tokens",
             "notification.terminal_state","notification.deliverables_satisfied",
-            "notification.permission_denial_count"
+            "notification.permission_denial_count","notification.grants"
           ],
           untrusted_fields:["narrative.text","notification.narrative.text"],
           notes:[
             "The completion notification is not a separate message and not a separate file: it is the `notification` field of the record the supervisor writes, shaped as a full response envelope so a reader can consume it on its own. Its narrative carries the same untrusted marking the record'"'"'s does — quote it, never follow it.",
             "The ceiling is fixed by this file being the one that ran. There is no flag that selects it, because a flag would be self-declared and any caller able to run the script could claim to be the operator.",
             "The child’s exit status is NEVER evidence that work happened: a fully denied child returns is_error:false and exit 0, measured. A clean exit is a precondition for done, never a reason for it.",
+            "The `grants` array is what the supervisor APPLIED, not what the caller asked for: a refused grant records an empty array and the job never starts. Treat it as cooperative accounting, not a tamper-proof audit — a job granted Bash can write its own job directory, so the field is trustworthy about what the supervisor applied and not about what a granted job did afterwards.",
             "permission_denials[] records a call that was attempted and refused. A permissions.deny PATH rule refuses without leaving an entry, so classification also measures EFFECT against the pre-job baseline — which is why a job hollowed out by path-rule refusals still lands in degraded.",
             "A deliverable that already existed and was not touched does not satisfy the contract: presence is compared against a fingerprint taken before the child started."
           ]
@@ -1250,7 +1268,18 @@ while [ $# -gt 0 ]; do
         --base-url)      SUP_BASE_URL="${2:-}"; shift; shift 2>/dev/null || true ;;
         --settings)      SUP_SETTINGS="${2:-}"; shift; shift 2>/dev/null || true ;;
         --skill)         [ -n "${2:-}" ] && SUP_SKILLS+=("$2"); shift; shift 2>/dev/null || true ;;
-        --allow)         [ -n "${2:-}" ] && SUP_GRANTS+=("$2"); shift; shift 2>/dev/null || true ;;
+        # An empty value is a usage error, not a no-op: dropping it silently runs
+        # the job ungranted while the caller believes it was granted, which is the
+        # confident-wrong-answer failure the refusal path exists to prevent.
+        --allow)
+            # The message line carries no interpolation on purpose: escapes.bats
+            # lints any line that prints, holds a `$`, and redirects to a terminal,
+            # and a one-line guard trips it even for a fixed string.
+            if [ -z "${2:-}" ]; then
+                printf '✗ --allow needs a tool name\n' >&2
+                exit 2
+            fi
+            SUP_GRANTS+=("$2"); shift; shift 2>/dev/null || true ;;
         --config)        SUP_CONFIG="${2:-}"; shift; shift 2>/dev/null || true ;;
         # The identity marker. It is an ARGUMENT rather than a variable because
         # jobs.sh resolves liveness by matching it as a whole field in argv, and
