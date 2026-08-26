@@ -279,6 +279,80 @@ check "closing an item lowers the open count" 'echo "$R4" | grep -q "retro backl
 check "a store with no .retro dir still logs the field rather than omitting it" \
   'run_rr "$D6" --trigger t5 >/dev/null 2>&1; tail -1 "$D6/mem/REFLECT.log" | grep -q "retro_captured=0"'
 
+# ================================================ crash-safe partial reporting
+# The runner used to write its report and its REFLECT.log line only after the
+# last pass, so a run killed mid-flight left a zero-byte report and NO log line
+# and the counts had to be rebuilt by hand. Retro item
+# plugin-reflect-runner-silent-exit, hit twice.
+#
+# Timing a kill is a race — the trap installs ~0.1-0.2s in and a fixed delay
+# lands on either side of it at random. So these tests inject a stall at a
+# CHOSEN point in a copy of the script and kill during that stall. The stall
+# position is what makes each assertion deterministic.
+echo "== a killed run still reports what it knew =="
+D8="$ROOT/h"; new_store "$D8"
+
+# stall_after <marker-substring> <outfile> — copy of the runner with a 5s stall
+# inserted immediately after the line containing <marker>.
+stall_after() {
+  python3 - "$RR" "$1" "$2" <<'PY'
+import sys
+src, marker, dest = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+lines = src.splitlines(keepends=True)
+hits = [i for i, l in enumerate(lines) if marker in l]
+assert len(hits) == 1, "marker %r matched %d lines, need exactly 1" % (marker, len(hits))
+lines.insert(hits[0] + 1, '\npython3 -c "import time; time.sleep(5)"\n')
+open(dest, "w").write("".join(lines))
+PY
+}
+
+# kill_during <script> <dir> — run it, SIGHUP it while it is in the stall.
+kill_during() {
+  REFLECT_MEMORY_DIR="$2/mem" REFLECT_DOC_STORE="$2/store" REFLECT_RUN_NO_RECONCILE=1 \
+    bash "$1" --trigger killed >"$2/out.txt" 2>"$2/err.txt" &
+  local p=$!
+  python3 -c "import time; time.sleep(1.5)"
+  kill -HUP "$p" 2>/dev/null
+  wait "$p" 2>/dev/null
+  echo $?
+}
+
+# Stall right after the traps are armed: every pass below is still unrun, which
+# is what makes the `unknown` assertions meaningful rather than incidental.
+stall_after "fi' EXIT" "$D8/early.sh"
+RC8="$(kill_during "$D8/early.sh" "$D8")"
+LOG8="$(tail -1 "$D8/mem/REFLECT.log" 2>/dev/null)"
+
+check "a killed run appends a log line instead of losing the counts" \
+  '[ -n "$LOG8" ]'
+check "the killed run is labelled partial, naming the signal" \
+  'echo "$LOG8" | grep -q "status=partial died=SIGHUP"'
+check "the killed run still exits non-zero rather than faking a clean finish" \
+  '[ "$RC8" -ne 0 ]'
+check "the report reaches stdout too, not only the log" \
+  '[ -s "$D8/out.txt" ]'
+
+# The honesty bar this plugin already holds for `embedded`: a pass that never
+# ran must not read the same as a pass that ran and found nothing. If these
+# ever report 0, a killed run becomes indistinguishable from a clean store.
+for f in index_tightened captured embedded; do
+  check "an unrun pass reports $f=unknown, never a smoothed 0" \
+    'echo "$LOG8" | grep -q "'"$f"'=unknown"'
+done
+
+# The positional contract from the retro_captured block above still holds where
+# it was written to hold: on a COMPLETE line. A partial line is a new class of
+# line and carries its marker after that field, so a reader that keys on the
+# tail sees the difference rather than silently parsing a half-run as a run.
+echo "== a complete run is unchanged by the trap =="
+D9="$ROOT/i"; new_store "$D9"
+run_rr "$D9" --trigger done >/dev/null 2>&1
+LOG9="$(tail -1 "$D9/mem/REFLECT.log")"
+check "a complete run carries no partial marker" \
+  '! echo "$LOG9" | grep -q "status=partial"'
+check "a complete run still ends at retro_captured, as positional readers expect" \
+  'echo "$LOG9" | grep -qE "retro_captured=[^ ]+$"'
+
 echo
 echo "reflect_run_test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
