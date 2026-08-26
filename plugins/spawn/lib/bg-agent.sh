@@ -1206,9 +1206,7 @@ emit_describe() {
             {name:"--skill",    value:"name", required:false, default:null, repeatable:true, note:"a skill the child is to have; repeat the flag for several. The child runs with --setting-sources project and inherits no skill the operator has, so each named skill is copied into the worktree the job runs in, where the child can read it and the ceiling denies editing it, and is removed when the job ends. A skill that cannot be provisioned is named in the degraded_reasons[] of the job record and the job still runs"},
             {name:"--allow",    value:"rule", required:false, default:null, repeatable:true, note:"one extra permission rule to widen the ceiling by, for this job only; repeat the flag for several. The shipped default is never edited. A rule the ceiling refuses to grant fails the job outright rather than running it quietly narrower than asked, because a job silently missing a capability it was promised returns a confident wrong answer"},
             {name:"--help",     value:null,   required:false, default:null, note:"exit 2 with help_requested:true — not a usage error"},
-            {name:"--describe", value:null,   required:false, default:null, note:"this document; exit 0; needs no gateway and no config"},
-            {name:"--skill",    value:"name", required:false, default:null, note:"repeatable; provisions a skill where the child can read it, and removes it when the job ends"},
-            {name:"--allow",    value:"tool", required:false, default:null, note:"repeatable; widens the ceiling copy belonging to THIS job. Grantable: WebSearch, Bash. Anything else is refused and the job does not start. A granted Bash is a full shell, not a narrower one; applied grants appear in grants[]"}
+            {name:"--describe", value:null,   required:false, default:null, note:"this document; exit 0; needs no gateway and no config"}
           ],
           exit_codes:[
             {code:0, error:null,               origin:"own",     meaning:"the job was started and a handle is returned; it says nothing about the outcome"},
