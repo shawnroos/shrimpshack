@@ -279,6 +279,160 @@ check "closing an item lowers the open count" 'echo "$R4" | grep -q "retro backl
 check "a store with no .retro dir still logs the field rather than omitting it" \
   'run_rr "$D6" --trigger t5 >/dev/null 2>&1; tail -1 "$D6/mem/REFLECT.log" | grep -q "retro_captured=0"'
 
+# ================================================ crash-safe partial reporting
+# The runner used to write its report and its REFLECT.log line only after the
+# last pass, so a run killed mid-flight left a zero-byte report and NO log line
+# and the counts had to be rebuilt by hand. Retro item
+# plugin-reflect-runner-silent-exit, hit twice.
+#
+# Timing a kill is a race — the trap installs ~0.1-0.2s in and a fixed delay
+# lands on either side of it at random. So these tests inject a stall at a
+# CHOSEN point in a copy of the script and kill during that stall. The stall
+# position is what makes each assertion deterministic.
+echo "== a killed run still reports what it knew =="
+D8="$ROOT/h"; new_store "$D8"
+
+# stall_after <marker-substring> <outfile> — copy of the runner with a 5s stall
+# inserted immediately after the line containing <marker>.
+stall_after() {
+  python3 - "$RR" "$1" "$2" <<'PY'
+import sys
+src, marker, dest = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+lines = src.splitlines(keepends=True)
+hits = [i for i, l in enumerate(lines) if marker in l]
+assert len(hits) == 1, "marker %r matched %d lines, need exactly 1" % (marker, len(hits))
+lines.insert(hits[0] + 1, '\npython3 -c "import time; time.sleep(5)"\n')
+open(dest, "w").write("".join(lines))
+PY
+}
+
+# kill_during <script> <dir> — run it, SIGHUP it while it is in the stall.
+kill_during() {
+  REFLECT_MEMORY_DIR="$2/mem" REFLECT_DOC_STORE="$2/store" REFLECT_RUN_NO_RECONCILE=1 \
+    bash "$1" --trigger killed >"$2/out.txt" 2>"$2/err.txt" &
+  local p=$!
+  python3 -c "import time; time.sleep(1.5)"
+  kill -HUP "$p" 2>/dev/null
+  wait "$p" 2>/dev/null
+  echo $?
+}
+
+# Stall right after the traps are armed: every pass below is still unrun, which
+# is what makes the `unknown` assertions meaningful rather than incidental.
+stall_after "fi' EXIT" "$D8/early.sh"
+RC8="$(kill_during "$D8/early.sh" "$D8")"
+LOG8="$(tail -1 "$D8/mem/REFLECT.log" 2>/dev/null)"
+
+check "a killed run appends a log line instead of losing the counts" \
+  '[ -n "$LOG8" ]'
+check "the killed run is labelled partial, naming the signal" \
+  'echo "$LOG8" | grep -q "status=partial died=SIGHUP"'
+check "the killed run still exits non-zero rather than faking a clean finish" \
+  '[ "$RC8" -ne 0 ]'
+check "the report reaches stdout too, not only the log" \
+  '[ -s "$D8/out.txt" ]'
+
+# The honesty bar this plugin already holds for `embedded`: a pass that never
+# ran must not read the same as a pass that ran and found nothing. If these
+# ever report 0, a killed run becomes indistinguishable from a clean store.
+for f in index_tightened captured embedded; do
+  check "an unrun pass reports $f=unknown, never a smoothed 0" \
+    'echo "$LOG8" | grep -q "'"$f"'=unknown"'
+done
+
+# The positional contract from the retro_captured block above still holds where
+# it was written to hold: on a COMPLETE line. A partial line is a new class of
+# line and carries its marker after that field, so a reader that keys on the
+# tail sees the difference rather than silently parsing a half-run as a run.
+echo "== a complete run is unchanged by the trap =="
+D9="$ROOT/i"; new_store "$D9"
+run_rr "$D9" --trigger done >/dev/null 2>&1
+LOG9="$(tail -1 "$D9/mem/REFLECT.log")"
+check "a complete run carries no partial marker" \
+  '! echo "$LOG9" | grep -q "status=partial"'
+check "a complete run still ends at retro_captured, as positional readers expect" \
+  'echo "$LOG9" | grep -qE "retro_captured=[^ ]+$"'
+
+# ============================================ write-ahead survival of a SIGKILL
+# The trap covers a signal the shell can handle. It does NOT cover SIGKILL, and
+# — measured — it does not fire promptly while bash is blocked on a foreground
+# child: signalled 1s into a 10s child, the report appeared 10.3s later. The
+# real failure ran past 120s, so it was inside a slow child the whole time and
+# the trap would have been queued behind it. Hence the write-ahead sidecar, and
+# hence these tests kill with -9, which no trap can intercept.
+echo "== an untrappable death still leaves a record =="
+D10="$ROOT/j"; new_store "$D10"
+
+# stall_after_checkpoint <dest> — copy stalled just past the first checkpoint,
+# so a sidecar is guaranteed to exist when the kill lands.
+python3 - "$RR" "$D10/k9.sh" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+anchor = "_reflect_recover\n_reflect_checkpoint\n"
+assert src.count(anchor) == 1, "checkpoint anchor missing"
+open(sys.argv[2], "w").write(
+    src.replace(anchor, anchor + '\npython3 -c "import time; time.sleep(10)"\n', 1))
+PY
+
+REFLECT_MEMORY_DIR="$D10/mem" REFLECT_DOC_STORE="$D10/store" REFLECT_RUN_NO_RECONCILE=1 \
+  bash "$D10/k9.sh" --trigger kill9 >/dev/null 2>&1 &
+K9=$!
+python3 -c "import time; time.sleep(1.5)"
+kill -9 "$K9" 2>/dev/null
+wait "$K9" 2>/dev/null
+
+check "SIGKILL writes no log line — nothing can trap it" \
+  '[ ! -s "$D10/mem/REFLECT.log" ]'
+check "but the write-ahead sidecar survives the kill" \
+  'ls "$D10/mem"/.reflect-run.*.inflight >/dev/null 2>&1'
+
+# Recovery is the next run's job: a dead run cannot report itself.
+run_rr "$D10" --trigger after >/dev/null 2>&1
+check "the next run promotes the killed run into the log" \
+  'grep -q "died=untrapped" "$D10/mem/REFLECT.log"'
+check "the promoted line keeps the dead run's own trigger, not the live one" \
+  'grep "died=untrapped" "$D10/mem/REFLECT.log" | grep -q " kill9 "'
+check "promotion adds one line per death, not a duplicate per later run" \
+  '[ "$(grep -c . "$D10/mem/REFLECT.log")" = "2" ]'
+check "the sidecar is cleared once promoted" \
+  '! ls "$D10/mem"/.reflect-run.*.inflight >/dev/null 2>&1'
+check "a clean run leaves no sidecar behind to be promoted later" \
+  'run_rr "$D10" --trigger clean >/dev/null 2>&1; ! ls "$D10/mem"/.reflect-run.*.inflight >/dev/null 2>&1'
+
+# ================================================ concurrent runs stay separate
+# The hazard the per-PID name and the kill -0 liveness test exist to prevent: a
+# second run must not read a first run's live progress as a death. A shared
+# filename, or a sweep without the liveness test, logs a phantom death for a run
+# that is still working.
+echo "== a live run's sidecar is not another run's death =="
+D11="$ROOT/k"; new_store "$D11"
+python3 - "$RR" "$D11/slow.sh" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+anchor = "_reflect_recover\n_reflect_checkpoint\n"
+assert src.count(anchor) == 1
+open(sys.argv[2], "w").write(
+    src.replace(anchor, anchor + '\npython3 -c "import time; time.sleep(6)"\n', 1))
+PY
+
+REFLECT_MEMORY_DIR="$D11/mem" REFLECT_DOC_STORE="$D11/store" REFLECT_RUN_NO_RECONCILE=1 \
+  bash "$D11/slow.sh" --trigger slowA >/dev/null 2>&1 &
+SLOWA=$!
+python3 -c "import time; time.sleep(1.0)"
+run_rr "$D11" --trigger fastB >/dev/null 2>&1
+ALIVE=$(kill -0 "$SLOWA" 2>/dev/null && echo yes || echo no)
+
+check "the slow run is genuinely still going (else the test proves nothing)" \
+  '[ "$ALIVE" = yes ]'
+check "the second run does NOT promote the first run's live sidecar" \
+  '! grep -q "died=untrapped" "$D11/mem/REFLECT.log"'
+
+wait "$SLOWA" 2>/dev/null
+check "the slow run records itself as complete, not partial" \
+  '! grep "slowA" "$D11/mem/REFLECT.log" | grep -q "status=partial"'
+check "two overlapping runs produce exactly two lines" \
+  '[ "$(grep -c . "$D11/mem/REFLECT.log")" = "2" ]'
+
 echo
 echo "reflect_run_test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
