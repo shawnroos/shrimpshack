@@ -1049,6 +1049,55 @@ EOS
     case "$remedy" in *max-tokens*) : ;; *) echo "remedy does not name the knob: $remedy"; return 1 ;; esac
 }
 
+@test "the size ceiling beats the prose matcher, whatever else the message says" {
+    # Regression. classify_undecodable originally ran AFTER classify_overflow,
+    # which matches open-ended prose including '*too long*'. An undecodable 502
+    # whose message merely contained that phrase was therefore reported as
+    # context_overflow, whose remedy says shrink it or pick a wider alias — and
+    # a second vendor was measured failing identically, so the alias half cannot
+    # work. Order is the fix; this test is what keeps it ordered.
+    start_fixture upstream-undecodable-overflow-prose "alpha"
+
+    lens "hi" --alias alpha
+    [ "$status" -eq 5 ]
+    [ "$(echo "$output" | jq -r '.error')" = "response_too_large" ]
+    [ "$(echo "$output" | jq -r '.error')" != "context_overflow" ]
+}
+
+@test "the size-ceiling failure reports how long the call actually ran" {
+    # The elapsed time is what separates the two readings the remedy names: near
+    # a route ceiling means the gateway gave up on its own attempt at that
+    # route's timeout_ms; a fast failure means the far side refused the size
+    # outright. Without it the caller cannot tell which repair applies.
+    start_fixture upstream-undecodable "alpha"
+
+    lens "hi" --alias alpha
+    local detail elapsed
+    detail="$(echo "$output" | jq -r '.detail')"
+    # The FRACTIONAL part is load-bearing. An earlier version of this assertion
+    # accepted any integer and passed even with the measurement removed: the
+    # status code was being parsed as the duration, so the detail read "after
+    # 502s". curl's %{time_total} always carries a decimal point; a status never
+    # does.
+    printf '%s' "$detail" | grep -qE 'after [0-9]+\.[0-9]+s'
+    elapsed="$(printf '%s' "$detail" | sed -n 's/.*after \([0-9.]*\)s.*/\1/p')"
+    [ -n "$elapsed" ]
+    [ "${elapsed%%.*}" != "502" ]
+}
+
+@test "the size-ceiling remedy names the timeout lever, not just the request size" {
+    start_fixture upstream-undecodable "alpha"
+
+    lens "hi" --alias alpha
+    local remedy; remedy="$(echo "$output" | jq -r '.remedy')"
+    # Both levers, because the failure has two readings.
+    printf '%s' "$remedy" | grep -qF -- '--max-tokens'
+    printf '%s' "$remedy" | grep -qF 'timeout_ms'
+    # The deadline is applied only to a non-streamed call, which is why an
+    # interactive session on the same alias never sees this.
+    printf '%s' "$remedy" | grep -qi 'stream'
+}
+
 @test "a 502 with any other body stays the generic upstream class" {
     # The guard on the guard. A classifier that matched every 502 would relabel
     # real provider outages as a size problem and send the caller to shrink a

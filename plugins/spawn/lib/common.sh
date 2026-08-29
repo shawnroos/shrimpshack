@@ -196,7 +196,7 @@ spawn::remedy_for() {
         upstream_error)
             printf 'The provider behind the alias failed. Read `detail` for what it said; retry once, and if it repeats, try a different alias rather than the same one.' ;;
         response_too_large)
-            printf 'Not flakiness and not the vendor: the request and the requested output together exceed what the provider will return, so the SAME call fails the same way every time. Lower --max-tokens first (cheapest to change), or send a smaller prompt. Do NOT retry unchanged and do NOT switch alias — a second vendor was measured failing identically.' ;;
+            printf 'Not flakiness and not the vendor: the SAME call fails the same way every time. Lower --max-tokens first (cheapest to change), or send a smaller prompt. Do NOT retry unchanged and do NOT switch alias — a second vendor was measured failing identically. Read the elapsed seconds in `detail` for WHY, because the two readings take different repairs: close to a route ceiling means the gateway gave up on its own attempt at that route timeout_ms (it applies only to a non-streamed call like this one), so a smaller requested output finishes inside it, or the operator raises timeout_ms for that route; a fast failure instead means the far side refused the size outright and only the request shrinks it.' ;;
         deadline_exceeded)
             printf 'The request was aborted, so nothing is still running and a retry does not stack a second call. Raise the timeout knob named in `detail`, or send a smaller prompt.' ;;
         preflight_failed)
