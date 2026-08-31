@@ -4028,6 +4028,53 @@ assert_response_field() {
     # The cause a caller branches on is the projection, not the object, so the
     # contract has to name it too.
     assert_response_field "$d" 'members[].error'
+    # allow/grants are the ask and the actual grant — a driver that cannot see
+    # both cannot tell a name simply not yet resolved from one refused.
+    assert_response_field "$d" 'members[].allow'
+    assert_response_field "$d" 'members[].grants'
+    # This plan also widened members[].error's own enum; array membership is
+    # not covered by assert_response_field, which only checks the note's prose.
+    if [ "$(printf '%s' "$d" | jq -r \
+            '.response_fields[] | select(.name == "members[].error") | .values | index("grant_refused") != null')" != "true" ]; then
+        printf 'members[].error values does not list grant_refused\n' >&2
+        return 1
+    fi
+}
+
+@test "--describe says a null members[].grants means no result yet, never refused" {
+    # The claim, not a verbatim sentence: null covers a member still in flight
+    # AND one grant_refused settled without ever calling the launcher, and
+    # either way it is never itself the refusal signal. A ban on the word
+    # "refused" alone would also fail the CORRECT note, which says that word
+    # three other times (naming the refusal signal, deriving from allow) — so
+    # this binds the denial to "null", the one clause that makes the claim.
+    # [^_] before the stem rejects a match against `grant_refused` itself —
+    # that value's own name contains "refused" and sits inside the same
+    # "null...never...launched" span, so an unguarded stem is satisfied by
+    # the enum value even after the denial clause is deleted.
+    local note
+    note="$(describe_json | jq -r '.response_fields[] | select(.name == "members[].grants") | .note')"
+    [ -n "$note" ]
+    if ! printf '%s' "$note" | grep -qiE 'no result yet'; then
+        printf 'members[].grants note does not say null means no result yet: %s\n' "$note" >&2
+        return 1
+    fi
+    if ! printf '%s' "$note" | grep -qiE 'null[^.]*never[^.]*[^_]refus'; then
+        printf 'members[].grants note does not deny that null means refused: %s\n' "$note" >&2
+        return 1
+    fi
+}
+
+@test "--describe pins the grant_refused and worktree_missing error_values rows by value and exit code" {
+    # error_values is checked in bulk elsewhere (length, and the code-for-value
+    # roundtrip), which a deleted row survives whenever the row's own value is
+    # never literal-assigned via SPAWN_TEAM_ERROR="..." — both of these are set
+    # through a different path (a jq --arg and a function argument), so a
+    # deleted row here reddens nothing else. Name them directly.
+    local d
+    d="$(describe_json)"
+    [ "$(printf '%s' "$d" | jq -r '.error_values[] | select(.value == "grant_refused") | .exit_code')" = "2" ]
+    [ "$(printf '%s' "$d" | jq -r '.error_values[] | select(.value == "worktree_missing") | .exit_code')" = "5" ]
 }
 
 @test "--describe says a member's cause is an object with the four keys the record writes" {
