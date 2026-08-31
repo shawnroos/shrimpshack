@@ -186,8 +186,8 @@ team_view_row() {       # <index> <member json>
         (if .round == null then "" else (.round | tostring) end),
         (.started_at // ""), ((.outcome != null) | tostring),
         (.tokens.input // "null" | tostring), (.tokens.output // "null" | tostring),
-        (.failure | tojson), (.served_model | tojson), (.grants | tojson)')"
-    local has_outcome fail_json sm_json gr_json
+        (.failure | tojson), (.served_model | tojson), (.grants | tojson), (.allow | tojson)')"
+    local has_outcome fail_json sm_json gr_json al_json
     {
         read -r name
         read -r ls
@@ -205,6 +205,7 @@ team_view_row() {       # <index> <member json>
         read -r fail_json
         read -r sm_json
         read -r gr_json
+        read -r al_json
     } <<EOF
 $mfields
 EOF
@@ -250,14 +251,14 @@ EOF
         --argjson live "$TV_LIVE" --argjson term "$term" \
         --argjson dl "$deliv" --argjson ti "$ti" --argjson to "$to" \
         --argjson fail "${fail_json:-null}" --argjson sm "${sm_json:-null}" \
-        --argjson gr "${gr_json:-null}" '{
+        --argjson gr "${gr_json:-null}" --argjson al "${al_json:-null}" '{
           idx:$idx, name:$n, alias:$a, worktree:$w, launch_state:$ls,
           handle:(if $h == "" then null else $h end),
           state:$st, state_source:$src, live:$live, terminal:$term,
           error:(if $e == "launch_failed" then ($fail.error // $e)
                  elif $e != "" then $e
                  else ($fail.error // null) end),
-          failure:$fail, served_model:$sm, grants:$gr,
+          failure:$fail, served_model:$sm, grants:$gr, allow:$al,
           round:(if $r == "" then null else ($r | tonumber?) end),
           started_at:(if $sa == "" then null else $sa end),
           elapsed_seconds:(if $el == "" then null else ($el | tonumber?) end),
