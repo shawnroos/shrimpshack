@@ -236,6 +236,23 @@ jq_free_path() {
     [ "$(rec '.members[1].allow | length')" = "0" ]
 }
 
+@test "the roster response itself carries allow and grants, not just the record" {
+    # do_roster's members projection is a separate {name, alias, ...} object
+    # built for the response — earlier tests here only ever read the record
+    # (`rec`) back off disk, never `out`, so a field dropped from THIS
+    # projection specifically had nothing pinning it.
+    roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.md" --allow Bash \
+        --member scout --alias haiku --contract "$WORK/c2.md"
+    [ "$status" -eq 0 ]
+    assert_json_key "$(out '.members[] | select(.name == "lead")' | jq -c .)" allow
+    assert_json_key "$(out '.members[] | select(.name == "lead")' | jq -c .)" grants
+    assert_json_key "$(out '.members[] | select(.name == "scout")' | jq -c .)" allow
+    assert_json_key "$(out '.members[] | select(.name == "scout")' | jq -c .)" grants
+    [ "$(out '.members[] | select(.name == "lead") | .allow | join(",")')" = "Bash" ]
+    [ "$(out '.members[] | select(.name == "lead") | .grants')" = "null" ]
+}
+
 # ===========================================================================
 # Teardown removes exactly what the record names
 # ===========================================================================
@@ -3171,6 +3188,10 @@ foreign_changes() {     # <before> <after> <deliverable>...
     [ "$(rec '.members[] | select(.name == "lead") | .grants')" = "null" ]
     [ "$(out '.members[] | select(.name == "lead") | .error')" = "grant_refused" ]
     [ "$(out '.members[] | select(.name == "lead") | .allow | join(",")')" = "Agent" ]
+    # `jq -r` prints "null" both for a null value AND for a missing key, so
+    # this alone would pass even if `grants` vanished from the projection —
+    # pin the key's PRESENCE too.
+    assert_json_key "$(out '.members[] | select(.name == "lead")' | jq -c .)" grants
     [ "$(out '.members[] | select(.name == "lead") | .grants')" = "null" ]
 
     # It never reached a launcher at all: no child was ever invoked.
@@ -3199,6 +3220,12 @@ foreign_changes() {     # <before> <after> <deliverable>...
     team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json::Bash"
     dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
     [ "$status" -eq 0 ]
+    # do_dispatch_round's own {name, alias, ...} projection is the one place
+    # the round response is built fresh (KTD-alike): a field dropped there
+    # never shows up as a wrong value, only as a key that silently stops
+    # existing, which a bare `= "null"` check cannot tell apart from absent.
+    assert_json_key "$(out '.members[] | select(.name == "lead")' | jq -c .)" allow
+    assert_json_key "$(out '.members[] | select(.name == "lead")' | jq -c .)" grants
     await_invocations 1
     await_member_terminal lead
 
