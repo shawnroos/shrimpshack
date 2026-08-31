@@ -797,7 +797,7 @@ contract_file() {   # <path> <deliverable>
                          deliverables:[$d]}' > "$1"
 }
 
-# team_file <path> <mode> <max-concurrent> <name:alias:contract[:skill,skill]>...
+# team_file <path> <mode> <max-concurrent> <name:alias:contract[:skill,skill[:allow,allow]]>...
 #
 # NO `token_ceiling` KEY unless TEAM_FILE_CEILING is set. Absent is the normal
 # case (KTD20: there is no default ceiling), and a file stating 0 is refused at
@@ -805,16 +805,16 @@ contract_file() {   # <path> <deliverable>
 # no-bound case nor an accepted run.
 team_file() {
     local f="$1" mode="$2" mc="$3"; shift 3
-    local spec name alias contract skills members='[]'
+    local spec name alias contract skills allow members='[]'
     for spec in "$@"; do
-        name="${spec%%:*}"; spec="${spec#*:}"
-        alias="${spec%%:*}"; spec="${spec#*:}"
-        contract="${spec%%:*}"; skills="${spec#*:}"
-        if [ "$skills" = "$contract" ]; then skills=""; fi
+        IFS=: read -r name alias contract skills allow <<EOF
+$spec
+EOF
         members="$(printf '%s' "$members" | jq -c --arg n "$name" --arg a "$alias" \
-            --arg c "$contract" --arg s "$skills" \
+            --arg c "$contract" --arg s "${skills:-}" --arg al "${allow:-}" \
             '. + [{name:$n, alias:$a, contract:$c,
-                   skills:($s | split(",") | map(select(length > 0)))}]')"
+                   skills:($s | split(",") | map(select(length > 0))),
+                   allow:($al | split(",") | map(select(length > 0)))}]')"
     done
     jq -n --arg m "$mode" --argjson mc "$mc" --argjson ms "$members" \
         --arg tc "${TEAM_FILE_CEILING:-}" \
@@ -1454,7 +1454,7 @@ arm_fork_burst() {
     for f in mode bounds members; do
         [ "$(printf '%s' "$output" | jq -r --arg f "$f" '[.team_file_fields[] | select(.name == $f)] | length')" = "1" ]
     done
-    [ "$(printf '%s' "$output" | jq -r '[.team_file_fields[] | select(.name == "members") | .member_fields[] | .name] | join(",")')" = "name,alias,contract,skills" ]
+    [ "$(printf '%s' "$output" | jq -r '[.team_file_fields[] | select(.name == "members") | .member_fields[] | .name] | join(",")')" = "name,alias,contract,skills,allow" ]
     # And it answers with no gateway and no config, as bg-agent's does.
     [ "$(out '.response_kind')" = "describe" ]
 }
@@ -3075,6 +3075,130 @@ foreign_changes() {     # <before> <after> <deliverable>...
     done
 }
 
+# ---------------------------------------------------------------------------
+# A caller-granted member — the roster surface's own `allow`
+# ---------------------------------------------------------------------------
+
+@test "an allow requested in the team file reaches bg-agent, and only the member that asked for it" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json" "scout:beta:$WORK/c.json::Bash"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 2
+
+    local lead_dir scout_dir
+    lead_dir="$(member_job_dir "$(member_handle lead)" "$(member_wt lead)")"
+    scout_dir="$(member_job_dir "$(member_handle scout)" "$(member_wt scout)")"
+    [ -n "$lead_dir" ] && [ -n "$scout_dir" ]
+
+    # grants.applied is written by the DETACHED SUPERVISOR from the --allow it
+    # was handed, same as skills.requested — the boundary a grant has to cross.
+    await_file "$scout_dir/grants.applied"
+    [ "$(cat "$scout_dir/grants.applied")" = "Bash" ]
+    jq -e '[.permissions.allow[] | select(. == "Bash")] | length == 1' \
+        "$scout_dir/ceiling.settings.json" >/dev/null
+
+    # lead asked for nothing and got nothing — the grant is per-member, not
+    # per-round.
+    refute_exists "$lead_dir/grants.applied"
+    jq -e '[.permissions.allow[] | select(. == "Bash" or startswith("Bash("))] | length == 0' \
+        "$lead_dir/ceiling.settings.json" >/dev/null
+
+    # The record carries the REQUEST on both rows, whether or not it granted.
+    [ "$(rec '.members[] | select(.name == "lead") | .allow | length')" = "0" ]
+    [ "$(rec '.members[] | select(.name == "scout") | .allow | join(",")')" = "Bash" ]
+}
+
+@test "an allow requested in the team file survives round 2 — the same trap as the --skill fork bug" {
+    # team_round_load rebuilds the roster from the RUN RECORD alone, never the
+    # team file again. A grant read only at team_file_load time would vanish
+    # here: the member held back to round 2 would still launch, just without
+    # the tool it was promised, and nothing would report it.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 1 \
+        "lead:alpha:$WORK/c.json" "scout:alpha:$WORK/c.json::Bash"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state lead)" = "dispatched" ]
+    [ "$(member_state scout)" = "pending" ]
+    # The request is on the record even before scout ever launches.
+    [ "$(rec '.members[] | select(.name == "scout") | .allow | join(",")')" = "Bash" ]
+
+    dispatch --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(out '.round')" = "2" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    await_invocations 2
+
+    local scout_dir
+    scout_dir="$(member_job_dir "$(member_handle scout)" "$(member_wt scout)")"
+    [ -n "$scout_dir" ]
+    await_file "$scout_dir/grants.applied"
+    [ "$(cat "$scout_dir/grants.applied")" = "Bash" ]
+    jq -e '[.permissions.allow[] | select(. == "Bash")] | length == 1' \
+        "$scout_dir/ceiling.settings.json" >/dev/null
+}
+
+@test "a member whose allow names a tool this surface will not grant never reaches its launcher" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json::Agent"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 5 ]
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .failure.error')" = "grant_refused" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .handle')" = "null" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .grants')" = "null" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "grant_refused" ]
+    [ "$(out '.members[] | select(.name == "lead") | .allow | join(",")')" = "Agent" ]
+    [ "$(out '.members[] | select(.name == "lead") | .grants')" = "null" ]
+
+    # It never reached a launcher at all: no child was ever invoked.
+    local n
+    n="$(grep -c '^--- invocation' "${FAKE_CLAUDE_RECORD_DIR:-/nonexistent}/argv" 2>/dev/null)" || n=0
+    [ "$n" = "0" ]
+}
+
+@test "control: the same team file with Bash instead of Agent dispatches, proving the refusal is about the tool" {
+    # The refusal above is only evidence if it can fail — a request this
+    # surface DOES grant, on the same shape, must NOT be refused.
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_MODE=hang
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json::Bash"
+
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(member_state lead)" = "dispatched" ]
+}
+
+@test "a granted member's applied grants land on its row once its result does, never before" {
+    dispatch_env "alpha"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    team_file "$WORK/team.json" attached 1 "lead:alpha:$WORK/c.json::Bash"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_invocations 1
+    await_member_terminal lead
+
+    # Applied at the ceiling and even written to disk, but this run's record
+    # has not been told yet — nothing has read the child's result back.
+    [ "$(rec '.members[0].grants')" = "null" ]
+
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    [ "$(rec '.members[] | select(.name == "lead") | .grants | join(",")')" = "Bash" ]
+    [ "$(out '.members[] | select(.name == "lead") | .grants | join(",")')" = "Bash" ]
+}
+
 @test "U7: a member whose child recorded no denial at all still classifies done" {
     # Deny leaves permission_denials[] EMPTY, so an empty array cannot be read as
     # "nothing was refused" — and must not block a member from being judged on
@@ -3328,7 +3452,7 @@ two_settled_then_one() {    # <mode for the third member>
     # R6 — a reader must not be able to tell "not reported" from "not run" by
     # the shape of a row.
     [ "$(out '[.members[] | keys_unsorted | join(",")] | unique | length')" = "1" ]
-    [ "$(out '.members[0] | keys_unsorted | sort | join(",")')" = "error,failure,launch_state,name,outcome,served_model,state,tokens" ]
+    [ "$(out '.members[0] | keys_unsorted | sort | join(",")')" = "allow,error,failure,grants,launch_state,name,outcome,served_model,state,tokens" ]
 }
 
 @test "a member that never launched appears in the advance response with its cause" {
