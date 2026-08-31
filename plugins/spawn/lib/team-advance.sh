@@ -471,12 +471,29 @@ retry_parse() {
 # The refusals, read off a record already in hand. Kept apart from the write so
 # every one of them answers before the lock is taken and before anything moves.
 retry_check() {         # <record json>
-    local rec="$1" state fired
+    local rec="$1" state cause fired
     if ! printf '%s' "$rec" | jq -e --arg n "$RETRY_MEMBER" \
             'any(.members[]; .name == $n)' >/dev/null 2>&1; then
         SPAWN_TEAM_ERROR="member_unknown"
         spawn::team_fail "this run has no member named $RETRY_MEMBER"
     fi
+    cause="$(printf '%s' "$rec" | jq -r --arg n "$RETRY_MEMBER" \
+        '.members[] | select(.name == $n) | (.failure.error // "")')"
+    # These three causes reapply IDENTICALLY on a retry: worktree_failed and
+    # worktree_missing settle on a checkout path this run never re-places
+    # (team.md and this surface's own --describe already say so), and
+    # grant_refused settles on an allow list that is immutable on the record —
+    # team_round_load reads the same names back and spawn::ceiling_grantable is
+    # static, so the member re-refuses every time. Refusing the retry here,
+    # under the SAME error value the member already carries, is what makes
+    # remedy_for's existing prose for each of the three reachable rather than
+    # dead text no caller path ever triggers.
+    case "$cause" in
+        worktree_failed|worktree_missing|grant_refused)
+            SPAWN_TEAM_ERROR="$cause"
+            spawn::team_fail "member $RETRY_MEMBER settled with $cause, which reapplies identically on retry"
+            ;;
+    esac
     # A retry replaces a settled non-success attempt. A member still in flight
     # has an attempt to finish, and one that finished has nothing to replace.
     state="$(printf '%s' "$rec" | jq -r --arg n "$RETRY_MEMBER" '.members[]

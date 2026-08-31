@@ -3598,6 +3598,49 @@ seed_failed_run() {     # [max-rounds] [ceiling]
     [ "$(cat "$RUN/team.json")" = "$before" ]
 }
 
+@test "retry on a member settled grant_refused is refused outright, under that same cause" {
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" lead launch_state launch_failed
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"error":"grant_refused","detail":"'\''Agent'\'' is not a tool this surface may grant to a team member","child_exit_code":null,"degraded_reasons":null}'
+    tr_ spawn::team_member_set "$RUN" lead outcome null
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "grant_refused" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry on a member settled worktree_failed is refused outright, under that same cause" {
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" lead launch_state launch_failed
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"error":"worktree_failed","detail":"path already in use","child_exit_code":null,"degraded_reasons":null}'
+    tr_ spawn::team_member_set "$RUN" lead outcome null
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 5 ]
+    [ "$(out '.error')" = "worktree_failed" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "retry on a member settled worktree_missing is refused outright, under that same cause" {
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"error":"worktree_missing","detail":"/gone","child_exit_code":null,"degraded_reasons":null}'
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 5 ]
+    [ "$(out '.error')" = "worktree_missing" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
 @test "retry names the member it wants" {
     seed_failed_run
     retry --run-id r1 --run-dir "$RUN"
