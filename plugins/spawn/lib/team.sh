@@ -186,7 +186,7 @@ usage() {
 team.sh roster   --run-id <id> [--run-dir <dir>] [--mode attached|unattended]
                  [--max-concurrent N] [--max-rounds N] [--token-ceiling N]
                  --member <name> --alias <alias> --contract <path>
-                 [--skill <name>]... [--worktree <path>]
+                 [--skill <name>]... [--allow <tool>]... [--worktree <path>]
                  [--member <name> ...]
 team.sh dispatch --team-file <path> [--run-id <id>] [--run-dir <dir>]
                  [--mode single-round|attached|unattended]
@@ -201,7 +201,7 @@ USAGE
 
 # Parallel indexed arrays, not a map: bash 3.2 has no associative array, and
 # the roster's ORDER is meaningful anyway — U4 dispatches in roster order.
-M_NAMES=(); M_ALIASES=(); M_CONTRACTS=(); M_SKILLS=(); M_WORKTREES=()
+M_NAMES=(); M_ALIASES=(); M_CONTRACTS=(); M_SKILLS=(); M_WORKTREES=(); M_ALLOWS=()
 
 
 # The driver's own checkout and where member worktrees belong. Both verbs that
@@ -380,9 +380,11 @@ do_describe() {
         {name:"members[].attempts", always:false, note:"the attempts this member has retired. An ARRAY on the run record, each entry holding that attempt’s round, handle, outcome, cause and token counts; the retry response projects it as a COUNT of that array. A retry appends one, so it never destroys the cause it replaces"},
         {name:"members[].failure",  always:false, note:"why this member did not succeed, or null. ONE object with four keys — error, detail, child_exit_code, degraded_reasons — written by whichever layer settled the member: the launcher on a refusal it gave, the probe on a terminal state it read. It lives on the run record, so it outlives teardown of the member’s worktree, which is where the child’s own account of itself was. advance, retry and status all carry it"},
         {name:"members[].error",    always:false,
-         values:["worktree_failed","worktree_missing"],
-         note:"the enum value to branch on, projected from members[].failure.error. Never prose. A member carrying a cause carries that cause’s value here, so a reader never has to reach into the object to decide what happened. This is a MEMBER cause, not a script exit, which is why the two values this surface writes itself are declared here rather than in error_values: `worktree_failed` is a member that never got a checkout, `worktree_missing` one whose checkout was placed and is gone — settled failed rather than left holding its round open, and NOT retryable, because a later round reuses the path already on the record and never re-places a member. A member settled by its launcher carries the launcher’s own error value or terminal state here instead, so this list is what this surface writes, never the whole set a reader can see"},
+         values:["worktree_failed","worktree_missing","grant_refused"],
+         note:"the enum value to branch on, projected from members[].failure.error. Never prose. A member carrying a cause carries that cause’s value here, so a reader never has to reach into the object to decide what happened. This is a MEMBER cause, not a script exit, which is why the three values this surface writes itself are declared here rather than in error_values: `worktree_failed` is a member that never got a checkout, `worktree_missing` one whose checkout was placed and is gone — settled failed rather than left holding its round open, and NOT retryable, because a later round reuses the path already on the record and never re-places a member. `grant_refused` is a member whose allow named a tool spawn::ceiling_grantable will not grant, refused before its launcher was ever invoked. A member settled by its launcher carries the launcher’s own error value or terminal state here instead, so this list is what this surface writes, never the whole set a reader can see"},
         {name:"members[].served_model", always:false, note:"the model that actually answered this member, read from the child’s own receipt. null is UNKNOWN and never the alias the member asked for. A value differing from that alias degrades the member and names BOTH models in members[].failure.degraded_reasons. advance and status carry it; retry does not"},
+        {name:"members[].allow",       always:false, note:"tool names this member’s team-file entry ASKED to grant. What the member actually received is members[].grants — a name here that is not there was refused, not applied"},
+        {name:"members[].grants",      always:false, note:"tool names the ceiling actually APPLIED to this member, read from the child’s own result once it reaches one — null while the member is still in flight, and an empty array for a member that asked for nothing or whose grant was refused. Never derived from members[].allow: a refused request must never read as a grant"},
         {name:"removed",            always:false, note:"teardown only: the worktrees removed, by member name"},
         {name:"team_file",          always:false, note:"the copy taken at dispatch, not the caller’s original"},
         {name:"mode",               always:false, note:"single-round | attached | unattended"},
@@ -418,7 +420,8 @@ do_describe() {
            {name:"name",     required:true,  note:"the name every response reports this member by, and the only thing teardown consents to remove; [A-Za-z0-9][A-Za-z0-9._-]* with no dot run"},
            {name:"alias",    required:true,  note:"the gateway alias this member runs on"},
            {name:"contract", required:true,  note:"path to that member’s own contract file, handed to bg-agent unread"},
-           {name:"skills",   required:false, note:"names of the skills this member is to have, and no other member gets them"}
+           {name:"skills",   required:false, note:"names of the skills this member is to have, and no other member gets them"},
+           {name:"allow",    required:false, note:"tool names to grant this member’s ceiling — today, WebSearch and Bash. Granting Bash to an unattended member is not a wider ceiling; it is the absence of one — see spawn::ceiling_grantable’s own header for what that hands over. A name this surface will not grant refuses the member’s launch outright rather than running it quietly ungranted; members[].grants reports what was actually applied, never what was merely asked for"}
          ]}
       ],
       modes:[

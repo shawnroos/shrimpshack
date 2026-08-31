@@ -181,6 +181,23 @@ team_record_served() {  # <name> <handle.sh result object>
         || say "team: '$name' was served by $v and it could not be recorded"
 }
 
+# What the ceiling ACTUALLY applied to this member, lifted out of the child's
+# own result record (SUP_GRANTS_APPLIED, by way of bg-agent's `grants`) — never
+# from the row's own `allow`, which is what the member ASKED for. A refused
+# grant still writes a result with `grants:[]`, so this reports that refusal
+# honestly instead of echoing the request back as though it had landed.
+#
+# WRITTEN BEFORE THE OUTCOME, for the same reason team_record_usage is: each
+# set is its own recompute-and-write, and an outcome landing first leaves a
+# reader looking at a terminal member with nothing said about what it held.
+team_record_grants() {  # <name> <handle.sh result object>
+    local name="$1" res="$2" v
+    v="$(printf '%s' "$res" | jq -c '.result.grants // empty' 2>/dev/null)"
+    [ -n "$v" ] || return 0
+    spawn::team_member_set "$RUN_DIR" "$name" grants "$v" \
+        || say "team: '$name' was granted $v and it could not be recorded"
+}
+
 # Why a member did not come back with work, written to its own row. The cause is
 # ONE object so a reader cannot get the verdict and the reason from two places
 # and find them disagreeing; the response's `error` is a projection of
@@ -267,6 +284,7 @@ team_probe_member() {   # <name> <handle> <worktree>
         [ -n "$outcome" ] || outcome="$state"
         team_record_usage "$name" "$res"
         team_record_served "$name" "$res"
+        team_record_grants "$name" "$res"
     else
         # handle_expired and result_missing say the job ran and its record is no
         # longer readable — which is not the same as no answer. The probe's own
@@ -327,6 +345,7 @@ team_emit_intent() {    # <record> <intent> <reasons-json> <delay|""> <detail>
                                 then $m.outcome else $p.outcome end),
                        tokens:$m.tokens,
                        served_model:$m.served_model,
+                       allow:$m.allow, grants:$m.grants,
                        failure:$m.failure,
                        error:($m.failure.error // $p.error // null)} ]}
         + (if $dl == "" then {} else {delay:($dl | tonumber)} end)')" \
