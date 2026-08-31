@@ -223,6 +223,19 @@ jq_free_path() {
     [ "$(rec '.members[1].skills | length')" = "0" ]
 }
 
+@test "the roster verb's --allow flag lands on the member's row, same as --skill" {
+    # three_members drives --skill through this same verb; nothing here drove
+    # --allow through it before this test — team.bats otherwise reaches allow
+    # only via the team-file path (team_file_load), never via roster_parse's
+    # own --member/--allow flags.
+    roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.md" --allow Bash \
+        --member scout --alias haiku --contract "$WORK/c2.md"
+    [ "$status" -eq 0 ]
+    [ "$(rec '.members[0].allow | join(",")')" = "Bash" ]
+    [ "$(rec '.members[1].allow | length')" = "0" ]
+}
+
 # ===========================================================================
 # Teardown removes exactly what the record names
 # ===========================================================================
