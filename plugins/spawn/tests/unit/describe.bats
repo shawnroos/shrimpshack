@@ -860,8 +860,15 @@ bash32_surfaces() {
     # over — the alternative is executing every file in lib/ to find out.
     printf '%s\n' "$listed" | grep -qx 'bg-operator.sh'
     printf '%s\n' "$listed" | grep -qx 'bg-repo.sh'
+    # FOUR, not three: bg-agent.sh, bg-operator.sh and bg-repo.sh source it to
+    # ANSWER --describe through it, which is the count this test otherwise
+    # tracks. team-dispatch.sh is the fourth, and for an unrelated reason — it
+    # calls spawn::ceiling_grantable() to refuse an ungrantable --allow before
+    # ever invoking bg-agent, and owns no --describe case of its own. Counted
+    # here explicitly so a fifth file sourcing ceilings.sh for either reason
+    # still has to be added by hand.
     run bash -c "grep -c 'SCRIPT_DIR/ceilings.sh' \"\$0\"/*.sh | grep -v ':0$' | wc -l" "$LIB"
-    [ "$(printf '%s' "$output" | tr -d ' ')" = "3" ]
+    [ "$(printf '%s' "$output" | tr -d ' ')" = "4" ]
 
     [ "$(printf '%s\n' "$listed" | grep -c .)" -eq 9 ]
 }

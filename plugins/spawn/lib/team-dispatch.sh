@@ -19,6 +19,13 @@ if ! declare -F say >/dev/null 2>&1; then
     # shellcheck source=./common.sh
     . "$SCRIPT_DIR/common.sh"
 fi
+# spawn::ceiling_grantable, so a member's `allow` is refused HERE, before a
+# launcher is ever invoked — bg-agent's own grant check runs in its detached
+# supervisor, after it has already answered this caller with a handle.
+if ! declare -F spawn::ceiling_grantable >/dev/null 2>&1; then
+    # shellcheck source=./ceilings.sh
+    . "$SCRIPT_DIR/ceilings.sh"
+fi
 
 # The per-member flags attach to the most recent --member, so a member is
 # declared and described in one place on the command line.
@@ -35,9 +42,9 @@ roster_parse() {
             --token-ceiling) tc="${2:-}"; tc_stated="--token-ceiling"; shift 2 || shift ;;
             --member)
                 M_NAMES+=("${2:-}"); M_ALIASES+=(""); M_CONTRACTS+=("")
-                M_SKILLS+=(""); M_WORKTREES+=("")
+                M_SKILLS+=(""); M_WORKTREES+=(""); M_ALLOWS+=("")
                 last=$(( last + 1 )); shift 2 || shift ;;
-            --alias|--contract|--skill|--worktree)
+            --alias|--contract|--skill|--worktree|--allow)
                 [ "$last" -ge 0 ] || { SPAWN_TEAM_ERROR="usage"
                     spawn::team_fail "$1 was given before any --member, so it belongs to nobody"; }
                 case "$1" in
@@ -45,6 +52,7 @@ roster_parse() {
                     --contract) M_CONTRACTS[$last]="${2:-}" ;;
                     --worktree) M_WORKTREES[$last]="${2:-}" ;;
                     --skill) M_SKILLS[$last]="${M_SKILLS[$last]} ${2:-}" ;;
+                    --allow) M_ALLOWS[$last]="${M_ALLOWS[$last]} ${2:-}" ;;
                 esac
                 shift 2 || shift ;;
             *)
@@ -99,7 +107,7 @@ team_place_members() {  # <run-dir>
         # a null handle: a handle does not exist until a launcher returns one,
         # and a launch can fail without ever producing one.
         spawn::team_member_add "$dir" "$name" "${M_ALIASES[$i]}" "$worktree" \
-            "${M_CONTRACTS[$i]}" "${M_SKILLS[$i]# }" \
+            "${M_CONTRACTS[$i]}" "${M_SKILLS[$i]# }" "${M_ALLOWS[$i]# }" \
             || spawn::team_fail "member '$name' could not be recorded"
         if [ -z "$worktree" ]; then
             TEAM_UNPLACED="$TEAM_UNPLACED $name"
@@ -161,7 +169,7 @@ do_roster() {
           pending: ([ .members[] | select(.launch_state == "pending"
                                           or .launch_state == "retry_pending") ] | length),
           members: [ .members[] | {name, alias, worktree, launch_state, handle,
-                                   skills, failure,
+                                   skills, allow, grants, failure,
                                    error: (.failure.error // null)} ]}')" \
         || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the roster could not be encoded"; }
     emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the roster encoded to nothing"; }
@@ -281,6 +289,7 @@ team_file_load() {  # <path>
         IFS= read -r alias || break
         IFS= read -r contract || break
         IFS= read -r skills || break
+        IFS= read -r allow || break
         spawn::team_name_ok "$name" || { SPAWN_TEAM_ERROR="member_name_invalid"
             spawn::team_fail "member name failed the grammar: $name"; }
         case " $seen " in
@@ -289,9 +298,10 @@ team_file_load() {  # <path>
         esac
         seen="$seen $name"
         M_NAMES+=("$name"); M_ALIASES+=("$alias"); M_CONTRACTS+=("$contract")
-        M_SKILLS+=("$skills"); M_WORKTREES+=("")
+        M_SKILLS+=("$skills"); M_WORKTREES+=(""); M_ALLOWS+=("$allow")
     done < <(jq -r '.members[] | (.name, .alias, .contract,
-                                 ((.skills // []) | join(" ")))' "$f" 2>/dev/null)
+                                 ((.skills // []) | join(" ")),
+                                 ((.allow // []) | join(" ")))' "$f" 2>/dev/null)
     [ "${#M_NAMES[@]}" -gt 0 ] || { SPAWN_TEAM_ERROR="team_file_malformed"
         spawn::team_fail "no member in $f could be read as a name, an alias and a contract"; }
 }
@@ -301,12 +311,30 @@ team_file_load() {  # <path>
 # Returns 0 when the member is dispatched — the caller counts those against the
 # concurrency maximum, so a refused launch never spends a slot it is not using.
 team_launch_member() {  # <index> <round>
-    local i="$1" round="$2" name="${M_NAMES[$i]}" out rc handle err s
+    local i="$1" round="$2" name="${M_NAMES[$i]}" out rc handle err s a bad=""
     local args=()
     for s in ${M_SKILLS[$i]}; do args+=(--skill "$s"); done
-    out="$(bash "$BG_AGENT" --alias "${M_ALIASES[$i]}" --contract "${M_CONTRACTS[$i]}" \
-        --cwd "${M_WORKTREES[$i]}" ${args[@]+"${args[@]}"} 2>/dev/null)"
-    rc=$?
+    # Checked HERE, against the same predicate bg-agent's own ceiling uses
+    # (spawn::ceiling_grantable), rather than left to bg-agent alone: its grant
+    # check runs in the DETACHED supervisor, after the launcher has already
+    # answered this caller with a handle — so a bad --allow would read
+    # `dispatched` here for the whole window before the job failed on its own,
+    # and never as `launch_failed`. `grant_refused` is checked before ANY
+    # --allow is forwarded, so a refused member never reaches bg-agent at all.
+    for a in ${M_ALLOWS[$i]}; do
+        spawn::ceiling_grantable "$a" || { bad="$a"; break; }
+    done
+    if [ -n "$bad" ]; then
+        out="$(jq -nc --arg e grant_refused --arg d \
+            "'$bad' is not a tool this surface may grant to a team member" \
+            '{error:$e, detail:$d}')"
+        rc=1
+    else
+        for a in ${M_ALLOWS[$i]}; do args+=(--allow "$a"); done
+        out="$(bash "$BG_AGENT" --alias "${M_ALIASES[$i]}" --contract "${M_CONTRACTS[$i]}" \
+            --cwd "${M_WORKTREES[$i]}" ${args[@]+"${args[@]}"} 2>/dev/null)"
+        rc=$?
+    fi
     handle="$(printf '%s' "$out" | jq -r '.handle // empty' 2>/dev/null)"
     if [ "$rc" -eq 0 ] && [ -n "$handle" ]; then
         # The handle is written BEFORE the state, because the record layer takes
@@ -374,20 +402,31 @@ team_round_load() {     # <run-dir>
     #
     # One field per line, not @tsv: an empty field between tabs collapses,
     # because tab is IFS whitespace.
+    #
+    # `$fields` is a COMMAND SUBSTITUTION, and $() strips EVERY trailing
+    # newline, not one — so a stream whose last projected value is the empty
+    # string loses that whole line, and the read loop breaks one field short
+    # on exactly that member. `.worktree` stays LAST for this reason: a placed
+    # member's worktree is never empty, so it is the one field here that can
+    # never trigger it. `allow` sits before it rather than after, on purpose —
+    # measured by putting it last first: an unallowed member (the common case)
+    # then read as `M_NAMES=()`, and every round-2 member vanished.
     local fields n
-    M_NAMES=(); M_ALIASES=(); M_CONTRACTS=(); M_SKILLS=(); M_WORKTREES=()
+    M_NAMES=(); M_ALIASES=(); M_CONTRACTS=(); M_SKILLS=(); M_WORKTREES=(); M_ALLOWS=()
     fields="$(printf '%s' "$rec" | jq -r '.members[]
         | select(.launch_state == "pending" or .launch_state == "retry_pending")
-        | (.name, .alias, .contract, ((.skills // []) | join(" ")), .worktree)' 2>/dev/null)"
+        | (.name, .alias, .contract, ((.skills // []) | join(" ")),
+           ((.allow // []) | join(" ")), .worktree)' 2>/dev/null)"
     n=0
     while IFS= read -r name; do
         IFS= read -r alias || break
         IFS= read -r contract || break
         IFS= read -r skills || break
+        IFS= read -r allow || break
         IFS= read -r worktree || break
         [ -n "$name" ] || continue
         M_NAMES+=("$name"); M_ALIASES+=("$alias"); M_CONTRACTS+=("$contract")
-        M_SKILLS+=("$skills"); M_WORKTREES+=("$worktree")
+        M_SKILLS+=("$skills"); M_WORKTREES+=("$worktree"); M_ALLOWS+=("$allow")
         n=$(( n + 1 ))
     done <<EOF
 $fields
@@ -577,7 +616,7 @@ do_dispatch_round() {
           # No apostrophes here: this jq program is a single-quoted shell
           # string, and one would close it.
           members: [ .members[] | {name, alias, worktree, launch_state, handle,
-                                   round, skills, failure,
+                                   round, skills, allow, grants, failure,
                                    error: (.failure.error // $le[.name] // null)} ]}')" \
         || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the round could not be encoded"; }
     emit "$obj" || { SPAWN_TEAM_ERROR="record_malformed"; spawn::team_fail "the round encoded to nothing"; }

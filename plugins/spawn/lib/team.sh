@@ -82,6 +82,8 @@ remedy_for() {
             printf 'The member has no checkout, so it cannot be dispatched; the rest of the roster is intact and its worktrees exist. Read `detail` for what git said — a path already in use and a full disk are the two that happen. Free the path named there (`git worktree list` shows what holds it) or run `teardown` on the run id, then call again. Retrying unchanged repeats the same failure.' ;;
         worktree_missing)
             printf 'The member had a checkout and it is gone, so the member is settled `failed` rather than left holding its round open on something no later round revisits. Do NOT retry it: a later round reuses the path already on the record and never re-places a member, so the retry dispatches into a directory that is not there. Read `detail` for the path — something outside this run removed it. Start a new run for the work.' ;;
+        grant_refused)
+            printf 'This member’s `allow` named a tool `spawn::ceiling_grantable` will not grant, and it was refused before its launcher was ever invoked. Do NOT retry it: the allow on the record does not change between attempts and the ceiling check is static, so the same name is refused every time. Edit that member’s allow list in the team file and start a new run, or drop the name if the member does not truly need it.' ;;
         driver_worktree)
             printf 'A member may not run in the worktree the driver is running in: they would contend for the one-job-per-worktree lock and write into the tree the driver reads its own record from. Drop the --worktree flag and let the roster place the member, or name a path that is not this checkout.' ;;
         member_duplicate)
@@ -136,7 +138,7 @@ emit_error() { spawn::emit_error plugin "run_id run_dir members removed team_fil
 # can refuse IS the caller's invocation or their run directory, which is 2.
 spawn::team_code_for() {
     case "$1" in
-        worktree_failed|launch_failed) printf '%s' "$EX_UPSTREAM" ;;
+        worktree_failed|worktree_missing|launch_failed) printf '%s' "$EX_UPSTREAM" ;;
         *) printf '%s' "$EX_USAGE" ;;
     esac
 }
@@ -186,7 +188,7 @@ usage() {
 team.sh roster   --run-id <id> [--run-dir <dir>] [--mode attached|unattended]
                  [--max-concurrent N] [--max-rounds N] [--token-ceiling N]
                  --member <name> --alias <alias> --contract <path>
-                 [--skill <name>]... [--worktree <path>]
+                 [--skill <name>]... [--allow <tool>]... [--worktree <path>]
                  [--member <name> ...]
 team.sh dispatch --team-file <path> [--run-id <id>] [--run-dir <dir>]
                  [--mode single-round|attached|unattended]
@@ -201,7 +203,7 @@ USAGE
 
 # Parallel indexed arrays, not a map: bash 3.2 has no associative array, and
 # the roster's ORDER is meaningful anyway — U4 dispatches in roster order.
-M_NAMES=(); M_ALIASES=(); M_CONTRACTS=(); M_SKILLS=(); M_WORKTREES=()
+M_NAMES=(); M_ALIASES=(); M_CONTRACTS=(); M_SKILLS=(); M_WORKTREES=(); M_ALLOWS=()
 
 
 # The driver's own checkout and where member worktrees belong. Both verbs that
@@ -380,9 +382,11 @@ do_describe() {
         {name:"members[].attempts", always:false, note:"the attempts this member has retired. An ARRAY on the run record, each entry holding that attempt’s round, handle, outcome, cause and token counts; the retry response projects it as a COUNT of that array. A retry appends one, so it never destroys the cause it replaces"},
         {name:"members[].failure",  always:false, note:"why this member did not succeed, or null. ONE object with four keys — error, detail, child_exit_code, degraded_reasons — written by whichever layer settled the member: the launcher on a refusal it gave, the probe on a terminal state it read. It lives on the run record, so it outlives teardown of the member’s worktree, which is where the child’s own account of itself was. advance, retry and status all carry it"},
         {name:"members[].error",    always:false,
-         values:["worktree_failed","worktree_missing"],
-         note:"the enum value to branch on, projected from members[].failure.error. Never prose. A member carrying a cause carries that cause’s value here, so a reader never has to reach into the object to decide what happened. This is a MEMBER cause, not a script exit, which is why the two values this surface writes itself are declared here rather than in error_values: `worktree_failed` is a member that never got a checkout, `worktree_missing` one whose checkout was placed and is gone — settled failed rather than left holding its round open, and NOT retryable, because a later round reuses the path already on the record and never re-places a member. A member settled by its launcher carries the launcher’s own error value or terminal state here instead, so this list is what this surface writes, never the whole set a reader can see"},
+         values:["worktree_failed","worktree_missing","grant_refused"],
+         note:"the enum value to branch on, projected from members[].failure.error. Never prose. A member carrying a cause carries that cause’s value here, so a reader never has to reach into the object to decide what happened. This is a MEMBER cause, not a script exit, which is why the three values this surface writes itself are declared here rather than in error_values: `worktree_failed` is a member that never got a checkout, `worktree_missing` one whose checkout was placed and is gone — settled failed rather than left holding its round open, because a later round reuses the path already on the record and never re-places a member. `grant_refused` is a member whose allow named a tool spawn::ceiling_grantable will not grant, refused before its launcher was ever invoked — the allow on the record never changes and the ceiling check is static, so the refusal is identical on every attempt. ALL THREE are settled and NOT retryable: `retry` refuses a member carrying any of them outright, under that same value, rather than parking it on a round it can only fail again. A member settled by its launcher carries the launcher’s own error value or terminal state here instead, so this list is what this surface writes, never the whole set a reader can see"},
         {name:"members[].served_model", always:false, note:"the model that actually answered this member, read from the child’s own receipt. null is UNKNOWN and never the alias the member asked for. A value differing from that alias degrades the member and names BOTH models in members[].failure.degraded_reasons. advance and status carry it; retry does not"},
+        {name:"members[].allow",       always:false, note:"tool names this member’s team-file entry ASKED to grant. What the member actually received is members[].grants, which stays null until a result reaches back — never read a name missing from a still-null grants as refused. The one reliable refusal signal is members[].error == \"grant_refused\""},
+        {name:"members[].grants",      always:false, note:"tool names the ceiling actually APPLIED to this member, read from the child’s own result once it reaches one. null means NO RESULT YET, never `refused` — that includes a member still in flight AND a member that was never launched at all: `grant_refused` settles the member without ever calling the launcher, so its grants stays null for ever, not an empty array. Read members[].error == \"grant_refused\" for the refusal signal; an empty array is a member that reached a result and asked for nothing. Never derived from members[].allow: a refused request must never read as a grant"},
         {name:"removed",            always:false, note:"teardown only: the worktrees removed, by member name"},
         {name:"team_file",          always:false, note:"the copy taken at dispatch, not the caller’s original"},
         {name:"mode",               always:false, note:"single-round | attached | unattended"},
@@ -418,7 +422,8 @@ do_describe() {
            {name:"name",     required:true,  note:"the name every response reports this member by, and the only thing teardown consents to remove; [A-Za-z0-9][A-Za-z0-9._-]* with no dot run"},
            {name:"alias",    required:true,  note:"the gateway alias this member runs on"},
            {name:"contract", required:true,  note:"path to that member’s own contract file, handed to bg-agent unread"},
-           {name:"skills",   required:false, note:"names of the skills this member is to have, and no other member gets them"}
+           {name:"skills",   required:false, note:"names of the skills this member is to have, and no other member gets them"},
+           {name:"allow",    required:false, note:"tool names to grant this member’s ceiling — today, WebSearch and Bash. Granting Bash to an unattended member is not a wider ceiling; it is the absence of one — see spawn::ceiling_grantable’s own header for what that hands over. A name this surface will not grant refuses the member’s launch outright rather than running it quietly ungranted; members[].grants reports what was actually applied, never what was merely asked for"}
          ]}
       ],
       modes:[
@@ -447,7 +452,9 @@ do_describe() {
         {value:"member_path_forbidden", exit_code:2, note:"a member names its own path; placement belongs to this surface"},
         {value:"roster_exceeds_round",  exit_code:2, note:"single-round was given more members than one round can hold; nothing was created"},
         {value:"driver_worktree",       exit_code:2, note:"a member was placed in the driver’s own checkout"},
-        {value:"worktree_failed",       exit_code:5, note:"a member has no checkout; the rest of the roster is intact"},
+        {value:"worktree_failed",       exit_code:5, note:"a member has no checkout; the rest of the roster is intact. Also given by retry, refused outright: a later round reuses the path already on the record rather than re-placing the member, so the checkout is never made and a retry would only repeat the loss"},
+        {value:"worktree_missing",      exit_code:5, note:"retry was given a member whose checkout was placed and is later gone; the same reuse-not-replace rule as worktree_failed makes the retry unable to land, so it is refused rather than parked on a round nothing can finish"},
+        {value:"grant_refused",         exit_code:2, note:"retry was given a member whose allow named a tool this surface will not grant. The record’s allow is immutable and the ceiling check is static, so the member would refuse identically on every attempt; refused here rather than spent against max_rounds"},
         {value:"launch_failed",         exit_code:5, note:"a member’s launcher refused it; that member carries the launcher’s own error value"},
         {value:"member_not_failed",     exit_code:2, note:"retry was given a member that finished, or one still in flight; a retry replaces a settled non-success attempt"},
         {value:"run_bound_reached",     exit_code:2, note:"retry was asked of a run whose round maximum or token ceiling has already fired; nothing was changed"},

@@ -41,9 +41,9 @@ So read the roster before the first dispatch and, per member, ask what its contr
 Two things to check while you are there, because both are silent:
 
 - **A skill name that does not resolve still dispatches.** It lands in that member's `failure.degraded_reasons[]` rather than refusing the run, so a typo yields a member running without the method it was promised — and it will report as though it had one.
-- **A member has no Bash.** It can read, search and write inside its own worktree, but it cannot run a build, a test, a linter or `git`. A skill whose method is "run the checker and report the output" cannot be followed — and the member will report on the part it could do. If a command has to run, put it in the member's contract as `verify`, which the supervisor runs itself.
+- **A member has no Bash by default.** It can read, search and write inside its own worktree, but it cannot run a build, a test, a linter or `git`. A skill whose method is "run the checker and report the output" cannot be followed — and the member will report on the part it could do. If a command has to run, put it in the member's contract as `verify`, which the supervisor runs itself — that is still the right call for most members.
 
-The team surface passes no `--allow`, so every member runs on the ceiling's floor: `Read`, `Write`, `Edit`, `Grep` and `Glob`, scoped to its own worktree. That is enough for a member to find its own inputs; it is not enough to execute anything.
+The team surface passes no `--allow` unless the team file's own member entry names one in its `allow` array, so every member runs on the ceiling's floor by default: `Read`, `Write`, `Edit`, `Grep` and `Glob`, scoped to its own worktree. That is enough for a member to find its own inputs; it is not enough to execute anything. A team file can grant one named member Bash — not a wider ceiling, the absence of one, for that member alone — and `members[].grants` in the run record reports what actually landed, never what the team file merely asked for.
 
 ## single-round: dispatch once, arm nothing
 
@@ -74,16 +74,16 @@ Ordered, per round:
 
 On `stop`, distinguish roster-exhausted from a bound. A run stopped by its round maximum or its token ceiling has not finished its work, and the report must not read as success. `reasons` lists every condition that fired, not the first one.
 
-A `stop` can carry a mixed verdict — some members done, some failed. `team.sh retry --run-id <run-id> --member <name>` returns ONE settled non-success member to the roster. It **dispatches nothing**: the member goes back to pending, so a retry has to be followed by the ordinary dispatch-and-advance round. The attempt it replaces is kept in `members[].attempts`, so retrying never destroys the cause you just reported. Retry the members whose cause says another attempt could land — a refused launch, a substituted model — and leave the ones whose cause says it cannot. Never retry the whole team by re-dispatching the run.
+A `stop` can carry a mixed verdict — some members done, some failed. `team.sh retry --run-id <run-id> --member <name>` returns ONE settled non-success member to the roster. It **dispatches nothing**: the member goes back to pending, so a retry has to be followed by the ordinary dispatch-and-advance round. The attempt it replaces is kept in `members[].attempts`, so retrying never destroys the cause you just reported. Retry the members whose cause says another attempt could land — a substituted model, a launch that failed for a reason since fixed outside the run — and leave the ones whose cause says it cannot. Never retry the whole team by re-dispatching the run.
 
-Four refusals come back from `retry`, all exit 2, and each is a different fact to relay rather than work around:
+Refusals come back from `retry`, and each is a different fact to relay rather than work around:
 
-- `member_not_failed` — that member finished, or is still in flight. A retry replaces a settled non-success attempt and nothing else.
-- `run_bound_reached` — the run's round maximum or token ceiling has already fired. Nothing was changed, and retrying into a stopped run is not how it resumes.
-- `run_busy` — an advance holds the run lock. Nothing was changed; come back after that advance prints its intent.
-- `member_unknown` — this run has no member by that name, and `members` lists the ones it does.
-
-**Do not retry a member whose cause is `worktree_missing`.** The cause is terminal — the member is recorded `failed` so its round closes rather than staying open on something no later round revisits — and `retry` will nonetheless ACCEPT it, because `failed` is a settled non-success like any other. It cannot work: a later round reuses the checkout path already on the record and never re-places a member, so the retry dispatches into a directory that is gone and fails the same way. This is one of the causes that says another attempt cannot land. Report the failure and, if the work still matters, start a new run.
+- `member_not_failed` (exit 2) — that member finished, or is still in flight. A retry replaces a settled non-success attempt and nothing else.
+- `run_bound_reached` (exit 2) — the run's round maximum or token ceiling has already fired. Nothing was changed, and retrying into a stopped run is not how it resumes.
+- `run_busy` (exit 2) — an advance holds the run lock. Nothing was changed; come back after that advance prints its intent.
+- `member_unknown` (exit 2) — this run has no member by that name, and `members` lists the ones it does.
+- `worktree_failed` / `worktree_missing` (exit 5) — the member's checkout never existed, or existed and is gone. `retry` refuses these OUTRIGHT, under that same cause value, rather than accepting the member back onto the roster: a later round reuses the checkout path already on the record and never re-places a member, so nothing a retry could do would land. Report the failure and, if the work still matters, start a new run.
+- `grant_refused` (exit 2) — the member's `allow` named a tool this surface will not grant. `retry` refuses this outright too: the allow on the record never changes between attempts and the ceiling check is static, so the same name would be refused every time. Fix the team file's `allow` list for this member and start a new run.
 
 ### Arming, in unattended mode only
 

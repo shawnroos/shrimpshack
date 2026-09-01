@@ -736,3 +736,63 @@ PYEOF
     row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
     [ "$(printf '%s' "$row" | jq -r '.error')" = "launch_failed" ]
 }
+
+# team-view's own jq -r fork reads .allow and .grants off the member object by
+# a fixed field ORDER, matched by a `read -r` block of the same length and
+# order — a field dropped from either side, or the two lists drifting apart,
+# shifts every read after it rather than failing loudly. status is the only
+# surface that has to re-derive this projection (dispatch and advance answer
+# from the member object directly), so it is the one place this can silently
+# stop happening.
+@test "U10: a member's requested allow reaches its status row" {
+    contract "$WORK/c1.json" out1.txt
+    team_cmd roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.json" --allow Bash
+    [ "$status" -eq 0 ]
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" allow
+    [ "$(printf '%s' "$row" | jq -c '.allow')" = '["Bash"]' ]
+}
+
+@test "U10: a member that asked for nothing renders allow as an empty array, not absent" {
+    three_dispatched
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" allow
+    [ "$(printf '%s' "$row" | jq -c '.allow')" = '[]' ]
+}
+
+@test "U10: what the ceiling actually applied reaches the status row as grants" {
+    three_dispatched
+    rec_set lead grants '["Bash"]'
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    assert_json_key "$row" grants
+    [ "$(printf '%s' "$row" | jq -c '.grants')" = '["Bash"]' ]
+}
+
+# grants stays null until a result lands (R15's contract), and a member's own
+# allow request must never be mistaken for what actually reached it.
+@test "U10: a member still in flight renders grants null, distinct from its own allow" {
+    contract "$WORK/c1.json" out1.txt
+    team_cmd roster --run-id r1 --run-dir "$RUN" \
+        --member lead --alias sonnet --contract "$WORK/c1.json" --allow WebSearch
+    [ "$status" -eq 0 ]
+
+    team_cmd status --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    local row
+    row="$(printf '%s' "$output" | jq -c '.members[] | select(.name == "lead")')"
+    [ "$(printf '%s' "$row" | jq -r '.grants | type')" = "null" ]
+    [ "$(printf '%s' "$row" | jq -c '.allow')" = '["WebSearch"]' ]
+}
