@@ -57,12 +57,24 @@ detection:
 
 - **`auto`** (default) — pick **herdr** when `HERDR_ENV=1` *and* the herdr server is
   live (a `herdr status server` probe — a stale `HERDR_ENV` never wins); else **cmux**
-  when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **ghostty** when
+  when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **herdr** again when
+  *nothing* announced itself and the server is live anyway; else **ghostty** when
   Ghostty is the terminal *and* no multiplexer announced itself at all; else **none**
   (worktree + handoff still produced, plus a manual `cd … && claude` line). Landing on
   **none** is only a success when nothing announced a backend — if something did and
   the launch never happened, the run exits 4 or 5. Precedence is explicit:
-  **herdr (live) > cmux > ghostty > none**.
+  **herdr (announced, live) > cmux > herdr (unannounced, live) > ghostty > none**.
+- The **unannounced herdr** arm exists because `HERDR_ENV` records launch ancestry, not
+  reachability. herdr injects it into the panes it spawns, so a session started from a
+  plain terminal never holds it — while `herdr pane` and `herdr agent` still address
+  every pane on the live server by id. Without this arm such a session fell through to
+  ghostty and opened a bare window beside the user's herdr layout, at exit 0, with no
+  mention of herdr. The arm sits below both announced arms and requires BOTH announcement
+  vars to be empty, so it never steals a session another backend owns, and it never
+  overrides `HERDR_ENV=0` (present but switched off), which still resolves `none`.
+  A session that reaches herdr this way holds no `HERDR_PANE_ID`, so `--target split`
+  has nothing to split — see the `--from-surface` note below; the script warns and opens
+  a tab.
 - Ghostty is deliberately suppressed whenever `HERDR_ENV` or `CMUX_WORKSPACE_ID` is
   set, even if the multiplexer's own probe then fails. Those vars are both present
   inside herdr-running-in-ghostty, and a multiplexer that announced itself owns the
@@ -368,6 +380,12 @@ instead of a split. Resolve it before dispatch, per backend:
 On ghostty, do **not** pass `$GHOSTTY_SURFACE_ID`. It's a hex pointer that matches
 neither a terminal's id nor its tty, so the split fails to find a surface and falls
 back to a tab. Pass `$(tty)` (e.g. `/dev/ttys004`).
+
+If **none** of those vars is set, the session is not inside a pane of any backend and
+there is no originating surface to split — which is exactly the case the unannounced
+herdr arm above resolves. Say so and use `--target tab`. Do **not** synthesize an id
+from `herdr pane list` or `cmux tree`: those enumerate panes the user is not sitting
+in, and splitting one of them puts the new session somewhere they did not ask for.
 
 Pass `--split-direction left` only when the user asked for the left side; the default
 is right.

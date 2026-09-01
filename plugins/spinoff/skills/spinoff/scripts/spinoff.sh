@@ -347,6 +347,17 @@ resolve_launcher() {
   esac
   if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
   elif [ -n "${CMUX_WORKSPACE_ID:-}" ] && _cmux_probe;    then LAUNCHER=cmux
+  # Nothing announced a multiplexer, but a herdr SERVER is up. HERDR_ENV is injected
+  # by the herdr binary into panes it spawns, so it is a proxy for launch ancestry, not
+  # for herdr being reachable: a session started from a plain terminal never holds it,
+  # while `herdr pane`/`agent` still address every pane on the live server by id. Before
+  # this arm such a session fell through to ghostty and opened a bare window beside the
+  # user's herdr layout, at exit 0, with no mention of herdr anywhere.
+  # It sits BELOW both announced arms and keeps their `-z` guards, so it cannot steal a
+  # session another backend owns, and HERDR_ENV=0 (present but switched off, R8) still
+  # resolves `none` rather than reaching this probe.
+  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] \
+       && _herdr_probe;                                   then LAUNCHER=herdr
   # ghostty is checked LAST, and only when NO multiplexer announced itself in the
   # environment at all. Two separate reasons, both load-bearing:
   #  * ghostty's own vars are set even when a multiplexer owns the session —
