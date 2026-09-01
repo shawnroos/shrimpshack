@@ -252,11 +252,43 @@ run_resolve() {
   [ "$output" = herdr ]
 }
 
-@test "resolve: neither env present -> none" {
+@test "resolve: nothing announced + live herdr server -> herdr" {
+  # HERDR_ENV records launch ancestry, not reachability. A session started outside a
+  # herdr pane never carries it, and before the unannounced arm this run resolved to
+  # ghostty (or none) while `herdr status server` said running. Reversal of an earlier
+  # assertion that read `none` here, which encoded exactly that defect.
   export HERDR_STUB_LIVE=1 HERDR_ENV= CMUX_WORKSPACE_ID=
   run run_resolve auto
   [ "$status" -eq 0 ]
+  [ "$output" = herdr ]
+}
+
+@test "resolve: nothing announced + dead herdr server -> none" {
+  # The guard on the arm above: it must select herdr on a LIVE probe only, never on
+  # the mere absence of announcements.
+  export HERDR_STUB_LIVE=0 HERDR_ENV= CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
   [ "$output" = none ]
+}
+
+@test "resolve: HERDR_ENV=0 + live herdr server -> none (announced but off, R8)" {
+  # A present-but-switched-off announcement still means a multiplexer owns this
+  # session. The unannounced arm keeps the `-z` test rather than a `!= 1` test so it
+  # cannot capture this case.
+  export HERDR_STUB_LIVE=1 HERDR_ENV=0 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = none ]
+}
+
+@test "resolve: cmux announced + live herdr server -> cmux (no cross-backend steal)" {
+  # The unannounced arm sits below the cmux arm and is guarded on CMUX_WORKSPACE_ID
+  # being empty, so a live herdr server elsewhere never takes a cmux session.
+  export HERDR_STUB_LIVE=1 HERDR_ENV= CMUX_WORKSPACE_ID=workspace:1
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = cmux ]
 }
 
 @test "resolve: --launcher cmux with herdr live -> cmux (override, R2)" {
