@@ -540,6 +540,21 @@ Stated plainly because the alternative is overclaiming: a headless session that 
   - A title beginning with `--`, a title of `..`, and a title slugging to empty are each rejected.
   - The API answers `RATELIMITED` and the client backs off.
 - **Verification:** No test touches the live Linear API.
+- **Status: done.** 33 tests.
+
+**Four defects were caught while building, three of them by checks that were passing.**
+
+1. **The branch matcher split unhyphenated identifiers at the wrong place**, on the plan's own AE1 example: `task/web3045-placeholder` resolved to `WEB304-5` rather than `WEB-3045`. A single pattern with an optional hyphen lets the letter class eat the digits and backtrack one. It is now two alternatives — hyphenated, which permits a digit in the team key, and unhyphenated, which requires a letters-only key because `X23045` cannot be split by any rule and guessing is worse than not matching. **The bug had two sites**: fixing the grep left the identical greedy split in the sed normaliser, so the first fix read green on the hyphenated case only.
+2. **`write_allowed` refused every write, including the bound issue's own.** The environment assignment was on `printf` rather than on `python3` — prefixing the first command of a pipeline sets it for that command alone — so the reader saw no target and raised. Three "refused" tests passed against it for entirely the wrong reason.
+3. **A missing credential reported as an unreachable API.** `credential` answers 2 on the plaintext-fallback path, which is a usable key; `_post` treated any non-zero as failure, so every call failed while the migration is outstanding — the state the machine is in right now. `query` then collapsed every `_post` failure into "unavailable", which needs the opposite response from a reader than "nothing is configured". The no-credential case now has a sentinel outside curl's exit range, because curl's own 3 means "malformed URL" and would otherwise be indistinguishable.
+4. **The slug repaired what it was told to reject.** It stripped leading hyphens and then tested for them, so `--rf` quietly became `rf`. The test is now made before trimming.
+
+**Two mutations came back green, and each was a finding rather than reassurance:**
+
+- The bound-state check could be deleted with no test turning red. A `proposed` record also has an empty `issue_identifier`, so it is refused by the identifier comparison whether or not the state is examined. `misplaced` and `stale` *do* carry the identifier, and they are what actually exercises the check — the test now uses them.
+- Removing the matcher's output-shape check turns nothing red either, and that one is honest: every string the matcher can produce is normalisable, so the check is **unreachable today**. It is kept and labelled as such rather than deleted, because the matcher and the normaliser are two patterns that must agree about one grammar and they have already disagreed once — it is what makes the next divergence fail closed. Both the library and the test say plainly that a green suite is not evidence it fires.
+
+**Also settled:** `bin/linear-cache-refresh.sh` had its own copy of the Keychain-then-plaintext resolver; it now calls `herdr_linear::credential`, so the order lives in one place.
 
 ### U6. Grounding hook
 

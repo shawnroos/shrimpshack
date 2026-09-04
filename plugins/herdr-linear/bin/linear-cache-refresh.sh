@@ -44,26 +44,14 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd -P)" ||
 if [ -n "$LIB_DIR" ] && [ -r "$LIB_DIR/secrets.sh" ]; then
     # shellcheck source=/dev/null
     . "$LIB_DIR/secrets.sh"
+    # linear.sh owns the one credential resolver. This script had its own copy,
+    # which is two places for the Keychain-then-plaintext order to drift.
+    # shellcheck source=/dev/null
+    [ -r "$LIB_DIR/linear.sh" ] && . "$LIB_DIR/linear.sh"
 fi
 
-read_key() (
-    set +x
-    local k=""
-    if command -v herdr_linear::keychain_read >/dev/null 2>&1; then
-        k="$(herdr_linear::keychain_read "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT" 2>/dev/null)" || k=""
-    fi
-    if [ -n "$k" ]; then
-        printf '%s' "$k"
-        return 0
-    fi
-    # Fallback: the pre-migration plaintext copy.
-    k="$(grep '^LINEAR_API_KEY=' "$SECRETS_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' \r')"
-    [ -n "$k" ] || return 1
-    printf '%s' "$k"
-    return 2
-)
-
-KEY="$(read_key)"; key_source=$?
+# 0 = from the Keychain, 2 = from the pre-migration plaintext copy, 1 = nothing.
+KEY="$(herdr_linear::credential)"; key_source=$?
 if [ -z "$KEY" ]; then
     printf 'no Linear credential: not in the Keychain (%s/%s) and no LINEAR_API_KEY in %s\n' \
         "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT" "$SECRETS_FILE" >&2

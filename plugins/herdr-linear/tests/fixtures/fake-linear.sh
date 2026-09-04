@@ -29,7 +29,8 @@
 # 429 body follows the documented form and is labelled here as unverified.
 #
 # Environment:
-#   FAKE_LINEAR_MODE         viewer | found_child | found_parent | not_found |
+#   FAKE_LINEAR_MODE         viewer | found_child | found_parent |
+#                            found_parent_moved | not_found |
 #                            auth_error | validation_error | rate_limited |
 #                            http_500 | empty_body | malformed_json
 #                            (default: found_child)
@@ -152,6 +153,14 @@ viewer() {
 JSON
 }
 
+# found_parent with updatedAt moved forward. Used as the second element of a
+# seq: to stage a concurrent edit landing between a pass's two reads.
+found_parent_moved() {
+    cat <<'JSON'
+{"data":{"issue":{"id":"33333333-3333-4333-8333-333333333333","identifier":"WEB-2870","title":"Tool: Detach Foreground","url":"https://linear.app/example/issue/WEB-2870/tool-detach-foreground","branchName":"web-2870-tool-detach-foreground","updatedAt":"2026-09-04T19:30:00.000Z","priority":3,"state":{"id":"88888888-8888-4888-8888-888888888888","name":"Dev Done","type":"started"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[]}}}}
+JSON
+}
+
 not_found() {
     cat <<'JSON'
 {"errors":[{"message":"Entity not found: Issue","path":["issue"],"locations":[{"line":1,"column":9}],"extensions":{"type":"invalid input","code":"INPUT_ERROR","statusCode":400,"userError":true,"userPresentableMessage":"Could not find referenced Issue."}}],"data":null}
@@ -177,11 +186,32 @@ rate_limited() {
 JSON
 }
 
+# A mode of the form `seq:a,b,c` serves a different body per call: the first
+# call gets a, the second b, and the last entry repeats thereafter. KTD7's
+# stale-write guard is about updatedAt moving BETWEEN two reads in one pass, so
+# a fixture that answers identically every time cannot exercise it at all.
+mode="${FAKE_LINEAR_MODE:-found_child}"
+case "$mode" in
+    seq:*)
+        seq_file="$record_dir/callno"
+        n=0
+        [ -f "$seq_file" ] && n="$(cat "$seq_file" 2>/dev/null || echo 0)"
+        printf '%s' "$(( n + 1 ))" > "$seq_file"
+        # shellcheck disable=SC2086
+        set -- ${mode#seq:}
+        IFS=',' read -r -a _modes <<< "${mode#seq:}"
+        idx="$n"
+        [ "$idx" -ge "${#_modes[@]}" ] && idx=$(( ${#_modes[@]} - 1 ))
+        mode="${_modes[$idx]}"
+        ;;
+esac
+
 status=200
-case "${FAKE_LINEAR_MODE:-found_child}" in
+case "$mode" in
     viewer)           [ "$wants_headers" = 1 ] && emit_headers 200; viewer ;;
     found_child)      [ "$wants_headers" = 1 ] && emit_headers 200; found_child ;;
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; found_parent ;;
+    found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; found_parent_moved ;;
     not_found)        [ "$wants_headers" = 1 ] && emit_headers 400; not_found ;;
     auth_error)       [ "$wants_headers" = 1 ] && emit_headers 401; auth_error ;;
     validation_error) [ "$wants_headers" = 1 ] && emit_headers 400; validation_error ;;
@@ -190,7 +220,7 @@ case "${FAKE_LINEAR_MODE:-found_child}" in
     empty_body)       [ "$wants_headers" = 1 ] && emit_headers 200 ;;
     malformed_json)   [ "$wants_headers" = 1 ] && emit_headers 200; printf '%s' '{"data":{"issue":' ;;
     *)
-        printf 'fake-linear: unknown FAKE_LINEAR_MODE: %s\n' "${FAKE_LINEAR_MODE:-}" >&2
+        printf 'fake-linear: unknown FAKE_LINEAR_MODE: %s\n' "$mode" >&2
         exit 2
         ;;
 esac
