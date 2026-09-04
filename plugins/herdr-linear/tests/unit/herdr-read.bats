@@ -175,29 +175,42 @@ plant_herdr() {
 }
 
 
-@test "a pane id is read from the environment without invoking herdr at all" {
+@test "the session's position costs one pane get, never a snapshot walk" {
+    # The env value was originally used raw, on the belief that it IS this
+    # pane's id. It is an alias: after a pane moves workspace the old id keeps
+    # resolving for the moved process while api snapshot reports the new one.
+    # So one cheap `pane get` is the cost of a correct id -- but a snapshot
+    # walk, which is what this accessor exists to avoid, still must not happen.
     export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
-    export HERDR_PANE_ID="wZ:p42"
+    export HERDR_PANE_ID="wA:p1"
 
     run -0 herdr_linear::pane_id
-    [ "$output" = "wZ:p42" ]
+    [ "$output" = "wA:p1" ]
 
-    # Not "the record is empty" — an absent file is the only proof the binary
-    # was never reached.
-    [ ! -e "$WORK/rec/argv" ]
+    record="$(argv_record)"
+    [ "$record" = "pane get wA:p1" ]
+    refute_match -q 'api snapshot' <<<"$record"
 }
 
-@test "tab and workspace ids come from the environment too, and are empty when unset" {
+@test "tab and workspace ids resolve the same way, and are empty when unset" {
     export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
+    # The env values are deliberately WRONG here. A fallback that returns them
+    # would match a naive expectation, so the expectation is the resolved value.
+    export HERDR_PANE_ID="wA:p9"
+    export HERDR_TAB_ID="wSTALE:t0"
+    export HERDR_WORKSPACE_ID="wSTALE"
     run -0 herdr_linear::tab_id
-    [ "$output" = "wA:t1" ]
+    [ "$output" = "wA:t2" ]
     run -0 herdr_linear::workspace_id
     [ "$output" = "wA" ]
 
+    # The two calls above already invoked the fixture, so "no record file" is
+    # not the question -- "no FURTHER invocation" is.
+    before="$(argv_record | wc -l)"
     unset HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID
     run -1 herdr_linear::pane_id
     [ -z "$output" ]
-    [ ! -e "$WORK/rec/argv" ]
+    [ "$(argv_record | wc -l)" -eq "$before" ]
 }
 
 # Topology — the lookups that genuinely need neighbours
@@ -259,7 +272,10 @@ wA:p2" ]
         refute_match -qw -- "$verb" <<<"$record"
     done
     # Only the two read verbs were ever used.
-    refute_match -qvE '^(status server|api snapshot)$' <<<"$record"
+    # `pane get <id>` joins the allow-list because resolving this pane's own id
+    # needs it and it mutates nothing. The list stays an ALLOW-list: a verb not
+    # named here fails the test even if it is absent from the mutating set.
+    refute_match -qvE '^(status server|api snapshot|pane get .*)$' <<<"$record"
 }
 
 @test "the readers work with jq absent, through the python3 fallback" {
@@ -282,4 +298,28 @@ wA:p2" ]
     run -0 env PATH="$WORK/bin" bash -c \
         ". '$LIB/herdr-read.sh'; '$FIX/fake-herdr.sh' api snapshot | herdr_linear::json result.snapshot.panes.1.pane_id"
     [ "$output" = "wA:p2" ]
+}
+
+@test "the session's own pane id is resolved, not taken from the environment" {
+    # Herdr keeps a moved pane's OLD id resolving for that process, but api
+    # snapshot reports the new one -- so the environment value is an alias, not
+    # an identity. Trusting it makes tab_of_pane silently return empty, which is
+    # exactly how the two accessors compose. Observed live: a pane moved from
+    # wR:pA to wJ:p37 kept HERDR_PANE_ID=wR:pA.
+    export HERDR_PANE_ID="wZ:pSTALE"
+    export FAKE_HERDR_ALIAS_OF="wZ:pSTALE"
+    export FAKE_HERDR_ALIAS_TO="wA:p2"
+
+    run -0 herdr_linear::pane_id
+    [ "$output" = "wA:p2" ]
+
+    run -0 herdr_linear::tab_of_pane "$(herdr_linear::pane_id)"
+    [ "$output" = "wA:t1" ]
+}
+
+@test "an unresolvable pane id falls back to the environment rather than emptying" {
+    export HERDR_PANE_ID="wA:p1"
+    export HERDR_BIN="$WORK/no-such-herdr"
+    run herdr_linear::pane_id
+    [ "$output" = "wA:p1" ]
 }

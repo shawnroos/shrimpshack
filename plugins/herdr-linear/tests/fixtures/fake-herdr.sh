@@ -126,6 +126,27 @@ case "${1:-}" in
             *) echo "fake-herdr: unsupported status subcommand '${2:-}'" >&2; exit 2 ;;
         esac
         ;;
+    pane)
+        case "${2:-}" in
+            # Read-only. Models herdr's real behaviour after a pane move: the
+            # OLD id still resolves for the moved process, and the response
+            # carries the pane's CURRENT id, which is what api snapshot reports.
+            get)
+                [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
+                _req="${3:-}"
+                if [ -n "${FAKE_HERDR_ALIAS_OF:-}" ] && [ "$_req" = "$FAKE_HERDR_ALIAS_OF" ]; then
+                    _req="${FAKE_HERDR_ALIAS_TO:-$_req}"
+                fi
+                case "$_req" in
+                    wA:p1) printf '{"result":{"pane":{"pane_id":"wA:p1","tab_id":"wA:t1","workspace_id":"wA"}}}\n' ;;
+                    wA:p2) printf '{"result":{"pane":{"pane_id":"wA:p2","tab_id":"wA:t1","workspace_id":"wA"}}}\n' ;;
+                    wA:p9) printf '{"result":{"pane":{"pane_id":"wA:p9","tab_id":"wA:t2","workspace_id":"wA"}}}\n' ;;
+                    *) echo "fake-herdr: no such pane '$_req'" >&2; exit 1 ;;
+                esac
+                ;;
+            *) echo "fake-herdr: unsupported pane subcommand '${2:-}'" >&2; exit 2 ;;
+        esac
+        ;;
     api)
         case "${2:-}" in
             snapshot) emit_snapshot ;;

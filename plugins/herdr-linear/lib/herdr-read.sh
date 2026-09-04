@@ -139,9 +139,32 @@ herdr_linear::probe() {
 # where this session already knows it is would be a round trip for an answer
 # already in hand — and one that can fail when the server is busy.
 
-herdr_linear::pane_id()      { [ -n "${HERDR_PANE_ID:-}" ]      && printf '%s' "$HERDR_PANE_ID"; }
-herdr_linear::tab_id()       { [ -n "${HERDR_TAB_ID:-}" ]       && printf '%s' "$HERDR_TAB_ID"; }
-herdr_linear::workspace_id() { [ -n "${HERDR_WORKSPACE_ID:-}" ] && printf '%s' "$HERDR_WORKSPACE_ID"; }
+# The environment carries this pane's identity AT LAUNCH, which stops being its
+# identity the moment the pane is moved to another workspace: herdr keeps the
+# old id resolving for the moved process, but `api snapshot` reports the new
+# one. So the env value is an alias, and matching it against snapshot data
+# silently finds nothing -- which is exactly how pane_id and tab_of_pane
+# compose. One cheap `pane get` resolves the alias; it is still not a snapshot
+# walk. When herdr cannot answer, the env value is returned unchanged, because
+# a wrong-but-present id degrades better here than an empty one.
+# All three fields come from ONE `pane get` on the pane id. Resolving a tab or
+# workspace id by passing IT to `pane get` cannot work -- that verb takes a pane
+# -- so the call fails and the stale env value is returned, which is the bug
+# this function exists to remove and looks identical to success.
+herdr_linear::_resolve_position() {
+    local field="$1" env_value="$2" bin out
+    [ -n "$env_value" ] || return 1
+    bin="$(herdr_linear::bin)"
+    if [ -n "$bin" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+        out="$("$bin" pane get "$HERDR_PANE_ID" 2>/dev/null | herdr_linear::json "result.pane.$field")"
+        if [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
+    fi
+    printf '%s' "$env_value"
+}
+
+herdr_linear::pane_id()      { herdr_linear::_resolve_position pane_id      "${HERDR_PANE_ID:-}"; }
+herdr_linear::tab_id()       { herdr_linear::_resolve_position tab_id       "${HERDR_TAB_ID:-}"; }
+herdr_linear::workspace_id() { herdr_linear::_resolve_position workspace_id "${HERDR_WORKSPACE_ID:-}"; }
 
 
 # The whole snapshot, as JSON, on stdout. The only reason to reach for this is
