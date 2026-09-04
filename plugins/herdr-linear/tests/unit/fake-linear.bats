@@ -47,6 +47,33 @@ jfield() { python3 -c "$1"; }
     [ "$status" -eq 98 ]
 }
 
+# Both guards started as enumerations of the ONE form each was tested with,
+# which is default-allow: `-u <key>:`, a key in the request body, `--json`,
+# `--data-binary` and `--data=<x>` all walked through exit 0. An allowlist never
+# closes a class. Both now scan every argument and refuse on the credential
+# shape or the `mutation` keyword wherever it appears.
+@test "the credential is refused in argv in EVERY form, not only -H" {
+    for form in "-u ${KEYLIKE}:" \
+                "--header Authorization: ${KEYLIKE}" \
+                "-H Authorization: ${KEYLIKE}"; do
+        run bash -c "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' $form --data '{}'"
+        [ "$status" -eq 98 ]
+    done
+    # and in the request body, where no header name appears at all
+    run bash -c "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' --data '{\"apiKey\":\"${KEYLIKE}\"}'"
+    [ "$status" -eq 98 ]
+}
+
+@test "a mutation is refused through EVERY data flag, not only --data" {
+    for flag in "--data" "--data-raw" "--data-binary" "--json" "-d"; do
+        run bash -c "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' $flag '{\"query\":\"mutation{x}\"}'"
+        [ "$status" -eq 97 ]
+    done
+    # and in the --flag=value form, which is not a separate argument at all
+    run bash -c "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' '--data={\"query\":\"mutation{x}\"}'"
+    [ "$status" -eq 97 ]
+}
+
 @test "a child issue carries a non-null parent" {
     run bash -c "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' --data '{}'"
     [ "$status" -eq 0 ]

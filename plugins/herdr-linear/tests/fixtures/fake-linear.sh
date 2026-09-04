@@ -49,10 +49,14 @@ mkdir -p "$record_dir" 2>/dev/null || true
 # --- boundary 1: the credential must never be on argv -------------------
 # Checked against the argv this process actually received, before anything
 # else runs, so a violation cannot be masked by a later success.
+# The credential SHAPE is what is refused, wherever it appears. An earlier
+# version required "authorization:" and the key in the same argument, which let
+# `-u <key>:` and a key inside --data through with exit 0 -- an allowlist of the
+# one form it had been tested with. A leak does not have to look like a header.
 for arg in "$@"; do
     case "$arg" in
-        *[Aa]uthorization:*lin_api_*|*lin_oauth_*|*"Bearer lin_"*)
-            printf 'fake-linear: credential in argv: %s\n' "$arg" >&2
+        *lin_api_*|*lin_oauth_*|*sk-ant-*|*"Bearer lin_"*)
+            printf 'fake-linear: credential shape in argv (arg redacted)\n' >&2
             exit 98
             ;;
     esac
@@ -83,10 +87,16 @@ for arg in "$@"; do
 done
 printf '%s\n' "$body" >> "$record_dir/bodies"
 
-case "$body" in
+# Scored against ALL of argv, not the extracted body. The extraction only knows
+# --data/-d/--data-raw as separate arguments, so --data-binary, --json and
+# --data=<value> yielded an empty body and passed. A GraphQL mutation cannot be
+# written without the keyword, so a substring test over argv cannot be evaded;
+# a read query carrying the word "mutation" in a string is refused too, which is
+# the right direction for a guard whose whole job is to fail closed.
+case "$*" in
     *mutation*)
         if [ "${FAKE_LINEAR_ALLOW_MUTATION:-0}" != 1 ]; then
-            printf 'fake-linear: unpermitted mutation: %s\n' "$body" >&2
+            printf 'fake-linear: unpermitted mutation\n' >&2
             exit 97
         fi
         ;;

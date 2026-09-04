@@ -420,7 +420,7 @@ All paths are under `plugins/herdr-linear/`.
 - **Goal:** Fixtures built from observed responses rather than from assumptions about the API.
 - **Requirements:** none directly; grounds U5.
 - **Dependencies:** U3.
-- **Files:** `tests/fixtures/fake-linear.sh`, `tests/unit/fake-linear.bats`.
+- **Files:** `tests/fixtures/fake-linear.sh`, `tests/unit/fake-linear.bats`, `tests/probe/linear-shape-probe.sh`.
 - **Approach:** Run once by hand, read-only, on 2026-09-04. The fixture stands in for **curl**, not for the API, because KTD9's claim is about the invocation: the credential travels on stdin through `--config -` and never on argv. Only something in curl's position can see argv and fail the run, so the fixture exits 98 on a credential in argv and 97 on an unpermitted mutation.
 - **Execution note:** Read-only against Linear. This is the one place the plan touches the real API before Phase C, and it writes nothing.
 - **Status: done.** Captured shapes: an issue with a parent, an issue without, entity-not-found, authentication error, GraphQL validation error, and the rate-limit headers. Only the 429 body is unverified — it could not be provoked read-only without spending the hour's budget, and it is labelled as constructed in the fixture.
@@ -444,8 +444,10 @@ All paths are under `plugins/herdr-linear/`.
 
 4. **KTD9 verified against the live endpoint.** A read-only query ran with the key fed to `curl --config -` on stdin; a scan of every process's argv for the actual key value found **0**. An earlier count of 3 was the scanning `grep` itself and two wrapper lines matching the literal template text, not the secret.
 
-- **Test scenarios:** `tests/unit/fake-linear.bats`, 12 tests. Each of the three no-result shapes is asserted distinctly; both boundary codes are asserted; `http_500`, `empty_body` and `malformed_json` are asserted to be distinguishable from one another.
-- **Verification:** three mutations were applied to the fixture and each turned its test red — removing the argv guard, removing the mutation guard, and giving the parent case a non-null `parent`. The fixture was restored byte-identical afterwards.
+5. **Both fixture guards began as enumerations and were widened to default-deny.** Each refused only the single form it had been written against: the credential check required `Authorization:` and the key in the *same* argument, so `-u <key>:` and a key inside `--data` passed with exit 0; the mutation check read an extracted body that only recognised `--data`/`-d`/`--data-raw` as separate arguments, so `--data-binary`, `--json` and `--data=<value>` passed too. Both now scan every argument for the credential shape and for the `mutation` keyword. This is the third time in this build an allowlist has been mistaken for a boundary.
+
+- **Test scenarios:** `tests/unit/fake-linear.bats`, 14 tests. Each of the three no-result shapes is asserted distinctly; both boundary codes are asserted; `http_500`, `empty_body` and `malformed_json` are asserted to be distinguishable from one another.
+- **Verification:** the two widening tests were seen red against the narrow guards before the guards were changed. Then three mutations were applied to the widened fixture and each turned its test red — removing the argv guard, removing the mutation guard, and narrowing the credential shape list. The fixture was restored byte-identical afterwards. `tests/probe/linear-shape-probe.sh` was run twice against the live API, once with named issues and once through its own discovery path on a different team.
 
 ### Phase B — Read path
 
