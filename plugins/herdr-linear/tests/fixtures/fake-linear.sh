@@ -171,6 +171,22 @@ hostile() {
 JSON
 }
 
+# A bounded candidate list: issues assigned to the viewer, in a non-terminal
+# state, most recently updated first. This is what the fallback path offers when
+# the branch carries no identifier.
+candidates() {
+    cat <<'JSON'
+{"data":{"issues":{"nodes":[{"identifier":"WEB-3318","title":"AI Tools drawer is blank when a still-processing layer is selected","updatedAt":"2026-09-04T15:55:10.206Z","state":{"name":"Backlog","type":"backlog"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"key":"WEB"}},{"identifier":"WEB-3317","title":"AI tools that run a custom pipeline stop when the drawer is closed","updatedAt":"2026-09-04T14:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"key":"WEB"}},{"identifier":"WEB-3312","title":"Separate Background leaves an empty layer after reload","updatedAt":"2026-09-03T10:00:00.000Z","state":{"name":"In Progress","type":"started"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"key":"WEB"}}]}}}
+JSON
+}
+
+# The filter matched nothing. KTD12 says say so and stop rather than widening.
+no_candidates() {
+    cat <<'JSON'
+{"data":{"issues":{"nodes":[]}}}
+JSON
+}
+
 not_found() {
     cat <<'JSON'
 {"errors":[{"message":"Entity not found: Issue","path":["issue"],"locations":[{"line":1,"column":9}],"extensions":{"type":"invalid input","code":"INPUT_ERROR","statusCode":400,"userError":true,"userPresentableMessage":"Could not find referenced Issue."}}],"data":null}
@@ -219,6 +235,8 @@ esac
 status=200
 case "$mode" in
     viewer)           [ "$wants_headers" = 1 ] && emit_headers 200; viewer ;;
+    candidates)       [ "$wants_headers" = 1 ] && emit_headers 200; candidates ;;
+    no_candidates)    [ "$wants_headers" = 1 ] && emit_headers 200; no_candidates ;;
     hostile)          [ "$wants_headers" = 1 ] && emit_headers 200; hostile ;;
     found_child)      [ "$wants_headers" = 1 ] && emit_headers 200; found_child ;;
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; found_parent ;;
