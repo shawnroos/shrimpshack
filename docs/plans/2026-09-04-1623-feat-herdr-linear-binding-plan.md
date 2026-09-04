@@ -61,7 +61,7 @@ The cost is paid twice per piece of work: once re-establishing context that the 
 
 - R1. Every bound piece of work is identified by its git worktree.
 - R2. The plugin proposes a binding by matching a worktree's branch against the branch name Linear supplies for an issue, and never writes to Linear on the strength of a proposal alone.
-- R3. When branch matching yields no candidate, the plugin offers candidates drawn from the workspace's bound Linear project, still under propose-and-confirm.
+- R3. When branch matching yields no candidate, the plugin offers candidates drawn from the workspace's bound Linear project, or from the Linear team the worktree's repository belongs to when that workspace is not yet bound, still under propose-and-confirm.
 - R4. A candidate Shawn declines is not proposed again for that worktree.
 - R5. A binding becomes authoritative only when Shawn confirms it, and then persists for the life of the worktree.
 - R6. A confirmation is accepted only from an interactive human session; in an unattended session the worktree stays proposed and nothing is written to Linear.
@@ -131,21 +131,21 @@ Only `Bound` permits an automatic write. `Proposed`, `Misplaced`, and `Stale` ar
   - **Actors:** A2, A3, A4
   - **Steps:** Resolve the worktree from the working directory; look up its binding; fetch only the R12 fields for the issue and its hierarchy; hand the session that context, with the issue title carried as quoted data rather than as session instructions.
   - **Outcome:** The session knows its issue, or says it is unbound.
-  - **Covers R11, R12, R13, R14, R26**
+  - **Covers R11, R12, R13, R14, R18, R26**
 
 - F2. Binding a worktree
-  - **Trigger:** A session starts in an unbound worktree, or Shawn asks to bind one.
+  - **Trigger:** A session starts in a worktree that is unbound or still proposed, or Shawn asks to bind one.
   - **Actors:** A1, A2, A4
   - **Steps:** Match the worktree's branch against Linear's branch names; present the candidates; Shawn picks one, asks for a new issue, or declines.
   - **Outcome:** The worktree is bound, or stays unbound with nothing written.
   - **Covers R2, R3, R4, R5, R6, R20, R21, R29**
 
 - F3. Writing a mechanical change
-  - **Trigger:** A repository event occurs in a bound worktree.
+  - **Trigger:** A session event occurs in a bound worktree.
   - **Actors:** A2, A4
   - **Steps:** Verify the event is authentic and current; derive the corresponding Linear state; write it; record that it was written.
-  - **Outcome:** Linear matches the repository without anyone acting.
-  - **Covers R15, R16, R18**
+  - **Outcome:** Linear matches the repository from that session onward, with nobody updating it by hand.
+  - **Covers R15, R16**
 
 - F4. Reconciling a misplacement
   - **Trigger:** A bound worktree sits in a workspace whose bound project is not its issue's project.
@@ -157,7 +157,7 @@ Only `Bound` permits an automatic write. `Proposed`, `Misplaced`, and `Stale` ar
 - F5. Laying out an issue
   - **Trigger:** Shawn asks for a tab for a Linear issue.
   - **Actors:** A1, A2, A3, A4
-  - **Steps:** Read the issue and the issues beneath it; validate every name taken from Linear; create the tab; create a worktree and column per issue to be worked; bind each on creation.
+  - **Steps:** Read the issue and the issues beneath it; validate every name taken from Linear; create the tab; create a worktree and column per issue to be worked; bind each on creation, taking Shawn's request for the layout as his confirmation of those bindings.
   - **Outcome:** The layout matches the issue, already bound.
   - **Covers R24, R28**
 
@@ -165,7 +165,7 @@ Only `Bound` permits an automatic write. `Proposed`, `Misplaced`, and `Stale` ar
 
 - AE1. **Covers R2, R5.** Given a worktree whose branch contains an issue identifier anywhere in it, when a session starts there, then the plugin offers that issue as a candidate and Linear is unchanged until Shawn confirms.
 - AE2. **Covers R8.** Given a bound worktree, when its pane is moved to a different tab in a different workspace, then the next session there is grounded without being asked to confirm the binding again.
-- AE3. **Covers R15, R17.** Given a bound worktree, when its pull request merges, then the issue moves to its completed state without asking; when the work is finished with no pull request, then the plugin asks before moving it.
+- AE3. **Covers R15, R17.** Given a bound worktree whose work landed without a pull request, when a session next starts there, then the plugin writes the completion Linear's own integration did not write, without asking; when whether the work is finished is not derivable from the repository, then the plugin asks before moving it.
 - AE4. **Covers R20.** Given an unbound worktree, when sessions run in it repeatedly, then the plugin does not create an issue and does not repeat the request to create one.
 - AE5. **Covers R22.** Given a bound worktree whose pane has been moved into a workspace bound to a different project, when the plugin next runs, then it reports the mismatch and offers both to move the pane back and to re-parent the issue, and applies neither on its own.
 - AE6. **Covers R23.** Given a bound issue that is closed in Linear, when its worktree is still being worked, then the plugin reports the closure and does not reopen the issue.
@@ -189,7 +189,7 @@ Only `Bound` permits an automatic write. `Proposed`, `Misplaced`, and `Stale` ar
 ### Dependencies / Assumptions
 
 - herdr 0.8.2 is installed and its server is reachable. Verified against the running installation: `api snapshot` returns the full topology including per-tab split direction and pane geometry; `pane report-metadata` and `workspace report-metadata` write display metadata; `tab create` and `pane split` accept `--env` and `--cwd`.
-- Linear supplies a canonical git branch name per issue, which is what R2 matches against. Most Slate branches do not carry it: 16 of 86 worktree branches contain a Linear identifier, and where it appears it sits after a `feature/`, `task/`, or `bugfix/` prefix rather than at the start, in both hyphenated and unhyphenated spellings. R2 therefore produces a candidate for a minority of worktrees.
+- Linear supplies a canonical git branch name per issue, which is what R2 matches against. Most Slate branches do not carry it: 18 of 86 worktree branches contain a Linear identifier, 16 of them hyphenated and 2 not, and where it appears it sits after a `feature/`, `task/`, or `bugfix/` prefix rather than at the start, in both hyphenated and unhyphenated spellings. R2 therefore produces a candidate for a minority of worktrees.
 - A per-worktree Linear pin already exists on this machine: `~/.claude/hooks/linear-pin.sh` runs as a `PostToolUse` hook on `mcp__linear__.*` and keeps a per-session and per-repository-and-branch record. It covers part of R1, R5, and R8. The plugin's binding store extends that record rather than standing a second one beside it, re-keyed on the worktree so a branch rename does not lose the binding.
 - Linear's GitHub integration is already live for the Web Creation team and writes part of what R15 would write. Verified on WEB-3172: an attachment for `slateteams/web-app#5433` was created automatically from the branch name, and the issue moved Todo to In Progress to Done with no manual step. R15 therefore covers only the transitions that integration does not make. Which transitions those are is a planning question.
 - The plugin observes the world only while a session runs, because a Claude Code plugin executes when one of its hooks fires. An event that happens with no session open is picked up by the next session in that worktree, not at the moment it occurs.
