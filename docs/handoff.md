@@ -1,157 +1,117 @@
-# Spinoff: spinoff's herdr backend can't survive the mandated background agent
+# Spinoff: Couple herdr's layout to Linear's object model
 
 > This handoff is directional — author intent and a starting point, not a spec.
 > The code and tests are the source of truth; validate against them and refine.
 
 ## Goal
+Build a plugin that makes a herdr layout and a Linear workspace the same object
+graph, so an agent knows what it is working on from *where* it is sitting, and so
+Linear stays an accurate record of the work without anyone remembering to update it.
 
-Make `/spinoff:start-session` and `/spinoff:start-split` actually launch a herdr
-session when herdr is live. Right now the skill's two hard rules contradict each
-other, and the failure is silent.
+Shawn's mapping, in his words:
+
+| herdr | Linear |
+| --- | --- |
+| session | account / workspace |
+| space (herdr calls it a **workspace**) | project |
+| tab | issue |
+| split column | sub-issue (several sessions on one issue) |
+| horizontal split inside a column | belongs to that column's sub-issue |
+
+Two directions, both required:
+
+1. **Read** — a new session in `projectX / issueY / subissueZ` immediately pulls its
+   Linear context and grounds itself. No "what am I working on?" preamble.
+2. **Write** — position gives the agent a path of action. It creates projects,
+   issues and sub-issues, and moves status, so Linear reflects the truth at all
+   times rather than at commit time.
 
 ## Why now / context
-
-Reported symptom: a spinoff run lands on `launcher: none`, prints the manual
-`cd … && claude` line, and **exits 0 with no `⚠`** — so it reads as success. It
-was initially taken for a flaky run. It is not; it looks like a design conflict.
-
-The conflict, in the skill's own words:
-
-- SKILL.md: *"You MUST run the script through a background `Agent`
-  (`run_in_background: true`) — never inline in this session. This is not optional."*
-- `spinoff.sh:232` and `:237`: the herdr branch is gated on the **environment
-  variable** `HERDR_ENV = 1`.
-
-```sh
-232  [ "${HERDR_ENV:-}" = 1 ] \
-233    && _record_loud herdr "${HERDR:-}" 'HERDR_ENV=1' HERDR_BIN "${HERDR_REJECTED:-}"
-237  if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
-```
-
-`HERDR_ENV` is set by herdr when it spawns the session. It is **not** a flag and
-the skill has no documented way to pass it down. The skill *did* anticipate the
-`PATH` half of this problem — Step 4 tells the main session to resolve `herdr` and
-pass `HERDR_BIN` down, precisely because "the background agent's shell does not
-inherit the login shell's `PATH`". But `HERDR_BIN` only survives the binary
-lookup. It does nothing for the `HERDR_ENV=1` gate on line 237, which is what
-actually selects the backend. Same class of bug, only half-fixed.
-
-There is a second env dependency further down, `spinoff.sh:521`:
-
-```sh
-521  if [ -n "${HERDR_PANE_ID:-}" ]; then
-522    ws="$("$HERDR" pane get "$HERDR_PANE_ID" …)"
-```
-
-`HERDR_PANE_ID` is how the script resolves the *live* workspace (deliberately
-preferred over the stale `HERDR_WORKSPACE_ID`). Also env-only, also not passable.
-So even if the gate on 237 were forced open, workspace resolution would degrade.
-
-**The nastiest part is what happens next, and it may not be `none`.** Line 250
-only suppresses the ghostty backend when `HERDR_ENV` is *empty*:
-
-```sh
-250  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] \
-251       && { … [ "${TERM_PROGRAM:-}" = ghostty ] … } && _ghostty_probe;  then LAUNCHER=ghostty
-```
-
-That suppression exists because herdr runs *inside* ghostty here (both sets of
-vars are present in a real session). If the background agent loses `HERDR_ENV`
-but keeps `TERM_PROGRAM=ghostty`, the guard on 250 inverts from protection into a
-trigger and the script opens a **bare ghostty window beside the user's herdr
-layout** — exactly the outcome the comment on 243–244 says it must never do. So
-depending on what the agent's shell inherits, the bug is either a silent `none`
-or a stray window. Establish which before designing the fix.
+Shawn raised this as its own batch of work while running in herdr. Today an agent
+in a fresh tab knows its cwd and nothing about the work item; and Linear drifts
+because updating it is a manual step at the end. The layout already encodes the
+work breakdown — this makes that encoding load-bearing instead of decorative.
 
 ## Key decisions already made
+- **Plugin home: `shrimpshack/plugins/herdr-linear/`** (Shawn chose shrimpshack over
+  a new standalone repo). Sits beside `spinoff`, `auto`, `reflect`, so it gets the
+  marketplace wiring for free.
+- **herdr has no local source repo** — it is a Homebrew install
+  (`/opt/homebrew/bin/herdr`). So this is a **Claude Code plugin** built on herdr's
+  public CLI. If it turns out a herdr-side change is genuinely needed, that is an
+  upstream ask to raise, not work to do here.
+- **No Linear ticket yet.** Deliberate — the first real dogfood of this plugin is it
+  creating its own project and issues once scope is clear.
+- **Vocabulary:** Shawn's "space" is herdr's **workspace**. Use herdr's own nouns
+  (workspace / tab / pane) in code and docs, and keep the Linear nouns
+  (project / issue / sub-issue) on the other side of the mapping. Don't invent a
+  third vocabulary.
 
-- **Fix the script, not the skill's workaround.** SKILL.md is explicit: *"if the
-  script does the wrong thing, FIX THE SCRIPT, don't work around it by hand."*
-  Do not solve this by telling the skill to run inline — the background-agent rule
-  exists to keep ~40 lines of step output and a readiness poll out of the main
-  session, and that reason is still good.
-- **The main session is the only place that can answer "what backend owns this
-  session".** That is already the established pattern for `HERDR_BIN` and
-  `--from-surface`; extending it to the announcement itself is consistent with the
-  design rather than a new idea.
-- **A silent wrong answer is the real defect.** The skill's own exit-code table
-  treats `launcher: none` at exit 0 as *legitimate* (a worktree-only spinoff). That
-  is correct when nothing announced a backend — and wrong when a backend announced
-  itself and got lost in transit. Whatever the fix, that case must become loud. The
-  script already has the machinery: `_record_loud` / `$LOUD_*` drive the `⚠` and
-  exit 4, and its comment on 200–205 names this exact bug class ("the same
-  lying-message defect this change exists to remove").
+## What the herdr CLI actually gives you (probed this session, `herdr 0.x` on PATH)
+Verified by running the command groups — not from docs:
+
+- **Read the whole topology:** `herdr api snapshot`. Also `herdr api schema --json`.
+  This is the primitive for "where am I".
+- **Env injection at creation:** both `herdr workspace create` and `herdr tab create`
+  accept `--env KEY=VALUE` (plus `--cwd`, `--label`, `--focus`). This is the strongest
+  grounding candidate — stamp `LINEAR_PROJECT_ID` / `LINEAR_ISSUE_ID` into the pane's
+  env when the surface is made, and have a Claude Code `SessionStart` hook read them
+  and fetch context. Much sturdier than parsing tab labels.
+- **Caller context already in env:** `HERDR_ENV`, `HERDR_WORKSPACE_ID`,
+  `HERDR_PANE_ID` are present in every herdr-spawned pane. Note
+  `HERDR_ENV=1` records *launch ancestry, not reachability* — probe
+  `herdr status server` before trusting it (memory:
+  `reference_herdr_env_is_ancestry_not_reachability`).
+- **Write-back into herdr chrome:** `herdr workspace report-metadata <ws_id>
+  --source ID --token NAME=VALUE [--ttl-ms N]`. Workspace-level only —
+  `herdr tab` exposes only `list/create/get/focus/rename/close`, **no metadata verb**.
+  So per-issue status in the herdr UI may only be reachable via `tab rename`.
+- **Agent lifecycle:** `herdr agent` classifies a pane's agent as
+  `idle | working | blocked | done | unknown`. A status signal worth mapping to Linear
+  issue state — but `unknown` does **not** mean finished, and `done` is just idle
+  after unseen background work.
 
 ## Open questions / not yet decided
-
-1. **What does a background agent's shell actually inherit?** This is the whole
-   premise and it has NOT been measured. The main session's Bash tool *does* see
-   `HERDR_ENV=1` (verified). A subagent may share that process env — in which case
-   the herdr path works and the reported failure has a different cause. **Measure
-   before designing anything.** Cheapest probe: a background agent that runs
-   `env | grep -E 'HERDR|CMUX|GHOSTTY|TERM_PROGRAM'` and reports back.
-2. If the env *is* lost — how to pass the announcement? Options, roughly in
-   ascending invasiveness: an env prefix on the dispatch command (same shape as
-   `HERDR_BIN`, needs no script change but does need `HERDR_ENV` + `HERDR_PANE_ID`
-   documented as passable); explicit `--launcher-announce` / `--from-pane` flags;
-   or having the script detect a live herdr session from the server rather than
-   from env vars at all. The last is the most robust and the biggest change.
-3. Does `--launcher herdr` already work around this today? Line 221 forces the
-   probe and skips the env-keyed detection — so a forced launcher may reach herdr
-   without `HERDR_ENV`. If so it is a usable stopgap, but workspace resolution
-   (521) still degrades to the frozen/absent `HERDR_WORKSPACE_ID`. Check what it
-   actually produces before recommending it.
-4. Is `/spinoff:start-workspace` affected the same way? It takes the same
-   `resolve_launcher` path, so probably yes — confirm rather than assume.
-5. Does the cmux path have the identical hole? Line 238 gates on
-   `CMUX_WORKSPACE_ID`, also env-only. If cmux works in practice, the difference
-   is evidence about what agents inherit — worth knowing either way.
+1. **Does the pane tree actually distinguish columns from rows?** I did not probe
+   `herdr pane`. The whole "column = sub-issue, horizontal split = belongs to that
+   column" mapping depends on `api snapshot` exposing that nesting. **Verify this
+   first** — if it doesn't, the mapping needs rethinking before anything is built.
+2. **`herdr integration install claude` already exists.** Find out what it installs
+   into `~/.claude` — that is the *existing* coupling surface between herdr and Claude
+   Code. Inspect and extend it rather than building a parallel one.
+3. **Linear write path.** CLAUDE.md prefers CLI over MCP precisely because MCP tokens
+   expire mid-task, and "Linear reflects truth at all times" is the requirement that
+   breaks first on an expired token. Is there a usable Linear CLI, or does this need a
+   thin script against the Linear GraphQL API with a durable key? Decide before
+   designing the write side.
+4. **Enforcement model — the material fork.** Is "agents update Linear consistently"
+   (a) skill instructions the agent is asked to follow, or (b) a hook (`Stop` /
+   `PostToolUse`) that detects drift and blocks or nags? (a) is cheap and unreliable;
+   (b) is real but intrusive. Shawn's phrasing ("agents are *made* to") leans (b).
+5. **Does this need a herdr-side plugin at all?** Shawn said "may or may not require a
+   combination". Answer it explicitly once you know what the CLI can and cannot do —
+   don't leave it implicit.
+6. **Conflict handling.** Two panes on one sub-issue both moving status; a tab renamed
+   by hand; an issue closed in Linear while a pane is still working it. Which side wins?
 
 ## Starting point
-
-- `~/projects/shrimpshack/plugins/spinoff/skills/spinoff/scripts/spinoff.sh`
-  - `resolve_launcher()` — lines 219–255. The gate (232, 237), the ghostty
-    suppression (250–252), the `none` fallback (253).
-  - `_record_loud()` — lines 206–213, plus the design note at 196–205.
-  - Workspace resolution from a live pane — lines 511–547.
-  - Binary resolution + the `HERDR_BIN` override — lines 1219–1221.
-- `~/projects/shrimpshack/plugins/spinoff/skills/spinoff/SKILL.md` — the
-  "You MUST run the script through a background `Agent`" rule in Step 4, the
-  binary-resolution table, and the exit-code table (which needs revisiting if
-  "announced but lost in transit" becomes a new loud case).
-- Repo is at `plugins/spinoff` version **0.9.1** — the same version currently
-  installed in the plugin cache.
-
-**Do not forget the plugin cache.** Merging a fix in `~/projects/shrimpshack`
-does not fix the live behavior: Claude Code runs the *installed* copy under
-`~/.claude/plugins/cache/shrimpshack/spinoff/<version>/`. The fix only takes
-effect after the plugin version is bumped and the cache re-installs. Plan the
-version bump as part of the change, and verify against the cached path, not the
-source tree.
-
-## Verification note
-
-This spinoff run is itself the experiment. It was dispatched exactly as SKILL.md
-mandates — background agent, `HERDR_BIN=/opt/homebrew/bin/herdr` passed down,
-`--target tab`, herdr live and probed from the main session. Whatever launcher it
-reports is a real data point for open question 1:
-
-- reports `herdr` → the premise is wrong; the agent inherits the env, and the
-  original `launcher: none` had some other cause worth chasing.
-- reports `none` → premise confirmed; the announcement is lost in transit.
-- reports `ghostty` (a bare window appeared) → premise confirmed *and* the
-  line-250 inversion above is real, which is the more urgent of the two.
-
-Read the dispatch result before touching code.
+- `plugins/spinoff/skills/spinoff/scripts/spinoff.sh` — **the prior art**. It already
+  drives herdr from a plugin script: backend detection, absolute binary resolution
+  (`HERDR_BIN`), workspace/tab/pane creation, agent readiness waits. Read its herdr
+  backend before writing any herdr calls of your own.
+- `plugins/auto/`, `plugins/reflect/` — plugin layout conventions in this repo.
+- `~/.agents/skills/herdr/SKILL.md` — the herdr control skill.
+- `herdr api schema --json` — the socket API surface.
+- Memory: `reference_herdr_env_is_ancestry_not_reachability`,
+  `feedback_prefer_cli_over_mcp`, `feedback_consume_extend_dont_rebuild`.
 
 ## Recommended next step
-
-`/ce-brainstorm`. The defect is well localized but the *fix* is not: option 2
-above spans "add an env prefix to a doc" through "stop keying detection off env
-vars entirely", and that choice needs a shape before it needs a plan. Run the
-measurement in open question 1 first — it may collapse the whole problem — then
-brainstorm the passing mechanism.
+`/ce-brainstorm`. Two things are genuinely unresolved — whether the pane tree supports
+the column/row mapping at all (Q1), and whether enforcement is instructions or hooks
+(Q4) — and each sends the design somewhere different. Probe `herdr pane` and
+`herdr integration install claude` first so the brainstorm argues from facts, then
+move to `/ce-plan` once the mapping is confirmed and the enforcement model is picked.
 
 ## Source session
-Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/1e90b332-cb44-41ea-8b7c-186fff0104fb.jsonl`
-Resume:     `cd /Users/shawnroos && claude -r 1e90b332-cb44-41ea-8b7c-186fff0104fb`
+Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos/2572ef78-e84c-4439-8c69-b4eb1927f976.jsonl`
+Resume:     `cd /Users/shawnroos && claude -r 2572ef78-e84c-4439-8c69-b4eb1927f976`
