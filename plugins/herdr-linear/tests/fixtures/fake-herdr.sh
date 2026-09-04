@@ -27,6 +27,8 @@
 #   FAKE_HERDR_RECORD_DIR  where the argv record lands
 #                          (default: $TMPDIR/fake-herdr-record)
 #   FAKE_HERDR_MODE        running | not_running | running_then_flood | dead
+#   FAKE_HERDR_ALLOW_MUTATION  1 to permit creation verbs (U10 only)
+#   FAKE_HERDR_SLOW_PANE   probes a new pane stays unregistered for
 #     running            the five faithful lines
 #     not_running        `status: not running`, exit 0 (herdr does not fail)
 #     running_then_flood `status: running` mid-output, then far more than one
@@ -55,12 +57,63 @@ if [ "${1:-}" = "--list-mutating-verbs" ]; then
     exit 0
 fi
 
+# U11's accessor must never reach a mutating verb, and the refusal is how that
+# is asserted. U10 builds layout and legitimately needs them, so it opts in --
+# the refusal stays the default so a read path cannot quietly acquire a write.
 for _verb in $FAKE_HERDR_MUTATING_VERBS; do
     if [ "${1:-}" = "$_verb" ] || [ "${2:-}" = "$_verb" ]; then
-        echo "fake-herdr: MUTATING VERB '$_verb' — the read-only accessor must never call this" >&2
-        exit 99
+        if [ "${FAKE_HERDR_ALLOW_MUTATION:-0}" != 1 ]; then
+            echo "fake-herdr: MUTATING VERB '$_verb' — the read-only accessor must never call this" >&2
+            exit 99
+        fi
+        _mutating="$_verb"
     fi
 done
+
+# Creation responses, shaped as herdr 0.8.2 actually answers: `tab create`
+# returns .result.tab and .result.root_pane; `pane split` returns .result.pane.
+# A caller that assumed a bare id, or that the pane exists the moment create
+# returns, would pass against a looser fixture and fail live.
+if [ "${FAKE_HERDR_ALLOW_MUTATION:-0}" = 1 ]; then
+    _n=0
+    _seq="$REC_DIR/seq"
+    mkdir -p "$REC_DIR" 2>/dev/null
+    [ -f "$_seq" ] && _n="$(cat "$_seq" 2>/dev/null || echo 0)"
+    case "${1:-}:${2:-}" in
+        tab:create)
+            _n=$(( _n + 1 )); printf '%s' "$_n" > "$_seq"
+            printf '{"result":{"tab":{"tab_id":"w1:t%s","label":"tab%s"},"root_pane":{"pane_id":"w1:p%s0","tab_id":"w1:t%s","workspace_id":"w1"}}}\n' \
+                "$_n" "$_n" "$_n" "$_n"
+            exit 0
+            ;;
+        pane:split)
+            _n=$(( _n + 1 )); printf '%s' "$_n" > "$_seq"
+            # A created pane becomes known to `pane get` only after
+            # FAKE_HERDR_SLOW_PANE further probes. Answering immediately would
+            # let a caller that assumes registration-on-return pass here and
+            # race against the real server, which is the defect this models.
+            printf '%s' "${FAKE_HERDR_SLOW_PANE:-0}" > "$REC_DIR/countdown.w1:p$_n"
+            printf '{"result":{"pane":{"pane_id":"w1:p%s","tab_id":"w1:t1","workspace_id":"w1"}}}\n' "$_n"
+            exit 0
+            ;;
+    esac
+fi
+
+# Created panes, checked before the canned pane set. The countdown is decremented
+# on each probe; the pane is reported as existing only once it reaches zero.
+if [ "${1:-}" = "pane" ] && [ "${2:-}" = "get" ] && [ -n "${3:-}" ]; then
+    _cd_file="$REC_DIR/countdown.${3}"
+    if [ -f "$_cd_file" ]; then
+        _cd="$(cat "$_cd_file" 2>/dev/null || echo 0)"
+        if [ "${_cd:-0}" -le 0 ] 2>/dev/null; then
+            printf '{"result":{"pane":{"pane_id":"%s","tab_id":"w1:t1","workspace_id":"w1"}}}\n' "$3"
+            exit 0
+        fi
+        printf '%s' "$(( _cd - 1 ))" > "$_cd_file"
+        echo "fake-herdr: pane '$3' not registered yet" >&2
+        exit 1
+    fi
+fi
 
 emit_status() {
     case "$MODE" in

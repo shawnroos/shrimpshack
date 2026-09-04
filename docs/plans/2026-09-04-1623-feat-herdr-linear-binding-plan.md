@@ -759,6 +759,19 @@ Two further defects were in the harness rather than the code: `grep -c` prints `
   - A pane is slow to register, and the poll waits.
   - Splitting a column in a tab built from an issue offers a sub-issue under that issue. Covers AE9.
 - **Verification:** A layout is built against the fake herdr fixture; no test touches the live server.
+- **Status: done.** 16 tests, 7 mutations, all red on the first pass.
+
+**The journal is the design, not a nicety.** A tab with three columns is a tab, three git worktrees, three panes and three bindings — eleven things that can each fail halfway. Without a record of what already exists, a retry makes a second tab and three more worktrees, leaving the person worse off than if it had never run. Every resource is journalled against the source issue before the next step starts, and the skill tells the reader to **re-run rather than clean up** — deleting the tab is what turns a resumable failure into lost work. The journal is append-only, because a file rewritten in place can lose an entry to a crash between read and write.
+
+**Names are validated before anything is created.** A title that cannot become a safe name fails the whole build with nothing made, rather than leaving a tab behind with no columns under it. One bad title among good ones stops everything.
+
+**Liveness is probed, never inferred.** `HERDR_ENV` records launch ancestry and stays set after the server has gone. The probe matches an exact `status: running` line — a substring match also accepts `not running`.
+
+**A pane exists when herdr says so, not when `split` returns.** The fixture models this: a created pane stays invisible to `pane get` for a configurable number of probes, so a caller that assumed registration-on-return passes against a permissive fixture and races against the real server. A pane that never registers is a failure, not a shrug.
+
+**Two fixture defects were found here, both of the same family that has bitten this build repeatedly — the fixture being more permissive or less faithful than the thing it stands in for.** Its `pane get` did not know about panes it had just created, so `await_pane` could never succeed; and the creation branches recorded argv a second time on top of the general record, double-counting every `tab create` and making three count assertions wrong.
+
+**The mutating-verb refusal stays the default.** U11's accessor must never reach one, and the fixture's exit 99 is how that is asserted. U10 opts in explicitly with `FAKE_HERDR_ALLOW_MUTATION=1`, so a read path cannot quietly acquire a write and still pass.
 
 ---
 
