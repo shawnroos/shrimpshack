@@ -115,6 +115,16 @@
       },
       "source": "./plugins/spawn",
       "category": "development"
+    },
+    {
+      "name": "herdr-linear",
+      "description": "Bind each Slate git worktree to a Linear issue, so a session knows what it is working on from where it sits and Linear stays current without being maintained by hand. A binding is proposed from the branch and confirmed by a person; only a confirmed binding permits a write, and writes are bounded in code to the bound issue and the issues the plugin created beneath it, because a personal Linear key carries the whole account. Grounding reads a per-issue cache for identity and the API for hierarchy, and carries every tracker-authored string inside a wrapper that marks it data rather than instructions. Reconciliation runs at session end, never blocks a session, and ships in shadow mode until a logged proposal has been checked against a real issue.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Shawn Roos"
+      },
+      "source": "./plugins/herdr-linear",
+      "category": "development"
     }
   ]
 }
