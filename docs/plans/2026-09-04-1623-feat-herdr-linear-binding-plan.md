@@ -623,7 +623,7 @@ Stated plainly because the alternative is overclaiming: a headless session that 
 - **Verification:** No Linear object is created or modified in any test; the fixture records the mutations that would have been sent.
 - **Status: done.** 18 tests.
 
-**This unit closes R6's second half.** `skills/bind/SKILL.md` carries `disable-model-invocation: true`, so the model cannot invoke it at all — the skill runs because a person typed `/herdr-linear:bind`. That is the positive signal the plugin establishes for itself, since U1 proved the payload carries none. The residual is stated in the skill file rather than hidden: a headless run that explicitly types the slash command still reaches it. The gate is against a session binding a worktree on its own initiative, which is the real risk; it is not a capability boundary.
+**This unit closes R6's second half.** `skills/bind/SKILL.md` carries `disable-model-invocation: true`, so the model cannot invoke it at all — the skill runs because a person typed `/herdr-linear:bind`. That is the positive signal the plugin establishes for itself, since U1 proved the payload carries none. The residual was later PROBED rather than reasoned about, and is larger than this paragraph originally said: the flag removes the skill from the model's invocable set, but it does not hide the file, so a session holding Bash can read the steps and call `binding_confirm` directly — and a headless run that types the slash command reaches the skill outright. See U4's R6 note for the three-row probe result. The gate is against a session binding a worktree on its own initiative, which is the real risk; it is not a capability boundary.
 
 **One deviation from the approach, with its reason.** Step 2 says the fallback should scope by "the Linear team the worktree's repository belongs to" when the workspace is unbound. No repository-to-team mapping exists on this machine, and inventing one would produce a confidently wrong scope. The list is instead scoped by assignee and state only, and every candidate carries a `SOURCE` column — `branch`, `project` or `assignee` — so whoever is choosing can see that an `assignee`-sourced list is a wide one.
 
@@ -634,19 +634,7 @@ Stated plainly because the alternative is overclaiming: a headless session that 
 3. Removing the proposed-workspace state check turned nothing red — and that one is real: `workspace_project` already answers empty for anything but a bound record. The check is kept as a labelled backstop, with a separate test pinning the underlying property. Mutating `propose` to record the identifier early does turn that test red, which is what the backstop exists to survive.
 
 - **Verification performed:** six mutations, all red after the fixes above — containment, widening an empty list, both decline filters, the candidate cap, and the early-record case.
-- **Status: done.** 18 tests.
 
-**This unit closes R6's second half.** `skills/bind/SKILL.md` carries `disable-model-invocation: true`, so the model cannot invoke it at all — the skill runs because a person typed `/herdr-linear:bind`. That is the positive signal the plugin establishes for itself, since U1 proved the payload carries none. The residual is stated in the skill file rather than hidden: a headless run that explicitly types the slash command still reaches it. The gate is against a session binding a worktree on its own initiative, which is the real risk; it is not a capability boundary.
-
-**One deviation from the approach, with its reason.** Step 2 says the fallback should scope by "the Linear team the worktree's repository belongs to" when the workspace is unbound. No repository-to-team mapping exists on this machine, and inventing one would produce a confidently wrong scope. The list is instead scoped by assignee and state only, and every candidate carries a `SOURCE` column — `branch`, `project` or `assignee` — so whoever is choosing can see that an `assignee`-sourced list is a wide one.
-
-**Three mutations came back green on the first pass, and each was a distinct problem:**
-
-1. Removing the branch decline filter turned nothing red, because the test used a fixture mode where the branch fetch failed to parse anyway. The test now asserts the candidate appears *before* the decline and is gone after.
-2. Removing the candidate cap turned nothing red, because the test exported the limit variable after the library had read it, overriding the mutation. Re-anchored on the call site.
-3. Removing the proposed-workspace state check turned nothing red — and that one is real: `workspace_project` already answers empty for anything but a bound record. The check is kept as a labelled backstop, with a separate test pinning the underlying property. Mutating `propose` to record the identifier early does turn that test red, which is what the backstop exists to survive.
-
-- **Verification performed:** six mutations, all red after the fixes above — containment, widening an empty list, both decline filters, the candidate cap, and the early-record case.
 
 ### Phase C — Write path
 
