@@ -497,7 +497,17 @@ All paths are under `plugins/herdr-linear/`.
 **R6 is split across U4 and U7, and neither half satisfies it alone.** U1 proved no field separates an interactive session from a headless one — `claude -p` reports the same `source: startup` an interactive start reports. So the store cannot check attendedness, and a test claiming it does would be a check narrower than its invariant.
 
 - **U4 guarantees ordering.** `propose` generates a nonce and stores it; `confirm` moves to bound only when handed that proposal's current nonce. This closes accidental confirmation, stale confirmation, and the cross-session case where two sessions share a worktree — a superseded proposal's nonce is dead.
-- **U7 must guarantee attendedness.** The nonce may reach `confirm` only after a human answered. That means `disable-model-invocation: true` on the bind skill plus a real blocking question. **Open verification item for U7: establish what a blocking question actually does under `claude -p`.** Probe it the way U1 probed the hook channel; do not assume it fails closed.
+- **U7 must guarantee attendedness.** The nonce may reach `confirm` only after a human answered. That means `disable-model-invocation: true` on the bind skill plus a real blocking question.
+
+**That open verification item is now closed — probed 2026-09-04**, a throwaway skill carrying the same frontmatter, run three ways:
+
+| What was tried | Result |
+|---|---|
+| the model asked to use the skill, file tools denied | **blocked** — the skill is not in its available-skills list at all |
+| `claude -p "/<skill>"` typed explicitly, headless | **runs** |
+| the model asked, with file tools allowed | it *read* `SKILL.md` and followed it without invoking the skill |
+
+The third row is the one that matters and it is a larger residual than first written: the flag removes the skill from the model's invocable set, but it does not hide the file, so a session holding Bash can read the steps and call `herdr_linear::binding_confirm` directly. The gate is against a session binding a worktree **on its own initiative**. It is not a capability boundary and must not be described as one.
 
 Stated plainly because the alternative is overclaiming: a headless session that runs the bind skill can call propose, take the nonce, and call confirm. Nothing in `lib/binding.sh` prevents that, and the header of that file says so.
 

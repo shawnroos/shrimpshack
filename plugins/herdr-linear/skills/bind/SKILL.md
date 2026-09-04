@@ -17,10 +17,25 @@ was actually made. What makes a confirmation *attended* is that this skill
 cannot be invoked by the model at all. It runs because a person typed
 `/herdr-linear:bind`.
 
-**The residual, stated rather than hidden:** a headless run that explicitly
-types that slash command still reaches here. This is a gate against a session
-binding a worktree on its own initiative, which is the actual risk. It is not a
-capability boundary, and nothing in a single-user shell could be one.
+**All of this was probed, not assumed** (2026-09-04, a throwaway skill with the
+same frontmatter, run three ways):
+
+| What was tried | Result |
+|---|---|
+| the model asked to use the skill, file tools denied | **blocked** — the skill is not in its available-skills list at all |
+| `claude -p "/<skill>"` typed explicitly, headless | **runs** |
+| the model asked, with file tools allowed | it *read* this file and followed it without invoking the skill |
+
+So the flag does exactly one thing, and it is worth being precise about: it
+removes the skill from the set the model can invoke. It does **not** hide the
+file, and a session holding Bash can read these steps and call
+`herdr_linear::binding_confirm` itself. Nor does it stop a headless run that
+types the command.
+
+The gate is therefore against a session binding a worktree **on its own
+initiative**, which is the actual risk being managed. It is not a capability
+boundary, and nothing in a single-user shell could be one. Do not describe it as
+one anywhere.
 
 ## Before anything
 
