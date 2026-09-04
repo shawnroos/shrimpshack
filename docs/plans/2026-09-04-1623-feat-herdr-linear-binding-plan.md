@@ -723,6 +723,19 @@ Two further defects were in the harness rather than the code: `grep -c` prints `
   - A misplaced binding suppresses the reconciliation write until resolved.
   - A workspace with no binding does not report every worktree in it as misplaced.
 - **Verification:** Each state is reachable in a fixture and neither writes to Linear.
+- **Status: done.** 16 tests.
+
+**Both states exist to stop the plugin doing something**, so every test asserts that nothing changed. A plugin that moved a worktree's issue to match whatever workspace it happens to sit in, or that reopened a ticket someone had just closed, would be undoing decisions a person made deliberately. The bind skill presents both remedies for a misplacement and applies only the one chosen; picking one would rewrite somebody's board.
+
+**A missing workspace binding is deliberately not a mismatch.** Most workspaces are unbound and always will be. Reporting every worktree in an unbound workspace as misplaced would make the state meaningless within a day, and a warning nobody can clear is one everybody learns to ignore. A mismatch requires both sides to be positively known and to disagree.
+
+**The comparison is on the project id, never the name.** Two projects can share a name, and a rename would silently clear a real mismatch.
+
+**Writes are suspended by the existing bound, not by new code.** `write_allowed` already requires `state == bound`, so `misplaced` and `stale` suspend automatic writes for free. That was verified rather than assumed, and both states are asserted against `write_allowed` directly as well as through `reconcile`.
+
+**A mutation exposed a real gap in the clearing rule.** Making the clear unconditional turned no test red at first, because the one test covering it used a branch-downgraded record — and the branch downgrade is recomputed on every read, so even a blanket write cannot resurrect it. The case that actually matters is an **unbound** worktree: a blanket clear turns `classify` into something that binds a worktree nobody bound, which is the single thing propose-and-confirm exists to prevent. Two tests now cover it — never-bound, and declined — and the mutation turns both red.
+
+**One deliberately redundant backstop, labelled as such:** the workspace-state check in `check_placement`. `workspace_project` already answers empty for anything but a bound record, so mutating the check away turns no test red. It stays so a future change to what `workspace_propose` records cannot silently produce a mismatch report from a proposed workspace; the property itself is pinned in `propose.bats`.
 
 ### Phase D — Layout
 

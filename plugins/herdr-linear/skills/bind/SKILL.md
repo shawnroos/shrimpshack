@@ -128,6 +128,32 @@ of the write boundary, so an issue missing from it cannot be written to later:
 herdr_linear::binding_add_child "$PWD" "$NEW_IDENTIFIER"
 ```
 
+## When a binding is misplaced or stale
+
+Two states suspend automatic writes and change nothing on their own. Both are
+reported by the grounding hook at session start and resolved here.
+
+**Misplaced** — the worktree's issue is in one Linear project, and the herdr
+workspace it sits in is bound to another. Both sides are named in the report.
+Offer both remedies and apply only the one chosen:
+
+- move the **issue** into the workspace's project, or
+- rebind the **workspace** to the issue's project.
+
+Never pick one. Which is right depends on what Shawn meant by the layout, and
+guessing rewrites somebody's board.
+
+**Stale** — the issue is completed or canceled in Linear while the worktree is
+still here. Report it and change nothing. Someone closed that ticket on purpose,
+and reopening it automatically undoes a decision. If the work really is
+continuing, offer to rebind the worktree to a new issue, or to reopen the
+existing one only on an explicit yes.
+
+Both states clear on their own once the condition is gone — the next session's
+check sets the binding back to bound and writes resume. Clearing is narrow: a
+binding downgraded for a different reason, such as the branch no longer
+matching, stays downgraded.
+
 ## Binding the workspace to a project
 
 Same shape, and the workspace stays unbound until confirmed. A workspace label

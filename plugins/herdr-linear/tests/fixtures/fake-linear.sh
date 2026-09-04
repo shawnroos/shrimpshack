@@ -195,6 +195,20 @@ completed_issue() {
 JSON
 }
 
+# The same issue in a DIFFERENT project, for staging a workspace/issue mismatch.
+other_project_issue() {
+    cat <<'JSON'
+{"data":{"issue":{"id":"33333333-3333-4333-8333-333333333333","identifier":"WEB-2870","title":"Tool: Detach Foreground","url":"https://linear.app/example/issue/WEB-2870/tool-detach-foreground","branchName":"web-2870-tool-detach-foreground","updatedAt":"2026-09-04T18:11:48.336Z","priority":3,"state":{"id":"st-prog","name":"In Progress","type":"started"},"parent":null,"project":{"id":"99999999-9999-4999-8999-999999999999","name":"A Different Project"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}}}
+JSON
+}
+
+# Closed in Linear while the worktree is still in use.
+canceled_issue() {
+    cat <<'JSON'
+{"data":{"issue":{"id":"33333333-3333-4333-8333-333333333333","identifier":"WEB-2870","title":"Tool: Detach Foreground","url":"https://linear.app/example/issue/WEB-2870/tool-detach-foreground","branchName":"web-2870-tool-detach-foreground","updatedAt":"2026-09-04T18:11:48.336Z","priority":3,"state":{"id":"st-cancel","name":"Canceled","type":"canceled"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}}}
+JSON
+}
+
 not_found() {
     cat <<'JSON'
 {"errors":[{"message":"Entity not found: Issue","path":["issue"],"locations":[{"line":1,"column":9}],"extensions":{"type":"invalid input","code":"INPUT_ERROR","statusCode":400,"userError":true,"userPresentableMessage":"Could not find referenced Issue."}}],"data":null}
@@ -277,6 +291,8 @@ case "$mode" in
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; found_parent ;;
     found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; found_parent_moved ;;
     completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; completed_issue ;;
+    other_project_issue) [ "$wants_headers" = 1 ] && emit_headers 200; other_project_issue ;;
+    canceled_issue)   [ "$wants_headers" = 1 ] && emit_headers 200; canceled_issue ;;
     not_found)        [ "$wants_headers" = 1 ] && emit_headers 400; not_found ;;
     auth_error)       [ "$wants_headers" = 1 ] && emit_headers 401; auth_error ;;
     validation_error) [ "$wants_headers" = 1 ] && emit_headers 400; validation_error ;;
