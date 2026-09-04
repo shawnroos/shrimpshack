@@ -477,7 +477,7 @@ All paths are under `plugins/herdr-linear/`.
   4. Take a per-record lock for every mutation and read-modify-write atomically.
   5. Read `linear-pin.sh`'s store as a seed only, and never write to it.
   6. Refuse any binding whose record was read from inside the worktree's tracked tree.
-  7. Treat a session as unattended unless U1's recorded signal positively proves otherwise.
+  7. Treat a session as unattended unless U1's recorded signal positively proves otherwise. **U1 found no such signal**, so R6 is satisfied by a pair of units rather than by this one — see below.
 - **Test scenarios:**
   - A confirmed binding survives a pane moving workspace, a tab rename and a herdr restart. Covers AE2.
   - A workspace binding survives a herdr restart and a workspace rename.
@@ -492,6 +492,26 @@ All paths are under `plugins/herdr-linear/`.
   - An unanswered proposal is retained and returned once on the next read. Covers AE13.
   - A child issue appears in `created_children` after creation.
 - **Verification:** Every state in the binding-states diagram is reachable and its guards hold.
+- **Status: done.** 27 tests.
+
+**R6 is split across U4 and U7, and neither half satisfies it alone.** U1 proved no field separates an interactive session from a headless one — `claude -p` reports the same `source: startup` an interactive start reports. So the store cannot check attendedness, and a test claiming it does would be a check narrower than its invariant.
+
+- **U4 guarantees ordering.** `propose` generates a nonce and stores it; `confirm` moves to bound only when handed that proposal's current nonce. This closes accidental confirmation, stale confirmation, and the cross-session case where two sessions share a worktree — a superseded proposal's nonce is dead.
+- **U7 must guarantee attendedness.** The nonce may reach `confirm` only after a human answered. That means `disable-model-invocation: true` on the bind skill plus a real blocking question. **Open verification item for U7: establish what a blocking question actually does under `claude -p`.** Probe it the way U1 probed the hook channel; do not assume it fails closed.
+
+Stated plainly because the alternative is overclaiming: a headless session that runs the bind skill can call propose, take the nonce, and call confirm. Nothing in `lib/binding.sh` prevents that, and the header of that file says so.
+
+**Other decisions settled while building:**
+
+- **Reads never write.** A branch mismatch reports an effective state of `proposed` and leaves the record alone. Downgrading on read would make grounding — the hot path, run at every session start — a lock-taking writer, and make a read block behind a concurrent mutation. The next mutation persists it.
+- **A record is valid or absent, with no middle.** Validation is a whole-shape test: required fields, `state` within the enum, `version` not from the future, list fields actually lists. Testing only "did the parse throw" would accept `state: "confirmed"` — a value nothing writes and no branch handles, which then falls through every state check in silence.
+- **Locking is `mkdir`, not `flock`.** `flock` on this machine is a Homebrew binary, so depending on it would fail on a clean checkout, and a lock that silently does not lock is worse than none. `mkdir` is atomic on every POSIX filesystem and needs nothing installed.
+- **One JSON implementation, python3.** The plugin already carries a finding about a jq path and a python path disagreeing on booleans. Two implementations of one contract is a divergence waiting to be found in production.
+- **The pin key is copied verbatim** from `~/.claude/hooks/linear-pin.sh:30-36`. Deriving it independently would make "no seed found" indistinguishable from a byte-off key — a silent false green.
+- **Workspace bindings reuse the worktree record shape**, keyed on the herdr workspace id. R10 then holds with no extra machinery: a rename changes the label, not the id, and the record holds no label at all.
+
+- **Verification performed:** six mutations, each turning its test red — removing the lock acquire, the branch downgrade, the state-enum check, the declined check, the nonce comparison, and the mode check. The lock mutation is the one that matters most: it proves the concurrency test stages a real overlapping race rather than two sequential calls that would both land regardless.
+- **Knowingly untested:** the owner half of the record's permission check. Creating a file owned by another user needs root. The mode half is covered; the bats file records the gap rather than leaving it silent.
 
 ### U5. Linear client
 
