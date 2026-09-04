@@ -29,7 +29,7 @@
 # 429 body follows the documented form and is labelled here as unverified.
 #
 # Environment:
-#   FAKE_LINEAR_MODE         found_child | found_parent | not_found |
+#   FAKE_LINEAR_MODE         viewer | found_child | found_parent | not_found |
 #                            auth_error | validation_error | rate_limited |
 #                            http_500 | empty_body | malformed_json
 #                            (default: found_child)
@@ -142,6 +142,16 @@ found_parent() {
 JSON
 }
 
+# The cheapest authenticated query, and the one migrate-credential.sh uses to
+# prove a stored key works. Captured live 2026-09-04; the name is the operator's
+# own, which is why the migration can print it -- it is not a secret, and it is
+# how someone sees WHICH account a fresh key belongs to before retiring the old.
+viewer() {
+    cat <<'JSON'
+{"data":{"viewer":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"}}}
+JSON
+}
+
 not_found() {
     cat <<'JSON'
 {"errors":[{"message":"Entity not found: Issue","path":["issue"],"locations":[{"line":1,"column":9}],"extensions":{"type":"invalid input","code":"INPUT_ERROR","statusCode":400,"userError":true,"userPresentableMessage":"Could not find referenced Issue."}}],"data":null}
@@ -169,6 +179,7 @@ JSON
 
 status=200
 case "${FAKE_LINEAR_MODE:-found_child}" in
+    viewer)           [ "$wants_headers" = 1 ] && emit_headers 200; viewer ;;
     found_child)      [ "$wants_headers" = 1 ] && emit_headers 200; found_child ;;
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; found_parent ;;
     not_found)        [ "$wants_headers" = 1 ] && emit_headers 400; not_found ;;

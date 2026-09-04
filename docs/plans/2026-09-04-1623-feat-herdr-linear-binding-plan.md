@@ -402,7 +402,7 @@ All paths are under `plugins/herdr-linear/`.
 - **Goal:** One credential, in the Keychain, read the same way by both readers, with the plaintext copy gone.
 - **Requirements:** R27. Implements KTD9.
 - **Dependencies:** U3.
-- **Files:** `bin/linear-cache-refresh.sh`, `bin/migrate-credential.sh`, `tests/unit/migrate.bats`, `tests/fixtures/fake-curl.sh`.
+- **Files:** `bin/linear-cache-refresh.sh`, `bin/migrate-credential.sh`, `tests/unit/migrate.bats`. No `fake-curl.sh` was written: `tests/fixtures/fake-linear.sh` from U13 already stands in for curl and already refuses a credential in argv, so a second double would have been a parallel path with a weaker guard.
 - **Approach:**
   1. Ship the refresh script in-tree, covered by the same fake-curl and fake-security seams as the rest of the suite, and have the migration replace the `~/.claude/hooks/` copy with a call into it. The edit becomes versioned and tested rather than a hand-patch.
   2. Issue a **fresh** Linear key rather than moving the existing one: the current key has lived in plaintext and may sit in backups or dotfile sync, so migrating it preserves that exposure.
@@ -414,6 +414,19 @@ All paths are under `plugins/herdr-linear/`.
   - The Keychain read returns empty, and the refresh fails loudly rather than calling Linear unauthenticated.
   - Re-running the migration after removal reports the Keychain as the only source.
 - **Verification:** The cache refresh works with the key removed from `~/.secrets`, and no gate reports success while the plaintext copy remains.
+- **Status: code done, the manual half is outstanding.** Both scripts are written and covered by 18 tests. What remains needs a person: issuing a fresh key at `https://linear.app/settings/api`, storing it, revoking the old one, and removing the plaintext line.
+
+**The leak this unit closes was measured, not assumed.** The `~/.claude/hooks/` copy passed the key as `-H "Authorization: $KEY"`, so it sat in process argv for the life of every request — and the statusline spawns that script on any cache miss. Sampling `ps` during one single-issue refresh caught the real key in **6 of 9 samples**; the ported script scored **0 of 11**. The first measurement of this returned 14, inflated because the measuring `grep` carried the key on its own argv; the corrected method passes the pattern through a file.
+
+**Blast radius, audited before anything moved:** the key's *value* exists in exactly one file, `~/.secrets`. herdr's session history holds the variable *name* four times and the value zero times. One script reads it (`~/.claude/hooks/linear-cache-refresh.sh`); `~/.agents/skills/printing-press/SKILL.md` only lists the name in documentation.
+
+**Design decisions worth keeping:**
+
+- **The fallback to plaintext stays, and is noisy on disk.** Removing it would break the statusline the moment the hook is swapped, before the operator has migrated. But the script runs detached, so its stderr warning reaches nobody — it therefore also writes `_plaintext_fallback_used`, which `migrate-credential.sh report` reads back. The migration is not finished while that marker keeps reappearing.
+- **`remove-plaintext` is a separate verb and refuses twice.** It will not run without a Keychain key, and will not run when that key fails a live `viewer` query — removing the plaintext copy behind a broken key leaves nothing working at all. It backs up to a 0600 file first and says plainly that the backup still contains the old key.
+- **A fresh key, not the old one.** The existing key has lived in plaintext where dotfile sync and Time Machine may have copied it, and it has been in argv on every cache miss. Moving it preserves that exposure; issuing a new one and revoking the old ends it. A personal API key cannot be created through the API, so this step is a person at a browser.
+
+- **Verification performed:** four mutations, each turning a test red — putting the credential back on argv, dropping the fallback marker, removing the `verify_key` gate from `remove-plaintext`, and skipping the backup. The argv mutation also exposed a vacuous assertion of my own: `[ "$status" -ne 98 ]` could never fail, because curl runs inside a command substitution whose pipeline ends in `wc` and the script exits from a later `echo`. The stdin record is what carries that test now, and the comment says so.
 
 ### U13. Capture real Linear response shapes
 
