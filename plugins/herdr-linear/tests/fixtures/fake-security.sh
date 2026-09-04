@@ -153,7 +153,17 @@ case "$SUBCMD" in
       exit 0
     fi
     if [ "$w_seen" -eq 1 ]; then
-      printf '%s\n' "$(cat "$found")"
+      # The real binary hex-encodes the password when it holds any byte outside
+      # printable ASCII: measured against the live Keychain, 23 bytes in came
+      # back as 46 characters. A fixture that always echoes bytes is MORE
+      # permissive than the thing it stands in for, and the suite then proves a
+      # round-trip the real store cannot do. Model it.
+      _v="$(cat "$found")"
+      if LC_ALL=C printf '%s' "$_v" | LC_ALL=C grep -q '[^ -~]'; then
+          LC_ALL=C printf '%s' "$_v" | xxd -p | tr -d '\n'; printf '\n'
+      else
+          printf '%s\n' "$_v"
+      fi
     else
       # Attribute dump — no password. This is what the existence probe reads.
       printf 'keychain: "fake"\nclass: "genp"\n    "acct"<blob>="%s"\n    "svce"<blob>="%s"\n' \

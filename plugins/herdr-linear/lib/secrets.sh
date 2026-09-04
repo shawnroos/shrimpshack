@@ -147,8 +147,21 @@ herdr_linear::keychain_write() (
     # which keychain_exists reports the credential as configured. The read-back
     # compare below still catches it, but only after the store has been dirtied.
     # Refusing here is what leaves a rejected paste with the store untouched.
+    #
+    # The same door refuses every byte outside printable ASCII, for a second
+    # reason measured against the real Keychain: `find-generic-password -w`
+    # returns the password HEX-ENCODED when it holds any such byte -- 23 bytes
+    # in came back as 46 characters -- and a reader cannot distinguish that blob
+    # from a password that happens to look like hex. Storing it would mean
+    # storing a credential nothing can recover. A Linear API key is ASCII by
+    # construction, so the only values this rejects are paste accidents: a smart
+    # quote, a non-breaking space, a stray tab.
+    # Printable ASCII only: 0x20-0x7E. The range must start at SPACE, not tab --
+    # \t-~ is 0x09-0x7E and quietly contains the newline this guard exists to
+    # refuse, which is how an earlier version of this line dropped that check
+    # while still looking stricter.
     case "$secret" in
-        *$'\n'*) return "$HERDR_LINEAR_SECRET_MALFORMED" ;;
+        *[!\ -~]*) return "$HERDR_LINEAR_SECRET_MALFORMED" ;;
     esac
 
     # Builtin printf, twice, newline-terminated. No external command, so the

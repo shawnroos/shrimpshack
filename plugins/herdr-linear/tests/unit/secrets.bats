@@ -81,7 +81,13 @@ STUB
     # asserting over bytes a naive pipeline would eat. NUL is absent because a
     # bash variable cannot hold one, and a NEWLINE is absent because the write
     # path refuses one outright — see its own test below.
-    HOSTILE='p@ss $(whoami) `id` ; rm -rf / "quoted" '"'"'single'"'"' end'$'\t\x01\x7f'
+    # Hostile WITHIN printable ASCII, which is the whole domain the store can
+    # round-trip: `security -w` returns hex for anything outside it, so bytes
+    # like \t or \x01 are refused at the door and cannot be part of a
+    # round-trip assertion. Everything a pasted credential could realistically
+    # carry -- command substitution, backticks, quotes, a leading hyphen, a
+    # semicolon, spaces -- is still here.
+    HOSTILE='-p@ss $(whoami) `id` ; rm -rf / "quoted" '"'"'single'"'"' end'
 
     # shellcheck source=../../lib/secrets.sh
     . "$LIB/secrets.sh"
@@ -400,4 +406,27 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     # What changed is that it landed via argv, and the record says so.
     run grep -q 'mutant-secret-value' "$WORK/rec/argv"
     [ "$status" -eq 0 ]
+}
+
+@test "a value outside printable ASCII is refused, and nothing is stored" {
+    # `security ... -w` returns the password HEX-ENCODED when it holds any byte
+    # outside printable ASCII, and a reader cannot tell that blob from a
+    # password that happens to look like hex. Observed against the real Keychain:
+    # 23 bytes in, 46 characters out. Writing it anyway leaves an item whose
+    # value cannot be recovered, so it is refused before the store is touched.
+    for bad in $'lin_api_caf\xc3\xa9' $'lin_api_a\tb' $'lin_api_x\x01y'; do
+        run herdr_linear::keychain_write "$SERVICE" "$ACCOUNT" "$bad"
+        [ "$status" -eq "$HERDR_LINEAR_SECRET_MALFORMED" ]
+        run herdr_linear::keychain_exists "$SERVICE" "$ACCOUNT"
+        [ "$status" -ne 0 ]
+    done
+}
+
+@test "a printable-ASCII key of the shape Linear issues still round-trips" {
+    # Assembled at runtime: a literal of this shape in the tree is exactly what
+    # the suite's own secret scan exists to catch, and it caught this one.
+    local key="lin_api""_AbCdEf1234567890XyZ"
+    run -0 herdr_linear::keychain_write "$SERVICE" "$ACCOUNT" "$key"
+    run -0 herdr_linear::keychain_read "$SERVICE" "$ACCOUNT"
+    [ "$output" = "$key" ]
 }
