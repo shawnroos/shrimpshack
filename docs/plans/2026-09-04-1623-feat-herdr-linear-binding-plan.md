@@ -789,6 +789,34 @@ Two further defects were in the harness rather than the code: `grep -c` prints `
 
 No unit test may touch the live Linear API, the real Keychain, or the running herdr server — a suite that mutates the machine is how a green run stops meaning anything. The two exceptions are deliberate, run by hand, and both read-only: U1's channel probe and U13's shape capture.
 
+### Gate status, 2026-09-05
+
+| Gate | State |
+|---|---|
+| Unit suite | **met** — 242 tests, exit 0 |
+| Suite trust | **met** — `self_check` fails a deliberately-false test on every run |
+| Manifest wiring | **met** — validate passes, versions match |
+| Secret scan | **met** — no credential shape in the tree |
+| Isolation | **met** — 242/242 from a checkout holding only `plugins/herdr-linear`, no sibling plugin present |
+| Plaintext removal | **NOT met** — needs the manual key rotation |
+| Shadow proof | **NOT met** — no logged proposal has been checked against a real issue yet |
+
+## Definition of Done — status, 2026-09-05
+
+| Bullet | State |
+|---|---|
+| Unit scenarios pass; suite seen to fail when broken | **met** |
+| A real Slate worktree is grounded; this repo produces nothing | **met** — a live `claude -p` in `~/projects/Slate/worktrees/cue-read` answered from the startup context ("this worktree is not bound…"); the same hook in this repo produced no output and exit 0 |
+| A mechanical change appears on a real Linear issue | **not met** — shadow mode; gated on the shadow proof |
+| A tab built from a real issue produces bound worktrees | **not met** — fixture only; the live herdr server has never been touched |
+| A binding survives a pane move, tab rename and restart | **met** |
+| No write from an unconfirmed proposal, an unattended session, or outside the bound set | **met**, with R6's residual stated in three places |
+| A fresh key in the Keychain, plaintext gone, never in argv | **not met** — the argv half is met and measured; the rotation is manual |
+| No hook can prevent a session ending, proven by a test | **met** — a live session with the reconcile hook and Linear unreachable exited 0 in 43s |
+| Dead-end code removed | **met** — no unreferenced functions, no leftover markers |
+
+**Four bullets remain, and three of them cannot be closed without Shawn**: the key rotation, the shadow proof against a real ticket, and a live layout build. The fourth — a mechanical change reaching a real issue — follows from the shadow proof.
+
 ---
 
 ## Definition of Done
