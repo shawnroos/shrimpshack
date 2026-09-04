@@ -187,6 +187,14 @@ no_candidates() {
 JSON
 }
 
+# An issue already in a completed state, for the case where Linear's own GitHub
+# integration got there first and there is nothing left to write.
+completed_issue() {
+    cat <<'JSON'
+{"data":{"issue":{"id":"33333333-3333-4333-8333-333333333333","identifier":"WEB-2870","title":"Tool: Detach Foreground","url":"https://linear.app/example/issue/WEB-2870/tool-detach-foreground","branchName":"web-2870-tool-detach-foreground","updatedAt":"2026-09-04T18:11:48.336Z","priority":3,"state":{"id":"st-done","name":"Done","type":"completed"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}}}
+JSON
+}
+
 not_found() {
     cat <<'JSON'
 {"errors":[{"message":"Entity not found: Issue","path":["issue"],"locations":[{"line":1,"column":9}],"extensions":{"type":"invalid input","code":"INPUT_ERROR","statusCode":400,"userError":true,"userPresentableMessage":"Could not find referenced Issue."}}],"data":null}
@@ -232,6 +240,33 @@ case "$mode" in
         ;;
 esac
 
+# Content routing, before the mode is consulted. A real endpoint answers by what
+# was asked, not by what the caller expected, and one reconciliation pass sends
+# three different queries -- an issue read, a team's workflow states, and the
+# mutation. A mode-only fixture would have to be sequenced by hand for every
+# test, which encodes the call ORDER into the test and breaks the moment the
+# implementation reorders two reads that do not depend on each other.
+case "$body" in
+    *'teams('*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        cat <<'JSON'
+{"data":{"teams":{"nodes":[{"states":{"nodes":[{"id":"st-backlog","name":"Backlog","type":"backlog"},{"id":"st-todo","name":"Todo","type":"unstarted"},{"id":"st-prog","name":"In Progress","type":"started"},{"id":"st-devdone","name":"Dev Done","type":"started"},{"id":"st-done","name":"Done","type":"completed"},{"id":"st-cancel","name":"Canceled","type":"canceled"}]}}]}}}
+JSON
+        exit 0
+        ;;
+    *issueUpdate*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        # success:false on a 200 is the case a "did the function finish" check
+        # reads as a successful write. It is reachable on purpose.
+        if [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "fail" ]; then
+            printf '%s' '{"data":{"issueUpdate":{"success":false}}}'
+        else
+            printf '%s' '{"data":{"issueUpdate":{"success":true}}}'
+        fi
+        exit 0
+        ;;
+esac
+
 status=200
 case "$mode" in
     viewer)           [ "$wants_headers" = 1 ] && emit_headers 200; viewer ;;
@@ -241,6 +276,7 @@ case "$mode" in
     found_child)      [ "$wants_headers" = 1 ] && emit_headers 200; found_child ;;
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; found_parent ;;
     found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; found_parent_moved ;;
+    completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; completed_issue ;;
     not_found)        [ "$wants_headers" = 1 ] && emit_headers 400; not_found ;;
     auth_error)       [ "$wants_headers" = 1 ] && emit_headers 401; auth_error ;;
     validation_error) [ "$wants_headers" = 1 ] && emit_headers 400; validation_error ;;

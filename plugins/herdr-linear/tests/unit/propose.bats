@@ -214,9 +214,14 @@ teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 @test "the bind skill runs the containment check before recording anything" {
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
     [[ "$body" == *"herdr_linear::contains"* ]]
-    # The containment section precedes the recording section.
-    c=$(grep -n 'herdr_linear::contains' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
-    r=$(grep -n 'herdr_linear::binding_confirm' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
+    # Anchored at line start, so only the INSTRUCTION inside a code block counts.
+    # Matching any mention compared against prose instead: a paragraph
+    # explaining that a session with Bash could call binding_confirm directly
+    # sits above the containment section, and failed a test about instruction
+    # order on the strength of a sentence.
+    c=$(grep -n '^herdr_linear::contains' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
+    r=$(grep -n '^herdr_linear::binding_confirm' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
+    [ -n "$c" ] && [ -n "$r" ]
     [ "$c" -lt "$r" ]
 }
 

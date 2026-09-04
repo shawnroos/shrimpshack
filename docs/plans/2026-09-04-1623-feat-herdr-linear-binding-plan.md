@@ -674,6 +674,36 @@ Stated plainly because the alternative is overclaiming: a headless session that 
   - The reconcile hook writes nothing in a worktree outside the Slate root.
   - The hook errors, and the session still ends.
 - **Verification:** A session ends normally with the hook installed and Linear unreachable.
+- **Status: done.** 20 tests.
+
+**The no-blocking property was proven by ending a real session, not by reading the hook.** A scratch settings file registered `hooks/reconcile.sh` on `SessionEnd`, `HERDR_LINEAR_CURL_BIN` was pointed at `/bin/false`, and `claude -p` was run in a scratch Slate worktree. It answered and exited 0 in 43 seconds. That is the plan's verification line, satisfied empirically.
+
+**Shadow mode is the default and the allowlist is a file, deliberately.** Turning writes on for a worktree means adding its resolved path to `~/.claude/herdr-linear/write-enabled` — an edit someone makes after reading what the shadow log said the plugin would have done. A flag flipped in passing is not the same act. The allowlist is matched whole-line, so `…/wt` does not enable `…/wt-other`, and an empty allowlist is not treated differently from a missing one.
+
+**The guard cannot be forgotten, by construction.** `write_state` takes the opening `updatedAt` as a required argument and calls `guard_unchanged` itself. A design where the caller guards first is a design where some future caller does not — the same reasoning as the binding nonce: an argument that must be supplied cannot be skipped by accident.
+
+**A write is recorded from the API's own answer.** Linear returns HTTP 200 carrying `issueUpdate.success: false` for a write that did not happen, and every "did the function reach the end" check reads that as success. The fixture can serve it on purpose.
+
+**The signal ordering is the whole design, and the first version had it wrong in a way that would have corrupted real boards.**
+
+`git merge-base --is-ancestor` answers **no** for squash-merged work: a squash creates a new commit, so the branch's own commits never become ancestors of the default branch. Squash is the default merge here. So "commits not merged, branch gone from the remote" is what **landed** work looks like most of the time — and it is also what abandoned work and a rebase look like. The repository cannot tell them apart.
+
+The first ordering tested `ahead > 0` before the deleted-upstream case, which sent every squash-merged branch to `started` — quietly moving finished work **back to In Progress**, the exact opposite of what happened. That was the common path, not an edge case. `upstream_gone` is now checked immediately after `merged`, and it produces a judgment proposal rather than a state.
+
+The rest: merged into the default branch is the one unambiguous completion signal, with or without a pull request — and work landing with no pull request is exactly what Linear's own GitHub integration never sees, which is what R15 is for. The hook never prompts; U6 surfaces the proposal at the next session.
+
+This was found because a test failed and the failure was investigated rather than the test adjusted. The test had been written to force `ahead=0`, which cannot co-exist with `merged=no` in a real repository — the setup was impossible, and making it possible is what exposed the ordering.
+
+- **Verification performed:** the live-session check above, 26 unit tests, and eleven mutations — all red.
+
+**The two most important guards were the two that mutated green.** Removing the write bound (R30) and removing containment (R26) both left the suite passing, and the reason is the same in each case: `reconcile` refuses earlier for a *different_ reason, so the guard's removal changed nothing observable.
+
+- An unbound worktree is refused by `reconcile`'s own state check before `write_allowed` is consulted. The isolating test calls `write_state` directly on a **bound** worktree with a target that is neither the bound issue nor a recorded child — the only shape that actually reaches the bound. A companion test writes to a recorded child successfully, so the refusal is the bound doing its job rather than a blanket no.
+- A worktree outside the Slate root is *also* unbound, so `reconcile` refused it either way and the status was identical with and without the check. The isolating test **binds the outside worktree first** — `lib/binding.sh` deliberately does not enforce the Slate root, since containment is the caller's job — leaving containment as the only thing that can refuse it.
+
+This is the same lesson as the earlier passes and worth stating once more plainly: a guard's test must reach a state where that guard is the *only* thing standing in the way. Otherwise the suite is testing the first refusal in the chain and reporting it as coverage of the last.
+
+Two further defects were in the harness rather than the code: `grep -c` prints `0` *and* exits 1, so a `|| echo 0` fallback appended a second zero and every count assertion compared against `"0\n0"`; and asserting on a log file that correctly does not exist read as a grep error rather than as a pass.
 
 ### U9. Untidy states
 
