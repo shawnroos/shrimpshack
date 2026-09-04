@@ -12,5 +12,6 @@
     "worktree",
     "issue-tracking",
     "grounding"
-  ]
+  ],
+  "hooks": "./hooks/hooks.json"
 }

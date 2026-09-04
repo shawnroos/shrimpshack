@@ -578,6 +578,15 @@ Stated plainly because the alternative is overclaiming: a headless session that 
   - On the `UserPromptSubmit` fallback, a second prompt in the same session injects nothing.
   - The binding store is unreadable, and the session starts anyway.
 - **Verification:** A session in a real Slate worktree reports its issue; one in this repo reports nothing.
+- **Status: done.** 14 tests.
+
+**The UserPromptSubmit fallback was not built and is not tested.** KTD10 records the `SessionStart` channel as proven on this build, so the fallback is unnecessary; a test for it would be a test for code that does not exist. The plan's scenario for it is therefore dropped rather than faked.
+
+**Untrusted text carries two defences, not one.** JSON encoding stops a value from breaking the structure, but a literal `</herdr-linear-context>` inside a title is still readable text that appears to close the wrapper. So each value is *also* tag-neutralised, using the zero-width-space technique from `plugins/reflect/hooks/seeded-recall.sh`. The injected text is not censored — it stays visible as data inside a wrapper that says what it is. Hiding it would keep the reader from seeing what a ticket actually contains.
+
+**Every path exits 0**, including a malformed payload, an empty payload, an unreadable store, and an unreachable API. The unreachable case emits an explicit notice and an instruction not to write, rather than silence — silence is indistinguishable from a session that simply has no binding.
+
+- **Verification performed:** five mutations, each turning a test red — removing the containment check, removing the tag neutralisation, inlining values instead of JSON-encoding them, reading the judgment without marking it seen, and dropping the unbound notice.
 
 ### U7. Proposal and confirmation
 
