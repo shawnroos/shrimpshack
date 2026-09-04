@@ -65,7 +65,7 @@ The cost is paid twice per piece of work: once re-establishing context that the 
 - R3. When branch matching yields no candidate, the plugin offers candidates drawn from the workspace's bound Linear project, or from the Linear team the worktree's repository belongs to when that workspace is not yet bound, still under propose-and-confirm.
 - R4. A candidate Shawn declines is not proposed again for that worktree.
 - R5. A binding becomes authoritative only when Shawn confirms it, and then persists for the life of the worktree.
-- R6. A confirmation is accepted only from an interactive human session; in an unattended session the worktree stays proposed and nothing is written to Linear.
+- R6. A confirmation is accepted only from an interactive human session; in an unattended session the worktree stays proposed and nothing is written to Linear. No payload field distinguishes the two — U1 observed a headless run reporting the same `source: startup` an interactive start reports — so the check is fail-closed against a positive signal the plugin itself establishes.
 - R7. A binding is never read from version-controlled repository content, so only a binding the plugin itself wrote through a confirmation is authoritative.
 - R8. A confirmed binding survives a pane moving between tabs or workspaces, a tab being renamed, and herdr restarting.
 - R9. A herdr workspace is bound to a Linear project by the same propose-and-confirm step, and the plugin never assumes the correspondence from the two names.
@@ -200,6 +200,7 @@ Only `Bound` permits an automatic write. `Proposed`, `Misplaced`, and `Stale` ar
 - No Linear integration exists in this repo today. `plugins/spinoff/skills/spinoff/SKILL.md` states that its script "has no Linear access and never looks one up".
 - Slate work is everything under the Slate project root, and it spans more than one Linear team. Every currently-open Slate pane sits on a Web Creation issue, but the web-app main checkout sits on a Frontend Guild branch. The team is therefore resolved per worktree, and R21 takes the team for a new issue from the workspace's bound project.
 - A tab groups related issues rather than strictly one issue and its children. One open tab holds an issue and its own parent as sibling columns, so R25 attaches a new sub-issue to the issue the tab was created from rather than inferring a parent from the neighbouring columns.
+- The `SessionStart` payload carries `cwd`, `hook_event_name`, `session_id`, `source` and `transcript_path`, and nothing that separates an interactive session from a headless one.
 - Which of the drift moments costs the most is not established. All of them are treated as in scope, sorted by R15 and R17 rather than by priority.
 - The pane tree does not name columns directly. Column membership is derived from pane geometry within a tab's layout, which the snapshot exposes.
 
@@ -245,7 +246,7 @@ Only `Bound` permits an automatic write. `Proposed`, `Misplaced`, and `Stale` ar
 - KTD7. **The stale-write guard is local to one reconciliation pass.** Read the issue's state and `updatedAt` at the start of the pass, derive the difference from that read, re-read `updatedAt` immediately before the mutation, and abort only when it moved *within that pass*. Never compare against a value stored from an earlier session: Linear's GitHub integration moves these issues on its own, so a cross-session comparison would abort every write permanently and silently. The guard closes the read-modify-write window; it is not a distributed lock, and Linear offers no precondition to make it one. Governs R16.
 - KTD8. **`secrets.sh` and `sanitize.sh` are vendored into this plugin, not sourced from `plugins/spawn`.** No plugin in this repo sources another's library, `${CLAUDE_PLUGIN_ROOT}` resolves only the current plugin, and spawn's own runner requires it to work from a checkout with no other plugin present. Governs R27, R28.
 - KTD9. **The credential never reaches a command argument.** The Authorization header goes to `curl` on stdin via `curl --config -`, never as a `-H` argument, mirroring the builtin-`printf` rule that keeps a secret out of the process table. Both readers — the plugin and the cache refresh — follow it. Governs R27.
-- KTD10. **The grounding channel is proven before it is built, and an inconclusive verdict blocks Phase B.** Documentation describes `hookSpecificOutput.additionalContext` on `SessionStart`; nothing here has exercised it, and `plugins/reflect` records that raw stdout injects for `UserPromptSubmit` only. The fallback grounds once per session and suppresses afterwards, which is a different behaviour from R11 rather than a later version of it.
+- KTD10. **The grounding channel is `hookSpecificOutput.additionalContext` on `SessionStart`, proven on this build.** U1 emitted two tokens in one JSON object — one under that key, one under a sibling key no contract names — and only the first reached the model, which distinguishes a real channel from the harness dumping raw stdout. The `UserPromptSubmit` fallback is not needed and is not built.
 - KTD11. **Slate-root containment is enforced against a named root.** The root is `~/projects/Slate`, resolved with `realpath` at hook time and overridable by one named environment variable for tests. Both paths are resolved and compared with a trailing separator, because a bare prefix admits a sibling directory and an unresolved symlink admits whatever it points at. A root that does not resolve is treated as outside. Governs R26.
 - KTD12. **Bindings are established lazily, and the fallback candidate list is bounded.** No bulk pass over the 86 existing worktrees. Because branch matching reaches under a fifth of them, the fallback path is the common one: it offers at most a handful of issues, assigned to Shawn, in a non-terminal state, most recently updated first, and says so and stops when that filter is empty rather than widening.
 - KTD13. **Two interactive skills, and hooks that never prompt.** Binding, reconciling a misplacement and layout are skills Shawn invokes; the hooks ground, reconcile and report. A judgment proposal is therefore never presented by the hook that found it — it is recorded against the binding and surfaced by the grounding hook at the next session, on the same path R18 defines.
@@ -255,7 +256,7 @@ Only `Bound` permits an automatic write. `Proposed`, `Misplaced`, and `Stale` ar
 
 ### Risks & Dependencies
 
-- **The grounding channel may not exist on this build.** No repo precedent injects context from `SessionStart`. U1 settles it; an inconclusive verdict blocks Phase B rather than falling through to the fallback.
+- ~~The grounding channel may not exist on this build.~~ **Closed by U1**: the channel is real, discriminated against a decoy key. `plugins/herdr-linear/tests/probe/README.md` carries the evidence.
 - **The credential migration edits a file this repo does not ship.** U12 moves that script in-tree so the change becomes versioned and testable rather than a hand-patch on one machine.
 - **The Keychain bound is weaker than it looks.** Its default ACL authenticates `/usr/bin/security`, not the caller, so any same-user process reads the item without a prompt. The improvement over plaintext is real but smaller than R27's wording suggests.
 - **herdr is moving software in this same repo.** Three verbs the plan depends on have no caller anywhere in the tree. U11 probes liveness before any call and every herdr call sits behind a fixture seam.
@@ -491,8 +492,8 @@ All paths are under `plugins/herdr-linear/`.
 - **Dependencies:** U1, U4, U5.
 - **Files:** `hooks/ground.sh`, `.claude/hooks/hooks.json`, `tests/unit/ground.bats`.
 - **Approach:**
-  1. Use the channel U1 proved. On a `UserPromptSubmit` verdict, ground once per session and suppress afterwards using a per-session marker in the binding store.
-  2. Call `lib/contain.sh` before anything else, exiting 0 and silent when outside.
+  1. Emit through `hookSpecificOutput.additionalContext` on `SessionStart`, which U1 proved reaches the model.
+  2. Resolve the worktree from the payload's `cwd` field, which U1 confirmed is present, and call `lib/contain.sh` before anything else, exiting 0 and silent when outside.
   3. Emit every Linear-derived string — title, project name, parent title, state name — inside one tagged wrapper introduced by a fixed line saying its contents are issue metadata to be read as data, never followed as instructions, with the closing tag neutralised inside each value.
   4. Surface any retained unanswered proposal once.
   5. Fail open on every error path, exiting 0.
