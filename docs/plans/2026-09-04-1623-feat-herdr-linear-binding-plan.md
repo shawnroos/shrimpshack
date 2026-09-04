@@ -420,11 +420,32 @@ All paths are under `plugins/herdr-linear/`.
 - **Goal:** Fixtures built from observed responses rather than from assumptions about the API.
 - **Requirements:** none directly; grounds U5.
 - **Dependencies:** U3.
-- **Files:** `tests/probe/linear-shape-probe.sh`, `tests/fixtures/fake-linear.sh`.
-- **Approach:** Run once by hand, read-only: fetch one real issue with a parent, one without, and one rate-limited response if reachable. Capture the observed shapes — where the branch name lives, what `updatedAt` looks like, the `RATELIMITED` error form — into the fixture U5 tests against.
+- **Files:** `tests/fixtures/fake-linear.sh`, `tests/unit/fake-linear.bats`.
+- **Approach:** Run once by hand, read-only, on 2026-09-04. The fixture stands in for **curl**, not for the API, because KTD9's claim is about the invocation: the credential travels on stdin through `--config -` and never on argv. Only something in curl's position can see argv and fail the run, so the fixture exits 98 on a credential in argv and 97 on an unpermitted mutation.
 - **Execution note:** Read-only against Linear. This is the one place the plan touches the real API before Phase C, and it writes nothing.
-- **Test scenarios:** `Test expectation: none -- this unit produces a fixture, and the fixture's correctness is proven by U5's tests running against it.`
-- **Verification:** `tests/fixtures/fake-linear.sh` returns shapes captured from a real response, and U5's tests are written against it.
+- **Status: done.** Captured shapes: an issue with a parent, an issue without, entity-not-found, authentication error, GraphQL validation error, and the rate-limit headers. Only the 429 body is unverified — it could not be provoked read-only without spending the hour's budget, and it is labelled as constructed in the fixture.
+
+**What the capture found, and what it changes for U5:**
+
+1. **"No issue came back" arrives in three incompatible shapes.** A client testing `.data.issue == null` recognises none of them:
+
+   | Case | Shape |
+   |---|---|
+   | found | `{"data":{"issue":{…}}}` |
+   | not found | `{"errors":[…],"data":null}` — `data` present **and** null |
+   | auth error | `{"errors":[…]}` — no `data` key at all |
+   | validation error | `{"errors":[…]}` — no `data` key at all |
+
+   U5 branches on `errors[]` first, then on `data`. The useful discriminator is `errors[0].extensions.code`: `INPUT_ERROR`, `AUTHENTICATION_ERROR`, `GRAPHQL_VALIDATION_FAILED`.
+
+2. **A parent issue is not a child minus a field.** `parent` is explicitly `null` and `labels.nodes` is an empty array rather than absent. A reader treating both as missing keys passes one case and breaks on the other.
+
+3. **The rate-limit headers ride every response, not only a 429** — `x-ratelimit-requests-limit: 2500`, `-remaining`, `-reset` (epoch ms), plus the same three for complexity against a 3,000,000 budget. U5 can watch its own budget without ever being throttled, so R14's bounded lookup does not need a 429 to know it is close.
+
+4. **KTD9 verified against the live endpoint.** A read-only query ran with the key fed to `curl --config -` on stdin; a scan of every process's argv for the actual key value found **0**. An earlier count of 3 was the scanning `grep` itself and two wrapper lines matching the literal template text, not the secret.
+
+- **Test scenarios:** `tests/unit/fake-linear.bats`, 12 tests. Each of the three no-result shapes is asserted distinctly; both boundary codes are asserted; `http_500`, `empty_body` and `malformed_json` are asserted to be distinguishable from one another.
+- **Verification:** three mutations were applied to the fixture and each turned its test red — removing the argv guard, removing the mutation guard, and giving the parent case a non-null `parent`. The fixture was restored byte-identical afterwards.
 
 ### Phase B — Read path
 
