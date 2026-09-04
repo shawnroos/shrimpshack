@@ -12,7 +12,6 @@
 # with their own options, and turning either on for them changes their control
 # flow. Every expansion is `${VAR:-}` so a caller running `set -u` is safe.
 
-# Binary resolution
 # Order: an explicit HERDR_BIN override, then PATH, then a list of known
 # install locations.
 #
@@ -93,7 +92,6 @@ herdr_linear::bin_rejected() {
     return 0
 }
 
-# Liveness
 # herdr must NEVER be piped into an early-exiting reader to decide liveness.
 # `grep -q` exits the instant it matches and closes the pipe, so herdr dies
 # mid-write and exits non-zero — and under a caller's `set -o pipefail` that
@@ -137,7 +135,6 @@ herdr_linear::probe() {
     esac
 }
 
-# The session's own position
 # herdr exports these into every pane it owns, so a snapshot walk to learn
 # where this session already knows it is would be a round trip for an answer
 # already in hand — and one that can fail when the server is busy.
@@ -146,7 +143,6 @@ herdr_linear::pane_id()      { [ -n "${HERDR_PANE_ID:-}" ]      && printf '%s' "
 herdr_linear::tab_id()       { [ -n "${HERDR_TAB_ID:-}" ]       && printf '%s' "$HERDR_TAB_ID"; }
 herdr_linear::workspace_id() { [ -n "${HERDR_WORKSPACE_ID:-}" ] && printf '%s' "$HERDR_WORKSPACE_ID"; }
 
-# Topology
 
 # The whole snapshot, as JSON, on stdout. The only reason to reach for this is
 # a question about NEIGHBOURS — which tab a pane sits in, which other panes

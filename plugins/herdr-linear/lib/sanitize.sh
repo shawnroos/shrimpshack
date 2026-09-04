@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sanitize.sh — this plugin's untrusted-text accessors (R28, KD10).
+# sanitize.sh — this plugin's untrusted-text accessors.
 #
 # WHY THIS EXISTS
 # Anyone with tracker access can write the text this plugin reads: issue titles,
@@ -9,7 +9,7 @@
 # and Unicode bidi overrides (U+202E) in it can rewrite the statusline or spoof
 # a consent prompt.
 #
-# It is VENDORED, not sourced from plugins/spawn (KTD8).
+# It is VENDORED, not sourced from plugins/spawn.
 #
 # R28 splits the defence in two, and both halves live here:
 #   * identifiers (issue keys, branch fragments, state names) are closed BY
@@ -59,7 +59,10 @@ def strip_display_controls:
            and (. < 8203 or . > 8207)
            and (. < 8232 or . > 8238)
            and (. < 8288 or . > 8303)
-           and . != 65279 )))
+           and . != 65279
+           and . != 6158
+           and (. < 65529 or . > 65531)
+           and (. < 917504 or . > 917631) )))
   | implode;
 def strip_display_deep:
   walk(if type == "string" then strip_display_controls else . end);
@@ -109,14 +112,24 @@ herdr_linear::sanitize_stream() {
 # command argument goes through this BEFORE it is used, not after. The test for
 # it lists the hostile shapes it refuses, and the point of the closed charset is
 # that the list is illustrative rather than exhaustive.
+# The charset is enumerated, not written as a range. Inside a `case` pattern
+# bash 3.2 -- which is what /bin/bash is on macOS -- matches [A-Za-z] by locale
+# collation, so under en_US.UTF-8 it admits accented letters and the "closed by
+# construction" claim holds on bash 5 and not on the interpreter a hook may get.
+#
+# The first character must be alphanumeric. The charset says nothing about
+# position, and that is the whole difference between an operand and a flag: a
+# tracker-authored value of `-D`, `--mirror` or `--exec` is charset-legal and
+# arrives in argv as an option. A leading dot is refused for the same reason --
+# `.git` and `.ssh` are legal identifiers that name the wrong thing entirely.
 herdr_linear::is_safe_identifier() {
     local s="${1:-}"
     [ -n "$s" ] || return 1
     case "$s" in
-        .|..) return 1 ;;
+        [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]*) return 1 ;;
     esac
     case "$s" in
-        *[!A-Za-z0-9._-]*) return 1 ;;
+        *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 1 ;;
     esac
     return 0
 }

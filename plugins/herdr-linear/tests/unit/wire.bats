@@ -58,3 +58,4 @@ marketplace() { printf '{"plugins":[{"name":"%s","version":"%s"}]}' "$1" "$2" > 
     run scan_paths "$WORK"
     [ "$status" -eq 0 ]
 }
+

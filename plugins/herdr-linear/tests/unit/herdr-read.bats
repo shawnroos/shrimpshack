@@ -18,6 +18,19 @@
 # stderr apart.
 bats_require_minimum_version 1.5.0
 
+# A `!`-negated command is exempt from errexit under POSIX, and bats scores a
+# test by errexit or the final command's status -- so `! grep -q X` anywhere but
+# the last line detects the defect and lets the test pass anyway. Every absence
+# assertion goes through this instead: it returns non-zero on a match, which is
+# a plain command failure and does fail the test wherever it sits.
+refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
+    if grep "$@"; then
+        printf 'refute_match: unexpectedly matched: %s\n' "$*" >&2
+        return 1
+    fi
+    return 0
+}
+
 setup() {
     FIX="$(cd "$BATS_TEST_DIRNAME/../fixtures" && pwd)"
     LIB="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
@@ -62,9 +75,7 @@ plant_herdr() {
     printf '%s' "$dir"
 }
 
-# ---------------------------------------------------------------------------
 # Resolution
-# ---------------------------------------------------------------------------
 
 @test "the binary is absent from PATH and is found on the fallback list" {
     plant_herdr "$WORK/opt" >/dev/null
@@ -115,9 +126,7 @@ plant_herdr() {
     [ "$output" = "$WORK/opt/herdr" ]
 }
 
-# ---------------------------------------------------------------------------
 # The liveness probe
-# ---------------------------------------------------------------------------
 
 @test "a live server probes true and the captured text is kept" {
     export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
@@ -165,9 +174,6 @@ plant_herdr() {
     [[ "$HERDR_LINEAR_PROBE_ERR" == *"could not connect"* ]]
 }
 
-# ---------------------------------------------------------------------------
-# The session's own position
-# ---------------------------------------------------------------------------
 
 @test "a pane id is read from the environment without invoking herdr at all" {
     export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
@@ -194,9 +200,7 @@ plant_herdr() {
     [ ! -e "$WORK/rec/argv" ]
 }
 
-# ---------------------------------------------------------------------------
 # Topology — the lookups that genuinely need neighbours
-# ---------------------------------------------------------------------------
 
 @test "a dotted field path is read out of a snapshot response" {
     export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
@@ -233,9 +237,7 @@ wA:p2" ]
     [ -z "$output" ]
 }
 
-# ---------------------------------------------------------------------------
 # The read-only boundary
-# ---------------------------------------------------------------------------
 
 @test "no accessor ever invokes a mutating herdr verb" {
     export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
@@ -251,11 +253,13 @@ wA:p2" ]
 
     record="$(argv_record)"
     [ -n "$record" ]  # the fixture WAS reached, so the absence below means something
-    for verb in create split move swap close rename focus run send-keys resize zoom report-metadata report-agent; do
-        ! grep -qw -- "$verb" <<<"$record"
+    verbs="$("$FIX/fake-herdr.sh" --list-mutating-verbs)"
+    [ -n "$verbs" ]   # an empty list would make the loop below vacuous
+    for verb in $verbs; do
+        refute_match -qw -- "$verb" <<<"$record"
     done
     # Only the two read verbs were ever used.
-    ! grep -qvE '^(status server|api snapshot)$' <<<"$record"
+    refute_match -qvE '^(status server|api snapshot)$' <<<"$record"
 }
 
 @test "the readers work with jq absent, through the python3 fallback" {

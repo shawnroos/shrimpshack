@@ -61,3 +61,29 @@ teardown() {
     run herdr_linear::contains ""
     [ "$status" -ne 0 ]
 }
+
+@test "a symlink to a FILE outside the root is outside" {
+    mkdir -p "$WORK/outside"; : > "$WORK/outside/f"
+    ln -s "$WORK/outside/f" "$WORK/Slate/link-to-file"
+    run herdr_linear::contains "$WORK/Slate/link-to-file"
+    [ "$status" -ne 0 ]
+}
+
+@test "a dangling symlink inside the root is outside" {
+    ln -s "$WORK/nowhere" "$WORK/Slate/dangling"
+    run herdr_linear::contains "$WORK/Slate/dangling"
+    [ "$status" -ne 0 ]
+}
+
+@test "a hardlink inside the root to a file outside it is outside" {
+    mkdir -p "$WORK/outside"; : > "$WORK/outside/key"
+    ln "$WORK/outside/key" "$WORK/Slate/hardlink"
+    run herdr_linear::contains "$WORK/Slate/hardlink"
+    [ "$status" -ne 0 ]
+}
+
+@test "a regular file inside the root is outside -- only directories are contained" {
+    : > "$WORK/Slate/plain-file"
+    run herdr_linear::contains "$WORK/Slate/plain-file"
+    [ "$status" -ne 0 ]
+}

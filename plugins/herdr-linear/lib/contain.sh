@@ -13,18 +13,18 @@
 # all answer "outside". The plugin declining to act is the safe direction; the
 # hooks that call this still exit 0 so a session is never blocked.
 
+# Only a real directory can be contained. The plugin acts on repositories and
+# worktrees, so a non-directory target is refused outright rather than resolved.
+# That one rule closes three ways the boundary was escapable: a symlink to a
+# file outside the root (the parent resolved, the link's own name did not), a
+# dangling symlink, and a hardlink -- which is not a link in the path at all,
+# has no target to follow, and would survive any amount of readlink.
+# A symlink TO a directory still resolves correctly through the cd/pwd -P below.
 herdr_linear::_resolve() {
     local p="$1"
     [ -n "$p" ] || return 1
-    if [ -d "$p" ]; then
-        (cd "$p" 2>/dev/null && pwd -P) || return 1
-    else
-        local d b
-        d="$(dirname "$p")"
-        b="$(basename "$p")"
-        d="$(cd "$d" 2>/dev/null && pwd -P)" || return 1
-        printf '%s/%s' "$d" "$b"
-    fi
+    [ -d "$p" ] || return 1
+    (cd "$p" 2>/dev/null && pwd -P) || return 1
 }
 
 # The root a session must sit under. The environment variable is the test seam;

@@ -6,7 +6,7 @@
 # either raise an unlock prompt (turning a headless run into a hang) or leave a
 # real Linear key behind, and both of those are how a green suite stops meaning
 # anything. The two seams — HERDR_LINEAR_SECURITY_BIN and
-# HERDR_LINEAR_OSASCRIPT_BIN — are how the whole path redirects (KTD8).
+# HERDR_LINEAR_OSASCRIPT_BIN — are how the whole path redirects.
 #
 # The load-bearing assertion in this file is the argv one. R27's claim is that
 # the credential never appears in a process argument, and the ONLY thing between
@@ -17,6 +17,19 @@
 # assertion is the whole point of the dialog and xtrace tests — without the
 # split, a leaked diagnostic would land in $output and read as a passing value.
 bats_require_minimum_version 1.5.0
+
+# A `!`-negated command is exempt from errexit under POSIX, and bats scores a
+# test by errexit or the final command's status -- so `! grep -q X` anywhere but
+# the last line detects the defect and lets the test pass anyway. Every absence
+# assertion goes through this instead: it returns non-zero on a match, which is
+# a plain command failure and does fail the test wherever it sits.
+refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
+    if grep "$@"; then
+        printf 'refute_match: unexpectedly matched: %s\n' "$*" >&2
+        return 1
+    fi
+    return 0
+}
 
 setup() {
     LIB="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
@@ -83,9 +96,7 @@ teardown() {
 
 argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
 
-# ---------------------------------------------------------------------------
 # The write path
-# ---------------------------------------------------------------------------
 
 @test "a hostile secret round-trips byte-exact and no fragment of it reaches argv" {
     run herdr_linear::keychain_write "$SERVICE" "$ACCOUNT" "$HOSTILE"
@@ -99,9 +110,9 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     # and the whole-string form passes over a value the store mangled.
     record="$(argv_record)"
     [ -n "$record" ]
-    ! grep -q 'whoami' <<<"$record"
-    ! grep -q 'quoted' <<<"$record"
-    ! grep -qF 'p@ss' <<<"$record"
+    refute_match -q 'whoami' <<<"$record"
+    refute_match -q 'quoted' <<<"$record"
+    refute_match -qF 'p@ss' <<<"$record"
 }
 
 @test "the write is fed on stdin to a TRAILING bare -w, with -U and without -T/-A/-g" {
@@ -113,10 +124,10 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     # how a positional argument disappears silently.
     [ "$(printf '%s\n' "$add_args" | tail -n 1)" = "-w" ]
     printf '%s\n' "$add_args" | grep -qx -- '-U'
-    ! printf '%s\n' "$add_args" | grep -qx -- '-T'
-    ! printf '%s\n' "$add_args" | grep -qx -- '-A'
-    ! printf '%s\n' "$add_args" | grep -qx -- '-g'
-    ! printf '%s\n' "$add_args" | grep -q 'value-one'
+    refute_match -qx -- '-T' < <(printf '%s\n' "$add_args")
+    refute_match -qx -- '-A' < <(printf '%s\n' "$add_args")
+    refute_match -qx -- '-g' < <(printf '%s\n' "$add_args")
+    refute_match -q 'value-one' < <(printf '%s\n' "$add_args")
 }
 
 @test "silent-empty: the store takes an empty password and exits 0; the write reports FAILURE" {
@@ -173,9 +184,7 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     [ -z "$output" ]
 }
 
-# ---------------------------------------------------------------------------
 # The xtrace guard
-# ---------------------------------------------------------------------------
 
 @test "under set -x the library traces no secret of its own" {
     # The caller's own call line traces its expanded arguments — that occurrence
@@ -190,9 +199,7 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     [ "$n" -eq 1 ]
 }
 
-# ---------------------------------------------------------------------------
 # The existence probe
-# ---------------------------------------------------------------------------
 
 @test "the existence probe answers yes/no without the value ever being produced" {
     run herdr_linear::keychain_exists "$SERVICE" "$ACCOUNT"
@@ -208,12 +215,10 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     # fixture had nothing to print even if the caller had captured it.
     probe_args="$(awk '/^--- invocation ---$/{n = NR} END { for (i = n + 1; i <= NR; i++) print rec[i] } { rec[NR] = $0 }' "$WORK/rec/argv")"
     [ "$(printf '%s\n' "$probe_args" | head -n 1)" = "find-generic-password" ]
-    ! printf '%s\n' "$probe_args" | grep -qx -- '-w'
+    refute_match -qx -- '-w' < <(printf '%s\n' "$probe_args")
 }
 
-# ---------------------------------------------------------------------------
 # The delete loop
-# ---------------------------------------------------------------------------
 
 @test "delete removes duplicate items and stops at not-found" {
     # Duplicates are possible in the real store, so the fixture's duplicate mode
@@ -236,9 +241,7 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     [ "$status" -eq 0 ]
 }
 
-# ---------------------------------------------------------------------------
 # The dialog
-# ---------------------------------------------------------------------------
 
 @test "the dialog yields its value on stdout, asks for a HIDDEN answer, and says nothing on stderr" {
     export FAKE_OSASCRIPT_ANSWER='dialog-value $(whoami) end'
@@ -280,13 +283,11 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
 
     run herdr_linear::keychain_read "$SERVICE" "$ACCOUNT"
     [ "$output" = 'handed-over-secret' ]
-    ! grep -q 'handed-over-secret' "$WORK/rec/argv"
-    ! grep -q 'handed-over-secret' "$WORK/rec-osa/argv"
+    refute_match -q 'handed-over-secret' "$WORK/rec/argv"
+    refute_match -q 'handed-over-secret' "$WORK/rec-osa/argv"
 }
 
-# ---------------------------------------------------------------------------
 # Display sanitising (R28, the sink half)
-# ---------------------------------------------------------------------------
 
 # Control characters are written as $'...' escapes rather than as literal bytes:
 # a literal ESC in this file is one editor accident away from being invisible in
@@ -297,9 +298,9 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     [ "$status" -eq 0 ]
 
     # The escape byte itself is gone, so no CSI or OSC sequence can survive.
-    ! printf '%s' "$output" | grep -q $'\033'
-    ! printf '%s' "$output" | grep -q $'\r'
-    ! printf '%s' "$output" | grep -qF $'\xe2\x80\xae'
+    refute_match -q $'\033' < <(printf '%s' "$output")
+    refute_match -q $'\r' < <(printf '%s' "$output")
+    refute_match -qF $'\xe2\x80\xae' < <(printf '%s' "$output")
 
     # ...and the strip is not "remove everything unusual": a strip-all-non-ASCII
     # bug would pass every assertion above.
@@ -314,15 +315,13 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     printf 'a\033[31mred\nb\xe2\x80\xaeflip\n' > "$WORK/log"
     run bash -c '. "$1"; herdr_linear::sanitize_stream < "$2"' _ "$LIB/sanitize.sh" "$WORK/log"
     [ "$status" -eq 0 ]
-    ! printf '%s' "$output" | grep -q $'\033'
-    ! printf '%s' "$output" | grep -qF $'\xe2\x80\xae'
+    refute_match -q $'\033' < <(printf '%s' "$output")
+    refute_match -qF $'\xe2\x80\xae' < <(printf '%s' "$output")
     printf '%s' "$output" | grep -qF 'red'
     printf '%s' "$output" | grep -qF 'flip'
 }
 
-# ---------------------------------------------------------------------------
 # Identifier construction (R28, the validation half)
-# ---------------------------------------------------------------------------
 
 @test "an identifier is CLOSED against [A-Za-z0-9._-], not filtered by denylist" {
     for good in "WEB-2757" "herdr_linear" "v1.2.3" "a" "ABC-1_x.y"; do
@@ -339,36 +338,34 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
     done
 }
 
-# ---------------------------------------------------------------------------
 # Source-level guards
-# ---------------------------------------------------------------------------
 
 @test "secrets.sh never uses find-generic-password -g, and never exits" {
-    ! grep -q 'find-generic-password.*-g\b' "$LIB/secrets.sh"
+    refute_match -q 'find-generic-password.*-g\b' "$LIB/secrets.sh"
     # A sourced library that calls exit kills its caller mid-setup.
-    ! grep -qE '^[[:space:]]*exit[[:space:]]' "$LIB/secrets.sh"
+    refute_match -qE '^[[:space:]]*exit[[:space:]]' "$LIB/secrets.sh"
     # The shell BUILTIN printf on the secret-bearing pipe: an external
     # /usr/bin/printf would put the value straight into the process table.
     # Comments are stripped first — this file explains the trap by name.
-    ! sed 's/#.*$//' "$LIB/secrets.sh" | grep -q '/usr/bin/printf'
+    refute_match -q '/usr/bin/printf' < <(sed 's/#.*$//' "$LIB/secrets.sh")
 }
 
 @test "secrets.sh prints nothing to stderr on any path (the pure-helper shape)" {
-    ! grep -qE '>&2|/dev/stderr|/dev/tty' "$LIB/secrets.sh"
+    refute_match -qE '>&2|/dev/stderr|/dev/tty' "$LIB/secrets.sh"
 }
 
-@test "the helpers source nothing from another plugin (KTD8)" {
+@test "the helpers source nothing from another plugin -- vendored, not sourced" {
     # The vendoring is the point: a runtime source of plugins/spawn would make
-    # this plugin unusable from a checkout that does not carry it.
-    ! grep -q 'plugins/spawn' "$LIB/secrets.sh"
-    ! grep -q 'plugins/spawn' "$LIB/sanitize.sh"
-    ! grep -qE '^[[:space:]]*(\.|source)[[:space:]]' "$LIB/secrets.sh"
-    ! grep -qE '^[[:space:]]*(\.|source)[[:space:]]' "$LIB/sanitize.sh"
+    # this plugin unusable from a checkout that does not carry it. Comments are
+    # stripped first -- both files name the decision in prose, and naming it is
+    # not depending on it.
+    refute_match -q 'plugins/spawn' < <(sed 's/#.*$//' "$LIB/secrets.sh")
+    refute_match -q 'plugins/spawn' < <(sed 's/#.*$//' "$LIB/sanitize.sh")
+    refute_match -qE '^[[:space:]]*(\.|source)[[:space:]]' "$LIB/secrets.sh"
+    refute_match -qE '^[[:space:]]*(\.|source)[[:space:]]' "$LIB/sanitize.sh"
 }
 
-# ---------------------------------------------------------------------------
 # The detector, seen failing. Twice, for two different reasons.
-# ---------------------------------------------------------------------------
 
 @test "self-test A: the argv assertion goes RED when the fixture leaks the secret into its record" {
     # Baseline first, so the red below is attributable to the plant rather than

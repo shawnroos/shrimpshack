@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fake-security.sh — stateful stand-in for /usr/bin/security in herdr-linear
-# tests (U3).
+# tests.
 #
 # lib/secrets.sh is the plugin's only toucher of the Keychain. Pointing it at
 # this script through HERDR_LINEAR_SECURITY_BIN (the HERDR_LINEAR_SLATE_ROOT
@@ -61,7 +61,7 @@ REC_DIR="${FAKE_SECURITY_RECORD_DIR:-${TMPDIR:-/tmp}/fake-security-record}"
 
 mkdir -p "$STORE" "$REC_DIR"
 
-# --- record the invocation (append-only, every subcommand) ------------------
+# record the invocation (append-only, every subcommand)
 {
   echo "--- invocation ---"
   for a in "$@"; do printf '%s\n' "$a"; done

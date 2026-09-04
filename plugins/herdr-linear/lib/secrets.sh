@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # secrets.sh — this plugin's only toucher of the Keychain and the password
-# dialog. The credential it holds is a personal Linear API key (R27, KTD1).
+# dialog. The credential it holds is a personal Linear API key.
 #
 # WHY THIS EXISTS
 # Every function below is a one-line shell command with a trap in it. Written
@@ -9,7 +9,7 @@
 # obvious one. So `security` and `osascript` are touched HERE and nowhere else,
 # and the traps are closed once.
 #
-# It is VENDORED, not sourced from plugins/spawn (KTD8): no plugin in this repo
+# It is VENDORED, not sourced from plugins/spawn: no plugin in this repo
 # sources another's library, `${CLAUDE_PLUGIN_ROOT}` resolves only the current
 # plugin, and this plugin's own runner must work from a checkout with no other
 # plugin present.
@@ -58,7 +58,7 @@
 # exit-code enum, and no caller should pass one through as a process exit code
 # without mapping it.
 
-# Seams (KTD8). Same shape as HERDR_LINEAR_SLATE_ROOT in contain.sh: every
+# Seams. Same shape as HERDR_LINEAR_SLATE_ROOT in contain.sh: every
 # external entry point is env-overridable so a test can point the whole path at
 # a fixture. A test that touched the real Keychain would either prompt for an
 # unlock or write a real Linear key to this machine's login keychain, and both
@@ -66,7 +66,6 @@
 HERDR_LINEAR_SECURITY_BIN="${HERDR_LINEAR_SECURITY_BIN:-/usr/bin/security}"
 HERDR_LINEAR_OSASCRIPT_BIN="${HERDR_LINEAR_OSASCRIPT_BIN:-/usr/bin/osascript}"
 
-# Return codes.
 HERDR_LINEAR_SECRET_OK=0
 HERDR_LINEAR_SECRET_FAIL=1       # the store or the dialog failed
 HERDR_LINEAR_SECRET_EMPTY=2      # refused: an empty value is not a secret
@@ -79,8 +78,11 @@ HERDR_LINEAR_SECRET_MALFORMED=4  # refused: the value cannot survive the write
 # exported SHELLOPTS=xtrace, is enough to spray a pasted API key across stderr,
 # which in an agent harness is a transcript.
 #
-# Every secret-touching function opens with `local -`, which snapshots the
-# shell options and lets bash restore them on return — including on an early
+# Every secret-touching function has a SUBSHELL body -- `name() ( ... )` -- so
+# `set +x` cannot escape it. `local -` was the obvious form and is a syntax
+# error on bash 3.2, which is what /bin/bash is on macOS: under `set -e` the
+# function aborts before touching the Keychain, and without `-e` the body runs
+# with xtrace off and never restored. A subshell confines it on every version — including on an early
 # return, with no paired call to forget. The obvious hand-rolled version,
 #
 #     xt="$(herdr_linear::xtrace_off)"      # WRONG
@@ -97,8 +99,7 @@ HERDR_LINEAR_SECRET_MALFORMED=4  # refused: the value cannot survive the write
 # command substitution strips. `-g` would print it to stderr, where it would
 # land in a log or a transcript; it is never used here, and secrets.bats asserts
 # that against this source.
-herdr_linear::keychain_read() {
-    local -
+herdr_linear::keychain_read() (
     set +x
     local service="$1" account="$2" out rc
     out="$("$HERDR_LINEAR_SECURITY_BIN" find-generic-password -a "$account" -s "$service" -w 2>/dev/null)"
@@ -108,7 +109,7 @@ herdr_linear::keychain_read() {
     fi
     [ "$rc" -eq 0 ] && return "$HERDR_LINEAR_SECRET_OK"
     return "$HERDR_LINEAR_SECRET_FAIL"
-}
+)
 
 # herdr_linear::keychain_exists <service> <account>
 # Yes/no, without the value ever being produced. Deliberately omits `-w`: the
@@ -134,8 +135,7 @@ herdr_linear::keychain_exists() {
 # An empty secret is refused up front rather than stored: storing one produces
 # exactly the state a failed write leaves behind, and the two would then be
 # indistinguishable on the next read.
-herdr_linear::keychain_write() {
-    local -
+herdr_linear::keychain_write() (
     set +x
     local service="$1" account="$2" secret="$3" rc back rc_back
 
@@ -170,7 +170,7 @@ herdr_linear::keychain_write() {
 
     [ "$rc" -eq 0 ] && return "$HERDR_LINEAR_SECRET_OK"
     return "$HERDR_LINEAR_SECRET_FAIL"
-}
+)
 
 # herdr_linear::keychain_delete <service> <account>
 # Removes every matching item. The real binary deletes ONE match per call and
@@ -211,8 +211,7 @@ herdr_linear::keychain_delete() {
 # Returns: 0 with the value on stdout · 3 cancelled · 2 empty answer ·
 #          1 any other dialog failure. Nothing is printed to stderr, ever —
 #          the caller owns diagnostics and must not echo the value.
-herdr_linear::prompt_secret() {
-    local -
+herdr_linear::prompt_secret() (
     set +x
     local title="$1" prompt="$2" errfile answer rc ret
 
@@ -241,4 +240,4 @@ herdr_linear::prompt_secret() {
     answer=""
     rm -f "$errfile" 2>/dev/null
     return "$ret"
-}
+)

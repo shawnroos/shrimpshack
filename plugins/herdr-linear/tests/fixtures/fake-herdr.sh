@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fake-herdr.sh — stand-in for the herdr binary in herdr-linear tests (U11).
+# fake-herdr.sh — stand-in for the herdr binary in herdr-linear tests.
 #
 # lib/herdr-read.sh is the plugin's only reader of herdr. Pointing it here
 # through HERDR_BIN keeps the whole accessor path off the user's LIVE server:
@@ -45,18 +45,22 @@ REC_DIR="${FAKE_HERDR_RECORD_DIR:-${TMPDIR:-/tmp}/fake-herdr-record}"
 mkdir -p "$REC_DIR" 2>/dev/null || true
 printf '%s\n' "$*" >>"$REC_DIR/argv" 2>/dev/null || true
 
-case "${1:-}" in
-    create|split|move|swap|close|rename|focus|run|send-keys|resize|zoom|report-metadata|report-agent)
-        echo "fake-herdr: MUTATING VERB '$1' — the read-only accessor must never call this" >&2
+# The one list. herdr-read.bats reads it back from here rather than carrying a
+# second copy: two hand-maintained lists guarding one boundary drift apart, and
+# the drift silently empties the assertion that the accessor never mutates.
+FAKE_HERDR_MUTATING_VERBS="create split move swap close rename focus run send-keys resize zoom report-metadata report-agent"
+
+if [ "${1:-}" = "--list-mutating-verbs" ]; then
+    printf '%s\n' "$FAKE_HERDR_MUTATING_VERBS"
+    exit 0
+fi
+
+for _verb in $FAKE_HERDR_MUTATING_VERBS; do
+    if [ "${1:-}" = "$_verb" ] || [ "${2:-}" = "$_verb" ]; then
+        echo "fake-herdr: MUTATING VERB '$_verb' — the read-only accessor must never call this" >&2
         exit 99
-        ;;
-esac
-case "${2:-}" in
-    create|split|move|swap|close|rename|focus|run|send-keys|resize|zoom|report-metadata|report-agent)
-        echo "fake-herdr: MUTATING VERB '$1 $2' — the read-only accessor must never call this" >&2
-        exit 99
-        ;;
-esac
+    fi
+done
 
 emit_status() {
     case "$MODE" in

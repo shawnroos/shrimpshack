@@ -64,7 +64,15 @@ PY
 # `claude plugin validate` exits 0 even when it reports problems, so its output
 # is what decides, not its status.
 validate_check() {
-    command -v claude >/dev/null 2>&1 || { printf 'claude not on PATH; skipping validate\n'; return 0; }
+    # A gate that cannot run is not a gate that passed. Opt out by name when
+    # that is deliberate; silence here would let `all` go green on a machine
+    # that never validated the manifest at all.
+    if ! command -v claude >/dev/null 2>&1; then
+        if [ -n "${HERDR_LINEAR_SKIP_VALIDATE:-}" ]; then
+            printf 'claude absent; validate skipped by HERDR_LINEAR_SKIP_VALIDATE\n'; return 0
+        fi
+        printf '%sclaude is not on PATH, so the manifest was never validated%s\n' "$RED" "$NC"; return 1
+    fi
     local out; out="$(claude plugin validate "$PLUGIN_ROOT" 2>&1 || true)"
     printf '%s\n' "$out"
     if printf '%s' "$out" | grep -qiE 'error|invalid|failed'; then return 1; fi
@@ -73,13 +81,16 @@ validate_check() {
 # Credential shapes that must never appear in the tree. spawn's set covers
 # sk-ant-, sk-, AKIA, gh[pousr]_, xox and PEM headers; a Linear key is lin_api_
 # and matches none of them, which is the shape this plugin actually handles.
-SECRET_PATTERNS='lin_api_[A-Za-z0-9]{16,}|sk-ant-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+SECRET_PATTERNS='lin_api_[A-Za-z0-9]{16,}|lin_oauth_[A-Za-z0-9]{16,}|sk-ant-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 
 # scan_paths <path>... -> non-zero when any path carries a credential shape.
 scan_paths() {
     local hit=0 p
     for p in "$@"; do
-        if grep -rInE "$SECRET_PATTERNS" "$p" 2>/dev/null; then hit=1; fi
+        # -l, never -n: printing the matching LINE copies a live credential into
+        # the terminal, the transcript and any log of the run, so the detector
+        # would spread the very thing it found. Name the file instead.
+        if grep -rIlE "$SECRET_PATTERNS" "$p" 2>/dev/null; then hit=1; fi
     done
     return "$hit"
 }
@@ -94,9 +105,26 @@ secret_scan() {
     fi
 }
 
+# A `!`-negated command is exempt from errexit, so `! grep -q X` in a bats test
+# detects the defect and lets the test pass. Two sanitiser tests and a Keychain
+# guard were inert this way. The suite refuses the shape rather than trusting
+# the next author to remember.
+assertion_lint() {
+    printf '%sAssertion lint...%s\n' "$YELLOW" "$NC"
+    local hits
+    hits="$(grep -rnE '^[[:space:]]*![[:space:]]' "$PLUGIN_ROOT"/tests/unit/*.bats 2>/dev/null || true)"
+    if [ -n "$hits" ]; then
+        printf '%s\n' "$hits"
+        printf '%sassertion lint FAILED%s — a `!`-negated assertion cannot fail its test; use refute_match.\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%sno negated assertions%s\n' "$GREEN" "$NC"
+}
+
 wire_smoke() {
     printf '%sWire smoke...%s\n' "$YELLOW" "$NC"
     local rc=0
+    assertion_lint || rc=1
     version_sync_check || rc=1
     validate_check || rc=1
     secret_scan || rc=1
