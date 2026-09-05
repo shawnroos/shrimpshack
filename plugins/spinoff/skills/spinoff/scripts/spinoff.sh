@@ -780,6 +780,7 @@ launcher_new_split_herdr() {
     if ! err="$("$HERDR" pane swap --source-pane "$pane" --target-pane "$FROM_SURFACE" 2>&1)"; then
       echo "  ⚠ the split succeeded but the swap that puts it on the LEFT failed: $err" >&2
       echo "    continuing — the briefed session lands on the right instead." >&2
+      TARGET_DOWNGRADE="split left → split right: the pane swap that moves the new pane to the left failed"
     fi
   fi
   LAUNCH_RUN_PANE="$pane"      # the pane claude runs in (no further split)
@@ -1417,7 +1418,7 @@ SPLIT_DIRECTION="right"      # --target split only: which side of --from-surface
 FROM_SURFACE=""              # the ORIGINATING pane/surface to split off (see the validation note below)
 # Set when a requested target could not be honoured. Declared HERE, beside the target
 # state it shadows, because the split fallback below runs long before the summary
-# block's own state is initialised — declaring it there wiped it on every run.
+# block's own state is initialised.
 TARGET_DOWNGRADE=""       # "<asked> → <got>: why", relayed in the summary block
 SESSION_TRANSCRIPT=""        # explicit originating-session transcript (set by the skill when backgrounded)
 SESSION_CWD=""               # cwd of the originating session, for the resume one-liner

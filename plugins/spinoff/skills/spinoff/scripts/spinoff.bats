@@ -518,6 +518,56 @@ version: 0.8.2' HERDR_ENV=1 CMUX_WORKSPACE_ID=
   [[ "$output" != *"went unnamed:"* ]]
 }
 
+# --target split with no --from-surface falls back to a TAB. The fallback itself is
+# old; what these two guard is that the summary SAYS so. The downgrade is recorded in
+# TARGET_DOWNGRADE, which must be declared before the argument loop that sets it —
+# declare it beside the summary block's own state instead and it is wiped on every
+# run, the script still passes `bash -n`, still exits 0, and the line just stops
+# appearing. Nothing else in this suite would go red. Hence a positive AND a negative,
+# mirroring the went-unnamed pair above.
+run_herdr_split_no_surface() {
+  local repo="$BATS_TEST_TMPDIR/srepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  HERDR_ARGV_LOG="$BATS_TEST_TMPDIR/herdr-argv-split.log"
+  : > "$HERDR_ARGV_LOG"
+
+  run env PATH="$STUBDIR:$PATH" \
+          HERDR_ARGV_LOG="$HERDR_ARGV_LOG" \
+          HERDR_STUB_LIVE=1 \
+          HERDR_ENV=1 \
+          HERDR_WORKSPACE_ID=wS \
+          HERDR_PANE_ID=wS:p1 \
+          CMUX_WORKSPACE_ID= \
+          SPINOFF_READY_TIMEOUT_MS=3000 \
+      bash "$SCRIPT" --name hsplit --label testlabel --handoff "$handoff" \
+                     --repo "$repo" --target split --launcher herdr
+}
+
+@test "summary: a split that fell back to a tab says so, inside the relayed block" {
+  run_herdr_split_no_surface
+  [ "$status" -eq 0 ]
+  # The caller reads the exit code (still 0 — a briefed session DOES exist) or the
+  # summary. Before this, neither could tell a real split from this fallback.
+  [[ "$output" == *"NOT what was asked for:"* ]]
+  [[ "$output" == *"split → tab"* ]]
+}
+
+@test "summary: says nothing about a downgrade when the target was honoured" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"NOT what was asked for:"* ]]
+}
+
 @test "herdr workspace: the handoff viewer pane is named Handoff, not the work label (R14)" {
   run_herdr_workspace
   [ "$status" -eq 0 ]
