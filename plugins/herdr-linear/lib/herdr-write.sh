@@ -107,7 +107,11 @@ herdr_linear::layout_build() {
         fi
 
         branch="$(herdr_linear::slug "$child")" || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
-        wt_path="$(herdr_linear::slate_root)/$branch"
+        # <root>/worktrees/<name>, matching every worktree on this machine and
+        # the `wt` shell function. An earlier version used <root>/<branch>,
+        # which puts a worktree beside the repositories instead of among the
+        # worktrees -- wrong, and invisible until someone went looking for it.
+        wt_path="$(herdr_linear::slate_root)/worktrees/$branch"
 
         if ! herdr_linear::journal_get "$parent" "worktree.$child" >/dev/null 2>&1; then
             herdr_linear::_make_worktree "$wt_path" "$branch" || return "$HERDR_LINEAR_LAYOUT_FAILED"
@@ -141,8 +145,10 @@ herdr_linear::_make_worktree() {
     root="$(herdr_linear::slate_root)"
     [ -d "$path" ] && return 0
     mkdir -p "$(dirname "$path")" 2>/dev/null
-    "${HERDR_LINEAR_GIT_BIN:-git}" -C "$root" worktree add -b "$branch" "$path" 2>/dev/null \
-        || "${HERDR_LINEAR_GIT_BIN:-git}" init -q -b "$branch" "$path" 2>/dev/null \
+    # Both streams: `worktree add` announces itself on stdout, which would
+    # otherwise leak into whatever the caller is capturing.
+    "${HERDR_LINEAR_GIT_BIN:-git}" -C "$root" worktree add -b "$branch" "$path" >/dev/null 2>&1 \
+        || "${HERDR_LINEAR_GIT_BIN:-git}" init -q -b "$branch" "$path" >/dev/null 2>&1 \
         || return 1
     return 0
 }

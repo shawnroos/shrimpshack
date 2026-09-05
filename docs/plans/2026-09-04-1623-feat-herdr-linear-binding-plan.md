@@ -841,6 +841,30 @@ It records a note and nothing else. It does not write the description — a hook
 
 **One backstop is labelled as unreachable:** the ownership re-check on the update path, since `document_for` only ever returns an id already in `created_documents`. It stays so a future change to how that id is resolved cannot reach the update path unchecked.
 
+### U16. Starting work — from a ticket, or from nothing
+
+Added 2026-09-05. Shawn named two gaps, and they are the same gap: binding assumed a worktree already existed, which is one row of a two-by-two and not the common one.
+
+| | Ticket exists | No ticket |
+|---|---|---|
+| **Worktree exists** | bind (U7) | create the issue from position (U7) |
+| **No worktree** | **U16 — the common one** | **U16** |
+
+- **Files:** `lib/start.sh`, `skills/start/SKILL.md`, `tests/unit/start.bats`.
+- **Status: done.** 14 tests, 7 mutations, all red on the first pass.
+
+**Starting from an existing ticket writes nothing to Linear.** It reads the issue, creates a local worktree and records a local binding. So the common motion is available before the credential rotation and before any worktree is in the write allowlist, and it cannot damage a board. Starting from *nothing* does write, and is shadow-gated like every other write — and its shadow path creates no worktree either, because one bound to an issue that was never filed is a dangling reference.
+
+**Binding on creation is not a guess.** Naming the ticket is the confirmation, and the skill carrying it cannot be invoked by the model. Same reasoning as U10.
+
+**The branch deliberately is not the worktree name.** It is `feature/` plus the branch name Linear supplies, so it carries the identifier. Most branches on this machine carry none — `feat/single-command-router`, `feat/brandfetch-styleguide-pipeline` — which is precisely why KTD6's branch matching only ever reached about a fifth of worktrees. Anything started this way is findable from its branch forever after. The worktree *directory* keeps the short human name every worktree here has (`cue-read`, `wcs-paper`), which is also what the `wt` shell function produces.
+
+**Three defects found while building it, one of them shipped earlier:**
+
+1. **U10 created worktrees in the wrong place** — `<root>/<branch>` rather than `<root>/worktrees/<name>`, beside the repositories instead of among the worktrees. Invisible until somebody went looking, and **the tests were holding it in place** by asserting the wrong path. Both are corrected.
+2. **`git worktree add` announces itself on stdout**, and only stderr was silenced — so "Preparing worktree ..." was prepended to the path the function returns, and `[ -d "$result" ]` was false for a directory that existed. The same bug was in both call sites.
+3. **`contains` ran before `mkdir`.** It accepts only a directory that exists — deliberately, so a symlink to a file or a dangling link cannot pass — so checking the worktrees root before creating it always failed. The directory is created first and the resolved path checked after, which keeps the guarantee.
+
 ---
 
 ## Verification Contract

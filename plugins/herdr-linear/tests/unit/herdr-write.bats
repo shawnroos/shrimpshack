@@ -49,16 +49,19 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     [ "$(herdr_calls 'tab create')" = "1" ]
     [ "$(herdr_calls 'pane split')" = "3" ]
     for c in WEB-3001 WEB-3002 WEB-3003; do
-        [ "$(herdr_linear::binding_state "$HERDR_LINEAR_SLATE_ROOT/$c")" = "bound" ]
-        [ "$(herdr_linear::binding_identifier "$HERDR_LINEAR_SLATE_ROOT/$c")" = "$c" ]
+        [ "$(herdr_linear::binding_state "$HERDR_LINEAR_SLATE_ROOT/worktrees/$c")" = "bound" ]
+        [ "$(herdr_linear::binding_identifier "$HERDR_LINEAR_SLATE_ROOT/worktrees/$c")" = "$c" ]
     done
 }
 
+# The path convention, pinned. These assertions previously named
+# <root>/<name>, which is beside the repositories rather than among the
+# worktrees -- the tests were holding a real defect in place.
 @test "each column gets its own worktree, and the pane is opened in it" {
     run herdr_linear::layout_build WEB-2870 WEB-3001
     [ "$status" -eq 0 ]
-    [ -d "$HERDR_LINEAR_SLATE_ROOT/WEB-3001" ]
-    run grep -c -- "--cwd $HERDR_LINEAR_SLATE_ROOT/WEB-3001" "$FAKE_HERDR_RECORD_DIR/argv"
+    [ -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" ]
+    run grep -c -- "--cwd $HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "1" ]
 }
 
@@ -71,7 +74,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     run herdr_linear::layout_build WEB-2870 WEB-3001
     [ "$status" -eq 1 ]
     [ "$(herdr_calls 'tab create')" = "0" ]
-    [ ! -d "$HERDR_LINEAR_SLATE_ROOT/WEB-3001" ]
+    [ ! -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" ]
 }
 
 @test "a dead server is reported the same way" {
@@ -104,7 +107,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     run herdr_linear::layout_build WEB-2870 WEB-3001 ".." WEB-3003
     [ "$status" -eq 2 ]
     [ "$(herdr_calls 'tab create')" = "0" ]
-    [ ! -d "$HERDR_LINEAR_SLATE_ROOT/WEB-3001" ]
+    [ ! -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" ]
 }
 
 # ------------------------------------------------------------- resumability
@@ -127,7 +130,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 
     # Still exactly one tab: the journal was consulted, not ignored.
     [ "$(herdr_calls 'tab create')" = "1" ]
-    [ "$(ls -1d "$HERDR_LINEAR_SLATE_ROOT"/WEB-300* 2>/dev/null | wc -l | tr -d ' ')" = "2" ]
+    [ "$(ls -1d "$HERDR_LINEAR_SLATE_ROOT"/worktrees/WEB-300* 2>/dev/null | wc -l | tr -d ' ')" = "2" ]
 }
 
 @test "a completed column is not rebuilt on a second run" {
