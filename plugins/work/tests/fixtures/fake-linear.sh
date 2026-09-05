@@ -280,6 +280,27 @@ case "$body" in
 JSON
         exit 0
         ;;
+    *issueCreate*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        if [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "fail" ]; then
+            printf '{"data":{"issueCreate":{"success":false,"issue":null}}}'
+        else
+            printf '{"data":{"issueCreate":{"success":true,"issue":{"id":"11111111-1111-4111-8111-111111111111","identifier":"%s","branchName":"%s","title":"t"}}}}' \
+                "${FAKE_LINEAR_NEW_IDENT:-WEB-4001}" \
+                "$(printf '%s' "${FAKE_LINEAR_NEW_IDENT:-WEB-4001}" | tr '[:upper:]' '[:lower:]')-a-new-thing"
+        fi
+        exit 0
+        ;;
+    *projectCreate*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        if [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "fail" ]; then
+            printf '{"data":{"projectCreate":{"success":false,"project":null}}}'
+        else
+            printf '{"data":{"projectCreate":{"success":true,"project":{"id":"%s","name":"A New Project","url":"https://linear.app/example/project/a-new-project"}}}}' \
+                "${FAKE_LINEAR_NEW_PROJECT_ID:-pppppppp-pppp-4ppp-8ppp-pppppppppppp}"
+        fi
+        exit 0
+        ;;
     *documentCreate*|*documentUpdate*)
         [ "$wants_headers" = 1 ] && emit_headers 200
         _op=documentCreate

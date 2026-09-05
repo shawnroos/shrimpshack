@@ -80,6 +80,12 @@ if [ "${FAKE_HERDR_ALLOW_MUTATION:-0}" = 1 ]; then
     mkdir -p "$REC_DIR" 2>/dev/null
     [ -f "$_seq" ] && _n="$(cat "$_seq" 2>/dev/null || echo 0)"
     case "${1:-}:${2:-}" in
+        workspace:create)
+            _n=$(( _n + 1 )); printf '%s' "$_n" > "$_seq"
+            printf '{"result":{"workspace":{"workspace_id":"w%s","label":"ws%s"},"tab":{"tab_id":"w%s:t1"},"root_pane":{"pane_id":"w%s:p1","tab_id":"w%s:t1","workspace_id":"w%s"}}}\n' \
+                "$_n" "$_n" "$_n" "$_n" "$_n" "$_n"
+            exit 0
+            ;;
         tab:create)
             _n=$(( _n + 1 )); printf '%s' "$_n" > "$_seq"
             printf '{"result":{"tab":{"tab_id":"w1:t%s","label":"tab%s"},"root_pane":{"pane_id":"w1:p%s0","tab_id":"w1:t%s","workspace_id":"w1"}}}\n' \

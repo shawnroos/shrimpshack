@@ -58,21 +58,12 @@ adopting it would silently re-home it. Pick another name.
 
 ## From nothing
 
-Neither a ticket nor a worktree. Write the description first — the same bar as
-any other, `/work:describe` explains the shape — then:
+Use **`/work:new`** instead. It derives the team and project from where you are,
+where this would make you supply them by hand — and getting that wrong files a
+ticket somebody has to notice and undo.
 
-```bash
-herdr_linear::start_new "Improve AI tools analytics" /tmp/desc.md "$TEAM_ID" ai-analytics
-```
-
-This one **does** write to Linear, so it is shadow-gated like every other write.
-In shadow mode it creates no worktree either: one bound to an issue that was
-never filed is a dangling reference pointing at nothing.
-
-Follow `docs/linear-conventions.md` for the title, and **ask about anything it
-lists under "Not yet settled"** — who is assigned, whether `ready-for-ai`
-applies, whether this should be a project rather than an issue. Those are
-decisions, not defaults.
+`/work:new-project` when the thing you are starting is big enough to hold its
+own issues.
 
 ## After either
 

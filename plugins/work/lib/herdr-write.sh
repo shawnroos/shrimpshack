@@ -68,6 +68,23 @@ herdr_linear::await_pane() {
     return 1
 }
 
+# herdr_linear::open_session <worktree-path>
+#
+# A pane in the CURRENT tab, working in that worktree. Split right and do not
+# steal focus: the person asked for a session to exist, not to be moved into it.
+# Prints the pane id.
+herdr_linear::open_session() {
+    local path="${1:-}" bin pane
+    [ -d "$path" ] || return 1
+    herdr_linear::probe || return 1
+    bin="$(herdr_linear::bin)"; [ -n "$bin" ] || return 1
+    pane="$("$bin" pane split --direction right --cwd "$path" --no-focus 2>/dev/null \
+        | herdr_linear::json "result.pane.pane_id")"
+    [ -n "$pane" ] || return 1
+    herdr_linear::await_pane "$pane" || return 1
+    printf '%s' "$pane"
+}
+
 # herdr_linear::layout_build <parent-issue> <child-issue>...
 #
 # Idempotent by journal: a second run after a partial failure continues, and
