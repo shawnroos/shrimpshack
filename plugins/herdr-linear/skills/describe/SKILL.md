@@ -25,6 +25,16 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 herdr_linear::description_template > /tmp/desc.md
 ```
 
+**The template is where a NEW description starts. It is not a cage.** A ticket
+that has earned its own headings keeps them — `docs/linear-conventions.md` walks
+through `WEB-3214` as the worked example, which uses none of the three spine
+headings and is better for it, because a heading that carries the point beats a
+heading that carries a category.
+
+So: `description_validate <file>` reports a missing spine as a **note** and
+refuses only real defects. Pass `strict` as a second argument when you composed
+from the template and want the spine held.
+
 Full rules in `docs/linear-conventions.md`. The three that decide whether a
 description is any good:
 
@@ -72,7 +82,7 @@ herdr_linear::describe "$PWD" /tmp/desc.md
 | 1 | identical to what is there; nothing sent |
 | 2 | refused — unbound, misplaced, stale, or outside the Slate root |
 | 3 | shadow mode: the rendered description is printed, nothing sent |
-| 5 | the description does not follow the template; stderr says which part |
+| 5 | a real defect — an empty section, a leftover placeholder, or a diary. stderr says which. A missing spine is only a note and does not land here |
 | 6 | refused as a diary |
 
 On 5 or 6, fix the text and try again. Do not work around the validator — it is

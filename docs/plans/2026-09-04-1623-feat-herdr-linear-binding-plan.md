@@ -799,7 +799,16 @@ It records a note and nothing else. It does not write the description — a hook
 
 **Two mutations were green until the tests were fixed, both for the same reason — the guard was never reached.** Restoring the unbound notice turned nothing red because the mutation anchor matched the containment block above it rather than the unbound block. And the commits-ahead guard survived deletion because the test reached `ahead=0` by checking out `main`, which *also* changes the branch and downgrades the binding to proposed — so the nudge returned early at the bound check. That test now merges instead, staying on the confirmed branch, which is the only shape that isolates the guard.
 
-- **Verification:** 20 tests, 8 mutations, all red on the first pass — spine presence, spine order, placeholders, the dated-heading threshold, the log-word check, the append check, validation-before-write, and the backup.
+**A real ticket was run against the validator as a test, and the validator lost.** Shawn offered `WEB-3214 — Improve AI tools analytics` as a good ticket. It was rejected outright, which exposed two defects:
+
+1. **The spine was a hard gate.** WEB-3214 uses none of Problem / Solution / Proposal. It uses `## Why`, `## The shape of this work`, `## Two things everyone reading these dashboards needs to know`, `## Worth agreeing before GA, not after` — headings that are *arguments*, which a reader can act on before reading a word beneath them, where `## Constraints` is a heading people skim past. A validator that refuses the work it exists to protect is the wrong validator. The spine is now the default a **new** description starts from, reported as a note otherwise, and held only in `strict` mode.
+2. **A markdown autolink matched the placeholder pattern.** WEB-3214 ends with `<https://…>`, so the validator called a real ticket unfinished *because it cited its source properly*. The pattern now excludes anything containing `://` or `@`.
+
+**What it confirmed rather than broke:** the ticket opens "Measured 25 Aug 2026" and passed every diary check. A date in prose is fine; dated *headings* are the log signal. That heuristic survives contact with a real ticket, and a test now pins it.
+
+**WEB-3214 is a permanent fixture** at `tests/fixtures/descriptions/web-3214.md`. Tighten the validator again and the test that breaks is *"a ticket held up as good passes validation"*. Mutating the spine back to hard turns it red.
+
+- **Verification:** 24 tests, 11 mutations, all red — spine presence, spine order, placeholders, the dated-heading threshold, the log-word check, the append check, validation-before-write, and the backup.
 - **Status: done.**
 
 ### U15. Documents instead of a gitignored `/docs`

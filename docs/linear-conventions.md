@@ -82,6 +82,40 @@ reader.
 - <constraint two>
 ```
 
+### The template is the default, not a cage
+
+Use it when writing a description from nothing. **A ticket that has earned its
+own headings keeps them.**
+
+`WEB-3214 — Improve AI tools analytics` is the worked example. It uses none of
+the three spine headings and is a better ticket for it:
+
+| Its heading | What the template would have called it |
+|---|---|
+| `## Why` | `## Problem` |
+| `## The shape of this work` | `## Proposal` |
+| `## Two things everyone reading these dashboards needs to know` | `## Constraints` |
+| `## Worth agreeing before GA, not after` | — |
+
+Those headings are **arguments**. A reader can act on "Two things everyone
+reading these dashboards needs to know" before reading a word beneath it.
+`## Constraints` is a heading people skim past. A heading that carries the point
+beats a heading that carries a category.
+
+What that ticket does that any good description does, whatever it calls its
+sections:
+
+- **Evidence with provenance.** "verified directly against Amplitude, not
+  inferred from the code" — it says how it knows, so a reader can weigh it.
+- **The second-order effect stated.** Not "we measure the wrong thing" but "GA
+  starts with instrumentation already trusted, instead of a month spent
+  debugging telemetry while the numbers finally matter."
+- **The trap named before someone falls in it.** "A pre-GA baseline is staff
+  behaviour, not customer behaviour. Do not carry one across the GA line."
+- **An open decision left open, and dated by consequence rather than calendar.**
+  "A number chosen after seeing the first week tends to be the number the first
+  week produced."
+
 ### The three rules that matter
 
 1. **Problem and Solution are about the actor, never the code.** Solution is

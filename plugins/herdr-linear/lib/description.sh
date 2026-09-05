@@ -106,59 +106,85 @@ print(json.dumps({"order": order, "parts": parts}))
 '
 }
 
-# herdr_linear::description_validate <file>
+# herdr_linear::description_validate <file> [strict]
 #
-# Gate on the template, before anything reaches Linear. Prints what is wrong on
-# stderr so a caller can fix it rather than guess.
+# TWO CLASSES OF RULE, AND THE SPLIT IS THE POINT.
+#
+# HARD (always refused): a diary, unfilled placeholders, an empty section. These
+# are defects in any description whatever its shape.
+#
+# ADVISORY (reported, not refused): the Problem / Solution / Proposal spine. It
+# is the default a NEW description starts from, not a gate every description
+# must pass.
+#
+# Why advisory: WEB-3214 "Improve AI tools analytics" is a ticket Shawn holds up
+# as good, and it uses none of those three headings. It uses `## Why`, `## The
+# shape of this work`, `## Two things everyone reading these dashboards needs to
+# know`, `## Worth agreeing before GA, not after`. Those headings are arguments
+# -- a reader can act on them -- where `## Constraints` is a heading people skim
+# past. An earlier version of this function REJECTED that ticket, which is the
+# validator being wrong rather than the ticket.
+#
+# Pass `strict` when composing a fresh description from the template, where the
+# spine is what you asked for and its absence means the template was abandoned
+# halfway.
 herdr_linear::description_validate() {
-    local f="${1:-}"
+    local f="${1:-}" mode="${2:-lenient}"
     [ -r "$f" ] || return "$HERDR_LINEAR_DESC_MALFORMED"
-    herdr_linear::_split_sections < "$f" | python3 -c '
-import sys, json, re
+    herdr_linear::_split_sections < "$f" | HERDR_LINEAR_DESC_MODE="$mode" python3 -c '
+import sys, json, os, re
 
 doc = json.load(sys.stdin)
 order = [o for o in doc["order"] if o != "__preamble__"]
 parts = doc["parts"]
 spine = ["Problem", "Solution", "Proposal"]
-errs = []
+strict = os.environ.get("HERDR_LINEAR_DESC_MODE") == "strict"
+hard, advisory = [], []
 
 missing = [x for x in spine if x not in order]
 if missing:
-    errs.append("missing section(s): " + ", ".join(missing))
+    (hard if strict else advisory).append(
+        "not using the Problem/Solution/Proposal shape (missing: %s)" % ", ".join(missing))
 
-# The spine leads, in order. Sections after Proposal are the ticket own business,
-# so only the relative order of the three is checked.
+# Order only matters among the spine sections actually present.
 present = [o for o in order if o in spine]
 if present and present != [x for x in spine if x in present]:
-    errs.append("spine out of order: got %s, want Problem then Solution then Proposal" % " then ".join(present))
+    (hard if strict else advisory).append(
+        "spine out of order: got %s, want Problem then Solution then Proposal" % " then ".join(present))
 
-for name in spine:
+# HARD from here down. An empty heading and a leftover placeholder are defects
+# in any description, whatever headings it chose.
+for name in order:
     body = parts.get(name, "")
-    if name in order and not body.strip():
-        errs.append("%s is empty" % name)
-    # A template still carrying its own placeholders was never filled in.
-    if re.search(r"<[a-z][^>]{10,}>", body or ""):
-        errs.append("%s still contains template placeholders" % name)
+    if not body.strip():
+        hard.append("%s is empty" % name)
+    # A placeholder is `<lowercase prose>`. It is NOT a markdown autolink:
+    # WEB-3214 ends with `<https://claude.ai/...>`, which is valid markdown and
+    # matched the first version of this pattern -- the validator calling a real
+    # ticket unfinished because it cited a source properly.
+    if re.search(r"<(?![^>]*(?:://|@))[a-z][^>]{4,}>", body or ""):
+        hard.append("%s still contains template placeholders" % name)
 
-# NEVER A DIARY. Two independent shapes, because an automated writer reaches for
-# both: a dated heading, and an entry that announces itself as an update. One
-# dated heading may be a legitimate deadline reference; two is a log.
+# NEVER A DIARY. Two independent shapes, because a writer reaches for both.
+# A date in PROSE is fine -- WEB-3214 opens with "Measured 25 Aug 2026" and is
+# not a diary. It is dated HEADINGS that mark a log.
 head_dates = re.findall(
     r"^#{2,4}\s.*(?:\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b)",
     "\n".join("## %s\n%s" % (k, v) for k, v in parts.items()), re.M | re.I)
 if len(head_dates) >= 2:
-    errs.append("reads as a diary: %d dated headings" % len(head_dates))
+    hard.append("reads as a diary: %d dated headings" % len(head_dates))
 
 log_words = re.findall(r"^\s*(?:[-*]\s*)?(?:update|progress|session \d|today|changelog|worklog)\b[:\-]",
                        "\n".join(parts.values()), re.M | re.I)
 if log_words:
-    errs.append("reads as a diary: log-style entries (%s)" % ", ".join(sorted(set(w.lower() for w in log_words))[:3]))
+    hard.append("reads as a diary: log-style entries (%s)"
+                % ", ".join(sorted(set(w.lower() for w in log_words))[:3]))
 
-if errs:
-    for e in errs:
-        sys.stderr.write("description: %s\n" % e)
-    sys.exit(1)
-sys.exit(0)
+for a in advisory:
+    sys.stderr.write("description: note: %s\n" % a)
+for e in hard:
+    sys.stderr.write("description: %s\n" % e)
+sys.exit(1 if hard else 0)
 ' || return "$HERDR_LINEAR_DESC_MALFORMED"
     return "$HERDR_LINEAR_DESC_OK"
 }

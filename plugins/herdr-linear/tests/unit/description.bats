@@ -105,21 +105,68 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$status" -eq 0 ]
 }
 
-@test "a missing spine section is named, not guessed at" {
-    printf '## Problem\n\nA real problem, stated at some length for the actor.\n' > "$WORK/x.md"
-    run --separate-stderr herdr_linear::description_validate "$WORK/x.md"
-    [ "$status" -ne 0 ]
-    [[ "$stderr" == *"missing section(s): Solution, Proposal"* ]]
+# THE CONFORMANCE TEST FOR THIS UNIT. WEB-3214 "Improve AI tools analytics" is a
+# real ticket Shawn holds up as good, and it uses none of the spine headings --
+# it uses `## Why`, `## The shape of this work`, `## Two things everyone reading
+# these dashboards needs to know`, `## Worth agreeing before GA, not after`.
+# Those headings are arguments a reader can act on, where `## Constraints` is a
+# heading people skim past.
+#
+# An earlier version of the validator REJECTED it. A validator that refuses the
+# work it is meant to protect is the wrong validator, so the spine became
+# advisory and the fixture stays as a regression guard.
+@test "WEB-3214, a ticket held up as good, passes validation" {
+    run --separate-stderr herdr_linear::description_validate "$FIX/descriptions/web-3214.md"
+    [ "$status" -eq 0 ]
+    # Reported as a note, not a refusal.
+    [[ "$stderr" == *"note: not using the Problem/Solution/Proposal shape"* ]]
 }
 
-@test "the spine out of order is refused" {
-    printf '## Solution\n\nreal text here\n\n## Problem\n\nreal text here\n\n## Proposal\n\nreal text\n' > "$WORK/x.md"
+# The spine is the default a NEW description starts from, so strict mode -- used
+# when composing from the template -- does hold it.
+@test "the same ticket does not pass strict mode, which is the point of the two modes" {
+    run --separate-stderr herdr_linear::description_validate "$FIX/descriptions/web-3214.md" strict
+    [ "$status" -ne 0 ]
+    [[ "$stderr" == *"not using the Problem/Solution/Proposal shape"* ]]
+}
+
+# `<https://...>` is a markdown autolink, and WEB-3214 ends with one. The first
+# placeholder pattern matched it -- the validator calling a real ticket
+# unfinished because it cited its source properly.
+@test "a markdown autolink is not a template placeholder" {
+    printf '## Notes\n\nSee <https://example.invalid/a/b-c-d> and <someone@example.com>.\n' > "$WORK/x.md"
     run --separate-stderr herdr_linear::description_validate "$WORK/x.md"
+    [ "$status" -eq 0 ]
+    [[ "$stderr" != *"placeholder"* ]]
+}
+
+# A date in PROSE is fine. WEB-3214 opens with "Measured 25 Aug 2026" and is not
+# a diary; it is dated HEADINGS that mark a log.
+@test "a date in prose is not a diary" {
+    printf '## Why\n\nMeasured 25 Aug 2026 in PROD, last 90 days. Numbers followed.\n' > "$WORK/x.md"
+    run --separate-stderr herdr_linear::description_validate "$WORK/x.md"
+    [ "$status" -eq 0 ]
+    [[ "$stderr" != *"diary"* ]]
+}
+
+@test "a missing spine section is a note in lenient mode and a refusal in strict" {
+    printf '## Problem\n\nA real problem, stated at some length for the actor.\n' > "$WORK/x.md"
+    run --separate-stderr herdr_linear::description_validate "$WORK/x.md"
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"note: not using the Problem/Solution/Proposal shape"* ]]
+
+    run --separate-stderr herdr_linear::description_validate "$WORK/x.md" strict
+    [ "$status" -ne 0 ]
+}
+
+@test "the spine out of order is a note in lenient mode and a refusal in strict" {
+    printf '## Solution\n\nreal text here\n\n## Problem\n\nreal text here\n\n## Proposal\n\nreal text\n' > "$WORK/x.md"
+    run --separate-stderr herdr_linear::description_validate "$WORK/x.md" strict
     [ "$status" -ne 0 ]
     [[ "$stderr" == *"out of order"* ]]
 }
 
-@test "an empty spine section is refused" {
+@test "an empty section is refused whatever it is called" {
     printf '## Problem\n\n## Solution\n\nreal text\n\n## Proposal\n\nreal text\n' > "$WORK/x.md"
     run --separate-stderr herdr_linear::description_validate "$WORK/x.md"
     [ "$status" -ne 0 ]
@@ -194,9 +241,11 @@ entirely rewritten text"
     [[ "$restored" == *"Nobody re-runs a render"* ]]
 }
 
+# `## Problem` alone is no longer invalid -- that is an advisory note now. This
+# needs a HARD failure, so it uses a diary: the rule that holds in every shape.
 @test "an invalid description never reaches Linear" {
     bind_wt; enable_writes
-    printf '## Problem\n\nonly this\n' > "$WORK/x.md"
+    printf '## Why\n\nreal text\n\n### 2026-09-04 update\n- a\n\n### 2026-09-05 update\n- b\n' > "$WORK/x.md"
     export FAKE_LINEAR_MODE=desc_issue FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::describe "$WT" "$WORK/x.md"
     [ "$status" -eq 5 ]
