@@ -865,6 +865,31 @@ Added 2026-09-05. Shawn named two gaps, and they are the same gap: binding assum
 2. **`git worktree add` announces itself on stdout**, and only stderr was silenced — so "Preparing worktree ..." was prepended to the path the function returns, and `[ -d "$result" ]` was false for a directory that existed. The same bug was in both call sites.
 3. **`contains` ran before `mkdir`.** It accepts only a directory that exists — deliberately, so a symlink to a file or a dangling link cannot pass — so checking the worktrees root before creating it always failed. The directory is created first and the resolved path checked after, which keeps the guarantee.
 
+### Rename to `work`, 2026-09-05
+
+The plugin is `work`, and the commands are `/work` and `/work:<verb>`. Shawn asked for the shorter namespace; `/herdr-linear:bind` was a mouthful for something typed several times a day.
+
+| Command | For |
+|---|---|
+| `/work` | where this worktree stands, and the one useful next step |
+| `/work WEB-3318` | start on that ticket |
+| `/work status` | the same, plus the credential and the write allowlist |
+| `/work:start` | begin work — from a ticket, or from nothing |
+| `/work:bind` | bind a worktree that already exists |
+| `/work:describe` | write the issue description |
+| `/work:doc` | publish a document to the issue |
+| `/work:layout` | build a herdr tab and its columns from an issue |
+
+**`/work` is invoked bare.** A command whose name matches its plugin needs no namespace — verified against `auto` and `reflect`, which already behave that way here, rather than assumed.
+
+**`/work:doc` was missing entirely.** The layout skill referenced a publish-doc command that had never been written, so the "working history goes in a document, not the ticket body" half of the never-a-diary rule had no way to be carried out. It exists now.
+
+**Also renamed:** the on-disk state, `~/.claude/herdr-linear/` to `~/.claude/work/`, and the wrapper the model reads, `<herdr-linear-context>` to `<work-context>`. Nothing is installed anywhere yet, so there is no migration.
+
+**Deliberately NOT renamed:** the internal `herdr_linear::` function prefix and the `HERDR_LINEAR_*` environment variables — 816 and 99 occurrences. Renaming them changes nothing a user sees, and `WORK_*` is a collision-prone prefix in environment space. The inconsistency is real and invisible; it is recorded here rather than left for someone to discover and assume was an oversight.
+
+**A validation warning caught a real omission**: the new command had no `description` in its frontmatter, which is what the plugin list shows a reader. The suite reported "passed with warnings" where it had previously reported "passed", which is the only reason it was noticed — worth keeping that distinction visible rather than collapsing both into a green tick.
+
 ---
 
 ## Verification Contract
