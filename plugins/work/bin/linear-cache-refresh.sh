@@ -51,8 +51,17 @@ if [ -n "$LIB_DIR" ] && [ -r "$LIB_DIR/secrets.sh" ]; then
 fi
 
 # 0 = from the Keychain, 2 = from the pre-migration plaintext copy, 1 = nothing.
-KEY="$(herdr_linear::credential)"; key_source=$?
-if [ -z "$KEY" ]; then
+#
+# ONLY THE EXIT CODE IS KEPT. The value is deliberately not held in a variable
+# here: this is the top level of a script, so an assignment cannot be fenced in
+# a `set +x` subshell the way a function body can, and bash traces AFTER
+# expansion -- under `bash -x` the assignment alone put the key in the trace
+# three times. This script is spawned DETACHED, so that stream lands somewhere
+# nobody is watching. api() re-resolves the value inside its own subshell
+# instead; that costs one extra Keychain read per request, bounded by the eight
+# pages below.
+herdr_linear::credential >/dev/null 2>&1; key_source=$?
+if [ "$key_source" -ne 0 ] && [ "$key_source" -ne 2 ]; then
     printf 'no Linear credential: not in the Keychain (%s/%s) and no LINEAR_API_KEY in %s\n' \
         "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT" "$SECRETS_FILE" >&2
     printf 'run bin/migrate-credential.sh to store one\n' >&2
@@ -66,10 +75,17 @@ fi
 # The credential is written to curl's stdin, never to argv. --config carries the
 # header and the URL together; -s and --max-time stay on argv, where they are
 # harmless and readable.
-api() {
-    printf 'header = "Authorization: %s"\nheader = "Content-Type: application/json"\nurl = "https://api.linear.app/graphql"\n' "$KEY" \
+#
+# Subshell body with `set +x`, for the xtrace reason given above: this is now
+# the only frame that holds the value, and `set +x` has to sit in the frame
+# that holds it.
+api() (
+    set +x
+    local key
+    key="$(herdr_linear::credential)"
+    printf 'header = "Authorization: %s"\nheader = "Content-Type: application/json"\nurl = "https://api.linear.app/graphql"\n' "$key" \
         | "$CURL_BIN" -s --max-time 20 --config - -X POST -d "$1"
-}
+)
 
 write_nodes() {
   jq -c '.[]' | while read -r n; do

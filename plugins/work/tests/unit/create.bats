@@ -48,6 +48,8 @@ teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
 bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
 enable_writes() { printf '%s\n' "$(cd "$WT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
+# new_project has no worktree of its own; the worktrees root stands in for one.
+enable_root_writes() { printf '%s\n' "$(cd "$WORK/Slate/worktrees" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
 sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 
 # ------------------------------------------------------------------ context
@@ -151,7 +153,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # -------------------------------------------------------------- new project
 
 @test "a new project creates the herdr space and binds the two" {
-    enable_writes
+    enable_root_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_PROJECT_ID=proj-new
     printf '# A New Project\n\nWhat it is for.\n' > "$WORK/p.md"
     run herdr_linear::new_project "A New Project" "$WORK/p.md" team-web
@@ -165,7 +167,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 }
 
 @test "a project is created on the team it was given" {
-    enable_writes
+    enable_root_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1
     printf '# P\n\ncontent\n' > "$WORK/p.md"
     run herdr_linear::new_project "P" "$WORK/p.md" team-web
@@ -176,11 +178,11 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # Without herdr the project still exists and is usable, so this reports rather
 # than failing silently.
 @test "an unreachable herdr server leaves the project made and says so" {
-    enable_writes
+    enable_root_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_HERDR_MODE=not_running
     printf '# P\n\ncontent\n' > "$WORK/p.md"
     run --separate-stderr herdr_linear::new_project "P" "$WORK/p.md" team-web
-    [ "$status" -eq 4 ]
+    [ "$status" -eq 5 ]
     [[ "$stderr" == *"no space was made"* ]]
     [ "$(sent projectCreate)" = "1" ]
 }
@@ -217,4 +219,79 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$status" -eq 3 ]
     [[ "$output" == *"under WEB-2870"* ]]
     [ "$(sent issueCreate)" = "0" ]
+}
+
+# ------------------------------------------------------------- the gate (F1)
+
+# The allowlist is per-path. Allowlisting one worktree after a shadow-log review
+# must not file real issues from every other worktree on the machine.
+@test "an allowlist naming an unrelated worktree does not enable issue creation" {
+    bind_wt
+    mkdir -p "$WORK/Slate/worktrees/elsewhere"
+    printf '%s\n' "$(cd "$WORK/Slate/worktrees/elsewhere" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
+    [ "$status" -eq 3 ]
+    [ "$(sent issueCreate)" = "0" ]
+    [ ! -e "$HERDR_LINEAR_SLATE_ROOT/worktrees/newthing" ]
+}
+
+# A header line makes the file non-empty while matching nothing at all.
+@test "an allowlist holding only a comment does not enable issue creation" {
+    bind_wt
+    printf '# worktrees with writes enabled\n\n' > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
+    [ "$status" -eq 3 ]
+    [ "$(sent issueCreate)" = "0" ]
+}
+
+# A worktree allowlist entry is not a project-creation grant.
+@test "an allowlisted worktree does not enable project creation" {
+    enable_writes
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    printf '# P\n\ncontent\n' > "$WORK/p.md"
+    run herdr_linear::new_project "P" "$WORK/p.md" team-web
+    [ "$status" -eq 3 ]
+    [ "$(sent projectCreate)" = "0" ]
+}
+
+# ------------------------------------------------------- partial vs failed (F3)
+
+# Exit 4 and exit 5 answer opposite questions: whether a project now exists.
+@test "a project that was never created fails rather than reporting a partial" {
+    enable_root_writes
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    printf '# P\n\ncontent\n' > "$WORK/p.md"
+    run herdr_linear::new_project "P" "$WORK/p.md" team-web
+    [ "$status" -eq 4 ]
+    run grep -q 'workspace create' "$FAKE_HERDR_RECORD_DIR/argv"
+    [ "$status" -ne 0 ]
+}
+
+# ------------------------------------------------------ created_children (F4)
+
+# created_children IS the write boundary. An issue this plugin filed but never
+# recorded can never be written to by it.
+@test "a created sub-issue is recorded as a child of the parent worktree" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4002
+    run herdr_linear::new_sub_issue "$WT" "A smaller thing" "$DESC" "" smaller
+    [ "$status" -eq 0 ]
+    rec="$(herdr_linear::binding_read "$WT")"
+    [[ "$rec" == *"WEB-4002"* ]]
+    run herdr_linear::write_allowed "$WT" WEB-4002
+    [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------- workspace label (F8)
+
+@test "the workspace label argument is the label the space is created with" {
+    enable_root_writes
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    printf '# P\n\ncontent\n' > "$WORK/p.md"
+    run herdr_linear::new_project "AI Canvas Tools" "$WORK/p.md" team-web "canvas"
+    [ "$status" -eq 0 ]
+    run grep -c -- '--label canvas' "$FAKE_HERDR_RECORD_DIR/argv"
+    [ "$output" = "1" ]
 }

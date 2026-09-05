@@ -15,7 +15,7 @@ worktree is bound to, or from the project the herdr workspace is bound to.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets binding linear reconcile description herdr-read herdr-write start create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start create; do
   source "$R/lib/$f.sh"
 done
 

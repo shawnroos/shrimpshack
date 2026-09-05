@@ -17,6 +17,7 @@ template exists to prevent.
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
@@ -82,6 +83,7 @@ herdr_linear::describe "$PWD" /tmp/desc.md
 | 1 | identical to what is there; nothing sent |
 | 2 | refused — unbound, misplaced, stale, or outside the Slate root |
 | 3 | shadow mode: the rendered description is printed, nothing sent |
+| 4 | the Linear fetch or the write itself failed — a network or API error, not a validation problem. Retry |
 | 5 | a real defect — an empty section, a leftover placeholder, or a diary. stderr says which. A missing spine is only a note and does not land here |
 | 6 | refused as a diary |
 

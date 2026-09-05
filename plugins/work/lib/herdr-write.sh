@@ -30,15 +30,32 @@ HERDR_LINEAR_LAYOUT_NO_SERVER=1
 HERDR_LINEAR_LAYOUT_BAD_NAME=2
 HERDR_LINEAR_LAYOUT_FAILED=3
 
+# A journal identifier becomes a path segment (here) and a sed program (in
+# journal_get, since the child identifier is embedded in the key). Today's
+# callers only pass Linear identifiers, which cannot contain `/`, so this is
+# not yet reachable -- but it becomes live the moment a caller passes a title.
+# lib/sanitize.sh has is_safe_identifier for exactly this; kept local because
+# that file is being edited elsewhere right now. Replace this with it later.
+herdr_linear::_safe_journal_key() {
+    case "$1" in
+        ''|*[!A-Za-z0-9._-]*) return 1 ;;
+        .|..) return 1 ;;
+    esac
+    return 0
+}
+
 herdr_linear::_journal() {
     local issue="$1"
+    herdr_linear::_safe_journal_key "$issue" || return 1
     mkdir -p "$HERDR_LINEAR_JOURNAL_DIR" 2>/dev/null
     printf '%s/%s.journal' "$HERDR_LINEAR_JOURNAL_DIR" "$issue"
 }
 
 # journal_get <issue> <key> -> prints the recorded value, or fails.
 herdr_linear::journal_get() {
-    local f; f="$(herdr_linear::_journal "$1")"
+    local f
+    herdr_linear::_safe_journal_key "$2" || return 1
+    f="$(herdr_linear::_journal "$1")" || return 1
     [ -r "$f" ] || return 1
     sed -n "s/^$2=//p" "$f" | tail -1 | grep -q . || return 1
     sed -n "s/^$2=//p" "$f" | tail -1
@@ -47,7 +64,9 @@ herdr_linear::journal_get() {
 # Append-only. A journal that is rewritten can lose an entry to a crash between
 # read and write; appending cannot.
 herdr_linear::journal_put() {
-    local f; f="$(herdr_linear::_journal "$1")"
+    local f
+    herdr_linear::_safe_journal_key "$2" || return 1
+    f="$(herdr_linear::_journal "$1")" || return 1
     mkdir -p "$(dirname "$f")" 2>/dev/null
     printf '%s=%s\n' "$2" "$3" >> "$f"
     chmod 600 "$f" 2>/dev/null
@@ -91,7 +110,7 @@ herdr_linear::open_session() {
 # creates nothing twice.
 herdr_linear::layout_build() {
     local parent="${1:-}" ; shift || true
-    local bin tab pane slug child branch wt_path
+    local bin tab pane slug child branch wt_path journal_file
 
     [ -n "$parent" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
@@ -110,20 +129,40 @@ herdr_linear::layout_build() {
         herdr_linear::slug "$child" >/dev/null || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
     done
 
-    tab="$(herdr_linear::journal_get "$parent" tab)" || {
+    # Two sessions building the same parent's layout within the poll window
+    # both miss `journal_get parent tab`, both run `tab create`, and the
+    # journal's `tail -1` orphans the first tab -- the concurrency twin of the
+    # retry this journal exists to prevent. Reuse binding.sh's mkdir lock: it
+    # is already a dependency (binding_propose/confirm below) and solves the
+    # same class of problem there.
+    journal_file="$(herdr_linear::_journal "$parent")" || return "$HERDR_LINEAR_LAYOUT_FAILED"
+
+    herdr_linear::_lock "$journal_file" || return "$HERDR_LINEAR_LAYOUT_FAILED"
+    tab="$(herdr_linear::journal_get "$parent" tab)"
+    if [ -z "$tab" ]; then
         tab="$("$bin" tab create --label "$slug" 2>/dev/null \
             | herdr_linear::json "result.tab.tab_id")"
-        [ -n "$tab" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
+        if [ -z "$tab" ]; then
+            herdr_linear::_unlock "$journal_file"
+            return "$HERDR_LINEAR_LAYOUT_FAILED"
+        fi
         herdr_linear::journal_put "$parent" tab "$tab"
-    }
+    fi
+    herdr_linear::_unlock "$journal_file"
 
     for child in "$@"; do
+        herdr_linear::_lock "$journal_file" || return "$HERDR_LINEAR_LAYOUT_FAILED"
+
         # Already done on an earlier attempt: skip, do not remake.
         if herdr_linear::journal_get "$parent" "pane.$child" >/dev/null 2>&1; then
+            herdr_linear::_unlock "$journal_file"
             continue
         fi
 
-        branch="$(herdr_linear::slug "$child")" || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
+        branch="$(herdr_linear::slug "$child")" || {
+            herdr_linear::_unlock "$journal_file"
+            return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
+        }
         # <root>/worktrees/<name>, matching every worktree on this machine and
         # the `wt` shell function. An earlier version used <root>/<branch>,
         # which puts a worktree beside the repositories instead of among the
@@ -131,15 +170,25 @@ herdr_linear::layout_build() {
         wt_path="$(herdr_linear::slate_root)/worktrees/$branch"
 
         if ! herdr_linear::journal_get "$parent" "worktree.$child" >/dev/null 2>&1; then
-            herdr_linear::_make_worktree "$wt_path" "$branch" || return "$HERDR_LINEAR_LAYOUT_FAILED"
+            herdr_linear::_make_worktree "$wt_path" "$branch" || {
+                herdr_linear::_unlock "$journal_file"
+                return "$HERDR_LINEAR_LAYOUT_FAILED"
+            }
             herdr_linear::journal_put "$parent" "worktree.$child" "$wt_path"
         fi
 
         pane="$("$bin" pane split --direction right --cwd "$wt_path" --no-focus 2>/dev/null \
             | herdr_linear::json "result.pane.pane_id")"
-        [ -n "$pane" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
-        herdr_linear::await_pane "$pane" || return "$HERDR_LINEAR_LAYOUT_FAILED"
+        if [ -z "$pane" ]; then
+            herdr_linear::_unlock "$journal_file"
+            return "$HERDR_LINEAR_LAYOUT_FAILED"
+        fi
+        herdr_linear::await_pane "$pane" || {
+            herdr_linear::_unlock "$journal_file"
+            return "$HERDR_LINEAR_LAYOUT_FAILED"
+        }
         herdr_linear::journal_put "$parent" "pane.$child" "$pane"
+        herdr_linear::_unlock "$journal_file"
 
         # Bound on creation: the layout IS the statement of what this worktree
         # is for, so there is nothing to propose and nothing to confirm.
@@ -164,8 +213,13 @@ herdr_linear::_make_worktree() {
     mkdir -p "$(dirname "$path")" 2>/dev/null
     # Both streams: `worktree add` announces itself on stdout, which would
     # otherwise leak into whatever the caller is capturing.
+    #
+    # No `git init` fallback here. `worktree add` fails most often because the
+    # branch already exists -- exactly a layout RETRY -- and a fresh empty repo
+    # shares no history with Slate, can never push, and the header above
+    # forbids repairing a failure this way. Fail and let the journal's own
+    # resumability handle the retry.
     "${HERDR_LINEAR_GIT_BIN:-git}" -C "$root" worktree add -b "$branch" "$path" >/dev/null 2>&1 \
-        || "${HERDR_LINEAR_GIT_BIN:-git}" init -q -b "$branch" "$path" >/dev/null 2>&1 \
         || return 1
     return 0
 }

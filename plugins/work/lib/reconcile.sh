@@ -52,7 +52,7 @@ herdr_linear::_default_branch() {
 # The repository side, read explicitly rather than inferred from one signal.
 # Prints `key=value` lines so a caller and a log see the same evidence.
 herdr_linear::repo_signals() {
-    local wt="$1" branch default merged upstream_gone pr_state ahead
+    local wt="$1" branch default merged upstream_gone pr_state ahead branch_moved first head_sha
     branch="$(herdr_linear::_current_branch "$wt")"
     [ -n "$branch" ] || return 1
     default="$(herdr_linear::_default_branch "$wt")" || default=""
@@ -62,12 +62,39 @@ herdr_linear::repo_signals() {
         merged=yes
     fi
 
+    # Ancestry ALONE calls a brand-new worktree merged: a branch cut from the
+    # default tip with nothing committed on it has HEAD == origin/default, so
+    # `--is-ancestor` is true and the issue reconciled straight to Done at the
+    # first session end. The branch's oldest reflog entry is where the branch
+    # was cut; equal to HEAD means nothing was ever committed here.
+    #
+    # Two ways this answers `unknown`: reflogs expire (90 days by default) and
+    # core.logAllRefUpdates can be off. Unknown refuses `completed`, so the cost
+    # is missing a genuine landing on a very old branch rather than closing a
+    # ticket nobody finished.
+    branch_moved=unknown
+    first="$(herdr_linear::_git "$wt" reflog show --format=%H "refs/heads/$branch" | tail -1)"
+    head_sha="$(herdr_linear::_git "$wt" rev-parse HEAD)"
+    if [ -n "$first" ] && [ -n "$head_sha" ]; then
+        if [ "$first" = "$head_sha" ]; then branch_moved=no; else branch_moved=yes; fi
+    fi
+
     # A branch that no longer exists on the remote. On its own this says
     # nothing: it happens when work lands AND when someone tidies up a branch
     # that was abandoned. Paired with merged=yes it is completion; alone it is a
     # judgment call, which is why it is reported rather than acted on.
-    upstream_gone=no
-    herdr_linear::_git "$wt" ls-remote --exit-code --heads origin "$branch" >/dev/null || upstream_gone=yes
+    #
+    # `ls-remote --exit-code` exits 2 for "no such ref" and 128 for "cannot
+    # reach origin", and _git swallows stderr -- so an offline session end read
+    # every live branch as deleted. Only a literal 2 is a deleted branch.
+    if herdr_linear::_git "$wt" ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+        upstream_gone=no
+    else
+        case $? in
+            2) upstream_gone=yes ;;
+            *) upstream_gone=unknown ;;
+        esac
+    fi
 
     pr_state=none
     if command -v "$HERDR_LINEAR_GH_BIN" >/dev/null 2>&1; then
@@ -80,16 +107,17 @@ herdr_linear::repo_signals() {
         ahead="$(herdr_linear::_git "$wt" rev-list --count "origin/$default..HEAD" || echo 0)"
     fi
 
-    printf 'branch=%s\ndefault=%s\nmerged=%s\nupstream_gone=%s\npr=%s\nahead=%s\n' \
-        "$branch" "$default" "$merged" "$upstream_gone" "$pr_state" "$ahead"
+    printf 'branch=%s\ndefault=%s\nmerged=%s\nbranch_moved=%s\nupstream_gone=%s\npr=%s\nahead=%s\n' \
+        "$branch" "$default" "$merged" "$branch_moved" "$upstream_gone" "$pr_state" "$ahead"
 }
 
 # Map the signals to a Linear state TYPE, or to `judgment` when the repository
 # does not settle it. Types, not names: every team names its states differently,
 # and the names are read from the team at runtime.
 herdr_linear::desired_state_type() {
-    local signals="$1" merged pr upstream_gone ahead
+    local signals="$1" merged pr upstream_gone ahead branch_moved
     merged="$(printf '%s' "$signals" | sed -n 's/^merged=//p')"
+    branch_moved="$(printf '%s' "$signals" | sed -n 's/^branch_moved=//p')"
     pr="$(printf '%s' "$signals" | sed -n 's/^pr=//p')"
     upstream_gone="$(printf '%s' "$signals" | sed -n 's/^upstream_gone=//p')"
     ahead="$(printf '%s' "$signals" | sed -n 's/^ahead=//p')"
@@ -97,7 +125,11 @@ herdr_linear::desired_state_type() {
     # Merged into the default branch is the one unambiguous completion signal,
     # whether or not a pull request existed. Work landing with no PR is exactly
     # the case Linear's own integration never sees.
-    if [ "$merged" = yes ]; then printf 'completed'; return 0; fi
+    #
+    # branch_moved is the discriminator between a landing and a worktree that
+    # was opened and closed without a single commit. Do NOT reach for `ahead`
+    # instead: a genuine merge leaves ahead=0 too.
+    if [ "$merged" = yes ] && [ "$branch_moved" = yes ]; then printf 'completed'; return 0; fi
 
     # THE ORDER HERE IS THE WHOLE DESIGN, and it is counter-intuitive.
     #
@@ -112,7 +144,12 @@ herdr_linear::desired_state_type() {
     # rather than guessed. Testing `ahead > 0` BEFORE this sent every
     # squash-merged branch to `started`, quietly moving finished work back to
     # In Progress -- the exact opposite of what happened.
-    if [ "$upstream_gone" = yes ]; then printf 'judgment'; return 0; fi
+    #
+    # `ahead > 0` here is not the ordering mistake described above -- it only
+    # says there is work to ask ABOUT. A branch with no commits of its own that
+    # was never pushed is also "gone from the remote", and asking whether it
+    # landed or was abandoned is a question about nothing.
+    if [ "$upstream_gone" = yes ] && [ "${ahead:-0}" -gt 0 ] 2>/dev/null; then printf 'judgment'; return 0; fi
 
     if [ "$pr" = open ]; then printf 'started'; return 0; fi
     if [ "${ahead:-0}" -gt 0 ] 2>/dev/null; then printf 'started'; return 0; fi
@@ -223,6 +260,29 @@ herdr_linear::reconcile() {
     team="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team",""))')"
     cur_type="$(herdr_linear::_state_type_of "$ident")"
 
+    # An issue someone has closed stays closed. The equality test below is NOT
+    # this check: canceled != started reads as a difference worth writing, so a
+    # ticket cancelled mid-session came back as In Progress at session end.
+    # states.sh says the same thing at the hook level; this is the half that
+    # cannot be skipped by a caller that forgot to classify first.
+    case "$cur_type" in
+        completed)
+            [ "$want" = completed ] || return "$HERDR_LINEAR_RECONCILE_NOTHING"
+            ;;
+        canceled)
+            # Canceled is not "done early" -- somebody decided this work should
+            # not happen. If the branch then lands, moving the ticket to Done
+            # silently overrules that decision, so it is asked rather than
+            # assumed. Every other terminal transition stays refused.
+            if [ "$want" = completed ]; then
+                herdr_linear::binding_set_judgment "$wt" \
+                    "$ident is canceled in Linear, but its branch has landed. Someone decided this work should not happen; moving it to Done would overrule that. Close it, reopen it, or leave it canceled?"
+                return "$HERDR_LINEAR_RECONCILE_PROPOSED"
+            fi
+            return "$HERDR_LINEAR_RECONCILE_NOTHING"
+            ;;
+    esac
+
     # Already there. Linear's GitHub integration usually got here first, and
     # writing the same value again is noise on someone's activity feed.
     [ "$cur_type" != "$want" ] || return "$HERDR_LINEAR_RECONCILE_NOTHING"
@@ -235,9 +295,16 @@ herdr_linear::reconcile() {
         return "$HERDR_LINEAR_RECONCILE_SHADOW"
     fi
 
-    herdr_linear::write_state "$wt" "$ident" "$opening" "$state_id"
-    rc=$?
-    [ "$rc" -eq 0 ] && herdr_linear::_shadow_log "WROTE $ident to type=$want"
+    # The shadow log is the only human-visible surface, and the hook throws
+    # stdout and stderr away. Logging successes alone made every AUTH,
+    # rate-limit, stale-guard and malformed-response failure invisible.
+    if herdr_linear::write_state "$wt" "$ident" "$opening" "$state_id"; then
+        rc=0
+        herdr_linear::_shadow_log "WROTE $ident to type=$want"
+    else
+        rc=$?
+        herdr_linear::_shadow_log "FAILED setting $ident to type=$want (state $state_id), rc=$rc"
+    fi
     return "$rc"
 }
 

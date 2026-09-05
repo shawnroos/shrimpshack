@@ -25,8 +25,14 @@ HERDR_LINEAR_STATE_UNKNOWN=3   # not enough information to judge; not a problem
 herdr_linear::check_placement() {
     local wt="${1:-}" ws="${2:-}" ident issue_project ws_project
 
-    [ "$(herdr_linear::binding_state "$wt" 2>/dev/null)" = "bound" ] \
-        || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    # misplaced and stale are states THIS FILE sets, so refusing to run outside
+    # `bound` meant neither check could ever run again -- the suspension lasted
+    # exactly one pass and classify then cleared it back to bound with the
+    # mismatch untouched.
+    case "$(herdr_linear::binding_state "$wt" 2>/dev/null)" in
+        bound|misplaced|stale) ;;
+        *) return "$HERDR_LINEAR_STATE_UNKNOWN" ;;
+    esac
     [ -n "$ws" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
 
     # Both sides must be positively known. An unbound workspace is the normal
@@ -69,8 +75,12 @@ herdr_linear::_issue_project_id() {
 # never reopen it. Someone closed that ticket on purpose.
 herdr_linear::check_liveness() {
     local wt="${1:-}" ident type
-    [ "$(herdr_linear::binding_state "$wt" 2>/dev/null)" = "bound" ] \
-        || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    # Same reason as check_placement: a check that cannot run in the state it
+    # set can never clear it, and can never confirm it either.
+    case "$(herdr_linear::binding_state "$wt" 2>/dev/null)" in
+        bound|misplaced|stale) ;;
+        *) return "$HERDR_LINEAR_STATE_UNKNOWN" ;;
+    esac
     ident="$(herdr_linear::binding_identifier "$wt")" || return "$HERDR_LINEAR_STATE_UNKNOWN"
     type="$(herdr_linear::_state_type_of "$ident" 2>/dev/null)" || return "$HERDR_LINEAR_STATE_UNKNOWN"
     case "$type" in
@@ -86,26 +96,29 @@ herdr_linear::check_liveness() {
 # One pass over both, recording the resulting state on the binding so the write
 # path can consult it without repeating the network calls.
 herdr_linear::classify() {
-    local wt="${1:-}" ws="${2:-}" out rc
-    out="$(herdr_linear::check_placement "$wt" "$ws")"; rc=$?
-    if [ "$rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
+    local wt="${1:-}" ws="${2:-}" out place_rc live_rc
+    out="$(herdr_linear::check_placement "$wt" "$ws")"; place_rc=$?
+    if [ "$place_rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
         herdr_linear::binding_set_state "$wt" misplaced
         printf '%s' "$out"
-        return "$rc"
+        return "$place_rc"
     fi
 
-    out="$(herdr_linear::check_liveness "$wt")"; rc=$?
-    if [ "$rc" -eq "$HERDR_LINEAR_STATE_STALE" ]; then
+    out="$(herdr_linear::check_liveness "$wt")"; live_rc=$?
+    if [ "$live_rc" -eq "$HERDR_LINEAR_STATE_STALE" ]; then
         herdr_linear::binding_set_state "$wt" stale
         printf '%s' "$out"
-        return "$rc"
+        return "$live_rc"
     fi
 
     # Clearing is deliberate and narrow: only misplaced/stale return to bound,
-    # and only when the check that set them now passes. A blanket "set bound"
-    # here would resurrect a binding the branch check had downgraded.
+    # and only on an explicit OK from the check that set them. "Not MISPLACED"
+    # is not the same answer as OK -- UNKNOWN means the check could not judge,
+    # and treating that as a pass cleared the suspension on a mismatch nobody
+    # had resolved.
     case "$(herdr_linear::binding_state "$wt" 2>/dev/null)" in
-        misplaced|stale) herdr_linear::binding_set_state "$wt" bound ;;
+        misplaced) [ "$place_rc" -eq "$HERDR_LINEAR_STATE_OK" ] && herdr_linear::binding_set_state "$wt" bound ;;
+        stale)     [ "$live_rc"  -eq "$HERDR_LINEAR_STATE_OK" ] && herdr_linear::binding_set_state "$wt" bound ;;
     esac
     return "$HERDR_LINEAR_STATE_OK"
 }

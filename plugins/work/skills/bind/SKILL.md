@@ -53,6 +53,7 @@ herdr_linear::contains "$PWD" || echo "outside the Slate root; nothing to do"
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
@@ -74,6 +75,10 @@ produced it:
 search, do not drop the assignee filter, do not list every issue in the
 workspace. An empty filtered list is a real answer, and R20 makes working
 without an issue a supported state — not a problem to solve.
+
+**Exit 2 means this worktree is outside the Slate root.** Same containment
+check as "Before anything" above, run again inside `candidates` itself. Say so
+and stop; nothing was recorded.
 
 **Exit 3 means Linear could not be reached.** Say that, and stop. Nothing is
 recorded.

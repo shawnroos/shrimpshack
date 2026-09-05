@@ -12,6 +12,15 @@
 # NOTHING HERE WRITES. It proposes. Only lib/binding.sh moves a record, and only
 # a confirmation moves it to bound.
 
+# Self-sourced rather than left to the caller's source list. The candidate block
+# is read from a terminal and answered, so the filter has to be present wherever
+# this file is, not wherever someone remembered to add it -- skills/bind is the
+# real caller and lists its libraries by hand.
+if ! command -v herdr_linear::sanitize_stream >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    . "$(dirname "${BASH_SOURCE[0]}")/sanitize.sh"
+fi
+
 HERDR_LINEAR_CANDIDATE_LIMIT="${HERDR_LINEAR_CANDIDATE_LIMIT:-5}"
 
 HERDR_LINEAR_PROPOSE_OK=0
@@ -71,7 +80,10 @@ import sys, json
 i = json.load(sys.stdin)["data"]["issue"]
 print("%s\t%s\tbranch" % (i["identifier"], i.get("title", "")))
 ' 2>/dev/null)"
-                if [ -n "$out" ]; then printf '%s\n' "$out"; return "$HERDR_LINEAR_PROPOSE_OK"; fi
+                if [ -n "$out" ]; then
+                    printf '%s\n' "$out" | herdr_linear::sanitize_stream
+                    return "$HERDR_LINEAR_PROPOSE_OK"
+                fi
                 ;;
             "$HERDR_LINEAR_UNAVAILABLE"|"$HERDR_LINEAR_AUTH"|"$HERDR_LINEAR_RATELIMITED")
                 return "$HERDR_LINEAR_PROPOSE_UNAVAILABLE"
@@ -114,7 +126,10 @@ for n in nodes:
     print("%s\t%s\t%s" % (n["identifier"], n.get("title", ""), src))
 ' 2>/dev/null)"
 
+    # Emptiness is judged on the raw block, before the filter: a title made
+    # entirely of stripped characters must still count as a candidate, or the
+    # list silently shortens and the caller is told the filter found nothing.
     [ -n "$out" ] || return "$HERDR_LINEAR_PROPOSE_NONE"
-    printf '%s\n' "$out"
+    printf '%s\n' "$out" | herdr_linear::sanitize_stream
     return "$HERDR_LINEAR_PROPOSE_OK"
 }

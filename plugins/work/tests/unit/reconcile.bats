@@ -137,6 +137,41 @@ mutations_sent() {
     [ "$output" = "judgment" ]
 }
 
+# `merge-base --is-ancestor HEAD origin/main` is TRUE for a worktree that has
+# never committed -- its HEAD IS the default tip -- so picking a ticket, opening
+# a session and closing it without a commit moved the ticket to Done. The branch
+# reflog is the discriminator, and it has to be: a genuine merge also leaves
+# ahead=0, and a fast-forward landing leaves HEAD equal to origin/main.
+@test "a worktree with no commits of its own is never completed" {
+    FRESH="$WORK/Slate/fresh"
+    git -C "$WT" worktree add -q -b feature/web-9999-fresh "$FRESH" main
+    signals="$(herdr_linear::repo_signals "$FRESH")"
+    [[ "$signals" == *"merged=yes"* ]]
+    [[ "$signals" == *"branch_moved=no"* ]]
+    run herdr_linear::desired_state_type "$signals"
+    [ "$output" = "none" ]
+
+    # And the whole pass writes nothing, with writes on and a mutation allowed.
+    n="$(herdr_linear::binding_propose "$FRESH" WEB-2870)"
+    herdr_linear::binding_confirm "$FRESH" WEB-2870 "$n"
+    printf '%s\n' "$(cd "$FRESH" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::reconcile "$FRESH"
+    [ "$status" -eq 1 ]
+    [ "$(mutations_sent)" = "0" ]
+}
+
+# `ls-remote --exit-code` exits 2 for "no such ref" and 128 for "cannot reach
+# origin". Treating every non-zero answer as "deleted" meant an offline session
+# end asked whether live work had been abandoned.
+@test "an unreachable remote is not read as a deleted branch" {
+    git -C "$WT" remote set-url origin "$WORK/nowhere.git"
+    signals="$(herdr_linear::repo_signals "$WT")"
+    [[ "$signals" == *"upstream_gone=unknown"* ]]
+    run herdr_linear::desired_state_type "$signals"
+    [ "$output" = "started" ]
+}
+
 @test "an open pull request still reads as started while the branch exists" {
     run herdr_linear::desired_state_type "$(printf 'merged=no\npr=open\nupstream_gone=no\nahead=2\n')"
     [ "$output" = "started" ]
@@ -219,6 +254,33 @@ mutations_sent() {
     run herdr_linear::reconcile "$WT"
     [ "$status" -eq 1 ]
     [ "$(mutations_sent)" = "0" ]
+}
+
+# `cur != want` is an equality test, not a terminality test: canceled != started
+# read as a difference worth writing, so a ticket someone cancelled during a
+# session came back as In Progress the moment the session ended.
+@test "a canceled issue is not moved back to started" {
+    bind_wt WEB-2870
+    enable_writes
+    export FAKE_LINEAR_MODE=canceled_issue FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::reconcile "$WT"
+    [ "$status" -eq 1 ]
+    [ "$(mutations_sent)" = "0" ]
+}
+
+# The shadow log is the only human-visible surface and the hook discards both
+# streams, so a write that failed used to leave no trace anywhere at all.
+@test "a failed write is named in the log, not only a successful one" {
+    bind_wt WEB-2870
+    merge_into_main
+    enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    export FAKE_LINEAR_MUTATION_RESULT=fail
+    run herdr_linear::reconcile "$WT"
+    [ "$status" -eq 5 ]
+    run cat "$HERDR_LINEAR_SHADOW_LOG"
+    [[ "$output" == *"FAILED setting WEB-2870 to type=completed"* ]]
+    [[ "$output" == *"rc=5"* ]]
 }
 
 # A 200 carrying success:false is a FAILED write that every "did the function
@@ -383,6 +445,40 @@ mutations_sent() {
     [ "$status" -eq 0 ]
     [ -z "$output" ]
     [ -z "$stderr" ]
+}
+
+# Nothing used to call classify, so `stale` was a state production never set and
+# the hook happily wrote over a decision a person had just made.
+@test "the hook does not reopen a ticket someone canceled" {
+    bind_wt WEB-2870
+    enable_writes
+    export FAKE_LINEAR_MODE=canceled_issue FAKE_LINEAR_ALLOW_MUTATION=1
+    run bash -c "printf '{\"cwd\":\"$WT\",\"hook_event_name\":\"SessionEnd\"}' | bash '$ROOT/hooks/reconcile.sh'"
+    [ "$status" -eq 0 ]
+    [ "$(mutations_sent)" = "0" ]
+    [ "$(herdr_linear::binding_state "$WT")" = "stale" ]
+    # The next session start is silent for any state but `bound`, so the
+    # suspension has to leave a trace somewhere a person can read.
+    run cat "$HERDR_LINEAR_SHADOW_LOG"
+    [[ "$output" == *"SUSPENDED"* ]]
+    [[ "$output" == *"WEB-2870 is canceled in Linear"* ]]
+}
+
+# pending_judgment is ONE slot and set-judgment replaces it wholesale, so the
+# description nudge used to evict the squash-merge question reconcile had just
+# recorded -- the headline case the judgment exists for. Driven through the hook
+# because each half is correct on its own; only the pairing is the defect.
+@test "the hook keeps reconcile's judgment instead of overwriting it with a nudge" {
+    bind_wt WEB-2870
+    git -C "$WT" push -q origin --delete feature/web-2870-detach
+    git -C "$WT" fetch -q --prune origin
+    export FAKE_LINEAR_MODE=found_parent
+    run bash -c "printf '{\"cwd\":\"$WT\",\"hook_event_name\":\"SessionEnd\"}' | bash '$ROOT/hooks/reconcile.sh'"
+    [ "$status" -eq 0 ]
+    run herdr_linear::binding_take_judgment "$WT" "s-judgment"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"gone from the remote"* ]]
+    [[ "$output" != *"the description does not cover"* ]]
 }
 
 @test "the hook is registered on SessionEnd and not on Stop" {

@@ -47,6 +47,17 @@ herdr_linear::_kind_known() {
     return 1
 }
 
+# True for a kind in the project-scoped list. `doc_publish` has no projectId
+# path -- it always resolves an issue and always sets issueId -- so accepting
+# one of these here would silently mis-scope the document rather than error.
+herdr_linear::_kind_is_project() {
+    local k="$1" candidate
+    for candidate in $HERDR_LINEAR_DOC_KINDS_PROJECT; do
+        [ "$k" = "$candidate" ] && return 0
+    done
+    return 1
+}
+
 # herdr_linear::doc_title <identifier> <kind> <what>
 # `WEB-3127 diagnosis: texture leak on image swap`
 herdr_linear::doc_title() {
@@ -90,6 +101,16 @@ print(json.dumps({"query": q, "variables": v}))
 herdr_linear::doc_publish() {
     local wt="${1:-}" kind="${2:-}" what="${3:-}" file="${4:-}"
     local ident title icon doc_id body resp new_id
+
+    # Project-scoped kinds have no mutation path: this function always resolves
+    # an issue from the worktree's binding and always sets issueId. Whether an
+    # agent may create a project-scoped document at all is listed under "Not
+    # yet settled" in docs/linear-conventions.md -- a question for Shawn, not
+    # one this function gets to answer by building a projectId path.
+    herdr_linear::_kind_is_project "$kind" && {
+        printf 'doc: "%s" is a project-scoped kind; publishing a project document is not implemented (see "Not yet settled" in docs/linear-conventions.md) -- ask before deciding this\n' "$kind" >&2
+        return "$HERDR_LINEAR_DOC_REFUSED"
+    }
 
     herdr_linear::contains "$wt" || return "$HERDR_LINEAR_DOC_REFUSED"
     [ "$(herdr_linear::binding_state "$wt" 2>/dev/null)" = "bound" ] \

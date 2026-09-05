@@ -14,6 +14,7 @@ bindings — so it runs only when a person asks for it.
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"

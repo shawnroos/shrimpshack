@@ -22,6 +22,10 @@ HERDR_LINEAR_CREATE_REFUSED=1
 HERDR_LINEAR_CREATE_NO_CONTEXT=2
 HERDR_LINEAR_CREATE_SHADOW=3
 HERDR_LINEAR_CREATE_FAILED=4
+# The remote object exists but the local half of the verb did not finish. Kept
+# apart from FAILED because the two demand opposite next moves: FAILED means
+# nothing was filed, PARTIAL means something was and is now unattended.
+HERDR_LINEAR_CREATE_PARTIAL=5
 
 # herdr_linear::current_context <worktree> [workspace-id]
 #
@@ -94,7 +98,7 @@ herdr_linear::_create_issue() {
         return "$HERDR_LINEAR_CREATE_NO_CONTEXT"
     fi
 
-    if ! herdr_linear::_start_writes_enabled; then
+    if ! herdr_linear::writes_enabled "$wt"; then
         herdr_linear::_shadow_log "SHADOW would create issue \"$title\" (team $team, project ${project:-none}${parent:+, parent $parent}) and a session for it"
         printf 'shadow: would create "%s"%s\n' "$title" "${parent:+ under $parent}"
         return "$HERDR_LINEAR_CREATE_SHADOW"
@@ -131,12 +135,19 @@ except Exception:
 ')" || return "$HERDR_LINEAR_CREATE_FAILED"
     [ -n "$ident" ] || return "$HERDR_LINEAR_CREATE_FAILED"
 
+    # created_children IS the write boundary: an issue this plugin filed is one
+    # it may later write to. A failure here fails CLOSED -- the child simply
+    # stays unwritable -- so it must not stop the session from being made.
+    if [ -n "$parent" ]; then
+        herdr_linear::binding_add_child "$wt" "$ident" >/dev/null 2>&1 || true
+    fi
+
     # The session. A failure here leaves a real issue with no worktree, which is
     # recoverable by hand -- so it is reported, not rolled back. Deleting a
     # freshly filed ticket to tidy up would be worse.
     path="$(herdr_linear::start_from_issue "$ident" "$name")" || {
         printf 'created %s, but could not make a worktree for it: run /work:start %s\n' "$ident" "$ident" >&2
-        return "$HERDR_LINEAR_CREATE_FAILED"
+        return "$HERDR_LINEAR_CREATE_PARTIAL"
     }
 
     pane="$(herdr_linear::open_session "$path" 2>/dev/null)" || pane=""
@@ -153,8 +164,12 @@ herdr_linear::new_project() {
 
     [ -n "$name" ] && [ -n "$team" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     [ -r "$contentfile" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
+    # This verb takes no worktree, so it never met the Slate-root containment
+    # check every other write passes. The worktrees root stands in for one.
+    herdr_linear::contains "$(herdr_linear::_worktree_root)" \
+        || return "$HERDR_LINEAR_CREATE_REFUSED"
 
-    if ! herdr_linear::_start_writes_enabled; then
+    if ! herdr_linear::_root_writes_enabled; then
         herdr_linear::_shadow_log "SHADOW would create project \"$name\" on team $team, and a herdr workspace for it"
         printf 'shadow: would create project "%s"\n' "$name"
         return "$HERDR_LINEAR_CREATE_SHADOW"
@@ -185,20 +200,23 @@ except Exception:
     # reports rather than failing the whole verb.
     herdr_linear::probe || {
         printf 'created project %s, but the herdr server is not reachable so no space was made\n' "$pid" >&2
-        return "$HERDR_LINEAR_CREATE_FAILED"
+        return "$HERDR_LINEAR_CREATE_PARTIAL"
     }
     bin="$(herdr_linear::bin)"
-    ws="$("$bin" workspace create --label "$name" --no-focus 2>/dev/null \
+    ws="$("$bin" workspace create --label "$label" --no-focus 2>/dev/null \
         | herdr_linear::json "result.workspace.workspace_id")"
     [ -n "$ws" ] || {
         printf 'created project %s, but the workspace could not be made\n' "$pid" >&2
-        return "$HERDR_LINEAR_CREATE_FAILED"
+        return "$HERDR_LINEAR_CREATE_PARTIAL"
     }
 
     # Bound on creation: making the space FROM the project is the statement that
     # they are the same thing.
-    nonce="$(herdr_linear::workspace_propose "$ws" "$pid")" || return "$HERDR_LINEAR_CREATE_FAILED"
-    herdr_linear::workspace_confirm "$ws" "$pid" "$nonce" || return "$HERDR_LINEAR_CREATE_FAILED"
+    nonce="$(herdr_linear::workspace_propose "$ws" "$pid")" && \
+        herdr_linear::workspace_confirm "$ws" "$pid" "$nonce" || {
+        printf 'created project %s and workspace %s, but could not bind them\n' "$pid" "$ws" >&2
+        return "$HERDR_LINEAR_CREATE_PARTIAL"
+    }
 
     printf '%s\t%s' "$pid" "$ws"
     return "$HERDR_LINEAR_CREATE_OK"

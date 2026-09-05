@@ -133,6 +133,15 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     [ "$(ls -1d "$HERDR_LINEAR_SLATE_ROOT"/worktrees/WEB-300* 2>/dev/null | wc -l | tr -d ' ')" = "2" ]
 }
 
+# The file's own header forbids repairing a failed retry this way: an empty
+# repo shares no history with Slate and can never push.
+@test "a branch that already exists fails the worktree instead of git-init a fresh repo" {
+    git -C "$HERDR_LINEAR_SLATE_ROOT" branch WEB-3001
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 3 ]
+    [ ! -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001/.git" ]
+}
+
 @test "a completed column is not rebuilt on a second run" {
     run herdr_linear::layout_build WEB-2870 WEB-3001
     [ "$status" -eq 0 ]
@@ -150,6 +159,34 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     # Both entries survive on disk; the reader takes the last.
     run grep -c '^tab=' "$HERDR_LINEAR_JOURNAL_DIR/WEB-2870.journal"
     [ "$output" = "2" ]
+}
+
+# An identifier becomes a path segment here, and a sed program's key in
+# journal_get. Today's callers only pass Linear identifiers (no `/`), but the
+# shape is validated regardless so this stays true the moment that changes.
+@test "an issue identifier that could escape the journal directory is refused" {
+    run herdr_linear::journal_put "../escaped" tab "x"
+    [ "$status" -ne 0 ]
+    [ ! -e "$HERDR_LINEAR_JOURNAL_DIR/../escaped.journal" ]
+}
+
+@test "a key that could corrupt the sed program is refused" {
+    herdr_linear::journal_put WEB-2870 tab "kept"
+    run herdr_linear::journal_get WEB-2870 "tab/../broken"
+    [ "$status" -ne 0 ]
+}
+
+# The lock is the same mkdir lock lib/binding.sh uses for the same class of
+# problem: two sessions building the same parent's layout must not both miss
+# `journal_get parent tab` and both create a tab, orphaning the first.
+@test "the tab section is locked, so a held lock blocks a concurrent build" {
+    journal_file="$(herdr_linear::_journal WEB-2870)"
+    herdr_linear::_lock "$journal_file"
+    export HERDR_LINEAR_LOCK_WAIT_SECONDS=1
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    herdr_linear::_unlock "$journal_file"
+    [ "$status" -eq 3 ]
+    [ "$(herdr_calls 'tab create')" = "0" ]
 }
 
 @test "the journal is not world-readable" {

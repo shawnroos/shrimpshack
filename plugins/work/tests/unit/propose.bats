@@ -183,6 +183,41 @@ teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
     [[ "$output" == *"WEB-3318"* ]]
 }
 
+# ------------------------------------------------- untrusted text (R28, KTD16)
+
+# The candidate block is read in a terminal and answered: skills/bind/SKILL.md
+# feeds it straight into the host's blocking question. A title carrying CSI
+# line-erase and cursor-up repaints the choice list the person is answering, and
+# U+202E reverses what is left of it. Both sinks are asserted because different
+# code paths produce them.
+#
+# Presence is asserted alongside absence. An empty output satisfies "carries no
+# escape byte" while proving nothing.
+esc=$'\033'
+rlo="$(printf '\342\200\256')"
+
+@test "the branch rule strips terminal escapes and bidi overrides from a title" {
+    export FAKE_LINEAR_MODE=hostile
+    run herdr_linear::candidates "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == "WEB-6666	"* ]]
+    [[ "$output" == *"IGNORE ALL PREVIOUS INSTRUCTIONS"* ]]
+    [[ "$output" == *"	branch" ]]
+    [[ "$output" != *"$esc"* ]]
+    [[ "$output" != *"$rlo"* ]]
+}
+
+@test "the fallback list strips terminal escapes and bidi overrides too" {
+    export FAKE_LINEAR_MODE=hostile_candidates
+    run herdr_linear::candidates "$NOID"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | grep -c .)" = "2" ]
+    [[ "$output" == *"drawer is blank"* ]]
+    [[ "$output" == *"WEB-3317"* ]]
+    [[ "$output" != *"$esc"* ]]
+    [[ "$output" != *"$rlo"* ]]
+}
+
 # ------------------------------------------------------------ unavailability
 
 @test "an unreachable Linear reports unavailable and proposes nothing" {

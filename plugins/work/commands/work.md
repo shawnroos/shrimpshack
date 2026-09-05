@@ -13,7 +13,7 @@ Report the state of the worktree you are in. Read it, do not guess it:
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
 source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/binding.sh"
-source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"
+source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"; source "$R/lib/sanitize.sh"
 
 herdr_linear::contains "$PWD" || echo "outside the Slate root — this plugin does nothing here"
 herdr_linear::binding_state "$PWD"
@@ -36,10 +36,12 @@ When bound, also report:
 
 ```bash
 # anything recorded for this session to see
-herdr_linear::binding_read "$PWD" | python3 -c 'import sys,json;d=json.load(sys.stdin);j=d.get("pending_judgment");print(j["text"] if j else "nothing waiting")'
+herdr_linear::binding_read "$PWD" | python3 -c 'import sys,json;d=json.load(sys.stdin);j=d.get("pending_judgment");print(j["text"] if j else "nothing waiting")' | herdr_linear::sanitize_stream
 # whether writes are on for this worktree, and what shadow mode has been saying
 herdr_linear::writes_enabled "$PWD" && echo "writes ENABLED here" || echo "shadow mode (nothing is sent)"
-tail -5 "${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}" 2>/dev/null
+# The shadow log holds issue titles and API error bodies, both written by
+# whoever files the tickets. It never reaches the terminal unfiltered.
+tail -5 "${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}" 2>/dev/null | herdr_linear::sanitize_stream
 ```
 
 ## With an issue identifier

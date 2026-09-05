@@ -28,6 +28,7 @@ HERDR_LINEAR_START_REFUSED=1
 HERDR_LINEAR_START_EXISTS=2
 HERDR_LINEAR_START_UNAVAILABLE=3
 HERDR_LINEAR_START_FAILED=4
+HERDR_LINEAR_START_SHADOW=5
 
 # Linear supplies a branch name per issue -- `web-3318-ai-tools-drawer-is-blank`.
 # Prefixing it with the repository's own convention gives a branch that carries
@@ -51,12 +52,18 @@ herdr_linear::start_default_name() {
     local resp="$1" title
     title="$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["issue"].get("title") or "")' 2>/dev/null)"
     [ -n "$title" ] || return 1
-    printf '%s' "$title" \
+    local slug
+    slug="$(printf '%s' "$title" \
         | tr '[:upper:]' '[:lower:]' \
         | tr -c 'a-z0-9' '-' \
-        | sed -E 's/-+/-/g; s/^-+//; s/-+$//' \
-        | cut -c1-40 \
-        | sed -E 's/-[^-]*$//; s/-+$//'
+        | sed -E 's/-+/-/g; s/^-+//; s/-+$//')"
+    # The 40-character cut can sever a word in half, so the severed remnant is
+    # dropped -- but only when the cut actually happened. Trimming
+    # unconditionally cost every short title its last word.
+    if [ "${#slug}" -gt 40 ]; then
+        slug="$(printf '%s' "$slug" | cut -c1-40 | sed -E 's/-[^-]*$//; s/-+$//')"
+    fi
+    printf '%s' "$slug"
 }
 
 herdr_linear::_worktree_root() { printf '%s/worktrees' "$(herdr_linear::slate_root)"; }
@@ -66,7 +73,7 @@ herdr_linear::_worktree_root() { printf '%s/worktrees' "$(herdr_linear::slate_ro
 # Prints the worktree path on success.
 herdr_linear::start_from_issue() {
     local ident="${1:-}" name="${2:-}" prefix="${3:-$HERDR_LINEAR_BRANCH_PREFIX}"
-    local resp branch path root nonce
+    local resp branch path root nonce existing
 
     [ -n "$ident" ] || return "$HERDR_LINEAR_START_REFUSED"
 
@@ -86,11 +93,31 @@ herdr_linear::start_from_issue() {
     root="$(herdr_linear::_worktree_root)"
     path="$root/$name"
 
-    # Never adopt a directory that is already there. It may be someone's live
-    # work, and binding it to this issue would silently re-home it.
+    # Never adopt a directory that is already there -- it may be someone's live
+    # work, and binding it to this issue would silently re-home it. The one
+    # exception is this issue's OWN worktree: the path is deterministic, so a
+    # flat refusal leaves a worktree whose binding failed unbindable by script
+    # forever, and the documented "just run /work:start again" recovery
+    # impossible.
     if [ -e "$path" ]; then
-        printf 'already exists: %s\n' "$path" >&2
-        return "$HERDR_LINEAR_START_EXISTS"
+        if [ ! -d "$path" ] || [ ! -e "$path/.git" ]; then
+            printf 'already exists: %s\n' "$path" >&2
+            return "$HERDR_LINEAR_START_EXISTS"
+        fi
+        existing="$(herdr_linear::binding_identifier "$path" 2>/dev/null)" || existing=""
+        if [ -n "$existing" ] && [ "$existing" != "$ident" ]; then
+            printf 'already exists and belongs to %s: %s\n' "$existing" "$path" >&2
+            return "$HERDR_LINEAR_START_EXISTS"
+        fi
+        if [ "$existing" = "$ident" ] \
+            && [ "$(herdr_linear::binding_state "$path" 2>/dev/null)" = "bound" ]; then
+            printf '%s' "$path"
+            return "$HERDR_LINEAR_START_OK"
+        fi
+        nonce="$(herdr_linear::binding_propose "$path" "$ident")" || return "$HERDR_LINEAR_START_FAILED"
+        herdr_linear::binding_confirm "$path" "$ident" "$nonce" || return "$HERDR_LINEAR_START_FAILED"
+        printf '%s' "$path"
+        return "$HERDR_LINEAR_START_OK"
     fi
 
     # The directory has to exist before it can be resolved: contains() only
@@ -129,7 +156,7 @@ herdr_linear::start_from_issue() {
 # worktree bound to an issue that was never filed is a dangling reference.
 herdr_linear::start_new() {
     local title="${1:-}" descfile="${2:-}" team="${3:-}" name="${4:-}"
-    local body resp ident
+    local body resp ident path
 
     [ -n "$title" ] && [ -n "$team" ] || return "$HERDR_LINEAR_START_REFUSED"
     [ -r "$descfile" ] || return "$HERDR_LINEAR_START_REFUSED"
@@ -137,10 +164,11 @@ herdr_linear::start_new() {
     # exists to carry a bad one.
     herdr_linear::description_validate "$descfile" || return "$HERDR_LINEAR_START_REFUSED"
 
-    if ! herdr_linear::_start_writes_enabled; then
+    if ! herdr_linear::_root_writes_enabled; then
         herdr_linear::_shadow_log "SHADOW would create issue \"$title\" on team $team, and a worktree for it"
-        printf 'shadow: would create "%s" on %s\n' "$title" "$team"
-        return "$HERDR_LINEAR_START_OK"
+        # stderr, because stdout carries the worktree path.
+        printf 'shadow: would create "%s" on %s\n' "$title" "$team" >&2
+        return "$HERDR_LINEAR_START_SHADOW"
     fi
 
     body="$(python3 -c '
@@ -164,12 +192,26 @@ except Exception:
 ')" || return "$HERDR_LINEAR_START_FAILED"
     [ -n "$ident" ] || return "$HERDR_LINEAR_START_FAILED"
 
-    herdr_linear::start_from_issue "$ident" "$name"
+    # The identifier must survive a worktree failure -- it is what the caller
+    # types to retry, and start_from_issue's own stderr never names it.
+    path="$(herdr_linear::start_from_issue "$ident" "$name")" || {
+        printf 'created %s, but could not make a worktree for it: run /work:start %s\n' "$ident" "$ident" >&2
+        return "$HERDR_LINEAR_START_FAILED"
+    }
+    printf '%s' "$path"
+    return "$HERDR_LINEAR_START_OK"
 }
 
-# Creating an issue is a write, and writes are opt-in per worktree. There is no
-# worktree yet, so this asks whether the ALLOWLIST has anything in it at all --
-# a deliberately conservative reading of "writes are enabled here".
-herdr_linear::_start_writes_enabled() {
-    [ -s "${HERDR_LINEAR_WRITE_ALLOWLIST:-$HOME/.claude/work/write-enabled}" ]
+# Creating an issue or a project is a write, and writes are opt-in PER PATH.
+# Neither verb has a worktree of its own to offer, so the worktrees root stands
+# in for one: it has to be inside the Slate root and listed in the allowlist by
+# name. Asking only whether the allowlist is non-empty -- what this used to do
+# -- meant allowlisting one scratch worktree turned issue and project creation
+# on from every worktree on the machine, and a lone comment line in the file did
+# it while matching nothing at all.
+herdr_linear::_root_writes_enabled() {
+    local root
+    root="$(herdr_linear::_worktree_root)"
+    herdr_linear::contains "$root" || return 1
+    herdr_linear::writes_enabled "$root"
 }

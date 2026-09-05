@@ -14,7 +14,7 @@ first, or use `/work:new`.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets binding linear reconcile description herdr-read herdr-write start create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start create; do
   source "$R/lib/$f.sh"
 done
 
@@ -22,6 +22,15 @@ herdr_linear::new_sub_issue "$PWD" "The title" /tmp/desc.md "$(herdr_linear::wor
 ```
 
 Exit codes are `/work:new`'s, plus: **2 also means this worktree is unbound**.
+
+The library records the new identifier against the binding for you
+(`binding_add_child`). That list is the write boundary — an issue missing from
+it can never be written to later — so if you ever file a sub-issue by any other
+route, add it yourself:
+
+```bash
+herdr_linear::binding_add_child "$PWD" "$NEW_IDENTIFIER"
+```
 
 ## When a sub-issue is the right shape
 

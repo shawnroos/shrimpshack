@@ -35,10 +35,17 @@ herdr_linear::doc_publish_file "$PWD" findings ./docs/analysis.md
 An unlisted kind is refused, not passed through. A new kind is a decision, and
 a shared vocabulary only works if the title tells you what you are about to read.
 
-| Scope | Kinds |
-|---|---|
-| issue | `diagnosis` `findings` `regression-report` `implementation-log` `reference` `test-plan` |
-| project | `RFC` `PRD` `plan` `development-plan` `architecture-overview` `codebase-exploration` `design-references` |
+| Scope | Kinds | Publishable here |
+|---|---|---|
+| issue | `diagnosis` `findings` `regression-report` `implementation-log` `reference` `test-plan` | yes |
+| project | `RFC` `PRD` `plan` `development-plan` `architecture-overview` `codebase-exploration` `design-references` | **no** |
+
+`doc_publish` always resolves the issue this worktree is bound to and always
+writes `issueId` — there is no `projectId` path. A project-scoped kind is
+refused rather than silently attached to the wrong issue. Whether an agent may
+create a project-scoped document at all is listed under "Not yet settled" in
+`docs/linear-conventions.md`; that is a question for Shawn to answer, not one
+this skill implements a path around.
 
 Titles are built for you: `WEB-3127 diagnosis: texture leak on image swap`.
 `:mag:` is applied to `diagnosis` and `findings`; everything else gets no icon,
@@ -57,7 +64,7 @@ anyone who can attach one move it into the writable set.
 | Exit | Meaning |
 |---|---|
 | 0 | published; the document id is on stdout |
-| 1 | refused — unbound, outside the Slate root, unknown kind, or no such file |
+| 1 | refused — unbound, outside the Slate root, unknown kind, project-scoped kind, or no such file |
 | 2 | shadow mode: the title is printed, nothing sent |
 | 3 | the API refused it, or reported success with no document |
 

@@ -167,6 +167,19 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$status" -ne 0 ]
 }
 
+# doc_publish has no projectId path -- it always resolves the bound issue and
+# always sets issueId -- so a project-scoped kind must be refused rather than
+# silently mis-scoped as an issue document. Whether an agent may create a
+# project-scoped document is unsettled (docs/linear-conventions.md); this
+# function must not answer that by implementing a path around it.
+@test "a project-scoped kind is refused, not silently attached to the issue" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::doc_publish "$WT" RFC "Brand Vocab" "$DOC"
+    [ "$status" -eq 1 ]
+    [ "$(sent documentCreate)" = "0" ]
+}
+
 @test "a missing content file is refused before anything is sent" {
     bind_wt; enable_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1

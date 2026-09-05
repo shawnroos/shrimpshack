@@ -106,12 +106,69 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
     [ "$output" = "0" ]
 }
 
+# argv is not the only diagnostic sink the credential can reach. Bash traces
+# AFTER expansion, so a brace-function caller of the resolver puts the value
+# into the xtrace stream even though the resolver itself suppresses tracing --
+# and bin/linear-cache-refresh.sh runs detached, where that stream lands
+# somewhere nobody is watching.
+@test "no fragment of the credential reaches the xtrace stream" {
+    export FAKE_LINEAR_MODE=found_parent
+    trace="$WORK/xtrace"
+    (
+        exec 9>"$trace"
+        BASH_XTRACEFD=9
+        set -x
+        herdr_linear::fetch_issue WEB-2870 >/dev/null 2>&1
+        set +x
+    )
+    # A trace of a call that never reached the credential is green for the
+    # wrong reason, so prove the request actually went out with the key on
+    # stdin before believing the absence.
+    [ "$(tail -1 "$FAKE_LINEAR_RECORD_DIR/auth_on_stdin")" = "yes" ]
+    run grep -c "$KEYLIKE" "$trace"
+    [ "$output" = "0" ]
+}
+
+@test "the refresh script does not put the credential in its xtrace stream" {
+    export FAKE_LINEAR_MODE=found_parent
+    trace="$WORK/xtrace-refresh"
+    bash -x "${BATS_TEST_DIRNAME}/../../bin/linear-cache-refresh.sh" WEB-2870 \
+        >/dev/null 2>"$trace"
+    [ "$(tail -1 "$FAKE_LINEAR_RECORD_DIR/auth_on_stdin")" = "yes" ]
+    run grep -c "$KEYLIKE" "$trace"
+    [ "$output" = "0" ]
+}
+
 @test "the Keychain is preferred over the plaintext copy" {
     printf '%s\n%s\n' "kc-$KEYLIKE" "kc-$KEYLIKE" \
         | "$HERDR_LINEAR_SECURITY_BIN" add-generic-password -a linear-api-key -s work-linear -U -w >/dev/null 2>&1
     run herdr_linear::credential
     [ "$status" -eq 0 ]
     [ "$output" = "kc-$KEYLIKE" ]
+}
+
+# migrate-credential.sh reports this marker back to the operator. The hooks
+# reach Linear through the library and never through the refresh script, so
+# without a write here the migration reads as finished while every hook is
+# still on the plaintext copy.
+@test "a library call served from the plaintext copy records the fallback" {
+    marker="$LINEAR_CACHE_DIR/_plaintext_fallback_used"
+    rm -f "$marker"
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::fetch_issue WEB-2870
+    [ "$status" -eq 0 ]
+    [ -s "$marker" ]
+}
+
+@test "a library call served from the Keychain records no fallback" {
+    printf '%s\n%s\n' "kc-$KEYLIKE" "kc-$KEYLIKE" \
+        | "$HERDR_LINEAR_SECURITY_BIN" add-generic-password -a linear-api-key -s work-linear -U -w >/dev/null 2>&1
+    marker="$LINEAR_CACHE_DIR/_plaintext_fallback_used"
+    rm -f "$marker"
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::fetch_issue WEB-2870
+    [ "$status" -eq 0 ]
+    [ ! -e "$marker" ]
 }
 
 @test "with no credential anywhere the client reports auth failure, not unavailable" {

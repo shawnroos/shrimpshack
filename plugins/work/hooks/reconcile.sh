@@ -18,7 +18,7 @@ set -uo pipefail
 
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd -P)" || exit 0
 LIB="$PLUGIN_DIR/lib"
-for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh; do
+for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh states.sh; do
     # shellcheck source=/dev/null
     [ -r "$LIB/$f" ] && . "$LIB/$f" 2>/dev/null
 done
@@ -35,13 +35,42 @@ except Exception:
 
 command -v herdr_linear::reconcile >/dev/null 2>&1 || exit 0
 
+# The untidy states first. Nothing called classify before this line, so
+# misplaced and stale were states production never set and reconcile's
+# suspension had nothing to read -- a ticket someone cancelled mid-session came
+# back as In Progress at session end. The workspace id is taken straight from
+# the environment rather than resolved through herdr: a closing session should
+# not wait on an IPC round trip, and an id that no longer resolves makes
+# check_placement answer UNKNOWN, which suspends nothing and clears nothing.
+if command -v herdr_linear::classify >/dev/null 2>&1; then
+    suspended="$(herdr_linear::classify "$cwd" "${HERDR_WORKSPACE_ID:-}" 2>/dev/null)"
+    case $? in
+        "$HERDR_LINEAR_STATE_MISPLACED"|"$HERDR_LINEAR_STATE_STALE")
+            # ground.sh is silent for every state but `bound`, so a suspension
+            # raised here would otherwise leave the next session with no
+            # explanation for why the plugin went quiet. The shadow log is the
+            # only human-visible surface a closing session has.
+            herdr_linear::_shadow_log "SUSPENDED $(printf '%s' "$suspended" | tr '\n' ' ')"
+            exit 0
+            ;;
+    esac
+fi
+
 # Nothing is printed. A SessionEnd hook has no channel to the model, and stray
 # output on a closing session is noise in someone's terminal.
 herdr_linear::reconcile "$cwd" >/dev/null 2>&1
+rc=$?
 
 # Once bound, notice whether the description has fallen behind the work. Records
 # a note; never writes the description and never prompts. Both are deliberate:
 # a hook cannot author prose, and KTD13 keeps hooks silent.
-herdr_linear::nudge_description "$cwd" >/dev/null 2>&1
+#
+# SKIPPED when reconcile recorded a judgment. pending_judgment is one slot and
+# set-judgment replaces it wholesale, so running both evicted the squash-merge
+# question -- the headline case the judgment exists for -- with a description
+# nudge, every time.
+if [ "$rc" -ne "$HERDR_LINEAR_RECONCILE_PROPOSED" ]; then
+    herdr_linear::nudge_description "$cwd" >/dev/null 2>&1
+fi
 
 exit 0

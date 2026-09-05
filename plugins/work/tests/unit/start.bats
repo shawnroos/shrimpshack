@@ -40,6 +40,12 @@ setup() {
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
+# Creation is gated on the worktrees ROOT being allowlisted by name.
+enable_root_writes() {
+    mkdir -p "$WORK/Slate/worktrees"
+    printf '%s\n' "$(cd "$WORK/Slate/worktrees" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+}
+
 sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 
@@ -152,9 +158,11 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "starting from nothing is shadow-gated, and creates no worktree either" {
     printf '## Problem\n\nreal problem text for the actor\n\n## Solution\n\nreal solution text\n\n## Proposal\n\nreal proposal\n' > "$WORK/d.md"
     export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1
-    run herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"shadow: would create"* ]]
+    run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
+    [ "$status" -eq 5 ]
+    # stdout is the worktree path on success, so the sentence must not land there.
+    [ -z "$output" ]
+    [[ "$stderr" == *"shadow: would create"* ]]
     [ "$(mutations)" = "0" ]
     [ ! -e "$WORK/Slate/worktrees/newthing" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
@@ -185,4 +193,130 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run herdr_linear::start_new "A new thing" "$WORK/d.md" "" newthing
     [ "$status" -eq 1 ]
     [ "$(mutations)" = "0" ]
+}
+
+# ------------------------------------------------------- idempotent retry (F2)
+
+# The path is deterministic, so a flat refusal on an existing path made the
+# documented recovery -- "run /work:start again" -- impossible.
+@test "retrying start on an already-bound worktree succeeds with the same path" {
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::start_from_issue WEB-3318 drawer-blank
+    [ "$status" -eq 0 ]
+    first="$output"
+    run herdr_linear::start_from_issue WEB-3318 drawer-blank
+    [ "$status" -eq 0 ]
+    [ "$output" = "$first" ]
+}
+
+# The partial failure the recovery exists for: the worktree was made, the
+# binding was not.
+@test "retrying start on an existing but unbound worktree binds it" {
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::start_from_issue WEB-3318 drawer-blank
+    [ "$status" -eq 0 ]
+    rm -rf "$HERDR_LINEAR_STORE_DIR"
+    run herdr_linear::binding_state "$WORK/Slate/worktrees/drawer-blank"
+    [ "$output" = "unbound" ]
+
+    run herdr_linear::start_from_issue WEB-3318 drawer-blank
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/Slate/worktrees/drawer-blank" ]
+    [ "$(herdr_linear::binding_identifier "$output")" = "WEB-3318" ]
+}
+
+# The realistic partial: propose landed, confirm did not.
+@test "retrying start on a worktree left at proposed finishes the binding" {
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::start_from_issue WEB-3318 drawer-blank
+    [ "$status" -eq 0 ]
+    wt="$WORK/Slate/worktrees/drawer-blank"
+    rm -rf "$HERDR_LINEAR_STORE_DIR"
+    herdr_linear::binding_propose "$wt" WEB-3318 >/dev/null
+    [ "$(herdr_linear::binding_state "$wt")" = "proposed" ]
+
+    run herdr_linear::start_from_issue WEB-3318 drawer-blank
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::binding_state "$wt")" = "bound" ]
+    [ "$(herdr_linear::binding_identifier "$wt")" = "WEB-3318" ]
+}
+
+# Somebody else's work, still never adopted.
+@test "a worktree bound to a different issue is still refused" {
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::start_from_issue WEB-3318 drawer-blank
+    [ "$status" -eq 0 ]
+    export FAKE_LINEAR_MODE=found_parent
+    run --separate-stderr herdr_linear::start_from_issue WEB-2870 drawer-blank
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == *"WEB-3318"* ]]
+    [ "$(herdr_linear::binding_identifier "$WORK/Slate/worktrees/drawer-blank")" = "WEB-3318" ]
+}
+
+# ------------------------------------------------------------- the gate (F1)
+
+# The allowlist is per-path. Allowlisting one worktree must not turn creation on
+# from every other one.
+@test "an allowlist naming an unrelated path does not enable creation" {
+    printf '## Problem\n\nreal problem text for the actor\n\n## Solution\n\nreal solution text\n\n## Proposal\n\nreal proposal\n' > "$WORK/d.md"
+    mkdir -p "$WORK/Slate/worktrees/elsewhere"
+    printf '%s\n' "$(cd "$WORK/Slate/worktrees/elsewhere" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
+    [ "$status" -eq 5 ]
+    [ "$(mutations)" = "0" ]
+    [ ! -e "$WORK/Slate/worktrees/newthing" ]
+}
+
+# A header line makes the file non-empty while matching nothing.
+@test "an allowlist holding only a comment does not enable creation" {
+    printf '## Problem\n\nreal problem text for the actor\n\n## Solution\n\nreal solution text\n\n## Proposal\n\nreal proposal\n' > "$WORK/d.md"
+    printf '# worktrees with writes enabled\n\n' > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
+    [ "$status" -eq 5 ]
+    [ "$(mutations)" = "0" ]
+}
+
+@test "the allowlisted worktree root does enable creation" {
+    printf '## Problem\n\nreal problem text for the actor\n\n## Solution\n\nreal solution text\n\n## Proposal\n\nreal proposal\n' > "$WORK/d.md"
+    enable_root_writes
+    export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/Slate/worktrees/newthing" ]
+    [ "$(sent issueCreate)" -ge 1 ]
+}
+
+# ------------------------------------------------------------ the name (F7)
+
+# The trailing trim exists to drop a word the 40-character cut severed. It used
+# to run unconditionally, so every short title lost its last word.
+@test "a short title keeps its last word" {
+    resp='{"data":{"issue":{"title":"AI tools drawer is blank"}}}'
+    run herdr_linear::start_default_name "$resp"
+    [ "$output" = "ai-tools-drawer-is-blank" ]
+}
+
+@test "a long title is cut at 40 characters with no severed word left behind" {
+    resp='{"data":{"issue":{"title":"AI Tools drawer is blank when a still-processing layer is selected"}}}'
+    run herdr_linear::start_default_name "$resp"
+    [ "${#output}" -le 40 ]
+    [[ "$output" =~ ^[a-z0-9-]+$ ]]
+    [[ "$output" != *- ]]
+    [ "$output" = "ai-tools-drawer-is-blank-when-a-still" ]
+}
+
+# The identifier is what the caller retries with, and start_from_issue's own
+# stderr never names it.
+@test "a filed issue whose worktree fails still names the identifier" {
+    printf '## Problem\n\nreal problem text for the actor\n\n## Solution\n\nreal solution text\n\n## Proposal\n\nreal proposal\n' > "$WORK/d.md"
+    enable_root_writes
+    mkdir -p "$WORK/Slate/worktrees/newthing"
+    printf 'someone else work\n' > "$WORK/Slate/worktrees/newthing/file.txt"
+    export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
+    [ "$status" -eq 4 ]
+    [[ "$stderr" == *"WEB-4001"* ]]
+    [ -z "$output" ]
 }

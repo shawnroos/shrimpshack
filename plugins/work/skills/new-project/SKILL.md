@@ -34,9 +34,17 @@ what is in and out. Not a description of the first ticket.
 | Exit | Meaning |
 |---|---|
 | 0 | project and space created and bound |
-| 1 | refused — no name, no team, or no content file |
+| 1 | refused — no name, no team, no content file, or a worktrees root that is missing or outside the Slate root |
 | 3 | shadow mode: nothing created, local or remote |
-| 4 | the project exists but the space does not; stderr says which |
+| 4 | nothing was created — the request never reached Linear, or Linear refused it |
+| 5 | the project exists but the space does not; stderr says which |
 
-**Exit 4 leaves a usable project.** Without herdr the project still exists and
+**Exit 4 means no project.** Do not tell anybody one was made.
+
+**Exit 5 leaves a usable project.** Without herdr the project still exists and
 works; only the space is missing. Bind it later with `/work:bind`.
+
+**Creating a project is allowlist-gated on the worktrees root.** That root must
+be listed by name in `$HERDR_LINEAR_WRITE_ALLOWLIST`; an entry for a single
+worktree does not grant it. The fourth argument is the herdr workspace label and
+defaults to the project name.

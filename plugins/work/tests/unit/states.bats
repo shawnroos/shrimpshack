@@ -192,6 +192,55 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     [ "$status" -eq 0 ]
 }
 
+# The FIXTURE IS HELD CONSTANT ACROSS BOTH CALLS. The test above flips it
+# between them, which is why it missed this: both checks used to refuse to run
+# unless the state was exactly `bound`, so once misplaced was set neither could
+# run again and the next pass cleared it with the mismatch untouched. The
+# suspension lasted exactly one pass.
+@test "a mismatch that is still there stays misplaced on the next pass" {
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+    run herdr_linear::write_allowed "$WT" WEB-2870
+    [ "$status" -eq 5 ]
+}
+
+@test "an issue that is still closed stays stale on the next pass" {
+    bind_wt
+    export FAKE_LINEAR_MODE=completed_issue
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq 2 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "stale" ]
+
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq 2 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "stale" ]
+    run herdr_linear::write_allowed "$WT" WEB-2870
+    [ "$status" -eq 5 ]
+}
+
+# UNKNOWN is not OK. The SessionEnd hook passes no workspace id it can trust, so
+# placement is unjudgeable there -- and a pass that could not look must not
+# clear a suspension somebody else's pass raised.
+@test "a pass that cannot judge placement does not clear a misplaced binding" {
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::classify "$WT" ""
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+}
+
 # THE case the narrow clearing exists for. An unbound worktree -- one whose
 # candidate was declined -- must stay unbound. Making the clear unconditional
 # turns classify into something that BINDS a worktree nobody bound, which is the

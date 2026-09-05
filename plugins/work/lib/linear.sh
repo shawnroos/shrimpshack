@@ -124,9 +124,30 @@ herdr_linear::branch_identifier() {
 
 # ------------------------------------------------------------------ the request
 
+# bin/linear-cache-refresh.sh writes this marker on a fallback read and
+# `bin/migrate-credential.sh report` reads it back. The LIBRARY path has to
+# write it too: the hooks go through here and never through the refresh script,
+# so without this the migration reports finished while every hook is still
+# reading the plaintext copy. Same path, same format, deliberately.
+herdr_linear::_note_plaintext_fallback() {
+    mkdir -p "$HERDR_LINEAR_CACHE_DIR" 2>/dev/null || return 0
+    date -u +%Y-%m-%dT%H:%M:%SZ >"$HERDR_LINEAR_CACHE_DIR/_plaintext_fallback_used" 2>/dev/null
+    return 0
+}
+
 # The credential is written to curl's stdin. Nothing else in this file builds a
 # request, so this is the single place that rule has to hold.
-herdr_linear::_post() {
+#
+# THE `( )` BODY IS LOAD-BEARING, NOT STYLE. Bash traces AFTER expansion, so
+# under `set -x` a brace-bodied `{ }` version of this function expands the key
+# into the xtrace stream -- measured at three occurrences per call -- even
+# though herdr_linear::credential suppresses tracing inside itself. `set +x`
+# only holds for the shell that runs it, so the guard has to be in the frame
+# that HOLDS the value. A subshell's option change dies with the subshell, so
+# the caller's own tracing is left exactly as it was. This is the shape every
+# function in lib/secrets.sh uses, for this reason.
+herdr_linear::_post() (
+    set +x
     local body="$1" key rc
     # credential answers 0 from the Keychain and 2 from the pre-migration
     # plaintext copy. BOTH are a usable key -- 2 is "here it is, and you should
@@ -135,7 +156,8 @@ herdr_linear::_post() {
     # which is the state the machine is in right now.
     key="$(herdr_linear::credential)"; rc=$?
     case "$rc" in
-        0|2) ;;
+        0) ;;
+        2) herdr_linear::_note_plaintext_fallback ;;
         *) return "$HERDR_LINEAR_NOCRED" ;;
     esac
     [ -n "$key" ] || return "$HERDR_LINEAR_NOCRED"
@@ -145,7 +167,7 @@ herdr_linear::_post() {
             --config - -X POST -d "$body"
     rc=$?
     return "$rc"
-}
+)
 
 herdr_linear::_error_code() {
     printf '%s' "$1" | python3 -c '

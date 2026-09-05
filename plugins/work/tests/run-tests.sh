@@ -34,13 +34,31 @@ EOF
     printf '%sself-check passed%s\n' "$GREEN" "$NC"
 }
 
+# The count of suite files committed alongside this guard (2026-09-05). Bump it
+# up whenever a suite file is added; if it is ever lowered, say why in the
+# commit — this number is what turns "the tests directory got renamed" into a
+# failure instead of a smaller, silently-green run.
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-17}"
+
 run_suite() {
-    local failed=0 f
-    for f in "$PLUGIN_ROOT"/tests/unit/*.bats; do
+    local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
+    for f in "$dir"/*.bats; do
         [ -e "$f" ] || continue
+        count=$((count + 1))
         printf '%s%s%s\n' "$YELLOW" "$(basename "$f")" "$NC"
         bats "$f" || failed=1
     done
+    # A loop that never ran is a loop that never failed. Refuse the silent
+    # green rather than let a moved directory or a broken glob report PASS.
+    if [ "$count" -eq 0 ]; then
+        printf '%srun_suite FAILED%s — zero .bats files found under %s; nothing ran.\n' "$RED" "$NC" "$dir"
+        return 1
+    fi
+    if [ "$count" -lt "$HERDR_LINEAR_MIN_SUITES" ]; then
+        printf '%srun_suite FAILED%s — %d suite file(s) found under %s, expected at least %d.\n' \
+            "$RED" "$NC" "$count" "$dir" "$HERDR_LINEAR_MIN_SUITES"
+        failed=1
+    fi
     return "$failed"
 }
 
@@ -121,6 +139,94 @@ assertion_lint() {
     printf '%sno negated assertions%s\n' "$GREEN" "$NC"
 }
 
+# Each SKILL.md hand-copies its own subset of `source lib/*.sh` lines, and
+# nothing else checks that the subset is actually enough. This computes the
+# real dependency closure from the lib files themselves (which function calls
+# which, defined where) and fails a skill whose declared sourcing is short of
+# what the functions it calls transitively need -- the "undefined function at
+# the worst moment" failure the copy-pasted lists cannot see coming.
+#
+# owned_skills is scoped to the skills this plugin's `work` maintainer for this
+# file owns; other skills under skills/ are out of scope here.
+skill_lib_sync_check() {
+    printf '%sSkill lib-sourcing check...%s\n' "$YELLOW" "$NC"
+    local root="${1:-$PLUGIN_ROOT}" out
+    out="$(python3 - "$root" <<'PY'
+import re, sys, glob, os
+
+plugin_root = sys.argv[1]
+owned_skills = ["describe", "new", "new-sub-issue", "bind", "layout"]
+
+lib_names = sorted(os.path.basename(f)[:-3] for f in glob.glob(os.path.join(plugin_root, "lib", "*.sh")))
+
+defs = {}
+for name in lib_names:
+    text = open(os.path.join(plugin_root, "lib", name + ".sh")).read()
+    for m in re.finditer(r'^herdr_linear::([A-Za-z0-9_]+)\s*\(\)', text, re.M):
+        defs[m.group(1)] = name
+
+file_deps = {}
+for name in lib_names:
+    text = open(os.path.join(plugin_root, "lib", name + ".sh")).read()
+    used = set()
+    for m in re.finditer(r'herdr_linear::([A-Za-z0-9_]+)', text):
+        fn = m.group(1)
+        if fn in defs and defs[fn] != name:
+            used.add(defs[fn])
+    file_deps[name] = used
+
+def closure(start_names):
+    seen, stack = set(), list(start_names)
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        stack.extend(file_deps.get(n, ()))
+    return seen
+
+def sourced_names(fence_text):
+    names = set(re.findall(r'lib/([a-zA-Z][a-zA-Z-]*)\.sh', fence_text))
+    m = re.search(r'for\s+f\s+in\s+([a-zA-Z0-9_ \-]+?)\s*;\s*do', fence_text)
+    if m:
+        names.update(m.group(1).split())
+    return names
+
+rc = 0
+for skill in owned_skills:
+    path = os.path.join(plugin_root, "skills", skill, "SKILL.md")
+    if not os.path.isfile(path):
+        print("MISSING SKILL.md: %s" % path); rc = 1; continue
+    text = open(path).read()
+    fence_text = "\n".join(re.findall(r'```bash\n(.*?)```', text, re.S))
+    declared = sourced_names(fence_text)
+    called = set(re.findall(r'herdr_linear::([A-Za-z0-9_]+)', fence_text))
+
+    unknown = sorted(fn for fn in called if fn not in defs)
+    if unknown:
+        print("%s: calls undefined function(s): %s" % (path, ", ".join(unknown))); rc = 1
+
+    required = closure({defs[fn] for fn in called if fn in defs})
+    missing = sorted(required - declared)
+    if missing:
+        print("%s: sources %s, missing %s (needed transitively by what it calls)"
+              % (path, sorted(declared), missing)); rc = 1
+
+    bogus = sorted(n for n in declared if n not in lib_names)
+    if bogus:
+        print("%s: sources nonexistent lib file(s): %s" % (path, bogus)); rc = 1
+
+sys.exit(rc)
+PY
+)" || true
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+        printf '%sskill lib-sourcing check FAILED%s\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%severy owned skill sources what it calls%s\n' "$GREEN" "$NC"
+}
+
 wire_smoke() {
     printf '%sWire smoke...%s\n' "$YELLOW" "$NC"
     local rc=0
@@ -128,6 +234,7 @@ wire_smoke() {
     version_sync_check || rc=1
     validate_check || rc=1
     secret_scan || rc=1
+    skill_lib_sync_check || rc=1
     return "$rc"
 }
 
