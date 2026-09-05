@@ -43,34 +43,71 @@ Rules that hold at both levels:
 
 ## Descriptions
 
-### Parent issue
+**This is the template. It is Shawn's stated preference, given 2026-09-05, and it
+replaces the `## What / ## Why / ## Not in this PR / ## Verification` shape that
+was derived from older tickets.** Where an existing ticket still carries the old
+shape, leave it alone; write new descriptions in this one.
 
-Sections observed on parent issues, in order:
+```markdown
+## Problem
 
+Describe the problem as it affects the actor — a user, a customer, internal
+staff. Convey the first and second order effects.
+
+### For example:
+- <example one>          — show the implications in the experience
+- <example two>
+
+## Solution
+
+Describe what the solution looks like for that same actor if the problem were
+resolved. **Implementation neutral.** What does the same scenario look like when
+the problem does not exist?
+
+### For example:
+- <solved example one>   — show the benefit of the problem not existing
+- <solved example two>
+
+## Proposal
+
+What we are building, without fluff or management theatre, for a non-technical
+reader.
+
+### Key Requirements
+- <key point one>        — framing, decisions, perspectives shaping the work
+- <key point two>
+
+### Constraints
+- <constraint one>       — technical, business, UX
+- <constraint two>
 ```
-## What          the thing, what is built, what is not, the feature flag
-## Why           motivation, and any scope that moved in or out
-## Not in this PR explicit exclusions, each with its current state
-## Verification  how it was checked
----
-                 a pointer to the architecture or sequence issue
-```
 
-Name the feature flag in `## What` when one gates the work.
+### The three rules that matter
 
-### Child issue
+1. **Problem and Solution are about the actor, never the code.** Solution is
+   written implementation-neutral: it describes the world without the problem,
+   not the mechanism that removes it. The mechanism belongs in Proposal.
+2. **Sections after Proposal are decided per ticket.** The three above are the
+   spine; anything beyond them is a judgement call for that ticket.
+3. **NEVER a diary.** The description is always the *latest* source of truth. It
+   is not a log, not a progress record, and not a running commentary. Nothing
+   dated accumulates in it. Working history belongs in a Linear document
+   (see **Documents** below); status belongs in the issue's state.
 
-No fixed section list. A child carries, in whatever order reads best:
+Rule 3 is the one an automated writer will break first, because appending is
+easier than rewriting. A description that grew a `### 5 Sep — update` heading has
+already failed, however accurate that heading is.
 
-- The rule or the problem, stated first.
-- Why it matters, in terms of what the user loses.
-- What the change covers, and explicitly what it does not.
-- A `## Source` line naming where the ticket came from — a Slack thread and its date, a call, a
-  QA session, a review finding.
-- Links to related issues, either inline or under a `## Relationship to <issue>` heading.
+### Child issues
 
-Prefer a stated rule over an enumerated list of cases. `Do not build an allowlist` is a real
-instruction Shawn has given in a ticket; a rule survives cases nobody thought of.
+A child may carry less than the full spine when the parent already holds the
+Problem — but what it does carry uses these section names, not invented ones.
+Prefer a stated rule over an enumerated list of cases: `Do not build an
+allowlist` is a real instruction Shawn has given in a ticket, and a rule
+survives cases nobody thought of.
+
+A `## Source` line is worth keeping where a ticket came from somewhere nameable —
+a Slack thread and its date, a call, a QA session, a review finding.
 
 ---
 

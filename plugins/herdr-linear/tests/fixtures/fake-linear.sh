@@ -211,13 +211,13 @@ JSON
 
 desc_issue() {
     cat <<'JSON'
-{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": "## What\n\nstale text the plugin wrote last time\n\n## Why\n\nUsers cannot see the drawer while a layer is still processing, so they think the tool is broken and retry. This paragraph is Shawn's and must survive verbatim.\n\n## Not in this PR\n\nThe Separate Background fix. Tracked separately.\n\n## Verification\n\nstale verification"}}}
+{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": "## Problem\n\nEditors open the drawer on a processing layer and see nothing, so they assume the tool is broken and retry. The second failure is what makes them stop using it.\n\n### For example:\n- A user selects a still-uploading image and sees an empty panel.\n- They reopen twice, then switch tools for that shot.\n\n## Solution\n\nOpening the drawer on a processing layer says what is happening, so waiting is a choice rather than a guess.\n\n### For example:\n- The panel keeps their place.\n- Nobody re-runs a render that was already running.\n\n## Proposal\n\nShow drawer contents as soon as the layer is known, and a clear processing state until then.\n\n### Key Requirements\n- The drawer never renders empty for a selectable layer.\n\n### Constraints\n- No new endpoint."}}}
 JSON
 }
 
-desc_rendered() {
+desc_empty() {
     cat <<'JSON'
-{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": "## What\n\nBranch `feature/web-2870-detach`.\n\n## Verification\n\nNo CI result readable from this worktree."}}}
+{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": ""}}}
 JSON
 }
 
@@ -320,7 +320,7 @@ case "$mode" in
     found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; found_parent_moved ;;
     completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; completed_issue ;;
     desc_issue)       [ "$wants_headers" = 1 ] && emit_headers 200; desc_issue ;;
-    desc_rendered)    [ "$wants_headers" = 1 ] && emit_headers 200; desc_rendered ;;
+    desc_empty)       [ "$wants_headers" = 1 ] && emit_headers 200; desc_empty ;;
     other_project_issue) [ "$wants_headers" = 1 ] && emit_headers 200; other_project_issue ;;
     canceled_issue)   [ "$wants_headers" = 1 ] && emit_headers 200; canceled_issue ;;
     not_found)        [ "$wants_headers" = 1 ] && emit_headers 400; not_found ;;

@@ -1,36 +1,80 @@
 #!/usr/bin/env bash
-# The issue description, maintained from the worktree. Sourced, never executed.
+# The issue description. Sourced, never executed.
 #
-# THE PLUGIN OWNS THE WHOLE DESCRIPTION. That was Shawn's decision, taken over a
-# fenced managed region that I proposed instead. It is written down here so that
-# nobody later reads this file and takes full ownership for an oversight.
+# THE PLUGIN OWNS THE DESCRIPTION, AND OWNS EXACTLY ONE THING ABOUT IT.
+# Shawn chose full ownership over the fenced managed region I proposed. But
+# ownership here means owning the TEMPLATE, the VALIDATION and the WRITE -- not
+# authoring the prose. Nothing in git can write Problem, Solution or Proposal:
+# those are about the actor and the intent, and a repository holds neither.
 #
-# WHAT THAT CAN AND CANNOT MEAN
-# The repository supplies `## What` -- branch, commits, pull request, files
-# touched -- and `## Verification` -- tests and CI. It cannot supply `## Why`.
-# Why is intent, and nothing in git holds it. A generator that authored all four
-# sections of docs/linear-conventions.md would replace real reasoning with a
-# restatement of the diff, which is worse than leaving the field alone.
+# An earlier version of this file derived `## What` from the branch and commit
+# count and `## Verification` from CI. That was wrong twice over: those headings
+# are not in the template at all, and "branch X, 4 commits" is precisely the
+# diary content the template forbids. Both are gone.
 #
-# So the whole description is emitted on every write: sections the plugin can
-# derive are rebuilt, and sections it cannot are carried through verbatim, in
-# their original order, including headings a person invented that this file has
-# never heard of. Full ownership of the DOCUMENT, not of the words in it.
+# THE SPINE, from docs/linear-conventions.md:
+#   ## Problem     the actor's problem, first and second order effects
+#   ## Solution    the same actor's world without it, IMPLEMENTATION NEUTRAL
+#   ## Proposal    what is being built, for a non-technical reader
+# Sections after Proposal are decided per ticket.
 #
-# AND EVERY OVERWRITE IS RECOVERABLE.
-# The prior description is saved before the mutation. A full-ownership write
-# with no undo is the wrong trade at any level of confidence.
+# NEVER A DIARY. The description is always the latest source of truth, never a
+# log. This is the rule an automated writer breaks first, because appending is
+# easier than rewriting -- so it is enforced structurally here rather than left
+# to good intentions, and a write that looks like accumulation is REFUSED.
+#
+# AND EVERY OVERWRITE IS RECOVERABLE. The prior description is saved before the
+# mutation. Full ownership with no undo is the wrong trade at any confidence.
 
 HERDR_LINEAR_DESC_BACKUP_DIR="${HERDR_LINEAR_DESC_BACKUP_DIR:-$HOME/.claude/herdr-linear/descriptions}"
 
-# Sections this file knows how to build. Everything else is carried forward.
-HERDR_LINEAR_DERIVED_SECTIONS="What Verification"
+# The spine, in order. Anything after Proposal is the ticket's own business.
+HERDR_LINEAR_DESC_SPINE="Problem Solution Proposal"
 
 HERDR_LINEAR_DESC_OK=0
 HERDR_LINEAR_DESC_UNCHANGED=1
 HERDR_LINEAR_DESC_REFUSED=2
 HERDR_LINEAR_DESC_SHADOW=3
 HERDR_LINEAR_DESC_FAILED=4
+HERDR_LINEAR_DESC_MALFORMED=5   # does not follow the template
+HERDR_LINEAR_DESC_DIARY=6       # reads as a log rather than current truth
+
+# The skeleton, for a ticket that has no description at all. Placeholders are
+# deliberately obvious: a half-filled template is visibly unfinished, whereas
+# plausible filler reads as a real description nobody wrote.
+herdr_linear::description_template() {
+    cat <<'TEMPLATE'
+## Problem
+
+<the problem as it affects the actor — user, customer, internal staff — with its
+first and second order effects>
+
+### For example:
+- <example showing the implication in the experience>
+- <example>
+
+## Solution
+
+<what that same actor's world looks like when the problem does not exist.
+implementation neutral: describe the scenario, not the mechanism>
+
+### For example:
+- <benefit of the problem not existing>
+- <benefit>
+
+## Proposal
+
+<what we are building, for a non-technical reader, without fluff>
+
+### Key Requirements
+- <framing, decision or perspective shaping the work>
+- <key point>
+
+### Constraints
+- <technical, business or UX constraint>
+- <constraint>
+TEMPLATE
+}
 
 # Split a markdown description into its `## ` sections, preserving order and any
 # preamble before the first heading.
@@ -62,75 +106,73 @@ print(json.dumps({"order": order, "parts": parts}))
 '
 }
 
-# What the repository can actually say about itself.
-herdr_linear::_derive_what() {
-    local wt="$1" branch default ahead files pr
-    branch="$(herdr_linear::_current_branch "$wt")"
-    default="$(herdr_linear::_default_branch "$wt")" || default=""
-    ahead=0
-    [ -n "$default" ] && ahead="$(herdr_linear::_git "$wt" rev-list --count "origin/$default..HEAD" || echo 0)"
-    files=0
-    [ -n "$default" ] && files="$(herdr_linear::_git "$wt" diff --name-only "origin/$default...HEAD" | grep -c . || echo 0)"
-    pr=""
-    if command -v "${HERDR_LINEAR_GH_BIN:-gh}" >/dev/null 2>&1; then
-        pr="$("${HERDR_LINEAR_GH_BIN:-gh}" pr view "$branch" --json number,url -q '"#" + (.number|tostring) + " " + .url' 2>/dev/null || true)"
-    fi
-
-    printf 'Branch `%s`' "$branch"
-    [ "${ahead:-0}" -gt 0 ] 2>/dev/null && printf ', %s commit%s' "$ahead" "$([ "$ahead" = 1 ] || printf s)"
-    [ "${files:-0}" -gt 0 ] 2>/dev/null && printf ', %s file%s changed' "$files" "$([ "$files" = 1 ] || printf s)"
-    printf '.\n'
-    [ -n "$pr" ] && printf '\nPull request %s\n' "$pr"
-    return 0
-}
-
-herdr_linear::_derive_verification() {
-    local wt="$1" out
-    # Only what can be READ. A verification section that claims a test run
-    # nobody performed is worse than an empty one.
-    out="$("${HERDR_LINEAR_GH_BIN:-gh}" pr checks "$(herdr_linear::_current_branch "$wt")" 2>/dev/null \
-        | awk '{print $2}' | sort | uniq -c | awk '{printf "%s %s, ", $1, $2}' || true)"
-    if [ -n "$out" ]; then
-        printf 'CI: %s\n' "${out%, }"
-    else
-        printf 'No CI result readable from this worktree.\n'
-    fi
-}
-
-# herdr_linear::render_description <worktree> <current-description>
+# herdr_linear::description_validate <file>
 #
-# Emits the complete new description on stdout.
-herdr_linear::render_description() {
-    local wt="$1" current="$2" what verification
-    what="$(herdr_linear::_derive_what "$wt")"
-    verification="$(herdr_linear::_derive_verification "$wt")"
-
-    printf '%s' "$current" | herdr_linear::_split_sections \
-        | HERDR_LINEAR_WHAT="$what" HERDR_LINEAR_VERIF="$verification" python3 -c '
-import sys, json, os
+# Gate on the template, before anything reaches Linear. Prints what is wrong on
+# stderr so a caller can fix it rather than guess.
+herdr_linear::description_validate() {
+    local f="${1:-}"
+    [ -r "$f" ] || return "$HERDR_LINEAR_DESC_MALFORMED"
+    herdr_linear::_split_sections < "$f" | python3 -c '
+import sys, json, re
 
 doc = json.load(sys.stdin)
-order, parts = doc["order"], doc["parts"]
-derived = {"What": os.environ["HERDR_LINEAR_WHAT"], "Verification": os.environ["HERDR_LINEAR_VERIF"]}
+order = [o for o in doc["order"] if o != "__preamble__"]
+parts = doc["parts"]
+spine = ["Problem", "Solution", "Proposal"]
+errs = []
 
-# Sections the plugin can derive are rebuilt. EVERY other section -- including
-# ones this code has never heard of -- is carried through byte for byte, in the
-# position it already occupied. Reordering a description is a rewrite too.
-for name in derived:
-    parts[name] = derived[name]
-    if name not in order:
-        order.append(name)
+missing = [x for x in spine if x not in order]
+if missing:
+    errs.append("missing section(s): " + ", ".join(missing))
 
-out = []
-for name in order:
+# The spine leads, in order. Sections after Proposal are the ticket own business,
+# so only the relative order of the three is checked.
+present = [o for o in order if o in spine]
+if present and present != [x for x in spine if x in present]:
+    errs.append("spine out of order: got %s, want Problem then Solution then Proposal" % " then ".join(present))
+
+for name in spine:
     body = parts.get(name, "")
-    if name == "__preamble__":
-        if body.strip():
-            out.append(body)
-        continue
-    out.append("## %s\n\n%s" % (name, body) if body.strip() else "## %s" % name)
-sys.stdout.write("\n\n".join(out).rstrip() + "\n")
-'
+    if name in order and not body.strip():
+        errs.append("%s is empty" % name)
+    # A template still carrying its own placeholders was never filled in.
+    if re.search(r"<[a-z][^>]{10,}>", body or ""):
+        errs.append("%s still contains template placeholders" % name)
+
+# NEVER A DIARY. Two independent shapes, because an automated writer reaches for
+# both: a dated heading, and an entry that announces itself as an update. One
+# dated heading may be a legitimate deadline reference; two is a log.
+head_dates = re.findall(
+    r"^#{2,4}\s.*(?:\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b)",
+    "\n".join("## %s\n%s" % (k, v) for k, v in parts.items()), re.M | re.I)
+if len(head_dates) >= 2:
+    errs.append("reads as a diary: %d dated headings" % len(head_dates))
+
+log_words = re.findall(r"^\s*(?:[-*]\s*)?(?:update|progress|session \d|today|changelog|worklog)\b[:\-]",
+                       "\n".join(parts.values()), re.M | re.I)
+if log_words:
+    errs.append("reads as a diary: log-style entries (%s)" % ", ".join(sorted(set(w.lower() for w in log_words))[:3]))
+
+if errs:
+    for e in errs:
+        sys.stderr.write("description: %s\n" % e)
+    sys.exit(1)
+sys.exit(0)
+' || return "$HERDR_LINEAR_DESC_MALFORMED"
+    return "$HERDR_LINEAR_DESC_OK"
+}
+
+# Does this write LOOK like an append to what is already there? A description
+# that is the previous one plus more is a diary however it is worded, and this
+# catches the shape without needing to recognise the wording.
+herdr_linear::description_is_append() {
+    local prev="$1" next="$2"
+    [ -n "$prev" ] || return 1
+    case "$next" in
+        "$prev"*) return 0 ;;
+    esac
+    return 1
 }
 
 herdr_linear::_backup_description() {
@@ -144,9 +186,13 @@ herdr_linear::_backup_description() {
     printf '%s' "$f"
 }
 
-# herdr_linear::describe <worktree>
+# herdr_linear::describe <worktree> <authored-file>
+#
+# The caller supplies the whole description. This function does not write prose
+# and must not start to: Problem, Solution and Proposal are about the actor and
+# the intent, and no amount of repository state stands in for either.
 herdr_linear::describe() {
-    local wt="${1:-}" ident resp current rendered opening body backup
+    local wt="${1:-}" file="${2:-}" ident resp current opening body backup next
 
     herdr_linear::contains "$wt" || return "$HERDR_LINEAR_DESC_REFUSED"
     # A backstop: write_allowed below already requires state == bound, so
@@ -158,23 +204,38 @@ herdr_linear::describe() {
     ident="$(herdr_linear::binding_identifier "$wt")" || return "$HERDR_LINEAR_DESC_REFUSED"
     herdr_linear::write_allowed "$wt" "$ident" || return "$HERDR_LINEAR_DESC_REFUSED"
 
+    [ -r "$file" ] || return "$HERDR_LINEAR_DESC_MALFORMED"
+    herdr_linear::description_validate "$file" || return "$HERDR_LINEAR_DESC_MALFORMED"
+    next="$(cat "$file")"
+
     resp="$(herdr_linear::_fetch_description "$ident")" || return "$HERDR_LINEAR_DESC_FAILED"
     current="$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["issue"].get("description") or "")')"
     opening="$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["issue"]["updatedAt"])')"
 
-    rendered="$(herdr_linear::render_description "$wt" "$current")" || return "$HERDR_LINEAR_DESC_FAILED"
+    # Nothing to say is a complete answer. Rewriting to the same bytes still
+    # stamps updatedAt and shows on the activity feed.
+    #
+    # This MUST precede the append check below: an identical description is a
+    # prefix of itself, so checking for an append first reported every no-op
+    # write as a diary -- a confusing false accusation for the commonest case.
+    [ "$next" != "$current" ] || return "$HERDR_LINEAR_DESC_UNCHANGED"
 
-    # Nothing to say is a complete answer. Rewriting a description to the same
-    # bytes still stamps updatedAt and shows on the activity feed.
-    [ "$rendered" != "$current" ] || return "$HERDR_LINEAR_DESC_UNCHANGED"
+    # The structural anti-diary check, and the reason it sits here rather than in
+    # validate: it needs the CURRENT description to compare against. A new
+    # description that begins with the whole of the old one is an append, which
+    # is a diary whatever the words say.
+    if herdr_linear::description_is_append "$current" "$next"; then
+        printf 'description: this write only appends to what is already there; the description is the latest truth, not a log\n' >&2
+        return "$HERDR_LINEAR_DESC_DIARY"
+    fi
 
     if ! herdr_linear::writes_enabled "$wt"; then
-        herdr_linear::_shadow_log "SHADOW would rewrite the description of $ident ($(printf '%s' "$rendered" | wc -c | tr -d ' ') bytes)"
-        printf '%s' "$rendered"
+        herdr_linear::_shadow_log "SHADOW would rewrite the description of $ident ($(printf '%s' "$next" | wc -c | tr -d ' ') bytes)"
+        printf '%s' "$next"
         return "$HERDR_LINEAR_DESC_SHADOW"
     fi
 
-    # Saved BEFORE the mutation, so a bad render is one command to undo.
+    # Saved BEFORE the mutation, so a bad description is one command to undo.
     backup="$(herdr_linear::_backup_description "$ident" "$current")" || return "$HERDR_LINEAR_DESC_FAILED"
 
     herdr_linear::guard_unchanged "$ident" "$opening" || return "$HERDR_LINEAR_DESC_REFUSED"
@@ -183,7 +244,7 @@ herdr_linear::describe() {
 import sys, json
 q = "mutation($id:String!,$d:String!){issueUpdate(id:$id,input:{description:$d}){success}}"
 print(json.dumps({"query": q, "variables": {"id": sys.argv[1], "d": sys.argv[2]}}))
-' "$ident" "$rendered")" || return "$HERDR_LINEAR_DESC_FAILED"
+' "$ident" "$next")" || return "$HERDR_LINEAR_DESC_FAILED"
 
     resp="$(herdr_linear::query "$body")" || return "$HERDR_LINEAR_DESC_FAILED"
     printf '%s' "$resp" | python3 -c '

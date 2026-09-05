@@ -771,34 +771,30 @@ a gitignored `/docs` becomes a Linear document.
 
 ### U14. The plugin owns the issue description
 
-- **Goal:** The description on a bound issue is maintained from the worktree, not by hand.
-- **Requirements:** R15, R16, R17, R29, R30. New: R31.
+- **Goal:** Every ticket description follows one template and stays the latest truth.
+- **Requirements:** R29, R30. New: R31.
 - **Dependencies:** U5, U8.
-- **Files:** `lib/description.sh`, `tests/unit/description.bats`.
+- **Files:** `lib/description.sh`, `skills/describe/SKILL.md`, `tests/unit/description.bats`.
 
-**R31. The plugin renders the whole description on every write, and never silently loses text it did not author.**
+**R31. The plugin owns the template, the validation and the write — and never authors the prose.**
 
-- **The concern I raised, and Shawn's decision.** I proposed a fenced managed region so his prose could not be touched. He chose full ownership instead. That is his board and his call; it is recorded here so nobody later reads the implementation as an accident.
-- **What that means in practice, and the honest limit.** The repository supplies `## What` (branch, commits, pull request, files touched) and `## Verification` (tests, CI). It cannot supply `## Why` — that is intent, and nothing in git holds it. A generator that authored all four sections would replace real reasoning with a hollow restatement of the diff.
-- **So: regenerate what is derivable, carry forward what is not.** Every write emits the complete description. Sections the plugin can derive are rebuilt from the worktree. Sections it cannot are carried through verbatim from the current description. Unknown sections a person added are preserved in place and in order.
-- **Every overwrite is recoverable.** The prior description is written to `~/.claude/herdr-linear/descriptions/<ID>/<timestamp>.md` before the mutation, and `restore` puts one back. A full-ownership write with no undo would be the wrong trade.
-- **Test scenarios:**
-  - A description with a hand-written `## Why` keeps it byte-identical after a write that changed `## What`.
-  - A section the plugin does not know about is preserved, in its original position.
-  - The prior description is saved before the write, and `restore` reproduces it byte for byte.
-  - The issue is not bound, or is misplaced or stale, and nothing is written.
-  - Shadow mode logs the rendered description and sends nothing.
-  - The description is unchanged from what would be rendered, and no write is sent.
-- **Verification:** A round trip preserves every section the plugin did not author, proven by a byte compare.
-- **Status: done.** 13 tests, 5 mutations.
+**The design changed once, and the correction is the point of this unit.** The first version derived `## What` from the branch and commit count and `## Verification` from CI, carrying the rest forward. Shawn then gave the canonical template, and that version was wrong twice over: those headings are not in the template at all, and *"branch X, 4 commits"* is precisely the diary content the template forbids. Both derivations were deleted.
 
-**The carry-forward works and is mutation-proven.** Replacing the renderer with one that regenerates all four sections turns the `Why` test red; dropping unknown headings turns the position test red. A hand-written `## Why`, a `## Not in this PR`, and a heading the code has never heard of all survive byte for byte and keep their original order.
+**Nothing in a repository can author this description.** `## Problem` and `## Solution` are about the actor; `## Proposal` is about intent. Git holds neither. So the library owns the mechanism and `skills/describe` owns the words.
 
-**Verification never claims a result nobody produced.** With no CI readable it says exactly that, rather than inventing a pass.
+**The spine** — `## Problem`, `## Solution`, `## Proposal`, in that order, with `### For example:` blocks and `### Key Requirements` / `### Constraints` under Proposal. Sections after Proposal are decided per ticket. `docs/linear-conventions.md` carries the full template; its earlier `## What / ## Why / ## Not in this PR / ## Verification` shape was derived from older tickets and is now explicitly superseded there.
 
-**One backstop is labelled as unreachable:** the bound-state check in `describe`, since `write_allowed` already requires `bound`. It stays because it refuses before any network call.
+**NEVER A DIARY, enforced structurally rather than asked for.** This is the rule an automated writer breaks first, because appending is easier than rewriting. Three independent checks, because a writer reaches for all three shapes:
 
-### U15 status
+1. **Two or more dated headings.** One can be a legitimate deadline or source reference; two is a log.
+2. **Log-style openers** — `Update:`, `Progress:`, `Session N:`, `Today:`, `Changelog`.
+3. **A prefix match against the current description.** A new description that begins with the whole of the old one is an append whatever the words say, and this check needs no vocabulary at all — which is why it catches the phrasings the first two do not.
+
+**Ordering bug found by a test.** The prefix check ran before the unchanged check, and an identical description is a prefix of itself — so every no-op write reported as a diary, a confusing false accusation for the commonest case. Unchanged is now tested first.
+
+- **Test scenarios:** the template's own placeholders fail validation; a missing spine section is named rather than guessed; the spine out of order is refused; an empty section is refused; extra sections after Proposal are allowed; two dated headings are refused and one is allowed; each log-style opener is refused; an append is refused; an invalid description never reaches Linear; the prior version is saved before every write and restores; unbound, misplaced, stale and outside-the-root are all refused; shadow mode prints and sends nothing.
+- **Verification:** 20 tests, 8 mutations, all red on the first pass — spine presence, spine order, placeholders, the dated-heading threshold, the log-word check, the append check, validation-before-write, and the backup.
+- **Status: done.**
 
 ### U15. Documents instead of a gitignored `/docs`
 
