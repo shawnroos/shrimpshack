@@ -421,7 +421,7 @@ do_describe() {
          member_fields:[
            {name:"name",     required:true,  note:"the name every response reports this member by, and the only thing teardown consents to remove; [A-Za-z0-9][A-Za-z0-9._-]* with no dot run"},
            {name:"alias",    required:true,  note:"the gateway alias this member runs on"},
-           {name:"contract", required:true,  note:"path to that member’s own contract file, handed to bg-agent unread"},
+           {name:"contract", required:true,  note:"path to that member’s own contract file. The file is ONE JSON object with a non-empty `task` and a non-empty `deliverables` array of worktree-relative paths; `done_means` and `verify` are optional prose. This surface hands the file to bg-agent unread and never parses it, so a contract written as markdown or prose dispatches from here and then fails that member with `contract_invalid` after its worktree is already placed. Author it as that object. bg-agent.sh --describe carries the field-by-field contract"},
            {name:"skills",   required:false, note:"names of the skills this member is to have, and no other member gets them"},
            {name:"allow",    required:false, note:"tool names to grant this member’s ceiling — today, WebSearch and Bash. Granting Bash to an unattended member is not a wider ceiling; it is the absence of one — see spawn::ceiling_grantable’s own header for what that hands over. A name this surface will not grant refuses the member’s launch outright rather than running it quietly ungranted; members[].grants reports what was actually applied, never what was merely asked for"}
          ]}
@@ -456,6 +456,7 @@ do_describe() {
         {value:"worktree_missing",      exit_code:5, note:"retry was given a member whose checkout was placed and is later gone; the same reuse-not-replace rule as worktree_failed makes the retry unable to land, so it is refused rather than parked on a round nothing can finish"},
         {value:"grant_refused",         exit_code:2, note:"retry was given a member whose allow named a tool this surface will not grant. The record’s allow is immutable and the ceiling check is static, so the member would refuse identically on every attempt; refused here rather than spent against max_rounds"},
         {value:"launch_failed",         exit_code:5, note:"a member’s launcher refused it; that member carries the launcher’s own error value"},
+        {value:"contract_invalid",      exit_code:5, note:"reported by a member, not by this surface: that member’s contract file is not one JSON object with a non-empty `task` and a non-empty `deliverables` array. The contract is read by bg-agent after dispatch, so the round opens and the checkout is placed before this is known; teardown removes it"},
         {value:"member_not_failed",     exit_code:2, note:"retry was given a member that finished, or one still in flight; a retry replaces a settled non-success attempt"},
         {value:"run_bound_reached",     exit_code:2, note:"retry was asked of a run whose round maximum or token ceiling has already fired; nothing was changed"},
         {value:"run_busy",              exit_code:2, note:"retry waited out an advance holding this run lock; nothing was changed"},
