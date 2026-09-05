@@ -162,8 +162,9 @@ def load(path):
     rec.setdefault("proposal", None)
     rec.setdefault("pending_judgment", None)
     rec.setdefault("created_children", [])
+    rec.setdefault("created_documents", [])
     rec.setdefault("issue_updated_at", "")
-    for k in ("declined", "created_children"):
+    for k in ("declined", "created_children", "created_documents"):
         if not isinstance(rec[k], list):
             return None
     return rec
@@ -173,6 +174,7 @@ def blank(path_value):
         "version": VERSION, "worktree_path": path_value, "state": "unbound",
         "branch_at_confirmation": "", "issue_identifier": "", "declined": [],
         "proposal": None, "pending_judgment": None, "created_children": [],
+        "created_documents": [],
         "issue_updated_at": "", "updated_at": now(),
     }
 
@@ -270,6 +272,28 @@ if op == "add-child":
         rec["created_children"].append(args[0])
     save(path, rec)
     sys.exit(0)
+
+if op == "add-document":
+    # R32. A document the plugin created. Same mechanism as created_children:
+    # the list bounds what may be MODIFIED later, and is never derived from
+    # Linear -- a tracker-derived list of "documents on this issue" would let
+    # anyone attach a document into the writable set.
+    doc_id, title = args[0], (args[1] if len(args) > 1 else "")
+    if not any(d.get("id") == doc_id for d in rec["created_documents"]):
+        rec["created_documents"].append({"id": doc_id, "title": title})
+    save(path, rec)
+    sys.exit(0)
+
+if op == "document-id-for":
+    # Which document, if any, this plugin already made for that title.
+    for d in rec["created_documents"]:
+        if d.get("title") == args[0]:
+            sys.stdout.write(d.get("id", ""))
+            sys.exit(0)
+    sys.exit(1)
+
+if op == "owns-document":
+    sys.exit(0 if any(d.get("id") == args[0] for d in rec["created_documents"]) else 1)
 
 if op == "set-judgment":
     rec["pending_judgment"] = {"text": args[0], "recorded_at": now(), "presented_in": []}
@@ -411,6 +435,9 @@ herdr_linear::binding_confirm() {
 herdr_linear::binding_decline()       { herdr_linear::_mutate "${1:-}" decline "${2:-}"; }
 herdr_linear::binding_set_state()     { herdr_linear::_mutate "${1:-}" set-state "${2:-}"; }
 herdr_linear::binding_add_child()     { herdr_linear::_mutate "${1:-}" add-child "${2:-}"; }
+herdr_linear::binding_add_document()  { herdr_linear::_mutate "${1:-}" add-document "${2:-}" "${3:-}"; }
+herdr_linear::binding_document_for()  { herdr_linear::_mutate "${1:-}" document-id-for "${2:-}"; }
+herdr_linear::binding_owns_document() { herdr_linear::_mutate "${1:-}" owns-document "${2:-}"; }
 herdr_linear::binding_set_judgment()  { herdr_linear::_mutate "${1:-}" set-judgment "${2:-}"; }
 herdr_linear::binding_clear_judgment(){ herdr_linear::_mutate "${1:-}" clear-judgment; }
 

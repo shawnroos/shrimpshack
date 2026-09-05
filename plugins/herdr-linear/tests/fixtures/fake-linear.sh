@@ -209,6 +209,18 @@ canceled_issue() {
 JSON
 }
 
+desc_issue() {
+    cat <<'JSON'
+{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": "## What\n\nstale text the plugin wrote last time\n\n## Why\n\nUsers cannot see the drawer while a layer is still processing, so they think the tool is broken and retry. This paragraph is Shawn's and must survive verbatim.\n\n## Not in this PR\n\nThe Separate Background fix. Tracked separately.\n\n## Verification\n\nstale verification"}}}
+JSON
+}
+
+desc_rendered() {
+    cat <<'JSON'
+{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": "## What\n\nBranch `feature/web-2870-detach`.\n\n## Verification\n\nNo CI result readable from this worktree."}}}
+JSON
+}
+
 not_found() {
     cat <<'JSON'
 {"errors":[{"message":"Entity not found: Issue","path":["issue"],"locations":[{"line":1,"column":9}],"extensions":{"type":"invalid input","code":"INPUT_ERROR","statusCode":400,"userError":true,"userPresentableMessage":"Could not find referenced Issue."}}],"data":null}
@@ -268,6 +280,22 @@ case "$body" in
 JSON
         exit 0
         ;;
+    *documentCreate*|*documentUpdate*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        _op=documentCreate
+        case "$body" in *documentUpdate*) _op=documentUpdate ;; esac
+        if [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "fail" ]; then
+            printf '{"data":{"%s":{"success":false,"document":null}}}' "$_op"
+        elif [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "no_document" ]; then
+            # success TRUE with no document. A caller that trusts `success`
+            # alone records a document it has no id for, and can then never
+            # update it -- so the next publish creates a duplicate instead.
+            printf '{"data":{"%s":{"success":true,"document":null}}}' "$_op"
+        else
+            printf '{"data":{"%s":{"success":true,"document":{"id":"%s","title":"t","url":"https://linear.app/example/document/t-abc"}}}}'                 "$_op" "${FAKE_LINEAR_DOC_ID:-dddddddd-dddd-4ddd-8ddd-dddddddddddd}"
+        fi
+        exit 0
+        ;;
     *issueUpdate*)
         [ "$wants_headers" = 1 ] && emit_headers 200
         # success:false on a 200 is the case a "did the function finish" check
@@ -291,6 +319,8 @@ case "$mode" in
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; found_parent ;;
     found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; found_parent_moved ;;
     completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; completed_issue ;;
+    desc_issue)       [ "$wants_headers" = 1 ] && emit_headers 200; desc_issue ;;
+    desc_rendered)    [ "$wants_headers" = 1 ] && emit_headers 200; desc_rendered ;;
     other_project_issue) [ "$wants_headers" = 1 ] && emit_headers 200; other_project_issue ;;
     canceled_issue)   [ "$wants_headers" = 1 ] && emit_headers 200; canceled_issue ;;
     not_found)        [ "$wants_headers" = 1 ] && emit_headers 400; not_found ;;

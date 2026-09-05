@@ -313,6 +313,8 @@ Phase A proves what is unproven and stands the plugin up. Phase B builds the rea
 | U11 | herdr read-only accessor | `lib/herdr-read.sh` | U2 |
 | U12 | Credential migration and in-tree cache refresh | `bin/linear-cache-refresh.sh` | U3 |
 | U13 | Capture real Linear response shapes | `tests/fixtures/fake-linear.sh` | U3 |
+| U14 | The plugin owns the issue description | `lib/description.sh` | U5, U8 |
+| U15 | Documents instead of a gitignored /docs | `lib/documents.sh` | U5, U4 |
 | U4 | The binding store | `lib/binding.sh` | U2, U3 |
 | U5 | Linear client | `lib/linear.sh` | U3, U13 |
 | U6 | Grounding hook | `hooks/ground.sh` | U1, U4, U5 |
@@ -760,6 +762,73 @@ Two further defects were in the harness rather than the code: `grep -c` prints `
 **Two fixture defects were found here, both of the same family that has bitten this build repeatedly — the fixture being more permissive or less faithful than the thing it stands in for.** Its `pane get` did not know about panes it had just created, so `await_pane` could never succeed; and the creation branches recorded argv a second time on top of the general record, double-counting every `tab create` and making three count assertions wrong.
 
 **The mutating-verb refusal stays the default.** U11's accessor must never reach one, and the fixture's exit 99 is how that is asserted. U10 opts in explicitly with `FAKE_HERDR_ALLOW_MUTATION=1`, so a read path cannot quietly acquire a write and still pass.
+
+### Phase E — The ticket as the record
+
+Added 2026-09-05 at Shawn's direction, after Phases A-D were built. Two asks:
+the plugin owns the issue description outright, and anything that would land in
+a gitignored `/docs` becomes a Linear document.
+
+### U14. The plugin owns the issue description
+
+- **Goal:** The description on a bound issue is maintained from the worktree, not by hand.
+- **Requirements:** R15, R16, R17, R29, R30. New: R31.
+- **Dependencies:** U5, U8.
+- **Files:** `lib/description.sh`, `tests/unit/description.bats`.
+
+**R31. The plugin renders the whole description on every write, and never silently loses text it did not author.**
+
+- **The concern I raised, and Shawn's decision.** I proposed a fenced managed region so his prose could not be touched. He chose full ownership instead. That is his board and his call; it is recorded here so nobody later reads the implementation as an accident.
+- **What that means in practice, and the honest limit.** The repository supplies `## What` (branch, commits, pull request, files touched) and `## Verification` (tests, CI). It cannot supply `## Why` — that is intent, and nothing in git holds it. A generator that authored all four sections would replace real reasoning with a hollow restatement of the diff.
+- **So: regenerate what is derivable, carry forward what is not.** Every write emits the complete description. Sections the plugin can derive are rebuilt from the worktree. Sections it cannot are carried through verbatim from the current description. Unknown sections a person added are preserved in place and in order.
+- **Every overwrite is recoverable.** The prior description is written to `~/.claude/herdr-linear/descriptions/<ID>/<timestamp>.md` before the mutation, and `restore` puts one back. A full-ownership write with no undo would be the wrong trade.
+- **Test scenarios:**
+  - A description with a hand-written `## Why` keeps it byte-identical after a write that changed `## What`.
+  - A section the plugin does not know about is preserved, in its original position.
+  - The prior description is saved before the write, and `restore` reproduces it byte for byte.
+  - The issue is not bound, or is misplaced or stale, and nothing is written.
+  - Shadow mode logs the rendered description and sends nothing.
+  - The description is unchanged from what would be rendered, and no write is sent.
+- **Verification:** A round trip preserves every section the plugin did not author, proven by a byte compare.
+- **Status: done.** 13 tests, 5 mutations.
+
+**The carry-forward works and is mutation-proven.** Replacing the renderer with one that regenerates all four sections turns the `Why` test red; dropping unknown headings turns the position test red. A hand-written `## Why`, a `## Not in this PR`, and a heading the code has never heard of all survive byte for byte and keep their original order.
+
+**Verification never claims a result nobody produced.** With no CI readable it says exactly that, rather than inventing a pass.
+
+**One backstop is labelled as unreachable:** the bound-state check in `describe`, since `write_allowed` already requires `bound`. It stays because it refuses before any network call.
+
+### U15 status
+
+### U15. Documents instead of a gitignored `/docs`
+
+- **Goal:** A durable document written during the work outlives the worktree and is attached to the issue.
+- **Requirements:** R28, R29, R30. New: R32.
+- **Dependencies:** U5, U4.
+- **Files:** `lib/documents.sh`, `skills/publish-doc/SKILL.md`, `tests/unit/documents.bats`.
+
+**R32. A document the plugin creates is recorded against the binding, updated in place thereafter, and one it did not create is never modified.**
+
+- **Why this is worth building.** Slate's web-app ignores `/docs`, so a durable document written on a branch dies with the worktree — the exact failure this plugin exists to stop, in a different shape. A Linear document outlives the branch, is attached to the work, and is readable by people who do not have the repo.
+- **`issueId` on `DocumentCreateInput`** means a document attaches to the bound issue directly, not only to a project. Verified by introspection, 2026-09-05.
+- **Titles and icons follow `docs/linear-conventions.md`**, whose Documents section was derived from 40 real documents in the workspace rather than invented: an issue-scoped title leads with the identifier and a kind word from the observed set; icons are sparse, with `:mag:` reserved for findings and diagnosis.
+- **The write bound extends to documents.** Created ids join `created_documents` on the binding, the same mechanism that bounds issue writes. A document the plugin did not create is never modified, and the list is never derived from Linear.
+- **Test scenarios:**
+  - A document is created against the bound issue and its id recorded.
+  - A second publish of the same document updates in place; no duplicate is created.
+  - A document id the record does not list is refused.
+  - A title that does not match the conventions is refused rather than corrected.
+  - A local markdown file is published with its content intact, including code fences.
+  - Shadow mode logs the document and sends nothing.
+- **Verification:** No document is created or modified in any test; the fixture records the mutations that would have been sent.
+- **Status: done.** 17 tests, 5 mutations.
+
+**Two bugs found, both by tests rather than by review.**
+
+1. **`tr '-_' '  '` is a portability trap.** BSD `tr` reads the leading hyphen as an option flag and errors, so the filename fallback produced an empty subject and every heading-less file was refused. The hyphen goes last in the set.
+2. **A `success: true` carrying a null document was recorded as a success.** That is a shape the API can return, and trusting `success` alone records a document with no id — which can then never be updated, so the *next* publish creates a duplicate rather than updating. Found by mutating the id guard, seeing it stay green, and realising the case was reachable but untested rather than the guard being redundant.
+
+**One backstop is labelled as unreachable:** the ownership re-check on the update path, since `document_for` only ever returns an id already in `created_documents`. It stays so a future change to how that id is resolved cannot reach the update path unchecked.
 
 ---
 

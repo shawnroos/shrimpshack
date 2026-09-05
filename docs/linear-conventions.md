@@ -124,6 +124,52 @@ pass may all be left at `No priority`, because their order comes from the parent
 
 ---
 
+---
+
+## Documents
+
+A Linear document is where anything that would otherwise land in a gitignored
+`/docs` directory belongs. In Slate's web-app `/docs` is ignored, so a durable
+document written on a branch dies with the worktree. A Linear document outlives
+the branch, is linked to the work, and is readable by people without the repo.
+
+Derived from 40 documents in the workspace, most of them Shawn's.
+
+### Two families, and the title says which
+
+| Scope | Attached to | Title shape | Real examples |
+|---|---|---|---|
+| **Issue** | `issueId` | leads with the identifier, then the kind, then what it is | `WEB-3127 diagnosis: texture leak on image swap` · `WEB-2651 — Denoise mix-slider regression report` · `MEDIA-270 Implementation Log: Folder Navigation in Media Hub` |
+| **Project** | `projectId` | a noun phrase, no identifier | `Architecture Overview` · `V1 Limitations & Fast-Follow Themes` · `RFC: Brand Vocab` · `PRD: Brand Hub Auditing` |
+
+The separator after the identifier varies in practice — a space, a colon, or an
+em dash all appear. Any of the three is fine; do not "correct" an existing one.
+
+### Kinds actually in use
+
+Issue-scoped: `diagnosis`, `findings`, `regression report`, `Implementation Log`,
+`Reference`, `Test Plan`.
+
+Project-scoped: `RFC`, `PRD`, `Plan`, `Development Plan`, `Architecture Overview`,
+`Codebase Exploration`, `Design References`.
+
+Use one of these rather than a new word. A new kind is a decision, and the point
+of a shared vocabulary is that a title tells you what you are about to read.
+
+### Icons
+
+Sparse — 22 of 40 documents carry none, which is the default. The one consistent
+use is **`:mag:` for a findings or diagnosis document**; all four of its
+appearances are that. Apply no icon otherwise. Same restraint as labels: do not
+add one to say what the title already says.
+
+### Updating rather than creating
+
+A document the plugin created is updated in place on the next run, never
+duplicated. The document id is recorded against the binding, in the same list
+that bounds what the plugin may write to — a document the plugin did not create
+is never modified.
+
 ## Not yet settled
 
 These need Shawn's decision. An agent asks rather than guessing.
@@ -133,3 +179,6 @@ These need Shawn's decision. An agent asks rather than guessing.
 - Whether an agent may create a milestone, or only apply an existing one.
 - Whether an agent may apply `ready-for-ai` to a ticket it wrote itself.
 - Who is assigned to an issue an agent creates.
+- Whether an agent may create a **project-scoped** document, or only an issue-scoped one. A project document is read by people outside the work, which is a higher bar than a diagnosis note on one ticket.
+- Who owns a document an agent creates (`ownerId`), and whether it should be Shawn or the agent's own account.
+- Whether documents should be filed into a resource folder (`resourceFolderId`), which nothing in the observed set uses.
