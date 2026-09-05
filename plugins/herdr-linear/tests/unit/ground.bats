@@ -82,12 +82,24 @@ bind_wt() {
 
 # --------------------------------------------------------------- the states
 
-@test "an unbound worktree starts normally and says it is unbound" {
-    run bash -c "printf '%s' '$(payload "$WT")' | bash '$HOOK'"
+# R13, AMENDED 2026-09-05: the hooks do nothing until a worktree is bound.
+# The earlier behaviour printed a "run /herdr-linear:bind" notice at every
+# session start, which in a tree of 86 mostly-unbound worktrees is a line in
+# every session forever.
+@test "an unbound worktree produces nothing at all" {
+    run --separate-stderr bash -c "printf '%s' '$(payload "$WT")' | bash '$HOOK'"
     [ "$status" -eq 0 ]
-    ctx="$(printf '%s' "$output" | context_of)"
-    [[ "$ctx" == *"not bound to a Linear issue"* ]]
-    [[ "$ctx" == *"Work proceeds normally"* ]]
+    [ -z "$output" ]
+    [ -z "$stderr" ]
+}
+
+# The known cost of the amendment, pinned so nobody mistakes it for a bug: an
+# unbound worktree is now indistinguishable from the plugin not being installed.
+@test "a proposed worktree is also silent -- only bound speaks" {
+    herdr_linear::binding_propose "$WT" WEB-3318 >/dev/null
+    run --separate-stderr bash -c "printf '%s' '$(payload "$WT")' | bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
 }
 
 @test "a bound worktree yields identity, state and hierarchy position" {

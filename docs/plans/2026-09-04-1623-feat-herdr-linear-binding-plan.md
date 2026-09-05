@@ -75,7 +75,7 @@ The cost is paid twice per piece of work: once re-establishing context that the 
 
 - R11. A session started in a bound worktree receives its Linear issue's context without asking for it.
 - R12. That context carries the issue's identity, its current state, and its position in the project and parent-issue hierarchy.
-- R13. A session started in an unbound worktree starts normally and says that it is unbound.
+- R13. **AMENDED 2026-09-05 at Shawn's direction: the hooks do nothing until a worktree is bound.** A session in an unbound worktree gets no output at all — not a notice, not a suggestion to bind. The original wording ("starts normally and says that it is unbound") produced a line at every session start; in a tree of 86 worktrees, nearly all of them unbound, that is advice nobody asked for about work they may have no intention of tracking. The known cost, accepted rather than overlooked: an unbound worktree is now indistinguishable from the plugin not being installed, so discovery belongs to the person invoking `/herdr-linear:bind`, not to the hook.
 - R14. Grounding bounds how long it waits on Linear and herdr; when either is unreachable the session starts with an explicit notice that its context is unavailable, and nothing is written until authoritative state is known.
 
 **Writing back**
@@ -793,6 +793,12 @@ a gitignored `/docs` becomes a Linear document.
 **Ordering bug found by a test.** The prefix check ran before the unchanged check, and an identical description is a prefix of itself — so every no-op write reported as a diary, a confusing false accusation for the commonest case. Unchanged is now tested first.
 
 - **Test scenarios:** the template's own placeholders fail validation; a missing spine section is named rather than guessed; the spine out of order is refused; an empty section is refused; extra sections after Proposal are allowed; two dated headings are refused and one is allowed; each log-style opener is refused; an append is refused; an invalid description never reaches Linear; the prior version is saved before every write and restores; unbound, misplaced, stale and outside-the-root are all refused; shadow mode prints and sends nothing.
+**Hooks are inert until a binding exists, and earn their keep after** (Shawn's rule, 2026-09-05). `reconcile` was already inert unless bound; `ground` now is too. The "once bound" half is `nudge_description`: at session end it notices the description no longer covers the work and records that on the binding, which U6 surfaces once at the next session start.
+
+It records a note and nothing else. It does not write the description — a hook cannot author prose about an actor and an intent — and it does not prompt, because KTD13 keeps hooks silent. It also does not re-raise the same nudge for the same commit: a note that reappears untouched is one a person learns to dismiss without reading.
+
+**Two mutations were green until the tests were fixed, both for the same reason — the guard was never reached.** Restoring the unbound notice turned nothing red because the mutation anchor matched the containment block above it rather than the unbound block. And the commits-ahead guard survived deletion because the test reached `ahead=0` by checking out `main`, which *also* changes the branch and downgrades the binding to proposed — so the nudge returned early at the bound check. That test now merges instead, staying on the confirmed branch, which is the only shape that isolates the guard.
+
 - **Verification:** 20 tests, 8 mutations, all red on the first pass — spine presence, spine order, placeholders, the dated-heading threshold, the log-word check, the append check, validation-before-write, and the backup.
 - **Status: done.**
 

@@ -390,3 +390,79 @@ mutations_sent() {
     [[ "$body" == *"SessionEnd"* ]]
     [[ "$body" != *'"Stop"'* ]]
 }
+
+# --------------------------------------------- the description nudge (once bound)
+
+# Shawn's rule: the hooks do nothing until a worktree is bound, and once bound
+# they earn their keep. This is the "once bound" half -- it notices the
+# description no longer covers the work, and records that for the next session.
+@test "an unbound worktree is never nudged about its description" {
+    run herdr_linear::nudge_description "$WT"
+    [ "$status" -ne 0 ]
+}
+
+@test "a bound worktree with new commits records a description nudge" {
+    bind_wt WEB-2870
+    run herdr_linear::nudge_description "$WT"
+    [ "$status" -eq 0 ]
+    run herdr_linear::binding_take_judgment "$WT" "s1"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-2870"* ]]
+    [[ "$output" == *"the description does not cover"* ]]
+    # It says rewrite, not append -- the description is never a diary.
+    [[ "$output" == *"do not append"* ]]
+}
+
+# It records a note; it never writes the description, and it never prompts.
+# A hook has nobody to ask and no way to author prose about the actor.
+@test "the nudge writes nothing to Linear" {
+    bind_wt WEB-2870
+    enable_writes
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::nudge_description "$WT"
+    [ "$status" -eq 0 ]
+    [ "$(mutations_sent)" = "0" ]
+}
+
+# A note that reappears untouched every session is one a person learns to
+# dismiss without reading.
+@test "the same nudge is not raised twice for the same commit" {
+    bind_wt WEB-2870
+    run herdr_linear::nudge_description "$WT"
+    [ "$status" -eq 0 ]
+    run herdr_linear::nudge_description "$WT"
+    [ "$status" -ne 0 ]
+}
+
+@test "a description written at the current commit is not nudged" {
+    bind_wt WEB-2870
+    herdr_linear::binding_set_desc_head "$WT" "$(git -C "$WT" rev-parse HEAD)"
+    run herdr_linear::nudge_description "$WT"
+    [ "$status" -ne 0 ]
+}
+
+# A worktree whose work has all landed has nothing for a description to have
+# fallen behind on.
+#
+# This MUST stay on the confirmed branch. Checking out main to get ahead=0 also
+# changes the branch, which downgrades the binding to proposed -- so the nudge
+# returned early at the bound check and the commits-ahead guard was never
+# reached. The test passed with that guard deleted. Merging instead keeps the
+# binding bound and leaves ahead at 0, which is the only shape that isolates it.
+@test "a worktree with no commits ahead is not nudged" {
+    bind_wt WEB-2870
+    merge_into_main
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
+    [ "$(git -C "$WT" rev-list --count origin/main..HEAD)" = "0" ]
+    run herdr_linear::nudge_description "$WT"
+    [ "$status" -ne 0 ]
+}
+
+@test "the hook calls the nudge, and still exits 0" {
+    bind_wt WEB-2870
+    run bash -c "printf '{\"cwd\":\"$WT\",\"hook_event_name\":\"SessionEnd\"}' | bash '$ROOT/hooks/reconcile.sh'"
+    [ "$status" -eq 0 ]
+    run herdr_linear::binding_take_judgment "$WT" "s9"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"description does not cover"* ]]
+}

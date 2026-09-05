@@ -39,4 +39,9 @@ command -v herdr_linear::reconcile >/dev/null 2>&1 || exit 0
 # output on a closing session is noise in someone's terminal.
 herdr_linear::reconcile "$cwd" >/dev/null 2>&1
 
+# Once bound, notice whether the description has fallen behind the work. Records
+# a note; never writes the description and never prompts. Both are deliberate:
+# a hook cannot author prose, and KTD13 keeps hooks silent.
+herdr_linear::nudge_description "$cwd" >/dev/null 2>&1
+
 exit 0

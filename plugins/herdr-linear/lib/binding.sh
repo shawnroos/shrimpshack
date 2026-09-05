@@ -163,6 +163,7 @@ def load(path):
     rec.setdefault("pending_judgment", None)
     rec.setdefault("created_children", [])
     rec.setdefault("created_documents", [])
+    rec.setdefault("description_head", "")
     rec.setdefault("issue_updated_at", "")
     for k in ("declined", "created_children", "created_documents"):
         if not isinstance(rec[k], list):
@@ -174,7 +175,7 @@ def blank(path_value):
         "version": VERSION, "worktree_path": path_value, "state": "unbound",
         "branch_at_confirmation": "", "issue_identifier": "", "declined": [],
         "proposal": None, "pending_judgment": None, "created_children": [],
-        "created_documents": [],
+        "created_documents": [], "description_head": "",
         "issue_updated_at": "", "updated_at": now(),
     }
 
@@ -294,6 +295,11 @@ if op == "document-id-for":
 
 if op == "owns-document":
     sys.exit(0 if any(d.get("id") == args[0] for d in rec["created_documents"]) else 1)
+
+if op == "set-description-head":
+    rec["description_head"] = args[0]
+    save(path, rec)
+    sys.exit(0)
 
 if op == "set-judgment":
     rec["pending_judgment"] = {"text": args[0], "recorded_at": now(), "presented_in": []}
@@ -436,6 +442,12 @@ herdr_linear::binding_decline()       { herdr_linear::_mutate "${1:-}" decline "
 herdr_linear::binding_set_state()     { herdr_linear::_mutate "${1:-}" set-state "${2:-}"; }
 herdr_linear::binding_add_child()     { herdr_linear::_mutate "${1:-}" add-child "${2:-}"; }
 herdr_linear::binding_add_document()  { herdr_linear::_mutate "${1:-}" add-document "${2:-}" "${3:-}"; }
+herdr_linear::binding_set_desc_head() { herdr_linear::_mutate "${1:-}" set-description-head "${2:-}"; }
+herdr_linear::binding_desc_head() {
+    local rec
+    rec="$(herdr_linear::binding_read "${1:-}")" || return 1
+    printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("description_head",""))' 2>/dev/null
+}
 herdr_linear::binding_document_for()  { herdr_linear::_mutate "${1:-}" document-id-for "${2:-}"; }
 herdr_linear::binding_owns_document() { herdr_linear::_mutate "${1:-}" owns-document "${2:-}"; }
 herdr_linear::binding_set_judgment()  { herdr_linear::_mutate "${1:-}" set-judgment "${2:-}"; }

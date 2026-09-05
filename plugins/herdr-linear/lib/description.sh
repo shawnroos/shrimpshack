@@ -254,6 +254,10 @@ except Exception: sys.exit(1)
 sys.exit(0 if ok is True else 1)
 ' || return "$HERDR_LINEAR_DESC_FAILED"
 
+    # Remember which commit this description describes, so a later session can
+    # tell whether it has fallen behind the work without re-reading Linear.
+    herdr_linear::binding_set_desc_head "$wt" "$(herdr_linear::_git "$wt" rev-parse HEAD)"
+
     herdr_linear::_shadow_log "WROTE description of $ident (prior saved at $backup)"
     return "$HERDR_LINEAR_DESC_OK"
 }

@@ -65,11 +65,18 @@ print(json.dumps({"hookSpecificOutput": {
 state="$(herdr_linear::binding_state "$cwd" 2>/dev/null || echo unbound)"
 
 if [ "$state" != "bound" ]; then
-    # R13. Say so plainly and get out of the way. A session that silently
-    # behaves differently when unbound is worse than one that says it is
-    # unbound, because nobody can tell which state they are in.
-    printf 'This worktree is not bound to a Linear issue. Work proceeds normally; run /herdr-linear:bind to bind it.' \
-        | emit
+    # R13, AMENDED 2026-09-05 at Shawn's direction: the hooks do nothing until a
+    # worktree is bound. Silence, not a notice.
+    #
+    # The earlier behaviour printed "this worktree is not bound, run
+    # /herdr-linear:bind" at every session start. In a tree with 86 worktrees,
+    # nearly all of them unbound, that is a line in every session forever --
+    # advice nobody asked for about work they may have no intention of tracking.
+    #
+    # The cost, stated so it is a known trade: an unbound worktree is now
+    # indistinguishable from the plugin not being installed. Binding is a
+    # deliberate act (/herdr-linear:bind), so discovery is the person's, not the
+    # hook's.
     exit 0
 fi
 

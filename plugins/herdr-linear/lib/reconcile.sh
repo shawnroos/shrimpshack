@@ -241,6 +241,46 @@ herdr_linear::reconcile() {
     return "$rc"
 }
 
+# herdr_linear::nudge_description <worktree>
+#
+# ONCE BOUND, the hooks earn their keep. This one notices that the description
+# no longer describes the work and records a note for the next session.
+#
+# It does NOT write the description, and could not: Problem, Solution and
+# Proposal are prose about the actor and the intent, and a hook has nobody to
+# ask and nothing to author from. It also does not prompt -- KTD13 keeps hooks
+# silent, so this goes on the binding and U6 surfaces it once at the next
+# session start, on the same path a judgment proposal takes.
+herdr_linear::nudge_description() {
+    local wt="${1:-}" head synced ahead default ident existing
+
+    [ "$(herdr_linear::binding_state "$wt" 2>/dev/null)" = "bound" ] || return 1
+    ident="$(herdr_linear::binding_identifier "$wt")" || return 1
+
+    head="$(herdr_linear::_git "$wt" rev-parse HEAD)"
+    [ -n "$head" ] || return 1
+    synced="$(herdr_linear::binding_desc_head "$wt" 2>/dev/null)" || synced=""
+    [ "$head" != "$synced" ] || return 1
+
+    # Only when there is actually new work. A worktree sitting at the default
+    # branch with nothing on it has no description to fall behind.
+    default="$(herdr_linear::_default_branch "$wt")" || return 1
+    ahead="$(herdr_linear::_git "$wt" rev-list --count "origin/$default..HEAD" || echo 0)"
+    [ "${ahead:-0}" -gt 0 ] 2>/dev/null || return 1
+
+    # Do not re-raise the same nudge every session end. A note that reappears
+    # untouched is one a person learns to dismiss without reading.
+    existing="$(herdr_linear::binding_read "$wt" 2>/dev/null \
+        | python3 -c 'import sys,json;j=json.load(sys.stdin).get("pending_judgment") or {};print(j.get("text",""))' 2>/dev/null)" || existing=""
+    case "$existing" in
+        *"$head"*) return 1 ;;
+    esac
+
+    herdr_linear::binding_set_judgment "$wt" \
+        "$ident has $ahead commit(s) the description does not cover (HEAD $head). If the work changed what the problem or the proposal is, rewrite it with /herdr-linear:describe -- do not append a note."
+    return 0
+}
+
 herdr_linear::_state_type_of() {
     local resp
     resp="$(herdr_linear::fetch_issue "$1")" || return 1
