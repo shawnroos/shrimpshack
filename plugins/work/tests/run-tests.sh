@@ -81,6 +81,37 @@ PY
 
 # `claude plugin validate` exits 0 even when it reports problems, so its output
 # is what decides, not its status.
+# `claude plugin validate` PASSES a manifest that declares ./hooks/hooks.json,
+# and the plugin then fails to LOAD with "Duplicate hooks file detected" -- the
+# standard path is auto-loaded, so naming it makes the whole plugin unavailable.
+# Validation is not the loader, and this is the gap between them.
+manifest_autoload_check() {
+    local m="$PLUGIN_ROOT/.claude-plugin/plugin.json" bad=0
+    printf '%bManifest auto-load check...%b\n' "$YELLOW" "$NC"
+    [ -r "$m" ] || { printf '%bno manifest at %s%b\n' "$RED" "$m" "$NC"; return 1; }
+    bad="$(python3 - "$m" "$PLUGIN_ROOT" <<'PY'
+import json, os, sys
+m, root = sys.argv[1], sys.argv[2]
+d = json.load(open(m))
+bad = []
+# Only hooks/hooks.json is auto-loaded; skills/ and commands/ are declared
+# normally by every other plugin in this marketplace and must stay.
+h = d.get("hooks")
+if isinstance(h, str) and os.path.normpath(h.lstrip("./")) == os.path.join("hooks", "hooks.json"):
+    if os.path.exists(os.path.join(root, "hooks", "hooks.json")):
+        bad.append("hooks: %s duplicates the auto-loaded hooks/hooks.json" % h)
+print("\n".join(bad))
+PY
+)"
+    if [ -n "$bad" ]; then
+        printf '%b%s%b\n' "$RED" "$bad" "$NC"
+        printf '%bthe plugin would fail to load; remove the key (the file is still used)%b\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%bmanifest declares no auto-loaded path%b\n' "$GREEN" "$NC"
+    return 0
+}
+
 validate_check() {
     # A gate that cannot run is not a gate that passed. Opt out by name when
     # that is deliberate; silence here would let `all` go green on a machine
@@ -233,6 +264,7 @@ wire_smoke() {
     assertion_lint || rc=1
     version_sync_check || rc=1
     validate_check || rc=1
+    manifest_autoload_check || rc=1
     secret_scan || rc=1
     skill_lib_sync_check || rc=1
     return "$rc"
