@@ -1075,6 +1075,14 @@ with tempfile.TemporaryDirectory() as store:
                                        session_id="s%d_%d" % (i, j), repo=rp)
     rows = {r["memory"]: r for r in tg.never_acted_on(store)}
 
+    # The tally counts LOGGED applications. A trigger that fired and changed the
+    # work still reads zero when nobody wrote an `applied` line, so every row has
+    # to carry that confound or a reader takes the count for a measurement of use
+    # and prunes a working trigger. Observed on reuse-gate / CONNECTIONS.md: 52
+    # nudges, zero applications, in the session that acted on it.
+    check("a misfire row states that zero may mean UNLOGGED, not unused",
+          all(r.get("evidence") == "unlogged-or-unused" for r in rows.values()))
+
     check("the repo a nudge fired in survives the log round-trip",
           rows["reference_many"]["repo_count"] == 3)
     check("a GLOBAL memory firing in many repos is diagnosed MIS-SCOPED",
