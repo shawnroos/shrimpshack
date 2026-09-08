@@ -252,11 +252,43 @@ run_resolve() {
   [ "$output" = herdr ]
 }
 
-@test "resolve: neither env present -> none" {
+@test "resolve: nothing announced + live herdr server -> herdr" {
+  # HERDR_ENV records launch ancestry, not reachability. A session started outside a
+  # herdr pane never carries it, and before the unannounced arm this run resolved to
+  # ghostty (or none) while `herdr status server` said running. Reversal of an earlier
+  # assertion that read `none` here, which encoded exactly that defect.
   export HERDR_STUB_LIVE=1 HERDR_ENV= CMUX_WORKSPACE_ID=
   run run_resolve auto
   [ "$status" -eq 0 ]
+  [ "$output" = herdr ]
+}
+
+@test "resolve: nothing announced + dead herdr server -> none" {
+  # The guard on the arm above: it must select herdr on a LIVE probe only, never on
+  # the mere absence of announcements.
+  export HERDR_STUB_LIVE=0 HERDR_ENV= CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
   [ "$output" = none ]
+}
+
+@test "resolve: HERDR_ENV=0 + live herdr server -> none (announced but off, R8)" {
+  # A present-but-switched-off announcement still means a multiplexer owns this
+  # session. The unannounced arm keeps the `-z` test rather than a `!= 1` test so it
+  # cannot capture this case.
+  export HERDR_STUB_LIVE=1 HERDR_ENV=0 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = none ]
+}
+
+@test "resolve: cmux announced + live herdr server -> cmux (no cross-backend steal)" {
+  # The unannounced arm sits below the cmux arm and is guarded on CMUX_WORKSPACE_ID
+  # being empty, so a live herdr server elsewhere never takes a cmux session.
+  export HERDR_STUB_LIVE=1 HERDR_ENV= CMUX_WORKSPACE_ID=workspace:1
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = cmux ]
 }
 
 @test "resolve: --launcher cmux with herdr live -> cmux (override, R2)" {
@@ -484,6 +516,99 @@ version: 0.8.2' HERDR_ENV=1 CMUX_WORKSPACE_ID=
   run_herdr_tab
   [ "$status" -eq 0 ]
   [[ "$output" != *"went unnamed:"* ]]
+}
+
+# --target split with no --from-surface falls back to a TAB. The fallback itself is
+# old; what these two guard is that the summary SAYS so. The downgrade is recorded in
+# TARGET_DOWNGRADE, which must be declared before the argument loop that sets it —
+# declare it beside the summary block's own state instead and it is wiped on every
+# run, the script still passes `bash -n`, still exits 0, and the line just stops
+# appearing. Nothing else in this suite would go red. Hence a positive AND a negative,
+# mirroring the went-unnamed pair above.
+run_herdr_split_no_surface() {
+  local repo="$BATS_TEST_TMPDIR/srepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  HERDR_ARGV_LOG="$BATS_TEST_TMPDIR/herdr-argv-split.log"
+  : > "$HERDR_ARGV_LOG"
+
+  run env PATH="$STUBDIR:$PATH" \
+          HERDR_ARGV_LOG="$HERDR_ARGV_LOG" \
+          HERDR_STUB_LIVE=1 \
+          HERDR_ENV=1 \
+          HERDR_WORKSPACE_ID=wS \
+          HERDR_PANE_ID=wS:p1 \
+          CMUX_WORKSPACE_ID= \
+          SPINOFF_READY_TIMEOUT_MS=3000 \
+      bash "$SCRIPT" --name hsplit --label testlabel --handoff "$handoff" \
+                     --repo "$repo" --target split --launcher herdr
+}
+
+@test "summary: a split that fell back to a tab says so, inside the relayed block" {
+  run_herdr_split_no_surface
+  [ "$status" -eq 0 ]
+  # The caller reads the exit code (still 0 — a briefed session DOES exist) or the
+  # summary. Before this, neither could tell a real split from this fallback.
+  [[ "$output" == *"NOT what was asked for:"* ]]
+  [[ "$output" == *"split → tab"* ]]
+}
+
+@test "summary: says nothing about a downgrade when the target was honoured" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"NOT what was asked for:"* ]]
+}
+
+# An omitted --base means "current HEAD", and the caller reads that as THEIR head.
+# It is resolved against the checkout the new worktree nests under, which is a
+# different branch whenever the caller sits in a worktree or passed --repo. That
+# checkout is routinely parked on unrelated work, so the new session gets a tree
+# WITHOUT the change it was spun off to continue. Every step still succeeds and the
+# run exits 0 with a tab open, so only the summary can carry this.
+setup_parked_main() {
+  local root="$BATS_TEST_TMPDIR/base"
+  mkdir -p "$root"
+  git -C "$root" init -q main
+  git -C "$root/main" config user.email t@example.com
+  git -C "$root/main" config user.name tester
+  echo a > "$root/main/f.md"
+  git -C "$root/main" add f.md
+  git -C "$root/main" commit -qm init
+  git -C "$root/main" checkout -q -b unrelated-parked-branch
+  echo b > "$root/main/f.md"
+  git -C "$root/main" commit -qam parked
+  printf '# H\n\n## Source session\n<!-- SESSION -->\n' > "$root/h.md"
+  PARKED_ROOT="$root"
+}
+
+@test "summary: an omitted --base that is not the caller's HEAD is stated" {
+  setup_parked_main
+  # --repo names a checkout parked on a branch the caller is not on: the exact shape
+  # the skill itself instructs callers to use from outside the target repo.
+  run env PATH="$STUBDIR:$PATH" HERDR_ENV=0 CMUX_WORKSPACE_ID= \
+      bash "$SCRIPT" --name baseprobe --handoff "$PARKED_ROOT/h.md" \
+                     --target tab --repo "$PARKED_ROOT/main"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"BASE WAS NOT YOURS:"* ]]
+  [[ "$output" == *"unrelated-parked-branch"* ]]
+}
+
+@test "summary: says nothing about the base when it IS the caller's HEAD" {
+  setup_parked_main
+  cd "$PARKED_ROOT/main"
+  run env PATH="$STUBDIR:$PATH" HERDR_ENV=0 CMUX_WORKSPACE_ID= \
+      bash "$SCRIPT" --name baseprobe2 --handoff "$PARKED_ROOT/h.md" --target tab
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"BASE WAS NOT YOURS:"* ]]
 }
 
 @test "herdr workspace: the handoff viewer pane is named Handoff, not the work label (R14)" {

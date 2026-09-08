@@ -218,7 +218,7 @@ spawn::team_record_new() {
 }
 
 spawn::team_member_add() {
-    local dir="$1" name="$2" alias="$3" worktree="$4" contract="$5" skills="${6:-}" cur raw
+    local dir="$1" name="$2" alias="$3" worktree="$4" contract="$5" skills="${6:-}" allow="${7:-}" cur raw
     cur="$(spawn::team_record_read "$dir")" || return 1
     if printf '%s' "$cur" | jq -e --arg n "$name" 'any(.members[]; .name == $n)' >/dev/null 2>&1; then
         SPAWN_TEAM_ERROR="member_duplicate"
@@ -226,12 +226,13 @@ spawn::team_member_add() {
         return 1
     fi
     raw="$(printf '%s' "$cur" | jq -c --arg n "$name" --arg a "$alias" --arg w "$worktree" \
-        --arg c "$contract" --arg sk "$skills" \
+        --arg c "$contract" --arg sk "$skills" --arg al "$allow" \
         '.members += [{name:$n, alias:$a, worktree:$w, contract:$c,
                        skills:($sk | split(" ") | map(select(length > 0))),
+                       allow:($al | split(" ") | map(select(length > 0))),
                        launch_state:"pending", handle:null, round:null,
                        started_at:null, outcome:null, failure:null, attempts:[],
-                       served_model:null,
+                       served_model:null, grants:null,
                        tokens:{input:null, output:null}}]')" || {
         SPAWN_TEAM_ERROR="record_unwritable"
         say "team record: could not encode the member row for '$name'"
@@ -245,7 +246,7 @@ spawn::team_member_set() {
     case "$fld" in
         launch_state|handle|round|started_at|outcome|tokens_input|tokens_output) ;;
         served_model) ;;
-        failure|attempts) ;;
+        failure|attempts|grants) ;;
         *)
             SPAWN_TEAM_ERROR="field_unknown"
             say "team record: '$fld' is not a writable member field"
@@ -265,7 +266,7 @@ spawn::team_member_set() {
           if .name != $n then .
           elif $f == "tokens_input" then .tokens.input = val
           elif $f == "tokens_output" then .tokens.output = val
-          elif ($f == "failure" or $f == "attempts") then .[$f] = ($v | fromjson)
+          elif ($f == "failure" or $f == "attempts" or $f == "grants") then .[$f] = ($v | fromjson)
           else .[$f] = val end)')" || {
         SPAWN_TEAM_ERROR="usage"
         say "team record: '$value' is not a valid value for '$fld'"
@@ -315,10 +316,10 @@ spawn::team_member_rotate() {
           else . + {attempts: ((.attempts // [])
                        + [{round: .round, handle: .handle, outcome: .outcome,
                            failure: .failure, tokens: .tokens,
-                       served_model: .served_model}]),
+                       served_model: .served_model, grants: .grants}]),
                     launch_state: "retry_pending",
                     handle: null, outcome: null, started_at: null,
-                    round: null, failure: null, served_model: null,
+                    round: null, failure: null, served_model: null, grants: null,
                     tokens: {input: null, output: null}}
           end)')" || {
         SPAWN_TEAM_ERROR="record_unwritable"

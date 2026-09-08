@@ -347,6 +347,17 @@ resolve_launcher() {
   esac
   if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
   elif [ -n "${CMUX_WORKSPACE_ID:-}" ] && _cmux_probe;    then LAUNCHER=cmux
+  # Nothing announced a multiplexer, but a herdr SERVER is up. HERDR_ENV is injected
+  # by the herdr binary into panes it spawns, so it is a proxy for launch ancestry, not
+  # for herdr being reachable: a session started from a plain terminal never holds it,
+  # while `herdr pane`/`agent` still address every pane on the live server by id. Before
+  # this arm such a session fell through to ghostty and opened a bare window beside the
+  # user's herdr layout, at exit 0, with no mention of herdr anywhere.
+  # It sits BELOW both announced arms and keeps their `-z` guards, so it cannot steal a
+  # session another backend owns, and HERDR_ENV=0 (present but switched off, R8) still
+  # resolves `none` rather than reaching this probe.
+  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] \
+       && _herdr_probe;                                   then LAUNCHER=herdr
   # ghostty is checked LAST, and only when NO multiplexer announced itself in the
   # environment at all. Two separate reasons, both load-bearing:
   #  * ghostty's own vars are set even when a multiplexer owns the session —
@@ -769,6 +780,7 @@ launcher_new_split_herdr() {
     if ! err="$("$HERDR" pane swap --source-pane "$pane" --target-pane "$FROM_SURFACE" 2>&1)"; then
       echo "  ⚠ the split succeeded but the swap that puts it on the LEFT failed: $err" >&2
       echo "    continuing — the briefed session lands on the right instead." >&2
+      TARGET_DOWNGRADE="split left → split right: the pane swap that moves the new pane to the left failed"
     fi
   fi
   LAUNCH_RUN_PANE="$pane"      # the pane claude runs in (no further split)
@@ -1212,6 +1224,7 @@ launcher_launch_agent_ghostty() {
         *error=surface-not-found*)
           echo "  ⚠ --from-surface '$FROM_SURFACE' matches no live ghostty terminal (expected a terminal id or its tty, e.g. /dev/ttys004) — opening a new TAB instead of a split" >&2
           LAUNCH_LABEL="agent tab"; LAUNCH_WHERE="tab"
+          TARGET_DOWNGRADE="split → tab: --from-surface '$FROM_SURFACE' matches no live ghostty terminal (expected a terminal id or its tty, e.g. /dev/ttys004)"
           out="$(_ghostty_run new-tab "$cmd" "$WORKTREE")" ;;
         *)
           # Put the user back in the pane they started from. The dictionary has no
@@ -1403,6 +1416,11 @@ TARGET="tab"                 # tab => surface in current workspace; workspace =>
 LAUNCHER="auto"              # launch backend: herdr | cmux | ghostty | auto (auto => detect, see resolve_launcher)
 SPLIT_DIRECTION="right"      # --target split only: which side of --from-surface (right | left)
 FROM_SURFACE=""              # the ORIGINATING pane/surface to split off (see the validation note below)
+# Set when a requested target could not be honoured. Declared HERE, beside the target
+# state it shadows, because the split fallback below runs long before the summary
+# block's own state is initialised.
+TARGET_DOWNGRADE=""       # "<asked> → <got>: why", relayed in the summary block
+BASE_SURPRISE=""          # set when an omitted --base did not mean the caller's HEAD
 SESSION_TRANSCRIPT=""        # explicit originating-session transcript (set by the skill when backgrounded)
 SESSION_CWD=""               # cwd of the originating session, for the resume one-liner
 while [ $# -gt 0 ]; do
@@ -1462,6 +1480,7 @@ if [ "$TARGET" = split ] && [ -z "$FROM_SURFACE" ]; then
   echo "  ⚠ --target split needs --from-surface <id>, and nothing was passed — opening a TAB instead of a split." >&2
   echo "    The originating surface cannot be inherited from the environment here; pass it explicitly." >&2
   TARGET=tab
+  TARGET_DOWNGRADE="split → tab: --target split needs --from-surface <id> and none was passed"
 fi
 
 # ---- resolve the launcher binaries (R1-R3, R15) ------------------------------
@@ -1508,6 +1527,12 @@ if [ -z "$GHOSTTY_APP" ]; then
     [ -d "$_g" ] && { GHOSTTY_APP="$_g"; break; }
   done
 fi
+
+# The branch the CALLER was standing on, read before --repo moves us anywhere.
+# An omitted --base means "current HEAD", and the caller reads that as THEIR head.
+# It is resolved further down against the MAIN checkout instead, which is a
+# different branch whenever the caller sits in a worktree or passed --repo.
+CALLER_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 
 # ---- resolve target repo (--repo) before any cwd-relative git/IO ------------
 # The originating /start session's cwd is often NOT inside the target repo (e.g.
@@ -1580,6 +1605,17 @@ if [ -n "$BASE" ]; then
   BASE_REF="$BASE"
 else
   BASE_REF="$CUR_BRANCH"          # branch off current HEAD
+  # ...but "current" is the MAIN checkout's HEAD, not the caller's, whenever the
+  # caller sits in a worktree or named --repo. That checkout is routinely parked on
+  # an unrelated branch, so the new session gets a tree WITHOUT the work it was spun
+  # off to continue — and every mechanical step still succeeds, so the run exits 0
+  # with a tab open. Nothing else in this script would notice. Say it instead.
+  if [ -n "$CALLER_BRANCH" ] && [ "$CALLER_BRANCH" != "HEAD" ] \
+     && [ "$CALLER_BRANCH" != "$BASE_REF" ]; then
+    BASE_SURPRISE="$BASE_REF (the $( [ -n "$REPO" ] && printf %s "--repo" || printf %s "main" ) checkout's HEAD) — NOT your '$CALLER_BRANCH'"
+    echo "  ⚠ --base was omitted, so the base is '$BASE_REF' — the checkout this worktree nests under, not the '$CALLER_BRANCH' you ran from." >&2
+    echo "    Pass --base '$CALLER_BRANCH' to carry your work, or --base origin/<branch> for a fresh base." >&2
+  fi
 fi
 step "base ref:    $BASE_REF"
 
@@ -1985,6 +2021,7 @@ else
   echo "✓ Spinoff complete"
 fi
 echo "  branch:    $BRANCH  (from $BASE_REF)"
+[ -n "$BASE_SURPRISE" ] && echo "  BASE WAS NOT YOURS: $BASE_SURPRISE"
 echo "  worktree:  $WORKTREE"
 echo "  handoff:   $HANDOFF_DST"
 echo "  docs:      $CARRIED carried"
@@ -2010,6 +2047,10 @@ fi
 VIEWER_NOTE=""; [ "$VIEWER_OK" = "1" ] && VIEWER_NOTE=" (handoff viewer alongside)"
 # Printed inside the relayed block, not via step() or a stderr warning: R12 puts
 # this in the summary, and those two surfaces land above it and beside it.
+if [ -n "$TARGET_DOWNGRADE" ]; then
+  echo "  NOT what was asked for:"
+  echo "    $TARGET_DOWNGRADE"
+fi
 if [ -n "$UNNAMED_SURFACES" ]; then
   echo "  went unnamed:"
   printf '%s\n' "$UNNAMED_SURFACES"

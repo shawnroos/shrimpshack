@@ -1,7 +1,7 @@
 {
   "name": "comment-cut",
   "description": "Cut comment bloat out of a branch without losing the comments that matter. Sweeps the mechanical classes, then judges area by area against four narrow keep-rules, each needing a failure that nothing reports AND a tempting edit that would cause it \u2014 a visible bug is a missing test, not a comment. Specs default to zero, on the principle that a red test is not a silent failure. The default action is delete, not tighten. Verification is the point: a comments-only change is proven by comparing esbuild minified output, so a stray string-literal or logic edit cannot pass, and an invariant-signal scan over every removed line catches the over-cut that typechecks and tests cannot see. Reads its keep/cut bar from the target repo, never from a copy baked into the plugin.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "author": {
     "name": "Shawn Roos",
     "email": "shawn@slateteams.com"
@@ -13,5 +13,7 @@
     "code-quality",
     "diff"
   ],
-  "skills": "./skills"
+  "skills": "./skills",
+  "commands": "./commands",
+  "hooks": "./.claude/hooks/hooks.json"
 }

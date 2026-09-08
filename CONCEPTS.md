@@ -131,3 +131,23 @@ is discarded.
 Retiring a member's current try into its attempt history and returning the member to the
 roster. It is one write, not a sequence, because a reader that catches it half-applied sees
 a member that is neither finished nor retryable.
+
+## Herdr and Linear
+
+### Binding
+The recorded link between one git worktree and one Linear issue. It is held against the
+worktree, never against a pane or tab, so rearranging the layout does not lose it. A match
+the plugin infers is only a proposal; the binding exists once Shawn confirms it, and only a
+confirmed binding permits a write to Linear.
+
+### Unbound
+A worktree with no binding. It is a supported state, not an error — work often starts before
+the issue exists — and the plugin never requires an issue to be created for it.
+
+### Misplaced
+A bound worktree whose herdr workspace does not correspond to its issue's Linear project.
+The plugin reports it and offers to move either side; it never picks which one was wrong.
+
+### Stale
+A binding whose issue has been closed in Linear while the worktree is still in use. It is
+reported and otherwise left alone — the plugin does not reopen an issue on its own.

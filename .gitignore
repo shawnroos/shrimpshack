@@ -3,3 +3,4 @@
 .claude/auto/
 **/.claude/scheduled_tasks.lock
 .DS_Store
+worktrees/

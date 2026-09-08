@@ -17,6 +17,12 @@ Usage:
   check.py --all           # every tracked JS/TS file under cwd
   check.py <file>...       # specific files
   check.py --self-test     # run built-in fixtures, exit 1 if detection breaks
+  check.py --porcelain ... # one finding per line as file:line:kind, exit 1 if any
+
+--porcelain is the only path that exits non-zero on findings. Every other path
+exits 0 whatever it finds, because a machine reading this must be able to tell
+"found something" from "found nothing" while a human running it can never have
+a commit blocked by it.
 """
 import re
 import subprocess
@@ -259,6 +265,7 @@ def main():
     args = sys.argv[1:]
     if '--self-test' in args:
         return self_test()
+    porcelain = '--porcelain' in args
     if '--all' in args:
         files = all_files()
     elif args:
@@ -267,8 +274,17 @@ def main():
         files = changed_files()
 
     if not files:
-        print('comment-bloat: no JS/TS files to check')
+        if not porcelain:
+            print('comment-bloat: no JS/TS files to check')
         return 0
+
+    if porcelain:
+        hits = 0
+        for f in files:
+            for ln, kind, _ in scan(f):
+                print(f'{f}:{ln}:{kind}')
+                hits += 1
+        return 1 if hits else 0
 
     total = 0
     for f in files:

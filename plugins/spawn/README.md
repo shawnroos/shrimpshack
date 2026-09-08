@@ -456,7 +456,10 @@ Read the file — `permissions/repo-bounded.settings.json` — it is the whole
 story. In summary: reads, greps, writes and edits are **scoped to the
 worktree**; version-control internals and hooks, and agent configuration
 (`.claude/`, `.claude-plugin/`, `CLAUDE.md`, `AGENTS.md`, `.mcp.json`) are
-denied; `Bash` is simply not allowed.
+denied; `Bash` is simply not allowed **by default**. It is one of the two
+grantable tools — a caller passing `--allow Bash` widens that job's own copy of
+the ceiling, which is not a narrower shell but a full one; see the cost in
+`commands/bg-agent.md`.
 
 `{{WORKTREE}}` in that file is substituted at launch with the job's worktree.
 A permission path is only absolute when it starts with `//`, which is why the

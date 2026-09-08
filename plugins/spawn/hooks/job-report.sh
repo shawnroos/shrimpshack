@@ -118,11 +118,12 @@ for dir in "$JOB_ROOT"/job-*; do
           (.terminal_state // "?"),
           (if (.deliverables_satisfied // false) then "deliverables present" else "NO deliverables" end),
           (.alias // "?"),
-          ((.permission_denials // []) | length | tostring)
+          ((.permission_denials // []) | length | tostring),
+          ((.grants // []) | join(","))
         ] | @tsv' "$dir/result.json" 2>/dev/null)" || continue
     [ -n "$line" ] || continue
 
-    IFS=$'\t' read -r handle state deliv alias denials <<< "$line"
+    IFS=$'\t' read -r handle state deliv alias denials grants <<< "$line"
 
     # NOT marked here. Nothing is printed inside this loop — the lines accumulate
     # and go out in one write after it — so marking here would let one failure
@@ -131,6 +132,9 @@ for dir in "$JOB_ROOT"/job-*; do
 
     extra=""
     [ "${denials:-0}" != "0" ] && extra=" · ${denials} tool call(s) refused by its ceiling"
+    # A granted job is named as such. Bash especially: a reader scanning these
+    # lines should not have to open the record to learn which jobs held a shell.
+    [ -n "${grants:-}" ] && extra="$extra · GRANTED $(clean "$grants")"
 
     LINES="$LINES
   - $(clean "$handle") on $(clean "$alias"): $(clean "$state"), ${deliv}${extra}

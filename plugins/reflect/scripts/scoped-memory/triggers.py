@@ -99,6 +99,12 @@ maintenance points, two of which live here as REPORTS and one as a WRITER.
   session B's unrelated application, and both logs still look well-formed
   (KTD9b). A trigger that has fired `MIN_MISFIRE_NUDGES` times with zero
   same-session applications is surfaced for prune-or-sharpen.
+  **The tally counts LOGGED applications, not use.** An `applied` line is written
+  only when an agent explicitly writes one, so a trigger that fired and changed
+  the work reads as zero when nobody logged it — observed on reuse-gate /
+  CONNECTIONS.md at 52 nudges and zero applications, in the session that acted on
+  it. Rows carry `evidence="unlogged-or-unused"`. Confirm a trigger is genuinely
+  idle before pruning it; this report narrows where to look, it does not decide.
 
 * **The writer** (`add`) — `add_triggers()` is the only sanctioned way to put a
   `triggers:` field into an existing body, and it exists because of KTD14:
@@ -1174,7 +1180,15 @@ def backfill_candidates(store_dir, min_days=None, include_declared=False,
 
 
 def never_acted_on(store_dir, min_nudges=None):
-    """Triggers that keep firing and never get applied.
+    """Triggers that keep firing and were never LOGGED as applied.
+
+    Read the name as "never logged", not "never used". An `applied` line lands in
+    MEMORY_USE.log only when an agent explicitly writes one, so a trigger that
+    fired and genuinely changed the work still tallies zero if nobody logged it.
+    The signal cannot separate an unused trigger from an unlogged one, and it was
+    caught doing exactly that: the reuse-gate / CONNECTIONS.md memory showed 52
+    nudges and zero applications in the very session that acted on it. Every row
+    therefore carries `evidence="unlogged-or-unused"`; do not prune on this alone.
 
     The join is `telemetry.join_surfaced_applied`, used unchanged — it credits a
     nudge only when the SAME session later applied that memory (KTD9b). Nudge
@@ -1220,6 +1234,9 @@ def never_acted_on(store_dir, min_nudges=None):
         rec["remedy"] = ("rescope" if len(repos) > 1
                          and scope_of_memory(store_dir, rec["memory"]) == scope.GLOBAL
                          else "prune-or-sharpen")
+        # Absence of a log line is not evidence of absence of use. Carried on the
+        # record so a reader cannot take the tally for a measurement of USE.
+        rec["evidence"] = "unlogged-or-unused"
         out.append(rec)
     out.sort(key=lambda r: (-r["nudges"], r["memory"] or ""))
     return out

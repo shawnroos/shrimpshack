@@ -51,11 +51,15 @@ when it turns out you needed tools or persistence, not in anticipation.
 
 ## What a background job can ACTUALLY do — measured by effect
 
-**A job cannot run shell commands, spawn agents, schedule work, or reach the
-network.** Bash, Agent, Workflow, Task*, Cron*, ScheduleWakeup, Monitor,
+**By default a job cannot run shell commands, spawn agents, schedule work, or
+reach the network.** Agent, Workflow, Task*, Cron*, ScheduleWakeup, Monitor,
 WebFetch, SendMessage, RemoteTrigger, PushNotification, ShareOnboardingGuide,
 NotebookEdit and the worktree-moving tools are all explicitly denied. It can
-Read, Write and Edit inside the worktree, and that is the job.
+Read, Write and Edit inside the worktree, plus Glob and Grep, and that is the job.
+
+**`Bash` is off by default and grantable on request** — `--allow Bash`; see
+the cost below. WebSearch is the other grantable tool. Everything else above
+stays refused.
 
 **Know how that boundary is built, because it changes what you can trust.** BOTH
 lists gate. An earlier version of this section said otherwise — that the deny list
@@ -65,7 +69,7 @@ the real CLI, three arms differing only in the permission file:
 
 | ceiling | Bash | `permission_denials` |
 |---|---|---|
-| shipped, `Bash` in `deny` | refused | `[]` |
+| `Bash` in `deny` (the shipped default before it became grantable) | refused | `[]` |
 | `Bash` removed from `deny` only | **still refused** | `["Bash"]` |
 | removed from `deny` AND added to `allow` | ran | — |
 
@@ -144,16 +148,24 @@ A skill provisioned into a job that cannot execute it is worse than no skill: th
 job follows as much of the method as its tools allow and reports on that.
 
 The child can Read, Write, Edit, `Grep` and `Glob` inside the worktree. It has
-**no Bash** — no build, no test run, no linter, no `git`. So:
+**no Bash unless you grant it** — so by default no build, no test run, no linter,
+no `git`. So:
 
 - a skill that reads files, searches for its own inputs, and writes a report → works
-- a skill that runs a build, a test, a linter, or `git` → will half-work, which
-  is worse than failing, because the job reports what it managed rather than what
-  it could not do
+- a skill that runs a build, a test, a linter, or `git` → will half-work without a
+  grant, which is worse than failing, because the job reports what it managed
+  rather than what it could not do
 
-If the task genuinely needs a command run, that is what the contract's `verify`
-is for: the SUPERVISOR runs it after the child exits, and its exit code is
-evidence rather than narrative.
+Two ways to give it a command. One command at the END → the contract's `verify`,
+which the SUPERVISOR runs after the child exits, making its exit code evidence
+rather than narrative. A shell DURING the work → `--allow Bash`, and read what
+that costs below, because it is not a narrower ceiling, it is none.
+
+Two ways to give it a command. If the task needs one command run at the END, use
+the contract's `verify`: the SUPERVISOR runs it after the child exits, and its
+exit code is evidence rather than narrative. If the task needs a shell DURING the
+work, pass `--allow Bash` — and read what that costs, below, because it is not a
+narrower ceiling, it is none.
 
 **Deliverables go in the worktree, never in `.spawn/`.** That directory is the
 supervisor's — the job record, the baseline, the provisioned skills — and the
@@ -169,7 +181,7 @@ limitation only after the answer comes back thin.
 | Surface | What the far side can do |
 |---|---|
 | `agent` | **Nothing.** One message in, one answer out. No file reads, no commands, no second turn. |
-| `bg-agent` | `Read`, `Write`, `Edit`, `Grep`, `Glob` — all **scoped to the worktree**, and search really works there (measured), so a job can find inputs you did not name. **No `Bash`** — it cannot run a command, a test, or `git log`. Version-control internals, hooks and agent configuration are denied outright; a path that resolves outside the worktree — an escaping symlink included — falls outside the allow and is refused. |
+| `bg-agent` | `Read`, `Write`, `Edit`, `Grep`, `Glob` — all **scoped to the worktree**, and search really works there (measured), so a job can find inputs you did not name. **No `Bash` by default** — it cannot run a command, a test, or `git log` unless you pass `--allow Bash`, which grants a full shell and ends every other bound (see the cost above). Version-control internals, hooks and agent configuration are denied outright; a path that resolves outside the worktree — an escaping symlink included — falls outside the allow and is refused. |
 | `session` | Claude Code's full loop under **your own** permissions in the directory you pin. |
 
 ### The trap: an `agent` reviewer only sees what you thought to include
@@ -208,6 +220,10 @@ The ceiling is chosen by which surface you reach, not selected by a flag: which
 ceiling applies is fixed by which file ran. So the choice of surface **is** the
 choice of permissions, and it is worth making deliberately rather than by habit:
 
+It has **no shell unless you grant one**. A question only a command can answer —
+a test run, a `git log` — needs either the contract's `verify` hook or
+`--allow Bash`, whose cost is below.
+
 - **Judgement on material you can hand over** → `agent`. Nothing can be touched.
 - **Investigation, review, or anything needing discovery** → `bg-agent`. It can read
   and search the worktree, so it can chase what you did not name; it can also write
@@ -230,6 +246,38 @@ promised returns a confident wrong answer.
 Name the tool you need and nothing more. Granting `Bash` back hands the job the one
 capability the rest of the ceiling exists to remove: the ability to have some other
 process produce the deliverable, which is then not the thing that was measured.
+
+### What granting `Bash` actually costs
+
+Say this to whoever asked, before you pass the flag. `--allow Bash` is not a wider
+ceiling — it is **no** ceiling, and the reason is mechanical rather than a matter
+of degree.
+
+Every other bound on a background job is **tool-scoped**. `Write(//<worktree>/**)`
+binds the `Write` tool. A shell is not that tool, so none of those rules reach it.
+A granted job runs commands as you, which means:
+
+- it reaches the plugin's own tool gate, its rendered ceiling, and its own job
+  record — all writable by the user who launched it;
+- it holds the gateway token, which the supervisor exports into the child's
+  environment as `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`, plus anything else
+  that user can read — `~/.claude`, SSH keys, push rights;
+- the blast radius **outlives the job**: the tool gate is one shared file, so a
+  granted job that rewrites it removes the default-deny layer for later jobs whose
+  caller granted nothing.
+
+Measured 2026-08-25: a granted child ran a shell command, was told to disarm its
+own gate copy, and did not — but that file was writable and nothing stopped it, so
+that is the model declining, not a bound. Do not read it as protection.
+
+There is **no command-scoped form**. `--allow "Bash(npm test:*)"` is refused: the
+gate matches the bare tool name, and the grant writes bare `Bash` into the allow
+list, which subsumes any scoped rule beside it. Pointing `SPAWN_CEILING_CONFIG_REPO`
+at your own settings file does not produce one either.
+
+So: prefer the contract's `verify` hook when one command at the end would do. Reach
+for the grant when the work genuinely needs a shell throughout, and say in your
+summary that you granted it.
 
 ## `bg-agent`: the contract is the whole point
 
@@ -327,6 +375,8 @@ absent is not done however confidently the narrative describes it.
 - **The ceiling is `repo-bounded` and is not selectable.** `--allow` widens that
   job's copy of it; nothing selects a different one. The job runs inside the current
   worktree, so work that needs to reach outside it is not a background job.
+  Granting `Bash` is the exception worth naming: it does not widen the bound, it
+  removes it (see the cost above).
 - **The child deadline is 900s.** Longer work needs splitting, not a bigger number.
 - **One job per worktree.** A second start is refused with `job_already_running`,
   and the response names the one already there in `running_handle`.
