@@ -135,12 +135,14 @@ check. Silence is indistinguishable from not having asked.
   you chose is your judgment; a skill they named is their instruction. If the job
   goes wrong, that distinction is the first thing worth knowing.
 
-**A name that does not resolve is not provisioned, and the job still runs.** An
-unresolvable skill is recorded in the job record's `degraded_reasons[]` rather
-than refusing the dispatch — so a typo yields a job running without the method it
-was promised. Skills resolve from your own `~/.claude/skills` and from installed
-plugins' skills; a name you guessed at is worth checking before you rely on it,
-and the reason a skill was refused is in that list rather than in the narrative.
+**A name that does not resolve refuses the dispatch.** The job is settled
+`skill_unresolvable` before anything is claimed, so a typo costs you the
+dispatch rather than a job running without the method it was promised. A name
+that resolves and then fails to copy is the case that still runs, recorded in
+the job record's `degraded_reasons[]`. Skills resolve from your own
+`~/.claude/skills` and from installed plugins' skills; a name you guessed at is
+worth checking before you rely on it, and the reason a skill was refused is in
+that list rather than in the narrative.
 
 ### Check it can actually run there before you provision it
 

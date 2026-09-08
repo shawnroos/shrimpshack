@@ -4244,14 +4244,34 @@ equip_section() {
                       on && /^#/ { exit } on'
 }
 
-@test "the skill warns that an unresolvable skill name still dispatches" {
-    # The trap that produces a confident report from an unequipped member: the
-    # name is recorded in degraded_reasons[] and the member runs anyway. A
-    # driver who thinks a typo refuses the run will not check for it.
+@test "the skill says an unresolvable skill name refuses that member" {
+    # REVERSED: an unresolvable name used to dispatch and degrade. It now
+    # refuses the member before anything is claimed, so a driver reading the old
+    # wording would go looking in degraded_reasons[] for a member that never ran.
+    # Scoped to the equip section for the reason recorded above it.
     local sec
     sec="$(equip_section)"
     [ -n "$sec" ]
-    printf '%s' "$sec" | grep -qiE 'degraded_reasons|does not resolve|unresolvable'
+    printf '%s' "$sec" | grep -qiE 'refuses that member|skill_unresolvable|skill_not_provisioned'
+    # The surviving degraded case is the one that resolves and fails to copy, so
+    # the section must still tell the driver that path exists.
+    printf '%s' "$sec" | grep -qiE 'degraded_reasons'
+}
+
+@test "no spawn doc claims an unresolvable skill name still runs the job" {
+    # A behaviour reversal leaves its old wording behind in every surface that
+    # explained it. Four carried this one; pinned absent over the whole plugin
+    # rather than trusted to stay fixed, the same treatment the retracted
+    # Grep/Glob claim gets below.
+    local root="$LIB/.." f hits=0
+    for f in "$root"/skills/*/SKILL.md "$root"/commands/*.md "$root"/README.md; do
+        [ -f "$f" ] || continue
+        if grep -qiE 'does not resolve does not stop|unresolvable skill name still dispatch|does not resolve still dispatch|does not resolve is not provisioned' "$f"; then
+            printf 'stale claim that an unresolvable name still runs, in %s\n' "$(basename "$f")" >&2
+            hits=1
+        fi
+    done
+    [ "$hits" -eq 0 ]
 }
 
 @test "no spawn doc claims a child has no Grep or Glob" {
