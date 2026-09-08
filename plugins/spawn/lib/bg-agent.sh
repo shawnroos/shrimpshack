@@ -126,6 +126,11 @@ JOBS="$SCRIPT_DIR/jobs.sh"
 # probe just authenticated against.
 # shellcheck source=./secrets.sh
 . "$SCRIPT_DIR/secrets.sh"
+# Sourced for the skill provisioning helpers: a child gets --setting-sources
+# project, so it does NOT inherit the operator's skills. A job told to run a
+# named skill has none unless one is copied where it can read it.
+# shellcheck source=./skills.sh
+. "$SCRIPT_DIR/skills.sh"
 KEYCHAIN_SERVICE="${SPAWN_KEYCHAIN_SERVICE:-spawn-gateway}"
 KEYCHAIN_ACCOUNT_TOKEN="${SPAWN_KEYCHAIN_ACCOUNT_TOKEN:-gateway-token}"
 
@@ -238,29 +243,13 @@ validate_deliverable() {
 }
 
 # ---------------------------------------------------------------------------
-# THE PRE-JOB BASELINE (KTD9).
-#
-# A pre-existing file must not satisfy a contract, so every deliverable is
-# fingerprinted BEFORE the child starts and the after-state is compared against
-# that record. `absent` is a fingerprint like any other, which is what makes
-# "was not there, now is" and "was there, was rewritten" both count while "was
-# there, untouched" does not.
-#
-# cksum is POSIX and needs no interpreter; it is fed on STDIN so its output
-# carries no filename. A directory fingerprints as its sorted listing, which
-# catches an added or removed entry but not a rewritten byte inside one — said
-# here rather than left for a reader to discover, because a contract naming a
-# directory is weaker than one naming files.
+# THE PRE-JOB BASELINE (KTD9). The comparison itself — fingerprint_path,
+# fingerprint_of and deliverable_state — lives in common.sh, because the view
+# that reports a RUNNING member reads the same baseline this file writes, and a
+# second copy of the comparison is how the two would come to disagree about
+# whether a file counts as progress. Only the baseline's CAPTURE is here: it
+# happens once, at launch, and nothing else writes one.
 # ---------------------------------------------------------------------------
-fingerprint_path() {    # <absolute path>
-    if [ -f "$1" ]; then
-        printf 'f:%s' "$(cksum < "$1" 2>/dev/null)"
-    elif [ -d "$1" ]; then
-        printf 'd:%s' "$(find "$1" 2>/dev/null | LC_ALL=C sort | cksum 2>/dev/null)"
-    else
-        printf 'absent'
-    fi
-}
 
 # Writes "<fingerprint>\t<relative path>" per deliverable, reading the paths
 # from a one-per-line list file. Tab-separated because a fingerprint contains
@@ -274,10 +263,6 @@ write_fingerprints() {  # <worktree> <list file> <destination>
         printf '%s\t%s\n' "$(fingerprint_path "$tree/$rel")" "$rel" >> "$dest" || return 1
     done < "$list"
     return 0
-}
-
-fingerprint_of() {      # <record file> <relative path>
-    awk -F '\t' -v want="$2" '$2 == want { print $1; exit }' "$1" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -604,7 +589,18 @@ launcher_main() {
     # -----------------------------------------------------------------------
     local SUP_PID
     set -m
+    # The supervisor is a SEPARATE process: anything the launcher parsed reaches
+    # it only if it is forwarded here. Measured the hard way — --skill was parsed,
+    # SUP_SKILLS was populated, and the detached supervisor saw an empty array, so
+    # provisioning silently never ran. Same shape as a sibling plugin's launch
+    # bug: state resolved in one process and assumed present in another.
+    local SKILL_ARGS=()
+    local _s
+    for _s in ${SUP_SKILLS[@]+"${SUP_SKILLS[@]}"}; do SKILL_ARGS+=(--skill "$_s"); done
+    for _s in ${SUP_GRANTS[@]+"${SUP_GRANTS[@]}"}; do SKILL_ARGS+=(--allow "$_s"); done
+
     nohup bash "$SELF" --supervise "spawn-bg-agent=$HANDLE" \
+        ${SKILL_ARGS[@]+"${SKILL_ARGS[@]}"} \
         --handle "$HANDLE" --alias "$ALIAS" --cwd "$PIN_CWD" \
         --worktree "$WORKTREE" --job-dir "$JOB_DIR" \
         --base-url "$BASE_URL" --settings "$SETTINGS" --config "$CONFIG_PATH" \
@@ -654,6 +650,13 @@ SUP_JOB_DIR=""
 SUP_CWD=""
 SUP_BASE_URL=""
 SUP_SETTINGS=""
+SUP_SKILLS=()      # names, in the order the caller asked for them
+SUP_GRANTS=()      # extra tools the caller asked the ceiling to permit
+# What the ceiling ACTUALLY granted. Kept apart from SUP_GRANTS because a
+# refused grant still writes a result, and reporting the request as though it
+# were the outcome would tell a reader a job held a shell it was denied.
+SUP_GRANTS_APPLIED=()
+SUP_SKILL_MANIFEST=""
 SUP_CONFIG=""
 SUP_STARTED=""
 SUP_RELEASED=0
@@ -680,6 +683,35 @@ sup_cancel() {
     sup_write_result "cancelled" "0" "null" "the job was cancelled and its child reaped"
     sup_release_once "cancelled" "cancelled: the supervisor was signalled and the child was reaped"
     exit 0
+}
+
+# The model that ANSWERED, from the child's own receipt (KTD10). The envelope
+# has no top-level model field, so modelUsage's first key is the only
+# attribution it holds; canonicalModel wins over the key when the entry carries
+# it, because a gateway alias can be the key while the canonical id names what
+# actually ran.
+#
+# ONE definition, called from both readers. Two copies of this program drift the
+# first time one is tuned, and the two readers decide different things: one
+# writes served_model into the record, the other decides whether the job is
+# degraded for a substitution. Disagreeing about which model answered is the
+# defect this whole surface exists to close.
+#
+# Absent, unreadable or empty is EMPTY, never $ALIAS — restating the request as
+# a measurement is exactly the byline the incident shipped.
+sup_served_model() {    # <child.json path>
+    [ -f "$1" ] || return 0
+    # `.[0] // empty`, never a bare `.[0]`: to_entries on an EMPTY modelUsage
+    # yields [], and .[0] on that is jq null, which `jq -r` prints as the
+    # four-character string "null". That lands in the record as a served model
+    # nothing measured, and it is non-empty, so the substitution gate below
+    # reads it as a model that differs from the alias and degrades a job for a
+    # mismatch that never happened. Measured, not theorised.
+    jq -r 'if type == "object" and (.modelUsage | type) == "object"
+        then (.modelUsage | to_entries | .[0] // empty
+              | (if (.value | type) == "object" and (.value.canonicalModel | type) == "string"
+                 then .value.canonicalModel else .key end))
+        else empty end' < "$1" 2>/dev/null | head -1
 }
 
 # The trusted record (R21). Written by this process, from measurement, into the
@@ -716,11 +748,23 @@ sup_cancel() {
 # `terminal_state` and `deliverables_satisfied`, both restated inside the
 # notification and both named in `detail`. `ok:false` here would also be
 # unreachable: if the supervisor could not measure, there is no record at all.
-sup_write_result() {    # <terminal state> <child exit code> <child is_error> <detail>
+sup_write_result() {    # <terminal state> <child exit code> <child is_error> <detail> [<served model>]
     local state="$1" child_rc="$2" child_ie="$3" detail="$4"
     local dir="$SUP_JOB_DIR"
     local denials='[]' narrative="" session_id="" changed='[]' deliv='[]'
     local verify_rc='null' verify_ran=false reasons='[]'
+    # An absent measurement is null, never 0 — a reader that cannot tell them
+    # apart reports an unmeasured ceiling as a satisfied one. Defaulted out here
+    # because the contract-fault path writes a record before any child exists,
+    # and reset again below because a child that died before writing leaves
+    # child.json present but EMPTY, on which jq prints nothing and exits 0.
+    local usage_json='{"input_tokens":null,"output_tokens":null}'
+    # Taken from the caller when it already read it, so the completion path does
+    # not fork jq twice over the same file for the same answer. PRESENCE, not
+    # emptiness, selects: empty is a valid served model meaning unknown, and
+    # testing for non-empty would silently re-read on every unknown.
+    local served=""
+    [ $# -ge 5 ] && served="$5"
 
     if [ -f "$dir/child.json" ]; then
         denials="$(jq -c 'if type == "object" and (.permission_denials | type) == "array" then .permission_denials else [] end' < "$dir/child.json" 2>/dev/null)"
@@ -728,6 +772,12 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         narrative="$(jq -r 'if type == "object" then (.result // "") else "" end' < "$dir/child.json" 2>/dev/null)"
         session_id="$(jq -r '.session_id // empty' < "$dir/child.json" 2>/dev/null)"
         case "$session_id" in ""|*[!A-Za-z0-9._-]*) session_id="" ;; esac
+        usage_json="$(jq -c 'def num(v): if (v | type) == "number" then v else null end;
+            (if type == "object" and (.usage | type) == "object" then .usage else {} end)
+            | {input_tokens: num(.input_tokens), output_tokens: num(.output_tokens)}' \
+            < "$dir/child.json" 2>/dev/null)"
+        [ -n "$usage_json" ] || usage_json='{"input_tokens":null,"output_tokens":null}'
+        [ $# -ge 5 ] || served="$(sup_served_model "$dir/child.json")"
     fi
 
     changed="$(changed_since_baseline "$SUP_WORKTREE" "$dir/baseline.marker" "$(dirname "$dir")" "$dir/baseline.git" \
@@ -742,16 +792,11 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
     # answer there, and it can never read as satisfied because `all` over an
     # empty array is guarded by the length check below.
     [ -f "$dir/deliverables.list" ] || : > "$dir/deliverables.list" 2>/dev/null
-    local rel before after was_present is_present is_changed all_ok=true
+    local rel all_ok=true
     deliv="$( { while IFS= read -r rel; do
             [ -n "$rel" ] || continue
-            before="$(fingerprint_of "$dir/baseline.deliverables" "$rel")"
-            [ -n "$before" ] || before="absent"
-            after="$(fingerprint_path "$SUP_WORKTREE/$rel")"
-            if [ "$before" = "absent" ]; then was_present=false; else was_present=true; fi
-            if [ "$after" = "absent" ]; then is_present=false; else is_present=true; fi
-            if [ "$after" != "$before" ] && [ "$is_present" = true ]; then is_changed=true; else is_changed=false; fi
-            printf '%s\t%s\t%s\t%s\n' "$rel" "$was_present" "$is_present" "$is_changed"
+            printf '%s\t%s\n' "$rel" \
+                "$(deliverable_state "$dir/baseline.deliverables" "$SUP_WORKTREE" "$rel")"
         done < "$dir/deliverables.list"; } \
         | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t"))
                    | map({path:.[0],
@@ -768,6 +813,17 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         [[ "$verify_rc" =~ ^[0-9]+$ ]] || verify_rc='null'
         [ "$verify_rc" = "null" ] || verify_ran=true
     fi
+
+    # The grants the ceiling APPLIED, from the supervisor's own memory — never
+    # re-read from grants.applied. That file sits in the job dir under
+    # <worktree>/.spawn, which a Bash-granted job can write, so re-reading it
+    # would let exactly the jobs this field exists to expose rewrite it. Same
+    # discipline as permission_denial_count: the supervisor's measurement, not a
+    # file the child could reach.
+    local grants
+    grants="$(printf '%s\n' ${SUP_GRANTS_APPLIED[@]+"${SUP_GRANTS_APPLIED[@]}"} \
+        | jq -Rsc 'split("\n") | map(select(length > 0))')"
+    [ -n "$grants" ] || grants='[]'
 
     reasons="$(printf '%s\n' "${SUP_REASONS:-}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
     [ -n "$reasons" ] || reasons='[]'
@@ -786,6 +842,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
       jq -nc --arg js "$SPAWN_RESULT_SCHEMA" --arg h "$SUP_HANDLE" \
         --arg rf "$dir/result.json" \
         --arg a "$ALIAS" --arg c "$CEILING" --arg w "$SUP_WORKTREE" \
+        --arg sm "$served" \
         --arg cw "$SUP_CWD" --arg st "$SUP_STARTED" --arg en "$(now_utc)" \
         --arg s "$state" --arg d "$detail" --arg sid "$session_id" \
         --arg n "$narrative" --arg vc "$verify_cmd" \
@@ -793,9 +850,11 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         --arg tp "$SPAWN_TRUST_PLUGIN" --arg np "$SPAWN_NOTICE_PLUGIN" \
         --argjson dn "$denials" --argjson ch "$changed" --argjson dl "$deliv" \
         --argjson vr "$verify_rc" --argjson vran "$verify_ran" \
-        --argjson ok "$all_ok" --argjson rs "$reasons" \
+        --argjson ok "$all_ok" --argjson rs "$reasons" --argjson us "$usage_json" \
+        --argjson gr "$grants" \
         --arg rc "$child_rc" --argjson ie "$child_ie" '{
-          schema:$js, job_id:$h, alias:$a, ceiling:$c,
+          schema:$js, job_id:$h, alias:$a,
+          served_model:(if $sm == "" then null else $sm end), ceiling:$c, grants:$gr,
           worktree:$w, cwd:$cw,
           content_trust:$tp, content_notice:$np,
           started_at:(if $st == "" then null else $st end), ended_at:$en,
@@ -808,6 +867,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
           verification:{command:(if $vc == "" then null else $vc end),
                         ran:$vran, exit_code:$vr},
           degraded_reasons:$rs,
+          usage:$us,
           narrative:{text:(if $n == "" then null else $n end),
                      content_trust:$tm, content_notice:$nm},
           notification:('"$notif_env"' + {
@@ -817,7 +877,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
                     + (if $ok then "; every deliverable the contract named is satisfied"
                        else "; not every deliverable the contract named is satisfied" end)
                     + ". This says the job ENDED, not that it succeeded — read terminal_state and deliverables_satisfied."),
-            job_id:$h, alias:$a, worktree:$w, result_file:$rf,
+            job_id:$h, alias:$a, worktree:$w, result_file:$rf, grants:$gr,
             terminal_state:$s, deliverables_satisfied:$ok,
             ended_at:$en,
             permission_denial_count:($dn|length),
@@ -887,10 +947,63 @@ supervisor_main() {
     if [ -z "$TOKEN" ]; then
         local NOTOK="no gateway token was resolvable, so the child was never started: the config has no server.token, GATEWAY_TOKEN is unset, and the Keychain holds no entry for this service. Nothing ran and nothing changed."
         sup_reason "$NOTOK"
+        [ -n "$SUP_SKILL_MANIFEST" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
         printf 'failed at %s — no token\n' "$(now_utc)" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
         sup_write_result "failed" 0 false "$NOTOK"
         sup_release_once "failed" "$NOTOK"
         exit 0
+    fi
+
+    # Skills the caller asked for, copied where the child can READ them. The
+    # ceiling denies Write/Edit on .claude/**, so the child uses them and cannot
+    # edit one or add itself another — provisioner and consumer stay separate,
+    # the same split the job record depends on.
+    #
+    # A failure here is recorded and the job still runs: a missing skill makes a
+    # job worse at its task, while refusing to start makes it impossible, and the
+    # record says which skills actually landed either way.
+    if [ "${#SUP_SKILLS[@]}" -gt 0 ]; then
+        SUP_SKILL_MANIFEST="$dir/skills.provisioned"
+        spawn::skill_git_exclude "$SUP_WORKTREE"
+        if ! spawn::skill_provision "$SUP_WORKTREE" "$SUP_SKILL_MANIFEST" "${SUP_SKILLS[@]}" 2>>"$dir/skills.err"; then
+            # WHICH skills, from the manifest, and WHY, from the first
+            # diagnostic. The set is derived from what actually LANDED rather
+            # than by parsing skills.err, so a reworded diagnostic cannot
+            # silently empty it; the diagnostic is then appended as context,
+            # because a reader told only which skill is missing still has to
+            # open a file to learn anything about the cause.
+            local landed="" missing="" want bare first
+            [ -f "$SUP_SKILL_MANIFEST" ] && landed=" $(sed 's|.*/||' "$SUP_SKILL_MANIFEST" | tr '\n' ' ')"
+            for want in "${SUP_SKILLS[@]}"; do
+                bare="${want##*:}"
+                case "$landed" in *" $bare "*) continue ;; esac
+                missing="${missing:+$missing }$(spawn::sanitize_for_display "$want")"
+            done
+            first="$(head -n 1 "$dir/skills.err" 2>/dev/null | tr '\t' ' ')"
+            first="$(spawn::sanitize_for_display "$first")"
+            sup_reason "these skills could not be provisioned and the job ran without them: ${missing:-see skills.err}${first:+ (${first})}"
+        fi
+        printf '%s\n' "${SUP_SKILLS[@]}" > "$dir/skills.requested"
+    fi
+
+    # Widen the job's OWN copy of the ceiling, never the shipped default. A
+    # refused grant aborts the job rather than running it quietly narrower than
+    # the caller asked for — a job that silently lacks a capability it was
+    # promised produces a confident wrong answer, which is worse than not running.
+    if [ "${#SUP_GRANTS[@]}" -gt 0 ]; then
+        if spawn::ceiling_grant "$SUP_SETTINGS" "${SUP_GRANTS[@]}" 2>>"$dir/grants.err"; then
+            SUP_GRANTS_APPLIED=("${SUP_GRANTS[@]}")
+            printf '%s\n' "${SUP_GRANTS[@]}" > "$dir/grants.applied"
+            sup_reason "the caller granted this job: $(printf '%s ' "${SUP_GRANTS[@]}")"
+        else
+            local BADG="a requested capability grant was refused; see grants.err. Nothing ran."
+            sup_reason "$BADG"
+            printf 'failed at %s — grant refused\n' "$(now_utc)" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
+            [ -n "$SUP_SKILL_MANIFEST" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
+            sup_write_result "failed" 0 false "$BADG"
+            sup_release_once "failed" "$BADG"
+            exit 0
+        fi
     fi
 
     spawn::ceiling_flags "$CEILING" "$SUP_SETTINGS"
@@ -971,7 +1084,7 @@ supervisor_main() {
     fi
 
     # The three effect signals, each independent of the others.
-    local DENIALS=0 VERIFY_RC=0 SATISFIED=0 rel before after
+    local DENIALS=0 VERIFY_RC=0 SATISFIED=0 rel dstate is_present is_changed
     [ -f "$dir/child.json" ] && DENIALS="$(jq -r 'if type == "object" and (.permission_denials | type) == "array" then (.permission_denials | length) else 0 end' < "$dir/child.json" 2>/dev/null)"
     [[ "$DENIALS" =~ ^[0-9]+$ ]] || DENIALS=0
     if [ -f "$dir/verify.rc" ]; then
@@ -981,23 +1094,39 @@ supervisor_main() {
     SATISFIED=1
     while IFS= read -r rel; do
         [ -n "$rel" ] || continue
-        before="$(fingerprint_of "$dir/baseline.deliverables" "$rel")"
-        [ -n "$before" ] || before="absent"
-        after="$(fingerprint_path "$SUP_WORKTREE/$rel")"
-        if [ "$after" = "absent" ]; then
+        dstate="$(deliverable_state "$dir/baseline.deliverables" "$SUP_WORKTREE" "$rel")"
+        IFS='	' read -r _ is_present is_changed <<< "$dstate"
+        if [ "$is_present" != true ]; then
             SATISFIED=0
             sup_reason "the contract names '$rel', and it is not there"
-        elif [ "$after" = "$before" ]; then
+        elif [ "$is_changed" != true ]; then
             SATISFIED=0
             sup_reason "the contract names '$rel', and it is byte-for-byte what it was before the job started"
         fi
     done < "$dir/deliverables.list"
 
+    # The fourth effect signal: WHICH MODEL ANSWERED. Claude Code validates
+    # --model on its own SDK path and can reject an alias the gateway serves,
+    # fall back to a default, and still produce the deliverable — a job that
+    # measures `done` on every signal above while its output is attributable to
+    # nothing that was asked for. A substitution DEGRADES the job rather than
+    # failing it (KTD11): the work may be useful, it is only unattributable.
+    #
+    # Only a KNOWN difference counts. An empty read is unknown, and treating
+    # unknown as a mismatch would degrade every job whose child reports no
+    # receipt.
+    local SUBST=0 SERVED=""
+    SERVED="$(sup_served_model "$dir/child.json")"
+    if [ -n "$SERVED" ] && [ -n "$ALIAS" ] && [ "$SERVED" != "$ALIAS" ]; then
+        SUBST=1
+        sup_reason "the job asked for '$ALIAS' and the child's own receipt says '$SERVED' answered, so this output is not attributable to the model the contract named"
+    fi
+
     [ "$DENIALS" -gt 0 ] && sup_reason "the ceiling refused $DENIALS tool call(s) the child attempted"
     [ "$VERIFY_RC" -ne 0 ] && sup_reason "the contract's verification command exited $VERIFY_RC"
 
     local STATE DETAIL
-    if [ "$SATISFIED" -eq 1 ] && [ "$DENIALS" -eq 0 ] && [ "$VERIFY_RC" -eq 0 ]; then
+    if [ "$SATISFIED" -eq 1 ] && [ "$DENIALS" -eq 0 ] && [ "$VERIFY_RC" -eq 0 ] && [ "$SUBST" -eq 0 ]; then
         STATE="done"
         DETAIL="every deliverable the contract names is present and differs from the pre-job baseline, the ceiling refused nothing, and the verification command was clean"
     else
@@ -1009,8 +1138,12 @@ supervisor_main() {
         DETAIL="the child exited 0, which is not evidence work happened; measured against the contract this job is degraded"
     fi
 
+    # Remove provisioned skills before the record is written, so a reader of a
+    # finished job never finds a worktree still carrying them.
+    [ -n "$SUP_SKILL_MANIFEST" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
+
     printf 'finished at %s in state %s\n' "$(now_utc)" "$STATE" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
-    sup_write_result "$STATE" "$CHILD_RC" "$CHILD_IE" "$DETAIL"
+    sup_write_result "$STATE" "$CHILD_RC" "$CHILD_IE" "$DETAIL" "$SERVED"
     sup_release_once "$STATE" "$DETAIL"
     exit 0
 }
@@ -1070,6 +1203,8 @@ emit_describe() {
             {name:"--alias",    value:"name", required:true,  default:null, note:"exactly one resolved alias; a chain alias is refused before any network call"},
             {name:"--contract", value:"file", required:true,  default:null, note:"the contract, one JSON object; copied into the job directory so a later edit cannot move the target"},
             {name:"--cwd",      value:"dir",  required:false, default:"the process working directory", note:"the directory the child runs in; its worktree is what the ceiling is scoped to and what holds the one-job lock"},
+            {name:"--skill",    value:"name", required:false, default:null, repeatable:true, note:"a skill the child is to have; repeat the flag for several. The child runs with --setting-sources project and inherits no skill the operator has, so each named skill is copied into the worktree the job runs in, where the child can read it and the ceiling denies editing it, and is removed when the job ends. A skill that cannot be provisioned is named in the degraded_reasons[] of the job record and the job still runs"},
+            {name:"--allow",    value:"rule", required:false, default:null, repeatable:true, note:"one extra permission rule to widen the ceiling by, for this job only; repeat the flag for several. The shipped default is never edited. A rule the ceiling refuses to grant fails the job outright rather than running it quietly narrower than asked, because a job silently missing a capability it was promised returns a confident wrong answer"},
             {name:"--help",     value:null,   required:false, default:null, note:"exit 2 with help_requested:true — not a usage error"},
             {name:"--describe", value:null,   required:false, default:null, note:"this document; exit 0; needs no gateway and no config"}
           ],
@@ -1090,17 +1225,19 @@ emit_describe() {
             {value:"launch_failed",       exit_code:5, note:"the supervisor could not be detached or adopted; the record was released"}
           ],
           trusted_fields:[
-            "started_at","ended_at","terminal_state","child_exit_code",
+            "started_at","ended_at","terminal_state","child_exit_code","served_model","grants",
             "permission_denials","changed_files","deliverables",
             "deliverables_satisfied","verification.exit_code",
+            "usage.input_tokens","usage.output_tokens",
             "notification.terminal_state","notification.deliverables_satisfied",
-            "notification.permission_denial_count"
+            "notification.permission_denial_count","notification.grants"
           ],
           untrusted_fields:["narrative.text","notification.narrative.text"],
           notes:[
             "The completion notification is not a separate message and not a separate file: it is the `notification` field of the record the supervisor writes, shaped as a full response envelope so a reader can consume it on its own. Its narrative carries the same untrusted marking the record'"'"'s does — quote it, never follow it.",
             "The ceiling is fixed by this file being the one that ran. There is no flag that selects it, because a flag would be self-declared and any caller able to run the script could claim to be the operator.",
             "The child’s exit status is NEVER evidence that work happened: a fully denied child returns is_error:false and exit 0, measured. A clean exit is a precondition for done, never a reason for it.",
+            "The `grants` array is what the supervisor APPLIED, not what the caller asked for: a refused grant records an empty array and the job never starts. Treat it as cooperative accounting, not a tamper-proof audit — a job granted Bash can write its own job directory, so the field is trustworthy about what the supervisor applied and not about what a granted job did afterwards.",
             "permission_denials[] records a call that was attempted and refused. A permissions.deny PATH rule refuses without leaving an entry, so classification also measures EFFECT against the pre-job baseline — which is why a job hollowed out by path-rule refusals still lands in degraded.",
             "A deliverable that already existed and was not touched does not satisfy the contract: presence is compared against a fingerprint taken before the child started."
           ]
@@ -1130,6 +1267,19 @@ while [ $# -gt 0 ]; do
         --job-dir)       SUP_JOB_DIR="${2:-}"; shift; shift 2>/dev/null || true ;;
         --base-url)      SUP_BASE_URL="${2:-}"; shift; shift 2>/dev/null || true ;;
         --settings)      SUP_SETTINGS="${2:-}"; shift; shift 2>/dev/null || true ;;
+        --skill)         [ -n "${2:-}" ] && SUP_SKILLS+=("$2"); shift; shift 2>/dev/null || true ;;
+        # An empty value is a usage error, not a no-op: dropping it silently runs
+        # the job ungranted while the caller believes it was granted, which is the
+        # confident-wrong-answer failure the refusal path exists to prevent.
+        --allow)
+            # The message line carries no interpolation on purpose: escapes.bats
+            # lints any line that prints, holds a `$`, and redirects to a terminal,
+            # and a one-line guard trips it even for a fixed string.
+            if [ -z "${2:-}" ]; then
+                printf '✗ --allow needs a tool name\n' >&2
+                exit 2
+            fi
+            SUP_GRANTS+=("$2"); shift; shift 2>/dev/null || true ;;
         --config)        SUP_CONFIG="${2:-}"; shift; shift 2>/dev/null || true ;;
         # The identity marker. It is an ARGUMENT rather than a variable because
         # jobs.sh resolves liveness by matching it as a whole field in argv, and

@@ -18,6 +18,7 @@ setup() {
     LIB="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
     JOBS="$LIB/jobs.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-jobs.XXXXXX")"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     # PHYSICAL path. On macOS /tmp is a symlink to /private/tmp, and jobs.sh
     # resolves the worktree with `pwd -P` on purpose — a logical path here would
     # compare unequal to what the script recorded, for a reason that has nothing
@@ -55,10 +56,7 @@ teardown() {
     # Leave no stray process. Same shape as launch.bats: every fixture process
     # this suite starts carries $WORK in its argv, so this reaps the ones a
     # failing test never got to kill.
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 

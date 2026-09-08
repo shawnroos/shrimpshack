@@ -17,6 +17,12 @@ and its first instruction is to **stop** and ground yourself in what you are doi
 right now. Name the topic → this command. Interrupted mid-task with no topic named →
 `/reflect-regroup`.
 
+**Not the same command as `/reflect-retro`.** `/memories <topic>` reads the memory
+store and changes what you *think*. `/reflect-retro` reads the retro backlog and
+changes the *tools* — it fixes or deletes what caused the friction and records a
+disposition, and it has failed if the backlog is the same size afterwards. Studying a
+subject → this command. Working the friction backlog down → `commands/reflect-retro.md`.
+
 ## 1. Retrieve
 
 ```bash

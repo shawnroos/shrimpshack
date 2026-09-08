@@ -30,6 +30,7 @@ setup() {
     CTL="$LIB/spawnctl.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-acq.XXXXXX")"
     WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
 
     # The search root is redirected into $WORK so no test can discover — or
     # promote over — this machine's real ~/gateway-0.1.1 install.
@@ -85,10 +86,7 @@ teardown() {
     # Any fake cargo left paused lives under $WORK, so its argv carries the
     # path and nothing outside this test can match.
     local p
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
     return 0
 }

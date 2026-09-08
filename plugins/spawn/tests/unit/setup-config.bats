@@ -31,6 +31,7 @@ setup() {
     CTL="$LIB/spawnctl.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-cfg.XXXXXX")"
     WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     GW_PID=""
 
     export SPAWN_SEARCH_ROOT="$WORK/root"
@@ -83,10 +84,7 @@ teardown() {
         wait "$GW_PID" 2>/dev/null || true
     fi
     local p
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
     return 0
 }

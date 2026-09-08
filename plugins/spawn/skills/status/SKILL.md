@@ -12,6 +12,7 @@ description: >
   what aliases exist, whether a background job is still running here, or wants the
   gateway started or bounced.
 allowed-tools: Bash, Read
+user-invocable: false
 ---
 
 # Gateway status and control

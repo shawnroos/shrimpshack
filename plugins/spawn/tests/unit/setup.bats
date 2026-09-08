@@ -37,6 +37,7 @@ setup() {
     SETUP="$LIB/setup.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-setup.XXXXXX")"
     WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
 
     # --- safety rails. Every path setup can write to lives under $WORK. ------
     export SPAWN_SEARCH_ROOT="$WORK/root"
@@ -117,10 +118,7 @@ teardown() {
     local pid p
     pid="$(cat "$WORK/.gateway.pid" 2>/dev/null || true)"
     [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
     return 0
 }

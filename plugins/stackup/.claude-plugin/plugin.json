@@ -1,0 +1,11 @@
+{
+  "name": "stackup",
+  "description": "Asks whether work should ship as a stack of dependent pull requests, at the two moments the answer is still cheap to act on: just after a plan is written, and just before a pull request opens. `gh stack` postdates model training, so agents carry no precedent for it and default to one branch per workstream forever; these hooks put the question in front of them. The hooks never force a stack — \"one pull request, because this is one logical change\" is a correct answer, and the plugin asks for a judgement rather than mandating an outcome. Submission and landing are left to whatever already handles them. Both hooks decide mechanically and only spend the model when the condition actually holds, and the gate is default-deny on suppression: anything it cannot classify fires the ask, because a spurious ask costs one line and a missing one costs the whole feature silently.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Shawn Roos",
+    "email": "shawn@slateteams.com"
+  },
+  "keywords": ["git", "github", "pull-request", "stacked-prs", "gh-stack", "review"],
+  "skills": "./skills"
+}

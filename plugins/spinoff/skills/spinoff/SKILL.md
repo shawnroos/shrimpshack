@@ -57,19 +57,33 @@ detection:
 
 - **`auto`** (default) — pick **herdr** when `HERDR_ENV=1` *and* the herdr server is
   live (a `herdr status server` probe — a stale `HERDR_ENV` never wins); else **cmux**
-  when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **ghostty** when
+  when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **herdr** again when
+  *nothing* announced itself and the server is live anyway; else **ghostty** when
   Ghostty is the terminal *and* no multiplexer announced itself at all; else **none**
   (worktree + handoff still produced, plus a manual `cd … && claude` line). Landing on
   **none** is only a success when nothing announced a backend — if something did and
   the launch never happened, the run exits 4 or 5. Precedence is explicit:
-  **herdr (live) > cmux > ghostty > none**.
+  **herdr (announced, live) > cmux > herdr (unannounced, live) > ghostty > none**.
+- The **unannounced herdr** arm exists because `HERDR_ENV` records launch ancestry, not
+  reachability. herdr injects it into the panes it spawns, so a session started from a
+  plain terminal never holds it — while `herdr pane` and `herdr agent` still address
+  every pane on the live server by id. Without this arm such a session fell through to
+  ghostty and opened a bare window beside the user's herdr layout, at exit 0, with no
+  mention of herdr. The arm sits below both announced arms and requires BOTH announcement
+  vars to be empty, so it never steals a session another backend owns, and it never
+  overrides `HERDR_ENV=0` (present but switched off), which still resolves `none`.
+  A session that reaches herdr this way holds no `HERDR_PANE_ID`, so `--target split`
+  has nothing to split — see the `--from-surface` note below; the script warns and opens
+  a tab.
 - Ghostty is deliberately suppressed whenever `HERDR_ENV` or `CMUX_WORKSPACE_ID` is
   set, even if the multiplexer's own probe then fails. Those vars are both present
   inside herdr-running-in-ghostty, and a multiplexer that announced itself owns the
   session — opening a bare ghostty window would be the wrong recovery. That
   suppression is also the direct route to **exit 5**: an announced multiplexer whose
-  probe fails has nowhere left to go. Remedy is starting its server, or
-  `--launcher ghostty` when you actually want a bare window.
+  probe fails has nowhere left to go. For herdr the `⚠` quotes what the backend
+  printed rather than naming a cause — read it, then act on what it says. Ghostty and
+  any other backend name only what was missing. Pass `--launcher ghostty` when you
+  actually want a bare window.
 - **`--launcher herdr` / `cmux` / `ghostty`** — force that backend, but it's *still*
   probed; if the probe fails it falls back to auto-detection rather than hard-erroring.
   But the flag itself counts as announcing a backend, so if that fallback also lands on
@@ -114,7 +128,7 @@ exists to remove. Every non-zero code here has a named cause and a named fix.
 | `2` | Unknown argument. | A skill bug. Fix the invocation. |
 | `3` | A session **launched but was not briefed** — the launch itself failed partway. | Worktree survives. Relay the recovery line the script prints and brief the tab by hand. |
 | `4` | A backend was **named** — by the environment (`HERDR_ENV=1`, `CMUX_WORKSPACE_ID`) or by an explicit `--launcher` — and its **binary could not be resolved**; nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN`, then re-run **with a new `--name`** — the worktree and branch already exist, so re-running the same name dies at exit 1. |
-| `5` | A backend was **named** the same two ways, and it **wouldn't take the launch**; nothing launched. | Worktree survives. Read the `⚠` — the cause differs by backend and it names the real one. For herdr: the server did not answer this process, which means it is stopped **or** running-but-unreachable from a detached shell; `herdr status server` tells the two apart. For `--launcher ghostty`: the `.app` or `osascript` was missing, and there is no server to start. Then re-run **with a new `--name`**, or use the manual line the script prints. Don't reach for `HERDR_BIN` on a herdr 5 — the binary was never the problem. |
+| `5` | A backend was **named** the same two ways, and it **wouldn't take the launch**; nothing launched. | Worktree survives. Read the `⚠`. For herdr it quotes what `herdr status server` printed on stdout and stderr — that quoted text is the evidence, and the message deliberately asserts no cause beyond it. For `--launcher ghostty`: the `.app` or `osascript` was missing, and there is no server to start. Then re-run **with a new `--name`**, or use the manual line the script prints. Don't reach for `HERDR_BIN` on a herdr 5 — the binary was never the problem. |
 
 Codes 3, 4 and 5 are mutually exclusive by construction. 3 means a backend resolved
 and the launch broke, so a launcher was in play. 4 and 5 both mean no launch happened
@@ -213,8 +227,16 @@ suggestion, not a directive.>
 <The script fills this in — leave a placeholder line `<!-- SESSION -->`.>
 ```
 
-Write it to `/tmp/spinoff-handoff.md`. Keep it tight and real — a handoff
-that reads like genuine working notes beats a padded template every time.
+Write it to a **session-isolated path** — your session's scratchpad directory when
+the harness gives you one, otherwise `/tmp/spinoff-handoff-<kebab-feature-name>.md`.
+Never a bare `/tmp/spinoff-handoff.md`: that name is shared by every session on the
+machine, so a concurrent spinoff overwrites it between your write and the script's
+read, and the new session wakes up briefed on someone else's work. That failure is
+silent — the run still exits 0 with a tab open. Observed on 2026-06-28, when a
+Brand Foundry handoff was clobbered by an unrelated one seconds before launch.
+
+Keep it tight and real — a handoff that reads like genuine working notes beats a
+padded template every time.
 
 Write it as **directional intent**, not a spec: convey enough information,
 direction, and author intent for the new session to *start*, with the code and
@@ -313,13 +335,35 @@ Pick `--name` from the workstream's topic (kebab-case, e.g. `crop-snapping`,
 suffix. Pick `--target` from the command: `tab` for `/start-session` (or
 `/start`), `split` for `/start-split`, `workspace` for `/start-workspace`.
 
-Also pass `--label` — the **short display name** for the new tab/split/workspace.
-It should capture both the **workspace** (where this forked from) and the **work**,
-at a glance, e.g. `slate·crop-snap` or `auto·recipes`. Keep it short (~24 chars):
-a short workspace token (usually the repo, abbreviated if long) + a `·`/`/`/`:`
-separator + a tight form of the work. If you omit `--label`, the script defaults
-to `<repo-basename>/<name>`, which is correct but often longer than ideal — prefer
-passing a curated short one.
+Also pass `--label` — the display name for **every** surface the run opens: the
+tab, the split, the workspace, and the Claude session itself. The convention is:
+
+```
+Ticket: Title          WEB-2757: Remove Logo
+Title                  Remove Logo            ← no ticket
+```
+
+**Resolve the ticket here, before dispatch.** The script has no Linear access and
+never looks one up; it applies whatever label you hand it. Take the ticket from
+the work you are already discussing. If you do not have one and the work warrants
+tracking, you may look it up in Linear, or create one — **but ask first before
+creating a ticket.** Never block the spinoff on it: if Linear is slow, errors, or
+returns nothing, drop the ticket and pass the bare title. A missing ticket is not
+a failure, it is information — a label with no `Ticket: ` prefix is how an
+untracked piece of work announces itself at a glance.
+
+Do not put a repo token in the label. The pre-colon slot belongs to a real ticket,
+and the working directory already carries the repo. If you omit `--label` the
+script derives one from `--name` (`tab-naming-convention` → `Tab naming
+convention`), which is the right answer whenever there is no ticket — so omitting
+it is fine, and passing `--label` is for when you have a ticket or a better title.
+
+Length: keep the title tight, but do not truncate to hit a number. Tab chrome
+elides what it cannot fit, and a name that survives elision beats one that was
+already cut short.
+
+The handoff viewer pane is named `Handoff` by the script — do not pass a label for
+it, and do not try to name it yourself.
 
 **For `--target split`, you MUST also pass `--from-surface <id>` — resolved here, in
 the main session.** The script splits off *that* surface, and it can't read it from
@@ -336,6 +380,12 @@ instead of a split. Resolve it before dispatch, per backend:
 On ghostty, do **not** pass `$GHOSTTY_SURFACE_ID`. It's a hex pointer that matches
 neither a terminal's id nor its tty, so the split fails to find a surface and falls
 back to a tab. Pass `$(tty)` (e.g. `/dev/ttys004`).
+
+If **none** of those vars is set, the session is not inside a pane of any backend and
+there is no originating surface to split — which is exactly the case the unannounced
+herdr arm above resolves. Say so and use `--target tab`. Do **not** synthesize an id
+from `herdr pane list` or `cmux tree`: those enumerate panes the user is not sitting
+in, and splitting one of them puts the new session somewhere they did not ask for.
 
 Pass `--split-direction left` only when the user asked for the left side; the default
 is right.
@@ -401,8 +451,8 @@ HERDR_BIN="<absolute path from `command -v herdr` here>" \
 CMUX_BIN="<absolute path from `command -v cmux` here>" \
 bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   --name "<kebab-feature-name>" \
-  --label "<short workspace·work label>" \
-  --handoff /tmp/spinoff-handoff.md \
+  --label "<Ticket: Title, or just Title when there is no ticket>" \
+  --handoff "<the session-isolated handoff path you wrote above>" \
   --target <tab|workspace|split> \
   --session-transcript "<resolved transcript path>" \
   --session-cwd "<resolved cwd>" \
@@ -486,9 +536,14 @@ continues in the new surface.
   binary resolves, but the herdr server isn't running): **exit 5**, not a skip. This
   used to be lumped in with the case above and exit 0, which made a dead server
   indistinguishable from a plain terminal. The `⚠` names the backend, the announcing
-  variable, and the remedy — start the server, not fix a path. Note `HERDR_ENV=0` is
+  variable, and quotes what herdr printed on both streams — it does not diagnose a
+  cause. Read that quoted text; it is the evidence. Do not fix a path. Note
+  `HERDR_ENV=0` is
   *not* this case: an announcement that is switched off announces nothing, so it stays
   a silent exit 0. Ghostty is deliberately not used as the recovery for either.
+  Until 0.10.1 this exit also fired *spuriously*, and the message blamed a cause that
+  was never real. If exit 5 appears while the server is plainly up, do not theorise —
+  relay the quoted text and say the probe disagreed with it.
 - **An announced backend whose binary can't be found** (`HERDR_ENV=1` or
   `CMUX_WORKSPACE_ID` set, but `herdr`/`cmux` doesn't resolve): a different outcome
   from the one above, and deliberately not silent. The summary block says

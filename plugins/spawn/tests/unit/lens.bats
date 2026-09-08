@@ -17,6 +17,7 @@ setup() {
     CTL="$LIB/spawnctl.sh"
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-lens.XXXXXX")"
     WORK="$(cd "$WORK" && pwd -P)"
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     TOKEN="tok-lens-s3cr3t-9f2a"
     GW_PID=""
     SPILLS=()
@@ -62,10 +63,7 @@ teardown() {
     for f in "${SPILLS[@]:-}"; do
         [ -n "$f" ] && rm -f "$f"
     done
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 
@@ -868,17 +866,43 @@ allowlist_lint() {  # <readme>
     # requirement, so the only way to hold it is to assert the absence.
     run bash -c "sed 's/#.*//' '$LENS' | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
     [ "$status" -ne 0 ]
-    # The finding cites the lens, but the invariant is repo-wide, and this lint
-    # is ENUMERATED per file — a new script joins it here or is silently
-    # uncovered. U7's job record is the first addition, U8's ceiling
-    # machinery and its two entry points the next, U9's supervisor after them,
-    # and U10's handle operations after that. All are asserted unguarded:
-    # a file that is renamed or lost must turn this RED rather than skip the
-    # file the line was added to cover.
-    local extra
-    for extra in "$LIB/jobs.sh" "$LIB/ceilings.sh" "$LIB/bg-operator.sh" "$LIB/bg-repo.sh" "$LIB/bg-agent.sh" "$LIB/handle.sh"; do
-        run bash -c "sed 's/#.*//' '$extra' | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
+    # The finding cites the lens, but the invariant is repo-wide. This lint used
+    # to ENUMERATE six files by hand, which made every file added after it
+    # silently uncovered — three new libs landed in this branch alone and none
+    # of them joined the list. GLOBBED now, so enrolment is automatic and the
+    # default is covered rather than exempt.
+    #
+    # TWO FILES ARE EXEMPT, both for the same reason: they use BUDGET as the
+    # name of a TIMEOUT in seconds (PROBE_BUDGET, DOCTOR_BUDGET), which is a
+    # bound on waiting, not on money. The exemption is asserted below rather
+    # than assumed, so it cannot outlive its reason.
+    local exempt=" setup-lib.sh setup-wire.sh "
+    local f b scanned=0
+    for f in "$LIB"/*.sh "$LIB"/../hooks/*.sh; do
+        [ -f "$f" ] || continue
+        b="$(basename "$f")"
+        case "$exempt" in *" $b "*) continue ;; esac
+        run bash -c "sed 's/#.*//' '$f' | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
+        [ "$status" -ne 0 ] || printf 'no-spend lint: %s\n' "$f" >&2
         [ "$status" -ne 0 ]
+        scanned=$((scanned + 1))
+    done
+    # Guard the guard. A glob that matched nothing would pass this test while
+    # scanning no file at all — the false-green shape the enumeration was
+    # protecting against, reintroduced by the fix for it.
+    #
+    # The floor is a NON-EMPTINESS check, not a file census. 21 files are
+    # scanned today (22 in lib/, 1 in hooks/, less the two exempt); the floor
+    # sits well below that so deleting a lib does not red this test for a
+    # reason that has nothing to do with spend logic. A glob that breaks
+    # returns 0, not 14, so the distance costs nothing.
+    [ "$scanned" -ge 12 ]
+
+    # The exemption's staleness guard: each exempt file must STILL match, or the
+    # reason for exempting it is gone and the entry has to go with it.
+    for f in $exempt; do
+        run bash -c "sed 's/#.*//' '$LIB/$f' | grep -inE 'spend|budget|cost|quota|dollar|usd|price'"
+        [ "$status" -eq 0 ]
     done
 }
 

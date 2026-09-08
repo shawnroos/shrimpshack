@@ -11,17 +11,20 @@ This is the first rule, because it is the one most often broken. A reflect run s
 user **exactly two things**:
 
 ```
-⏺ Reflecting on <subject matter>
+Reflecting on <subject matter>
 ```
 
 …then the work happens out of sight, then **one** closing summary. Nothing in between.
 
+- **Write that line as plain text — no `⏺`, no bullet, no other leading glyph.** The
+  harness already renders its own `⏺` in front of assistant text, so typing one produces
+  a doubled marker (`⏺ ⏺ Reflecting on …`).
 - `<subject matter>` names what this run is consolidating, in the user's terms — what the
   session was about ("the grep prefilter work", "the WEB-2845 detector fix"), not the
   machinery ("passes 1-10", "17 memories").
-- **Do the work in ONE batched call, or dispatch it to a background agent.** Ten passes is
-  not ten visible tool calls. A pass that needs several shell steps needs one script, not
-  one call per step.
+- **Run the mechanical passes through `scripts/reflect-run.sh`** (see below), which is one
+  short visible call instead of a hand-written shell blob. Whatever is left over goes in
+  ONE batched call, or a background agent. Ten passes is not ten visible tool calls.
 - **Never narrate the passes.** No "now updating timestamps", no "checking merge
   candidates", no per-pass tallies on screen, no thinking-out-loud between steps. The
   REFLECT.log line is the record; the closing summary is the report.
@@ -36,6 +39,46 @@ the user is trying to follow, and the volume buries the one line that matters (a
 a halted cleanup) instead of surfacing it.
 
 `/reflect verbose` is the ONLY mode that prints the pass-by-pass detail.
+
+---
+
+## The runner — one command for every mechanical pass
+
+The passes split in two. **Judgment** (what was learned, what to save, what merges into
+what, whether a worktree's leftovers matter) stays with you. **Mechanics** is the same
+shell every single run, and hand-writing it produced a forty-line blob in the transcript
+each time — the exact mess the output contract exists to prevent.
+
+So run the mechanics through the script, once, near the end:
+
+```
+bash <plugin>/scripts/reflect-run.sh \
+  --trigger manual \
+  --applied "feedback_a reference_b" \
+  --saved 1 --merged 0 --retired 0 --compounded 1 \
+  --triggers-declared 1 --triggers-pruned 0 \
+  --capture-from /path/to/worktree \
+  --scan-worktrees ~/projects/<repo>
+```
+
+It owns: pass 2's `last_used` bumps and `MEMORY_USE.log` lines, the trigger-manifest
+recompile, pass 6 (render + lint), pass 7 (durable doc capture), pass 8 (reconcile +
+index + embed), the pass 9 **scan**, and pass 10 (the REFLECT.log line). It prints a
+compact `key=value` report; read it, don't re-derive it.
+
+**What you still do yourself**, because a script cannot:
+
+- Passes 1, 3, 4, 5 — inventory, merges, retirement, `/ce-compound`.
+- Writing new memory bodies and `triggers:` blocks (use `triggers.py add`, never a hand
+  edit — it preserves mtime).
+- **Removing a worktree.** The runner scans and reports `state=DIRTY` / `pr=MERGED`; it
+  never removes anything, because deciding whether an untracked file is the only copy of
+  something is judgment, and being wrong is unrecoverable.
+
+**The counts it reports are observed effects, not steps that ran** — `updated` counts
+files whose bytes changed, `captured` counts files that differed from the store copy,
+`index_tightened` is `1` only if `MEMORY.md` actually changed. Pass its `embedded=` value
+through verbatim; never substitute a number for `unknown`.
 
 ---
 
@@ -171,7 +214,60 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory/triggers.py add \
 
 It validates each pattern before writing, refuses to clobber an existing block without `--replace`, recompiles the manifest, and **preserves the file's mtime**. That last part is why hand-editing is wrong: activation reads mtime as "last reinforcement", so hand-editing 200 files would spike 200 activations, reshuffle the index's hot/cold cut and lower those memories' recall floors — surfacing them more for no reason but the write. The same rule holds for any future bulk frontmatter edit.
 
-Tally: `updated=N saved=M triggers_declared=T triggers_pruned=P`.
+**The vent pass — what got in the way that a tool should have handled.** A memory answers "how should I work"; this answers "what should we fix". It lives here because Pass 2 already holds the session's context and already writes memory-dir files, and it runs before Pass 6 so the same run's render sees the store as it now is. It writes **retro items**, and writes nothing when the answer is nothing.
+
+Retro items live in `<memory-dir>/.retro/`. They are not memories: nothing indexes them, nothing recalls them, and the only way to see the backlog is the list entry point below. `/reflect:reflect-retro` is what works them down.
+
+**The bar. An item qualifies when all three hold:**
+
+1. The friction came from a **tool** — a plugin, skill, hook, script, or harness behaviour — rather than from the work itself.
+2. A future session would hit it again unchanged.
+3. It is nameable as a specific thing, not a mood.
+
+**Explicitly excluded:** a mistake you made and corrected; a one-off environment hiccup; a task that was simply hard; and anything already `open` in the backlog for the same thing. That last case **bumps the existing item's session list — it never writes a second item**:
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py            # list the open backlog
+PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/scripts" python3 -c \
+  "import retro; retro.append_session(STORE, NAME, SESSION_ID)"
+```
+
+The bar is deliberately narrow. The cost of a missed item is one repeat; the cost of a noisy backlog is the whole feature, because a backlog nobody trusts gets skipped.
+
+**Never paste raw material.** An item states the friction **in your own words**. It never carries raw transcript excerpts, raw command output, environment values, tokens, or file contents, and a probe never embeds a literal credential. The hooks fire in every project including work repos, the drain reads whole transcripts of sessions nobody reviewed, and a retro item is precisely what later gets pasted into an issue or a PR — so a credential that appeared once in an error message would otherwise become durable and travel.
+
+**Provenance.** Every item records `capture: live` or `capture: drained`.
+
+- `live` — this session's own friction, which you watched happen. Apply the bar as stated.
+- `drained` — friction read cold out of another session's transcript. **Narrower rule: write an item only when the transcript contains an explicit tool failure you can name** — a non-zero exit, an error message, a documented path that did not exist — never on general judgment. An agent reading a stranger's transcript in an unrelated repo cannot judge "would a future session hit this again unchanged", so the retro session weights a `drained` item accordingly.
+
+**Drain the queue first.** The `PreCompact` / `SessionEnd` hooks stash a transcript reference so material survives compaction and session end; this is the pass that spends it:
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py drain
+```
+
+It prints one JSON result and does **no extraction** — deciding whether a tool or the work was at fault is judgment, which is the whole reason the hooks queue rather than capture. It hands back bounded candidate material and you decide what qualifies. Read its counts, do not re-derive them:
+
+- `drained[]` — one entry per session, each with failure-shaped `candidates` (tool errors, non-zero exits, hook errors) plus the session's `cwd` and `git_branch`.
+- `candidates_dropped` / `excerpts_truncated` — **how much the cap threw away.** Non-zero means there was more friction than you are looking at. A truncated drain must never be read as a quiet session.
+- `cursor_found: false` — the resume point was gone, so the whole transcript was re-read; expect material you have already seen.
+- `dropped_missing` / `dropped_expired` / `dropped_malformed` — records that could not be spent. A transcript Claude Code has pruned is dropped, never retried. Records older than the expiry bound (14 days) are dropped: capture is bounded, so a session nobody reflects on within a fortnight is lost signal, by design.
+
+The live session's own record is never drained — it is stamped and left for the next run, because this pass already has that session in context.
+
+**Write items through the writer, never by hand** (`retro.py` is the single writer, and the only thing that can close an item is a recorded proof):
+
+```
+PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/scripts" python3 -c \
+  "import retro; retro.write_item(STORE, name=..., description=...,
+   surface='plugin'|'skill'|'harness'|'codebase', thing=..., symptom=...,
+   sessions=[...], capture='live'|'drained', probe=None)"
+```
+
+**This pass adds no visible output.** The output contract still holds: two visible units, never a narration of passes.
+
+Tally: `updated=N saved=M triggers_declared=T triggers_pruned=P retro_captured=R`. `retro_captured` counts **items written or bumped**, never candidates read or records drained — the same "every count means an observed effect, never a step that ran" rule as every other tally here.
 
 ### 3. Memory merge pass
 - Scan `MEMORY.md` for entries with overlapping topics (same subject area, similar guidance)
@@ -225,6 +321,7 @@ Tally: `index_tightened=0|1`.
 ### 7. Document capture pass — silent, automatic
 
 - Classify documents produced this session or sitting in active worktrees. **Durable** (capture): brainstorms (`docs/brainstorms/`), handoffs (`docs/handoff.md` / `*handoff*`), and `docs/solutions/`. **Ephemeral** (leave in place, ages out with its worktree): scratch plans, working notes, review logs. No author marker — this is reflect's judgment by the heuristic.
+- **`docs/` is not only the repo root one.** Where the root `docs/` is gitignored, the real corpus lives module-scoped — Slate web-app keeps its solutions at `src/app/modules/creation/modules/ai-tools/docs/solutions/`, with `logic-errors/` and `design-patterns/` under it. A root-only rule reported `captured=0` against a worktree that held a freshly written solution doc, twice, and the learning would have died with the worktree. So search the whole tree for `*/docs/{brainstorms,solutions}/` and `*handoff*`, not just `<repo-root>/docs/`. Bound it: skip `node_modules/`, `.git/`, `dist/`, `build/`, and any path already inside `~/.claude/doc-store/`. A gitignored path still counts — being untracked is the reason the doc needs copying out, not a reason to skip it.
 - Copy each durable doc into the matching central store subdirectory: `~/.claude/doc-store/{brainstorms,handoffs,solutions}/`. Preserve the filename; skip if an identical copy is already present.
 - **Ordering is load-bearing:** this runs before Pass 9 (worktree cleanup), so a durable doc authored inside a worktree is copied out before the worktree is removed.
 
@@ -232,11 +329,11 @@ Tally: `captured=N`.
 
 ### 8. Reconcile + embed pass — silent, automatic
 
-- Run `${CLAUDE_PLUGIN_ROOT}/scripts/qmd-reconcile-collections.sh` to ensure the Claude-owned QMD collections exist (`claude-memory` for the memory dir + one `claude-<type>` per doc-store subdirectory) and re-embed them with collection-scoped `qmd embed -c <name>`. This makes memories saved and docs captured this session findable next session (seeded recall depends on it).
-- Only `claude-`-prefixed collections are touched. The ~24.8k-doc global backlog and foreign collections (openclaw, Slate) are never embedded here.
+- Run `${CLAUDE_PLUGIN_ROOT}/scripts/qmd-reconcile-collections.sh` to ensure the Claude-owned QMD collections exist (`claude-memory` for the memory dir + one `claude-<type>` per doc-store subdirectory), then **index once with a global `qmd update` and re-embed each with collection-scoped `qmd embed -c <name>`, in that order**. Both steps are required and neither substitutes for the other: `update` adds newly saved files to the index (and drops deleted ones), `embed` generates the vectors. `qmd embed` alone only re-vectorises documents **already** in the index, so an embed-only pass leaves every memory saved this session unindexed and unfindable next session — which is exactly what it did before this was fixed.
+- **Creation and embedding** are restricted to `claude-`-prefixed collections: foreign collections (openclaw, Slate) are never created, embedded, or modified. **Indexing is global** — `qmd update` takes no `-c` flag, so the one update per run re-indexes every collection in the resolved config, the ~24.8k-doc backlog included. That is the price of new memories being findable at all; it is one rescan per run, never one per collection.
 - **If `qmd` is not installed, this pass is a clean no-op** (the script skips and exits 0). Memory still works: the budgeted pointer index loads, and bodies are read directly via their file pointers — only search-based and seeded recall stay dormant until `qmd` is installed.
 
-Tally: `embedded=N`.
+Tally: `embedded=0|unknown` — the script emits this, you do not compute it. It has exactly two values and neither is a count of collections visited. `0` means every embed proved it had no work to do; `unknown` means documents may have been embedded but the number is not observable, because `qmd` reports content hashes rather than documents and one document can carry several. A failed embed also yields `unknown`. Report whatever the script printed; never substitute a number for `unknown`, and never read `unknown` as a failure.
 
 ### 9. Work cleanup pass — silent, automatic
 
@@ -254,12 +351,14 @@ Append one line to `<memory-dir>/REFLECT.log`. The field set is extended additiv
 <ISO8601 timestamp> <trigger> updated=N saved=M merged=K retired=L compounded=C index_tightened=I captured=X embedded=Y worktrees_removed=W triggers_declared=T triggers_pruned=P
 ```
 
+`embedded=Y` is the one non-numeric field: it is `0` or the literal `unknown` (see Pass 8). Every other field is a count. **Every count means an observed effect, never a step that ran** — `updated` counts memory files whose content or `last_used` actually changed, not memories inspected; `saved` counts body files successfully written, not save attempts; `index_tightened` is `1` only when Pass 6 changed the rendered `MEMORY.md`, `0` when the render was already compliant even though render and lint both ran; `worktrees_removed` counts worktrees confirmed absent afterward, not removal commands issued. A `0` with a reason is a real result; a number you did not observe is not.
+
 The two trigger fields go last so every existing positional reader keeps working. `triggers_declared` counts memories given a `triggers:` block this pass — authored at save time or backfilled — and `triggers_pruned` counts never-acted-on triggers removed or sharpened. Both are `0` on a pass that declared none, which is a normal and expected outcome, not a skip.
 
 Examples:
 ```
-2026-05-08T18:42:13-07:00 manual updated=2 saved=0 merged=0 retired=1 compounded=0 index_tightened=1 captured=0 embedded=1 worktrees_removed=0 triggers_declared=0 triggers_pruned=0
-2026-05-08T19:15:00-07:00 PR_event updated=0 saved=1 merged=0 retired=0 compounded=1 index_tightened=0 captured=2 embedded=2 worktrees_removed=2 triggers_declared=1 triggers_pruned=0
+2026-05-08T18:42:13-07:00 manual updated=2 saved=0 merged=0 retired=1 compounded=0 index_tightened=1 captured=0 embedded=0 worktrees_removed=0 triggers_declared=0 triggers_pruned=0
+2026-05-08T19:15:00-07:00 PR_event updated=0 saved=1 merged=0 retired=0 compounded=1 index_tightened=0 captured=2 embedded=unknown worktrees_removed=2 triggers_declared=1 triggers_pruned=0
 ```
 
 In verbose mode (`/reflect verbose`): also print the full pass-by-pass summary to screen, ending with the log line.

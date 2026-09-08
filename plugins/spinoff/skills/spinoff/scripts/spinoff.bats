@@ -22,6 +22,11 @@ setup() {
 #!/usr/bin/env bash
 [ -n "${CMUX_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$CMUX_ARGV_LOG"
 case "$1" in
+  rename-tab)
+    # CMUX_STUB_RENAME_FAIL=1 rejects the way a real missing surface does.
+    if [ "${CMUX_STUB_RENAME_FAIL:-0}" = 1 ]; then
+      echo 'Error: surface not found' >&2; exit 1
+    fi ;;
   tree)          printf 'pane pane:1\n'; printf 'surface surface:9 [terminal]\n' ;;
   new-surface)   printf 'created surface:42\n' ;;
   new-workspace) printf 'created workspace:7\n' ;;
@@ -43,7 +48,24 @@ STUB
   cat > "$STUBDIR/herdr" <<'STUB'
 #!/usr/bin/env bash
 if [ "$1" = status ] && [ "$2" = server ]; then
-  if [ "${HERDR_STUB_LIVE:-0}" = 1 ]; then echo "status: running"; exit 0
+  # Two knobs, both defaulting to the original behaviour so existing tests are
+  # untouched. HERDR_STUB_STATUS_RC makes the stub exit non-zero AFTER printing —
+  # the real herdr does this at 101 (Rust ignores SIGPIPE, so a closed pipe is a
+  # panic, not signal 141). HERDR_STUB_STATUS_OUT overrides the stdout text; set
+  # but empty means print nothing. Without the text knob the dead arm only ever
+  # writes to stderr, so a `status: not running` stdout case is inexpressible.
+  if [ -n "${HERDR_STUB_STATUS_OUT+x}" ]; then
+    [ -n "$HERDR_STUB_STATUS_OUT" ] && printf '%s\n' "$HERDR_STUB_STATUS_OUT"
+    exit "${HERDR_STUB_STATUS_RC:-0}"
+  fi
+  # FIVE lines, matching real `herdr status server`. A one-line stub cannot tell an
+  # exact-LINE match from whole-output equality: mutating the probe to
+  # `[ "$OUT" = 'status: running' ]` — which rejects every real server — kept the whole
+  # suite green while the stub printed one line.
+  if [ "${HERDR_STUB_LIVE:-0}" = 1 ]; then
+    printf '%s\n' "status: running" "version: 0.8.2" "protocol: 20" "compatible: yes" \
+                  "socket: /Users/test/.config/herdr/herdr.sock"
+    exit "${HERDR_STUB_STATUS_RC:-0}"
   else echo "status: unreachable" >&2; exit 1; fi
 fi
 [ -n "${HERDR_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$HERDR_ARGV_LOG"
@@ -78,6 +100,22 @@ case "$1 $2" in
     else
       printf '%s\n' '╭─────────╮' '  ? for shortcuts · shift+tab to cycle'
     fi ;;
+  "pane rename")
+    # Echoes back what it stored, the way the real CLI does, so the caller's
+    # read-back has something to compare against. HERDR_STUB_RENAME_FAIL=1 makes it
+    # reject the way a real pane-not-found does: exit 1 with a JSON error payload.
+    if [ "${HERDR_STUB_RENAME_FAIL:-0}" = 1 ]; then
+      echo '{"error":{"code":"pane_not_found","message":"pane not found"}}'; exit 1
+    fi
+    # Exits 0 while storing something OTHER than what was asked for — the silent
+    # mangle the read-back exists to catch. Without this the read-back branch has
+    # no test that can fail.
+    if [ "${HERDR_STUB_RENAME_MISMATCH:-0}" = 1 ]; then
+      shift 2; printf '{"result":{"pane":{"pane_id":"%s","label":"truncated"}}}\n' "$1"; exit 0
+    fi
+    shift 2   # drop "pane rename"; $1 is the pane id, $2.. the label
+    pane_id="$1"; shift
+    printf '{"result":{"pane":{"pane_id":"%s","label":"%s"}}}\n' "$pane_id" "$*" ;;
   *) : ;;  # pane run / pane close / workspace focus / agent send / pane send-keys → ok
 esac
 exit 0
@@ -214,11 +252,43 @@ run_resolve() {
   [ "$output" = herdr ]
 }
 
-@test "resolve: neither env present -> none" {
+@test "resolve: nothing announced + live herdr server -> herdr" {
+  # HERDR_ENV records launch ancestry, not reachability. A session started outside a
+  # herdr pane never carries it, and before the unannounced arm this run resolved to
+  # ghostty (or none) while `herdr status server` said running. Reversal of an earlier
+  # assertion that read `none` here, which encoded exactly that defect.
   export HERDR_STUB_LIVE=1 HERDR_ENV= CMUX_WORKSPACE_ID=
   run run_resolve auto
   [ "$status" -eq 0 ]
+  [ "$output" = herdr ]
+}
+
+@test "resolve: nothing announced + dead herdr server -> none" {
+  # The guard on the arm above: it must select herdr on a LIVE probe only, never on
+  # the mere absence of announcements.
+  export HERDR_STUB_LIVE=0 HERDR_ENV= CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
   [ "$output" = none ]
+}
+
+@test "resolve: HERDR_ENV=0 + live herdr server -> none (announced but off, R8)" {
+  # A present-but-switched-off announcement still means a multiplexer owns this
+  # session. The unannounced arm keeps the `-z` test rather than a `!= 1` test so it
+  # cannot capture this case.
+  export HERDR_STUB_LIVE=1 HERDR_ENV=0 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = none ]
+}
+
+@test "resolve: cmux announced + live herdr server -> cmux (no cross-backend steal)" {
+  # The unannounced arm sits below the cmux arm and is guarded on CMUX_WORKSPACE_ID
+  # being empty, so a live herdr server elsewhere never takes a cmux session.
+  export HERDR_STUB_LIVE=1 HERDR_ENV= CMUX_WORKSPACE_ID=workspace:1
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = cmux ]
 }
 
 @test "resolve: --launcher cmux with herdr live -> cmux (override, R2)" {
@@ -236,6 +306,75 @@ run_resolve() {
   [ "$output" = cmux ]        # to cmux, since it's available
 }
 
+@test "probe: herdr exits NON-ZERO after printing running -> still herdr (pipefail race)" {
+  # The defect this suite could not previously express. `grep -q` exits the instant
+  # it matches and closes the pipe, so herdr dies mid-write and exits non-zero. Under
+  # `set -o pipefail` that becomes the pipeline's status, so the probe reported
+  # "not running" on a match that had already succeeded. Measured 80-94 per 300 against
+  # the live server before the fix; deterministic here.
+  #
+  # The exit CODE is deliberately not the contract — it moved between herdr releases
+  # (101, a Rust broken-pipe panic, on 0.8.0; 141, plain SIGPIPE, on 0.8.2). 101 is the
+  # stub value because it is the harder case: a code no reader ties to a broken pipe.
+  export HERDR_STUB_LIVE=1 HERDR_STUB_STATUS_RC=101 HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = herdr ]
+}
+
+@test "probe: a forced --launcher herdr also survives the non-zero print" {
+  # The other call site. resolve_launcher probes twice — once for a forced backend
+  # and once for env auto-detection — so pinning only the auto path would leave the
+  # flag route open to the same race.
+  export HERDR_STUB_LIVE=1 HERDR_STUB_STATUS_RC=101 HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve herdr
+  [ "$status" -eq 0 ]
+  [ "$output" = herdr ]
+}
+
+@test "probe: 'status: not running' is NOT a live server" {
+  # The false positive the anchored match closes. The pre-fix probe was
+  # `grep -qi 'running'` — a bare case-insensitive substring, which "not running"
+  # satisfies. Any loosening of the match back toward a substring re-opens this.
+  export HERDR_STUB_STATUS_OUT='status: not running' HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" != herdr ]
+}
+
+@test "probe: empty herdr output is NOT a live server" {
+  export HERDR_STUB_STATUS_OUT= HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = none ]
+}
+
+@test "probe: the running LINE is found when it is not the first line" {
+  # Guards the difference between an exact-line match and whole-output equality.
+  # Without this, a probe that only accepts output equal to `status: running` — and
+  # therefore rejects every real herdr — passes the suite.
+  export HERDR_STUB_STATUS_OUT='warning: config reloaded
+status: running
+version: 0.8.2' HERDR_ENV=1 CMUX_WORKSPACE_ID=
+  run run_resolve auto
+  [ "$status" -eq 0 ]
+  [ "$output" = herdr ]
+}
+
+@test "probe: near-miss shapes the exact match rejects, one per line" {
+  # The match tightened from `grep -qi running` to an exact lowercase line, which is a
+  # real new dependency on herdr's wording. Pin it deliberately: if a future herdr
+  # capitalises or pads the key, THESE go red and name the cause, instead of the
+  # spurious exit 5 coming back with no test to explain it.
+  local shape
+  for shape in 'Status: running' '  status: running' 'status: running ' 'status:running'; do
+    export HERDR_STUB_STATUS_OUT="$shape" HERDR_ENV=1 CMUX_WORKSPACE_ID=
+    run run_resolve auto
+    [ "$status" -eq 0 ]
+    [ "$output" = none ] || { echo "accepted near-miss: <$shape>"; return 1; }
+  done
+}
+
 @test "--launcher bogus dies with a clear message" {
   run bash "$SCRIPT" --launcher bogus
   [ "$status" -ne 0 ]
@@ -246,6 +385,28 @@ run_resolve() {
   run bash "$SCRIPT" --name feat --label -bad --handoff /dev/null
   [ "$status" -ne 0 ]
   [[ "$output" == *"--label must not start with '-'"* ]]
+}
+
+@test "cmux: a rejected rename warns and does not fail the run (AE5)" {
+  local repo="$BATS_TEST_TMPDIR/crepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  run env PATH="$STUBDIR:$PATH" \
+          CMUX_STUB_RENAME_FAIL=1 \
+          CMUX_WORKSPACE_ID=workspace:99 \
+          HERDR_ENV= \
+      bash "$SCRIPT" --name ctestx --label testlabel --handoff "$handoff" --repo "$repo" --target tab
+  # Naming is cosmetic: the worktree and the briefed session must survive it.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not be named"* ]]
 }
 
 @test "behavior-preservation: cmux --target tab emits the pre-seam CLI call shape" {
@@ -312,6 +473,161 @@ run_resolve() {
   # (which splits a pane in the CURRENT tab — the bug this replaces).
   grep -qE "^pane run wS:p2 cd '.*/worktrees/htab' && claude --name 'testlabel' \"\\\$\(cat '.*\.spinoff-brief'\)\"$" "$HERDR_ARGV_LOG"
   ! grep -q "^agent start" "$HERDR_ARGV_LOG"
+}
+
+@test "herdr: names the pane, passing a two-word label as ONE argument (AE6)" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  # The label is a bare variadic positional on this call, so a label that
+  # word-splits would arrive as two argv items and store only the first.
+  grep -qxF "pane rename wS:p2 testlabel" "$HERDR_ARGV_LOG"
+}
+@test "herdr: names the pane BEFORE running claude into it (KTD2)" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  local rename_at run_at
+  rename_at="$(grep -n '^pane rename ' "$HERDR_ARGV_LOG" | head -1 | cut -d: -f1)"
+  run_at="$(grep -n '^pane run ' "$HERDR_ARGV_LOG" | head -1 | cut -d: -f1)"
+  [ -n "$rename_at" ] && [ -n "$run_at" ]
+  # After the launch the pane holds a live shell writing its own title; naming
+  # first is what keeps the label from racing it.
+  [ "$rename_at" -lt "$run_at" ]
+}
+@test "herdr: a rejected rename warns, keeps the session briefed, and reports the surface (AE5)" {
+  export HERDR_STUB_RENAME_FAIL=1
+  run_herdr_tab
+  # A cosmetic failure must not cost the worktree or the briefed session.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not be named"* ]]
+  # the launch still happened (the summary line for the unnamed surface is U5's)
+  grep -q '^pane run ' "$HERDR_ARGV_LOG"
+}
+
+@test "summary: names a surface that went unnamed, inside the relayed block (R12)" {
+  export HERDR_STUB_RENAME_FAIL=1
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  # R12: the summary reports what went unnamed, so the run never implies a name it
+  # did not set. It has to land in the summary block the skill relays verbatim.
+  [[ "$output" == *"went unnamed:"* ]]
+  [[ "$output" == *"herdr tab pane wS:p2"* ]]
+}
+@test "summary: says nothing about naming when every surface took its name" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"went unnamed:"* ]]
+}
+
+# --target split with no --from-surface falls back to a TAB. The fallback itself is
+# old; what these two guard is that the summary SAYS so. The downgrade is recorded in
+# TARGET_DOWNGRADE, which must be declared before the argument loop that sets it —
+# declare it beside the summary block's own state instead and it is wiped on every
+# run, the script still passes `bash -n`, still exits 0, and the line just stops
+# appearing. Nothing else in this suite would go red. Hence a positive AND a negative,
+# mirroring the went-unnamed pair above.
+run_herdr_split_no_surface() {
+  local repo="$BATS_TEST_TMPDIR/srepo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+
+  local handoff="$repo/handoff.md"
+  printf '# Handoff\n\nbrief body\n' > "$handoff"
+
+  HERDR_ARGV_LOG="$BATS_TEST_TMPDIR/herdr-argv-split.log"
+  : > "$HERDR_ARGV_LOG"
+
+  run env PATH="$STUBDIR:$PATH" \
+          HERDR_ARGV_LOG="$HERDR_ARGV_LOG" \
+          HERDR_STUB_LIVE=1 \
+          HERDR_ENV=1 \
+          HERDR_WORKSPACE_ID=wS \
+          HERDR_PANE_ID=wS:p1 \
+          CMUX_WORKSPACE_ID= \
+          SPINOFF_READY_TIMEOUT_MS=3000 \
+      bash "$SCRIPT" --name hsplit --label testlabel --handoff "$handoff" \
+                     --repo "$repo" --target split --launcher herdr
+}
+
+@test "summary: a split that fell back to a tab says so, inside the relayed block" {
+  run_herdr_split_no_surface
+  [ "$status" -eq 0 ]
+  # The caller reads the exit code (still 0 — a briefed session DOES exist) or the
+  # summary. Before this, neither could tell a real split from this fallback.
+  [[ "$output" == *"NOT what was asked for:"* ]]
+  [[ "$output" == *"split → tab"* ]]
+}
+
+@test "summary: says nothing about a downgrade when the target was honoured" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"NOT what was asked for:"* ]]
+}
+
+# An omitted --base means "current HEAD", and the caller reads that as THEIR head.
+# It is resolved against the checkout the new worktree nests under, which is a
+# different branch whenever the caller sits in a worktree or passed --repo. That
+# checkout is routinely parked on unrelated work, so the new session gets a tree
+# WITHOUT the change it was spun off to continue. Every step still succeeds and the
+# run exits 0 with a tab open, so only the summary can carry this.
+setup_parked_main() {
+  local root="$BATS_TEST_TMPDIR/base"
+  mkdir -p "$root"
+  git -C "$root" init -q main
+  git -C "$root/main" config user.email t@example.com
+  git -C "$root/main" config user.name tester
+  echo a > "$root/main/f.md"
+  git -C "$root/main" add f.md
+  git -C "$root/main" commit -qm init
+  git -C "$root/main" checkout -q -b unrelated-parked-branch
+  echo b > "$root/main/f.md"
+  git -C "$root/main" commit -qam parked
+  printf '# H\n\n## Source session\n<!-- SESSION -->\n' > "$root/h.md"
+  PARKED_ROOT="$root"
+}
+
+@test "summary: an omitted --base that is not the caller's HEAD is stated" {
+  setup_parked_main
+  # --repo names a checkout parked on a branch the caller is not on: the exact shape
+  # the skill itself instructs callers to use from outside the target repo.
+  run env PATH="$STUBDIR:$PATH" HERDR_ENV=0 CMUX_WORKSPACE_ID= \
+      bash "$SCRIPT" --name baseprobe --handoff "$PARKED_ROOT/h.md" \
+                     --target tab --repo "$PARKED_ROOT/main"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"BASE WAS NOT YOURS:"* ]]
+  [[ "$output" == *"unrelated-parked-branch"* ]]
+}
+
+@test "summary: says nothing about the base when it IS the caller's HEAD" {
+  setup_parked_main
+  cd "$PARKED_ROOT/main"
+  run env PATH="$STUBDIR:$PATH" HERDR_ENV=0 CMUX_WORKSPACE_ID= \
+      bash "$SCRIPT" --name baseprobe2 --handoff "$PARKED_ROOT/h.md" --target tab
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"BASE WAS NOT YOURS:"* ]]
+}
+
+@test "herdr workspace: the handoff viewer pane is named Handoff, not the work label (R14)" {
+  run_herdr_workspace
+  [ "$status" -eq 0 ]
+  # The viewer holds the brief, not the work. Two identically-named splits beside
+  # each other is the thing this convention exists to stop.
+  grep -qxF "pane rename wS:pB Handoff" "$HERDR_ARGV_LOG"
+  grep -qxF "pane rename wS:p2 testlabel" "$HERDR_ARGV_LOG"
+}
+
+@test "herdr: a rename that stores a DIFFERENT label is caught by the read-back (R12)" {
+  export HERDR_STUB_RENAME_MISMATCH=1
+  run_herdr_tab
+  # Exit 0 from the backend is not evidence the name landed — that is the whole
+  # premise of this change. The read-back must notice and report the surface.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reports the name"* ]]
+  [[ "$output" == *"went unnamed:"* ]]
 }
 
 @test "herdr tab: places the tab in the LIVE workspace, not a stale HERDR_WORKSPACE_ID" {
@@ -659,9 +975,12 @@ run_unresolvable() {
   # useless here — the old step line this diff removed contained both, so asserting
   # them would pass against the very implementation this test exists to reject.
   [[ "$output" == *'`herdr` announced this session (HERDR_ENV=1) but would not take the launch'* ]]
-  # The remedy is starting the server — NOT setting a binary path. Borrowing exit 4's
-  # diagnosis here would send the user to fix a $PATH that is already correct.
-  [[ "$output" == *"herdr status server"* ]]
+  # The remedy is the SERVER — NOT a binary path. Borrowing exit 4's diagnosis here
+  # would send the user to fix a $PATH that is already correct. Asserted by meaning,
+  # not by naming `herdr status server`: that command is what the probe already ran and
+  # quoted, so telling the reader to run it again was the dead end this replaced.
+  [[ "$output" == *"If the server is down"* ]]
+  [[ "$output" == *"status: running"* ]]
   [[ "$output" != *"could not resolve"* ]]
   [[ "$output" != *"SPINOFF_BIN_PATHS"* ]]
   # A retrying caller must be told the worktree is already there; re-running the same
@@ -684,6 +1003,91 @@ run_unresolvable() {
   [[ "$output" != *"skipping launch automation"* ]]
   # The artifacts survive — this is a failed launch, not a failed spinoff.
   [ -f "$UREPO/worktrees/uh/docs/handoff.md" ]
+}
+
+@test "exit 5: the message quotes herdr's stdout instead of naming a mechanism" {
+  # The old text asserted the server "did not answer THIS process" and blamed a
+  # detached shell. Nobody had established that, and `herdr status server` answers
+  # `running` right before and after a failing run — so the message framed its own
+  # refutation as confirmation and sent three sessions after a socket bug that did
+  # not exist. Whatever herdr actually said is the only honest content here.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_STATUS_OUT='status: not running'
+  [ "$status" -eq 5 ]
+  # BOTH report sites must carry it: the mid-run ⚠ and the end-of-run tail. A single
+  # occurrence would still pass if a future edit dropped one of them, and the two
+  # sites drifting apart is the failure mode the shared helper exists to prevent.
+  [ "$(grep -cF 'status: not running' <<<"$output")" -ge 2 ]
+}
+
+@test "exit 5: stderr is quoted too — it is where a dead server reports itself" {
+  # The probe matches on stdout only, but herdr writes an unreachable server to
+  # stderr. Discarding it would leave the evidence line empty in exactly the case
+  # the message exists for, and then claim herdr printed nothing — a fresh false
+  # assertion replacing the one this change removes.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"status: unreachable"* ]]
+}
+
+@test "exit 5: silence on both streams is reported as silence, not inferred" {
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_STATUS_OUT=
+  [ "$status" -eq 5 ]
+  # Both sites, and a needle specific to the empty case — a bare "nothing" appears at
+  # two unrelated places, so deleting one report site still passed.
+  [ "$(grep -cE 'printed nothing on stdout or stderr|\(nothing, on either stream\)' <<<"$output")" -ge 2 ]
+}
+
+@test "exit 5: every quoted evidence line carries the block indent" {
+  # Real herdr answers with five lines. Padding the STRING instead of each LINE left
+  # four of them flush against the margin, inside the block the skill relays verbatim.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_STATUS_OUT='status: stopped
+version: 0.8.2
+socket: /tmp/h.sock'
+  [ "$status" -eq 5 ]
+  # the trailing lines must never appear column-zero
+  [ "$(grep -c '^version: 0.8.2' <<<"$output")" -eq 0 ]
+  [ "$(grep -c '^socket: /tmp/h.sock' <<<"$output")" -eq 0 ]
+  # ...and must still be present, indented, at both report sites
+  [ "$(grep -cE '^[[:space:]]+version: 0\.8\.2$' <<<"$output")" -ge 2 ]
+}
+
+@test "probe: an unusable scratch file reports lost stderr, never silence" {
+  # The fallback path keeps stdout (the match input) but cannot capture stderr.
+  # Claiming silence there would be a fresh false assertion — the class this change
+  # exists to remove — so it must name the loss instead. Driven at the function level:
+  # the full-run helper pins its own PATH, so a failing `mktemp` cannot be shadowed in.
+  MKTMP="$BATS_TEST_TMPDIR/mkfail"; mkdir -p "$MKTMP"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$MKTMP/mktemp"; chmod +x "$MKTMP/mktemp"
+  run env PATH="$MKTMP:$PATH" TMPDIR=/nonexistent-scratch-dir SPINOFF_TEST_SOURCE=1 \
+      bash -c '
+        source "$1" 2>/dev/null
+        HERDR="$2"
+        _herdr_probe
+        echo "LOST=${HERDR_PROBE_ERR_LOST}"
+        _herdr_probe_said_something && echo "SAID=yes"
+        _herdr_probe_evidence "  "
+      ' _ "$SCRIPT" "$HERDR_BIN"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"LOST=1"* ]]
+  # it must still count as having something to report, so the caller does not fall
+  # through to the "printed nothing" wording
+  [[ "$output" == *"SAID=yes"* ]]
+  [[ "$output" == *"stderr could not be captured"* ]]
+}
+
+@test "exit 5: no herdr path asserts a detached shell or an unanswered process" {
+  # The class, not the two instances. Any exit-5 herdr run must be free of both
+  # phrases; a future edit that reintroduces either in one branch trips this.
+  LOUD_STUBS=herdr
+  run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=0
+  [ "$status" -eq 5 ]
+  [[ "$output" != *"detached"* ]]
+  [[ "$output" != *"did not answer"* ]]
+  [[ "$output" != *"cannot reach its socket"* ]]
 }
 
 @test "loud: the probe-failed summary says INCOMPLETE and never prints a tick" {
@@ -724,7 +1128,8 @@ run_unresolvable() {
                    OSASCRIPT_BIN=/nonexistent/osascript
   [ "$status" -eq 5 ]
   [[ "$output" == *"announced this session (HERDR_ENV=1)"* ]]
-  [[ "$output" == *"herdr status server"* ]]
+  # herdr's branch specifically — ghostty's says nothing about a running server
+  [[ "$output" == *"did not report a running server"* ]]
   [[ "$output" != *"announced this session (--launcher ghostty)"* ]]
   [[ "$output" != *"osascript was not found"* ]]
 }

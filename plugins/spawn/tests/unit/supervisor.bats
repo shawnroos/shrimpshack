@@ -34,6 +34,8 @@ setup() {
     JOBS="$LIB/jobs.sh"
 
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gw-sup.XXXXXX")"
+
+    . "$BATS_TEST_DIRNAME/../lib/sweep.bash"
     # PHYSICAL path. On macOS /tmp is a symlink to /private/tmp, and the
     # rendered permission rules and the job lock are both keyed on the path the
     # tools resolve — a logical path here compares unequal for a reason that has
@@ -81,10 +83,7 @@ teardown() {
         kill "$GW_PID" 2>/dev/null || true
         wait "$GW_PID" 2>/dev/null || true
     fi
-    for p in $(pgrep -f "$WORK" 2>/dev/null); do
-        [ "$p" = "$$" ] && continue
-        kill -9 "$p" 2>/dev/null
-    done
+    sweep_work
     rm -rf "$WORK"
 }
 
@@ -174,7 +173,11 @@ contract() {
 # launcher so a caller can assert on $status first.
 start_job() {   # <contract file> [extra launcher args...]
     local c="$1"; shift
-    run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" 2>/dev/null' \
+    # "${@:4}" is what makes the documented extra-args half real: without it the
+    # trailing arguments were accepted by the signature and silently dropped, so
+    # a caller passing --allow would have measured an ungranted job and called it
+    # a grant.
+    run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" "${@:4}" 2>/dev/null' \
         _ "$BG" "$PROJ" "$c" "$@"
     HANDLE="$(printf '%s' "$output" | jq -r '.handle // empty' 2>/dev/null)"
     JOB_DIR="$(printf '%s' "$output" | jq -r '.job.job_dir // empty' 2>/dev/null)"
@@ -229,6 +232,134 @@ result_field() {    # <jq path>
     [ "$(result_field '.permission_denials[0].tool_name')" = "Bash" ]
     [ "$(result_field '.deliverables_satisfied')" = "false" ]
     [ "$(result_field '.degraded_reasons | length')" -ge 1 ]
+}
+
+@test "a Bash grant survives the launcher-to-supervisor fork and reaches the ceiling" {
+    # THE HOP IS THE RISK, NOT THE GRANT. --allow is parsed in the LAUNCHER and
+    # applied in a separate detached SUPERVISOR process; bg-agent.sh's own
+    # comment records --skill being parsed, populated, and arriving empty on the
+    # far side, so provisioning silently never ran. A grant that fails the same
+    # way leaves the job running narrower than the caller was promised, with
+    # nothing in the record saying so.
+    #
+    # grants.applied is written BY THE SUPERVISOR, only when its own SUP_GRANTS
+    # is non-empty — so its contents are proof the flag crossed the fork, not
+    # proof the launcher parsed it.
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json" --allow Bash
+    [ "$status" -eq 0 ]
+    [ -n "$HANDLE" ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    [ -f "$JOB_DIR/grants.applied" ] \
+        || { echo "no grants.applied — the grant did not reach the supervisor"; return 1; }
+    run cat "$JOB_DIR/grants.applied"
+    [ "$output" = "Bash" ]
+
+    # And it landed in BOTH layers of the job's own rendered ceiling.
+    run python3 -c "
+import json
+d=json.load(open('$JOB_DIR/ceiling.settings.json'))
+allow='Bash' in d['permissions']['allow']
+gate='Bash' in d['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()[1:]
+print('BOTH' if allow and gate else ('allow=%s gate=%s' % (allow, gate)))"
+    [ "$output" = "BOTH" ]
+
+    # R8 — and the record says so, in both the record and the notification a
+    # reader consumes on its own.
+    [ "$(result_field '.grants | join(",")')" = "Bash" ]
+    [ "$(result_field '.notification.grants | join(",")')" = "Bash" ]
+}
+
+@test "R8: the grants field is sourced from memory, not from the job's own directory" {
+    # THE FORGEABILITY PROPERTY, asserted where it can actually fail.
+    #
+    # An earlier version of this test wrote a forged grants.applied AFTER
+    # await_terminal returned — which is after result.json is already on disk, so
+    # the assertion held no matter what the writer did. It could not fail. The
+    # tamper is untimeable from out here: the supervisor writes that file itself,
+    # microseconds before the record.
+    #
+    # So the property is pinned at the source instead. `grants` must come from the
+    # in-memory array; the moment the writer re-reads the job directory, a
+    # Bash-granted job can rewrite its own accounting.
+    local bg; bg="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)/bg-agent.sh"
+    # Comments stripped FIRST. The writer's own comment says it never re-reads
+    # grants.applied, and an unfiltered grep matched that sentence — this test
+    # failed against code that was already correct, which is the same
+    # prose-matching trap it exists to guard against.
+    run bash -c "sed -n '/^sup_write_result()/,/^}/p' '$bg' | grep -v '^[[:space:]]*#' | grep -c 'grants.applied'"
+    [ "$output" = "0" ] \
+        || { echo "sup_write_result reads grants.applied — the record is forgeable"; return 1; }
+    run bash -c "sed -n '/^sup_write_result()/,/^}/p' '$bg' | grep -c 'SUP_GRANTS_APPLIED'"
+    [ "$output" != "0" ] \
+        || { echo "sup_write_result no longer sources grants from memory"; return 1; }
+}
+
+@test "R8: a REFUSED grant is recorded as no grant, not as the grant that was asked for" {
+    # The record answers "what did this job hold", not "what did its caller type".
+    # A refused grant still writes a result — the job fails and nothing runs — so
+    # reporting the request here would tell a reader the job held a capability it
+    # was explicitly denied.
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+
+    start_job "$WORK/c.json" --allow Agent
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "failed" ]
+
+    [ "$(result_field '.grants | length')" = "0" ] \
+        || { echo "a refused grant was recorded as granted: $(result_field '.grants | join(",")')"; return 1; }
+    [ "$(result_field '.notification.grants | length')" = "0" ]
+    refute_exists "$JOB_DIR/grants.applied"
+}
+
+@test "R8: an ungranted job records an empty grants array, not a null and not an absent key" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    [ "$(result_field '.grants | type')" = "array" ]
+    [ "$(result_field '.grants | length')" = "0" ]
+    [ "$(result_field '.notification.grants | length')" = "0" ]
+}
+
+@test "R8: --describe lists grants as a trusted field" {
+    # It is the supervisor's own record of what it applied, so a reader may act
+    # on it without believing the model.
+    run bash "$BG" --describe
+    [ "$status" -eq 0 ]
+    run bash -c 'printf "%s" "$1" | jq -r ".trusted_fields | index(\"grants\") != null"' _ "$output"
+    [ "$output" = "true" ]
+}
+
+@test "an ungranted job's ceiling names Bash in neither layer" {
+    # The control for the arm above. Same path, no --allow: the record carries no
+    # grant and the rendered ceiling is unchanged, so the arm above is measuring
+    # the flag rather than the default.
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    refute_exists "$JOB_DIR/grants.applied"
+    run python3 -c "
+import json
+d=json.load(open('$JOB_DIR/ceiling.settings.json'))
+allow='Bash' in d['permissions']['allow']
+gate='Bash' in d['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()[1:]
+print('NEITHER' if not allow and not gate else ('allow=%s gate=%s' % (allow, gate)))"
+    [ "$output" = "NEITHER" ]
 }
 
 @test "AE5: a refusal keeps a job out of done even when the deliverable landed" {
@@ -917,4 +1048,217 @@ EOS
     printf 'wait -n\n' >> "$WORK/plant.sh"
     run bash -c "sed 's/#.*//' '$WORK/plant.sh' | grep -nE 'wait[ ]+-n|mapfile|readarray|declare[ ]+-A|local[ ]+-A'"
     [ "$status" -eq 0 ]
+}
+
+# ===========================================================================
+# R13 — the record names the skill that did not land
+# ===========================================================================
+
+@test "R13: an unprovisionable skill leaves the job running and is NAMED in the record" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    # A skills home holding exactly ONE of the two requested skills. Two are
+    # asked for so the record has to distinguish them: naming the whole
+    # requested list would pass a test that only looked for "a skill name".
+    export SPAWN_SKILLS_HOME="$WORK/skills-home"
+    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine"
+    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
+
+    run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" \
+        --skill lands-fine --skill never-installed 2>/dev/null' \
+        _ "$BG" "$PROJ" "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    HANDLE="$(printf '%s' "$output" | jq -r '.handle // empty')"
+    JOB_DIR="$(printf '%s' "$output" | jq -r '.job.job_dir // empty')"
+    [ -n "$HANDLE" ] && [ -n "$JOB_DIR" ]
+
+    # The job STILL RUNS. A missing skill makes a job worse at its task; it does
+    # not make it not happen.
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.child_exit_code')" = "0" ]
+    [ "$(result_field '.deliverables_satisfied')" = "true" ]
+
+    # The provisioner's own stderr agrees on which one failed, so the record is
+    # not merely echoing back the argument it was given.
+    grep -qF 'never-installed' "$JOB_DIR/skills.err"
+    refute_file_match 'lands-fine' "$JOB_DIR/skills.err"
+
+    result_field '.degraded_reasons | join(" ")' > "$WORK/reasons.txt"
+    grep -qF 'never-installed' "$WORK/reasons.txt"
+    # The one that LANDED must not appear in a failure reason. Naming the whole
+    # requested list is the bug this arm exists to catch.
+    refute_file_match 'lands-fine' "$WORK/reasons.txt"
+}
+
+@test "R13 control arm: the absence check on the landed skill can fail" {
+    # The assertion above claims a name is NOT in the reasons. An absence
+    # assertion that cannot go red proves nothing, so this drives it red on a
+    # file that does contain the name.
+    printf 'one or more requested skills could not be provisioned\n' > "$WORK/reasons.txt"
+    run refute_file_match 'lands-fine' "$WORK/reasons.txt"
+    [ "$status" -eq 0 ]
+    printf 'the caller asked for lands-fine\n' >> "$WORK/reasons.txt"
+    run refute_file_match 'lands-fine' "$WORK/reasons.txt"
+    [ "$status" -ne 0 ]
+}
+
+# ===========================================================================
+# U12/R20/R30 — the record carries the tokens the child reported
+#
+# NULL IS NOT ZERO. Every arm below pins the KEY's presence and the value's
+# TYPE, never `jq -r`'s rendering: `jq -r` prints JSON null, the string "null"
+# and an absent key identically, so an assertion written that way is green
+# before the field exists and stays green when an absent measurement is
+# recorded as 0 — which is the defect this unit exists to prevent.
+# ===========================================================================
+
+# A child that reports a chosen result JSON. The shared fixture always reports
+# usage and other suites pin that shape, so the variant shapes come from here.
+# It writes the deliverable, so these jobs classify on the same path as any
+# other rather than through the empty-worktree branch.
+stub_child() {  # <result json>
+    mkdir -p "$WORK/stub"
+    cat > "$WORK/stub/claude" <<STUB
+#!/usr/bin/env bash
+printf 'stub wrote at %s\n' "\$(date +%s)" > "\$PWD/out.txt"
+cat <<'RESULT'
+$1
+RESULT
+STUB
+    chmod +x "$WORK/stub/claude"
+    export SPAWN_CLAUDE_BIN="$WORK/stub/claude"
+}
+
+usage_is() {    # <field> <jq type> [<jq value expression>]
+    local field="$1" want="$2" expr="${3:-}"
+    jq -e --arg f "$field" --arg t "$want" \
+        'has("usage") and (.usage | has($f)) and ((.usage[$f] | type) == $t)' \
+        < "$JOB_DIR/result.json" >/dev/null || {
+            printf 'usage_is: %s is not present with type %s; record says: %s\n' \
+                "$field" "$want" "$(jq -c '.usage' < "$JOB_DIR/result.json")" >&2
+            return 1; }
+    [ -z "$expr" ] && return 0
+    jq -e --arg f "$field" ".usage[\$f] $expr" < "$JOB_DIR/result.json" >/dev/null || {
+        printf 'usage_is: %s failed %s; record says: %s\n' \
+            "$field" "$expr" "$(jq -c '.usage' < "$JOB_DIR/result.json")" >&2
+        return 1; }
+    return 0
+}
+
+@test "U12: a completed job's record carries the counts the child reported" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    # The fixture's own numbers, not a round figure: a record that hardcoded
+    # anything would have to hardcode these.
+    usage_is input_tokens number '== 11'
+    usage_is output_tokens number '== 7'
+}
+
+@test "U12: a child reporting ZERO tokens records 0, as a number" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    stub_child '{"type":"result","subtype":"success","is_error":false,"session_id":"11111111-2222-3333-4444-555555555555","result":"stub answer","permission_denials":[],"usage":{"input_tokens":0,"output_tokens":0}}'
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    # Asserted FIRST: a stub that failed to run leaves the job failed, and that
+    # red would be about the scaffolding rather than about usage.
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    usage_is input_tokens number '== 0'
+    usage_is output_tokens number '== 0'
+}
+
+@test "U12: a child that reports NO usage object records null, not zero" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    stub_child '{"type":"result","subtype":"success","is_error":false,"session_id":"11111111-2222-3333-4444-555555555555","result":"stub answer","permission_denials":[]}'
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    # The job classifies normally: an unmeasured child is not a broken one.
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    usage_is input_tokens 'null'
+    usage_is output_tokens 'null'
+}
+
+@test "U12: a non-numeric count records null, per field, and does not propagate the string" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    stub_child '{"type":"result","subtype":"success","is_error":false,"session_id":"11111111-2222-3333-4444-555555555555","result":"stub answer","permission_denials":[],"usage":{"input_tokens":"lots","output_tokens":7}}'
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "done" ]
+
+    # Per field. A both-null answer would pass a record that threw the whole
+    # object away the moment one value was bad.
+    usage_is input_tokens 'null'
+    usage_is output_tokens number '== 7'
+    refute_file_match 'lots' "$JOB_DIR/result.json"
+}
+
+@test "U12: a job whose child produced no result at all records null counts and still ends" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_MODE=fail
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    # child.json exists and is EMPTY here — the redirection creates it before
+    # the child writes anything. That is a different path from an absent file.
+    [ "$(await_terminal "$HANDLE")" = "failed" ]
+    [ -f "$JOB_DIR/child.json" ]
+    [ ! -s "$JOB_DIR/child.json" ]
+
+    usage_is input_tokens 'null'
+    usage_is output_tokens 'null'
+}
+
+@test "U12: recording usage changes no classification — a degraded job stays degraded" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_DENIALS='[{"tool_name":"Bash","tool_use_id":"tu_12","tool_input":{"command":"touch out.txt"}}]'
+    export FAKE_CLAUDE_WRITE="out.txt"
+
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ "$(await_terminal "$HANDLE")" = "degraded" ]
+    [ "$(result_field '.terminal_state')" = "degraded" ]
+    [ "$(result_field '.permission_denial_count')" = "1" ]
+    [ "$(result_field '.deliverables_satisfied')" = "true" ]
+    usage_is input_tokens number '== 11'
+}
+
+@test "U12 control arm: the type assertion goes red when a count is written as the wrong thing" {
+    JOB_DIR="$WORK/fakejob"; mkdir -p "$JOB_DIR"
+    printf '%s\n' '{"usage":{"input_tokens":0,"output_tokens":null}}' > "$JOB_DIR/result.json"
+    run usage_is input_tokens 'null'
+    [ "$status" -ne 0 ]
+    run usage_is output_tokens number
+    [ "$status" -ne 0 ]
+    run usage_is input_tokens number '== 7'
+    [ "$status" -ne 0 ]
+    # And it passes on the shapes it is meant to accept, so the arm above is a
+    # real discrimination and not a check that always fails.
+    run usage_is input_tokens number '== 0'
+    [ "$status" -eq 0 ]
+    run usage_is output_tokens 'null'
+    [ "$status" -eq 0 ]
+
+    printf '%s\n' '{"usage":{}}' > "$JOB_DIR/result.json"
+    run usage_is input_tokens 'null'
+    [ "$status" -ne 0 ]
+    printf '%s\n' '{}' > "$JOB_DIR/result.json"
+    run usage_is input_tokens 'null'
+    [ "$status" -ne 0 ]
 }

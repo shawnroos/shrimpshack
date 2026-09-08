@@ -78,7 +78,76 @@ Deleting a memory because it is *wrong* — contradicted by a newer one, or a du
 absorbed into a stronger entry. Capacity is never a reason to delete; that is what the
 hot/cold split is for.
 
+## Retro
+
+### Retro item
+A record of tool friction: a plugin, skill, hook, script or harness behaviour that got in
+the way and would get in the way again unchanged. It answers "what should we fix", where a
+Memory answers "how should I work". Items live in a dot-directory inside the Store, so
+nothing indexes, recalls or triggers on them — they are review-time reading.
+
+### Backlog
+Every retro item whose Disposition is still `open`. It is worked down by
+`/reflect:reflect-retro`, never filtered by recency: staleness is sort order, because a
+recent window would hide the item that has been re-derived most often.
+
+### Disposition
+A retro item's state: `open`, `fixed`, `culled`, or `wontfix`. An item leaves the Backlog
+only by moving out of `open`, and only with a recorded proof of what closed it.
+
+### Probe
+A shell check stored on a retro item that proves the friction is gone. It proves it by
+printing a token carrying a nonce generated for that one execution — never by exiting
+zero, which on this machine proves nothing. Probes run only inside the manual retro
+session, and only after the operator has approved the text.
+
+### Vent pass
+The part of a reflect run that asks what got in the way and writes retro items. It writes
+nothing when the answer is nothing.
+
 ## Flagged ambiguities
 
 - "Recall" had been used both for the layered lookup and for the automatic surfacing that
   follows a trigger match — these are distinct: the latter is a Nudge.
+- Retirement and a `culled` Disposition are different acts on different things.
+  Retirement deletes a *memory* because it is wrong. Culled records that a *tool* was
+  deleted — the retro concluded the thing itself should go. Neither is about capacity.
+
+## Spawn teams
+
+### Cause
+Why a member of a team run did not succeed, composed only of facts the plugin itself
+established — the supervisor's own account, the child's exit code, and the reasons it
+recorded for degrading. It is written into the run record, so it outlives the member's
+worktree and the job record that worktree held. The model's own narrative is not part of
+it; that is the child's text, not the plugin's finding.
+
+### Attempt
+One retired try at a member's work: the round it ran in, the job it ran as, the outcome it
+reached and the cause it carried. A member accumulates attempts; nothing a retry replaces
+is discarded.
+
+### Rotation
+Retiring a member's current try into its attempt history and returning the member to the
+roster. It is one write, not a sequence, because a reader that catches it half-applied sees
+a member that is neither finished nor retryable.
+
+## Herdr and Linear
+
+### Binding
+The recorded link between one git worktree and one Linear issue. It is held against the
+worktree, never against a pane or tab, so rearranging the layout does not lose it. A match
+the plugin infers is only a proposal; the binding exists once Shawn confirms it, and only a
+confirmed binding permits a write to Linear.
+
+### Unbound
+A worktree with no binding. It is a supported state, not an error — work often starts before
+the issue exists — and the plugin never requires an issue to be created for it.
+
+### Misplaced
+A bound worktree whose herdr workspace does not correspond to its issue's Linear project.
+The plugin reports it and offers to move either side; it never picks which one was wrong.
+
+### Stale
+A binding whose issue has been closed in Linear while the worktree is still in use. It is
+reported and otherwise left alone — the plugin does not reopen an issue on its own.

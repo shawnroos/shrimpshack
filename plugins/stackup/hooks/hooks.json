@@ -1,0 +1,29 @@
+{
+  "description": "stackup hooks — ask whether work should ship as a stack of dependent pull requests, at the two moments the answer is still cheap. PostToolUse(Write|Edit|MultiEdit) fires after a plan file lands and asks for the layers while the dependency graph is fresh. PreToolUse(Bash) fires before a pull request opens as the last catch for work that never went through a plan. Both are command hooks: they decide mechanically and emit additionalContext only when the condition holds, so the model is not run on every write or every shell command. Neither ever blocks.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/tools/stackup/run.sh plan",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/tools/stackup/run.sh pr",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

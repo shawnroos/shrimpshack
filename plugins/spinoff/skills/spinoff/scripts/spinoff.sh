@@ -139,9 +139,66 @@ resolve_bin_rejected() { [ -n "${2:-}" ] && [ -z "${1:-}" ] && printf '%s' "$2";
 # dialog, which is why this checks the RESOLVED $OSASCRIPT (already validated as a
 # regular executable file by resolve_bin) instead of running it. $GHOSTTY_APP and
 # $OSASCRIPT are resolved next to $HERDR / $CMUX, below.
-_herdr_probe() { [ -n "${HERDR:-}" ] && "$HERDR" status server 2>/dev/null | grep -qi 'running'; }
+# herdr must NEVER be piped into an early-exiting reader to decide liveness. `grep -q`
+# exits the instant it matches and closes the pipe, so herdr dies mid-write and exits
+# non-zero — and under the `set -o pipefail` at the top of this file that non-zero
+# becomes the pipeline's status, so the probe returns FALSE on a match that already
+# succeeded. Measured 80-94 failures per 300 against a live server before this change.
+#
+# Do not look for one exit code: the signature is not stable across herdr releases.
+# Observed 101 (a Rust broken-pipe panic, `failed printing to stdout`) on 0.8.0, and
+# 141 (plain SIGPIPE, no stderr at all) on 0.8.2. Capture first, then test the text —
+# that is correct for any of them, because no exit status reaches a conditional.
+#
+# The match is an exact `status: running` LINE, not a substring: the old
+# `grep -qi running` also accepted "not running". herdr prints several lines, so the
+# line may not be the first one.
+_herdr_probe() {
+  [ -n "${HERDR:-}" ] || return 1
+  local _err
+  _err="$(mktemp 2>/dev/null)" || _err="${TMPDIR:-/tmp}/spinoff-herdr-probe.$$"
+  HERDR_PROBE_ERR_LOST=0
+  if : > "$_err" 2>/dev/null; then
+    HERDR_PROBE_OUT="$("$HERDR" status server 2>"$_err" || true)"
+    HERDR_PROBE_ERR="$(cat "$_err" 2>/dev/null || true)"
+    rm -f "$_err"
+  else
+    # No writable scratch file. Keep stdout (the match input) intact, but record that
+    # stderr was DROPPED rather than let the report claim herdr printed nothing —
+    # that would be a fresh false assertion, the class this change exists to remove.
+    HERDR_PROBE_OUT="$("$HERDR" status server 2>/dev/null || true)"
+    HERDR_PROBE_ERR=""
+    HERDR_PROBE_ERR_LOST=1
+  fi
+  # Wrapping both sides in newlines lets one pattern match an exact line anywhere.
+  case $'\n'"$HERDR_PROBE_OUT"$'\n' in
+    *$'\nstatus: running\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 _cmux_probe()  { [ -n "${CMUX:-}" ] && [ -x "$CMUX" ]; }
 _ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
+
+# The exit-5 evidence, split into a predicate and a printer because the two report
+# sites need the presence answer BEFORE they print — one leads with a header, the
+# other with a sentence — and each words the empty case for its own register.
+_herdr_probe_said_something() {
+  [ -n "${HERDR_PROBE_OUT:-}" ] || [ -n "${HERDR_PROBE_ERR:-}" ] || [ "${HERDR_PROBE_ERR_LOST:-0}" = 1 ]
+}
+# Pads EVERY line, not the string. herdr answers with five lines, so padding once left
+# four of them flush against the margin and broke the block SKILL.md relays verbatim.
+_herdr_probe_evidence() {
+  local pad="$1" _l
+  if [ -n "${HERDR_PROBE_OUT:-}" ]; then
+    while IFS= read -r _l; do printf '%s%s\n' "$pad" "$_l" >&2; done <<<"$HERDR_PROBE_OUT"
+  fi
+  if [ -n "${HERDR_PROBE_ERR:-}" ]; then
+    while IFS= read -r _l; do printf '%s%s\n' "$pad" "$_l" >&2; done <<<"$HERDR_PROBE_ERR"
+  fi
+  [ "${HERDR_PROBE_ERR_LOST:-0}" = 1 ] \
+    && printf '%s(stderr could not be captured — no writable scratch file)\n' "$pad" >&2
+  return 0
+}
 
 # ---- announced-but-unresolvable record (R5, R6, R17, KTD-3, KTD-8, KTD-9) ----
 # An environment that DELIBERATELY announces a multiplexer, plus a binary we could not
@@ -174,6 +231,9 @@ _ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
 # binary whose probe merely failed DOES reach it and records only $ANNOUNCED_*, never
 # $LOUD_*. That is now a LOUD exit 5, not a silent exit 0: $ANNOUNCED_* alone is
 # enough to fail the run, and $LOUD_* only chooses which failure it is.
+HERDR_PROBE_OUT="" # what the last _herdr_probe read on stdout — the exit-5 evidence
+HERDR_PROBE_ERR="" # and on stderr, where herdr reports an unreachable server
+HERDR_PROBE_ERR_LOST=0 # 1 when stderr was dropped, so the report says so
 LOUD_BIN=""        # binary an announcement asked for that resolution could not find
 LOUD_ANNOUNCE=""   # the env var that announced it, rendered for a human
 LOUD_OVERRIDE=""   # the env var that pins it explicitly
@@ -230,7 +290,7 @@ _record_loud() {
 resolve_launcher() {
   case "$LAUNCHER" in
     herdr) if _herdr_probe; then LAUNCHER=herdr; return; fi
-           echo "  ⚠ --launcher herdr requested but the herdr server isn't reachable — falling back to auto-detection" >&2 ;;
+           echo "  ⚠ --launcher herdr requested but herdr did not report a running server — falling back to auto-detection" >&2 ;;
     cmux)  if _cmux_probe; then LAUNCHER=cmux; return; fi
            echo "  ⚠ --launcher cmux requested but the cmux CLI isn't available — falling back to auto-detection" >&2 ;;
     ghostty) if _ghostty_probe; then LAUNCHER=ghostty; return; fi
@@ -272,7 +332,7 @@ resolve_launcher() {
   # when herdr's server is dead, so that exact run has BOTH a forced ghostty and a live
   # HERDR_ENV=1. Recording ghostty first would replace herdr's diagnosis — which hands
   # over `herdr status server`, the one command that separates a stopped server from a
-  # socket this process cannot reach — with a ghostty message that has no remedy at all.
+  # server did not report running — with a ghostty message that has no remedy at all.
   # The exit code is 5 either way, so nothing checking status would have caught that.
   # Whatever announced a cause worth acting on keeps the message.
   #
@@ -287,6 +347,17 @@ resolve_launcher() {
   esac
   if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
   elif [ -n "${CMUX_WORKSPACE_ID:-}" ] && _cmux_probe;    then LAUNCHER=cmux
+  # Nothing announced a multiplexer, but a herdr SERVER is up. HERDR_ENV is injected
+  # by the herdr binary into panes it spawns, so it is a proxy for launch ancestry, not
+  # for herdr being reachable: a session started from a plain terminal never holds it,
+  # while `herdr pane`/`agent` still address every pane on the live server by id. Before
+  # this arm such a session fell through to ghostty and opened a bare window beside the
+  # user's herdr layout, at exit 0, with no mention of herdr anywhere.
+  # It sits BELOW both announced arms and keeps their `-z` guards, so it cannot steal a
+  # session another backend owns, and HERDR_ENV=0 (present but switched off, R8) still
+  # resolves `none` rather than reaching this probe.
+  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] \
+       && _herdr_probe;                                   then LAUNCHER=herdr
   # ghostty is checked LAST, and only when NO multiplexer announced itself in the
   # environment at all. Two separate reasons, both load-bearing:
   #  * ghostty's own vars are set even when a multiplexer owns the session —
@@ -419,7 +490,13 @@ launcher_launch_agent_cmux() {
   LB_READY=0
   local err
   local -a WSA=(); [ -n "${LAUNCH_WS:-}" ] && WSA=(--workspace "$LAUNCH_WS")
-  "$CMUX" rename-tab --surface "$LAUNCH_SFC" "${WSA[@]}" --title "$LABEL" >/dev/null 2>&1
+  # Not silenced. This call spent a release discarding its own errors, so a rename
+  # that never landed was indistinguishable from one that did.
+  local rerr
+  if ! rerr="$("$CMUX" rename-tab --surface "$LAUNCH_SFC" "${WSA[@]}" --title "$LABEL" 2>&1)"; then
+    echo "  ⚠ cmux surface could not be named: $rerr" >&2
+    note_unnamed "cmux $LAUNCH_WHERE surface $LAUNCH_SFC"
+  fi
   if ! err="$("$CMUX" send --surface "$LAUNCH_SFC" "${WSA[@]}" "$LAUNCH_CMD" 2>&1)"; then
     KICKOFF_OK=0
     echo "  ⚠ cmux send failed while launching the briefed session: $err" >&2
@@ -487,6 +564,13 @@ launcher_open_viewer_cmux() {
   if [ -n "$RIGHT_PANE" ]; then
     if "$CMUX" open "$HANDOFF_DST" --pane "$RIGHT_PANE" --workspace "$LAUNCH_WS" --no-focus >/dev/null 2>&1; then
       VIEWER_OK=1
+      # R14 applies to every backend. Whether rename-tab accepts a PANE ref (this
+      # is `new-pane`, not `new-surface`) is unverified, so attempt it and report
+      # the surface honestly when it does not take, rather than assume either way.
+      local verr
+      if ! verr="$("$CMUX" rename-tab --surface "$RIGHT_PANE" --workspace "$LAUNCH_WS" --title "$VIEWER_LABEL" 2>&1)"; then
+        note_unnamed "cmux handoff viewer pane $RIGHT_PANE"
+      fi
       step "  handoff viewer: $RIGHT_PANE"
     else
       echo "  ⚠ opened right pane but could not render the handoff viewer" >&2
@@ -696,6 +780,7 @@ launcher_new_split_herdr() {
     if ! err="$("$HERDR" pane swap --source-pane "$pane" --target-pane "$FROM_SURFACE" 2>&1)"; then
       echo "  ⚠ the split succeeded but the swap that puts it on the LEFT failed: $err" >&2
       echo "    continuing — the briefed session lands on the right instead." >&2
+      TARGET_DOWNGRADE="split left → split right: the pane swap that moves the new pane to the left failed"
     fi
   fi
   LAUNCH_RUN_PANE="$pane"      # the pane claude runs in (no further split)
@@ -718,6 +803,24 @@ launcher_launch_agent_herdr() {
   if [ -z "$pane" ]; then
     echo "  ⚠ no herdr pane resolved to launch claude into" >&2
     HERDR_PANE=""; LAUNCH_SFC=""; SURFACE_REF=""; return
+  fi
+  # Name the pane BEFORE the launch: afterwards it holds a live shell writing its
+  # own title, and `pane rename` claims no pin against that. This runs for the tab
+  # and workspace targets too, not only the split — a pane's label is a distinct
+  # object from the tab's and the workspace's, and it is unnamed on all three today.
+  # The label is a bare variadic positional here, so it must stay ONE quoted word;
+  # an end-of-options `--` is NOT consumed and would land in the label.
+  local rout rlabel
+  if ! rout="$("$HERDR" pane rename "$pane" "$LABEL" 2>&1)"; then
+    echo "  ⚠ herdr pane could not be named: $rout" >&2
+    note_unnamed "herdr $LAUNCH_WHERE pane $pane"
+  else
+    # Same variable carries the success body — the reply echoes what it stored.
+    rlabel="$(printf '%s' "$rout" | _herdr_json 'result.pane.label')"
+    if [ "$rlabel" != "$LABEL" ]; then
+      echo "  ⚠ herdr pane $pane reports the name '$rlabel', not '$LABEL'" >&2
+      note_unnamed "herdr $LAUNCH_WHERE pane $pane"
+    fi
   fi
   # The brief rides this command as claude's positional prompt (read from the brief
   # file), so a successful run IS a successful briefing. Errors are surfaced, not
@@ -834,6 +937,10 @@ launcher_open_viewer_herdr() {
     "$HERDR" pane run "$view" "bat --paging=always '$HANDOFF_DST'" >/dev/null 2>&1 && VIEWER_OK=1
   fi
   if [ "$VIEWER_OK" = "1" ]; then
+    # A fixed name, not the work label: the viewer holds the brief, not the work, and
+    # two identically-named splits side by side is the problem this convention fixes.
+    "$HERDR" pane rename "$view" "$VIEWER_LABEL" >/dev/null 2>&1 \
+      || note_unnamed "herdr handoff viewer pane $view"
     step "  handoff viewer: $view"
   else
     echo "  ⚠ opened a right pane but no markdown pager (glow/bat) is available — skipping the handoff render" >&2
@@ -963,6 +1070,39 @@ on run argv
 			focus t
 			return "focused=" & (id of t as text)
 
+		else if verb is "set-title" then
+			-- argv: set-title <terminal-ref> <tab|surface> <title>
+			-- `name` is read-only on window, tab and terminal (sdef access="r"), so
+			-- the title is set through `perform action`, which also pins it against
+			-- the shell's own OSC writes. Set and read back in ONE event: the tab
+			-- handle then never crosses the shell boundary, and there is no second
+			-- event for the title to change under.
+			set t to my findTerminal(item 2 of argv)
+			if t is missing value then return "error=surface-not-found"
+			set theScope to item 3 of argv
+			set theTitle to item 4 of argv
+			if theScope is "tab" then
+				perform action ("set_tab_title:" & theTitle) on t
+				-- A terminal exposes no back-pointer to its tab, so the tab is found
+				-- by scanning. Reading the terminal's name here would never match:
+				-- a tab-scope set leaves it at the shell's own title.
+				repeat with w in windows
+					repeat with tb in tabs of w
+						try
+							repeat with tt in terminals of tb
+								if (id of tt as text) is (id of t as text) then
+									return "name=" & (name of tb as text)
+								end if
+							end repeat
+						end try
+					end repeat
+				end repeat
+				return "error=tab-not-found"
+			else
+				perform action ("set_surface_title:" & theTitle) on t
+				return "name=" & (name of t as text)
+			end if
+
 		else if verb is "pid" then
 			set t to my findTerminal(item 2 of argv)
 			if t is missing value then return "error=surface-not-found"
@@ -1084,6 +1224,7 @@ launcher_launch_agent_ghostty() {
         *error=surface-not-found*)
           echo "  ⚠ --from-surface '$FROM_SURFACE' matches no live ghostty terminal (expected a terminal id or its tty, e.g. /dev/ttys004) — opening a new TAB instead of a split" >&2
           LAUNCH_LABEL="agent tab"; LAUNCH_WHERE="tab"
+          TARGET_DOWNGRADE="split → tab: --from-surface '$FROM_SURFACE' matches no live ghostty terminal (expected a terminal id or its tty, e.g. /dev/ttys004)"
           out="$(_ghostty_run new-tab "$cmd" "$WORKTREE")" ;;
         *)
           # Put the user back in the pane they started from. The dictionary has no
@@ -1115,6 +1256,73 @@ launcher_launch_agent_ghostty() {
   pid="$(_ghostty_field "$out" pid)"
   KICKOFF_OK=1
   step "  $LAUNCH_LABEL: $GHOSTTY_TERM (pid ${pid:-unknown}, launched with the brief)"
+  # Named AFTER the launch because on ghostty creation IS the launch — there is no
+  # surface to name before it. Read LAUNCH_WHERE here, not GHOSTTY_PLACE: a split
+  # whose --from-surface did not resolve fell back to a tab above and rewrote it.
+  _ghostty_name_surface
+}
+
+# Sets the title and confirms it landed. `perform action` returns true when it did
+# nothing — measured on a terminal created ~1s earlier, where the title stayed at the
+# shell's own — so the returned name is the only evidence. The first attempt missing
+# is the expected path, not the exception, which is why this polls rather than
+# retrying once immediately.
+_ghostty_name_surface() {
+  local scope=tab
+  [ "$LAUNCH_WHERE" = split ] && scope=surface
+  if ! _ghostty_probe_titles; then
+    note_unnamed "ghostty $LAUNCH_WHERE terminal $GHOSTTY_TERM (no set_tab_title action on this Ghostty)"
+    return
+  fi
+  _ghostty_set_title "$GHOSTTY_TERM" "$scope" "$LABEL" && return
+  case "$_GST_STATE" in
+    dead)
+      KICKOFF_OK=0
+      # Clear the handle too: launcher_wait_ready_ghostty guards on it being
+      # non-empty, and a dead-but-set handle makes it poll for a pid that can
+      # never come until the 180s ceiling — three silent minutes confirming a
+      # death the run has already diagnosed.
+      GHOSTTY_TERM=""
+      echo "  ⚠ the ghostty terminal that was just launched no longer exists — the session did not survive" >&2
+      return ;;
+  esac
+  echo "  ⚠ ghostty $LAUNCH_WHERE could not be named (reports '${_GST_OBSERVED:-}')" >&2
+  note_unnamed "ghostty $LAUNCH_WHERE terminal $GHOSTTY_TERM"
+}
+
+# Sets a title and returns 0 only when the backend reports the title actually landed.
+# Sets $_GST_STATE to `dead` when the handle no longer resolves, so a caller that
+# cares about liveness can tell that apart from a title that would not stick.
+# Retries because `perform action` returns true when it did nothing: measured on a
+# terminal created ~1s earlier, where the title stayed at the shell's own. A first
+# miss is the expected path, not the exception.
+_ghostty_set_title() {
+  local term="$1" scope="$2" want="$3" out i=0
+  _GST_STATE=ok; _GST_OBSERVED=""
+  while [ "$i" -lt 3 ]; do
+    out="$(_ghostty_run set-title "$term" "$scope" "$want")"
+    # A dead handle is reported on the FIRST reply, not after the retries: retrying
+    # something already gone only delays the report.
+    case "$out" in
+      *error=surface-not-found*) _GST_STATE=dead; return 1 ;;
+    esac
+    _GST_OBSERVED="$(_ghostty_field "$out" name)"
+    [ "$_GST_OBSERVED" = "$want" ] && return 0
+    i=$((i+1)); sleep 1
+  done
+  _GST_STATE=mismatch
+  return 1
+}
+
+# Probed through the resolved bundle, never a bare `ghostty` on PATH: this script
+# resolves only GHOSTTY_APP (a .app directory) and osascript, and a background
+# agent's PATH may not carry /usr/bin at all. A probe that cannot RUN is not the
+# same as an action that is absent — only the latter means "no naming support".
+_ghostty_probe_titles() {
+  local bin="${GHOSTTY_APP:-}/Contents/MacOS/ghostty" actions
+  [ -x "$bin" ] || return 0
+  actions="$("$bin" +list-actions 2>/dev/null)" || return 0
+  case "$actions" in *set_tab_title*) return 0 ;; *) return 1 ;; esac
 }
 
 # Readiness on ghostty is the pid the terminal reports (KTD-7) — the started signal.
@@ -1168,6 +1376,11 @@ launcher_open_viewer_ghostty() {
   view="$(_ghostty_field "$out" terminal)"
   if [ -n "$view" ]; then
     VIEWER_OK=1
+    # Fixed name, same reason as the herdr viewer. Its own surface, so surface scope.
+    # Goes through the shared setter: a bare `_ghostty_field … || note_unnamed` could
+    # never fire, because _ghostty_field ends in `head` and always exits 0.
+    _ghostty_set_title "$view" surface "$VIEWER_LABEL" \
+      || note_unnamed "ghostty handoff viewer terminal $view"
     # Leave the user in the agent, not in the pager — the equivalent of the other
     # backends' --no-focus on the viewer split. Separate Apple event, for the reason
     # given in the split verb. Best-effort.
@@ -1203,6 +1416,11 @@ TARGET="tab"                 # tab => surface in current workspace; workspace =>
 LAUNCHER="auto"              # launch backend: herdr | cmux | ghostty | auto (auto => detect, see resolve_launcher)
 SPLIT_DIRECTION="right"      # --target split only: which side of --from-surface (right | left)
 FROM_SURFACE=""              # the ORIGINATING pane/surface to split off (see the validation note below)
+# Set when a requested target could not be honoured. Declared HERE, beside the target
+# state it shadows, because the split fallback below runs long before the summary
+# block's own state is initialised.
+TARGET_DOWNGRADE=""       # "<asked> → <got>: why", relayed in the summary block
+BASE_SURPRISE=""          # set when an omitted --base did not mean the caller's HEAD
 SESSION_TRANSCRIPT=""        # explicit originating-session transcript (set by the skill when backgrounded)
 SESSION_CWD=""               # cwd of the originating session, for the resume one-liner
 while [ $# -gt 0 ]; do
@@ -1234,11 +1452,13 @@ esac
 FORCED_LAUNCHER="$LAUNCHER"
 
 [ -n "$NAME" ] || die "missing --name <kebab-feature-name>"
-# A curated --label is passed to `herdr agent start "$LABEL"` as a BARE positional
-# (before flags), so a leading '-' would be misparsed as an option — the hazard the
-# cmux path sidesteps with `--title`. Reject it early with a clear message rather
-# than letting `agent start` fail obscurely. (The default label, set later from the
-# repo basename + name, can't start with '-', so this only guards user input.)
+# $LABEL reaches `herdr pane rename "$pane" "$LABEL"` as a BARE positional. Measured
+# on herdr 0.8.0 a leading '-' is in fact accepted there as a positional, so this
+# guard is belt-and-braces against a future backend that parses it as a flag, not a
+# live hazard. Kept because the label now reaches more positional call sites, not
+# fewer. NOTE: this runs before the default is derived, so it guards user input only —
+# `--name '---'` de-kebabs to nothing and falls back to a raw '---' label that never
+# passes through here.
 case "$LABEL" in -*) die "--label must not start with '-' (got: $LABEL)" ;; esac
 [ -n "$HANDOFF_SRC" ] || die "missing --handoff <path-to-handoff.md>"
 [ -f "$HANDOFF_SRC" ] || die "handoff file not found: $HANDOFF_SRC"
@@ -1260,6 +1480,7 @@ if [ "$TARGET" = split ] && [ -z "$FROM_SURFACE" ]; then
   echo "  ⚠ --target split needs --from-surface <id>, and nothing was passed — opening a TAB instead of a split." >&2
   echo "    The originating surface cannot be inherited from the environment here; pass it explicitly." >&2
   TARGET=tab
+  TARGET_DOWNGRADE="split → tab: --target split needs --from-surface <id> and none was passed"
 fi
 
 # ---- resolve the launcher binaries (R1-R3, R15) ------------------------------
@@ -1307,6 +1528,12 @@ if [ -z "$GHOSTTY_APP" ]; then
   done
 fi
 
+# The branch the CALLER was standing on, read before --repo moves us anywhere.
+# An omitted --base means "current HEAD", and the caller reads that as THEIR head.
+# It is resolved further down against the MAIN checkout instead, which is a
+# different branch whenever the caller sits in a worktree or passed --repo.
+CALLER_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+
 # ---- resolve target repo (--repo) before any cwd-relative git/IO ------------
 # The originating /start session's cwd is often NOT inside the target repo (e.g.
 # run from ~), so `--repo` names it explicitly. Relative file args are read AFTER
@@ -1341,16 +1568,28 @@ CUR_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 BRANCH="$PREFIX/$NAME"
 WORKTREE="$MAIN_ROOT/worktrees/$NAME"
 
-# Display name for the cmux tab/workspace: a short label that captures BOTH the
-# workspace (repo) this was forked from AND the work it's for, so a glance at the
-# tab tells you where it came from and what it's for. The skill passes a curated
-# short --label; absent that, default to <repo>/<name>.
-[ -n "$LABEL" ] || LABEL="$(basename "$MAIN_ROOT")/$NAME"
+# Display name for every surface this run opens. The convention is `Ticket: Title`;
+# the skill resolves the ticket and passes the whole thing as --label. Absent that,
+# the default is the de-kebabed name with NO repo token: the pre-colon slot is
+# reserved for a real ticket, so a label without one is the signal that the work is
+# untracked. The raw-$NAME fallback is load-bearing — a label that resolved to
+# empty would pin a blank tab, which reads worse than any default.
+if [ -z "$LABEL" ]; then
+  _lbl="${NAME//-/ }"
+  _lbl="${_lbl#"${_lbl%%[![:space:]]*}"}"
+  _lbl="${_lbl%"${_lbl##*[![:space:]]}"}"
+  if [ -n "$_lbl" ]; then
+    LABEL="$(printf '%s' "${_lbl:0:1}" | tr '[:lower:]' '[:upper:]')${_lbl:1}"
+  else
+    LABEL="$NAME"
+  fi
+  unset _lbl
+fi
 
 step "repo:        $MAIN_ROOT"
 step "new branch:  $BRANCH"
 step "worktree:    $WORKTREE"
-step "label:       $LABEL"
+step "label:       $LABEL"   # requested, not yet applied — surfaces are named at launch
 
 [ -e "$WORKTREE" ] && die "worktree path already exists: $WORKTREE"
 if git -C "$MAIN_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -1366,6 +1605,17 @@ if [ -n "$BASE" ]; then
   BASE_REF="$BASE"
 else
   BASE_REF="$CUR_BRANCH"          # branch off current HEAD
+  # ...but "current" is the MAIN checkout's HEAD, not the caller's, whenever the
+  # caller sits in a worktree or named --repo. That checkout is routinely parked on
+  # an unrelated branch, so the new session gets a tree WITHOUT the work it was spun
+  # off to continue — and every mechanical step still succeeds, so the run exits 0
+  # with a tab open. Nothing else in this script would notice. Say it instead.
+  if [ -n "$CALLER_BRANCH" ] && [ "$CALLER_BRANCH" != "HEAD" ] \
+     && [ "$CALLER_BRANCH" != "$BASE_REF" ]; then
+    BASE_SURPRISE="$BASE_REF (the $( [ -n "$REPO" ] && printf %s "--repo" || printf %s "main" ) checkout's HEAD) — NOT your '$CALLER_BRANCH'"
+    echo "  ⚠ --base was omitted, so the base is '$BASE_REF' — the checkout this worktree nests under, not the '$CALLER_BRANCH' you ran from." >&2
+    echo "    Pass --base '$CALLER_BRANCH' to carry your work, or --base origin/<branch> for a fresh base." >&2
+  fi
 fi
 step "base ref:    $BASE_REF"
 
@@ -1566,6 +1816,12 @@ LEFT_PANE=""; WS=""  # cmux discovery scratch (set by the cmux verbs)
 HERDR_PANE=""        # herdr agent pane id (set by launcher_launch_agent_herdr)
 # Backend-neutral refs the launch verbs hand off to each other:
 LAUNCH_WS=""; LAUNCH_SFC=""; LAUNCH_LABEL=""; LAUNCH_WHERE=""; LAUNCH_RUN_PANE=""; HERDR_WS_SOURCE=""
+# One human-readable surface descriptor per line, appended by every backend that
+# fails to name a surface and read by the summary. Declared here, once, because
+# three producers write it — without a single declared shape they invent three.
+UNNAMED_SURFACES=""
+VIEWER_LABEL="Handoff"
+note_unnamed() { UNNAMED_SURFACES="${UNNAMED_SURFACES}${UNNAMED_SURFACES:+$'\n'}  - $1"; }
 # Short pointer, not the full directional prose. The "treat the handoff as
 # directional" framing already lives authoritatively in every generated handoff
 # (the banner injected above + the handoff body), so the brief only points at it.
@@ -1649,22 +1905,28 @@ if [ "$ANNOUNCED_UNLAUNCHED" = 1 ] && [ -n "$LOUD_BIN" ]; then
 elif [ "$ANNOUNCED_UNLAUNCHED" = 1 ]; then
   # The other side of the gate: the binary resolved, so there is nothing to fix on
   # $PATH — the backend itself would not take the launch. Today that means herdr's
-  # server is not running (`_herdr_probe` greps `status server` for "running"). The
+  # server is not running (`_herdr_probe` matches a `status: running` line). The
   # first line is deliberately cause-NEUTRAL so it stays true if a future backend
   # reaches this branch for some other reason; the named remedy follows it as the
   # known cause rather than the definition of the failure.
   echo "  ⚠ \`$ANNOUNCED_BIN\` announced this session ($ANNOUNCED_BY) but would not take the launch —" >&2
   echo "    NOT launching, and NOT calling that a skip. The worktree and handoff are still made." >&2
   if [ "$ANNOUNCED_BIN" = herdr ]; then
-    # TWO causes, and the second is the common one. The server may genuinely be
-    # stopped — or it may be running fine and simply unreachable from THIS process:
-    # a background agent's environment does not always carry what `herdr status
-    # server` needs to find the socket, and that probe then fails while the user's
-    # herdr is perfectly alive. Saying only "start the server" sends someone to
-    # restart something that is already running, so name both.
-    echo "    the binary resolved fine; its server did not answer THIS process." >&2
-    echo "    check \`herdr status server\` here — if it reports running, the server is fine" >&2
-    echo "    and this process just can't reach it (a detached/background shell often can't)." >&2
+    # Report the EVIDENCE, never a mechanism. The previous wording asserted the server
+    # "did not answer THIS process" and blamed a detached shell — a cause nobody had
+    # established. It sent three separate sessions hunting a socket-reachability
+    # problem that did not exist, because `herdr status server` answers `running`
+    # right before and after a failing run, which the message framed as CONFIRMING
+    # the theory rather than refuting it. Print what herdr actually said and stop.
+    echo "    the binary resolved fine; herdr did not report a running server." >&2
+    if _herdr_probe_said_something; then
+      echo "    herdr reported:" >&2
+      _herdr_probe_evidence "      "
+    else
+      echo "    herdr printed nothing on stdout or stderr." >&2
+    fi
+    echo "    the probe needs a \`status: running\` line and did not get one. If the server is" >&2
+    echo "    down, start it and re-run; otherwise use the manual line below." >&2
   elif [ "$ANNOUNCED_BIN" = ghostty ]; then
     # Ghostty has no server to be up or down: `_ghostty_probe` fails ONLY when the .app
     # or osascript did not resolve. Saying "the binary resolved fine" here would be
@@ -1759,6 +2021,7 @@ else
   echo "✓ Spinoff complete"
 fi
 echo "  branch:    $BRANCH  (from $BASE_REF)"
+[ -n "$BASE_SURPRISE" ] && echo "  BASE WAS NOT YOURS: $BASE_SURPRISE"
 echo "  worktree:  $WORKTREE"
 echo "  handoff:   $HANDOFF_DST"
 echo "  docs:      $CARRIED carried"
@@ -1782,6 +2045,16 @@ else
   SESS_STATE="open + briefed"
 fi
 VIEWER_NOTE=""; [ "$VIEWER_OK" = "1" ] && VIEWER_NOTE=" (handoff viewer alongside)"
+# Printed inside the relayed block, not via step() or a stderr warning: R12 puts
+# this in the summary, and those two surfaces land above it and beside it.
+if [ -n "$TARGET_DOWNGRADE" ]; then
+  echo "  NOT what was asked for:"
+  echo "    $TARGET_DOWNGRADE"
+fi
+if [ -n "$UNNAMED_SURFACES" ]; then
+  echo "  went unnamed:"
+  printf '%s\n' "$UNNAMED_SURFACES"
+fi
 if [ -n "$SURFACE_REF" ] && [ -n "$WORKSPACE_REF" ]; then
   echo "  $LAUNCHER:      workspace $WORKSPACE_REF + agent $SURFACE_REF — new Claude session $SESS_STATE$VIEWER_NOTE"
 elif [ -n "$SURFACE_REF" ]; then
@@ -1865,11 +2138,14 @@ if [ "${ANNOUNCED_UNLAUNCHED:-0}" = "1" ]; then
   echo "⚠ NO SESSION WAS LAUNCHED — \`$ANNOUNCED_BIN\` would not take it." >&2
   echo "  This session announced it ($ANNOUNCED_BY), so this is a failure, not a skip." >&2
   if [ "$ANNOUNCED_BIN" = herdr ]; then
-    echo "  The binary resolved; its server did not answer this process. Either it is stopped —" >&2
-    echo "  start it — or it is running and this shell cannot reach its socket, which is what" >&2
-    echo "  happens when the script runs detached from the session that owns herdr. Run" >&2
-    echo "  \`herdr status server\` here to tell the two apart, fix whichever it is, then re-run" >&2
-    echo "  — but the worktree and branch already exist, so re-run with a NEW --name," >&2
+    echo "  The binary resolved; herdr did not report a running server. What it printed:" >&2
+    if _herdr_probe_said_something; then
+      _herdr_probe_evidence "    "
+    else
+      echo "    (nothing, on either stream)" >&2
+    fi
+    echo "  The probe needs a \`status: running\` line and did not get one. If the server is down," >&2
+    echo "  start it, then re-run — but the worktree and branch already exist, so use a NEW --name," >&2
   elif [ "$ANNOUNCED_BIN" = ghostty ]; then
     echo "  Ghostty could not be driven: the ⚠ above names what was missing — the .app itself," >&2
     echo "  or osascript (\$OSASCRIPT_BIN pins it). There is no ghostty server to start. Fix" >&2
