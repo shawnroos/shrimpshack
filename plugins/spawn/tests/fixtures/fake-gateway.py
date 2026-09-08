@@ -236,6 +236,16 @@ class Handler(BaseHTTPRequestHandler):
         if scenario == "upstream-undecodable":
             self._send(502, _err("api_error", "error decoding response body"))
             return
+        # Same failure, but the message ALSO trips the overflow prose matcher.
+        # Classified by prose this returns "shrink it or pick a wider alias" —
+        # and a second vendor was measured failing identically, so switching
+        # alias cannot work. The narrower class has to win the tie.
+        if scenario == "upstream-undecodable-overflow-prose":
+            self._send(
+                502,
+                _err("api_error", "request too long: error decoding response body"),
+            )
+            return
         if scenario == "throttle-429":
             self._send(
                 429,
@@ -281,6 +291,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if scenario == "upstream-undecodable":
             self._send(502, _err("api_error", "error decoding response body"))
+            return
+        # Same failure, but the message ALSO trips the overflow prose matcher.
+        # Classified by prose this returns "shrink it or pick a wider alias" —
+        # and a second vendor was measured failing identically, so switching
+        # alias cannot work. The narrower class has to win the tie.
+        if scenario == "upstream-undecodable-overflow-prose":
+            self._send(
+                502,
+                _err("api_error", "request too long: error decoding response body"),
+            )
             return
         if scenario == "throttle-429":
             self._send(
@@ -355,7 +375,8 @@ def main():
     ap.add_argument(
         "--scenario",
         default="healthy",
-        choices=["down", "healthy", "upstream-5xx", "upstream-undecodable", "throttle-429", "context-length", "slow",
+        choices=["down", "healthy", "upstream-5xx", "upstream-undecodable",
+            "upstream-undecodable-overflow-prose", "throttle-429", "context-length", "slow",
             "thinking-only", "empty-text", "auth-reject-post"],
     )
     ap.add_argument("--delay", type=float, default=5.0, help="seconds the slow scenario sleeps")
