@@ -92,6 +92,108 @@ TODAY="$(date +%Y-%m-%d)"
 UPDATED=0
 MISSING=""
 
+# ------------------------------------------------------- crash-safe reporting
+# Passes 3-10 are best-effort, and the report plus the REFLECT.log line used to
+# be written only after the last of them finished. A run that died mid-flight
+# left a zero-byte report and no log line at all, so the counts had to be
+# rebuilt by hand. Reproduced: SIGHUP 0.05s in gives report_bytes=0 and no
+# REFLECT.log file. SIGKILL is still unrecoverable — nothing can trap it.
+#
+# The sentinels are `unknown`, never 0. A pass that never ran must not read the
+# same as a pass that ran and found nothing — the distinction this script
+# already insists on for `embedded` and `retro_captured`. Each pass overwrites
+# its own sentinel when it reaches it, so on a partial run the fields still
+# reading `unknown` are exactly the passes that did not happen.
+INDEX_TIGHTENED=unknown
+LINT_OK=unknown
+CAPTURED=unknown
+EMBEDDED=unknown
+WT_REPORT=""
+WT_MERGED_CLEAN=unknown
+RETRO_CAPTURED=unknown
+RETRO_OPEN=0
+RETRO_OPEN_THRESHOLD="${REFLECT_RETRO_OPEN_THRESHOLD:-10}"
+
+_REPORT_EMITTED=0
+
+_reflect_report() {
+  [ "$_REPORT_EMITTED" = 1 ] && return 0
+  _REPORT_EMITTED=1
+  _note=""
+  [ "$1" != complete ] && _note=" status=partial died=$1"
+
+  LOG_LINE="$TS $TRIGGER updated=$UPDATED saved=$SAVED merged=$MERGED retired=$RETIRED compounded=$COMPOUNDED index_tightened=$INDEX_TIGHTENED captured=$CAPTURED embedded=$EMBEDDED worktrees_removed=0 triggers_declared=$TRIG_DECL triggers_pruned=$TRIG_PRUNED retro_captured=$RETRO_CAPTURED$_note"
+  echo "$LOG_LINE" >> "$MEMORY_DIR/REFLECT.log"
+
+  echo "updated=$UPDATED captured=$CAPTURED index_tightened=$INDEX_TIGHTENED lint=$LINT_OK embedded=$EMBEDDED"
+  [ "$RETRO_OPEN" -ge "$RETRO_OPEN_THRESHOLD" ] && echo "retro backlog: $RETRO_OPEN open - /reflect:reflect-retro"
+  [ -n "$MISSING" ] && echo "missing_memories:$MISSING"
+  if [ -n "$WT_REPORT" ]; then
+    echo "worktrees (scan only — nothing removed; DIRTY + MERGED needs your call):$WT_REPORT"
+    echo "worktrees_merged_and_clean=$WT_MERGED_CLEAN"
+  fi
+  echo "logged: $LOG_LINE"
+  # The real line is down; the write-ahead copy would now be a duplicate that the
+  # next run promotes as a phantom death.
+  rm -f "$INFLIGHT" "$INFLIGHT.tmp" 2>/dev/null
+  return 0
+}
+
+# The trap alone is not enough, and this was measured rather than assumed.
+# Bash does not run a trap while it is blocked on a FOREGROUND child: signalled
+# 1s into a 10s child, the report came out 10.3s later, once the child returned.
+# The real failure this fixes went past 120s, which means it was inside a slow
+# child (qmd embed) the whole time — so the trap would have been queued behind
+# however long that child had left, and a process-group teardown kills it first.
+# SIGKILL was never trappable at any point.
+#
+# So the counts are also written ahead, to a per-PID sidecar updated at each pass
+# boundary. Nothing can stop a write that already happened. The next run promotes
+# any sidecar whose process is gone into REFLECT.log, which is how an untrappable
+# death still leaves a record instead of a hole.
+#
+# Per-PID because two runs can overlap: a shared filename would let one run
+# report the other's live progress as a death.
+INFLIGHT="$MEMORY_DIR/.reflect-run.$$.inflight"
+
+_reflect_checkpoint() {
+  # Same field order as the real line, so a promoted sidecar parses identically.
+  printf '%s\n' "$TS $TRIGGER updated=$UPDATED saved=$SAVED merged=$MERGED retired=$RETIRED compounded=$COMPOUNDED index_tightened=$INDEX_TIGHTENED captured=$CAPTURED embedded=$EMBEDDED worktrees_removed=0 triggers_declared=$TRIG_DECL triggers_pruned=$TRIG_PRUNED retro_captured=$RETRO_CAPTURED" \
+    > "$INFLIGHT.tmp" 2>/dev/null \
+    && mv -f "$INFLIGHT.tmp" "$INFLIGHT" 2>/dev/null
+  # mv -f, never a bare mv: mv is aliased interactive in this operator's shell and
+  # a bare one would prompt into a dead terminal and silently leave a stale file.
+  return 0
+}
+
+# Promote the leavings of any run that died without reaching its trap. `kill -0`
+# is the liveness test: a sidecar whose PID still exists belongs to a run that is
+# still going, and must be left alone.
+_reflect_recover() {
+  local f pid
+  for f in "$MEMORY_DIR"/.reflect-run.*.inflight; do
+    [ -e "$f" ] || continue
+    pid="${f##*/.reflect-run.}"; pid="${pid%.inflight}"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    [ "$pid" = "$$" ] && continue
+    kill -0 "$pid" 2>/dev/null && continue
+    printf '%s status=partial died=untrapped\n' "$(cat "$f" 2>/dev/null)" \
+      >> "$MEMORY_DIR/REFLECT.log" 2>/dev/null
+    rm -f "$f" 2>/dev/null
+  done
+  return 0
+}
+
+# Each signal trap re-raises after reporting, so the exit status still says the
+# run was killed rather than claiming a clean finish.
+trap '_reflect_report SIGHUP;  trap - HUP;  kill -HUP  $$' HUP
+trap '_reflect_report SIGTERM; trap - TERM; kill -TERM $$' TERM
+trap '_reflect_report SIGINT;  trap - INT;  kill -INT  $$' INT
+trap '_rc=$?; if [ "$_rc" = 0 ]; then _reflect_report complete; else _reflect_report "exit_$_rc"; fi' EXIT
+
+_reflect_recover
+_reflect_checkpoint
+
 for mem in $APPLIED; do
   f="$MEMORY_DIR/${mem%.md}.md"
   if [ ! -f "$f" ]; then
@@ -138,6 +240,7 @@ if [ -f "$HERE/scoped-memory/triggers.py" ]; then
     || echo "reflect-run: trigger recompile failed (non-fatal)" >&2
 fi
 
+_reflect_checkpoint
 # ------------------------------------------------------------------------- pass 6
 INDEX="$MEMORY_DIR/MEMORY.md"
 INDEX_TIGHTENED=0
@@ -152,6 +255,7 @@ if [ -f "$HERE/memory-index-lint.sh" ]; then
   if bash "$HERE/memory-index-lint.sh" >/dev/null 2>&1; then LINT_OK=yes; else LINT_OK=no; fi
 fi
 
+_reflect_checkpoint
 # ------------------------------------------------------------------------- pass 7
 # Durable = brainstorms, handoffs, docs/solutions. Plans, reviews and working notes
 # are ephemeral by design and age out with their worktree.
@@ -189,6 +293,7 @@ for src_root in ${CAPTURE_FROM+"${CAPTURE_FROM[@]}"}; do
   done < <(find "$src_root/docs" -maxdepth 1 -type f -name '*handoff*.md' 2>/dev/null)
 done
 
+_reflect_checkpoint
 # ------------------------------------------------------------------------- pass 8
 # `embedded` is whatever the reconciler printed. Parsing its summary is the point:
 # this script has no way to observe an embed and must not invent a number.
@@ -208,6 +313,7 @@ if [ "${REFLECT_RUN_NO_RECONCILE:-0}" != "1" ] && [ -f "$HERE/qmd-reconcile-coll
   esac
 fi
 
+_reflect_checkpoint
 # --------------------------------------------------------------- pass 9 (scan only)
 WT_REPORT=""
 WT_MERGED_CLEAN=0
@@ -254,17 +360,8 @@ esac
 # R13. Measured: the vent bar yields about two items a week, so ten open items is
 # roughly five weeks of un-worked backlog - the point at which it earns a line.
 # Below it the summary stays silent; a backlog that nags at three items gets muted.
-RETRO_OPEN_THRESHOLD="${REFLECT_RETRO_OPEN_THRESHOLD:-10}"
 
+_reflect_checkpoint
 # ------------------------------------------------------------------------ pass 10
-LOG_LINE="$TS $TRIGGER updated=$UPDATED saved=$SAVED merged=$MERGED retired=$RETIRED compounded=$COMPOUNDED index_tightened=$INDEX_TIGHTENED captured=$CAPTURED embedded=$EMBEDDED worktrees_removed=0 triggers_declared=$TRIG_DECL triggers_pruned=$TRIG_PRUNED retro_captured=$RETRO_CAPTURED"
-echo "$LOG_LINE" >> "$MEMORY_DIR/REFLECT.log"
-
-echo "updated=$UPDATED captured=$CAPTURED index_tightened=$INDEX_TIGHTENED lint=$LINT_OK embedded=$EMBEDDED"
-[ "$RETRO_OPEN" -ge "$RETRO_OPEN_THRESHOLD" ] && echo "retro backlog: $RETRO_OPEN open - /reflect:reflect-retro"
-[ -n "$MISSING" ] && echo "missing_memories:$MISSING"
-if [ -n "$WT_REPORT" ]; then
-  echo "worktrees (scan only — nothing removed; DIRTY + MERGED needs your call):$WT_REPORT"
-  echo "worktrees_merged_and_clean=$WT_MERGED_CLEAN"
-fi
-echo "logged: $LOG_LINE"
+# The EXIT trap emits it. Reaching here just means the status is `complete`.
+_reflect_report complete
