@@ -501,8 +501,11 @@ retry_check() {         # <record json>
     # under the SAME error value the member already carries, is what makes
     # remedy_for's existing prose for each of the three reachable rather than
     # dead text no caller path ever triggers.
+    # The two skill refusals belong here for the same reason grant_refused does:
+    # the contract text and the --skill flags are fixed on the record, so the
+    # launcher re-refuses identically on every attempt.
     case "$cause" in
-        worktree_failed|worktree_missing|grant_refused)
+        worktree_failed|worktree_missing|grant_refused|skill_not_provisioned|skill_unresolvable)
             SPAWN_TEAM_ERROR="$cause"
             spawn::team_fail "member $RETRY_MEMBER settled with $cause, which reapplies identically on retry"
             ;;

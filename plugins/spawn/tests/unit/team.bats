@@ -4374,3 +4374,54 @@ skills_home_fixture() {
     assert_child_alias beta
     refute_child_alias alpha
 }
+
+# ---------------------------------------------------------------------------
+# R13 — a refusal the record cannot change is not worth a retry
+# ---------------------------------------------------------------------------
+# The contract text and the --skill flags are fixed on the record, exactly as
+# the allow list is for grant_refused, so the member re-refuses every time.
+
+@test "AE10: retry on a member settled skill_not_provisioned is refused, under that cause" {
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" lead launch_state launch_failed
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"error":"skill_not_provisioned","detail":"the contract instructs '\''/ce-code-review'\'' and this job was given no matching --skill","child_exit_code":null,"degraded_reasons":null}'
+    tr_ spawn::team_member_set "$RUN" lead outcome null
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "skill_not_provisioned" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "AE10: retry on a member settled skill_unresolvable is refused, under that cause" {
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" lead launch_state launch_failed
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"error":"skill_unresolvable","detail":"--skill '\''ce-code-reviw'\'' names a skill that does not resolve","child_exit_code":null,"degraded_reasons":null}'
+    tr_ spawn::team_member_set "$RUN" lead outcome null
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "skill_unresolvable" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "R13 control arm: a retryable cause is still admitted, so the guard did not widen" {
+    # Written because the two arms above would both pass if retry_check refused
+    # everything. contract_invalid is a launcher refusal a caller CAN fix by
+    # editing the contract, so it must stay retryable.
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" lead launch_state launch_failed
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"error":"contract_invalid","detail":"the contract is unusable","child_exit_code":null,"degraded_reasons":null}'
+    tr_ spawn::team_member_set "$RUN" lead outcome null
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 0 ]
+    [ "$(out '.error')" = "null" ]
+}
