@@ -1405,3 +1405,57 @@ nothing_started() {
             '[.error_values[] | select(.value == $v)][0].note // empty')" ]
     done
 }
+
+# ===========================================================================
+# What actually landed is on the result AND the notification (R7)
+# ===========================================================================
+# Grants are on both surfaces; skills were on neither. The notification is what
+# an operator reads when a job comes back, so a result-only field repeats the
+# defect this work exists to close.
+
+@test "AE7: with nothing provisioned, both surfaces carry an empty set, not a missing key" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.skills | type')" = "array" ]
+    [ "$(result_field '.skills | length')" = "0" ]
+    [ "$(result_field '.notification.skills | type')" = "array" ]
+}
+
+@test "R7: a skill that landed is named on the result and on the notification" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+    export SPAWN_SKILLS_HOME="$WORK/skills-home"
+    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine"
+    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
+
+    start_job "$WORK/c.json" --skill lands-fine
+    [ "$status" -eq 0 ]
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.skills | join(" ")')" = "lands-fine" ]
+    [ "$(result_field '.notification.skills | join(" ")')" = "lands-fine" ]
+}
+
+@test "AE8: a job refused its grant never ran the child, so it claims no skills" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export SPAWN_SKILLS_HOME="$WORK/skills-home"
+    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine"
+    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
+
+    # The skill IS provisioned before the ceiling is widened, then unprovisioned
+    # when the grant is refused. Reporting it here would name a method that never
+    # reached a child.
+    start_job "$WORK/c.json" --skill lands-fine --allow Agent
+    [ "$status" -eq 0 ]
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.terminal_state')" = "failed" ]
+    # type first: jq gives `null | length` as 0, so a length check alone passes
+    # when the field is absent entirely.
+    [ "$(result_field '.skills | type')" = "array" ]
+    [ "$(result_field '.skills | length')" = "0" ]
+}

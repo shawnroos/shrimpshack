@@ -692,6 +692,29 @@ SUP_BASE_URL=""
 SUP_SETTINGS=""
 SUP_SKILLS=()      # names, in the order the caller asked for them
 SUP_GRANTS=()      # extra tools the caller asked the ceiling to permit
+SUP_SKILLS_LANDED=()  # of SUP_SKILLS, the ones the manifest says actually landed
+
+# Which of the requested skills the manifest says landed. Requested names are
+# kept, not the manifest's bare basenames, so a `plugin:skill` request reads back
+# as the caller wrote it.
+sup_capture_landed_skills() {   # <manifest>
+    local man="${1:-}" landed="" want bare
+    SUP_SKILLS_LANDED=()
+    [ -n "$man" ] && [ -f "$man" ] || return 0
+    landed=" $(sed 's|.*/||' "$man" | tr '\n' ' ')"
+    for want in ${SUP_SKILLS[@]+"${SUP_SKILLS[@]}"}; do
+        bare="${want##*:}"
+        case "$landed" in *" $bare "*) SUP_SKILLS_LANDED+=("$want") ;; esac
+    done
+}
+
+sup_skill_landed() {            # <requested name>
+    local n="${1:-}" s
+    for s in ${SUP_SKILLS_LANDED[@]+"${SUP_SKILLS_LANDED[@]}"}; do
+        [ "$s" = "$n" ] && return 0
+    done
+    return 1
+}
 # What the ceiling ACTUALLY granted. Kept apart from SUP_GRANTS because a
 # refused grant still writes a result, and reporting the request as though it
 # were the outcome would tell a reader a job held a shell it was denied.
@@ -865,6 +888,11 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         | jq -Rsc 'split("\n") | map(select(length > 0))')"
     [ -n "$grants" ] || grants='[]'
 
+    local skills_landed
+    skills_landed="$(printf '%s\n' ${SUP_SKILLS_LANDED[@]+"${SUP_SKILLS_LANDED[@]}"} \
+        | jq -Rsc 'split("\n") | map(select(length > 0))')"
+    [ -n "$skills_landed" ] || skills_landed='[]'
+
     reasons="$(printf '%s\n' "${SUP_REASONS:-}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
     [ -n "$reasons" ] || reasons='[]'
 
@@ -891,10 +919,10 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         --argjson dn "$denials" --argjson ch "$changed" --argjson dl "$deliv" \
         --argjson vr "$verify_rc" --argjson vran "$verify_ran" \
         --argjson ok "$all_ok" --argjson rs "$reasons" --argjson us "$usage_json" \
-        --argjson gr "$grants" \
+        --argjson gr "$grants" --argjson sk "$skills_landed" \
         --arg rc "$child_rc" --argjson ie "$child_ie" '{
           schema:$js, job_id:$h, alias:$a,
-          served_model:(if $sm == "" then null else $sm end), ceiling:$c, grants:$gr,
+          served_model:(if $sm == "" then null else $sm end), ceiling:$c, grants:$gr, skills:$sk,
           worktree:$w, cwd:$cw,
           content_trust:$tp, content_notice:$np,
           started_at:(if $st == "" then null else $st end), ended_at:$en,
@@ -917,7 +945,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
                     + (if $ok then "; every deliverable the contract named is satisfied"
                        else "; not every deliverable the contract named is satisfied" end)
                     + ". This says the job ENDED, not that it succeeded — read terminal_state and deliverables_satisfied."),
-            job_id:$h, alias:$a, worktree:$w, result_file:$rf, grants:$gr,
+            job_id:$h, alias:$a, worktree:$w, result_file:$rf, grants:$gr, skills:$sk,
             terminal_state:$s, deliverables_satisfied:$ok,
             ended_at:$en,
             permission_denial_count:($dn|length),
@@ -1005,19 +1033,23 @@ supervisor_main() {
     if [ "${#SUP_SKILLS[@]}" -gt 0 ]; then
         SUP_SKILL_MANIFEST="$dir/skills.provisioned"
         spawn::skill_git_exclude "$SUP_WORKTREE"
-        if ! spawn::skill_provision "$SUP_WORKTREE" "$SUP_SKILL_MANIFEST" "${SUP_SKILLS[@]}" 2>>"$dir/skills.err"; then
-            # WHICH skills, from the manifest, and WHY, from the first
+        local prov_rc=0
+        spawn::skill_provision "$SUP_WORKTREE" "$SUP_SKILL_MANIFEST" "${SUP_SKILLS[@]}" 2>>"$dir/skills.err" || prov_rc=$?
+        # Read ONCE, here, on both paths: the manifest sits under the worktree,
+        # which a Bash-granted child can write, so a later read would report the
+        # child's own edit as the supervisor's finding.
+        sup_capture_landed_skills "$SUP_SKILL_MANIFEST"
+        if [ "$prov_rc" -ne 0 ]; then
+            # WHICH skills, from the captured set, and WHY, from the first
             # diagnostic. The set is derived from what actually LANDED rather
             # than by parsing skills.err, so a reworded diagnostic cannot
             # silently empty it; the diagnostic is then appended as context,
             # because a reader told only which skill is missing still has to
             # open a file to learn anything about the cause.
-            local landed="" missing="" want bare first
-            [ -f "$SUP_SKILL_MANIFEST" ] && landed=" $(sed 's|.*/||' "$SUP_SKILL_MANIFEST" | tr '\n' ' ')"
+            local missing="" want first
             for want in "${SUP_SKILLS[@]}"; do
-                bare="${want##*:}"
-                case "$landed" in *" $bare "*) continue ;; esac
-                missing="${missing:+$missing }$(spawn::sanitize_for_display "$want")"
+                sup_skill_landed "$want" \
+                    || missing="${missing:+$missing }$(spawn::sanitize_for_display "$want")"
             done
             first="$(head -n 1 "$dir/skills.err" 2>/dev/null | tr '\t' ' ')"
             first="$(spawn::sanitize_for_display "$first")"
@@ -1040,6 +1072,8 @@ supervisor_main() {
             sup_reason "$BADG"
             printf 'failed at %s — grant refused\n' "$(now_utc)" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
             [ -n "$SUP_SKILL_MANIFEST" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
+            # Removed before any child ran, so the result must not claim them.
+            SUP_SKILLS_LANDED=()
             sup_write_result "failed" 0 false "$BADG"
             sup_release_once "failed" "$BADG"
             exit 0
