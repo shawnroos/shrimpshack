@@ -80,6 +80,45 @@ spawn::skill_name_ok() {
     return 0
 }
 
+# The contract-token grammar is SEPARATE from skill_name_ok above, and must stay
+# separate: that one guards the resolver and accepts a trailing `.`, so reusing it
+# here would capture `ce-code-review.` from "run /ce-code-review." and refuse a job
+# whose --skill was correct.
+#
+# A `/` only opens a token when the character before it is not alphanumeric, and a
+# token followed by another `/` is a path segment. Together those reject
+# `https://host/name`, `/usr/bin/thing` and `x/name` without enumerating them.
+spawn::skill_tokens() {
+    local rest=" ${1:-} " tok punct='.,;:!?)' last
+    while [[ "$rest" =~ (^|[^A-Za-z0-9])/([A-Za-z0-9][A-Za-z0-9._:-]*) ]]; do
+        tok="${BASH_REMATCH[2]}"
+        # The sentinel is load-bearing: without it the remainder of `/a/b` starts
+        # with `/` at ^, and the second segment matches as a fresh token.
+        rest="x${rest#*"${BASH_REMATCH[0]}"}"
+        case "$rest" in x/*) continue ;; esac
+        while [ -n "$tok" ]; do
+            last="${tok#"${tok%?}"}"
+            case "$punct" in *"$last"*) tok="${tok%?}" ;; *) break ;; esac
+        done
+        [ -n "$tok" ] && printf '%s\n' "$tok"
+    done
+    return 0
+}
+
+# Namespace-aware on purpose: skill_resolve filters on the plugin key, so matching
+# only the last segment would let another plugin's same-named skill satisfy the
+# gate and hand the child a different method than the contract named.
+spawn::skill_same() {
+    local a="${1:-}" b="${2:-}"
+    [ -n "$a" ] && [ -n "$b" ] || return 1
+    case "$a" in
+        *:*) case "$b" in
+                 *:*) [ "$a" = "$b" ]; return $? ;;
+             esac ;;
+    esac
+    [ "${a##*:}" = "${b##*:}" ]
+}
+
 spawn::skill_resolve() {
     # Declared separately: `local a="$1" b="$a"` evaluates $a before a exists,
     # which under `set -u` is an unbound-variable error, not an empty string.
