@@ -1420,6 +1420,7 @@ FROM_SURFACE=""              # the ORIGINATING pane/surface to split off (see th
 # state it shadows, because the split fallback below runs long before the summary
 # block's own state is initialised.
 TARGET_DOWNGRADE=""       # "<asked> → <got>: why", relayed in the summary block
+BASE_SURPRISE=""          # set when an omitted --base did not mean the caller's HEAD
 SESSION_TRANSCRIPT=""        # explicit originating-session transcript (set by the skill when backgrounded)
 SESSION_CWD=""               # cwd of the originating session, for the resume one-liner
 while [ $# -gt 0 ]; do
@@ -1527,6 +1528,12 @@ if [ -z "$GHOSTTY_APP" ]; then
   done
 fi
 
+# The branch the CALLER was standing on, read before --repo moves us anywhere.
+# An omitted --base means "current HEAD", and the caller reads that as THEIR head.
+# It is resolved further down against the MAIN checkout instead, which is a
+# different branch whenever the caller sits in a worktree or passed --repo.
+CALLER_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+
 # ---- resolve target repo (--repo) before any cwd-relative git/IO ------------
 # The originating /start session's cwd is often NOT inside the target repo (e.g.
 # run from ~), so `--repo` names it explicitly. Relative file args are read AFTER
@@ -1598,6 +1605,17 @@ if [ -n "$BASE" ]; then
   BASE_REF="$BASE"
 else
   BASE_REF="$CUR_BRANCH"          # branch off current HEAD
+  # ...but "current" is the MAIN checkout's HEAD, not the caller's, whenever the
+  # caller sits in a worktree or named --repo. That checkout is routinely parked on
+  # an unrelated branch, so the new session gets a tree WITHOUT the work it was spun
+  # off to continue — and every mechanical step still succeeds, so the run exits 0
+  # with a tab open. Nothing else in this script would notice. Say it instead.
+  if [ -n "$CALLER_BRANCH" ] && [ "$CALLER_BRANCH" != "HEAD" ] \
+     && [ "$CALLER_BRANCH" != "$BASE_REF" ]; then
+    BASE_SURPRISE="$BASE_REF (the $( [ -n "$REPO" ] && printf %s "--repo" || printf %s "main" ) checkout's HEAD) — NOT your '$CALLER_BRANCH'"
+    echo "  ⚠ --base was omitted, so the base is '$BASE_REF' — the checkout this worktree nests under, not the '$CALLER_BRANCH' you ran from." >&2
+    echo "    Pass --base '$CALLER_BRANCH' to carry your work, or --base origin/<branch> for a fresh base." >&2
+  fi
 fi
 step "base ref:    $BASE_REF"
 
@@ -2003,6 +2021,7 @@ else
   echo "✓ Spinoff complete"
 fi
 echo "  branch:    $BRANCH  (from $BASE_REF)"
+[ -n "$BASE_SURPRISE" ] && echo "  BASE WAS NOT YOURS: $BASE_SURPRISE"
 echo "  worktree:  $WORKTREE"
 echo "  handoff:   $HANDOFF_DST"
 echo "  docs:      $CARRIED carried"

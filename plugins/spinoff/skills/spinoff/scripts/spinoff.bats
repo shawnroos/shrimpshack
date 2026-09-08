@@ -568,6 +568,49 @@ run_herdr_split_no_surface() {
   [[ "$output" != *"NOT what was asked for:"* ]]
 }
 
+# An omitted --base means "current HEAD", and the caller reads that as THEIR head.
+# It is resolved against the checkout the new worktree nests under, which is a
+# different branch whenever the caller sits in a worktree or passed --repo. That
+# checkout is routinely parked on unrelated work, so the new session gets a tree
+# WITHOUT the change it was spun off to continue. Every step still succeeds and the
+# run exits 0 with a tab open, so only the summary can carry this.
+setup_parked_main() {
+  local root="$BATS_TEST_TMPDIR/base"
+  mkdir -p "$root"
+  git -C "$root" init -q main
+  git -C "$root/main" config user.email t@example.com
+  git -C "$root/main" config user.name tester
+  echo a > "$root/main/f.md"
+  git -C "$root/main" add f.md
+  git -C "$root/main" commit -qm init
+  git -C "$root/main" checkout -q -b unrelated-parked-branch
+  echo b > "$root/main/f.md"
+  git -C "$root/main" commit -qam parked
+  printf '# H\n\n## Source session\n<!-- SESSION -->\n' > "$root/h.md"
+  PARKED_ROOT="$root"
+}
+
+@test "summary: an omitted --base that is not the caller's HEAD is stated" {
+  setup_parked_main
+  # --repo names a checkout parked on a branch the caller is not on: the exact shape
+  # the skill itself instructs callers to use from outside the target repo.
+  run env PATH="$STUBDIR:$PATH" HERDR_ENV=0 CMUX_WORKSPACE_ID= \
+      bash "$SCRIPT" --name baseprobe --handoff "$PARKED_ROOT/h.md" \
+                     --target tab --repo "$PARKED_ROOT/main"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"BASE WAS NOT YOURS:"* ]]
+  [[ "$output" == *"unrelated-parked-branch"* ]]
+}
+
+@test "summary: says nothing about the base when it IS the caller's HEAD" {
+  setup_parked_main
+  cd "$PARKED_ROOT/main"
+  run env PATH="$STUBDIR:$PATH" HERDR_ENV=0 CMUX_WORKSPACE_ID= \
+      bash "$SCRIPT" --name baseprobe2 --handoff "$PARKED_ROOT/h.md" --target tab
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"BASE WAS NOT YOURS:"* ]]
+}
+
 @test "herdr workspace: the handoff viewer pane is named Handoff, not the work label (R14)" {
   run_herdr_workspace
   [ "$status" -eq 0 ]
