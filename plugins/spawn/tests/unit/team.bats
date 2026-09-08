@@ -4316,3 +4316,61 @@ equip_section() {
         return 1
     fi
 }
+
+# ===========================================================================
+# What a member actually got, and what refused it (R8, R9, R10)
+# ===========================================================================
+# `skills` on the row is what the TEAM FILE asked for. What actually landed is
+# its own field, for the same reason `grants` is not read off `allow`: a request
+# that did not land must never read as one that did.
+
+skills_home_fixture() {
+    export SPAWN_SKILLS_HOME="$WORK/skills-home"
+    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine"
+    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
+}
+
+@test "R8: a member's record carries what landed beside what it asked for" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    skills_home_fixture
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json:lands-fine" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_member_terminal lead
+    await_member_terminal scout
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+
+    [ "$(rec '.members[] | select(.name == "lead") | .skills | join(" ")')" = "lands-fine" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .skills_landed | join(" ")')" = "lands-fine" ]
+    # A member that asked for nothing reached a result and holds nothing, which
+    # is an empty array — not null, which means no result yet.
+    [ "$(rec '.members[] | select(.name == "scout") | .skills_landed | type')" = "array" ]
+    [ "$(rec '.members[] | select(.name == "scout") | .skills_landed | length')" = "0" ]
+}
+
+@test "AE9: a member whose contract instructs a skill it was not given fails alone" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    jq -n '{task:"run /ce-code-review over the diff", done_means:"the deliverable exists",
+            deliverables:["out.txt"]}' > "$WORK/bad.json"
+    export FAKE_CLAUDE_WRITE=out.txt
+    skills_home_fixture
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/bad.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    assert_one_object "$output"
+    [ "$(out '.dispatched')" = "1" ]
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "skill_not_provisioned" ]
+    [ "$(out '.members[] | select(.name == "scout") | .error')" = "null" ]
+
+    # The round continued, proved on the child's side: only the later member ran.
+    await_invocations 1
+    assert_child_alias beta
+    refute_child_alias alpha
+}
