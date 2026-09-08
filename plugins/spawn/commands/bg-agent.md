@@ -17,7 +17,7 @@ Prefer the contract's `verify` when the job only needs a command run at the end 
 
 **Measured caveat on `WebSearch`, so you do not debug it twice:** the grant works — without it the call is refused and recorded, with it the call runs. But a job runs against the gateway, and web search is a server-side tool of the Anthropic API, not something the permission system can provide for a third-party model. The tool runs and the backend answers "can't perform web searches". Granting it is correct and currently buys nothing on a gateway alias.
 
-**Equip the job — this is part of every dispatch, not a step you take when asked.** A background child inherits NOTHING from you: not your skills, not this conversation, not the conventions you have been following all session. Nobody warns you. A job told to "run ce-code-review" with no such skill provisioned does not stop and say so — it **improvises something shaped like a review** and files a narrative that reads exactly like the real thing.
+**Equip the job — this is part of every dispatch, not a step you take when asked.** A background child inherits NOTHING from you: not your skills, not this conversation, not the conventions you have been following all session. Nobody warns you. A job told to "run ce-code-review" with no such skill provisioned does not stop and say so — it **improvises something shaped like a review** and files a narrative that reads exactly like the real thing. That is why a contract naming a skill as a literal `/ce-code-review` is now refused outright as `skill_not_provisioned` unless you pass the matching `--skill`; the improvising case that survives is the one written without the slash, which nothing can detect for you.
 
 So before you run it, ask what this task actually needs, and pass it:
 
@@ -32,7 +32,7 @@ Two sources, one flag, and the difference is worth recording:
 - **the caller named it** — honour it exactly, including the `plugin:skill` form
 - **you judged the task needs it** — add it, and say in your summary that you did, because a skill you chose is your judgment and a skill they named is their instruction
 
-**A skill name that does not resolve does not stop the job.** It is recorded in the record's `degraded_reasons[]` and the job runs without the method it was promised — so a typo buys you a confident report from an unequipped job. Names resolve from your own `~/.claude/skills` and from installed plugins' skills.
+**A skill name that does not resolve stops the job before it starts.** The dispatch is refused as `skill_unresolvable` and nothing is claimed, because a typo would otherwise buy you a confident report from an unequipped job. A skill that resolves and then fails to COPY is the other case and still runs: that one is recorded in the record's `degraded_reasons[]`. Names resolve from your own `~/.claude/skills` and from installed plugins' skills.
 
 **Check the skill can run there before you provision it.** The child can read, search (`Grep`/`Glob` both work) and write inside the worktree — but it has no shell, so a skill whose method is "run the linter and report the output" cannot be followed, and the job will report on the part it managed. If a command must run, that is what the contract's `verify` is for.
 

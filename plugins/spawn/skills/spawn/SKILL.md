@@ -111,6 +111,12 @@ so — it **improvises something shaped like a review**, and the narrative reads
 exactly like the real thing. You get a confident report from a job that never had
 the method. Same for a job asked to follow a convention it was never handed.
 
+A contract that names the method as a literal `/ce-code-review` is now refused
+outright as `skill_not_provisioned` unless the matching `--skill` is passed, so
+that half cannot reach a child at all. The half that still improvises is a method
+named in prose — "apply the code review process" — which nothing can detect for
+you. That is what these questions are for.
+
 ### The three questions, asked every time
 
 1. **What method does this task name?** A skill, a review process, a house
@@ -135,12 +141,14 @@ check. Silence is indistinguishable from not having asked.
   you chose is your judgment; a skill they named is their instruction. If the job
   goes wrong, that distinction is the first thing worth knowing.
 
-**A name that does not resolve is not provisioned, and the job still runs.** An
-unresolvable skill is recorded in the job record's `degraded_reasons[]` rather
-than refusing the dispatch — so a typo yields a job running without the method it
-was promised. Skills resolve from your own `~/.claude/skills` and from installed
-plugins' skills; a name you guessed at is worth checking before you rely on it,
-and the reason a skill was refused is in that list rather than in the narrative.
+**A name that does not resolve refuses the dispatch.** The job is settled
+`skill_unresolvable` before anything is claimed, so a typo costs you the
+dispatch rather than a job running without the method it was promised. A name
+that resolves and then fails to copy is the case that still runs, recorded in
+the job record's `degraded_reasons[]`. Skills resolve from your own
+`~/.claude/skills` and from installed plugins' skills; a name you guessed at is
+worth checking before you rely on it, and the reason a skill was refused is in
+that list rather than in the narrative.
 
 ### Check it can actually run there before you provision it
 

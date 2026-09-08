@@ -170,6 +170,10 @@ remedy_for() {
             printf 'This surface will not start a job on a chain alias: a chain can change model mid-flight on fallback, and the plugin table under-declares a chain window to its smallest route — tolerable for one tool-less turn, wrong for a job that holds tools for an hour. Read `non_chain_aliases` in this response and start again on one of those.' ;;
         contract_invalid)
             printf 'The contract must be one JSON object with a non-empty `task` and a non-empty `deliverables` array of worktree-relative paths; `done_means` and `verify` are optional. Nothing was started. Fix the file named in `detail` and call again.' ;;
+        skill_not_provisioned)
+            printf 'The contract instructs a slash command and this job was given no matching skill, so the child would improvise something shaped like it and report as though it had run. Nothing was started. Either pass `--skill <name>` for the skill named in `detail`, or remove the literal `/<name>` from the contract when it was not an instruction.' ;;
+        skill_unresolvable)
+            printf 'A `--skill` name does not resolve to an installed skill, so the job would have run without the method it was promised. Nothing was started. Fix the name in `detail` — it resolves from your own skills and from installed plugins, in bare or `plugin:skill` form — or, when the contract only mentions it in passing, remove both the flag and the literal `/<name>` token.' ;;
         ceiling_unavailable)
             printf 'The permission configuration for this ceiling could not be read or rendered, so no job was started — a job with no ceiling is exactly what must not run. Check the file named in `detail` exists and is readable, or point SPAWN_CEILING_CONFIG_REPO at your own copy.' ;;
         job_already_running)
@@ -425,6 +429,40 @@ job_release() {         # <handle> <worktree> <state> <detail>
 # ===========================================================================
 # ROLE 1 — THE LAUNCHER
 # ===========================================================================
+# R1/R12. The contract may not instruct a skill this job cannot run.
+#
+# Refused HERE, in the launcher, and not where the grant check sits: that one
+# runs in the DETACHED supervisor, so it fires after the handle has already been
+# returned. This refuses before the claim, so no lock, job directory or git
+# exclude is left behind.
+#
+# `verify` is deliberately not scanned. It is a shell command the supervisor
+# runs itself, never the child's instruction, so a slash there is shell syntax.
+refuse_unprovisioned_skills() {
+    local tok have s
+    while IFS= read -r tok; do
+        [ -n "$tok" ] || continue
+        have=""
+        for s in ${SUP_SKILLS[@]+"${SUP_SKILLS[@]}"}; do
+            spawn::skill_same "$tok" "$s" && { have=yes; break; }
+        done
+        [ -n "$have" ] || REMEDY="$(remedy_for skill_not_provisioned)" \
+            die "$EX_USAGE" "skill_not_provisioned" \
+                "the contract instructs '/$tok' and this job was given no matching --skill"
+    done <<EOF
+$(spawn::skill_tokens "$CONTRACT_TASK"; spawn::skill_tokens "$CONTRACT_DONE")
+EOF
+
+    # Every named skill, not only the ones a token matched: a typo on a
+    # prose-worded contract reaches the same unequipped ending.
+    for s in ${SUP_SKILLS[@]+"${SUP_SKILLS[@]}"}; do
+        spawn::skill_resolve "$s" >/dev/null 2>&1 \
+            || REMEDY="$(remedy_for skill_unresolvable)" \
+                die "$EX_USAGE" "skill_unresolvable" \
+                    "--skill '$s' names a skill that does not resolve"
+    done
+}
+
 launcher_main() {
     need_jq
 
@@ -459,6 +497,8 @@ launcher_main() {
     read_contract "$CONTRACT" \
         || REMEDY="$(remedy_for contract_invalid)" \
             die "$EX_USAGE" "contract_invalid" "the contract at '$CONTRACT' is unusable: $CONTRACT_FAULT"
+
+    refuse_unprovisioned_skills
 
     # Before any network call.
     refuse_chain_alias "$ALIAS"
@@ -652,6 +692,32 @@ SUP_BASE_URL=""
 SUP_SETTINGS=""
 SUP_SKILLS=()      # names, in the order the caller asked for them
 SUP_GRANTS=()      # extra tools the caller asked the ceiling to permit
+SUP_SKILLS_LANDED=()  # of SUP_SKILLS, the ones the manifest says actually landed
+# Whether a child was ever spawned. CHILD_PID cannot answer that: it is cleared
+# when the child completes, so a late cancel would read it as "never started".
+SUP_CHILD_STARTED=0
+
+# Which of the requested skills the manifest says landed. Requested names are
+# kept, not the manifest's bare basenames, so a `plugin:skill` request reads back
+# as the caller wrote it.
+sup_capture_landed_skills() {   # <manifest>
+    local man="${1:-}" landed="" want bare
+    SUP_SKILLS_LANDED=()
+    [ -n "$man" ] && [ -f "$man" ] || return 0
+    landed=" $(sed 's|.*/||' "$man" | tr '\n' ' ')"
+    for want in ${SUP_SKILLS[@]+"${SUP_SKILLS[@]}"}; do
+        bare="${want##*:}"
+        case "$landed" in *" $bare "*) SUP_SKILLS_LANDED+=("$want") ;; esac
+    done
+}
+
+sup_skill_landed() {            # <requested name>
+    local n="${1:-}" s
+    for s in ${SUP_SKILLS_LANDED[@]+"${SUP_SKILLS_LANDED[@]}"}; do
+        [ "$s" = "$n" ] && return 0
+    done
+    return 1
+}
 # What the ceiling ACTUALLY granted. Kept apart from SUP_GRANTS because a
 # refused grant still writes a result, and reporting the request as though it
 # were the outcome would tell a reader a job held a shell it was denied.
@@ -679,6 +745,14 @@ sup_cancel() {
     # re-parented to init keeps the gateway token in its environment for as long
     # as it lives.
     reap_child
+    # The trap is armed before skills are provisioned, so a cancel can land
+    # after the copies exist and before any child could read them. Same rule as
+    # the refused-grant branch below: a job whose child never started must not
+    # report a method as landed, and must not leave the copies behind.
+    if [ "${SUP_CHILD_STARTED:-0}" -eq 0 ]; then
+        [ -n "${SUP_SKILL_MANIFEST:-}" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
+        SUP_SKILLS_LANDED=()
+    fi
     printf 'cancelled at %s; the child was signalled and reaped\n' "$(now_utc)" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
     sup_write_result "cancelled" "0" "null" "the job was cancelled and its child reaped"
     sup_release_once "cancelled" "cancelled: the supervisor was signalled and the child was reaped"
@@ -825,6 +899,11 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         | jq -Rsc 'split("\n") | map(select(length > 0))')"
     [ -n "$grants" ] || grants='[]'
 
+    local skills_landed
+    skills_landed="$(printf '%s\n' ${SUP_SKILLS_LANDED[@]+"${SUP_SKILLS_LANDED[@]}"} \
+        | jq -Rsc 'split("\n") | map(select(length > 0))')"
+    [ -n "$skills_landed" ] || skills_landed='[]'
+
     reasons="$(printf '%s\n' "${SUP_REASONS:-}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
     [ -n "$reasons" ] || reasons='[]'
 
@@ -851,10 +930,10 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
         --argjson dn "$denials" --argjson ch "$changed" --argjson dl "$deliv" \
         --argjson vr "$verify_rc" --argjson vran "$verify_ran" \
         --argjson ok "$all_ok" --argjson rs "$reasons" --argjson us "$usage_json" \
-        --argjson gr "$grants" \
+        --argjson gr "$grants" --argjson sk "$skills_landed" \
         --arg rc "$child_rc" --argjson ie "$child_ie" '{
           schema:$js, job_id:$h, alias:$a,
-          served_model:(if $sm == "" then null else $sm end), ceiling:$c, grants:$gr,
+          served_model:(if $sm == "" then null else $sm end), ceiling:$c, grants:$gr, skills:$sk,
           worktree:$w, cwd:$cw,
           content_trust:$tp, content_notice:$np,
           started_at:(if $st == "" then null else $st end), ended_at:$en,
@@ -877,7 +956,7 @@ sup_write_result() {    # <terminal state> <child exit code> <child is_error> <d
                     + (if $ok then "; every deliverable the contract named is satisfied"
                        else "; not every deliverable the contract named is satisfied" end)
                     + ". This says the job ENDED, not that it succeeded — read terminal_state and deliverables_satisfied."),
-            job_id:$h, alias:$a, worktree:$w, result_file:$rf, grants:$gr,
+            job_id:$h, alias:$a, worktree:$w, result_file:$rf, grants:$gr, skills:$sk,
             terminal_state:$s, deliverables_satisfied:$ok,
             ended_at:$en,
             permission_denial_count:($dn|length),
@@ -965,19 +1044,23 @@ supervisor_main() {
     if [ "${#SUP_SKILLS[@]}" -gt 0 ]; then
         SUP_SKILL_MANIFEST="$dir/skills.provisioned"
         spawn::skill_git_exclude "$SUP_WORKTREE"
-        if ! spawn::skill_provision "$SUP_WORKTREE" "$SUP_SKILL_MANIFEST" "${SUP_SKILLS[@]}" 2>>"$dir/skills.err"; then
-            # WHICH skills, from the manifest, and WHY, from the first
+        local prov_rc=0
+        spawn::skill_provision "$SUP_WORKTREE" "$SUP_SKILL_MANIFEST" "${SUP_SKILLS[@]}" 2>>"$dir/skills.err" || prov_rc=$?
+        # Read ONCE, here, on both paths: the manifest sits under the worktree,
+        # which a Bash-granted child can write, so a later read would report the
+        # child's own edit as the supervisor's finding.
+        sup_capture_landed_skills "$SUP_SKILL_MANIFEST"
+        if [ "$prov_rc" -ne 0 ]; then
+            # WHICH skills, from the captured set, and WHY, from the first
             # diagnostic. The set is derived from what actually LANDED rather
             # than by parsing skills.err, so a reworded diagnostic cannot
             # silently empty it; the diagnostic is then appended as context,
             # because a reader told only which skill is missing still has to
             # open a file to learn anything about the cause.
-            local landed="" missing="" want bare first
-            [ -f "$SUP_SKILL_MANIFEST" ] && landed=" $(sed 's|.*/||' "$SUP_SKILL_MANIFEST" | tr '\n' ' ')"
+            local missing="" want first
             for want in "${SUP_SKILLS[@]}"; do
-                bare="${want##*:}"
-                case "$landed" in *" $bare "*) continue ;; esac
-                missing="${missing:+$missing }$(spawn::sanitize_for_display "$want")"
+                sup_skill_landed "$want" \
+                    || missing="${missing:+$missing }$(spawn::sanitize_for_display "$want")"
             done
             first="$(head -n 1 "$dir/skills.err" 2>/dev/null | tr '\t' ' ')"
             first="$(spawn::sanitize_for_display "$first")"
@@ -1000,6 +1083,8 @@ supervisor_main() {
             sup_reason "$BADG"
             printf 'failed at %s — grant refused\n' "$(now_utc)" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
             [ -n "$SUP_SKILL_MANIFEST" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
+            # Removed before any child ran, so the result must not claim them.
+            SUP_SKILLS_LANDED=()
             sup_write_result "failed" 0 false "$BADG"
             sup_release_once "failed" "$BADG"
             exit 0
@@ -1032,6 +1117,7 @@ supervisor_main() {
             --model "$ALIAS" --output-format json -p "$PROMPT"
     ) > "$dir/child.json" 2> "$dir/child.err" &
     CHILD_PID=$!
+    SUP_CHILD_STARTED=1
 
     local TICKS waited=0 TIMED_OUT=0
     TICKS="$(awk -v t="$JOB_TIMEOUT" 'BEGIN{print int(t * 5)}')"
@@ -1203,7 +1289,7 @@ emit_describe() {
             {name:"--alias",    value:"name", required:true,  default:null, note:"exactly one resolved alias; a chain alias is refused before any network call"},
             {name:"--contract", value:"file", required:true,  default:null, note:"the contract, one JSON object; copied into the job directory so a later edit cannot move the target"},
             {name:"--cwd",      value:"dir",  required:false, default:"the process working directory", note:"the directory the child runs in; its worktree is what the ceiling is scoped to and what holds the one-job lock"},
-            {name:"--skill",    value:"name", required:false, default:null, repeatable:true, note:"a skill the child is to have; repeat the flag for several. The child runs with --setting-sources project and inherits no skill the operator has, so each named skill is copied into the worktree the job runs in, where the child can read it and the ceiling denies editing it, and is removed when the job ends. A skill that cannot be provisioned is named in the degraded_reasons[] of the job record and the job still runs"},
+            {name:"--skill",    value:"name", required:false, default:null, repeatable:true, note:"a skill the child is to have; repeat the flag for several. The child runs with --setting-sources project and inherits no skill the operator has, so each named skill is copied into the worktree the job runs in, where the child can read it and the ceiling denies editing it, and is removed when the job ends. A name that does not resolve refuses the dispatch outright (skill_unresolvable), and so does a contract that instructs a slash command no --skill matches (skill_not_provisioned); a skill that resolves and then fails to copy is named in the degraded_reasons[] of the job record and the job still runs"},
             {name:"--allow",    value:"rule", required:false, default:null, repeatable:true, note:"one extra permission rule to widen the ceiling by, for this job only; repeat the flag for several. The shipped default is never edited. A rule the ceiling refuses to grant fails the job outright rather than running it quietly narrower than asked, because a job silently missing a capability it was promised returns a confident wrong answer"},
             {name:"--help",     value:null,   required:false, default:null, note:"exit 2 with help_requested:true — not a usage error"},
             {name:"--describe", value:null,   required:false, default:null, note:"this document; exit 0; needs no gateway and no config"}
@@ -1221,16 +1307,18 @@ emit_describe() {
             {value:"chain_refused",       exit_code:2, note:"the alias is a chain and chain_policy declares bg-agent refuse; nothing was claimed and nothing was called"},
             {value:"contract_invalid",    exit_code:2, note:"the contract is not one JSON object with a task and at least one worktree-relative deliverable"},
             {value:"job_already_running", exit_code:2, note:"this worktree already has a job; the response names it in running_handle"},
+            {value:"skill_not_provisioned",exit_code:2, note:"the contract instructs a slash command whose skill this job was not given; refused before the claim, because a child with no such skill improvises something shaped like it and reports as though it ran"},
+            {value:"skill_unresolvable",   exit_code:2, note:"a --skill name does not resolve to an installed skill; refused before the claim rather than left to run without the method it was promised"},
             {value:"ceiling_unavailable", exit_code:5, note:"the permission configuration could not be rendered, so no child was started"},
             {value:"launch_failed",       exit_code:5, note:"the supervisor could not be detached or adopted; the record was released"}
           ],
           trusted_fields:[
-            "started_at","ended_at","terminal_state","child_exit_code","served_model","grants",
+            "started_at","ended_at","terminal_state","child_exit_code","served_model","grants","skills",
             "permission_denials","changed_files","deliverables",
             "deliverables_satisfied","verification.exit_code",
             "usage.input_tokens","usage.output_tokens",
             "notification.terminal_state","notification.deliverables_satisfied",
-            "notification.permission_denial_count","notification.grants"
+            "notification.permission_denial_count","notification.grants","notification.skills"
           ],
           untrusted_fields:["narrative.text","notification.narrative.text"],
           notes:[
@@ -1267,7 +1355,15 @@ while [ $# -gt 0 ]; do
         --job-dir)       SUP_JOB_DIR="${2:-}"; shift; shift 2>/dev/null || true ;;
         --base-url)      SUP_BASE_URL="${2:-}"; shift; shift 2>/dev/null || true ;;
         --settings)      SUP_SETTINGS="${2:-}"; shift; shift 2>/dev/null || true ;;
-        --skill)         [ -n "${2:-}" ] && SUP_SKILLS+=("$2"); shift; shift 2>/dev/null || true ;;
+        # Same rule as --allow below, for the same reason: dropping an empty value
+        # silently runs the job WITHOUT the method the caller believes it passed,
+        # which is the confident-wrong-answer this whole surface exists to refuse.
+        --skill)
+            if [ -z "${2:-}" ]; then
+                printf '✗ --skill needs a skill name\n' >&2
+                exit 2
+            fi
+            SUP_SKILLS+=("$2"); shift; shift 2>/dev/null || true ;;
         # An empty value is a usage error, not a no-op: dropping it silently runs
         # the job ungranted while the caller believes it was granted, which is the
         # confident-wrong-answer failure the refusal path exists to prevent.

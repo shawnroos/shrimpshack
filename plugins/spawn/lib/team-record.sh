@@ -232,7 +232,7 @@ spawn::team_member_add() {
                        allow:($al | split(" ") | map(select(length > 0))),
                        launch_state:"pending", handle:null, round:null,
                        started_at:null, outcome:null, failure:null, attempts:[],
-                       served_model:null, grants:null,
+                       served_model:null, grants:null, skills_landed:null,
                        tokens:{input:null, output:null}}]')" || {
         SPAWN_TEAM_ERROR="record_unwritable"
         say "team record: could not encode the member row for '$name'"
@@ -246,7 +246,7 @@ spawn::team_member_set() {
     case "$fld" in
         launch_state|handle|round|started_at|outcome|tokens_input|tokens_output) ;;
         served_model) ;;
-        failure|attempts|grants) ;;
+        failure|attempts|grants|skills_landed) ;;
         *)
             SPAWN_TEAM_ERROR="field_unknown"
             say "team record: '$fld' is not a writable member field"
@@ -266,7 +266,7 @@ spawn::team_member_set() {
           if .name != $n then .
           elif $f == "tokens_input" then .tokens.input = val
           elif $f == "tokens_output" then .tokens.output = val
-          elif ($f == "failure" or $f == "attempts" or $f == "grants") then .[$f] = ($v | fromjson)
+          elif ($f == "failure" or $f == "attempts" or $f == "grants" or $f == "skills_landed") then .[$f] = ($v | fromjson)
           else .[$f] = val end)')" || {
         SPAWN_TEAM_ERROR="usage"
         say "team record: '$value' is not a valid value for '$fld'"
@@ -316,10 +316,12 @@ spawn::team_member_rotate() {
           else . + {attempts: ((.attempts // [])
                        + [{round: .round, handle: .handle, outcome: .outcome,
                            failure: .failure, tokens: .tokens,
-                       served_model: .served_model, grants: .grants}]),
+                       served_model: .served_model, grants: .grants,
+                           skills_landed: .skills_landed}]),
                     launch_state: "retry_pending",
                     handle: null, outcome: null, started_at: null,
                     round: null, failure: null, served_model: null, grants: null,
+                    skills_landed: null,
                     tokens: {input: null, output: null}}
           end)')" || {
         SPAWN_TEAM_ERROR="record_unwritable"

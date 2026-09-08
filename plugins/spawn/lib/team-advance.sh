@@ -190,6 +190,18 @@ team_record_served() {  # <name> <handle.sh result object>
 # WRITTEN BEFORE THE OUTCOME, for the same reason team_record_usage is: each
 # set is its own recompute-and-write, and an outcome landing first leaves a
 # reader looking at a terminal member with nothing said about what it held.
+# What the child actually got, read from its own result. Kept apart from the
+# row's `skills`, which is what the TEAM FILE asked for, for the same reason
+# grants is kept apart from allow: a request that did not land must never read
+# as one that did.
+team_record_skills() {  # <name> <handle.sh result object>
+    local name="$1" res="$2" v
+    v="$(printf '%s' "$res" | jq -c '.result.skills // empty' 2>/dev/null)"
+    [ -n "$v" ] || return 0
+    spawn::team_member_set "$RUN_DIR" "$name" skills_landed "$v" \
+        || say "team: '$name' ran with $v and it could not be recorded"
+}
+
 team_record_grants() {  # <name> <handle.sh result object>
     local name="$1" res="$2" v
     v="$(printf '%s' "$res" | jq -c '.result.grants // empty' 2>/dev/null)"
@@ -285,6 +297,7 @@ team_probe_member() {   # <name> <handle> <worktree>
         team_record_usage "$name" "$res"
         team_record_served "$name" "$res"
         team_record_grants "$name" "$res"
+        team_record_skills "$name" "$res"
     else
         # handle_expired and result_missing say the job ran and its record is no
         # longer readable — which is not the same as no answer. The probe's own
@@ -488,8 +501,11 @@ retry_check() {         # <record json>
     # under the SAME error value the member already carries, is what makes
     # remedy_for's existing prose for each of the three reachable rather than
     # dead text no caller path ever triggers.
+    # The two skill refusals belong here for the same reason grant_refused does:
+    # the contract text and the --skill flags are fixed on the record, so the
+    # launcher re-refuses identically on every attempt.
     case "$cause" in
-        worktree_failed|worktree_missing|grant_refused)
+        worktree_failed|worktree_missing|grant_refused|skill_not_provisioned|skill_unresolvable)
             SPAWN_TEAM_ERROR="$cause"
             spawn::team_fail "member $RETRY_MEMBER settled with $cause, which reapplies identically on retry"
             ;;

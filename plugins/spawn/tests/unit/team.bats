@@ -4244,14 +4244,62 @@ equip_section() {
                       on && /^#/ { exit } on'
 }
 
-@test "the skill warns that an unresolvable skill name still dispatches" {
-    # The trap that produces a confident report from an unequipped member: the
-    # name is recorded in degraded_reasons[] and the member runs anyway. A
-    # driver who thinks a typo refuses the run will not check for it.
+@test "the skill says an unresolvable skill name refuses that member" {
+    # REVERSED: an unresolvable name used to dispatch and degrade. It now
+    # refuses the member before anything is claimed, so a driver reading the old
+    # wording would go looking in degraded_reasons[] for a member that never ran.
+    # Scoped to the equip section for the reason recorded above it.
     local sec
     sec="$(equip_section)"
     [ -n "$sec" ]
-    printf '%s' "$sec" | grep -qiE 'degraded_reasons|does not resolve|unresolvable'
+    printf '%s' "$sec" | grep -qiE 'refuses that member|skill_unresolvable|skill_not_provisioned'
+    # The surviving degraded case is the one that resolves and fails to copy, so
+    # the section must still tell the driver that path exists.
+    printf '%s' "$sec" | grep -qiE 'degraded_reasons'
+}
+
+@test "no spawn doc claims an unresolvable skill name still runs the job" {
+    # A behaviour reversal leaves its old wording behind in every surface that
+    # explained it. Four carried this one; pinned absent over the whole plugin
+    # rather than trusted to stay fixed, the same treatment the retracted
+    # Grep/Glob claim gets below.
+    local root="$LIB/.." f hits=0
+    for f in "$root"/skills/*/SKILL.md "$root"/commands/*.md "$root"/README.md; do
+        [ -f "$f" ] || continue
+        if grep -qiE 'does not resolve does not stop|unresolvable skill name still dispatch|does not resolve still dispatch|does not resolve is not provisioned' "$f"; then
+            printf 'stale claim that an unresolvable name still runs, in %s\n' "$(basename "$f")" >&2
+            hits=1
+        fi
+    done
+    [ "$hits" -eq 0 ]
+}
+
+@test "every doc that warns about improvising also names the refusal that stops it" {
+    # The warning and the refusal are two halves of one fact. A surface carrying
+    # only the warning teaches the pre-refusal model for the exact case this
+    # change fixes, which is how a caller learns the new behaviour only by
+    # hitting it. Keyed on the warning, so a new surface that adds it is covered
+    # without anyone remembering to list the file here.
+    local root="$LIB/.." f hits=0
+    for f in "$root"/skills/*/SKILL.md "$root"/commands/*.md "$root"/README.md; do
+        [ -f "$f" ] || continue
+        grep -qi 'improvises' "$f" || continue
+        # Scoped to the SECTION carrying the warning, not the file: team.md
+        # names the value twice, so a file-wide grep stayed green when the
+        # sentence this guards was deleted. Measured, by deleting it. Section
+        # rather than paragraph because two of these docs answer the warning in
+        # the paragraph after it.
+        local sec
+        sec="$(awk '/^#/ { if (seen) exit; buf=""; }
+                    { buf = buf $0 "\n" }
+                    /improvises/ { seen=1 }
+                    END { if (seen) printf "%s", buf }' "$f")"
+        if ! printf '%s' "$sec" | grep -q 'skill_not_provisioned'; then
+            printf 'warns about improvising without naming the refusal: %s\n' "$(basename "$f")" >&2
+            hits=1
+        fi
+    done
+    [ "$hits" -eq 0 ]
 }
 
 @test "no spawn doc claims a child has no Grep or Glob" {
@@ -4315,4 +4363,107 @@ equip_section() {
         printf 'the reporting section no longer mentions status:\n%s\n' "$sec" >&2
         return 1
     fi
+}
+
+# ===========================================================================
+# What a member actually got, and what refused it (R8, R9, R10)
+# ===========================================================================
+# `skills` on the row is what the TEAM FILE asked for. What actually landed is
+# its own field, for the same reason `grants` is not read off `allow`: a request
+# that did not land must never read as one that did.
+
+@test "R8: a member's record carries what landed beside what it asked for" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    export FAKE_CLAUDE_WRITE=out.txt
+    fake_skill lands-fine
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/c.json:lands-fine" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+    await_member_terminal lead
+    await_member_terminal scout
+    advance --run-dir "$RUN"
+    [ "$status" -eq 0 ]
+
+    [ "$(rec '.members[] | select(.name == "lead") | .skills | join(" ")')" = "lands-fine" ]
+    [ "$(rec '.members[] | select(.name == "lead") | .skills_landed | join(" ")')" = "lands-fine" ]
+    # A member that asked for nothing reached a result and holds nothing, which
+    # is an empty array — not null, which means no result yet.
+    [ "$(rec '.members[] | select(.name == "scout") | .skills_landed | type')" = "array" ]
+    [ "$(rec '.members[] | select(.name == "scout") | .skills_landed | length')" = "0" ]
+}
+
+@test "AE9: a member whose contract instructs a skill it was not given fails alone" {
+    dispatch_env "alpha,beta"
+    contract_file "$WORK/c.json" out.txt
+    jq -n '{task:"run /ce-code-review over the diff", done_means:"the deliverable exists",
+            deliverables:["out.txt"]}' > "$WORK/bad.json"
+    export FAKE_CLAUDE_WRITE=out.txt
+    fake_skill lands-fine
+    team_file "$WORK/team.json" attached 2 \
+        "lead:alpha:$WORK/bad.json" "scout:beta:$WORK/c.json"
+    dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
+    assert_one_object "$output"
+    [ "$(out '.dispatched')" = "1" ]
+    [ "$(member_state lead)" = "launch_failed" ]
+    [ "$(member_state scout)" = "dispatched" ]
+    [ "$(out '.members[] | select(.name == "lead") | .error')" = "skill_not_provisioned" ]
+    [ "$(out '.members[] | select(.name == "scout") | .error')" = "null" ]
+
+    # The round continued, proved on the child's side: only the later member ran.
+    await_invocations 1
+    assert_child_alias beta
+    refute_child_alias alpha
+}
+
+# ---------------------------------------------------------------------------
+# R13 — a refusal the record cannot change is not worth a retry
+# ---------------------------------------------------------------------------
+# The contract text and the --skill flags are fixed on the record, exactly as
+# the allow list is for grant_refused, so the member re-refuses every time.
+
+@test "AE10: retry on a member settled skill_not_provisioned is refused, under that cause" {
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" lead launch_state launch_failed
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"error":"skill_not_provisioned","detail":"the contract instructs '\''/ce-code-review'\'' and this job was given no matching --skill","child_exit_code":null,"degraded_reasons":null}'
+    tr_ spawn::team_member_set "$RUN" lead outcome null
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "skill_not_provisioned" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "AE10: retry on a member settled skill_unresolvable is refused, under that cause" {
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" lead launch_state launch_failed
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"error":"skill_unresolvable","detail":"--skill '\''ce-code-reviw'\'' names a skill that does not resolve","child_exit_code":null,"degraded_reasons":null}'
+    tr_ spawn::team_member_set "$RUN" lead outcome null
+    local before; before="$(cat "$RUN/team.json")"
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 2 ]
+    [ "$(out '.error')" = "skill_unresolvable" ]
+    [ "$(out '.remedy | length > 0')" = "true" ]
+    [ "$(cat "$RUN/team.json")" = "$before" ]
+}
+
+@test "R13 control arm: a retryable cause is still admitted, so the guard did not widen" {
+    # Written because the two arms above would both pass if retry_check refused
+    # everything. contract_invalid is a launcher refusal a caller CAN fix by
+    # editing the contract, so it must stay retryable.
+    seed_failed_run
+    tr_ spawn::team_member_set "$RUN" lead launch_state launch_failed
+    tr_ spawn::team_member_set "$RUN" lead failure \
+        '{"error":"contract_invalid","detail":"the contract is unusable","child_exit_code":null,"degraded_reasons":null}'
+    tr_ spawn::team_member_set "$RUN" lead outcome null
+
+    retry --run-id r1 --run-dir "$RUN" --member lead
+    [ "$status" -eq 0 ]
+    [ "$(out '.error')" = "null" ]
 }

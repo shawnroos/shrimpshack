@@ -359,3 +359,98 @@ provision() {
     run cat "$WORK/.claude/skills/ce-code-review/SKILL.md"
     [ "$output" = "the user's own" ]
 }
+
+# ---------------------------------------------------------------------------
+# Contract-token scanning (U1)
+# ---------------------------------------------------------------------------
+# The gate reads what the contract literally CONTAINS, so the grammar's value is
+# which strings it refuses. spawn::skill_name_ok is resolver-safety grammar and
+# accepts a trailing `.`, so reusing it here would let `/ce-code-review.` compare
+# as a different skill and refuse a correctly flagged job.
+
+toks() { sk spawn::skill_tokens "$1"; }
+
+@test "a slash token is found at the start, mid-sentence, and more than once" {
+    [ "$(toks '/ce-code-review over the diff')" = "ce-code-review" ]
+    [ "$(toks 'please run /ce-code-review now')" = "ce-code-review" ]
+    [ "$(toks 'run /ce-doc-review then /ce-code-review')" = "$(printf 'ce-doc-review\nce-code-review')" ]
+}
+
+@test "trailing punctuation is not part of the name" {
+    for text in '/ce-code-review.' '/ce-code-review,' 'run (/ce-code-review)' '/ce-code-review!'; do
+        [ "$(toks "$text")" = "ce-code-review" ] || { echo "kept punctuation: $text"; return 1; }
+    done
+}
+
+@test "a path or URL is not a slash command" {
+    for text in 'https://example.dev/ce-code-review' '/usr/bin/thing' 'see x/ce-code-review' 'a/b/c'; do
+        out="$(toks "$text")"
+        [ -z "$out" ] || { echo "matched a path: $text -> $out"; return 1; }
+    done
+}
+
+@test "nothing inside a slash-run opens a token, however the segments are punctuated" {
+    # A path component is not an instruction. Pinned because the boundary rule
+    # alone would read the last segment of `docs/plan.md/ce-code-review` as one,
+    # and refusing a job over a path in its prose is the false refusal R5 leaves
+    # no override for.
+    for text in 'see docs/plan.md/ce-code-review' 'run /a./ce-code-review' \
+                'run /a-/ce-code-review' 'run /a/ce-code-review'; do
+        out="$(toks "$text")"
+        [ -z "$out" ] || { echo "read a path segment as a command: $text -> $out"; return 1; }
+    done
+    # A colon is a namespace separator, not a segment break, so this one IS a token.
+    [ "$(toks 'run /a:ce-code-review')" = "a:ce-code-review" ]
+}
+
+@test "a relative path in ordinary prose is not a slash command" {
+    # The reachable false refusal: "write it to ./out.md" is normal contract
+    # prose, and a refusal over it has no override to escape. Every other path
+    # case here is multi-segment, which the second-slash rule already covers;
+    # these are single-segment and only the opener rule can reject them.
+    for text in 'write the report to ./out.md' 'see ../out.md' 'put it in ~/notes.md' \
+                'read ./notes' 'compare with ../main/out.txt'; do
+        out="$(toks "$text")"
+        [ -z "$out" ] || { echo "read a relative path as a command: $text -> $out"; return 1; }
+    done
+}
+
+@test "a trailing hyphen is stripped like any other trailing punctuation" {
+    # A hyphen is inside the capture class, so it reaches the strip loop the way
+    # a dot does. Left on, "/ce-code-review-" compares unequal to a correctly
+    # passed --skill and refuses an equipped job.
+    [ "$(toks '/ce-code-review-')" = "ce-code-review" ]
+    [ "$(toks 'run /ce-code-review- now')" = "ce-code-review" ]
+    [ "$(toks '/ce-code-review:')" = "ce-code-review" ]
+}
+
+@test "prose naming a skill without a slash yields nothing, and empty text is not an error" {
+    [ -z "$(toks 'the sort of problem ce-code-review would catch')" ]
+    run sk spawn::skill_tokens ""
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a namespaced token is captured whole" {
+    [ "$(toks 'run /compound-engineering:ce-code-review')" = "compound-engineering:ce-code-review" ]
+}
+
+@test "bare and namespaced name the same skill, in both directions" {
+    run sk spawn::skill_same ce-code-review compound-engineering:ce-code-review
+    [ "$status" -eq 0 ]
+    run sk spawn::skill_same compound-engineering:ce-code-review ce-code-review
+    [ "$status" -eq 0 ]
+    run sk spawn::skill_same ce-code-review ce-code-review
+    [ "$status" -eq 0 ]
+}
+
+@test "two different namespaces are NOT the same skill" {
+    # skill_resolve filters on the plugin key, so a last-segment match would let
+    # another plugin's same-named skill satisfy the gate and run a different method.
+    # -eq 1, not -ne 0: a missing function exits 127, which satisfies -ne 0 and
+    # makes this test pass over the defect it exists to catch.
+    run sk spawn::skill_same compound-engineering:ce-code-review other-plugin:ce-code-review
+    [ "$status" -eq 1 ]
+    run sk spawn::skill_same ce-code-review ce-doc-review
+    [ "$status" -eq 1 ]
+}

@@ -203,6 +203,11 @@ await_terminal() {  # <handle> [seconds]
     return 1
 }
 
+fake_skill() {      # <name> [file body] — a skill on the operator's side
+    mkdir -p "$SPAWN_SKILLS_HOME/skills/$1"
+    printf '%s\n' "${2:-payload}" > "$SPAWN_SKILLS_HOME/skills/$1/SKILL.md"
+}
+
 result_field() {    # <jq path>
     jq -r "$1" < "$JOB_DIR/result.json"
 }
@@ -331,13 +336,18 @@ print('BOTH' if allow and gate else ('allow=%s gate=%s' % (allow, gate)))"
     [ "$(result_field '.notification.grants | length')" = "0" ]
 }
 
-@test "R8: --describe lists grants as a trusted field" {
-    # It is the supervisor's own record of what it applied, so a reader may act
-    # on it without believing the model.
+@test "R8: --describe lists grants and skills as trusted fields" {
+    # Both are the supervisor's own record of what it applied, so a reader may
+    # act on them without believing the model. Skills is measured exactly as
+    # grants is — supervisor memory, read once before the child starts — so a
+    # trust declaration covering one and not the other understates the record.
     run bash "$BG" --describe
     [ "$status" -eq 0 ]
-    run bash -c 'printf "%s" "$1" | jq -r ".trusted_fields | index(\"grants\") != null"' _ "$output"
-    [ "$output" = "true" ]
+    local desc="$output"
+    for f in grants skills notification.grants notification.skills; do
+        printf '%s' "$desc" | jq -e --arg f "$f" '.trusted_fields | index($f) != null' >/dev/null \
+            || { echo "trusted_fields does not list $f"; return 1; }
+    done
 }
 
 @test "an ungranted job's ceiling names Bash in neither layer" {
@@ -1059,15 +1069,17 @@ EOS
     contract "$WORK/c.json" "create out.txt" "out.txt"
     export FAKE_CLAUDE_WRITE="out.txt"
 
-    # A skills home holding exactly ONE of the two requested skills. Two are
-    # asked for so the record has to distinguish them: naming the whole
-    # requested list would pass a test that only looked for "a skill name".
+    # Two skills that BOTH resolve, so the launcher's resolution gate passes and
+    # this arm still measures provisioning. The second is refused at provision
+    # time for not being self-contained. It used to be a name that did not
+    # resolve at all; that now refuses the dispatch outright (R12), which would
+    # have made this arm measure the gate instead of the record.
     export SPAWN_SKILLS_HOME="$WORK/skills-home"
-    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine"
-    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
+    fake_skill lands-fine
+    fake_skill wont-land 'reads $CLAUDE_PLUGIN_ROOT at run time'
 
     run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" \
-        --skill lands-fine --skill never-installed 2>/dev/null' \
+        --skill lands-fine --skill wont-land 2>/dev/null' \
         _ "$BG" "$PROJ" "$WORK/c.json"
     [ "$status" -eq 0 ]
     HANDLE="$(printf '%s' "$output" | jq -r '.handle // empty')"
@@ -1082,11 +1094,11 @@ EOS
 
     # The provisioner's own stderr agrees on which one failed, so the record is
     # not merely echoing back the argument it was given.
-    grep -qF 'never-installed' "$JOB_DIR/skills.err"
+    grep -qF 'wont-land' "$JOB_DIR/skills.err"
     refute_file_match 'lands-fine' "$JOB_DIR/skills.err"
 
     result_field '.degraded_reasons | join(" ")' > "$WORK/reasons.txt"
-    grep -qF 'never-installed' "$WORK/reasons.txt"
+    grep -qF 'wont-land' "$WORK/reasons.txt"
     # The one that LANDED must not appear in a failure reason. Naming the whole
     # requested list is the bug this arm exists to catch.
     refute_file_match 'lands-fine' "$WORK/reasons.txt"
@@ -1261,4 +1273,229 @@ usage_is() {    # <field> <jq type> [<jq value expression>]
     printf '%s\n' '{}' > "$JOB_DIR/result.json"
     run usage_is input_tokens 'null'
     [ "$status" -ne 0 ]
+}
+
+# ===========================================================================
+# The gate: a contract may not instruct a skill the job cannot run (R1, R12)
+# ===========================================================================
+# A child inherits no skills, so a contract saying "/ce-code-review" with no
+# --skill improvises something review-shaped and files a narrative that reads
+# like the real thing. These refuse before the claim, so nothing is stranded.
+
+skills_home() {         # a portable skills home + plugin registry
+    export SPAWN_SKILLS_HOME="$WORK/skills-home"
+    fake_skill ce-code-review
+    mkdir -p "$WORK/plug/skills/ce-code-review"
+    printf 'payload\n' > "$WORK/plug/skills/ce-code-review/SKILL.md"
+    mkdir -p "$SPAWN_SKILLS_HOME/plugins"
+    jq -n --arg p "$WORK/plug" '{"compound-engineering":[{installPath:$p}]}' \
+        > "$SPAWN_SKILLS_HOME/plugins/installed_plugins.json"
+}
+
+nothing_started() {
+    refute_exists "$PROJ/.spawn/lock"
+    refute_exists "$FAKE_CLAUDE_RECORD_DIR/argv"
+}
+
+@test "AE1: a contract instructing a skill the job was not given is refused, naming skill and flag" {
+    start_fixture healthy "alpha"; skills_home
+    jq -n '{task:"run /ce-code-review over the diff", deliverables:["out.txt"]}' > "$WORK/c.json"
+    start_job "$WORK/c.json"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "skill_not_provisioned" ]
+    printf '%s' "$output" | jq -r '.detail' | grep -q 'ce-code-review'
+    printf '%s' "$output" | jq -r '.detail' | grep -q -- '--skill'
+    nothing_started
+}
+
+@test "AE2: prose naming a skill without a slash dispatches normally" {
+    start_fixture healthy "alpha"; skills_home
+    contract "$WORK/c.json" "the sort of problem ce-code-review would catch" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+}
+
+@test "AE3: a negated slash token is still refused, and no override exists" {
+    start_fixture healthy "alpha"; skills_home
+    jq -n '{task:"do not bother running /ce-code-review", deliverables:["out.txt"]}' > "$WORK/c.json"
+    start_job "$WORK/c.json"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "skill_not_provisioned" ]
+    # R5 is proved by there being no override to try: the refusal reads no flag,
+    # env var or config value. Asserting that some invented variable name fails
+    # to bypass it would pass for any unused name and prove nothing.
+    nothing_started
+}
+
+# Split in two on purpose: a started job holds the worktree lock, so a second
+# dispatch in one test is refused as job_already_running and proves nothing
+# about the gate.
+@test "AE4: a bare token satisfied by a namespaced flag dispatches" {
+    start_fixture healthy "alpha"; skills_home
+    export FAKE_CLAUDE_WRITE="out.txt"
+    contract "$WORK/c.json" "run /ce-code-review over the diff" "out.txt"
+    start_job "$WORK/c.json" --skill compound-engineering:ce-code-review
+    [ "$status" -eq 0 ]
+}
+
+@test "AE5: a namespaced token satisfied by a bare flag dispatches" {
+    start_fixture healthy "alpha"; skills_home
+    export FAKE_CLAUDE_WRITE="out.txt"
+    contract "$WORK/c.json" "run /compound-engineering:ce-code-review now" "out.txt"
+    start_job "$WORK/c.json" --skill ce-code-review
+    [ "$status" -eq 0 ]
+}
+
+@test "AE13: two different namespaces are not the same skill, and the dispatch is refused" {
+    start_fixture healthy "alpha"; skills_home
+    contract "$WORK/c.json" "run /compound-engineering:ce-code-review" "out.txt"
+    start_job "$WORK/c.json" --skill other-plugin:ce-code-review
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "skill_not_provisioned" ]
+    nothing_started
+}
+
+@test "AE6: a flagged name that does not resolve is refused before the claim" {
+    start_fixture healthy "alpha"; skills_home
+    contract "$WORK/c.json" "run /ce-code-reviw over the diff" "out.txt"
+    start_job "$WORK/c.json" --skill ce-code-reviw
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "skill_unresolvable" ]
+    nothing_started
+}
+
+@test "AE11: a prose contract with a typo'd flag is refused, though no token names it" {
+    start_fixture healthy "alpha"; skills_home
+    contract "$WORK/c.json" "apply the code review process" "out.txt"
+    start_job "$WORK/c.json" --skill ce-code-reviw
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "skill_unresolvable" ]
+    nothing_started
+}
+
+@test "AE12: a slash token that is not a skill cannot be satisfied by any flag" {
+    start_fixture healthy "alpha"; skills_home
+    jq -n '{task:"then /clear the context", deliverables:["out.txt"]}' > "$WORK/c.json"
+    start_job "$WORK/c.json"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "skill_not_provisioned" ]
+    start_job "$WORK/c.json" --skill clear
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "skill_unresolvable" ]
+    printf '%s' "$output" | jq -r '.remedy' | grep -q 'remove'
+}
+
+@test "the gate reads task and done_means, and does not read verify" {
+    start_fixture healthy "alpha"; skills_home
+    export FAKE_CLAUDE_WRITE="out.txt"
+    jq -n '{task:"do the thing", done_means:"after /ce-code-review passes",
+            deliverables:["out.txt"]}' > "$WORK/c.json"
+    start_job "$WORK/c.json"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s' "$output" | jq -r '.error')" = "skill_not_provisioned" ]
+
+    # verify is a shell command the supervisor runs itself, never the child's
+    # instruction, so a slash there is shell syntax and must not refuse.
+    jq -n '{task:"do the thing", verify:"ls /usr/bin/env && echo /ce-code-review",
+            deliverables:["out.txt"]}' > "$WORK/c2.json"
+    start_job "$WORK/c2.json"
+    [ "$status" -eq 0 ]
+}
+
+@test "an empty --skill value is a usage error, not a silent no-op" {
+    # Dropping it would run the job WITHOUT the method the caller believes it
+    # passed — the confident-wrong-answer this surface exists to refuse, reached
+    # through the very flag it is about. --allow already refuses this way.
+    start_fixture healthy "alpha"; skills_home
+    contract "$WORK/c.json" "do the thing" "out.txt"
+    run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" --skill "" 2>/dev/null' \
+        _ "$BG" "$PROJ" "$WORK/c.json"
+    [ "$status" -eq 2 ]
+    nothing_started
+}
+
+@test "a cancel before the child starts yields a well-formed cancelled result" {
+    # HONEST SCOPE: this reaches the cancel path before the child exists, but it
+    # lands before PROVISIONING too, so it does not exercise the narrow window
+    # between provisioning and child start where sup_cancel's unprovision-and-
+    # clear guard actually matters. Removing that guard leaves this test green —
+    # measured. The guard is kept because it mirrors the refused-grant branch,
+    # which AE8 does prove; the window itself is recorded as a testing gap
+    # rather than covered by an assertion that cannot fail.
+    start_fixture healthy "alpha"; skills_home
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_MODE=hang
+    start_job "$WORK/c.json" --skill ce-code-review
+    [ "$status" -eq 0 ]
+
+    # Signal the supervisor itself, not the child.
+    kill -TERM "$SUP_PID" 2>/dev/null || true
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.terminal_state')" = "cancelled" ]
+    [ "$(result_field '.skills | type')" = "array" ]
+}
+
+@test "both refusal values are declared in the error taxonomy" {
+    run bash -c 'bash "$1" --describe' _ "$BG"
+    [ "$status" -eq 0 ]
+    for v in skill_not_provisioned skill_unresolvable; do
+        [ "$(printf '%s' "$output" | jq -r --arg v "$v" \
+            '[.error_values[] | select(.value == $v)] | length')" = "1" ] \
+            || { echo "missing from error_values: $v"; return 1; }
+        [ -n "$(printf '%s' "$output" | jq -r --arg v "$v" \
+            '[.error_values[] | select(.value == $v)][0].note // empty')" ]
+    done
+}
+
+# ===========================================================================
+# What actually landed is on the result AND the notification (R7)
+# ===========================================================================
+# Grants are on both surfaces; skills were on neither. The notification is what
+# an operator reads when a job comes back, so a result-only field repeats the
+# defect this work exists to close.
+
+@test "AE7: with nothing provisioned, both surfaces carry an empty set, not a missing key" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+    start_job "$WORK/c.json"
+    [ "$status" -eq 0 ]
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.skills | type')" = "array" ]
+    [ "$(result_field '.skills | length')" = "0" ]
+    [ "$(result_field '.notification.skills | type')" = "array" ]
+}
+
+@test "R7: a skill that landed is named on the result and on the notification" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_WRITE="out.txt"
+    export SPAWN_SKILLS_HOME="$WORK/skills-home"
+    fake_skill lands-fine
+
+    start_job "$WORK/c.json" --skill lands-fine
+    [ "$status" -eq 0 ]
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.skills | join(" ")')" = "lands-fine" ]
+    [ "$(result_field '.notification.skills | join(" ")')" = "lands-fine" ]
+}
+
+@test "AE8: a job refused its grant never ran the child, so it claims no skills" {
+    start_fixture healthy "alpha"
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export SPAWN_SKILLS_HOME="$WORK/skills-home"
+    fake_skill lands-fine
+
+    # The skill IS provisioned before the ceiling is widened, then unprovisioned
+    # when the grant is refused. Reporting it here would name a method that never
+    # reached a child.
+    start_job "$WORK/c.json" --skill lands-fine --allow Agent
+    [ "$status" -eq 0 ]
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.terminal_state')" = "failed" ]
+    # type first: jq gives `null | length` as 0, so a length check alone passes
+    # when the field is absent entirely.
+    [ "$(result_field '.skills | type')" = "array" ]
+    [ "$(result_field '.skills | length')" = "0" ]
 }
