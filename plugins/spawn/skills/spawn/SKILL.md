@@ -111,6 +111,12 @@ so — it **improvises something shaped like a review**, and the narrative reads
 exactly like the real thing. You get a confident report from a job that never had
 the method. Same for a job asked to follow a convention it was never handed.
 
+A contract that names the method as a literal `/ce-code-review` is now refused
+outright as `skill_not_provisioned` unless the matching `--skill` is passed, so
+that half cannot reach a child at all. The half that still improvises is a method
+named in prose — "apply the code review process" — which nothing can detect for
+you. That is what these questions are for.
+
 ### The three questions, asked every time
 
 1. **What method does this task name?** A skill, a review process, a house

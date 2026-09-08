@@ -33,13 +33,13 @@ Refuse a `bg-agent` or team-member dispatch whose contract instructs a slash com
 
 A `bg-agent` or team child runs under `--setting-sources project` and inherits nothing from its launcher. A skill exists for that child only when the dispatch names it with `--skill`.
 
-The two provisioning outcomes are not equally visible. A named skill that fails to provision is recorded in `degraded_reasons[]` and the job continues (`plugins/spawn/lib/bg-agent.sh:964-984`). A skill that was never named produces no signal at all — no error, no reason, no field on the result.
+The two provisioning outcomes are not equally visible. A named skill that fails to provision is recorded in `degraded_reasons[]` and the job continues (`plugins/spawn/lib/bg-agent.sh`). A skill that was never named produces no signal at all — no error, no reason, no field on the result.
 
 The child does not stop when a skill it was told to use is absent. It improvises something shaped like the missing skill and returns a finished deliverable. The operator's first contact with the failure is reading that deliverable and finding the work was not done the way the contract asked. At that point the evidence points at the model, not at the dispatch, so the operator loses confidence in the child for a defect in how the job was launched.
 
-Nothing pushes the existing diagnostic toward the operator either: the notification envelope carries `terminal_state` and `deliverables_satisfied` but not `degraded_reasons` (`plugins/spawn/lib/bg-agent.sh:873-882`), so the record is read only by an operator who already suspects a problem.
+Nothing pushes the existing diagnostic toward the operator either: the notification envelope carries `terminal_state` and `deliverables_satisfied` but not `degraded_reasons` (`plugins/spawn/lib/bg-agent.sh`), so the record is read only by an operator who already suspects a problem.
 
-Instruction has already been tried. `plugins/spawn/commands/bg-agent.md:20` warns that a job told to "run ce-code-review" with no such skill "improvises something shaped like a review and files a narrative that reads exactly like the real thing", and `plugins/spawn/skills/team-run/SKILL.md:37` says the same for members. Both shipped in commit `40df34d`. The failure this plan fixes happened afterwards.
+Instruction has already been tried. `plugins/spawn/commands/bg-agent.md` warns that a job told to "run ce-code-review" with no such skill "improvises something shaped like a review and files a narrative that reads exactly like the real thing", and `plugins/spawn/skills/team-run/SKILL.md` says the same for members. Both shipped in commit `40df34d`. The failure this plan fixes happened afterwards.
 
 ### Actors
 
@@ -54,8 +54,8 @@ Instruction has already been tried. `plugins/spawn/commands/bg-agent.md:20` warn
 - **Trigger only on a literal slash-command token.** A slash token is text the contract contains; a need expressed in prose is intent the plugin would have to guess. *(session-settled: user-directed — chosen over a matcher that reads contract prose for implied needs: prose inference contradicts the explicit-only precedent in `docs/plans/2026-08-25-1730-feat-grantable-bash-for-background-jobs-plan.md` and `docs/plans/2026-08-12-001-feat-spawn-caller-granted-sandbox-plan.md`.)* Governs R2.
 - **No override.** An escape hatch reopens the silent path this work exists to close. *(session-settled: user-directed — chosen over a refuse-with-explicit-opt-out variant: the cost is that a contract mentioning a slash command in prose must be reworded.)* Governs R5.
 - **Refuse a named skill that cannot resolve, not only one never named.** A flagged-but-unresolvable name reaches the identical ending — a finished deliverable missing the method it was promised. *(session-settled: user-directed — chosen over leaving that case to the existing degraded path: the degraded path is the one the operator does not read.)* Governs R12.
-- **Give skills the manifest that grants already have.** Results already carry applied grants (`plugins/spawn/lib/bg-agent.sh:824-826`) and skills have no equivalent field, so this is a symmetry fix. *(session-settled: user-directed — chosen over detection alone and over also detecting missing grants.)* Governs R7, R8.
-- **A refused member fails that member; the round continues.** A refused `--allow` grant already fails one member without stopping the round (`plugins/spawn/lib/team-dispatch.sh:320-333`), and the refusal is recorded, so a partially dispatched round is not a silent one. Governs R9, R10, R13.
+- **Give skills the manifest that grants already have.** Results already carry applied grants (`plugins/spawn/lib/bg-agent.sh`) and skills have no equivalent field, so this is a symmetry fix. *(session-settled: user-directed — chosen over detection alone and over also detecting missing grants.)* Governs R7, R8.
+- **A refused member fails that member; the round continues.** A refused `--allow` grant already fails one member without stopping the round (`plugins/spawn/lib/team-dispatch.sh`), and the refusal is recorded, so a partially dispatched round is not a silent one. Governs R9, R10, R13.
 - **`--setting-sources project` stays.** It is the lever that makes a child genuinely narrower than its launcher, and this work closes a diagnostic gap rather than changing the isolation model. *(session-settled: user-directed — chosen over widening what a child inherits: inheritance would remove the isolation the flag exists to provide.)*
 - **Do not add authoring guidance.** Both dispatch surfaces already name this exact failure with this exact skill, and the failure still occurred. *(session-settled: user-directed — chosen over sharpening the existing equip sections: more prose in a document that already says this would not change the outcome.)*
 
@@ -105,7 +105,7 @@ Instruction has already been tried. `plugins/spawn/commands/bg-agent.md:20` warn
 - Widening what a child inherits, including any change to `--setting-sources project`.
 - `spawn:agent` and `spawn:lens`, which have no tools to load a skill into, and `spawn:session`, which already inherits the operator's skills.
 - Changing the authoring guidance at either dispatch surface.
-- A skill that resolves at dispatch but fails to provision after the claim. It records `degraded_reasons` and the job runs, per the shipped decision at `plugins/spawn/lib/bg-agent.sh:962-964` — "a missing skill makes a job worse at its task, while refusing to start makes it impossible". Reversing that is its own change with its own argument.
+- A skill that resolves at dispatch but fails to provision after the claim. It records `degraded_reasons` and the job runs, per the shipped decision at `plugins/spawn/lib/bg-agent.sh` — "a missing skill makes a job worse at its task, while refusing to start makes it impossible". Reversing that is its own change with its own argument.
 
 #### Deferred to Follow-Up Work
 
@@ -127,13 +127,13 @@ Track both after landing: compare refusals cleared by adding `--skill` against t
 
 ### Key Technical Decisions
 
-- KTD1. **Place the gate in the launcher, immediately after the contract is read.** `plugins/spawn/lib/team-dispatch.sh:334` dispatches each member by shelling out to `bg-agent.sh`, so one gate covers both surfaces. Do not copy the `--allow` check as a model: it runs in the detached supervisor (`plugins/spawn/lib/bg-agent.sh:996-1007`) and would fire after the handle already returned. Copy `contract_invalid` (`plugins/spawn/lib/bg-agent.sh:458-461`), which refuses synchronously. Governs R1, R9, R12.
+- KTD1. **Place the gate in the launcher, immediately after the contract is read.** `plugins/spawn/lib/team-dispatch.sh` dispatches each member by shelling out to `bg-agent.sh`, so one gate covers both surfaces. Do not copy the `--allow` check as a model: it runs in the detached supervisor (`plugins/spawn/lib/bg-agent.sh`) and would fire after the handle already returned. Copy `contract_invalid` (`plugins/spawn/lib/bg-agent.sh`), which refuses synchronously. Governs R1, R9, R12.
 - KTD2. **Scan `task` and `done_means`; exclude `verify`.** Those two become the child's prompt. `verify` is a shell command string the supervisor runs itself, so a slash there is shell syntax rather than an instruction, and scanning it would refuse legitimate commands. `deliverables` is a path list, not instruction text, and is excluded on the same grounds. Governs R2.
-- KTD3. **Write a purpose-built token grammar; do not reuse `spawn::skill_name_ok`.** That function is resolver-safety grammar and accepts a trailing `.`, so a naively extracted `/ce-code-review.` would compare as a different skill and false-refuse a correctly flagged job. The scanner needs its own boundary rules and must strip trailing punctuation before comparing. Comparison is namespace-aware: when both the token and the flag carry a plugin prefix, the full `plugin:name` must match, because `spawn::skill_resolve` filters on the plugin key (`plugins/spawn/lib/skills.sh:128`) and a last-segment match would let another plugin's same-named skill satisfy the gate. Governs R2, R4.
+- KTD3. **Write a purpose-built token grammar; do not reuse `spawn::skill_name_ok`.** That function is resolver-safety grammar and accepts a trailing `.`, so a naively extracted `/ce-code-review.` would compare as a different skill and false-refuse a correctly flagged job. The scanner needs its own boundary rules and must strip trailing punctuation before comparing. Comparison is namespace-aware: when both the token and the flag carry a plugin prefix, the full `plugin:name` must match, because `spawn::skill_resolve` filters on the plugin key (`plugins/spawn/lib/skills.sh`) and a last-segment match would let another plugin's same-named skill satisfy the gate. Governs R2, R4.
 - KTD4. **Capture the provisioned set once, in supervisor memory, on every path.** Mirror `SUP_GRANTS_APPLIED`. The manifest lives under the worktree's `.spawn`, which a Bash-granted child can write, so it is never re-read after the child starts. Clear the captured value on every path that unprovisions before the child starts, or a failed result claims skills that never ran. Governs R7, R8.
 - KTD5. **Resolve every flagged name at dispatch, before anything is claimed.** `spawn::skill_resolve` is local and cheap, and nothing is claimed at the gate's position, so a resolution failure can refuse without stranding state. Every `--skill` value is resolved, not only those matching a contract token, because a typo on a prose-worded contract reaches the same ending. *(session-settled: user-directed — chosen over leaving flagged-but-unresolvable names to the existing degraded path: that path produces the same finished-but-unequipped deliverable the Objective forbids.)* Governs R12.
-- KTD7. **The refusal's error value is a new entry in the existing taxonomy at exit 2.** It appears in `error_values` (`plugins/spawn/lib/bg-agent.sh:1220-1226`), the `--describe` output, `remedy_for`, and the retry `error_values` table in `plugins/spawn/lib/team.sh:456`, so a caller reading any surface finds it. Governs R6.
-- KTD6. **Add the new code to the retry causes that reapply identically.** `plugins/spawn/lib/team-advance.sh:492` lists `worktree_failed|worktree_missing|grant_refused`. Contract text and skill flags are fixed on the record exactly as an allow-list is. Governs R13.
+- KTD7. **The refusal's error value is a new entry in the existing taxonomy at exit 2.** It appears in `error_values` (`plugins/spawn/lib/bg-agent.sh`), the `--describe` output, `remedy_for`, and the retry `error_values` table in `plugins/spawn/lib/team.sh`, so a caller reading any surface finds it. Governs R6.
+- KTD6. **Add the new code to the retry causes that reapply identically.** `plugins/spawn/lib/team-advance.sh` lists `worktree_failed|worktree_missing|grant_refused`. Contract text and skill flags are fixed on the record exactly as an allow-list is. Governs R13.
 
 ### High-Level Technical Design
 
@@ -156,12 +156,12 @@ flowchart TB
   I --> J[result records skills provisioned<br/>and grants applied]
 ```
 
-Both refusals sit before the claim at `plugins/spawn/lib/bg-agent.sh:508`, so nothing is stranded: no lock, no job directory, no git-exclude entry. The existing provisioning check at `H` asks whether a *named* skill resolved and lets the job run; the new gates ask whether a needed skill was named at all, and whether a name that was given can resolve, and refuse.
+Both refusals sit before the claim at `plugins/spawn/lib/bg-agent.sh`, so nothing is stranded: no lock, no job directory, no git-exclude entry. The existing provisioning check at `H` asks whether a *named* skill resolved and lets the job run; the new gates ask whether a needed skill was named at all, and whether a name that was given can resolve, and refuse.
 
 ### Assumptions
 
 - The error value's name is an implementation choice; where it must appear is owned by KTD7.
-- `die` prints to stderr while `emit_error` writes the JSON envelope to stdout, which `team_launch_member` reads and records as `.failure.error` (`plugins/spawn/lib/team-dispatch.sh:358, 371`). R9 and R10 need no plumbing change beyond the taxonomy entries.
+- `die` prints to stderr while `emit_error` writes the JSON envelope to stdout, which `team_launch_member` reads and records as `.failure.error` (`plugins/spawn/lib/team-dispatch.sh`). R9 and R10 need no plumbing change beyond the taxonomy entries.
 
 ### Open Questions
 
@@ -191,7 +191,7 @@ U1 is a pure function and lands first. U2 consumes it. U3 and U5 depend only on 
   4. Reject a candidate immediately followed by `/`.
   5. Compare per KTD3: the full `plugin:name` when both sides carry a namespace, and the segment after the last `:` only when one side is bare.
   6. Use `[[ =~ ]]` with `BASH_REMATCH` and `case " $list " in *" $x "*)` string containment — bash 3.2 has no associative arrays.
-- **Patterns to follow:** the existing helpers in `plugins/spawn/lib/skills.sh:71-131`; the string-containment idiom at `plugins/spawn/lib/bg-agent.sh:974-980`.
+- **Patterns to follow:** the existing helpers in `plugins/spawn/lib/skills.sh`; the string-containment idiom at `plugins/spawn/lib/bg-agent.sh`.
 - **Execution note:** Write the scanner test-first. The grammar's whole value is which strings it refuses to match, and those cases are cheaper to state as tests than to reason about in the shell.
 - **Test scenarios:**
   - `/ce-code-review` at the start of the text yields `ce-code-review`.
@@ -213,13 +213,13 @@ U1 is a pure function and lands first. U2 consumes it. U3 and U5 depend only on 
 - **Dependencies:** U1
 - **Files:** `plugins/spawn/lib/bg-agent.sh`, `plugins/spawn/tests/unit/supervisor.bats`
 - **Approach:**
-  1. Insert the gate immediately after `read_contract` succeeds (`plugins/spawn/lib/bg-agent.sh:459-462`), per KTD1.
+  1. Insert the gate immediately after `read_contract` succeeds (`plugins/spawn/lib/bg-agent.sh`), per KTD1.
   2. Scan `CONTRACT_TASK` and `CONTRACT_DONE` only, per KTD2.
   3. For each token with no matching `--skill`, refuse with `die "$EX_USAGE" "<new-code>" "..."`, naming the skill and the flag per R3.
   4. Resolve every `--skill` value with `spawn::skill_resolve` and refuse the same way on failure, per KTD5 — not only values matching a contract token.
   5. Register the new error value on every surface KTD7 names.
   6. Fail closed: an unreadable contract already refuses as `contract_invalid` upstream; an empty `--skill` value refuses rather than counting as a match.
-- **Patterns to follow:** the `contract_invalid` refusal at `plugins/spawn/lib/bg-agent.sh:458-461` and `die` in `plugins/spawn/lib/common.sh:581-585`. Do **not** follow the grant check at `:996-1007` — it runs in the detached supervisor.
+- **Patterns to follow:** the `contract_invalid` refusal at `plugins/spawn/lib/bg-agent.sh` and `die` in `plugins/spawn/lib/common.sh`. Do **not** follow the grant check at `:996-1007` — it runs in the detached supervisor.
 - **Test scenarios:**
   - Covers AE1. A contract instructing `/ce-code-review` with no `--skill` exits 2, and the error names both the skill and the flag.
   - Covers AE6. A contract instructing `/ce-code-reviw` with `--skill ce-code-reviw` exits 2 because the name does not resolve.
@@ -241,12 +241,12 @@ U1 is a pure function and lands first. U2 consumes it. U3 and U5 depend only on 
 - **Dependencies:** U2
 - **Files:** `plugins/spawn/lib/bg-agent.sh`, `plugins/spawn/tests/unit/supervisor.bats`
 - **Approach:**
-  1. Hoist an unconditional capture of the provisioned set into a supervisor variable mirroring `SUP_GRANTS_APPLIED` (`plugins/spawn/lib/bg-agent.sh:658`). Today the equivalent value is computed only inside the failure branch at `:976`, so the success path records nothing.
+  1. Hoist an unconditional capture of the provisioned set into a supervisor variable mirroring `SUP_GRANTS_APPLIED` (`plugins/spawn/lib/bg-agent.sh`). Today the equivalent value is computed only inside the failure branch at `:976`, so the success path records nothing.
   2. Read it from the manifest once, before the child starts, and never again — per KTD4 the manifest is child-writable.
-  3. Thread it into the result object beside `grants` (`plugins/spawn/lib/bg-agent.sh:824-857`) AND into the notification envelope beside `grants:$gr` (`plugins/spawn/lib/bg-agent.sh:880`). The envelope is the surface the operator reads, so a result-only field repeats the defect this plan exists to close.
+  3. Thread it into the result object beside `grants` (`plugins/spawn/lib/bg-agent.sh`) AND into the notification envelope beside `grants:$gr` (`plugins/spawn/lib/bg-agent.sh`). The envelope is the surface the operator reads, so a result-only field repeats the defect this plan exists to close.
   4. Clear it per KTD4, on every path that calls `spawn::skill_unprovision` before the child starts.
   5. Emit the empty set as a value, never as an absent key.
-- **Patterns to follow:** `SUP_GRANTS_APPLIED` end to end — populated at `plugins/spawn/lib/bg-agent.sh:995`, assembled at `:824-857`.
+- **Patterns to follow:** `SUP_GRANTS_APPLIED` end to end — populated at `plugins/spawn/lib/bg-agent.sh`, assembled at `:824-857`.
 - **Test scenarios:**
   - Covers AE7. A job dispatched with no `--skill` and no tokens completes with the skills field present and empty on both the result and the notification envelope.
   - A job dispatched with one resolvable `--skill` completes with that skill named in the field.
@@ -262,11 +262,11 @@ U1 is a pure function and lands first. U2 consumes it. U3 and U5 depend only on 
 - **Dependencies:** U2, U3
 - **Files:** `plugins/spawn/lib/team-advance.sh`, `plugins/spawn/lib/team-record.sh`, `plugins/spawn/lib/team.sh`, `plugins/spawn/tests/unit/team.bats`
 - **Approach:**
-  1. Mirror `team_record_grants` (`plugins/spawn/lib/team-advance.sh:193-198`, called at `:287`) for the skills field.
+  1. Mirror `team_record_grants` (`plugins/spawn/lib/team-advance.sh`, called at `:287`) for the skills field.
   2. Carry the null and passthrough wiring in `team-record.sh` the way grants are wired.
   3. Document the field in the run-record surface in `team.sh` beside `members[].grants`.
-  4. No change is needed for the refusal to reach the record: `die` writes to stderr while the JSON envelope goes to stdout, which `team_launch_member` reads and records as `.failure.error` (`plugins/spawn/lib/team-dispatch.sh:358, 371`).
-- **Patterns to follow:** `members[].grants` end to end, including its `--describe` documentation at `plugins/spawn/lib/team.sh:389`.
+  4. No change is needed for the refusal to reach the record: `die` writes to stderr while the JSON envelope goes to stdout, which `team_launch_member` reads and records as `.failure.error` (`plugins/spawn/lib/team-dispatch.sh`).
+- **Patterns to follow:** `members[].grants` end to end, including its `--describe` documentation at `plugins/spawn/lib/team.sh`.
 - **Test scenarios:**
   - Covers AE9. A three-member round with one member instructing an unprovisioned skill dispatches the other two and fails only that member.
   - The refused member's recorded cause names the new error value and is distinguishable from a member that failed to launch for another reason.
@@ -281,8 +281,8 @@ U1 is a pure function and lands first. U2 consumes it. U3 and U5 depend only on 
 - **Dependencies:** U2
 - **Files:** `plugins/spawn/lib/team-advance.sh`, `plugins/spawn/lib/team.sh`, `plugins/spawn/tests/unit/team.bats`
 - **Approach:**
-  1. Add the new error value to the `retry_check` case listing causes that reapply identically, per KTD6 (`plugins/spawn/lib/team-advance.sh:492`, currently `worktree_failed|worktree_missing|grant_refused`).
-  2. Declare it in the retry `error_values` table (`plugins/spawn/lib/team.sh:456`) beside `grant_refused`, so the refusal's remedy prose is reachable rather than dead text. Do NOT add it to the `members[].error` enum at `plugins/spawn/lib/team.sh:385` — that field documents only what the team surface writes itself, and this value is the launcher's.
+  1. Add the new error value to the `retry_check` case listing causes that reapply identically, per KTD6 (`plugins/spawn/lib/team-advance.sh`, currently `worktree_failed|worktree_missing|grant_refused`).
+  2. Declare it in the retry `error_values` table (`plugins/spawn/lib/team.sh`) beside `grant_refused`, so the refusal's remedy prose is reachable rather than dead text. Do NOT add it to the `members[].error` enum at `plugins/spawn/lib/team.sh` — that field documents only what the team surface writes itself, and this value is the launcher's.
 - **Patterns to follow:** the `grant_refused` arm of that same case statement, including its refusal message shape.
 - **Test scenarios:**
   - Covers AE10. Retrying a member that failed under the new code is refused, not admitted.
@@ -297,9 +297,9 @@ U1 is a pure function and lands first. U2 consumes it. U3 and U5 depend only on 
 - **Dependencies:** U2
 - **Files:** `plugins/spawn/commands/bg-agent.md`, `plugins/spawn/skills/team-run/SKILL.md`, `plugins/spawn/skills/spawn/SKILL.md`, `plugins/spawn/tests/unit/surfaces.bats`
 - **Approach:** Three statements become false when R12 lands. Correct each in place to say an unresolvable name now refuses the dispatch, keeping the surrounding warning about what a child cannot do:
-  1. `plugins/spawn/commands/bg-agent.md:35` — "A skill name that does not resolve does not stop the job."
-  2. `plugins/spawn/skills/team-run/SKILL.md:43` — "A skill name that does not resolve still dispatches."
-  3. `plugins/spawn/skills/spawn/SKILL.md:138` — "A name that does not resolve is not provisioned, and the job still runs."
+  1. `plugins/spawn/commands/bg-agent.md` — "A skill name that does not resolve does not stop the job."
+  2. `plugins/spawn/skills/team-run/SKILL.md` — "A skill name that does not resolve still dispatches."
+  3. `plugins/spawn/skills/spawn/SKILL.md` — "A name that does not resolve is not provisioned, and the job still runs."
 - **Patterns to follow:** commit `40df34d` pinned its documentation claims with tests scoped to the section carrying them, after an unscoped grep passed on a different section's mention of the same field.
 - **Execution note:** This is a behaviour reversal, so sweep for the class rather than these three lines — search every surface for any remaining claim that an unresolvable name still runs.
 - **Test scenarios:**
@@ -355,27 +355,27 @@ Per unit:
 
 ## Sources / Research
 
-- `plugins/spawn/lib/bg-agent.sh:319-352` — `read_contract`, which sets `CONTRACT_TASK`, `CONTRACT_DONE`, `CONTRACT_VERIFY`, `CONTRACT_DELIVERABLES`.
-- `plugins/spawn/lib/bg-agent.sh:458-462` — the `contract_invalid` refusal, the pattern U2 copies, and the gate's insertion point.
-- `plugins/spawn/lib/bg-agent.sh:508` — the claim, which is the first state a dispatch creates and sits after the gate.
-- `plugins/spawn/lib/bg-agent.sh:824-857, 658, 995` — `SUP_GRANTS_APPLIED` from population to result assembly.
-- `plugins/spawn/lib/bg-agent.sh:964-984, 976` — the provisioning failure branch, and the only place the landed set is computed today.
-- `plugins/spawn/lib/bg-agent.sh:996-1007` — the grant check that runs in the detached supervisor. Named so it is not copied.
-- `plugins/spawn/lib/bg-agent.sh:873-882` — the notification envelope, which omits `degraded_reasons`.
-- `plugins/spawn/lib/bg-agent.sh:1220-1226` — the dispatch-time error taxonomy.
-- `plugins/spawn/lib/skills.sh:71-131` — `spawn::skill_name_ok` and `spawn::skill_resolve`. The first is resolver-safety grammar and is not a token extractor.
-- `plugins/spawn/lib/team-dispatch.sh:316, 333` — skills and allows become flags with no check against the contract.
-- `plugins/spawn/lib/team-dispatch.sh:334, 358, 371` — the per-member shell-out to `bg-agent`, and where its stdout envelope is read and recorded as `.failure.error`.
-- `plugins/spawn/lib/team-advance.sh:193-198, 492` — grants propagation, and the retry causes that reapply identically.
-- `plugins/spawn/tests/unit/supervisor.bats:886-903` — the existing refusal test shape U2 mirrors.
+- `plugins/spawn/lib/bg-agent.sh` `read_contract()` — sets `CONTRACT_TASK`, `CONTRACT_DONE`, `CONTRACT_VERIFY`, `CONTRACT_DELIVERABLES`.
+- `plugins/spawn/lib/bg-agent.sh` `launcher_main()`, the `contract_invalid` refusal — the pattern U2 copies, and the gate's insertion point immediately after it.
+- `plugins/spawn/lib/bg-agent.sh` — the `bash "$JOBS" claim` call, the first state a dispatch creates; it sits after the gate.
+- `plugins/spawn/lib/bg-agent.sh` — `SUP_GRANTS_APPLIED`, from its declaration to the "grants the ceiling APPLIED" assembly in `sup_write_result()`.
+- `plugins/spawn/lib/bg-agent.sh` — the `spawn::skill_provision` branch, which before this work computed the landed set only on failure.
+- `plugins/spawn/lib/bg-agent.sh` — the `spawn::ceiling_grant` check, which runs in the DETACHED supervisor. Named so it is not copied.
+- `plugins/spawn/lib/bg-agent.sh` — the `notification:` envelope in `sup_write_result()`, which omits `degraded_reasons`.
+- `plugins/spawn/lib/bg-agent.sh` — the `error_values:[` table in the `--describe` output.
+- `plugins/spawn/lib/skills.sh` — `spawn::skill_name_ok` and `spawn::skill_resolve`. The first is resolver-safety grammar and is not a token extractor.
+- `plugins/spawn/lib/team-dispatch.sh` — skills and allows become flags with no check against the contract.
+- `plugins/spawn/lib/team-dispatch.sh` `team_launch_member()` — the per-member shell-out to `bg-agent`, and where its stdout envelope is read and recorded as `.failure.error`.
+- `plugins/spawn/lib/team-advance.sh` — `team_record_grants()`, and the `retry_check()` causes that reapply identically.
+- `plugins/spawn/tests/unit/supervisor.bats` — the existing `R26` contract-refusal tests, whose shape U2 mirrors.
 - `docs/solutions/logic-errors/a-test-can-pass-because-it-cannot-fail.md` — the exit-127 and `! grep` traps the verification gates guard against.
 - `docs/solutions/logic-errors/exporting-an-empty-credential-is-worse-than-exporting-none.md` — a rule stated in a comment is not a gate; test the absent case explicitly.
 - `docs/solutions/workflow-issues/test-count-subtraction-reconciliation-is-weaker-than-passing-parity.md` — the runner's shape and the three legitimate skips.
 - Commit `40df34d` — the authoring guidance that already names this failure, and the evidence that instruction alone did not prevent it.
-- `plugins/spawn/lib/bg-agent.sh:880` — the notification envelope's `grants:$gr`, the surface U3 must mirror.
-- `plugins/spawn/lib/bg-agent.sh:962-964` — the shipped argument that a provisioning failure degrades rather than aborts, which Scope Boundaries now records.
-- `plugins/spawn/lib/skills.sh:128` — `spawn::skill_resolve` filters on the plugin key, which is why KTD3's comparison is namespace-aware.
-- `plugins/spawn/lib/skills.sh:245` — `skill_not_selfcontained`, a post-claim provisioning failure that still runs the job.
-- `plugins/spawn/lib/team.sh:385, 456` — the `members[].error` enum this value must stay out of, and the retry `error_values` table it belongs in.
+- `plugins/spawn/lib/bg-agent.sh` — the notification envelope's `grants:$gr`, the surface U3 must mirror.
+- `plugins/spawn/lib/bg-agent.sh` — the comment above `spawn::skill_provision` arguing a provisioning failure degrades rather than aborts, which Scope Boundaries now records.
+- `plugins/spawn/lib/skills.sh` — `spawn::skill_resolve` filters on the plugin key, which is why KTD3's comparison is namespace-aware.
+- `plugins/spawn/lib/skills.sh` — `spawn::skill_selfcontained`, whose refusal is a post-claim provisioning failure that still runs the job.
+- `plugins/spawn/lib/team.sh` — the `members[].error` enum this value must stay out of, and the retry `error_values` table it belongs in.
 - `docs/solutions/best-practices/default-deny-for-an-unattended-agent.md` — supports the gate's PLACEMENT before the claim, where the job cannot rewrite it. It does not endorse the trigger: that doc's rule is literal comparison on a closed set, while the token grammar is a text pattern that fails open by design (AE2).
 - `CONCEPTS.md` — **Cause** is composed only of facts the plugin established, which is why the trigger is a literal token rather than a prose matcher; **Recall** holds that a degraded lookup is never mistaken for an empty one, the invariant this work restores for provisioning.

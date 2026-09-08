@@ -4274,6 +4274,34 @@ equip_section() {
     [ "$hits" -eq 0 ]
 }
 
+@test "every doc that warns about improvising also names the refusal that stops it" {
+    # The warning and the refusal are two halves of one fact. A surface carrying
+    # only the warning teaches the pre-refusal model for the exact case this
+    # change fixes, which is how a caller learns the new behaviour only by
+    # hitting it. Keyed on the warning, so a new surface that adds it is covered
+    # without anyone remembering to list the file here.
+    local root="$LIB/.." f hits=0
+    for f in "$root"/skills/*/SKILL.md "$root"/commands/*.md "$root"/README.md; do
+        [ -f "$f" ] || continue
+        grep -qi 'improvises' "$f" || continue
+        # Scoped to the SECTION carrying the warning, not the file: team.md
+        # names the value twice, so a file-wide grep stayed green when the
+        # sentence this guards was deleted. Measured, by deleting it. Section
+        # rather than paragraph because two of these docs answer the warning in
+        # the paragraph after it.
+        local sec
+        sec="$(awk '/^#/ { if (seen) exit; buf=""; }
+                    { buf = buf $0 "\n" }
+                    /improvises/ { seen=1 }
+                    END { if (seen) printf "%s", buf }' "$f")"
+        if ! printf '%s' "$sec" | grep -q 'skill_not_provisioned'; then
+            printf 'warns about improvising without naming the refusal: %s\n' "$(basename "$f")" >&2
+            hits=1
+        fi
+    done
+    [ "$hits" -eq 0 ]
+}
+
 @test "no spawn doc claims a child has no Grep or Glob" {
     # RETRACTED 2026-08-22, measured through the real path: a child found a
     # random nonce in one of sixty files with Grep, and listed exactly the ten
@@ -4344,17 +4372,11 @@ equip_section() {
 # its own field, for the same reason `grants` is not read off `allow`: a request
 # that did not land must never read as one that did.
 
-skills_home_fixture() {
-    export SPAWN_SKILLS_HOME="$WORK/skills-home"
-    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine"
-    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
-}
-
 @test "R8: a member's record carries what landed beside what it asked for" {
     dispatch_env "alpha,beta"
     contract_file "$WORK/c.json" out.txt
     export FAKE_CLAUDE_WRITE=out.txt
-    skills_home_fixture
+    fake_skill lands-fine
     team_file "$WORK/team.json" attached 2 \
         "lead:alpha:$WORK/c.json:lands-fine" "scout:beta:$WORK/c.json"
     dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"
@@ -4378,7 +4400,7 @@ skills_home_fixture() {
     jq -n '{task:"run /ce-code-review over the diff", done_means:"the deliverable exists",
             deliverables:["out.txt"]}' > "$WORK/bad.json"
     export FAKE_CLAUDE_WRITE=out.txt
-    skills_home_fixture
+    fake_skill lands-fine
     team_file "$WORK/team.json" attached 2 \
         "lead:alpha:$WORK/bad.json" "scout:beta:$WORK/c.json"
     dispatch --team-file "$WORK/team.json" --run-id r1 --run-dir "$RUN"

@@ -389,6 +389,41 @@ toks() { sk spawn::skill_tokens "$1"; }
     done
 }
 
+@test "nothing inside a slash-run opens a token, however the segments are punctuated" {
+    # A path component is not an instruction. Pinned because the boundary rule
+    # alone would read the last segment of `docs/plan.md/ce-code-review` as one,
+    # and refusing a job over a path in its prose is the false refusal R5 leaves
+    # no override for.
+    for text in 'see docs/plan.md/ce-code-review' 'run /a./ce-code-review' \
+                'run /a-/ce-code-review' 'run /a/ce-code-review'; do
+        out="$(toks "$text")"
+        [ -z "$out" ] || { echo "read a path segment as a command: $text -> $out"; return 1; }
+    done
+    # A colon is a namespace separator, not a segment break, so this one IS a token.
+    [ "$(toks 'run /a:ce-code-review')" = "a:ce-code-review" ]
+}
+
+@test "a relative path in ordinary prose is not a slash command" {
+    # The reachable false refusal: "write it to ./out.md" is normal contract
+    # prose, and a refusal over it has no override to escape. Every other path
+    # case here is multi-segment, which the second-slash rule already covers;
+    # these are single-segment and only the opener rule can reject them.
+    for text in 'write the report to ./out.md' 'see ../out.md' 'put it in ~/notes.md' \
+                'read ./notes' 'compare with ../main/out.txt'; do
+        out="$(toks "$text")"
+        [ -z "$out" ] || { echo "read a relative path as a command: $text -> $out"; return 1; }
+    done
+}
+
+@test "a trailing hyphen is stripped like any other trailing punctuation" {
+    # A hyphen is inside the capture class, so it reaches the strip loop the way
+    # a dot does. Left on, "/ce-code-review-" compares unequal to a correctly
+    # passed --skill and refuses an equipped job.
+    [ "$(toks '/ce-code-review-')" = "ce-code-review" ]
+    [ "$(toks 'run /ce-code-review- now')" = "ce-code-review" ]
+    [ "$(toks '/ce-code-review:')" = "ce-code-review" ]
+}
+
 @test "prose naming a skill without a slash yields nothing, and empty text is not an error" {
     [ -z "$(toks 'the sort of problem ce-code-review would catch')" ]
     run sk spawn::skill_tokens ""

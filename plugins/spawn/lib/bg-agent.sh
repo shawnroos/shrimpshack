@@ -693,6 +693,9 @@ SUP_SETTINGS=""
 SUP_SKILLS=()      # names, in the order the caller asked for them
 SUP_GRANTS=()      # extra tools the caller asked the ceiling to permit
 SUP_SKILLS_LANDED=()  # of SUP_SKILLS, the ones the manifest says actually landed
+# Whether a child was ever spawned. CHILD_PID cannot answer that: it is cleared
+# when the child completes, so a late cancel would read it as "never started".
+SUP_CHILD_STARTED=0
 
 # Which of the requested skills the manifest says landed. Requested names are
 # kept, not the manifest's bare basenames, so a `plugin:skill` request reads back
@@ -742,6 +745,14 @@ sup_cancel() {
     # re-parented to init keeps the gateway token in its environment for as long
     # as it lives.
     reap_child
+    # The trap is armed before skills are provisioned, so a cancel can land
+    # after the copies exist and before any child could read them. Same rule as
+    # the refused-grant branch below: a job whose child never started must not
+    # report a method as landed, and must not leave the copies behind.
+    if [ "${SUP_CHILD_STARTED:-0}" -eq 0 ]; then
+        [ -n "${SUP_SKILL_MANIFEST:-}" ] && spawn::skill_unprovision "$SUP_SKILL_MANIFEST"
+        SUP_SKILLS_LANDED=()
+    fi
     printf 'cancelled at %s; the child was signalled and reaped\n' "$(now_utc)" | job_log "$SUP_HANDLE" "$SUP_WORKTREE"
     sup_write_result "cancelled" "0" "null" "the job was cancelled and its child reaped"
     sup_release_once "cancelled" "cancelled: the supervisor was signalled and the child was reaped"
@@ -1106,6 +1117,7 @@ supervisor_main() {
             --model "$ALIAS" --output-format json -p "$PROMPT"
     ) > "$dir/child.json" 2> "$dir/child.err" &
     CHILD_PID=$!
+    SUP_CHILD_STARTED=1
 
     local TICKS waited=0 TIMED_OUT=0
     TICKS="$(awk -v t="$JOB_TIMEOUT" 'BEGIN{print int(t * 5)}')"
@@ -1301,12 +1313,12 @@ emit_describe() {
             {value:"launch_failed",       exit_code:5, note:"the supervisor could not be detached or adopted; the record was released"}
           ],
           trusted_fields:[
-            "started_at","ended_at","terminal_state","child_exit_code","served_model","grants",
+            "started_at","ended_at","terminal_state","child_exit_code","served_model","grants","skills",
             "permission_denials","changed_files","deliverables",
             "deliverables_satisfied","verification.exit_code",
             "usage.input_tokens","usage.output_tokens",
             "notification.terminal_state","notification.deliverables_satisfied",
-            "notification.permission_denial_count","notification.grants"
+            "notification.permission_denial_count","notification.grants","notification.skills"
           ],
           untrusted_fields:["narrative.text","notification.narrative.text"],
           notes:[
@@ -1343,7 +1355,15 @@ while [ $# -gt 0 ]; do
         --job-dir)       SUP_JOB_DIR="${2:-}"; shift; shift 2>/dev/null || true ;;
         --base-url)      SUP_BASE_URL="${2:-}"; shift; shift 2>/dev/null || true ;;
         --settings)      SUP_SETTINGS="${2:-}"; shift; shift 2>/dev/null || true ;;
-        --skill)         [ -n "${2:-}" ] && SUP_SKILLS+=("$2"); shift; shift 2>/dev/null || true ;;
+        # Same rule as --allow below, for the same reason: dropping an empty value
+        # silently runs the job WITHOUT the method the caller believes it passed,
+        # which is the confident-wrong-answer this whole surface exists to refuse.
+        --skill)
+            if [ -z "${2:-}" ]; then
+                printf '✗ --skill needs a skill name\n' >&2
+                exit 2
+            fi
+            SUP_SKILLS+=("$2"); shift; shift 2>/dev/null || true ;;
         # An empty value is a usage error, not a no-op: dropping it silently runs
         # the job ungranted while the caller believes it was granted, which is the
         # confident-wrong-answer failure the refusal path exists to prevent.

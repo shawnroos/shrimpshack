@@ -85,12 +85,24 @@ spawn::skill_name_ok() {
 # here would capture `ce-code-review.` from "run /ce-code-review." and refuse a job
 # whose --skill was correct.
 #
-# A `/` only opens a token when the character before it is not alphanumeric, and a
-# token followed by another `/` is a path segment. Together those reject
-# `https://host/name`, `/usr/bin/thing` and `x/name` without enumerating them.
+# A `/` opens a token only when the character before it is not alphanumeric and
+# not `.` or `~`, which are the two that make a relative path: `./out.md`,
+# `../out.md` and `~/notes.md` are wholly ordinary in contract prose, and a
+# refusal there has no override to escape it. Nobody writes `./name` to mean
+# "run the skill". Beyond that,
+# nothing inside a run of slash-separated segments opens one at all — the whole
+# run is a path. So `https://host/name`, `/usr/bin/thing`, `x/name` and
+# `docs/plan.md/name` all yield nothing, without enumerating any of them. A path
+# component is not an instruction, so missing it is the wanted answer rather than
+# a gap.
 spawn::skill_tokens() {
-    local rest=" ${1:-} " tok punct='.,;:!?)' last
-    while [[ "$rest" =~ (^|[^A-Za-z0-9])/([A-Za-z0-9][A-Za-z0-9._:-]*) ]]; do
+    # `.`, `:` and `-` are the punctuation the capture class lets through, so
+    # they are the only ones a trailing strip can act on. A trailing `-` matters
+    # as much as a trailing `.`: it makes `/ce-code-review-` compare unequal to
+    # a correctly passed --skill, which is the false refusal this grammar exists
+    # apart from skill_name_ok to avoid.
+    local rest=" ${1:-} " tok punct='.:-' last
+    while [[ "$rest" =~ (^|[^A-Za-z0-9./~])/([A-Za-z0-9][A-Za-z0-9._:-]*) ]]; do
         tok="${BASH_REMATCH[2]}"
         # The sentinel is load-bearing: without it the remainder of `/a/b` starts
         # with `/` at ^, and the second segment matches as a fresh token.

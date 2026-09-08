@@ -203,6 +203,11 @@ await_terminal() {  # <handle> [seconds]
     return 1
 }
 
+fake_skill() {      # <name> [file body] — a skill on the operator's side
+    mkdir -p "$SPAWN_SKILLS_HOME/skills/$1"
+    printf '%s\n' "${2:-payload}" > "$SPAWN_SKILLS_HOME/skills/$1/SKILL.md"
+}
+
 result_field() {    # <jq path>
     jq -r "$1" < "$JOB_DIR/result.json"
 }
@@ -331,13 +336,18 @@ print('BOTH' if allow and gate else ('allow=%s gate=%s' % (allow, gate)))"
     [ "$(result_field '.notification.grants | length')" = "0" ]
 }
 
-@test "R8: --describe lists grants as a trusted field" {
-    # It is the supervisor's own record of what it applied, so a reader may act
-    # on it without believing the model.
+@test "R8: --describe lists grants and skills as trusted fields" {
+    # Both are the supervisor's own record of what it applied, so a reader may
+    # act on them without believing the model. Skills is measured exactly as
+    # grants is — supervisor memory, read once before the child starts — so a
+    # trust declaration covering one and not the other understates the record.
     run bash "$BG" --describe
     [ "$status" -eq 0 ]
-    run bash -c 'printf "%s" "$1" | jq -r ".trusted_fields | index(\"grants\") != null"' _ "$output"
-    [ "$output" = "true" ]
+    local desc="$output"
+    for f in grants skills notification.grants notification.skills; do
+        printf '%s' "$desc" | jq -e --arg f "$f" '.trusted_fields | index($f) != null' >/dev/null \
+            || { echo "trusted_fields does not list $f"; return 1; }
+    done
 }
 
 @test "an ungranted job's ceiling names Bash in neither layer" {
@@ -1065,9 +1075,8 @@ EOS
     # resolve at all; that now refuses the dispatch outright (R12), which would
     # have made this arm measure the gate instead of the record.
     export SPAWN_SKILLS_HOME="$WORK/skills-home"
-    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine" "$SPAWN_SKILLS_HOME/skills/wont-land"
-    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
-    printf 'reads $CLAUDE_PLUGIN_ROOT at run time\n' > "$SPAWN_SKILLS_HOME/skills/wont-land/SKILL.md"
+    fake_skill lands-fine
+    fake_skill wont-land 'reads $CLAUDE_PLUGIN_ROOT at run time'
 
     run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" \
         --skill lands-fine --skill wont-land 2>/dev/null' \
@@ -1275,8 +1284,7 @@ usage_is() {    # <field> <jq type> [<jq value expression>]
 
 skills_home() {         # a portable skills home + plugin registry
     export SPAWN_SKILLS_HOME="$WORK/skills-home"
-    mkdir -p "$SPAWN_SKILLS_HOME/skills/ce-code-review"
-    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/ce-code-review/SKILL.md"
+    fake_skill ce-code-review
     mkdir -p "$WORK/plug/skills/ce-code-review"
     printf 'payload\n' > "$WORK/plug/skills/ce-code-review/SKILL.md"
     mkdir -p "$SPAWN_SKILLS_HOME/plugins"
@@ -1314,8 +1322,9 @@ nothing_started() {
     start_job "$WORK/c.json"
     [ "$status" -eq 2 ]
     [ "$(printf '%s' "$output" | jq -r '.error')" = "skill_not_provisioned" ]
-    SPAWN_SKILL_GATE=off start_job "$WORK/c.json"
-    [ "$status" -eq 2 ]
+    # R5 is proved by there being no override to try: the refusal reads no flag,
+    # env var or config value. Asserting that some invented variable name fails
+    # to bypass it would pass for any unused name and prove nothing.
     nothing_started
 }
 
@@ -1394,6 +1403,39 @@ nothing_started() {
     [ "$status" -eq 0 ]
 }
 
+@test "an empty --skill value is a usage error, not a silent no-op" {
+    # Dropping it would run the job WITHOUT the method the caller believes it
+    # passed — the confident-wrong-answer this surface exists to refuse, reached
+    # through the very flag it is about. --allow already refuses this way.
+    start_fixture healthy "alpha"; skills_home
+    contract "$WORK/c.json" "do the thing" "out.txt"
+    run bash -c 'cd "$2" && bash "$1" --alias alpha --contract "$3" --cwd "$2" --skill "" 2>/dev/null' \
+        _ "$BG" "$PROJ" "$WORK/c.json"
+    [ "$status" -eq 2 ]
+    nothing_started
+}
+
+@test "a cancel before the child starts yields a well-formed cancelled result" {
+    # HONEST SCOPE: this reaches the cancel path before the child exists, but it
+    # lands before PROVISIONING too, so it does not exercise the narrow window
+    # between provisioning and child start where sup_cancel's unprovision-and-
+    # clear guard actually matters. Removing that guard leaves this test green —
+    # measured. The guard is kept because it mirrors the refused-grant branch,
+    # which AE8 does prove; the window itself is recorded as a testing gap
+    # rather than covered by an assertion that cannot fail.
+    start_fixture healthy "alpha"; skills_home
+    contract "$WORK/c.json" "create out.txt" "out.txt"
+    export FAKE_CLAUDE_MODE=hang
+    start_job "$WORK/c.json" --skill ce-code-review
+    [ "$status" -eq 0 ]
+
+    # Signal the supervisor itself, not the child.
+    kill -TERM "$SUP_PID" 2>/dev/null || true
+    [ -n "$(await_terminal "$HANDLE")" ]
+    [ "$(result_field '.terminal_state')" = "cancelled" ]
+    [ "$(result_field '.skills | type')" = "array" ]
+}
+
 @test "both refusal values are declared in the error taxonomy" {
     run bash -c 'bash "$1" --describe' _ "$BG"
     [ "$status" -eq 0 ]
@@ -1430,8 +1472,7 @@ nothing_started() {
     contract "$WORK/c.json" "create out.txt" "out.txt"
     export FAKE_CLAUDE_WRITE="out.txt"
     export SPAWN_SKILLS_HOME="$WORK/skills-home"
-    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine"
-    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
+    fake_skill lands-fine
 
     start_job "$WORK/c.json" --skill lands-fine
     [ "$status" -eq 0 ]
@@ -1444,8 +1485,7 @@ nothing_started() {
     start_fixture healthy "alpha"
     contract "$WORK/c.json" "create out.txt" "out.txt"
     export SPAWN_SKILLS_HOME="$WORK/skills-home"
-    mkdir -p "$SPAWN_SKILLS_HOME/skills/lands-fine"
-    printf 'payload\n' > "$SPAWN_SKILLS_HOME/skills/lands-fine/SKILL.md"
+    fake_skill lands-fine
 
     # The skill IS provisioned before the ceiling is widened, then unprovisioned
     # when the grant is refused. Reporting it here would name a method that never
