@@ -170,6 +170,10 @@ remedy_for() {
             printf 'This surface will not start a job on a chain alias: a chain can change model mid-flight on fallback, and the plugin table under-declares a chain window to its smallest route — tolerable for one tool-less turn, wrong for a job that holds tools for an hour. Read `non_chain_aliases` in this response and start again on one of those.' ;;
         contract_invalid)
             printf 'The contract must be one JSON object with a non-empty `task` and a non-empty `deliverables` array of worktree-relative paths; `done_means` and `verify` are optional. Nothing was started. Fix the file named in `detail` and call again.' ;;
+        skill_not_provisioned)
+            printf 'The contract instructs a slash command and this job was given no matching skill, so the child would improvise something shaped like it and report as though it had run. Nothing was started. Either pass `--skill <name>` for the skill named in `detail`, or remove the literal `/<name>` from the contract when it was not an instruction.' ;;
+        skill_unresolvable)
+            printf 'A `--skill` name does not resolve to an installed skill, so the job would have run without the method it was promised. Nothing was started. Fix the name in `detail` — it resolves from your own skills and from installed plugins, in bare or `plugin:skill` form — or, when the contract only mentions it in passing, remove both the flag and the literal `/<name>` token.' ;;
         ceiling_unavailable)
             printf 'The permission configuration for this ceiling could not be read or rendered, so no job was started — a job with no ceiling is exactly what must not run. Check the file named in `detail` exists and is readable, or point SPAWN_CEILING_CONFIG_REPO at your own copy.' ;;
         job_already_running)
@@ -425,6 +429,40 @@ job_release() {         # <handle> <worktree> <state> <detail>
 # ===========================================================================
 # ROLE 1 — THE LAUNCHER
 # ===========================================================================
+# R1/R12. The contract may not instruct a skill this job cannot run.
+#
+# Refused HERE, in the launcher, and not where the grant check sits: that one
+# runs in the DETACHED supervisor, so it fires after the handle has already been
+# returned. This refuses before the claim, so no lock, job directory or git
+# exclude is left behind.
+#
+# `verify` is deliberately not scanned. It is a shell command the supervisor
+# runs itself, never the child's instruction, so a slash there is shell syntax.
+refuse_unprovisioned_skills() {
+    local tok have s
+    while IFS= read -r tok; do
+        [ -n "$tok" ] || continue
+        have=""
+        for s in ${SUP_SKILLS[@]+"${SUP_SKILLS[@]}"}; do
+            spawn::skill_same "$tok" "$s" && { have=yes; break; }
+        done
+        [ -n "$have" ] || REMEDY="$(remedy_for skill_not_provisioned)" \
+            die "$EX_USAGE" "skill_not_provisioned" \
+                "the contract instructs '/$tok' and this job was given no matching --skill"
+    done <<EOF
+$(spawn::skill_tokens "$CONTRACT_TASK"; spawn::skill_tokens "$CONTRACT_DONE")
+EOF
+
+    # Every named skill, not only the ones a token matched: a typo on a
+    # prose-worded contract reaches the same unequipped ending.
+    for s in ${SUP_SKILLS[@]+"${SUP_SKILLS[@]}"}; do
+        spawn::skill_resolve "$s" >/dev/null 2>&1 \
+            || REMEDY="$(remedy_for skill_unresolvable)" \
+                die "$EX_USAGE" "skill_unresolvable" \
+                    "--skill '$s' names a skill that does not resolve"
+    done
+}
+
 launcher_main() {
     need_jq
 
@@ -459,6 +497,8 @@ launcher_main() {
     read_contract "$CONTRACT" \
         || REMEDY="$(remedy_for contract_invalid)" \
             die "$EX_USAGE" "contract_invalid" "the contract at '$CONTRACT' is unusable: $CONTRACT_FAULT"
+
+    refuse_unprovisioned_skills
 
     # Before any network call.
     refuse_chain_alias "$ALIAS"
@@ -1221,6 +1261,8 @@ emit_describe() {
             {value:"chain_refused",       exit_code:2, note:"the alias is a chain and chain_policy declares bg-agent refuse; nothing was claimed and nothing was called"},
             {value:"contract_invalid",    exit_code:2, note:"the contract is not one JSON object with a task and at least one worktree-relative deliverable"},
             {value:"job_already_running", exit_code:2, note:"this worktree already has a job; the response names it in running_handle"},
+            {value:"skill_not_provisioned",exit_code:2, note:"the contract instructs a slash command whose skill this job was not given; refused before the claim, because a child with no such skill improvises something shaped like it and reports as though it ran"},
+            {value:"skill_unresolvable",   exit_code:2, note:"a --skill name does not resolve to an installed skill; refused before the claim rather than left to run without the method it was promised"},
             {value:"ceiling_unavailable", exit_code:5, note:"the permission configuration could not be rendered, so no child was started"},
             {value:"launch_failed",       exit_code:5, note:"the supervisor could not be detached or adopted; the record was released"}
           ],
