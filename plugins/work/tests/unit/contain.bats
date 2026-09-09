@@ -87,3 +87,79 @@ teardown() {
     run herdr_linear::contains "$WORK/Slate/plain-file"
     [ "$status" -ne 0 ]
 }
+
+# ------------------------------------------------------------- scope readers
+#
+# The four jobs one root used to do are separate readers now, and a reader
+# answers instead of refusing: every test below asserts the value reported, not
+# an exit status, because a non-zero exit cannot tell "reported outside" from
+# "crashed".
+
+@test "the path signal reports inside for a path under the root, and exits 0" {
+    run herdr_linear::path_signal "$WORK/Slate/web-app"
+    [ "$status" -eq 0 ]
+    [ "$output" = "inside" ]
+}
+
+# AE7.
+@test "the path signal reports outside for a path under no known root, and exits 0" {
+    run herdr_linear::path_signal "$WORK/outside"
+    [ "$status" -eq 0 ]
+    [ "$output" = "outside" ]
+}
+
+@test "a worktree resolves its project from the parent of its worktrees directory" {
+    unset HERDR_LINEAR_SLATE_ROOT
+    mkdir -p "$WORK/projects/alpha/worktrees/drawer"
+    run herdr_linear::worktree_project "$WORK/projects/alpha/worktrees/drawer"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/projects/alpha" ]
+    [ "$(basename "$output")" = "alpha" ]
+}
+
+# Worktrees BESIDE the projects rather than under one: the parent of the
+# worktrees directory is not a project, and the path signal says so rather than
+# erroring.
+@test "worktrees beside the projects yield an outside path signal, not an error" {
+    unset HERDR_LINEAR_SLATE_ROOT
+    mkdir -p "$WORK/worktrees/drawer"
+    run herdr_linear::path_signal "$WORK/worktrees/drawer"
+    [ "$status" -eq 0 ]
+    [ "$output" = "outside" ]
+}
+
+@test "a directory under no worktrees directory falls back to the configured root" {
+    run herdr_linear::worktree_project "$WORK/outside"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/Slate" ]
+}
+
+@test "the repo reader returns the main checkout a linked worktree belongs to" {
+    unset HERDR_LINEAR_SLATE_ROOT
+    git -C "$WORK/Slate" init -q -b main
+    git -C "$WORK/Slate" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    git -C "$WORK/Slate" worktree add -q -b f/x "$WORK/Slate/worktrees/drawer" >/dev/null 2>&1
+    run herdr_linear::worktree_repo "$WORK/Slate/worktrees/drawer"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/Slate" ]
+}
+
+# The bare form of --git-common-dir prints `.git` at a main checkout, which is
+# what every fixture is; --path-format=absolute is what makes the answer a
+# directory the caller can hand to `git -C`.
+@test "the repo reader returns the checkout itself at a main checkout" {
+    unset HERDR_LINEAR_SLATE_ROOT
+    git -C "$WORK/Slate" init -q -b main
+    git -C "$WORK/Slate" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    run herdr_linear::worktree_repo "$WORK/Slate"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/Slate" ]
+}
+
+@test "the configured root wins over derivation for the project and repo readers" {
+    mkdir -p "$WORK/projects/alpha/worktrees/drawer"
+    run herdr_linear::worktree_project "$WORK/projects/alpha/worktrees/drawer"
+    [ "$output" = "$WORK/Slate" ]
+    run herdr_linear::worktree_repo "$WORK/projects/alpha/worktrees/drawer"
+    [ "$output" = "$WORK/Slate" ]
+}

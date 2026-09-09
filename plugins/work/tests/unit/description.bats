@@ -314,7 +314,9 @@ entirely rewritten text"
     [ "$(sent issueUpdate)" = "0" ]
 }
 
-@test "a worktree outside the Slate root is never described" {
+# Being outside the configured root is no longer the refusal. What refuses is
+# the binding: an unbound worktree is described nowhere, inside the root or out.
+@test "a worktree outside the Slate root is refused for being unbound, not for being outside" {
     OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
@@ -322,4 +324,11 @@ entirely rewritten text"
     run herdr_linear::describe "$OUT" "$GOOD"
     [ "$status" -eq 2 ]
     [ "$(sent issueUpdate)" = "0" ]
+
+    n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"
+    herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
+    printf '%s\n' "$(cd "$OUT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    run herdr_linear::describe "$OUT" "$GOOD"
+    [ "$status" -eq 0 ]
+    [ "$(sent issueUpdate)" = "1" ]
 }

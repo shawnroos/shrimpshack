@@ -404,3 +404,66 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     run grep -c -- '--label canvas' "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "1" ]
 }
+
+# ------------------------------------------------------------ scope signals
+#
+# R7. Two signals, reported as values, never a refusal. Each test asserts what
+# was reported and that the reader exited 0 -- a non-zero exit could not tell
+# "reported negative" from "crashed".
+
+@test "the scope reader reports the path and the Linear project it resolved" {
+    bind_wt
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::scope_signals "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"path=inside"* ]]
+    [[ "$output" == *"project=44444444-4444-4444-8444-444444444444"* ]]
+}
+
+# AE5. Unknown is not negative: the worktree is not out of scope just because
+# Linear could not be asked.
+@test "with Linear unreachable the path signal still answers and the project is unknown" {
+    bind_wt
+    export FAKE_LINEAR_MODE=http_500
+    run herdr_linear::scope_signals "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"path=inside"* ]]
+    [[ "$output" == *"project=unknown"* ]]
+}
+
+# AE7.
+@test "a worktree outside every known root reports both signals negative and returns" {
+    OUT="$WORK/elsewhere/wt"; mkdir -p "$OUT"
+    run herdr_linear::scope_signals "$OUT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"path=outside"* ]]
+    [[ "$output" == *"project=negative"* ]]
+}
+
+@test "an unbound worktree in scope reports a negative project without asking Linear" {
+    run herdr_linear::scope_signals "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"path=inside"* ]]
+    [[ "$output" == *"project=negative"* ]]
+    [ "$(sent issue)" = "0" ]
+}
+
+# ------------------------------------------------------------ the from-dir
+
+# new_project has no worktree of its own, so it takes the directory it was
+# invoked from and resolves the project -- and therefore the worktrees root the
+# allowlist is read for -- from that.
+@test "new_project reads the allowlist for the project the from-dir belongs to" {
+    unset HERDR_LINEAR_SLATE_ROOT
+    mkdir -p "$WORK/projects/alpha/worktrees/from" "$WORK/projects/beta/worktrees"
+    printf '%s\n' "$(cd "$WORK/projects/beta/worktrees" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    printf '# P\n\ncontent\n' > "$WORK/p.md"
+    run herdr_linear::new_project "P" "$WORK/p.md" team-web "" "$WORK/projects/alpha/worktrees/from"
+    [ "$status" -eq 3 ]
+    [ "$(sent projectCreate)" = "0" ]
+
+    printf '%s\n' "$(cd "$WORK/projects/alpha/worktrees" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    run herdr_linear::new_project "P" "$WORK/p.md" team-web "" "$WORK/projects/alpha/worktrees/from"
+    [ "$(sent projectCreate)" = "1" ]
+}

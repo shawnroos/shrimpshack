@@ -112,7 +112,6 @@ herdr_linear::doc_publish() {
         return "$HERDR_LINEAR_DOC_REFUSED"
     }
 
-    herdr_linear::contains "$wt" || return "$HERDR_LINEAR_DOC_REFUSED"
     [ "$(herdr_linear::binding_state "$wt" 2>/dev/null)" = "bound" ] \
         || return "$HERDR_LINEAR_DOC_REFUSED"
     [ -r "$file" ] || return "$HERDR_LINEAR_DOC_REFUSED"

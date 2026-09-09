@@ -220,7 +220,6 @@ herdr_linear::_backup_description() {
 herdr_linear::describe() {
     local wt="${1:-}" file="${2:-}" ident resp current opening body backup next
 
-    herdr_linear::contains "$wt" || return "$HERDR_LINEAR_DESC_REFUSED"
     # A backstop: write_allowed below already requires state == bound, so
     # mutating this line away turns no test red. It stays because it refuses
     # before any network call and states the precondition where a reader looks

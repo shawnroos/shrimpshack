@@ -66,13 +66,17 @@ herdr_linear::start_default_name() {
     printf '%s' "$slug"
 }
 
-herdr_linear::_worktree_root() { printf '%s/worktrees' "$(herdr_linear::slate_root)"; }
+herdr_linear::_worktree_root() { printf '%s/worktrees' "$(herdr_linear::worktree_project "${1:-$PWD}")"; }
 
-# herdr_linear::start_from_issue <identifier> [worktree-name] [branch-prefix]
+# herdr_linear::start_from_issue <identifier> [worktree-name] [branch-prefix] [from-dir]
 #
-# Prints the worktree path on success.
+# Prints the worktree path on success. <from-dir> is the directory the caller is
+# standing in; the project the worktree is made in, and the repository it is
+# made from, are both resolved from it. Worktrees are per project, so there is
+# no one root to fall back on -- $PWD is the honest default.
 herdr_linear::start_from_issue() {
     local ident="${1:-}" name="${2:-}" prefix="${3:-$HERDR_LINEAR_BRANCH_PREFIX}"
+    local from="${4:-$PWD}"
     local resp branch path root nonce existing
 
     [ -n "$ident" ] || return "$HERDR_LINEAR_START_REFUSED"
@@ -90,7 +94,7 @@ herdr_linear::start_from_issue() {
     [ -n "$name" ] || name="$(herdr_linear::start_default_name "$resp")" || return "$HERDR_LINEAR_START_FAILED"
     name="$(herdr_linear::slug "$name" 60)" || return "$HERDR_LINEAR_START_REFUSED"
 
-    root="$(herdr_linear::_worktree_root)"
+    root="$(herdr_linear::_worktree_root "$from")"
     path="$root/$name"
 
     # Never adopt a directory that is already there -- it may be someone's live
@@ -120,22 +124,12 @@ herdr_linear::start_from_issue() {
         return "$HERDR_LINEAR_START_OK"
     fi
 
-    # The directory has to exist before it can be resolved: contains() only
-    # accepts a real directory, deliberately, so that a symlink to a file or a
-    # dangling link cannot pass. Creating the worktrees root first and checking
-    # it afterwards keeps that guarantee -- and the check still earns its place,
-    # because a Slate root that is itself a symlink somewhere unexpected is
-    # caught here rather than after a worktree has been made in it.
     mkdir -p "$root" 2>/dev/null
-    herdr_linear::contains "$root" || {
-        printf 'the worktree root is not inside the Slate root\n' >&2
-        return "$HERDR_LINEAR_START_REFUSED"
-    }
     # BOTH streams. `git worktree add` prints "Preparing worktree ..." on
     # STDOUT, which silencing only stderr leaves prepended to the path this
     # function returns -- so every caller got a path with a sentence in front
     # of it, and `[ -d "$result" ]` was false for a directory that existed.
-    "${HERDR_LINEAR_GIT_BIN:-git}" -C "$(herdr_linear::slate_root)" \
+    "${HERDR_LINEAR_GIT_BIN:-git}" -C "$(herdr_linear::worktree_repo "$from")" \
         worktree add -b "$branch" "$path" >/dev/null 2>&1 \
         || return "$HERDR_LINEAR_START_FAILED"
 
@@ -147,7 +141,7 @@ herdr_linear::start_from_issue() {
     return "$HERDR_LINEAR_START_OK"
 }
 
-# herdr_linear::start_new <title> <description-file> <team-key> [worktree-name]
+# herdr_linear::start_new <title> <description-file> <team-key> [worktree-name] [from-dir]
 #
 # Nothing exists yet. Creates the issue, then the worktree bound to it.
 #
@@ -156,6 +150,7 @@ herdr_linear::start_from_issue() {
 # worktree bound to an issue that was never filed is a dangling reference.
 herdr_linear::start_new() {
     local title="${1:-}" descfile="${2:-}" team="${3:-}" name="${4:-}"
+    local from="${5:-$PWD}"
     local body resp ident path
 
     [ -n "$title" ] && [ -n "$team" ] || return "$HERDR_LINEAR_START_REFUSED"
@@ -164,7 +159,7 @@ herdr_linear::start_new() {
     # template, so a missing spine means the template was abandoned halfway.
     herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_START_REFUSED"
 
-    if ! herdr_linear::_root_writes_enabled; then
+    if ! herdr_linear::_root_writes_enabled "$from"; then
         herdr_linear::_shadow_log "SHADOW would create issue \"$title\" on team $team, and a worktree for it"
         # stderr, because stdout carries the worktree path.
         printf 'shadow: would create "%s" on %s\n' "$title" "$team" >&2
@@ -194,7 +189,7 @@ except Exception:
 
     # The identifier must survive a worktree failure -- it is what the caller
     # types to retry, and start_from_issue's own stderr never names it.
-    path="$(herdr_linear::start_from_issue "$ident" "$name")" || {
+    path="$(herdr_linear::start_from_issue "$ident" "$name" "" "$from")" || {
         printf 'created %s, but could not make a worktree for it: run /work:start %s\n' "$ident" "$ident" >&2
         return "$HERDR_LINEAR_START_FAILED"
     }
@@ -203,15 +198,14 @@ except Exception:
 }
 
 # Creating an issue or a project is a write, and writes are opt-in PER PATH.
-# Neither verb has a worktree of its own to offer, so the worktrees root stands
-# in for one: it has to be inside the Slate root and listed in the allowlist by
-# name. Asking only whether the allowlist is non-empty -- what this used to do
-# -- meant allowlisting one scratch worktree turned issue and project creation
+# Neither verb has a worktree of its own to offer, so the worktrees root of the
+# project the caller is standing in stands in for one: it has to be listed in
+# the allowlist by name. Asking only whether the allowlist is non-empty -- what
+# this used to do -- meant allowlisting one scratch worktree turned issue and project creation
 # on from every worktree on the machine, and a lone comment line in the file did
 # it while matching nothing at all.
 herdr_linear::_root_writes_enabled() {
     local root
-    root="$(herdr_linear::_worktree_root)"
-    herdr_linear::contains "$root" || return 1
+    root="$(herdr_linear::_worktree_root "${1:-$PWD}")"
     herdr_linear::writes_enabled "$root"
 }

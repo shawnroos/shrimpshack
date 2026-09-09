@@ -367,11 +367,11 @@ mutations_sent() {
     [ "$status" -eq 0 ]
 }
 
-# ISOLATES containment. The test below it cannot: an outside worktree is also
-# unbound, so reconcile refuses it either way and the status is identical with
-# and without the check. This one BINDS the outside worktree first, so
-# containment is the only thing left that can refuse it.
-@test "a BOUND worktree outside the Slate root is still refused, by containment alone" {
+# Containment is retired as a gate (R2/R7): a bound, write-enabled worktree
+# reconciles wherever it sits. Binding it directly through the store is what
+# ISOLATES that -- an unbound outside worktree is refused either way, so the
+# status would be identical with and without the retired check.
+@test "a BOUND worktree outside the Slate root reconciles like any other" {
     OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
     git init -q -b main "$OUT"
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
@@ -386,11 +386,12 @@ mutations_sent() {
     printf '%s\n' "$(cd "$OUT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::reconcile "$OUT"
-    [ "$status" -eq 4 ]
+    [ "$status" -eq "$HERDR_LINEAR_RECONCILE_NOTHING" ]
     [ "$(mutations_sent)" = "0" ]
 }
 
-@test "a worktree outside the Slate root is never written from" {
+# Still refused -- by the binding, which is the gate that remains.
+@test "an unbound worktree outside the Slate root is never written from" {
     OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
     git init -q -b main "$OUT"
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x

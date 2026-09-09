@@ -167,7 +167,7 @@ herdr_linear::layout_build() {
         # the `wt` shell function. An earlier version used <root>/<branch>,
         # which puts a worktree beside the repositories instead of among the
         # worktrees -- wrong, and invisible until someone went looking for it.
-        wt_path="$(herdr_linear::slate_root)/worktrees/$branch"
+        wt_path="$(herdr_linear::worktree_project)/worktrees/$branch"
 
         if ! herdr_linear::journal_get "$parent" "worktree.$child" >/dev/null 2>&1; then
             herdr_linear::_make_worktree "$wt_path" "$branch" || {
@@ -208,7 +208,7 @@ herdr_linear::_bind_created() {
 
 herdr_linear::_make_worktree() {
     local path="$1" branch="$2" root
-    root="$(herdr_linear::slate_root)"
+    root="$(herdr_linear::worktree_repo)"
     [ -d "$path" ] && return 0
     mkdir -p "$(dirname "$path")" 2>/dev/null
     # Both streams: `worktree add` announces itself on stdout, which would

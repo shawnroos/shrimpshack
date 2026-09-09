@@ -147,7 +147,11 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$(sent documentCreate)" = "0" ]
 }
 
-@test "a worktree outside the Slate root publishes nothing" {
+# Containment is a signal now, not a gate. A worktree outside the configured
+# root that is bound and write-enabled publishes like any other -- the binding
+# and the write allowlist are what decide, and the test below proves the second
+# of them still does.
+@test "a worktree outside the Slate root is no longer refused for being outside" {
     OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
@@ -155,7 +159,18 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     printf '%s\n' "$(cd "$OUT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
     export FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::doc_publish "$OUT" diagnosis "x" "$DOC"
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 0 ]
+    [ "$(sent documentCreate)" = "1" ]
+}
+
+@test "a worktree outside the Slate root that is not write-enabled still publishes nothing" {
+    OUT="$WORK/NotSlate/wt2"; mkdir -p "$OUT"
+    git -C "$OUT" init -q -b main
+    git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
+    n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"; herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::doc_publish "$OUT" diagnosis "x" "$DOC"
+    [ "$status" -eq "$HERDR_LINEAR_DOC_SHADOW" ]
     [ "$(sent documentCreate)" = "0" ]
 }
 

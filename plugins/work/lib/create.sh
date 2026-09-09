@@ -62,6 +62,44 @@ herdr_linear::current_context() {
     printf 'project=%s\nteam=%s\nissue=%s\n' "$project" "$team" "$ident"
 }
 
+# herdr_linear::scope_signals <worktree> [workspace-id]
+#
+# R7. Two signals, printed as `key=value`: whether the path sits under a known
+# projects root, and which Linear project the worktree maps to. It never
+# refuses -- a signal that blocks cannot be weighed against anything else.
+#
+# `unknown` is not `negative`. A worktree whose issue could not be fetched is
+# not out of scope; it is unread. current_context cannot make that distinction
+# because it swallows the fetch failure into an empty project, so the fetch
+# exit is read here instead.
+herdr_linear::scope_signals() {
+    local wt="${1:-}" ws="${2:-}"
+    printf 'path=%s\nproject=%s\n' \
+        "$(herdr_linear::path_signal "$wt")" \
+        "$(herdr_linear::_scope_project "$wt" "$ws")"
+}
+
+herdr_linear::_scope_project() {
+    local wt="$1" ws="$2" ident resp project rc
+    ident="$(herdr_linear::binding_identifier "$wt" 2>/dev/null)" || ident=""
+    if [ -n "$ident" ]; then
+        resp="$(herdr_linear::fetch_issue "$ident" 2>/dev/null)"; rc=$?
+        case "$rc" in
+            0) project="$(printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("project") or {}).get("id",""))' 2>/dev/null)" ;;
+            "$HERDR_LINEAR_NOT_FOUND") project="" ;;
+            *) printf 'unknown'; return 0 ;;
+        esac
+        [ -n "$project" ] && { printf '%s' "$project"; return 0; }
+    fi
+
+    if [ -n "$ws" ] && [ "$(herdr_linear::workspace_state "$ws" 2>/dev/null)" = "bound" ]; then
+        project="$(herdr_linear::workspace_project "$ws" 2>/dev/null)" || project=""
+        [ -n "$project" ] && { printf '%s' "$project"; return 0; }
+    fi
+
+    printf 'negative'
+}
+
 # herdr_linear::project_teams <project-id>
 #
 # Every team on the project, one `<id><TAB><name>` line each. A project with no
@@ -151,7 +189,6 @@ herdr_linear::_create_issue() {
 
     [ -n "$title" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     [ -r "$descfile" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
-    herdr_linear::contains "$wt" || return "$HERDR_LINEAR_CREATE_REFUSED"
     # Strict, not lenient: this description was composed fresh from the
     # template, so a missing spine means the template was abandoned halfway.
     herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_CREATE_REFUSED"
@@ -212,7 +249,7 @@ except Exception:
     # The session. A failure here leaves a real issue with no worktree, which is
     # recoverable by hand -- so it is reported, not rolled back. Deleting a
     # freshly filed ticket to tidy up would be worse.
-    path="$(herdr_linear::start_from_issue "$ident" "$name")" || {
+    path="$(herdr_linear::start_from_issue "$ident" "$name" "" "$wt")" || {
         printf 'created %s, but could not make a worktree for it: run /work:start %s\n' "$ident" "$ident" >&2
         return "$HERDR_LINEAR_CREATE_PARTIAL"
     }
@@ -222,21 +259,22 @@ except Exception:
     return "$HERDR_LINEAR_CREATE_OK"
 }
 
-# herdr_linear::new_project <name> <content-file> <team-id> [workspace-label]
+# herdr_linear::new_project <name> <content-file> <team-id> [workspace-label] [from-dir]
 #
 # A Linear project and the herdr workspace that is its space, bound together.
+#
+# This verb makes no worktree of its own, so <from-dir> is how it knows which
+# project it is being run from: the write gate below is read for that project's
+# worktrees root.
 herdr_linear::new_project() {
     local name="${1:-}" contentfile="${2:-}" team="${3:-}" label="${4:-$1}"
+    local from="${5:-$PWD}"
     local body resp pid bin ws nonce
 
     [ -n "$name" ] && [ -n "$team" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     [ -r "$contentfile" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
-    # This verb takes no worktree, so it never met the Slate-root containment
-    # check every other write passes. The worktrees root stands in for one.
-    herdr_linear::contains "$(herdr_linear::_worktree_root)" \
-        || return "$HERDR_LINEAR_CREATE_REFUSED"
 
-    if ! herdr_linear::_root_writes_enabled; then
+    if ! herdr_linear::_root_writes_enabled "$from"; then
         herdr_linear::_shadow_log "SHADOW would create project \"$name\" on team $team, and a herdr workspace for it"
         printf 'shadow: would create project "%s"\n' "$name"
         return "$HERDR_LINEAR_CREATE_SHADOW"

@@ -43,13 +43,19 @@ setup() {
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
+mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
+
 # --------------------------------------------------------------- containment
 
-@test "a worktree outside the Slate root is refused before anything is read" {
+# The containment refusal is retired: candidates is a reader, and a reader
+# answers. Nothing is written here whatever the answer -- the fixture refuses
+# every mutation, and this asserts none was attempted.
+@test "a worktree outside the Slate root is answered rather than refused" {
     export FAKE_LINEAR_MODE=found_child
     run herdr_linear::candidates "$OUTSIDE"
-    [ "$status" -eq 2 ]
-    [ ! -f "$FAKE_LINEAR_RECORD_DIR/bodies" ]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-3318"* ]]
+    [ "$(mutations)" = "0" ]
 }
 
 # ------------------------------------------------------------- the branch rule

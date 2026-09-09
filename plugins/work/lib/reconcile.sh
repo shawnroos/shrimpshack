@@ -237,7 +237,6 @@ herdr_linear::_shadow_log() {
 herdr_linear::reconcile() {
     local wt="${1:-}" ident signals want ctx cur_type team opening state_id rc
 
-    herdr_linear::contains "$wt" || return "$HERDR_LINEAR_RECONCILE_REFUSED"
     [ "$(herdr_linear::binding_state "$wt" 2>/dev/null)" = "bound" ] \
         || return "$HERDR_LINEAR_RECONCILE_REFUSED"
     ident="$(herdr_linear::binding_identifier "$wt")" || return "$HERDR_LINEAR_RECONCILE_REFUSED"

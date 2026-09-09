@@ -335,3 +335,22 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [[ "$stderr" == *"WEB-4001"* ]]
     [ -z "$output" ]
 }
+
+# ------------------------------------------------------------ the from-dir
+
+# R6. Worktrees are per project, so the project is the one the caller is
+# standing in -- not one root shared by everything on the machine.
+@test "the worktree is made in the project the from-dir belongs to" {
+    unset HERDR_LINEAR_SLATE_ROOT
+    mkdir -p "$WORK/projects/alpha"
+    git -C "$WORK/projects/alpha" init -q -b main
+    git -C "$WORK/projects/alpha" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    git -C "$WORK/projects/alpha" worktree add -q -b f/from "$WORK/projects/alpha/worktrees/from" >/dev/null 2>&1
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::start_from_issue WEB-3318 drawer-blank "" "$WORK/projects/alpha/worktrees/from"
+    [ "$status" -eq 0 ]
+    # The reader resolves the path, and $WORK from mktemp is not resolved.
+    real="$(cd "$WORK/projects/alpha" && pwd -P)"
+    [ "$output" = "$real/worktrees/drawer-blank" ]
+    [ -d "$output" ]
+}

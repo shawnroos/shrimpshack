@@ -46,8 +46,8 @@ except Exception:
 
 # R26. Before anything else, and silent when outside -- this plugin has no
 # business announcing itself in someone else'"'"'s repository.
-if command -v herdr_linear::contains >/dev/null 2>&1; then
-    herdr_linear::contains "$cwd" || exit 0
+if command -v herdr_linear::path_signal >/dev/null 2>&1; then
+    [ "$(herdr_linear::path_signal "$cwd")" = "inside" ] || exit 0
 else
     exit 0
 fi
