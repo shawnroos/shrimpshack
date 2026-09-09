@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Creating work: an issue, a sub-issue, or a project. Sourced, never executed.
 #
-# EVERY VERB HERE ENDS IN A SESSION. Filing a ticket and then separately making
-# somewhere to work on it is two acts that always happen together, so they are
-# one command: the issue is created, a worktree is made and bound to it, and a
-# pane is opened in that worktree.
+# EVERY VERB HERE ENDS IN A PLACE TO WORK. Filing a ticket and then separately
+# making somewhere to work on it is two acts that always happen together, so
+# they are one command: the issue is created, a worktree is made and bound to
+# it, and a pane is opened in that worktree.
+#
+# EXCEPT WHEN YOU ARE ALREADY STANDING IN IT. `new_issue_here` files the ticket
+# and binds the worktree it was asked from, because a second worktree there
+# leaves the one you are in bound to nothing and the new one empty.
 #
 # CONTEXT IS DERIVED, NOT ASKED FOR. "In the current project" means the project
 # of the issue this worktree is bound to, or the project the herdr workspace is
@@ -146,6 +150,17 @@ herdr_linear::new_issue() {
     herdr_linear::_create_issue "$1" "$2" "$3" "" "${4:-}" "${5:-}"
 }
 
+# herdr_linear::new_issue_here <worktree> <title> <descfile> [workspace-id]
+#
+# R12. The same issue, bound to the worktree it was asked from. No second
+# worktree, and no pane -- you are already in the one this is for, so the third
+# output field is empty.
+#
+# It takes no worktree NAME, because it makes no worktree to name.
+herdr_linear::new_issue_here() {
+    herdr_linear::_create_issue "$1" "$2" "$3" "" "${4:-}" "" here
+}
+
 # herdr_linear::new_sub_issue <worktree> <title> <descfile> [workspace-id] [name]
 #
 # The same, parented to the issue this worktree is bound to. Refuses when the
@@ -185,13 +200,26 @@ herdr_linear::_no_team_reason() {
 
 herdr_linear::_create_issue() {
     local wt="${1:-}" title="${2:-}" descfile="${3:-}" parent="${4:-}" ws="${5:-}" name="${6:-}"
-    local ctx project team body resp ident path pane parent_id
+    local here="${7:-}"
+    local ctx project team body resp ident path pane parent_id nonce bound
 
     [ -n "$title" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     [ -r "$descfile" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     # Strict, not lenient: this description was composed fresh from the
     # template, so a missing spine means the template was abandoned halfway.
     herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_CREATE_REFUSED"
+
+    # Decided BEFORE anything is filed. Found out afterwards, a worktree that
+    # cannot be bound turns a refusal into a partial: a real issue, and nowhere
+    # this verb is willing to put it.
+    if [ -n "$here" ]; then
+        bound="$(herdr_linear::binding_identifier "$wt" 2>/dev/null)" || bound=""
+        if [ -n "$bound" ]; then
+            printf 'this worktree is already bound to %s. Rebinding it would re-home that work, so which of a rebind, a sub-issue of %s, or an issue in its own worktree you meant is a choice, not a fact.\n' \
+                "$bound" "$bound" >&2
+            return "$HERDR_LINEAR_CREATE_REFUSED"
+        fi
+    fi
 
     ctx="$(herdr_linear::current_context "$wt" "$ws")"
     project="$(herdr_linear::_ctx_field "$ctx" project)"
@@ -244,6 +272,19 @@ except Exception:
     # stays unwritable -- so it must not stop the session from being made.
     if [ -n "$parent" ]; then
         herdr_linear::binding_add_child "$wt" "$ident" >/dev/null 2>&1 || true
+    fi
+
+    # Bound in place. Asking for the ticket FROM this worktree is the statement
+    # of what it is for -- the same reasoning start_from_issue binds on, where
+    # naming the ticket is the confirmation.
+    if [ -n "$here" ]; then
+        nonce="$(herdr_linear::binding_propose "$wt" "$ident")" && \
+            herdr_linear::binding_confirm "$wt" "$ident" "$nonce" || {
+            printf 'created %s, but could not bind this worktree to it: run /work:bind %s\n' "$ident" "$ident" >&2
+            return "$HERDR_LINEAR_CREATE_PARTIAL"
+        }
+        printf '%s\t%s\t' "$ident" "$wt"
+        return "$HERDR_LINEAR_CREATE_OK"
     fi
 
     # The session. A failure here leaves a real issue with no worktree, which is

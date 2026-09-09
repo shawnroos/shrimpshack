@@ -478,3 +478,90 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     run herdr_linear::new_project "P" "$WORK/p.md" team-web "" "$WORK/projects/alpha/worktrees/from"
     [ "$(sent projectCreate)" = "1" ]
 }
+
+# ------------------------------------------------- filing in place (R12, F1, AE8)
+#
+# The other row of the two-by-two: you are already standing in the worktree the
+# work belongs in. Filing the ticket and then making a SECOND worktree for it
+# leaves the one you are in bound to nothing and the new one empty.
+
+# `!`-negated commands are exempt from errexit, so a negated assertion cannot
+# fail its test. This is the shape the suite's assertion lint demands instead.
+refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
+    if grep "$@"; then
+        printf 'refute_match: unexpectedly matched: %s\n' "$*" >&2
+        return 1
+    fi
+    return 0
+}
+
+worktree_count() { git -C "$WORK/Slate" worktree list | grep -c .; }
+
+# Covers AE8. One team on the project, so the team is a fact and not a question:
+# the only thing anyone was asked is the R9 first-write answer, and nothing is
+# refused.
+@test "an issue is filed and bound to the worktree it was asked from" {
+    enable_writes "$TEAM_ID" proj-abc
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_NEW_IDENT=WEB-4002 FAKE_LINEAR_PROJECT_TEAMS=one
+    run herdr_linear::new_issue_here "$WT" "A new thing" "$DESC" w1
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | cut -f1)" = "WEB-4002" ]
+    # The worktree it was asked from, not a new one.
+    [ "$(printf '%s' "$output" | cut -f2)" = "$WT" ]
+    [ "$(herdr_linear::binding_identifier "$WT")" = "WEB-4002" ]
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
+    [ "$(sent issueCreate)" = "1" ]
+}
+
+# The whole of R12. A count, not a spot check: a second worktree anywhere under
+# the project is the defect, whatever it is called.
+@test "filing in place creates no second worktree and no second pane" {
+    enable_writes "$TEAM_ID" proj-abc
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_NEW_IDENT=WEB-4002 FAKE_LINEAR_PROJECT_TEAMS=one
+    before="$(worktree_count)"
+    run herdr_linear::new_issue_here "$WT" "A new thing" "$DESC" w1
+    [ "$status" -eq 0 ]
+    [ "$(worktree_count)" = "$before" ]
+    # You are already sitting in it, so there is no pane to open.
+    [ -z "$(printf '%s' "$output" | cut -f3)" ]
+    refute_match -q -- '--cwd' "$FAKE_HERDR_RECORD_DIR/argv"
+}
+
+# Rebinding silently re-homes whatever the worktree was already for. Which of
+# the three things the person meant -- rebind, sub-issue, a new worktree -- is a
+# fork, so the verb refuses and says what it found.
+@test "a worktree already bound to another issue is not silently rebound" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_NEW_IDENT=WEB-4002
+    before="$(worktree_count)"
+    run --separate-stderr herdr_linear::new_issue_here "$WT" "A new thing" "$DESC"
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_REFUSED" ]
+    [[ "$stderr" == *"already bound to WEB-2870"* ]]
+    [ "$(sent issueCreate)" = "0" ]
+    [ "$(herdr_linear::binding_identifier "$WT")" = "WEB-2870" ]
+    [ "$(worktree_count)" = "$before" ]
+}
+
+# The consent gate IS the one question. Without an answer nothing is filed --
+# and nothing local is created either, so the worktree is not left bound to an
+# issue that does not exist.
+@test "filing in place with nobody having answered files nothing and binds nothing" {
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_NEW_IDENT=WEB-4002 FAKE_LINEAR_PROJECT_TEAMS=one
+    run herdr_linear::new_issue_here "$WT" "A new thing" "$DESC" w1
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_SHADOW" ]
+    [ "$(sent issueCreate)" = "0" ]
+    # Presence apart from value: "nobody answered" is not "the answer was no".
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -ne 0 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "unbound" ]
+}
