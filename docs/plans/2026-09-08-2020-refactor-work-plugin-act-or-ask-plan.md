@@ -34,7 +34,7 @@ Two full sessions were spent negotiating this plugin rather than filing a ticket
 
 The refusals are not wrong in principle — filing into the wrong Linear team is someone's cleanup. They are wrong in placement. `herdr_linear::current_context` fills `project` from a bound workspace and never fills `team`, so `_create_issue` returns NO_CONTEXT for a fact one query answers. `skills/new/SKILL.md:26` instructs the agent not to pick a team, which is right, but nothing distinguishes "cannot pick" from "did not look."
 
-The deeper cause is that `herdr_linear::slate_root` does three unrelated jobs under one name: the containment boundary (`plugins/work/lib/contain.sh:41`), the parent of the worktrees directory (`plugins/work/lib/start.sh:69`, `plugins/work/lib/herdr-write.sh:170`), and a git repo to run commands in (`plugins/work/lib/start.sh:138`). The second job encodes one shared worktrees directory under one root. The actual layout is `~/projects/<project>/worktrees/<feature>` — worktrees are per project. So the plugin models one project while the work spans many, and widening the root only made the single wrong model larger.
+The deeper cause is that `herdr_linear::slate_root` does four unrelated jobs under one name: the containment boundary (`plugins/work/lib/contain.sh:41`), the parent of the worktrees directory (`plugins/work/lib/start.sh:69`, `plugins/work/lib/herdr-write.sh:170`), a git repo to run commands in (`plugins/work/lib/start.sh:138`), and the key the write allowlist is looked up under (`plugins/work/lib/start.sh:212-217`). The second job encodes one shared worktrees directory under one root. The actual layout is `~/projects/<project>/worktrees/<feature>` — worktrees are per project. So the plugin models one project while the work spans many, and widening the root only made the single wrong model larger.
 
 The gates were never the safety they appear to be. `plugins/work/skills/bind/SKILL.md:37` states it outright: the gate "is not a capability boundary, and nothing in a single-user shell could be one." An agent with shell access can call the confirm verb directly. What the gates actually buy is friction against accidental initiative, and that friction is currently spent stopping derivable work rather than reviewable writes.
 
@@ -51,20 +51,23 @@ The split that decision describes:
 
 ```mermaid
 flowchart TB
-  subgraph now["Today: one name, three jobs"]
+  subgraph now["Today: one name, four jobs"]
     SR["herdr_linear::slate_root"]
     SR --> J1["containment boundary"]
     SR --> J2["parent of worktrees dir"]
     SR --> J3["git repo to run in"]
+    SR --> J4["write-allowlist key"]
   end
-  subgraph next["Proposed: three readers"]
+  subgraph next["Proposed: separate readers"]
     P1["in-scope signals<br/>path + Linear project"]
     P2["this worktree's project"]
     P3["this worktree's repo"]
+    P4["consent, keyed per directory"]
   end
   J1 -.-> P1
   J2 -.-> P2
   J3 -.-> P3
+  J4 -.-> P4
 ```
 
 ### Actors
@@ -171,7 +174,8 @@ flowchart TB
 
 - Where the per-worktree write answer is recorded, and whether it lives alongside the binding record or separately.
 - How a repo maps to a Linear project for R7's second signal, and whether that mapping is derived, cached, or declared.
-- Whether the `SLATE` env var name gets a deprecation path or a clean rename.
+- ~~Whether the `SLATE` env var name gets a deprecation path or a clean rename.~~ **Resolved: deprecate, do not rename cleanly.** `HERDR_LINEAR_SLATE_ROOT` is set in `~/.claude/settings.json` to `/Users/shawnroos/projects`. A clean rename orphans that silently, and because the new default is `$HOME/projects` it would keep working *by accident* — which hides the orphan instead of surfacing it. U8 reads the old name as a fallback and prints one deprecation line to stderr when it fires.
+- ~~What the configuration surface for the scope default is.~~ **Resolved: `HERDR_LINEAR_PROJECTS_ROOT`, defaulting to `$HOME/projects`.** An env var, matching every other seam in `lib/`; no new config file format for one value.
 - Which existing refusal exit codes survive as codes and which collapse into reader output.
 
 ### Sources / Research
@@ -340,9 +344,9 @@ U1, U2, U3 and U7 have landed. The rest runs in four waves, shaped by which file
 ### U5. The act-or-ask rubric in skill prose
 
 - **Goal:** One pass over every skill document: the act-or-ask rule, the conventions citations, and the organisation name, which are all edits to the same paragraphs.
-- **Requirements:** R1, R2, R4, R8 (prose half), R14 (citation half). Also closes AE1's unmet half — U3 resolves the team but exposes only `team=<id>`, so the name never surfaces; R4 requires naming the fact and its source.
+- **Requirements:** R1, R2, R4, R8 (prose half), R14 (citation half). Also closes AE1's unmet half. U3 resolves the team but `current_context` exposes only `team=<id>`, so the name never surfaces. **Decided:** add a `team_name=` line to `current_context` rather than having each skill fence re-query `project_teams` and match the id. One line in lib serves every caller — including the hooks and headless runs a prose rubric never reaches, which is the R4 gap the review flagged and no other unit closes.
 - **Dependencies:** U1, U2, U3.
-- **Files:** all eight `plugins/work/skills/*/SKILL.md` and `plugins/work/commands/work.md`. This unit owns every prose edit to those files; U6 and U8 own no `SKILL.md`.
+- **Files:** all eight `plugins/work/skills/*/SKILL.md` and `plugins/work/commands/work.md`; `plugins/work/tests/run-tests.sh` (the `owned_skills` list); `plugins/work/tests/unit/wire.bats` (its sync-check fixtures); `plugins/work/tests/unit/propose.bats` (the citation assertion U6 left for this unit); and `plugins/work/lib/create.sh` plus `plugins/work/tests/unit/create.bats` for the one line AE1 needs. This unit owns every prose edit to the skill files; U6 and U8 own no `SKILL.md`.
 - **Approach:** mirror the wording already in `plugins/auto/skills/auto/SKILL.md:289-298` and `plugins/spinoff/skills/spinoff/SKILL.md:253-259` — resolve mechanical, escalate a fork, escalate when unsure — and state R4's three-part statement shape (fact, source, derivation). Replace each "outside the Slate root" sentence with the reader's two signals. Extend `owned_skills` at `run-tests.sh:189` from five to all eight skills, and add the missing `sanitize.sh` source line to `start`, `new-project` and `doc` so the check passes; add `commands/work.md` to the scan, since it calls `contains` at line 18 and `writes_enabled` at line 41 and is never scanned today.
 - **Test scenarios:** `Test expectation: none — prose only.` `skill_lib_sync_check` still proves every `herdr_linear::` call in a fenced block resolves.
 - **Verification:** `wire_smoke` passes with `owned_skills` covering all eight skills plus `commands/work.md`, so "no skill cites a retired verb" is proven rather than asserted.
