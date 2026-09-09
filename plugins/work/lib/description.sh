@@ -12,7 +12,8 @@
 # are not in the template at all, and "branch X, 4 commits" is precisely the
 # diary content the template forbids. Both are gone.
 #
-# THE SPINE, from docs/linear-conventions.md:
+# THE SPINE, from this plugin's docs/linear-conventions.md (path relative to
+# the plugin root):
 #   ## Problem     the actor's problem, first and second order effects
 #   ## Solution    the same actor's world without it, IMPLEMENTATION NEUTRAL
 #   ## Proposal    what is being built, for a non-technical reader

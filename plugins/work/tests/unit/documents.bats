@@ -34,6 +34,13 @@ setup() {
     printf '# Texture leak on image swap\n\nThe pool is never drained.\n\n```ts\nconst x = 1;\n```\n' > "$DOC"
 }
 
+refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
+    if grep "$@"; then
+        printf 'refute_match: unexpectedly matched: %s\n' "$*" >&2
+        return 1
+    fi
+}
+
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
 bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
@@ -191,17 +198,42 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$status" -ne 0 ]
 }
 
+# R14. The conventions document the plugin's own code and skills cite must
+# travel inside the plugin, not sit in a repository the reader may not have.
+# The plugin-relative path and the old repo-root path are the SAME string, so a
+# substring match on the filename proves nothing -- readability under the
+# plugin root is what discriminates.
+@test "the conventions document ships inside the plugin" {
+    [ -r "$ROOT/docs/linear-conventions.md" ]
+    run test -e "$ROOT/../../docs/linear-conventions.md"
+    [ "$status" -ne 0 ]
+}
+
+# R8. The document is cited by a plugin being generalised away from one
+# company, so its title cannot name that company.
+@test "the conventions document is not titled for one organisation" {
+    # head of a missing file is empty, and an empty stream matches nothing --
+    # so without this the refutation passes on a doc that does not exist.
+    [ -r "$ROOT/docs/linear-conventions.md" ]
+    refute_match -qF 'Slate' < <(head -1 "$ROOT/docs/linear-conventions.md")
+}
+
 # doc_publish has no projectId path -- it always resolves the bound issue and
 # always sets issueId -- so a project-scoped kind must be refused rather than
 # silently mis-scoped as an issue document. Whether an agent may create a
-# project-scoped document is unsettled (docs/linear-conventions.md); this
-# function must not answer that by implementing a path around it.
+# project-scoped document is unsettled (the plugin's docs/linear-conventions.md);
+# this function must not answer that by implementing a path around it.
 @test "a project-scoped kind is refused, not silently attached to the issue" {
     bind_wt; enable_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::doc_publish "$WT" RFC "Brand Vocab" "$DOC"
     [ "$status" -eq 1 ]
     [ "$(sent documentCreate)" = "0" ]
+    # The refusal points the reader at a document they can open. A bare
+    # `docs/linear-conventions.md` reads as a repository path the reader may
+    # not have; the message must say what the path is relative to.
+    [[ "$output" == *"in this plugin, at docs/linear-conventions.md"* ]]
+    refute_match -qF ' in docs/linear-conventions.md)' <<<"$output"
 }
 
 @test "a missing content file is refused before anything is sent" {

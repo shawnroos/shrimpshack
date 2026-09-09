@@ -274,6 +274,11 @@ rlo="$(printf '\342\200\256')"
 
 @test "the bind skill defers to the conventions doc on unsettled questions" {
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
+    # This substring is contained by BOTH the old repo-root path and the plugin
+    # path, so it cannot fail on the move alone. U5 tightens it to the
+    # ${CLAUDE_PLUGIN_ROOT} token once the skill citations become fences. The
+    # readability check below is the part that fails when the doc is not shipped.
     [[ "$body" == *"linear-conventions.md"* ]]
     [[ "$body" == *"Not yet settled"* ]]
+    [ -r "$ROOT/docs/linear-conventions.md" ]
 }

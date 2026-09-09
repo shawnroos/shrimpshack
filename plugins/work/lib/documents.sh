@@ -14,7 +14,8 @@
 # anyone who can attach a document move it into the writable set. Exactly the
 # reasoning behind created_children, and the same failure it prevents.
 #
-# TITLES FOLLOW docs/linear-conventions.md, WHICH WAS DERIVED, NOT INVENTED.
+# TITLES FOLLOW docs/linear-conventions.md IN THIS PLUGIN (path relative to the
+# plugin root), WHICH WAS DERIVED, NOT INVENTED.
 # Its Documents section came from 40 real documents in the workspace. An
 # issue-scoped title leads with the identifier and a kind word from the observed
 # set; icons are sparse, with `:mag:` reserved for findings and diagnosis.
@@ -105,10 +106,11 @@ herdr_linear::doc_publish() {
     # Project-scoped kinds have no mutation path: this function always resolves
     # an issue from the worktree's binding and always sets issueId. Whether an
     # agent may create a project-scoped document at all is listed under "Not
-    # yet settled" in docs/linear-conventions.md -- a question for Shawn, not
+    # yet settled" in this plugin's docs/linear-conventions.md (path relative to
+    # the plugin root) -- a question for Shawn, not
     # one this function gets to answer by building a projectId path.
     herdr_linear::_kind_is_project "$kind" && {
-        printf 'doc: "%s" is a project-scoped kind; publishing a project document is not implemented (see "Not yet settled" in docs/linear-conventions.md) -- ask before deciding this\n' "$kind" >&2
+        printf 'doc: "%s" is a project-scoped kind; publishing a project document is not implemented (see "Not yet settled" in this plugin, at docs/linear-conventions.md) -- ask before deciding this\n' "$kind" >&2
         return "$HERDR_LINEAR_DOC_REFUSED"
     }
 

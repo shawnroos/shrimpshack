@@ -1,4 +1,4 @@
-# Linear conventions for Slate work
+# Linear conventions
 
 The shape a Linear project, issue, and sub-issue takes. Any agent that creates or updates
 Linear on Shawn's behalf follows this document.
