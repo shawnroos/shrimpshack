@@ -51,7 +51,52 @@ herdr_linear::current_context() {
         fi
     fi
 
+    # A project answers the team when no bound issue can -- the first issue in a
+    # new space. ONLY when the project has exactly one team: a project spanning
+    # several has no single right answer, and picking one files work into a team
+    # nobody chose. The caller asks instead, and names the candidates.
+    if [ -z "$team" ] && [ -n "$project" ]; then
+        team="$(herdr_linear::project_team "$project" 2>/dev/null)" || team=""
+    fi
+
     printf 'project=%s\nteam=%s\nissue=%s\n' "$project" "$team" "$ident"
+}
+
+# herdr_linear::project_teams <project-id>
+#
+# Every team on the project, one `<id><TAB><name>` line each. A project with no
+# teams prints nothing and succeeds; only a transport or shape failure returns
+# non-zero, so a caller can tell "no teams" from "could not ask".
+herdr_linear::project_teams() {
+    local pid="${1:-}" body resp
+    [ -n "$pid" ] || return 1
+    body="$(python3 -c '
+import sys, json
+q = "query($id:String!){project(id:$id){teams(first:50){nodes{id name}}}}"
+print(json.dumps({"query": q, "variables": {"id": sys.argv[1]}}))
+' "$pid")" || return 1
+    resp="$(herdr_linear::query "$body")" || return 1
+    printf '%s' "$resp" | python3 -c '
+import sys, json
+try:
+    nodes = json.load(sys.stdin)["data"]["project"]["teams"]["nodes"]
+except Exception:
+    sys.exit(1)
+for n in nodes:
+    sys.stdout.write("%s\t%s\n" % (n.get("id", ""), n.get("name", "")))
+'
+}
+
+# herdr_linear::project_team <project-id>
+#
+# The id of the project's ONLY team, or nothing. Several teams print nothing and
+# succeed: "cannot tell" is the answer, not an error to be reported at a caller
+# that would then have to distinguish it from a network failure.
+herdr_linear::project_team() {
+    local lines
+    lines="$(herdr_linear::project_teams "${1:-}")" || return 1
+    [ "$(printf '%s' "$lines" | grep -c .)" -eq 1 ] || return 0
+    printf '%s' "$lines" | head -n1 | cut -f1
 }
 
 herdr_linear::_ctx_field() { printf '%s' "$1" | sed -n "s/^$2=//p"; }
@@ -78,6 +123,28 @@ herdr_linear::new_sub_issue() {
     herdr_linear::_create_issue "$1" "$2" "$3" "$parent" "${4:-}" "${5:-}"
 }
 
+# Why the team could not be derived, said so the reader can act on it. A project
+# spanning several teams is a QUESTION, not a dead end, so name every candidate:
+# "cannot tell which team" alone leaves the reader to go find out which exist.
+herdr_linear::_no_team_reason() {
+    local project="${1:-}" teams=""
+    if [ -n "$project" ]; then
+        teams="$(herdr_linear::project_teams "$project" 2>/dev/null)" || teams=""
+    fi
+    if [ "$(printf '%s' "$teams" | grep -c .)" -gt 1 ]; then
+        printf 'this project spans several teams, so which one this belongs to is a choice, not a fact. Ask, then name one of:\n'
+        printf '%s' "$teams" | grep . | while IFS=$'\t' read -r id name; do
+            printf '  %s (%s)\n' "$name" "$id"
+        done
+        return 0
+    fi
+    if [ -n "$project" ]; then
+        printf 'this project has no team, so there is nothing to file against. Add a team to the project first.\n'
+        return 0
+    fi
+    printf 'cannot tell which team this belongs to. Bind this worktree, or bind the workspace to a project first.\n'
+}
+
 herdr_linear::_create_issue() {
     local wt="${1:-}" title="${2:-}" descfile="${3:-}" parent="${4:-}" ws="${5:-}" name="${6:-}"
     local ctx project team body resp ident path pane parent_id
@@ -94,7 +161,7 @@ herdr_linear::_create_issue() {
     team="$(herdr_linear::_ctx_field "$ctx" team)"
 
     if [ -z "$team" ]; then
-        printf 'cannot tell which team this belongs to. Bind this worktree, or bind the workspace to a project first.\n' >&2
+        herdr_linear::_no_team_reason "$project" >&2
         return "$HERDR_LINEAR_CREATE_NO_CONTEXT"
     fi
 

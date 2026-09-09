@@ -39,6 +39,8 @@
 #   FAKE_LINEAR_RECORD_DIR   where the argv/stdin record lands
 #   FAKE_LINEAR_ALLOW_MUTATION  set to 1 to permit a GraphQL mutation;
 #                            unset, a mutation exits 97 without answering
+#   FAKE_LINEAR_PROJECT_TEAMS  one | many | none  -- how many teams the
+#                            project(id:) arm answers with (default: one)
 #
 # Exit codes distinguish the two boundary breaks from an ordinary HTTP answer:
 #   98  the credential appeared in argv          (KTD9 broken)
@@ -293,6 +295,18 @@ esac
 # test, which encodes the call ORDER into the test and breaks the moment the
 # implementation reorders two reads that do not depend on each other.
 case "$body" in
+    # MUST precede the `teams(` arm below: the project-team query contains
+    # `teams(` too, and the workflow-states arm would otherwise answer it with
+    # a shape that has no team ids in it at all.
+    *'project(id:'*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        case "${FAKE_LINEAR_PROJECT_TEAMS:-one}" in
+            none) printf '{"data":{"project":{"teams":{"nodes":[]}}}}' ;;
+            many) printf '{"data":{"project":{"teams":{"nodes":[{"id":"55555555-5555-4555-8555-555555555555","name":"Web"},{"id":"66666666-6666-4666-8666-666666666666","name":"Brand"},{"id":"77777777-7777-4777-8777-777777777777","name":"Platform"}]}}}}' ;;
+            *)    printf '{"data":{"project":{"teams":{"nodes":[{"id":"55555555-5555-4555-8555-555555555555","name":"Web"}]}}}}' ;;
+        esac
+        exit 0
+        ;;
     *'teams('*)
         [ "$wants_headers" = 1 ] && emit_headers 200
         cat <<'JSON'

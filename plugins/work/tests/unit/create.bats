@@ -74,6 +74,86 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [[ "$output" == *"project=proj-abc"* ]]
 }
 
+# The other half of the same case. A project answers the TEAM too, or the first
+# issue in a new space is unfileable: `_create_issue` refuses on an empty team,
+# and before this the workspace filled project and left team blank forever.
+# Covers AE1.
+@test "a bound workspace supplies the team when its project has one team" {
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=one
+    run herdr_linear::current_context "$WT" w1
+    [[ "$output" == *"team=55555555-5555-4555-8555-555555555555"* ]]
+}
+
+# Picking one of several is how work is filed into a team nobody chose.
+@test "a project spanning several teams supplies no team" {
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=many
+    run herdr_linear::current_context "$WT" w1
+    # Without this the test passes on code that never looked at all:
+    # a hardcoded empty team satisfies the assertion below.
+    [ "$(sent 'project(id:')" -ge 1 ]
+    [[ "$output" == *"team="$'\n'* ]]
+    [[ "$output" != *"team=5"* ]]
+}
+
+@test "a project with no team supplies no team" {
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=none
+    run herdr_linear::current_context "$WT" w1
+    # Without this the test passes on code that never looked at all:
+    # a hardcoded empty team satisfies the assertion below.
+    [ "$(sent 'project(id:')" -ge 1 ]
+    [[ "$output" == *"team="$'\n'* ]]
+}
+
+# The bound issue still wins: it is the more specific fact, and a project lookup
+# must not override the team the issue itself names. The lookup must not even
+# fire -- without that count, dropping the `[ -z "$team" ]` guard stays green
+# here whenever the project happens to answer the same id.
+@test "a bound issue's team is not replaced by its project's" {
+    bind_wt
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=many
+    run herdr_linear::current_context "$WT" w1
+    [ "$(sent 'project(id:')" -eq 0 ]
+    [[ "$output" == *"team=55555555-5555-4555-8555-555555555555"* ]]
+}
+
+# The whole point of the fix, at the verb that was refusing.
+@test "an issue can be filed from a workspace-bound worktree with no binding" {
+    enable_writes
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_NEW_IDENT=WEB-4002 FAKE_LINEAR_PROJECT_TEAMS=one
+    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" w1 newthing
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | cut -f1)" = "WEB-4002" ]
+}
+
+# Covers AE2. Naming the candidates is the whole of the ask half of act-or-ask:
+# "cannot tell which team" leaves the reader to go find out which teams exist.
+# Writes are ENABLED and mutation is permitted here on purpose -- otherwise the
+# fixture's own 97 gate, not the refusal, is what kept issueCreate unsent.
+@test "a project spanning three teams names all three and files nothing" {
+    enable_writes
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_PROJECT_TEAMS=many
+    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" w1 newthing
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_NO_CONTEXT" ]
+    [[ "$output" == *"Web"* ]]
+    [[ "$output" == *"Brand"* ]]
+    [[ "$output" == *"Platform"* ]]
+    [ "$(sent issueCreate)" -eq 0 ]
+}
+
 @test "a merely proposed workspace supplies nothing" {
     herdr_linear::workspace_propose w1 proj-abc >/dev/null
     export FAKE_LINEAR_MODE=found_parent
