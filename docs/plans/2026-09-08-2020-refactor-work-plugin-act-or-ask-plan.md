@@ -354,12 +354,15 @@ U1 and U3 are independent and can land in either order. U2 depends on U1 only fo
 - **Goal:** A description composed fresh from the template cannot be filed structureless.
 - **Requirements:** R15. Covers AE6.
 - **Dependencies:** none.
-- **Files:** `plugins/work/lib/create.sh`, `plugins/work/lib/start.sh`, `plugins/work/tests/unit/description.bats`, `plugins/work/tests/unit/create.bats`.
-- **Approach:** pass `strict` at both lenient call sites — `lib/create.sh:90` and `lib/start.sh:165`. The validator already implements the mode (`lib/description.sh:132`, `141-153`); only the argument changes.
+- **Files:** `plugins/work/lib/create.sh`, `plugins/work/lib/start.sh`, `plugins/work/skills/new/SKILL.md`, `plugins/work/skills/start/SKILL.md`, `plugins/work/tests/unit/create.bats`, `plugins/work/tests/unit/description.bats`, `plugins/work/tests/unit/start.bats`.
+- **Approach:** pass `strict` at both lenient call sites — `lib/create.sh:90` and `lib/start.sh:165`. The validator already implements the mode (`lib/description.sh:132`, `141-153`); only the argument changes. `new_sub_issue` reaches the same call through `_create_issue`, so one change covers it. Two skill documents describe the old lenient bar in prose and become false with the change.
 - **Test scenarios:**
   - Covers AE6. A headingless description composed fresh is refused and nothing is filed.
   - A description that has earned its own headings still passes the lenient path used by `describe`.
-  - The create path maps a failed validate to `CREATE_REFUSED`, shared with missing-title, so exit code alone cannot discriminate: assert `CREATE_REFUSED` **and** stderr carrying `not using the Problem/Solution/Proposal shape` **and** no `issueCreate` in the recorded bodies. Keep the `MALFORMED` assertion for the direct validator test in `description.bats`.
+  - The create path maps a failed validate to `CREATE_REFUSED`, shared with missing-title, so exit code alone cannot discriminate: assert `CREATE_REFUSED` **and** stderr carrying `not using the Problem/Solution/Proposal shape` **and** no `issueCreate` in the recorded bodies. The unprefixed `description:` is what separates strict from lenient — lenient emits `description: note: …`.
+  - `new_sub_issue` needs its own case; the shared call site does not give it one.
+  - `start_new` needs the same case, and leaves no worktree behind when refused.
+  - The strict-mode tests in `description.bats` assert `-ne 0` today, which does not prove a refusal. Give them the `MALFORMED` value — this is an addition, not a preserved assertion.
 - **Verification:** `description.bats` and `create.bats` pass; the lenient path for existing descriptions is unchanged.
 
 ### U8. Retire the organisation name
