@@ -19,7 +19,6 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    export HERDR_LINEAR_WRITE_ALLOWLIST="$WORK/write-enabled"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_DOCSDOCSDOCSDOCSDOC" > "$LINEAR_SECRETS_FILE"
@@ -38,7 +37,17 @@ setup() {
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
 bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
-enable_writes() { (cd "$WT" && pwd -P) > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
+# The answer a person would have given, recorded the only way the store accepts
+# one: propose, then confirm with the nonce it returned. The ids are the fake
+# tracker's -- the same pair every issue in these fixtures sits in.
+TEAM_ID=55555555-5555-4555-8555-555555555555
+PROJECT_ID=44444444-4444-4444-8444-444444444444
+grant_consent() {
+    local dir="$1" team="${2:-$TEAM_ID}" project="${3-$PROJECT_ID}" n
+    n="$(herdr_linear::consent_propose "$dir" "$team" "$project")"
+    herdr_linear::consent_confirm "$dir" "$team" "$project" "$n"
+}
+enable_writes() { grant_consent "$WT"; }
 sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 
 # ------------------------------------------------------------------- titles
@@ -156,7 +165,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
     n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"; herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
-    printf '%s\n' "$(cd "$OUT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$OUT"
     export FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::doc_publish "$OUT" diagnosis "x" "$DOC"
     [ "$status" -eq 0 ]
@@ -217,6 +226,19 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 }
 
 # ------------------------------------------------------------- shadow mode
+
+# AE3, on the doc path. The named case the mutation phase forces red.
+@test "a document is not published when nobody has answered" {
+    bind_wt
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -eq 1 ]
+    run herdr_linear::doc_publish "$WT" diagnosis "a texture leak" "$DOC"
+    [ "$status" -eq "$HERDR_LINEAR_DOC_SHADOW" ]
+    [ "$(sent documentCreate)" = "0" ]
+    run cat "$HERDR_LINEAR_SHADOW_LOG"
+    [[ "$output" == *"SHADOW would create document"* ]]
+}
 
 @test "shadow mode logs the document and sends nothing" {
     bind_wt

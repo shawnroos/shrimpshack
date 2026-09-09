@@ -24,7 +24,6 @@ setup() {
     export FAKE_HERDR_ALLOW_MUTATION=1
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    export HERDR_LINEAR_WRITE_ALLOWLIST="$WORK/write-enabled"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     export HERDR_LINEAR_PANE_POLL_MS=5
     mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/hrec" "$WORK/cache"
@@ -47,9 +46,20 @@ setup() {
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
 bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
-enable_writes() { printf '%s\n' "$(cd "$WT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
-# new_project has no worktree of its own; the worktrees root stands in for one.
-enable_root_writes() { printf '%s\n' "$(cd "$WORK/Slate/worktrees" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
+# The answer a person would have given, recorded the only way the store accepts
+# one: propose, then confirm with the nonce it returned. Scoped to the team and
+# project the question named, and to the branch it was answered on.
+grant_consent() {
+    local dir="$1" team="$2" project="${3:-}" n
+    n="$(herdr_linear::consent_propose "$dir" "$team" "$project")"
+    herdr_linear::consent_confirm "$dir" "$team" "$project" "$n"
+}
+TEAM_ID=55555555-5555-4555-8555-555555555555
+PROJECT_ID=44444444-4444-4444-8444-444444444444
+enable_writes() { grant_consent "$WT" "${1:-$TEAM_ID}" "${2-$PROJECT_ID}"; }
+# new_project names a team and no project, and is answered for the directory it
+# is run from -- which needs no binding of its own.
+enable_root_writes() { grant_consent "${1:-$PWD}" team-web ""; }
 sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 
 # ------------------------------------------------------------------ context
@@ -126,7 +136,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 
 # The whole point of the fix, at the verb that was refusing.
 @test "an issue can be filed from a workspace-bound worktree with no binding" {
-    enable_writes
+    enable_writes "$TEAM_ID" proj-abc
     n="$(herdr_linear::workspace_propose w1 proj-abc)"
     herdr_linear::workspace_confirm w1 proj-abc "$n"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
@@ -332,12 +342,13 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 
 # ------------------------------------------------------------- the gate (F1)
 
-# The allowlist is per-path. Allowlisting one worktree after a shadow-log review
-# must not file real issues from every other worktree on the machine.
-@test "an allowlist naming an unrelated worktree does not enable issue creation" {
+# The answer is per directory. Answering in one worktree must not file real
+# issues from every other worktree on the machine.
+@test "an answer given in an unrelated worktree does not enable issue creation" {
     bind_wt
     mkdir -p "$WORK/Slate/worktrees/elsewhere"
-    printf '%s\n' "$(cd "$WORK/Slate/worktrees/elsewhere" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    git -C "$WORK/Slate" worktree add -q -b feature/elsewhere-x "$WORK/Slate/worktrees/elsewhere2" >/dev/null 2>&1
+    grant_consent "$WORK/Slate/worktrees/elsewhere2" "$TEAM_ID" "$PROJECT_ID"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
     run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
     [ "$status" -eq 3 ]
@@ -345,22 +356,23 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ ! -e "$HERDR_LINEAR_SLATE_ROOT/worktrees/newthing" ]
 }
 
-# A header line makes the file non-empty while matching nothing at all.
-@test "an allowlist holding only a comment does not enable issue creation" {
+# A proposal is not an answer: nobody confirmed it.
+@test "a proposed but unconfirmed answer does not enable issue creation" {
     bind_wt
-    printf '# worktrees with writes enabled\n\n' > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    herdr_linear::consent_propose "$WT" "$TEAM_ID" "$PROJECT_ID" >/dev/null
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
     [ "$status" -eq 3 ]
     [ "$(sent issueCreate)" = "0" ]
 }
 
-# A worktree allowlist entry is not a project-creation grant.
-@test "an allowlisted worktree does not enable project creation" {
-    enable_writes
+# An answer given for one team does not cover a project on another. Naming the
+# team is the whole scope of the question new_project asks.
+@test "an answer for another team does not enable project creation" {
+    enable_root_writes "$PWD"
     export FAKE_LINEAR_ALLOW_MUTATION=1
     printf '# P\n\ncontent\n' > "$WORK/p.md"
-    run herdr_linear::new_project "P" "$WORK/p.md" team-web
+    run herdr_linear::new_project "P" "$WORK/p.md" team-brand
     [ "$status" -eq 3 ]
     [ "$(sent projectCreate)" = "0" ]
 }
@@ -450,20 +462,19 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 
 # ------------------------------------------------------------ the from-dir
 
-# new_project has no worktree of its own, so it takes the directory it was
-# invoked from and resolves the project -- and therefore the worktrees root the
-# allowlist is read for -- from that.
-@test "new_project reads the allowlist for the project the from-dir belongs to" {
+# new_project has no worktree of its own, so the answer is read for the
+# directory it was invoked from. An answer given somewhere else does not travel.
+@test "new_project reads the answer for the from-dir, not for another directory" {
     unset HERDR_LINEAR_SLATE_ROOT
-    mkdir -p "$WORK/projects/alpha/worktrees/from" "$WORK/projects/beta/worktrees"
-    printf '%s\n' "$(cd "$WORK/projects/beta/worktrees" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    mkdir -p "$WORK/projects/alpha/worktrees/from" "$WORK/projects/beta/worktrees/other"
     export FAKE_LINEAR_ALLOW_MUTATION=1
     printf '# P\n\ncontent\n' > "$WORK/p.md"
+    grant_consent "$WORK/projects/beta/worktrees/other" team-web ""
     run herdr_linear::new_project "P" "$WORK/p.md" team-web "" "$WORK/projects/alpha/worktrees/from"
     [ "$status" -eq 3 ]
     [ "$(sent projectCreate)" = "0" ]
 
-    printf '%s\n' "$(cd "$WORK/projects/alpha/worktrees" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$WORK/projects/alpha/worktrees/from" team-web ""
     run herdr_linear::new_project "P" "$WORK/p.md" team-web "" "$WORK/projects/alpha/worktrees/from"
     [ "$(sent projectCreate)" = "1" ]
 }

@@ -26,7 +26,6 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    export HERDR_LINEAR_WRITE_ALLOWLIST="$WORK/write-enabled"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     export HERDR_LINEAR_DESC_BACKUP_DIR="$WORK/descriptions"
     mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
@@ -75,7 +74,17 @@ EOF
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
 bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
-enable_writes() { (cd "$WT" && pwd -P) > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
+# The answer a person would have given, recorded the only way the store accepts
+# one: propose, then confirm with the nonce it returned. The ids are the fake
+# tracker's -- the same pair every issue in these fixtures sits in.
+TEAM_ID=55555555-5555-4555-8555-555555555555
+PROJECT_ID=44444444-4444-4444-8444-444444444444
+grant_consent() {
+    local dir="$1" team="${2:-$TEAM_ID}" project="${3-$PROJECT_ID}" n
+    n="$(herdr_linear::consent_propose "$dir" "$team" "$project")"
+    herdr_linear::consent_confirm "$dir" "$team" "$project" "$n"
+}
+enable_writes() { grant_consent "$WT"; }
 sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 
 # --------------------------------------------------------------- the template
@@ -275,6 +284,37 @@ entirely rewritten text"
     [ "$(sent issueUpdate)" = "0" ]
 }
 
+# AE3. Nobody has answered the question for this directory, so the write is
+# computed in full, logged, and not sent. This is the named case the mutation
+# phase forces red -- without it, `describe` could drop its consent check and
+# the suite would still be green.
+@test "a description is not written when nobody has answered" {
+    bind_wt
+    export FAKE_LINEAR_MODE=desc_issue FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -eq 1 ]
+    run herdr_linear::describe "$WT" "$GOOD"
+    [ "$status" -eq "$HERDR_LINEAR_DESC_SHADOW" ]
+    [ "$(sent issueUpdate)" = "0" ]
+    run cat "$HERDR_LINEAR_SHADOW_LOG"
+    [[ "$output" == *"SHADOW would rewrite the description of WEB-2870"* ]]
+}
+
+# An answer given for this team and project on a DIFFERENT branch is not an
+# answer for this one -- the worktree was recreated, and R10 says ask again.
+@test "an answer given on another branch does not enable the description write" {
+    enable_writes
+    git -C "$WT" checkout -q -b feature/web-9999-other
+    # Re-bound on the new branch, so the BINDING is valid again. Consent is not:
+    # it carries its own branch, and `confirm` does not rewrite it.
+    bind_wt
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
+    export FAKE_LINEAR_MODE=desc_issue FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::describe "$WT" "$GOOD"
+    [ "$status" -eq "$HERDR_LINEAR_DESC_SHADOW" ]
+    [ "$(sent issueUpdate)" = "0" ]
+}
+
 @test "shadow mode prints what it would write and sends nothing" {
     bind_wt
     export FAKE_LINEAR_MODE=desc_issue FAKE_LINEAR_ALLOW_MUTATION=1
@@ -327,7 +367,7 @@ entirely rewritten text"
 
     n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"
     herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
-    printf '%s\n' "$(cd "$OUT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$OUT"
     run herdr_linear::describe "$OUT" "$GOOD"
     [ "$status" -eq 0 ]
     [ "$(sent issueUpdate)" = "1" ]

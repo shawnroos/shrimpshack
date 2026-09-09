@@ -258,6 +258,80 @@ PY
     printf '%severy owned skill sources what it calls%s\n' "$GREEN" "$NC"
 }
 
+# The enforcement point is the thing under test, and one red test proves ONE
+# write site. This forces the consent reader to say yes everywhere, then demands
+# a named red test per write verb. A verb that forgot the check stays green under
+# the mutation, and its absence from this list is the finding.
+#
+# The lib/ tree is copied and patched; nothing under the checkout is touched, so
+# a killed run leaves no half-mutated source behind.
+consent_mutation_check() {
+    printf '%sConsent mutation (reader forced true)...%s\n' "$YELLOW" "$NC"
+    # `cp -R "$PLUGIN_ROOT"` is only safe while PLUGIN_ROOT really is the plugin.
+    # A copy of this script run from somewhere else resolves it to `/` and the
+    # phase then copies the whole filesystem -- which is how it filled a disk
+    # once. Prove the target first; the copy is the destructive step.
+    if [ ! -r "$PLUGIN_ROOT/.claude-plugin/plugin.json" ] || [ ! -d "$PLUGIN_ROOT/lib" ]; then
+        printf '%s%s is not the plugin root; refusing to copy it%s\n' "$RED" "$PLUGIN_ROOT" "$NC"
+        return 1
+    fi
+    local tmp; tmp="$(mktemp -d)"
+    # The whole plugin, because a .bats file resolves lib/ from its OWN
+    # directory -- copying lib/ alone would run every test against the real one
+    # and report a green mutation for a reason that has nothing to do with the
+    # code under test.
+    cp -R "$PLUGIN_ROOT" "$tmp/work"
+    cat >> "$tmp/work/lib/binding.sh" <<'EOF'
+
+herdr_linear::consent_ok() { return 0; }
+EOF
+    # Every one of these must go red. They are named, because "the suite failed"
+    # is exactly the answer that hides a verb with no check in it.
+    local -a expect=(
+        "create.bats:an answer given in an unrelated worktree does not enable issue creation"
+        "create.bats:an answer for another team does not enable project creation"
+        "start.bats:an answer for another team does not enable creation"
+        "description.bats:a description is not written when nobody has answered"
+        "documents.bats:a document is not published when nobody has answered"
+        "reconcile.bats:a hook with no recorded answer records the question rather than sending"
+    )
+    local rc=0 entry file name out
+    for entry in "${expect[@]}"; do
+        file="${entry%%:*}"; name="${entry#*:}"
+        out="$(bats -f "$name" "$tmp/work/tests/unit/$file" 2>&1 || true)"
+        # The filter matching nothing prints "0 tests" and exits 0, which reads
+        # exactly like a pass. Require the test to have RUN and to have failed.
+        if ! printf '%s' "$out" | grep -q "^ok 1 \|^not ok 1 "; then
+            printf '%s  %s / %s — the mutation phase ran no such test%s\n' "$RED" "$file" "$name" "$NC"; rc=1; continue
+        fi
+        if printf '%s' "$out" | grep -q "^not ok 1 "; then
+            printf '%s  red: %s / %s%s\n' "$GREEN" "$file" "$name" "$NC"
+        else
+            printf '%s  STILL GREEN: %s / %s — this verb does not read the consent record%s\n' "$RED" "$file" "$name" "$NC"; rc=1
+        fi
+    done
+    rm -rf "$tmp"
+    [ "$rc" -eq 0 ] && printf '%severy write verb turns red without the consent check%s\n' "$GREEN" "$NC"
+    return "$rc"
+}
+
+# consent_confirm has exactly one class of caller: the ask-and-record fence in a
+# write skill, every one of them disable-model-invocation. A caller under lib/,
+# hooks/ or commands/ would let the plugin answer its own question.
+consent_caller_check() {
+    printf '%sConsent-confirm caller check...%s\n' "$YELLOW" "$NC"
+    local hits
+    hits="$(grep -rn 'herdr_linear::consent_confirm' \
+        "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" 2>/dev/null \
+        | grep -v '^.*/lib/binding.sh:.*herdr_linear::consent_confirm() {' || true)"
+    if [ -n "$hits" ]; then
+        printf '%s\n' "$hits"
+        printf '%sconsent-confirm caller check FAILED%s — only a write skill may record an answer.\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%sno caller under lib/, hooks/ or commands/%s\n' "$GREEN" "$NC"
+}
+
 wire_smoke() {
     printf '%sWire smoke...%s\n' "$YELLOW" "$NC"
     local rc=0
@@ -267,6 +341,7 @@ wire_smoke() {
     manifest_autoload_check || rc=1
     secret_scan || rc=1
     skill_lib_sync_check || rc=1
+    consent_caller_check || rc=1
     return "$rc"
 }
 
@@ -276,8 +351,9 @@ main() {
         self-check) self_check || rc=1 ;;
         unit) self_check || rc=1; run_suite || rc=1 ;;
         smoke) wire_smoke || rc=1 ;;
-        all) self_check || rc=1; run_suite || rc=1; wire_smoke || rc=1 ;;
-        *) printf 'usage: run-tests.sh [all|unit|self-check|smoke]\n' >&2; return 2 ;;
+        mutation) consent_mutation_check || rc=1 ;;
+        all) self_check || rc=1; run_suite || rc=1; wire_smoke || rc=1; consent_mutation_check || rc=1 ;;
+        *) printf 'usage: run-tests.sh [all|unit|self-check|smoke|mutation]\n' >&2; return 2 ;;
     esac
     if [ "$rc" -eq 0 ]; then printf '%sPASS%s\n' "$GREEN" "$NC"; else printf '%sFAIL%s\n' "$RED" "$NC"; fi
     return "$rc"

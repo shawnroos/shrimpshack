@@ -202,7 +202,7 @@ herdr_linear::_create_issue() {
         return "$HERDR_LINEAR_CREATE_NO_CONTEXT"
     fi
 
-    if ! herdr_linear::writes_enabled "$wt"; then
+    if ! herdr_linear::consent_ok "$wt" "$team" "$project"; then
         herdr_linear::_shadow_log "SHADOW would create issue \"$title\" (team $team, project ${project:-none}${parent:+, parent $parent}) and a session for it"
         printf 'shadow: would create "%s"%s\n' "$title" "${parent:+ under $parent}"
         return "$HERDR_LINEAR_CREATE_SHADOW"
@@ -274,7 +274,10 @@ herdr_linear::new_project() {
     [ -n "$name" ] && [ -n "$team" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     [ -r "$contentfile" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
 
-    if ! herdr_linear::_root_writes_enabled "$from"; then
+    # A project names a team and no project of its own, so the answer that
+    # covers it is the team-scoped one, recorded for the directory the session
+    # is standing in -- which has no binding and needs none.
+    if ! herdr_linear::consent_ok "$from" "$team" ""; then
         herdr_linear::_shadow_log "SHADOW would create project \"$name\" on team $team, and a herdr workspace for it"
         printf 'shadow: would create project "%s"\n' "$name"
         return "$HERDR_LINEAR_CREATE_SHADOW"

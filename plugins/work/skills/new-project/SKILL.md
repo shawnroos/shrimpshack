@@ -10,6 +10,35 @@ A Linear project and a herdr workspace are the same thing seen from two sides.
 This makes both and binds them, so every worktree opened in that space knows
 which project it belongs to.
 
+## The first write from this directory asks once
+
+Writes to Linear are opened by an answer, not by a file somebody edits.
+
+```bash
+R="${CLAUDE_PLUGIN_ROOT}"
+for f in contain secrets binding linear reconcile description herdr-read herdr-write start create; do
+  source "$R/lib/$f.sh"
+done
+herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
+```
+
+Name `$TEAM` — there is no project yet — and the title, and ask, using the
+host's blocking question tool. Record only what that tool returns, in two steps,
+because `consent_confirm` requires the nonce `consent_propose` hands back:
+
+```bash
+nonce="$(herdr_linear::consent_propose "$PWD" "$TEAM"  "")"
+herdr_linear::consent_confirm "$PWD" "$TEAM"  "" "$nonce"
+```
+
+**Never supply the answer yourself.** A prompt that is refused, a hook, or a
+headless `claude -p "/work:new-project … yes"` records nothing — the verb then runs in
+shadow and reports what it would have sent. That is the right outcome, not
+something to work around.
+
+The answer is scoped to what the question named: a write deriving a different
+team, or made from a different branch, asks again.
+
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
 for f in contain secrets binding linear reconcile description herdr-read herdr-write start create; do
@@ -20,6 +49,7 @@ herdr_linear::new_project "AI Canvas Tools" /tmp/content.md "$TEAM_ID"
 ```
 
 Prints `PROJECT_ID<TAB>WORKSPACE_ID`.
+
 
 ## Before running it
 
@@ -34,7 +64,7 @@ what is in and out. Not a description of the first ticket.
 | Exit | Meaning |
 |---|---|
 | 0 | project and space created and bound |
-| 1 | refused — no name, no team, no content file, or a worktrees root that is missing or outside the Slate root |
+| 1 | refused — no name, no team, or no content file |
 | 3 | shadow mode: nothing created, local or remote |
 | 4 | nothing was created — the request never reached Linear, or Linear refused it |
 | 5 | the project exists but the space does not; stderr says which |
@@ -44,7 +74,7 @@ what is in and out. Not a description of the first ticket.
 **Exit 5 leaves a usable project.** Without herdr the project still exists and
 works; only the space is missing. Bind it later with `/work:bind`.
 
-**Creating a project is allowlist-gated on the worktrees root.** That root must
-be listed by name in `$HERDR_LINEAR_WRITE_ALLOWLIST`; an entry for a single
-worktree does not grant it. The fourth argument is the herdr workspace label and
-defaults to the project name.
+**Creating a project asks about the team only**, because a project has no
+project of its own to name. The answer is recorded for the directory the command
+is run from, which needs no binding. The fourth argument is the herdr workspace
+label and defaults to the project name.

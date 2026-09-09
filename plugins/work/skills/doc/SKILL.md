@@ -14,6 +14,37 @@ the branch, readable by people who do not have the repository.
 source of truth and never a diary — if you want a record of what happened, it
 goes in a document, not the ticket body.
 
+## The first write from this directory asks once
+
+Writes to Linear are opened by an answer, not by a file somebody edits.
+
+```bash
+R="${CLAUDE_PLUGIN_ROOT}"
+source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/binding.sh"
+source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"; source "$R/lib/documents.sh"
+CTX="$(herdr_linear::issue_context "$(herdr_linear::binding_identifier "$PWD")")"
+TEAM="$(printf '%s' "$CTX" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))')"
+PROJECT="$(printf '%s' "$CTX" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project_id",""))')"
+herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
+```
+
+Name `$TEAM`, `$PROJECT` and the issue, and ask, using the host's blocking
+question tool. Record only what that tool returns, in two steps, because
+`consent_confirm` requires the nonce `consent_propose` hands back:
+
+```bash
+nonce="$(herdr_linear::consent_propose "$PWD" "$TEAM"  "$PROJECT")"
+herdr_linear::consent_confirm "$PWD" "$TEAM"  "$PROJECT" "$nonce"
+```
+
+**Never supply the answer yourself.** A prompt that is refused, a hook, or a
+headless `claude -p "/work:doc … yes"` records nothing — the verb then runs in
+shadow and reports what it would have sent. That is the right outcome, not
+something to work around.
+
+The answer is scoped to what the question named: a write deriving a different
+team or a different project, or made from a different branch, asks again.
+
 ## Publishing
 
 ```bash
@@ -29,6 +60,7 @@ Or take the subject from a file's own first heading:
 ```bash
 herdr_linear::doc_publish_file "$PWD" findings ./docs/analysis.md
 ```
+
 
 ## Kinds
 

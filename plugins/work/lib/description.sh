@@ -219,6 +219,7 @@ herdr_linear::_backup_description() {
 # the intent, and no amount of repository state stands in for either.
 herdr_linear::describe() {
     local wt="${1:-}" file="${2:-}" ident resp current opening body backup next
+    local ctx c_team c_project
 
     # A backstop: write_allowed below already requires state == bound, so
     # mutating this line away turns no test red. It stays because it refuses
@@ -254,7 +255,13 @@ herdr_linear::describe() {
         return "$HERDR_LINEAR_DESC_DIARY"
     fi
 
-    if ! herdr_linear::writes_enabled "$wt"; then
+    # The team and project this write lands in, read from the issue itself, so
+    # the answer recorded by `/work:new` for the same pair covers this too.
+    ctx="$(herdr_linear::issue_context "$ident" 2>/dev/null)" || ctx='{}'
+    c_team="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))' 2>/dev/null)"
+    c_project="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project_id",""))' 2>/dev/null)"
+
+    if ! herdr_linear::consent_ok "$wt" "$c_team" "$c_project"; then
         herdr_linear::_shadow_log "SHADOW would rewrite the description of $ident ($(printf '%s' "$next" | wc -c | tr -d ' ') bytes)"
         printf '%s' "$next"
         return "$HERDR_LINEAR_DESC_SHADOW"

@@ -275,6 +275,11 @@ out = {
     "state": (api.get("state") or {}).get("name", ""),
     "project": (api.get("project") or {}).get("name", ""),
     "team": (api.get("team") or {}).get("key", ""),
+    # The ids, beside the human-readable key and name. The write-consent record
+    # is compared against what `current_context` derives, which is ids -- so a
+    # key here and an id there would make every second verb ask again.
+    "project_id": (api.get("project") or {}).get("id", ""),
+    "team_id": (api.get("team") or {}).get("id", ""),
     "parent": (api.get("parent") or {}).get("identifier", ""),
     "parent_title": (api.get("parent") or {}).get("title", ""),
     "url": api.get("url", ""),

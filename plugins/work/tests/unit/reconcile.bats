@@ -37,7 +37,6 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    export HERDR_LINEAR_WRITE_ALLOWLIST="$WORK/write-enabled"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     export HERDR_LINEAR_GH_BIN="$WORK/no-such-gh"
     mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
@@ -76,7 +75,17 @@ merge_into_main() {
     git -C "$WT" fetch -q origin
 }
 
-enable_writes() { (cd "$WT" && pwd -P) > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
+# The answer a person would have given, recorded the only way the store accepts
+# one: propose, then confirm with the nonce it returned. The ids are the fake
+# tracker's -- the same pair every issue in these fixtures sits in.
+TEAM_ID=55555555-5555-4555-8555-555555555555
+PROJECT_ID=44444444-4444-4444-8444-444444444444
+grant_consent() {
+    local dir="$1" team="${2:-$TEAM_ID}" project="${3-$PROJECT_ID}" n
+    n="$(herdr_linear::consent_propose "$dir" "$team" "$project")"
+    herdr_linear::consent_confirm "$dir" "$team" "$project" "$n"
+}
+enable_writes() { grant_consent "$WT"; }
 # grep -c prints "0" AND exits 1 when there are no matches, so a trailing
 # `|| echo 0` appends a SECOND zero and every "= 0" assertion fails against
 # "0\n0". Capture into a variable instead.
@@ -154,7 +163,7 @@ mutations_sent() {
     # And the whole pass writes nothing, with writes on and a mutation allowed.
     n="$(herdr_linear::binding_propose "$FRESH" WEB-2870)"
     herdr_linear::binding_confirm "$FRESH" WEB-2870 "$n"
-    printf '%s\n' "$(cd "$FRESH" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$FRESH"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::reconcile "$FRESH"
     [ "$status" -eq 1 ]
@@ -193,23 +202,40 @@ mutations_sent() {
     [[ "$output" == *"merged=yes"* ]]
 }
 
-@test "an empty allowlist is not the same as a missing one -- both keep shadow mode on" {
+# R9a. The hook has nobody to ask, so it records what it would have written --
+# in its own slot, where the next session can surface it.
+@test "a hook with no recorded answer records the question rather than sending" {
     bind_wt WEB-2870
     merge_into_main
     export FAKE_LINEAR_MODE=found_parent
-    : > "$HERDR_LINEAR_WRITE_ALLOWLIST"
     run herdr_linear::reconcile "$WT"
     [ "$status" -eq 2 ]
     [ "$(mutations_sent)" = "0" ]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-2870 was not moved"* ]]
 }
 
-# A path prefix must not enable a sibling worktree. The allowlist is matched
-# whole-line, so `.../wt` does not enable `.../wt-other`.
-@test "the allowlist matches a whole path, not a prefix" {
+# KTD3. The judgment slot holds one thing and has already evicted the
+# squash-merge question once. The consent question gets its own.
+@test "recording the consent question does not evict a pending judgment" {
+    bind_wt WEB-2870
+    merge_into_main
+    herdr_linear::binding_set_judgment "$WT" "did this land?"
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::reconcile "$WT"
+    [ "$status" -eq 2 ]
+    run herdr_linear::binding_take_judgment "$WT" other-session
+    [ "$output" = "did this land?" ]
+}
+
+# An answer for a sibling directory is not an answer for this one.
+@test "an answer recorded for a sibling worktree does not enable the write" {
     bind_wt WEB-2870
     merge_into_main
     export FAKE_LINEAR_MODE=found_parent
-    printf '%s\n' "$(cd "$WT" && pwd -P)-other" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    mkdir -p "$WT-other"
+    grant_consent "$WT-other"
     run herdr_linear::reconcile "$WT"
     [ "$status" -eq 2 ]
     [ "$(mutations_sent)" = "0" ]
@@ -383,7 +409,7 @@ mutations_sent() {
     herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
     [ "$(herdr_linear::binding_state "$OUT")" = "bound" ]
 
-    printf '%s\n' "$(cd "$OUT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$OUT"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::reconcile "$OUT"
     [ "$status" -eq "$HERDR_LINEAR_RECONCILE_NOTHING" ]

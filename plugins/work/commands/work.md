@@ -37,8 +37,9 @@ When bound, also report:
 ```bash
 # anything recorded for this session to see
 herdr_linear::binding_read "$PWD" | python3 -c 'import sys,json;d=json.load(sys.stdin);j=d.get("pending_judgment");print(j["text"] if j else "nothing waiting")' | herdr_linear::sanitize_stream
-# whether writes are on for this worktree, and what shadow mode has been saying
-herdr_linear::writes_enabled "$PWD" && echo "writes ENABLED here" || echo "shadow mode (nothing is sent)"
+# whether anyone has answered the write question for this directory
+herdr_linear::has_consent "$PWD" && echo "an answer is recorded here" || echo "no answer recorded — the first write will ask"
+herdr_linear::binding_pending_consent "$PWD" 2>/dev/null | herdr_linear::sanitize_stream
 # The shadow log holds issue titles and API error bodies, both written by
 # whoever files the tickets. It never reaches the terminal unfiltered.
 tail -5 "${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}" 2>/dev/null | herdr_linear::sanitize_stream
@@ -51,12 +52,17 @@ the worktree and binds it. That path writes nothing to Linear.
 
 ## With `status`
 
-The same report, plus the credential and the write allowlist:
+The same report, plus the credential and the recorded answer:
 
 ```bash
 bash "$R/bin/migrate-credential.sh" report
-cat "${HERDR_LINEAR_WRITE_ALLOWLIST:-$HOME/.claude/work/write-enabled}" 2>/dev/null || echo "no worktree has writes enabled"
+herdr_linear::binding_read "$PWD" 2>/dev/null \
+  | python3 -c 'import sys,json;c=json.load(sys.stdin).get("consent");print(json.dumps(c) if c else "no answer recorded for this directory")'
 ```
+
+**There is no allowlist file.** Writes are opened by answering the question the
+first write asks, and the answer is scoped to the team, project and branch it
+named. A different team, a different project, or a different branch asks again.
 
 ## The rest
 

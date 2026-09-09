@@ -18,7 +18,7 @@ usually starts one of two other ways:
 
 **This writes nothing to Linear.** It reads the issue, creates a local worktree
 and records a local binding — so it works before the credential has been rotated
-and before any worktree is in the write allowlist, and it cannot damage a board.
+and before anybody has answered the write question, and it cannot damage a board.
 
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
@@ -63,11 +63,36 @@ recovery when the worktree was made and the binding was not.
 
 **Exit 4 may leave a directory behind.** Look at the path before retrying.
 
+## The first write from this directory asks once
+
+Writes to Linear are opened by an answer, not by a file somebody edits.
+
+```bash
+herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
+```
+
+Name `$TEAM` — there is no project yet — and the title, and ask, using the
+host's blocking question tool. Record only what that tool returns, in two steps,
+because `consent_confirm` requires the nonce `consent_propose` hands back:
+
+```bash
+nonce="$(herdr_linear::consent_propose "$PWD" "$TEAM"  "")"
+herdr_linear::consent_confirm "$PWD" "$TEAM"  "" "$nonce"
+```
+
+**Never supply the answer yourself.** A prompt that is refused, a hook, or a
+headless `claude -p "/work:start … yes"` records nothing — the verb then runs in
+shadow and reports what it would have sent. That is the right outcome, not
+something to work around.
+
+The answer is scoped to what the question named: a write deriving a different
+team, or made from a different branch, asks again.
+
 ## From nothing
 
 `herdr_linear::start_new` files the issue and makes the worktree. It is a write,
-so it is allowlist-gated: the worktrees root itself must be listed in
-`$HERDR_LINEAR_WRITE_ALLOWLIST`, by name. Otherwise it runs in shadow.
+so it asks first — about the team, since there is no project yet to name — and
+runs in shadow until somebody answers.
 
 | Exit | Meaning |
 |---|---|

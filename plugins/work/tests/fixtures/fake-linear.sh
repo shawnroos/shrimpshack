@@ -375,8 +375,20 @@ case "$mode" in
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; found_parent ;;
     found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; found_parent_moved ;;
     completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; completed_issue ;;
-    desc_issue)       [ "$wants_headers" = 1 ] && emit_headers 200; desc_issue ;;
-    desc_empty)       [ "$wants_headers" = 1 ] && emit_headers 200; desc_empty ;;
+    # The description modes answer TWO different queries. `_fetch_description`
+    # asks for identifier/description/updatedAt; everything else -- the team and
+    # project a write is scoped to among them -- comes from the full-fields
+    # query, which the description shape has none of. Answering both with the
+    # description payload left team and project empty, which is not what the
+    # tracker does and is not what these tests are about.
+    desc_issue)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        case "$body" in *'state {'*) found_parent ;; *) desc_issue ;; esac
+        ;;
+    desc_empty)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        case "$body" in *'state {'*) found_parent ;; *) desc_empty ;; esac
+        ;;
     other_project_issue) [ "$wants_headers" = 1 ] && emit_headers 200; other_project_issue ;;
     canceled_issue)   [ "$wants_headers" = 1 ] && emit_headers 200; canceled_issue ;;
     not_found)        [ "$wants_headers" = 1 ] && emit_headers 400; not_found ;;

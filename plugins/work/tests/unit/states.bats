@@ -23,7 +23,6 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    export HERDR_LINEAR_WRITE_ALLOWLIST="$WORK/write-enabled"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_STATESSTATESSTATES1" > "$LINEAR_SECRETS_FILE"
@@ -42,6 +41,13 @@ setup() {
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
 bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
+# The ids the fake tracker puts on every issue in these fixtures.
+grant_consent() {
+    local dir="$1" team="${2:-55555555-5555-4555-8555-555555555555}"
+    local project="${3-44444444-4444-4444-8444-444444444444}" n
+    n="$(herdr_linear::consent_propose "$dir" "$team" "$project")"
+    herdr_linear::consent_confirm "$dir" "$team" "$project" "$n"
+}
 # classify RETURNS the state as its exit code, so every call goes through `run`.
 # A bare call trips errexit on a perfectly normal "this is misplaced" answer.
 bind_ws() { local n; n="$(herdr_linear::workspace_propose "$1" "$2")"; herdr_linear::workspace_confirm "$1" "$2" "$n"; }
@@ -146,7 +152,7 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
 @test "a misplaced binding suspends the reconciliation write until it is resolved" {
     bind_wt
     bind_ws w1 "$CANVAS"
-    (cd "$WT" && pwd -P) > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$WT"
     export FAKE_LINEAR_MODE=other_project_issue FAKE_LINEAR_ALLOW_MUTATION=1
 
     run herdr_linear::classify "$WT" w1
@@ -164,7 +170,7 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
 
 @test "a stale binding suspends the reconciliation write too" {
     bind_wt
-    (cd "$WT" && pwd -P) > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$WT"
     export FAKE_LINEAR_MODE=completed_issue FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::classify "$WT" ""
     [ "$status" -eq 2 ]

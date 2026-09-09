@@ -24,10 +24,11 @@
 HERDR_LINEAR_GH_BIN="${HERDR_LINEAR_GH_BIN:-gh}"
 HERDR_LINEAR_GIT_BIN="${HERDR_LINEAR_GIT_BIN:-git}"
 
-# Writes are OFF unless a worktree is listed here. The list is a file, one
-# resolved worktree path per line, so turning writes on is a deliberate edit
-# someone makes after reading a shadow log -- not a flag flipped in passing.
-HERDR_LINEAR_WRITE_ALLOWLIST="${HERDR_LINEAR_WRITE_ALLOWLIST:-$HOME/.claude/work/write-enabled}"
+# Writes are OFF until somebody answers the question this directory's first
+# write asks. The answer lives in the binding store, keyed on the directory and
+# scoped to the team, project and branch it named -- see `consent_ok` in
+# lib/binding.sh. There is no allowlist file any more: a hand-edited one made a
+# fresh worktree unwritable until somebody remembered to edit it.
 HERDR_LINEAR_SHADOW_LOG="${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}"
 
 HERDR_LINEAR_RECONCILE_OK=0
@@ -221,13 +222,6 @@ sys.exit(0 if ok is True else 1)
     return "$HERDR_LINEAR_RECONCILE_OK"
 }
 
-herdr_linear::writes_enabled() {
-    local wt resolved
-    resolved="$(cd "${1:-}" 2>/dev/null && pwd -P)" || return 1
-    [ -r "$HERDR_LINEAR_WRITE_ALLOWLIST" ] || return 1
-    grep -qxF "$resolved" "$HERDR_LINEAR_WRITE_ALLOWLIST" 2>/dev/null
-}
-
 herdr_linear::_shadow_log() {
     mkdir -p "$(dirname "$HERDR_LINEAR_SHADOW_LOG")" 2>/dev/null
     printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$HERDR_LINEAR_SHADOW_LOG"
@@ -236,6 +230,7 @@ herdr_linear::_shadow_log() {
 # The whole pass for one worktree.
 herdr_linear::reconcile() {
     local wt="${1:-}" ident signals want ctx cur_type team opening state_id rc
+    local c_team c_project
 
     [ "$(herdr_linear::binding_state "$wt" 2>/dev/null)" = "bound" ] \
         || return "$HERDR_LINEAR_RECONCILE_REFUSED"
@@ -257,6 +252,8 @@ herdr_linear::reconcile() {
     ctx="$(herdr_linear::issue_context "$ident")" || return "$HERDR_LINEAR_RECONCILE_NOTHING"
     opening="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("updated_at",""))')"
     team="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team",""))')"
+    c_team="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))')"
+    c_project="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project_id",""))')"
     cur_type="$(herdr_linear::_state_type_of "$ident")"
 
     # An issue someone has closed stays closed. The equality test below is NOT
@@ -289,8 +286,14 @@ herdr_linear::reconcile() {
     state_id="$(herdr_linear::team_state_id "$team" "$want")" \
         || return "$HERDR_LINEAR_RECONCILE_NOTHING"
 
-    if ! herdr_linear::writes_enabled "$wt"; then
+    # R9a. This runs from a session-end hook, and a hook never prompts. So the
+    # question resolves to shadow, and what it would have written is recorded --
+    # in `pending_consent`, not the judgment slot, which holds one thing and has
+    # already evicted the squash-merge question once.
+    if ! herdr_linear::consent_ok "$wt" "$c_team" "$c_project"; then
         herdr_linear::_shadow_log "SHADOW would set $ident to type=$want (state $state_id); signals: $(printf '%s' "$signals" | tr '\n' ' ')"
+        herdr_linear::binding_set_pending_consent "$wt" \
+            "Nothing here has answered the write question yet, so $ident was not moved to $want. Run /work:describe or /work:new from this worktree to answer it."
         return "$HERDR_LINEAR_RECONCILE_SHADOW"
     fi
 

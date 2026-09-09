@@ -25,7 +25,6 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    export HERDR_LINEAR_WRITE_ALLOWLIST="$WORK/write-enabled"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_STARTSTARTSTARTSTAR" > "$LINEAR_SECRETS_FILE"
@@ -40,11 +39,14 @@ setup() {
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
-# Creation is gated on the worktrees ROOT being allowlisted by name.
-enable_root_writes() {
-    mkdir -p "$WORK/Slate/worktrees"
-    printf '%s\n' "$(cd "$WORK/Slate/worktrees" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+# start_new names a team and no project -- there is no project yet -- and the
+# answer is recorded for the directory the command was run from.
+grant_consent() {
+    local dir="$1" team="${2:-team-web}" project="${3-}" n
+    n="$(herdr_linear::consent_propose "$dir" "$team" "$project")"
+    herdr_linear::consent_confirm "$dir" "$team" "$project" "$n"
 }
+enable_root_writes() { grant_consent "${1:-$PWD}" team-web ""; }
 
 sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
@@ -173,7 +175,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # one.
 @test "a description that fails validation stops before anything is created" {
     printf '## Why\n\nreal\n\n### 2026-09-04 update\n- a\n\n### 2026-09-05 update\n- b\n' > "$WORK/d.md"
-    printf '%s\n' "$WORK/Slate/worktrees/anything" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    enable_root_writes
     export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
     [ "$status" -eq 1 ]
@@ -270,12 +272,12 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 
 # ------------------------------------------------------------- the gate (F1)
 
-# The allowlist is per-path. Allowlisting one worktree must not turn creation on
-# from every other one.
-@test "an allowlist naming an unrelated path does not enable creation" {
+# The answer is per directory. Answering in one place must not turn creation on
+# from everywhere else.
+@test "an answer given in an unrelated directory does not enable creation" {
     printf '## Problem\n\nreal problem text for the actor\n\n## Solution\n\nreal solution text\n\n## Proposal\n\nreal proposal\n' > "$WORK/d.md"
     mkdir -p "$WORK/Slate/worktrees/elsewhere"
-    printf '%s\n' "$(cd "$WORK/Slate/worktrees/elsewhere" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$WORK/Slate/worktrees/elsewhere" team-web ""
     export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1
     run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
     [ "$status" -eq 5 ]
@@ -283,17 +285,17 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ ! -e "$WORK/Slate/worktrees/newthing" ]
 }
 
-# A header line makes the file non-empty while matching nothing.
-@test "an allowlist holding only a comment does not enable creation" {
+# An answer naming another team does not cover this one.
+@test "an answer for another team does not enable creation" {
     printf '## Problem\n\nreal problem text for the actor\n\n## Solution\n\nreal solution text\n\n## Proposal\n\nreal proposal\n' > "$WORK/d.md"
-    printf '# worktrees with writes enabled\n\n' > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$PWD" team-brand ""
     export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1
     run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
     [ "$status" -eq 5 ]
     [ "$(mutations)" = "0" ]
 }
 
-@test "the allowlisted worktree root does enable creation" {
+@test "an answer recorded here does enable creation" {
     printf '## Problem\n\nreal problem text for the actor\n\n## Solution\n\nreal solution text\n\n## Proposal\n\nreal proposal\n' > "$WORK/d.md"
     enable_root_writes
     export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001

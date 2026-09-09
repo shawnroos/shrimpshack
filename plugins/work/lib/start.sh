@@ -13,7 +13,7 @@
 #
 # STARTING FROM A TICKET WRITES NOTHING TO LINEAR. It reads the issue, creates a
 # local worktree, and records a local binding. That matters: it works before the
-# credential rotation and before any worktree is in the write allowlist, so the
+# credential rotation and before anybody has answered the write question, so the
 # common motion is available immediately and cannot damage a board.
 #
 # BINDING ON CREATION IS NOT A GUESS. You named the ticket; that IS the
@@ -159,7 +159,7 @@ herdr_linear::start_new() {
     # template, so a missing spine means the template was abandoned halfway.
     herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_START_REFUSED"
 
-    if ! herdr_linear::_root_writes_enabled "$from"; then
+    if ! herdr_linear::consent_ok "$from" "$team" ""; then
         herdr_linear::_shadow_log "SHADOW would create issue \"$title\" on team $team, and a worktree for it"
         # stderr, because stdout carries the worktree path.
         printf 'shadow: would create "%s" on %s\n' "$title" "$team" >&2
@@ -197,15 +197,3 @@ except Exception:
     return "$HERDR_LINEAR_START_OK"
 }
 
-# Creating an issue or a project is a write, and writes are opt-in PER PATH.
-# Neither verb has a worktree of its own to offer, so the worktrees root of the
-# project the caller is standing in stands in for one: it has to be listed in
-# the allowlist by name. Asking only whether the allowlist is non-empty -- what
-# this used to do -- meant allowlisting one scratch worktree turned issue and project creation
-# on from every worktree on the machine, and a lone comment line in the file did
-# it while matching nothing at all.
-herdr_linear::_root_writes_enabled() {
-    local root
-    root="$(herdr_linear::_worktree_root "${1:-$PWD}")"
-    herdr_linear::writes_enabled "$root"
-}

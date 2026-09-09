@@ -33,6 +33,35 @@ A HIGHER bar than an edit: this description is composed fresh, so the
 `/work:describe` explains the shape. A ticket filed with a thin description is
 a ticket somebody has to come back to.
 
+## The first write from this directory asks once
+
+Writes to Linear are opened by an answer, not by a file somebody edits.
+
+```bash
+CTX="$(herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)")"
+TEAM="$(herdr_linear::_ctx_field "$CTX" team)"
+PROJECT="$(herdr_linear::_ctx_field "$CTX" project)"
+herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
+```
+
+Name `$TEAM`, `$PROJECT` and the issue — or the title, when the write **is** the
+creation — and ask, using the host's blocking question tool. Record only what
+that tool returns, in two steps, because `consent_confirm` requires the nonce
+`consent_propose` hands back:
+
+```bash
+nonce="$(herdr_linear::consent_propose "$PWD" "$TEAM"  "$PROJECT")"
+herdr_linear::consent_confirm "$PWD" "$TEAM"  "$PROJECT" "$nonce"
+```
+
+**Never supply the answer yourself.** A prompt that is refused, a hook, or a
+headless `claude -p "/work:new … yes"` records nothing — the verb then runs in
+shadow and reports what it would have sent. That is the right outcome, not
+something to work around.
+
+The answer is scoped to what the question named: a write deriving a different
+team or a different project, or made from a different branch, asks again.
+
 ## Then
 
 ```bash

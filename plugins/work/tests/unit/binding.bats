@@ -332,3 +332,130 @@ bind_it() {   # propose + confirm, the happy path, used as a fixture
     [ "$status" -ne 0 ]
     [ ! -e "$HERDR_LINEAR_STORE_DIR/workspaces/../../etc/passwd.json" ]
 }
+
+# ------------------------------------------------------------------- consent
+#
+# U2. The write-consent record. It shares ONE mechanism with the binding -- the
+# path-hash key -- and nothing else. It carries its own team, project and
+# branch, because `branch_at_confirmation` is compared only when the state is
+# `bound`, is rewritten by every confirm including the no-human ones, and is
+# empty for the unbound checkout R9 has to cover.
+
+grant() {  # <team> <project>
+    local n
+    n="$(herdr_linear::consent_propose "$WT" "$1" "${2:-}")"
+    herdr_linear::consent_confirm "$WT" "$1" "${2:-}" "$n"
+}
+
+# The values are pinned, not merely non-zero: 127 is also non-zero, so a
+# `-ne 0` assertion here would pass against a reader that does not exist.
+@test "a directory with no recorded answer has no consent" {
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -eq 1 ]
+    run herdr_linear::consent_ok "$WT" TEAM-A PROJ-1
+    [ "$status" -eq 1 ]
+}
+
+# A key that is absent and a key whose value is null both print an empty string
+# through `_py field`, so presence is asked for separately from value.
+@test "a proposed but unconfirmed answer is still no consent" {
+    herdr_linear::consent_propose "$WT" TEAM-A PROJ-1 >/dev/null
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -eq 1 ]
+    run herdr_linear::consent_ok "$WT" TEAM-A PROJ-1
+    [ "$status" -eq 1 ]
+}
+
+@test "a recorded answer covers the team and project it named" {
+    grant TEAM-A PROJ-1
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -eq 0 ]
+    run herdr_linear::consent_ok "$WT" TEAM-A PROJ-1
+    [ "$status" -eq 0 ]
+}
+
+@test "a write to a different team asks again" {
+    grant TEAM-A PROJ-1
+    run herdr_linear::consent_ok "$WT" TEAM-B PROJ-1
+    [ "$status" -ne 0 ]
+}
+
+@test "a write to a different project asks again" {
+    grant TEAM-A PROJ-1
+    run herdr_linear::consent_ok "$WT" TEAM-A PROJ-2
+    [ "$status" -ne 0 ]
+}
+
+# start_new and new_project name a team and no project, so a request carrying
+# no project is covered by the answer for that team.
+@test "a write naming no project is covered by the team's answer" {
+    grant TEAM-A PROJ-1
+    run herdr_linear::consent_ok "$WT" TEAM-A ""
+    [ "$status" -eq 0 ]
+}
+
+# The other direction is NOT covered: the question named a team only.
+@test "a team-only answer does not cover a write into a project" {
+    grant TEAM-A ""
+    run herdr_linear::consent_ok "$WT" TEAM-A PROJ-1
+    [ "$status" -ne 0 ]
+    run herdr_linear::consent_ok "$WT" TEAM-A ""
+    [ "$status" -eq 0 ]
+}
+
+# A worktree recreated at the same path on different work is a different
+# directory as far as the question goes.
+@test "a recreated worktree at the same path on a different branch has no consent" {
+    grant TEAM-A PROJ-1
+    git -C "$WT" checkout -q -b feature/web-9999-other
+    run herdr_linear::consent_ok "$WT" TEAM-A PROJ-1
+    [ "$status" -ne 0 ]
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -eq 0 ]
+}
+
+# The binding's own branch field is rewritten by every confirm, including the
+# no-human pairs in start.sh and create.sh. Consent must not ride on it.
+@test "re-confirming the binding on a new branch does not revive consent" {
+    grant TEAM-A PROJ-1
+    git -C "$WT" checkout -q -b feature/web-9999-other
+    bind_it WEB-9999
+    run herdr_linear::binding_state "$WT"
+    [ "$output" = "bound" ]
+    run herdr_linear::consent_ok "$WT" TEAM-A PROJ-1
+    [ "$status" -ne 0 ]
+}
+
+# R9a and R10a. The nonce orders confirm after propose. A caller that supplies
+# an answer of its own -- the headless `claude -p "/work:new ... yes"` case --
+# supplies no nonce, and records nothing.
+@test "consent_confirm with an answer in place of the nonce records nothing" {
+    herdr_linear::consent_propose "$WT" TEAM-A PROJ-1 >/dev/null
+    run herdr_linear::consent_confirm "$WT" TEAM-A PROJ-1 yes
+    [ "$status" -eq 2 ]
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -ne 0 ]
+}
+
+# R9. The checkout a session runs from before any worktree exists has no
+# binding at all, so the consent reader must not require one.
+@test "consent is recorded and read from an unbound checkout" {
+    run herdr_linear::binding_state "$WT"
+    [ "$output" = "unbound" ]
+    grant TEAM-A ""
+    run herdr_linear::binding_state "$WT"
+    [ "$output" = "unbound" ]
+    run herdr_linear::consent_ok "$WT" TEAM-A ""
+    [ "$status" -eq 0 ]
+}
+
+# KTD3. "Nobody to ask" gets its own field. set-judgment replaces its single
+# slot wholesale, and the squash-merge question already lost that fight once.
+@test "a pending consent question does not evict a pending judgment" {
+    herdr_linear::binding_set_judgment "$WT" "did this land?"
+    herdr_linear::binding_set_pending_consent "$WT" "would have set WEB-1234 to Done"
+    run herdr_linear::binding_take_judgment "$WT" session-two
+    [ "$output" = "did this land?" ]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$output" = "would have set WEB-1234 to Done" ]
+}
