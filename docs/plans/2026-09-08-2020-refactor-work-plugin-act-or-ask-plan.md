@@ -348,7 +348,7 @@ U1, U2, U3 and U7 have landed. The rest runs in four waves, shaped by which file
 - **Dependencies:** U1, U2, U3.
 - **Files:** all eight `plugins/work/skills/*/SKILL.md` and `plugins/work/commands/work.md`; `plugins/work/tests/run-tests.sh` (the `owned_skills` list); `plugins/work/tests/unit/wire.bats` (its sync-check fixtures); `plugins/work/tests/unit/propose.bats` (the citation assertion U6 left for this unit); and `plugins/work/lib/create.sh` plus `plugins/work/tests/unit/create.bats` for the one line AE1 needs. This unit owns every prose edit to the skill files; U6 and U8 own no `SKILL.md`.
 - **Approach:** mirror the wording already in `plugins/auto/skills/auto/SKILL.md:289-298` and `plugins/spinoff/skills/spinoff/SKILL.md:253-259` — resolve mechanical, escalate a fork, escalate when unsure — and state R4's three-part statement shape (fact, source, derivation). Replace each "outside the Slate root" sentence with the reader's two signals. Extend `owned_skills` at `run-tests.sh:189` from five to all eight skills, and add `commands/work.md` to the scan — it calls `contains` at line 18 and `writes_enabled` at line 41 and is never scanned today. The check proves a skill sources what it calls; today only `commands/work.md` calls a `sanitize.sh` verb and it already sources one, so add a source line where the extended scan actually reports a gap rather than where this plan guessed one.
-- **Test scenarios:** `Test expectation: none — prose only.` `skill_lib_sync_check` still proves every `herdr_linear::` call in a fenced block resolves.
+- **Test scenarios:** The plan predicted none. Five were needed: two proving a resolved team is NAMED and not only identified, two asserting absence on the many-team fixture (whose first team shares the bound issue's id and name, so a value assertion sits in a false-green trap), and one proving the sourcing scan reaches the command file. `skill_lib_sync_check` still proves every `herdr_linear::` call in a fenced block resolves.
 - **Verification:** `wire_smoke` passes with `owned_skills` covering all eight skills plus `commands/work.md`, so "no skill cites a retired verb" is proven rather than asserted.
 
 ### U6. Ship the conventions document
@@ -382,7 +382,7 @@ U1, U2, U3 and U7 have landed. The rest runs in four waves, shaped by which file
 - **Goal:** The plugin names no organisation.
 - **Requirements:** R8.
 - **Dependencies:** U1.
-- **Files:** `plugins/work/lib/contain.sh`, `plugins/work/lib/secrets.sh`, `plugins/work/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (repo root — the `work` entry's description), and the `HERDR_LINEAR_SLATE_ROOT` seam across the ten test suites that export it. No `SKILL.md` or `commands/work.md` — U5 owns that prose.
+- **Files:** `plugins/work/lib/{contain,secrets,documents,herdr-write}.sh`, `plugins/work/docs/linear-conventions.md`, `plugins/work/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (repo root — the `work` entry only), `plugins/work/tests/fixtures/descriptions/web-3214.md`, `plugins/work/tests/fixtures/fake-security.sh`, `plugins/work/tests/run-tests.sh`, and the seam across the ten test suites that export it. The four libraries, the conventions document and the two fixtures were added at dispatch; the plan's original list missed them. No `SKILL.md` or `commands/work.md` — U5 owns that prose.
 - **Approach:** rename the env seam, move the scope default to configuration, and replace the prose. The tracker's own name stays — the prohibited class is the organisation and product name only.
 - **Test scenarios:** a grep for the organisation token over all shipped files returns nothing; run it against the pre-change tree first to confirm it can fail.
 - **Verification:** `version_sync_check` still passes after the `plugin.json` description edit.
@@ -399,7 +399,7 @@ U1, U2, U3 and U7 have landed. The rest runs in four waves, shaped by which file
   3. State the boundary in the same place: the subagent gathers and reports; it never asks and never records consent. The R9 question stays in the main session per KTD8, and consent-confirm keeps its single caller.
   4. Leave `lib/` unchanged. Delegation is an instruction to the agent, not a shell mechanism — a lib verb has no subagent to dispatch.
 - **Patterns to follow:** `plugins/spinoff/skills/spinoff/SKILL.md:256-259` for the gather-versus-decide split.
-- **Test scenarios:** `Test expectation: none — prose only.` The boundary that carries risk is consent, and U2's grep already proves `consent_confirm` has one caller; a delegated step cannot acquire a second without failing it.
+- **Test scenarios:** The plan predicted none, for the second time, and was wrong again. `consent_caller_check` deliberately skips `skills/`, because a write skill legitimately calls the record verbs in its own fence. So a brief instructing a subagent to ask or to record shipped green. Three tests scan the fenced briefs for the record verbs and for `AskUserQuestion`. Limits: a brief outside a fence is not scanned, and any future plain-text fence in those files is read as a brief.
 - **Verification:** the consent grep from U2 still returns one caller after U9; no skill instructs a subagent to ask a question or record an answer.
 
 ---
@@ -414,7 +414,10 @@ There is no CI in this repository. `plugins/work/tests/run-tests.sh` is the enti
 | Harness can fail | the runner's `self_check` phase | every run — a green suite means nothing if this stops failing |
 | Suite count | `HERDR_LINEAR_MIN_SUITES` at `run-tests.sh:41` — a floor, so a new suite does not fail it; bump it so the floor keeps meaning | U2, if it adds a `.bats` file |
 | Consent mutation | the `self_check`-shaped phase U2 adds; one named red test per write verb | U2 |
-| Skill/lib wiring | `skill_lib_sync_check`, `owned_skills` at `run-tests.sh:189` | U2, U5, U6 |
+| Skill/lib wiring | `skill_lib_sync_check`, globbing `owned_docs` with an empty-glob guard | U2, U5, U6, U8 |
+| Shared rubric | `rubric_sync_check` — all eight skills byte-identical, names the file that drifted | U5 |
+| Organisation name | `brand_scan` — every shipped file, exemptions expire with their justification | U8 |
+| Delegation briefs | `wire.bats` — no brief tells a subagent to ask or to record | U9 |
 | Assertion shape | `assertion_lint` — a `.bats` line may not start with `!` | every unit adding tests |
 | Version parity | `version_sync_check` | U8 |
 
@@ -471,9 +474,12 @@ Written after all nine units landed. These are known and open, not oversights.
 
 ### Follow-ups this plan created and did not finish
 
-- **`herdr_linear::project_teams` is still undelegated.** U9 owns delegation but the two
-  prose callers, `skills/new/SKILL.md` and `skills/new-sub-issue/SKILL.md`, are U5's
-  files. The wave boundary split the requirement from the files it needed.
+- **`herdr_linear::project_teams` is deliberately not delegated, because it is not heavy.**
+  R16 defines heavy as large raw output with a small decision-relevant part. This verb
+  fetches at most fifty teams and prints `id<TAB>name` for each, and the caller needs
+  every line to name the candidates. There is nothing to summarise away. Delegating it
+  would buy a round trip and save fifty short lines. This is a scope judgement, not an
+  unfinished follow-up.
 - **`lib/binding.sh` does not self-heal a missing dependency.** `lib/linear.sh` and
   `lib/propose.sh` both re-source one; `binding.sh` does not, so an unsourced
   `sanitize.sh` silently downgrades an identifier check to a weaker validator with no
