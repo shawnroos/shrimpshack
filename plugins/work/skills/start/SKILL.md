@@ -72,7 +72,7 @@ so it is allowlist-gated: the worktrees root itself must be listed in
 | Exit | Meaning |
 |---|---|
 | 0 | created; the path is on stdout |
-| 1 | refused — no title, no team, or a description that fails validation |
+| 1 | refused — no title, no team, or a description that fails strict validation (the Problem/Solution/Proposal spine is required here) |
 | 4 | the issue was filed but the worktree or binding failed; stderr says which |
 | 5 | shadow mode: nothing created, local or remote; the sentence is on stderr |
 

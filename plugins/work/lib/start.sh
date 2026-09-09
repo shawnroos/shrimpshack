@@ -160,9 +160,9 @@ herdr_linear::start_new() {
 
     [ -n "$title" ] && [ -n "$team" ] || return "$HERDR_LINEAR_START_REFUSED"
     [ -r "$descfile" ] || return "$HERDR_LINEAR_START_REFUSED"
-    # The description is held to the same bar as any other, before an issue
-    # exists to carry a bad one.
-    herdr_linear::description_validate "$descfile" || return "$HERDR_LINEAR_START_REFUSED"
+    # Strict, not lenient: this description was composed fresh from the
+    # template, so a missing spine means the template was abandoned halfway.
+    herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_START_REFUSED"
 
     if ! herdr_linear::_root_writes_enabled; then
         herdr_linear::_shadow_log "SHADOW would create issue \"$title\" on team $team, and a worktree for it"

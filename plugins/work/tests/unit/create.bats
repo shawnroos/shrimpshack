@@ -127,6 +127,35 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$(sent issueCreate)" = "0" ]
 }
 
+# AE6. The create path composes a description FRESH from the template, so the
+# spine is what was asked for and its absence means the template was abandoned
+# halfway. Lenient mode -- right for a description that earned its own headings
+# -- would file this with only a note. Strict refuses it.
+#
+# CREATE_REFUSED is shared with a missing title, so the exit code alone proves
+# nothing. The stderr line is what says WHICH refusal this was, and it is the
+# unprefixed form: lenient writes "description: note: not using ...".
+@test "a description with no template headings is refused before anything is filed" {
+    bind_wt; enable_writes
+    printf '## Why\n\nA real reason, stated at length for whoever reads it.\n\n## The shape of this work\n\nWhat we do about it.\n' > "$WORK/headingless.md"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$WORK/headingless.md"
+    [ "$status" -eq 1 ]
+    [[ "$stderr" == *"description: not using the Problem/Solution/Proposal shape"* ]]
+    [ "$(sent issueCreate)" = "0" ]
+}
+
+# The same bar on the sub-issue path, which reaches the same validate call.
+@test "a sub-issue with no template headings is refused before anything is filed" {
+    bind_wt; enable_writes
+    printf '## Why\n\nA real reason, stated at length for whoever reads it.\n\n## The shape of this work\n\nWhat we do about it.\n' > "$WORK/headingless.md"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::new_sub_issue "$WT" "A smaller thing" "$WORK/headingless.md"
+    [ "$status" -eq 1 ]
+    [[ "$stderr" == *"description: not using the Problem/Solution/Proposal shape"* ]]
+    [ "$(sent issueCreate)" = "0" ]
+}
+
 # ----------------------------------------------------------- new sub-issue
 
 @test "a sub-issue is parented to the issue this worktree is bound to" {

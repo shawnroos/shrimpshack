@@ -180,6 +180,21 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$(mutations)" = "0" ]
 }
 
+# AE6, on the other create path. Composing from the template and then dropping
+# the spine is the template abandoned halfway, so strict mode holds it here too.
+# START_REFUSED is shared with a missing title and a missing team, so the stderr
+# line is what identifies the refusal -- lenient writes "note: not using ...".
+@test "a description with no template headings is refused before anything is created" {
+    printf '## Why\n\nA real reason, stated at length for whoever reads it.\n\n## The shape of this work\n\nWhat we do about it.\n' > "$WORK/d.md"
+    enable_root_writes
+    export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
+    [ "$status" -eq 1 ]
+    [[ "$stderr" == *"description: not using the Problem/Solution/Proposal shape"* ]]
+    [ "$(mutations)" = "0" ]
+    [ ! -e "$WORK/Slate/worktrees/newthing" ]
+}
+
 @test "a missing description file is refused" {
     export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::start_new "A new thing" "$WORK/nope.md" team-web newthing

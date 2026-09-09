@@ -85,9 +85,9 @@ herdr_linear::_create_issue() {
     [ -n "$title" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     [ -r "$descfile" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     herdr_linear::contains "$wt" || return "$HERDR_LINEAR_CREATE_REFUSED"
-    # Held to the same bar as any other description, before an issue exists to
-    # carry a bad one.
-    herdr_linear::description_validate "$descfile" || return "$HERDR_LINEAR_CREATE_REFUSED"
+    # Strict, not lenient: this description was composed fresh from the
+    # template, so a missing spine means the template was abandoned halfway.
+    herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_CREATE_REFUSED"
 
     ctx="$(herdr_linear::current_context "$wt" "$ws")"
     project="$(herdr_linear::_ctx_field "$ctx" project)"

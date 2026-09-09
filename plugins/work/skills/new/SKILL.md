@@ -28,8 +28,10 @@ filing into the wrong one is a thing somebody has to notice and undo.
 
 ## Write the description first
 
-Same bar as any other: `/work:describe` explains the shape. A ticket filed with
-a thin description is a ticket somebody has to come back to.
+A HIGHER bar than an edit: this description is composed fresh, so the
+`## Problem` / `## Solution` / `## Proposal` spine is required, in that order.
+`/work:describe` explains the shape. A ticket filed with a thin description is
+a ticket somebody has to come back to.
 
 ## Then
 

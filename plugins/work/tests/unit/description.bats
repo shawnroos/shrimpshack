@@ -126,7 +126,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # when composing from the template -- does hold it.
 @test "the same ticket does not pass strict mode, which is the point of the two modes" {
     run --separate-stderr herdr_linear::description_validate "$FIX/descriptions/web-3214.md" strict
-    [ "$status" -ne 0 ]
+    [ "$status" -eq "$HERDR_LINEAR_DESC_MALFORMED" ]
     [[ "$stderr" == *"not using the Problem/Solution/Proposal shape"* ]]
 }
 
@@ -156,13 +156,14 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [[ "$stderr" == *"note: not using the Problem/Solution/Proposal shape"* ]]
 
     run --separate-stderr herdr_linear::description_validate "$WORK/x.md" strict
-    [ "$status" -ne 0 ]
+    [ "$status" -eq "$HERDR_LINEAR_DESC_MALFORMED" ]
+    [[ "$stderr" == *"not using the Problem/Solution/Proposal shape"* ]]
 }
 
 @test "the spine out of order is a note in lenient mode and a refusal in strict" {
     printf '## Solution\n\nreal text here\n\n## Problem\n\nreal text here\n\n## Proposal\n\nreal text\n' > "$WORK/x.md"
     run --separate-stderr herdr_linear::description_validate "$WORK/x.md" strict
-    [ "$status" -ne 0 ]
+    [ "$status" -eq "$HERDR_LINEAR_DESC_MALFORMED" ]
     [[ "$stderr" == *"out of order"* ]]
 }
 
@@ -251,6 +252,17 @@ entirely rewritten text"
     [ "$status" -eq 5 ]
     [ "$(sent issueUpdate)" = "0" ]
     [ -z "$(herdr_linear::describe_backups WEB-2870)" ]
+}
+
+# The other half of the two modes. `describe` edits a description that has
+# earned its own headings, so it stays LENIENT -- strict there would refuse
+# WEB-3214, the ticket the validator exists to protect.
+@test "a ticket with its own headings is still written by describe" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=desc_issue FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::describe "$WT" "$FIX/descriptions/web-3214.md"
+    [ "$status" -eq 0 ]
+    [ "$(sent issueUpdate)" = "1" ]
 }
 
 @test "a description identical to the current one is not rewritten" {
