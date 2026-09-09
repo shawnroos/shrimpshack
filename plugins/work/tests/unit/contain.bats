@@ -198,6 +198,9 @@ seam() {
     [[ "$stderr" == *"HERDR_LINEAR_SLATE_ROOT"* ]]
     [[ "$stderr" == *"HERDR_LINEAR_PROJECTS_ROOT"* ]]
     [[ "$stderr" == *"settings.json"* ]]
+    # The value is being READ here, so the line must say rename, not delete.
+    [[ "$stderr" == *"rename it to"* ]]
+    [[ "$stderr" != *"ignored"* ]]
 }
 
 @test "the new name alone says nothing" {
@@ -205,9 +208,18 @@ seam() {
     [ -z "$stderr" ]
 }
 
-@test "the deprecated name is not warned about when the new one is also set" {
+# The deprecation exists to get the stale setting out of the configuration, and
+# someone holding both names has not finished. This test replaced one that
+# asserted silence here: warning only when the fallback is READ was a narrower
+# rule than the deprecation is for.
+@test "holding both names warns that the old one is ignored, not that it needs renaming" {
     seam HERDR_LINEAR_PROJECTS_ROOT="$WORK/root" HERDR_LINEAR_SLATE_ROOT="$WORK/outside"
-    [ -z "$stderr" ]
+    [ "$(printf '%s\n' "$stderr" | grep -c .)" -eq 1 ]
+    [[ "$stderr" == *"HERDR_LINEAR_SLATE_ROOT"* ]]
+    [[ "$stderr" == *"ignored"* ]]
+    [[ "$stderr" == *"delete"* ]]
+    # Renaming is the wrong instruction here; the new name is already set.
+    [[ "$stderr" != *"rename it to"* ]]
 }
 
 @test "with neither name set the root defaults to projects under HOME" {

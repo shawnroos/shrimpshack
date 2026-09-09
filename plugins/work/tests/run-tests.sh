@@ -179,13 +179,21 @@ brand_scan() {
     # reads exactly like a clean tree; its status is what decides.
     local out rc=0
     out="$(python3 - "$PLUGIN_ROOT" "$REPO_ROOT/.claude-plugin/marketplace.json" "$BRAND_PATTERN" <<'PYEOF'
-import json, os, re, sys
+import glob, json, os, re, sys
 
 plugin_root, marketplace, pattern = sys.argv[1], sys.argv[2], sys.argv[3]
 rx = re.compile(pattern)
 manifest = json.load(open(os.path.join(plugin_root, ".claude-plugin", "plugin.json")))
+# The manifest address is looked up rather than written down, so it cannot go
+# stale -- whatever the manifest carries is what is exempt. The deprecated
+# variable name is a literal, and a literal outlives its reason unless something
+# checks: an exemption that survives the thing it excused is a hole in the scan,
+# so it expires with the fallback that needs it.
+DEPRECATED_ENV = "HERDR_LINEAR_SLATE_ROOT"
+lib_text = "".join(open(f).read() for f in sorted(glob.glob(os.path.join(plugin_root, "lib", "*.sh"))))
+
 exempt = [e for e in [(manifest.get("author") or {}).get("email"),
-                      "HERDR_LINEAR_SLATE_ROOT"] if e]
+                      DEPRECATED_ENV] if e]
 
 def spans(line):
     out = []
@@ -200,6 +208,11 @@ def spans(line):
     return out
 
 hits = []
+if DEPRECATED_ENV not in lib_text:
+    hits.append("run-tests.sh: the exemption for %s is no longer justified -- it "
+                "appears nowhere under lib/, so remove it from BRAND_PATTERN's "
+                "exempt list" % DEPRECATED_ENV)
+
 for dirpath, dirnames, filenames in os.walk(plugin_root):
     dirnames[:] = [d for d in dirnames if d != ".git"]
     for fn in sorted(filenames):
@@ -233,7 +246,7 @@ PYEOF
     fi
     if [ -n "$out" ]; then
         printf '%s\n' "$out"
-        printf '%sbrand scan FAILED%s — a shipped file names the organisation.\n' "$RED" "$NC"
+        printf '%sbrand scan FAILED%s — see the line(s) above.\n' "$RED" "$NC"
         return 1
     fi
     printf '%sno shipped file names the organisation%s\n' "$GREEN" "$NC"

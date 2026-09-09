@@ -37,8 +37,17 @@ herdr_linear::_resolve() {
 # once-per-process guard variable would die with the subshell and the line would
 # repeat on every lookup. The hooks source this file with stderr discarded, so
 # their silence outside the root is unaffected.
-if [ -z "${HERDR_LINEAR_PROJECTS_ROOT:-}" ] && [ -n "${HERDR_LINEAR_SLATE_ROOT:-}" ]; then
-    printf 'work: HERDR_LINEAR_SLATE_ROOT is deprecated; rename it to HERDR_LINEAR_PROJECTS_ROOT (check ~/.claude/settings.json and your shell environment)\n' >&2
+#
+# Two situations, two lines, deliberately not interchangeable: the old name is
+# being READ and must be renamed, or it is being IGNORED and must be deleted.
+# Someone holding both has not finished either way, and a reader who cannot tell
+# the cases apart cannot tell what to do about them.
+if [ -n "${HERDR_LINEAR_SLATE_ROOT:-}" ]; then
+    if [ -n "${HERDR_LINEAR_PROJECTS_ROOT:-}" ]; then
+        printf 'work: HERDR_LINEAR_SLATE_ROOT is set but ignored, because HERDR_LINEAR_PROJECTS_ROOT takes precedence; delete the old name (check ~/.claude/settings.json and your shell environment)\n' >&2
+    else
+        printf 'work: HERDR_LINEAR_SLATE_ROOT is deprecated; rename it to HERDR_LINEAR_PROJECTS_ROOT (check ~/.claude/settings.json and your shell environment)\n' >&2
+    fi
 fi
 
 # The root override a caller has set, if any; non-zero when nobody has. The new
