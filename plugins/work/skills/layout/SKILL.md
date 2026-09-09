@@ -6,6 +6,26 @@ disable-model-invocation: true
 
 # Build a layout from a Linear issue
 
+## Act or ask
+
+- **Mechanically derivable** — the team a single-team project has, the project a
+  worktree's path names, an unambiguous default — **resolve it yourself** and
+  carry on.
+- **A genuine fork** — which of three teams, which side of a misplaced binding
+  to move, whether this is a project or a parent issue — **ask**, name every
+  candidate, and change nothing until it is answered.
+- **When you cannot tell which of the two it is, ask.** The default for a
+  substantive choice is ask, not resolve.
+
+**Say every resolution out loud before you act on it**, naming three things:
+the fact, where you read it, and how you derived it.
+
+> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+
+That one line lets a reader catch a wrong answer and its cause without opening a
+log. And nothing here refuses: a reader answering `outside`, `negative` or
+`unknown` is a signal to weigh and to say, never a reason to stop.
+
 This creates real things — a herdr tab, git worktrees, panes, and Linear
 bindings — so it runs only when a person asks for it.
 
@@ -72,9 +92,13 @@ inferring a parent from the neighbours would attach the new issue to the wrong
 place.
 
 Offer, do not assume. Working without an issue is supported: if Shawn declines,
-create nothing and leave the worktree unbound. If he accepts, follow
-`docs/linear-conventions.md` for the title and description, ask about anything
-that document lists under "Not yet settled", and record the new identifier:
+create nothing and leave the worktree unbound. If he accepts, follow the
+conventions for the title and description, ask about anything they list under
+"Not yet settled", and record the new identifier:
+
+```bash
+cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+```
 
 ```bash
 herdr_linear::binding_add_child "$PWD" "$NEW_IDENTIFIER"

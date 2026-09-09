@@ -6,6 +6,26 @@ disable-model-invocation: true
 
 # New project, and the space it lives in
 
+## Act or ask
+
+- **Mechanically derivable** — the team a single-team project has, the project a
+  worktree's path names, an unambiguous default — **resolve it yourself** and
+  carry on.
+- **A genuine fork** — which of three teams, which side of a misplaced binding
+  to move, whether this is a project or a parent issue — **ask**, name every
+  candidate, and change nothing until it is answered.
+- **When you cannot tell which of the two it is, ask.** The default for a
+  substantive choice is ask, not resolve.
+
+**Say every resolution out loud before you act on it**, naming three things:
+the fact, where you read it, and how you derived it.
+
+> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+
+That one line lets a reader catch a wrong answer and its cause without opening a
+log. And nothing here refuses: a reader answering `outside`, `negative` or
+`unknown` is a signal to weigh and to say, never a reason to stop.
+
 A Linear project and a herdr workspace are the same thing seen from two sides.
 This makes both and binds them, so every worktree opened in that space knows
 which project it belongs to.
@@ -16,7 +36,7 @@ Writes to Linear are opened by an answer, not by a file somebody edits.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets binding linear reconcile description herdr-read herdr-write start create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start create; do
   source "$R/lib/$f.sh"
 done
 herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
@@ -41,7 +61,7 @@ team, or made from a different branch, asks again.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets binding linear reconcile description herdr-read herdr-write start create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start create; do
   source "$R/lib/$f.sh"
 done
 
@@ -54,9 +74,13 @@ Prints `PROJECT_ID<TAB>WORKSPACE_ID`.
 ## Before running it
 
 **A project is a bigger claim than an issue.** It is a body of work with its own
-milestones, spanning many issues over months. `docs/linear-conventions.md` lists
-*when a project is created rather than a parent issue* as **not yet settled** —
-so ask. Do not decide it because a project was the thing that was mentioned.
+milestones, spanning many issues over months. The conventions list *when a
+project is created rather than a parent issue* as **not yet settled** — so ask.
+Do not decide it because a project was the thing that was mentioned.
+
+```bash
+cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+```
 
 The content file is the project's own document — what this body of work is for,
 what is in and out. Not a description of the first ticket.

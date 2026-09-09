@@ -36,7 +36,7 @@ HERDR_LINEAR_CREATE_PARTIAL=5
 # Prints `project=<id>`, `team=<id>` and `issue=<identifier>` for whatever can
 # be determined. A caller decides which of them it actually needs.
 herdr_linear::current_context() {
-    local wt="${1:-}" ws="${2:-}" ident resp project team
+    local wt="${1:-}" ws="${2:-}" ident resp project team team_name="" line=""
 
     ident="$(herdr_linear::binding_identifier "$wt" 2>/dev/null)" || ident=""
     if [ -n "$ident" ]; then
@@ -44,6 +44,7 @@ herdr_linear::current_context() {
         if [ -n "$resp" ]; then
             project="$(printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("project") or {}).get("id",""))' 2>/dev/null)"
             team="$(printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("team") or {}).get("id",""))' 2>/dev/null)"
+            team_name="$(printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("team") or {}).get("name",""))' 2>/dev/null)"
         fi
     fi
 
@@ -60,10 +61,13 @@ herdr_linear::current_context() {
     # several has no single right answer, and picking one files work into a team
     # nobody chose. The caller asks instead, and names the candidates.
     if [ -z "$team" ] && [ -n "$project" ]; then
-        team="$(herdr_linear::project_team "$project" 2>/dev/null)" || team=""
+        line="$(herdr_linear::project_team "$project" 2>/dev/null)" || line=""
+        team="$(printf '%s' "$line" | cut -f1)"
+        team_name="$(printf '%s' "$line" | cut -f2)"
     fi
 
-    printf 'project=%s\nteam=%s\nissue=%s\n' "$project" "$team" "$ident"
+    printf 'project=%s\nteam=%s\nteam_name=%s\nissue=%s\n' \
+        "$project" "$team" "$team_name" "$ident"
 }
 
 # herdr_linear::scope_signals <worktree> [workspace-id]
@@ -131,14 +135,17 @@ for n in nodes:
 
 # herdr_linear::project_team <project-id>
 #
-# The id of the project's ONLY team, or nothing. Several teams print nothing and
-# succeed: "cannot tell" is the answer, not an error to be reported at a caller
-# that would then have to distinguish it from a network failure.
+# The project's ONLY team as `<id><TAB><name>`, or nothing. Several teams print
+# nothing and succeed: "cannot tell" is the answer, not an error to be reported
+# at a caller that would then have to distinguish it from a network failure.
+#
+# This verb is the single owner of the exactly-one-team rule R13 states. Both
+# fields come off the one line, so the id and the name cannot disagree.
 herdr_linear::project_team() {
     local lines
     lines="$(herdr_linear::project_teams "${1:-}")" || return 1
     [ "$(printf '%s' "$lines" | grep -c .)" -eq 1 ] || return 0
-    printf '%s' "$lines" | head -n1 | cut -f1
+    printf '%s' "$lines" | head -n1
 }
 
 herdr_linear::_ctx_field() { printf '%s' "$1" | sed -n "s/^$2=//p"; }

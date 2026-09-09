@@ -25,9 +25,6 @@ HERDR_LINEAR_CANDIDATE_LIMIT="${HERDR_LINEAR_CANDIDATE_LIMIT:-5}"
 
 HERDR_LINEAR_PROPOSE_OK=0
 HERDR_LINEAR_PROPOSE_NONE=1       # the filter was empty; say so, do not widen
-# Retired: candidates answers for any worktree now. The value stays defined
-# because skills/bind/SKILL.md still reads exit 2 as a sentence; U5 rewrites it.
-HERDR_LINEAR_PROPOSE_OUTSIDE=2
 HERDR_LINEAR_PROPOSE_UNAVAILABLE=3
 
 # The GraphQL for the fallback list. Assigned to the viewer, not in a terminal

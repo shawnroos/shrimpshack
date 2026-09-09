@@ -96,6 +96,27 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [[ "$output" == *"team=55555555-5555-4555-8555-555555555555"* ]]
 }
 
+# AE1's second half: "states which team it resolved" needs the NAME, and R4
+# wants the fact and its source together. The id alone reads as an opaque uuid
+# in the session output, which is the gap this closes.
+@test "a team resolved from the project is named, not just identified" {
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=one
+    run herdr_linear::current_context "$WT" w1
+    [[ "$output" == *"team_name=Web"* ]]
+}
+
+# The other arm. A bound issue already carries its team's name in the fetch, so
+# the name must come from that response rather than a second project query.
+@test "a team resolved from the bound issue is named too" {
+    bind_wt
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::current_context "$WT"
+    [[ "$output" == *"team_name=Web"* ]]
+    [ "$(sent 'project(id:')" -eq 0 ]
+}
+
 # Picking one of several is how work is filed into a team nobody chose.
 @test "a project spanning several teams supplies no team" {
     n="$(herdr_linear::workspace_propose w1 proj-abc)"
@@ -107,6 +128,11 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$(sent 'project(id:')" -ge 1 ]
     [[ "$output" == *"team="$'\n'* ]]
     [[ "$output" != *"team=5"* ]]
+    # The `many` fixture's first team is id 5555.../name Web, the same pair the
+    # bound issue carries, so this asserts ABSENCE. A value assertion here would
+    # stay green over a resolver that picked the first of several.
+    [[ "$output" == *"team_name="$'\n'* ]]
+    [[ "$output" != *"team_name=Web"* ]]
 }
 
 @test "a project with no team supplies no team" {
@@ -118,6 +144,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     # a hardcoded empty team satisfies the assertion below.
     [ "$(sent 'project(id:')" -ge 1 ]
     [[ "$output" == *"team="$'\n'* ]]
+    [[ "$output" == *"team_name="$'\n'* ]]
 }
 
 # The bound issue still wins: it is the more specific fact, and a project lookup

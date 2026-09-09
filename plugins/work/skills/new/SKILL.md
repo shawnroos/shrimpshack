@@ -6,6 +6,26 @@ disable-model-invocation: true
 
 # New issue, and somewhere to work it
 
+## Act or ask
+
+- **Mechanically derivable** — the team a single-team project has, the project a
+  worktree's path names, an unambiguous default — **resolve it yourself** and
+  carry on.
+- **A genuine fork** — which of three teams, which side of a misplaced binding
+  to move, whether this is a project or a parent issue — **ask**, name every
+  candidate, and change nothing until it is answered.
+- **When you cannot tell which of the two it is, ask.** The default for a
+  substantive choice is ask, not resolve.
+
+**Say every resolution out loud before you act on it**, naming three things:
+the fact, where you read it, and how you derived it.
+
+> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+
+That one line lets a reader catch a wrong answer and its cause without opening a
+log. And nothing here refuses: a reader answering `outside`, `negative` or
+`unknown` is a signal to weigh and to say, never a reason to stop.
+
 Filing a ticket and then separately making somewhere to work on it are two acts
 that always happen together, so this is one command: the issue is created, a
 worktree is made and bound to it, and a pane opens in that worktree.
@@ -19,12 +39,25 @@ for f in contain secrets sanitize binding linear reconcile description herdr-rea
   source "$R/lib/$f.sh"
 done
 
-herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)"
+CTX="$(herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)")"
+printf '%s\n' "$CTX"
 ```
 
-If that prints no `team=`, stop and say so. Bind this worktree first
-(`/work:bind`), or bind the workspace to a project. **Do not pick a team** —
-filing into the wrong one is a thing somebody has to notice and undo.
+`team_name=` carries the name beside the id. **State both, and where they came
+from, before you file** — "Team: Web, the only team on project AI Canvas Tools".
+
+An empty `team=` means the fact is unresolved, not that the answer is unknowable.
+Ask which, and name the candidates:
+
+```bash
+herdr_linear::project_teams "$(herdr_linear::_ctx_field "$CTX" project)"
+```
+
+Each line is `ID<TAB>NAME`. Several lines is a fork — ask, using the host's
+blocking question tool, and file nothing until answered. No project at all means
+there is nothing to derive from: bind this worktree (`/work:bind`), or bind the
+workspace to a project. **Never pick a team yourself** — filing into the wrong
+one is a thing somebody has to notice and undo.
 
 ## Write the description first
 
@@ -76,7 +109,7 @@ chose — `cue-read`, `wcs-paper`. The derived fallback is mechanical and worse.
 | Exit | Meaning |
 |---|---|
 | 0 | filed, worktree made, pane opened |
-| 1 | refused — no title, no description, bad description, outside the Slate root |
+| 1 | refused — no title, no description, or a bad description |
 | 2 | no team could be derived; nothing was created |
 | 3 | shadow mode: nothing was created, local or remote |
 | 4 | the issue exists but something after it failed; stderr says what to run |
@@ -84,5 +117,9 @@ chose — `cue-read`, `wcs-paper`. The derived fallback is mechanical and worse.
 **Exit 4 is not a rollback.** The issue is real. Deleting a freshly filed ticket
 to tidy up is worse than leaving it and finishing by hand.
 
-Follow `docs/linear-conventions.md` for the title, and ask about anything it
-lists under "Not yet settled" rather than defaulting.
+Follow the conventions for the title, and ask about anything they list under
+"Not yet settled" rather than defaulting:
+
+```bash
+cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+```

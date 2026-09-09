@@ -177,8 +177,9 @@ assertion_lint() {
 # what the functions it calls transitively need -- the "undefined function at
 # the worst moment" failure the copy-pasted lists cannot see coming.
 #
-# owned_skills is scoped to the skills this plugin's `work` maintainer for this
-# file owns; other skills under skills/ are out of scope here.
+# owned_docs is every document this plugin ships that carries a bash fence
+# calling into lib/ -- all eight skills and the command. Anything that calls a
+# lib verb and is scanned by nothing is where a retired verb survives unnoticed.
 skill_lib_sync_check() {
     printf '%sSkill lib-sourcing check...%s\n' "$YELLOW" "$NC"
     local root="${1:-$PLUGIN_ROOT}" out
@@ -186,7 +187,17 @@ skill_lib_sync_check() {
 import re, sys, glob, os
 
 plugin_root = sys.argv[1]
-owned_skills = ["describe", "new", "new-sub-issue", "bind", "layout"]
+owned_docs = [
+    "skills/describe/SKILL.md",
+    "skills/new/SKILL.md",
+    "skills/new-sub-issue/SKILL.md",
+    "skills/new-project/SKILL.md",
+    "skills/bind/SKILL.md",
+    "skills/layout/SKILL.md",
+    "skills/start/SKILL.md",
+    "skills/doc/SKILL.md",
+    "commands/work.md",
+]
 
 lib_names = sorted(os.path.basename(f)[:-3] for f in glob.glob(os.path.join(plugin_root, "lib", "*.sh")))
 
@@ -224,10 +235,10 @@ def sourced_names(fence_text):
     return names
 
 rc = 0
-for skill in owned_skills:
-    path = os.path.join(plugin_root, "skills", skill, "SKILL.md")
+for rel in owned_docs:
+    path = os.path.join(plugin_root, rel)
     if not os.path.isfile(path):
-        print("MISSING SKILL.md: %s" % path); rc = 1; continue
+        print("MISSING: %s" % path); rc = 1; continue
     text = open(path).read()
     fence_text = "\n".join(re.findall(r'```bash\n(.*?)```', text, re.S))
     declared = sourced_names(fence_text)
@@ -255,7 +266,7 @@ PY
         printf '%sskill lib-sourcing check FAILED%s\n' "$RED" "$NC"
         return 1
     fi
-    printf '%severy owned skill sources what it calls%s\n' "$GREEN" "$NC"
+    printf '%severy owned document sources what it calls%s\n' "$GREEN" "$NC"
 }
 
 # The enforcement point is the thing under test, and one red test proves ONE
@@ -332,6 +343,68 @@ consent_caller_check() {
     printf '%sno caller under lib/, hooks/ or commands/%s\n' "$GREEN" "$NC"
 }
 
+# The act-or-ask rubric is copied into all eight skills because a skill file is
+# what is in context when it runs. Eight copies drift, and a drifted copy ships
+# green -- so the identity is asserted here rather than assumed, and the failure
+# names the file that moved.
+rubric_sync_check() {
+    printf '%sRubric sync check...%s\n' "$YELLOW" "$NC"
+    local root="${1:-$PLUGIN_ROOT}" out
+    out="$(python3 - "$root" <<'PYEOF'
+import sys, os, glob, hashlib
+
+root = sys.argv[1]
+paths = sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")))
+if not paths:
+    print("no SKILL.md files found under %s/skills" % root); sys.exit(1)
+
+# The rubric is bounded by its own closing sentence, not by the next heading:
+# in most skills the text after it is file-specific prose with no heading
+# between, and a heading-bounded window would compare that prose too.
+TERMINATOR = "never a reason to stop."
+
+def block(path):
+    lines = open(path).read().splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == "## Act or ask":
+            out = [line]
+            for nxt in lines[i + 1:]:
+                out.append(nxt)
+                if nxt.rstrip().endswith(TERMINATOR):
+                    return "\n".join(out).rstrip()
+            return None
+    return None
+
+blocks = {p: block(p) for p in paths}
+missing = sorted(p for p, b in blocks.items() if b is None)
+for p in missing:
+    print("%s: carries no `## Act or ask` rubric, or one that never closes" % p)
+
+present = {p: b for p, b in blocks.items() if b is not None}
+if present:
+    # The majority spelling is the reference, so one drifted file is named as
+    # the drift rather than renaming the other seven.
+    counts = {}
+    for b in present.values():
+        counts[b] = counts.get(b, 0) + 1
+    ref = max(counts, key=lambda b: counts[b])
+    ref_sum = hashlib.md5(ref.encode()).hexdigest()[:8]
+    for p in sorted(present):
+        if present[p] != ref:
+            print("%s: rubric differs from the other %d (%s vs %s)"
+                  % (p, counts[ref], hashlib.md5(present[p].encode()).hexdigest()[:8], ref_sum))
+
+sys.exit(1 if missing or len(counts) > 1 else 0)
+PYEOF
+)" || true
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+        printf '%srubric sync check FAILED%s\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%sthe rubric is one text in every skill%s\n' "$GREEN" "$NC"
+}
+
 wire_smoke() {
     printf '%sWire smoke...%s\n' "$YELLOW" "$NC"
     local rc=0
@@ -341,6 +414,7 @@ wire_smoke() {
     manifest_autoload_check || rc=1
     secret_scan || rc=1
     skill_lib_sync_check || rc=1
+    rubric_sync_check || rc=1
     consent_caller_check || rc=1
     return "$rc"
 }

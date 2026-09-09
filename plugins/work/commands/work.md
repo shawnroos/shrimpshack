@@ -14,18 +14,26 @@ Report the state of the worktree you are in. Read it, do not guess it:
 R="${CLAUDE_PLUGIN_ROOT}"
 source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/binding.sh"
 source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"; source "$R/lib/sanitize.sh"
+source "$R/lib/description.sh"; source "$R/lib/herdr-read.sh"
+source "$R/lib/herdr-write.sh"; source "$R/lib/start.sh"; source "$R/lib/create.sh"
 
-herdr_linear::contains "$PWD" || echo "outside the Slate root — this plugin does nothing here"
+herdr_linear::scope_signals "$PWD" "$(herdr_linear::workspace_id)"
 herdr_linear::binding_state "$PWD"
 herdr_linear::binding_identifier "$PWD" 2>/dev/null
 ```
+
+`scope_signals` prints two lines and never refuses. `path=` says whether this
+directory sits under a known projects root; `project=` names the tracker project
+it maps to, or `negative` when none does, or `unknown` when the tracker could not
+be reached. **Report both and carry on.** `outside` and `negative` together mean
+nothing here maps to tracked work, which is worth saying and is not a reason to
+stop. `unknown` is not `negative` — an unread signal is not an absent one.
 
 Then say, in one or two lines, what state it is in and the single most useful
 next step:
 
 | State | Say |
 |---|---|
-| outside the Slate root | this plugin does nothing here. Stop. |
 | `unbound` | not bound. `/work:bind` to bind it, or `/work:start` for new work elsewhere |
 | `proposed` | a candidate was offered and not confirmed. `/work:bind` to finish |
 | `bound` | name the issue, its state, and whether anything is waiting (below) |

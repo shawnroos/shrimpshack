@@ -6,6 +6,26 @@ disable-model-invocation: true
 
 # New sub-issue, and somewhere to work it
 
+## Act or ask
+
+- **Mechanically derivable** — the team a single-team project has, the project a
+  worktree's path names, an unambiguous default — **resolve it yourself** and
+  carry on.
+- **A genuine fork** — which of three teams, which side of a misplaced binding
+  to move, whether this is a project or a parent issue — **ask**, name every
+  candidate, and change nothing until it is answered.
+- **When you cannot tell which of the two it is, ask.** The default for a
+  substantive choice is ask, not resolve.
+
+**Say every resolution out loud before you act on it**, naming three things:
+the fact, where you read it, and how you derived it.
+
+> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+
+That one line lets a reader catch a wrong answer and its cause without opening a
+log. And nothing here refuses: a reader answering `outside`, `negative` or
+`unknown` is a signal to weigh and to say, never a reason to stop.
+
 The same as `/work:new`, parented to the issue this worktree is bound to.
 
 **It refuses when the worktree is not bound.** A sub-issue with no parent is
@@ -23,9 +43,15 @@ for f in contain secrets sanitize binding linear reconcile description herdr-rea
 done
 CTX="$(herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)")"
 TEAM="$(herdr_linear::_ctx_field "$CTX" team)"
+TEAM_NAME="$(herdr_linear::_ctx_field "$CTX" team_name)"
 PROJECT="$(herdr_linear::_ctx_field "$CTX" project)"
 herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
 ```
+
+**State `$TEAM_NAME` and where it came from before you file** — the parent issue
+names it, or it is the only team on the project. An empty `$TEAM` is a fork, not
+a dead end: list the candidates with `herdr_linear::project_teams "$PROJECT"` and
+ask which.
 
 Name `$TEAM`, `$PROJECT` and the issue — or the title, when the write **is** the
 creation — and ask, using the host's blocking question tool. Record only what
@@ -75,5 +101,9 @@ never gets its own PR is a checklist item wearing a ticket's clothes.
 Most sub-issues are discovered during the work rather than planned up front, so
 this being reachable mid-session is the point.
 
-Title it as a full sentence naming the problem or the outcome, per
-`docs/linear-conventions.md` — the parent carries the noun phrase.
+Title it as a full sentence naming the problem or the outcome — the parent
+carries the noun phrase:
+
+```bash
+cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+```

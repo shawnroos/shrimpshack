@@ -1,10 +1,30 @@
 ---
 name: start
-description: Start work on a Linear issue that has no worktree yet, or start something new that has neither a worktree nor a ticket. Creates the worktree under Slate's worktrees directory, names the branch so the issue is findable from it forever after, and binds the two. Use at the beginning of a piece of work.
+description: Start work on a Linear issue that has no worktree yet, or start something new that has neither a worktree nor a ticket. Creates the worktree under the project's own worktrees directory, names the branch so the issue is findable from it forever after, and binds the two. Use at the beginning of a piece of work.
 disable-model-invocation: true
 ---
 
 # Start a piece of work
+
+## Act or ask
+
+- **Mechanically derivable** — the team a single-team project has, the project a
+  worktree's path names, an unambiguous default — **resolve it yourself** and
+  carry on.
+- **A genuine fork** — which of three teams, which side of a misplaced binding
+  to move, whether this is a project or a parent issue — **ask**, name every
+  candidate, and change nothing until it is answered.
+- **When you cannot tell which of the two it is, ask.** The default for a
+  substantive choice is ask, not resolve.
+
+**Say every resolution out loud before you act on it**, naming three things:
+the fact, where you read it, and how you derived it.
+
+> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+
+That one line lets a reader catch a wrong answer and its cause without opening a
+log. And nothing here refuses: a reader answering `outside`, `negative` or
+`unknown` is a signal to weigh and to say, never a reason to stop.
 
 Binding assumes a worktree already exists, which is the uncommon case. Work
 usually starts one of two other ways:
@@ -23,6 +43,7 @@ and before anybody has answered the write question, and it cannot damage a board
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"

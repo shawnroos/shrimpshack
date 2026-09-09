@@ -89,9 +89,10 @@ EOF
 # dependency closure of the functions it calls, computed from the lib files
 # themselves rather than trusted by inspection ---
 
-# owned_skills is a fixed list inside the check, so a fixture root needs a
-# (possibly empty) SKILL.md for each of the five names or the check reports
-# them as missing, which would mask the thing under test.
+# owned_docs is a fixed list inside the check, so a fixture root needs a
+# (possibly empty) file for every path it names -- all eight skills and the
+# command -- or the check reports them as missing, which would mask the thing
+# under test.
 sync_fixture() {
     local root="$1" describe_block="$2"
     mkdir -p "$root/lib"
@@ -101,10 +102,12 @@ EOF
     cat > "$root/lib/b.sh" <<'EOF'
 herdr_linear::fn_b() { herdr_linear::fn_a; }
 EOF
-    for s in new new-sub-issue bind layout; do
+    for s in new new-sub-issue new-project bind layout start doc; do
         mkdir -p "$root/skills/$s"
         printf -- '---\nname: %s\n---\nno bash here\n' "$s" > "$root/skills/$s/SKILL.md"
     done
+    mkdir -p "$root/commands"
+    printf -- 'no bash here\n' > "$root/commands/work.md"
     mkdir -p "$root/skills/describe"
     printf -- '---\nname: describe\n---\n%s\n' "$describe_block" > "$root/skills/describe/SKILL.md"
 }
@@ -141,3 +144,19 @@ herdr_linear::fn_never_defined
     [[ "$output" == *"fn_never_defined"* ]]
 }
 
+
+# commands/work.md calls lib verbs and was scanned by nothing until U5. Without
+# this case the extended list is an assertion; with it, it is proven.
+@test "sync check covers the command, not only the skills" {
+    sync_fixture "$WORK" 'no bash here'
+    cat > "$WORK/commands/work.md" <<'CMD'
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/b.sh"
+herdr_linear::fn_b
+```
+CMD
+    run skill_lib_sync_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"commands/work.md"* ]]
+    [[ "$output" == *"missing"*"'a'"* ]]
+}

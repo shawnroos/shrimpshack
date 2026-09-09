@@ -252,15 +252,18 @@ rlo="$(printf '\342\200\256')"
     [ "$output" = "1" ]
 }
 
-@test "the bind skill runs the containment check before recording anything" {
+@test "the bind skill reads the scope signal before recording anything" {
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
-    [[ "$body" == *"herdr_linear::contains"* ]]
+    [[ "$body" == *"herdr_linear::path_signal"* ]]
+    # The ordering check alone stays green if someone adds the reader and leaves
+    # the retired gate verb in place beside it. This is what refuses that.
+    [[ "$body" != *"herdr_linear::contains"* ]]
     # Anchored at line start, so only the INSTRUCTION inside a code block counts.
     # Matching any mention compared against prose instead: a paragraph
     # explaining that a session with Bash could call binding_confirm directly
-    # sits above the containment section, and failed a test about instruction
+    # sits above the signal section, and failed a test about instruction
     # order on the strength of a sentence.
-    c=$(grep -n '^herdr_linear::contains' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
+    c=$(grep -n '^herdr_linear::path_signal' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
     r=$(grep -n '^herdr_linear::binding_confirm' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
     [ -n "$c" ] && [ -n "$r" ]
     [ "$c" -lt "$r" ]
@@ -274,11 +277,10 @@ rlo="$(printf '\342\200\256')"
 
 @test "the bind skill defers to the conventions doc on unsettled questions" {
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
-    # This substring is contained by BOTH the old repo-root path and the plugin
-    # path, so it cannot fail on the move alone. U5 tightens it to the
-    # ${CLAUDE_PLUGIN_ROOT} token once the skill citations become fences. The
-    # readability check below is the part that fails when the doc is not shipped.
-    [[ "$body" == *"linear-conventions.md"* ]]
+    # Single-quoted, so the pattern is the literal token. Double quotes expand
+    # the variable, and the test would then pass on any path merely ENDING in
+    # docs/linear-conventions.md -- including a bare prose citation.
+    [[ "$body" == *'${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md'* ]]
     [[ "$body" == *"Not yet settled"* ]]
     [ -r "$ROOT/docs/linear-conventions.md" ]
 }
