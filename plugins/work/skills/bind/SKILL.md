@@ -103,6 +103,36 @@ without an issue a supported state — not a problem to solve.
 **Exit 3 means Linear could not be reached.** Say that, and stop. Nothing is
 recorded.
 
+## When you need more than the list to choose
+
+`candidates` prints at most `HERDR_LINEAR_CANDIDATE_LIMIT` lines, five by
+default, one line each. That list stays here — dispatching a subagent to carry
+five lines is latency bought for nothing.
+
+Opening each candidate to see which one is really this worktree's work is the
+heavy part, and it is the part to hand off. **Dispatch a subagent**, with a
+scratch path — your session's scratchpad directory when the harness gives you
+one, otherwise a path carrying this worktree's name, never a shared one:
+
+```text
+For each identifier below, read the issue and write one block per issue to
+<scratch path>: identifier, title, state, and two lines on what it covers. Rank
+them against this branch name and this worktree's recent commits; when two fit
+equally, say so instead of ordering them. Reply with the path and one line per
+issue in your ranked order. Create nothing, bind nothing, write nothing back to
+the tracker, and run no git command that moves HEAD.
+```
+
+**The gist ranks the candidates; it never shortens them.** A candidate dropped
+on the way back is a candidate the person never gets offered, and they cannot
+see that it happened. Open the file when you need more than a line.
+
+**The subagent reads; it never asks and it never records.** It has no prompt
+channel, so a question handed to it is a decision lost. Ambiguity — two issues
+that both fit, a title that could be either — comes back as a line in the file,
+and you ask here. Step 2's question and everything `binding_confirm` records
+happen in this session, with a person answering.
+
 ## Step 2 — ask, and only then record
 
 Present the candidates and ask which one, using the host's blocking question

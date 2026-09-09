@@ -160,3 +160,69 @@ CMD
     [[ "$output" == *"commands/work.md"* ]]
     [[ "$output" == *"missing"*"'a'"* ]]
 }
+
+
+# --- the delegation briefs ---
+#
+# consent_caller_check greps lib/, hooks/ and commands/ only: a write skill
+# legitimately calls consent_confirm in its own fence, so skills/ cannot be
+# swept wholesale. That leaves one gap. U9 tells three skills to hand a step to
+# a subagent, and a subagent has no prompt channel -- so a brief that says "ask
+# which one" or calls a record verb loses a decision or answers the person's
+# question for them, and ships green today. The brief is fenced as ```text so
+# it can be read back and held to that.
+
+brief_check() {
+    python3 - "$1" <<'PYEOF'
+import sys, os, re
+
+root = sys.argv[1]
+BANNED = ("consent_confirm", "consent_propose", "binding_confirm",
+          "workspace_confirm", "binding_add_child", "AskUserQuestion",
+          "blocking question tool")
+rc = 0
+for skill in ("bind", "layout", "describe"):
+    p = os.path.join(root, "skills", skill, "SKILL.md")
+    if not os.path.exists(p):
+        print("%s: missing" % p); rc = 1; continue
+    briefs = re.findall(r'```text\n(.*?)```', open(p).read(), re.S)
+    if not briefs:
+        print("%s: carries no subagent brief" % p); rc = 1; continue
+    for b in briefs:
+        for word in BANNED:
+            if word in b:
+                print("%s: the brief tells a subagent to ask or record (%s)"
+                      % (p, word)); rc = 1
+sys.exit(rc)
+PYEOF
+}
+
+@test "no shipped brief tells a subagent to ask or record" {
+    run brief_check "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
+    [ "$status" -eq 0 ]
+}
+
+@test "a brief that records an answer is caught, and the file is named" {
+    for s in bind layout describe; do
+        mkdir -p "$WORK/skills/$s"
+        printf -- '```text\nRead them and reply with the path.\n```\n' > "$WORK/skills/$s/SKILL.md"
+    done
+    printf -- '```text\nRead them, then run herdr_linear::consent_confirm.\n```\n' \
+        > "$WORK/skills/describe/SKILL.md"
+    run brief_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"describe/SKILL.md"* ]]
+    [[ "$output" == *"consent_confirm"* ]]
+}
+
+@test "a skill that lost its brief is caught" {
+    for s in bind layout describe; do
+        mkdir -p "$WORK/skills/$s"
+        printf -- '```text\nRead them and reply with the path.\n```\n' > "$WORK/skills/$s/SKILL.md"
+    done
+    printf -- 'the delegation section was deleted\n' > "$WORK/skills/layout/SKILL.md"
+    run brief_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"layout/SKILL.md"* ]]
+    [[ "$output" == *"carries no subagent brief"* ]]
+}

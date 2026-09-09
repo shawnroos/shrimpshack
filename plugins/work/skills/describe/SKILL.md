@@ -128,6 +128,32 @@ Status belongs in the issue's state. Neither belongs here.
 When the work changed what you understand about the problem, **rewrite the
 Problem section**. Do not add a note saying it changed.
 
+## Reading the branch before you write
+
+Problem and Solution need what the work turned out to be, and the branch's
+history is where that is written. It is also the largest thing you would read
+all session, and almost none of it belongs in this context.
+
+**Dispatch a subagent to read it.** Give it a scratch path — your session's
+scratchpad directory when the harness gives you one, otherwise a path carrying
+this worktree's name, never a shared one. Brief it with this and nothing more:
+
+```text
+Read this branch's commits and its diff against the base branch. Write to
+<scratch path>: what changed, why, and anything that contradicts the issue's
+current description. Write nothing to Linear and run no git command that moves
+HEAD. Name anything you could not tell from the history. Reply with the path and
+at most ten lines of gist.
+```
+
+Compose the description from that gist and the description already on the issue.
+Open the file only when you need a detail the gist does not carry.
+
+**The subagent reads; it never asks and it never records.** It has no prompt
+channel, so a question handed to it is a decision lost. Ambiguity comes back as
+a line in the file, and you ask here. The write question above is asked in this
+session, by a person, and nothing a subagent returns stands in for that answer.
+
 ## Writing it
 
 Read the current description first and keep what is still true — you are

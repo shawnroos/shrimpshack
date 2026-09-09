@@ -72,6 +72,21 @@ herdr_linear::binding_read "$PWD" 2>/dev/null \
 first write asks, and the answer is scoped to the team, project and branch it
 named. A different team, a different project, or a different branch asks again.
 
+## Reading a lot to decide a little
+
+When a step's raw output is large and the part you decide on is small — reading
+each candidate issue, fetching a parent's children, reading a branch's history —
+**send a subagent to do the reading**. Give it a scratch path, have it write the
+raw output there, and take back the path plus one line per thing you may choose.
+Open the file only for a detail those lines do not carry. `/work:bind`,
+`/work:layout` and `/work:describe` each say what to brief it with.
+
+**A subagent reads and reports. It never asks and it never records.** It has no
+prompt channel, so a question handed to it is a decision lost — it names what is
+ambiguous, and you ask here. The question each write skill asks before its first
+write is answered in this session, by a person, and no subagent's reply stands
+in for that answer.
+
 ## The rest
 
 | Command | For |
