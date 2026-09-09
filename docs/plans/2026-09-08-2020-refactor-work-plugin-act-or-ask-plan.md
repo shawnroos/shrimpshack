@@ -242,7 +242,14 @@ flowchart TB
 
 ### Sequencing
 
-U1 and U3 are independent and can land in either order. U2 depends on U1 only for the directory identity a consent record is keyed on. U4 depends on U2 and U3, because it binds through the consent record and files through the team reader. U5 depends on U1, U2 and U3 existing, because the rubric describes readers that must be there to describe. U9 depends on U3 and U5 — it delegates the readers U3 adds, and it edits the prose U5 rewrites. U6 and U7 are independent of all of it. U8 depends on U1. U1 put the three path readers in `plugins/work/lib/contain.sh` and the two-signal reader beside `current_context` in `plugins/work/lib/create.sh` — the bind skill sources `contain.sh` alone and `skill_lib_sync_check` matches on mention, so the Linear half cannot live there.
+U1, U2, U3 and U7 have landed. The rest runs in four waves, shaped by which files each unit owns rather than by the dependency graph alone — U5, U6 and U8 originally all rewrote the same eight skill documents, so that prose is now one unit's to own.
+
+| Wave | Units | Why together, or why alone |
+|---|---|---|
+| 1 | U4, U6 | Disjoint file sets: U4 owns `lib/create.sh` and `create.bats`; U6 owns the document move and the two lib files that name it. Run in parallel under the shared-workspace contract — neither worker runs the suite, and verification happens once on the integrated tree. |
+| 2 | U5 | Alone: it owns every `SKILL.md` and `commands/work.md`, doing the rubric, the citations and the organisation name in one pass over the same paragraphs. |
+| 3 | U8 | Alone: the seam rename touches the ten suites that export it, which every earlier wave also edits. |
+| 4 | U9 | Alone: it edits skill prose U5 must have finished. |
 
 ---
 
@@ -321,7 +328,7 @@ U1 and U3 are independent and can land in either order. U2 depends on U1 only fo
 - **Goal:** A verb that files and binds in place, with no second worktree.
 - **Requirements:** R12. Covers F1, AE8.
 - **Dependencies:** U2, U3.
-- **Files:** `plugins/work/lib/create.sh`, `plugins/work/skills/new/SKILL.md`, `plugins/work/tests/unit/create.bats`.
+- **Files:** `plugins/work/lib/create.sh`, `plugins/work/tests/unit/create.bats`. The skill prose for this verb belongs to U5, which owns every `SKILL.md` edit.
 - **Approach:** branch `_create_issue` before its unconditional `herdr_linear::start_from_issue` call (`lib/create.sh:148`) so an already-bound-capable worktree binds in place instead. Name the new verb and any new skill so it collides with neither `commands/work.md` nor the eight existing skill names.
 - **Patterns to follow:** `docs/solutions/architecture-patterns/command-and-skill-sharing-a-name.md` — a command and skill sharing a name makes the skill silently unreachable.
 - **Test scenarios:**
@@ -332,20 +339,20 @@ U1 and U3 are independent and can land in either order. U2 depends on U1 only fo
 
 ### U5. The act-or-ask rubric in skill prose
 
-- **Goal:** State the rule the plugin now follows, in the place the agent reads it.
-- **Requirements:** R1, R2, R4.
+- **Goal:** One pass over every skill document: the act-or-ask rule, the conventions citations, and the organisation name, which are all edits to the same paragraphs.
+- **Requirements:** R1, R2, R4, R8 (prose half), R14 (citation half). Also closes AE1's unmet half — U3 resolves the team but exposes only `team=<id>`, so the name never surfaces; R4 requires naming the fact and its source.
 - **Dependencies:** U1, U2, U3.
-- **Files:** `plugins/work/skills/*/SKILL.md`, `plugins/work/commands/work.md`.
+- **Files:** all eight `plugins/work/skills/*/SKILL.md` and `plugins/work/commands/work.md`. This unit owns every prose edit to those files; U6 and U8 own no `SKILL.md`.
 - **Approach:** mirror the wording already in `plugins/auto/skills/auto/SKILL.md:289-298` and `plugins/spinoff/skills/spinoff/SKILL.md:253-259` — resolve mechanical, escalate a fork, escalate when unsure — and state R4's three-part statement shape (fact, source, derivation). Replace each "outside the Slate root" sentence with the reader's two signals. Extend `owned_skills` at `run-tests.sh:189` from five to all eight skills, and add the missing `sanitize.sh` source line to `start`, `new-project` and `doc` so the check passes; add `commands/work.md` to the scan, since it calls `contains` at line 18 and `writes_enabled` at line 41 and is never scanned today.
 - **Test scenarios:** `Test expectation: none — prose only.` `skill_lib_sync_check` still proves every `herdr_linear::` call in a fenced block resolves.
 - **Verification:** `wire_smoke` passes with `owned_skills` covering all eight skills plus `commands/work.md`, so "no skill cites a retired verb" is proven rather than asserted.
 
 ### U6. Ship the conventions document
 
-- **Goal:** The conventions the skills cite are readable where the plugin runs.
+- **Goal:** The conventions document ships inside the plugin. U5 rewrites the citations that point at it.
 - **Requirements:** R14.
 - **Dependencies:** none.
-- **Files:** `docs/linear-conventions.md` → `plugins/work/docs/linear-conventions.md`; citations in `plugins/work/skills/{bind,new,describe,new-project,new-sub-issue,doc,layout}/SKILL.md`, `plugins/work/lib/documents.sh:108-111`, and the comments at `plugins/work/lib/description.sh:15` and `plugins/work/lib/documents.sh:17`.
+- **Files:** `docs/linear-conventions.md` → `plugins/work/docs/linear-conventions.md`; the runtime message in `plugins/work/lib/documents.sh`, the comments in `plugins/work/lib/description.sh` and `plugins/work/lib/documents.sh`, and `plugins/work/tests/unit/{propose,documents}.bats`. No `SKILL.md` — U5 owns those citations.
 - **Approach:** move the file, then change all nine citations to a runnable fence — `cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"` — rather than a prose path, since the variable expands only inside bash. No `plugin.json` or marketplace edit; the whole source directory already ships (KTD5). Retitle away from the organisation name per R8. Reinstall the plugin from the local marketplace before verifying.
 - **Test scenarios:** `tests/unit/propose.bats:271` substring-matches `linear-conventions.md`, which the new citation still contains, so it cannot fail against the old path. Assert the full token `${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md` and route a negative assertion for the bare repo-root citation through `refute_match`.
 - **Verification:** after reinstalling, `test -r "$CLAUDE_PLUGIN_ROOT/docs/linear-conventions.md"` succeeds from a session on the installed plugin. The suite runs against the checkout and cannot prove this, so it is a manual gate. If a same-version update does not refresh the cache, R14 is recorded as deferred rather than claimed met.
@@ -371,7 +378,7 @@ U1 and U3 are independent and can land in either order. U2 depends on U1 only fo
 - **Goal:** The plugin names no organisation.
 - **Requirements:** R8.
 - **Dependencies:** U1.
-- **Files:** `plugins/work/lib/contain.sh:2,33`, `plugins/work/lib/secrets.sh:61`, `plugins/work/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (repo root — the `work` entry's description), every `plugins/work/skills/*/SKILL.md` and `plugins/work/commands/work.md`, and the `HERDR_LINEAR_SLATE_ROOT` seam across ten test suites.
+- **Files:** `plugins/work/lib/contain.sh`, `plugins/work/lib/secrets.sh`, `plugins/work/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (repo root — the `work` entry's description), and the `HERDR_LINEAR_SLATE_ROOT` seam across the ten test suites that export it. No `SKILL.md` or `commands/work.md` — U5 owns that prose.
 - **Approach:** rename the env seam, move the scope default to configuration, and replace the prose. The tracker's own name stays — the prohibited class is the organisation and product name only.
 - **Test scenarios:** a grep for the organisation token over all shipped files returns nothing; run it against the pre-change tree first to confirm it can fail.
 - **Verification:** `version_sync_check` still passes after the `plugin.json` description edit.
