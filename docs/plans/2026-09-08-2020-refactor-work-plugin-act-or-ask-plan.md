@@ -436,3 +436,60 @@ Repo-specific rules that decide whether a green run means anything:
 - No skill instructs a subagent to ask the person or to record consent; the U2 consent grep still returns exactly one caller.
 - Abandoned experimental code from approaches that did not pan out is removed, not left in the diff.
 - The plan's load-bearing assumption still holds, or the Dependencies section records that it did not and what replaced it.
+
+---
+
+## Residual record
+
+Written after all nine units landed. These are known and open, not oversights.
+
+### Requirements not met in full
+
+- **R8 cannot hold as written, and does not.** The deprecation the plan itself
+  requires forces `HERDR_LINEAR_SLATE_ROOT` to stay spelled out in `lib/contain.sh`,
+  in both the fallback and the warning that tells the reader what to change. R8 says
+  the token leaves every shipped file. Both cannot be true. The brand scan carries a
+  named exemption that expires with its justification: when the fallback goes, the
+  scan fails until the exemption goes too. Verified by mutation.
+- **R14 is deferred, not met.** The conventions document ships inside the plugin
+  source, but the installed cache is pinned at an older commit with no `docs/`
+  directory, so a skill citing it at runtime still cannot read it. The reinstall is
+  out of this plan's scope.
+- **R7's "unknown when the tracker is unreachable" arm cannot fire.** `workspace_state`
+  reads a local store record, so there is no network call to fail. AE5 passes on the
+  path signal alone. Closing this means giving the reader a real remote read.
+
+### Open, needing a decision that is not a worker's to make
+
+- **The brand scan's manifest-address exemption widens with the manifest.** The
+  maintainer address is looked up rather than written down, so it cannot go stale, but
+  whatever address the manifest carries becomes exempt. Closing it needs a definition
+  of a legitimate maintainer address.
+- **The user's `~/.claude/settings.json` still sets the old variable name.** Nothing in
+  this branch reads or edits that file. Until it is renamed, every run prints the
+  deprecation line. This is a required user action, not a defect.
+
+### Follow-ups this plan created and did not finish
+
+- **`herdr_linear::project_teams` is still undelegated.** U9 owns delegation but the two
+  prose callers, `skills/new/SKILL.md` and `skills/new-sub-issue/SKILL.md`, are U5's
+  files. The wave boundary split the requirement from the files it needed.
+- **`lib/binding.sh` does not self-heal a missing dependency.** `lib/linear.sh` and
+  `lib/propose.sh` both re-source one; `binding.sh` does not, so an unsourced
+  `sanitize.sh` silently downgrades an identifier check to a weaker validator with no
+  rule about leading dashes. The globbed scan closes this for every document the plugin
+  ships. It does not close it for a caller outside the plugin.
+- **`/tmp/desc.md` in describe's fence is a shared-name collision** of exactly the kind
+  the sibling plugin warns about. Two sessions writing a description at once share the
+  path.
+- **Layout Step 1 has no lib verb for fetching children**, so the agent runs an ad-hoc
+  query. Predates this plan.
+
+### False greens found while building this
+
+Recorded because the pattern repeated, not to tally mistakes. Six checks passed while
+incapable of failing: a fixture whose first team shared the bound issue's id; a title
+test matching an empty read of a missing file; an exit 127 mistaken for a red; a wrapper
+exit code taken from `tail`; a brand scan reporting clean when its own read crashed to
+stderr; and four tests reading the developer's real environment instead of their fixture.
+Every one was found by mutating finished code, none by inspection.
