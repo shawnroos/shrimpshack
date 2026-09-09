@@ -168,7 +168,7 @@ Grouped families, applied when the grouping is meaningful:
 
 | Family | Use |
 |---|---|
-| `repo/…` | the repository the work lands in, e.g. `slateteams/web-app` |
+| `repo/…` | the repository the work lands in, e.g. `acme/web-app` |
 | `platform: …` | the platform affected, e.g. `platform: WCS` |
 | `Requests/…` | the platform a customer request came from |
 
@@ -200,7 +200,7 @@ pass may all be left at `No priority`, because their order comes from the parent
 ## Documents
 
 A Linear document is where anything that would otherwise land in a gitignored
-`/docs` directory belongs. In Slate's web-app `/docs` is ignored, so a durable
+`/docs` directory belongs. Plenty of repositories gitignore `/docs`, so a durable
 document written on a branch dies with the worktree. A Linear document outlives
 the branch, is linked to the work, and is readable by people without the repo.
 

@@ -13,7 +13,8 @@ setup() {
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
 
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
+    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -22,21 +23,21 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_PROPOSEPROPOSEPROPO" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh propose.sh; do . "$ROOT/lib/$f"; done
 
-    WT="$WORK/Slate/wt"; mkdir -p "$WT"
+    WT="$WORK/root/wt"; mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-3318-drawer
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
-    NOID="$WORK/Slate/noid"; mkdir -p "$NOID"
+    NOID="$WORK/root/noid"; mkdir -p "$NOID"
     git -C "$NOID" init -q -b rehome-sprawl
     git -C "$NOID" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
-    OUTSIDE="$WORK/NotSlate/wt"; mkdir -p "$OUTSIDE"
+    OUTSIDE="$WORK/elsewhere/wt"; mkdir -p "$OUTSIDE"
     git -C "$OUTSIDE" init -q -b feature/web-3318-drawer
     git -C "$OUTSIDE" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 }
@@ -50,7 +51,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # The containment refusal is retired: candidates is a reader, and a reader
 # answers. Nothing is written here whatever the answer -- the fixture refuses
 # every mutation, and this asserts none was attempted.
-@test "a worktree outside the Slate root is answered rather than refused" {
+@test "a worktree outside the project root is answered rather than refused" {
     export FAKE_LINEAR_MODE=found_child
     run herdr_linear::candidates "$OUTSIDE"
     [ "$status" -eq 0 ]

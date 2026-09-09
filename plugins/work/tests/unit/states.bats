@@ -14,7 +14,8 @@ setup() {
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
 
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
+    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -24,13 +25,13 @@ setup() {
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_STATESSTATESSTATES1" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh states.sh; do . "$ROOT/lib/$f"; done
 
-    WT="$WORK/Slate/wt"; mkdir -p "$WT"
+    WT="$WORK/root/wt"; mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-2870-detach
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 

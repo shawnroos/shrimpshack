@@ -3,7 +3,7 @@
 #
 # This is the first code in the plugin that can change anything in Linear, so
 # the tests are organised around what must NOT happen: no write from an unbound
-# worktree, none from outside the Slate root, none while shadow mode is on, none
+# worktree, none from outside the project root, none while shadow mode is on, none
 # recorded when the API said it failed, and nothing that can hold a session open.
 #
 # The network is tests/fixtures/fake-linear.sh, which refuses any GraphQL
@@ -28,7 +28,8 @@ setup() {
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
 
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
+    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -39,7 +40,7 @@ setup() {
     export LINEAR_SECRETS_FILE="$WORK/secrets"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     export HERDR_LINEAR_GH_BIN="$WORK/no-such-gh"
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_RECONCILERECONCILE1" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
@@ -49,7 +50,7 @@ setup() {
     # rather than stubbed.
     ORIGIN="$WORK/origin.git"
     git init -q --bare -b main "$ORIGIN"
-    WT="$WORK/Slate/wt"
+    WT="$WORK/root/wt"
     git init -q -b main "$WT"
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
     git -C "$WT" remote add origin "$ORIGIN"
@@ -152,7 +153,7 @@ mutations_sent() {
 # reflog is the discriminator, and it has to be: a genuine merge also leaves
 # ahead=0, and a fast-forward landing leaves HEAD equal to origin/main.
 @test "a worktree with no commits of its own is never completed" {
-    FRESH="$WORK/Slate/fresh"
+    FRESH="$WORK/root/fresh"
     git -C "$WT" worktree add -q -b feature/web-9999-fresh "$FRESH" main
     signals="$(herdr_linear::repo_signals "$FRESH")"
     [[ "$signals" == *"merged=yes"* ]]
@@ -397,13 +398,13 @@ mutations_sent() {
 # reconciles wherever it sits. Binding it directly through the store is what
 # ISOLATES that -- an unbound outside worktree is refused either way, so the
 # status would be identical with and without the retired check.
-@test "a BOUND worktree outside the Slate root reconciles like any other" {
-    OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
+@test "a BOUND worktree outside the project root reconciles like any other" {
+    OUT="$WORK/elsewhere/wt"; mkdir -p "$OUT"
     git init -q -b main "$OUT"
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
 
     # Bind it directly through the store: lib/binding.sh does not enforce the
-    # Slate root -- containment is the caller's job, which is exactly the
+    # project root -- containment is the caller's job, which is exactly the
     # property under test.
     n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"
     herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
@@ -417,8 +418,8 @@ mutations_sent() {
 }
 
 # Still refused -- by the binding, which is the gate that remains.
-@test "an unbound worktree outside the Slate root is never written from" {
-    OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
+@test "an unbound worktree outside the project root is never written from" {
+    OUT="$WORK/elsewhere/wt"; mkdir -p "$OUT"
     git init -q -b main "$OUT"
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1

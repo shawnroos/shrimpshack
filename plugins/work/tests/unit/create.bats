@@ -12,7 +12,8 @@ setup() {
     ROOT="${BATS_TEST_DIRNAME}/../.."
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
+    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -26,18 +27,18 @@ setup() {
     export LINEAR_SECRETS_FILE="$WORK/secrets"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     export HERDR_LINEAR_PANE_POLL_MS=5
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/hrec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/hrec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_CREATECREATECREATE1" > "$LINEAR_SECRETS_FILE"
 
-    git -C "$WORK/Slate" init -q -b main
-    git -C "$WORK/Slate" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    git -C "$WORK/root" init -q -b main
+    git -C "$WORK/root" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh \
              herdr-read.sh herdr-write.sh start.sh create.sh; do . "$ROOT/lib/$f"; done
 
-    WT="$WORK/Slate/worktrees/current"
-    git -C "$WORK/Slate" worktree add -q -b feature/web-2870-detach "$WT" >/dev/null 2>&1
+    WT="$WORK/root/worktrees/current"
+    git -C "$WORK/root" worktree add -q -b feature/web-2870-detach "$WT" >/dev/null 2>&1
 
     DESC="$WORK/d.md"
     printf '## Problem\n\nA real problem for the actor, at length.\n\n## Solution\n\nThe world without it.\n\n## Proposal\n\nWhat we build.\n' > "$DESC"
@@ -222,7 +223,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$status" -eq 0 ]
     pane="$(printf '%s' "$output" | cut -f3)"
     [ -n "$pane" ]
-    run grep -c -- "--cwd $HERDR_LINEAR_SLATE_ROOT/worktrees/newthing" "$FAKE_HERDR_RECORD_DIR/argv"
+    run grep -c -- "--cwd $HERDR_LINEAR_PROJECTS_ROOT/worktrees/newthing" "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "1" ]
 }
 
@@ -343,7 +344,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
     [ "$status" -eq 3 ]
     [ "$(sent issueCreate)" = "0" ]
-    [ ! -e "$HERDR_LINEAR_SLATE_ROOT/worktrees/newthing" ]
+    [ ! -e "$HERDR_LINEAR_PROJECTS_ROOT/worktrees/newthing" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
     [[ "$output" == *"SHADOW would create issue"* ]]
 }
@@ -373,14 +374,14 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # issues from every other worktree on the machine.
 @test "an answer given in an unrelated worktree does not enable issue creation" {
     bind_wt
-    mkdir -p "$WORK/Slate/worktrees/elsewhere"
-    git -C "$WORK/Slate" worktree add -q -b feature/elsewhere-x "$WORK/Slate/worktrees/elsewhere2" >/dev/null 2>&1
-    grant_consent "$WORK/Slate/worktrees/elsewhere2" "$TEAM_ID" "$PROJECT_ID"
+    mkdir -p "$WORK/root/worktrees/elsewhere"
+    git -C "$WORK/root" worktree add -q -b feature/elsewhere-x "$WORK/root/worktrees/elsewhere2" >/dev/null 2>&1
+    grant_consent "$WORK/root/worktrees/elsewhere2" "$TEAM_ID" "$PROJECT_ID"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
     run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
     [ "$status" -eq 3 ]
     [ "$(sent issueCreate)" = "0" ]
-    [ ! -e "$HERDR_LINEAR_SLATE_ROOT/worktrees/newthing" ]
+    [ ! -e "$HERDR_LINEAR_PROJECTS_ROOT/worktrees/newthing" ]
 }
 
 # A proposal is not an answer: nobody confirmed it.
@@ -492,7 +493,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # new_project has no worktree of its own, so the answer is read for the
 # directory it was invoked from. An answer given somewhere else does not travel.
 @test "new_project reads the answer for the from-dir, not for another directory" {
-    unset HERDR_LINEAR_SLATE_ROOT
+    unset HERDR_LINEAR_PROJECTS_ROOT
     mkdir -p "$WORK/projects/alpha/worktrees/from" "$WORK/projects/beta/worktrees/other"
     export FAKE_LINEAR_ALLOW_MUTATION=1
     printf '# P\n\ncontent\n' > "$WORK/p.md"
@@ -522,7 +523,7 @@ refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
     return 0
 }
 
-worktree_count() { git -C "$WORK/Slate" worktree list | grep -c .; }
+worktree_count() { git -C "$WORK/root" worktree list | grep -c .; }
 
 # Covers AE8. One team on the project, so the team is a fact and not a question:
 # the only thing anyone was asked is the R9 first-write answer, and nothing is

@@ -17,7 +17,8 @@ setup() {
     ROOT="${BATS_TEST_DIRNAME}/../.."
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
+    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -28,13 +29,13 @@ setup() {
     export LINEAR_SECRETS_FILE="$WORK/secrets"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     export HERDR_LINEAR_DESC_BACKUP_DIR="$WORK/descriptions"
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_DESCDESCDESCDESCDES" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh; do . "$ROOT/lib/$f"; done
 
-    WT="$WORK/Slate/wt"; mkdir -p "$WT"
+    WT="$WORK/root/wt"; mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-2870-detach
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
@@ -356,8 +357,8 @@ entirely rewritten text"
 
 # Being outside the configured root is no longer the refusal. What refuses is
 # the binding: an unbound worktree is described nowhere, inside the root or out.
-@test "a worktree outside the Slate root is refused for being unbound, not for being outside" {
-    OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
+@test "a worktree outside the project root is refused for being unbound, not for being outside" {
+    OUT="$WORK/elsewhere/wt"; mkdir -p "$OUT"
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
     export FAKE_LINEAR_MODE=desc_issue FAKE_LINEAR_ALLOW_MUTATION=1

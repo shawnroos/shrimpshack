@@ -2,8 +2,8 @@
 # Linear documents, in place of a gitignored /docs. Sourced, never executed.
 #
 # WHY THIS EXISTS
-# Slate's web-app ignores /docs, so a durable document written on a branch dies
-# with the worktree -- the same failure this whole plugin exists to stop, in a
+# Plenty of repositories gitignore /docs, so a durable document written on a
+# branch dies with the worktree -- the same failure this whole plugin exists to stop, in a
 # different shape. A Linear document outlives the branch, is attached to the
 # work, and is readable by people who do not have the repository.
 #

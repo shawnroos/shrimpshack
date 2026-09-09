@@ -17,7 +17,8 @@ setup() {
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
 
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
+    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_JOURNAL_DIR="$WORK/journal"
@@ -26,11 +27,11 @@ setup() {
     export FAKE_HERDR_ALLOW_MUTATION=1
     export HERDR_LINEAR_PANE_POLL_MS=5
     export HERDR_LINEAR_PANE_POLL_TRIES=10
-    mkdir -p "$WORK/Slate" "$WORK/hrec"
+    mkdir -p "$WORK/root" "$WORK/hrec"
 
-    # A Slate root that is a real repo, so `git worktree add` has somewhere to go.
-    git -C "$WORK/Slate" init -q -b main
-    git -C "$WORK/Slate" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    # A project root that is a real repo, so `git worktree add` has somewhere to go.
+    git -C "$WORK/root" init -q -b main
+    git -C "$WORK/root" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh herdr-write.sh; do . "$ROOT/lib/$f"; done
@@ -49,8 +50,8 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     [ "$(herdr_calls 'tab create')" = "1" ]
     [ "$(herdr_calls 'pane split')" = "3" ]
     for c in WEB-3001 WEB-3002 WEB-3003; do
-        [ "$(herdr_linear::binding_state "$HERDR_LINEAR_SLATE_ROOT/worktrees/$c")" = "bound" ]
-        [ "$(herdr_linear::binding_identifier "$HERDR_LINEAR_SLATE_ROOT/worktrees/$c")" = "$c" ]
+        [ "$(herdr_linear::binding_state "$HERDR_LINEAR_PROJECTS_ROOT/worktrees/$c")" = "bound" ]
+        [ "$(herdr_linear::binding_identifier "$HERDR_LINEAR_PROJECTS_ROOT/worktrees/$c")" = "$c" ]
     done
 }
 
@@ -60,8 +61,8 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 @test "each column gets its own worktree, and the pane is opened in it" {
     run herdr_linear::layout_build WEB-2870 WEB-3001
     [ "$status" -eq 0 ]
-    [ -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" ]
-    run grep -c -- "--cwd $HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" "$FAKE_HERDR_RECORD_DIR/argv"
+    [ -d "$HERDR_LINEAR_PROJECTS_ROOT/worktrees/WEB-3001" ]
+    run grep -c -- "--cwd $HERDR_LINEAR_PROJECTS_ROOT/worktrees/WEB-3001" "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "1" ]
 }
 
@@ -74,7 +75,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     run herdr_linear::layout_build WEB-2870 WEB-3001
     [ "$status" -eq 1 ]
     [ "$(herdr_calls 'tab create')" = "0" ]
-    [ ! -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" ]
+    [ ! -d "$HERDR_LINEAR_PROJECTS_ROOT/worktrees/WEB-3001" ]
 }
 
 @test "a dead server is reported the same way" {
@@ -107,7 +108,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     run herdr_linear::layout_build WEB-2870 WEB-3001 ".." WEB-3003
     [ "$status" -eq 2 ]
     [ "$(herdr_calls 'tab create')" = "0" ]
-    [ ! -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" ]
+    [ ! -d "$HERDR_LINEAR_PROJECTS_ROOT/worktrees/WEB-3001" ]
 }
 
 # ------------------------------------------------------------- resumability
@@ -130,16 +131,16 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 
     # Still exactly one tab: the journal was consulted, not ignored.
     [ "$(herdr_calls 'tab create')" = "1" ]
-    [ "$(ls -1d "$HERDR_LINEAR_SLATE_ROOT"/worktrees/WEB-300* 2>/dev/null | wc -l | tr -d ' ')" = "2" ]
+    [ "$(ls -1d "$HERDR_LINEAR_PROJECTS_ROOT"/worktrees/WEB-300* 2>/dev/null | wc -l | tr -d ' ')" = "2" ]
 }
 
 # The file's own header forbids repairing a failed retry this way: an empty
-# repo shares no history with Slate and can never push.
+# repo shares no history with the project and can never push.
 @test "a branch that already exists fails the worktree instead of git-init a fresh repo" {
-    git -C "$HERDR_LINEAR_SLATE_ROOT" branch WEB-3001
+    git -C "$HERDR_LINEAR_PROJECTS_ROOT" branch WEB-3001
     run herdr_linear::layout_build WEB-2870 WEB-3001
     [ "$status" -eq 3 ]
-    [ ! -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001/.git" ]
+    [ ! -d "$HERDR_LINEAR_PROJECTS_ROOT/worktrees/WEB-3001/.git" ]
 }
 
 @test "a completed column is not rebuilt on a second run" {

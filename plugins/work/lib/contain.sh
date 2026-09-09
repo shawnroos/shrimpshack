@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Slate-root containment, and the scope readers built on it. Sourced, never
+# Project-root containment, and the scope readers built on it. Sourced, never
 # executed.
 #
 # Containment is a SIGNAL now, not a gate: no lib verb refuses for being
@@ -7,7 +7,7 @@
 # the comparison below still has to get right is the answer, and two failure
 # shapes would make it wrong, both of which a string prefix admits: a sibling
 # directory whose name begins with the root path
-# ("SlateOther" against "Slate"), and a symlink that resolves somewhere else
+# ("projectsOther" against "projects"), and a symlink that resolves somewhere else
 # entirely. Both operands are therefore resolved before they are compared, and
 # the comparison carries a trailing separator.
 #
@@ -29,10 +29,37 @@ herdr_linear::_resolve() {
     (cd "$p" 2>/dev/null && pwd -P) || return 1
 }
 
-# The root a session must sit under. The environment variable is the test seam;
-# nothing in the plugin writes it at runtime.
-herdr_linear::slate_root() {
-    printf '%s' "${HERDR_LINEAR_SLATE_ROOT:-$HOME/projects/Slate}"
+# The deprecated spelling of the seam, honoured but announced. The new default
+# is the same directory the old variable was usually pointed at, so a silent
+# rename would keep working BY ACCIDENT and leave the stale setting in place
+# unnoticed. The warning is emitted here, at source time, and not inside the
+# readers below: every reader runs in a command substitution, where a
+# once-per-process guard variable would die with the subshell and the line would
+# repeat on every lookup. The hooks source this file with stderr discarded, so
+# their silence outside the root is unaffected.
+if [ -z "${HERDR_LINEAR_PROJECTS_ROOT:-}" ] && [ -n "${HERDR_LINEAR_SLATE_ROOT:-}" ]; then
+    printf 'work: HERDR_LINEAR_SLATE_ROOT is deprecated; rename it to HERDR_LINEAR_PROJECTS_ROOT (check ~/.claude/settings.json and your shell environment)\n' >&2
+fi
+
+# The root override a caller has set, if any; non-zero when nobody has. The new
+# name wins outright when both are set.
+herdr_linear::_root_override() {
+    if [ -n "${HERDR_LINEAR_PROJECTS_ROOT:-}" ]; then
+        printf '%s' "$HERDR_LINEAR_PROJECTS_ROOT"
+        return 0
+    fi
+    if [ -n "${HERDR_LINEAR_SLATE_ROOT:-}" ]; then
+        printf '%s' "$HERDR_LINEAR_SLATE_ROOT"
+        return 0
+    fi
+    return 1
+}
+
+# The root a session must sit under. The environment variable is the
+# configuration surface and the test seam; nothing in the plugin writes it at
+# runtime.
+herdr_linear::projects_root() {
+    herdr_linear::_root_override || printf '%s' "$HOME/projects"
 }
 
 # herdr_linear::contains <path> -> 0 when <path> is the root or beneath it.
@@ -40,7 +67,7 @@ herdr_linear::contains() {
     local target="${1:-}" root resolved_root resolved_target
     [ -n "$target" ] || return 1
 
-    root="$(herdr_linear::slate_root)"
+    root="$(herdr_linear::projects_root)"
     resolved_root="$(herdr_linear::_resolve "$root")" || return 1
     resolved_target="$(herdr_linear::_resolve "$target")" || return 1
 
@@ -79,17 +106,17 @@ herdr_linear::path_signal() {
 # worktrees directory falls back to the configured root, which is the answer
 # for a plain repository checkout.
 herdr_linear::worktree_project() {
-    local dir="${1:-$PWD}" resolved
-    if [ -n "${HERDR_LINEAR_SLATE_ROOT:-}" ]; then
-        printf '%s' "$HERDR_LINEAR_SLATE_ROOT"
+    local dir="${1:-$PWD}" resolved override
+    if override="$(herdr_linear::_root_override)"; then
+        printf '%s' "$override"
         return 0
     fi
-    resolved="$(herdr_linear::_resolve "$dir")" || { herdr_linear::slate_root; return 0; }
+    resolved="$(herdr_linear::_resolve "$dir")" || { herdr_linear::projects_root; return 0; }
     case "$resolved" in
         */worktrees) printf '%s' "${resolved%/worktrees}"; return 0 ;;
         */worktrees/*) printf '%s' "${resolved%%/worktrees/*}"; return 0 ;;
     esac
-    herdr_linear::slate_root
+    herdr_linear::projects_root
 }
 
 # herdr_linear::worktree_repo [dir]
@@ -99,9 +126,9 @@ herdr_linear::worktree_project() {
 # --path-format=absolute is load-bearing -- the bare form prints `.git` at a
 # main checkout, which is a relative path and not somewhere `git -C` can go.
 herdr_linear::worktree_repo() {
-    local dir="${1:-$PWD}" common
-    if [ -n "${HERDR_LINEAR_SLATE_ROOT:-}" ]; then
-        printf '%s' "$HERDR_LINEAR_SLATE_ROOT"
+    local dir="${1:-$PWD}" common override
+    if override="$(herdr_linear::_root_override)"; then
+        printf '%s' "$override"
         return 0
     fi
     common="$("${HERDR_LINEAR_GIT_BIN:-git}" -C "$dir" rev-parse \

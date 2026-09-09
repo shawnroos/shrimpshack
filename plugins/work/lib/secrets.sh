@@ -58,7 +58,7 @@
 # exit-code enum, and no caller should pass one through as a process exit code
 # without mapping it.
 
-# Seams. Same shape as HERDR_LINEAR_SLATE_ROOT in contain.sh: every
+# Seams. Same shape as HERDR_LINEAR_PROJECTS_ROOT in contain.sh: every
 # external entry point is env-overridable so a test can point the whole path at
 # a fixture. A test that touched the real Keychain would either prompt for an
 # unlock or write a real Linear key to this machine's login keychain, and both

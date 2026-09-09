@@ -216,7 +216,7 @@ herdr_linear::_make_worktree() {
     #
     # No `git init` fallback here. `worktree add` fails most often because the
     # branch already exists -- exactly a layout RETRY -- and a fresh empty repo
-    # shares no history with Slate, can never push, and the header above
+    # shares no history with the project, can never push, and the header above
     # forbids repairing a failure this way. Fail and let the journal's own
     # resumability handle the retry.
     "${HERDR_LINEAR_GIT_BIN:-git}" -C "$root" worktree add -b "$branch" "$path" >/dev/null 2>&1 \

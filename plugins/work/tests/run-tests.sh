@@ -154,6 +154,91 @@ secret_scan() {
     fi
 }
 
+# R8. The organisation and product name this plugin was written for must appear
+# in nothing it ships; the tracker's own name is not in that class. This file is
+# the single exclusion, because it is where the forbidden spelling is written
+# down. The leading `[^A-Za-z]` keeps ordinary words that end in the same
+# letters ("translate") out of the class. Two exact strings are exempt, by span
+# so a second name on the same line is still a hit: the maintainer's own address
+# in the manifest, which is identity rather than branding, and the deprecated
+# environment variable name, which the fallback in lib/contain.sh has to spell
+# out to name what the user must rename. Both exemptions go when the thing they
+# name goes.
+BRAND_PATTERN='(^|[^A-Za-z])[Ss]late'
+
+brand_scan() {
+    printf '%sBrand scan...%s\n' "$YELLOW" "$NC"
+    # A recursive walk over a directory that is not there finds nothing and
+    # reads exactly like a clean tree, so prove the root before trusting it.
+    if [ ! -d "$PLUGIN_ROOT/lib" ] || [ ! -r "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]; then
+        printf '%sbrand scan FAILED%s — %s is not the plugin root; nothing was scanned.\n' \
+            "$RED" "$NC" "$PLUGIN_ROOT"
+        return 1
+    fi
+    # The scanner's own failure prints on stderr and leaves stdout empty, which
+    # reads exactly like a clean tree; its status is what decides.
+    local out rc=0
+    out="$(python3 - "$PLUGIN_ROOT" "$REPO_ROOT/.claude-plugin/marketplace.json" "$BRAND_PATTERN" <<'PYEOF'
+import json, os, re, sys
+
+plugin_root, marketplace, pattern = sys.argv[1], sys.argv[2], sys.argv[3]
+rx = re.compile(pattern)
+manifest = json.load(open(os.path.join(plugin_root, ".claude-plugin", "plugin.json")))
+exempt = [e for e in [(manifest.get("author") or {}).get("email"),
+                      "HERDR_LINEAR_SLATE_ROOT"] if e]
+
+def spans(line):
+    out = []
+    for token in exempt:
+        start = 0
+        while True:
+            i = line.find(token, start)
+            if i < 0:
+                break
+            out.append((i, i + len(token)))
+            start = i + 1
+    return out
+
+hits = []
+for dirpath, dirnames, filenames in os.walk(plugin_root):
+    dirnames[:] = [d for d in dirnames if d != ".git"]
+    for fn in sorted(filenames):
+        path = os.path.join(dirpath, fn)
+        if fn == "run-tests.sh":
+            continue
+        try:
+            text = open(path, encoding="utf-8").read()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            allowed = spans(line)
+            for m in rx.finditer(line):
+                if any(a <= m.start() and m.end() <= b for a, b in allowed):
+                    continue
+                hits.append("%s:%d:%s" % (os.path.relpath(path, plugin_root), n, line.strip()))
+
+entry = next((e for e in json.load(open(marketplace)).get("plugins", [])
+              if e.get("name") == manifest["name"]), None)
+if entry is None:
+    hits.append("marketplace.json: %r is not registered" % manifest["name"])
+elif rx.search(json.dumps(entry, ensure_ascii=False)):
+    hits.append("marketplace.json: the %r entry names the organisation" % manifest["name"])
+
+print("\n".join(hits))
+PYEOF
+)" || rc=1
+    if [ "$rc" -ne 0 ]; then
+        printf '%sbrand scan FAILED%s — the scan itself did not complete; nothing was proven.\n' "$RED" "$NC"
+        return 1
+    fi
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+        printf '%sbrand scan FAILED%s — a shipped file names the organisation.\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%sno shipped file names the organisation%s\n' "$GREEN" "$NC"
+}
+
 # A `!`-negated command is exempt from errexit, so `! grep -q X` in a bats test
 # detects the defect and lets the test pass. Two sanitiser tests and a Keychain
 # guard were inert this way. The suite refuses the shape rather than trusting
@@ -178,8 +263,9 @@ assertion_lint() {
 # the worst moment" failure the copy-pasted lists cannot see coming.
 #
 # owned_docs is every document this plugin ships that carries a bash fence
-# calling into lib/ -- all eight skills and the command. Anything that calls a
-# lib verb and is scanned by nothing is where a retired verb survives unnoticed.
+# calling into lib/. It is globbed, never listed: a hand-written list is
+# complete only until the next skill is added, and the file nobody remembered to
+# add is exactly where a retired verb survives unnoticed.
 skill_lib_sync_check() {
     printf '%sSkill lib-sourcing check...%s\n' "$YELLOW" "$NC"
     local root="${1:-$PLUGIN_ROOT}" out
@@ -187,17 +273,14 @@ skill_lib_sync_check() {
 import re, sys, glob, os
 
 plugin_root = sys.argv[1]
-owned_docs = [
-    "skills/describe/SKILL.md",
-    "skills/new/SKILL.md",
-    "skills/new-sub-issue/SKILL.md",
-    "skills/new-project/SKILL.md",
-    "skills/bind/SKILL.md",
-    "skills/layout/SKILL.md",
-    "skills/start/SKILL.md",
-    "skills/doc/SKILL.md",
-    "commands/work.md",
-]
+owned_docs = sorted(
+    os.path.relpath(p, plugin_root)
+    for p in glob.glob(os.path.join(plugin_root, "skills", "*", "SKILL.md"))
+    + glob.glob(os.path.join(plugin_root, "commands", "*.md"))
+)
+# An empty glob makes the loop below a no-op, and a no-op reports clean.
+if not owned_docs:
+    print("no skill or command document found under %s" % plugin_root); sys.exit(1)
 
 lib_names = sorted(os.path.basename(f)[:-3] for f in glob.glob(os.path.join(plugin_root, "lib", "*.sh")))
 
@@ -237,8 +320,6 @@ def sourced_names(fence_text):
 rc = 0
 for rel in owned_docs:
     path = os.path.join(plugin_root, rel)
-    if not os.path.isfile(path):
-        print("MISSING: %s" % path); rc = 1; continue
     text = open(path).read()
     fence_text = "\n".join(re.findall(r'```bash\n(.*?)```', text, re.S))
     declared = sourced_names(fence_text)
@@ -343,6 +424,29 @@ consent_caller_check() {
     printf '%sno caller under lib/, hooks/ or commands/%s\n' "$GREEN" "$NC"
 }
 
+# Sourcing lib/ writes to stderr -- the deprecated-root warning in contain.sh
+# does -- and a hook has no stderr to spare: R26 is no output at all, not less
+# of it. Both hooks discard it on the source loop today; this is what stops the
+# next hook, or a rewrite of an existing one, from dropping the redirection and
+# leaking lib chatter into a session that was never pointed at this plugin.
+hook_source_stderr_check() {
+    printf '%sHook source-stderr check...%s\n' "$YELLOW" "$NC"
+    local rc=0 f hits
+    for f in "$PLUGIN_ROOT"/hooks/*.sh; do
+        [ -e "$f" ] || continue
+        hits="$(grep -n '\. "\$LIB/\$f"' "$f" | grep -v '2>/dev/null' || true)"
+        if [ -n "$hits" ]; then
+            printf '%s: %s\n' "$(basename "$f")" "$hits"
+            rc=1
+        fi
+    done
+    if [ "$rc" -ne 0 ]; then
+        printf '%shook source-stderr check FAILED%s — a hook sources lib without discarding stderr.\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%severy hook sources lib with stderr discarded%s\n' "$GREEN" "$NC"
+}
+
 # The act-or-ask rubric is copied into all eight skills because a skill file is
 # what is in context when it runs. Eight copies drift, and a drifted copy ships
 # green -- so the identity is asserted here rather than assumed, and the failure
@@ -413,9 +517,11 @@ wire_smoke() {
     validate_check || rc=1
     manifest_autoload_check || rc=1
     secret_scan || rc=1
+    brand_scan || rc=1
     skill_lib_sync_check || rc=1
     rubric_sync_check || rc=1
     consent_caller_check || rc=1
+    hook_source_stderr_check || rc=1
     return "$rc"
 }
 

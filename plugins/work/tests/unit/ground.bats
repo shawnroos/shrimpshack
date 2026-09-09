@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # U6 — the grounding hook.
 #
-# The hook runs at every session start in a Slate worktree, so its first duty is
-# to be harmless: every path exits 0, and a worktree outside the Slate root
+# The hook runs at every session start in a worktree under the project root, so its first duty is
+# to be harmless: every path exits 0, and a worktree outside the project root
 # produces nothing at all. The second is that no string Linear supplies is ever
 # readable as an instruction.
 #
@@ -19,7 +19,8 @@ setup() {
     HOOK="$ROOT/hooks/ground.sh"
     WORK="$(mktemp -d)"
 
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
+    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -29,15 +30,15 @@ setup() {
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
     export CLAUDE_SESSION_ID="s1"
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_GROUNDGROUNDGROUNDGR" > "$LINEAR_SECRETS_FILE"
 
-    WT="$WORK/Slate/wt"
+    WT="$WORK/root/wt"
     mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-3318-drawer
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
-    OUTSIDE="$WORK/NotSlate/wt"
+    OUTSIDE="$WORK/elsewhere/wt"
     mkdir -p "$OUTSIDE"
     git -C "$OUTSIDE" init -q -b feature/web-3318-drawer
     git -C "$OUTSIDE" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
@@ -60,8 +61,20 @@ bind_wt() {
 
 # R26/AE7. Not "less output" -- none, and exit 0. This plugin has no business
 # announcing itself in a repository it was never pointed at.
-@test "a worktree outside the Slate root produces no output at all" {
+@test "a worktree outside the project root produces no output at all" {
     run --separate-stderr bash -c "printf '%s' '$(payload "$OUTSIDE")' | bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ -z "$stderr" ]
+}
+
+# The deprecated root variable warns on stderr when it is read, and a hook has
+# no stderr to spare: R26 is no output at all, not less of it. ground.sh sources
+# lib/ with stderr discarded, which is what keeps the two compatible.
+@test "the deprecated root name still produces no hook output at all" {
+    run --separate-stderr env -u HERDR_LINEAR_PROJECTS_ROOT \
+        HERDR_LINEAR_SLATE_ROOT="$WORK/root" \
+        bash -c "printf '%s' '$(payload "$OUTSIDE")' | bash '$HOOK'"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
     [ -z "$stderr" ]

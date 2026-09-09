@@ -10,7 +10,8 @@ setup() {
     ROOT="${BATS_TEST_DIRNAME}/../.."
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
+    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -20,13 +21,13 @@ setup() {
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_DOCSDOCSDOCSDOCSDOC" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh documents.sh; do . "$ROOT/lib/$f"; done
 
-    WT="$WORK/Slate/wt"; mkdir -p "$WT"
+    WT="$WORK/root/wt"; mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-2870-detach
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
@@ -167,8 +168,8 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # root that is bound and write-enabled publishes like any other -- the binding
 # and the write allowlist are what decide, and the test below proves the second
 # of them still does.
-@test "a worktree outside the Slate root is no longer refused for being outside" {
-    OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
+@test "a worktree outside the project root is no longer refused for being outside" {
+    OUT="$WORK/elsewhere/wt"; mkdir -p "$OUT"
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
     n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"; herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
@@ -179,8 +180,8 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$(sent documentCreate)" = "1" ]
 }
 
-@test "a worktree outside the Slate root that is not write-enabled still publishes nothing" {
-    OUT="$WORK/NotSlate/wt2"; mkdir -p "$OUT"
+@test "a worktree outside the project root that is not write-enabled still publishes nothing" {
+    OUT="$WORK/elsewhere/wt2"; mkdir -p "$OUT"
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
     n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"; herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
@@ -215,7 +216,10 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     # head of a missing file is empty, and an empty stream matches nothing --
     # so without this the refutation passes on a doc that does not exist.
     [ -r "$ROOT/docs/linear-conventions.md" ]
-    refute_match -qF 'Slate' < <(head -1 "$ROOT/docs/linear-conventions.md")
+    # Assembled, not written out: the literal would itself be a hit for the
+    # tree-wide brand scan in run-tests.sh that enforces this same rule.
+    local name; name="$(printf 'S%s' late)"
+    refute_match -qF "$name" < <(head -1 "$ROOT/docs/linear-conventions.md")
 }
 
 # doc_publish has no projectId path -- it always resolves the bound issue and
