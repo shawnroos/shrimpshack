@@ -13,9 +13,8 @@ Report the state of the worktree you are in. Read it, do not guess it:
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
 source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/binding.sh"
-source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"; source "$R/lib/sanitize.sh"
-source "$R/lib/description.sh"; source "$R/lib/herdr-read.sh"
-source "$R/lib/herdr-write.sh"; source "$R/lib/start.sh"; source "$R/lib/create.sh"
+source "$R/lib/linear.sh"; source "$R/lib/sanitize.sh"
+source "$R/lib/herdr-read.sh"; source "$R/lib/context.sh"
 
 herdr_linear::scope_signals "$PWD" "$(herdr_linear::workspace_id)"
 herdr_linear::binding_state "$PWD"

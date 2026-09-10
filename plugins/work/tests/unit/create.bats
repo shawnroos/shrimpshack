@@ -41,7 +41,7 @@ setup() {
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh \
-             herdr-read.sh herdr-write.sh start.sh create.sh; do . "$ROOT/lib/$f"; done
+             herdr-read.sh herdr-write.sh start.sh context.sh create.sh; do . "$ROOT/lib/$f"; done
 
     WT="$PROJECT/worktrees/current"
     git -C "$PROJECT" worktree add -q -b feature/web-2870-detach "$WT" >/dev/null 2>&1
@@ -76,10 +76,9 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "the current project and team come from the bound issue" {
     bind_wt
     export FAKE_LINEAR_MODE=found_parent
-    run herdr_linear::current_context "$WT"
-    [[ "$output" == *"project=44444444-4444-4444-8444-444444444444"* ]]
-    [[ "$output" == *"team=55555555-5555-4555-8555-555555555555"* ]]
-    [[ "$output" == *"issue=WEB-2870"* ]]
+    run --separate-stderr herdr_linear::current_context "$WT"
+    [ "$(herdr_linear::context_fields "$output" project_id team_id identifier)" \
+      = "$PROJECT_ID"$'\t'"$TEAM_ID"$'\t'"WEB-2870" ]
 }
 
 # The first issue in a new space has no bound worktree to ask.
@@ -87,8 +86,8 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     n="$(herdr_linear::workspace_propose w1 proj-abc)"
     herdr_linear::workspace_confirm w1 proj-abc "$n"
     export FAKE_LINEAR_MODE=found_parent
-    run herdr_linear::current_context "$WT" w1
-    [[ "$output" == *"project=proj-abc"* ]]
+    run --separate-stderr herdr_linear::current_context "$WT" w1
+    [ "$(herdr_linear::context_fields "$output" project_id)" = "proj-abc" ]
 }
 
 # The other half of the same case. A project answers the TEAM too, or the first
@@ -99,8 +98,9 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     n="$(herdr_linear::workspace_propose w1 proj-abc)"
     herdr_linear::workspace_confirm w1 proj-abc "$n"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=one
-    run herdr_linear::current_context "$WT" w1
-    [[ "$output" == *"team=55555555-5555-4555-8555-555555555555"* ]]
+    run --separate-stderr herdr_linear::current_context "$WT" w1
+    [ "$(herdr_linear::context_fields "$output" project_id team_id)" \
+      = "proj-abc"$'\t'"$TEAM_ID" ]
 }
 
 # AE1's second half: "states which team it resolved" needs the NAME, and R4
@@ -110,8 +110,9 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     n="$(herdr_linear::workspace_propose w1 proj-abc)"
     herdr_linear::workspace_confirm w1 proj-abc "$n"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=one
-    run herdr_linear::current_context "$WT" w1
-    [[ "$output" == *"team_name=Web"* ]]
+    run --separate-stderr herdr_linear::current_context "$WT" w1
+    [ "$(herdr_linear::context_fields "$output" project_id team_name)" \
+      = "proj-abc"$'\t'"Web" ]
 }
 
 # The other arm. A bound issue already carries its team's name in the fetch, so
@@ -119,8 +120,9 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "a team resolved from the bound issue is named too" {
     bind_wt
     export FAKE_LINEAR_MODE=found_parent
-    run herdr_linear::current_context "$WT"
-    [[ "$output" == *"team_name=Web"* ]]
+    run --separate-stderr herdr_linear::current_context "$WT"
+    [ "$(herdr_linear::context_fields "$output" team_id team_name)" \
+      = "$TEAM_ID"$'\t'"Web Creation" ]
     [ "$(sent 'project(id:')" -eq 0 ]
 }
 
@@ -129,29 +131,29 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     n="$(herdr_linear::workspace_propose w1 proj-abc)"
     herdr_linear::workspace_confirm w1 proj-abc "$n"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=many
-    run herdr_linear::current_context "$WT" w1
+    run --separate-stderr herdr_linear::current_context "$WT" w1
     # Without this the test passes on code that never looked at all:
     # a hardcoded empty team satisfies the assertion below.
     [ "$(sent 'project(id:')" -ge 1 ]
-    [[ "$output" == *"team="$'\n'* ]]
-    [[ "$output" != *"team=5"* ]]
-    # The `many` fixture's first team is id 5555.../name Web, the same pair the
-    # bound issue carries, so this asserts ABSENCE. A value assertion here would
-    # stay green over a resolver that picked the first of several.
-    [[ "$output" == *"team_name="$'\n'* ]]
-    [[ "$output" != *"team_name=Web"* ]]
+    # The whole line, not the two empty fields alone: a reader that returns
+    # nothing at all -- unparseable output, a crash -- gives an empty string
+    # here, and an emptiness assertion would call that the right answer. The
+    # `many` fixture's first team is the pair the bound issue carries, so this
+    # is also what stays red on a resolver that picks the first of several.
+    [ "$(herdr_linear::context_fields "$output" project_id team_id team_name)" \
+      = "proj-abc"$'\t'$'\t' ]
 }
 
 @test "a project with no team supplies no team" {
     n="$(herdr_linear::workspace_propose w1 proj-abc)"
     herdr_linear::workspace_confirm w1 proj-abc "$n"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=none
-    run herdr_linear::current_context "$WT" w1
+    run --separate-stderr herdr_linear::current_context "$WT" w1
     # Without this the test passes on code that never looked at all:
     # a hardcoded empty team satisfies the assertion below.
     [ "$(sent 'project(id:')" -ge 1 ]
-    [[ "$output" == *"team="$'\n'* ]]
-    [[ "$output" == *"team_name="$'\n'* ]]
+    [ "$(herdr_linear::context_fields "$output" project_id team_id team_name)" \
+      = "proj-abc"$'\t'$'\t' ]
 }
 
 # The bound issue still wins: it is the more specific fact, and a project lookup
@@ -163,9 +165,9 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     n="$(herdr_linear::workspace_propose w1 proj-abc)"
     herdr_linear::workspace_confirm w1 proj-abc "$n"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_PROJECT_TEAMS=many
-    run herdr_linear::current_context "$WT" w1
+    run --separate-stderr herdr_linear::current_context "$WT" w1
     [ "$(sent 'project(id:')" -eq 0 ]
-    [[ "$output" == *"team=55555555-5555-4555-8555-555555555555"* ]]
+    [ "$(herdr_linear::context_fields "$output" team_id)" = "$TEAM_ID" ]
 }
 
 # The whole point of the fix, at the verb that was refusing.
@@ -201,11 +203,38 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "a merely proposed workspace supplies nothing" {
     herdr_linear::workspace_propose w1 proj-abc >/dev/null
     export FAKE_LINEAR_MODE=found_parent
-    run herdr_linear::current_context "$WT" w1
-    [[ "$output" == *"project="$'\n'* ]] || [[ "$output" != *"proj-abc"* ]]
+    run --separate-stderr herdr_linear::current_context "$WT" w1
+    [ "$(herdr_linear::context_fields "$output" project_id team_id identifier)" \
+      = $'\t'$'\t' ]
 }
 
 # --------------------------------------------------------------- new issue
+
+# The shared body's whole output contract: an identifier, and nothing else. A
+# progress line on stdout prepends a sentence to what every tail reads back as
+# the identifier, which is the defect start.sh records having had once with
+# `git worktree add`.
+@test "the shared filing body prints the identifier and nothing else" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::_file_issue "$WT" "A new thing" "$DESC" "" ""
+    [ "$status" -eq 0 ]
+    [ "$output" = "WEB-4001" ]
+}
+
+# A field nobody reads is a field nobody should ask for: the fixture prunes its
+# answer to the selection it was sent, so asking for more is asking the tracker
+# for data this plugin then drops. Scoped to the mutation's own selection --
+# fetch_issue selects branchName for a reason.
+@test "the issue-create request asks for no field the caller never reads" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
+    [ "$status" -eq 0 ]
+    [ "$(sent issueCreate)" -eq 1 ]
+    [ "$(sent 'issueCreate.*branchName')" -eq 0 ]
+    [ "$(sent 'issueCreate.*identifier')" -eq 1 ]
+}
 
 @test "a new issue is created in the current project, with a session" {
     bind_wt; enable_writes

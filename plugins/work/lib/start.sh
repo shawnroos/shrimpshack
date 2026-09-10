@@ -170,7 +170,7 @@ herdr_linear::start_new() {
 import sys, json
 q = ("mutation($t:String!,$d:String!,$team:String!){"
      "issueCreate(input:{title:$t,description:$d,teamId:$team})"
-     "{success issue{id identifier branchName title}}}")
+     "{success issue{identifier}}}")
 print(json.dumps({"query": q, "variables": {
     "t": sys.argv[1], "d": open(sys.argv[2]).read(), "team": sys.argv[3]}}))
 ' "$title" "$descfile" "$team")" || return "$HERDR_LINEAR_START_FAILED"

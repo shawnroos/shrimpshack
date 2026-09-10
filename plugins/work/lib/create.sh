@@ -10,10 +10,11 @@
 # and binds the worktree it was asked from, because a second worktree there
 # leaves the one you are in bound to nothing and the new one empty.
 #
-# CONTEXT IS DERIVED, NOT ASKED FOR. "In the current project" means the project
-# of the issue this worktree is bound to, or the project the herdr workspace is
-# bound to. Asking which team and which project every time is how a command
-# stops being worth typing.
+# WHERE THE CONTEXT COMES FROM. The readers live in lib/context.sh; this file
+# only writes. `_file_issue` is everything the three filing verbs share and it
+# ends at the tracker, printing the identifier and nothing else. What each verb
+# does with that identifier -- a worktree and a pane, or the worktree you are
+# standing in -- is its own tail, and its own output shape.
 #
 # ALL THREE WRITE TO LINEAR, so all three are shadow-gated. In shadow mode
 # NOTHING local is created either -- no worktree, no pane, no workspace. A
@@ -31,141 +32,11 @@ HERDR_LINEAR_CREATE_FAILED=4
 # nothing was filed, PARTIAL means something was and is now unattended.
 HERDR_LINEAR_CREATE_PARTIAL=5
 
-# herdr_linear::current_context <worktree> [workspace-id]
-#
-# Prints `project=<id>`, `team=<id>` and `issue=<identifier>` for whatever can
-# be determined. A caller decides which of them it actually needs.
-herdr_linear::current_context() {
-    local wt="${1:-}" ws="${2:-}" ident resp project team team_name="" line=""
-
-    ident="$(herdr_linear::binding_identifier "$wt" 2>/dev/null)" || ident=""
-    if [ -n "$ident" ]; then
-        resp="$(herdr_linear::fetch_issue "$ident" 2>/dev/null)" || resp=""
-        if [ -n "$resp" ]; then
-            project="$(printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("project") or {}).get("id",""))' 2>/dev/null)"
-            team="$(printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("team") or {}).get("id",""))' 2>/dev/null)"
-            team_name="$(printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("team") or {}).get("name",""))' 2>/dev/null)"
-        fi
-    fi
-
-    # A bound workspace answers the project when this worktree cannot -- which
-    # is the case for the very first issue in a new space.
-    if [ -z "$project" ] && [ -n "$ws" ]; then
-        if [ "$(herdr_linear::workspace_state "$ws" 2>/dev/null)" = "bound" ]; then
-            project="$(herdr_linear::workspace_project "$ws" 2>/dev/null)" || project=""
-        fi
-    fi
-
-    # A project answers the team when no bound issue can -- the first issue in a
-    # new space. ONLY when the project has exactly one team: a project spanning
-    # several has no single right answer, and picking one files work into a team
-    # nobody chose. The caller asks instead, and names the candidates.
-    if [ -z "$team" ] && [ -n "$project" ]; then
-        line="$(herdr_linear::project_team "$project" 2>/dev/null)" || line=""
-        team="$(printf '%s' "$line" | cut -f1)"
-        team_name="$(printf '%s' "$line" | cut -f2)"
-    fi
-
-    printf 'project=%s\nteam=%s\nteam_name=%s\nissue=%s\n' \
-        "$project" "$team" "$team_name" "$ident"
-}
-
-# herdr_linear::scope_signals <worktree> [workspace-id]
-#
-# R7. Two signals, printed as `key=value`: whether the path sits under a known
-# projects root, and which Linear project the worktree maps to. It never
-# refuses -- a signal that blocks cannot be weighed against anything else.
-#
-# `unknown` is not `negative`. A worktree whose issue could not be fetched is
-# not out of scope; it is unread. current_context cannot make that distinction
-# because it swallows the fetch failure into an empty project, so the fetch
-# exit is read here instead.
-herdr_linear::scope_signals() {
-    local wt="${1:-}" ws="${2:-}"
-    printf 'path=%s\nproject=%s\n' \
-        "$(herdr_linear::path_signal "$wt")" \
-        "$(herdr_linear::_scope_project "$wt" "$ws")"
-}
-
-herdr_linear::_scope_project() {
-    local wt="$1" ws="$2" ident resp project rc
-    ident="$(herdr_linear::binding_identifier "$wt" 2>/dev/null)" || ident=""
-    if [ -n "$ident" ]; then
-        resp="$(herdr_linear::fetch_issue "$ident" 2>/dev/null)"; rc=$?
-        case "$rc" in
-            0) project="$(printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("project") or {}).get("id",""))' 2>/dev/null)" ;;
-            "$HERDR_LINEAR_NOT_FOUND") project="" ;;
-            *) printf 'unknown'; return 0 ;;
-        esac
-        [ -n "$project" ] && { printf '%s' "$project"; return 0; }
-    fi
-
-    if [ -n "$ws" ] && [ "$(herdr_linear::workspace_state "$ws" 2>/dev/null)" = "bound" ]; then
-        project="$(herdr_linear::workspace_project "$ws" 2>/dev/null)" || project=""
-        [ -n "$project" ] && { printf '%s' "$project"; return 0; }
-    fi
-
-    printf 'negative'
-}
-
-# herdr_linear::project_teams <project-id>
-#
-# Every team on the project, one `<id><TAB><name>` line each. A project with no
-# teams prints nothing and succeeds; only a transport or shape failure returns
-# non-zero, so a caller can tell "no teams" from "could not ask".
-herdr_linear::project_teams() {
-    local pid="${1:-}" body resp
-    [ -n "$pid" ] || return 1
-    body="$(python3 -c '
-import sys, json
-q = "query($id:String!){project(id:$id){teams(first:50){nodes{id name}}}}"
-print(json.dumps({"query": q, "variables": {"id": sys.argv[1]}}))
-' "$pid")" || return 1
-    resp="$(herdr_linear::query "$body")" || return 1
-    printf '%s' "$resp" | python3 -c '
-import sys, json
-try:
-    nodes = json.load(sys.stdin)["data"]["project"]["teams"]["nodes"]
-except Exception:
-    sys.exit(1)
-for n in nodes:
-    sys.stdout.write("%s\t%s\n" % (n.get("id", ""), n.get("name", "")))
-'
-}
-
-# herdr_linear::project_team <project-id>
-#
-# The project's ONLY team as `<id><TAB><name>`, or nothing. Several teams print
-# nothing and succeed: "cannot tell" is the answer, not an error to be reported
-# at a caller that would then have to distinguish it from a network failure.
-#
-# This verb is the single owner of the exactly-one-team rule R13 states. Both
-# fields come off the one line, so the id and the name cannot disagree.
-herdr_linear::project_team() {
-    local lines
-    lines="$(herdr_linear::project_teams "${1:-}")" || return 1
-    [ "$(printf '%s' "$lines" | grep -c .)" -eq 1 ] || return 0
-    printf '%s' "$lines" | head -n1
-}
-
-herdr_linear::_ctx_field() { printf '%s' "$1" | sed -n "s/^$2=//p"; }
-
 # herdr_linear::new_issue <worktree> <title> <descfile> [workspace-id] [name]
 #
 # A new issue in the current project, and a session to work it in.
 herdr_linear::new_issue() {
-    herdr_linear::_create_issue "$1" "$2" "$3" "" "${4:-}" "${5:-}"
-}
-
-# herdr_linear::new_issue_here <worktree> <title> <descfile> [workspace-id]
-#
-# R12. The same issue, bound to the worktree it was asked from. No second
-# worktree, and no pane -- you are already in the one this is for, so the third
-# output field is empty.
-#
-# It takes no worktree NAME, because it makes no worktree to name.
-herdr_linear::new_issue_here() {
-    herdr_linear::_create_issue "$1" "$2" "$3" "" "${4:-}" "" here
+    herdr_linear::_issue_with_session "$1" "$2" "$3" "" "${4:-}" "${5:-}"
 }
 
 # herdr_linear::new_sub_issue <worktree> <title> <descfile> [workspace-id] [name]
@@ -180,35 +51,73 @@ herdr_linear::new_sub_issue() {
         printf 'this worktree is not bound to an issue, so there is no parent for a sub-issue\n' >&2
         return "$HERDR_LINEAR_CREATE_NO_CONTEXT"
     fi
-    herdr_linear::_create_issue "$1" "$2" "$3" "$parent" "${4:-}" "${5:-}"
+    herdr_linear::_issue_with_session "$1" "$2" "$3" "$parent" "${4:-}" "${5:-}"
 }
 
-# Why the team could not be derived, said so the reader can act on it. A project
-# spanning several teams is a QUESTION, not a dead end, so name every candidate:
-# "cannot tell which team" alone leaves the reader to go find out which exist.
-herdr_linear::_no_team_reason() {
-    local project="${1:-}" teams=""
-    if [ -n "$project" ]; then
-        teams="$(herdr_linear::project_teams "$project" 2>/dev/null)" || teams=""
+# herdr_linear::new_issue_here <worktree> <title> <descfile> [workspace-id]
+#
+# R12. The same issue, bound to the worktree it was asked from. No second
+# worktree, and no pane -- you are already in the one this is for, so the third
+# output field is empty.
+#
+# It takes no worktree NAME, because it makes no worktree to name.
+herdr_linear::new_issue_here() {
+    local wt="${1:-}" bound ident nonce
+
+    # Decided BEFORE anything is filed, which is why it is here and not inside
+    # the shared body: found out afterwards, a worktree that cannot be bound
+    # turns a refusal into a partial -- a real issue, and nowhere this verb is
+    # willing to put it.
+    bound="$(herdr_linear::binding_identifier "$wt" 2>/dev/null)" || bound=""
+    if [ -n "$bound" ]; then
+        printf 'this worktree is already bound to %s. Rebinding it would re-home that work, so which of a rebind, a sub-issue of %s, or an issue in its own worktree you meant is a choice, not a fact.\n' \
+            "$bound" "$bound" >&2
+        return "$HERDR_LINEAR_CREATE_REFUSED"
     fi
-    if [ "$(printf '%s' "$teams" | grep -c .)" -gt 1 ]; then
-        printf 'this project spans several teams, so which one this belongs to is a choice, not a fact. Ask, then name one of:\n'
-        printf '%s' "$teams" | grep . | while IFS=$'\t' read -r id name; do
-            printf '  %s (%s)\n' "$name" "$id"
-        done
-        return 0
-    fi
-    if [ -n "$project" ]; then
-        printf 'this project has no team, so there is nothing to file against. Add a team to the project first.\n'
-        return 0
-    fi
-    printf 'cannot tell which team this belongs to. Bind this worktree, or bind the workspace to a project first.\n'
+
+    ident="$(herdr_linear::_file_issue "$wt" "${2:-}" "${3:-}" "" "${4:-}")" || return $?
+
+    # Bound in place. Asking for the ticket FROM this worktree is the statement
+    # of what it is for -- the same reasoning start_from_issue binds on, where
+    # naming the ticket is the confirmation.
+    nonce="$(herdr_linear::binding_propose "$wt" "$ident")" && \
+        herdr_linear::binding_confirm "$wt" "$ident" "$nonce" || {
+        printf 'created %s, but could not bind this worktree to it: run /work:bind %s\n' "$ident" "$ident" >&2
+        return "$HERDR_LINEAR_CREATE_PARTIAL"
+    }
+    printf '%s\t%s\t' "$ident" "$wt"
+    return "$HERDR_LINEAR_CREATE_OK"
 }
 
-herdr_linear::_create_issue() {
-    local wt="${1:-}" title="${2:-}" descfile="${3:-}" parent="${4:-}" ws="${5:-}" name="${6:-}"
-    local here="${7:-}"
-    local ctx project team body resp ident path pane parent_id nonce bound
+# The tail `new_issue` and `new_sub_issue` share: the issue, then somewhere to
+# work it. Prints `IDENTIFIER<TAB>WORKTREE<TAB>PANE`.
+herdr_linear::_issue_with_session() {
+    local wt="${1:-}" name="${6:-}" ident path pane
+
+    ident="$(herdr_linear::_file_issue "$wt" "${2:-}" "${3:-}" "${4:-}" "${5:-}")" || return $?
+
+    # A failure here leaves a real issue with no worktree, which is recoverable
+    # by hand -- so it is reported, not rolled back. Deleting a freshly filed
+    # ticket to tidy up would be worse.
+    path="$(herdr_linear::start_from_issue "$ident" "$name" "" "$wt")" || {
+        printf 'created %s, but could not make a worktree for it: run /work:start %s\n' "$ident" "$ident" >&2
+        return "$HERDR_LINEAR_CREATE_PARTIAL"
+    }
+
+    pane="$(herdr_linear::open_session "$path" 2>/dev/null)" || pane=""
+    printf '%s\t%s\t%s' "$ident" "$path" "$pane"
+    return "$HERDR_LINEAR_CREATE_OK"
+}
+
+# herdr_linear::_file_issue <worktree> <title> <descfile> <parent> [workspace-id]
+#
+# Everything the three filing verbs share, ending at the tracker. STDOUT CARRIES
+# THE IDENTIFIER AND NOTHING ELSE -- every message here goes to stderr, because
+# a stray line would prepend a sentence to what the caller reads back as an
+# identifier.
+herdr_linear::_file_issue() {
+    local wt="${1:-}" title="${2:-}" descfile="${3:-}" parent="${4:-}" ws="${5:-}"
+    local ctx fields project team body resp ident parent_id
 
     [ -n "$title" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     [ -r "$descfile" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
@@ -216,30 +125,20 @@ herdr_linear::_create_issue() {
     # template, so a missing spine means the template was abandoned halfway.
     herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_CREATE_REFUSED"
 
-    # Decided BEFORE anything is filed. Found out afterwards, a worktree that
-    # cannot be bound turns a refusal into a partial: a real issue, and nowhere
-    # this verb is willing to put it.
-    if [ -n "$here" ]; then
-        bound="$(herdr_linear::binding_identifier "$wt" 2>/dev/null)" || bound=""
-        if [ -n "$bound" ]; then
-            printf 'this worktree is already bound to %s. Rebinding it would re-home that work, so which of a rebind, a sub-issue of %s, or an issue in its own worktree you meant is a choice, not a fact.\n' \
-                "$bound" "$bound" >&2
-            return "$HERDR_LINEAR_CREATE_REFUSED"
-        fi
-    fi
-
     ctx="$(herdr_linear::current_context "$wt" "$ws")"
-    project="$(herdr_linear::_ctx_field "$ctx" project)"
-    team="$(herdr_linear::_ctx_field "$ctx" team)"
+    fields="$(herdr_linear::context_fields "$ctx" project_id team_id)"
+    project="$(printf '%s' "$fields" | cut -f1)"
+    team="$(printf '%s' "$fields" | cut -f2)"
 
     if [ -z "$team" ]; then
-        herdr_linear::_no_team_reason "$project" >&2
+        herdr_linear::no_team_reason "$project" >&2
         return "$HERDR_LINEAR_CREATE_NO_CONTEXT"
     fi
 
     if ! herdr_linear::consent_gate "$wt" "$team" "$project" \
         "create issue \"$title\" (team $team, project ${project:-none}${parent:+, parent $parent}) and a session for it"; then
-        printf 'shadow: would create "%s"%s\n' "$title" "${parent:+ under $parent}"
+        # stderr, because stdout carries the identifier.
+        printf 'shadow: would create "%s"%s\n' "$title" "${parent:+ under $parent}" >&2
         return "$HERDR_LINEAR_CREATE_SHADOW"
     fi
 
@@ -258,7 +157,7 @@ inp = {"title": title, "description": open(path).read(), "teamId": team}
 if project: inp["projectId"] = project
 if parent:  inp["parentId"] = parent
 q = ("mutation($i:IssueCreateInput!){issueCreate(input:$i)"
-     "{success issue{id identifier branchName title}}}")
+     "{success issue{identifier}}}")
 print(json.dumps({"query": q, "variables": {"i": inp}}))
 ' "$title" "$descfile" "$team" "$project" "$parent_id")" || return "$HERDR_LINEAR_CREATE_FAILED"
 
@@ -281,29 +180,7 @@ except Exception:
         herdr_linear::binding_add_child "$wt" "$ident" >/dev/null 2>&1 || true
     fi
 
-    # Bound in place. Asking for the ticket FROM this worktree is the statement
-    # of what it is for -- the same reasoning start_from_issue binds on, where
-    # naming the ticket is the confirmation.
-    if [ -n "$here" ]; then
-        nonce="$(herdr_linear::binding_propose "$wt" "$ident")" && \
-            herdr_linear::binding_confirm "$wt" "$ident" "$nonce" || {
-            printf 'created %s, but could not bind this worktree to it: run /work:bind %s\n' "$ident" "$ident" >&2
-            return "$HERDR_LINEAR_CREATE_PARTIAL"
-        }
-        printf '%s\t%s\t' "$ident" "$wt"
-        return "$HERDR_LINEAR_CREATE_OK"
-    fi
-
-    # The session. A failure here leaves a real issue with no worktree, which is
-    # recoverable by hand -- so it is reported, not rolled back. Deleting a
-    # freshly filed ticket to tidy up would be worse.
-    path="$(herdr_linear::start_from_issue "$ident" "$name" "" "$wt")" || {
-        printf 'created %s, but could not make a worktree for it: run /work:start %s\n' "$ident" "$ident" >&2
-        return "$HERDR_LINEAR_CREATE_PARTIAL"
-    }
-
-    pane="$(herdr_linear::open_session "$path" 2>/dev/null)" || pane=""
-    printf '%s\t%s\t%s' "$ident" "$path" "$pane"
+    printf '%s' "$ident"
     return "$HERDR_LINEAR_CREATE_OK"
 }
 

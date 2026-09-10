@@ -36,7 +36,7 @@ Writes to Linear are opened by an answer, not by a file somebody edits.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start context create; do
   source "$R/lib/$f.sh"
 done
 herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
@@ -73,7 +73,7 @@ team, or made from a different branch, asks again.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start context create; do
   source "$R/lib/$f.sh"
 done
 

@@ -35,22 +35,24 @@ worktree is bound to, or from the project the herdr workspace is bound to.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start context create; do
   source "$R/lib/$f.sh"
 done
 
 CTX="$(herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)")"
-printf '%s\n' "$CTX"
+herdr_linear::context_fields "$CTX" project_id team_id team_name identifier
 ```
 
-`team_name=` carries the name beside the id. **State both, and where they came
-from, before you file** — "Team: Web, the only team on project AI Canvas Tools".
+One tab-separated line: the project id, the team id, the team's name, and the
+issue this worktree is bound to. **State the team's name and its id, and where
+they came from, before you file** — "Team: Web, the only team on project AI
+Canvas Tools".
 
-An empty `team=` means the fact is unresolved, not that the answer is unknowable.
-Ask which, and name the candidates:
+An empty team field means the fact is unresolved, not that the answer is
+unknowable. Ask which, and name the candidates:
 
 ```bash
-herdr_linear::project_teams "$(herdr_linear::_ctx_field "$CTX" project)"
+herdr_linear::project_teams "$(herdr_linear::context_fields "$CTX" project_id)"
 ```
 
 Each line is `ID<TAB>NAME`. Several lines is a fork — ask, using the host's
@@ -72,8 +74,9 @@ Writes to Linear are opened by an answer, not by a file somebody edits.
 
 ```bash
 CTX="$(herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)")"
-TEAM="$(herdr_linear::_ctx_field "$CTX" team)"
-PROJECT="$(herdr_linear::_ctx_field "$CTX" project)"
+FIELDS="$(herdr_linear::context_fields "$CTX" team_id project_id)"
+TEAM="$(printf '%s' "$FIELDS" | cut -f1)"
+PROJECT="$(printf '%s' "$FIELDS" | cut -f2)"
 herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
 ```
 

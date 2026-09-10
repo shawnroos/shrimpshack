@@ -317,6 +317,10 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$status" -eq 0 ]
     [ "$output" = "$PROJECT/worktrees/newthing" ]
     [ "$(sent issueCreate)" -ge 1 ]
+    # A field nobody reads is a field nobody should ask for. Scoped to the
+    # mutation's own selection -- fetch_issue selects branchName for a reason.
+    [ "$(sent 'issueCreate.*branchName')" -eq 0 ]
+    [ "$(sent 'issueCreate.*identifier')" -ge 1 ]
 }
 
 # ------------------------------------------------------------ the name (F7)

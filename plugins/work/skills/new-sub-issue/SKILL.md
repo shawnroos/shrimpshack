@@ -38,13 +38,14 @@ Writes to Linear are opened by an answer, not by a file somebody edits.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start context create; do
   source "$R/lib/$f.sh"
 done
 CTX="$(herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)")"
-TEAM="$(herdr_linear::_ctx_field "$CTX" team)"
-TEAM_NAME="$(herdr_linear::_ctx_field "$CTX" team_name)"
-PROJECT="$(herdr_linear::_ctx_field "$CTX" project)"
+FIELDS="$(herdr_linear::context_fields "$CTX" team_id team_name project_id)"
+TEAM="$(printf '%s' "$FIELDS" | cut -f1)"
+TEAM_NAME="$(printf '%s' "$FIELDS" | cut -f2)"
+PROJECT="$(printf '%s' "$FIELDS" | cut -f3)"
 herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
 ```
 
@@ -85,7 +86,7 @@ team or a different project, or made from a different branch, asks again.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start context create; do
   source "$R/lib/$f.sh"
 done
 
