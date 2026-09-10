@@ -75,7 +75,7 @@ jfield() { python3 -c "$1"; }
 }
 
 @test "a child issue carries a non-null parent" {
-    run bash -c "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' --data '{}'"
+    run bash -c "printf '' | FAKE_LINEAR_UNFILTERED=1 FAKE_LINEAR_MODE=found_child bash '$FIXTURE' --data '{}'"
     [ "$status" -eq 0 ]
     result="$(printf '%s' "$output" | jfield \
         'import sys,json;print(json.load(sys.stdin)["data"]["issue"]["parent"]["identifier"])')"
@@ -87,7 +87,7 @@ jfield() { python3 -c "$1"; }
 # treats "no parent" and "no labels" as missing keys passes on one and breaks
 # on the other.
 @test "a parent issue has parent null and an empty labels array" {
-    run bash -c "printf '' | FAKE_LINEAR_MODE=found_parent bash '$FIXTURE' --data '{}'"
+    run bash -c "printf '' | FAKE_LINEAR_UNFILTERED=1 FAKE_LINEAR_MODE=found_parent bash '$FIXTURE' --data '{}'"
     [ "$status" -eq 0 ]
     result="$(printf '%s' "$output" | jfield \
         'import sys,json;d=json.load(sys.stdin)["data"]["issue"];print(d["parent"],len(d["labels"]["nodes"]))')"
@@ -97,21 +97,21 @@ jfield() { python3 -c "$1"; }
 # The trap U5 would otherwise walk into. "No issue came back" arrives in three
 # incompatible shapes, and `.data.issue == null` recognises none of them.
 @test "not_found sets data to null beside errors, rather than nulling the issue" {
-    run bash -c "printf '' | FAKE_LINEAR_MODE=not_found bash '$FIXTURE' --data '{}'"
+    run bash -c "printf '' | FAKE_LINEAR_UNFILTERED=1 FAKE_LINEAR_MODE=not_found bash '$FIXTURE' --data '{}'"
     result="$(printf '%s' "$output" | jfield \
         'import sys,json;d=json.load(sys.stdin);print("data" in d, d["data"] is None, len(d["errors"]))')"
     [ "$result" = "True True 1" ]
 }
 
 @test "auth_error omits the data key entirely" {
-    run bash -c "printf '' | FAKE_LINEAR_MODE=auth_error bash '$FIXTURE' --data '{}'"
+    run bash -c "printf '' | FAKE_LINEAR_UNFILTERED=1 FAKE_LINEAR_MODE=auth_error bash '$FIXTURE' --data '{}'"
     result="$(printf '%s' "$output" | jfield \
         'import sys,json;print("data" in json.load(sys.stdin))')"
     [ "$result" = "False" ]
 }
 
 @test "validation_error also omits the data key" {
-    run bash -c "printf '' | FAKE_LINEAR_MODE=validation_error bash '$FIXTURE' --data '{}'"
+    run bash -c "printf '' | FAKE_LINEAR_UNFILTERED=1 FAKE_LINEAR_MODE=validation_error bash '$FIXTURE' --data '{}'"
     result="$(printf '%s' "$output" | jfield \
         'import sys,json;d=json.load(sys.stdin);print("data" in d, d["errors"][0]["extensions"]["code"])')"
     [ "$result" = "False GRAPHQL_VALIDATION_FAILED" ]
@@ -132,11 +132,11 @@ jfield() { python3 -c "$1"; }
 # The rate-limit headers are on every response, not only on a 429, so a client
 # can watch its own budget without ever being throttled.
 @test "the rate-limit headers appear only when curl was asked for headers" {
-    run bash -c "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' -i --data '{}'"
+    run bash -c "printf '' | FAKE_LINEAR_UNFILTERED=1 FAKE_LINEAR_MODE=found_child bash '$FIXTURE' -i --data '{}'"
     [ "$status" -eq 0 ]
     [[ "$output" == *"x-ratelimit-requests-limit: 2500"* ]]
 
-    run bash -c "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' --data '{}'"
+    run bash -c "printf '' | FAKE_LINEAR_UNFILTERED=1 FAKE_LINEAR_MODE=found_child bash '$FIXTURE' --data '{}'"
     [ "$status" -eq 0 ]
     [[ "$output" != *"x-ratelimit-requests-limit"* ]]
 }
@@ -163,4 +163,58 @@ jfield() { python3 -c "$1"; }
 
     run bash -c "printf '' | FAKE_LINEAR_MODE=malformed_json bash '$FIXTURE' --data '{}'"
     [ "$output" = '{"data":{"issue":' ]
+}
+
+# --- the fixture answers the REQUEST, not the mode -------------------------
+#
+# Served whole, a canned payload answers fields the request never selected, so
+# a field deleted from a query in lib/ still arrives and every test stays green.
+# That was measured, not supposed: branchName was removed from
+# HERDR_LINEAR_ISSUE_FIELDS and the entire suite passed. These pin the filter
+# that closed it, in both directions and on both sides of the boundary.
+
+@test "a read answers only the fields the request selected" {
+    body='{"query":"query($id:String!){issue(id:$id){identifier state{name}}}"}'
+    run bash -c "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' --data '$body'"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | jfield \
+        'import sys,json;d=json.load(sys.stdin)["data"]["issue"];print(sorted(d), sorted(d["state"]))')"
+    [ "$result" = "['identifier', 'state'] ['name']" ]
+}
+
+# The word-matching version of this filter cannot do this one. `updatedAt`
+# appears in the request as an ARGUMENT (orderBy:updatedAt) after being dropped
+# from the selection, so matching field names against the request text keeps it
+# and the mutation walks through.
+@test "a field named only in the arguments is still dropped from the answer" {
+    body='{"query":"query($f:IssueFilter,$n:Int){issues(first:$n,filter:$f,orderBy:updatedAt){nodes{identifier title}}}"}'
+    run bash -c "printf '' | FAKE_LINEAR_MODE=candidates bash '$FIXTURE' --data '$body'"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | jfield \
+        'import sys,json;print(sorted(json.load(sys.stdin)["data"]["issues"]["nodes"][0]))')"
+    [ "$result" = "['identifier', 'title']" ]
+}
+
+# The write side matters more than it looks: a branchName off a create response
+# names a git branch, and an identifier off the same response reaches a
+# filesystem path. An over-answering mutation arm hides a dropped field there
+# exactly as it did on the read side.
+@test "a mutation answers only the fields the mutation selected" {
+    body='{"query":"mutation($i:IssueCreateInput!){issueCreate(input:$i){success issue{identifier}}}"}'
+    run bash -c "printf '' | FAKE_LINEAR_ALLOW_MUTATION=1 bash '$FIXTURE' --data '$body'"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | jfield \
+        'import sys,json;d=json.load(sys.stdin)["data"]["issueCreate"];print(sorted(d), sorted(d["issue"]))')"
+    [ "$result" = "['issue', 'success'] ['identifier']" ]
+}
+
+# A request with nothing to filter by is REFUSED, not answered whole. Answering
+# it would restore the hole for any body the extractor cannot read, which is
+# how the permissive path became the default one in the first place.
+@test "a request carrying no query is refused, and says how to ask for the payload whole" {
+    run --separate-stderr bash -c \
+        "printf '' | FAKE_LINEAR_MODE=found_child bash '$FIXTURE' --data '{}'"
+    [ "$status" -eq 95 ]
+    [ -z "$output" ]
+    [[ "$stderr" == *"FAKE_LINEAR_UNFILTERED"* ]]
 }
