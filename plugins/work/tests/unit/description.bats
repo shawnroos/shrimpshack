@@ -90,6 +90,32 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 
 # --------------------------------------------------------------- the template
 
+# The backup directory is named after the identifier, so the identifier is a
+# path segment here exactly as it is in the cache.
+@test "a backup identifier that escapes the backup directory is refused" {
+    mkdir -p "$HERDR_LINEAR_DESC_BACKUP_DIR"
+    printf 'leaked\n' > "$WORK/elsewhere.md"
+
+    run herdr_linear::describe_backups "../"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+
+    run herdr_linear::describe_restore "../"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+
+    run herdr_linear::_backup_description "../escaped" "body"
+    [ "$status" -ne 0 ]
+    [ ! -e "$HERDR_LINEAR_DESC_BACKUP_DIR/../escaped" ]
+
+    # The positive control: a real identifier still round-trips.
+    mkdir -p "$HERDR_LINEAR_DESC_BACKUP_DIR/WEB-3318"
+    printf 'kept\n' > "$HERDR_LINEAR_DESC_BACKUP_DIR/WEB-3318/20200101T000000Z.md"
+    run herdr_linear::describe_restore WEB-3318
+    [ "$status" -eq 0 ]
+    [ "$output" = "kept" ]
+}
+
 @test "the template carries the spine, in order, with the example blocks" {
     run herdr_linear::description_template
     order="$(printf '%s' "$output" | grep '^## ' | tr '\n' '|')"

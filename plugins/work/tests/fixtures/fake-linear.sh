@@ -184,6 +184,15 @@ hostile() {
 JSON
 }
 
+# The hostile mode above puts its payload in the TITLE and keeps the identifier
+# well-formed, which is why nothing here ever reached the code that names FILES
+# after an identifier. This is that shape: the traversal is the identifier.
+traversal_identifier() {
+    cat <<'JSON'
+{"data":{"issue":{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","identifier":"../escaped","title":"t","url":"https://linear.app/example/issue/x","branchName":"x","updatedAt":"2026-09-04T12:00:00.000Z","priority":0,"state":{"id":"b","name":"Backlog","type":"backlog"},"parent":null,"project":null,"team":{"id":"e","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}}}
+JSON
+}
+
 # The candidate list with the same hostile bytes in one title. The chooser reads
 # this list in a terminal and answers a question about it, so it is a distinct
 # sink from the single-issue read above and needs its own fixture.
@@ -370,6 +379,7 @@ case "$mode" in
     candidates)       [ "$wants_headers" = 1 ] && emit_headers 200; candidates ;;
     no_candidates)    [ "$wants_headers" = 1 ] && emit_headers 200; no_candidates ;;
     hostile)          [ "$wants_headers" = 1 ] && emit_headers 200; hostile ;;
+    traversal_identifier) [ "$wants_headers" = 1 ] && emit_headers 200; traversal_identifier ;;
     hostile_candidates) [ "$wants_headers" = 1 ] && emit_headers 200; hostile_candidates ;;
     found_child)      [ "$wants_headers" = 1 ] && emit_headers 200; found_child ;;
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; found_parent ;;

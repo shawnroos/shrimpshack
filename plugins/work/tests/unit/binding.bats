@@ -38,6 +38,72 @@ bind_it() {   # propose + confirm, the happy path, used as a fixture
 
 # ------------------------------------------------------------------- lifecycle
 
+# The record is the delivery channel: whatever goes in here comes back out of
+# binding_identifier and becomes a path segment downstream. The store refuses an
+# unsafe identifier so no later reader has to.
+@test "an identifier the validator rejects never enters the record" {
+    for bad in "../outside" ".." "-D" ".git" "a/b" 'a$b'; do
+        run herdr_linear::binding_propose "$WT" "$bad"
+        [ "$status" -ne 0 ]
+        run herdr_linear::binding_state "$WT"
+        [ "$output" = "unbound" ]
+    done
+
+    # The positive control -- a validator that refuses everything passes above.
+    run herdr_linear::binding_propose "$WT" WEB-1234
+    [ "$status" -eq 0 ]
+    [ "${#output}" -eq 32 ]
+}
+
+# The guard on the way in does not cover a record already on disk -- one written
+# before the guard existed, or edited by anything that can reach the store. The
+# reader is what every downstream path-builder actually calls, so it validates
+# too rather than trusting the file.
+@test "an unsafe identifier already in the record is not handed out" {
+    bind_it WEB-1234
+    run herdr_linear::binding_identifier "$WT"
+    [ "$output" = "WEB-1234" ]
+
+    python3 -c 'import sys,json;f=sys.argv[1];d=json.load(open(f));d["issue_identifier"]="../outside";json.dump(d,open(f,"w"))' "$(record_file)"
+
+    run herdr_linear::binding_identifier "$WT"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+# The proposal is on disk between propose and confirm. Confirm compares the id
+# it is given against the proposal and would otherwise take a hostile pair.
+@test "confirm refuses an unsafe identifier that reached the proposal on disk" {
+    nonce="$(herdr_linear::binding_propose "$WT" WEB-1234)"
+    python3 -c 'import sys,json;f=sys.argv[1];d=json.load(open(f));d["proposal"]["identifier"]="../outside";json.dump(d,open(f,"w"))' "$(record_file)"
+
+    run herdr_linear::binding_confirm "$WT" "../outside" "$nonce"
+    [ "$status" -ne 0 ]
+    run herdr_linear::binding_state "$WT"
+    [ "$output" != "bound" ]
+}
+
+# add-child is the third writer of an identifier into the record, and what it
+# writes is a tracker-authored identifier from create.sh.
+@test "a child identifier that is not safe never enters the record" {
+    bind_it WEB-1234
+    run herdr_linear::binding_add_child "$WT" "../outside"
+    [ "$status" -ne 0 ]
+    run grep -c "outside" "$(record_file)"
+    [ "$output" = "0" ]
+
+    run herdr_linear::binding_add_child "$WT" WEB-9999
+    [ "$status" -eq 0 ]
+}
+
+# A proposed record has no identifier yet. That is ABSENT, and a caller that
+# cannot tell it from REFUSED treats a hostile record as an empty one.
+@test "a proposed record reports its identifier absent, not refused" {
+    herdr_linear::binding_propose "$WT" WEB-1234 >/dev/null
+    run herdr_linear::binding_identifier "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_ABSENT" ]
+}
+
 @test "a worktree with no record is unbound" {
     run herdr_linear::binding_state "$WT"
     [ "$output" = "unbound" ]

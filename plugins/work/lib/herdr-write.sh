@@ -21,6 +21,11 @@
 # that slugs to nothing are refused outright, because a repaired name is a name
 # nobody chose pointing at a place nobody meant.
 
+# No lib sources another, and ground.sh sources sanitize.sh AFTER this file:
+# without this the call below is 127, which its `||` branch reads as a refusal.
+command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+
 HERDR_LINEAR_JOURNAL_DIR="${HERDR_LINEAR_JOURNAL_DIR:-$HOME/.claude/work/layouts}"
 HERDR_LINEAR_PANE_POLL_TRIES="${HERDR_LINEAR_PANE_POLL_TRIES:-40}"
 HERDR_LINEAR_PANE_POLL_MS="${HERDR_LINEAR_PANE_POLL_MS:-100}"
@@ -30,23 +35,9 @@ HERDR_LINEAR_LAYOUT_NO_SERVER=1
 HERDR_LINEAR_LAYOUT_BAD_NAME=2
 HERDR_LINEAR_LAYOUT_FAILED=3
 
-# A journal identifier becomes a path segment (here) and a sed program (in
-# journal_get, since the child identifier is embedded in the key). Today's
-# callers only pass Linear identifiers, which cannot contain `/`, so this is
-# not yet reachable -- but it becomes live the moment a caller passes a title.
-# lib/sanitize.sh has is_safe_identifier for exactly this; kept local because
-# that file is being edited elsewhere right now. Replace this with it later.
-herdr_linear::_safe_journal_key() {
-    case "$1" in
-        ''|*[!A-Za-z0-9._-]*) return 1 ;;
-        .|..) return 1 ;;
-    esac
-    return 0
-}
-
 herdr_linear::_journal() {
     local issue="$1"
-    herdr_linear::_safe_journal_key "$issue" || return 1
+    herdr_linear::is_safe_identifier "$issue" || return 1
     mkdir -p "$HERDR_LINEAR_JOURNAL_DIR" 2>/dev/null
     printf '%s/%s.journal' "$HERDR_LINEAR_JOURNAL_DIR" "$issue"
 }
@@ -54,7 +45,7 @@ herdr_linear::_journal() {
 # journal_get <issue> <key> -> prints the recorded value, or fails.
 herdr_linear::journal_get() {
     local f
-    herdr_linear::_safe_journal_key "$2" || return 1
+    herdr_linear::is_safe_identifier "$2" || return 1
     f="$(herdr_linear::_journal "$1")" || return 1
     [ -r "$f" ] || return 1
     sed -n "s/^$2=//p" "$f" | tail -1 | grep -q . || return 1
@@ -65,7 +56,7 @@ herdr_linear::journal_get() {
 # read and write; appending cannot.
 herdr_linear::journal_put() {
     local f
-    herdr_linear::_safe_journal_key "$2" || return 1
+    herdr_linear::is_safe_identifier "$2" || return 1
     f="$(herdr_linear::_journal "$1")" || return 1
     mkdir -p "$(dirname "$f")" 2>/dev/null
     printf '%s=%s\n' "$2" "$3" >> "$f"

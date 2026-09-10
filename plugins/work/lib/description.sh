@@ -27,6 +27,11 @@
 # AND EVERY OVERWRITE IS RECOVERABLE. The prior description is saved before the
 # mutation. Full ownership with no undo is the wrong trade at any confidence.
 
+# No lib sources another, and ground.sh sources sanitize.sh AFTER this file:
+# without this the call below is 127, which its `||` branch reads as a refusal.
+command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+
 HERDR_LINEAR_DESC_BACKUP_DIR="${HERDR_LINEAR_DESC_BACKUP_DIR:-$HOME/.claude/work/descriptions}"
 
 # The spine, in order. Anything after Proposal is the ticket's own business.
@@ -204,6 +209,7 @@ herdr_linear::description_is_append() {
 
 herdr_linear::_backup_description() {
     local ident="$1" body="$2" dir f
+    herdr_linear::is_safe_identifier "$ident" || return 1
     dir="$HERDR_LINEAR_DESC_BACKUP_DIR/$ident"
     mkdir -p "$dir" 2>/dev/null || return 1
     chmod 700 "$HERDR_LINEAR_DESC_BACKUP_DIR" "$dir" 2>/dev/null
@@ -313,6 +319,7 @@ print(json.dumps({"query":"query($id:String!){issue(id:$id){identifier descripti
 # Puts a saved description back. Newest by default.
 herdr_linear::describe_restore() {
     local ident="${1:-}" f dir
+    herdr_linear::is_safe_identifier "$ident" || return "$HERDR_LINEAR_DESC_REFUSED"
     dir="$HERDR_LINEAR_DESC_BACKUP_DIR/$ident"
     f="${2:-}"
     [ -n "$f" ] || f="$(ls -1 "$dir"/*.md 2>/dev/null | tail -1)"
@@ -321,5 +328,6 @@ herdr_linear::describe_restore() {
 }
 
 herdr_linear::describe_backups() {
-    ls -1 "$HERDR_LINEAR_DESC_BACKUP_DIR/${1:-}"/*.md 2>/dev/null
+    herdr_linear::is_safe_identifier "${1:-}" || return 1
+    ls -1 "$HERDR_LINEAR_DESC_BACKUP_DIR/$1"/*.md 2>/dev/null
 }

@@ -22,6 +22,11 @@
 # 3. A read cannot hang a session (R14). Every call is bounded well inside the
 #    hook's budget and answers "unavailable" rather than blocking.
 
+# No lib sources another, and ground.sh sources sanitize.sh AFTER this file:
+# without this the call below is 127, which its `||` branch reads as a refusal.
+command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+
 HERDR_LINEAR_API_URL="${HERDR_LINEAR_API_URL:-https://api.linear.app/graphql}"
 HERDR_LINEAR_CURL_BIN="${HERDR_LINEAR_CURL_BIN:-curl}"
 HERDR_LINEAR_CACHE_DIR="${LINEAR_CACHE_DIR:-$HOME/.claude/linear-cache}"
@@ -242,6 +247,9 @@ herdr_linear::issue_updated_at() {
 # session in an hour-old status is worse than one extra API call.
 herdr_linear::cache_read() {
     local id="${1:-}" f age fetched now
+    # A path segment built from a tracker-authored value. Refusing at the sink
+    # is what makes the traversal impossible however the identifier arrived.
+    herdr_linear::is_safe_identifier "$id" || return 1
     f="$HERDR_LINEAR_CACHE_DIR/$id.json"
     [ -r "$f" ] || return 1
     fetched="$(python3 -c 'import sys,json;print(json.load(open(sys.argv[1])).get("fetchedAt",""))' "$f" 2>/dev/null)" || return 1

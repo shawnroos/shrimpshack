@@ -36,6 +36,11 @@
 
 # Outside version control, which R7 requires, and outside ${CLAUDE_PLUGIN_ROOT},
 # which changes on plugin update.
+# No lib sources another, and ground.sh sources sanitize.sh AFTER this file:
+# without this the call below is 127, which its `||` branch reads as a refusal.
+command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+
 HERDR_LINEAR_STORE_DIR="${HERDR_LINEAR_STORE_DIR:-$HOME/.claude/work}"
 HERDR_LINEAR_PIN_DIR="${HERDR_LINEAR_PIN_DIR:-$HOME/.claude/linear-pin}"
 HERDR_LINEAR_RECORD_VERSION=1
@@ -456,9 +461,16 @@ herdr_linear::binding_state() {
 }
 
 herdr_linear::binding_identifier() {
-    local rec
+    local rec id
     rec="$(herdr_linear::binding_read "$1")" || return "$HERDR_LINEAR_BINDING_ABSENT"
-    printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("issue_identifier",""))' 2>/dev/null
+    id="$(printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("issue_identifier",""))' 2>/dev/null)"
+    # A proposed record has no identifier yet; that is absent, not hostile, and
+    # callers distinguish the two.
+    [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_ABSENT"
+    # A record written before this guard existed, or edited by anything that can
+    # reach the store, is untrusted at read time too.
+    herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    printf '%s' "$id"
 }
 
 # The pin store is a SEED and is never written. It holds a bare identifier with
@@ -502,6 +514,9 @@ herdr_linear::_mutate() {
 herdr_linear::binding_propose() {
     local wt="${1:-}" id="${2:-}"
     [ -n "$wt" ] && [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    # The record is a delivery channel: what is written here comes back out of
+    # binding_identifier and becomes a path segment downstream.
+    herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
     herdr_linear::_mutate "$wt" propose "$(cd "$wt" && pwd -P)" "$id"
 }
 
@@ -510,13 +525,17 @@ herdr_linear::binding_propose() {
 herdr_linear::binding_confirm() {
     local wt="${1:-}" id="${2:-}" nonce="${3:-}" branch
     [ -n "$wt" ] && [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
     branch="$(herdr_linear::_current_branch "$wt")"
     herdr_linear::_mutate "$wt" confirm "$id" "$nonce" "$branch"
 }
 
 herdr_linear::binding_decline()       { herdr_linear::_mutate "${1:-}" decline "${2:-}"; }
 herdr_linear::binding_set_state()     { herdr_linear::_mutate "${1:-}" set-state "${2:-}"; }
-herdr_linear::binding_add_child()     { herdr_linear::_mutate "${1:-}" add-child "${2:-}"; }
+herdr_linear::binding_add_child() {
+    herdr_linear::is_safe_identifier "${2:-}" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::_mutate "${1:-}" add-child "$2"
+}
 herdr_linear::binding_add_document()  { herdr_linear::_mutate "${1:-}" add-document "${2:-}" "${3:-}"; }
 herdr_linear::binding_set_desc_head() { herdr_linear::_mutate "${1:-}" set-description-head "${2:-}"; }
 herdr_linear::binding_desc_head() {
