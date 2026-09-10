@@ -108,10 +108,14 @@ def present(request):
     if normalized["source"]:
         metadata["source"] = normalized["source"]
 
+    # R19: the caption rides inside the block, once, for every form. Only the block
+    # can be expected to survive relay, so anything qualifying the numbers goes in it.
+    head = render.caption(normalized)
+    body = "\n\n".join(blocks)
     return {
         "status": "ok",
         "message": "",
-        "block": "\n\n".join(blocks),
+        "block": (head + "\n" + body) if head else body,
         "form": decision["form"],
         "metadata": metadata,
         "notes": notes,

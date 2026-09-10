@@ -184,8 +184,7 @@ def table_with_meta(request, series_names=None):
             cells.append(cell(format_number(request["series"][name][i])))
         rows.append("| " + " | ".join(cells) + " |")
 
-    head_line = caption(request)
-    block = "\n".join(([head_line] if head_line else []) + [head, rule] + rows)
+    block = "\n".join([head, rule] + rows)
     return block, {"rendered": len(keep), "omitted": omitted}
 
 

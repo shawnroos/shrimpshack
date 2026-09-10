@@ -143,16 +143,16 @@ def main():
     )
     check("the omitted rows are reported", meta["omitted"] > 0, repr(meta))
 
-    # --- the caption travels inside the block (R19) ---
+    # --- the caption is built once and assembled by present, for every form (R19) ---
     req = norm([1.0, 2.0, 3.0], title="Weekly signups", units="users", source={"Period": "Aug"})
-    t = render.table(req)
-    check("the caption carries the title", "Weekly signups" in t, t.split("\n")[0])
-    check("the caption carries the units", "users" in t, t.split("\n")[0])
-    check("the caption carries the source metadata", "Aug" in t, t)
+    cap = render.caption(req)
+    check("the caption carries the title", "Weekly signups" in cap, cap)
+    check("the caption carries the units", "users" in cap, cap)
+    check("the caption carries the source metadata", "Aug" in cap, cap)
 
-    req = norm([1.0, 2.0, 3.0], title="Bare")
-    t = render.table(req)
-    check("an absent unit leaves no placeholder", "None" not in t and "undefined" not in t, t)
+    bare = render.caption(norm([1.0, 2.0, 3.0], title="Bare"))
+    check("an absent unit leaves no placeholder", "None" not in bare and "undefined" not in bare, bare)
+    check("a table body carries no duplicate caption", "Weekly signups" not in render.table(req), render.table(req))
 
     print(f"render_test: {passed} passed, {failed} failed")
     return 1 if failed else 0
