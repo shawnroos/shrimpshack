@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U15 — Linear documents in place of a gitignored /docs.
 #
 # No document is created or modified anywhere real. The curl stand-in records
@@ -11,7 +14,6 @@ setup() {
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
     export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
-    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"

@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U3 — the vendored Keychain, dialog and sanitiser primitives.
 #
 # Everything here runs against fixtures. The real Keychain is out of the test

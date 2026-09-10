@@ -38,7 +38,7 @@ EOF
 # up whenever a suite file is added; if it is ever lowered, say why in the
 # commit — this number is what turns "the tests directory got renamed" into a
 # failure instead of a smaller, silently-green run.
-HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-17}"
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-18}"
 
 run_suite() {
     local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
@@ -337,6 +337,40 @@ assertion_lint() {
         return 1
     fi
     printf '%sno negated assertions%s\n' "$GREEN" "$NC"
+}
+
+# tests/unit/setup_common.bash clears the environment namespace the libraries
+# read, and points every seam that would otherwise default into $HOME, the
+# Keychain or the network at the test's own directory. A suite added without it
+# reads whatever the person running the tests happens to have exported, and
+# reports green either way. Same argument the suite-count floor makes above: the
+# failure this refuses is a silent pass, so it is asserted rather than
+# remembered.
+#
+# The check lives here rather than inside run_suite because run_suite is also
+# pointed at fixture directories of throwaway suites, which have no shared setup
+# to load and should not be failed for it.
+suite_setup_check() {
+    printf '%sSuite isolation check...%s\n' "$YELLOW" "$NC"
+    local dir="${1:-$PLUGIN_ROOT/tests/unit}" f count=0 missing=""
+    for f in "$dir"/*.bats; do
+        [ -e "$f" ] || continue
+        count=$((count + 1))
+        grep -qE '^[[:space:]]*load[[:space:]]+setup_common([[:space:]]|$)' "$f" \
+            || missing="$missing  $(basename "$f")"$'\n'
+    done
+    if [ "$count" -eq 0 ]; then
+        printf '%ssuite isolation check FAILED%s — no .bats file under %s; nothing was checked.\n' \
+            "$RED" "$NC" "$dir"
+        return 1
+    fi
+    if [ -n "$missing" ]; then
+        printf '%s' "$missing"
+        printf '%ssuite isolation check FAILED%s — the suite(s) above do not `load setup_common`,\n' "$RED" "$NC"
+        printf 'so they read the environment of whoever runs them.\n'
+        return 1
+    fi
+    printf '%sall %d suite(s) load the shared setup%s\n' "$GREEN" "$count" "$NC"
 }
 
 # Each SKILL.md hand-copies its own subset of `source lib/*.sh` lines, and
@@ -701,6 +735,7 @@ wire_smoke() {
     printf '%sWire smoke...%s\n' "$YELLOW" "$NC"
     local rc=0
     assertion_lint || rc=1
+    suite_setup_check || rc=1
     scan_caller_check || rc=1
     version_sync_check || rc=1
     validate_check || rc=1

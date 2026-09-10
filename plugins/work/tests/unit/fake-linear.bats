@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U13 — the captured Linear response shapes, and the two boundaries the
 # curl-substitute fixture enforces.
 #

@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U5 — the Linear client.
 #
 # No test here touches the live Linear API. The network goes through

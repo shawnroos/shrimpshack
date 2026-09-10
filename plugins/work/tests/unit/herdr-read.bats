@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U11 — the read-only herdr accessor.
 #
 # Nothing here touches the live herdr server. That is a decision, not a

@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # The runner's own rules. Both exist because a green line over a broken rule is
 # worse than no line: the version fields drift silently, and spawn's credential
 # patterns do not match the one credential this plugin actually handles.
@@ -83,6 +86,31 @@ EOF
 EOF
     HERDR_LINEAR_MIN_SUITES=1 run run_suite "$WORK"
     [ "$status" -eq 0 ]
+}
+
+# --- suite_setup_check: a suite without the shared setup reads the developer's
+# own environment, and reports green while doing it ---
+
+@test "suite isolation check names a suite that does not load the shared setup" {
+    printf '%s\n' '@test "t" { true; }' > "$WORK/forgot.bats"
+    printf 'load setup_common\n@test "t" { true; }\n' > "$WORK/remembered.bats"
+    run suite_setup_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"forgot.bats"* ]]
+    [[ "$output" != *"remembered.bats"* ]]
+}
+
+@test "suite isolation check passes when every suite loads the shared setup" {
+    printf 'load setup_common\n@test "t" { true; }\n' > "$WORK/a.bats"
+    run suite_setup_check "$WORK"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all 1 suite(s)"* ]]
+}
+
+@test "suite isolation check refuses a directory it found no suite in" {
+    run suite_setup_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nothing was checked"* ]]
 }
 
 # --- skill_lib_sync_check: a skill's declared sourcing must cover the real

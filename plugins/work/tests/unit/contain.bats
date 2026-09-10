@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # Containment is the plugin's outermost boundary: every entry point calls it
 # before doing anything. A prefix match would admit a sibling directory and an
 # unresolved symlink would admit whatever it points at, so both are tested.
@@ -11,10 +14,6 @@ setup() {
     WORK="$(cd "$WORK" && pwd -P)"
     mkdir -p "$WORK/root/web-app" "$WORK/rootOther" "$WORK/outside"
     export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
-    # The machine running this suite may still carry the deprecated name in its
-    # own environment. Left set, every test below that unsets the new name would
-    # silently read the developer's real projects root instead of deriving.
-    unset HERDR_LINEAR_SLATE_ROOT
     . "$LIB/contain.sh"
 }
 

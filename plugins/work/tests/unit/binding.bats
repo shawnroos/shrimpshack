@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U4 — the binding store.
 #
 # WHAT THE NONCE TESTS DO AND DO NOT CLAIM

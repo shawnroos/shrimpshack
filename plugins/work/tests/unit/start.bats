@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # Starting work — from a ticket, or from nothing.
 #
 # The gap these fill: binding assumed a worktree already existed, which is the
@@ -23,7 +26,6 @@ setup() {
     # ~/projects is; the repository is the project inside it.
     export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
     PROJECT="$WORK/root/alpha"
-    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"

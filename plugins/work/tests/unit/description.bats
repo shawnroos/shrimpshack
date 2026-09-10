@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U14 — the issue description.
 #
 # The plugin owns the TEMPLATE, the VALIDATION and the WRITE. It does not author
@@ -18,7 +21,6 @@ setup() {
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
     export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
-    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"

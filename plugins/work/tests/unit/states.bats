@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U9 — the untidy states.
 #
 # Both states exist to STOP the plugin doing something, so every test here
@@ -15,7 +18,6 @@ setup() {
     WORK="$(mktemp -d)"
 
     export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
-    unset HERDR_LINEAR_SLATE_ROOT
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
