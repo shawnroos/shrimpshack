@@ -182,7 +182,7 @@ flowchart TB
 
 - `plugins/work/lib/contain.sh:32-41` — `slate_root` and the containment check.
 - `plugins/work/lib/start.sh:69,131,138` and `plugins/work/lib/herdr-write.sh:170,211` — the worktrees-root and git-root uses of the same value.
-- `plugins/work/lib/create.sh:34-55,90,96-99,148` — `current_context`, the lenient validate call, the NO_CONTEXT return, and the unconditional second worktree.
+- `plugins/work/lib/create.sh:34-55,90,96-99,148` — `current_context`, the lenient validate call, the NO_CONTEXT return, and the unconditional second worktree. *(As of the review pass, `current_context` and the other readers live in `plugins/work/lib/context.sh` and print JSON, not `key=value`.)*
 - `plugins/work/lib/linear.sh:304-324` — `write_allowed`, read from the local binding record.
 - `plugins/work/lib/reconcile.sh:224-229` — `writes_enabled` and the allowlist file.
 - `plugins/work/lib/description.sh:132,144-147,187` — the lenient default and the advisory spine.
@@ -266,12 +266,12 @@ U1, U2, U3 and U7 have landed. The rest runs in four waves, shaped by which file
 - **Dependencies:** none.
 - **Files:** `plugins/work/lib/contain.sh`, `plugins/work/lib/start.sh`, `plugins/work/lib/herdr-write.sh`, `plugins/work/lib/create.sh`, `plugins/work/lib/reconcile.sh`, `plugins/work/lib/documents.sh`, `plugins/work/lib/description.sh`, `plugins/work/lib/propose.sh`, `plugins/work/hooks/ground.sh`, and the `HERDR_LINEAR_SLATE_ROOT` seam in `plugins/work/tests/unit/{contain,create,reconcile,start,herdr-write,description,ground,documents,states,propose}.bats`.
 - **Approach:**
-  1. Add a reader that reports the two signals of R7 as `key=value` lines, following the shape `herdr_linear::current_context` already prints (`lib/create.sh:34-55`).
+  1. Add a reader that reports the two signals of R7 as `key=value` lines, following the shape `herdr_linear::current_context` already prints (`lib/create.sh:34-55`; that reader now lives in `lib/context.sh` and prints JSON).
   2. Add a reader for this worktree's project, derived from the parent of the `worktrees` directory in the resolved path.
   3. Add a reader for this worktree's repo via `git rev-parse --path-format=absolute --git-common-dir`, returning the directory containing it. The bare form prints `.git` at a main checkout, which every test fixture is.
   4. Give `start_from_issue` (`start.sh:74-76`), `start_new` (`start.sh:157-158`) and `new_project` (`create.sh:161-162`) a trailing `<from-dir>` argument defaulting to `$PWD`, since none takes a directory today and all three derive their root from `slate_root`. Leave `_root_writes_enabled` alone — U2 retires it.
   5. Retire `herdr_linear::contains`'s refusal at its eight `lib/` call sites — `create.sh:87,169`, `start.sh:130,215`, `reconcile.sh:240`, `documents.sh:115`, `description.sh:223`, `propose.sh:57` — and at `hooks/ground.sh:50`. The hooks keep their silence: `ground.sh` and `hooks/reconcile.sh` exit 0 on a negative path signal, so the reader's answer replaces the refusal without the plugin announcing itself in someone else's repository. The `skills/bind/SKILL.md:48` and `commands/work.md:18` sentences move with U5. Leave `propose.sh`'s enum otherwise intact per KTD4.
-- **Patterns to follow:** `lib/propose.sh:26-29` for the reader-with-enum shape; `lib/create.sh:34-55` for `key=value` reader output.
+- **Patterns to follow:** `lib/propose.sh:26-29` for the reader-with-enum shape; `lib/create.sh:34-55` for reader output — superseded: the readers moved to `lib/context.sh` and print JSON, so `lib/linear.sh`'s `issue_context` is the shape to follow.
 - **Test scenarios:**
   - Covers AE7. A worktree under no known projects root: both signals report negative and the reader exits 0.
   - Covers AE5. Linear unreachable: the path signal still answers and the Linear signal reports unknown, distinct from negative.
