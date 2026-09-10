@@ -621,6 +621,77 @@ PYEOF
     printf '%sthe rubric is one text in every skill%s\n' "$GREEN" "$NC"
 }
 
+# A function that turns an identifier into a filesystem path must call the one
+# validator. This is the half a unit test cannot answer: is_safe_identifier had
+# two passing tests and one production caller, and the traversal in cache_read
+# sat under both of them. The check is grep-shaped ON PURPOSE -- it asks whether
+# the call is WRITTEN, and the positive-path unit tests carry the other half,
+# which is whether the function is DEFINED when the code runs.
+#
+# Anchored on the path construction, not on a name: a site is any line that puts
+# a variable segment under a *_DIR or *CACHE root. Two sites consume a shasum
+# key rather than an identifier and are named below with that reason.
+#
+# WHAT IT DOES NOT SEE, so nobody reads more from a green than is there:
+# constructions at a script's TOP LEVEL rather than inside a function, and roots
+# that are neither *_DIR nor *CACHE -- start.sh builds "$root/$name" from a
+# slugged title, which lib/sanitize.sh guards by a different route.
+identifier_path_check() {
+    printf '%sIdentifier path-construction check...%s\n' "$YELLOW" "$NC"
+    local rc=0 f out
+    for f in "$PLUGIN_ROOT"/lib/*.sh "$PLUGIN_ROOT"/hooks/*.sh "$PLUGIN_ROOT"/bin/*.sh; do
+        [ -e "$f" ] || continue
+        out="$(awk -v file="$f" '
+            # binding_key and _pin_branch_key both emit 16 hex characters from
+            # shasum. There is no identifier in either path.
+            BEGIN {
+                skip["herdr_linear::_record_path"] = 1
+                skip["herdr_linear::binding_seed_candidate"] = 1
+            }
+            # ANY function header, not just a herdr_linear:: one. The cache
+            # WRITER is a bare write_nodes(), and a prefix-only pattern walked
+            # straight past the one traversal that writes rather than reads.
+            /^[A-Za-z_][A-Za-z0-9_:]*\(\)[[:space:]]*\{/ {
+                fn = $0; sub(/\(\).*/, "", fn)
+                body = ""; site = ""; next
+            }
+            fn != "" { body = body "\n" $0 }
+            # A *_DIR root with a variable segment under it. Skips the top-level
+            # defaulting assignments, which have the _DIR on the left.
+            fn != "" && (/_DIR/ || /CACHE/) && /\$\{?[a-z_0-9]/ \
+                && !/^[[:space:]]*[A-Z_]+=/ {
+                if (site == "") site = NR ": " $0
+            }
+            /^\}/ {
+                if (fn != "" && site != "" && !(fn in skip) \
+                    && body !~ /is_safe_identifier/)
+                    print file ":" site "   [" fn "]"
+                fn = ""; body = ""; site = ""
+            }
+        ' "$f")"
+        [ -n "$out" ] && { printf '%s\n' "$out"; rc=1; }
+    done
+    # The other half. A grep proves the call is written; nothing above proves
+    # the function is DEFINED when it runs. No lib sources another, and
+    # ground.sh sources sanitize.sh AFTER the files that need it -- so a caller
+    # without this line gets 127 from an undefined function, which its `||`
+    # branch reads as a refusal and every negative test passes for that reason.
+    for f in "$PLUGIN_ROOT"/lib/*.sh "$PLUGIN_ROOT"/bin/*.sh; do
+        [ -e "$f" ] || continue
+        case "$f" in */sanitize.sh) continue ;; esac
+        grep -q 'is_safe_identifier' "$f" || continue
+        grep -qE 'sanitize\.sh"?$|/sanitize\.sh' "$f" && continue
+        printf '%s: calls is_safe_identifier and never sources sanitize.sh\n' "$f"
+        rc=1
+    done
+
+    if [ "$rc" -ne 0 ]; then
+        printf '%sidentifier path check FAILED%s — a path is built from a value that was never validated, or by a validator that is not loaded.\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%severy identifier that becomes a path is validated, by a validator this file loads%s\n' "$GREEN" "$NC"
+}
+
 wire_smoke() {
     printf '%sWire smoke...%s\n' "$YELLOW" "$NC"
     local rc=0
@@ -634,6 +705,7 @@ wire_smoke() {
     skill_lib_sync_check || rc=1
     rubric_sync_check || rc=1
     consent_caller_check || rc=1
+    identifier_path_check || rc=1
     hook_source_stderr_check || rc=1
     return "$rc"
 }
