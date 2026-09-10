@@ -10,20 +10,33 @@ import re
 import constants
 
 
+def present_values(values):
+    """The values that are actually there. A gap is held as NaN by this module's
+    convention, so every consumer filters the same way through this one helper."""
+    return [v for v in values if not math.isnan(v)]
+
+
 class Refusal(Exception):
     """Input the skill will not render. The message names the specific problem."""
 
 
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_FENCE = re.compile(r"`{3,}")
 
 
 def _clean(text, limit, notes, what):
     """Make caller text safe to place inside a Markdown table and a fenced block."""
     original = "" if text is None else str(text)
-    safe = _CONTROL.sub(" ", original)
-    safe = safe.replace("|", "\\|")
-    # Three backticks would close the fence the caller is told to wrap this in.
-    safe = safe.replace("```", "``")
+    # Default-deny. A blocklist of ASCII control codes left bidi overrides (U+202E)
+    # and zero-width characters through, which can make a label read as something
+    # other than what it is. isprintable() closes the whole class and keeps the
+    # em dash, ellipsis, CJK and emoji the output actually uses.
+    safe = "".join(c if c.isprintable() else " " for c in original)
+    # Escape the backslash first. Otherwise a caller's own "\\|" becomes "\\\\|", which
+    # Markdown reads as a literal backslash followed by a live column delimiter.
+    safe = safe.replace("\\", "\\\\").replace("|", "\\|")
+    # Collapse any run of three or more backticks in ONE pass. A plain replace is not
+    # idempotent: four backticks become "``" + "`", which is three again - a fence.
+    safe = _FENCE.sub("``", safe)
     safe = " ".join(safe.split())
     if len(safe) > limit:
         safe = safe[: limit - 1].rstrip() + "…"
@@ -50,8 +63,9 @@ def _to_number(value, series_name, position):
             number = float(text)
         except ValueError:
             raise Refusal(
-                f"The {series_name} series has the value {value!r} at position "
-                f"{position + 1}, which is not a number."
+                f"The {series_name} series has the value "
+                f"'{_clean(text, constants.MAX_LABEL_CHARS, [], 'A value')}' at "
+                f"position {position + 1}, which is not a number."
             )
     if not math.isfinite(number):
         # nan/inf pass float() happily and then poison the spread test and the axis.
@@ -77,7 +91,28 @@ def validate(request):
     if not isinstance(raw_series, dict) or len(raw_series) == 0:
         raise Refusal("The chart needs at least one named series of numbers.")
 
-    zero_meaningful = set(request.get("zero_meaningful") or [])
+    raw_zero = request.get("zero_meaningful") or []
+    if not isinstance(raw_zero, (list, tuple, set)) or not all(
+        isinstance(name, str) for name in raw_zero
+    ):
+        # The container check alone still died in set() on an unhashable element.
+        raise Refusal("zero_meaningful must be a list of series names.")
+    zero_meaningful = set(raw_zero)
+
+    raw_source = request.get("source") or {}
+    if not isinstance(raw_source, dict):
+        raise Refusal("source must be an object of name/value pairs.")
+    if len(raw_source) > constants.MAX_SOURCE_FIELDS:
+        raise Refusal(
+            f"source carries {len(raw_source)} fields; at most "
+            f"{constants.MAX_SOURCE_FIELDS} fit in a caption."
+        )
+
+    if len(raw_series) > constants.MAX_SERIES:
+        raise Refusal(
+            f"{len(raw_series)} series is more than the {constants.MAX_SERIES} this can show "
+            "without the table growing past a readable width."
+        )
 
     x_labels = [_clean(label, constants.MAX_LABEL_CHARS, notes, "An x-axis label") for label in raw_x]
 
@@ -92,8 +127,12 @@ def validate(request):
                 f"The {name} series has {len(values)} values, but the x axis has "
                 f"{len(raw_x)} labels."
             )
-        numbers = [_to_number(value, name, index) for index, value in enumerate(values)]
-        gaps = [index for index, number in enumerate(numbers) if math.isnan(number)]
+        numbers, gaps = [], []
+        for index, value in enumerate(values):
+            number = _to_number(value, name, index)
+            numbers.append(number)
+            if math.isnan(number):
+                gaps.append(index)
         if len(gaps) == len(numbers):
             raise Refusal(f"The {name} series has no values to show; every point is missing.")
         series[name] = numbers
@@ -105,8 +144,9 @@ def validate(request):
     requested = request.get("type") or request.get("form") or "auto"
     if requested not in ("auto", "table", "chart"):
         notes.append(
-            f"The requested form {requested!r} is not one this version provides; "
-            "the form was chosen from the data instead."
+            f"The requested form "
+            f"'{_clean(requested, constants.MAX_LABEL_CHARS, [], 'A form name')}' is "
+            "not one this version provides; the form was chosen from the data instead."
         )
         requested = "auto"
 
@@ -121,7 +161,7 @@ def validate(request):
         "source": {
             _clean(k, constants.MAX_LABEL_CHARS, notes, "A source field"):
             _clean(v, constants.MAX_LABEL_CHARS, notes, "A source value")
-            for k, v in (request.get("source") or {}).items()
+            for k, v in raw_source.items()
         },
         "notes": notes,
     }

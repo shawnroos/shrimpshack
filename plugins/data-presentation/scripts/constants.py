@@ -10,10 +10,9 @@ half-covers, which is why they do not live next to their call sites.
 # nothing. A chart earns its place by showing shape, not by being smaller.
 MIN_CHART_POINTS = 8
 
-# Series are indistinguishable without colour, and colour is unavailable: the renderer
-# reads its glyph set once, outside the per-series loop, and varies only colour per
-# series. Colour is raw ANSI, which is literal garbage inside a fenced block.
-MAX_SERIES_PER_CHART = 1
+# One series per chart is structural, not tunable: selection emits one chart per
+# eligible series, so there is no constant to move. A pinned MAX_SERIES_PER_CHART = 1
+# was removed because nothing read it - the pin protected a number, not the behaviour.
 
 # Beyond three single-series charts a table compares them better.
 MAX_STACKED_CHARTS = 3
@@ -31,6 +30,11 @@ CHART_ROW_BUDGET = 12
 # Beyond this the table stops being readable in a scrolling transcript.
 TABLE_ROW_BUDGET = 40
 
+# Each series is a table column, and columns cannot be narrowed indefinitely. Past this
+# the row is wider than the column budget whatever the labels do, so it is refused at
+# the gate rather than rendered over budget.
+MAX_SERIES = 8
+
 # Where an SI suffix first shortens a significant-digits label rather than lengthening it.
 ABBREVIATE_ABOVE = 10000
 
@@ -44,3 +48,6 @@ SIGNIFICANT_DIGITS = 4
 # the rendered block, and so a long label cannot blow the column budget on its own.
 MAX_LABEL_CHARS = 24
 MAX_TITLE_CHARS = 120
+
+# A caption is one line inside the block, so its source fields are bounded too.
+MAX_SOURCE_FIELDS = 8

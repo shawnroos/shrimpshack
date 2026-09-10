@@ -115,6 +115,17 @@ def main():
         repr(result["x"][0]),
     )
 
+    # A caller's own backslash before a pipe. Escaping only the pipe turns "\\|" into
+    # "\\\\|" - a literal backslash followed by a LIVE column delimiter.
+    cleaned = validate(req(x=["Q1\\| Fabricated", "b", "c"]))["x"][0]
+    # Drop escaped backslash pairs, then every surviving pipe must still be escaped.
+    residue = cleaned.replace("\\\\", "")
+    check(
+        "a backslash before a pipe leaves no live delimiter",
+        "|" not in residue.replace("\\|", ""),
+        repr(cleaned),
+    )
+
     result = validate(req(title="before\n```\nafter"))
     check(
         "a code fence in a title cannot close the block",
@@ -127,6 +138,12 @@ def main():
         repr(result["title"]),
     )
 
+    # A single replace is not idempotent: four backticks collapse to three, which is a
+    # fence again. Every run length has to come out short, not just the exact triple.
+    for probe in ("x```y", "x````y", "x`````y", "x``````y", "`" * 12):
+        out = validate(req(title=probe))["title"]
+        check(f"a run of backticks in {probe!r} cannot reassemble a fence", "```" not in out, repr(out))
+
     # Pin the limit with a literal on both sides. Deriving the input AND the expectation
     # from the constant makes the assertion incapable of failing when the constant moves.
     check("the label limit is pinned at 24", constants.MAX_LABEL_CHARS == 24, repr(constants.MAX_LABEL_CHARS))
@@ -137,6 +154,68 @@ def main():
         f"len={len(result['x'][0])}",
     )
     check("the truncation is reported", any("truncat" in n.lower() for n in result["notes"]), repr(result["notes"]))
+
+    # --- caller text that is not a control character but still deceives (R18) ---
+    # A blocklist of ASCII control codes let these through. They are the reason the
+    # cleaner is default-deny on isprintable() rather than an enumerated range.
+    deceptive = validate(req(title="admin\u202egnp.exe", x=["a\u200bb", "c", "d"]))
+    check(
+        "a right-to-left override cannot reverse how a title reads",
+        "\u202e" not in deceptive["title"],
+        repr(deceptive["title"]),
+    )
+    check(
+        "a zero-width space cannot hide inside a label",
+        "\u200b" not in deceptive["x"][0],
+        repr(deceptive["x"][0]),
+    )
+    check(
+        "ordinary punctuation still survives the cleaner",
+        "\u2014" in validate(req(title="a \u2014 b"))["title"],
+        repr(validate(req(title="a \u2014 b"))["title"]),
+    )
+
+    # --- optional metadata: the element shape, not just the container ---
+    # A container-only check passed [[]] and then died in set() on an unhashable value.
+    for bad_zero, label in (([[]], "a list element"), ([1, 2], "numeric elements"), (7, "a bare number")):
+        check(
+            f"zero_meaningful with {label} is refused, not a crash",
+            refusal(req(zero_meaningful=bad_zero)) is not None,
+            repr(bad_zero),
+        )
+
+    check(
+        "a string source is refused rather than crashing",
+        refusal(req(source="internal")) is not None,
+    )
+    check(
+        "a source with more fields than fit a caption is refused",
+        refusal(req(source={f"k{i}": "v" for i in range(2000)})) is not None,
+    )
+    check(
+        "the source field cap is pinned at 8",
+        constants.MAX_SOURCE_FIELDS == 8,
+        repr(constants.MAX_SOURCE_FIELDS),
+    )
+    check(
+        "eight source fields are still accepted",
+        refusal(req(source={f"k{i}": "v" for i in range(8)})) is None,
+    )
+
+    # --- caller text reaches the refusal message, which is relayed too ---
+    message = refusal(req(series={"S": [1, "\u202e evil", 3]}))
+    check(
+        "caller text in a refusal message is cleaned",
+        message is not None and "\u202e" not in message,
+        repr(message),
+    )
+
+    # --- the series cap keeps a table inside the column budget ---
+    check(
+        "more series than a table can compare is refused",
+        refusal({"title": "T", "x": ["a"], "series": {f"s{i}": [1.0] for i in range(60)}}) is not None,
+    )
+    check("the series cap is pinned at 8", constants.MAX_SERIES == 8, repr(constants.MAX_SERIES))
 
     # --- the gate cannot be bypassed ---
     check(

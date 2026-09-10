@@ -43,7 +43,6 @@ def rising(n, start=1.0, step=1.0):
 def main():
     # --- the thresholds are pinned by literal, so moving one turns these red ---
     check("minimum chart points is pinned at 8", constants.MIN_CHART_POINTS == 8, repr(constants.MIN_CHART_POINTS))
-    check("maximum series per chart is pinned at 1", constants.MAX_SERIES_PER_CHART == 1)
     check("maximum stacked charts is pinned at 3", constants.MAX_STACKED_CHARTS == 3)
 
     # --- point count (R1, R2) ---
@@ -91,9 +90,12 @@ def main():
     result = pick({"A": rising(9), "B": rising(9, start=100.0)})
     check("two series select charts", result["form"] == "charts", result["form"])
     check("two series produce two charts", len(result["chart_series"]) == 2, repr(result["chart_series"]))
+    # isinstance(str) was tautological - it passed whatever the rule did. Tie the
+    # charted set to the actual input series instead.
     check(
-        "no chart carries more than one series",
-        all(isinstance(name, str) for name in result["chart_series"]),
+        "each charted series appears exactly once and is one of the inputs",
+        sorted(result["chart_series"]) == ["A", "B"]
+        and len(result["chart_series"]) == len(set(result["chart_series"])),
         repr(result["chart_series"]),
     )
 

@@ -7,23 +7,17 @@ then dies with `module 'select' has no attribute 'select'`. Reproduced, not theo
 The rule is fixed thresholds from `constants`, so it is testable. Taste is not.
 """
 
-import math
-
 import constants
+from validate import present_values
 
 
-def _present(values):
-    return [v for v in values if not math.isnan(v)]
-
-
-def _is_flat(values):
+def _is_flat(present):
     """Flat means the renderer would draw a straight line: max == min.
 
     Not a percentage floor. The renderer scales to the observed range, so a series
     varying half a percent still draws at full height with visible shape. A floor
     would refuse conversion rate, latency, and uptime, which people genuinely chart.
     """
-    present = _present(values)
     if not present:
         return True
     return max(present) == min(present)
@@ -53,11 +47,13 @@ def choose(request):
         return as_table(None)
 
     # Count what would actually plot. A gap is not a point.
-    plottable = min(len(_present(values)) for values in series.values())
-    if plottable < constants.MIN_CHART_POINTS:
+    presents = {name: present_values(values) for name, values in series.items()}
+    thin = {n: len(v) for n, v in presents.items() if len(v) < constants.MIN_CHART_POINTS}
+    if len(thin) == len(series):
+        fewest = min(thin.values())
         return as_table(
-            f"A chart needs at least {constants.MIN_CHART_POINTS} plottable points and this "
-            f"has {plottable}, so a table is shown instead"
+            f"A chart needs at least {constants.MIN_CHART_POINTS} plottable points and the "
+            f"fullest series has {fewest}, so a table is shown instead"
             + (" of the chart that was requested." if requested == "chart" else ".")
         )
 
@@ -69,19 +65,25 @@ def choose(request):
         )
 
     # Flatness is judged per series, so one flat series does not demote the others.
-    varying = [name for name, values in series.items() if not _is_flat(values)]
+    # Both tests are per series: a thin or flat series falls to the table beside the
+    # charts rather than demoting every other series with it.
+    varying = [
+        name for name, values in presents.items()
+        if not _is_flat(values) and name not in thin
+    ]
     flat = [name for name in series if name not in varying]
 
     if not varying:
         return as_table(
             "Every series has the same value at every point, so there is no variation to "
-            "plot and a table shows it exactly"
+            "plot and a table shows the value directly"
             + (", rather than the chart that was requested." if requested == "chart" else ".")
         )
 
     if flat:
         reasons.append(
-            "These series have no variation to plot and are shown in a table instead: "
+            "These series have too few points or no variation to plot and are shown in a "
+            "table instead: "
             + ", ".join(flat)
             + "."
         )

@@ -118,6 +118,22 @@ def main():
     _, meta = render.chart_with_meta(req, "S")
     check("a missing position survives reduction", 201 in meta["kept_missing_positions"], repr(meta["kept_missing_positions"]))
 
+    # A gap-heavy long series is where retaining every missing position fights the width
+    # promise. Retention used to win and render 138 columns against a promised 72.
+    gappy = [None if i % 3 == 0 else float(i % 97) for i in range(400)]
+    gappy[0], gappy[-1] = 1.0, 2.0
+    block, meta = render.chart_with_meta(norm(gappy), "S")
+    check(
+        "a gap-heavy 400-point series still fits the column budget",
+        widest(block) <= constants.COLUMN_BUDGET,
+        f"width={widest(block)}",
+    )
+    check(
+        "gaps that could not be shown are reported rather than dropped silently",
+        len(meta["unshown_missing"]) > 0 and meta["unshown_missing"] == sorted(meta["unshown_missing"]),
+        repr(meta["unshown_missing"][:5]),
+    )
+
     # --- no ANSI anywhere (R11) ---
     table = render.table(norm([1.0, 2.0, 3.0]))
     check("no escape character in a chart", "\x1b" not in chart)

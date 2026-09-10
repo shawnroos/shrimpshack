@@ -12,10 +12,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import render
+from render import AXIS_GLYPHS
 from selection import choose
 from validate import Refusal, validate
-
-AXIS_GLYPHS = ("┼", "┤")
 
 RELAY = (
     "Reproduce the block below verbatim inside a plain triple-backtick fence with no "
@@ -36,16 +35,26 @@ def _refuse(message, notes=None):
     }
 
 
-def _verify(block, expect_axis):
-    """The library returns '' and raises nothing on two inputs, so check the string.
+# The glyphs the renderer draws data with. An axis alone is not a chart.
+PLOT_MARKS = "╭╮╯╰│─╶╴"
+
+
+def _verify(rendered, expect_axis):
+    """Check what the renderer produced, never the assembled block.
 
     A completed call is not proof anything was drawn - the repo has a written rule
     about exactly this, from a tally that counted work an exited-zero command never did.
+    And the string checked must be the renderer's own output: a caller who names a
+    series "fake ┤" would otherwise supply the axis glyph that passes this check, and
+    get a success back for a chart with no data in it.
     """
-    if not block or not block.strip():
+    if not rendered or not rendered.strip():
         return "The chart came back empty, so there is nothing to show."
-    if expect_axis and not any(glyph in block for glyph in AXIS_GLYPHS):
-        return "The chart came back without an axis, so it is not a chart."
+    if expect_axis:
+        if not any(glyph in rendered for glyph in AXIS_GLYPHS):
+            return "The chart came back without an axis, so it is not a chart."
+        if not any(mark in rendered for mark in PLOT_MARKS):
+            return "The chart came back with an axis but nothing plotted on it."
     return None
 
 
@@ -59,13 +68,20 @@ def present(request):
     notes = list(normalized["notes"]) + list(decision["reasons"])
 
     blocks = []
+    unshown_by_series = {}
     if decision["form"] == "charts":
         for name in decision["chart_series"]:
             block, meta = render.chart_with_meta(normalized, name)
-            problem = _verify(block, expect_axis=True)
+            problem = _verify(meta["body"], expect_axis=True)
             if problem:
                 return _refuse(problem, notes)
             blocks.append(block)
+            unshown_by_series[name] = meta.get("unshown_missing", [])
+            if meta.get("unshown_missing"):
+                notes.append(
+                    f"{name}: {len(meta['unshown_missing'])} of the missing positions could "
+                    "not be shown as gaps once the series was reduced to fit the width."
+                )
             if meta["omitted"]:
                 notes.append(
                     f"{name}: {meta['omitted']} of {meta['omitted'] + meta['rendered']} points "
@@ -92,8 +108,21 @@ def present(request):
             )
 
     for name, positions in normalized["missing"].items():
-        if positions:
-            human = ", ".join(str(p + 1) for p in positions)
+        if not positions:
+            continue
+        unshown = set(unshown_by_series.get(name, []))
+        shown = [p for p in positions if p not in unshown]
+        human = ", ".join(str(p + 1) for p in positions)
+        if unshown:
+            # Do not claim a break the reader cannot see. The earlier note already said
+            # how many gaps the width could not fit; naming them all as visible breaks
+            # here would contradict it.
+            notes.append(
+                f"{name}: no value at position {human}. "
+                f"{len(shown)} of those show as a break; the rest fell outside the points "
+                "the width allowed. None is rendered as a zero."
+            )
+        else:
             notes.append(
                 f"{name}: no value at position {human}. The gap is shown as a break, not as a zero."
             )

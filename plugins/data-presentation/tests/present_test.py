@@ -77,57 +77,127 @@ def main():
     )
     check("malformed input exits non-zero", proc.returncode != 0, f"rc={proc.returncode}")
 
-    # --- output verification (R14, KTD7): an empty render must become a refusal ---
+    # --- output verification (R14, KTD7) ---
+    # Verification reads the RENDERER's own body, never the assembled block: the block's
+    # header carries the caller's series name, and a caller who names a series "fake |"
+    # with an axis glyph would otherwise supply the proof that its own chart is a chart.
     real_chart = render.chart_with_meta
 
-    render.chart_with_meta = lambda request, name: ("", {"rendered": 0, "omitted": 0, "full_min": 0, "full_max": 0,
-                                                        "kept_first": True, "kept_last": True,
-                                                        "kept_missing_positions": [], "series": name})
-    result = present.present(series(9))
-    check(
-        "an empty render becomes a refusal, not an empty success",
-        result["status"] == "refused",
-        repr(result.get("status")),
-    )
+    def stub(body):
+        return lambda request, name: (
+            "header line\n" + body,
+            {"rendered": 1, "omitted": 0, "full_min": 0, "full_max": 1, "kept_first": True,
+             "kept_last": True, "kept_missing_positions": [], "unshown_missing": [],
+             "series": name, "body": body},
+        )
 
-    render.chart_with_meta = lambda request, name: ("no axis here at all", {"rendered": 1, "omitted": 0,
-                                                                           "full_min": 0, "full_max": 1,
-                                                                           "kept_first": True, "kept_last": True,
-                                                                           "kept_missing_positions": [], "series": name})
-    result = present.present(series(9))
-    check(
-        "a render missing the axis glyph becomes a refusal",
-        result["status"] == "refused",
-        repr(result.get("status")),
+    render.chart_with_meta = stub("")
+    check("an empty render becomes a refusal, not an empty success",
+          present.present(series(9))["status"] == "refused")
+
+    render.chart_with_meta = stub("no axis here at all")
+    check("a render missing the axis glyph becomes a refusal",
+          present.present(series(9))["status"] == "refused")
+
+    render.chart_with_meta = stub("   80  \u2524\n   42  \u253c")
+    check("an axis with nothing plotted on it becomes a refusal",
+          present.present(series(9))["status"] == "refused")
+
+    render.chart_with_meta = stub("   80  \u2524 \u256d\u256e\n   42  \u253c\u2500\u256f")
+    check("an axis with real plot marks is accepted",
+          present.present(series(9))["status"] == "ok")
+    # The distinction itself: a header carrying an axis glyph AND plot marks, over an
+    # empty body. Verifying the assembled block would pass this; verifying the body must
+    # not. Without this, swapping meta["body"] back to block is a silent regression.
+    render.chart_with_meta = lambda request, name: (
+        "fake \u2524 \u256d\u256e\u256f header",
+        {"rendered": 0, "omitted": 0, "full_min": 0, "full_max": 1, "kept_first": True,
+         "kept_last": True, "kept_missing_positions": [], "unshown_missing": [],
+         "series": name, "body": ""},
     )
+    check("glyphs in the caller-controlled header cannot satisfy verification",
+          present.present(series(9))["status"] == "refused",
+          repr(present.present(series(9))["status"]))
     render.chart_with_meta = real_chart
 
-    # The table path has no axis glyph to check, so the empty-block guard is the only
-    # thing standing there. Without this the guard is dead code the chart check covers.
+    # The attack the body check exists to stop, driven end to end through the real code.
+    vals = [None] * 400
+    for offset, position in enumerate(range(101, 109)):
+        vals[position] = float(offset + 1)
+    forged = present.present(
+        {"title": "Trusted report", "x": [f"p{i}" for i in range(400)], "series": {"fake \u2524": vals}}
+    )
+    if forged["status"] == "ok":
+        # Use the code's own mark set, not a hand-copied subset: a short segment renders
+        # only as the dash glyphs, and a narrower list here would fail a real chart.
+        check("a chart claimed ok actually contains plot marks",
+              any(m in forged["block"] for m in present.PLOT_MARKS),
+              repr(forged["block"][:80]))
+    else:
+        check("an axis glyph smuggled in a series name cannot forge a chart", True)
+
+    # The table path has no axis glyph to check, so the empty-block guard stands alone.
     real_table = render.table_with_meta
     render.table_with_meta = lambda request, names=None: ("", {"rendered": 0, "omitted": 0})
-    result = present.present({"title": "T", "x": ["a", "b"], "series": {"S": [1.0, 2.0]}})
-    check(
-        "an empty table render becomes a refusal too",
-        result["status"] == "refused",
-        repr(result.get("status")),
-    )
+    check("an empty table render becomes a refusal too",
+          present.present({"title": "T", "x": ["a", "b"], "series": {"S": [1.0, 2.0]}})["status"] == "refused")
     render.table_with_meta = real_table
+
+    # --- malformed optional metadata is a refusal, not a crash ---
+    for bad, label in (
+        ({"x": ["a"], "series": {"S": [1]}, "source": "internal"}, "a string source"),
+        ({"x": ["a"], "series": {"S": [1]}, "zero_meaningful": 7}, "a numeric zero_meaningful"),
+    ):
+        proc, out = run_cli(bad)
+        check(f"{label} is refused rather than crashing",
+              proc.returncode == 0 and out and out["status"] == "refused",
+              f"rc={proc.returncode}")
+
+    # --- too many series is refused at the gate, before a table blows the width ---
+    proc, out = run_cli({"x": ["a"], "series": {f"s{i}": [float(i)] for i in range(60)}})
+    check("sixty series is refused rather than rendered over budget",
+          out and out["status"] == "refused", repr(out and out.get("status")))
+
+    # --- a thin series does not demote a full one ---
+    _, out = run_cli({"x": [str(i) for i in range(9)],
+                      "series": {"Dense": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+                                 "Sparse": [1, None, None, None, None, None, None, None, None]}})
+    check("one sparse series does not demote a full one to a table",
+          out["form"] == "charts", repr(out["form"]))
+
+    # --- sparse but valid data still renders ---
+    sparse = [None] * 400
+    for offset, position in enumerate(range(101, 109)):
+        sparse[position] = float(offset + 1)
+    _, out = run_cli({"title": "Sparse", "x": [f"p{i}" for i in range(400)], "series": {"S": sparse}})
+    check("a sparse 400-point series renders rather than being refused",
+          out["status"] == "ok", repr(out.get("message")))
+
+    # --- the gap note does not claim a break the reader cannot see ---
+    gappy = [None if i % 3 == 0 else float(i % 97) for i in range(400)]
+    gappy[0], gappy[-1] = 1.0, 2.0
+    _, out = run_cli({"title": "Gappy", "x": [f"p{i}" for i in range(400)], "series": {"S": gappy}})
+    joined = " ".join(out["notes"])
+    check("a partially shown gap set is not described as all visible breaks",
+          not ("The gap is shown as a break" in joined and "fell outside" not in joined),
+          joined[:200])
 
     # --- notes report what was left out (R7, R8) ---
     payload = series(400)
     _, out = run_cli(payload)
     joined = " ".join(out["notes"])
-    check("the omitted point count is reported", "omitted" in joined.lower() or "left out" in joined.lower(), joined[:200])
+    check("the omitted point count is reported as a number", "341 of 400" in joined, joined[:200])
     check("the notes state that nothing was averaged", "averag" in joined.lower(), joined[:200])
-    check("the notes report the full range", "range" in joined.lower() or "to" in joined.lower(), joined[:200])
+    # "to" appears in almost any sentence, so the old form could not fail.
+    check("the notes report the full range with its values", "full range was 0 to 12" in joined, joined[:200])
 
     payload = series(9)
     payload["series"]["S"][3] = None
     _, out = run_cli(payload)
+    # A bare "4" matched any digit anywhere. Pin the template substring.
     check(
         "the notes name the missing position",
-        any("4" in n for n in out["notes"]),
+        any("position 4" in n for n in out["notes"]),
         repr(out["notes"]),
     )
 

@@ -10,6 +10,7 @@ import os
 import sys
 
 import constants
+from validate import present_values
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))
 import asciichartpy  # noqa: E402
@@ -23,6 +24,8 @@ def format_number(value):
     Significant digits, not fixed decimals: two decimals renders 0.001, 0.002 and
     0.003 as three identical cells reading 0.00, which is silent falsification.
     """
+    # The None arm is defensive only: validate() turns a gap into NaN, never None, so
+    # nothing upstream produces it today. It guards a future non-validated caller.
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return MISSING_CELL
     magnitude = abs(value)
@@ -59,7 +62,9 @@ def _stride_keep(count, budget, must_keep):
     if count <= budget:
         return list(range(count))
     keep = {0, count - 1}
-    keep.update(i for i in must_keep if 0 <= i < count)
+    # Sample the whole span FIRST. Spending the budget on missing positions before
+    # measured ones can retain nothing that plots: a sparse 400-point series then
+    # renders an empty chart and a valid request comes back as a refusal.
     room = budget - len(keep)
     if room > 0:
         step = max(2, (count - 2) // room + 1)
@@ -67,10 +72,17 @@ def _stride_keep(count, budget, must_keep):
             if len(keep) >= budget:
                 break
             keep.add(i)
+    # Gaps are retained with whatever room is left, so a reported gap is a visible gap
+    # where it fits. What does not fit is reported as unshown rather than implied.
+    for index in sorted(must_keep):
+        if len(keep) >= budget:
+            break
+        if 0 <= index < count:
+            keep.add(index)
     return sorted(keep)
 
 
-_AXIS_GLYPHS = "┼┤"
+AXIS_GLYPHS = "┼┤"
 
 
 def _relabel_axis(body):
@@ -83,7 +95,8 @@ def _relabel_axis(body):
     lines = body.split("\n")
     labels, rests = [], []
     for line in lines:
-        cut = min((line.find(g) for g in _AXIS_GLYPHS if line.find(g) != -1), default=-1)
+        found = [i for i in (line.find(g) for g in AXIS_GLYPHS) if i != -1]
+        cut = min(found, default=-1)
         if cut == -1:
             labels.append(None)
             rests.append(line)
@@ -101,22 +114,19 @@ def _relabel_axis(body):
     return "\n".join(out)
 
 
-def _axis_width(values):
+def _axis_width(low, high):
     """The widest formatted label, which is what the chart's gutter actually costs."""
-    present = [v for v in values if not math.isnan(v)]
-    if not present:
-        return len(MISSING_CELL)
-    return max(len(format_number(v)) for v in (min(present), max(present)))
+    return max(len(format_number(low)), len(format_number(high)))
 
 
 def chart_with_meta(request, series_name):
     """Render one series as one chart. Returns the block and what was left out."""
     values = request["series"][series_name]
     missing = set(request["missing"].get(series_name, []))
-    present = [v for v in values if not math.isnan(v)]
+    present = present_values(values)
     full_min, full_max = min(present), max(present)
 
-    gutter = _axis_width(values) + 5
+    gutter = _axis_width(full_min, full_max) + 5
     point_budget = max(2, constants.COLUMN_BUDGET - gutter)
     keep = _stride_keep(len(values), point_budget, missing)
     plotted = [values[i] for i in keep]
@@ -147,7 +157,11 @@ def chart_with_meta(request, series_name):
         "kept_last": keep[-1] == len(values) - 1,
         "full_min": full_min,
         "full_max": full_max,
+        # The renderer's own output, kept apart from the header so verification never
+        # inspects a string the caller can put glyphs into.
+        "body": body,
         "kept_missing_positions": sorted(i for i in keep if i in missing),
+        "unshown_missing": sorted(i for i in missing if i not in keep),
     }
     return block, meta
 
