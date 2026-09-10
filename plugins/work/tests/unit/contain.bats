@@ -132,10 +132,18 @@ teardown() {
     [ "$output" = "outside" ]
 }
 
-@test "a directory under no worktrees directory falls back to the configured root" {
+# A plain checkout is its own project, so the repo reader answers -- and a
+# directory that is no checkout at all answers with itself rather than with the
+# configured root, which is a boundary and not a project.
+@test "a directory under no worktrees directory is answered by the repo reader" {
+    git -C "$WORK/root/web-app" init -q -b main
+    run herdr_linear::worktree_project "$WORK/root/web-app"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/root/web-app" ]
+
     run herdr_linear::worktree_project "$WORK/outside"
     [ "$status" -eq 0 ]
-    [ "$output" = "$WORK/root" ]
+    [ "$output" = "$WORK/outside" ]
 }
 
 @test "the repo reader returns the main checkout a linked worktree belongs to" {
@@ -160,12 +168,32 @@ teardown() {
     [ "$output" = "$WORK/root" ]
 }
 
-@test "the configured root wins over derivation for the project and repo readers" {
-    mkdir -p "$WORK/projects/alpha/worktrees/drawer"
-    run herdr_linear::worktree_project "$WORK/projects/alpha/worktrees/drawer"
-    [ "$output" = "$WORK/root" ]
-    run herdr_linear::worktree_repo "$WORK/projects/alpha/worktrees/drawer"
-    [ "$output" = "$WORK/root" ]
+# The configured root is the containment boundary and nothing else. A worktree
+# under it belongs to its OWN project, and the same fixture proves both halves:
+# the project reader derives, the signal still answers from the root.
+@test "the configured root does not override a worktree's own project" {
+    mkdir -p "$WORK/root/alpha/worktrees/drawer"
+    run herdr_linear::worktree_project "$WORK/root/alpha/worktrees/drawer"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/root/alpha" ]
+    run herdr_linear::path_signal "$WORK/root/alpha/worktrees/drawer"
+    [ "$output" = "inside" ]
+}
+
+# What the project reader answers is a directory; what the repo reader answers
+# has to be a REPOSITORY, because `git -C` is handed it. The configured root
+# here is a plain directory, exactly as ~/projects is on a real machine.
+@test "the repo reader answers a repository, not the configured root" {
+    [ "$(git -C "$WORK/root" rev-parse --git-dir 2>/dev/null || printf 'none')" = "none" ]
+    mkdir -p "$WORK/root/alpha"
+    git -C "$WORK/root/alpha" init -q -b main
+    git -C "$WORK/root/alpha" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    git -C "$WORK/root/alpha" worktree add -q -b f/x "$WORK/root/alpha/worktrees/drawer" >/dev/null 2>&1
+    run herdr_linear::worktree_repo "$WORK/root/alpha/worktrees/drawer"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/root/alpha" ]
+    run git -C "$output" rev-parse --git-dir
+    [ "$status" -eq 0 ]
 }
 
 # ------------------------------------------------- the root seam and its name

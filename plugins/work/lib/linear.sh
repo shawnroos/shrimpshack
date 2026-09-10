@@ -263,12 +263,14 @@ except Exception:
 # The named fields off one context blob, tab-separated on one line, from one
 # python3. Consume with `cut -f N`, not `read`: a field can legitimately be
 # empty -- an issue with no project -- and tab in IFS collapses the gap.
+# Only an absent field and a null one come back empty; `false` and `0` come
+# back as themselves, which `or ""` folded in with the absent ones.
 herdr_linear::context_fields() {
     local json="${1:-}"; shift
     printf '%s' "$json" | python3 -c '
 import sys, json
 ctx = json.load(sys.stdin)
-sys.stdout.write("\t".join(str(ctx.get(f) or "") for f in sys.argv[1:]) + "\n")
+sys.stdout.write("\t".join("" if ctx.get(f) is None else str(ctx.get(f)) for f in sys.argv[1:]) + "\n")
 ' "$@" 2>/dev/null
 }
 

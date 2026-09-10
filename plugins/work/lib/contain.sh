@@ -93,10 +93,11 @@ herdr_linear::contains() {
 # named apart. Every one of them ANSWERS: a reader that refuses cannot be
 # weighed against anything else, and containment is a signal now, not a gate.
 #
-# The environment variable takes precedence over derivation in all three. It is
-# the deliberate seam -- a caller that sets it has said where the work is, and
-# nothing should second-guess that from a path. Derivation is what runs when
-# nobody has said.
+# The configured root answers ONE of those questions -- where the boundary is.
+# It is not the project and it is not a repository: ~/projects holds projects
+# and is not itself a checkout, so letting it short-circuit the two readers
+# below handed `git -C` a directory git cannot work in. Project and repository
+# are derived from the directory asked about, always.
 
 # herdr_linear::path_signal [dir] -> prints `inside` or `outside`. Always 0.
 herdr_linear::path_signal() {
@@ -112,20 +113,16 @@ herdr_linear::path_signal() {
 # The project directory this worktree belongs to: the parent of the `worktrees`
 # directory it sits in, matching the ~/projects/<project>/worktrees/<feature>
 # layout. Its basename is the project name. A directory that sits under no
-# worktrees directory falls back to the configured root, which is the answer
-# for a plain repository checkout.
+# worktrees directory is answered by the repository reader below -- a plain
+# checkout is its own project.
 herdr_linear::worktree_project() {
-    local dir="${1:-$PWD}" resolved override
-    if override="$(herdr_linear::_root_override)"; then
-        printf '%s' "$override"
-        return 0
-    fi
-    resolved="$(herdr_linear::_resolve "$dir")" || { herdr_linear::projects_root; return 0; }
+    local dir="${1:-$PWD}" resolved
+    resolved="$(herdr_linear::_resolve "$dir")" || { herdr_linear::worktree_repo "$dir"; return 0; }
     case "$resolved" in
         */worktrees) printf '%s' "${resolved%/worktrees}"; return 0 ;;
         */worktrees/*) printf '%s' "${resolved%%/worktrees/*}"; return 0 ;;
     esac
-    herdr_linear::projects_root
+    herdr_linear::worktree_repo "$resolved"
 }
 
 # herdr_linear::worktree_repo [dir]
@@ -134,14 +131,15 @@ herdr_linear::worktree_project() {
 # dir, so a linked worktree answers with the checkout it was made from.
 # --path-format=absolute is load-bearing -- the bare form prints `.git` at a
 # main checkout, which is a relative path and not somewhere `git -C` can go.
+#
+# Nothing here falls back to the project reader: that reader calls this one, so
+# the pair would recurse. A directory git cannot answer for is answered with
+# itself -- wrong is better than a hang, and the caller's `git -C` fails
+# visibly.
 herdr_linear::worktree_repo() {
-    local dir="${1:-$PWD}" common override
-    if override="$(herdr_linear::_root_override)"; then
-        printf '%s' "$override"
-        return 0
-    fi
+    local dir="${1:-$PWD}" common
     common="$("${HERDR_LINEAR_GIT_BIN:-git}" -C "$dir" rev-parse \
         --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
-    [ -n "$common" ] || { herdr_linear::worktree_project "$dir"; return 0; }
+    [ -n "$common" ] || { printf '%s' "$dir"; return 0; }
     printf '%s' "$(dirname "$common")"
 }

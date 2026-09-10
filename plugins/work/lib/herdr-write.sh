@@ -163,8 +163,8 @@ herdr_linear::layout_build() {
             herdr_linear::_unlock "$journal_file"
             return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
         }
-        # <root>/worktrees/<name>, matching every worktree on this machine and
-        # the `wt` shell function. An earlier version used <root>/<branch>,
+        # <project>/worktrees/<name>, matching every worktree on this machine
+        # and the `wt` shell function. An earlier version used <root>/<branch>,
         # which puts a worktree beside the repositories instead of among the
         # worktrees -- wrong, and invisible until someone went looking for it.
         wt_path="$(herdr_linear::worktree_project)/worktrees/$branch"
