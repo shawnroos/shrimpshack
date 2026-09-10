@@ -325,6 +325,9 @@ entirely rewritten text"
     [ "$(sent issueUpdate)" = "0" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
     [[ "$output" == *"SHADOW would rewrite the description of WEB-2870"* ]]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rewrite the description of WEB-2870"* ]]
 }
 
 # An answer given for this team and project on a DIFFERENT branch is not an

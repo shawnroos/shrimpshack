@@ -144,8 +144,8 @@ herdr_linear::doc_publish() {
     c_team="$(printf '%s' "$fields" | cut -f1)"
     c_project="$(printf '%s' "$fields" | cut -f2)"
 
-    if ! herdr_linear::consent_ok "$wt" "$c_team" "$c_project"; then
-        herdr_linear::_shadow_log "SHADOW would $( [ -n "$doc_id" ] && printf update || printf create ) document \"$title\" on $ident ($(wc -c < "$file" | tr -d ' ') bytes)"
+    if ! herdr_linear::consent_gate "$wt" "$c_team" "$c_project" \
+        "$( [ -n "$doc_id" ] && printf update || printf create ) document \"$title\" on $ident ($(wc -c < "$file" | tr -d ' ') bytes)"; then
         printf '%s' "$title"
         return "$HERDR_LINEAR_DOC_SHADOW"
     fi

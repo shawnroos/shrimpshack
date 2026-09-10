@@ -272,8 +272,8 @@ print("%s\t%s\t%s" % (i["updatedAt"], (i.get("team") or {}).get("id", ""), (i.ge
         return "$HERDR_LINEAR_DESC_DIARY"
     fi
 
-    if ! herdr_linear::consent_ok "$wt" "$c_team" "$c_project"; then
-        herdr_linear::_shadow_log "SHADOW would rewrite the description of $ident ($(printf '%s' "$next" | wc -c | tr -d ' ') bytes)"
+    if ! herdr_linear::consent_gate "$wt" "$c_team" "$c_project" \
+        "rewrite the description of $ident ($(printf '%s' "$next" | wc -c | tr -d ' ') bytes)"; then
         printf '%s' "$next"
         return "$HERDR_LINEAR_DESC_SHADOW"
     fi

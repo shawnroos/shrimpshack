@@ -159,8 +159,8 @@ herdr_linear::start_new() {
     # template, so a missing spine means the template was abandoned halfway.
     herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_START_REFUSED"
 
-    if ! herdr_linear::consent_ok "$from" "$team" ""; then
-        herdr_linear::_shadow_log "SHADOW would create issue \"$title\" on team $team, and a worktree for it"
+    if ! herdr_linear::consent_gate "$from" "$team" "" \
+        "create issue \"$title\" on team $team, and a worktree for it"; then
         # stderr, because stdout carries the worktree path.
         printf 'shadow: would create "%s" on %s\n' "$title" "$team" >&2
         return "$HERDR_LINEAR_START_SHADOW"

@@ -374,6 +374,26 @@ if op == "consent-confirm":
     save(path, rec)
     sys.exit(0)
 
+if op == "consent-decline":
+    # An absent answer and a refused one both mean do not write, so this records
+    # no third state: it clears the proposal and the notice and leaves `consent`
+    # as it found it. Not a revoke -- a recorded yes is never offered this.
+    #
+    # The same nonce rule the confirm half uses, for a different reason. A
+    # decline authorises nothing, but it CLEARS the deferred-write notice, which
+    # is the only surfaced evidence that a write was skipped. The nonce makes a
+    # decline answer a proposal that actually happened, so nothing can erase
+    # that evidence by answering a question nobody asked.
+    team, project, nonce = args[0], args[1], args[2]
+    p = rec.get("consent_proposal")
+    if (not p or not nonce or p.get("nonce") != nonce
+            or p.get("team") != team or p.get("project") != project):
+        sys.exit(2)
+    rec["consent_proposal"] = None
+    rec["pending_consent"] = None
+    save(path, rec)
+    sys.exit(0)
+
 if op == "set-pending-consent":
     # KTD3. Its own slot. `set-judgment` replaces its single slot wholesale, and
     # a consent question landing there would evict the squash-merge question --
@@ -615,6 +635,44 @@ herdr_linear::binding_pending_consent() {
     f="$(herdr_linear::_record_path "${1:-}")" || return 1
     herdr_linear::_mode_ok "$f" || return 1
     herdr_linear::_py pending-consent "$f"
+}
+
+# The answer to no, and symmetric with confirm in both halves of the rule. KTD2
+# governs who may call it -- a decline is a person's answer, so nothing under
+# lib/, hooks/ or commands/ may -- and the nonce governs what it may answer.
+herdr_linear::consent_decline() {
+    local dir="${1:-}" team="${2:-}" project="${3:-}" nonce="${4:-}"
+    [ -n "$dir" ] && [ -n "$team" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::_mutate "$dir" consent-decline "$team" "$project" "$nonce"
+}
+
+HERDR_LINEAR_SHADOW_LOG="${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}"
+
+herdr_linear::_shadow_log() {
+    mkdir -p "$(dirname "$HERDR_LINEAR_SHADOW_LOG")" 2>/dev/null
+    printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$HERDR_LINEAR_SHADOW_LOG"
+}
+
+# herdr_linear::consent_gate <dir> <team> <project> <what> [detail]
+#   0  the recorded answer covers this write; proceed
+#   1  it does not; the skip is logged and recorded, and the caller returns its
+#      own shadow code
+#
+# The record is written on EVERY path, not just the hook's. No verb here can
+# tell whether a person is watching -- all six are reachable from a subagent, a
+# headless run, or another plugin sourcing lib/ -- and the costs are asymmetric:
+# over-recording costs one line in one session, and only while the write still
+# has not happened, while under-recording drops a write silently in exactly the
+# unattended case R9a exists for.
+herdr_linear::consent_gate() {
+    local dir="${1:-}" team="${2:-}" project="${3:-}" what="${4:-}" detail="${5:-}"
+    herdr_linear::consent_ok "$dir" "$team" "$project" && return 0
+    herdr_linear::_shadow_log "SHADOW would $what${detail:+ $detail}"
+    # A locked or unreadable store must not turn a refusal into a proceed.
+    herdr_linear::binding_set_pending_consent "$dir" \
+        "Nothing here has answered the write question yet, so this did not happen: $what. Run /work:describe or /work:new from this worktree to answer it; answering no clears this notice." \
+        || true
+    return 1
 }
 
 # ------------------------------------------------- workspace to project (R9, R10)

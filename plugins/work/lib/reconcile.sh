@@ -29,7 +29,6 @@ HERDR_LINEAR_GIT_BIN="${HERDR_LINEAR_GIT_BIN:-git}"
 # scoped to the team, project and branch it named -- see `consent_ok` in
 # lib/binding.sh. There is no allowlist file any more: a hand-edited one made a
 # fresh worktree unwritable until somebody remembered to edit it.
-HERDR_LINEAR_SHADOW_LOG="${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}"
 
 HERDR_LINEAR_RECONCILE_OK=0
 HERDR_LINEAR_RECONCILE_NOTHING=1     # no difference to write
@@ -222,11 +221,6 @@ sys.exit(0 if ok is True else 1)
     return "$HERDR_LINEAR_RECONCILE_OK"
 }
 
-herdr_linear::_shadow_log() {
-    mkdir -p "$(dirname "$HERDR_LINEAR_SHADOW_LOG")" 2>/dev/null
-    printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$HERDR_LINEAR_SHADOW_LOG"
-}
-
 # The whole pass for one worktree.
 herdr_linear::reconcile() {
     local wt="${1:-}" ident signals want ctx fields cur_type team opening state_id rc
@@ -287,14 +281,9 @@ herdr_linear::reconcile() {
     state_id="$(herdr_linear::team_state_id "$team" "$want")" \
         || return "$HERDR_LINEAR_RECONCILE_NOTHING"
 
-    # R9a. This runs from a session-end hook, and a hook never prompts. So the
-    # question resolves to shadow, and what it would have written is recorded --
-    # in `pending_consent`, not the judgment slot, which holds one thing and has
-    # already evicted the squash-merge question once.
-    if ! herdr_linear::consent_ok "$wt" "$c_team" "$c_project"; then
-        herdr_linear::_shadow_log "SHADOW would set $ident to type=$want (state $state_id); signals: $(printf '%s' "$signals" | tr '\n' ' ')"
-        herdr_linear::binding_set_pending_consent "$wt" \
-            "Nothing here has answered the write question yet, so $ident was not moved to $want. Run /work:describe or /work:new from this worktree to answer it."
+    if ! herdr_linear::consent_gate "$wt" "$c_team" "$c_project" \
+        "set $ident to type=$want" \
+        "(state $state_id); signals: $(printf '%s' "$signals" | tr '\n' ' ')"; then
         return "$HERDR_LINEAR_RECONCILE_SHADOW"
     fi
 

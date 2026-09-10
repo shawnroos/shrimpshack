@@ -165,8 +165,8 @@ CMD
 # --- the delegation briefs ---
 #
 # consent_caller_check greps lib/, hooks/ and commands/ only: a write skill
-# legitimately calls consent_confirm in its own fence, so skills/ cannot be
-# swept wholesale. That leaves one gap. U9 tells three skills to hand a step to
+# legitimately calls consent_confirm and consent_decline in its own fence, so
+# skills/ cannot be swept wholesale. That leaves one gap. U9 tells three skills to hand a step to
 # a subagent, and a subagent has no prompt channel -- so a brief that says "ask
 # which one" or calls a record verb loses a decision or answers the person's
 # question for them, and ships green today. The brief is fenced as ```text so
@@ -177,7 +177,7 @@ brief_check() {
 import sys, os, re
 
 root = sys.argv[1]
-BANNED = ("consent_confirm", "consent_propose", "binding_confirm",
+BANNED = ("consent_confirm", "consent_decline", "consent_propose", "binding_confirm",
           "workspace_confirm", "binding_add_child", "AskUserQuestion",
           "blocking question tool")
 rc = 0

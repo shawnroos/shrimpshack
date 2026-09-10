@@ -388,6 +388,11 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$status" -eq 3 ]
     [ "$(sent issueCreate)" = "0" ]
     [ ! -e "$PROJECT/worktrees/newthing" ]
+    # R9a holds for every verb, not only the session-end hook: the skip is
+    # recorded where the next session is told about it.
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"A new thing"* ]]
 }
 
 # A proposal is not an answer: nobody confirmed it.
@@ -409,6 +414,9 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     run herdr_linear::new_project "P" "$WORK/p.md" team-brand
     [ "$status" -eq 3 ]
     [ "$(sent projectCreate)" = "0" ]
+    run herdr_linear::binding_pending_consent "$PWD"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"create project \"P\""* ]]
 }
 
 # ------------------------------------------------------- partial vs failed (F3)

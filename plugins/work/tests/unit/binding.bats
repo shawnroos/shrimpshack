@@ -525,3 +525,122 @@ grant() {  # <team> <project>
     run herdr_linear::binding_pending_consent "$WT"
     [ "$output" = "would have set WEB-1234 to Done" ]
 }
+
+# ---------------------------------------------------------------- the gate
+#
+# One gate, six verbs. What each verb prints and returns is its own; the log
+# line and the deferred-write record are not.
+
+@test "the gate proceeds when the recorded answer covers the write" {
+    export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
+    grant TEAM-A PROJ-1
+    run herdr_linear::consent_gate "$WT" TEAM-A PROJ-1 "rewrite the description of WEB-1234"
+    [ "$status" -eq 0 ]
+    [ ! -f "$HERDR_LINEAR_SHADOW_LOG" ]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$status" -ne 0 ]
+}
+
+@test "the gate refuses, logs the skip and records it for the next session" {
+    export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
+    run herdr_linear::consent_gate "$WT" TEAM-A PROJ-1 "rewrite the description of WEB-1234"
+    [ "$status" -eq 1 ]
+    run cat "$HERDR_LINEAR_SHADOW_LOG"
+    [[ "$output" == *"SHADOW would rewrite the description of WEB-1234"* ]]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rewrite the description of WEB-1234"* ]]
+    [[ "$output" == *"did not happen"* ]]
+}
+
+# The log carries diagnostics the notice does not: a state id nobody reads out
+# loud belongs in the log and not in a session's context.
+@test "the gate's fifth argument reaches the log and not the record" {
+    export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
+    run herdr_linear::consent_gate "$WT" TEAM-A "" "set WEB-1234 to type=completed" "(state st-9); signals: merged"
+    [ "$status" -eq 1 ]
+    run cat "$HERDR_LINEAR_SHADOW_LOG"
+    [[ "$output" == *"SHADOW would set WEB-1234 to type=completed (state st-9); signals: merged"* ]]
+    run herdr_linear::binding_pending_consent "$WT"
+    [[ "$output" != *"st-9"* ]]
+}
+
+# ------------------------------------------------------------------ decline
+#
+# A refusal and an unanswered question both mean do not write. A third state in
+# a two-state record is a case the reader gets wrong, so no is recorded as an
+# absence.
+
+@test "declining records no answer and leaves the writes shut" {
+    local n; n="$(herdr_linear::consent_propose "$WT" TEAM-A PROJ-1)"
+    run herdr_linear::consent_decline "$WT" TEAM-A PROJ-1 "$n"
+    [ "$status" -eq 0 ]
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -eq 1 ]
+    run herdr_linear::consent_ok "$WT" TEAM-A PROJ-1
+    [ "$status" -eq 1 ]
+    # Read from the record itself: the two predicates above would also be
+    # satisfied by a `consent` object this file learned to read as a refusal.
+    run herdr_linear::_py field "$(herdr_linear::_record_path "$WT")" consent
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "declining clears the proposal, so a held nonce cannot be confirmed later" {
+    local n; n="$(herdr_linear::consent_propose "$WT" TEAM-A PROJ-1)"
+    herdr_linear::consent_decline "$WT" TEAM-A PROJ-1 "$n"
+    run herdr_linear::consent_confirm "$WT" TEAM-A PROJ-1 "$n"
+    [ "$status" -eq 2 ]
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -eq 1 ]
+}
+
+# Without this a person who answers no is asked the same question at every
+# session start for as long as the record lives.
+@test "declining clears the deferred-write notice" {
+    local n; n="$(herdr_linear::consent_propose "$WT" TEAM-A PROJ-1)"
+    herdr_linear::binding_set_pending_consent "$WT" "would have set WEB-1234 to Done"
+    herdr_linear::consent_decline "$WT" TEAM-A PROJ-1 "$n"
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$status" -ne 0 ]
+}
+
+@test "declining leaves a pending judgment alone" {
+    local n; n="$(herdr_linear::consent_propose "$WT" TEAM-A PROJ-1)"
+    herdr_linear::binding_set_judgment "$WT" "did this land?"
+    herdr_linear::consent_decline "$WT" TEAM-A PROJ-1 "$n"
+    run herdr_linear::binding_take_judgment "$WT" session-two
+    [ "$output" = "did this land?" ]
+}
+
+# The notice is the only surfaced evidence that a write was skipped. Clearing it
+# is a suppression, so a decline must answer a proposal that actually happened
+# -- not a question nobody asked.
+@test "a decline with no proposal in flight is refused, and the notice survives" {
+    herdr_linear::binding_set_pending_consent "$WT" "would have set WEB-1234 to Done"
+    run herdr_linear::consent_decline "$WT" TEAM-A PROJ-1 anything
+    [ "$status" -eq 2 ]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$status" -eq 0 ]
+    [ "$output" = "would have set WEB-1234 to Done" ]
+}
+
+@test "a decline carrying the wrong nonce is refused, and the notice survives" {
+    herdr_linear::consent_propose "$WT" TEAM-A PROJ-1 >/dev/null
+    herdr_linear::binding_set_pending_consent "$WT" "would have set WEB-1234 to Done"
+    run herdr_linear::consent_decline "$WT" TEAM-A PROJ-1 not-the-nonce
+    [ "$status" -eq 2 ]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$output" = "would have set WEB-1234 to Done" ]
+}
+
+# The nonce belongs to one question. A decline naming a different team is
+# answering something else.
+@test "a decline naming a team the proposal did not is refused" {
+    local n; n="$(herdr_linear::consent_propose "$WT" TEAM-A PROJ-1)"
+    herdr_linear::binding_set_pending_consent "$WT" "would have set WEB-1234 to Done"
+    run herdr_linear::consent_decline "$WT" TEAM-B PROJ-1 "$n"
+    [ "$status" -eq 2 ]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$output" = "would have set WEB-1234 to Done" ]
+}

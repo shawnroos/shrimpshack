@@ -459,12 +459,12 @@ consent_mutation_check() {
     # themselves and the two must agree -- the list can drift, but not quietly.
     local derived expected
     derived="$(awk '
-        /herdr_linear::consent_ok/ && $0 !~ /^[[:space:]]*#/ && $0 !~ /herdr_linear::consent_ok\(\)/ {
+        /herdr_linear::consent_gate/ && $0 !~ /^[[:space:]]*#/ && $0 !~ /herdr_linear::consent_gate\(\)/ {
             n = split(FILENAME, p, "/"); f = p[n]; sub(/\.sh$/, ".bats", f); print f
         }' "$PLUGIN_ROOT"/lib/*.sh | sort)"
     expected="$(printf '%s\n' "${expect[@]}" | sed 's/:.*//' | sort)"
     if [ "$derived" != "$expected" ]; then
-        printf '%sconsent mutation FAILED%s — the named list and the real consent_ok call sites disagree.\n' \
+        printf '%sconsent mutation FAILED%s — the named list and the real consent_gate call sites disagree.\n' \
             "$RED" "$NC"
         printf '  < named above, > found under lib/; add or remove a named test to match.\n'
         diff <(printf '%s\n' "$expected") <(printf '%s\n' "$derived") | sed 's/^/  /'
@@ -500,12 +500,14 @@ EOF
     return "$rc"
 }
 
-# consent_confirm has exactly one class of caller: the ask-and-record fence in a
-# write skill, every one of them disable-model-invocation. A caller under lib/,
-# hooks/ or commands/ would let the plugin answer its own question.
+# consent_confirm and consent_decline have exactly one class of caller: the
+# ask-and-record fence in a write skill, every one of them
+# disable-model-invocation. Both record a PERSON'S answer -- no is an answer --
+# so a caller under lib/, hooks/ or commands/ would let the plugin answer its
+# own question either way.
 consent_caller_check() {
-    printf '%sConsent-confirm caller check...%s\n' "$YELLOW" "$NC"
-    local hits d
+    printf '%sConsent answer-verb caller check...%s\n' "$YELLOW" "$NC"
+    local hits d verb
     # An absent directory yields no hits and reads as "no caller", so name the
     # three the rule is about and require each to be there before believing it.
     for d in lib hooks commands; do
@@ -515,15 +517,18 @@ consent_caller_check() {
             return 1
         fi
     done
-    hits="$(grep -rn 'herdr_linear::consent_confirm' \
-        "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" 2>/dev/null \
-        | grep -v '^.*/lib/binding.sh:.*herdr_linear::consent_confirm() {' || true)"
-    if [ -n "$hits" ]; then
-        printf '%s\n' "$hits"
-        printf '%sconsent-confirm caller check FAILED%s — only a write skill may record an answer.\n' "$RED" "$NC"
-        return 1
-    fi
-    printf '%sno caller under lib/, hooks/ or commands/%s\n' "$GREEN" "$NC"
+    for verb in consent_confirm consent_decline; do
+        hits="$(grep -rn "herdr_linear::$verb" \
+            "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" 2>/dev/null \
+            | grep -v "^.*/lib/binding.sh:.*herdr_linear::$verb() {" || true)"
+        if [ -n "$hits" ]; then
+            printf '%s\n' "$hits"
+            printf '%s%s caller check FAILED%s — only a write skill may record an answer.\n' \
+                "$RED" "$verb" "$NC"
+            return 1
+        fi
+    done
+    printf '%sneither answer verb has a caller under lib/, hooks/ or commands/%s\n' "$GREEN" "$NC"
 }
 
 # Sourcing lib/ writes to stderr -- the deprecated-root warning in contain.sh

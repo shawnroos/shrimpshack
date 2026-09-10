@@ -87,6 +87,18 @@ nonce="$(herdr_linear::consent_propose "$PWD" "$TEAM"  "$PROJECT")"
 herdr_linear::consent_confirm "$PWD" "$TEAM"  "$PROJECT" "$nonce"
 ```
 
+**No is an answer too.** It answers the same proposal, so it carries the same
+nonce -- a decline clears the deferred-write notice, and nothing may clear that
+by answering a question nobody asked:
+
+```bash
+herdr_linear::consent_decline "$PWD" "$TEAM"  "$PROJECT" "$nonce"
+```
+
+Declining records no answer: it clears the question and the deferred-write
+notice, and the verb still runs in shadow. There is no "no" on file, because an
+unanswered question and a refused one both mean do not write.
+
 **Never supply the answer yourself.** A prompt that is refused, a hook, or a
 headless `claude -p "/work:new … yes"` records nothing — the verb then runs in
 shadow and reports what it would have sent. That is the right outcome, not

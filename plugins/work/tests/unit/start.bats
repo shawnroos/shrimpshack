@@ -304,6 +304,9 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web newthing
     [ "$status" -eq 5 ]
     [ "$(mutations)" = "0" ]
+    run herdr_linear::binding_pending_consent "$PWD"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"A new thing"* ]]
 }
 
 @test "an answer recorded here does enable creation" {

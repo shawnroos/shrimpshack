@@ -214,7 +214,8 @@ mutations_sent() {
     [ "$(mutations_sent)" = "0" ]
     run herdr_linear::binding_pending_consent "$WT"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"WEB-2870 was not moved"* ]]
+    [[ "$output" == *"WEB-2870"* ]]
+    [[ "$output" == *"did not happen"* ]]
 }
 
 # KTD3. The judgment slot holds one thing and has already evicted the
