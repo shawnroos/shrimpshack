@@ -220,7 +220,7 @@ herdr_linear::_backup_description() {
 # the intent, and no amount of repository state stands in for either.
 herdr_linear::describe() {
     local wt="${1:-}" file="${2:-}" ident resp current opening body backup next
-    local ctx c_team c_project
+    local fields c_team c_project
 
     # A backstop: write_allowed below already requires state == bound, so
     # mutating this line away turns no test red. It stays because it refuses
@@ -237,7 +237,17 @@ herdr_linear::describe() {
 
     resp="$(herdr_linear::_fetch_description "$ident")" || return "$HERDR_LINEAR_DESC_FAILED"
     current="$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["issue"].get("description") or "")')"
-    opening="$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["issue"]["updatedAt"])')"
+    # The team and project this write lands in ride on the response already in
+    # hand, so the answer recorded by `/work:new` for the same pair covers this
+    # too without a second fetch.
+    fields="$(printf '%s' "$resp" | python3 -c '
+import sys, json
+i = json.load(sys.stdin)["data"]["issue"]
+print("%s\t%s\t%s" % (i["updatedAt"], (i.get("team") or {}).get("id", ""), (i.get("project") or {}).get("id", "")))
+')"
+    opening="$(printf '%s' "$fields" | cut -f1)"
+    c_team="$(printf '%s' "$fields" | cut -f2)"
+    c_project="$(printf '%s' "$fields" | cut -f3)"
 
     # Nothing to say is a complete answer. Rewriting to the same bytes still
     # stamps updatedAt and shows on the activity feed.
@@ -255,12 +265,6 @@ herdr_linear::describe() {
         printf 'description: this write only appends to what is already there; the description is the latest truth, not a log\n' >&2
         return "$HERDR_LINEAR_DESC_DIARY"
     fi
-
-    # The team and project this write lands in, read from the issue itself, so
-    # the answer recorded by `/work:new` for the same pair covers this too.
-    ctx="$(herdr_linear::issue_context "$ident" 2>/dev/null)" || ctx='{}'
-    c_team="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))' 2>/dev/null)"
-    c_project="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project_id",""))' 2>/dev/null)"
 
     if ! herdr_linear::consent_ok "$wt" "$c_team" "$c_project"; then
         herdr_linear::_shadow_log "SHADOW would rewrite the description of $ident ($(printf '%s' "$next" | wc -c | tr -d ' ') bytes)"
@@ -299,7 +303,7 @@ herdr_linear::_fetch_description() {
     local body
     body="$(python3 -c '
 import sys, json
-print(json.dumps({"query":"query($id:String!){issue(id:$id){identifier description updatedAt}}",
+print(json.dumps({"query":"query($id:String!){issue(id:$id){identifier description updatedAt team{id} project{id}}}",
                   "variables":{"id":sys.argv[1]}}))
 ' "$1")" || return 1
     herdr_linear::query "$body"

@@ -258,6 +258,20 @@ except Exception:
     cat "$f"
 }
 
+# herdr_linear::context_fields <context-json> <field>...
+#
+# The named fields off one context blob, tab-separated on one line, from one
+# python3. Consume with `cut -f N`, not `read`: a field can legitimately be
+# empty -- an issue with no project -- and tab in IFS collapses the gap.
+herdr_linear::context_fields() {
+    local json="${1:-}"; shift
+    printf '%s' "$json" | python3 -c '
+import sys, json
+ctx = json.load(sys.stdin)
+sys.stdout.write("\t".join(str(ctx.get(f) or "") for f in sys.argv[1:]) + "\n")
+' "$@" 2>/dev/null
+}
+
 # KTD5. Identity from the cache when it is fresh; parent, team and updatedAt
 # always from the API, because the cache holds none of them.
 herdr_linear::issue_context() {

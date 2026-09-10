@@ -233,13 +233,13 @@ JSON
 
 desc_issue() {
     cat <<'JSON'
-{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": "## Problem\n\nEditors open the drawer on a processing layer and see nothing, so they assume the tool is broken and retry. The second failure is what makes them stop using it.\n\n### For example:\n- A user selects a still-uploading image and sees an empty panel.\n- They reopen twice, then switch tools for that shot.\n\n## Solution\n\nOpening the drawer on a processing layer says what is happening, so waiting is a choice rather than a guess.\n\n### For example:\n- The panel keeps their place.\n- Nobody re-runs a render that was already running.\n\n## Proposal\n\nShow drawer contents as soon as the layer is known, and a clear processing state until then.\n\n### Key Requirements\n- The drawer never renders empty for a selectable layer.\n\n### Constraints\n- No new endpoint."}}}
+{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "team": {"id": "55555555-5555-4555-8555-555555555555"}, "project": {"id": "44444444-4444-4444-8444-444444444444"}, "description": "## Problem\n\nEditors open the drawer on a processing layer and see nothing, so they assume the tool is broken and retry. The second failure is what makes them stop using it.\n\n### For example:\n- A user selects a still-uploading image and sees an empty panel.\n- They reopen twice, then switch tools for that shot.\n\n## Solution\n\nOpening the drawer on a processing layer says what is happening, so waiting is a choice rather than a guess.\n\n### For example:\n- The panel keeps their place.\n- Nobody re-runs a render that was already running.\n\n## Proposal\n\nShow drawer contents as soon as the layer is known, and a clear processing state until then.\n\n### Key Requirements\n- The drawer never renders empty for a selectable layer.\n\n### Constraints\n- No new endpoint."}}}
 JSON
 }
 
 desc_empty() {
     cat <<'JSON'
-{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": ""}}}
+{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "team": {"id": "55555555-5555-4555-8555-555555555555"}, "project": {"id": "44444444-4444-4444-8444-444444444444"}, "description": ""}}}
 JSON
 }
 
@@ -376,11 +376,10 @@ case "$mode" in
     found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; found_parent_moved ;;
     completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; completed_issue ;;
     # The description modes answer TWO different queries. `_fetch_description`
-    # asks for identifier/description/updatedAt; everything else -- the team and
-    # project a write is scoped to among them -- comes from the full-fields
-    # query, which the description shape has none of. Answering both with the
-    # description payload left team and project empty, which is not what the
-    # tracker does and is not what these tests are about.
+    # asks for identifier/description/updatedAt plus the team and project ids a
+    # write is scoped to; the full-fields query asks for everything else.
+    # Answering both with the description payload left the rest empty, which is
+    # not what the tracker does and is not what these tests are about.
     desc_issue)
         [ "$wants_headers" = 1 ] && emit_headers 200
         case "$body" in *'state {'*) found_parent ;; *) desc_issue ;; esac

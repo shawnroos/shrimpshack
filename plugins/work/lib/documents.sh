@@ -101,7 +101,7 @@ print(json.dumps({"query": q, "variables": v}))
 # document as work progresses does not litter the issue with near-duplicates.
 herdr_linear::doc_publish() {
     local wt="${1:-}" kind="${2:-}" what="${3:-}" file="${4:-}"
-    local ident title icon doc_id body resp new_id ctx c_team c_project
+    local ident title icon doc_id body resp new_id ctx fields c_team c_project
 
     # Project-scoped kinds have no mutation path: this function always resolves
     # an issue from the worktree's binding and always sets issueId. Whether an
@@ -140,8 +140,9 @@ herdr_linear::doc_publish() {
     fi
 
     ctx="$(herdr_linear::issue_context "$ident" 2>/dev/null)" || ctx='{}'
-    c_team="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))' 2>/dev/null)"
-    c_project="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project_id",""))' 2>/dev/null)"
+    fields="$(herdr_linear::context_fields "$ctx" team_id project_id)"
+    c_team="$(printf '%s' "$fields" | cut -f1)"
+    c_project="$(printf '%s' "$fields" | cut -f2)"
 
     if ! herdr_linear::consent_ok "$wt" "$c_team" "$c_project"; then
         herdr_linear::_shadow_log "SHADOW would $( [ -n "$doc_id" ] && printf update || printf create ) document \"$title\" on $ident ($(wc -c < "$file" | tr -d ' ') bytes)"

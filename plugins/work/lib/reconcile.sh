@@ -229,7 +229,7 @@ herdr_linear::_shadow_log() {
 
 # The whole pass for one worktree.
 herdr_linear::reconcile() {
-    local wt="${1:-}" ident signals want ctx cur_type team opening state_id rc
+    local wt="${1:-}" ident signals want ctx fields cur_type team opening state_id rc
     local c_team c_project
 
     [ "$(herdr_linear::binding_state "$wt" 2>/dev/null)" = "bound" ] \
@@ -250,10 +250,11 @@ herdr_linear::reconcile() {
     fi
 
     ctx="$(herdr_linear::issue_context "$ident")" || return "$HERDR_LINEAR_RECONCILE_NOTHING"
-    opening="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("updated_at",""))')"
-    team="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team",""))')"
-    c_team="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))')"
-    c_project="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project_id",""))')"
+    fields="$(herdr_linear::context_fields "$ctx" updated_at team team_id project_id)"
+    opening="$(printf '%s' "$fields" | cut -f1)"
+    team="$(printf '%s' "$fields" | cut -f2)"
+    c_team="$(printf '%s' "$fields" | cut -f3)"
+    c_project="$(printf '%s' "$fields" | cut -f4)"
     cur_type="$(herdr_linear::_state_type_of "$ident")"
 
     # An issue someone has closed stays closed. The equality test below is NOT
