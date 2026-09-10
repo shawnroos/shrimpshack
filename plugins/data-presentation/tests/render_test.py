@@ -134,6 +134,30 @@ def main():
         repr(meta["unshown_missing"][:5]),
     )
 
+    # A reduced chart that keeps no measured point is not a chart. The gap-heavy test
+    # above checks width and unshown gaps only, so this case passed green without it.
+    _, gmeta = render.chart_with_meta(norm(gappy), "S")
+    kept_real = [i for i in range(400) if i not in set(gmeta["kept_missing_positions"])]
+    check("a reduced chart still retains measured points", gmeta["rendered"] > len(gmeta["kept_missing_positions"]),
+          f"rendered={gmeta['rendered']} gaps kept={len(gmeta['kept_missing_positions'])}")
+
+    # Axis fidelity below the renderer's own two-decimal default. Its tick text is parsed
+    # back to a float, so without a lossless format every one of these rows reads "0".
+    tiny = render.chart(norm([0.001, 0.002, 0.003, 0.004, 0.005, 0.004, 0.003, 0.002, 0.001]), "S")
+    tiny_axis = [l.split("┤")[0].split("┼")[0].strip() for l in tiny.split("\n")[1:] if ("┤" in l or "┼" in l)]
+    check("small values are not flattened to zero on the axis",
+          len({a for a in tiny_axis}) > 2 and tiny_axis.count("0") == 0, repr(tiny_axis[:5]))
+
+    # Ranges whose intermediate ticks are wider than either endpoint.
+    # 300 points spanning 0 to 0.001 is the shape that overflows when the gutter is sized
+    # from the endpoints alone: "0" and "0.001" are narrow, but "0.0008333" is not.
+    for low, high, count in ((0.0, 1e6, 9), (0.0, 1e-3, 9), (0.0, 1e-3, 300),
+                             (0.0, 2e-6, 300), (1e-6, 3e-6, 60), (-1e9, 1e9, 400)):
+        span = [low + (high - low) * i / (count - 1) for i in range(count)]
+        wide_block = render.chart(norm(span), "S")
+        check(f"a {low} to {high} chart fits the column budget",
+              widest(wide_block) <= constants.COLUMN_BUDGET, f"width={widest(wide_block)}")
+
     # --- no ANSI anywhere (R11) ---
     table = render.table(norm([1.0, 2.0, 3.0]))
     check("no escape character in a chart", "\x1b" not in chart)
@@ -149,6 +173,12 @@ def main():
 
     wide = render.table(norm([1.0, 2.0, 3.0], x=["x" * 60, "b", "c"]))
     check("a table with long labels fits the column budget", widest(wide) <= constants.COLUMN_BUDGET, f"width={widest(wide)}")
+
+    multi = validate({"title": "T", "x": [f"p{i}" for i in range(5)],
+                      "series": {f"series number {i}": [float(i)] * 5 for i in range(6)}})
+    check("a six-series table fits the column budget",
+          widest(render.table(multi)) <= constants.COLUMN_BUDGET,
+          f"width={widest(render.table(multi))}")
 
     tall_values = [float(i) for i in range(200)]
     block, meta = render.table_with_meta(norm(tall_values))

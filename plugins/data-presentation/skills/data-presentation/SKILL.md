@@ -26,7 +26,7 @@ echo '{
 Fields: `x` and `series` are required. `title`, `units`, and `source` are optional and are
 rendered into a caption inside the block. `type` may be `table` or `chart` to ask for a
 form; the rule below still decides, and the notes say if you did not get what you asked
-for. `zero_meaningful` lists series where a zero is a real measurement rather than a gap.
+for. A zero is always treated as a real measurement; only `null` or an empty string counts as missing, so a gap can never be silently rendered as a zero.
 
 Use `null` for a missing value. Never substitute a zero yourself.
 

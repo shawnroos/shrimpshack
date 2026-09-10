@@ -201,6 +201,16 @@ def main():
         repr(out["notes"]),
     )
 
+    # End to end on a mostly-missing series: a success must carry visible data, not an
+    # axis with nothing on it.
+    mostly_missing = [None] * 400
+    for offset, position in enumerate(range(101, 109)):
+        mostly_missing[position] = float(offset + 1)
+    _, out = run_cli({"title": "Sparse", "x": [f"p{i}" for i in range(400)], "series": {"S": mostly_missing}})
+    check("a success on sparse data contains visible plot marks",
+          out["status"] == "ok" and any(m in out["block"] for m in present.PLOT_MARKS),
+          repr(out.get("message") or out["block"][:80]))
+
     # --- an overridden form names both (R3) ---
     payload = series(5)
     payload["type"] = "chart"

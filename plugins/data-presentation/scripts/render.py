@@ -115,8 +115,16 @@ def _relabel_axis(body):
 
 
 def _axis_width(low, high):
-    """The widest formatted label, which is what the chart's gutter actually costs."""
-    return max(len(format_number(low)), len(format_number(high)))
+    """The widest tick label that will be drawn, which is what the gutter costs.
+
+    Measuring only the endpoints understates it: 0 to 1000000 has endpoints "0" and
+    "1M" but an intermediate tick of "916.7k", three times wider.
+    """
+    rows = constants.CHART_ROW_BUDGET
+    span = high - low
+    return max(
+        len(format_number(high - span * step / rows)) for step in range(rows + 1)
+    )
 
 
 def chart_with_meta(request, series_name):
@@ -139,6 +147,11 @@ def chart_with_meta(request, series_name):
             "height": constants.CHART_ROW_BUDGET,
             "min": full_min,
             "max": full_max,
+            # Lossless tick text. The default template is two decimals, and _relabel_axis
+            # parses that text back to a float - so a series of 0.001..0.005 would arrive
+            # already rounded and every axis row would read 0. Reformatting cannot undo a
+            # rounding that happened before it.
+            "format": "{:.17g} ",
         },
     )
     body = _relabel_axis(body)
