@@ -62,20 +62,85 @@ run_suite() {
     return "$failed"
 }
 
+# scan_or_fail <label> [python-args...] -- the scanner itself arrives on stdin.
+#
+# Every check that shells out to a scanner needs the same three-way reading, and
+# writing it out per check produced three different wrappers, two of which
+# reported the scanner's own crash as a clean tree. There is one wrapper now.
+#
+#   status != 0  the scan did not complete; nothing was proven -> fail
+#   stdout       the findings -> print them and fail
+#   neither      pass
+#
+# So a scanner behind this helper PRINTS its findings and exits 0; it must not
+# use its exit status to report one, because that status is reserved for "I
+# crashed". Callers must write `scan_or_fail ... || return 1`: errexit is off
+# inside a check invoked as `check || rc=1`, so without it the caller's own green
+# line runs anyway and the failure is thrown away.
+scan_or_fail() {
+    local label="$1" out rc=0
+    shift
+    out="$(python3 - "$@")" || rc=$?
+    if [ -n "$out" ]; then printf '%s\n' "$out"; fi
+    if [ "$rc" -ne 0 ]; then
+        printf '%s%s FAILED%s — the scan itself did not complete; nothing was proven.\n' \
+            "$RED" "$label" "$NC"
+        return 1
+    fi
+    if [ -n "$out" ]; then
+        printf '%s%s FAILED%s — see the line(s) above.\n' "$RED" "$label" "$NC"
+        return 1
+    fi
+    return 0
+}
+
+# The helper's contract holds only while every caller writes `|| return 1`. A
+# call without it prints the failure and then falls through to the caller's own
+# green line, which is exactly the defect the helper was written to remove -- so
+# the shape is refused here rather than left to the next author's memory.
+scan_caller_check() {
+    printf '%sscan_or_fail caller check...%s\n' "$YELLOW" "$NC"
+    local self="$SCRIPT_DIR/run-tests.sh" calls bare
+    [ -r "$self" ] || {
+        printf '%sscan_or_fail caller check FAILED%s — %s is not readable; nothing was checked.\n' \
+            "$RED" "$NC" "$self"; return 1; }
+    # A call is the first word of its own line. Anchoring there is what keeps
+    # this from matching the name inside its own comments and messages -- a
+    # predicate that matches itself reports a defect on a clean file. The cost is
+    # that a call buried mid-line is outside what this sees; the shapes that hide
+    # one there (`if ! scan_or_fail ...`) already handle the failure.
+    # A pattern that stopped matching would call every caller correct, so the
+    # count is asserted too.
+    calls="$(grep -cE '^[[:space:]]*scan_or_fail[[:space:]]' "$self" || true)"
+    if [ "$calls" -eq 0 ]; then
+        printf '%sscan_or_fail caller check FAILED%s — no call recognised in %s; the shape moved.\n' \
+            "$RED" "$NC" "$self"
+        return 1
+    fi
+    bare="$(grep -nE '^[[:space:]]*scan_or_fail[[:space:]]' "$self" | grep -v '|| return 1$' || true)"
+    if [ -n "$bare" ]; then
+        printf '%s\n' "$bare"
+        printf '%sscan_or_fail caller check FAILED%s — the line(s) above drop the trailing\n' "$RED" "$NC"
+        printf 'guard, so a failed scan falls through to the green line below it.\n'
+        return 1
+    fi
+    printf '%sall %d call(s) stop on a failed scan%s\n' "$GREEN" "$calls" "$NC"
+}
+
 # The two version fields must agree. Nothing enforces this repo-wide, so each
 # plugin that wants the check writes its own.
 version_sync_check() {
     local manifest="${1:-$PLUGIN_ROOT/.claude-plugin/plugin.json}"
     local marketplace="${2:-$REPO_ROOT/.claude-plugin/marketplace.json}"
-    python3 - "$manifest" "$marketplace" <<'PY'
+    scan_or_fail "version sync check" "$manifest" "$marketplace" <<'PY' || return 1
 import json, sys
 m = json.load(open(sys.argv[1]))
 mk = json.load(open(sys.argv[2]))
 entry = next((p for p in mk.get("plugins", []) if p.get("name") == m["name"]), None)
 if entry is None:
-    print("plugin %r is not registered in the marketplace" % m["name"]); sys.exit(1)
-if entry.get("version") != m.get("version"):
-    print("version drift: plugin.json %s, marketplace %s" % (m.get("version"), entry.get("version"))); sys.exit(1)
+    print("plugin %r is not registered in the marketplace" % m["name"])
+elif entry.get("version") != m.get("version"):
+    print("version drift: plugin.json %s, marketplace %s" % (m.get("version"), entry.get("version")))
 PY
 }
 
@@ -86,10 +151,10 @@ PY
 # standard path is auto-loaded, so naming it makes the whole plugin unavailable.
 # Validation is not the loader, and this is the gap between them.
 manifest_autoload_check() {
-    local m="$PLUGIN_ROOT/.claude-plugin/plugin.json" bad=0
-    printf '%bManifest auto-load check...%b\n' "$YELLOW" "$NC"
-    [ -r "$m" ] || { printf '%bno manifest at %s%b\n' "$RED" "$m" "$NC"; return 1; }
-    bad="$(python3 - "$m" "$PLUGIN_ROOT" <<'PY'
+    local m="$PLUGIN_ROOT/.claude-plugin/plugin.json"
+    printf '%sManifest auto-load check...%s\n' "$YELLOW" "$NC"
+    [ -r "$m" ] || { printf '%sno manifest at %s%s\n' "$RED" "$m" "$NC"; return 1; }
+    scan_or_fail "manifest auto-load check" "$m" "$PLUGIN_ROOT" <<'PY' || return 1
 import json, os, sys
 m, root = sys.argv[1], sys.argv[2]
 d = json.load(open(m))
@@ -99,16 +164,11 @@ bad = []
 h = d.get("hooks")
 if isinstance(h, str) and os.path.normpath(h.lstrip("./")) == os.path.join("hooks", "hooks.json"):
     if os.path.exists(os.path.join(root, "hooks", "hooks.json")):
-        bad.append("hooks: %s duplicates the auto-loaded hooks/hooks.json" % h)
+        bad.append("hooks: %s duplicates the auto-loaded hooks/hooks.json, so the "
+                   "plugin would fail to load; remove the key (the file is still used)" % h)
 print("\n".join(bad))
 PY
-)"
-    if [ -n "$bad" ]; then
-        printf '%b%s%b\n' "$RED" "$bad" "$NC"
-        printf '%bthe plugin would fail to load; remove the key (the file is still used)%b\n' "$RED" "$NC"
-        return 1
-    fi
-    printf '%bmanifest declares no auto-loaded path%b\n' "$GREEN" "$NC"
+    printf '%smanifest declares no auto-loaded path%s\n' "$GREEN" "$NC"
     return 0
 }
 
@@ -146,6 +206,16 @@ scan_paths() {
 
 secret_scan() {
     printf '%sSecret scan...%s\n' "$YELLOW" "$NC"
+    # grep exiting 2 because the path is absent is not a match, so a scan of
+    # nothing prints the same "no credential shapes found" as a clean tree. This
+    # is the credential guard; it does not get to say that about a directory it
+    # never opened. The guard is written out here rather than shared with
+    # brand_scan's, so that neither can be relaxed on the other's behalf.
+    if [ ! -d "$PLUGIN_ROOT/lib" ] || [ ! -r "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]; then
+        printf '%ssecret scan FAILED%s — %s is not the plugin root; nothing was scanned.\n' \
+            "$RED" "$NC" "$PLUGIN_ROOT"
+        return 1
+    fi
     if scan_paths "$PLUGIN_ROOT"; then
         printf '%sno credential shapes found%s\n' "$GREEN" "$NC"
     else
@@ -164,7 +234,12 @@ secret_scan() {
 # environment variable name, which the fallback in lib/contain.sh has to spell
 # out to name what the user must rename. Both exemptions go when the thing they
 # name goes.
-BRAND_PATTERN='(^|[^A-Za-z])[Ss]late'
+#
+# Every letter is a class because the name is spelled in three cases here and
+# the pattern could reach only two of them: the SHOUTING form inside
+# HERDR_LINEAR_SLATE_ROOT went unseen, which made the green line claim more than
+# it had looked at and left the exemption for that variable suppressing nothing.
+BRAND_PATTERN='(^|[^A-Za-z])[Ss][Ll][Aa][Tt][Ee]'
 
 brand_scan() {
     printf '%sBrand scan...%s\n' "$YELLOW" "$NC"
@@ -175,10 +250,7 @@ brand_scan() {
             "$RED" "$NC" "$PLUGIN_ROOT"
         return 1
     fi
-    # The scanner's own failure prints on stderr and leaves stdout empty, which
-    # reads exactly like a clean tree; its status is what decides.
-    local out rc=0
-    out="$(python3 - "$PLUGIN_ROOT" "$REPO_ROOT/.claude-plugin/marketplace.json" "$BRAND_PATTERN" <<'PYEOF'
+    scan_or_fail "brand scan" "$PLUGIN_ROOT" "$REPO_ROOT/.claude-plugin/marketplace.json" "$BRAND_PATTERN" <<'PYEOF' || return 1
 import glob, json, os, re, sys
 
 plugin_root, marketplace, pattern = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -239,16 +311,6 @@ elif rx.search(json.dumps(entry, ensure_ascii=False)):
 
 print("\n".join(hits))
 PYEOF
-)" || rc=1
-    if [ "$rc" -ne 0 ]; then
-        printf '%sbrand scan FAILED%s — the scan itself did not complete; nothing was proven.\n' "$RED" "$NC"
-        return 1
-    fi
-    if [ -n "$out" ]; then
-        printf '%s\n' "$out"
-        printf '%sbrand scan FAILED%s — see the line(s) above.\n' "$RED" "$NC"
-        return 1
-    fi
     printf '%sno shipped file names the organisation%s\n' "$GREEN" "$NC"
 }
 
@@ -258,7 +320,16 @@ PYEOF
 # the next author to remember.
 assertion_lint() {
     printf '%sAssertion lint...%s\n' "$YELLOW" "$NC"
-    local hits
+    local hits f count=0
+    # A grep that matched nothing and a grep that was handed nothing print the
+    # same empty string. Count what was examined and refuse the second, the way
+    # run_suite refuses a loop that never ran.
+    for f in "$PLUGIN_ROOT"/tests/unit/*.bats; do [ -e "$f" ] && count=$((count + 1)); done
+    if [ "$count" -eq 0 ]; then
+        printf '%sassertion lint FAILED%s — no .bats file under %s/tests/unit; nothing was linted.\n' \
+            "$RED" "$NC" "$PLUGIN_ROOT"
+        return 1
+    fi
     hits="$(grep -rnE '^[[:space:]]*![[:space:]]' "$PLUGIN_ROOT"/tests/unit/*.bats 2>/dev/null || true)"
     if [ -n "$hits" ]; then
         printf '%s\n' "$hits"
@@ -281,8 +352,8 @@ assertion_lint() {
 # add is exactly where a retired verb survives unnoticed.
 skill_lib_sync_check() {
     printf '%sSkill lib-sourcing check...%s\n' "$YELLOW" "$NC"
-    local root="${1:-$PLUGIN_ROOT}" out
-    out="$(python3 - "$root" <<'PY'
+    local root="${1:-$PLUGIN_ROOT}"
+    scan_or_fail "skill lib-sourcing check" "$root" <<'PY' || return 1
 import re, sys, glob, os
 
 plugin_root = sys.argv[1]
@@ -293,7 +364,7 @@ owned_docs = sorted(
 )
 # An empty glob makes the loop below a no-op, and a no-op reports clean.
 if not owned_docs:
-    print("no skill or command document found under %s" % plugin_root); sys.exit(1)
+    print("no skill or command document found under %s" % plugin_root); raise SystemExit
 
 lib_names = sorted(os.path.basename(f)[:-3] for f in glob.glob(os.path.join(plugin_root, "lib", "*.sh")))
 
@@ -330,7 +401,6 @@ def sourced_names(fence_text):
         names.update(m.group(1).split())
     return names
 
-rc = 0
 for rel in owned_docs:
     path = os.path.join(plugin_root, rel)
     text = open(path).read()
@@ -340,26 +410,18 @@ for rel in owned_docs:
 
     unknown = sorted(fn for fn in called if fn not in defs)
     if unknown:
-        print("%s: calls undefined function(s): %s" % (path, ", ".join(unknown))); rc = 1
+        print("%s: calls undefined function(s): %s" % (path, ", ".join(unknown)))
 
     required = closure({defs[fn] for fn in called if fn in defs})
     missing = sorted(required - declared)
     if missing:
         print("%s: sources %s, missing %s (needed transitively by what it calls)"
-              % (path, sorted(declared), missing)); rc = 1
+              % (path, sorted(declared), missing))
 
     bogus = sorted(n for n in declared if n not in lib_names)
     if bogus:
-        print("%s: sources nonexistent lib file(s): %s" % (path, bogus)); rc = 1
-
-sys.exit(rc)
+        print("%s: sources nonexistent lib file(s): %s" % (path, bogus))
 PY
-)" || true
-    if [ -n "$out" ]; then
-        printf '%s\n' "$out"
-        printf '%sskill lib-sourcing check FAILED%s\n' "$RED" "$NC"
-        return 1
-    fi
     printf '%severy owned document sources what it calls%s\n' "$GREEN" "$NC"
 }
 
@@ -380,16 +442,6 @@ consent_mutation_check() {
         printf '%s%s is not the plugin root; refusing to copy it%s\n' "$RED" "$PLUGIN_ROOT" "$NC"
         return 1
     fi
-    local tmp; tmp="$(mktemp -d)"
-    # The whole plugin, because a .bats file resolves lib/ from its OWN
-    # directory -- copying lib/ alone would run every test against the real one
-    # and report a green mutation for a reason that has nothing to do with the
-    # code under test.
-    cp -R "$PLUGIN_ROOT" "$tmp/work"
-    cat >> "$tmp/work/lib/binding.sh" <<'EOF'
-
-herdr_linear::consent_ok() { return 0; }
-EOF
     # Every one of these must go red. They are named, because "the suite failed"
     # is exactly the answer that hides a verb with no check in it.
     local -a expect=(
@@ -400,6 +452,34 @@ EOF
         "documents.bats:a document is not published when nobody has answered"
         "reconcile.bats:a hook with no recorded answer records the question rather than sending"
     )
+    # The names above are the point of the list and they stay. What a hand-kept
+    # list cannot do is notice the write verb added next year: a seventh call
+    # site with no line here is forgotten in the one phase that then reports
+    # every verb covered. So the same list is derived from the call sites
+    # themselves and the two must agree -- the list can drift, but not quietly.
+    local derived expected
+    derived="$(awk '
+        /herdr_linear::consent_ok/ && $0 !~ /^[[:space:]]*#/ && $0 !~ /herdr_linear::consent_ok\(\)/ {
+            n = split(FILENAME, p, "/"); f = p[n]; sub(/\.sh$/, ".bats", f); print f
+        }' "$PLUGIN_ROOT"/lib/*.sh | sort)"
+    expected="$(printf '%s\n' "${expect[@]}" | sed 's/:.*//' | sort)"
+    if [ "$derived" != "$expected" ]; then
+        printf '%sconsent mutation FAILED%s — the named list and the real consent_ok call sites disagree.\n' \
+            "$RED" "$NC"
+        printf '  < named above, > found under lib/; add or remove a named test to match.\n'
+        diff <(printf '%s\n' "$expected") <(printf '%s\n' "$derived") | sed 's/^/  /'
+        return 1
+    fi
+    local tmp; tmp="$(mktemp -d)"
+    # The whole plugin, because a .bats file resolves lib/ from its OWN
+    # directory -- copying lib/ alone would run every test against the real one
+    # and report a green mutation for a reason that has nothing to do with the
+    # code under test.
+    cp -R "$PLUGIN_ROOT" "$tmp/work"
+    cat >> "$tmp/work/lib/binding.sh" <<'EOF'
+
+herdr_linear::consent_ok() { return 0; }
+EOF
     local rc=0 entry file name out
     for entry in "${expect[@]}"; do
         file="${entry%%:*}"; name="${entry#*:}"
@@ -425,7 +505,16 @@ EOF
 # hooks/ or commands/ would let the plugin answer its own question.
 consent_caller_check() {
     printf '%sConsent-confirm caller check...%s\n' "$YELLOW" "$NC"
-    local hits
+    local hits d
+    # An absent directory yields no hits and reads as "no caller", so name the
+    # three the rule is about and require each to be there before believing it.
+    for d in lib hooks commands; do
+        if [ ! -d "$PLUGIN_ROOT/$d" ]; then
+            printf '%sconsent-confirm caller check FAILED%s — %s/%s is not there; it was never swept.\n' \
+                "$RED" "$NC" "$PLUGIN_ROOT" "$d"
+            return 1
+        fi
+    done
     hits="$(grep -rn 'herdr_linear::consent_confirm' \
         "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" 2>/dev/null \
         | grep -v '^.*/lib/binding.sh:.*herdr_linear::consent_confirm() {' || true)"
@@ -444,15 +533,33 @@ consent_caller_check() {
 # leaking lib chatter into a session that was never pointed at this plugin.
 hook_source_stderr_check() {
     printf '%sHook source-stderr check...%s\n' "$YELLOW" "$NC"
-    local rc=0 f hits
+    local rc=0 f hits loops count=0
     for f in "$PLUGIN_ROOT"/hooks/*.sh; do
         [ -e "$f" ] || continue
+        count=$((count + 1))
+        # The rule is enforced by recognising one exact spelling of the source
+        # loop. A hook that spells it differently matches nothing and passes
+        # while leaking, so require the line to be FOUND before reading anything
+        # into the fact that none of them was bare.
+        loops="$(grep -c '\. "\$LIB/\$f"' "$f" || true)"
+        if [ "$loops" -eq 0 ]; then
+            printf '%s: no `. "$LIB/$f"` line, so this check saw nothing in it. Every hook\n' "$(basename "$f")"
+            printf '    is required to carry that exact line; a hook that sources lib some other\n'
+            printf '    way, or sources none at all, needs this check widened rather than trusted.\n'
+            rc=1
+            continue
+        fi
         hits="$(grep -n '\. "\$LIB/\$f"' "$f" | grep -v '2>/dev/null' || true)"
         if [ -n "$hits" ]; then
             printf '%s: %s\n' "$(basename "$f")" "$hits"
             rc=1
         fi
     done
+    if [ "$count" -eq 0 ]; then
+        printf '%shook source-stderr check FAILED%s — no hook under %s/hooks; nothing was checked.\n' \
+            "$RED" "$NC" "$PLUGIN_ROOT"
+        return 1
+    fi
     if [ "$rc" -ne 0 ]; then
         printf '%shook source-stderr check FAILED%s — a hook sources lib without discarding stderr.\n' "$RED" "$NC"
         return 1
@@ -466,14 +573,14 @@ hook_source_stderr_check() {
 # names the file that moved.
 rubric_sync_check() {
     printf '%sRubric sync check...%s\n' "$YELLOW" "$NC"
-    local root="${1:-$PLUGIN_ROOT}" out
-    out="$(python3 - "$root" <<'PYEOF'
+    local root="${1:-$PLUGIN_ROOT}"
+    scan_or_fail "rubric sync check" "$root" <<'PYEOF' || return 1
 import sys, os, glob, hashlib
 
 root = sys.argv[1]
 paths = sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")))
 if not paths:
-    print("no SKILL.md files found under %s/skills" % root); sys.exit(1)
+    print("no SKILL.md files found under %s/skills" % root); raise SystemExit
 
 # The rubric is bounded by its own closing sentence, not by the next heading:
 # in most skills the text after it is file-specific prose with no heading
@@ -510,15 +617,7 @@ if present:
         if present[p] != ref:
             print("%s: rubric differs from the other %d (%s vs %s)"
                   % (p, counts[ref], hashlib.md5(present[p].encode()).hexdigest()[:8], ref_sum))
-
-sys.exit(1 if missing or len(counts) > 1 else 0)
 PYEOF
-)" || true
-    if [ -n "$out" ]; then
-        printf '%s\n' "$out"
-        printf '%srubric sync check FAILED%s\n' "$RED" "$NC"
-        return 1
-    fi
     printf '%sthe rubric is one text in every skill%s\n' "$GREEN" "$NC"
 }
 
@@ -526,6 +625,7 @@ wire_smoke() {
     printf '%sWire smoke...%s\n' "$YELLOW" "$NC"
     local rc=0
     assertion_lint || rc=1
+    scan_caller_check || rc=1
     version_sync_check || rc=1
     validate_check || rc=1
     manifest_autoload_check || rc=1
