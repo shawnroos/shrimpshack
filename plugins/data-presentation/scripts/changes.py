@@ -38,6 +38,13 @@ def _parse(text):
         return None
 
 
+def parse_time(text):
+    moment = _parse(text)
+    if moment is None or moment.tzinfo:
+        return moment
+    return moment.replace(tzinfo=timezone.utc)
+
+
 def _as_utc(moment):
     if moment.tzinfo is None:
         return moment.replace(tzinfo=timezone.utc)
@@ -164,7 +171,7 @@ def compare(previous, current, reason_if_none=None):
 
 
 def _clean(text):
-    return validate._clean(text, math.inf, [], "a changes line")
+    return validate.clean_text(text, math.inf, [], "a changes line")
 
 
 def _wrap(text, width, indent="", more="  "):

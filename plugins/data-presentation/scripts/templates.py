@@ -13,6 +13,7 @@ import tempfile
 from urllib.parse import parse_qsl, urlsplit
 
 import constants
+from canon import canonical_json
 from validate import FORMS
 
 NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,23}$"
@@ -463,8 +464,7 @@ def template_hash(template):
     # name is excluded as well as created_at: rename carries the run record (R17), and a
     # record whose hash differs from its template is treated as absent (KTD6).
     body = {k: v for k, v in template.items() if k not in ("created_at", "name")}
-    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical_json(body).encode("utf-8")).hexdigest()
 
 
 def ensure_dirs(home=None):
@@ -535,6 +535,10 @@ def load(name, home=None):
             "invalid", f"The file for {name!r} names itself {template['name']!r}; it was edited by hand."
         )
     return template
+
+
+def exists(name, home=None):
+    return os.path.exists(_path("templates", name, home))
 
 
 def list_templates(home=None):

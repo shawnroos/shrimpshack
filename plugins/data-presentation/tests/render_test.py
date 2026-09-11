@@ -308,7 +308,7 @@ def main():
         cells.append(cell)
         return cells
 
-    # Mutation: delete `.replace("|", "\\|")` from _clean. This goes red - the labels
+    # Mutation: delete `.replace("|", "\\|")` from clean_text. This goes red - the labels
     # arrive carrying live delimiters and every row parses as more columns than declared.
     table_lines = [line for line in block.split("\n") if line.startswith("|")]
     check(

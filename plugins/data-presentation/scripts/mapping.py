@@ -10,6 +10,7 @@ import math
 import re
 
 import constants
+from canon import canonical_json
 
 ADAPTERS = ("amplitude-segmentation", "paths", "identity")
 
@@ -268,8 +269,7 @@ def _extract(result, mapping):
         params = _read(entry, _AMP_PARAMS, base, types)
         if not isinstance(params, dict):
             raise _drift(f"{'.'.join(base + _AMP_PARAMS)} should be an object.")
-        canonical = json.dumps(params, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        definition = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        definition = "sha256:" + hashlib.sha256(canonical_json(params).encode("utf-8")).hexdigest()
         specs = (base, _AMP_X, _AMP_NAMES, _AMP_VALUES)
         root = entry
     elif adapter == "paths":

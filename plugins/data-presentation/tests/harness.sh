@@ -19,6 +19,8 @@ EXPECTED=(
   templates_test.py
   mapping_test.py
   changes_test.py
+  sources_test.py
+  pairing_test.py
   report_test.py
 )
 
