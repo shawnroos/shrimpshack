@@ -565,4 +565,18 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
     [ "$status" -eq 3 ]
     [ "$(herdr_calls 'pane split')" = "$splits" ]
+    [[ "$stderr" == *"whether WEB-3001 still has its pane"* ]]
+}
+
+# One failed read, then a good one. The second read proves nothing about the
+# first, so the failure itself must be what the pane check sees.
+@test "one snapshot read that fails is not taken for a column whose pane is gone" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    splits="$(herdr_calls 'pane split')"
+    rm -f "$FAKE_HERDR_RECORD_DIR/snapshots"
+    export FAKE_HERDR_SNAPSHOT_FAILS_AT=2
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 3 ]
+    [ "$(herdr_calls 'pane split')" = "$splits" ]
 }

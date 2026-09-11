@@ -120,6 +120,21 @@ creations() { local n; n="$(grep -cE '^(tab create|pane split|workspace create)'
     [ "$(herdr_linear::tab_of_pane "$output")" = "$tab" ]
 }
 
+# One failed read of the tab's panes, then a good one: the tab is still there,
+# so a second tab for the ticket would be wrong.
+@test "one snapshot read that fails makes no second tab for the ticket" {
+    bind_space wG "$PID"
+    run herdr_linear::open_session "$WT"
+    [ "$status" -eq 0 ]
+    tab="$(herdr_linear::binding_tab "$WT")"
+    rm -f "$FAKE_HERDR_RECORD_DIR/snapshots"
+    export FAKE_HERDR_SNAPSHOT_FAILS_AT=1
+    run --separate-stderr herdr_linear::open_session "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_SESSION_FAILED" ]
+    [ "$(herdr_calls 'tab create')" = "1" ]
+    [ "$(herdr_linear::binding_tab "$WT")" = "$tab" ]
+}
+
 # The record is only an authority while the tab it names is still there.
 @test "a recorded tab that herdr no longer has is replaced, and the record follows" {
     bind_space wG "$PID"

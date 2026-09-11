@@ -247,9 +247,17 @@ wA:p2" ]
 @test "topology lookups against a dead server answer empty rather than garbage" {
     export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
     export FAKE_HERDR_MODE=dead
-    run -1 herdr_linear::tab_of_pane "wA:p2"
+    run -2 herdr_linear::tab_of_pane "wA:p2"
     [ -z "$output" ]
-    run -1 herdr_linear::panes_in_tab "wA:t1"
+    run -2 herdr_linear::panes_in_tab "wA:t1"
+    [ -z "$output" ]
+}
+
+# A snapshot with no pane list was not read, whatever herdr's exit status says.
+@test "a snapshot that holds no pane list is could-not-read, not no-such-pane" {
+    export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
+    export FAKE_HERDR_SNAPSHOT_NO_PANES=1
+    run -2 herdr_linear::tab_of_pane "wA:p2"
     [ -z "$output" ]
 }
 

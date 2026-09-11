@@ -209,12 +209,16 @@ except Exception:
 
 # The snapshot is captured to a variable before it is filtered, for the same
 # reason the probe is: a filter that stops reading early kills herdr mid-write.
+# 1 when the snapshot was read and holds no match; 2 when it could not be read.
+# Only the read that answered can say which: a second read that succeeds says
+# nothing about a first that failed while the server was busy.
 herdr_linear::_pane_field() {
     local match_key="$1" match_val="$2" want="$3" snap
-    snap="$(herdr_linear::snapshot)" || return 1
-    [ -n "$snap" ] || return 1
+    snap="$(herdr_linear::snapshot)" || return 2
+    [ -n "$snap" ] || return 2
     local out
     if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$snap" | jq -e '.result.snapshot.panes | type == "array"' >/dev/null 2>&1 || return 2
         out="$(printf '%s' "$snap" | jq -r --arg k "$match_key" --arg v "$match_val" --arg w "$want" \
             '.result.snapshot.panes[]? | select(.[$k] == $v) | .[$w] // empty' 2>/dev/null)"
     else
@@ -222,20 +226,21 @@ herdr_linear::_pane_field() {
 import sys, json, os
 try:
     panes = json.load(sys.stdin)["result"]["snapshot"]["panes"]
-    for p in panes:
-        if p.get(os.environ["HL_K"]) == os.environ["HL_V"]:
-            v = p.get(os.environ["HL_W"])
-            if v is not None:
-                print(v)
+    assert isinstance(panes, list)
 except Exception:
-    pass
-' 2>/dev/null)"
+    sys.exit(2)
+for p in panes:
+    if isinstance(p, dict) and p.get(os.environ["HL_K"]) == os.environ["HL_V"]:
+        v = p.get(os.environ["HL_W"])
+        if v is not None:
+            print(v)
+' 2>/dev/null)" || return 2
     fi
     [ -n "$out" ] || return 1
     printf '%s' "$out"
 }
 
-# Which tab a pane sits in.
+# Which tab a pane sits in. 1 for no such pane, 2 when herdr could not be read.
 herdr_linear::tab_of_pane() {
     [ -n "${1:-}" ] || return 1
     herdr_linear::_pane_field pane_id "$1" tab_id
@@ -283,9 +288,3 @@ herdr_linear::tab_space() {
     return 1
 }
 
-# Whether herdr can give a snapshot at all. The pane readers return nothing
-# both for "no such pane" and for "could not read", and only this tells them
-# apart.
-herdr_linear::snapshot_readable() {
-    herdr_linear::snapshot >/dev/null 2>&1
-}

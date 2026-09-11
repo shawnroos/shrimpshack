@@ -186,12 +186,13 @@ herdr_linear::_issue_space() {
 # <space>. Nothing otherwise, and the caller makes a new tab.
 # Non-zero when herdr could not be asked about the tab.
 herdr_linear::_pane_of_tab_in() {
-    local tab="${1:-}" ws="${2:-}" where panes
+    local tab="${1:-}" ws="${2:-}" where panes rc
     [ -n "$tab" ] || return 0
     where="$(herdr_linear::tab_space "$tab")" || return 1
     [ "$where" = "$ws" ] || return 0
-    panes="$(herdr_linear::panes_in_tab "$tab" 2>/dev/null)" \
-        || { herdr_linear::snapshot_readable || return 1; return 0; }
+    panes="$(herdr_linear::panes_in_tab "$tab" 2>/dev/null)"; rc=$?
+    [ "$rc" -eq 2 ] && return 1
+    [ "$rc" -eq 0 ] || return 0
     printf '%s\n' "$panes" | head -n1
 }
 
@@ -247,7 +248,7 @@ herdr_linear::open_session() {
 herdr_linear::layout_build() {
     local parent="${1:-}" ; shift || true
     local bin tab tabpane pane slug child branch wt_path journal_file here bound repo resp
-    local ws="" rc made existing owner orc ptab i=0 paths=() branches=()
+    local ws="" rc made existing owner orc ptab prc i=0 paths=() branches=()
 
     [ -n "$parent" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
@@ -316,7 +317,8 @@ herdr_linear::layout_build() {
                     return "$HERDR_LINEAR_LAYOUT_FAILED"
                 fi
                 # Adopt only a worktree with no binding or the child's own. A
-                # record that cannot be read is not "unowned".
+                # record with an unsafe identifier is not "unowned". One that
+                # fails its mode check or does not parse reads as absent here.
                 owner="$(herdr_linear::binding_identifier "$existing" 2>/dev/null)"; orc=$?
                 if { [ "$orc" -eq 0 ] && [ "$owner" != "$child" ]; } \
                     || { [ "$orc" -ne 0 ] && [ "$orc" -ne "$HERDR_LINEAR_BINDING_ABSENT" ]; }; then
@@ -391,8 +393,8 @@ herdr_linear::layout_build() {
         # A pane that closed with an old tab is a column still to make.
         pane="$(herdr_linear::journal_get "$parent" "pane.$child" 2>/dev/null)" || pane=""
         if [ -n "$pane" ]; then
-            ptab="$(herdr_linear::tab_of_pane "$pane" 2>/dev/null)" || ptab=""
-            if [ -z "$ptab" ] && ! herdr_linear::snapshot_readable; then
+            ptab="$(herdr_linear::tab_of_pane "$pane" 2>/dev/null)"; prc=$?
+            if [ "$prc" -eq 2 ]; then
                 herdr_linear::_unlock "$journal_file"
                 printf 'could not read the herdr snapshot, so whether %s still has its pane is unknown; nothing was made\n' "$child" >&2
                 return "$HERDR_LINEAR_LAYOUT_FAILED"
