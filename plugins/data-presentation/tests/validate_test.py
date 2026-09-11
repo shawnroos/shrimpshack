@@ -172,7 +172,7 @@ def main():
     check("the truncation is reported", any("truncat" in n.lower() for n in result["notes"]), repr(result["notes"]))
 
     # --- the cut runs AFTER the escape, and never splits an escape pair (P3) ---
-    # Mutation: move the truncation block in _clean above the "|" escape. This goes red:
+    # Mutation: move the truncation block in clean_text above the "|" escape. This goes red:
     # 23 kept pipes become 46 characters once escaped, so the label leaves the cleaner
     # at nearly twice its own limit. The "z" * 64 label above cannot catch it - it has
     # no character that escaping makes longer.

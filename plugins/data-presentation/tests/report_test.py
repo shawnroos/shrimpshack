@@ -462,12 +462,17 @@ def test_save_gates():
     check("snapshot with confirm saves", out["status"] == "ok" and template_exists("dated-fake"), out)
 
     s = fresh()
-    s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), ts=INSIDE_WEEK)
     path = draft_file(s, "missing-fake", [draft_block("chart-aaaa", args_for("chart-aaaa", groupByLimit=5))])
     out = save(s, path, "--confirm")
     check("a draft call not in the log stops save", out["status"] == "stopped" and out["next"] == "make_calls", out)
     check("the stop says the call must be made again", "compacted or cleared" in out["message"] and "again" in out["message"], out)
     check("a missing call writes nothing", not template_exists("missing-fake") and record_bytes("missing-fake") is None)
+    s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), ts=INSIDE_WEEK)
+    out = save(s, path, "--confirm")
+    check("one differing call to the tool stops save", out["status"] == "stopped" and out["next"] == "make_calls", out)
+    check("that stop names the difference", "removed groupByLimit" in out["message"] and "draft's call" in out["message"], out)
+    check("that stop points at save, not finish", "run save again" in out["message"] and "finish" not in out["message"], out)
+    check("a differing call writes nothing", not template_exists("missing-fake") and record_bytes("missing-fake") is None)
 
     b_reply = weekly_reply({"fake-b": [1, 2, 3]}, "chart-bbbb")
     path = draft_file(s, "half-fake", [draft_block("chart-aaaa", args_for("chart-aaaa")), draft_block("chart-bbbb", args_for("chart-bbbb"))])
