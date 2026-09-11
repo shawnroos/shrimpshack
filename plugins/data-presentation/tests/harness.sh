@@ -15,6 +15,10 @@ EXPECTED=(
   render_test.py
   forms_test.py
   present_test.py
+  session_log_test.py
+  templates_test.py
+  mapping_test.py
+  changes_test.py
 )
 
 PASS=0
