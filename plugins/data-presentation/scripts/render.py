@@ -11,7 +11,7 @@ import string
 import sys
 
 import constants
-from validate import Refusal, present_values, truncate_escaped
+from validate import Refusal, present_values
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))
 import asciichartpy  # noqa: E402
@@ -233,14 +233,18 @@ def table_with_meta(request, series_names=None):
     }
     number_width = sum(max((len(v) for v in column), default=0) for column in numbers.values())
 
+    # Nothing in a table is cut to make it fit. The row labels are measured over the rows
+    # that survive reduction, not all of them, so a label the reader never sees cannot
+    # refuse a table that would have rendered.
     # "| a | b |" costs three characters per gap plus the two ends.
     separators = 3 * len(names) + 4
-    label_budget = constants.COLUMN_BUDGET - separators - number_width
-    if label_budget < constants.MIN_LABEL_CELL:
+    label_width = max((len(str(x[i])) for i in keep), default=0)
+    needed = separators + label_width + number_width
+    if needed > constants.COLUMN_BUDGET:
         raise Refusal(
-            f"{len(names)} series of numbers this wide cannot fit a table inside "
-            f"{constants.COLUMN_BUDGET} columns without cutting a value or a row label. "
-            "Ask for fewer series."
+            f"{len(names)} series with values and row labels this long needs {needed} "
+            f"columns and the budget is {constants.COLUMN_BUDGET}. Nothing here can be "
+            "shortened without cutting a value or a label, so ask for fewer series."
         )
     # The header row carries no numbers, so it is bounded on its own.
     header_budget = max(1, (constants.COLUMN_BUDGET - separators) // len(names))
@@ -250,7 +254,7 @@ def table_with_meta(request, series_names=None):
     rule = "| " + " | ".join(["---"] * (len(names) + 1)) + " |"
     rows = []
     for row, i in enumerate(keep):
-        cells = [truncate_escaped(str(x[i]), label_budget)]
+        cells = [str(x[i])]
         cells.extend(numbers[name][row] for name in names)
         rows.append("| " + " | ".join(cells) + " |")
 

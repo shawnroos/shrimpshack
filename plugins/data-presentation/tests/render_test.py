@@ -241,14 +241,41 @@ def main():
     check("a table that needs no legend carries none",
           plain.startswith("|"), repr(plain.split("\n")[0]))
 
-    # --- a truncated cell cannot open a column the table did not declare (P3) ---
-    # Six series of seven-character values, so the row label is cut down to eight
-    # characters and a pipe-laden label really does reach the cut. With one or two
-    # series the label never reaches it and the assertion cannot fail.
+    # --- a row label is never cut either (P1) ---
+    # Six series of seven-character values leaves eight columns for the label, so
+    # 2026-09-01 and 2026-09-02 both used to render as "2026-09…". The arithmetic is
+    # 22 separators + 42 of values + 10 of label = 74 against a budget of 72, so the
+    # margin is two characters and the message has to say so.
+    # Mutation: truncate the row label to what is left instead of refusing - this goes
+    # red, because both dates come back as the same string.
+    dated = validate({"title": "t", "x": ["2026-09-01", "2026-09-02"],
+                      "series": {f"tool-{i}": [-916700.0, -123456.0] for i in range(6)}})
+    try:
+        dated_block = render.table(dated)
+        dated_refusal = None
+    except Refusal as exc:
+        dated_block, dated_refusal = None, str(exc)
+    check("two dates that would collide refuse instead of rendering",
+          dated_refusal is not None,
+          repr(dated_block and dated_block.split("\n")[-2:]))
+    check("the refusal states what the table needed and what the budget is",
+          dated_refusal is not None and "74" in dated_refusal and "72" in dated_refusal,
+          repr(dated_refusal))
+
+    # The same six series with values that leave room still render, and the dates come
+    # through whole. Without this the rule above could be "always refuse at six series".
+    roomy = render.table(validate({"title": "t", "x": ["2026-09-01", "2026-09-02"],
+                                   "series": {f"tool-{i}": [1.0, 2.0] for i in range(6)}}))
+    check("six series with narrow values still render the dates in full",
+          "2026-09-01" in roomy and "2026-09-02" in roomy, repr(roomy.split("\n")[-2:]))
+
+    # --- a label cut at the gate cannot open a column the table did not declare (P3) ---
+    # Each raw label escapes to 29 characters, so the gate's 24-character cut really
+    # fires, and they differ at the first character so they stay distinct through it.
     delimited = validate({
         "title": "T",
-        "x": ["a|b|c|d|e|f|g" for _ in range(4)],
-        "series": {f"n|{i}|long|name": [-916700.0] * 4 for i in range(6)},
+        "x": [f"{i}|b|c|d|e|f|g|h|i|j" for i in range(3)],
+        "series": {f"n|{i}|long|name": [1.0, 2.0, 3.0] for i in range(3)},
     })
     block = render.table(delimited)
 
@@ -273,15 +300,25 @@ def main():
     # arrive carrying live delimiters and every row parses as more columns than declared.
     table_lines = [line for line in block.split("\n") if line.startswith("|")]
     check(
-        "every row of a pipe-laden table parses as seven columns",
-        all(len(columns(line)) == 9 for line in table_lines),
+        "every row of a pipe-laden table parses as four columns",
+        all(len(columns(line)) == 6 for line in table_lines),
         repr([len(columns(line)) for line in table_lines]),
     )
-    check("the pipe-laden row labels were actually cut",
+    check("the gate really did cut these row labels",
           all("…" in columns(line)[1] for line in table_lines[2:]), repr(table_lines[2:]))
+    check("the pipe-laden names reached the header intact",
+          "n\\|0\\|long\\|name" in table_lines[0], repr(table_lines[0]))
+
+    # The same delimiters carried by a legend rather than a header row. Four series is
+    # where the names stop fitting, so the legend exists and the check is not vacuous.
+    keyed = render.table(validate({
+        "title": "T", "x": ["aa", "bb"],
+        "series": {f"n|{i}|long|name": [1.0, 2.0] for i in range(4)},
+    }))
+    legend_lines = [line for line in keyed.split("\n") if not line.startswith("|")]
+    check("the legend exists to be checked", len(legend_lines) == 2, repr(legend_lines))
     check("the legend carries no live delimiter either",
-          all(len(columns(line)) == 1 for line in block.split("\n") if not line.startswith("|")),
-          repr([l for l in block.split("\n") if not l.startswith("|")]))
+          all(len(columns(line)) == 1 for line in legend_lines), repr(legend_lines))
     check(
         "the pipe-laden table still fits the column budget",
         widest(block) <= constants.COLUMN_BUDGET,

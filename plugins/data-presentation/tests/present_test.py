@@ -153,6 +153,23 @@ def main():
               proc.returncode == 0 and out and out["status"] == "refused",
               f"rc={proc.returncode}")
 
+    # --- two row labels stay different end to end, or nothing is shown (P1) ---
+    # Mutation: cut the row label to the width that is left instead of refusing - this
+    # goes red, because the CLI then returns ok with both rows reading "2026-09…".
+    dates = {"title": "t", "x": ["2026-09-01", "2026-09-02"],
+             "series": {f"tool-{i}": [-916700.0, -123456.0] for i in range(6)}}
+    proc, out = run_cli(dates)
+    check("dates that cannot both fit are refused through the CLI",
+          proc.returncode == 0 and out and out["status"] == "refused",
+          f"rc={proc.returncode} {repr(out and out.get('block'))[:120]}")
+
+    dates["series"] = {f"tool-{i}": [1, 2] for i in range(6)}
+    _, out = run_cli(dates)
+    row_labels = [line.split("|")[1].strip() for line in out["block"].split("\n")
+                  if line.startswith("|")][2:]
+    check("the same six series with narrow values still render both dates",
+          row_labels == ["2026-09-01", "2026-09-02"], repr(row_labels))
+
     # --- the reported shape, end to end: six tools, two of them sharing a prefix ---
     # Mutation: return truncated names instead of keys in render._headers - this goes
     # red, because remove-background and remove-logo both come back as "remov…".

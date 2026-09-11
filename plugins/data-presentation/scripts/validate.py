@@ -26,10 +26,10 @@ _FENCE = re.compile(r"`{3,}")
 def truncate_escaped(text, limit):
     """Cut already-escaped text to `limit` characters without splitting an escape.
 
-    The escape has to run BEFORE this cut, and both call sites depend on it: escaping
-    after a cut can push the result back over the limit, and a cut landing between a
-    backslash and the character it escapes strands the backslash. Neither failure is
-    visible in the output, which is why the ordering lives in one function.
+    The escape has to run BEFORE this cut: escaping after a cut can push the result back
+    over the limit, and a cut landing between a backslash and the character it escapes
+    strands the backslash. Neither failure is visible in the output, which is why the
+    ordering lives in one function rather than at the call site.
     """
     if len(text) <= limit:
         return text
@@ -123,6 +123,15 @@ def validate(request):
         )
 
     x_labels = [_clean(label, constants.MAX_LABEL_CHARS, notes, "An x-axis label") for label in raw_x]
+    # Labels that arrive different and leave the same are rows the reader cannot tell
+    # apart. Genuinely repeated labels are fine and stay accepted: the comparison is
+    # against the distinct labels that came in, not against the row count.
+    if len(set(x_labels)) < len({str(label) for label in raw_x}):
+        raise Refusal(
+            "Two x-axis labels become the same once they are shortened, so two rows "
+            f"would be indistinguishable. Keep them under {constants.MAX_LABEL_CHARS} "
+            "characters, or put the difference earlier in the label."
+        )
 
     series = {}
     missing = {}

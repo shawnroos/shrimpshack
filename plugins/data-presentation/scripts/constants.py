@@ -37,10 +37,6 @@ TABLE_ROW_BUDGET = 40
 # are known.
 MAX_SERIES = 8
 
-# The narrowest row label worth printing. Below this the label says nothing at all, so a
-# table that cannot give its labels this much is refused rather than rendered blind.
-MIN_LABEL_CELL = 4
-
 # Where an SI suffix first shortens a significant-digits label rather than lengthening it.
 ABBREVIATE_ABOVE = 10000
 

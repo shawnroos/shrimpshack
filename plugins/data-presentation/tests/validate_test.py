@@ -198,6 +198,24 @@ def main():
         repr(stranded),
     )
 
+    # --- labels that arrive different must not leave the same (P1) ---
+    # 27 characters each, identical for the first 23. The gate cuts both to
+    # "2026-09-01 experiment r…" and the two rows become indistinguishable, which the
+    # table can no longer fix downstream.
+    # Mutation: delete the collision check - this goes red.
+    collide = refusal(req(x=["2026-09-01 experiment run A",
+                             "2026-09-01 experiment run B",
+                             "c"]))
+    check("labels that collapse to the same text are refused", collide is not None)
+    check("the collision refusal says what to do about it",
+          collide is not None and "24" in collide, repr(collide))
+
+    # Mutation: compare against len(x_labels) instead of the distinct raw labels - this
+    # goes red, because a table is allowed to repeat a label that arrived repeated.
+    check("labels that were already identical are still accepted",
+          refusal(req(x=["a", "a", "b"])) is None,
+          repr(refusal(req(x=["a", "a", "b"]))))
+
     # --- caller text that is not a control character but still deceives (R18) ---
     # A blocklist of ASCII control codes let these through. They are the reason the
     # cleaner is default-deny on isprintable() rather than an enumerated range.
