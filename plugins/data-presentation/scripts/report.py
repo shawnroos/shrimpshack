@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import changes  # noqa: E402
 import constants  # noqa: E402
+import credentials  # noqa: E402
 import mapping  # noqa: E402
 import pairing  # noqa: E402
 import present as presenter  # noqa: E402
@@ -29,6 +30,7 @@ import session_log  # noqa: E402
 import sources  # noqa: E402
 import templates  # noqa: E402
 import validate  # noqa: E402
+from credentials import CredentialError  # noqa: E402
 from mapping import MappingError  # noqa: E402
 from session_log import LogError  # noqa: E402
 from sources import CommandSource, Stop, ToolSource, clean_name, join_words  # noqa: E402
@@ -47,7 +49,6 @@ START_OVER = (
     "The conversation was compacted or rewound since prepare ran; run the report again from prepare."
 )
 OPEN_CAVEAT = "The last point may still have been open when fetched."
-BAD_RECORD = "the last run's record cannot be read"
 PREVIEW_REASON = "this preview becomes the report's first baseline when saved"
 MARKER = re.compile(r"dp-[0-9a-f]{16}")
 LIST_FILLER = ("report", "the", "show", "me")
@@ -106,28 +107,6 @@ def _wrap(text, width):
     return out
 
 
-def _require_foreground(found, verb):
-    for source in found:
-        call = source.call
-        if call is not None and call["tool"] == "Bash" and call["input"].get("run_in_background") is True:
-            raise Stop(
-                f"{source.which()}'s command ran in the background, so its output may not be complete. "
-                f"Run the command in the foreground, exactly as listed, then run {verb} again.",
-                "make_calls",
-            )
-
-
-def _require_results(found, verb):
-    for source in found:
-        call = source.call
-        if call is not None and not call["has_result"]:
-            raise Stop(
-                f"{source.which()}'s call has no result yet. Run {verb} again in a later message, "
-                "after every result has returned.",
-                "run_finish_again",
-            )
-
-
 def _mapping_stop(number, err, rebuild=True, variation=False):
     if err.kind == "source_error":
         return Stop(f"Block {number}: {err} This report stopped; do not retry the call.")
@@ -145,24 +124,20 @@ def _mapping_stop(number, err, rebuild=True, variation=False):
     return Stop(f"Block {number}: the result cannot be read the way the draft's mapping says. {err}")
 
 
-def _window(log, branch, marker):
-    if marker is None:
-        return log.calls(branch), None
-    prepared = next((c for c in log.calls(branch) if c["text"] is not None and marker in c["text"]), None)
-    if prepared is None:
-        raise Stop(START_OVER, "start_over")
-    return log.calls(branch, after_text=marker), changes.parse_time(prepared["timestamp"])
-
-
 def _collect(template, found, needle, verb, variation=False):
     # finish reads only calls after prepare and checks fingerprints; save reads the whole
     # branch and takes them.
     marker = needle if verb == "finish" else None
     log = session_log.load(session_log.find_log())
-    calls, prepared_at = _window(log, log.branch(log.find_invocation(needle)), marker)
+    branch = log.branch(log.find_invocation(needle))
+    if marker is None:
+        calls, prepared_at = log.calls(branch), None
+    else:
+        prepared, calls = log.run(branch, marker)
+        if prepared is None:
+            raise Stop(START_OVER, "start_over")
+        prepared_at = changes.parse_time(prepared)
     pairing.pair(found, calls, exact=not variation, verb=verb)
-    _require_foreground(found, verb)
-    _require_results(found, verb)
     for source in found:
         source.read(prepared_at, check_age=marker is not None)
     of_block = sources.by_block(found)
@@ -181,39 +156,12 @@ def _collect(template, found, needle, verb, variation=False):
     return mapped
 
 
-def _record_ok(blocks, count):
-    if not isinstance(blocks, list) or len(blocks) != count:
-        return False
-    for block in blocks:
-        if not isinstance(block, dict):
-            return False
-        x, series = block.get("x"), block.get("series")
-        if not isinstance(x, list) or not isinstance(series, dict):
-            return False
-        if any(isinstance(v, bool) or not isinstance(v, (str, int, float)) for v in x):
-            return False
-        for values in series.values():
-            if not isinstance(values, list) or len(values) != len(x):
-                return False
-            if any(v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))) for v in values):
-                return False
-        if block.get("replied_at") is not None and not isinstance(block["replied_at"], str):
-            return False
-    return True
-
-
 def _baseline(name, template):
     try:
         record = templates.load_run(name)
     except TemplateError:
-        return None, BAD_RECORD
-    if record is None:
-        return None, "no earlier run"
-    if record.get("template_hash") != templates.template_hash(template):
-        return None, "the template changed since the last run"
-    if not _record_ok(record.get("blocks"), len(template["blocks"])):
-        return None, BAD_RECORD
-    return record["blocks"], None
+        return None, changes.BAD_RECORD
+    return changes.baseline(record, templates.template_hash(template), len(template["blocks"]))
 
 
 def _labels(previous_x, current_x):
@@ -228,6 +176,7 @@ def _render(template, found, mapped, width, label, previous_blocks, reason):
     sections, found_all, notes, currents = [], [], [], []
     for number, spec in enumerate(template["blocks"], start=1):
         source, rows, settings = of_block[number], mapped[number - 1], spec["present"]
+        changes.screen(number, rows)
         size = width or settings.get("width") or constants.COLUMN_BUDGET
         shown = presenter.present({
             "x": mapping.display_x(rows["x"]),
@@ -290,7 +239,7 @@ def cmd_prepare(args):
     template = templates.load(args.name)
     unset = []
     for block in template["blocks"]:
-        for variable in templates.env_names(block["source"]):
+        for variable in credentials.env_names(block["source"]):
             if not os.environ.get(variable) and variable not in unset:
                 unset.append(variable)
     if unset:
@@ -350,7 +299,7 @@ def _finish(args, template, found):
         last = templates.load_run(args.name)
     except TemplateError:
         last = None
-    if isinstance(last, dict) and last.get("marker") == args.marker:
+    if changes.finished_by(last, args.marker):
         raise Stop(
             "This run was already finished, and its report was shown then. To run the report "
             "again, start from prepare.",
@@ -370,10 +319,7 @@ def _finish(args, template, found):
             f"Offer to save it as a new report with /data-presentation:new, or to update {args.name}.",
             block, changed, notes,
         )
-    templates.write_run(
-        args.name,
-        {"template_hash": templates.template_hash(template), "blocks": currents, "marker": args.marker},
-    )
+    templates.write_run(args.name, changes.run_record(templates.template_hash(template), currents, args.marker))
     return _response("ok", "none", "", block, changed, notes)
 
 
@@ -419,7 +365,7 @@ def _gate_draft(template, snapshot):
     try:
         templates.validate(shape)
         for block in template["blocks"]:
-            templates.secret_scan(block["source"])
+            credentials.scan_source(block["source"])
             mapping.validate_mapping(block["mapping"])
     except MappingError as err:
         raise Stop(f"The draft's mapping cannot be used: {err}") from None
@@ -460,7 +406,7 @@ def cmd_save(args):
         )
     template["created_at"] = datetime.datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     templates.save(template, replace=args.replace)
-    templates.write_run(name, {"template_hash": templates.template_hash(template), "blocks": currents})
+    templates.write_run(name, changes.run_record(templates.template_hash(template), currents))
     return _response("ok", "none", f"Saved {name}. Its preview is the first baseline.", block, changed, notes)
 
 
@@ -521,7 +467,7 @@ def main(argv=None):
         return args.run(args)
     except Stop as stop:
         return _response(stop.status, stop.next, str(stop))
-    except (TemplateError, LogError) as err:
+    except (TemplateError, LogError, CredentialError) as err:
         return _response("stopped", "none", str(err))
     except Exception as exc:  # noqa: BLE001
         return _response("fault", "none", f"{type(exc).__name__}: {exc}")

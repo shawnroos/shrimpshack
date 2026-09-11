@@ -143,8 +143,33 @@ def test_loose():
           and found[0].call is changed)
 
 
+def test_ready():
+    print("pre-read checks")
+    for verb in ("finish", "save"):
+        found = built({"kind": "command", "command": "fake-fetch --out {output}"})
+        background = call("Bash", {"command": found[0].args["command"], "run_in_background": True})
+        stop = stop_of(found, [background], verb=verb)
+        check(f"{verb}: a command run in the background stops for the foreground",
+              stop and "foreground" in str(stop) and f"run {verb} again" in str(stop) and stop.next == "make_calls", stop)
+
+        found = built(tool({"t": "a"}))
+        pending = dict(call(OTHER, {"t": "a"}), has_result=False, timestamp=None, text=None)
+        stop = stop_of(found, [pending], verb=verb)
+        check(f"{verb}: a call with no result yet stops to run again",
+              stop and "no result yet" in str(stop) and f"Run {verb} again" in str(stop)
+              and stop.next == "run_finish_again", stop)
+
+    found = built({"kind": "command", "command": "fake-fetch --out {output}"})
+    both = dict(call("Bash", {"command": found[0].args["command"], "run_in_background": True}), has_result=False)
+    stop = stop_of(found, [both])
+    check("the foreground check runs before the result check", stop and stop.next == "make_calls", stop)
+    found = built({"kind": "command", "command": "fake-fetch --out {output}"})
+    foreground = call("Bash", {"command": found[0].args["command"], "run_in_background": False})
+    check("a finished foreground command passes", stop_of(found, [foreground]) is None and found[0].call is foreground)
+
+
 def main():
-    for test in (test_ignore_lists, test_diff, test_exact, test_save_wording, test_loose):
+    for test in (test_ignore_lists, test_diff, test_exact, test_save_wording, test_loose, test_ready):
         try:
             test()
         except Exception as exc:  # noqa: BLE001

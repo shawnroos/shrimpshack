@@ -144,5 +144,29 @@ def _closest(source, pool):
     return nearest[-1]
 
 
+def _require_foreground(sources, verb):
+    for source in sources:
+        call = source.call
+        if call is not None and call["tool"] == "Bash" and call["input"].get("run_in_background") is True:
+            raise Stop(
+                f"{source.which()}'s command ran in the background, so its output may not be complete. "
+                f"Run the command in the foreground, exactly as listed, then run {verb} again.",
+                "make_calls",
+            )
+
+
+def _require_results(sources, verb):
+    for source in sources:
+        call = source.call
+        if call is not None and not call["has_result"]:
+            raise Stop(
+                f"{source.which()}'s call has no result yet. Run {verb} again in a later message, "
+                "after every result has returned.",
+                "run_finish_again",
+            )
+
+
 def pair(sources, calls, exact, verb="finish"):
     (_pair_exact if exact else _pair_loose)(sources, calls, verb)
+    _require_foreground(sources, verb)
+    _require_results(sources, verb)

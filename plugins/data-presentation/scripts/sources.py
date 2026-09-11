@@ -128,15 +128,20 @@ class FileSource(Source):
             raise self._unreadable(err) from None
 
     def _read_file(self, prepared_at, check_age):
-        with os.fdopen(self._open(), encoding="utf-8", errors="replace") as f:
-            info = os.fstat(f.fileno())
+        fd = self._open()
+        try:
+            # fstat before fdopen: fdopen raises on a directory, which must be a stop.
+            info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode):
                 raise self._not_regular()
             self._check_written(info.st_mtime, prepared_at, check_age)
-            try:
-                self.text = f.read()
-            except OSError as err:
-                raise self._unreadable(err) from None
+            with os.fdopen(fd, encoding="utf-8", errors="replace", closefd=False) as f:
+                try:
+                    self.text = f.read()
+                except OSError as err:
+                    raise self._unreadable(err) from None
+        finally:
+            os.close(fd)
         return info.st_mtime
 
 
