@@ -23,6 +23,22 @@ class Refusal(Exception):
 _FENCE = re.compile(r"`{3,}")
 
 
+def truncate_escaped(text, limit):
+    """Cut already-escaped text to `limit` characters without splitting an escape.
+
+    The escape has to run BEFORE this cut, and both call sites depend on it: escaping
+    after a cut can push the result back over the limit, and a cut landing between a
+    backslash and the character it escapes strands the backslash. Neither failure is
+    visible in the output, which is why the ordering lives in one function.
+    """
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1].rstrip()
+    if (len(cut) - len(cut.rstrip("\\"))) % 2:
+        cut = cut[:-1]
+    return cut + "…"
+
+
 def _clean(text, limit, notes, what):
     """Make caller text safe to place inside a Markdown table and a fenced block."""
     original = "" if text is None else str(text)
@@ -39,7 +55,7 @@ def _clean(text, limit, notes, what):
     safe = _FENCE.sub("``", safe)
     safe = " ".join(safe.split())
     if len(safe) > limit:
-        safe = safe[: limit - 1].rstrip() + "…"
+        safe = truncate_escaped(safe, limit)
         notes.append(f"{what} was truncated to {limit} characters.")
     return safe
 

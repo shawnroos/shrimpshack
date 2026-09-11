@@ -10,7 +10,7 @@ import os
 import sys
 
 import constants
-from validate import present_values
+from validate import present_values, truncate_escaped
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))
 import asciichartpy  # noqa: E402
@@ -199,8 +199,9 @@ def table_with_meta(request, series_names=None):
     per_column = max(6, (constants.COLUMN_BUDGET - 4) // (len(names) + 1) - 3)
 
     def cell(text):
-        text = str(text)
-        return text if len(text) <= per_column else text[: per_column - 1] + "…"
+        # The text arrives escaped from validate. Cutting it here must not split an
+        # escape pair, so the cut goes through the one escape-aware truncator.
+        return truncate_escaped(str(text), per_column)
 
     head = "| " + " | ".join([cell("")] + [cell(n) for n in names]) + " |"
     rule = "| " + " | ".join(["---"] * (len(names) + 1)) + " |"

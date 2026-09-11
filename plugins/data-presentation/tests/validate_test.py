@@ -171,6 +171,33 @@ def main():
     )
     check("the truncation is reported", any("truncat" in n.lower() for n in result["notes"]), repr(result["notes"]))
 
+    # --- the cut runs AFTER the escape, and never splits an escape pair (P3) ---
+    # Mutation: move the truncation block in _clean above the "|" escape. This goes red:
+    # 23 kept pipes become 46 characters once escaped, so the label leaves the cleaner
+    # at nearly twice its own limit. The "z" * 64 label above cannot catch it - it has
+    # no character that escaping makes longer.
+    piped = validate(req(x=["|" * 40, "b", "c"]))["x"][0]
+    check(
+        "a pipe-dense label is still inside the 24-character limit",
+        len(piped) <= 24,
+        f"len={len(piped)}: {piped!r}",
+    )
+    check(
+        "every pipe surviving the cut is still escaped",
+        "|" not in piped.replace("\\\\", "").replace("\\|", ""),
+        repr(piped),
+    )
+
+    # Mutation: drop the odd-trailing-backslash trim from truncate_escaped. This goes
+    # red: the cut lands inside "\|" and leaves the backslash alone against the ellipsis.
+    stranded = validate(req(x=["a" * 22 + "|zzz", "b", "c"]))["x"][0]
+    body = stranded[:-1]
+    check(
+        "a cut landing inside an escape pair does not strand the backslash",
+        stranded.endswith("…") and (len(body) - len(body.rstrip("\\"))) % 2 == 0,
+        repr(stranded),
+    )
+
     # --- caller text that is not a control character but still deceives (R18) ---
     # A blocklist of ASCII control codes let these through. They are the reason the
     # cleaner is default-deny on isprintable() rather than an enumerated range.

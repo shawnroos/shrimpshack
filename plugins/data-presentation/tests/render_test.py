@@ -171,6 +171,47 @@ def main():
     t0 = render.table(norm([0.0, 0.0, 0.0]))
     check("a zero renders as 0, never as the missing marker", "0" in t0 and render.MISSING_CELL not in t0, t0)
 
+    # --- a truncated cell cannot open a column the table did not declare (P3) ---
+    # Four series, so per_column is narrow enough that a 24-character label actually
+    # reaches the cut. With one series it never does and the assertion cannot fail.
+    delimited = validate({
+        "title": "T",
+        "x": ["a|b|c|d|e|f|g" for _ in range(4)],
+        "series": {f"n|{i}|long|name": [float(i)] * 4 for i in range(4)},
+    })
+    block = render.table(delimited)
+
+    def columns(row):
+        """Split on the delimiters the renderer left live, skipping escaped ones."""
+        cells, cell, i = [], "", 0
+        while i < len(row):
+            if row[i] == "\\" and i + 1 < len(row):
+                cell += row[i:i + 2]
+                i += 2
+            elif row[i] == "|":
+                cells.append(cell)
+                cell = ""
+                i += 1
+            else:
+                cell += row[i]
+                i += 1
+        cells.append(cell)
+        return cells
+
+    # Mutation: delete `.replace("|", "\\|")` from _clean. This goes red - the labels
+    # arrive carrying live delimiters and every row parses as more columns than declared.
+    check(
+        "every row of a pipe-laden table parses as five columns",
+        all(len(columns(line)) == 7 for line in block.split("\n")),
+        repr([len(columns(line)) for line in block.split("\n")]),
+    )
+    check("the pipe-laden labels were actually cut", "…" in block, block.split("\n")[0])
+    check(
+        "the pipe-laden table still fits the column budget",
+        widest(block) <= constants.COLUMN_BUDGET,
+        f"width={widest(block)}",
+    )
+
     wide = render.table(norm([1.0, 2.0, 3.0], x=["x" * 60, "b", "c"]))
     check("a table with long labels fits the column budget", widest(wide) <= constants.COLUMN_BUDGET, f"width={widest(wide)}")
 
