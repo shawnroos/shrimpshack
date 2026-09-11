@@ -188,7 +188,10 @@ herdr_linear::start_from_issue() {
     # Before the repository is resolved: this issue's own worktree already
     # names its repository, and a retry must not be asked a question about it.
     if [ -e "$path" ]; then
-        if [ ! -d "$path" ] || [ ! -e "$path/.git" ]; then
+        # git's own answer, not a `.git` entry: anything can hold one of those,
+        # and binding it would claim a restart that did not happen.
+        if [ ! -d "$path" ] \
+            || [ "$("$git" -C "$path" rev-parse --show-toplevel 2>/dev/null)" != "$(cd "$path" && pwd -P)" ]; then
             printf 'already exists: %s\n' "$path" >&2
             return "$HERDR_LINEAR_START_EXISTS"
         fi

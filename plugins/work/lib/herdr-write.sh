@@ -290,13 +290,11 @@ herdr_linear::layout_build() {
     done
 
     # R17. The layout's tab goes in the space bound to the parent's project,
-    # resolved before anything is made. A retry with a journalled tab carries
-    # on in that tab whatever has been rebound since.
-    if ! herdr_linear::journal_get "$parent" tab >/dev/null 2>&1; then
-        ws="$(herdr_linear::_issue_space "$parent" "$here" layout)"; rc=$?
-        [ "$rc" -eq 2 ] && return "$HERDR_LINEAR_LAYOUT_ASK"
-        [ "$rc" -eq 0 ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
-    fi
+    # resolved before anything is made -- on a retry too, because a journalled
+    # tab may since have been closed or moved to another space.
+    ws="$(herdr_linear::_issue_space "$parent" "$here" layout)"; rc=$?
+    [ "$rc" -eq 2 ] && return "$HERDR_LINEAR_LAYOUT_ASK"
+    [ "$rc" -eq 0 ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
     # Two sessions building the same parent's layout within the poll window
     # both miss `journal_get parent tab`, both run `tab create`, and the
@@ -307,10 +305,13 @@ herdr_linear::layout_build() {
     journal_file="$(herdr_linear::_journal "$parent")" || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
     herdr_linear::_lock "$journal_file" || return "$HERDR_LINEAR_LAYOUT_FAILED"
-    tab="$(herdr_linear::journal_get "$parent" tab)"
-    if [ -z "$tab" ]; then
-        # R20, KTD28. The parent's ticket may already own a tab in this space;
-        # the layout is that piece of work, so its columns go there.
+    # KTD28 for the journal as for a binding: its tab counts only while herdr
+    # still has it in this space. A dead one would be split from on every retry.
+    tab="$(herdr_linear::journal_get "$parent" tab)" || tab=""
+    tabpane="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")"
+    if [ -z "$tabpane" ]; then
+        # R20. The parent's ticket may already own a tab in this space; the
+        # layout is that piece of work, so its columns go there.
         tab="$(herdr_linear::binding_tab "$here" 2>/dev/null)" || tab=""
         tabpane="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")"
         if [ -z "$tabpane" ]; then
@@ -323,16 +324,9 @@ herdr_linear::layout_build() {
             return "$HERDR_LINEAR_LAYOUT_FAILED"
         fi
         herdr_linear::journal_put "$parent" tab "$tab"
-        herdr_linear::journal_put "$parent" tabpane "$tabpane"
         herdr_linear::binding_set_tab "$here" "$tab"
     fi
     herdr_linear::_unlock "$journal_file"
-
-    # KTD30. Every column is split from a pane of this tab. An untargeted split
-    # splits whatever pane has focus, which put columns in some other tab.
-    tabpane="$(herdr_linear::journal_get "$parent" tabpane 2>/dev/null)" \
-        || tabpane="$(herdr_linear::panes_in_tab "$tab" 2>/dev/null | head -n1)"
-    [ -n "$tabpane" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
     i=-1
     for child in "$@"; do
@@ -354,6 +348,8 @@ herdr_linear::layout_build() {
             herdr_linear::journal_put "$parent" "worktree.$child" "$wt_path"
         fi
 
+        # KTD30. Split from a pane of this tab. An untargeted split splits
+        # whatever pane has focus, which put columns in some other tab.
         pane="$("$bin" pane split "$tabpane" --direction right --cwd "$wt_path" --no-focus 2>/dev/null \
             | herdr_linear::json "result.pane.pane_id")"
         if [ -z "$pane" ]; then

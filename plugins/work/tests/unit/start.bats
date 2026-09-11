@@ -722,3 +722,16 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ ! -e "$BASE/$CHILD" ]
     [[ "$stderr" == *"$WORK/root/moved"* ]]
 }
+
+# The recovery adopts this issue's own worktree. A directory that merely holds
+# a `.git` entry is not one, and binding it would claim a restart that did not
+# happen.
+@test "a directory with a .git entry that git does not recognise is never adopted" {
+    record_alpha
+    mkdir -p "$BASE/$CHILD"
+    : > "$BASE/$CHILD/.git"
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 2 ]
+    [ "$(herdr_linear::binding_state "$BASE/$CHILD")" = "unbound" ]
+}

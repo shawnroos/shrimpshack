@@ -419,3 +419,27 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     [ "$status" -eq 0 ]
     [ "$(herdr_linear::binding_tab "$(col WEB-3001)")" = "$output" ]
 }
+
+# A journalled tab is only an authority while herdr still has it in the
+# parent's space. A tab closed between a failed run and its retry would
+# otherwise be split from forever, and the retry could never succeed.
+@test "a retry whose journalled tab is gone makes a new tab in the space" {
+    herdr_linear::journal_put WEB-2870 tab wG:t999
+    herdr_linear::journal_put WEB-2870 tabpane wG:p0999
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    [ "$output" != "wG:t999" ]
+    [ "$(herdr_calls 'tab create --workspace wG')" = "1" ]
+    pane="$(herdr_linear::journal_get WEB-2870 pane.WEB-3001)"
+    [ "$(herdr_linear::tab_of_pane "$pane")" = "$output" ]
+}
+
+# R17 on a retry: a journalled tab that now sits in another space is not the
+# project's space, so the columns do not follow it there.
+@test "a retry whose journalled tab is in another space does not split there" {
+    herdr_linear::journal_put WEB-2870 tab wA:t1
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    [ "$(herdr_calls 'pane split wA:')" = "0" ]
+    [ "$(herdr_calls 'tab create --workspace wG')" = "1" ]
+}
