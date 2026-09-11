@@ -168,8 +168,8 @@ def main():
     check("a missing table cell is an explicit marker, not a blank", "—" in t or "-" in t, t)
     check("a missing table cell is not rendered as zero", " 0 " not in t, t)
 
-    t0 = render.table(norm([0.0, 0.0, 0.0], zero_meaningful=["S"]))
-    check("a declared-meaningful zero renders as 0", "0" in t0, t0)
+    t0 = render.table(norm([0.0, 0.0, 0.0]))
+    check("a zero renders as 0, never as the missing marker", "0" in t0 and render.MISSING_CELL not in t0, t0)
 
     wide = render.table(norm([1.0, 2.0, 3.0], x=["x" * 60, "b", "c"]))
     check("a table with long labels fits the column budget", widest(wide) <= constants.COLUMN_BUDGET, f"width={widest(wide)}")

@@ -23,7 +23,7 @@ def check(name, condition, detail=""):
         print(f"  FAIL - {name}{(': ' + detail) if detail else ''}", file=sys.stderr)
 
 
-def pick(series, points=None, form="auto", zero_meaningful=None):
+def pick(series, points=None, form="auto"):
     """Validate then choose, so selection only ever sees normalized input."""
     n = points if points is not None else len(next(iter(series.values())))
     request = {
@@ -31,7 +31,6 @@ def pick(series, points=None, form="auto", zero_meaningful=None):
         "x": [f"p{i}" for i in range(n)],
         "series": series,
         "type": form,
-        "zero_meaningful": zero_meaningful or [],
     }
     return choose(validate(request))
 
@@ -83,8 +82,8 @@ def main():
     result = pick({"S": [-102.0, -101.0, -100.0, -103.0, -99.0, -101.5, -100.5, -102.5]})
     check("an all-negative series selects a chart", result["form"] == "charts", result["form"])
 
-    result = pick({"S": [0.0] * 9}, zero_meaningful=["S"])
-    check("an all-zero declared-meaningful series selects a table", result["form"] == "table", result["form"])
+    result = pick({"S": [0.0] * 9})
+    check("an all-zero series selects a table", result["form"] == "table", result["form"])
 
     # --- one series per chart (R10), several become stacked charts --- AE2
     result = pick({"A": rising(9), "B": rising(9, start=100.0)})

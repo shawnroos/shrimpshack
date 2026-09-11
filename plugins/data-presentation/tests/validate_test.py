@@ -95,11 +95,27 @@ def main():
         repr(result["missing"]),
     )
 
-    result = validate(req(series={"S": [0, 0, 0]}, zero_meaningful=["S"]))
+    # A zero is a measured value with nothing declared about it. Only null and the empty
+    # string are gaps, which is why the old zero_meaningful field could not change any
+    # output and was dropped rather than wired to something.
+    result = validate(req(series={"S": [0, 0, 0]}))
     check(
-        "declared-meaningful zeros are values, not gaps",
+        "zeros are values, not gaps",
         result["missing"]["S"] == [] and result["series"]["S"] == [0.0, 0.0, 0.0],
         repr(result["missing"]),
+    )
+    check(
+        "an empty string is a gap while a zero beside it is not",
+        validate(req(series={"S": [0, "", 0]}))["missing"]["S"] == [1],
+        repr(validate(req(series={"S": [0, "", 0]}))["missing"]),
+    )
+    # Mutation: re-add "zero_meaningful" to validate()'s return dict - this goes red.
+    # The field is gone from the contract, so a caller still sending it is ignored like
+    # any other unknown key rather than shaping a value nobody reads.
+    check(
+        "the dropped field is not carried into the normalized request",
+        "zero_meaningful" not in validate(req(zero_meaningful=["S"])),
+        repr(sorted(validate(req(zero_meaningful=["S"])))),
     )
 
     # --- caller text (R18) ---
@@ -176,14 +192,6 @@ def main():
     )
 
     # --- optional metadata: the element shape, not just the container ---
-    # A container-only check passed [[]] and then died in set() on an unhashable value.
-    for bad_zero, label in (([[]], "a list element"), ([1, 2], "numeric elements"), (7, "a bare number")):
-        check(
-            f"zero_meaningful with {label} is refused, not a crash",
-            refusal(req(zero_meaningful=bad_zero)) is not None,
-            repr(bad_zero),
-        )
-
     check(
         "a string source is refused rather than crashing",
         refusal(req(source="internal")) is not None,

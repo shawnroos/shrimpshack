@@ -147,7 +147,6 @@ def main():
     # --- malformed optional metadata is a refusal, not a crash ---
     for bad, label in (
         ({"x": ["a"], "series": {"S": [1]}, "source": "internal"}, "a string source"),
-        ({"x": ["a"], "series": {"S": [1]}, "zero_meaningful": 7}, "a numeric zero_meaningful"),
     ):
         proc, out = run_cli(bad)
         check(f"{label} is refused rather than crashing",

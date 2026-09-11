@@ -91,14 +91,6 @@ def validate(request):
     if not isinstance(raw_series, dict) or len(raw_series) == 0:
         raise Refusal("The chart needs at least one named series of numbers.")
 
-    raw_zero = request.get("zero_meaningful") or []
-    if not isinstance(raw_zero, (list, tuple, set)) or not all(
-        isinstance(name, str) for name in raw_zero
-    ):
-        # The container check alone still died in set() on an unhashable element.
-        raise Refusal("zero_meaningful must be a list of series names.")
-    zero_meaningful = set(raw_zero)
-
     raw_source = request.get("source") or {}
     if not isinstance(raw_source, dict):
         raise Refusal("source must be an object of name/value pairs.")
@@ -156,7 +148,6 @@ def validate(request):
         "x": x_labels,
         "series": series,
         "missing": missing,
-        "zero_meaningful": zero_meaningful,
         "units": _clean(request.get("units"), constants.MAX_LABEL_CHARS, notes, "The units"),
         "source": {
             _clean(k, constants.MAX_LABEL_CHARS, notes, "A source field"):
