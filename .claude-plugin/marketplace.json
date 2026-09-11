@@ -128,8 +128,8 @@
     },
     {
       "name": "data-presentation",
-      "description": "Turn structured data an agent already holds into something a person can actually read in a chat transcript. Picks the form the data earns - a Markdown table by default, a line chart when the shape is worth a picture - validates the values, renders, checks its own output, and reports what it left out. It never invents a missing value and never claims more than the data supports. It does not fetch data and does not interpret what the numbers mean.",
-      "version": "0.1.0",
+      "description": "Turn structured data an agent already holds into something a person can actually read in a chat transcript. Picks the form the data earns - a Markdown table by default, a line chart when the shape is worth a picture - validates the values, renders, checks its own output, and reports what it left out. It never invents a missing value and never claims more than the data supports. Saved reports re-run the exact calls a report was built from, check the data still has the same shape, and show what changed since the last run. It does not fetch data and does not interpret what the numbers mean.",
+      "version": "0.2.0",
       "author": {
         "name": "Shawn Roos"
       },
