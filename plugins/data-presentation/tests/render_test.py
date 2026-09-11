@@ -220,25 +220,25 @@ def main():
 
     # --- two columns can never read as the same thing (P1) ---
     # The shape that found this: a per-tool breakdown where two names share a prefix.
-    # Both rendered as "remov…", and a table that cannot say which column is which has
+    # Both rendered as "blurr…", and a table that cannot say which column is which has
     # stopped doing the one thing a table is for.
     tools = validate({
         "title": "t", "x": ["a", "b"],
         "series": {name: [1.0, 2.0] for name in
-                   ("remove-background", "studio-lighting", "relight",
-                    "godrays", "detach-foreground", "remove-logo")},
+                   ("blurry-background", "castle-lighting", "retouch",
+                    "sunbeam", "sketch-foreground", "blurry-logo")},
     })
     block = render.table(tools)
     head_cells = [c.strip() for c in block.split("\n")[-4].split("|")[1:-1]][1:]
     # Mutation: return truncated names instead of the keys in _headers - this goes red
-    # with two "remov…" headers. A "the header is short enough" check would not.
+    # with two "blurr…" headers. A "the header is short enough" check would not.
     check("six crowded headers are all different from each other",
           len(set(head_cells)) == len(head_cells) == 6, repr(head_cells))
     legend = "\n".join(block.split("\n")[:-4])
     check("the legend gives the first colliding name in full",
-          "remove-background" in legend, repr(legend))
+          "blurry-background" in legend, repr(legend))
     check("the legend gives the second colliding name in full",
-          "remove-logo" in legend, repr(legend))
+          "blurry-logo" in legend, repr(legend))
     check("the keyed table still fits the column budget",
           widest(block) <= constants.COLUMN_BUDGET, f"width={widest(block)}")
 
