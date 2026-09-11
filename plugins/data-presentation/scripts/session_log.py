@@ -80,14 +80,14 @@ def _check_conversation_line(entry, number):
                 raise _unreadable(f"line {number} has a tool_result block that cannot be parsed")
 
 
-def load(path):
+def _parsed_lines(path, name=None):
+    where = f" of {name}" if name else ""
     try:
         with open(path, "rb") as f:
             raw = f.read()
     except OSError as e:
-        raise _unreadable(f"{path} cannot be opened ({e.strerror})") from e
+        raise _unreadable(f"{name or path} cannot be opened ({e.strerror})") from e
     lines = raw.split(b"\n")
-    entries = []
     for index, data in enumerate(lines):
         if not data.strip():
             continue
@@ -97,11 +97,17 @@ def load(path):
             # The log is appended to while we read it: the final line may be half-written.
             if index == len(lines) - 1:
                 continue
-            raise _unreadable(f"line {index + 1} is not JSON") from None
+            raise _unreadable(f"line {index + 1}{where} is not JSON") from None
         if not isinstance(entry, dict):
-            raise _unreadable(f"line {index + 1} is not a JSON object")
+            raise _unreadable(f"line {index + 1}{where} is not a JSON object")
+        yield index + 1, entry
+
+
+def load(path):
+    entries = []
+    for number, entry in _parsed_lines(path):
         if entry.get("type") in CONVERSATION:
-            _check_conversation_line(entry, index + 1)
+            _check_conversation_line(entry, number)
         entries.append(entry)
     return Log(path, entries)
 
@@ -128,16 +134,19 @@ def _latest_invocation(entries, needle):
     return latest
 
 
-def _lenient_entries(path):
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for text in f:
-                try:
-                    yield json.loads(text)
-                except ValueError:
-                    continue
-    except OSError:
-        return
+def _message_id(entry):
+    message = entry.get("message")
+    if entry.get("type") != "assistant" or not isinstance(message, dict) or not isinstance(message.get("id"), str):
+        return None
+    return message["id"]
+
+
+def _blocks(entry, kind):
+    message = entry.get("message")
+    content = message.get("content") if entry.get("type") in CONVERSATION and isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return []
+    return [b for b in content if b.get("type") == kind]
 
 
 def _joined(content):
@@ -168,6 +177,7 @@ class Log:
         self.session_dir = path[: -len(".jsonl")] if path.endswith(".jsonl") else path
         self.entries = entries
         self._by_uuid = {e["uuid"]: e for e in entries if isinstance(e.get("uuid"), str)}
+        self._position = {id(e): i for i, e in enumerate(entries)}
 
     def find_invocation(self, needle):
         found = _latest_invocation(self.entries, needle)
@@ -175,7 +185,8 @@ class Log:
             return found
         pattern = os.path.join(glob.escape(self.session_dir), "subagents", "*.jsonl")
         for sub in sorted(glob.glob(pattern)):
-            if _latest_invocation(_lenient_entries(sub), needle) is not None:
+            entries = (entry for _, entry in _parsed_lines(sub, "subagent log " + os.path.basename(sub)))
+            if _latest_invocation(entries, needle) is not None:
                 raise LogError(
                     "subagent",
                     "This was run from a subagent; reports only run in the main session. Run it again from the main conversation.",
@@ -196,34 +207,53 @@ class Log:
             if parent is None and entry.get("subtype") == "compact_boundary":
                 parent = entry.get("logicalParentUuid")
             entry = self._by_uuid.get(parent)
-        path.reverse()
-        return path
+        return self._with_parallel_calls(path, from_entry)
+
+    def _with_parallel_calls(self, path, from_entry):
+        # Parallel tool calls from one API message fork the parentUuid chain, so a walk
+        # from a later line misses some of them. They share the message id; a rewound
+        # branch gets a new one.
+        turns = {_message_id(e) for e in path} - {None}
+        uses = set()
+        for entry in self.entries:
+            if _message_id(entry) in turns:
+                uses.update(b["id"] for b in _blocks(entry, "tool_use"))
+        on_branch = {id(e) for e in path}
+        for entry in self.entries:
+            if _message_id(entry) in turns or any(b["tool_use_id"] in uses for b in _blocks(entry, "tool_result")):
+                on_branch.add(id(entry))
+        # The cap keeps the invoking line last: calls() depends on it, and a sibling written
+        # after it ran concurrently with it.
+        last = self._position.get(id(from_entry), len(self.entries))
+        return [e for e in self.entries if id(e) in on_branch and self._position[id(e)] <= last]
 
     def calls(self, branch, after_text=None):
         invoking = branch[-1] if branch else None
         start = -1 if after_text is None else None
         uses = []
+        seen = set()
         results = {}
         for position, entry in enumerate(branch):
             if entry.get("type") not in CONVERSATION or not isinstance(entry["message"]["content"], list):
                 continue
             for block in entry["message"]["content"]:
-                if block.get("type") == "tool_use" and entry is not invoking:
-                    uses.append((position, block))
+                if block.get("type") == "tool_use":
+                    if block["id"] in seen:
+                        raise _unreadable(f"the tool call {block['id']} appears twice on this branch")
+                    seen.add(block["id"])
+                    if entry is not invoking:
+                        uses.append((position, block))
                 elif block.get("type") == "tool_result":
-                    results.setdefault(block["tool_use_id"], (entry, block))
+                    answered = block["tool_use_id"]
+                    if answered in results:
+                        raise _unreadable(f"the tool call {answered} has two results on this branch")
+                    if answered in seen:
+                        results[answered] = (entry, block)
                     if start is None and after_text in _joined(block.get("content")):
                         start = position
         if start is None:
             return []
-        calls = []
-        taken = set()
-        for position, block in uses:
-            if position <= start or block["id"] in taken:
-                continue
-            taken.add(block["id"])
-            calls.append(self._call(block, results.get(block["id"])))
-        return calls
+        return [self._call(block, results.get(block["id"])) for position, block in uses if position > start]
 
     def _call(self, use, result):
         call = {

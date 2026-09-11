@@ -30,8 +30,11 @@ def short(x):
     return f"{months[x[5:7]]} {int(x[8:10])}"
 
 
-def block(x, series, open_x=None):
-    return {"x": list(x), "series": series, "replied_at": "2026-09-01T09:00:00Z", "open_x": open_x}
+def block(x, series, open_x=None, not_shown=None):
+    found = {"x": list(x), "series": series, "replied_at": "2026-09-01T09:00:00Z", "open_x": open_x}
+    if not_shown is not None:
+        found["not_shown"] = list(not_shown)
+    return found
 
 
 def kinds(found):
@@ -164,20 +167,98 @@ lines = changes.render_lines(found, 48)
 check("newly returned wording", lines and lines[0] == "tool-beta: newly returned", repr(lines))
 check("no longer returned wording", lines[1:] == ["tool-gamma: no longer returned"], repr(lines))
 
+# With series "all" and more than eight series, a rank reshuffle moves a name between
+# shown and not shown; both runs returned it, so it is neither newly nor no longer returned.
+nine = [f"tool-{i}" for i in range(9)]
+prev = block(WEEKS, {n: [1, 1, 1] for n in nine[:8]}, not_shown=[nine[8]])
+cur = {
+    "x": WEEKS,
+    "series": {n: [1, 1, 1] for n in nine[:7] + [nine[8]]},
+    "not_shown": [nine[7]],
+}
+found = changes.compare(prev, cur)
+check("reshuffle is now_shown then now_not_shown", kinds(found) == ["now_shown", "now_not_shown"], str(found))
+check(
+    "reshuffle names the right series",
+    [c["series"] for c in found] == ["tool-8", "tool-7"],
+    str(found),
+)
+lines = changes.render_lines(found, 48)
+check(
+    "now shown and now not shown wording",
+    lines == ["tool-8: now shown", "tool-7: now not shown, still returned"],
+    repr(lines),
+)
+long_hidden = "tool-hidden-with-a-series-name-longer-than-the-width"
+lines = changes.render_lines([{"kind": "now_not_shown", "x": None, "series": long_hidden, "old": None, "new": None}], 48)
+check(
+    "long now not shown wraps within 48 keeping every word",
+    all(len(l) <= 48 for l in lines) and long_hidden in "".join(lines) and "still returned" in " ".join(lines),
+    repr(lines),
+)
+
+# A name that only moved into not_shown is still returned in the current run.
+prev = block(WEEKS, {"tool-alpha": [1, 1, 1], "tool-beta": [2, 2, 2]}, not_shown=[])
+cur = {"x": WEEKS, "series": {"tool-alpha": [1, 1, 1]}, "not_shown": ["tool-beta"]}
+check("shown to not shown is not no_longer_returned", kinds(changes.compare(prev, cur)) == ["now_not_shown"])
+
+# A name absent from both series and not_shown on one side is newly or no longer returned.
+prev = block(WEEKS, {"tool-alpha": [1, 1, 1]}, not_shown=["tool-gone"])
+cur = {"x": WEEKS, "series": {"tool-alpha": [1, 1, 1]}, "not_shown": ["tool-new"]}
+found = changes.compare(prev, cur)
+check(
+    "not-shown names that come and go are newly and no longer returned",
+    [(c["kind"], c["series"]) for c in found] == [("newly_returned", "tool-new"), ("no_longer_returned", "tool-gone")],
+    str(found),
+)
+
+# An older record carries no not_shown: it reads as empty.
+prev = block(WEEKS, {"tool-alpha": [1, 1, 1], "tool-beta": [2, 2, 2]})
+cur = {"x": WEEKS, "series": {"tool-alpha": [1, 1, 1]}, "not_shown": ["tool-beta"]}
+check("older record without not_shown: moved to not shown", kinds(changes.compare(prev, cur)) == ["now_not_shown"])
+cur = {"x": WEEKS, "series": {"tool-alpha": [1, 1, 1]}, "not_shown": []}
+check("older record without not_shown: gone is no longer returned", kinds(changes.compare(prev, cur)) == ["no_longer_returned"])
+prev["not_shown"] = 5
+try:
+    found = kinds(changes.compare(prev, cur))
+except TypeError as e:
+    found = repr(e)
+check("a not_shown number reads as empty", found == ["no_longer_returned"], str(found))
+prev = block(WEEKS, {"tool-alpha": [1, 1, 1], "tool-beta": [2, 2, 2]})
+cur = {"x": WEEKS, "series": {"tool-alpha": [1, 1, 1]}, "not_shown": {"tool-beta": 1}}
+check("a not_shown object reads as empty", kinds(changes.compare(prev, cur)) == ["no_longer_returned"])
+prev = block(WEEKS, {"tool-alpha": [1, 1, 1]}, not_shown=[{"n": 1}, "tool-beta"])
+cur = {"x": WEEKS, "series": {"tool-alpha": [1, 1, 1], "tool-beta": [2, 2, 2]}, "not_shown": []}
+try:
+    found = kinds(changes.compare(prev, cur))
+except TypeError as e:
+    found = repr(e)
+check("a non-text entry in not_shown is skipped", found == ["now_shown"], str(found))
+
 # Ordering across every kind in one comparison, regardless of input order.
 prev = block(
     WEEKS,
-    {"tool-gamma": [1, 1, 1], "tool-alpha": [3, 7, 40], "tool-delta": [5, 5, 5]},
+    {"tool-hide": [4, 4, 4], "tool-gamma": [1, 1, 1], "tool-alpha": [3, 7, 40], "tool-delta": [5, 5, 5]},
     open_x=WEEKS[2],
+    not_shown=["tool-show"],
 )
 cur = {
     "x": WEEKS + ["2026-09-07T00:00:00"],
-    "series": {"tool-beta": [2, 2, 2, 2], "tool-delta": [5, None, 5, 5], "tool-alpha": [3, 9, 70, 8]},
+    "series": {
+        "tool-show": [6, 6, 6, 6],
+        "tool-beta": [2, 2, 2, 2],
+        "tool-delta": [5, None, 5, 5],
+        "tool-alpha": [3, 9, 70, 8],
+    },
+    "not_shown": ["tool-hide"],
 }
 found = changes.compare(prev, cur)
 check(
     "ordering across all kinds",
-    kinds(found) == ["revised", "filled_in", "new_x", "now_missing", "newly_returned", "no_longer_returned"],
+    kinds(found) == [
+        "revised", "filled_in", "new_x", "now_missing",
+        "newly_returned", "no_longer_returned", "now_shown", "now_not_shown",
+    ],
     str(kinds(found)),
 )
 lines = changes.render_lines(found, 48, display_x=short)
@@ -239,20 +320,58 @@ days = ["2026-09-01", "2026-09-02", "2026-09-03"]
 check("daily step, date-only x", changes.open_x(days, "2026-09-04T11:00:00Z") == "2026-09-03")
 check("daily step closed", changes.open_x(days, "2026-09-04T12:00:00Z") is None)
 check("non-date x is None", changes.open_x(["a", "b", "c"], "2026-09-07T06:00:00Z") is None)
-check("irregular step is None", changes.open_x(["2026-09-01", "2026-09-02", "2026-09-05"], "2026-09-05T01:00:00Z") is None)
-check("single x is None", changes.open_x(["2026-09-01"], "2026-09-01T01:00:00Z") is None)
+check("numeric x is None", changes.open_x([1, 2, 3], "2026-09-07T06:00:00Z") is None)
 check("bad reply time is None", changes.open_x(WEEKS, "not a time") is None)
+check("aware weekly x has no zone offset", changes.open_x(["2026-08-24T00:00:00Z", "2026-08-31T00:00:00Z"], "2026-09-06T23:59:00Z") == "2026-08-31T00:00:00Z")
+check("aware weekly x closed at its end", changes.open_x(["2026-08-24T00:00:00Z", "2026-08-31T00:00:00Z"], "2026-09-07T00:00:00Z") is None)
+
+# Fail safe: when the step is irregular, not whole days, or unknown, the last x stays
+# possibly open until the largest observed step (1 day for one point) plus 12 hours.
+irregular = ["2026-09-01", "2026-09-02", "2026-09-05"]
+check("irregular step: open before last + largest step + 12h", changes.open_x(irregular, "2026-09-08T11:59:00Z") == "2026-09-05")
+check("irregular step: closed at last + largest step + 12h", changes.open_x(irregular, "2026-09-08T12:00:00Z") is None)
+check("single x: open before last + 1 day + 12h", changes.open_x(["2026-09-01"], "2026-09-02T11:59:00Z") == "2026-09-01")
+check("single x: closed at last + 1 day + 12h", changes.open_x(["2026-09-01"], "2026-09-02T12:00:00Z") is None)
+hours = ["2026-09-01T10:00:00", "2026-09-01T11:00:00", "2026-09-01T12:00:00"]
+check("hourly x: open before last + 1h + 12h", changes.open_x(hours, "2026-09-02T00:59:00Z") == hours[2])
+check("hourly x: closed at last + 1h + 12h", changes.open_x(hours, "2026-09-02T01:00:00Z") is None)
+halves = ["2026-09-01T00:00:00", "2026-09-02T12:00:00", "2026-09-04T00:00:00"]
+check("36-hour step: open before last + 36h + 12h", changes.open_x(halves, "2026-09-05T23:59:00Z") == halves[2])
+check("36-hour step: closed at last + 36h + 12h", changes.open_x(halves, "2026-09-06T00:00:00Z") is None)
+unsorted = ["2026-09-05", "2026-09-01", "2026-09-02"]
+check("unsorted x: the latest x is the open one", changes.open_x(unsorted, "2026-09-08T11:59:00Z") == "2026-09-05")
+check("unsorted x: closed after the latest x's end", changes.open_x(unsorted, "2026-09-08T12:00:00Z") is None)
+
+# Month-like steps (all 28 to 31 days) end at the same day next month.
+months = ["2026-06-01T00:00:00", "2026-07-01T00:00:00", "2026-08-01T00:00:00"]
+check("monthly: open before next month + 12h", changes.open_x(months, "2026-09-01T11:59:00Z") == months[2])
+check("monthly: closed at next month + 12h", changes.open_x(months, "2026-09-01T12:00:00Z") is None)
+check("two points 30 days apart are monthly", changes.open_x(["2026-04-01", "2026-05-01"], "2026-06-01T11:59:00Z") == "2026-05-01")
+check("two points 30 days apart close at next month", changes.open_x(["2026-04-01", "2026-05-01"], "2026-06-01T12:00:00Z") is None)
+check("28-day step to March ends April 1", changes.open_x(["2026-02-01", "2026-03-01"], "2026-03-30T00:00:00Z") == "2026-03-01")
+check("31-day step to February ends March 1", changes.open_x(["2026-01-01", "2026-02-01"], "2026-03-02T00:00:00Z") is None)
+check("Jan 31 rolls to March 1, never a clamped Feb 28", changes.open_x(["2025-12-31", "2026-01-31"], "2026-03-01T11:59:00Z") == "2026-01-31")
+check("Jan 31 closed at March 1 + 12h", changes.open_x(["2025-12-31", "2026-01-31"], "2026-03-01T12:00:00Z") is None)
+fractional = ["2026-06-01T00:00:00", "2026-06-30T12:00:00"]
+check("a 29.5-day step is not monthly: closed after last + step + 12h", changes.open_x(fractional, "2026-07-30T18:00:00Z") is None)
+check("a 29.5-day step is open before last + step + 12h", changes.open_x(fractional, "2026-07-30T11:59:00Z") == fractional[1])
+check("December rolls into January",changes.open_x(["2026-11-01", "2026-12-01"], "2027-01-01T11:59:00Z") == "2026-12-01")
 
 # record_block carries the mapped numbers and its open x.
-mapped = {"x": WEEKS, "series": {"tool-alpha": [3, 7, None]}}
+mapped = {"x": WEEKS, "series": {"tool-alpha": [3, 7, None]}, "not_shown": ["tool-omega"]}
 rec = changes.record_block(mapped, "2026-09-07T06:00:00Z")
 check(
     "record_block shape",
-    rec == {"x": WEEKS, "series": {"tool-alpha": [3, 7, None]}, "replied_at": "2026-09-07T06:00:00Z", "open_x": WEEKS[2]},
+    rec == {
+        "x": WEEKS, "series": {"tool-alpha": [3, 7, None]}, "not_shown": ["tool-omega"],
+        "replied_at": "2026-09-07T06:00:00Z", "open_x": WEEKS[2],
+    },
     str(rec),
 )
 rec["series"]["tool-alpha"][0] = 99
-check("record_block copies its input", mapped["series"]["tool-alpha"][0] == 3)
+rec["not_shown"].append("tool-extra")
+check("record_block copies its input", mapped["series"]["tool-alpha"][0] == 3 and mapped["not_shown"] == ["tool-omega"])
+check("record_block without not_shown stores an empty list", changes.record_block({"x": WEEKS, "series": {}}, None)["not_shown"] == [])
 rec = changes.record_block(mapped, "2026-09-09T00:00:00Z")
 check("record_block closed week has no open_x", rec["open_x"] is None)
 

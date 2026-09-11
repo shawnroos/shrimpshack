@@ -7,15 +7,18 @@ none, so it cannot talk past a stop. Output is one JSON object on stdout.
 
 import argparse
 import datetime
+import errno
 import json
 import math
 import os
 import re
 import secrets
 import shlex
+import stat
 import string
 import sys
 import textwrap
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -47,12 +50,16 @@ BAD_RECORD = "the last run's record cannot be read"
 PREVIEW_REASON = "this preview becomes the report's first baseline when saved"
 MARKER = re.compile(r"dp-[0-9a-f]{16}")
 LIST_FILLER = ("report", "the", "show", "me")
-BASH_IGNORED = ("description", "timeout", "run_in_background")
+BASH_IGNORED = ("description", "timeout", "run_in_background", "dangerouslyDisableSandbox")
 AMPLITUDE_IGNORED = ("rationale",)
 MAX_NAMED = 6
 NAME_CHARS = 60
 UTC = datetime.timezone.utc
 OK_STATUSES = ("ok", "stopped", "refused")
+# The log stamps a result after the command exits; this allows for the gap between the file
+# system's clock and the log writer's.
+WRITE_SLACK_SECONDS = 2
+STALE_OUTPUT_SECONDS = 24 * 3600
 
 
 class Stop(Exception):
@@ -276,6 +283,15 @@ def _pair_exact(sources, calls):
     for entry in sources:
         if _expect(entry) is None:
             continue
+        if entry["source"]["kind"] == "command":
+            last = next((c for c in reversed(calls) if _same_tool(entry, c)), None)
+            if last is None:
+                raise _not_made(entry)
+            if not _same(entry["tool"], entry["args"], last):
+                raise _difference(entry, last)
+            entry["call"] = last
+            used.add(last["id"])
+            continue
         for call in reversed(calls):
             if _same(entry["tool"], entry["args"], call):
                 entry["call"] = call
@@ -301,8 +317,41 @@ def _pair_loose(sources, calls):
         pool = [c for c in calls if _same_tool(entries[0], c)]
         if len(pool) < len(entries):
             raise _not_made(entries[len(pool)])
-        for entry, call in zip(entries, pool[len(pool) - len(entries):]):
-            entry["call"] = call
+        if len(entries) == 1:
+            entries[0]["call"] = pool[-1]
+            continue
+        for entry in entries:
+            entry["call"] = _closest(entry, pool)
+            pool = [c for c in pool if c["id"] != entry["call"]["id"]]
+
+
+def _distance(entry, call):
+    return len(_diff(_kept(entry["tool"], entry["args"]), _kept(entry["tool"], call["input"])))
+
+
+def _closest(entry, pool):
+    least = min(_distance(entry, c) for c in pool)
+    nearest = [c for c in pool if _distance(entry, c) == least]
+    # Calls with the same arguments are one call retried, so the latest of them stands.
+    if len({_canonical(_kept(entry["tool"], c["input"])) for c in nearest}) > 1:
+        raise Stop(
+            f"{_which(entry)}: more than one call to {_clean(entry['tool'])} after prepare is as close "
+            "to its saved call as any other, so which block each belongs to cannot be told. Make one "
+            "call per block, then run finish again.",
+            "make_calls",
+        )
+    return nearest[-1]
+
+
+def _require_foreground(sources, verb):
+    for entry in sources:
+        call = entry.get("call")
+        if call is not None and call["tool"] == "Bash" and call["input"].get("run_in_background") is True:
+            raise Stop(
+                f"{_which(entry)}'s command ran in the background, so its output may not be complete. "
+                f"Run the command in the foreground, exactly as listed, then run {verb} again.",
+                "make_calls",
+            )
 
 
 def _require_results(sources, verb):
@@ -323,9 +372,37 @@ def _source_error(entry):
     )
 
 
-def _read(path):
-    with open(path, encoding="utf-8", errors="replace") as f:
-        return f.read()
+def _not_regular(entry, path):
+    return Stop(f"{_which(entry)}: {path} is not a regular file, so it is not this run's data.")
+
+
+def _open(entry, path, command):
+    # O_NONBLOCK so a pipe planted at the path cannot hang finish before the regular-file check.
+    flags = os.O_RDONLY | os.O_NONBLOCK | (os.O_NOFOLLOW if command else 0)
+    try:
+        return os.open(path, flags)
+    except FileNotFoundError:
+        if command:
+            raise Stop(f"{_which(entry)}: the command wrote no output file at {path}.") from None
+        raise Stop(f"{_which(entry)}: the file {path} cannot be read.") from None
+    except OSError as err:
+        if command and err.errno == errno.ELOOP:
+            raise _not_regular(entry, path) from None
+        raise Stop(f"{_which(entry)}: {path} cannot be read ({err.strerror}).") from None
+
+
+def _check_written(entry, mtime, prepared_at, check_age):
+    if check_age and (prepared_at is None or mtime < prepared_at.timestamp()):
+        raise Stop(
+            f"{_which(entry)}: the output file is older than this run's prepare, so it is not this "
+            "run's data."
+        )
+    replied = _parse_time(entry["call"]["timestamp"])
+    if replied is None or mtime > replied.timestamp() + WRITE_SLACK_SECONDS:
+        raise Stop(
+            f"{_which(entry)}: the output file changed after the command's result came back, so it "
+            "is not that command's output."
+        )
 
 
 def _fetch(entry, prepared_at=None, check_age=False):
@@ -336,28 +413,29 @@ def _fetch(entry, prepared_at=None, check_age=False):
     if kind == "tool":
         entry["text"], entry["replied_at"] = call["text"], call["timestamp"]
         return
-    path = entry["output"] if kind == "command" else entry["source"]["path"]
-    try:
-        info = os.stat(path)
-    except OSError:
-        if kind == "command":
-            raise Stop(f"{_which(entry)}: the command wrote no output file at {path}.") from None
-        raise Stop(f"{_which(entry)}: the file {path} cannot be read.") from None
-    if check_age and (prepared_at is None or info.st_mtime < prepared_at.timestamp()):
-        raise Stop(
-            f"{_which(entry)}: the output file is older than this run's prepare, so it is not this "
-            "run's data."
-        )
-    try:
-        entry["text"] = _read(path)
-    except OSError as err:
-        raise Stop(f"{_which(entry)}: {path} cannot be read ({err.strerror}).") from None
-    entry["replied_at"] = call["timestamp"] if kind == "command" else _utc(info.st_mtime)
+    command = kind == "command"
+    path = entry["output"] if command else entry["source"]["path"]
+    with os.fdopen(_open(entry, path, command), encoding="utf-8", errors="replace") as f:
+        info = os.fstat(f.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise _not_regular(entry, path)
+        if command:
+            _check_written(entry, info.st_mtime, prepared_at, check_age)
+        try:
+            entry["text"] = f.read()
+        except OSError as err:
+            raise Stop(f"{_which(entry)}: {path} cannot be read ({err.strerror}).") from None
+    entry["replied_at"] = call["timestamp"] if command else _utc(info.st_mtime)
 
 
-def _mapping_stop(number, err, rebuild=True):
+def _mapping_stop(number, err, rebuild=True, variation=False):
     if err.kind == "source_error":
         return Stop(f"Block {number}: {err} This report stopped; do not retry the call.")
+    if variation:
+        return Stop(
+            f"Block {number}: the variation changed the data's shape, so it cannot be read the way "
+            f"this report expects. {err}"
+        )
     if rebuild:
         return Stop(
             f"Block {number}: the result can no longer be read the way this report expects. {err} "
@@ -412,8 +490,8 @@ def _labels(previous_x, current_x):
 def _render(template, sources, mapped, width, label, previous_blocks, reason):
     of_block = _by_block(sources)
     sections, found_all, notes, currents = [], [], [], []
-    for number, block in enumerate(template["blocks"], start=1):
-        entry, rows, settings = of_block[number], mapped[number - 1], block["present"]
+    for number, spec in enumerate(template["blocks"], start=1):
+        entry, rows, settings = of_block[number], mapped[number - 1], spec["present"]
         size = width or settings.get("width") or constants.COLUMN_BUDGET
         shown = presenter.present({
             "x": mapping.display_x(rows["x"]),
@@ -488,6 +566,7 @@ def cmd_prepare(args):
         )
     marker = "dp-" + secrets.token_hex(8)
     templates.ensure_dirs()
+    _sweep_outputs(args.name)
     calls = []
     for entry in _sources(template):
         source = entry["source"]
@@ -503,6 +582,23 @@ def cmd_prepare(args):
         "ok", "make_calls", marker=marker, calls=calls,
         relay=PREPARE_RELAY.format(name=args.name, marker=marker),
     )
+
+
+def _sweep_outputs(name):
+    folder = os.path.join(templates.root(), "out")
+    own = re.compile(re.escape(name) + "-" + MARKER.pattern + r"-\d+\.json")
+    cutoff = time.time() - STALE_OUTPUT_SECONDS
+    for item in os.listdir(folder):
+        if not own.fullmatch(item):
+            continue
+        path = os.path.join(folder, item)
+        try:
+            info = os.lstat(path)
+            if stat.S_ISREG(info.st_mode) and info.st_mtime < cutoff:
+                os.unlink(path)
+        except OSError:
+            # Another prepare or finish may remove the same file first; that is not a failure.
+            pass
 
 
 def cmd_finish(args):
@@ -531,6 +627,16 @@ def cmd_finish(args):
 
 
 def _finish(args, template, sources):
+    try:
+        last = templates.load_run(args.name)
+    except TemplateError:
+        last = None
+    if isinstance(last, dict) and last.get("marker") == args.marker:
+        raise Stop(
+            "This run was already finished, and its report was shown then. To run the report "
+            "again, start from prepare.",
+            "start_over",
+        )
     log = _open_log()
     branch = log.branch(_invocation(log, args.marker))
     prepared = next((c for c in log.calls(branch) if c["text"] is not None and args.marker in c["text"]), None)
@@ -541,6 +647,7 @@ def _finish(args, template, sources):
         _pair_loose(sources, calls)
     else:
         _pair_exact(sources, calls)
+    _require_foreground(sources, "finish")
     _require_results(sources, "finish")
     prepared_at = _parse_time(prepared["timestamp"])
     for entry in sources:
@@ -553,7 +660,7 @@ def _finish(args, template, sources):
             mapping.check_fingerprint(block["fingerprint"], text, block["mapping"])
             mapped.append(mapping.map_result(text, block["mapping"]))
         except MappingError as err:
-            raise _mapping_stop(number, err) from None
+            raise _mapping_stop(number, err, variation=args.variation) from None
     previous, reason = _baseline(args.name, template)
     if args.variation:
         label = f"Variation of {args.name}: not the saved report, not remembered"
@@ -567,7 +674,10 @@ def _finish(args, template, sources):
             f"Offer to save it as a new report with /data-presentation:new, or to update {args.name}.",
             block, found, notes,
         )
-    templates.write_run(args.name, {"template_hash": templates.template_hash(template), "blocks": currents})
+    templates.write_run(
+        args.name,
+        {"template_hash": templates.template_hash(template), "blocks": currents, "marker": args.marker},
+    )
     return _response("ok", "none", "", block, found, notes)
 
 
@@ -659,6 +769,7 @@ def cmd_save(args):
                 "make_calls",
             )
         entry["call"] = match
+    _require_foreground(sources, "save")
     _require_results(sources, "save")
     for entry in sources:
         _fetch(entry)

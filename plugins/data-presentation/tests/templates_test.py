@@ -293,6 +293,99 @@ def main():
     check("a long env reference name is not a token",
           accepted('curl -f -H "Authorization: Bearer $FAKE_TOKEN_NAME_1234567890" https://api.example.test -o {output}'))
 
+    # --- secrets: tool sources get no $NAME expansion, so no credential value at all ---
+    def tool_refusal(args, tool="mcp__fake__q"):
+        return refusal(templates.secret_scan, {"kind": "tool", "tool": tool, "args": args})
+
+    err = tool_refusal({"command": "curl -f https://api.example.test -o /tmp/fake.json"}, tool="Bash")
+    check("a Bash tool source is refused", err is not None, repr(err))
+    check("the Bash refusal says to save it as a command", err is not None and "command source" in str(err), str(err))
+
+    for label, args, secret in (
+        ("a short value under api_key", {"api_key": "fakeshort"}, "fakeshort"),
+        ("a nested password under auth", {"auth": {"password": "fakepw"}}, "fakepw"),
+        ("any value under an auth ancestor", {"auth": {"user": "fakeuser"}}, "fakeuser"),
+        ("a list under a tokens key", {"tokens": ["fakeone"]}, "fakeone"),
+        ("an env reference under a key (tool args never expand it)", {"apiKey": "$FAKE_KEY"}, "$FAKE_KEY"),
+        ("a number under a secret key", {"client_secret": 123456}, "123456"),
+        ("a query api_key in a tool URL", {"url": "https://api.example.test/v1?api_key=fakeabc"}, "fakeabc"),
+        ("userinfo in a tool URL", {"endpoint": {"base": "https://fakeuser:fakepw@api.example.test/v1"}}, "fakepw"),
+        ("userinfo after a missing scheme", {"base": "see ://fakeuser:fakepw@api.example.test"}, "fakepw"),
+        ("any value under a headers key", {"headers": {"X-Session": "fakesess"}}, "fakesess"),
+        ("a value under a cookie key", {"cookie": "session=fakesess"}, "fakesess"),
+    ):
+        err = tool_refusal(args)
+        check(f"tool args: {label} is refused", kind_of(err) == "secret", repr(err))
+        check(f"tool args: the refusal for {label} does not echo it", err is not None and secret not in str(err), str(err))
+        check(f"tool args: the refusal for {label} points at a command source",
+              err is not None and "command source" in str(err), str(err))
+
+    amplitude_args = {
+        "chartIds": ["abc1def2", "ghi3jkl4"],
+        "include": "data",
+        "excludeIncompleteDatapoints": True,
+        "groupByLimit": 10,
+        "rationale": "A fake reason for the weekly pull",
+        "projectId": "123456",
+        "chart": "abc1def2",
+        "date_range": {"relative": "Last 90 Days"},
+    }
+    check("the real Amplitude argument shape is accepted", tool_refusal(amplitude_args) is None,
+          str(tool_refusal(amplitude_args)))
+    check("an ordinary tool URL is accepted",
+          tool_refusal({"url": "https://api.example.test/v1?limit=10&m=uniques"}) is None)
+    check("a true/false under a credential key is accepted", tool_refusal({"useAuth": True}) is None)
+
+    # --- secrets: credential options in any program, not only curl ---
+    for label, command, secret in (
+        ("wget --header with a literal bearer",
+         'wget --header "Authorization: Bearer fakeabc" -O {output} https://api.example.test', "fakeabc"),
+        ("gh api -H with a literal key", 'gh api -H "X-Api-Key: fakeabc" /repos/x > {output}', "fakeabc"),
+        ("gh api -H with a literal header of any name", 'gh api -H "X-Session: fakeabc" /repos/x > {output}',
+         "fakeabc"),
+        ("gh api -H with no header name", "gh api -H fakesecretvalue /repos/x > {output}", "fakesecretvalue"),
+        ("an attached -H in any program", 'gh api -H"X-Session: fakeabc" /repos/x > {output}', "fakeabc"),
+        ("an httpie Authorization:value word", "http GET https://api.example.test Authorization:fakeabc > {output}",
+         "fakeabc"),
+        ("an httpie X-Api-Key:value word", "http https://api.example.test X-Api-Key:fakeabc > {output}", "fakeabc"),
+        ("curl -b with a literal cookie", 'curl -f -b "session=fakeabc" https://api.example.test -o {output}',
+         "fakeabc"),
+        ("curl --cookie with a literal cookie", 'curl -f --cookie "session=fakeabc" https://api.example.test -o {output}',
+         "fakeabc"),
+        ("a curl cluster ending in b", 'curl -fsSb "session=fakeabc" https://api.example.test -o {output}', "fakeabc"),
+        ("an attached --token=value", "fetchtool --token=fakeabc https://api.example.test > {output}", "fakeabc"),
+        ("a spaced --password value", "fetchtool --password fakeabc https://api.example.test > {output}", "fakeabc"),
+        ("an --api-key value", "fetchtool --api-key fakeabc > {output}", "fakeabc"),
+        ("an --auth value", "http --auth fakeuser:fakeabc https://api.example.test > {output}", "fakeabc"),
+        ("a --cookie value in any program", "fetchtool --cookie session=fakeabc > {output}", "fakeabc"),
+        ("an option with no value to read", "fetchtool -o {output} --token", None),
+        ("an option name glued to its value", "fetchtool --api-keyfake123 > {output}", "fake123"),
+    ):
+        err = refusal(templates.secret_scan, {"kind": "command", "command": command})
+        check(f"{label} is refused", kind_of(err) == "secret", repr(err))
+        if secret:
+            check(f"the refusal for {label} does not echo it", err is not None and secret not in str(err), str(err))
+    err = refusal(templates.secret_scan, {"kind": "command", "command": "fetchtool --token=fakeabc > {output}"})
+    check("an option refusal names the option", err is not None and "--token" in str(err), str(err))
+    check("an option refusal says to use an environment variable",
+          err is not None and "environment variable" in str(err), str(err))
+    check("curl -fsS -H with a bearer env reference is still accepted",
+          accepted('curl -fsS -H "Authorization: Bearer $TOKEN" https://api.example.test -o {output}'))
+    check("wget --header with a bearer env reference is accepted",
+          accepted('wget --header "Authorization: Bearer $FAKE_TOKEN" -O {output} https://api.example.test'))
+    check("an httpie header from an env reference is accepted",
+          accepted("http https://api.example.test X-Api-Key:$FAKE_KEY > {output}"))
+    check("--token=$NAME is accepted", accepted("fetchtool --token=$FAKE_TOKEN > {output}"))
+    check("--password ${NAME} is accepted", accepted("fetchtool --password ${FAKE_PASS} > {output}"))
+    check("curl -b from an env reference is accepted",
+          accepted('curl -f -b "$FAKE_COOKIE" https://api.example.test -o {output}'))
+    check("gh api -H with a safe Accept header is accepted",
+          accepted('gh api -H "Accept: application/json" /repos/x > {output}'))
+    check("URL userinfo after a missing scheme is refused in a command",
+          secret_kind("wget -O {output} ://fakeuser:fakepw@api.example.test") == "secret")
+    check("a URL is not read as a header word", accepted("wget -O {output} https://api.example.test/v1"))
+    check("an ordinary long option is accepted", accepted("fetchtool --limit 10 --format json > {output}"))
+
     # --- the -f rule ---
     err = refusal(templates.secret_scan, {
         "kind": "command", "command": 'curl -H "Authorization: Bearer $FAKE_TOKEN" https://api.example.test -o {output}'})

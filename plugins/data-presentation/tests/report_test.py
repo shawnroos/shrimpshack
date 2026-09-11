@@ -504,6 +504,7 @@ def test_save_gates():
     with open(out_path, "w") as f:
         json.dump({"x": WEEKS, "series": {"fake-a": [1, 2, 3]}}, f)
     s.bash(f"fake-fetch --out {out_path}", "", description="fake build", timeout=1000)
+    stamp(out_path, s.clock)
     block = {"source": {"kind": "command", "command": "fake-fetch --out {output}", "output": out_path},
              "mapping": {"adapter": "identity"}, "present": {"title": "Fake rows"}}
     path = draft_file(s, "cmd-fake", [block])
@@ -682,6 +683,11 @@ def test_drift():
         s.tool(AMP, args_for("chart-aaaa"), reply)
         out = finish(s, "ai-fake", p["marker"])
         stopped_unchanged(label, out, "ai-fake", before, next_move="offer_rebuild_template")
+        p = prepare(s, "ai-fake")
+        s.tool(AMP, args_for("chart-aaaa"), reply)
+        out = finish(s, "ai-fake", p["marker"], "--variation")
+        stopped_unchanged(f"{label} in a variation", out, "ai-fake", before, next_move="none",
+                          needle="variation changed the data's shape")
 
     s = fresh()
     reply = weekly_reply()
@@ -735,6 +741,38 @@ def test_variation():
     out = finish(s, "two-fake", p["marker"], "--variation")
     check("a two-block variation pairs its calls in order", out["status"] == "ok", out)
     check("a variation never writes a first record", record_bytes("two-fake") is None)
+
+    s = fresh()
+    make("pair-fake", [rows_block({"table": "fake-a", "limit": 10}, "fake-a-rows", "Fake table A"),
+                       rows_block({"table": "fake-b", "limit": 10}, "fake-b-rows", "Fake table B")])
+    p = prepare(s, "pair-fake")
+    s.tool(OTHER, {"table": "fake-b", "limit": 20}, rows_of("fake-b-rows"))
+    s.tool(OTHER, {"table": "fake-a", "limit": 20}, rows_of("fake-a-rows"))
+    out = finish(s, "pair-fake", p["marker"], "--variation")
+    check("a variation with calls in reverse order is ok", out["status"] == "ok", out)
+    at = [out["block"].find(t) for t in ("Fake table A", "fake-a-rows", "Fake table B", "fake-b-rows")]
+    check("each block shows the call closest to its own saved call", -1 not in at and at == sorted(at), out["block"])
+
+    s = fresh()
+    make("tie-fake", [rows_block({"table": "fake-a", "region": "r"}, "fake-a-rows", "Fake table A"),
+                      rows_block({"table": "fake-b", "region": "q"}, "fake-b-rows", "Fake table B")])
+    p = prepare(s, "tie-fake")
+    s.tool(OTHER, {"table": "fake-b", "region": "q"}, rows_of("fake-b-rows"))
+    s.tool(OTHER, {"table": "fake-a", "region": "s"}, rows_of("fake-a-rows"))
+    s.tool(OTHER, {"table": "fake-a", "region": "t"}, rows_of("fake-a-rows"))
+    out = finish(s, "tie-fake", p["marker"], "--variation")
+    stopped_unchanged("two calls equally close to one block", out, "tie-fake", None, next_move="make_calls",
+                      needle="Block 1")
+
+
+def rows_of(series_name):
+    return {"x": WEEKS, "series": {series_name: [1, 2, 3]}}
+
+
+def rows_block(args, series_name, title):
+    block = ident_block({"kind": "tool", "tool": OTHER, "args": args}, rows_of(series_name))
+    block["present"] = {"title": title, "type": "auto"}
+    return block
 
 
 def test_pending_and_start_over():
@@ -795,9 +833,21 @@ def command_template(name="cmd-fake"):
     make(name, [ident_block(source, {"x": WEEKS, "series": {"fake-a": [1, 2, 3]}})])
 
 
-def write_rows(path, values):
+def write_rows(path, values, at=None):
     with open(path, "w") as f:
         json.dump({"x": WEEKS, "series": {"fake-a": values}}, f)
+    if at is not None:
+        stamp(path, at)
+
+
+def stamp(path, moment):
+    if isinstance(moment, str):
+        moment = datetime.datetime.fromisoformat(moment.replace("Z", "+00:00"))
+    os.utime(path, (moment.timestamp(), moment.timestamp()), follow_symlinks=False)
+
+
+def out_of(p):
+    return p["calls"][0]["command"].split("--out ", 1)[1]
 
 
 def test_command_source():
@@ -810,8 +860,9 @@ def test_command_source():
     check("the output path is named from the name and the marker",
           os.path.dirname(out_path) == os.path.join(data_root(), "out") and os.path.basename(out_path).startswith(f"cmd-fake-{p['marker']}"), out_path)
     check("prepare does not create the output file", not os.path.exists(out_path))
-    s.bash(command, "", ts="2026-09-07T06:00:00.000Z", description="fake fetch", timeout=60000, run_in_background=False)
-    write_rows(out_path, [1, 2, 3])
+    s.bash(command, "", ts="2026-09-07T06:00:00.000Z", description="fake fetch", timeout=60000,
+           run_in_background=False, dangerouslyDisableSandbox=True)
+    write_rows(out_path, [1, 2, 3], at="2026-09-07T05:30:00.000Z")
     out = finish(s, "cmd-fake", p["marker"])
     check("a fresh output file is read", out["status"] == "ok", out)
     check("the reply time is the command's result time", "Fetched 2026-09-07 06:00 UTC+00:00" in out["block"], out["block"])
@@ -845,6 +896,51 @@ def test_command_source():
     check("a changed command is not echoed", "--fake-extra" not in out["message"], out["message"])
 
     p = prepare(s, "cmd-fake")
+    command, out_path = p["calls"][0]["command"], out_of(p)
+    s.bash(command, "")
+    s.bash(command.replace("fake-fetch", "fake-other-fetch"), "")
+    write_rows(out_path, [1, 2, 9], at=s.clock)
+    out = finish(s, "cmd-fake", p["marker"])
+    stopped_unchanged("the exact command, then a changed one writing the same path", out, "cmd-fake", before,
+                      next_move="make_calls", needle="not the saved call")
+
+    p = prepare(s, "cmd-fake")
+    command, out_path = p["calls"][0]["command"], out_of(p)
+    s.bash(command, "")
+    elsewhere = os.path.join(s.home, "fake-elsewhere.json")
+    write_rows(elsewhere, [1, 2, 9], at=s.clock)
+    os.symlink(elsewhere, out_path)
+    out = finish(s, "cmd-fake", p["marker"])
+    stopped_unchanged("an output path replaced by a symlink", out, "cmd-fake", before, next_move="none",
+                      needle="not a regular file")
+    check("the symlink's target is never deleted", os.path.exists(elsewhere))
+    check("the symlink itself is removed after finish", not os.path.lexists(out_path))
+
+    p = prepare(s, "cmd-fake")
+    command, out_path = p["calls"][0]["command"], out_of(p)
+    s.bash(command, "")
+    os.mkfifo(out_path)
+    out = finish(s, "cmd-fake", p["marker"])
+    stopped_unchanged("an output path that is a pipe", out, "cmd-fake", before, next_move="none",
+                      needle="not a regular file")
+
+    p = prepare(s, "cmd-fake")
+    command, out_path = p["calls"][0]["command"], out_of(p)
+    s.bash(command, "")
+    write_rows(out_path, [1, 2, 9], at=s.clock + datetime.timedelta(seconds=10))
+    out = finish(s, "cmd-fake", p["marker"])
+    stopped_unchanged("an output file written after the command's result", out, "cmd-fake", before,
+                      next_move="none", needle="after")
+
+    p = prepare(s, "cmd-fake")
+    command, out_path = p["calls"][0]["command"], out_of(p)
+    s.bash(command, "Command running in background with ID: fake01", run_in_background=True)
+    write_rows(out_path, [1, 2, 9], at=s.clock)
+    out = finish(s, "cmd-fake", p["marker"])
+    stopped_unchanged("a command run in the background", out, "cmd-fake", before, next_move="make_calls",
+                      needle="foreground")
+
+    p = prepare(s, "cmd-fake")
     command = p["calls"][0]["command"]
     out_path = command.split("--out ", 1)[1]
     s.bash(command, "fake: exit 1", is_error=True)
@@ -874,22 +970,76 @@ def test_file_source():
     s = fresh()
     data = os.path.join(s.home, "fake-data.json")
     write_rows(data, [4, 5, 6])
-    moment = datetime.datetime(2026, 9, 7, 8, 30, tzinfo=UTC).timestamp()
-    os.utime(data, (moment, moment))
+    moment = datetime.datetime(2026, 9, 7, 4, 30, tzinfo=UTC)
+    stamp(data, moment)
     make("file-fake", [ident_block({"kind": "file", "path": data}, {"x": WEEKS, "series": {"fake-a": [4, 5, 6]}})])
     p = prepare(s, "file-fake")
+    check("the file was written before prepare, as in real use", moment < s.clock, s.clock)
     check("a file source needs no call", p["calls"] == [{"file": data}], p)
     out = finish(s, "file-fake", p["marker"])
-    check("a file source runs", out["status"] == "ok", out)
-    check("a file source's reply time is its modification time", "Fetched 2026-09-07 08:30 UTC+00:00" in out["block"], out["block"])
+    check("a file written before prepare runs", out["status"] == "ok", out)
+    check("a file source's reply time is its modification time", "Fetched 2026-09-07 04:30 UTC+00:00" in out["block"], out["block"])
     rec = record("file-fake")
-    check("the record stores the file time", rec and changes._parse(rec["blocks"][0]["replied_at"]) == datetime.datetime(2026, 9, 7, 8, 30, tzinfo=UTC), rec)
+    check("the record stores the file time", rec and changes._parse(rec["blocks"][0]["replied_at"]) == moment, rec)
     check("the file itself is never deleted", os.path.exists(data))
     before = record_bytes("file-fake")
     os.unlink(data)
     p = prepare(s, "file-fake")
     out = finish(s, "file-fake", p["marker"])
     stopped_unchanged("a missing file", out, "file-fake", before, next_move="none")
+
+
+def test_sweep():
+    print("prepare clears abandoned outputs")
+    s = fresh()
+    command_template()
+    templates.ensure_dirs()
+    folder = os.path.join(data_root(), "out")
+    now = time.time()
+
+    def seed(name, hours_old, where=folder):
+        path = os.path.join(where, name)
+        write_rows(path, [1, 2, 3])
+        os.utime(path, (now - hours_old * 3600,) * 2)
+        return path
+
+    old = seed("cmd-fake-dp-0123456789abcdef-1.json", 25)
+    young = seed("cmd-fake-dp-0123456789abcdef-2.json", 1)
+    sibling = seed("cmd-fake-extra-dp-0123456789abcdef-1.json", 25)
+    unrelated = seed("fake-notes.json", 25)
+    target = seed("fake-target.json", 25, s.home)
+    link = os.path.join(folder, "cmd-fake-dp-fedcba9876543210-1.json")
+    os.symlink(target, link)
+    os.utime(link, (now - 25 * 3600,) * 2, follow_symlinks=False)
+    p = prepare(s, "cmd-fake")
+    check("prepare with old outputs around is ok", p["status"] == "ok", p)
+    check("an output of this report older than a day is deleted", not os.path.exists(old))
+    check("an output younger than a day is kept", os.path.exists(young))
+    check("another report's output is kept even when its name starts with this one", os.path.exists(sibling))
+    check("a file not named like an output is kept", os.path.exists(unrelated))
+    check("a symlink named like an output is left alone", os.path.lexists(link))
+    check("the symlink's target is never touched", os.path.exists(target))
+
+
+def test_already_finished():
+    print("a marker finishes once")
+    s = fresh()
+    make("ai-fake", [amp_block("chart-aaaa", weekly_reply())])
+    p = prepare(s, "ai-fake")
+    s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), ts=INSIDE_WEEK)
+    out = finish(s, "ai-fake", p["marker"])
+    check("the first finish is ok", out["status"] == "ok", out)
+    check("the run record keeps the marker", (record("ai-fake") or {}).get("marker") == p["marker"], record("ai-fake"))
+    before = record_bytes("ai-fake")
+    out = finish(s, "ai-fake", p["marker"])
+    stopped_unchanged("finish run twice with one marker", out, "ai-fake", before, next_move="start_over",
+                      needle="already finished")
+    out = finish(s, "ai-fake", p["marker"], "--variation")
+    stopped_unchanged("a variation with a finished marker", out, "ai-fake", before, next_move="start_over")
+    p = prepare(s, "ai-fake")
+    s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), ts=INSIDE_WEEK)
+    out = finish(s, "ai-fake", p["marker"])
+    check("a new marker still finishes and compares", out["status"] == "ok" and "No changes since" in out["block"], out)
 
 
 def test_times():
@@ -1059,7 +1209,8 @@ def main():
         for test in (
             test_list, test_prepare, test_env, test_save_then_finish, test_save_gates, test_ae1_revision,
             test_call_equality, test_two_blocks, test_source_errors, test_drift, test_present_refused,
-            test_variation, test_pending_and_start_over, test_command_source, test_file_source, test_times,
+            test_variation, test_pending_and_start_over, test_command_source, test_file_source, test_sweep,
+            test_already_finished, test_times,
             test_width, test_ae5_seventh, test_template_changed, test_delete_rename, test_fault,
         ):
             try:
