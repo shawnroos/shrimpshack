@@ -150,6 +150,37 @@ herdr_linear::no_space_reason() {
     printf 'no herdr space is bound to project %s. This space (%s) has no binding: propose binding it to project %s, and ask.\n' "$pid" "$here" "$pid"
 }
 
+# herdr_linear::_issue_space <identifier> <worktree> <what>
+#
+# The space bound to the issue's project, on stdout. 1 when it could not be
+# read; 2 when it is a question -- the reason is on stderr and recorded on
+# <worktree>'s binding, because this cannot tell whether anybody is there to
+# answer (KTD29). <what> names the thing being placed, for the reason's text.
+herdr_linear::_issue_space() {
+    local ident="$1" at="$2" what="$3" pid ws="" reason=""
+    pid="$(herdr_linear::_issue_project_id "$ident")" || return 1
+    if [ -z "$pid" ]; then
+        reason="$(printf '%s has no project, so no herdr space is bound to it. Ask where its %s should open.' "$ident" "$what")"
+    else
+        ws="$(herdr_linear::project_space "$pid")" || return 1
+        [ -n "$ws" ] || reason="$(herdr_linear::no_space_reason "$pid" "$(herdr_linear::workspace_id 2>/dev/null)")"
+    fi
+    if [ -n "$reason" ]; then
+        printf '%s\n' "$reason" >&2
+        herdr_linear::binding_set_pending_placement "$at" "$reason" || true
+        return 2
+    fi
+    printf '%s' "$ws"
+}
+
+# KTD28. A pane of <tab> to split from, while herdr still has that tab in
+# <space>. Nothing otherwise, and the caller makes a new tab.
+herdr_linear::_pane_of_tab_in() {
+    local tab="${1:-}" ws="${2:-}"
+    [ -n "$tab" ] && [ "$(herdr_linear::tab_space "$tab")" = "$ws" ] || return 0
+    herdr_linear::panes_in_tab "$tab" 2>/dev/null | head -n1
+}
+
 # herdr_linear::open_session <worktree-path>
 #
 # A pane for the issue the worktree is bound to, in the space bound to that
@@ -160,33 +191,19 @@ herdr_linear::no_space_reason() {
 # nothing is made, the question is on stderr, and it is recorded on the binding
 # because this verb cannot tell whether anybody is there to answer (KTD29).
 herdr_linear::open_session() {
-    local path="${1:-}" bin ident pid ws tab target made pane reason
+    local path="${1:-}" bin ident ws rc tab target made pane
     [ -d "$path" ] || return "$HERDR_LINEAR_SESSION_FAILED"
     ident="$(herdr_linear::binding_identifier "$path" 2>/dev/null)" || return "$HERDR_LINEAR_SESSION_FAILED"
     herdr_linear::probe || return "$HERDR_LINEAR_SESSION_FAILED"
     bin="$(herdr_linear::bin)"; [ -n "$bin" ] || return "$HERDR_LINEAR_SESSION_FAILED"
 
-    pid="$(herdr_linear::_issue_project_id "$ident")" || return "$HERDR_LINEAR_SESSION_FAILED"
-    if [ -z "$pid" ]; then
-        reason="$(printf '%s has no project, so no herdr space is bound to it. Ask where its session should open.' "$ident")"
-    else
-        ws="$(herdr_linear::project_space "$pid")" || return "$HERDR_LINEAR_SESSION_FAILED"
-        [ -n "$ws" ] || reason="$(herdr_linear::no_space_reason "$pid" "$(herdr_linear::workspace_id 2>/dev/null)")"
-    fi
-    if [ -n "$reason" ]; then
-        printf '%s\n' "$reason" >&2
-        herdr_linear::binding_set_pending_placement "$path" "$reason" || true
-        return "$HERDR_LINEAR_SESSION_ASK"
-    fi
-    printf 'space %s: the only herdr space bound to project %s, read from its workspace record\n' "$ws" "$pid" >&2
+    ws="$(herdr_linear::_issue_space "$ident" "$path" session)"; rc=$?
+    [ "$rc" -eq 2 ] && return "$HERDR_LINEAR_SESSION_ASK"
+    [ "$rc" -eq 0 ] || return "$HERDR_LINEAR_SESSION_FAILED"
+    printf 'space %s: the only herdr space bound to the project of %s, read from its workspace record\n' "$ws" "$ident" >&2
 
-    # KTD28. The recorded tab, only while herdr still has it and it is in this
-    # space. Anything else gets a new tab here, and the record follows.
     tab="$(herdr_linear::binding_tab "$path" 2>/dev/null)" || tab=""
-    target=""
-    if [ -n "$tab" ] && [ "$(herdr_linear::tab_space "$tab")" = "$ws" ]; then
-        target="$(herdr_linear::panes_in_tab "$tab" 2>/dev/null | head -n1)"
-    fi
+    target="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")"
     if [ -n "$target" ]; then
         pane="$("$bin" pane split "$target" --direction right --cwd "$path" --no-focus 2>/dev/null \
             | herdr_linear::json "result.pane.pane_id")"
@@ -213,7 +230,7 @@ herdr_linear::open_session() {
 herdr_linear::layout_build() {
     local parent="${1:-}" ; shift || true
     local bin tab tabpane pane slug child branch wt_path journal_file here bound repo resp
-    local pid ws reason made i=0 paths=() branches=()
+    local ws="" rc made i=0 paths=() branches=()
 
     [ -n "$parent" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
@@ -276,19 +293,9 @@ herdr_linear::layout_build() {
     # resolved before anything is made. A retry with a journalled tab carries
     # on in that tab whatever has been rebound since.
     if ! herdr_linear::journal_get "$parent" tab >/dev/null 2>&1; then
-        pid="$(herdr_linear::_issue_project_id "$parent")" || return "$HERDR_LINEAR_LAYOUT_FAILED"
-        reason=""
-        if [ -z "$pid" ]; then
-            reason="$(printf '%s has no project, so no herdr space is bound to it. Ask where its layout should open.' "$parent")"
-        else
-            ws="$(herdr_linear::project_space "$pid")" || return "$HERDR_LINEAR_LAYOUT_FAILED"
-            [ -n "$ws" ] || reason="$(herdr_linear::no_space_reason "$pid" "$(herdr_linear::workspace_id 2>/dev/null)")"
-        fi
-        if [ -n "$reason" ]; then
-            printf '%s\n' "$reason" >&2
-            herdr_linear::binding_set_pending_placement "$here" "$reason" || true
-            return "$HERDR_LINEAR_LAYOUT_ASK"
-        fi
+        ws="$(herdr_linear::_issue_space "$parent" "$here" layout)"; rc=$?
+        [ "$rc" -eq 2 ] && return "$HERDR_LINEAR_LAYOUT_ASK"
+        [ "$rc" -eq 0 ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
     fi
 
     # Two sessions building the same parent's layout within the poll window
@@ -305,10 +312,7 @@ herdr_linear::layout_build() {
         # R20, KTD28. The parent's ticket may already own a tab in this space;
         # the layout is that piece of work, so its columns go there.
         tab="$(herdr_linear::binding_tab "$here" 2>/dev/null)" || tab=""
-        tabpane=""
-        if [ -n "$tab" ] && [ "$(herdr_linear::tab_space "$tab")" = "$ws" ]; then
-            tabpane="$(herdr_linear::panes_in_tab "$tab" 2>/dev/null | head -n1)"
-        fi
+        tabpane="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")"
         if [ -z "$tabpane" ]; then
             made="$("$bin" tab create --workspace "$ws" --cwd "$here" --label "$slug" --no-focus 2>/dev/null)"
             tab="$(printf '%s' "$made" | herdr_linear::json "result.tab.tab_id")"
