@@ -51,3 +51,9 @@ MAX_TITLE_CHARS = 120
 
 # A caption is one line inside the block, so its source fields are bounded too.
 MAX_SOURCE_FIELDS = 8
+
+# --- Notes ---------------------------------------------------------------------
+
+# A note names this many missing positions and then counts the rest. Enumerating all of
+# them put several hundred characters into one note for a series with sixty gaps.
+MAX_LISTED_POSITIONS = 6

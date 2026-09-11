@@ -11,6 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import constants
 import render
 from render import AXIS_GLYPHS
 from selection import choose
@@ -56,6 +57,19 @@ def _verify(rendered, expect_axis):
         if not any(mark in rendered for mark in PLOT_MARKS):
             return "The chart came back with an axis but nothing plotted on it."
     return None
+
+
+def _positions(positions):
+    """Name the positions, or the first few and a count of the rest.
+
+    A note is read in a transcript. Enumerating every gap put several hundred
+    characters into one line for a series with sixty of them.
+    """
+    human = [str(p + 1) for p in positions]
+    if len(human) <= constants.MAX_LISTED_POSITIONS:
+        return ", ".join(human)
+    listed = ", ".join(human[: constants.MAX_LISTED_POSITIONS])
+    return f"{listed} and {len(human) - constants.MAX_LISTED_POSITIONS} more"
 
 
 def present(request):
@@ -112,7 +126,7 @@ def present(request):
             continue
         unshown = set(unshown_by_series.get(name, []))
         shown = [p for p in positions if p not in unshown]
-        human = ", ".join(str(p + 1) for p in positions)
+        human = _positions(positions)
         if unshown:
             # Do not claim a break the reader cannot see. The earlier note already said
             # how many gaps the width could not fit; naming them all as visible breaks

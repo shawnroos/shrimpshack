@@ -9,6 +9,7 @@ import sys
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
 sys.path.insert(0, SCRIPTS)
 
+import constants  # noqa: E402
 import present  # noqa: E402
 import render  # noqa: E402
 
@@ -181,6 +182,30 @@ def main():
     check("a partially shown gap set is not described as all visible breaks",
           not ("The gap is shown as a break" in joined and "fell outside" not in joined),
           joined[:200])
+
+    # --- a long gap list is summarised, not enumerated (P2) ---
+    # Sixty gaps by hand, with the expectation written as a literal. Deriving "54 more"
+    # from the constant would move both sides together and the assertion could not fail.
+    check("the listed-position cap is pinned at 6",
+          constants.MAX_LISTED_POSITIONS == 6, repr(constants.MAX_LISTED_POSITIONS))
+    many_gaps = [float(i) for i in range(10)] + [None] * 60
+    _, out = run_cli({"title": "Gaps", "x": [f"p{i}" for i in range(70)], "series": {"S": many_gaps}})
+    gap_note = next((n for n in out["notes"] if n.startswith("S: no value at position")), "")
+    # Mutation: restore the old ", ".join over every position - this goes red, because the
+    # note then reads "11, 12, ... 70" and carries no count.
+    check("sixty gaps are summarised to the first few and a count",
+          "11, 12, 13, 14, 15, 16 and 54 more" in gap_note, repr(gap_note))
+    check("the summarised note does not enumerate the last gap",
+          "68, 69, 70" not in gap_note, repr(gap_note))
+    check("the summarised note stays short enough to read in a transcript",
+          len(gap_note) < 200, f"len={len(gap_note)}")
+
+    # Under the cap every position is still named, so the summary does not cost detail.
+    few_gaps = [float(i) for i in range(10)] + [None] * 3
+    _, out = run_cli({"title": "Gaps", "x": [f"p{i}" for i in range(13)], "series": {"S": few_gaps}})
+    gap_note = next((n for n in out["notes"] if n.startswith("S: no value at position")), "")
+    check("three gaps are still named individually",
+          "11, 12, 13" in gap_note and "more" not in gap_note, repr(gap_note))
 
     # --- notes report what was left out (R7, R8) ---
     payload = series(400)
