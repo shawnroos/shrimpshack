@@ -246,3 +246,31 @@ herdr_linear::panes_in_tab() {
     [ -n "${1:-}" ] || return 1
     herdr_linear::_pane_field tab_id "$1" pane_id
 }
+
+# Every space herdr reports, one `<id><TAB><label>` line each. Nothing on a
+# failure: a server that cannot be asked offers no space, rather than a space
+# that is not there.
+herdr_linear::live_spaces() {
+    local bin out
+    bin="$(herdr_linear::bin)"
+    [ -n "$bin" ] || return 1
+    out="$("$bin" workspace list 2>/dev/null)" || return 1
+    printf '%s' "$out" | python3 -c '
+import sys, json
+try:
+    for w in json.load(sys.stdin)["result"]["workspaces"]:
+        sys.stdout.write("%s\t%s\n" % (w.get("workspace_id", ""), w.get("label", "")))
+except Exception:
+    sys.exit(1)
+'
+}
+
+# The space a tab sits in, or nothing when herdr has no such tab. herdr answers
+# a missing tab with an error object, so the field is read rather than the exit.
+herdr_linear::tab_space() {
+    local bin
+    [ -n "${1:-}" ] || return 1
+    bin="$(herdr_linear::bin)"
+    [ -n "$bin" ] || return 1
+    "$bin" tab get "$1" 2>/dev/null | herdr_linear::json "result.tab.workspace_id"
+}

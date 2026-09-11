@@ -42,6 +42,7 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 
 herdr_linear::probe || echo "the herdr server is not reachable; nothing was built"
@@ -96,6 +97,11 @@ herdr_linear::layout_build "$PARENT" "$CHILD_A" "$CHILD_B"
 | 2 | a title cannot become a safe name | name the issue, and stop |
 | 3 | a step failed partway, or a child's issue could not be read | say which; **re-running continues** |
 | 4 | not run from the parent's own worktree | say where it ran and what that is bound to; `cd` to the parent's worktree, or run `/work:start` on the parent first |
+| 5 | which herdr space the layout belongs in is a question; nothing was made | ask it, exactly as `/work:new` does, then re-run |
+
+The tab is made in the space bound to the parent's project, or the parent's
+own tab is used when it already has one there. Every column is split inside
+that tab, never beside whatever pane has focus.
 
 **On exit 3, re-run the same command.** Every created resource is journalled
 against the parent issue, so a retry skips what exists and continues. Do not

@@ -172,6 +172,9 @@ These were settled during implementation, after the plan was written. Each one i
 - KTD30. **The layout resolves the parent's space before it makes a tab, and splits every column from its own tab's root pane.** Before this change each column was split from whatever pane had focus, so the columns of a layout could land in a different tab from the one it had just made. The root pane is journalled beside the tab. The parent's own recorded tab is reused under KTD28's rule. A layout whose space is a choice makes nothing and returns an ask value. Governs R17, R20.
 - KTD31. **A hook never places a session, and the runner enforces it.** No hook calls `open_session`, `layout_build`, `workspace_propose` or `workspace_confirm`. The single-caller check covers `workspace_confirm`: no caller under `hooks/` or `commands/`, and under `lib/` only `new_project`, which binds a space it has just made from the project — the same bound-on-creation reasoning `start_from_issue` applies to `binding_confirm`. Governs R18, R21.
 
+- KTD32. **The ask values are `SESSION_ASK` (6) for `open_session` and `LAYOUT_ASK` (5) for the layout.** 6 matches `START_ASK`, so a reader sees one number for "a question, nothing made" on the per-ticket verbs; the layout's enum already used 4. An issue with no project asks too: a space is a project, so there is nothing to look up. A layout retry whose tab is already journalled skips the space lookup and carries on in that tab, whatever has been rebound since. Governs R17, R19.
+- KTD33. **`/work:start` does not open a session.** It creates and binds a worktree and says where it is, as before. R17 governs where a session opens when one is opened, which is `open_session` (the create skills) and the layout. Opening a pane from `/work:start` would be a new behaviour nobody asked for. Governs R17.
+
 ### High-Level Technical Design
 
 ```mermaid

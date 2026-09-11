@@ -225,16 +225,16 @@ herdr_linear::start_from_issue() {
             printf 'the repository record for this scope could not be read\n' >&2
             return "$HERDR_LINEAR_START_FAILED"
         }
-        if [ "$(printf '%s' "$candidates" | grep -c .)" -ne 1 ]; then
+        repo="$(printf '%s' "$candidates" | herdr_linear::the_only_line)"
+        if [ -z "$repo" ]; then
             herdr_linear::no_repo_reason "$key" "$team_key" >&2
             return "$HERDR_LINEAR_START_ASK"
         fi
         # A repository that moved is asked about again, not failed on.
-        if [ ! -d "$candidates" ]; then
-            printf 'the only repository recorded for this scope is not there any more: %s. Ask which repository to use, then pass it back as an absolute path.\n' "$candidates" >&2
+        if [ ! -d "$repo" ]; then
+            printf 'the only repository recorded for this scope is not there any more: %s. Ask which repository to use, then pass it back as an absolute path.\n' "$repo" >&2
             return "$HERDR_LINEAR_START_ASK"
         fi
-        repo="$candidates"
         source="$(herdr_linear::scope_repo_source "$key" "$team_key")"
         # R6. stderr, because stdout is the path alone.
         printf 'repository %s: the only repository recorded for this scope, read from %s\n' \

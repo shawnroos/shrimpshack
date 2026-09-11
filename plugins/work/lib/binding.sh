@@ -172,6 +172,8 @@ def load(path):
     rec.setdefault("consent", None)
     rec.setdefault("consent_proposal", None)
     rec.setdefault("pending_consent", None)
+    rec.setdefault("pending_placement", None)
+    rec.setdefault("tab", "")
     rec.setdefault("created_children", [])
     rec.setdefault("created_documents", [])
     rec.setdefault("description_head", "")
@@ -187,6 +189,7 @@ def blank(path_value):
         "branch_at_confirmation": "", "issue_identifier": "", "declined": [],
         "proposal": None, "pending_judgment": None,
         "consent": None, "consent_proposal": None, "pending_consent": None,
+        "pending_placement": None, "tab": "",
         "created_children": [],
         "created_documents": [], "description_head": "",
         "issue_updated_at": "", "updated_at": now(),
@@ -253,6 +256,13 @@ if op == "pending-consent":
     if rec is None or not rec.get("pending_consent"):
         sys.exit(1)
     sys.stdout.write(rec["pending_consent"])
+    sys.exit(0)
+
+if op == "pending-placement":
+    rec = load(path)
+    if rec is None or not rec.get("pending_placement"):
+        sys.exit(1)
+    sys.stdout.write(rec["pending_placement"])
     sys.exit(0)
 
 # ---- mutations. Each loads, applies, saves. The caller holds the lock.
@@ -399,6 +409,18 @@ if op == "set-pending-consent":
     # a consent question landing there would evict the squash-merge question --
     # which has already happened once.
     rec["pending_consent"] = args[0]
+    save(path, rec)
+    sys.exit(0)
+
+if op == "set-tab":
+    rec["tab"] = args[0]
+    save(path, rec)
+    sys.exit(0)
+
+if op == "set-pending-placement":
+    # KTD29. Its own slot: consent-confirm clears pending_consent, and a space
+    # question landing there would be cleared by an answer to a different one.
+    rec["pending_placement"] = args[0] or None
     save(path, rec)
     sys.exit(0)
 
@@ -635,6 +657,30 @@ herdr_linear::binding_pending_consent() {
     f="$(herdr_linear::_record_path "${1:-}")" || return 1
     herdr_linear::_mode_ok "$f" || return 1
     herdr_linear::_py pending-consent "$f"
+}
+
+# KTD28. The tab a ticket owns, on that ticket's own binding. A tab's label is
+# prose; this record is the only thing that says which tab is the ticket's.
+herdr_linear::binding_set_tab() { herdr_linear::_mutate "${1:-}" set-tab "${2:-}"; }
+
+herdr_linear::binding_tab() {
+    local f
+    f="$(herdr_linear::_record_path "${1:-}")" || return 1
+    herdr_linear::_mode_ok "$f" || return 1
+    herdr_linear::_py field "$f" tab
+}
+
+# KTD29. A placement question nobody was there to answer, kept for the next
+# session start. An empty text clears it.
+herdr_linear::binding_set_pending_placement() {
+    herdr_linear::_mutate "${1:-}" set-pending-placement "${2:-}"
+}
+
+herdr_linear::binding_pending_placement() {
+    local f
+    f="$(herdr_linear::_record_path "${1:-}")" || return 1
+    herdr_linear::_mode_ok "$f" || return 1
+    herdr_linear::_py pending-placement "$f"
 }
 
 # The answer to no, and symmetric with confirm in both halves of the rule. KTD2

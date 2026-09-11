@@ -267,6 +267,10 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 
 @test "a new issue opens a pane in its own worktree" {
     record_repo
+    # R17. The session opens in the space bound to the issue's project.
+    export FAKE_HERDR_WORKSPACES='wG=AI Canvas Tools'
+    n="$(herdr_linear::workspace_propose wG "$PROJECT_ID")"
+    herdr_linear::workspace_confirm wG "$PROJECT_ID" "$n"
     bind_wt; enable_writes
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
     run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
@@ -667,4 +671,21 @@ worktree_count() { git -C "$PROJECT" worktree list | grep -c .; }
     [[ "$stderr" == *"no repository is recorded"* ]]
     [[ "$stderr" == *"/work:start WEB-4001"* ]]
     [ ! -e "$NEW_WT" ]
+}
+
+# KTD29. The create tail used to discard open_session's stderr, so a session
+# with no space to open in vanished with nothing said. The issue and worktree
+# are real; the pane is empty and the question is on stderr.
+@test "a new issue whose project has no space carries the space question" {
+    record_repo
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
+    [ "$status" -eq 0 ]
+    [ -d "$NEW_WT" ]
+    [ -z "$(printf '%s' "$output" | cut -f3)" ]
+    # The question's own words: the filing lines on stderr name the project too.
+    [[ "$stderr" == *"no herdr space is bound to project $PROJECT_ID"* ]]
+    run grep -c '^tab create' "$FAKE_HERDR_RECORD_DIR/argv"
+    [ "$output" = "0" ]
 }

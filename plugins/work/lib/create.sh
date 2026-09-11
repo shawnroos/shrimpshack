@@ -104,7 +104,9 @@ herdr_linear::_issue_with_session() {
         return "$HERDR_LINEAR_CREATE_PARTIAL"
     }
 
-    pane="$(herdr_linear::open_session "$path" 2>/dev/null)" || pane=""
+    # stderr is left open: when the space is a choice, the question is there and
+    # nowhere else.
+    pane="$(herdr_linear::open_session "$path")" || pane=""
     printf '%s\t%s\t%s' "$ident" "$path" "$pane"
     return "$HERDR_LINEAR_CREATE_OK"
 }

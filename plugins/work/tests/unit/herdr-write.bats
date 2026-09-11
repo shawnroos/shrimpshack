@@ -62,8 +62,13 @@ setup() {
     mkdir -p "$BASE"
     git -C "$PROJECT" worktree add -q -b feature/WEB-2870-tool-detach-foreground "$PARENT_WT" >/dev/null 2>&1
     bind_as "$PARENT_WT" WEB-2870
+    # R17. The parent's project has a space, and it is not the focused one.
+    export FAKE_HERDR_WORKSPACES='wA=Plugins,wG=AI Canvas Tools'
+    bind_space wG 44444444-4444-4444-8444-444444444444
     cd "$PARENT_WT" || return 1
 }
+
+bind_space() { local n; n="$(herdr_linear::workspace_propose "$1" "$2")"; herdr_linear::workspace_confirm "$1" "$2" "$n"; }
 
 bind_as() { local n; n="$(herdr_linear::binding_propose "$1" "$2")"; herdr_linear::binding_confirm "$1" "$2" "$n"; }
 
@@ -360,4 +365,57 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     run herdr_linear::layout_build WEB-2870 WEB-3001
     [ "$status" -eq 0 ]
     [ "$(ls -1d "$BASE"/WEB-3001* | wc -l | tr -d ' ')" = "1" ]
+}
+
+# ------------------------------------------------ where the layout lands (U7)
+
+# R17. The tab goes in the parent's project's space, not the focused one.
+@test "the layout's tab is made in the space bound to the parent's project" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    [ "$(herdr_calls 'tab create --workspace wG')" = "1" ]
+}
+
+# KTD30. Every column is split from the layout's own tab. An untargeted split
+# lands in whatever tab has focus, which is not the tab just made.
+@test "every column is split inside the layout's own tab" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001 WEB-3002
+    [ "$status" -eq 0 ]
+    tab="$output"
+    [ "$(herdr_calls '^pane split --')" = "0" ]
+    for c in WEB-3001 WEB-3002; do
+        pane="$(herdr_linear::journal_get WEB-2870 "pane.$c")"
+        [ "$(herdr_linear::tab_of_pane "$pane")" = "$tab" ]
+    done
+}
+
+# R20. The parent's ticket already owns a tab in its space; the layout is that
+# piece of work, so the columns go there rather than in a second tab.
+@test "a parent that already has a tab in its space gets its columns there" {
+    made="$(FAKE_HERDR_ALLOW_MUTATION=1 "$HERDR_BIN" tab create --workspace wG --label WEB-2870)"
+    ptab="$(printf '%s' "$made" | herdr_linear::json result.tab.tab_id)"
+    herdr_linear::binding_set_tab "$PARENT_WT" "$ptab"
+    : > "$FAKE_HERDR_RECORD_DIR/argv"
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    [ "$output" = "$ptab" ]
+    [ "$(herdr_calls 'tab create')" = "0" ]
+}
+
+# No space for the parent's project is a question, asked before anything is
+# made -- no tab, no worktree, no pane.
+@test "a parent whose project has no space asks and makes nothing" {
+    rm -f "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq "$HERDR_LINEAR_LAYOUT_ASK" ]
+    [[ "$stderr" == *"44444444-4444-4444-8444-444444444444"* ]]
+    [ "$(herdr_calls 'tab create')" = "0" ]
+    [ ! -e "$(col WEB-3001)" ]
+}
+
+# A column's session is the child's piece of work, in the parent's tab.
+@test "each column's tab is recorded on the column's binding" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::binding_tab "$(col WEB-3001)")" = "$output" ]
 }

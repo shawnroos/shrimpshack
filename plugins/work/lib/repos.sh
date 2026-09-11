@@ -156,8 +156,7 @@ herdr_linear::_scope_read() {
 herdr_linear::scope_repo() {
     local lines
     lines="$(herdr_linear::scope_repos "$@")" || return 1
-    [ "$(printf '%s' "$lines" | grep -c .)" -eq 1 ] || return 0
-    printf '%s' "$lines" | head -n1
+    printf '%s' "$lines" | herdr_linear::the_only_line
 }
 
 # Why there is no single repository, said so the reader can act on it. Several

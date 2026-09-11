@@ -27,6 +27,8 @@ command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 command -v herdr_linear::start_worktree_name >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/start.sh"
+command -v herdr_linear::_issue_project_id >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/states.sh"
 
 HERDR_LINEAR_JOURNAL_DIR="${HERDR_LINEAR_JOURNAL_DIR:-$HOME/.claude/work/layouts}"
 HERDR_LINEAR_PANE_POLL_TRIES="${HERDR_LINEAR_PANE_POLL_TRIES:-40}"
@@ -37,6 +39,13 @@ HERDR_LINEAR_LAYOUT_NO_SERVER=1
 HERDR_LINEAR_LAYOUT_BAD_NAME=2
 HERDR_LINEAR_LAYOUT_FAILED=3
 HERDR_LINEAR_LAYOUT_NOT_PARENT=4
+HERDR_LINEAR_LAYOUT_ASK=5
+
+HERDR_LINEAR_SESSION_OK=0
+HERDR_LINEAR_SESSION_FAILED=1
+# Which space the session opens in is a choice, not a fact. Nothing was made;
+# the question is on stderr and recorded on the binding.
+HERDR_LINEAR_SESSION_ASK=6
 
 herdr_linear::_journal() {
     local issue="$1"
@@ -81,21 +90,117 @@ herdr_linear::await_pane() {
     return 1
 }
 
+# ---------------------------------------------------------- spaces (KTD27)
+#
+# A space is a project. Which space is a project's is read from the workspace
+# records -- a space's label is prose and names the wrong project on the machine
+# this was written for (KTD13).
+
+# Every live space bound to the project, one id per line. A record for a space
+# herdr no longer reports is not a candidate: offering it would fail inside
+# `tab create`, after the question could have been asked.
+herdr_linear::project_spaces() {
+    local pid="${1:-}" live f ws
+    [ -n "$pid" ] || return 1
+    live="$(herdr_linear::live_spaces | cut -f1)" || return 1
+    for f in "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json; do
+        [ -e "$f" ] || continue
+        ws="$(basename "$f" .json)"
+        # workspace_project answers only for a bound record, so a proposal
+        # nobody confirmed is not a candidate.
+        [ "$(herdr_linear::workspace_project "$ws" 2>/dev/null)" = "$pid" ] || continue
+        printf '%s\n' "$live" | grep -qxF -- "$ws" && printf '%s\n' "$ws"
+    done
+    return 0
+}
+
+herdr_linear::project_space() {
+    local lines
+    lines="$(herdr_linear::project_spaces "${1:-}")" || return 1
+    printf '%s' "$lines" | herdr_linear::the_only_line
+}
+
+# Why there is no single space, said so the person can answer it. With none
+# bound, the answer depends on the space this session is working from: an
+# unbound one is the pairing to propose (R18); one bound to another project is
+# Misplaced (R19), and which side was wrong is not this plugin's to pick.
+herdr_linear::no_space_reason() {
+    local pid="${1:-}" here="${2:-}" spaces labels ws other
+    spaces="$(herdr_linear::project_spaces "$pid" 2>/dev/null)" || spaces=""
+    labels="$(herdr_linear::live_spaces 2>/dev/null)" || labels=""
+    if [ "$(printf '%s' "$spaces" | grep -c .)" -gt 1 ]; then
+        printf 'several herdr spaces are bound to project %s, so which one this opens in is a choice. Ask, then name one of:\n' "$pid"
+        printf '%s' "$spaces" | grep . | while IFS= read -r ws; do
+            printf '  %s (%s)\n' "$ws" "$(printf '%s\n' "$labels" | awk -F '\t' -v w="$ws" '$1 == w { print $2; exit }')"
+        done | herdr_linear::sanitize_stream
+        return 0
+    fi
+    if [ -z "$here" ]; then
+        printf 'no herdr space is bound to project %s, and this session is not in one. Ask which space to bind to it.\n' "$pid"
+        return 0
+    fi
+    other=""
+    [ "$(herdr_linear::workspace_state "$here" 2>/dev/null)" = "bound" ] \
+        && other="$(herdr_linear::workspace_project "$here" 2>/dev/null)"
+    if [ -n "$other" ] && [ "$other" != "$pid" ]; then
+        printf 'Misplaced: this space (%s) is bound to project %s, and this issue is in project %s. Nothing was opened.\n' "$here" "$other" "$pid"
+        printf 'Offer either move -- bind a space to project %s, or move the issue into project %s -- and do not pick which side was wrong.\n' "$pid" "$other"
+        return 0
+    fi
+    printf 'no herdr space is bound to project %s. This space (%s) has no binding: propose binding it to project %s, and ask.\n' "$pid" "$here" "$pid"
+}
+
 # herdr_linear::open_session <worktree-path>
 #
-# A pane in the CURRENT tab, working in that worktree. Split right and do not
-# steal focus: the person asked for a session to exist, not to be moved into it.
-# Prints the pane id.
+# A pane for the issue the worktree is bound to, in the space bound to that
+# issue's project (R17), in the tab the ticket owns or a new one (R20). Never
+# beside whatever pane has focus. Prints the pane id.
+#
+# Exit: SESSION_OK, SESSION_FAILED, or SESSION_ASK when the space is a choice --
+# nothing is made, the question is on stderr, and it is recorded on the binding
+# because this verb cannot tell whether anybody is there to answer (KTD29).
 herdr_linear::open_session() {
-    local path="${1:-}" bin pane
-    [ -d "$path" ] || return 1
-    herdr_linear::probe || return 1
-    bin="$(herdr_linear::bin)"; [ -n "$bin" ] || return 1
-    pane="$("$bin" pane split --direction right --cwd "$path" --no-focus 2>/dev/null \
-        | herdr_linear::json "result.pane.pane_id")"
-    [ -n "$pane" ] || return 1
-    herdr_linear::await_pane "$pane" || return 1
+    local path="${1:-}" bin ident pid ws tab target made pane reason
+    [ -d "$path" ] || return "$HERDR_LINEAR_SESSION_FAILED"
+    ident="$(herdr_linear::binding_identifier "$path" 2>/dev/null)" || return "$HERDR_LINEAR_SESSION_FAILED"
+    herdr_linear::probe || return "$HERDR_LINEAR_SESSION_FAILED"
+    bin="$(herdr_linear::bin)"; [ -n "$bin" ] || return "$HERDR_LINEAR_SESSION_FAILED"
+
+    pid="$(herdr_linear::_issue_project_id "$ident")" || return "$HERDR_LINEAR_SESSION_FAILED"
+    if [ -z "$pid" ]; then
+        reason="$(printf '%s has no project, so no herdr space is bound to it. Ask where its session should open.' "$ident")"
+    else
+        ws="$(herdr_linear::project_space "$pid")" || return "$HERDR_LINEAR_SESSION_FAILED"
+        [ -n "$ws" ] || reason="$(herdr_linear::no_space_reason "$pid" "$(herdr_linear::workspace_id 2>/dev/null)")"
+    fi
+    if [ -n "$reason" ]; then
+        printf '%s\n' "$reason" >&2
+        herdr_linear::binding_set_pending_placement "$path" "$reason" || true
+        return "$HERDR_LINEAR_SESSION_ASK"
+    fi
+    printf 'space %s: the only herdr space bound to project %s, read from its workspace record\n' "$ws" "$pid" >&2
+
+    # KTD28. The recorded tab, only while herdr still has it and it is in this
+    # space. Anything else gets a new tab here, and the record follows.
+    tab="$(herdr_linear::binding_tab "$path" 2>/dev/null)" || tab=""
+    target=""
+    if [ -n "$tab" ] && [ "$(herdr_linear::tab_space "$tab")" = "$ws" ]; then
+        target="$(herdr_linear::panes_in_tab "$tab" 2>/dev/null | head -n1)"
+    fi
+    if [ -n "$target" ]; then
+        pane="$("$bin" pane split "$target" --direction right --cwd "$path" --no-focus 2>/dev/null \
+            | herdr_linear::json "result.pane.pane_id")"
+    else
+        made="$("$bin" tab create --workspace "$ws" --cwd "$path" --label "$ident" --no-focus 2>/dev/null)"
+        tab="$(printf '%s' "$made" | herdr_linear::json "result.tab.tab_id")"
+        pane="$(printf '%s' "$made" | herdr_linear::json "result.root_pane.pane_id")"
+        [ -n "$tab" ] && herdr_linear::binding_set_tab "$path" "$tab"
+    fi
+    [ -n "$pane" ] || return "$HERDR_LINEAR_SESSION_FAILED"
+    herdr_linear::await_pane "$pane" || return "$HERDR_LINEAR_SESSION_FAILED"
+    herdr_linear::binding_set_pending_placement "$path" "" || true
     printf '%s' "$pane"
+    return "$HERDR_LINEAR_SESSION_OK"
 }
 
 # herdr_linear::layout_build <parent-issue> <child-issue>...
@@ -107,8 +212,8 @@ herdr_linear::open_session() {
 # creates nothing twice.
 herdr_linear::layout_build() {
     local parent="${1:-}" ; shift || true
-    local bin tab pane slug child branch wt_path journal_file here bound repo resp
-    local i=0 paths=() branches=()
+    local bin tab tabpane pane slug child branch wt_path journal_file here bound repo resp
+    local pid ws reason made i=0 paths=() branches=()
 
     [ -n "$parent" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
@@ -167,6 +272,25 @@ herdr_linear::layout_build() {
         paths[i]="$wt_path"; branches[i]="$branch"; i=$(( i + 1 ))
     done
 
+    # R17. The layout's tab goes in the space bound to the parent's project,
+    # resolved before anything is made. A retry with a journalled tab carries
+    # on in that tab whatever has been rebound since.
+    if ! herdr_linear::journal_get "$parent" tab >/dev/null 2>&1; then
+        pid="$(herdr_linear::_issue_project_id "$parent")" || return "$HERDR_LINEAR_LAYOUT_FAILED"
+        reason=""
+        if [ -z "$pid" ]; then
+            reason="$(printf '%s has no project, so no herdr space is bound to it. Ask where its layout should open.' "$parent")"
+        else
+            ws="$(herdr_linear::project_space "$pid")" || return "$HERDR_LINEAR_LAYOUT_FAILED"
+            [ -n "$ws" ] || reason="$(herdr_linear::no_space_reason "$pid" "$(herdr_linear::workspace_id 2>/dev/null)")"
+        fi
+        if [ -n "$reason" ]; then
+            printf '%s\n' "$reason" >&2
+            herdr_linear::binding_set_pending_placement "$here" "$reason" || true
+            return "$HERDR_LINEAR_LAYOUT_ASK"
+        fi
+    fi
+
     # Two sessions building the same parent's layout within the poll window
     # both miss `journal_get parent tab`, both run `tab create`, and the
     # journal's `tail -1` orphans the first tab -- the concurrency twin of the
@@ -178,15 +302,33 @@ herdr_linear::layout_build() {
     herdr_linear::_lock "$journal_file" || return "$HERDR_LINEAR_LAYOUT_FAILED"
     tab="$(herdr_linear::journal_get "$parent" tab)"
     if [ -z "$tab" ]; then
-        tab="$("$bin" tab create --label "$slug" 2>/dev/null \
-            | herdr_linear::json "result.tab.tab_id")"
-        if [ -z "$tab" ]; then
+        # R20, KTD28. The parent's ticket may already own a tab in this space;
+        # the layout is that piece of work, so its columns go there.
+        tab="$(herdr_linear::binding_tab "$here" 2>/dev/null)" || tab=""
+        tabpane=""
+        if [ -n "$tab" ] && [ "$(herdr_linear::tab_space "$tab")" = "$ws" ]; then
+            tabpane="$(herdr_linear::panes_in_tab "$tab" 2>/dev/null | head -n1)"
+        fi
+        if [ -z "$tabpane" ]; then
+            made="$("$bin" tab create --workspace "$ws" --cwd "$here" --label "$slug" --no-focus 2>/dev/null)"
+            tab="$(printf '%s' "$made" | herdr_linear::json "result.tab.tab_id")"
+            tabpane="$(printf '%s' "$made" | herdr_linear::json "result.root_pane.pane_id")"
+        fi
+        if [ -z "$tab" ] || [ -z "$tabpane" ]; then
             herdr_linear::_unlock "$journal_file"
             return "$HERDR_LINEAR_LAYOUT_FAILED"
         fi
         herdr_linear::journal_put "$parent" tab "$tab"
+        herdr_linear::journal_put "$parent" tabpane "$tabpane"
+        herdr_linear::binding_set_tab "$here" "$tab"
     fi
     herdr_linear::_unlock "$journal_file"
+
+    # KTD30. Every column is split from a pane of this tab. An untargeted split
+    # splits whatever pane has focus, which put columns in some other tab.
+    tabpane="$(herdr_linear::journal_get "$parent" tabpane 2>/dev/null)" \
+        || tabpane="$(herdr_linear::panes_in_tab "$tab" 2>/dev/null | head -n1)"
+    [ -n "$tabpane" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
     i=-1
     for child in "$@"; do
@@ -208,7 +350,7 @@ herdr_linear::layout_build() {
             herdr_linear::journal_put "$parent" "worktree.$child" "$wt_path"
         fi
 
-        pane="$("$bin" pane split --direction right --cwd "$wt_path" --no-focus 2>/dev/null \
+        pane="$("$bin" pane split "$tabpane" --direction right --cwd "$wt_path" --no-focus 2>/dev/null \
             | herdr_linear::json "result.pane.pane_id")"
         if [ -z "$pane" ]; then
             herdr_linear::_unlock "$journal_file"
@@ -223,7 +365,8 @@ herdr_linear::layout_build() {
 
         # Bound on creation: the layout IS the statement of what this worktree
         # is for, so there is nothing to propose and nothing to confirm.
-        herdr_linear::_bind_created "$wt_path" "$child"
+        herdr_linear::_bind_created "$wt_path" "$child" \
+            && herdr_linear::binding_set_tab "$wt_path" "$tab"
     done
 
     printf '%s' "$tab"

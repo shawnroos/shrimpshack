@@ -38,7 +38,7 @@ EOF
 # up whenever a suite file is added; if it is ever lowered, say why in the
 # commit — this number is what turns "the tests directory got renamed" into a
 # failure instead of a smaller, silently-green run.
-HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-19}"
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-20}"
 
 run_suite() {
     local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
@@ -565,6 +565,57 @@ consent_caller_check() {
     printf '%sneither answer verb has a caller under lib/, hooks/ or commands/%s\n' "$GREEN" "$NC"
 }
 
+# KTD31. A space binding is a person's answer, as consent is, and a hook has
+# nobody to ask. So no hook binds a space or places a session, nothing under
+# commands/ binds one, and under lib/ the one caller of workspace_confirm is
+# new_project -- which binds a space it has just made FROM the project, the
+# same bound-on-creation reasoning start_from_issue applies to binding_confirm.
+placement_caller_check() {
+    printf '%sPlacement caller check...%s\n' "$YELLOW" "$NC"
+    local root="${1:-$PLUGIN_ROOT}" d
+    for d in lib hooks commands; do
+        if [ ! -d "$root/$d" ]; then
+            printf '%splacement caller check FAILED%s — %s/%s is not there; it was never swept.\n' \
+                "$RED" "$NC" "$root" "$d"
+            return 1
+        fi
+    done
+    scan_or_fail "placement caller check" "$root" <<'PYEOF' || return 1
+import os, re, sys
+
+root = sys.argv[1]
+DEF = re.compile(r"^(herdr_linear::[A-Za-z0-9_]+)\(\)\s*\{")
+HOOK_BANNED = ("workspace_confirm", "workspace_propose", "open_session", "layout_build")
+LIB_ALLOWED = {("create.sh", "herdr_linear::new_project")}
+
+def files(d):
+    for base, _, names in os.walk(os.path.join(root, d)):
+        for n in sorted(names):
+            yield os.path.join(base, n)
+
+for f in files("hooks"):
+    for i, line in enumerate(open(f, errors="replace"), 1):
+        for verb in HOOK_BANNED:
+            if "herdr_linear::" + verb in line:
+                print("%s:%d: a hook calls %s; a hook has nobody to ask" % (f, i, verb))
+for f in files("commands"):
+    for i, line in enumerate(open(f, errors="replace"), 1):
+        if "herdr_linear::workspace_confirm" in line:
+            print("%s:%d: a command binds a space" % (f, i))
+for f in files("lib"):
+    current = None
+    for i, line in enumerate(open(f, errors="replace"), 1):
+        m = DEF.match(line)
+        if m:
+            current = m.group(1)
+            continue
+        if "herdr_linear::workspace_confirm" in line and not line.lstrip().startswith("#"):
+            if (os.path.basename(f), current) not in LIB_ALLOWED:
+                print("%s:%d: %s calls workspace_confirm; only new_project may" % (f, i, current))
+PYEOF
+    printf '%sno hook places a session, and only new_project binds a space from lib/%s\n' "$GREEN" "$NC"
+}
+
 # Sourcing lib/ writes to stderr -- the deprecated-root warning in contain.sh
 # does -- and a hook has no stderr to spare: R26 is no output at all, not less
 # of it. Both hooks discard it on the source loop today; this is what stops the
@@ -745,6 +796,7 @@ wire_smoke() {
     skill_lib_sync_check || rc=1
     rubric_sync_check || rc=1
     consent_caller_check || rc=1
+    placement_caller_check || rc=1
     identifier_path_check || rc=1
     hook_source_stderr_check || rc=1
     return "$rc"

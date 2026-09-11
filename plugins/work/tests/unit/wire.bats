@@ -286,3 +286,44 @@ start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.
     body="$(start_skill)"
     [[ "$body" == *"scopes/"* ]]
 }
+
+# ------------------------------------------ nobody places a session unasked (KTD31)
+
+placement_tree() {
+    mkdir -p "$WORK/p/lib" "$WORK/p/hooks" "$WORK/p/commands"
+    printf 'herdr_linear::workspace_confirm() {\n    :\n}\n' > "$WORK/p/lib/binding.sh"
+    printf 'herdr_linear::new_project() {\n    herdr_linear::workspace_confirm "$ws" "$pid" "$n"\n}\n' > "$WORK/p/lib/create.sh"
+    printf '#!/bin/bash\n' > "$WORK/p/hooks/ground.sh"
+}
+
+@test "the placement caller check passes the one site that binds a space it made" {
+    placement_tree
+    run placement_caller_check "$WORK/p"
+    [ "$status" -eq 0 ]
+}
+
+# A space binding is a person's answer. A hook has nobody to ask.
+@test "a hook that binds a space or opens a session turns the placement check red" {
+    for verb in workspace_confirm workspace_propose open_session layout_build; do
+        placement_tree
+        printf 'herdr_linear::%s x\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"ground.sh"* ]]
+        rm -rf "$WORK/p"
+    done
+}
+
+@test "a second lib caller of workspace_confirm turns the placement check red" {
+    placement_tree
+    printf 'herdr_linear::open_session() {\n    herdr_linear::workspace_confirm a b c\n}\n' >> "$WORK/p/lib/create.sh"
+    run placement_caller_check "$WORK/p"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"open_session"* ]]
+}
+
+@test "the placement check refuses a tree it cannot sweep" {
+    mkdir -p "$WORK/q/lib"
+    run placement_caller_check "$WORK/q"
+    [ "$status" -ne 0 ]
+}

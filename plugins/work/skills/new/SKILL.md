@@ -35,7 +35,7 @@ worktree is bound to, or from the project the herdr workspace is bound to.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write repos start context create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read states herdr-write repos start context create; do
   source "$R/lib/$f.sh"
 done
 
@@ -128,6 +128,26 @@ name.
 | 3 | shadow mode: nothing was created, local or remote |
 | 4 | the tracker call failed; nothing was filed |
 | 5 | the issue exists but its worktree did not follow; stderr says what to run, and may carry the repository question |
+
+**The pane opens in the space bound to the issue's project, never beside the
+focused pane.** A tab is a piece of work: the new ticket gets its own tab in
+that space. When `PANE` is empty and stderr says which space is a question,
+nothing was opened. Ask it, using the host's blocking question tool:
+
+- **This space has no binding:** propose binding it to the project named in
+  the question. Record only what the person answers:
+
+```bash
+nonce="$(herdr_linear::workspace_propose "$(herdr_linear::workspace_id)" "$PROJECT_ID")"
+herdr_linear::workspace_confirm "$(herdr_linear::workspace_id)" "$PROJECT_ID" "$nonce"
+herdr_linear::open_session "$WORKTREE"
+```
+
+- **This space is bound to a different project:** that is Misplaced. Say both
+  sides, offer to move either one, and do not pick which was wrong.
+- **Several spaces are bound to the project:** name each and ask which.
+
+A space's label is never the answer, even when it names the project.
 
 **Exit 5 is not a rollback.** The issue is real. Deleting a freshly filed ticket
 to tidy up is worse than leaving it and finishing by hand. When stderr names

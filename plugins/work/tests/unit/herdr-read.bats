@@ -326,3 +326,48 @@ wA:p2" ]
     run herdr_linear::pane_id
     [ "$output" = "wA:p1" ]
 }
+
+# ------------------------------------------------ the fixture's placement arms
+
+# Placement is only testable against a fixture that answers the way herdr
+# does: a tab is made in the space it was asked for, a split lands in its
+# target's tab, and a tab that is gone is an error with exit 1.
+fh() { FAKE_HERDR_ALLOW_MUTATION=1 bash "$FIX/fake-herdr.sh" "$@"; }
+
+@test "fixture: a tab is created in the space it names, with a root pane in it" {
+    run fh tab create --workspace wG --cwd /tmp --label WEB-1 --no-focus
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.tab.workspace_id)" = "wG" ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.root_pane.tab_id)" \
+      = "$(printf '%s' "$output" | herdr_linear::json result.tab.tab_id)" ]
+}
+
+@test "fixture: a split lands in its target pane's tab" {
+    made="$(fh tab create --workspace wG --label x)"
+    root="$(printf '%s' "$made" | herdr_linear::json result.root_pane.pane_id)"
+    tab="$(printf '%s' "$made" | herdr_linear::json result.tab.tab_id)"
+    run fh pane split "$root" --direction right --cwd /tmp/x --no-focus
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.pane.tab_id)" = "$tab" ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.pane.workspace_id)" = "wG" ]
+}
+
+@test "fixture: a tab that does not exist is an error with exit 1" {
+    run --separate-stderr fh tab get wZ:t999
+    [ "$status" -eq 1 ]
+    [ "$(printf '%s' "$output" | herdr_linear::json error.code)" = "tab_not_found" ]
+}
+
+@test "fixture: the workspace list reports the spaces it was given, with labels" {
+    export FAKE_HERDR_WORKSPACES='wG=AI Canvas Tools,wJ=Plugins'
+    run fh workspace list
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.workspaces.0.workspace_id)" = "wG" ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.workspaces.0.label)" = "AI Canvas Tools" ]
+}
+
+@test "fixture: the snapshot reports created panes in their tabs" {
+    root="$(fh tab create --workspace wG --label x | herdr_linear::json result.root_pane.pane_id)"
+    run herdr_linear::panes_in_tab wG:t1
+    [ "$output" = "$root" ]
+}

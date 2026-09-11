@@ -14,6 +14,10 @@
 # keys are `issue_context`'s keys for the same facts. Two shapes for one concept
 # is what made a caller bridge them by hand.
 
+# No lib sources another. Without this the_only_line is 127 in project_team.
+command -v herdr_linear::the_only_line >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+
 # herdr_linear::current_context <worktree> [workspace-id]
 #
 # JSON carrying `project_id`, `team_id`, `team_name` and `identifier` for
@@ -132,8 +136,7 @@ for n in nodes:
 herdr_linear::project_team() {
     local lines
     lines="$(herdr_linear::project_teams "${1:-}")" || return 1
-    [ "$(printf '%s' "$lines" | grep -c .)" -eq 1 ] || return 0
-    printf '%s' "$lines" | head -n1
+    printf '%s' "$lines" | herdr_linear::the_only_line
 }
 
 # Why the team could not be derived, said so the reader can act on it. A project
