@@ -7,6 +7,7 @@ its `format` option is a str.format template rather than a callable.
 
 import math
 import os
+import string
 import sys
 
 import constants
@@ -183,6 +184,36 @@ def chart(request, series_name):
     return chart_with_meta(request, series_name)[0]
 
 
+LEGEND_JOIN = " · "
+
+
+def _headers(names, budget):
+    """Column headers that cannot be read as each other.
+
+    A name that fits is printed whole. Once any name has to be cut, every header
+    becomes a letter key and the names move to a legend above the table: at the six to
+    nine characters a crowded table leaves, a fragment is not an identifier, and
+    remove-background and remove-logo both read as "remov…". Letters, not digits, so a
+    header is never mistaken for data.
+    """
+    if all(len(name) <= budget for name in names):
+        return names, []
+    letters = string.ascii_uppercase
+    keys = [letters[i] if i < len(letters) else f"S{i + 1}" for i in range(len(names))]
+    # Pack the legend on the separator, never mid-entry: a key wrapped away from its
+    # name is the same ambiguity the keys exist to remove. A key and a name cannot
+    # exceed the budget on their own, because the gate caps a name at MAX_LABEL_CHARS.
+    lines, line = [], ""
+    for entry in (f"{key} {name}" for key, name in zip(keys, names)):
+        if line and len(line) + len(LEGEND_JOIN) + len(entry) > constants.COLUMN_BUDGET:
+            lines.append(line)
+            line = entry
+        else:
+            line = entry if not line else line + LEGEND_JOIN + entry
+    lines.append(line)
+    return keys, lines
+
+
 def table_with_meta(request, series_names=None):
     """Render a Markdown table. Returns the block and what was left out."""
     names = list(series_names if series_names is not None else request["series"])
@@ -214,7 +245,8 @@ def table_with_meta(request, series_names=None):
     # The header row carries no numbers, so it is bounded on its own.
     header_budget = max(1, (constants.COLUMN_BUDGET - separators) // len(names))
 
-    header = "| " + " | ".join([""] + [truncate_escaped(n, header_budget) for n in names]) + " |"
+    headers, legend = _headers(names, header_budget)
+    header = "| " + " | ".join([""] + headers) + " |"
     rule = "| " + " | ".join(["---"] * (len(names) + 1)) + " |"
     rows = []
     for row, i in enumerate(keep):
@@ -222,7 +254,7 @@ def table_with_meta(request, series_names=None):
         cells.extend(numbers[name][row] for name in names)
         rows.append("| " + " | ".join(cells) + " |")
 
-    block = "\n".join([header, rule] + rows)
+    block = "\n".join(legend + [header, rule] + rows)
     return block, {"rendered": len(keep), "omitted": omitted}
 
 

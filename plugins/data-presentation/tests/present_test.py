@@ -153,6 +153,20 @@ def main():
               proc.returncode == 0 and out and out["status"] == "refused",
               f"rc={proc.returncode}")
 
+    # --- the reported shape, end to end: six tools, two of them sharing a prefix ---
+    # Mutation: return truncated names instead of keys in render._headers - this goes
+    # red, because remove-background and remove-logo both come back as "remov…".
+    _, out = run_cli({"title": "t", "x": ["a", "b"],
+                      "series": {name: [1, 2] for name in
+                                 ("remove-background", "studio-lighting", "relight",
+                                  "godrays", "detach-foreground", "remove-logo")}})
+    header_row = next(line for line in out["block"].split("\n") if line.startswith("|  |"))
+    header_cells = [c.strip() for c in header_row.split("|")[2:-1]]
+    check("six tool columns come back individually identifiable",
+          len(set(header_cells)) == 6, repr(header_cells))
+    check("the block names remove-background in full", "remove-background" in out["block"])
+    check("the block names remove-logo in full", "remove-logo" in out["block"])
+
     # --- a renderer refusal reaches the caller as a refusal, not a crash (P1) ---
     # Eight nine-character values cannot fit 72 columns, and cutting one would falsify
     # it. Mutation: remove the `except Refusal` around the render calls in present() -

@@ -206,13 +206,49 @@ def main():
     check("the width refusal names the series count",
           refused is not None and "8" in refused, repr(refused))
 
+    # --- two columns can never read as the same thing (P1) ---
+    # The shape that found this: a per-tool breakdown where two names share a prefix.
+    # Both rendered as "remov…", and a table that cannot say which column is which has
+    # stopped doing the one thing a table is for.
+    tools = validate({
+        "title": "t", "x": ["a", "b"],
+        "series": {name: [1.0, 2.0] for name in
+                   ("remove-background", "studio-lighting", "relight",
+                    "godrays", "detach-foreground", "remove-logo")},
+    })
+    block = render.table(tools)
+    head_cells = [c.strip() for c in block.split("\n")[-4].split("|")[1:-1]][1:]
+    # Mutation: return truncated names instead of the keys in _headers - this goes red
+    # with two "remov…" headers. A "the header is short enough" check would not.
+    check("six crowded headers are all different from each other",
+          len(set(head_cells)) == len(head_cells) == 6, repr(head_cells))
+    legend = "\n".join(block.split("\n")[:-4])
+    check("the legend gives the first colliding name in full",
+          "remove-background" in legend, repr(legend))
+    check("the legend gives the second colliding name in full",
+          "remove-logo" in legend, repr(legend))
+    check("the keyed table still fits the column budget",
+          widest(block) <= constants.COLUMN_BUDGET, f"width={widest(block)}")
+
+    # A name that fits is printed, not keyed. Two series is the shape that must read
+    # exactly as it always has.
+    # Mutation: drop the fits-the-budget branch from _headers so keys are always used -
+    # this goes red.
+    plain = render.table(validate({"title": "t", "x": ["a", "b"],
+                                   "series": {"Signups": [1.0, 2.0], "Churn": [3.0, 4.0]}}))
+    check("two series that fit keep their real names",
+          plain.split("\n")[0] == "|  | Signups | Churn |", repr(plain.split("\n")[0]))
+    check("a table that needs no legend carries none",
+          plain.startswith("|"), repr(plain.split("\n")[0]))
+
     # --- a truncated cell cannot open a column the table did not declare (P3) ---
-    # Four series, so per_column is narrow enough that a 24-character label actually
-    # reaches the cut. With one series it never does and the assertion cannot fail.
+    # Six series of seven-character values, so the row label is cut down to eight
+    # characters and a pipe-laden label really does reach the cut. With one or two
+    # series the label never reaches it and the assertion cannot fail.
     delimited = validate({
         "title": "T",
         "x": ["a|b|c|d|e|f|g" for _ in range(4)],
-        "series": {f"n|{i}|long|name": [float(i)] * 4 for i in range(4)},
+        "series": {f"n|{i}|long|name": [-916700.0] * 4 for i in range(6)},
     })
     block = render.table(delimited)
 
@@ -235,12 +271,17 @@ def main():
 
     # Mutation: delete `.replace("|", "\\|")` from _clean. This goes red - the labels
     # arrive carrying live delimiters and every row parses as more columns than declared.
+    table_lines = [line for line in block.split("\n") if line.startswith("|")]
     check(
-        "every row of a pipe-laden table parses as five columns",
-        all(len(columns(line)) == 7 for line in block.split("\n")),
-        repr([len(columns(line)) for line in block.split("\n")]),
+        "every row of a pipe-laden table parses as seven columns",
+        all(len(columns(line)) == 9 for line in table_lines),
+        repr([len(columns(line)) for line in table_lines]),
     )
-    check("the pipe-laden labels were actually cut", "…" in block, block.split("\n")[0])
+    check("the pipe-laden row labels were actually cut",
+          all("…" in columns(line)[1] for line in table_lines[2:]), repr(table_lines[2:]))
+    check("the legend carries no live delimiter either",
+          all(len(columns(line)) == 1 for line in block.split("\n") if not line.startswith("|")),
+          repr([l for l in block.split("\n") if not l.startswith("|")]))
     check(
         "the pipe-laden table still fits the column budget",
         widest(block) <= constants.COLUMN_BUDGET,

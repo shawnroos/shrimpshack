@@ -62,6 +62,11 @@ and real variation in the series. A chart carries exactly one series; several be
 several charts, because the renderer cannot tell two lines apart without colour and colour
 is unusable inside a fence.
 
+A value is never cut to fit a column. When the names of the columns will not fit, they
+become letters and a legend above the table gives each one in full, so two columns can
+never read as the same thing. If the numbers themselves cannot fit the width, it refuses
+and asks for fewer series.
+
 It never invents a missing value. It refuses rather than rendering something misleading,
 and it says so in plain language. Read the `notes`: they carry what was omitted, which
 positions were missing, and why you got the form you got.
