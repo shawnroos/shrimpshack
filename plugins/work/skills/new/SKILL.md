@@ -113,13 +113,12 @@ team or a different project, or made from a different branch, asks again.
 ## Then
 
 ```bash
-herdr_linear::new_issue "$PWD" "The title" /tmp/desc.md "$(herdr_linear::workspace_id)" short-name
+herdr_linear::new_issue "$PWD" "The title" /tmp/desc.md "$(herdr_linear::workspace_id)"
 ```
 
-Prints `IDENTIFIER<TAB>WORKTREE<TAB>PANE`.
-
-**Ask for the short name.** Every worktree here is called something a person
-chose — `cue-read`, `wcs-paper`. The derived fallback is mechanical and worse.
+Prints `IDENTIFIER<TAB>WORKTREE<TAB>PANE`. The worktree's path and name come
+from the new ticket, exactly as `/work:start` derives them; nobody supplies a
+name.
 
 | Exit | Meaning |
 |---|---|
@@ -127,10 +126,13 @@ chose — `cue-read`, `wcs-paper`. The derived fallback is mechanical and worse.
 | 1 | refused — no title, no description, or a bad description |
 | 2 | no team could be derived; nothing was created |
 | 3 | shadow mode: nothing was created, local or remote |
-| 4 | the issue exists but something after it failed; stderr says what to run |
+| 4 | the tracker call failed; nothing was filed |
+| 5 | the issue exists but its worktree did not follow; stderr says what to run, and may carry the repository question |
 
-**Exit 4 is not a rollback.** The issue is real. Deleting a freshly filed ticket
-to tidy up is worse than leaving it and finishing by hand.
+**Exit 5 is not a rollback.** The issue is real. Deleting a freshly filed ticket
+to tidy up is worse than leaving it and finishing by hand. When stderr names
+several repositories, or none, that is the repository question: run
+`/work:start <identifier>`, which asks it properly and records the answer.
 
 Follow the conventions for the title, and ask about anything they list under
 "Not yet settled" rather than defaulting:

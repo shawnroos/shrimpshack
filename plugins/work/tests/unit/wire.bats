@@ -254,3 +254,35 @@ PYEOF
     [[ "$output" == *"layout/SKILL.md"* ]]
     [[ "$output" == *"carries no subagent brief"* ]]
 }
+
+# ------------------------------------------------ the start skill (U6)
+
+start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.md"; }
+
+# R6, R7. The skill is where the person is, so it is where the repository
+# question is asked. Citing the readers by name is what makes it ask from the
+# record rather than from wherever it happens to be standing.
+@test "the start skill cites the repository readers by name" {
+    body="$(start_skill)"
+    [[ "$body" == *"herdr_linear::scope_repos"* ]]
+    [[ "$body" == *"herdr_linear::no_repo_reason"* ]]
+}
+
+# KTD7. An exit the table does not name is an exit the skill reads as failure.
+@test "the start skill's exit tables carry a row for the ask value" {
+    run bash -c "printf '%s\n' \"\$1\" | grep -cE '^\\| 6 \\|'" _ "$(start_skill)"
+    [ "$output" = "2" ]
+}
+
+# R14. No caller supplies the name, so the skill must not tell anyone to.
+@test "the start skill passes no worktree name and asks for none" {
+    body="$(start_skill)"
+    [[ "$body" != *"start_from_issue WEB-3318 drawer-blank"* ]]
+    [[ "$body" != *"Ask for the short name"* ]]
+}
+
+# The deferred verb's stand-in. Without it a wrong answer is recorded forever.
+@test "the start skill states how to undo a wrongly recorded repository" {
+    body="$(start_skill)"
+    [[ "$body" == *"scopes/"* ]]
+}

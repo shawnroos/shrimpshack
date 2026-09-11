@@ -55,7 +55,10 @@ tail -5 "${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}" 2>/dev/null 
 ## With an issue identifier
 
 `/work WEB-3318` means *start on this*. Hand off to `/work:start`, which creates
-the worktree and binds it. That path writes nothing to Linear.
+the worktree at a path derived from the ticket and binds it — or, when more
+than one repository or none is recorded for the ticket's project, comes back
+asking which repository to use and creates nothing until that is answered.
+That path writes nothing to Linear.
 
 ## With `status`
 

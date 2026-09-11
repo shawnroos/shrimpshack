@@ -90,7 +90,7 @@ for f in contain secrets sanitize binding linear reconcile description herdr-rea
   source "$R/lib/$f.sh"
 done
 
-herdr_linear::new_sub_issue "$PWD" "The title" /tmp/desc.md "$(herdr_linear::workspace_id)" short-name
+herdr_linear::new_sub_issue "$PWD" "The title" /tmp/desc.md "$(herdr_linear::workspace_id)"
 ```
 
 Exit codes are `/work:new`'s, plus: **2 also means this worktree is unbound**.

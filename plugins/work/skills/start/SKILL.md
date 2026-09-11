@@ -1,6 +1,6 @@
 ---
 name: start
-description: Start work on a Linear issue that has no worktree yet, or start something new that has neither a worktree nor a ticket. Creates the worktree under the project's own worktrees directory, names the branch so the issue is findable from it forever after, and binds the two. Use at the beginning of a piece of work.
+description: Start work on a Linear issue that has no worktree yet, or start something new that has neither a worktree nor a ticket. Creates the worktree at a path derived from the ticket — worktrees root, organisation, project or team, then the identifier and title — in a repository read from what was recorded for that project, asking which repository when that is a choice. Names the branch so the issue is findable from it forever after, and binds the two. Use at the beginning of a piece of work.
 disable-model-invocation: true
 ---
 
@@ -51,37 +51,74 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
 
-herdr_linear::start_from_issue WEB-3318 drawer-blank
+herdr_linear::start_from_issue WEB-3318
 ```
 
 It prints the worktree path. `cd` there and work.
 
-**Ask for the short name** rather than deriving one, when there is somebody to
-ask. Every worktree here is called something a person chose — `cue-read`,
-`wcs-paper` — not a ticket slug. With no name given it derives a short one from
-the title, which is a fallback, not the goal.
+**The path comes from the ticket, never from where you are standing.** It is
+`<worktrees-root>/<org>/<project or team>/<IDENTIFIER>-<title-slug>` — for
+example `~/worktrees/<org>/ai-canvas-tools/WEB-3318-ai-tools-drawer-is-blank-when-a-still`.
+The worktrees root is `$HOME/worktrees` unless `HERDR_LINEAR_WORKTREES_ROOT`
+says otherwise, and it is kept apart from `~/projects` so deleting all of it
+only ever loses uncommitted work. Nobody supplies the name, so nothing can drop
+the identifier out of it.
 
-**The branch is not the worktree name.** It is `feature/` plus the branch name
-Linear supplies, so it carries the identifier: `feature/web-3318-ai-tools-drawer-is-blank…`.
-That is deliberate — most branches here carry no identifier, which is why
-matching a branch to an issue only ever worked for about a fifth of worktrees.
-One started this way is findable forever after. Pass a third argument to use
-`bugfix` or `task` instead.
+**The branch is the directory name behind the prefix:**
+`feature/WEB-3318-ai-tools-drawer-is-blank-when-a-still`. The identifier is in
+both, so the worktree is findable from its branch forever after. Pass a second
+argument to use `bugfix` or `task` instead of `feature`.
+
+## Which repository
+
+A project touches several repositories, so the repository is read from what was
+recorded for the issue's project — or its team, when it has no project — never
+from the directory you are in. `start_from_issue` reads the candidates itself,
+through `herdr_linear::scope_repos`; to see them for an issue you already have
+the ids for:
+
+```bash
+herdr_linear::scope_repos "project-$PROJECT_ID" "team-$TEAM_ID"
+```
+
+- **One candidate:** `start_from_issue` uses it and says so on stderr — the
+  repository, the record file it was read from, and that it was the only one
+  recorded. Repeat that line to the person.
+- **Several, or none:** it creates nothing and exits 6.
+  `herdr_linear::no_repo_reason` is what it printed: it names every candidate.
+  **Ask**, naming every candidate, using the host's blocking question tool. The
+  directory you are standing in is never the tiebreaker. When it is a worktree
+  bound to another issue in the same project, its repository is a strong default
+  to *offer* in the question — say that it is where you are, and still ask.
+- **Then retry with the answer, as an absolute path.** A relative path is
+  refused, because resolving it would let the current directory decide again:
+
+```bash
+herdr_linear::start_from_issue WEB-3318 "" "$PWD" /Users/me/projects/web-app
+```
+
+The answer is recorded for the project and for its team, so the question is
+never asked again for that scope. **A wrong answer is undone by deleting the
+scope's record file** under `scopes/` in the store
+(`$HERDR_LINEAR_STORE_DIR/scopes/project-<id>.json`, and the `team-<id>.json`
+beside it). There is no verb for that yet.
 
 | Exit | Meaning |
 |---|---|
-| 0 | created; the path is on stdout |
-| 1 | refused — no such issue, or a name that cannot become a safe path |
+| 0 | created; the path is on stdout, and stderr says which repository and why |
+| 1 | refused — no such issue, a name that cannot become a safe path, a relative or non-repository answer, or a worktrees root that overlaps `~/projects`, `/` or `$HOME` |
 | 2 | a directory of that name already exists; nothing was touched |
 | 3 | Linear was unreachable; nothing was created |
 | 4 | the issue was read, but the worktree or its binding failed; a directory may exist |
+| 6 | which repository is a choice; nothing was created. Ask, then retry with the answer |
 
 **Exit 2 is never overridden.** That directory may be somebody's live work, and
-adopting it would silently re-home it. Pick another name.
+adopting it would silently re-home it. Say whose it is and stop.
 
 **Running it again is safe.** A path already bound to this same issue exits 0
 with that path; a path that exists but is unbound gets bound. That is the
-recovery when the worktree was made and the binding was not.
+recovery when the worktree was made and the binding was not. A worktree whose
+directory was deleted is made again on the same branch.
 
 **Exit 4 may leave a directory behind.** Look at the path before retrying.
 
@@ -134,11 +171,14 @@ runs in shadow until somebody answers.
 | 1 | refused — no title, no team, or a description that fails strict validation (the Problem/Solution/Proposal spine is required here) |
 | 4 | the issue was filed but the worktree or binding failed; stderr says which |
 | 5 | shadow mode: nothing created, local or remote; the sentence is on stderr |
+| 6 | the issue was filed, and which repository is a choice; stderr names the identifier and every candidate |
 
 **Exit 5 is not success.** Only exit 0 puts a path on stdout.
 
-**Exit 4 means the issue exists.** stderr names its identifier; retry with
-`start_from_issue` on that identifier.
+**Exit 4 and exit 6 mean the issue exists.** stderr names its identifier. On 6,
+ask the repository question above, then retry with `start_from_issue` on that
+identifier and the answer — or pass the answer to `start_new` as a fifth
+argument up front when it is already known.
 
 Prefer **`/work:new`**. It derives the team and project from where you are,
 where this would make you supply them by hand — and getting that wrong files a
