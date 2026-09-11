@@ -13,6 +13,7 @@ EXPECTED=(
   validate_test.py
   selection_test.py
   render_test.py
+  forms_test.py
   present_test.py
 )
 

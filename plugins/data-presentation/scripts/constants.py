@@ -14,14 +14,35 @@ MIN_CHART_POINTS = 8
 # eligible series, so there is no constant to move. A pinned MAX_SERIES_PER_CHART = 1
 # was removed because nothing read it - the pin protected a number, not the behaviour.
 
-# Beyond three single-series charts a table compares them better.
+# Beyond three single-series charts, sparkline rows on one shared scale compare them
+# better: one line each, full names, and every row drawn against the same range.
 MAX_STACKED_CHARTS = 3
+
+# A ranked bar list omits nothing, so its length is the category count. Past this the
+# list stops being a comparison a reader can hold, and it is refused rather than cut.
+MAX_BAR_CATEGORIES = 20
+
+# A column wider than this is a slab, not a bar. Narrower slots are still widened to
+# hold a label or value whole, because nothing in a form is cut to make it fit.
+MAX_COLUMN_WIDTH = 12
+
+# Eighth-block rows. Eight rows of eight steps give 64 heights, enough that a value of 1
+# against 13 still stands visibly above the baseline.
+COLUMN_ROWS = 8
 
 # --- Budgets ----------------------------------------------------------------
 
 # Fits a narrow chat pane without wrapping, which would destroy the character grid.
-# A judgement, not a measurement.
+# A judgement, not a measurement. It is the default for the caller's `width`; the
+# terminal is never measured, because the block is read in a transcript whose width
+# belongs to the reader's client, not to the process that rendered it.
 COLUMN_BUDGET = 72
+
+# The range a caller may state. Below 48 the fixed text a form must print whole - a
+# 24-character name beside a range such as "-9.999T to -9.999T" - no longer fits on
+# one line. Above 160 even a wide desktop client wraps. Both are judgements.
+MIN_WIDTH = 48
+MAX_WIDTH = 160
 
 # The renderer defaults its height to the data's numeric interval, so a series spanning
 # 0 to 100000 renders 100001 lines unless a height is passed. Never omit it.

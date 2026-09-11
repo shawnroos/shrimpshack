@@ -1,4 +1,5 @@
-"""Rendering. Tables and charts, both fed by one number formatter.
+"""Rendering. Tables, line charts, bars, columns and sparklines, all fed by one number
+formatter and all drawn into the caller's stated width.
 
 The chart library is vendored and does three things the caller must work around:
 it has no width option, it defaults its height to the data's numeric interval, and
@@ -17,6 +18,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ven
 import asciichartpy  # noqa: E402
 
 MISSING_CELL = "—"
+
+# Eighth blocks, left-growing for bars and bottom-growing for columns and sparklines.
+LEFT_EIGHTHS = "▏▎▍▌▋▊▉"
+LOWER_EIGHTHS = "▁▂▃▄▅▆▇"
+FULL_BLOCK = "█"
+SPARK_LEVELS = LOWER_EIGHTHS + FULL_BLOCK
+
+
+class DoesNotFit(Refusal):
+    """A form that cannot hold its labels and values whole inside the width. The caller
+    falls back to a form that can, and says why; nothing is cut to make this one fit."""
 
 
 def format_number(value):
@@ -136,7 +148,7 @@ def chart_with_meta(request, series_name):
     full_min, full_max = min(present), max(present)
 
     gutter = _axis_width(full_min, full_max) + 5
-    point_budget = max(2, constants.COLUMN_BUDGET - gutter)
+    point_budget = max(2, request["width"] - gutter)
     keep = _stride_keep(len(values), point_budget, missing)
     plotted = [values[i] for i in keep]
 
@@ -158,9 +170,12 @@ def chart_with_meta(request, series_name):
     body = _relabel_axis(body)
 
     omitted = len(values) - len(keep)
-    header = f"{series_name}  {format_number(full_min)} to {format_number(full_max)}"
+    span = f"{format_number(full_min)} to {format_number(full_max)}"
     if request.get("units"):
-        header += f" {request['units']}"
+        span += f" {request['units']}"
+    header = f"{series_name}  {span}"
+    if len(header) > request["width"]:
+        header = f"{series_name}\n{span}"
     block = header + "\n" + body
 
     meta = {
@@ -187,7 +202,22 @@ def chart(request, series_name):
 LEGEND_JOIN = " · "
 
 
-def _headers(names, budget):
+def _pack(entries, width):
+    """Join entries on the separator into lines no wider than `width`, never splitting
+    an entry: a legend key wrapped away from its name is the ambiguity the key exists to
+    remove. Every entry is shorter than MIN_WIDTH by construction, so none overflows."""
+    lines, line = [], ""
+    for entry in entries:
+        if line and len(line) + len(LEGEND_JOIN) + len(entry) > width:
+            lines.append(line)
+            line = entry
+        else:
+            line = entry if not line else line + LEGEND_JOIN + entry
+    lines.append(line)
+    return lines
+
+
+def _headers(names, budget, width):
     """Column headers that cannot be read as each other.
 
     A name that fits is printed whole. Once any name has to be cut, every header
@@ -200,18 +230,7 @@ def _headers(names, budget):
         return names, []
     letters = string.ascii_uppercase
     keys = [letters[i] if i < len(letters) else f"S{i + 1}" for i in range(len(names))]
-    # Pack the legend on the separator, never mid-entry: a key wrapped away from its
-    # name is the same ambiguity the keys exist to remove. A key and a name cannot
-    # exceed the budget on their own, because the gate caps a name at MAX_LABEL_CHARS.
-    lines, line = [], ""
-    for entry in (f"{key} {name}" for key, name in zip(keys, names)):
-        if line and len(line) + len(LEGEND_JOIN) + len(entry) > constants.COLUMN_BUDGET:
-            lines.append(line)
-            line = entry
-        else:
-            line = entry if not line else line + LEGEND_JOIN + entry
-    lines.append(line)
-    return keys, lines
+    return keys, _pack([f"{key} {name}" for key, name in zip(keys, names)], width)
 
 
 def table_with_meta(request, series_names=None):
@@ -231,25 +250,11 @@ def table_with_meta(request, series_names=None):
     numbers = {
         name: [format_number(request["series"][name][i]) for i in keep] for name in names
     }
-    number_width = sum(max((len(v) for v in column), default=0) for column in numbers.values())
-
-    # Nothing in a table is cut to make it fit. The row labels are measured over the rows
-    # that survive reduction, not all of them, so a label the reader never sees cannot
-    # refuse a table that would have rendered.
-    # "| a | b |" costs three characters per gap plus the two ends.
+    width = request["width"]
+    # "| a | b |" costs three characters per gap plus the two ends. The header row
+    # carries no numbers, so its names are bounded on their own.
     separators = 3 * len(names) + 4
-    label_width = max((len(str(x[i])) for i in keep), default=0)
-    needed = separators + label_width + number_width
-    if needed > constants.COLUMN_BUDGET:
-        raise Refusal(
-            f"{len(names)} series with values and row labels this long needs {needed} "
-            f"columns and the budget is {constants.COLUMN_BUDGET}. Nothing here can be "
-            "shortened without cutting a value or a label, so ask for fewer series."
-        )
-    # The header row carries no numbers, so it is bounded on its own.
-    header_budget = max(1, (constants.COLUMN_BUDGET - separators) // len(names))
-
-    headers, legend = _headers(names, header_budget)
+    headers, legend = _headers(names, max(1, (width - separators) // len(names)), width)
     header = "| " + " | ".join([""] + headers) + " |"
     rule = "| " + " | ".join(["---"] * (len(names) + 1)) + " |"
     rows = []
@@ -258,9 +263,183 @@ def table_with_meta(request, series_names=None):
         cells.extend(numbers[name][row] for name in names)
         rows.append("| " + " | ".join(cells) + " |")
 
+    # Nothing in a table is cut to make it fit, so the lines are built whole and then
+    # measured. Predicting the width from the data rows missed the rule row, whose
+    # "---" cells outgrow one-character values at a narrow width. Only rows that survive
+    # reduction are measured, so a label the reader never sees cannot refuse the table.
+    needed = max(len(line) for line in [header, rule] + rows)
+    if needed > width:
+        raise DoesNotFit(
+            f"{len(names)} series with values and row labels this long needs {needed} "
+            f"columns and the width is {width}. Nothing here can be shortened without "
+            "cutting a value or a label, so ask for fewer series or a wider width."
+        )
+
     block = "\n".join(legend + [header, rule] + rows)
     return block, {"rendered": len(keep), "omitted": omitted}
 
 
 def table(request, series_names=None):
     return table_with_meta(request, series_names)[0]
+
+
+def _rank(categories):
+    """Largest first, a missing value last, ties in the caller's order. sorted() is
+    stable, which is what keeps the ties where the caller put them."""
+    return sorted(categories, key=lambda c: (math.isnan(c[1]), -c[1] if not math.isnan(c[1]) else 0))
+
+
+def _scale_top(ranked):
+    present = [v for _, v in ranked if not math.isnan(v)]
+    return max(present, default=0.0)
+
+
+def bars_with_meta(request, categories):
+    """Ranked horizontal bars on one zero-based scale.
+
+    Each label sits on its own line, so no label is ever cut however narrow the width,
+    and the bar starts on the next line with the value directly after it.
+    """
+    width = request["width"]
+    ranked = _rank(categories)
+    texts = [format_number(v) for _, v in ranked]
+    value_width = max(len(t) for t in texts)
+    # "  " indent, the bar, one space, the value.
+    room = width - 2 - 1 - value_width
+    top = _scale_top(ranked)
+    eighths_per_unit = room * 8 / top if top > 0 else 0.0
+
+    lines, marks = [], []
+    for (label, value), text in zip(ranked, texts):
+        lines.append(label)
+        if math.isnan(value):
+            lines.append(f"  {MISSING_CELL}")
+            continue
+        full, part = divmod(int(value * eighths_per_unit + 0.5), 8)
+        bar = FULL_BLOCK * full + (LEFT_EIGHTHS[part - 1] if part else "")
+        marks.append(bar)
+        lines.append(f"  {bar} {text}")
+    return "\n".join(lines), {"rendered": len(ranked), "omitted": 0, "marks": marks}
+
+
+def bars(request, categories):
+    return bars_with_meta(request, categories)[0]
+
+
+COLUMN_GAP = 2
+
+
+def columns_with_meta(request, categories):
+    """Ranked vertical columns on one zero-based scale, with the value above each column
+    and the label below it. Raises DoesNotFit rather than cut a label to its slot."""
+    width = request["width"]
+    ranked = _rank(categories)
+    count = len(ranked)
+    texts = [format_number(v) for _, v in ranked]
+    available = (width - COLUMN_GAP * (count - 1)) // count
+    needed = max(max(len(label) for label, _ in ranked), max(len(t) for t in texts))
+    slot = max(needed, min(available, constants.MAX_COLUMN_WIDTH))
+    if slot > available:
+        raise DoesNotFit(
+            f"{count} columns in {width} characters leave {available} for each, and the "
+            f"longest label or value needs {needed}, so the columns would cut it."
+        )
+
+    top = _scale_top(ranked)
+    steps = constants.COLUMN_ROWS * 8
+    heights = [
+        None if math.isnan(v) else (int(v / top * steps + 0.5) if top > 0 else 0)
+        for _, v in ranked
+    ]
+
+    def row(cells):
+        return (" " * COLUMN_GAP).join(cells).rstrip()
+
+    lines = [row(t.center(slot) for t in texts)]
+    marks = []
+    for level in range(constants.COLUMN_ROWS - 1, -1, -1):
+        cells = []
+        for height in heights:
+            filled = 0 if height is None else height - level * 8
+            if filled >= 8:
+                cell = FULL_BLOCK * slot
+            elif filled > 0:
+                cell = LOWER_EIGHTHS[filled - 1] * slot
+            else:
+                cell = " " * slot
+            cells.append(cell)
+            if cell.strip():
+                marks.append(cell)
+        lines.append(row(cells))
+    # A missing category gets no baseline: absence is not a column of height zero.
+    lines.append(row((" " * slot if h is None else "─" * slot) for h in heights))
+    lines.append(row(label.center(slot) for label, _ in ranked))
+    return "\n".join(lines), {"rendered": count, "omitted": 0, "marks": marks}
+
+
+def columns(request, categories):
+    return columns_with_meta(request, categories)[0]
+
+
+def sparkline_with_meta(request, names=None):
+    """One line per series, every row drawn against ONE shared range.
+
+    Scaling each row to its own maximum draws a series of a single event as the same
+    full-height spike as a series of thirteen - the exact dishonesty this skill exists
+    to refuse. There is deliberately no per-row option.
+    """
+    width = request["width"]
+    names = list(names if names is not None else request["series"])
+    x = request["x"]
+    series = request["series"]
+
+    latest = {name: format_number(series[name][-1]) for name in names}
+    label_width = max(len(name) for name in names)
+    value_width = max(len(t) for t in latest.values())
+    room = width - label_width - 2 - 2 - value_width
+
+    must_keep = set()
+    for name in names:
+        must_keep.update(request["missing"].get(name, []))
+    keep = _stride_keep(len(x), room, must_keep)
+
+    # The range comes from every value, not only the kept ones, so a spike the width
+    # dropped still sets the scale and the footer states the true range.
+    everything = [v for name in names for v in present_values(series[name])]
+    low, high = min(everything), max(everything)
+    levels = len(SPARK_LEVELS) - 1
+
+    def glyph(value):
+        if math.isnan(value):
+            return " "
+        if high == low:
+            return SPARK_LEVELS[0]
+        return SPARK_LEVELS[int((value - low) / (high - low) * levels + 0.5)]
+
+    lines, marks = [], []
+    for name in names:
+        drawn = "".join(glyph(series[name][i]) for i in keep)
+        marks.append(drawn)
+        lines.append(f"{name:<{label_width}}  {drawn}  {latest[name]:>{value_width}}")
+
+    span = f"{x[0]} to {x[-1]}"
+    footer = [span] if len(span) <= width else [f"{x[0]} to", x[-1]]
+    footer.append(f"one scale for every row: {format_number(low)} to {format_number(high)}")
+    lines.extend(_pack(footer, width))
+
+    unshown = {
+        name: sorted(i for i in request["missing"].get(name, []) if i not in set(keep))
+        for name in names
+    }
+    return "\n".join(lines), {
+        "rendered": len(keep),
+        "omitted": len(x) - len(keep),
+        "marks": marks,
+        "low": low,
+        "high": high,
+        "unshown_missing": unshown,
+    }
+
+
+def sparkline(request, names=None):
+    return sparkline_with_meta(request, names)[0]

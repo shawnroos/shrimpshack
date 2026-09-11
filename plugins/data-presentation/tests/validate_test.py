@@ -270,6 +270,40 @@ def main():
     )
     check("the series cap is pinned at 8", constants.MAX_SERIES == 8, repr(constants.MAX_SERIES))
 
+    # --- width is a stated input, bounded, never measured ---
+    check("the width floor is pinned at 48", constants.MIN_WIDTH == 48, repr(constants.MIN_WIDTH))
+    check("the width ceiling is pinned at 160", constants.MAX_WIDTH == 160, repr(constants.MAX_WIDTH))
+    # A literal, not COLUMN_BUDGET: deriving the expectation from the constant would
+    # move with it. Mutation: default width to 80 - this goes red.
+    check("width defaults to 72 when the caller states none",
+          validate(req())["width"] == 72, repr(validate(req()).get("width")))
+    check("a stated width is carried through", validate(req(width=100))["width"] == 100)
+    # Mutation: change the range test to a strict < on MIN_WIDTH - the 48 check goes red.
+    check("width 48 is accepted", refusal(req(width=48)) is None, repr(refusal(req(width=48))))
+    check("width 47 is refused", refusal(req(width=47)) is not None)
+    check("width 160 is accepted", refusal(req(width=160)) is None, repr(refusal(req(width=160))))
+    check("width 161 is refused", refusal(req(width=161)) is not None)
+    # Mutation: drop the bool guard - True passes as an int and reaches the range check
+    # as 1, which is refused for the wrong reason; the message check below goes red.
+    check("a null width means the default, like every other optional field",
+          validate(req(width=None))["width"] == 72, repr(refusal(req(width=None))))
+    for bad_width in (True, "72", 72.0):
+        message = refusal(req(width=bad_width))
+        check(f"width {bad_width!r} is refused as not a whole number",
+              message is not None and "whole number" in message, repr(message))
+
+    # --- the new forms are requestable by name ---
+    # Mutation: drop "sparkline" from FORMS - it is then noted as unsupported and
+    # replaced with auto, and this goes red.
+    for form in ("bars", "columns", "sparkline"):
+        check(f"a {form} request is carried through",
+              validate(req(type=form))["requested_form"] == form,
+              repr(validate(req(type=form))["requested_form"]))
+    unknown = validate(req(type="heatmap"))
+    check("a heatmap request is still an unsupported form",
+          unknown["requested_form"] == "auto" and any("heatmap" in n for n in unknown["notes"]),
+          repr(unknown["notes"]))
+
     # --- the gate cannot be bypassed ---
     check(
         "validate is the only exported entry point that returns a normalized request",

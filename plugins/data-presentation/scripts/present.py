@@ -59,6 +59,16 @@ def _verify(rendered, expect_axis):
     return None
 
 
+def _verify_marks(meta, glyphs, what):
+    """The drawn marks only. Bars, columns and sparklines interleave caller labels with
+    what they draw, so the check reads the marks the renderer returned on their own; a
+    caller who names a category "█" cannot supply the proof that something was drawn."""
+    if not any(glyph in mark for mark in meta.get("marks", []) for glyph in glyphs):
+        return f"The {what} came back with nothing drawn, so there is nothing to show."
+    return None
+
+
+
 def _positions(positions):
     """Name the positions, or the first few and a count of the rest.
 
@@ -72,6 +82,73 @@ def _positions(positions):
     return f"{listed} and {len(human) - constants.MAX_LISTED_POSITIONS} more"
 
 
+def _render(normalized, decision, form, blocks, notes, unshown_by_series):
+    """Draw one form into `blocks`. Returns a verification problem, or None."""
+    if form == "charts":
+        for name in decision["chart_series"]:
+            block, meta = render.chart_with_meta(normalized, name)
+            problem = _verify(meta["body"], expect_axis=True)
+            if problem:
+                return problem
+            blocks.append(block)
+            unshown_by_series[name] = meta.get("unshown_missing", [])
+            if meta.get("unshown_missing"):
+                notes.append(
+                    f"{name}: {len(meta['unshown_missing'])} of the missing positions could "
+                    "not be shown as gaps once the series was reduced to fit the width."
+                )
+            if meta["omitted"]:
+                notes.append(
+                    f"{name}: {meta['omitted']} of {meta['omitted'] + meta['rendered']} points "
+                    "were omitted to fit the width. No values were averaged, and the full "
+                    f"range was {render.format_number(meta['full_min'])} to "
+                    f"{render.format_number(meta['full_max'])}."
+                )
+        if decision["table_series"]:
+            block, _ = render.table_with_meta(normalized, decision["table_series"])
+            problem = _verify(block, expect_axis=False)
+            if problem:
+                return problem
+            blocks.append(block)
+        return None
+
+    if form in ("bars", "columns"):
+        draw = render.bars_with_meta if form == "bars" else render.columns_with_meta
+        block, meta = draw(normalized, decision["categories"])
+        problem = _verify_marks(meta, render.FULL_BLOCK + render.LEFT_EIGHTHS + render.LOWER_EIGHTHS, form)
+        if problem:
+            return problem
+        blocks.append(block)
+        return None
+
+    if form == "sparkline":
+        block, meta = render.sparkline_with_meta(normalized, list(normalized["series"]))
+        problem = _verify_marks(meta, render.SPARK_LEVELS, "sparkline")
+        if problem:
+            return problem
+        blocks.append(block)
+        unshown_by_series.update(meta["unshown_missing"])
+        if meta["omitted"]:
+            notes.append(
+                f"{meta['omitted']} of {meta['omitted'] + meta['rendered']} points were "
+                "omitted from every row to fit the width. No values were averaged, and the "
+                "shared scale still spans every value."
+            )
+        return None
+
+    block, meta = render.table_with_meta(normalized, list(normalized["series"]))
+    problem = _verify(block, expect_axis=False)
+    if problem:
+        return problem
+    blocks.append(block)
+    if meta["omitted"]:
+        notes.append(
+            f"{meta['omitted']} of {meta['omitted'] + meta['rendered']} rows were omitted "
+            "to keep the table readable. No values were averaged."
+        )
+    return None
+
+
 def present(request):
     try:
         normalized = validate(request)
@@ -83,48 +160,25 @@ def present(request):
 
     blocks = []
     unshown_by_series = {}
+    form = decision["form"]
     try:
-        if decision["form"] == "charts":
-            for name in decision["chart_series"]:
-                block, meta = render.chart_with_meta(normalized, name)
-                problem = _verify(meta["body"], expect_axis=True)
-                if problem:
-                    return _refuse(problem, notes)
-                blocks.append(block)
-                unshown_by_series[name] = meta.get("unshown_missing", [])
-                if meta.get("unshown_missing"):
-                    notes.append(
-                        f"{name}: {len(meta['unshown_missing'])} of the missing positions could "
-                        "not be shown as gaps once the series was reduced to fit the width."
-                    )
-                if meta["omitted"]:
-                    notes.append(
-                        f"{name}: {meta['omitted']} of {meta['omitted'] + meta['rendered']} points "
-                        "were omitted to fit the width. No values were averaged, and the full "
-                        f"range was {render.format_number(meta['full_min'])} to "
-                        f"{render.format_number(meta['full_max'])}."
-                    )
-            if decision["table_series"]:
-                block, meta = render.table_with_meta(normalized, decision["table_series"])
-                problem = _verify(block, expect_axis=False)
-                if problem:
-                    return _refuse(problem, notes)
-                blocks.append(block)
-        else:
-            block, meta = render.table_with_meta(normalized, decision["table_series"])
-            problem = _verify(block, expect_axis=False)
-            if problem:
-                return _refuse(problem, notes)
-            blocks.append(block)
-            if meta["omitted"]:
-                notes.append(
-                    f"{meta['omitted']} of {meta['omitted'] + meta['rendered']} rows were omitted "
-                    "to keep the table readable. No values were averaged."
-                )
+        try:
+            problem = _render(normalized, decision, form, blocks, notes, unshown_by_series)
+        except render.DoesNotFit as exc:
+            # Only columns give way. Bars put each label on its own line and sparklines
+            # keep at least 13 points at the narrowest width, so neither runs out of
+            # room; a table that cannot fit is refused outright.
+            if form != "columns":
+                raise
+            form = "bars"
+            notes.append(f"{exc} Bars are shown instead.")
+            problem = _render(normalized, decision, form, blocks, notes, unshown_by_series)
     except Refusal as exc:
         # A renderer refusal is the same answer as a gate refusal: these numbers
         # cannot be shown at this width without cutting one of them.
         return _refuse(str(exc), notes)
+    if problem:
+        return _refuse(problem, notes)
 
     for name, positions in normalized["missing"].items():
         if not positions:
@@ -164,7 +218,7 @@ def present(request):
         "status": "ok",
         "message": "",
         "block": (head + "\n" + body) if head else body,
-        "form": decision["form"],
+        "form": form,
         "metadata": metadata,
         "notes": notes,
         "relay": RELAY,

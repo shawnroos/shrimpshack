@@ -5,10 +5,11 @@ transcript.
 
 The plugin is three things:
 
-1. **A rule for what form the data earns.** A Markdown table by default. A line chart only
-   when there are at least eight points, one series per chart, and the series actually
-   varies. Below that, a table shows every exact value in the same vertical space and
-   loses nothing.
+1. **A rule for what form the data earns.** Ranked bars for a comparison between
+   categories. A line chart when there are at least eight points, one series per chart,
+   and the series actually varies. Sparkline rows on one shared scale for four or more
+   such series. A table for everything else, which shows every exact value and loses
+   nothing.
 2. **A validation gate that refuses rather than renders badly.** Mismatched lengths,
    non-numeric values, non-finite values, and empty series are named and refused. A missing
    value is never quietly turned into a zero.
@@ -33,8 +34,9 @@ summarise it.
 ## What it does not do
 
 It does not fetch data, and it does not tell you what the numbers mean. Both are the
-caller's job. It renders no SVG, no heatmap, and no sparkline; see the plan's Scope
-Boundaries for why.
+caller's job. It renders no SVG, no heatmap, and no slope chart. The plan's Scope
+Boundaries also list the sparkline as deferred; that was reversed after the plan was
+written, and the sparkline form now exists.
 
 ## Tests
 

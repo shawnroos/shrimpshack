@@ -22,6 +22,8 @@ class Refusal(Exception):
 
 _FENCE = re.compile(r"`{3,}")
 
+FORMS = ("auto", "table", "chart", "bars", "columns", "sparkline")
+
 
 def truncate_escaped(text, limit):
     """Cut already-escaped text to `limit` characters without splitting an escape.
@@ -158,8 +160,20 @@ def validate(request):
     if len(series) != len(raw_series):
         raise Refusal("Two series share a name once their labels are cleaned up.")
 
+    width = request.get("width")
+    if width is None:
+        width = constants.COLUMN_BUDGET
+    # bool is an int subclass, so True would otherwise pass as a width of 1.
+    if isinstance(width, bool) or not isinstance(width, int):
+        raise Refusal("width must be a whole number of columns.")
+    if not constants.MIN_WIDTH <= width <= constants.MAX_WIDTH:
+        raise Refusal(
+            f"width {width} is outside the {constants.MIN_WIDTH} to {constants.MAX_WIDTH} "
+            "columns this can render into."
+        )
+
     requested = request.get("type") or request.get("form") or "auto"
-    if requested not in ("auto", "table", "chart"):
+    if requested not in FORMS:
         notes.append(
             f"The requested form "
             f"'{_clean(requested, constants.MAX_LABEL_CHARS, [], 'A form name')}' is "
@@ -170,6 +184,7 @@ def validate(request):
     return {
         "title": _clean(request.get("title"), constants.MAX_TITLE_CHARS, notes, "The title"),
         "requested_form": requested,
+        "width": width,
         "x": x_labels,
         "series": series,
         "missing": missing,

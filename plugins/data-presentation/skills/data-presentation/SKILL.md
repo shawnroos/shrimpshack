@@ -24,9 +24,15 @@ echo '{
 ```
 
 Fields: `x` and `series` are required. `title`, `units`, and `source` are optional and are
-rendered into a caption inside the block. `type` may be `table` or `chart` to ask for a
-form; the rule below still decides, and the notes say if you did not get what you asked
-for. A zero is always treated as a real measurement; only `null` or an empty string counts as missing, so a gap can never be silently rendered as a zero.
+rendered into a caption inside the block. `type` may be `table`, `chart`, `bars`,
+`columns` or `sparkline` to ask for a form; the data still has to support it, and the
+notes say if you did not get what you asked for. A zero is always treated as a real
+measurement; only `null` or an empty string counts as missing, so a gap can never be
+silently rendered as a zero.
+
+`width` is optional: the number of columns the destination shows, from 48 to 160,
+defaulting to 72. The skill never measures a terminal. The reader's client decides how
+wide the transcript is, so state the width if you know it and leave it out if you do not.
 
 Use `null` for a missing value. Never substitute a zero yourself.
 
@@ -57,14 +63,26 @@ Do not call this skill for:
 
 ## What it will and will not do
 
-It chooses a table unless there are at least eight plottable points, at most three series,
-and real variation in the series. A chart carries exactly one series; several become
-several charts, because the renderer cannot tell two lines apart without colour and colour
-is unusable inside a fence.
+It picks the form from the shape of the data:
 
-Nothing in a table is cut to make it fit. When the names of the columns will not fit,
-they become letters and a legend above the table gives each one in full, so two columns
-can never read as the same thing. Values and row labels are never shortened at all: if
+- **One x value across several series** is a comparison between categories. It is drawn as
+  ranked bars, largest first, each full label on its own line and the value at the end of
+  its bar. Bars are drawn from zero, so a negative value or all zeros gets a table instead.
+- **At least eight plottable points in one to three series, with real variation**, is a
+  line chart per series. A chart carries exactly one series, because the renderer cannot
+  tell two lines apart without colour and colour is unusable inside a fence.
+- **Four or more such series** become sparkline rows: one line per series, its full name,
+  its shape, and its latest value. Every row is drawn on one shared scale, stated under the
+  rows, so a series of one event never draws the same height as a series of thirteen.
+- **Anything else** is a table.
+
+Bars can also be asked for on one series across its x values, and columns on either shape.
+Columns are only drawn when every label and value fits its column whole; otherwise bars
+are drawn and the notes say why. The skill never picks columns on its own.
+
+Nothing in any form is cut to make it fit. In a table, when the names of the columns
+will not fit, they become letters and a legend above the table gives each one in full,
+so two columns can never read as the same thing. Values and row labels are never shortened at all: if
 they cannot fit the width, it refuses and asks for fewer series, and it says how many
 columns the table needed. A label long enough for the gate to shorten is refused too if
 shortening it would make two rows read the same.
@@ -73,7 +91,8 @@ It never invents a missing value. It refuses rather than rendering something mis
 and it says so in plain language. Read the `notes`: they carry what was omitted, which
 positions were missing, and why you got the form you got.
 
-It renders no SVG, no heatmap, and no sparkline.
+It renders no SVG, no heatmap, and no slope chart. A heatmap loses its smallest cells into
+the background, and a slope chart needs a "before" value nobody measured.
 
 It does not tell you what the numbers mean. That reading is yours, and a chart shows
 correlation, never cause.

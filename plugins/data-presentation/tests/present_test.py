@@ -249,6 +249,77 @@ def main():
     check("three gaps are still named individually",
           "11, 12, 13" in gap_note and "more" not in gap_note, repr(gap_note))
 
+    # --- the new forms, end to end through the CLI, on the real tools data ---
+    weeks = ["Jun 08", "Jun 15", "Jun 22", "Jun 29", "Jul 06", "Jul 13", "Jul 20",
+             "Jul 27", "Aug 03", "Aug 10", "Aug 17", "Aug 24", "Aug 31"]
+    tools = {
+        "remove-background": [0, 0, 0, 0, 7, 6, 1, 5, 3, 5, 1, 2, 13],
+        "studio-lighting": [0, 0, 0, 0, 1, 2, 0, 1, 0, 0, 0, 0, 9],
+        "relight": [0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 8],
+        "godrays": [0, 0, 0, 0, 5, 2, 0, 1, 0, 0, 1, 0, 7],
+        "detach-foreground": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        "remove-logo": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    }
+    _, out = run_cli({"title": "t", "x": weeks, "series": tools})
+    check("six tools over thirteen weeks come back as sparkline rows",
+          out["form"] == "sparkline", repr(out["form"]))
+    spark_rows = {line.split("  ")[0]: line for line in out["block"].split("\n")[1:7]}
+    check("each tool has its own row under its full name",
+          sorted(spark_rows) == sorted(tools), repr(sorted(spark_rows)))
+    # Mutation: per-row scaling in sparkline_with_meta - this goes red end to end.
+    check("the single-event tool ends low while the peak of thirteen ends full",
+          spark_rows["detach-foreground"].endswith("\u2582   1")
+          and spark_rows["remove-background"].endswith("\u2588  13"),
+          repr([spark_rows.get("detach-foreground"), spark_rows.get("remove-background")]))
+
+    latest = {name: [values[-1]] for name, values in tools.items()}
+    _, out = run_cli({"title": "t", "x": ["Aug 31"], "series": latest})
+    check("the latest week alone comes back as bars", out["form"] == "bars", repr(out["form"]))
+    bar_lines = out["block"].split("\n")[1:]
+    check("the bars lead with the largest tool", bar_lines[0] == "remove-background", repr(bar_lines[:2]))
+
+    # Columns cannot hold six tool names whole, so they give way to bars and say so.
+    # Mutation: re-raise DoesNotFit for columns in present - this goes red as a refusal.
+    _, out = run_cli({"title": "t", "x": ["Aug 31"], "series": latest, "type": "columns"})
+    check("columns that would cut a tool name fall back to bars",
+          out["status"] == "ok" and out["form"] == "bars", repr((out["status"], out["form"])))
+    check("the fallback says why and what was shown",
+          any("would cut" in n and "Bars are shown instead" in n for n in out["notes"]),
+          repr(out["notes"]))
+    _, out = run_cli({"title": "t", "x": ["now"], "type": "columns",
+                      "series": {"slot 0": [82], "slot 1": [14], "slot 2": [17], "slot 3": [10]}})
+    check("short labels get the columns that were asked for", out["form"] == "columns", repr(out["form"]))
+
+    # Every form at the narrowest width, through the CLI. The caption is prose and is
+    # left out of the measurement; the title here is one character so it cannot matter.
+    narrow_cases = {
+        "sparkline": {"x": weeks, "series": tools},
+        "bars": {"x": ["Aug 31"], "series": latest},
+        "columns": {"x": ["now"], "type": "columns",
+                    "series": {"slot 0": [82], "slot 1": [14], "slot 2": [17], "slot 3": [10]}},
+        "charts": {"x": weeks, "series": {"Applies": [0, 0, 0, 0, 37, 25, 1, 14, 24, 10, 5, 3, 127]}},
+        "table": {"x": ["a", "b"], "series": {"s0": [1, 2], "s1": [3, 4]}},
+    }
+    for expected, payload in narrow_cases.items():
+        _, out = run_cli(dict(payload, title="t", width=48))
+        widest_line = max(len(line) for line in out["block"].split("\n")[1:]) if out["block"] else -1
+        check(f"{expected} at width 48 renders as {expected} inside 48 columns",
+              out["form"] == expected and 0 < widest_line <= 48,
+              f"form={out['form']} width={widest_line} {out.get('message', '')}")
+
+    # --- verification reads the drawn marks, never the labels beside them ---
+    real_spark, real_bars = render.sparkline_with_meta, render.bars_with_meta
+    render.sparkline_with_meta = lambda request, names=None: (
+        "\u2588 forged \u2582", {"rendered": 1, "omitted": 0, "marks": [], "unshown_missing": {}})
+    check("a sparkline with glyphs only in its labels is refused",
+          present.present({"title": "t", "x": weeks, "series": tools})["status"] == "refused")
+    render.bars_with_meta = lambda request, categories: (
+        "\u2588\u2588\u2588 label\n  ", {"rendered": 1, "omitted": 0, "marks": [""]})
+    # Mutation: disable the check in _verify_marks - both of these go red.
+    check("bars whose only blocks are in a label are refused",
+          present.present({"title": "t", "x": ["Aug 31"], "series": latest})["status"] == "refused")
+    render.sparkline_with_meta, render.bars_with_meta = real_spark, real_bars
+
     # --- notes report what was left out (R7, R8) ---
     payload = series(400)
     _, out = run_cli(payload)
