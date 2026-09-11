@@ -735,3 +735,38 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$status" -eq 2 ]
     [ "$(herdr_linear::binding_state "$BASE/$CHILD")" = "unbound" ]
 }
+
+# Linear project names carry emoji and brackets. slug() refuses a leading
+# non-alphanumeric, so the segment is composed the way the title is, not
+# refused -- or every start in that project fails with nothing said.
+@test "a project name that starts with punctuation still yields a segment" {
+    resp='{"data":{"issue":{"project":{"id":"p1","name":"[Q3] Canvas Tools"},"team":{"id":"t1","key":"WEB"}}}}'
+    run herdr_linear::start_scope "$resp"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | cut -f3)" = "q3-canvas-tools" ]
+}
+
+@test "a project name with no letters or digits falls back to the team key" {
+    resp='{"data":{"issue":{"project":{"id":"p1","name":"🚀 ✨"},"team":{"id":"t1","key":"WEB"}}}}'
+    run herdr_linear::start_scope "$resp"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | cut -f1)" = "project-p1" ]
+    [ "$(printf '%s' "$output" | cut -f3)" = "web" ]
+}
+
+# The moved repository was asked about again and answered. The dead path must
+# not stay beside the answer, or every later start sees two candidates and
+# asks forever.
+@test "answering after a repository moved leaves only the answer recorded" {
+    mkdir -p "$WORK/root/moved"
+    git -C "$WORK/root/moved" init -q -b main
+    record_repo "$WORK/root/moved"
+    rm -rf "$WORK/root/moved"
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 6 ]
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$PROJECT" "$PROJECT"
+    [ "$status" -eq 0 ]
+    run herdr_linear::scope_repos "$PKEY" "$TKEY"
+    [ "$output" = "$PROJECT" ]
+}

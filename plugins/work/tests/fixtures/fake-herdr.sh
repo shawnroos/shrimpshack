@@ -29,6 +29,8 @@
 #   FAKE_HERDR_MODE        running | not_running | running_then_flood | dead
 #   FAKE_HERDR_ALLOW_MUTATION  1 to permit creation verbs (U10 only)
 #   FAKE_HERDR_SLOW_PANE   probes a new pane stays unregistered for
+#   FAKE_HERDR_WORKSPACE_LIST_FAILS  1 to make `workspace list` fail while the
+#                          server otherwise answers
 #   FAKE_HERDR_WORKSPACES  the spaces `workspace list` reports, as
 #                          `id=label,id=label` (default: wA=Plugins). Created
 #                          tabs and panes are remembered in the record dir, so
@@ -307,6 +309,9 @@ case "${1:-}" in
         case "${2:-}" in
             list)
                 [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
+                # A server that answers status but fails this one read: the
+                # probe passes, so only the reader's own exit can report it.
+                [ "${FAKE_HERDR_WORKSPACE_LIST_FAILS:-0}" = 1 ] && { echo "fake-herdr: workspace list failed" >&2; exit 1; }
                 FAKE_HERDR_WORKSPACES="${FAKE_HERDR_WORKSPACES-wA=Plugins}" python3 -c '
 import json, os
 out = []

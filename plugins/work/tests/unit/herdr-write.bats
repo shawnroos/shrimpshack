@@ -443,3 +443,36 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     [ "$(herdr_calls 'pane split wA:')" = "0" ]
     [ "$(herdr_calls 'tab create --workspace wG')" = "1" ]
 }
+
+# The question was answered and the layout built: the notice that asked it is
+# spent, and showing it at every later session start would be a stale question.
+@test "a layout that builds clears the placement question it asked earlier" {
+    rm -f "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq "$HERDR_LINEAR_LAYOUT_ASK" ]
+    run herdr_linear::binding_pending_placement "$PARENT_WT"
+    [ "$status" -eq 0 ]
+    bind_space wG 44444444-4444-4444-8444-444444444444
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    run herdr_linear::binding_pending_placement "$PARENT_WT"
+    [ "$status" -ne 0 ]
+}
+
+# One worktree per issue. A child already started with /work:start holds its
+# branch in its own worktree; a layout run from a parent elsewhere reuses that
+# worktree rather than failing on the branch forever.
+@test "a child already started elsewhere is laid out in its own worktree" {
+    old="$PROJECT/worktrees/parent"
+    git -C "$PROJECT" worktree add -q -b f/parent "$old" >/dev/null 2>&1
+    bind_as "$old" WEB-2870
+    herdr_linear::record_scope_repo "$PROJECT" \
+        project-44444444-4444-4444-8444-444444444444 team-55555555-5555-4555-8555-555555555555
+    started="$(herdr_linear::start_from_issue WEB-3001 2>/dev/null)"
+    [ -d "$started" ]
+    cd "$old"
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::journal_get WEB-2870 worktree.WEB-3001)" = "$started" ]
+    [ ! -e "$PROJECT/worktrees/WEB-3001-column-web-3001" ]
+}

@@ -108,8 +108,16 @@ sys.stdout.write("\t".join([p.get("id") or "", p.get("name") or "",
     if [ -n "$pid" ]; then
         herdr_linear::is_safe_identifier "$pid" || return 1
         key="project-$pid"
-        segment="$(herdr_linear::slug "$pname" 60)" || return 1
-        segment="$(printf '%s' "$segment" | tr '[:upper:]' '[:lower:]')"
+        # Composed like the title, not slugged: slug() refuses a leading
+        # non-alphanumeric, and project names start with emoji and brackets.
+        segment="$(printf '%s' "$pname" \
+            | tr '[:upper:]' '[:lower:]' \
+            | tr -c 'a-z0-9' '-' \
+            | sed -E 's/-+/-/g; s/^-+//; s/-+$//' \
+            | cut -c1-60 | sed -E 's/-+$//')"
+        herdr_linear::is_safe_identifier "$segment" \
+            || segment="$(printf '%s' "$tkey" | tr '[:upper:]' '[:lower:]')"
+        herdr_linear::is_safe_identifier "$segment" || return 1
     else
         key="$team_key"
         segment="$(printf '%s' "$tkey" | tr '[:upper:]' '[:lower:]')"

@@ -113,7 +113,8 @@ team or a different project, or made from a different branch, asks again.
 ## Then
 
 ```bash
-herdr_linear::new_issue "$PWD" "The title" /tmp/desc.md "$(herdr_linear::workspace_id)"
+OUT="$(herdr_linear::new_issue "$PWD" "The title" /tmp/desc.md "$(herdr_linear::workspace_id)")"; RC=$?
+IFS=$'\t' read -r IDENTIFIER WORKTREE PANE <<< "$OUT"
 ```
 
 Prints `IDENTIFIER<TAB>WORKTREE<TAB>PANE`. The worktree's path and name come
@@ -134,12 +135,12 @@ focused pane.** A tab is a piece of work: the new ticket gets its own tab in
 that space. When `PANE` is empty and stderr says which space is a question,
 nothing was opened. Ask it, using the host's blocking question tool:
 
-- **This space has no binding:** propose binding it to the project named in
-  the question. Record only what the person answers:
+- **This space has no binding:** propose binding it to `$PROJECT`, the
+  project the issue was filed into. Record only what the person answers:
 
 ```bash
-nonce="$(herdr_linear::workspace_propose "$(herdr_linear::workspace_id)" "$PROJECT_ID")"
-herdr_linear::workspace_confirm "$(herdr_linear::workspace_id)" "$PROJECT_ID" "$nonce"
+nonce="$(herdr_linear::workspace_propose "$(herdr_linear::workspace_id)" "$PROJECT")"
+herdr_linear::workspace_confirm "$(herdr_linear::workspace_id)" "$PROJECT" "$nonce"
 herdr_linear::open_session "$WORKTREE"
 ```
 

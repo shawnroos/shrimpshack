@@ -240,3 +240,37 @@ creations() { local n; n="$(grep -cE '^(tab create|pane split|workspace create)'
     [ "$status" -eq "$HERDR_LINEAR_SESSION_ASK" ]
     [ "$(creations)" = "0" ]
 }
+
+# A space list that could not be read is not an empty one. Reading it as empty
+# would ask "bind this space?" about a space that may already be bound, and
+# record that question as if it were real.
+@test "a space list herdr cannot answer fails rather than asking" {
+    bind_space wG "$PID"
+    export FAKE_HERDR_WORKSPACE_LIST_FAILS=1
+    run --separate-stderr herdr_linear::open_session "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_SESSION_FAILED" ]
+    [ "$(creations)" = "0" ]
+    run herdr_linear::binding_pending_placement "$WT"
+    [ "$status" -ne 0 ]
+}
+
+# A failure says what failed. The create tail keeps stderr open for exactly
+# this, and an empty pane with nothing said reads as the plugin not working.
+@test "an issue that cannot be read opens no session and says why" {
+    bind_space wG "$PID"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run --separate-stderr herdr_linear::open_session "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_SESSION_FAILED" ]
+    [[ "$stderr" == *"could not read"* ]]
+    [ "$(creations)" = "0" ]
+}
+
+# With no current space there is no pairing to propose, so the question is the
+# plain one.
+@test "a session in no space asks which space to bind" {
+    unset HERDR_WORKSPACE_ID
+    run --separate-stderr herdr_linear::open_session "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_SESSION_ASK" ]
+    [[ "$stderr" == *"this session is not in one"* ]]
+    [ "$(creations)" = "0" ]
+}

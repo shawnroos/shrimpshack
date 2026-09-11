@@ -421,3 +421,12 @@ wt_setup() {
     [ "$status" -eq 0 ]
     [ "$output" = "$WORK/root/alpha" ]
 }
+
+# R13. A relative root would resolve against wherever the plugin runs, which is
+# the caller's directory deciding where worktrees go.
+@test "a relative worktrees root is not usable" {
+    export HERDR_LINEAR_WORKTREES_ROOT="worktrees"
+    run herdr_linear::worktrees_root_usable
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not an absolute path"* ]]
+}

@@ -102,7 +102,10 @@ herdr_linear::await_pane() {
 herdr_linear::project_spaces() {
     local pid="${1:-}" live f ws
     [ -n "$pid" ] || return 1
-    live="$(herdr_linear::live_spaces | cut -f1)" || return 1
+    # Captured before the cut: a pipeline's status is the cut's, and a failed
+    # read would come back as a list with no spaces in it.
+    live="$(herdr_linear::live_spaces)" || return 1
+    live="$(printf '%s' "$live" | cut -f1)"
     for f in "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json; do
         [ -e "$f" ] || continue
         ws="$(basename "$f" .json)"
@@ -158,11 +161,17 @@ herdr_linear::no_space_reason() {
 # answer (KTD29). <what> names the thing being placed, for the reason's text.
 herdr_linear::_issue_space() {
     local ident="$1" at="$2" what="$3" pid ws="" reason=""
-    pid="$(herdr_linear::_issue_project_id "$ident")" || return 1
+    pid="$(herdr_linear::_issue_project_id "$ident")" || {
+        printf 'could not read %s from Linear, so its space is unknown; nothing was opened\n' "$ident" >&2
+        return 1
+    }
     if [ -z "$pid" ]; then
         reason="$(printf '%s has no project, so no herdr space is bound to it. Ask where its %s should open.' "$ident" "$what")"
     else
-        ws="$(herdr_linear::project_space "$pid")" || return 1
+        ws="$(herdr_linear::project_space "$pid")" || {
+            printf 'could not read the herdr spaces, so the space for %s is unknown; nothing was opened\n' "$ident" >&2
+            return 1
+        }
         [ -n "$ws" ] || reason="$(herdr_linear::no_space_reason "$pid" "$(herdr_linear::workspace_id 2>/dev/null)")"
     fi
     if [ -n "$reason" ]; then
@@ -230,7 +239,7 @@ herdr_linear::open_session() {
 herdr_linear::layout_build() {
     local parent="${1:-}" ; shift || true
     local bin tab tabpane pane slug child branch wt_path journal_file here bound repo resp
-    local ws="" rc made i=0 paths=() branches=()
+    local ws="" rc made existing i=0 paths=() branches=()
 
     [ -n "$parent" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
@@ -285,6 +294,11 @@ herdr_linear::layout_build() {
                 printf 'the title of %s cannot become a safe name; nothing was made\n' "$child" >&2
                 return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
             }
+            # One worktree per issue: a child already started with /work:start
+            # holds this branch in its own worktree, and a second `add -b` of
+            # the same branch fails on every retry.
+            existing="$(herdr_linear::_worktree_of_branch "$repo" "$branch")"
+            [ -n "$existing" ] && { wt_path="$existing"; branch=""; }
         fi
         paths[i]="$wt_path"; branches[i]="$branch"; i=$(( i + 1 ))
     done
@@ -295,6 +309,7 @@ herdr_linear::layout_build() {
     ws="$(herdr_linear::_issue_space "$parent" "$here" layout)"; rc=$?
     [ "$rc" -eq 2 ] && return "$HERDR_LINEAR_LAYOUT_ASK"
     [ "$rc" -eq 0 ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
+    herdr_linear::binding_set_pending_placement "$here" "" || true
 
     # Two sessions building the same parent's layout within the poll window
     # both miss `journal_get parent tab`, both run `tab create`, and the
@@ -378,6 +393,12 @@ herdr_linear::_bind_created() {
     nonce="$(herdr_linear::binding_propose "$wt" "$child" 2>/dev/null)" || return 1
     herdr_linear::binding_confirm "$wt" "$child" "$nonce" 2>/dev/null || return 1
     return 0
+}
+
+# The checked-out worktree of <branch> in <repository>, or nothing.
+herdr_linear::_worktree_of_branch() {
+    "${HERDR_LINEAR_GIT_BIN:-git}" -C "$1" worktree list --porcelain 2>/dev/null \
+        | awk -v want="branch refs/heads/$2" '/^worktree /{p=substr($0,10)} $0==want{print p; exit}'
 }
 
 # herdr_linear::_make_worktree <path> <branch> <repository>

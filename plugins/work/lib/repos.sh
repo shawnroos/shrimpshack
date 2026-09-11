@@ -94,6 +94,10 @@ if op == "read":
 
 if op == "add":
     rec = load(path) or {"version": VERSION, "repositories": []}
+    # A candidate no longer on disk is dropped when an answer is recorded: an
+    # answer given after a repository moved would otherwise sit beside the dead
+    # path, and every later start would see two candidates and ask again.
+    rec["repositories"] = [r for r in rec["repositories"] if os.path.isdir(r)]
     if args[0] not in rec["repositories"]:
         rec["repositories"].append(args[0])
     save(path, rec)
