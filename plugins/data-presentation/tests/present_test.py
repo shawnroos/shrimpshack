@@ -153,6 +153,18 @@ def main():
               proc.returncode == 0 and out and out["status"] == "refused",
               f"rc={proc.returncode}")
 
+    # --- a renderer refusal reaches the caller as a refusal, not a crash (P1) ---
+    # Eight nine-character values cannot fit 72 columns, and cutting one would falsify
+    # it. Mutation: remove the `except Refusal` around the render calls in present() -
+    # this goes red, because the CLI then dies with a traceback and no JSON at all.
+    proc, out = run_cli({"title": "t", "x": ["aa", "bb"],
+                         "series": {f"s{i}": [-0.001234, -0.005678] for i in range(8)}})
+    check("numbers too wide for the budget are refused through the CLI",
+          proc.returncode == 0 and out and out["status"] == "refused",
+          f"rc={proc.returncode} {proc.stderr[:120]}")
+    check("the width refusal names the series count",
+          out and "8" in out.get("message", ""), repr(out and out.get("message")))
+
     # --- too many series is refused at the gate, before a table blows the width ---
     proc, out = run_cli({"x": ["a"], "series": {f"s{i}": [float(i)] for i in range(60)}})
     check("sixty series is refused rather than rendered over budget",

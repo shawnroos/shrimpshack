@@ -10,7 +10,7 @@ import os
 import sys
 
 import constants
-from validate import present_values, truncate_escaped
+from validate import Refusal, present_values, truncate_escaped
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))
 import asciichartpy  # noqa: E402
@@ -195,24 +195,34 @@ def table_with_meta(request, series_names=None):
     keep = _stride_keep(len(x), constants.TABLE_ROW_BUDGET, must_keep)
     omitted = len(x) - len(keep)
 
-    # Trim labels so the assembled row cannot blow the column budget on its own.
-    per_column = max(6, (constants.COLUMN_BUDGET - 4) // (len(names) + 1) - 3)
+    # Numbers are formatted first and never cut. One truncator over cells of every kind
+    # rendered -916.7k as "-916.…", which is a falsified value, not a narrow one.
+    numbers = {
+        name: [format_number(request["series"][name][i]) for i in keep] for name in names
+    }
+    number_width = sum(max((len(v) for v in column), default=0) for column in numbers.values())
 
-    def cell(text):
-        # The text arrives escaped from validate. Cutting it here must not split an
-        # escape pair, so the cut goes through the one escape-aware truncator.
-        return truncate_escaped(str(text), per_column)
+    # "| a | b |" costs three characters per gap plus the two ends.
+    separators = 3 * len(names) + 4
+    label_budget = constants.COLUMN_BUDGET - separators - number_width
+    if label_budget < constants.MIN_LABEL_CELL:
+        raise Refusal(
+            f"{len(names)} series of numbers this wide cannot fit a table inside "
+            f"{constants.COLUMN_BUDGET} columns without cutting a value or a row label. "
+            "Ask for fewer series."
+        )
+    # The header row carries no numbers, so it is bounded on its own.
+    header_budget = max(1, (constants.COLUMN_BUDGET - separators) // len(names))
 
-    head = "| " + " | ".join([cell("")] + [cell(n) for n in names]) + " |"
+    header = "| " + " | ".join([""] + [truncate_escaped(n, header_budget) for n in names]) + " |"
     rule = "| " + " | ".join(["---"] * (len(names) + 1)) + " |"
     rows = []
-    for i in keep:
-        cells = [cell(x[i])]
-        for name in names:
-            cells.append(cell(format_number(request["series"][name][i])))
+    for row, i in enumerate(keep):
+        cells = [truncate_escaped(str(x[i]), label_budget)]
+        cells.extend(numbers[name][row] for name in names)
         rows.append("| " + " | ".join(cells) + " |")
 
-    block = "\n".join([head, rule] + rows)
+    block = "\n".join([header, rule] + rows)
     return block, {"rendered": len(keep), "omitted": omitted}
 
 

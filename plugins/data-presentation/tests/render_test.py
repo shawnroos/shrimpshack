@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import constants
 import render
-from validate import validate
+from validate import Refusal, validate
 
 passed = failed = 0
 
@@ -170,6 +170,41 @@ def main():
 
     t0 = render.table(norm([0.0, 0.0, 0.0]))
     check("a zero renders as 0, never as the missing marker", "0" in t0 and render.MISSING_CELL not in t0, t0)
+
+    # --- a number is never cut to fit a column (P1) ---
+    # Six series is where the old shared cell width bit: every value rendered as
+    # "-916.…", which is a falsified number rather than a narrow one. Six is also the
+    # count a per-tool breakdown produces, so this is not an exotic shape.
+    # Mutation: put the number cells back through truncate_escaped - this goes red.
+    six = validate({"title": "t", "x": ["aa", "bb"],
+                    "series": {f"s{i}": [-916700.0, -123456.0] for i in range(6)}})
+    block = render.table(six)
+    data_rows = block.split("\n")[2:]
+    check("a six-series table prints the whole number",
+          all(cell.strip() in ("aa", "bb", "-916.7k", "-123.5k", "")
+              for row in data_rows for cell in row.split("|")),
+          repr(data_rows))
+    check("no data cell carries a truncation mark",
+          not any("…" in row for row in data_rows), repr(data_rows))
+    check("the six-series table still fits the column budget",
+          widest(block) <= constants.COLUMN_BUDGET, f"width={widest(block)}")
+
+    # --- numbers that cannot fit are refused, not cut (P1) ---
+    # Eight nine-character values plus separators need 100 columns. Nothing honest can
+    # be cut to reach 72, so the renderer refuses the way the series cap does.
+    # Mutation: delete the label_budget check in table_with_meta - this goes red, and
+    # the mutant renders the row at 106 characters with cut values in it.
+    too_wide = validate({"title": "t", "x": ["aa", "bb"],
+                         "series": {f"s{i}": [-0.001234, -0.005678] for i in range(8)}})
+    try:
+        over = render.table(too_wide)
+        refused = None
+    except Refusal as exc:
+        over, refused = None, str(exc)
+    check("eight series of wide numbers is refused rather than cut",
+          refused is not None, repr(over and over.split("\n")[2]))
+    check("the width refusal names the series count",
+          refused is not None and "8" in refused, repr(refused))
 
     # --- a truncated cell cannot open a column the table did not declare (P3) ---
     # Four series, so per_column is narrow enough that a 24-character label actually

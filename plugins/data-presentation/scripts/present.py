@@ -83,43 +83,48 @@ def present(request):
 
     blocks = []
     unshown_by_series = {}
-    if decision["form"] == "charts":
-        for name in decision["chart_series"]:
-            block, meta = render.chart_with_meta(normalized, name)
-            problem = _verify(meta["body"], expect_axis=True)
-            if problem:
-                return _refuse(problem, notes)
-            blocks.append(block)
-            unshown_by_series[name] = meta.get("unshown_missing", [])
-            if meta.get("unshown_missing"):
-                notes.append(
-                    f"{name}: {len(meta['unshown_missing'])} of the missing positions could "
-                    "not be shown as gaps once the series was reduced to fit the width."
-                )
-            if meta["omitted"]:
-                notes.append(
-                    f"{name}: {meta['omitted']} of {meta['omitted'] + meta['rendered']} points "
-                    "were omitted to fit the width. No values were averaged, and the full "
-                    f"range was {render.format_number(meta['full_min'])} to "
-                    f"{render.format_number(meta['full_max'])}."
-                )
-        if decision["table_series"]:
+    try:
+        if decision["form"] == "charts":
+            for name in decision["chart_series"]:
+                block, meta = render.chart_with_meta(normalized, name)
+                problem = _verify(meta["body"], expect_axis=True)
+                if problem:
+                    return _refuse(problem, notes)
+                blocks.append(block)
+                unshown_by_series[name] = meta.get("unshown_missing", [])
+                if meta.get("unshown_missing"):
+                    notes.append(
+                        f"{name}: {len(meta['unshown_missing'])} of the missing positions could "
+                        "not be shown as gaps once the series was reduced to fit the width."
+                    )
+                if meta["omitted"]:
+                    notes.append(
+                        f"{name}: {meta['omitted']} of {meta['omitted'] + meta['rendered']} points "
+                        "were omitted to fit the width. No values were averaged, and the full "
+                        f"range was {render.format_number(meta['full_min'])} to "
+                        f"{render.format_number(meta['full_max'])}."
+                    )
+            if decision["table_series"]:
+                block, meta = render.table_with_meta(normalized, decision["table_series"])
+                problem = _verify(block, expect_axis=False)
+                if problem:
+                    return _refuse(problem, notes)
+                blocks.append(block)
+        else:
             block, meta = render.table_with_meta(normalized, decision["table_series"])
             problem = _verify(block, expect_axis=False)
             if problem:
                 return _refuse(problem, notes)
             blocks.append(block)
-    else:
-        block, meta = render.table_with_meta(normalized, decision["table_series"])
-        problem = _verify(block, expect_axis=False)
-        if problem:
-            return _refuse(problem, notes)
-        blocks.append(block)
-        if meta["omitted"]:
-            notes.append(
-                f"{meta['omitted']} of {meta['omitted'] + meta['rendered']} rows were omitted "
-                "to keep the table readable. No values were averaged."
-            )
+            if meta["omitted"]:
+                notes.append(
+                    f"{meta['omitted']} of {meta['omitted'] + meta['rendered']} rows were omitted "
+                    "to keep the table readable. No values were averaged."
+                )
+    except Refusal as exc:
+        # A renderer refusal is the same answer as a gate refusal: these numbers
+        # cannot be shown at this width without cutting one of them.
+        return _refuse(str(exc), notes)
 
     for name, positions in normalized["missing"].items():
         if not positions:
