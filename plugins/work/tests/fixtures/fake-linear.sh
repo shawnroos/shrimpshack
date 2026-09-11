@@ -34,15 +34,32 @@
 #                            auth_error | validation_error | rate_limited |
 #                            http_500 | empty_body | malformed_json |
 #                            hostile | hostile_candidates | candidates |
-#                            no_candidates
+#                            no_candidates | echo_issue
 #                            (default: found_child)
+#                            echo_issue answers found_child's shape with the
+#                            identifier that was asked for and the title
+#                            `Column <identifier>`, so several issues in one
+#                            test derive several different names
 #   FAKE_LINEAR_RECORD_DIR   where the argv/stdin record lands
 #   FAKE_LINEAR_ALLOW_MUTATION  set to 1 to permit a GraphQL mutation;
 #                            unset, a mutation exits 97 without answering
+#   FAKE_LINEAR_PROJECT_TEAMS  one | many | none  -- how many teams the
+#                            project(id:) arm answers with (default: one)
+#   FAKE_LINEAR_ORGANIZATION  the URL key the organization arm answers with,
+#                            or `empty` for an organization of null
+#                            (default: acme)
+#   FAKE_LINEAR_MISSING_IDS  comma-separated identifiers the echo_issue mode
+#                            answers as not_found
+#   FAKE_LINEAR_UNFILTERED   set to 1 to receive the canned payload whole,
+#                            for a test asserting on a captured SHAPE rather
+#                            than on what a query selected
 #
 # Exit codes distinguish the two boundary breaks from an ordinary HTTP answer:
 #   98  the credential appeared in argv          (KTD9 broken)
 #   97  a mutation was sent without permission   (R30 broken)
+#   96  the response filter itself failed        (nothing was proven)
+#   95  the request carried no GraphQL query, and no test asked for the
+#       unfiltered payload                       (see FAKE_LINEAR_UNFILTERED)
 
 set -u
 
@@ -104,6 +121,157 @@ case "$*" in
         fi
         ;;
 esac
+
+# --- answer only what was selected ---------------------------------------
+# The canned bodies below are whole captured responses. Served as-is they
+# answer fields the request never asked for, so a field DELETED from a query in
+# lib/ still arrives and every test stays green -- proven by deleting
+# branchName from HERDR_LINEAR_ISSUE_FIELDS and watching the suite pass. This
+# parses the request's own selection set and subtracts everything outside it.
+#
+# The selection set is PARSED, not word-matched against the request text.
+# Word-matching cannot work here: `orderBy:updatedAt` and `filter:{key:{eq:$k}}`
+# are ARGUMENTS, so `updatedAt` and `key` stay present in the body long after
+# they are dropped from the selection -- the mutation the filter exists to catch
+# would still pass. Everything between `(` and its matching `)` is skipped.
+#
+# A request carrying no readable GraphQL query is REFUSED, not answered whole.
+# A few tests do want the captured payload as captured -- they assert on the
+# shape rather than on a selection -- and they say so with
+# FAKE_LINEAR_UNFILTERED=1. That is the difference between a permissive path a
+# test opts into and a permissive path a malformed body falls into: the second
+# is default-allow, and the whole point of this filter is that default-allow at
+# a boundary is how a dropped field, or a traversal, goes unseen.
+prune() {
+    local canned; canned="$(cat)"
+    if [ "${FAKE_LINEAR_UNFILTERED:-0}" = 1 ]; then printf '%s' "$canned"; return 0; fi
+    HERDR_FAKE_BODY="$body" HERDR_FAKE_CANNED="$canned" python3 - <<'PY'
+import json, os, sys
+
+body = os.environ.get("HERDR_FAKE_BODY") or ""
+canned = os.environ.get("HERDR_FAKE_CANNED") or ""
+
+
+def selection(q):
+    """{issue(id:$id){id state{name}}} -> {'issue': {'id': {}, 'state': {'name': {}}}}"""
+    root = {}
+    stack = [root]
+    name = None
+    i, n = 0, len(q)
+    while i < n:
+        c = q[i]
+        if c == "(":
+            depth = 0
+            while i < n:
+                if q[i] == "(":
+                    depth += 1
+                elif q[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            i += 1
+            # `name` is deliberately NOT cleared: the arguments belong to the
+            # field before them, so the `{` that follows still opens THAT
+            # field's set. Clearing it sent every field carrying arguments --
+            # issue(id:), issues(first:) -- to the root, and the filter pruned
+            # nothing while still passing a keep-direction-only check.
+            continue
+        if c == "{":
+            # A name before the brace opens that field's own set; no name means
+            # this is the operation's set, which is `data` itself. That is what
+            # lets `query($id:String!){...}` and a bare `{ viewer { id } }` both
+            # parse without the operation keyword becoming a field.
+            stack.append(root if name is None else stack[-1][name])
+            name = None
+            i += 1
+            continue
+        if c == "}":
+            if len(stack) > 1:
+                stack.pop()
+            name = None
+            i += 1
+            continue
+        if c.isalpha() or c == "_":
+            j = i
+            while j < n and (q[j].isalnum() or q[j] == "_"):
+                j += 1
+            if len(stack) > 1:
+                stack[-1].setdefault(q[i:j], {})
+                name = q[i:j]
+            else:
+                name = None
+            i = j
+            continue
+        i += 1
+    return root
+
+
+def prune(sel, value):
+    if isinstance(value, list):
+        return [prune(sel, v) for v in value]
+    if isinstance(value, dict):
+        out = {}
+        for k, sub in sel.items():
+            if k in value:
+                out[k] = prune(sub, value[k]) if sub else value[k]
+        return out
+    # A selected field whose value is null or scalar keeps it: `parent: null`
+    # is an answer, not an absence.
+    return value
+
+
+try:
+    q = json.loads(body)["query"]
+except Exception:
+    sys.stderr.write("fake-linear: request carries no GraphQL query, so nothing "
+                     "says which fields to answer; set FAKE_LINEAR_UNFILTERED=1 "
+                     "to ask for the captured payload whole\n")
+    raise SystemExit(95)
+
+# The three non-JSON modes -- http_500, empty_body, malformed_json -- are
+# answers a real endpoint gives, and there is nothing to subtract from them.
+try:
+    resp = json.loads(canned)
+except Exception:
+    sys.stdout.write(canned)
+    raise SystemExit(0)
+
+if isinstance(resp, dict) and isinstance(resp.get("data"), dict):
+    resp["data"] = prune(selection(q), resp["data"])
+sys.stdout.write(json.dumps(resp))
+PY
+}
+
+# A prune that crashes must not answer empty: an empty body reads as
+# UNAVAILABLE downstream, which is a plausible-looking pass. Stdout stays empty
+# on a refusal, so a loud failure and a successful empty answer cannot be
+# confused -- the same shape the unknown-mode arm below uses.
+# `answer` runs in the SCRIPT's own shell, never on the right of a pipe: an
+# `exit` inside a pipeline leaves only the subshell, so the refusal below
+# printed its complaint and the script still finished 0 with a full payload.
+answer() {
+    printf '%s' "$1" | prune
+    _rc=$?
+    case "$_rc" in
+        0)  ;;
+        95) exit 95 ;;
+        *)  exit 96 ;;
+    esac
+}
+
+serve() { answer "$("$1")"; }
+
+echo_issue() {
+    found_child | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+ident = json.loads(sys.argv[1]).get("variables", {}).get("id", "")
+d["data"]["issue"]["identifier"] = ident
+d["data"]["issue"]["title"] = "Column " + ident
+print(json.dumps(d))
+' "$body"
+}
 
 # --- headers ------------------------------------------------------------
 # Emitted only when the caller asked for them, exactly as curl behaves. The
@@ -182,6 +350,15 @@ hostile() {
 JSON
 }
 
+# The hostile mode above puts its payload in the TITLE and keeps the identifier
+# well-formed, which is why nothing here ever reached the code that names FILES
+# after an identifier. This is that shape: the traversal is the identifier.
+traversal_identifier() {
+    cat <<'JSON'
+{"data":{"issue":{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","identifier":"../escaped","title":"t","url":"https://linear.app/example/issue/x","branchName":"x","updatedAt":"2026-09-04T12:00:00.000Z","priority":0,"state":{"id":"b","name":"Backlog","type":"backlog"},"parent":null,"project":null,"team":{"id":"e","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}}}
+JSON
+}
+
 # The candidate list with the same hostile bytes in one title. The chooser reads
 # this list in a terminal and answers a question about it, so it is a distinct
 # sink from the single-issue read above and needs its own fixture.
@@ -231,13 +408,13 @@ JSON
 
 desc_issue() {
     cat <<'JSON'
-{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": "## Problem\n\nEditors open the drawer on a processing layer and see nothing, so they assume the tool is broken and retry. The second failure is what makes them stop using it.\n\n### For example:\n- A user selects a still-uploading image and sees an empty panel.\n- They reopen twice, then switch tools for that shot.\n\n## Solution\n\nOpening the drawer on a processing layer says what is happening, so waiting is a choice rather than a guess.\n\n### For example:\n- The panel keeps their place.\n- Nobody re-runs a render that was already running.\n\n## Proposal\n\nShow drawer contents as soon as the layer is known, and a clear processing state until then.\n\n### Key Requirements\n- The drawer never renders empty for a selectable layer.\n\n### Constraints\n- No new endpoint."}}}
+{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "team": {"id": "55555555-5555-4555-8555-555555555555"}, "project": {"id": "44444444-4444-4444-8444-444444444444"}, "description": "## Problem\n\nEditors open the drawer on a processing layer and see nothing, so they assume the tool is broken and retry. The second failure is what makes them stop using it.\n\n### For example:\n- A user selects a still-uploading image and sees an empty panel.\n- They reopen twice, then switch tools for that shot.\n\n## Solution\n\nOpening the drawer on a processing layer says what is happening, so waiting is a choice rather than a guess.\n\n### For example:\n- The panel keeps their place.\n- Nobody re-runs a render that was already running.\n\n## Proposal\n\nShow drawer contents as soon as the layer is known, and a clear processing state until then.\n\n### Key Requirements\n- The drawer never renders empty for a selectable layer.\n\n### Constraints\n- No new endpoint."}}}
 JSON
 }
 
 desc_empty() {
     cat <<'JSON'
-{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "description": ""}}}
+{"data": {"issue": {"identifier": "WEB-2870", "updatedAt": "2026-09-04T18:11:48.336Z", "team": {"id": "55555555-5555-4555-8555-555555555555"}, "project": {"id": "44444444-4444-4444-8444-444444444444"}, "description": ""}}}
 JSON
 }
 
@@ -293,31 +470,56 @@ esac
 # test, which encodes the call ORDER into the test and breaks the moment the
 # implementation reorders two reads that do not depend on each other.
 case "$body" in
+    # The key is `acme` and never the real workspace's: run-tests.sh's brand_scan
+    # walks tests/fixtures/ too, so the real key here reddens the whole suite.
+    *'organization'*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        if [ "${FAKE_LINEAR_ORGANIZATION:-acme}" = empty ]; then
+            answer "$(printf '{"data":{"organization":null}}')"
+        else
+            answer "$(printf '{"data":{"organization":{"id":"88888888-8888-4888-8888-888888888888","urlKey":"%s","name":"Acme"}}}' \
+                "${FAKE_LINEAR_ORGANIZATION:-acme}")"
+        fi
+        exit 0
+        ;;
+    # MUST precede the `teams(` arm below: the project-team query contains
+    # `teams(` too, and the workflow-states arm would otherwise answer it with
+    # a shape that has no team ids in it at all.
+    *'project(id:'*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        case "${FAKE_LINEAR_PROJECT_TEAMS:-one}" in
+            none) answer "$(printf '{"data":{"project":{"teams":{"nodes":[]}}}}')" ;;
+            many) answer "$(printf '{"data":{"project":{"teams":{"nodes":[{"id":"55555555-5555-4555-8555-555555555555","name":"Web"},{"id":"66666666-6666-4666-8666-666666666666","name":"Brand"},{"id":"77777777-7777-4777-8777-777777777777","name":"Platform"}]}}}}')" ;;
+            *)    answer "$(printf '{"data":{"project":{"teams":{"nodes":[{"id":"55555555-5555-4555-8555-555555555555","name":"Web"}]}}}}')" ;;
+        esac
+        exit 0
+        ;;
     *'teams('*)
         [ "$wants_headers" = 1 ] && emit_headers 200
-        cat <<'JSON'
+        answer "$(cat <<'JSON'
 {"data":{"teams":{"nodes":[{"states":{"nodes":[{"id":"st-backlog","name":"Backlog","type":"backlog"},{"id":"st-todo","name":"Todo","type":"unstarted"},{"id":"st-prog","name":"In Progress","type":"started"},{"id":"st-devdone","name":"Dev Done","type":"started"},{"id":"st-done","name":"Done","type":"completed"},{"id":"st-cancel","name":"Canceled","type":"canceled"}]}}]}}}
 JSON
+)"
         exit 0
         ;;
     *issueCreate*)
         [ "$wants_headers" = 1 ] && emit_headers 200
         if [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "fail" ]; then
-            printf '{"data":{"issueCreate":{"success":false,"issue":null}}}'
+            answer "$(printf '{"data":{"issueCreate":{"success":false,"issue":null}}}')"
         else
-            printf '{"data":{"issueCreate":{"success":true,"issue":{"id":"11111111-1111-4111-8111-111111111111","identifier":"%s","branchName":"%s","title":"t"}}}}' \
+            answer "$(printf '{"data":{"issueCreate":{"success":true,"issue":{"id":"11111111-1111-4111-8111-111111111111","identifier":"%s","branchName":"%s","title":"t"}}}}' \
                 "${FAKE_LINEAR_NEW_IDENT:-WEB-4001}" \
-                "$(printf '%s' "${FAKE_LINEAR_NEW_IDENT:-WEB-4001}" | tr '[:upper:]' '[:lower:]')-a-new-thing"
+                "$(printf '%s' "${FAKE_LINEAR_NEW_IDENT:-WEB-4001}" | tr '[:upper:]' '[:lower:]')-a-new-thing")"
         fi
         exit 0
         ;;
     *projectCreate*)
         [ "$wants_headers" = 1 ] && emit_headers 200
         if [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "fail" ]; then
-            printf '{"data":{"projectCreate":{"success":false,"project":null}}}'
+            answer "$(printf '{"data":{"projectCreate":{"success":false,"project":null}}}')"
         else
-            printf '{"data":{"projectCreate":{"success":true,"project":{"id":"%s","name":"A New Project","url":"https://linear.app/example/project/a-new-project"}}}}' \
-                "${FAKE_LINEAR_NEW_PROJECT_ID:-pppppppp-pppp-4ppp-8ppp-pppppppppppp}"
+            answer "$(printf '{"data":{"projectCreate":{"success":true,"project":{"id":"%s","name":"A New Project","url":"https://linear.app/example/project/a-new-project"}}}}' \
+                "${FAKE_LINEAR_NEW_PROJECT_ID:-pppppppp-pppp-4ppp-8ppp-pppppppppppp}")"
         fi
         exit 0
         ;;
@@ -326,14 +528,14 @@ JSON
         _op=documentCreate
         case "$body" in *documentUpdate*) _op=documentUpdate ;; esac
         if [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "fail" ]; then
-            printf '{"data":{"%s":{"success":false,"document":null}}}' "$_op"
+            answer "$(printf '{"data":{"%s":{"success":false,"document":null}}}' "$_op")"
         elif [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "no_document" ]; then
             # success TRUE with no document. A caller that trusts `success`
             # alone records a document it has no id for, and can then never
             # update it -- so the next publish creates a duplicate instead.
-            printf '{"data":{"%s":{"success":true,"document":null}}}' "$_op"
+            answer "$(printf '{"data":{"%s":{"success":true,"document":null}}}' "$_op")"
         else
-            printf '{"data":{"%s":{"success":true,"document":{"id":"%s","title":"t","url":"https://linear.app/example/document/t-abc"}}}}'                 "$_op" "${FAKE_LINEAR_DOC_ID:-dddddddd-dddd-4ddd-8ddd-dddddddddddd}"
+            answer "$(printf '{"data":{"%s":{"success":true,"document":{"id":"%s","title":"t","url":"https://linear.app/example/document/t-abc"}}}}'                 "$_op" "${FAKE_LINEAR_DOC_ID:-dddddddd-dddd-4ddd-8ddd-dddddddddddd}")"
         fi
         exit 0
         ;;
@@ -342,9 +544,9 @@ JSON
         # success:false on a 200 is the case a "did the function finish" check
         # reads as a successful write. It is reachable on purpose.
         if [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "fail" ]; then
-            printf '%s' '{"data":{"issueUpdate":{"success":false}}}'
+            answer "$(printf '%s' '{"data":{"issueUpdate":{"success":false}}}')"
         else
-            printf '%s' '{"data":{"issueUpdate":{"success":true}}}'
+            answer "$(printf '%s' '{"data":{"issueUpdate":{"success":true}}}')"
         fi
         exit 0
         ;;
@@ -352,23 +554,42 @@ esac
 
 status=200
 case "$mode" in
-    viewer)           [ "$wants_headers" = 1 ] && emit_headers 200; viewer ;;
-    candidates)       [ "$wants_headers" = 1 ] && emit_headers 200; candidates ;;
-    no_candidates)    [ "$wants_headers" = 1 ] && emit_headers 200; no_candidates ;;
-    hostile)          [ "$wants_headers" = 1 ] && emit_headers 200; hostile ;;
-    hostile_candidates) [ "$wants_headers" = 1 ] && emit_headers 200; hostile_candidates ;;
-    found_child)      [ "$wants_headers" = 1 ] && emit_headers 200; found_child ;;
-    found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; found_parent ;;
-    found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; found_parent_moved ;;
-    completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; completed_issue ;;
-    desc_issue)       [ "$wants_headers" = 1 ] && emit_headers 200; desc_issue ;;
-    desc_empty)       [ "$wants_headers" = 1 ] && emit_headers 200; desc_empty ;;
-    other_project_issue) [ "$wants_headers" = 1 ] && emit_headers 200; other_project_issue ;;
-    canceled_issue)   [ "$wants_headers" = 1 ] && emit_headers 200; canceled_issue ;;
-    not_found)        [ "$wants_headers" = 1 ] && emit_headers 400; not_found ;;
-    auth_error)       [ "$wants_headers" = 1 ] && emit_headers 401; auth_error ;;
-    validation_error) [ "$wants_headers" = 1 ] && emit_headers 400; validation_error ;;
-    rate_limited)     [ "$wants_headers" = 1 ] && emit_headers 429; rate_limited ;;
+    viewer)           [ "$wants_headers" = 1 ] && emit_headers 200; serve viewer ;;
+    candidates)       [ "$wants_headers" = 1 ] && emit_headers 200; serve candidates ;;
+    no_candidates)    [ "$wants_headers" = 1 ] && emit_headers 200; serve no_candidates ;;
+    hostile)          [ "$wants_headers" = 1 ] && emit_headers 200; serve hostile ;;
+    traversal_identifier) [ "$wants_headers" = 1 ] && emit_headers 200; serve traversal_identifier ;;
+    hostile_candidates) [ "$wants_headers" = 1 ] && emit_headers 200; serve hostile_candidates ;;
+    found_child)      [ "$wants_headers" = 1 ] && emit_headers 200; serve found_child ;;
+    echo_issue)
+        _asked="$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("variables",{}).get("id",""))' 2>/dev/null)"
+        case ",${FAKE_LINEAR_MISSING_IDS:-}," in
+            *",$_asked,"*) [ "$wants_headers" = 1 ] && emit_headers 400; serve not_found ;;
+            *) [ "$wants_headers" = 1 ] && emit_headers 200; serve echo_issue ;;
+        esac
+        ;;
+    found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; serve found_parent ;;
+    found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; serve found_parent_moved ;;
+    completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; serve completed_issue ;;
+    # The description modes answer TWO different queries. `_fetch_description`
+    # asks for identifier/description/updatedAt plus the team and project ids a
+    # write is scoped to; the full-fields query asks for everything else.
+    # Answering both with the description payload left the rest empty, which is
+    # not what the tracker does and is not what these tests are about.
+    desc_issue)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        case "$body" in *'state {'*) serve found_parent ;; *) serve desc_issue ;; esac
+        ;;
+    desc_empty)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        case "$body" in *'state {'*) serve found_parent ;; *) serve desc_empty ;; esac
+        ;;
+    other_project_issue) [ "$wants_headers" = 1 ] && emit_headers 200; serve other_project_issue ;;
+    canceled_issue)   [ "$wants_headers" = 1 ] && emit_headers 200; serve canceled_issue ;;
+    not_found)        [ "$wants_headers" = 1 ] && emit_headers 400; serve not_found ;;
+    auth_error)       [ "$wants_headers" = 1 ] && emit_headers 401; serve auth_error ;;
+    validation_error) [ "$wants_headers" = 1 ] && emit_headers 400; serve validation_error ;;
+    rate_limited)     [ "$wants_headers" = 1 ] && emit_headers 429; serve rate_limited ;;
     http_500)         [ "$wants_headers" = 1 ] && emit_headers 500; printf '%s' '<html>Internal Server Error</html>' ;;
     empty_body)       [ "$wants_headers" = 1 ] && emit_headers 200 ;;
     malformed_json)   [ "$wants_headers" = 1 ] && emit_headers 200; printf '%s' '{"data":{"issue":' ;;

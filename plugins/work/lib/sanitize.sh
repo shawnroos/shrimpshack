@@ -133,3 +133,13 @@ herdr_linear::is_safe_identifier() {
     esac
     return 0
 }
+
+# The only non-empty line on stdin, or nothing; always 0. KTD26: a team, a
+# repository and a space all resolve by one rule -- one known answer is used,
+# several or none are a question -- so the counting is written once.
+herdr_linear::the_only_line() {
+    local lines
+    lines="$(grep . || true)"
+    [ "$(printf '%s' "$lines" | grep -c .)" -eq 1 ] || return 0
+    printf '%s' "$lines"
+}

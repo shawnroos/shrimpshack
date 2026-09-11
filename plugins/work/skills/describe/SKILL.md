@@ -6,6 +6,26 @@ disable-model-invocation: true
 
 # Write the issue description
 
+## Act or ask
+
+- **Mechanically derivable** — the team a single-team project has, the project a
+  worktree's path names, an unambiguous default — **resolve it yourself** and
+  carry on.
+- **A genuine fork** — which of three teams, which side of a misplaced binding
+  to move, whether this is a project or a parent issue — **ask**, name every
+  candidate, and change nothing until it is answered.
+- **When you cannot tell which of the two it is, ask.** The default for a
+  substantive choice is ask, not resolve.
+
+**Say every resolution out loud before you act on it**, naming three things:
+the fact, where you read it, and how you derived it.
+
+> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+
+That one line lets a reader catch a wrong answer and its cause without opening a
+log. And nothing here refuses: a reader answering `outside`, `negative` or
+`unknown` is a signal to weigh and to say, never a reason to stop.
+
 The library owns the template, the validation and the write. **You write the
 prose**, because nothing in the repository can: Problem and Solution are about
 the actor, and Proposal is about intent. A branch name and a commit count are
@@ -27,7 +47,7 @@ herdr_linear::description_template > /tmp/desc.md
 ```
 
 **The template is where a NEW description starts. It is not a cage.** A ticket
-that has earned its own headings keeps them — `docs/linear-conventions.md` walks
+that has earned its own headings keeps them — the conventions document walks
 through `WEB-3214` as the worked example, which uses none of the three spine
 headings and is better for it, because a heading that carries the point beats a
 heading that carries a category.
@@ -36,8 +56,13 @@ So: `description_validate <file>` reports a missing spine as a **note** and
 refuses only real defects. Pass `strict` as a second argument when you composed
 from the template and want the spine held.
 
-Full rules in `docs/linear-conventions.md`. The three that decide whether a
-description is any good:
+Full rules ship with the plugin:
+
+```bash
+cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+```
+
+The three that decide whether a description is any good:
 
 | Section | Written for | The mistake to avoid |
 |---|---|---|
@@ -48,6 +73,53 @@ description is any good:
 `### Key Requirements` carries the framing and decisions shaping the work.
 `### Constraints` carries technical, business and UX limits. Sections after
 Proposal are decided per ticket.
+
+## The first write from this directory asks once
+
+Writes to Linear are opened by an answer, not by a file somebody edits.
+
+```bash
+CTX="$(herdr_linear::issue_context "$(herdr_linear::binding_identifier "$PWD")")"
+TEAM="$(printf '%s' "$CTX" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))')"
+PROJECT="$(printf '%s' "$CTX" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project_id",""))')"
+TEAM_KEY="$(printf '%s' "$CTX" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team",""))')"
+PROJECT_NAME="$(printf '%s' "$CTX" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project",""))')"
+herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
+```
+
+**Name the team and the project the way a person reads them.** `$TEAM_KEY` and
+`$PROJECT_NAME` come out of the same `issue_context` read as the two ids, so
+this costs no extra query. A question naming two opaque uuids is a question
+nobody can answer, and R4 wants the fact and where it was read together.
+
+Name `$TEAM_KEY`, `$PROJECT_NAME` and the issue, and ask, using the host's blocking
+question tool. Record only what that tool returns, in two steps, because
+`consent_confirm` requires the nonce `consent_propose` hands back:
+
+```bash
+nonce="$(herdr_linear::consent_propose "$PWD" "$TEAM"  "$PROJECT")"
+herdr_linear::consent_confirm "$PWD" "$TEAM"  "$PROJECT" "$nonce"
+```
+
+**No is an answer too.** It answers the same proposal, so it carries the same
+nonce -- a decline clears the deferred-write notice, and nothing may clear that
+by answering a question nobody asked:
+
+```bash
+herdr_linear::consent_decline "$PWD" "$TEAM"  "$PROJECT" "$nonce"
+```
+
+Declining records no answer: it clears the question and the deferred-write
+notice, and the verb still runs in shadow. There is no "no" on file, because an
+unanswered question and a refused one both mean do not write.
+
+**Never supply the answer yourself.** A prompt that is refused, a hook, or a
+headless `claude -p "/work:describe … yes"` records nothing — the verb then runs in
+shadow and reports what it would have sent. That is the right outcome, not
+something to work around.
+
+The answer is scoped to what the question named: a write deriving a different
+team or a different project, or made from a different branch, asks again.
 
 ## Never a diary
 
@@ -68,6 +140,32 @@ Status belongs in the issue's state. Neither belongs here.
 When the work changed what you understand about the problem, **rewrite the
 Problem section**. Do not add a note saying it changed.
 
+## Reading the branch before you write
+
+Problem and Solution need what the work turned out to be, and the branch's
+history is where that is written. It is also the largest thing you would read
+all session, and almost none of it belongs in this context.
+
+**Dispatch a subagent to read it.** Give it a scratch path — your session's
+scratchpad directory when the harness gives you one, otherwise a path carrying
+this worktree's name, never a shared one. Brief it with this and nothing more:
+
+```text
+Read this branch's commits and its diff against the base branch. Write to
+<scratch path>: what changed, why, and anything that contradicts the issue's
+current description. Write nothing to Linear and run no git command that moves
+HEAD. Name anything you could not tell from the history. Reply with the path and
+at most ten lines of gist.
+```
+
+Compose the description from that gist and the description already on the issue.
+Open the file only when you need a detail the gist does not carry.
+
+**The subagent reads; it never asks and it never records.** It has no prompt
+channel, so a question handed to it is a decision lost. Ambiguity comes back as
+a line in the file, and you ask here. The write question above is asked in this
+session, by a person, and nothing a subagent returns stands in for that answer.
+
 ## Writing it
 
 Read the current description first and keep what is still true — you are
@@ -81,7 +179,7 @@ herdr_linear::describe "$PWD" /tmp/desc.md
 |---|---|
 | 0 | written; the prior version is saved |
 | 1 | identical to what is there; nothing sent |
-| 2 | refused — unbound, misplaced, stale, or outside the Slate root |
+| 2 | refused — unbound, misplaced, or stale |
 | 3 | shadow mode: the rendered description is printed, nothing sent |
 | 4 | the Linear fetch or the write itself failed — a network or API error, not a validation problem. Retry |
 | 5 | a real defect — an empty section, a leftover placeholder, or a diary. stderr says which. A missing spine is only a note and does not land here |

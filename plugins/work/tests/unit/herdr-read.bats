@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U11 — the read-only herdr accessor.
 #
 # Nothing here touches the live herdr server. That is a decision, not a
@@ -244,9 +247,17 @@ wA:p2" ]
 @test "topology lookups against a dead server answer empty rather than garbage" {
     export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
     export FAKE_HERDR_MODE=dead
-    run -1 herdr_linear::tab_of_pane "wA:p2"
+    run -2 herdr_linear::tab_of_pane "wA:p2"
     [ -z "$output" ]
-    run -1 herdr_linear::panes_in_tab "wA:t1"
+    run -2 herdr_linear::panes_in_tab "wA:t1"
+    [ -z "$output" ]
+}
+
+# A snapshot with no pane list was not read, whatever herdr's exit status says.
+@test "a snapshot that holds no pane list is could-not-read, not no-such-pane" {
+    export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
+    export FAKE_HERDR_SNAPSHOT_NO_PANES=1
+    run -2 herdr_linear::tab_of_pane "wA:p2"
     [ -z "$output" ]
 }
 
@@ -322,4 +333,52 @@ wA:p2" ]
     export HERDR_BIN="$WORK/no-such-herdr"
     run herdr_linear::pane_id
     [ "$output" = "wA:p1" ]
+}
+
+# ------------------------------------------------ the fixture's placement arms
+
+# Placement is only testable against a fixture that answers the way herdr
+# does: a tab is made in the space it was asked for, a split lands in its
+# target's tab, and a tab that is gone is an error with exit 1.
+fh() { FAKE_HERDR_ALLOW_MUTATION=1 bash "$FIX/fake-herdr.sh" "$@"; }
+
+@test "fixture: a tab is created in the space it names, with a root pane in it" {
+    run fh tab create --workspace wG --cwd /tmp --label WEB-1 --no-focus
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.tab.workspace_id)" = "wG" ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.root_pane.tab_id)" \
+      = "$(printf '%s' "$output" | herdr_linear::json result.tab.tab_id)" ]
+}
+
+@test "fixture: a split lands in its target pane's tab" {
+    made="$(fh tab create --workspace wG --label x)"
+    root="$(printf '%s' "$made" | herdr_linear::json result.root_pane.pane_id)"
+    tab="$(printf '%s' "$made" | herdr_linear::json result.tab.tab_id)"
+    run fh pane split "$root" --direction right --cwd /tmp/x --no-focus
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.pane.tab_id)" = "$tab" ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.pane.workspace_id)" = "wG" ]
+}
+
+# herdr 0.9.0 writes the error object to stderr, not stdout. The fixture once
+# put it on stdout, and code reading only stdout passed here and failed live.
+@test "fixture: a tab that does not exist is an error on stderr with exit 1" {
+    run --separate-stderr fh tab get wZ:t999
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+    [ "$(printf '%s' "$stderr" | herdr_linear::json error.code)" = "tab_not_found" ]
+}
+
+@test "fixture: the workspace list reports the spaces it was given, with labels" {
+    export FAKE_HERDR_WORKSPACES='wG=AI Canvas Tools,wJ=Plugins'
+    run fh workspace list
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.workspaces.0.workspace_id)" = "wG" ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.workspaces.0.label)" = "AI Canvas Tools" ]
+}
+
+@test "fixture: the snapshot reports created panes in their tabs" {
+    root="$(fh tab create --workspace wG --label x | herdr_linear::json result.root_pane.pane_id)"
+    run herdr_linear::panes_in_tab wG:t1
+    [ "$output" = "$root" ]
 }

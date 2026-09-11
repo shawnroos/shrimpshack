@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U5 — the Linear client.
 #
 # No test here touches the live Linear API. The network goes through
@@ -139,6 +142,20 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
     [ "$output" = "0" ]
 }
 
+# The refresh script NAMES FILES after whatever the tracker calls an issue. That
+# is a write outside the cache, not a read of one, and no fixture had the shape
+# to reach it: the hostile mode carries its payload in the title.
+@test "the refresh script does not name a cache file outside the cache" {
+    export FAKE_LINEAR_MODE=traversal_identifier
+    run bash "${BATS_TEST_DIRNAME}/../../bin/linear-cache-refresh.sh" WEB-2870
+    [ ! -e "$LINEAR_CACHE_DIR/../escaped.json" ]
+
+    # The positive control: an ordinary identifier is still written.
+    export FAKE_LINEAR_MODE=found_parent
+    run bash "${BATS_TEST_DIRNAME}/../../bin/linear-cache-refresh.sh" WEB-2870
+    [ -f "$LINEAR_CACHE_DIR/WEB-2870.json" ]
+}
+
 @test "the Keychain is preferred over the plaintext copy" {
     printf '%s\n%s\n' "kc-$KEYLIKE" "kc-$KEYLIKE" \
         | "$HERDR_LINEAR_SECURITY_BIN" add-generic-password -a linear-api-key -s work-linear -U -w >/dev/null 2>&1
@@ -196,6 +213,39 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
     [ "$status" -eq 0 ]
     got="$(printf '%s' "$output" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["identity_from_cache"],d["title"])')"
     [ "$got" = "False AI Tools drawer is blank when a still-processing layer is selected" ]
+}
+
+# The cache key is a path segment. A tracker-authored identifier that is not a
+# safe one reaches this function, so the refusal has to be here and not only at
+# whatever put the value in the record.
+@test "a cache key that escapes the cache directory is refused, not followed" {
+    printf '{"id":"OUTSIDE","title":"Attacker Title","project":"Evil","status":"x","fetchedAt":"%s"}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$WORK/outside.json"
+    run herdr_linear::cache_read "../outside"
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+
+    # The positive control. Without it a validator that refuses everything --
+    # or one that is undefined and returns 127 -- reads as a pass above.
+    cache_issue WEB-3318 "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    run herdr_linear::cache_read WEB-3318
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | grep -qF 'Cached Title'
+}
+
+# Sourced ALONE, in a shell that has loaded nothing else. Every other test here
+# sources binding.sh first, which pulls sanitize.sh in, so they cannot tell a
+# working guard from a missing one: an undefined validator returns 127 and the
+# refusal above stays green for the wrong reason.
+@test "linear.sh sourced on its own still has the validator its cache key needs" {
+    run bash -c '. "$1"; command -v herdr_linear::is_safe_identifier' _ "$LIB/linear.sh"
+    [ "$status" -eq 0 ]
+
+    printf '{"id":"OUTSIDE","fetchedAt":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$WORK/outside.json"
+    run bash -c '. "$1"; HERDR_LINEAR_CACHE_DIR="$2"; herdr_linear::cache_read ../outside' \
+        _ "$LIB/linear.sh" "$LINEAR_CACHE_DIR"
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
 }
 
 # The parent is typically someone else's issue, so it is never in a cache keyed
@@ -381,4 +431,28 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
     long="$(python3 -c 'print("a"*500)')"
     run herdr_linear::slug "$long" 60
     [ "${#output}" -le 60 ]
+}
+
+# -------------------------------------------------------- the organisation (R1)
+
+@test "the organisation reader returns the workspace URL key" {
+    run herdr_linear::organization_key
+    [ "$status" -eq 0 ]
+    [ "$output" = "acme" ]
+}
+
+# The org is the first path segment. An empty answer must be a refusal, not an
+# empty segment that collapses two directories into one.
+@test "an organisation the API cannot name returns nothing and does not crash" {
+    export FAKE_LINEAR_ORGANIZATION=empty
+    run --separate-stderr herdr_linear::organization_key
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "an unreachable Linear leaves the organisation unanswered" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run --separate-stderr herdr_linear::organization_key
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
 }

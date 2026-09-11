@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # The runner's own rules. Both exist because a green line over a broken rule is
 # worse than no line: the version fields drift silently, and spawn's credential
 # patterns do not match the one credential this plugin actually handles.
@@ -85,13 +88,39 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+# --- suite_setup_check: a suite without the shared setup reads the developer's
+# own environment, and reports green while doing it ---
+
+@test "suite isolation check names a suite that does not load the shared setup" {
+    printf '%s\n' '@test "t" { true; }' > "$WORK/forgot.bats"
+    printf 'load setup_common\n@test "t" { true; }\n' > "$WORK/remembered.bats"
+    run suite_setup_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"forgot.bats"* ]]
+    [[ "$output" != *"remembered.bats"* ]]
+}
+
+@test "suite isolation check passes when every suite loads the shared setup" {
+    printf 'load setup_common\n@test "t" { true; }\n' > "$WORK/a.bats"
+    run suite_setup_check "$WORK"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all 1 suite(s)"* ]]
+}
+
+@test "suite isolation check refuses a directory it found no suite in" {
+    run suite_setup_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nothing was checked"* ]]
+}
+
 # --- skill_lib_sync_check: a skill's declared sourcing must cover the real
 # dependency closure of the functions it calls, computed from the lib files
 # themselves rather than trusted by inspection ---
 
-# owned_skills is a fixed list inside the check, so a fixture root needs a
-# (possibly empty) SKILL.md for each of the five names or the check reports
-# them as missing, which would mask the thing under test.
+# owned_docs is a fixed list inside the check, so a fixture root needs a
+# (possibly empty) file for every path it names -- all eight skills and the
+# command -- or the check reports them as missing, which would mask the thing
+# under test.
 sync_fixture() {
     local root="$1" describe_block="$2"
     mkdir -p "$root/lib"
@@ -101,10 +130,12 @@ EOF
     cat > "$root/lib/b.sh" <<'EOF'
 herdr_linear::fn_b() { herdr_linear::fn_a; }
 EOF
-    for s in new new-sub-issue bind layout; do
+    for s in new new-sub-issue new-project bind layout start doc; do
         mkdir -p "$root/skills/$s"
         printf -- '---\nname: %s\n---\nno bash here\n' "$s" > "$root/skills/$s/SKILL.md"
     done
+    mkdir -p "$root/commands"
+    printf -- 'no bash here\n' > "$root/commands/work.md"
     mkdir -p "$root/skills/describe"
     printf -- '---\nname: describe\n---\n%s\n' "$describe_block" > "$root/skills/describe/SKILL.md"
 }
@@ -141,3 +172,158 @@ herdr_linear::fn_never_defined
     [[ "$output" == *"fn_never_defined"* ]]
 }
 
+
+# commands/work.md calls lib verbs and was scanned by nothing until U5. Without
+# this case the extended list is an assertion; with it, it is proven.
+@test "sync check covers the command, not only the skills" {
+    sync_fixture "$WORK" 'no bash here'
+    cat > "$WORK/commands/work.md" <<'CMD'
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/b.sh"
+herdr_linear::fn_b
+```
+CMD
+    run skill_lib_sync_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"commands/work.md"* ]]
+    [[ "$output" == *"missing"*"'a'"* ]]
+}
+
+
+# --- the delegation briefs ---
+#
+# consent_caller_check greps lib/, hooks/ and commands/ only: a write skill
+# legitimately calls consent_confirm and consent_decline in its own fence, so
+# skills/ cannot be swept wholesale. That leaves one gap. U9 tells three skills to hand a step to
+# a subagent, and a subagent has no prompt channel -- so a brief that says "ask
+# which one" or calls a record verb loses a decision or answers the person's
+# question for them, and ships green today. The brief is fenced as ```text so
+# it can be read back and held to that.
+
+brief_check() {
+    python3 - "$1" <<'PYEOF'
+import sys, os, re
+
+root = sys.argv[1]
+BANNED = ("consent_confirm", "consent_decline", "consent_propose", "binding_confirm",
+          "workspace_confirm", "binding_add_child", "AskUserQuestion",
+          "blocking question tool")
+rc = 0
+for skill in ("bind", "layout", "describe"):
+    p = os.path.join(root, "skills", skill, "SKILL.md")
+    if not os.path.exists(p):
+        print("%s: missing" % p); rc = 1; continue
+    briefs = re.findall(r'```text\n(.*?)```', open(p).read(), re.S)
+    if not briefs:
+        print("%s: carries no subagent brief" % p); rc = 1; continue
+    for b in briefs:
+        for word in BANNED:
+            if word in b:
+                print("%s: the brief tells a subagent to ask or record (%s)"
+                      % (p, word)); rc = 1
+sys.exit(rc)
+PYEOF
+}
+
+@test "no shipped brief tells a subagent to ask or record" {
+    run brief_check "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
+    [ "$status" -eq 0 ]
+}
+
+@test "a brief that records an answer is caught, and the file is named" {
+    for s in bind layout describe; do
+        mkdir -p "$WORK/skills/$s"
+        printf -- '```text\nRead them and reply with the path.\n```\n' > "$WORK/skills/$s/SKILL.md"
+    done
+    printf -- '```text\nRead them, then run herdr_linear::consent_confirm.\n```\n' \
+        > "$WORK/skills/describe/SKILL.md"
+    run brief_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"describe/SKILL.md"* ]]
+    [[ "$output" == *"consent_confirm"* ]]
+}
+
+@test "a skill that lost its brief is caught" {
+    for s in bind layout describe; do
+        mkdir -p "$WORK/skills/$s"
+        printf -- '```text\nRead them and reply with the path.\n```\n' > "$WORK/skills/$s/SKILL.md"
+    done
+    printf -- 'the delegation section was deleted\n' > "$WORK/skills/layout/SKILL.md"
+    run brief_check "$WORK"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"layout/SKILL.md"* ]]
+    [[ "$output" == *"carries no subagent brief"* ]]
+}
+
+# ------------------------------------------------ the start skill (U6)
+
+start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.md"; }
+
+# R6, R7. The skill is where the person is, so it is where the repository
+# question is asked. Citing the readers by name is what makes it ask from the
+# record rather than from wherever it happens to be standing.
+@test "the start skill cites the repository readers by name" {
+    body="$(start_skill)"
+    [[ "$body" == *"herdr_linear::scope_repos"* ]]
+    [[ "$body" == *"herdr_linear::no_repo_reason"* ]]
+}
+
+# KTD7. An exit the table does not name is an exit the skill reads as failure.
+@test "the start skill's exit tables carry a row for the ask value" {
+    run bash -c "printf '%s\n' \"\$1\" | grep -cE '^\\| 6 \\|'" _ "$(start_skill)"
+    [ "$output" = "2" ]
+}
+
+# R14. No caller supplies the name, so the skill must not tell anyone to.
+@test "the start skill passes no worktree name and asks for none" {
+    body="$(start_skill)"
+    [[ "$body" != *"start_from_issue WEB-3318 drawer-blank"* ]]
+    [[ "$body" != *"Ask for the short name"* ]]
+}
+
+# The deferred verb's stand-in. Without it a wrong answer is recorded forever.
+@test "the start skill states how to undo a wrongly recorded repository" {
+    body="$(start_skill)"
+    [[ "$body" == *"scopes/"* ]]
+}
+
+# ------------------------------------------ nobody places a session unasked (KTD31)
+
+placement_tree() {
+    mkdir -p "$WORK/p/lib" "$WORK/p/hooks" "$WORK/p/commands"
+    printf 'herdr_linear::workspace_confirm() {\n    :\n}\n' > "$WORK/p/lib/binding.sh"
+    printf 'herdr_linear::new_project() {\n    herdr_linear::workspace_confirm "$ws" "$pid" "$n"\n}\n' > "$WORK/p/lib/create.sh"
+    printf '#!/bin/bash\n' > "$WORK/p/hooks/ground.sh"
+}
+
+@test "the placement caller check passes the one site that binds a space it made" {
+    placement_tree
+    run placement_caller_check "$WORK/p"
+    [ "$status" -eq 0 ]
+}
+
+# A space binding is a person's answer. A hook has nobody to ask.
+@test "a hook that binds a space or opens a session turns the placement check red" {
+    for verb in workspace_confirm workspace_propose open_session layout_build; do
+        placement_tree
+        printf 'herdr_linear::%s x\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"ground.sh"* ]]
+        rm -rf "$WORK/p"
+    done
+}
+
+@test "a second lib caller of workspace_confirm turns the placement check red" {
+    placement_tree
+    printf 'herdr_linear::open_session() {\n    herdr_linear::workspace_confirm a b c\n}\n' >> "$WORK/p/lib/create.sh"
+    run placement_caller_check "$WORK/p"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"open_session"* ]]
+}
+
+@test "the placement check refuses a tree it cannot sweep" {
+    mkdir -p "$WORK/q/lib"
+    run placement_caller_check "$WORK/q"
+    [ "$status" -ne 0 ]
+}

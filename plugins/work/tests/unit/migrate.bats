@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U12 — the credential migration and the in-tree cache refresh.
 #
 # Nothing here touches the real Keychain, the real ~/.secrets, or the real

@@ -44,6 +44,10 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd -P)" ||
 if [ -n "$LIB_DIR" ] && [ -r "$LIB_DIR/secrets.sh" ]; then
     # shellcheck source=/dev/null
     . "$LIB_DIR/secrets.sh"
+    # This script NAMES FILES after tracker-authored identifiers, so it fails
+    # closed without the validator rather than writing outside the cache.
+    # shellcheck source=/dev/null
+    . "$LIB_DIR/sanitize.sh"
     # linear.sh owns the one credential resolver. This script had its own copy,
     # which is two places for the Keychain-then-plaintext order to drift.
     # shellcheck source=/dev/null
@@ -91,6 +95,9 @@ write_nodes() {
   jq -c '.[]' | while read -r n; do
     id=$(printf '%s' "$n" | jq -r '.identifier')
     [ -n "$id" ] && [ "$id" != "null" ] || continue
+    # The identifier becomes the filename. Anyone who can name an issue in this
+    # workspace would otherwise choose where this script writes.
+    herdr_linear::is_safe_identifier "$id" || continue
     printf '%s' "$n" | jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{id: .identifier, title: .title, project: (.project.name // ""),
         status: (.state.name // ""), fetchedAt: $now}' >"$CACHE/$id.json"

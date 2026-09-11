@@ -1,9 +1,12 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U8 — reconciliation writes.
 #
 # This is the first code in the plugin that can change anything in Linear, so
 # the tests are organised around what must NOT happen: no write from an unbound
-# worktree, none from outside the Slate root, none while shadow mode is on, none
+# worktree, none from outside the project root, none while shadow mode is on, none
 # recorded when the API said it failed, and nothing that can hold a session open.
 #
 # The network is tests/fixtures/fake-linear.sh, which refuses any GraphQL
@@ -28,7 +31,7 @@ setup() {
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
 
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -37,10 +40,9 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    export HERDR_LINEAR_WRITE_ALLOWLIST="$WORK/write-enabled"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     export HERDR_LINEAR_GH_BIN="$WORK/no-such-gh"
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_RECONCILERECONCILE1" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
@@ -50,7 +52,7 @@ setup() {
     # rather than stubbed.
     ORIGIN="$WORK/origin.git"
     git init -q --bare -b main "$ORIGIN"
-    WT="$WORK/Slate/wt"
+    WT="$WORK/root/wt"
     git init -q -b main "$WT"
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
     git -C "$WT" remote add origin "$ORIGIN"
@@ -76,7 +78,17 @@ merge_into_main() {
     git -C "$WT" fetch -q origin
 }
 
-enable_writes() { (cd "$WT" && pwd -P) > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
+# The answer a person would have given, recorded the only way the store accepts
+# one: propose, then confirm with the nonce it returned. The ids are the fake
+# tracker's -- the same pair every issue in these fixtures sits in.
+TEAM_ID=55555555-5555-4555-8555-555555555555
+PROJECT_ID=44444444-4444-4444-8444-444444444444
+grant_consent() {
+    local dir="$1" team="${2:-$TEAM_ID}" project="${3-$PROJECT_ID}" n
+    n="$(herdr_linear::consent_propose "$dir" "$team" "$project")"
+    herdr_linear::consent_confirm "$dir" "$team" "$project" "$n"
+}
+enable_writes() { grant_consent "$WT"; }
 # grep -c prints "0" AND exits 1 when there are no matches, so a trailing
 # `|| echo 0` appends a SECOND zero and every "= 0" assertion fails against
 # "0\n0". Capture into a variable instead.
@@ -143,7 +155,7 @@ mutations_sent() {
 # reflog is the discriminator, and it has to be: a genuine merge also leaves
 # ahead=0, and a fast-forward landing leaves HEAD equal to origin/main.
 @test "a worktree with no commits of its own is never completed" {
-    FRESH="$WORK/Slate/fresh"
+    FRESH="$WORK/root/fresh"
     git -C "$WT" worktree add -q -b feature/web-9999-fresh "$FRESH" main
     signals="$(herdr_linear::repo_signals "$FRESH")"
     [[ "$signals" == *"merged=yes"* ]]
@@ -154,7 +166,7 @@ mutations_sent() {
     # And the whole pass writes nothing, with writes on and a mutation allowed.
     n="$(herdr_linear::binding_propose "$FRESH" WEB-2870)"
     herdr_linear::binding_confirm "$FRESH" WEB-2870 "$n"
-    printf '%s\n' "$(cd "$FRESH" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$FRESH"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::reconcile "$FRESH"
     [ "$status" -eq 1 ]
@@ -193,23 +205,41 @@ mutations_sent() {
     [[ "$output" == *"merged=yes"* ]]
 }
 
-@test "an empty allowlist is not the same as a missing one -- both keep shadow mode on" {
+# R9a. The hook has nobody to ask, so it records what it would have written --
+# in its own slot, where the next session can surface it.
+@test "a hook with no recorded answer records the question rather than sending" {
     bind_wt WEB-2870
     merge_into_main
     export FAKE_LINEAR_MODE=found_parent
-    : > "$HERDR_LINEAR_WRITE_ALLOWLIST"
     run herdr_linear::reconcile "$WT"
     [ "$status" -eq 2 ]
     [ "$(mutations_sent)" = "0" ]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-2870"* ]]
+    [[ "$output" == *"did not happen"* ]]
 }
 
-# A path prefix must not enable a sibling worktree. The allowlist is matched
-# whole-line, so `.../wt` does not enable `.../wt-other`.
-@test "the allowlist matches a whole path, not a prefix" {
+# KTD3. The judgment slot holds one thing and has already evicted the
+# squash-merge question once. The consent question gets its own.
+@test "recording the consent question does not evict a pending judgment" {
+    bind_wt WEB-2870
+    merge_into_main
+    herdr_linear::binding_set_judgment "$WT" "did this land?"
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::reconcile "$WT"
+    [ "$status" -eq 2 ]
+    run herdr_linear::binding_take_judgment "$WT" other-session
+    [ "$output" = "did this land?" ]
+}
+
+# An answer for a sibling directory is not an answer for this one.
+@test "an answer recorded for a sibling worktree does not enable the write" {
     bind_wt WEB-2870
     merge_into_main
     export FAKE_LINEAR_MODE=found_parent
-    printf '%s\n' "$(cd "$WT" && pwd -P)-other" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    mkdir -p "$WT-other"
+    grant_consent "$WT-other"
     run herdr_linear::reconcile "$WT"
     [ "$status" -eq 2 ]
     [ "$(mutations_sent)" = "0" ]
@@ -367,31 +397,32 @@ mutations_sent() {
     [ "$status" -eq 0 ]
 }
 
-# ISOLATES containment. The test below it cannot: an outside worktree is also
-# unbound, so reconcile refuses it either way and the status is identical with
-# and without the check. This one BINDS the outside worktree first, so
-# containment is the only thing left that can refuse it.
-@test "a BOUND worktree outside the Slate root is still refused, by containment alone" {
-    OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
+# Containment is retired as a gate (R2/R7): a bound, write-enabled worktree
+# reconciles wherever it sits. Binding it directly through the store is what
+# ISOLATES that -- an unbound outside worktree is refused either way, so the
+# status would be identical with and without the retired check.
+@test "a BOUND worktree outside the project root reconciles like any other" {
+    OUT="$WORK/elsewhere/wt"; mkdir -p "$OUT"
     git init -q -b main "$OUT"
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
 
     # Bind it directly through the store: lib/binding.sh does not enforce the
-    # Slate root -- containment is the caller's job, which is exactly the
+    # project root -- containment is the caller's job, which is exactly the
     # property under test.
     n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"
     herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
     [ "$(herdr_linear::binding_state "$OUT")" = "bound" ]
 
-    printf '%s\n' "$(cd "$OUT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$OUT"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::reconcile "$OUT"
-    [ "$status" -eq 4 ]
+    [ "$status" -eq "$HERDR_LINEAR_RECONCILE_NOTHING" ]
     [ "$(mutations_sent)" = "0" ]
 }
 
-@test "a worktree outside the Slate root is never written from" {
-    OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
+# Still refused -- by the binding, which is the gate that remains.
+@test "an unbound worktree outside the project root is never written from" {
+    OUT="$WORK/elsewhere/wt"; mkdir -p "$OUT"
     git init -q -b main "$OUT"
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1

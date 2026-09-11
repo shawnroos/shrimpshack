@@ -13,19 +13,26 @@ Report the state of the worktree you are in. Read it, do not guess it:
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
 source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/binding.sh"
-source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"; source "$R/lib/sanitize.sh"
+source "$R/lib/linear.sh"; source "$R/lib/sanitize.sh"
+source "$R/lib/herdr-read.sh"; source "$R/lib/context.sh"
 
-herdr_linear::contains "$PWD" || echo "outside the Slate root — this plugin does nothing here"
+herdr_linear::scope_signals "$PWD" "$(herdr_linear::workspace_id)"
 herdr_linear::binding_state "$PWD"
 herdr_linear::binding_identifier "$PWD" 2>/dev/null
 ```
+
+`scope_signals` prints two lines and never refuses. `path=` says whether this
+directory sits under a known projects root; `project=` names the tracker project
+it maps to, or `negative` when none does, or `unknown` when the tracker could not
+be reached. **Report both and carry on.** `outside` and `negative` together mean
+nothing here maps to tracked work, which is worth saying and is not a reason to
+stop. `unknown` is not `negative` — an unread signal is not an absent one.
 
 Then say, in one or two lines, what state it is in and the single most useful
 next step:
 
 | State | Say |
 |---|---|
-| outside the Slate root | this plugin does nothing here. Stop. |
 | `unbound` | not bound. `/work:bind` to bind it, or `/work:start` for new work elsewhere |
 | `proposed` | a candidate was offered and not confirmed. `/work:bind` to finish |
 | `bound` | name the issue, its state, and whether anything is waiting (below) |
@@ -37,8 +44,9 @@ When bound, also report:
 ```bash
 # anything recorded for this session to see
 herdr_linear::binding_read "$PWD" | python3 -c 'import sys,json;d=json.load(sys.stdin);j=d.get("pending_judgment");print(j["text"] if j else "nothing waiting")' | herdr_linear::sanitize_stream
-# whether writes are on for this worktree, and what shadow mode has been saying
-herdr_linear::writes_enabled "$PWD" && echo "writes ENABLED here" || echo "shadow mode (nothing is sent)"
+# whether anyone has answered the write question for this directory
+herdr_linear::has_consent "$PWD" && echo "an answer is recorded here" || echo "no answer recorded — the first write will ask"
+herdr_linear::binding_pending_consent "$PWD" 2>/dev/null | herdr_linear::sanitize_stream
 # The shadow log holds issue titles and API error bodies, both written by
 # whoever files the tickets. It never reaches the terminal unfiltered.
 tail -5 "${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}" 2>/dev/null | herdr_linear::sanitize_stream
@@ -47,16 +55,39 @@ tail -5 "${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}" 2>/dev/null 
 ## With an issue identifier
 
 `/work WEB-3318` means *start on this*. Hand off to `/work:start`, which creates
-the worktree and binds it. That path writes nothing to Linear.
+the worktree at a path derived from the ticket and binds it — or, when more
+than one repository or none is recorded for the ticket's project, comes back
+asking which repository to use and creates nothing until that is answered.
+That path writes nothing to Linear.
 
 ## With `status`
 
-The same report, plus the credential and the write allowlist:
+The same report, plus the credential and the recorded answer:
 
 ```bash
 bash "$R/bin/migrate-credential.sh" report
-cat "${HERDR_LINEAR_WRITE_ALLOWLIST:-$HOME/.claude/work/write-enabled}" 2>/dev/null || echo "no worktree has writes enabled"
+herdr_linear::binding_read "$PWD" 2>/dev/null \
+  | python3 -c 'import sys,json;c=json.load(sys.stdin).get("consent");print(json.dumps(c) if c else "no answer recorded for this directory")'
 ```
+
+**There is no allowlist file.** Writes are opened by answering the question the
+first write asks, and the answer is scoped to the team, project and branch it
+named. A different team, a different project, or a different branch asks again.
+
+## Reading a lot to decide a little
+
+When a step's raw output is large and the part you decide on is small — reading
+each candidate issue, fetching a parent's children, reading a branch's history —
+**send a subagent to do the reading**. Give it a scratch path, have it write the
+raw output there, and take back the path plus one line per thing you may choose.
+Open the file only for a detail those lines do not carry. `/work:bind`,
+`/work:layout` and `/work:describe` each say what to brief it with.
+
+**A subagent reads and reports. It never asks and it never records.** It has no
+prompt channel, so a question handed to it is a decision lost — it names what is
+ambiguous, and you ask here. The question each write skill asks before its first
+write is answered in this session, by a person, and no subagent's reply stands
+in for that answer.
 
 ## The rest
 

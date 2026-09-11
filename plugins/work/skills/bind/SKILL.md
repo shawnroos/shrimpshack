@@ -6,6 +6,26 @@ disable-model-invocation: true
 
 # Bind a worktree to a Linear issue
 
+## Act or ask
+
+- **Mechanically derivable** — the team a single-team project has, the project a
+  worktree's path names, an unambiguous default — **resolve it yourself** and
+  carry on.
+- **A genuine fork** — which of three teams, which side of a misplaced binding
+  to move, whether this is a project or a parent issue — **ask**, name every
+  candidate, and change nothing until it is answered.
+- **When you cannot tell which of the two it is, ask.** The default for a
+  substantive choice is ask, not resolve.
+
+**Say every resolution out loud before you act on it**, naming three things:
+the fact, where you read it, and how you derived it.
+
+> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+
+That one line lets a reader catch a wrong answer and its cause without opening a
+log. And nothing here refuses: a reader answering `outside`, `negative` or
+`unknown` is a signal to weigh and to say, never a reason to stop.
+
 **`disable-model-invocation: true` is load-bearing, not tidiness.** It is the
 other half of R6.
 
@@ -39,14 +59,18 @@ one anywhere.
 
 ## Before anything
 
-Run the containment check first. A worktree outside the Slate project root is
-refused outright — this plugin does not record bindings in repositories it was
-never pointed at.
+Read the path signal. It answers `inside` or `outside` and always succeeds — a
+worktree outside the known projects root is a fact to state, not a reason to
+stop.
 
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
-herdr_linear::contains "$PWD" || echo "outside the Slate root; nothing to do"
+herdr_linear::path_signal "$PWD"
 ```
+
+Say `outside` out loud before recording a binding somewhere this plugin was
+never pointed at. The path signal alone decides nothing: Step 1 resolves the
+project itself, and that is the stronger signal.
 
 ## Step 1 — offer the candidates
 
@@ -76,12 +100,38 @@ search, do not drop the assignee filter, do not list every issue in the
 workspace. An empty filtered list is a real answer, and R20 makes working
 without an issue a supported state — not a problem to solve.
 
-**Exit 2 means this worktree is outside the Slate root.** Same containment
-check as "Before anything" above, run again inside `candidates` itself. Say so
-and stop; nothing was recorded.
-
 **Exit 3 means Linear could not be reached.** Say that, and stop. Nothing is
 recorded.
+
+## When you need more than the list to choose
+
+`candidates` prints at most `HERDR_LINEAR_CANDIDATE_LIMIT` lines, five by
+default, one line each. That list stays here — dispatching a subagent to carry
+five lines is latency bought for nothing.
+
+Opening each candidate to see which one is really this worktree's work is the
+heavy part, and it is the part to hand off. **Dispatch a subagent**, with a
+scratch path — your session's scratchpad directory when the harness gives you
+one, otherwise a path carrying this worktree's name, never a shared one:
+
+```text
+For each identifier below, read the issue and write one block per issue to
+<scratch path>: identifier, title, state, and two lines on what it covers. Rank
+them against this branch name and this worktree's recent commits; when two fit
+equally, say so instead of ordering them. Reply with the path and one line per
+issue in your ranked order. Create nothing, bind nothing, write nothing back to
+the tracker, and run no git command that moves HEAD.
+```
+
+**The gist ranks the candidates; it never shortens them.** A candidate dropped
+on the way back is a candidate the person never gets offered, and they cannot
+see that it happened. Open the file when you need more than a line.
+
+**The subagent reads; it never asks and it never records.** It has no prompt
+channel, so a question handed to it is a decision lost. Ambiguity — two issues
+that both fit, a title that could be either — comes back as a line in the file,
+and you ask here. Step 2's question and everything `binding_confirm` records
+happen in this session, with a person answering.
 
 ## Step 2 — ask, and only then record
 
@@ -119,9 +169,15 @@ related work, so the issue that tab was created from is the likely parent. Ask.
 **Create with no parent when the parent is not confirmed**; a guessed parent is
 worse than none, because it silently re-homes work.
 
-Follow `docs/linear-conventions.md`: a parent title is a noun phrase, a child
-title is a full sentence naming the problem or the outcome, and the description
-sections are `## What`, `## Why`, `## Not in this PR`, `## Verification`.
+Read the conventions, which ship with the plugin:
+
+```bash
+cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+```
+
+A parent title is a noun phrase, a child title is a full sentence naming the
+problem or the outcome, and the description sections are `## What`, `## Why`,
+`## Not in this PR`, `## Verification`.
 **Anything that document lists under "Not yet settled" is a question for Shawn,
 not a default to pick** — that includes who is assigned, whether to apply
 `ready-for-ai`, and whether to create a project rather than a parent issue.

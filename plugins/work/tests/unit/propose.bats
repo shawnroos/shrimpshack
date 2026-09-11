@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U7 — candidate generation, and the skill's contract.
 #
 # NO LINEAR OBJECT IS CREATED OR MODIFIED HERE. fake-linear.sh refuses any
@@ -13,7 +16,7 @@ setup() {
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
 
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -22,34 +25,40 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_PROPOSEPROPOSEPROPO" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh propose.sh; do . "$ROOT/lib/$f"; done
 
-    WT="$WORK/Slate/wt"; mkdir -p "$WT"
+    WT="$WORK/root/wt"; mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-3318-drawer
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
-    NOID="$WORK/Slate/noid"; mkdir -p "$NOID"
+    NOID="$WORK/root/noid"; mkdir -p "$NOID"
     git -C "$NOID" init -q -b rehome-sprawl
     git -C "$NOID" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
-    OUTSIDE="$WORK/NotSlate/wt"; mkdir -p "$OUTSIDE"
+    OUTSIDE="$WORK/elsewhere/wt"; mkdir -p "$OUTSIDE"
     git -C "$OUTSIDE" init -q -b feature/web-3318-drawer
     git -C "$OUTSIDE" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 }
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
+mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
+
 # --------------------------------------------------------------- containment
 
-@test "a worktree outside the Slate root is refused before anything is read" {
+# The containment refusal is retired: candidates is a reader, and a reader
+# answers. Nothing is written here whatever the answer -- the fixture refuses
+# every mutation, and this asserts none was attempted.
+@test "a worktree outside the project root is answered rather than refused" {
     export FAKE_LINEAR_MODE=found_child
     run herdr_linear::candidates "$OUTSIDE"
-    [ "$status" -eq 2 ]
-    [ ! -f "$FAKE_LINEAR_RECORD_DIR/bodies" ]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-3318"* ]]
+    [ "$(mutations)" = "0" ]
 }
 
 # ------------------------------------------------------------- the branch rule
@@ -246,15 +255,18 @@ rlo="$(printf '\342\200\256')"
     [ "$output" = "1" ]
 }
 
-@test "the bind skill runs the containment check before recording anything" {
+@test "the bind skill reads the scope signal before recording anything" {
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
-    [[ "$body" == *"herdr_linear::contains"* ]]
+    [[ "$body" == *"herdr_linear::path_signal"* ]]
+    # The ordering check alone stays green if someone adds the reader and leaves
+    # the retired gate verb in place beside it. This is what refuses that.
+    [[ "$body" != *"herdr_linear::contains"* ]]
     # Anchored at line start, so only the INSTRUCTION inside a code block counts.
     # Matching any mention compared against prose instead: a paragraph
     # explaining that a session with Bash could call binding_confirm directly
-    # sits above the containment section, and failed a test about instruction
+    # sits above the signal section, and failed a test about instruction
     # order on the strength of a sentence.
-    c=$(grep -n '^herdr_linear::contains' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
+    c=$(grep -n '^herdr_linear::path_signal' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
     r=$(grep -n '^herdr_linear::binding_confirm' "$ROOT/skills/bind/SKILL.md" | head -1 | cut -d: -f1)
     [ -n "$c" ] && [ -n "$r" ]
     [ "$c" -lt "$r" ]
@@ -268,6 +280,10 @@ rlo="$(printf '\342\200\256')"
 
 @test "the bind skill defers to the conventions doc on unsettled questions" {
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
-    [[ "$body" == *"linear-conventions.md"* ]]
+    # Single-quoted, so the pattern is the literal token. Double quotes expand
+    # the variable, and the test would then pass on any path merely ENDING in
+    # docs/linear-conventions.md -- including a bare prose citation.
+    [[ "$body" == *'${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md'* ]]
     [[ "$body" == *"Not yet settled"* ]]
+    [ -r "$ROOT/docs/linear-conventions.md" ]
 }

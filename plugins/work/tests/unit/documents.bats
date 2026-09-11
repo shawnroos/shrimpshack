@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+
+load setup_common
+
 # U15 — Linear documents in place of a gitignored /docs.
 #
 # No document is created or modified anywhere real. The curl stand-in records
@@ -10,7 +13,7 @@ setup() {
     ROOT="${BATS_TEST_DIRNAME}/../.."
     FIX="${BATS_TEST_DIRNAME}/../fixtures"
     WORK="$(mktemp -d)"
-    export HERDR_LINEAR_SLATE_ROOT="$WORK/Slate"
+    export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -19,15 +22,14 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    export HERDR_LINEAR_WRITE_ALLOWLIST="$WORK/write-enabled"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
-    mkdir -p "$WORK/Slate" "$WORK/rec" "$WORK/cache"
+    mkdir -p "$WORK/root" "$WORK/rec" "$WORK/cache"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_DOCSDOCSDOCSDOCSDOC" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh documents.sh; do . "$ROOT/lib/$f"; done
 
-    WT="$WORK/Slate/wt"; mkdir -p "$WT"
+    WT="$WORK/root/wt"; mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-2870-detach
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
@@ -35,10 +37,27 @@ setup() {
     printf '# Texture leak on image swap\n\nThe pool is never drained.\n\n```ts\nconst x = 1;\n```\n' > "$DOC"
 }
 
+refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
+    if grep "$@"; then
+        printf 'refute_match: unexpectedly matched: %s\n' "$*" >&2
+        return 1
+    fi
+}
+
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
 bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
-enable_writes() { (cd "$WT" && pwd -P) > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
+# The answer a person would have given, recorded the only way the store accepts
+# one: propose, then confirm with the nonce it returned. The ids are the fake
+# tracker's -- the same pair every issue in these fixtures sits in.
+TEAM_ID=55555555-5555-4555-8555-555555555555
+PROJECT_ID=44444444-4444-4444-8444-444444444444
+grant_consent() {
+    local dir="$1" team="${2:-$TEAM_ID}" project="${3-$PROJECT_ID}" n
+    n="$(herdr_linear::consent_propose "$dir" "$team" "$project")"
+    herdr_linear::consent_confirm "$dir" "$team" "$project" "$n"
+}
+enable_writes() { grant_consent "$WT"; }
 sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 
 # ------------------------------------------------------------------- titles
@@ -147,15 +166,30 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$(sent documentCreate)" = "0" ]
 }
 
-@test "a worktree outside the Slate root publishes nothing" {
-    OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
+# Containment is a signal now, not a gate. A worktree outside the configured
+# root that is bound and write-enabled publishes like any other -- the binding
+# and the write allowlist are what decide, and the test below proves the second
+# of them still does.
+@test "a worktree outside the project root is no longer refused for being outside" {
+    OUT="$WORK/elsewhere/wt"; mkdir -p "$OUT"
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
     n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"; herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
-    printf '%s\n' "$(cd "$OUT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
+    grant_consent "$OUT"
     export FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::doc_publish "$OUT" diagnosis "x" "$DOC"
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 0 ]
+    [ "$(sent documentCreate)" = "1" ]
+}
+
+@test "a worktree outside the project root that is not write-enabled still publishes nothing" {
+    OUT="$WORK/elsewhere/wt2"; mkdir -p "$OUT"
+    git -C "$OUT" init -q -b main
+    git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
+    n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"; herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::doc_publish "$OUT" diagnosis "x" "$DOC"
+    [ "$status" -eq "$HERDR_LINEAR_DOC_SHADOW" ]
     [ "$(sent documentCreate)" = "0" ]
 }
 
@@ -167,17 +201,45 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$status" -ne 0 ]
 }
 
+# R14. The conventions document the plugin's own code and skills cite must
+# travel inside the plugin, not sit in a repository the reader may not have.
+# The plugin-relative path and the old repo-root path are the SAME string, so a
+# substring match on the filename proves nothing -- readability under the
+# plugin root is what discriminates.
+@test "the conventions document ships inside the plugin" {
+    [ -r "$ROOT/docs/linear-conventions.md" ]
+    run test -e "$ROOT/../../docs/linear-conventions.md"
+    [ "$status" -ne 0 ]
+}
+
+# R8. The document is cited by a plugin being generalised away from one
+# company, so its title cannot name that company.
+@test "the conventions document is not titled for one organisation" {
+    # head of a missing file is empty, and an empty stream matches nothing --
+    # so without this the refutation passes on a doc that does not exist.
+    [ -r "$ROOT/docs/linear-conventions.md" ]
+    # Assembled, not written out: the literal would itself be a hit for the
+    # tree-wide brand scan in run-tests.sh that enforces this same rule.
+    local name; name="$(printf 'S%s' late)"
+    refute_match -qF "$name" < <(head -1 "$ROOT/docs/linear-conventions.md")
+}
+
 # doc_publish has no projectId path -- it always resolves the bound issue and
 # always sets issueId -- so a project-scoped kind must be refused rather than
 # silently mis-scoped as an issue document. Whether an agent may create a
-# project-scoped document is unsettled (docs/linear-conventions.md); this
-# function must not answer that by implementing a path around it.
+# project-scoped document is unsettled (the plugin's docs/linear-conventions.md);
+# this function must not answer that by implementing a path around it.
 @test "a project-scoped kind is refused, not silently attached to the issue" {
     bind_wt; enable_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::doc_publish "$WT" RFC "Brand Vocab" "$DOC"
     [ "$status" -eq 1 ]
     [ "$(sent documentCreate)" = "0" ]
+    # The refusal points the reader at a document they can open. A bare
+    # `docs/linear-conventions.md` reads as a repository path the reader may
+    # not have; the message must say what the path is relative to.
+    [[ "$output" == *"in this plugin, at docs/linear-conventions.md"* ]]
+    refute_match -qF ' in docs/linear-conventions.md)' <<<"$output"
 }
 
 @test "a missing content file is refused before anything is sent" {
@@ -202,6 +264,22 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 }
 
 # ------------------------------------------------------------- shadow mode
+
+# AE3, on the doc path. The named case the mutation phase forces red.
+@test "a document is not published when nobody has answered" {
+    bind_wt
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    run herdr_linear::has_consent "$WT"
+    [ "$status" -eq 1 ]
+    run herdr_linear::doc_publish "$WT" diagnosis "a texture leak" "$DOC"
+    [ "$status" -eq "$HERDR_LINEAR_DOC_SHADOW" ]
+    [ "$(sent documentCreate)" = "0" ]
+    run cat "$HERDR_LINEAR_SHADOW_LOG"
+    [[ "$output" == *"SHADOW would create document"* ]]
+    run herdr_linear::binding_pending_consent "$WT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"create document"* ]]
+}
 
 @test "shadow mode logs the document and sends nothing" {
     bind_wt
