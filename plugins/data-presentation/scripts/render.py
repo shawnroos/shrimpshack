@@ -225,7 +225,7 @@ def _headers(names, budget, width):
     A name that fits is printed whole. Once any name has to be cut, every header
     becomes a letter key and the names move to a legend above the table: at the six to
     nine characters a crowded table leaves, a fragment is not an identifier, and
-    remove-background and remove-logo both read as "remov…". Letters, not digits, so a
+    blurry-background and blurry-logo both read as "blurr…". Letters, not digits, so a
     header is never mistaken for data.
     """
     if all(len(name) <= budget for name in names):

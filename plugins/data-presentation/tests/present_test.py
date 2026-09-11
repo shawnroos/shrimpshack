@@ -221,17 +221,17 @@ def main():
 
     # --- the reported shape, end to end: six tools, two of them sharing a prefix ---
     # Mutation: return truncated names instead of keys in render._headers - this goes
-    # red, because remove-background and remove-logo both come back as "remov…".
+    # red, because blurry-background and blurry-logo both come back as "blurr…".
     _, out = run_cli({"title": "t", "x": ["a", "b"],
                       "series": {name: [1, 2] for name in
-                                 ("remove-background", "studio-lighting", "relight",
-                                  "godrays", "detach-foreground", "remove-logo")}})
+                                 ("blurry-background", "castle-lighting", "retouch",
+                                  "sunbeam", "sketch-foreground", "blurry-logo")}})
     header_row = next(line for line in out["block"].split("\n") if line.startswith("|  |"))
     header_cells = [c.strip() for c in header_row.split("|")[2:-1]]
     check("six tool columns come back individually identifiable",
           len(set(header_cells)) == 6, repr(header_cells))
-    check("the block names remove-background in full", "remove-background" in out["block"])
-    check("the block names remove-logo in full", "remove-logo" in out["block"])
+    check("the block names blurry-background in full", "blurry-background" in out["block"])
+    check("the block names blurry-logo in full", "blurry-logo" in out["block"])
 
     # --- a renderer refusal reaches the caller as a refusal, not a crash (P1) ---
     # Eight nine-character values cannot fit 72 columns, and cutting one would falsify
@@ -302,12 +302,12 @@ def main():
     weeks = ["Jun 08", "Jun 15", "Jun 22", "Jun 29", "Jul 06", "Jul 13", "Jul 20",
              "Jul 27", "Aug 03", "Aug 10", "Aug 17", "Aug 24", "Aug 31"]
     tools = {
-        "remove-background": [0, 0, 0, 0, 7, 6, 1, 5, 3, 5, 1, 2, 13],
-        "studio-lighting": [0, 0, 0, 0, 1, 2, 0, 1, 0, 0, 0, 0, 9],
-        "relight": [0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 8],
-        "godrays": [0, 0, 0, 0, 5, 2, 0, 1, 0, 0, 1, 0, 7],
-        "detach-foreground": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-        "remove-logo": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        "blurry-background": [0, 0, 0, 0, 4, 8, 2, 6, 2, 4, 3, 1, 13],
+        "castle-lighting": [0, 0, 0, 0, 2, 1, 0, 2, 0, 1, 0, 0, 9],
+        "retouch": [0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 1, 0, 8],
+        "sunbeam": [0, 0, 0, 0, 3, 4, 0, 2, 0, 0, 2, 0, 7],
+        "sketch-foreground": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        "blurry-logo": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
     }
     _, out = run_cli({"title": "t", "x": weeks, "series": tools})
     check("six tools over thirteen weeks come back as sparkline rows",
@@ -317,15 +317,15 @@ def main():
           sorted(spark_rows) == sorted(tools), repr(sorted(spark_rows)))
     # Mutation: per-row scaling in sparkline_with_meta - this goes red end to end.
     check("the single-event tool ends low while the peak of thirteen ends full",
-          spark_rows["detach-foreground"].endswith("\u2582   1")
-          and spark_rows["remove-background"].endswith("\u2588  13"),
-          repr([spark_rows.get("detach-foreground"), spark_rows.get("remove-background")]))
+          spark_rows["sketch-foreground"].endswith("\u2582   1")
+          and spark_rows["blurry-background"].endswith("\u2588  13"),
+          repr([spark_rows.get("sketch-foreground"), spark_rows.get("blurry-background")]))
 
     latest = {name: [values[-1]] for name, values in tools.items()}
     _, out = run_cli({"title": "t", "x": ["Aug 31"], "series": latest})
     check("the latest week alone comes back as bars", out["form"] == "bars", repr(out["form"]))
     bar_lines = out["block"].split("\n")[1:]
-    check("the bars lead with the largest tool", bar_lines[0] == "remove-background", repr(bar_lines[:2]))
+    check("the bars lead with the largest tool", bar_lines[0] == "blurry-background", repr(bar_lines[:2]))
 
     # Columns cannot hold six tool names whole, so they give way to bars and say so.
     # Mutation: re-raise DoesNotFit for columns in present - this goes red as a refusal.

@@ -32,12 +32,12 @@ def widest(block):
 WEEKS = ["Jun 08", "Jun 15", "Jun 22", "Jun 29", "Jul 06", "Jul 13", "Jul 20",
          "Jul 27", "Aug 03", "Aug 10", "Aug 17", "Aug 24", "Aug 31"]
 TOOLS = {
-    "remove-background": [0, 0, 0, 0, 7, 6, 1, 5, 3, 5, 1, 2, 13],
-    "studio-lighting": [0, 0, 0, 0, 1, 2, 0, 1, 0, 0, 0, 0, 9],
-    "relight": [0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 8],
-    "godrays": [0, 0, 0, 0, 5, 2, 0, 1, 0, 0, 1, 0, 7],
-    "detach-foreground": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    "remove-logo": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    "blurry-background": [0, 0, 0, 0, 4, 8, 2, 6, 2, 4, 3, 1, 13],
+    "castle-lighting": [0, 0, 0, 0, 2, 1, 0, 2, 0, 1, 0, 0, 9],
+    "retouch": [0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 1, 0, 8],
+    "sunbeam": [0, 0, 0, 0, 3, 4, 0, 2, 0, 0, 2, 0, 7],
+    "sketch-foreground": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    "blurry-logo": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
 }
 
 
@@ -65,18 +65,18 @@ def main():
     # per-row version has glyphs too. What must hold is that a single event is drawn
     # far below a series whose peak is thirteen.
     # Mutation: compute low and high per row inside the loop - this goes red, because
-    # detach-foreground's lone 1 is then its own maximum and draws as a full block.
+    # sketch-foreground's lone 1 is then its own maximum and draws as a full block.
     check("a single event never reaches the height of a peak of thirteen",
-          max(level(c) for c in marks["detach-foreground"]) == 1
-          and max(level(c) for c in marks["remove-background"]) == 7,
-          f"{marks['detach-foreground']!r} vs {marks['remove-background']!r}")
+          max(level(c) for c in marks["sketch-foreground"]) == 1
+          and max(level(c) for c in marks["blurry-background"]) == 7,
+          f"{marks['sketch-foreground']!r} vs {marks['blurry-background']!r}")
     check("the latest week draws 1 and 13 at different heights",
-          marks["detach-foreground"][-1] != marks["remove-background"][-1],
-          f"{marks['detach-foreground'][-1]!r} {marks['remove-background'][-1]!r}")
+          marks["sketch-foreground"][-1] != marks["blurry-background"][-1],
+          f"{marks['sketch-foreground'][-1]!r} {marks['blurry-background'][-1]!r}")
     # The same scale also places the middle series in order of their peaks.
     check("nine draws above one on the shared scale",
-          level(marks["studio-lighting"][-1]) > level(marks["remove-logo"][-1]),
-          f"{marks['studio-lighting']!r} {marks['remove-logo']!r}")
+          level(marks["castle-lighting"][-1]) > level(marks["blurry-logo"][-1]),
+          f"{marks['castle-lighting']!r} {marks['blurry-logo']!r}")
 
     rows = block.split("\n")[:6]
     check("every row starts with its full series name",
@@ -90,12 +90,12 @@ def main():
 
     # A gap is a space, never the lowest glyph: a zero and a gap must not look alike.
     # Mutation: have glyph() return SPARK_LEVELS[0] for NaN - this goes red.
-    gapped = list(TOOLS["godrays"])
+    gapped = list(TOOLS["sunbeam"])
     gapped[5] = None
-    _, gmeta = render.sparkline_with_meta(tools(godrays=gapped))
-    godrays_marks = gmeta["marks"][list(TOOLS).index("godrays")]
-    check("a missing week is drawn as a space", godrays_marks[5] == " ", repr(godrays_marks))
-    check("a zero week beside it is still drawn", godrays_marks[6] == "▁", repr(godrays_marks))
+    _, gmeta = render.sparkline_with_meta(tools(sunbeam=gapped))
+    sunbeam_marks = gmeta["marks"][list(TOOLS).index("sunbeam")]
+    check("a missing week is drawn as a space", sunbeam_marks[5] == " ", repr(sunbeam_marks))
+    check("a zero week beside it is still drawn", sunbeam_marks[6] == "▁", repr(sunbeam_marks))
 
     # A spike the width dropped still sets the scale. The stride keeps index 1 and then
     # every seventh point, so index 2 is not drawn; the footer must still say 999.
@@ -123,15 +123,15 @@ def main():
     check("the tools sparkline fits width 48", widest(narrow) <= 48, f"width={widest(narrow)}")
 
     # --- bars: ranked, zero-based, one scale, labels whole ---
-    shuffled = [("remove-logo", 1.0), ("godrays", 7.0), ("remove-background", 13.0),
-                ("detach-foreground", 1.0), ("relight", 8.0), ("studio-lighting", 9.0)]
+    shuffled = [("blurry-logo", 1.0), ("sunbeam", 7.0), ("blurry-background", 13.0),
+                ("sketch-foreground", 1.0), ("retouch", 8.0), ("castle-lighting", 9.0)]
     bars_block, bars_meta = render.bars_with_meta(tools(), shuffled)
     lines = bars_block.split("\n")
     # Mutation: drop the sort in _rank - this goes red. The input is deliberately out of
     # order; the tools data arrives already ranked and could not catch it.
     check("bars are ranked largest first, ties in the caller's order",
-          lines[0::2] == ["remove-background", "studio-lighting", "relight", "godrays",
-                          "remove-logo", "detach-foreground"], repr(lines[0::2]))
+          lines[0::2] == ["blurry-background", "castle-lighting", "retouch", "sunbeam",
+                          "blurry-logo", "sketch-foreground"], repr(lines[0::2]))
     # Mutation: scale each bar to its own value - every bar becomes 67 blocks, red.
     # Mutation: scale from the smallest value instead of zero - the 1s vanish, red.
     check("the largest bar fills the room left by the value", bars_meta["marks"][0] == "█" * 67,

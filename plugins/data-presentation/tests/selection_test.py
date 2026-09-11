@@ -119,8 +119,8 @@ def main():
     # --- snapshot comparisons are ranked bars ---
     check("the bar category cap is pinned at 20", constants.MAX_BAR_CATEGORIES == 20,
           repr(constants.MAX_BAR_CATEGORIES))
-    snapshot = {"remove-background": [13.0], "studio-lighting": [9.0], "relight": [8.0],
-                "godrays": [7.0], "detach-foreground": [1.0], "remove-logo": [1.0]}
+    snapshot = {"blurry-background": [13.0], "castle-lighting": [9.0], "retouch": [8.0],
+                "sunbeam": [7.0], "sketch-foreground": [1.0], "blurry-logo": [1.0]}
     # Mutation: delete the snapshot branch in choose - this goes red, back to a table.
     result = pick(snapshot, points=1)
     check("one x value across six series selects bars", result["form"] == "bars", result["form"])
