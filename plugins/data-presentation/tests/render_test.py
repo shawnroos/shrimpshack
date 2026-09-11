@@ -48,6 +48,18 @@ def main():
     check("just below the threshold is not abbreviated", not render.format_number(9999).endswith(("k", "M")), render.format_number(9999))
     check("at the threshold it is abbreviated", render.format_number(10000).endswith("k"), render.format_number(10000))
 
+    # Past a thousand trillion the T suffix needs four integer digits, and the step after
+    # rendered as "1e+04T": scientific notation with an SI suffix bolted on.
+    check("the scientific threshold is pinned at 1e15", constants.SCIENTIFIC_ABOVE == 1e15,
+          repr(constants.SCIENTIFIC_ABOVE))
+    # Mutation: move SCIENTIFIC_ABOVE to 1e30 - this goes red.
+    for huge in (1e16, 1e20, 1.79769e308, -3.2e17):
+        text = render.format_number(huge)
+        check(f"{huge:g} is never written with both an exponent and a suffix",
+              not ("e" in text and text[-1] in "kMBT"), repr(text))
+    check("just under the threshold keeps the T suffix", render.format_number(9.99e14).endswith("T"),
+          repr(render.format_number(9.99e14)))
+
     # --- charts keep real magnitude (R9) ---
     req = norm([42.0, 57.0, 51.0, 74.0, 68.0, 71.0, 80.0, 77.0])
     chart = render.chart(req, "S")

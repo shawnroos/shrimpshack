@@ -304,6 +304,16 @@ def main():
           unknown["requested_form"] == "auto" and any("heatmap" in n for n in unknown["notes"]),
           repr(unknown["notes"]))
 
+    # --- a range too large to draw ---
+    # Mutation: delete the infinite-span refusal in validate - this goes red. Every value
+    # below is finite, but max minus min is not, and the renderer's scale then collapses.
+    check("values whose range overflows are refused",
+          refusal(req(series={"S": [-1.79769e308, 0.0, 1.79769e308]})) is not None)
+    check("a very large but drawable range is still accepted",
+          refusal(req(series={"S": [-1e300, 0.0, 1e300]})) is None)
+    check("the overflow is judged across every series, not one at a time",
+          refusal(req(series={"A": [1.79769e308, 1.0, 1.0], "B": [-1.79769e308, 1.0, 1.0]})) is not None)
+
     # --- the gate cannot be bypassed ---
     check(
         "validate is the only exported entry point that returns a normalized request",

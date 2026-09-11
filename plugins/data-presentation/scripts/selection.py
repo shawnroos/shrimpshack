@@ -41,7 +41,7 @@ def _categories(request, allow_series_over_x):
         pairs = list(zip(x, values))
     else:
         return None, (
-            f"bars need one value per category, and this data has {len(series)} series "
+            f"there is not one value per category; this data has {len(series)} series "
             f"over {len(x)} x values"
         )
     if len(pairs) > constants.MAX_BAR_CATEGORIES:
@@ -51,7 +51,7 @@ def _categories(request, allow_series_over_x):
         )
     negative = next((label for label, v in pairs if not math.isnan(v) and v < 0), None)
     if negative is not None:
-        return None, f"bars are drawn from zero and {negative} is negative"
+        return None, f"{negative} is negative, and bars and columns start from zero"
     if not any(not math.isnan(v) and v > 0 for _, v in pairs):
         return None, "every category is zero, so there is nothing to draw"
     return pairs, None
@@ -66,7 +66,12 @@ def choose(request):
     """
     series = request["series"]
     requested = request.get("requested_form", "auto")
-    reasons = []
+    # Two kinds of note, kept apart because only one survives a refusal. `declined` says
+    # why a requested form could not be used, which stays true whatever happens next.
+    # `outcome` says what the chosen form is, which is only true once it has been drawn:
+    # "so a table is shown" stood beside a refusal when the table then could not fit.
+    declined, outcome = [], []
+    categories_declined = False
 
     def decision(form, **parts):
         return {
@@ -74,12 +79,14 @@ def choose(request):
             "chart_series": parts.get("chart_series", []),
             "table_series": parts.get("table_series", []),
             "categories": parts.get("categories", []),
-            "reasons": reasons,
+            "declined": list(declined),
+            "outcome": list(outcome),
+            "reasons": declined + outcome,
         }
 
     def as_table(reason):
         if reason:
-            reasons.append(reason)
+            outcome.append(reason)
         return decision("table", table_series=list(series))
 
     if requested == "table":
@@ -89,7 +96,8 @@ def choose(request):
         pairs, why_not = _categories(request, allow_series_over_x=True)
         if pairs:
             return decision(requested, categories=pairs)
-        reasons.append(f"{requested.capitalize()} were requested, but {why_not}; the form was chosen from the data instead.")
+        declined.append(f"{requested.capitalize()} were requested, but {why_not}; the form was chosen from the data instead.")
+        categories_declined = True
         requested = "auto"
 
     # Count what would actually plot. A gap is not a point.
@@ -102,13 +110,13 @@ def choose(request):
 
     if requested == "sparkline":
         if len(thin) == len(series):
-            reasons.append(
+            declined.append(
                 f"A sparkline was requested, but it needs at least "
                 f"{constants.MIN_CHART_POINTS} plottable points and the fullest series has "
                 f"{min(thin.values())}; the form was chosen from the data instead."
             )
         elif not varying:
-            reasons.append(
+            declined.append(
                 "A sparkline was requested, but every series holds one value throughout, "
                 "so there is no shape to draw; the form was chosen from the data instead."
             )
@@ -122,7 +130,7 @@ def choose(request):
     pairs, why_not = _categories(request, allow_series_over_x=False)
     if pairs:
         if requested == "chart":
-            reasons.append(
+            outcome.append(
                 "A chart was requested, but there is one x value, so the series are "
                 "compared as ranked bars instead."
             )
@@ -130,7 +138,7 @@ def choose(request):
     snapshot_blocked = len(request["x"]) == 1 and len(series) >= 2
 
     if len(thin) == len(series):
-        if snapshot_blocked:
+        if snapshot_blocked and requested == "auto" and not categories_declined:
             return as_table(f"There is one x value, but {why_not}, so a table is shown.")
         fewest = min(thin.values())
         return as_table(
@@ -147,7 +155,7 @@ def choose(request):
         )
 
     if len(series) > constants.MAX_STACKED_CHARTS:
-        reasons.append(
+        outcome.append(
             f"{len(series)} series is more than the {constants.MAX_STACKED_CHARTS} separate "
             "charts worth stacking, so each is drawn as a sparkline row on one shared scale"
             + (" instead of the chart that was requested." if requested == "chart" else ".")
@@ -158,7 +166,7 @@ def choose(request):
     # the table beside the charts rather than demoting every other series with it.
     flat = [name for name in series if name not in varying]
     if flat:
-        reasons.append(
+        outcome.append(
             "These series have too few points or no variation to plot and are shown in a "
             "table instead: "
             + ", ".join(flat)

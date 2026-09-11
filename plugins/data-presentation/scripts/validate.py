@@ -160,6 +160,16 @@ def validate(request):
     if len(series) != len(raw_series):
         raise Refusal("Two series share a name once their labels are cleaned up.")
 
+    # Every value can be finite while the distance between them is not: -1.8e308 and
+    # 1.8e308 subtract to infinity, the renderer's scale collapses, and a chart comes
+    # back as a single line. The widest range any form draws is across every series.
+    everything = [v for values in series.values() for v in present_values(values)]
+    if not math.isfinite(max(everything) - min(everything)):
+        raise Refusal(
+            "The values span a range too large to draw, so no form can show them "
+            "honestly. Split them into separate requests or rescale them first."
+        )
+
     width = request.get("width")
     if width is None:
         width = constants.COLUMN_BUDGET

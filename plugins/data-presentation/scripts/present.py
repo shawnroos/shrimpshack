@@ -56,6 +56,23 @@ def _verify(rendered, expect_axis):
             return "The chart came back without an axis, so it is not a chart."
         if not any(mark in rendered for mark in PLOT_MARKS):
             return "The chart came back with an axis but nothing plotted on it."
+        # A scale that overflows collapses every point onto one row. That row has an
+        # axis glyph and a flat mark, so the two checks above both pass it.
+        if len(rendered.splitlines()) < constants.CHART_ROW_BUDGET:
+            return "The chart came back collapsed onto a single line, so it does not show the data."
+    return None
+
+
+def _verify_width(blocks, width):
+    """Every drawn line inside the stated width. A backstop for the whole class: each form
+    already budgets its own lines, and this catches the one that did its sums wrong."""
+    for block in blocks:
+        widest = max((len(line) for line in block.split("\n")), default=0)
+        if widest > width:
+            return (
+                f"A line came out {widest} characters wide against a width of {width}, and "
+                "nothing here is cut to make it fit. Ask for a wider width."
+            )
     return None
 
 
@@ -156,14 +173,17 @@ def present(request):
         return _refuse(str(exc))
 
     decision = choose(normalized)
-    notes = list(normalized["notes"]) + list(decision["reasons"])
+    # What stays true on a refusal, and what is only true once something was drawn.
+    kept = list(normalized["notes"]) + list(decision["declined"])
+    shown = list(decision["outcome"])
+    drawing = []
 
     blocks = []
     unshown_by_series = {}
     form = decision["form"]
     try:
         try:
-            problem = _render(normalized, decision, form, blocks, notes, unshown_by_series)
+            problem = _render(normalized, decision, form, blocks, drawing, unshown_by_series)
         except render.DoesNotFit as exc:
             # Only columns give way. Bars put each label on its own line and sparklines
             # keep at least 13 points at the narrowest width, so neither runs out of
@@ -171,14 +191,19 @@ def present(request):
             if form != "columns":
                 raise
             form = "bars"
-            notes.append(f"{exc} Bars are shown instead.")
-            problem = _render(normalized, decision, form, blocks, notes, unshown_by_series)
+            shown.append(f"{exc} Bars are shown instead.")
+            problem = _render(normalized, decision, form, blocks, drawing, unshown_by_series)
     except Refusal as exc:
         # A renderer refusal is the same answer as a gate refusal: these numbers
         # cannot be shown at this width without cutting one of them.
-        return _refuse(str(exc), notes)
+        return _refuse(str(exc), kept)
     if problem:
-        return _refuse(problem, notes)
+        return _refuse(problem, kept)
+    too_wide = _verify_width(blocks, normalized["width"])
+    if too_wide:
+        return _refuse(too_wide, kept)
+
+    notes = kept + shown + drawing
 
     for name, positions in normalized["missing"].items():
         if not positions:

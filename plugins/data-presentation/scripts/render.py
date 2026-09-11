@@ -42,6 +42,8 @@ def format_number(value):
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return MISSING_CELL
     magnitude = abs(value)
+    if magnitude >= constants.SCIENTIFIC_ABOVE:
+        return f"{value:.{constants.SIGNIFICANT_DIGITS}g}"
     if magnitude >= constants.ABBREVIATE_ABOVE:
         for limit, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "k")):
             if magnitude >= limit:
@@ -315,7 +317,12 @@ def bars_with_meta(request, categories):
         if math.isnan(value):
             lines.append(f"  {MISSING_CELL}")
             continue
-        full, part = divmod(int(value * eighths_per_unit + 0.5), 8)
+        eighths = int(value * eighths_per_unit + 0.5)
+        # A value above zero that rounds to no bar at all reads as zero. 0.01 beside 13
+        # did exactly that. The smallest visible mark keeps present distinct from absent.
+        if value > 0:
+            eighths = max(1, eighths)
+        full, part = divmod(eighths, 8)
         bar = FULL_BLOCK * full + (LEFT_EIGHTHS[part - 1] if part else "")
         marks.append(bar)
         lines.append(f"  {bar} {text}")
@@ -347,8 +354,11 @@ def columns_with_meta(request, categories):
 
     top = _scale_top(ranked)
     steps = constants.COLUMN_ROWS * 8
+    # A value above zero never draws as the same empty slot as a zero: 1 beside 10000
+    # rounded to height 0 and read as nothing.
     heights = [
-        None if math.isnan(v) else (int(v / top * steps + 0.5) if top > 0 else 0)
+        None if math.isnan(v)
+        else (max(1 if v > 0 else 0, int(v / top * steps + 0.5)) if top > 0 else 0)
         for _, v in ranked
     ]
 
@@ -414,7 +424,12 @@ def sparkline_with_meta(request, names=None):
             return " "
         if high == low:
             return SPARK_LEVELS[0]
-        return SPARK_LEVELS[int((value - low) / (high - low) * levels + 0.5)]
+        level = int((value - low) / (high - low) * levels + 0.5)
+        # The shared scale is deliberate, and it still must not draw a value above the
+        # floor as the floor: 1 and 9 against 1000 both drew the same bottom glyph as 0.
+        if value > low:
+            level = max(1, level)
+        return SPARK_LEVELS[level]
 
     lines, marks = [], []
     for name in names:

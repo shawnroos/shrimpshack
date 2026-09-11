@@ -223,6 +223,37 @@ def main():
         f"{result['form']} {result['reasons']}",
     )
 
+
+    # --- a note names the form that was asked for, and says each thing once ---
+    # Mutation: restore "bars are drawn from zero" in _categories - this goes red. A
+    # columns request was being told about bars.
+    neg = validate({"title": "T", "x": ["now"], "series": {"gain": [4], "loss": [-2]}, "type": "columns"})
+    result = choose(neg)
+    check("a declined columns request is not told about bars alone",
+          not any(r.startswith("Columns were requested, but bars are") for r in result["reasons"]),
+          repr(result["reasons"]))
+    check("the reason for a negative value names both forms that start from zero",
+          any("bars and columns start from zero" in r for r in result["reasons"]), repr(result["reasons"]))
+    # Mutation: drop `not categories_declined` from the snapshot branch - this goes red.
+    check("the negative value is explained once, not twice",
+          sum("start from zero" in r for r in result["reasons"]) == 1, repr(result["reasons"]))
+
+    # Mutation: drop `requested == "auto"` from the snapshot branch - this goes red. A
+    # chart request was told why bars could not be drawn, not why a chart could not.
+    chart_neg = validate({"title": "T", "x": ["now"], "series": {"gain": [4], "loss": [-2]}, "type": "chart"})
+    result = choose(chart_neg)
+    check("a chart request is told why a chart cannot be drawn",
+          any("A chart needs at least" in r for r in result["reasons"]), repr(result["reasons"]))
+    check("a chart request is not told about bars instead",
+          not any("start from zero" in r for r in result["reasons"]), repr(result["reasons"]))
+
+    # A reason for declining a requested form is kept apart from a claim about what was shown,
+    # because only the first is still true if the chosen form then refuses.
+    result = choose(neg)
+    check("declining the requested form is recorded as declined",
+          any(r.startswith("Columns were requested") for r in result["declined"]), repr(result["declined"]))
+    check("a claim about what is shown is recorded as an outcome, not declined",
+          all("is shown" not in r for r in result["declined"]), repr(result["declined"]))
     print(f"selection_test: {passed} passed, {failed} failed")
     return 1 if failed else 0
 

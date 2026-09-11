@@ -61,6 +61,10 @@ MAX_SERIES = 8
 # Where an SI suffix first shortens a significant-digits label rather than lengthening it.
 ABBREVIATE_ABOVE = 10000
 
+# Past this the T suffix needs four integer digits, and the next step up rendered as
+# "1e+04T" - scientific notation with an SI suffix bolted on. Plain scientific instead.
+SCIENTIFIC_ABOVE = 1e15
+
 # Significant digits below the abbreviation threshold. Fixed decimals were rejected:
 # two of them render 0.001, 0.002 and 0.003 as three identical cells reading 0.00.
 SIGNIFICANT_DIGITS = 4

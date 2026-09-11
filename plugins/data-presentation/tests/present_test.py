@@ -92,21 +92,52 @@ def main():
              "series": name, "body": body},
         )
 
+    # Thirteen rows, the height a real chart draws. Each stub below differs from this
+    # by exactly one property, so each guard is the only thing that can reject it.
+    tall = [f"{v:>4}  \u2524" for v in range(13, 0, -1)]
+    tall_valid = list(tall)
+    tall_valid[5] += " \u256d\u256e"
+    tall_valid[6] += " \u2502\u2570"
+
     render.chart_with_meta = stub("")
     check("an empty render becomes a refusal, not an empty success",
           present.present(series(9))["status"] == "refused")
 
-    render.chart_with_meta = stub("no axis here at all")
+    # Mutation: delete the axis check in _verify - this goes red. Full height and
+    # carrying marks, so neither the row check nor the marks check can stand in for it.
+    render.chart_with_meta = stub("\n".join(f"{v:>4}   \u256d\u256e\u2502" for v in range(13, 0, -1)))
     check("a render missing the axis glyph becomes a refusal",
           present.present(series(9))["status"] == "refused")
 
-    render.chart_with_meta = stub("   80  \u2524\n   42  \u253c")
+    # Mutation: delete the plot-marks check in _verify - this goes red. Full height with
+    # an axis on every row, so only the marks check can reject it.
+    render.chart_with_meta = stub("\n".join(tall))
     check("an axis with nothing plotted on it becomes a refusal",
           present.present(series(9))["status"] == "refused")
 
-    render.chart_with_meta = stub("   80  \u2524 \u256d\u256e\n   42  \u253c\u2500\u256f")
-    check("an axis with real plot marks is accepted",
+    # Mutation: delete the row check in _verify - this goes red. An overflowing scale
+    # collapses every point onto one row; that row has an axis and a flat mark, so the
+    # axis and marks checks both pass it.
+    render.chart_with_meta = stub("   0  \u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
+    check("a chart collapsed onto one line becomes a refusal",
+          present.present(series(9))["status"] == "refused")
+
+    render.chart_with_meta = stub("\n".join(tall_valid))
+    check("a full-height chart with real plot marks is accepted",
           present.present(series(9))["status"] == "ok")
+
+    # Mutation: delete the _verify_width call in present - this goes red. A valid chart
+    # whose header line runs past the width is the one case every form budgets for and
+    # this backstop exists to catch when a form gets its sums wrong.
+    wide_header = "x" * 90
+    render.chart_with_meta = lambda request, name: (
+        wide_header + "\n" + "\n".join(tall_valid),
+        {"rendered": 1, "omitted": 0, "full_min": 0, "full_max": 1, "kept_first": True,
+         "kept_last": True, "kept_missing_positions": [], "unshown_missing": [],
+         "series": name, "body": "\n".join(tall_valid)},
+    )
+    check("a drawn line wider than the width becomes a refusal",
+          present.present(series(9))["status"] == "refused")
     # The distinction itself: a header carrying an axis glyph AND plot marks, over an
     # empty body. Verifying the assembled block would pass this; verifying the body must
     # not. Without this, swapping meta["body"] back to block is a silent regression.
@@ -143,6 +174,24 @@ def main():
     check("an empty table render becomes a refusal too",
           present.present({"title": "T", "x": ["a", "b"], "series": {"S": [1.0, 2.0]}})["status"] == "refused")
     render.table_with_meta = real_table
+
+    # --- the review's three cases, end to end through the real CLI ---
+    # A range that overflows collapsed the chart onto one line and came back ok.
+    proc, out = run_cli({"type": "chart", "width": 48, "units": "abcdefghijklmnopqrstuvwx",
+                         "x": [1, 2, 3, 4, 5, 6, 7, 8],
+                         "series": {"A": [-1.79769e308, -1e308, -5e307, 0, 5e307, 1e308, 1.5e308, 1.79769e308]}})
+    check("values whose range overflows are refused, not drawn as one line",
+          out and out["status"] == "refused", repr(out and out.get("block")))
+
+    # A refused table must not leave behind the note that promised it.
+    _, out = run_cli({"type": "bars", "width": 48, "x": ["only"],
+                      "series": {"A": [-1], "B": [2], "C": [3], "D": [4],
+                                 "E": [5], "F": [6], "G": [7], "H": [8]}})
+    check("a refusal carries no note claiming something was shown",
+          out["status"] == "refused" and not any("is shown" in n or "are shown" in n for n in out["notes"]),
+          repr(out["notes"]))
+    check("a refusal still says why the requested form was declined",
+          any(n.startswith("Bars were requested") for n in out["notes"]), repr(out["notes"]))
 
     # --- malformed optional metadata is a refusal, not a crash ---
     for bad, label in (

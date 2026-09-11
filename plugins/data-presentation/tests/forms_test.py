@@ -228,6 +228,47 @@ def main():
     check("that refusal names the 55 columns the table needed",
           rule_refused is not None and "55" in rule_refused, repr(rule_refused))
 
+
+    # --- a value above zero is never drawn identically to zero ---
+    # Mutation: drop the `if value > 0: eighths = max(1, eighths)` floor in bars - this
+    # goes red. 0.01 beside 13 rounded to no bar at all, the same as the zero beside it.
+    snap = validate({"title": "t", "x": ["now"], "series": {"big": [13], "tiny": [0.01], "zero": [0]}})
+    _, bmeta = render.bars_with_meta(snap, [("big", 13.0), ("tiny", 0.01), ("zero", 0.0)])
+    bar_block = render.bars(snap, [("big", 13.0), ("tiny", 0.01), ("zero", 0.0)])
+    tiny_line = bar_block.split("\n")[bar_block.split("\n").index("tiny") + 1]
+    zero_line = bar_block.split("\n")[bar_block.split("\n").index("zero") + 1]
+    check("a tiny bar draws a visible mark", any(g in tiny_line for g in render.FULL_BLOCK + render.LEFT_EIGHTHS),
+          repr(tiny_line))
+    check("a tiny bar does not draw the same as zero", tiny_line.split()[0] != zero_line.split()[0],
+          f"tiny={tiny_line!r} zero={zero_line!r}")
+
+    # Mutation: drop the `1 if v > 0` floor in columns - this goes red. 1 beside 10000
+    # rounded to height 0 and left the same empty slot as the zero.
+    col = validate({"title": "t", "width": 48, "x": ["only"],
+                    "series": {"large": [10000], "small": [1], "zero": [0]}})
+    col_block = render.columns(col, [("large", 10000.0), ("small", 1.0), ("zero", 0.0)])
+    col_rows = col_block.split("\n")[1:-2]          # drawn rows: no value line, baseline, labels
+    slot = (48 - 2 * 2) // 3
+    def column(i):
+        return "".join(r[i * (slot + 2): i * (slot + 2) + slot] for r in col_rows if len(r) > i * (slot + 2))
+    check("a small column draws a visible mark", column(1).strip() != "", repr(column(1)))
+    check("zero still draws no column", column(2).strip() == "", repr(column(2)))
+
+    # Mutation: drop the `if value > low: level = max(1, level)` floor in the sparkline -
+    # this goes red. 1 and 9 against 1000 drew the same bottom glyph as 0, so three
+    # different series read as one flat line.
+    spark = validate({"title": "t", "x": WEEKS[:9],
+                      "series": {"big": [0, 1000, 0, 500, 0, 1000, 0, 0, 1000],
+                                 "one": [1] * 9, "zero": [0] * 9, "nine": [9] * 9}})
+    _, smeta = render.sparkline_with_meta(spark, ["big", "one", "zero", "nine"])
+    drawn = dict(zip(["big", "one", "zero", "nine"], smeta["marks"]))
+    check("a sparkline row of ones does not draw the same as a row of zeros",
+          drawn["one"] != drawn["zero"], f"one={drawn['one']!r} zero={drawn['zero']!r}")
+    check("a sparkline row of nines does not draw the same as a row of zeros",
+          drawn["nine"] != drawn["zero"], f"nine={drawn['nine']!r} zero={drawn['zero']!r}")
+    check("the shared scale still draws zero at the floor", set(drawn["zero"]) == {render.SPARK_LEVELS[0]},
+          repr(drawn["zero"]))
+
     print(f"forms_test: {passed} passed, {failed} failed")
     return 1 if failed else 0
 

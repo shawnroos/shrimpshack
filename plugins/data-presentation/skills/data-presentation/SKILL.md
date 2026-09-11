@@ -87,6 +87,11 @@ they cannot fit the width, it refuses and asks for fewer series, and it says how
 columns the table needed. A label long enough for the gate to shorten is refused too if
 shortening it would make two rows read the same.
 
+A value that is present is never drawn as if it were zero. A bar, column or sparkline
+point too small to register at the scale still gets the smallest visible mark, so a real
+value and a zero can always be told apart. Values spread over a range too large to draw
+are refused rather than collapsed onto one line.
+
 It never invents a missing value. It refuses rather than rendering something misleading,
 and it says so in plain language. Read the `notes`: they carry what was omitted, which
 positions were missing, and why you got the form you got.
