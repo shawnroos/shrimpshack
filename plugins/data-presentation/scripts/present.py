@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""The entry point. Reads a JSON request on stdin, writes a JSON response on stdout.
+
+A refusal is a normal response and exits zero. Only an internal fault exits non-zero,
+so a caller can tell "I will not render this" from "I broke".
+"""
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import constants
+import render
+from render import AXIS_GLYPHS
+from selection import choose
+from validate import Refusal, validate
+
+RELAY = (
+    "Reproduce the block below verbatim inside a plain triple-backtick fence with no "
+    "language tag. Do not retype it, do not summarise it, and do not describe it in "
+    "place of showing it."
+)
+
+
+def _refuse(message, notes=None):
+    return {
+        "status": "refused",
+        "message": message,
+        "block": "",
+        "form": None,
+        "metadata": {},
+        "notes": notes or [],
+        "relay": RELAY,
+    }
+
+
+# The glyphs the renderer draws data with. An axis alone is not a chart.
+PLOT_MARKS = "╭╮╯╰│─╶╴"
+
+
+def _verify(rendered, expect_axis):
+    """Check what the renderer produced, never the assembled block.
+
+    A completed call is not proof anything was drawn - the repo has a written rule
+    about exactly this, from a tally that counted work an exited-zero command never did.
+    And the string checked must be the renderer's own output: a caller who names a
+    series "fake ┤" would otherwise supply the axis glyph that passes this check, and
+    get a success back for a chart with no data in it.
+    """
+    if not rendered or not rendered.strip():
+        return "The chart came back empty, so there is nothing to show."
+    if expect_axis:
+        if not any(glyph in rendered for glyph in AXIS_GLYPHS):
+            return "The chart came back without an axis, so it is not a chart."
+        if not any(mark in rendered for mark in PLOT_MARKS):
+            return "The chart came back with an axis but nothing plotted on it."
+        # A scale that overflows collapses every point onto one row. That row has an
+        # axis glyph and a flat mark, so the two checks above both pass it.
+        if len(rendered.splitlines()) < constants.CHART_ROW_BUDGET:
+            return "The chart came back collapsed onto a single line, so it does not show the data."
+    return None
+
+
+def _verify_width(blocks, width):
+    """Every drawn line inside the stated width. A backstop for the whole class: each form
+    already budgets its own lines, and this catches the one that did its sums wrong."""
+    for block in blocks:
+        widest = max((len(line) for line in block.split("\n")), default=0)
+        if widest > width:
+            return (
+                f"A line came out {widest} characters wide against a width of {width}, and "
+                "nothing here is cut to make it fit. Ask for a wider width."
+            )
+    return None
+
+
+def _verify_marks(meta, glyphs, what):
+    """The drawn marks only. Bars, columns and sparklines interleave caller labels with
+    what they draw, so the check reads the marks the renderer returned on their own; a
+    caller who names a category "█" cannot supply the proof that something was drawn."""
+    if not any(glyph in mark for mark in meta.get("marks", []) for glyph in glyphs):
+        return f"The {what} came back with nothing drawn, so there is nothing to show."
+    return None
+
+
+
+def _positions(positions):
+    """Name the positions, or the first few and a count of the rest.
+
+    A note is read in a transcript. Enumerating every gap put several hundred
+    characters into one line for a series with sixty of them.
+    """
+    human = [str(p + 1) for p in positions]
+    if len(human) <= constants.MAX_LISTED_POSITIONS:
+        return ", ".join(human)
+    listed = ", ".join(human[: constants.MAX_LISTED_POSITIONS])
+    return f"{listed} and {len(human) - constants.MAX_LISTED_POSITIONS} more"
+
+
+def _render(normalized, decision, form, blocks, notes, unshown_by_series):
+    """Draw one form into `blocks`. Returns a verification problem, or None."""
+    if form == "charts":
+        for name in decision["chart_series"]:
+            block, meta = render.chart_with_meta(normalized, name)
+            problem = _verify(meta["body"], expect_axis=True)
+            if problem:
+                return problem
+            blocks.append(block)
+            unshown_by_series[name] = meta.get("unshown_missing", [])
+            if meta.get("unshown_missing"):
+                notes.append(
+                    f"{name}: {len(meta['unshown_missing'])} of the missing positions could "
+                    "not be shown as gaps once the series was reduced to fit the width."
+                )
+            if meta["omitted"]:
+                notes.append(
+                    f"{name}: {meta['omitted']} of {meta['omitted'] + meta['rendered']} points "
+                    "were omitted to fit the width. No values were averaged, and the full "
+                    f"range was {render.format_number(meta['full_min'])} to "
+                    f"{render.format_number(meta['full_max'])}."
+                )
+        if decision["table_series"]:
+            block, _ = render.table_with_meta(normalized, decision["table_series"])
+            problem = _verify(block, expect_axis=False)
+            if problem:
+                return problem
+            blocks.append(block)
+        return None
+
+    if form in ("bars", "columns"):
+        draw = render.bars_with_meta if form == "bars" else render.columns_with_meta
+        block, meta = draw(normalized, decision["categories"])
+        problem = _verify_marks(meta, render.FULL_BLOCK + render.LEFT_EIGHTHS + render.LOWER_EIGHTHS, form)
+        if problem:
+            return problem
+        blocks.append(block)
+        return None
+
+    if form == "sparkline":
+        block, meta = render.sparkline_with_meta(normalized, list(normalized["series"]))
+        problem = _verify_marks(meta, render.SPARK_LEVELS, "sparkline")
+        if problem:
+            return problem
+        blocks.append(block)
+        unshown_by_series.update(meta["unshown_missing"])
+        if meta["omitted"]:
+            notes.append(
+                f"{meta['omitted']} of {meta['omitted'] + meta['rendered']} points were "
+                "omitted from every row to fit the width. No values were averaged, and the "
+                "shared scale still spans every value."
+            )
+        return None
+
+    block, meta = render.table_with_meta(normalized, list(normalized["series"]))
+    problem = _verify(block, expect_axis=False)
+    if problem:
+        return problem
+    blocks.append(block)
+    if meta["omitted"]:
+        notes.append(
+            f"{meta['omitted']} of {meta['omitted'] + meta['rendered']} rows were omitted "
+            "to keep the table readable. No values were averaged."
+        )
+    return None
+
+
+def present(request):
+    try:
+        normalized = validate(request)
+    except Refusal as exc:
+        return _refuse(str(exc))
+
+    decision = choose(normalized)
+    # What stays true on a refusal, and what is only true once something was drawn.
+    kept = list(normalized["notes"]) + list(decision["declined"])
+    shown = list(decision["outcome"])
+    drawing = []
+
+    blocks = []
+    unshown_by_series = {}
+    form = decision["form"]
+    try:
+        try:
+            problem = _render(normalized, decision, form, blocks, drawing, unshown_by_series)
+        except render.DoesNotFit as exc:
+            # Only columns give way. Bars put each label on its own line and sparklines
+            # keep at least 13 points at the narrowest width, so neither runs out of
+            # room; a table that cannot fit is refused outright.
+            if form != "columns":
+                raise
+            form = "bars"
+            shown.append(f"{exc} Bars are shown instead.")
+            problem = _render(normalized, decision, form, blocks, drawing, unshown_by_series)
+    except Refusal as exc:
+        # A renderer refusal is the same answer as a gate refusal: these numbers
+        # cannot be shown at this width without cutting one of them.
+        return _refuse(str(exc), kept)
+    if problem:
+        return _refuse(problem, kept)
+    too_wide = _verify_width(blocks, normalized["width"])
+    if too_wide:
+        return _refuse(too_wide, kept)
+
+    notes = kept + shown + drawing
+
+    for name, positions in normalized["missing"].items():
+        if not positions:
+            continue
+        unshown = set(unshown_by_series.get(name, []))
+        shown = [p for p in positions if p not in unshown]
+        human = _positions(positions)
+        if unshown:
+            # Do not claim a break the reader cannot see. The earlier note already said
+            # how many gaps the width could not fit; naming them all as visible breaks
+            # here would contradict it.
+            notes.append(
+                f"{name}: no value at position {human}. "
+                f"{len(shown)} of those show as a break; the rest fell outside the points "
+                "the width allowed. None is rendered as a zero."
+            )
+        else:
+            notes.append(
+                f"{name}: no value at position {human}. The gap is shown as a break, not as a zero."
+            )
+
+    metadata = {
+        "title": normalized["title"],
+        "series": list(normalized["series"]),
+        "x_count": len(normalized["x"]),
+    }
+    if normalized["units"]:
+        metadata["units"] = normalized["units"]
+    if normalized["source"]:
+        metadata["source"] = normalized["source"]
+
+    # R19: the caption rides inside the block, once, for every form. Only the block
+    # can be expected to survive relay, so anything qualifying the numbers goes in it.
+    head = render.caption(normalized)
+    body = "\n\n".join(blocks)
+    return {
+        "status": "ok",
+        "message": "",
+        "block": (head + "\n" + body) if head else body,
+        "form": form,
+        "metadata": metadata,
+        "notes": notes,
+        "relay": RELAY,
+    }
+
+
+def main():
+    try:
+        request = json.load(sys.stdin)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        # A fault, not a refusal: the caller sent something that is not a request.
+        print(f"data-presentation: could not read the request as JSON: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(present(request), ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
