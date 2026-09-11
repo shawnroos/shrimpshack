@@ -34,8 +34,12 @@
 #                            auth_error | validation_error | rate_limited |
 #                            http_500 | empty_body | malformed_json |
 #                            hostile | hostile_candidates | candidates |
-#                            no_candidates
+#                            no_candidates | echo_issue
 #                            (default: found_child)
+#                            echo_issue answers found_child's shape with the
+#                            identifier that was asked for and the title
+#                            `Column <identifier>`, so several issues in one
+#                            test derive several different names
 #   FAKE_LINEAR_RECORD_DIR   where the argv/stdin record lands
 #   FAKE_LINEAR_ALLOW_MUTATION  set to 1 to permit a GraphQL mutation;
 #                            unset, a mutation exits 97 without answering
@@ -44,6 +48,8 @@
 #   FAKE_LINEAR_ORGANIZATION  the URL key the organization arm answers with,
 #                            or `empty` for an organization of null
 #                            (default: acme)
+#   FAKE_LINEAR_MISSING_IDS  comma-separated identifiers the echo_issue mode
+#                            answers as not_found
 #   FAKE_LINEAR_UNFILTERED   set to 1 to receive the canned payload whole,
 #                            for a test asserting on a captured SHAPE rather
 #                            than on what a query selected
@@ -255,6 +261,17 @@ answer() {
 }
 
 serve() { answer "$("$1")"; }
+
+echo_issue() {
+    found_child | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+ident = json.loads(sys.argv[1]).get("variables", {}).get("id", "")
+d["data"]["issue"]["identifier"] = ident
+d["data"]["issue"]["title"] = "Column " + ident
+print(json.dumps(d))
+' "$body"
+}
 
 # --- headers ------------------------------------------------------------
 # Emitted only when the caller asked for them, exactly as curl behaves. The
@@ -544,6 +561,13 @@ case "$mode" in
     traversal_identifier) [ "$wants_headers" = 1 ] && emit_headers 200; serve traversal_identifier ;;
     hostile_candidates) [ "$wants_headers" = 1 ] && emit_headers 200; serve hostile_candidates ;;
     found_child)      [ "$wants_headers" = 1 ] && emit_headers 200; serve found_child ;;
+    echo_issue)
+        _asked="$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("variables",{}).get("id",""))' 2>/dev/null)"
+        case ",${FAKE_LINEAR_MISSING_IDS:-}," in
+            *",$_asked,"*) [ "$wants_headers" = 1 ] && emit_headers 400; serve not_found ;;
+            *) [ "$wants_headers" = 1 ] && emit_headers 200; serve echo_issue ;;
+        esac
+        ;;
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; serve found_parent ;;
     found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; serve found_parent_moved ;;
     completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; serve completed_issue ;;

@@ -245,3 +245,24 @@ jfield() { python3 -c "$1"; }
         'import sys,json;print(json.load(sys.stdin)["data"]["organization"])')"
     [ "$result" = "None" ]
 }
+
+# The layout builds several columns in one test, and a fixture that answers
+# every identifier with the same issue would derive one path for all of them.
+@test "echo_issue answers with the identifier that was asked for" {
+    for id in WEB-3001 WEB-3002; do
+        run bash -c \
+            "printf '' | FAKE_LINEAR_MODE=echo_issue bash '$FIXTURE' --data '{\"query\":\"query(\$id:String!){issue(id:\$id){identifier title}}\",\"variables\":{\"id\":\"$id\"}}'"
+        [ "$status" -eq 0 ]
+        result="$(printf '%s' "$output" | jfield \
+            'import sys,json;i=json.load(sys.stdin)["data"]["issue"];print(i["identifier"]+"|"+i["title"])')"
+        [ "$result" = "$id|Column $id" ]
+    done
+}
+
+@test "echo_issue answers a listed missing identifier as not found" {
+    run bash -c \
+        "printf '' | FAKE_LINEAR_MODE=echo_issue FAKE_LINEAR_MISSING_IDS=WEB-3002 bash '$FIXTURE' --data '{\"query\":\"query(\$id:String!){issue(id:\$id){identifier}}\",\"variables\":{\"id\":\"WEB-3002\"}}'"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["data"])')"
+    [ "$result" = "None" ]
+}

@@ -37,6 +37,10 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 
@@ -75,6 +79,12 @@ column is asked here, and a subagent's reply never stands in for that answer.
 
 ## Step 2 — build
 
+**Run it from the parent's own worktree.** Each child's worktree is made beside
+the parent's, from the parent's repository, and named from the child's own
+issue: `<IDENTIFIER>-<title-slug>`. The parent's repository is a fact, not a
+choice, so the layout never asks the repository question. It checks that the
+directory it runs in is bound to the parent, and refuses otherwise.
+
 ```bash
 herdr_linear::layout_build "$PARENT" "$CHILD_A" "$CHILD_B"
 ```
@@ -84,7 +94,8 @@ herdr_linear::layout_build "$PARENT" "$CHILD_A" "$CHILD_B"
 | 0 | built; prints the tab id | name the tab and the columns |
 | 1 | the herdr server is not reachable | say so; nothing was created |
 | 2 | a title cannot become a safe name | name the issue, and stop |
-| 3 | a step failed partway | say which; **re-running continues** |
+| 3 | a step failed partway, or a child's issue could not be read | say which; **re-running continues** |
+| 4 | not run from the parent's own worktree | say where it ran and what that is bound to; `cd` to the parent's worktree, or run `/work:start` on the parent first |
 
 **On exit 3, re-run the same command.** Every created resource is journalled
 against the parent issue, so a retry skips what exists and continues. Do not

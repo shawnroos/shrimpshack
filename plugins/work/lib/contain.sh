@@ -204,6 +204,13 @@ herdr_linear::path_signal() {
 herdr_linear::worktree_project() {
     local dir="${1:-$PWD}" resolved
     resolved="$(herdr_linear::_resolve "$dir")" || { herdr_linear::worktree_repo "$dir"; return 0; }
+    # Before the `worktrees` cases: the default root is itself named
+    # `worktrees`, so they would cut every path under it to the home directory.
+    # A worktree here belongs to no project directory; its repository answers.
+    if herdr_linear::_under "$resolved" "$(herdr_linear::worktrees_root)"; then
+        herdr_linear::worktree_repo "$resolved"
+        return 0
+    fi
     case "$resolved" in
         */worktrees) printf '%s' "${resolved%/worktrees}"; return 0 ;;
         */worktrees/*) printf '%s' "${resolved%%/worktrees/*}"; return 0 ;;

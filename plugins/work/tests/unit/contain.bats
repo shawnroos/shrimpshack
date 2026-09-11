@@ -397,3 +397,27 @@ wt_setup() {
     [ "$status" -eq 0 ]
     [ "$output" = "usable" ]
 }
+
+# ------------------------------------------ the project reader under the new root
+
+# R11. A root spelled `.../worktrees` is exactly what the default is, and the
+# `*/worktrees/*` case used to cut every path under it at the first `worktrees`
+# segment -- answering with the home directory for every ticket worktree.
+@test "a worktree under the worktrees root answers the repository it was made from" {
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK/home/worktrees"
+    git -C "$WORK/root/web-app" init -q -b main
+    git -C "$WORK/root/web-app" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    mkdir -p "$WORK/home/worktrees/acme/web"
+    git -C "$WORK/root/web-app" worktree add -q -b f/x "$WORK/home/worktrees/acme/web/WEB-1-x" >/dev/null 2>&1
+    run herdr_linear::worktree_project "$WORK/home/worktrees/acme/web/WEB-1-x"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/root/web-app" ]
+}
+
+@test "a project's own worktrees directory still answers the project" {
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK/home/worktrees"
+    mkdir -p "$WORK/root/alpha/worktrees/drawer"
+    run herdr_linear::worktree_project "$WORK/root/alpha/worktrees/drawer"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/root/alpha" ]
+}

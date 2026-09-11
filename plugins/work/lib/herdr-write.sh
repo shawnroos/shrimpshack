@@ -25,6 +25,8 @@
 # without this the call below is 127, which its `||` branch reads as a refusal.
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+command -v herdr_linear::start_worktree_name >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/start.sh"
 
 HERDR_LINEAR_JOURNAL_DIR="${HERDR_LINEAR_JOURNAL_DIR:-$HOME/.claude/work/layouts}"
 HERDR_LINEAR_PANE_POLL_TRIES="${HERDR_LINEAR_PANE_POLL_TRIES:-40}"
@@ -34,6 +36,7 @@ HERDR_LINEAR_LAYOUT_OK=0
 HERDR_LINEAR_LAYOUT_NO_SERVER=1
 HERDR_LINEAR_LAYOUT_BAD_NAME=2
 HERDR_LINEAR_LAYOUT_FAILED=3
+HERDR_LINEAR_LAYOUT_NOT_PARENT=4
 
 herdr_linear::_journal() {
     local issue="$1"
@@ -97,11 +100,15 @@ herdr_linear::open_session() {
 
 # herdr_linear::layout_build <parent-issue> <child-issue>...
 #
+# Runs from the parent's own worktree. Each child's worktree is made beside it,
+# from its repository, named from the child's own issue (KTD11).
+#
 # Idempotent by journal: a second run after a partial failure continues, and
 # creates nothing twice.
 herdr_linear::layout_build() {
     local parent="${1:-}" ; shift || true
-    local bin tab pane slug child branch wt_path journal_file
+    local bin tab pane slug child branch wt_path journal_file here bound repo resp
+    local i=0 paths=() branches=()
 
     [ -n "$parent" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
@@ -118,6 +125,46 @@ herdr_linear::layout_build() {
     slug="$(herdr_linear::slug "$parent")" || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
     for child in "$@"; do
         herdr_linear::slug "$child" >/dev/null || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
+    done
+
+    # The verb takes an identifier, not a path, so the directory it runs in is
+    # the only way it knows which worktree is the parent's. That is identity
+    # verification, as bind does -- not deriving the repository from position.
+    here="$("${HERDR_LINEAR_GIT_BIN:-git}" -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || here="$PWD"
+    here="$(cd "$here" && pwd -P)"
+    bound="$(herdr_linear::binding_identifier "$here" 2>/dev/null)" || bound=""
+    if [ "$bound" != "$parent" ] \
+        || [ "$(herdr_linear::binding_state "$here" 2>/dev/null)" != "bound" ]; then
+        printf 'a layout for %s runs from its own worktree; %s is bound to %s\n' \
+            "$parent" "$here" "${bound:-nothing}" >&2
+        return "$HERDR_LINEAR_LAYOUT_NOT_PARENT"
+    fi
+    repo="$(herdr_linear::worktree_repo "$here")"
+    # Siblings of a main checkout sit among the canonical repositories.
+    if [ "$repo" = "$here" ]; then
+        printf 'a layout for %s runs from its own worktree, not from the main checkout %s\n' \
+            "$parent" "$here" >&2
+        return "$HERDR_LINEAR_LAYOUT_NOT_PARENT"
+    fi
+
+    # Every child is read before anything is made, so one unreadable child
+    # leaves no tab and no half-built columns. A column already journalled keeps
+    # its path: a title renamed since would otherwise derive a second worktree.
+    for child in "$@"; do
+        if wt_path="$(herdr_linear::journal_get "$parent" "worktree.$child" 2>/dev/null)"; then
+            branch=""
+        else
+            resp="$(herdr_linear::fetch_issue "$child")" || {
+                printf 'could not read %s, so its column has no name; nothing was made\n' "$child" >&2
+                return "$HERDR_LINEAR_LAYOUT_FAILED"
+            }
+            wt_path="${here%/*}/$(herdr_linear::start_worktree_name "$resp")" \
+                && branch="$(herdr_linear::start_branch_name "$resp")" || {
+                printf 'the title of %s cannot become a safe name; nothing was made\n' "$child" >&2
+                return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
+            }
+        fi
+        paths[i]="$wt_path"; branches[i]="$branch"; i=$(( i + 1 ))
     done
 
     # Two sessions building the same parent's layout within the poll window
@@ -141,7 +188,10 @@ herdr_linear::layout_build() {
     fi
     herdr_linear::_unlock "$journal_file"
 
+    i=-1
     for child in "$@"; do
+        i=$(( i + 1 ))
+        wt_path="${paths[i]}"; branch="${branches[i]}"
         herdr_linear::_lock "$journal_file" || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
         # Already done on an earlier attempt: skip, do not remake.
@@ -150,18 +200,8 @@ herdr_linear::layout_build() {
             continue
         fi
 
-        branch="$(herdr_linear::slug "$child")" || {
-            herdr_linear::_unlock "$journal_file"
-            return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
-        }
-        # <project>/worktrees/<name>, matching every worktree on this machine
-        # and the `wt` shell function. An earlier version used <root>/<branch>,
-        # which puts a worktree beside the repositories instead of among the
-        # worktrees -- wrong, and invisible until someone went looking for it.
-        wt_path="$(herdr_linear::worktree_project)/worktrees/$branch"
-
         if ! herdr_linear::journal_get "$parent" "worktree.$child" >/dev/null 2>&1; then
-            herdr_linear::_make_worktree "$wt_path" "$branch" || {
+            herdr_linear::_make_worktree "$wt_path" "$branch" "$repo" || {
                 herdr_linear::_unlock "$journal_file"
                 return "$HERDR_LINEAR_LAYOUT_FAILED"
             }
@@ -197,9 +237,13 @@ herdr_linear::_bind_created() {
     return 0
 }
 
+# herdr_linear::_make_worktree <path> <branch> <repository>
+#
+# The repository is passed in. Reading it from $PWD here is the caller's
+# directory deciding the repository, the defect KTD11 removes from the layout.
 herdr_linear::_make_worktree() {
-    local path="$1" branch="$2" root
-    root="$(herdr_linear::worktree_repo)"
+    local path="$1" branch="$2" root="${3:-}"
+    [ -n "$root" ] || return 1
     [ -d "$path" ] && return 0
     mkdir -p "$(dirname "$path")" 2>/dev/null
     # Both streams: `worktree add` announces itself on stdout, which would
