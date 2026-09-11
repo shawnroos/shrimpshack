@@ -71,20 +71,106 @@ herdr_linear::projects_root() {
     herdr_linear::_root_override || printf '%s' "$HOME/projects"
 }
 
-# herdr_linear::contains <path> -> 0 when <path> is the root or beneath it.
-herdr_linear::contains() {
-    local target="${1:-}" root resolved_root resolved_target
-    [ -n "$target" ] || return 1
+# The ephemeral root. Worktrees started from a ticket live outside every
+# project, so this is a SECOND boundary rather than a second project root:
+# nothing under it is canonical, and deleting all of it must stay safe.
+herdr_linear::worktrees_root() {
+    printf '%s' "${HERDR_LINEAR_WORKTREES_ROOT:-$HOME/worktrees}"
+}
 
-    root="$(herdr_linear::projects_root)"
+# A configured root may not exist yet -- the plugin creates it -- so `_resolve`
+# cannot answer for it. Resolve the deepest ancestor that DOES exist and put
+# the missing tail back: that is enough to defeat a symlinked parent, which is
+# the shape a lexical comparison alone admits.
+herdr_linear::_resolve_intent() {
+    local p="${1:-}" tail="" base
+    [ -n "$p" ] || return 1
+    case "$p" in /*) ;; *) return 1 ;; esac
+    while [ "$p" != "/" ]; do
+        if [ -d "$p" ]; then
+            base="$(cd "$p" 2>/dev/null && pwd -P)" || return 1
+            [ "$base" = "/" ] && { printf '%s' "$tail"; return 0; }
+            printf '%s%s' "$base" "$tail"
+            return 0
+        fi
+        tail="/$(basename "$p")$tail"
+        p="$(dirname "$p")"
+    done
+    printf '%s' "${tail:-/}"
+}
+
+# herdr_linear::worktrees_root_usable -> prints `usable`, or the reason it is
+# not. Always exits 0: a reader answers, and the caller refuses.
+#
+# R13. The Objective's promise -- deleting the whole ephemeral tree never
+# destroys canonical work -- is a property of the CONFIGURATION, not of the
+# default. A root that equals, contains or sits inside ~/projects turns one
+# `rm -rf` into the loss of every canonical checkout, and `/` or $HOME turn it
+# into something worse. None of those are configurations to warn about and
+# proceed under.
+herdr_linear::worktrees_root_usable() {
+    local wt pr home
+    wt="$(herdr_linear::worktrees_root)"
+    wt="$(herdr_linear::_resolve_intent "$wt")" || {
+        printf 'the worktrees root is not an absolute path: %s' "$(herdr_linear::worktrees_root)"
+        return 0
+    }
+    if [ "$wt" = "/" ]; then
+        printf 'the worktrees root is the filesystem root; it must be a directory of its own'
+        return 0
+    fi
+
+    home="$(herdr_linear::_resolve_intent "${HOME:-}" 2>/dev/null)" || home=""
+    if [ -n "$home" ] && [ "$wt" = "$home" ]; then
+        printf 'the worktrees root is the home directory; it must be a directory of its own'
+        return 0
+    fi
+
+    pr="$(herdr_linear::_resolve_intent "$(herdr_linear::projects_root)" 2>/dev/null)" || pr=""
+    if [ -n "$pr" ]; then
+        if [ "$wt" = "$pr" ]; then
+            printf 'the worktrees root is the projects root (%s); deleting the ephemeral tree would delete every canonical checkout' "$pr"
+            return 0
+        fi
+        case "$pr" in
+            "$wt"/*)
+                printf 'the worktrees root contains the projects root (%s); deleting the ephemeral tree would delete every canonical checkout' "$pr"
+                return 0 ;;
+        esac
+        case "$wt" in
+            "$pr"/*)
+                printf 'the worktrees root sits inside the projects root (%s); an ephemeral tree under the canonical one is not safe to delete' "$pr"
+                return 0 ;;
+        esac
+    fi
+
+    printf 'usable'
+}
+
+herdr_linear::_under() {
+    local resolved_target="$1" root resolved_root
+    root="$2"
     resolved_root="$(herdr_linear::_resolve "$root")" || return 1
-    resolved_target="$(herdr_linear::_resolve "$target")" || return 1
-
     [ "$resolved_target" = "$resolved_root" ] && return 0
     case "$resolved_target" in
         "$resolved_root"/*) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+# herdr_linear::contains <path> -> 0 when <path> is at or beneath EITHER root.
+#
+# Each root is resolved independently, and an unresolvable one is skipped
+# rather than returning. Returning early on the first root is what would make
+# every worktrees-root path read `outside` on a machine with no ~/projects.
+herdr_linear::contains() {
+    local target="${1:-}" resolved_target
+    [ -n "$target" ] || return 1
+    resolved_target="$(herdr_linear::_resolve "$target")" || return 1
+
+    herdr_linear::_under "$resolved_target" "$(herdr_linear::projects_root)" && return 0
+    herdr_linear::_under "$resolved_target" "$(herdr_linear::worktrees_root)" && return 0
+    return 1
 }
 
 # ------------------------------------------------------------- scope readers

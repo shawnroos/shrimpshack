@@ -24,6 +24,7 @@ herdr_linear_test::isolate() {
     mkdir -p "$sandbox"
 
     export HERDR_LINEAR_PROJECTS_ROOT="$sandbox/projects"
+    export HERDR_LINEAR_WORKTREES_ROOT="$sandbox/worktrees"
     export HERDR_LINEAR_STORE_DIR="$sandbox/store"
     export HERDR_LINEAR_PIN_DIR="$sandbox/pin"
     export HERDR_LINEAR_JOURNAL_DIR="$sandbox/layouts"

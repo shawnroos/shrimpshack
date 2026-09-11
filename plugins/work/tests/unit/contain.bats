@@ -255,3 +255,145 @@ seam() {
     [ "$output" = "$WORK/projects" ]
     [ -z "$stderr" ]
 }
+
+# --------------------------------------------- the ephemeral worktrees root
+#
+# A second boundary, not a second project root. Worktrees started from a ticket
+# live outside every project, so a signal that knows only ~/projects reports
+# `outside` for the plugin's own worktrees and both hooks exit 0 in them.
+#
+# Each root is resolved INDEPENDENTLY. The single-root form returned early on
+# an unresolvable root, which would have made every worktrees-root path read
+# `outside` on a machine with no ~/projects directory -- the two tests below
+# that delete one root are what hold that apart.
+
+wt_setup() {
+    mkdir -p "$WORK/wt/acme/ai-canvas-tools/WEB-1-x" "$WORK/wtOther"
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK/wt"
+}
+
+# AE7.
+@test "a path under the worktrees root is inside" {
+    wt_setup
+    run herdr_linear::path_signal "$WORK/wt/acme/ai-canvas-tools/WEB-1-x"
+    [ "$status" -eq 0 ]
+    [ "$output" = "inside" ]
+}
+
+@test "the worktrees root itself is inside" {
+    wt_setup
+    run herdr_linear::path_signal "$WORK/wt"
+    [ "$status" -eq 0 ]
+    [ "$output" = "inside" ]
+}
+
+# AE7. The projects root is gone; the worktrees root must still answer.
+@test "a worktrees-root path is inside when the projects root does not exist" {
+    wt_setup
+    rm -rf "$WORK/root"
+    run herdr_linear::path_signal "$WORK/wt/acme/ai-canvas-tools/WEB-1-x"
+    [ "$status" -eq 0 ]
+    [ "$output" = "inside" ]
+}
+
+@test "a projects-root path is inside when the worktrees root does not exist" {
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK/absent-wt"
+    run herdr_linear::path_signal "$WORK/root/web-app"
+    [ "$status" -eq 0 ]
+    [ "$output" = "inside" ]
+}
+
+@test "a sibling whose name begins with the worktrees root path is outside" {
+    wt_setup
+    run herdr_linear::path_signal "$WORK/wtOther"
+    [ "$status" -eq 0 ]
+    [ "$output" = "outside" ]
+}
+
+@test "a symlink under the worktrees root pointing outside it is outside" {
+    wt_setup
+    ln -s "$WORK/outside" "$WORK/wt/escape"
+    run herdr_linear::path_signal "$WORK/wt/escape"
+    [ "$status" -eq 0 ]
+    [ "$output" = "outside" ]
+}
+
+@test "with the seam unset the worktrees root defaults to worktrees under HOME" {
+    run --separate-stderr env -u HERDR_LINEAR_WORKTREES_ROOT HOME="$WORK" \
+        bash -c ". '$LIB/contain.sh'; herdr_linear::worktrees_root"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/worktrees" ]
+}
+
+# ------------------------------------------------ the root is usable, or not
+#
+# R13. The promise that deleting the whole ephemeral tree is safe is a property
+# of the CONFIGURATION, not of the default. A root that swallows ~/projects
+# turns one `rm -rf` into the loss of every canonical checkout, so the reader
+# answers `unusable` and the caller refuses rather than creating anything.
+
+@test "a disjoint worktrees root is usable" {
+    wt_setup
+    run herdr_linear::worktrees_root_usable
+    [ "$status" -eq 0 ]
+    [ "$output" = "usable" ]
+}
+
+# Set-but-empty falls back to the default, exactly as the projects-root seam
+# does. This is asserted rather than guarded against: a refusal branch for an
+# empty root would be unreachable through the seam, and an unreachable guard
+# reads as protection nobody has.
+@test "an empty worktrees seam falls back to the default rather than to nothing" {
+    run --separate-stderr env HERDR_LINEAR_WORKTREES_ROOT= HOME="$WORK" \
+        bash -c ". '$LIB/contain.sh'; herdr_linear::worktrees_root"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$WORK/worktrees" ]
+}
+
+@test "the filesystem root is not a usable worktrees root" {
+    export HERDR_LINEAR_WORKTREES_ROOT="/"
+    run herdr_linear::worktrees_root_usable
+    [ "$status" -eq 0 ]
+    [ "$output" != "usable" ]
+}
+
+@test "the home directory is not a usable worktrees root" {
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK/home"
+    mkdir -p "$WORK/home"
+    run env HOME="$WORK/home" bash -c ". '$LIB/contain.sh'; herdr_linear::worktrees_root_usable"
+    [ "$status" -eq 0 ]
+    [ "$output" != "usable" ]
+}
+
+# AE10.
+@test "a worktrees root equal to the projects root is not usable" {
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK/root"
+    run herdr_linear::worktrees_root_usable
+    [ "$status" -eq 0 ]
+    [ "$output" != "usable" ]
+    [[ "$output" == *"$WORK/root"* ]]
+}
+
+@test "a worktrees root containing the projects root is not usable" {
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK"
+    run herdr_linear::worktrees_root_usable
+    [ "$status" -eq 0 ]
+    [ "$output" != "usable" ]
+}
+
+@test "a worktrees root inside the projects root is not usable" {
+    mkdir -p "$WORK/root/ephemeral"
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK/root/ephemeral"
+    run herdr_linear::worktrees_root_usable
+    [ "$status" -eq 0 ]
+    [ "$output" != "usable" ]
+}
+
+# A root that is not there YET is still a usable configuration -- the plugin
+# creates it. Only an overlapping or absurd one is refused.
+@test "a worktrees root that does not exist yet is usable" {
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK/not-yet"
+    run herdr_linear::worktrees_root_usable
+    [ "$status" -eq 0 ]
+    [ "$output" = "usable" ]
+}
