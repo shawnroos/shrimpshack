@@ -241,7 +241,7 @@ def test_main_fixture(tmp):
     check("the branch passes through line types other than user and assistant", uid(6) in ids and uid(11) in ids, repr(ids))
     check("the abandoned branch is not on the branch", uid(7) not in ids and uid(8) not in ids, repr(ids))
 
-    calls = log.calls(branch, after_text=MARKER)
+    prepared_at, calls = log.run(branch, MARKER)
     got = [c["id"] for c in calls]
     check(
         "only calls after prepare, on the current branch, are returned",
@@ -291,6 +291,25 @@ def test_main_fixture(tmp):
 
     prep = log.calls(branch)[1]
     check("a plain Bash result is returned as is", prep["text"].startswith(f"MARKER {MARKER}"), repr(prep["text"]))
+
+    prep_result = next(e for e in raw if e.get("type") == "user" and isinstance(e["message"]["content"], list)
+                       and any(b.get("tool_use_id") == "toolu_fixture_prep" for b in e["message"]["content"]))
+    check("run returns the prepare result line's time", prepared_at == prep_result["timestamp"],
+          repr((prepared_at, prep_result["timestamp"])))
+    check("run's calls are the ones after the prepare result", got == [c["id"] for c in log.calls(branch)][2:], repr(got))
+    missing = log.run(branch, "dp-never-issued-0000")
+    check("run on a branch with no prepare result is (None, [])", missing == (None, []), repr(missing))
+    prep_use = next(e for e in log.entries if any(
+        isinstance(b, dict) and b.get("id") == "toolu_fixture_prep" for b in (e.get("message") or {}).get("content") or []))
+    early_branch = log.branch(prep_use)
+    check("a prepare not yet answered on the branch reads as no prepare",
+          log.run(early_branch, MARKER)[0] is None, repr(log.run(early_branch, MARKER)))
+
+    untimed = dict(prep_result)
+    del untimed["timestamp"]
+    shaped = session_log.Log(log.path, [untimed if e.get("uuid") == prep_result["uuid"] else e for e in log.entries])
+    found_at, _ = shaped.run(shaped.branch(shaped.find_invocation(MARKER)), MARKER)
+    check("a prepare result with no time is still a prepare, not a start over", found_at == "", repr(found_at))
 
 
 def test_loops(tmp):

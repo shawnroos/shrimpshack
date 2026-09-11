@@ -375,6 +375,70 @@ check("record_block without not_shown stores an empty list", changes.record_bloc
 rec = changes.record_block(mapped, "2026-09-09T00:00:00Z")
 check("record_block closed week has no open_x", rec["open_x"] is None)
 
+# run_record builds the whole record; save's has no marker.
+good = changes.record_block(mapped, "2026-09-07T06:00:00Z")
+built = changes.run_record("fake-hash", [good], "dp-0000000000000000")
+check("run_record shape with a marker", built == {"template_hash": "fake-hash", "blocks": [good], "marker": "dp-0000000000000000"}, str(built))
+check("run_record without a marker stores no marker key", "marker" not in changes.run_record("fake-hash", [good]))
+check("finished_by matches the stored marker", changes.finished_by(built, "dp-0000000000000000"))
+check("finished_by refuses another marker", not changes.finished_by(built, "dp-1111111111111111"))
+check("finished_by of no record or a non-object is False",
+      not changes.finished_by(None, "dp-0000000000000000") and not changes.finished_by(["dp-0000000000000000"], "dp-0000000000000000"))
+
+
+def refused_secret(fn, *args):
+    try:
+        fn(*args)
+    except changes.credentials.CredentialError as err:
+        return err
+    return None
+
+
+SECRETISH = "tok3nABCDEFGH1234567890"
+for label, position, bad in (
+    ("a shown series name", "a series name", {"x": WEEKS, "series": {SECRETISH: [1, 2, 3]}}),
+    ("a series name not shown", "a series name", {"x": WEEKS, "series": {}, "not_shown": [SECRETISH]}),
+    ("an x label", "an x label", {"x": ["fake-a", SECRETISH], "series": {"fake": [1, 2]}}),
+):
+    err = refused_secret(changes.run_record, "fake-hash", [good, changes.record_block(bad, None)])
+    check(f"run_record refuses {label} that looks like a credential",
+          err is not None and err.kind == "secret" and f"Block 2: {position} from the source" in str(err), repr(err))
+    check(f"run_record's refusal of {label} never repeats the value", err is not None and SECRETISH not in str(err))
+    err = refused_secret(changes.screen, 3, bad)
+    check(f"screen refuses {label} before anything is shown", err is not None and "Block 3" in str(err), repr(err))
+plain = {"x": ["blurry-background-regional"], "series": {"blurry-background-regional": [1]},
+         "not_shown": ["another-long-plain-series-name"]}
+check("an ordinary long name with no digits passes the screen", refused_secret(changes.screen, 1, plain) is None)
+check("a number x is never screened", refused_secret(changes.screen, 1, {"x": [12345678901234567890123], "series": {}}) is None)
+
+# baseline: the three reasons, and the shape a loaded record must have.
+check("no record is no earlier run", changes.baseline(None, "fake-hash", 1) == (None, "no earlier run"))
+check("a record from another template says the template changed",
+      changes.baseline(built, "other-hash", 1) == (None, "the template changed since the last run"))
+check("a matching record returns its blocks", changes.baseline(built, "fake-hash", 1) == ([good], None))
+bad_reason = (None, "the last run's record cannot be read")
+check("a record that is not an object cannot be read", changes.baseline(["fake"], "fake-hash", 1) == bad_reason)
+older = {k: v for k, v in good.items() if k not in ("not_shown", "open_x")}
+check("a block with no not_shown or open_x is still read", changes.baseline(dict(built, blocks=[older]), "fake-hash", 1) == ([older], None))
+odd = dict(good, not_shown="not a list")
+check("a block with a malformed not_shown is still read", changes.baseline(dict(built, blocks=[odd]), "fake-hash", 1) == ([odd], None))
+for label, blocks in (
+    ("blocks not a list", {"0": good}),
+    ("a block count unlike the template's", [good, good]),
+    ("a block that is not an object", ["fake"]),
+    ("x not a list", [dict(good, x="fake")]),
+    ("series not an object", [dict(good, series=[1, 2, 3])]),
+    ("an x value that is true", [dict(good, x=[True, WEEKS[1], WEEKS[2]])]),
+    ("an x value that is an object", [dict(good, x=[{}, WEEKS[1], WEEKS[2]])]),
+    ("a series shorter than x", [dict(good, series={"tool-alpha": [3, 7]})]),
+    ("a series that is not a list", [dict(good, series={"tool-alpha": "3,7,40"})]),
+    ("a value that is text", [dict(good, series={"tool-alpha": [3, "7", 40]})]),
+    ("a value that is false", [dict(good, series={"tool-alpha": [3, False, 40]})]),
+    ("a reply time that is a number", [dict(good, replied_at=1788393600)]),
+):
+    check(f"a record with {label} cannot be read", changes.baseline(dict(built, blocks=blocks), "fake-hash", 1) == bad_reason,
+          repr(changes.baseline(dict(built, blocks=blocks), "fake-hash", 1)))
+
 # topn_line.
 args = {"query": {"definition": {"params": {"groupByLimit": 25}}}}
 check(

@@ -15,7 +15,6 @@ sys.path.insert(0, SCRIPTS)
 REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
 os.environ["HOME"] = tempfile.mkdtemp(prefix="templates-test-home-")
 
-import credentials  # noqa: E402
 import mapping  # noqa: E402
 import templates  # noqa: E402
 
@@ -190,7 +189,7 @@ def main():
     t = template(blocks=[file_block("relative/path.json")])
     check("a relative file path is refused", kind_of(refusal(templates.validate, t)) == "invalid")
 
-    # --- the scan through templates keeps report.py's TemplateError contract ---
+    # --- save's scan keeps the store's TemplateError contract ---
     for label, source, kind in (
         ("a literal header", {"kind": "command", "command": 'curl -f -H "X-Api-Key: fakeabc" https://api.example.test -o {output}'},
          "secret"),
@@ -198,14 +197,12 @@ def main():
         ("a Bash tool source", {"kind": "tool", "tool": "Bash", "args": {}}, "invalid"),
         ("an unbalanced quote", {"kind": "command", "command": 'curl -f "https://x {output}'}, "invalid"),
     ):
-        err = None
-        try:
-            templates.secret_scan(source)
-        except templates.TemplateError as caught:
-            err = caught
-        check(f"templates.secret_scan raises TemplateError {kind!r} for {label}", kind_of(err) == kind, repr(err))
-    check("templates.secret_scan accepts a clean source", refusal(templates.secret_scan, tool_block()["source"]) is None)
-    check("templates.env_names is the credentials one", templates.env_names is credentials.env_names)
+        block = dict(tool_block(), source=source)
+        err = refusal(templates.save, template(blocks=[block]), home=fresh_home())
+        check(f"templates.save raises TemplateError {kind!r} for {label}", kind_of(err) == kind, repr(err))
+    check("templates.save accepts a clean source", refusal(templates.save, template(), home=fresh_home()) is None)
+    check("templates re-exports neither the scan nor env_names",
+          not hasattr(templates, "secret_scan") and not hasattr(templates, "env_names"))
 
     # --- absolute dates (R4) ---
     found = templates.absolute_dates({"date_range": {"start": 1788393600, "end": 1789119554}})

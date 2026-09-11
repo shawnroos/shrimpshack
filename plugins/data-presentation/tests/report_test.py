@@ -497,6 +497,10 @@ def test_save_gates():
     path = draft_file(s, "secret-fake", [draft_block("chart-aaaa", secret_args)])
     out = save(s, path, "--confirm")
     check("a literal credential stops save", out["status"] == "stopped" and not template_exists("secret-fake"), out)
+    out = save(s, path)
+    check("a literal credential stops the preview too, before anything is shown",
+          out["status"] == "stopped" and out["block"] == "" and "apiKey" in out["message"], out)
+    check("the credential's value is never repeated", "abcd1234efgh5678ijkl9012" not in json.dumps(out), out)
 
     s = fresh()
     s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), is_error=True)
@@ -992,6 +996,103 @@ def test_file_source():
     p = prepare(s, "file-fake")
     out = finish(s, "file-fake", p["marker"])
     stopped_unchanged("a missing file", out, "file-fake", before, next_move="none")
+    os.mkdir(data)
+    p = prepare(s, "file-fake")
+    out = finish(s, "file-fake", p["marker"])
+    stopped_unchanged("a directory at the file's path", out, "file-fake", before, next_move="none",
+                      needle="not a regular file")
+
+
+SECRETISH = "tok3nABCDEFGH1234567890"
+LABELS = ["fake-a", "fake-b", "fake-c"]
+
+
+def label_rows(x=LABELS, name="fake-rows"):
+    return {"x": list(x), "series": {name: [1, 2, 3]}}
+
+
+def test_source_secrets():
+    print("a value from the source that looks like a credential")
+    s = fresh()
+    baseline(s)
+    before = record_bytes("ai-fake")
+    p = prepare(s, "ai-fake")
+    s.tool(AMP, args_for("chart-aaaa"), weekly_reply(dict(SIX, **{SECRETISH: [1, 2, 3]})), ts=INSIDE_WEEK)
+    out = finish(s, "ai-fake", p["marker"])
+    stopped_unchanged("a credential-like series name", out, "ai-fake", before, next_move="none",
+                      needle="looks like a credential")
+    check("the stop names the block and the position", "Block 1: a series name" in out["message"], out["message"])
+    check("the stop says it was neither shown nor stored", "not shown or stored" in out["message"], out["message"])
+    check("the value is never repeated", SECRETISH not in json.dumps(out), out)
+
+    p = prepare(s, "ai-fake")
+    changed = args_for("chart-aaaa")
+    del changed["excludeIncompleteDatapoints"]
+    s.tool(AMP, changed, weekly_reply({SECRETISH: [1, 2, 3]}), ts=INSIDE_WEEK)
+    out = finish(s, "ai-fake", p["marker"], "--variation")
+    stopped_unchanged("a credential-like series name in a variation", out, "ai-fake", before, next_move="none",
+                      needle="looks like a credential")
+    check("a variation never repeats the value", SECRETISH not in json.dumps(out), out)
+
+    s = fresh()
+    make("labels-fake", [ident_block({"kind": "tool", "tool": OTHER, "args": {"table": "fake"}}, label_rows())])
+    p = prepare(s, "labels-fake")
+    s.tool(OTHER, {"table": "fake"}, label_rows(), ts=INSIDE_WEEK)
+    out = finish(s, "labels-fake", p["marker"])
+    check("a label x runs", out["status"] == "ok", out)
+    before = record_bytes("labels-fake")
+    p = prepare(s, "labels-fake")
+    s.tool(OTHER, {"table": "fake"}, label_rows(["fake-a", SECRETISH, "fake-c"]), ts=INSIDE_WEEK)
+    out = finish(s, "labels-fake", p["marker"])
+    stopped_unchanged("a credential-like x label", out, "labels-fake", before, next_move="none",
+                      needle="Block 1: an x label")
+    check("an x label is never repeated", SECRETISH not in json.dumps(out), out)
+
+    s = fresh()
+    s.tool(AMP, args_for("chart-aaaa"), weekly_reply({SECRETISH: [1, 2, 3]}), ts=INSIDE_WEEK)
+    path = draft_file(s, "secret-name", [draft_block("chart-aaaa", args_for("chart-aaaa"))])
+    out = save(s, path)
+    check("a save preview with a credential-like name stops",
+          out["status"] == "stopped" and out["next"] == "none" and out["block"] == ""
+          and "looks like a credential" in out["message"], out)
+    check("a save preview never repeats the value", SECRETISH not in json.dumps(out), out)
+    out = save(s, path, "--confirm")
+    check("a confirmed save with a credential-like name writes nothing",
+          out["status"] == "stopped" and not template_exists("secret-name") and record_bytes("secret-name") is None, out)
+
+    s = fresh()
+    plain = {"blurry-background-regional": [3, 7, 40], "tool-bravo": [5, 6, 7]}
+    out, _ = baseline(s, series=plain)
+    check("an ordinary long name with no digits passes", out["status"] == "ok", out)
+    check("that name is shown, as far as the table column allows", "blurry-background-regio" in out["block"], out["block"])
+    check("that name is stored", "blurry-background-regional" in (record("ai-fake") or {"blocks": [{"series": {}}]})["blocks"][0]["series"])
+
+
+def test_bad_record():
+    print("a run record that cannot be read")
+    for label, body in (
+        ("a series shorter than x", None),
+        ("text that is not JSON", b"{not json"),
+        ("JSON that is not an object", b"[1, 2, 3]\n"),
+    ):
+        s = fresh()
+        baseline(s)
+        path = os.path.join(data_root(), "runs", "ai-fake.json")
+        if body is None:
+            rec = record("ai-fake")
+            rec["blocks"][0]["series"]["tool-alpha"] = [3, 7]
+            body = json.dumps(rec).encode()
+        with open(path, "wb") as f:
+            f.write(body)
+        p = prepare(s, "ai-fake")
+        s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), ts=INSIDE_WEEK)
+        out = finish(s, "ai-fake", p["marker"])
+        check(f"{label}: the run still reports", out["status"] == "ok", out)
+        check(f"{label}: the changes section says the record cannot be read",
+              "No earlier run to compare: the last run's record cannot be read." in flat(out["block"]), out["block"])
+        check(f"{label}: never reads as no changes", "No changes since" not in out["block"], out["block"])
+        check(f"{label}: a readable record is written again",
+              (record("ai-fake") or {}).get("marker") == p["marker"] and record("ai-fake")["blocks"][0]["series"] == SIX)
 
 
 def test_sweep():
@@ -1214,7 +1315,8 @@ def main():
         for test in (
             test_list, test_prepare, test_env, test_save_then_finish, test_save_gates, test_ae1_revision,
             test_call_equality, test_two_blocks, test_source_errors, test_drift, test_present_refused,
-            test_variation, test_pending_and_start_over, test_command_source, test_file_source, test_sweep,
+            test_variation, test_pending_and_start_over, test_command_source, test_file_source,
+            test_source_secrets, test_bad_record, test_sweep,
             test_already_finished, test_times,
             test_width, test_ae5_seventh, test_template_changed, test_delete_rename, test_fault,
         ):

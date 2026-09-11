@@ -150,17 +150,6 @@ def validate(template):
             raise TemplateError("invalid", f"{where} fingerprint must be an object.")
 
 
-# Kept for report.py, which calls these through templates and catches TemplateError.
-def secret_scan(source):
-    try:
-        credentials.scan_source(source)
-    except credentials.CredentialError as err:
-        raise TemplateError(err.kind, str(err)) from None
-
-
-env_names = credentials.env_names
-
-
 def _looks_absolute(value):
     if isinstance(value, (int, float)):
         return EPOCH_MIN <= value <= EPOCH_MAX or EPOCH_MIN * 1000 <= value <= EPOCH_MAX * 1000
@@ -245,8 +234,11 @@ def _read_json(path, what):
 
 def save(template, replace=False, home=None):
     validate(template)
-    for block in template["blocks"]:
-        secret_scan(block["source"])
+    try:
+        for block in template["blocks"]:
+            credentials.scan_source(block["source"])
+    except credentials.CredentialError as err:
+        raise TemplateError(err.kind, str(err)) from None
     path = _path("templates", template["name"], home)
     taken = TemplateError(
         "exists",
@@ -332,10 +324,7 @@ def load_run(name, home=None):
     path = _path("runs", name, home)
     if not os.path.exists(path):
         return None
-    record = _read_json(path, f"{name!r} run record")
-    if not isinstance(record, dict):
-        raise TemplateError("invalid", f"The run record for {name!r} is not an object.")
-    return record
+    return _read_json(path, f"{name!r} run record")
 
 
 def write_run(name, record, home=None):

@@ -222,14 +222,26 @@ class Log:
         for entry in self.entries:
             if _message_id(entry) in turns or any(b["tool_use_id"] in uses for b in _blocks(entry, "tool_result")):
                 on_branch.add(id(entry))
-        # The cap keeps the invoking line last: calls() depends on it, and a sibling written
+        # The cap keeps the invoking line last: _scan() depends on it, and a sibling written
         # after it ran concurrently with it.
         last = self._position.get(id(from_entry), len(self.entries))
         return [e for e in self.entries if id(e) in on_branch and self._position[id(e)] <= last]
 
-    def calls(self, branch, after_text=None):
+    def calls(self, branch):
+        return self._scan(branch, None)[1]
+
+    def run(self, branch, marker):
+        prepared, calls = self._scan(branch, marker)
+        if prepared is None:
+            return None, []
+        # "" rather than None: a prepare line with no time must fail the age check, not
+        # read as no prepare at all.
+        return prepared.get("timestamp") or "", calls
+
+    def _scan(self, branch, after_text):
         invoking = branch[-1] if branch else None
         start = -1 if after_text is None else None
+        prepared = None
         uses = []
         seen = set()
         results = {}
@@ -250,10 +262,10 @@ class Log:
                     if answered in seen:
                         results[answered] = (entry, block)
                     if start is None and after_text in _joined(block.get("content")):
-                        start = position
+                        start, prepared = position, entry
         if start is None:
-            return []
-        return [self._call(block, results.get(block["id"])) for position, block in uses if position > start]
+            return None, []
+        return prepared, [self._call(block, results.get(block["id"])) for position, block in uses if position > start]
 
     def _call(self, use, result):
         call = {

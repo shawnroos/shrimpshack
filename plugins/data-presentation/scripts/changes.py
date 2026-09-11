@@ -1,13 +1,18 @@
-"""What changed since the last successful run of a template, in plain lines."""
+"""The run record, and what changed since the last successful run of a template, in plain lines."""
 
 import math
 import textwrap
 from datetime import datetime, timedelta, timezone
 
+import credentials
 import render
 import validate
 
 MAX_CHANGE_LINES = 12
+
+NO_RUN = "no earlier run"
+BAD_RECORD = "the last run's record cannot be read"
+TEMPLATE_CHANGED = "the template changed since the last run"
 
 ORDER = (
     "revised", "filled_in", "new_x", "now_missing",
@@ -84,6 +89,18 @@ def open_x(block_x, replied_at):
     return block_x[latest] if _as_utc(reply) < _as_utc(end) else None
 
 
+def screen(number, block):
+    named = [("an x label", x) for x in block["x"]]
+    named += [("a series name", name) for name in [*block["series"], *(block.get("not_shown") or [])]]
+    for where, value in named:
+        if isinstance(value, str) and credentials.looks_secret(value):
+            raise credentials.CredentialError(
+                "secret",
+                f"Block {number}: {where} from the source looks like a credential, so it was not shown "
+                "or stored. The value is not repeated here.",
+            )
+
+
 def record_block(mapped, replied_at):
     return {
         "x": list(mapped["x"]),
@@ -92,6 +109,54 @@ def record_block(mapped, replied_at):
         "replied_at": replied_at,
         "open_x": open_x(mapped["x"], replied_at),
     }
+
+
+def run_record(template_hash, blocks, marker=None):
+    for number, block in enumerate(blocks, start=1):
+        screen(number, block)
+    record = {"template_hash": template_hash, "blocks": blocks}
+    if marker is not None:
+        record["marker"] = marker
+    return record
+
+
+def finished_by(record, marker):
+    return isinstance(record, dict) and record.get("marker") == marker
+
+
+def _number(value):
+    return not isinstance(value, bool) and isinstance(value, (int, float))
+
+
+def _block_ok(block):
+    # not_shown and open_x are not checked: an older record has neither, and compare
+    # reads a malformed not_shown as empty.
+    if not isinstance(block, dict):
+        return False
+    x, series = block.get("x"), block.get("series")
+    if not isinstance(x, list) or not isinstance(series, dict):
+        return False
+    if not all(isinstance(v, str) or _number(v) for v in x):
+        return False
+    for values in series.values():
+        if not isinstance(values, list) or len(values) != len(x):
+            return False
+        if not all(v is None or _number(v) for v in values):
+            return False
+    return block.get("replied_at") is None or isinstance(block["replied_at"], str)
+
+
+def baseline(record, template_hash, count):
+    if record is None:
+        return None, NO_RUN
+    if not isinstance(record, dict):
+        return None, BAD_RECORD
+    if record.get("template_hash") != template_hash:
+        return None, TEMPLATE_CHANGED
+    blocks = record.get("blocks")
+    if not isinstance(blocks, list) or len(blocks) != count or not all(map(_block_ok, blocks)):
+        return None, BAD_RECORD
+    return blocks, None
 
 
 def _change(kind, x=None, series=None, old=None, new=None):
@@ -124,7 +189,7 @@ def _rolled_off(x, prev_x, cur_x):
 def compare(previous, current, reason_if_none=None):
     if previous is None:
         found = _change("no_baseline")
-        found["reason"] = reason_if_none or "no earlier run"
+        found["reason"] = reason_if_none or NO_RUN
         return [found]
 
     prev_x, cur_x = list(previous["x"]), list(current["x"])

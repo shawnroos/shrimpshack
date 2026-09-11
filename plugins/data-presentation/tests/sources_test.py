@@ -51,6 +51,10 @@ def stop_of(source, *args, **kwargs):
     return None
 
 
+def open_fds():
+    return len(os.listdir("/dev/fd"))
+
+
 def command_at(path, call=None):
     source = CommandSource(COMMAND, 1, path)
     source.blocks = [1]
@@ -121,6 +125,25 @@ def test_file_source(home):
     gone.blocks = [1]
     stop = stop_of(gone)
     check("a missing file cannot be read", stop and "cannot be read" in str(stop) and stop.next == "none", stop)
+
+    folder = os.path.join(home, "fake-folder.json")
+    os.mkdir(folder)
+    at_folder = FileSource({"kind": "file", "path": folder}, 1, folder)
+    at_folder.blocks = [1]
+    try:
+        stop = stop_of(at_folder)
+    except Exception as exc:  # noqa: BLE001
+        stop = exc
+    check("a directory at a file source's path is a stop, not an error",
+          isinstance(stop, Stop) and "not a regular file" in str(stop) and stop.next == "none", repr(stop))
+
+    before = open_fds()
+    for reader in (source, piped, at_folder, command_at(fifo), command_at(path)):
+        try:
+            stop_of(reader)
+        except Exception:  # noqa: BLE001
+            pass
+    check("no read leaves a file descriptor open, on any path", open_fds() == before, (before, open_fds()))
 
 
 def test_command_source(home):
