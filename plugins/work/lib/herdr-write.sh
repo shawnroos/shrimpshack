@@ -186,11 +186,13 @@ herdr_linear::_issue_space() {
 # <space>. Nothing otherwise, and the caller makes a new tab.
 # Non-zero when herdr could not be asked about the tab.
 herdr_linear::_pane_of_tab_in() {
-    local tab="${1:-}" ws="${2:-}" where
+    local tab="${1:-}" ws="${2:-}" where panes
     [ -n "$tab" ] || return 0
     where="$(herdr_linear::tab_space "$tab")" || return 1
     [ "$where" = "$ws" ] || return 0
-    herdr_linear::panes_in_tab "$tab" 2>/dev/null | head -n1
+    panes="$(herdr_linear::panes_in_tab "$tab" 2>/dev/null)" \
+        || { herdr_linear::snapshot_readable || return 1; return 0; }
+    printf '%s\n' "$panes" | head -n1
 }
 
 # herdr_linear::open_session <worktree-path>
@@ -245,7 +247,7 @@ herdr_linear::open_session() {
 herdr_linear::layout_build() {
     local parent="${1:-}" ; shift || true
     local bin tab tabpane pane slug child branch wt_path journal_file here bound repo resp
-    local ws="" rc made existing owner i=0 paths=() branches=()
+    local ws="" rc made existing owner orc ptab i=0 paths=() branches=()
 
     [ -n "$parent" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
@@ -308,10 +310,18 @@ herdr_linear::layout_build() {
                 return "$HERDR_LINEAR_LAYOUT_FAILED"
             }
             if [ -n "$existing" ]; then
-                owner="$(herdr_linear::binding_identifier "$existing" 2>/dev/null)" || owner=""
-                if [ -n "$owner" ] && [ "$owner" != "$child" ]; then
+                if [ ! -d "$existing" ]; then
+                    printf 'the branch for %s is registered to %s, which is not there; run git worktree prune (unlocking it first if it is locked); nothing was made\n' \
+                        "$child" "$existing" >&2
+                    return "$HERDR_LINEAR_LAYOUT_FAILED"
+                fi
+                # Adopt only a worktree with no binding or the child's own. A
+                # record that cannot be read is not "unowned".
+                owner="$(herdr_linear::binding_identifier "$existing" 2>/dev/null)"; orc=$?
+                if { [ "$orc" -eq 0 ] && [ "$owner" != "$child" ]; } \
+                    || { [ "$orc" -ne 0 ] && [ "$orc" -ne "$HERDR_LINEAR_BINDING_ABSENT" ]; }; then
                     printf 'the branch for %s is checked out in %s, which is bound to %s; nothing was made\n' \
-                        "$child" "$existing" "$owner" >&2
+                        "$child" "$existing" "${owner:-an unreadable record}" >&2
                     return "$HERDR_LINEAR_LAYOUT_FAILED"
                 fi
                 wt_path="$existing"; branch=""
@@ -380,9 +390,17 @@ herdr_linear::layout_build() {
         # Done on an earlier attempt only while its pane is still in this tab.
         # A pane that closed with an old tab is a column still to make.
         pane="$(herdr_linear::journal_get "$parent" "pane.$child" 2>/dev/null)" || pane=""
-        if [ -n "$pane" ] && [ "$(herdr_linear::tab_of_pane "$pane" 2>/dev/null)" = "$tab" ]; then
-            herdr_linear::_unlock "$journal_file"
-            continue
+        if [ -n "$pane" ]; then
+            ptab="$(herdr_linear::tab_of_pane "$pane" 2>/dev/null)" || ptab=""
+            if [ -z "$ptab" ] && ! herdr_linear::snapshot_readable; then
+                herdr_linear::_unlock "$journal_file"
+                printf 'could not read the herdr snapshot, so whether %s still has its pane is unknown; nothing was made\n' "$child" >&2
+                return "$HERDR_LINEAR_LAYOUT_FAILED"
+            fi
+            if [ "$ptab" = "$tab" ]; then
+                herdr_linear::_unlock "$journal_file"
+                continue
+            fi
         fi
 
         if ! herdr_linear::journal_get "$parent" "worktree.$child" >/dev/null 2>&1; then

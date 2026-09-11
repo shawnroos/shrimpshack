@@ -269,14 +269,23 @@ except Exception:
 # tab; non-zero when herdr could not be asked. herdr exits 1 for both, so the
 # error code is what tells "gone" from "unknown" -- and a caller that took
 # unknown for gone would make a second tab on every retry during an outage.
+# herdr writes that error object to STDERR (0.9.0), so the miss is asked again
+# for its stderr alone.
 herdr_linear::tab_space() {
-    local bin out ws
+    local bin ws err
     [ -n "${1:-}" ] || return 1
     bin="$(herdr_linear::bin)"
     [ -n "$bin" ] || return 1
-    out="$("$bin" tab get "$1" 2>/dev/null)"
-    [ "$(printf '%s' "$out" | herdr_linear::json "error.code")" = "tab_not_found" ] && return 0
-    ws="$(printf '%s' "$out" | herdr_linear::json "result.tab.workspace_id")"
-    [ -n "$ws" ] || return 1
-    printf '%s' "$ws"
+    ws="$("$bin" tab get "$1" 2>/dev/null | herdr_linear::json "result.tab.workspace_id")"
+    [ -n "$ws" ] && { printf '%s' "$ws"; return 0; }
+    err="$("$bin" tab get "$1" 2>&1 >/dev/null)"
+    [ "$(printf '%s' "$err" | herdr_linear::json "error.code")" = "tab_not_found" ] && return 0
+    return 1
+}
+
+# Whether herdr can give a snapshot at all. The pane readers return nothing
+# both for "no such pane" and for "could not read", and only this tells them
+# apart.
+herdr_linear::snapshot_readable() {
+    herdr_linear::snapshot >/dev/null 2>&1
 }

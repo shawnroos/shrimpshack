@@ -29,6 +29,7 @@
 #   FAKE_HERDR_MODE        running | not_running | running_then_flood | dead
 #   FAKE_HERDR_ALLOW_MUTATION  1 to permit creation verbs (U10 only)
 #   FAKE_HERDR_SLOW_PANE   probes a new pane stays unregistered for
+#   FAKE_HERDR_SNAPSHOT_FAILS  1 to make `api snapshot` fail
 #   FAKE_HERDR_TAB_GET_FAILS  1 to make `tab get` fail with no answer at all,
 #                          as an unreachable server does, unlike a missing tab
 #   FAKE_HERDR_WORKSPACE_LIST_FAILS  1 to make `workspace list` fail while the
@@ -224,6 +225,7 @@ emit_status() {
 
 emit_snapshot() {
     [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; return 1; }
+    [ "${FAKE_HERDR_SNAPSHOT_FAILS:-0}" = 1 ] && { echo "fake-herdr: snapshot failed" >&2; return 1; }
     canned_snapshot | REC_DIR="$REC_DIR" python3 -c '
 import sys, json, os
 d = json.load(sys.stdin)
@@ -290,7 +292,8 @@ case "${1:-}" in
         ;;
     tab)
         case "${2:-}" in
-            # herdr answers a missing tab with an error object AND exit 1.
+            # herdr answers a missing tab with an error object on STDERR and
+            # exit 1 (herdr 0.9.0, checked live). Stdout is empty.
             get)
                 [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
                 [ "${FAKE_HERDR_TAB_GET_FAILS:-0}" = 1 ] && { echo "fake-herdr: tab get failed" >&2; exit 1; }
@@ -300,7 +303,7 @@ case "${1:-}" in
                     *) [ -f "$REC_DIR/tabs" ] && _ws="$(awk -v t="${3:-}" '$1 == t { print $2; exit }' "$REC_DIR/tabs")" ;;
                 esac
                 if [ -z "$_ws" ]; then
-                    printf '{"error":{"code":"tab_not_found","message":"tab %s not found"},"id":"cli:tab:get"}\n' "${3:-}"
+                    printf '{"error":{"code":"tab_not_found","message":"tab %s not found"},"id":"cli:tab:get"}\n' "${3:-}" >&2
                     exit 1
                 fi
                 printf '{"id":"cli:tab:get","result":{"tab":{"tab_id":"%s","workspace_id":"%s"},"type":"tab_info"}}\n' "${3:-}" "$_ws"

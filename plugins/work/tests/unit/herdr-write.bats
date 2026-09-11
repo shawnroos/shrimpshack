@@ -526,3 +526,30 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     [ "$status" -eq 3 ]
     [ "$(herdr_calls 'tab create')" = "1" ]
 }
+
+# A snapshot that could not be read says nothing about which panes exist.
+# Taking it for "the column's pane is gone" splits a second pane into a
+# finished layout; taking it for "the tab is gone" makes a second tab.
+@test "a snapshot herdr cannot give makes no pane and no tab" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    splits="$(herdr_calls 'pane split')"
+    export FAKE_HERDR_SNAPSHOT_FAILS=1
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 3 ]
+    [ "$(herdr_calls 'pane split')" = "$splits" ]
+    [ "$(herdr_calls 'tab create')" = "1" ]
+}
+
+# A locked worktree whose directory is gone is not reported prunable, but it is
+# no worktree to open a column in.
+@test "a child branch held by a worktree whose directory is gone is refused with a reason" {
+    gone="$BASE/gone"
+    git -C "$PROJECT" worktree add -q -b feature/WEB-3001-column-web-3001 "$gone" >/dev/null 2>&1
+    git -C "$PROJECT" worktree lock "$gone"
+    rm -rf "$gone"
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 3 ]
+    [[ "$stderr" == *"$gone"* ]]
+    [ "$(herdr_calls 'tab create')" = "0" ]
+}

@@ -352,10 +352,13 @@ fh() { FAKE_HERDR_ALLOW_MUTATION=1 bash "$FIX/fake-herdr.sh" "$@"; }
     [ "$(printf '%s' "$output" | herdr_linear::json result.pane.workspace_id)" = "wG" ]
 }
 
-@test "fixture: a tab that does not exist is an error with exit 1" {
+# herdr 0.9.0 writes the error object to stderr, not stdout. The fixture once
+# put it on stdout, and code reading only stdout passed here and failed live.
+@test "fixture: a tab that does not exist is an error on stderr with exit 1" {
     run --separate-stderr fh tab get wZ:t999
     [ "$status" -eq 1 ]
-    [ "$(printf '%s' "$output" | herdr_linear::json error.code)" = "tab_not_found" ]
+    [ -z "$output" ]
+    [ "$(printf '%s' "$stderr" | herdr_linear::json error.code)" = "tab_not_found" ]
 }
 
 @test "fixture: the workspace list reports the spaces it was given, with labels" {
