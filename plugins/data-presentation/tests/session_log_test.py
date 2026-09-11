@@ -102,8 +102,11 @@ def line(n, parent, typ, content=None, **extra):
     return d
 
 
-def use(n, parent, tid, name="Bash", inp=None):
-    return line(n, parent, "assistant", [{"type": "tool_use", "id": tid, "name": name, "input": inp or {"command": "true"}}])
+def use(n, parent, tid, name="Bash", inp=None, mid=None):
+    d = line(n, parent, "assistant", [{"type": "tool_use", "id": tid, "name": name, "input": inp or {"command": "true"}}])
+    if mid is not None:
+        d["message"]["id"] = mid
+    return d
 
 
 def res(n, parent, tid, content, is_error=False):
@@ -136,12 +139,13 @@ class Project:
         shutil.copy(os.path.join(FIXTURES, "session_spill.txt"), os.path.join(self.results_dir, "toolu_fixture_spill.txt"))
         return self.path
 
-    def write_subagent(self, lines):
+    def write_subagent(self, lines, name="agent-fixture0001.jsonl", tail=""):
         sub = os.path.join(self.session_dir, "subagents")
         os.makedirs(sub, exist_ok=True)
-        with open(os.path.join(sub, "agent-fixture0001.jsonl"), "w") as f:
+        with open(os.path.join(sub, name), "w") as f:
             for item in lines:
-                f.write(json.dumps(item) + "\n")
+                f.write(item if isinstance(item, str) else json.dumps(item) + "\n")
+            f.write(tail)
 
 
 def spilled(project, n, target):
@@ -494,6 +498,93 @@ def test_load(tmp):
     check("a long Bash result is returned whole", calls[0]["text"] == filler, repr(len(calls[0]["text"])))
 
 
+def test_parallel_calls(tmp):
+    project = Project(os.path.join(tmp, "parallel"))
+    shutil.copy(os.path.join(FIXTURES, "session_parallel.jsonl"), project.path)
+    log = session_log.load(project.path)
+    entry = log.find_invocation(f"{MARKER}-parallel")
+    branch = log.branch(entry)
+    ids = [e["uuid"] for e in branch]
+    check("a parallel call off the parentUuid chain is on the branch", uid(3) in ids and uid(6) in ids, repr(ids))
+    check("the expanded branch keeps file order", ids == [uid(n) for n in (1, 2, 3, 4, 5, 6, 7, 10)], repr(ids))
+    check("the rewound branch with its own message id stays off", uid(8) not in ids and uid(9) not in ids, repr(ids))
+    calls = log.calls(branch)
+    got = [c["id"] for c in calls]
+    check(
+        "every parallel call from one message is returned from a later line",
+        got == ["toolu_fixture_par_a", "toolu_fixture_par_b", "toolu_fixture_par_c"],
+        repr(got),
+    )
+    check("each parallel call has its own result", [c["text"] for c in calls] == [f"fixture review {k} done" for k in "abc"], repr(calls))
+    check("a call on the rewound branch is not returned", "toolu_fixture_rewound" not in got, repr(got))
+
+    sibling = [
+        line(1, None, "user", "fixture prompt"),
+        use(2, uid(1), "toolu_fin", "Bash", {"command": f"finish {MARKER}"}, mid="msg_fixture_x"),
+        use(3, uid(2), "toolu_sib", "Bash", {"command": "echo fixture"}, mid="msg_fixture_x"),
+    ]
+    log = session_log.load(project.write(sibling))
+    entry = log.find_invocation(MARKER)
+    branch = log.branch(entry)
+    check("the invoking line stays last on the branch", branch and branch[-1] is entry, repr([e["uuid"] for e in branch]))
+    check("a sibling call written after the invoking line stays off", uid(3) not in [e["uuid"] for e in branch])
+    check("the invoking call is still not returned", log.calls(branch) == [], repr(log.calls(branch)))
+
+
+def test_pairing(tmp):
+    project = Project(os.path.join(tmp, "pairing"))
+    early = [
+        res(1, None, "toolu_late", "fixture stray result"),
+        use(2, uid(1), "toolu_late"),
+        use(3, uid(2), "toolu_fin", "Bash", {"command": f"finish {MARKER}"}),
+    ]
+    log = session_log.load(project.write(early))
+    calls = log.calls(log.branch(log.find_invocation(MARKER)))
+    check("a result that comes before its call is not paired", calls and calls[0]["has_result"] is False, repr(calls))
+
+    twice = [
+        use(1, None, "toolu_dup"),
+        res(2, uid(1), "toolu_dup", "fixture first"),
+        use(3, uid(2), "toolu_dup"),
+        use(4, uid(3), "toolu_fin", "Bash", {"command": f"finish {MARKER}"}),
+    ]
+    log = session_log.load(project.write(twice))
+    ok, e = raises(lambda: log.calls(log.branch(log.find_invocation(MARKER))), "unreadable")
+    check("a tool call id used twice on the branch stops as unreadable", ok, repr(e))
+
+    two_results = [
+        use(1, None, "toolu_one"),
+        res(2, uid(1), "toolu_one", "fixture first"),
+        res(3, uid(2), "toolu_one", "fixture second"),
+        use(4, uid(3), "toolu_fin", "Bash", {"command": f"finish {MARKER}"}),
+    ]
+    log = session_log.load(project.write(two_results))
+    ok, e = raises(lambda: log.calls(log.branch(log.find_invocation(MARKER))), "unreadable")
+    check("two results for one call on the branch stop as unreadable", ok, repr(e))
+
+
+def test_subagent_strict(tmp):
+    project = Project(os.path.join(tmp, "substrict"))
+    project.write([line(1, None, "user", "fixture prompt")])
+    good = [line(1, None, "user", "fixture subagent prompt", isSidechain=True)]
+    project.write_subagent(good + ["{not json\n"] + good)
+    ok, e = raises(lambda: session_log.load(project.path).find_invocation(MARKER), "unreadable")
+    check("a broken line in a subagent log stops as unreadable", ok, repr(e))
+    check("the subagent message names the file", e is not None and "agent-fixture0001.jsonl" in str(e), str(e))
+    check("the subagent message does not print the full path", e is not None and project.session_dir not in str(e), str(e))
+
+    fin = use(2, uid(1), "toolu_sub_fin", "Bash", {"command": f"finish {MARKER}"})
+    partial = json.dumps(res(3, uid(2), "toolu_sub_fin", "fixture"))[:40]
+    project.write_subagent(good + [fin], tail=partial)
+    ok, e = raises(lambda: session_log.load(project.path).find_invocation(MARKER), "subagent")
+    check("a partial last line in a subagent log is tolerated", ok, repr(e))
+
+    project.write_subagent(good)
+    os.makedirs(os.path.join(project.session_dir, "subagents", "agent-fixture0002.jsonl"))
+    ok, e = raises(lambda: session_log.load(project.path).find_invocation(MARKER), "unreadable")
+    check("a subagent log that cannot be opened stops as unreadable", ok, repr(e))
+
+
 def test_log_error():
     e = LogError("not_found", "no session log matched")
     check("LogError carries its kind", e.kind == "not_found")
@@ -512,6 +603,9 @@ def main():
         test_invocation_lookup(tmp)
         test_persisted_output(tmp)
         test_load(tmp)
+        test_parallel_calls(tmp)
+        test_pairing(tmp)
+        test_subagent_strict(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

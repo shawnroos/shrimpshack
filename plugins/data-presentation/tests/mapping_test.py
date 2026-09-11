@@ -351,6 +351,26 @@ def main():
         ok, msg = is_error(mapping.map_result, (broken, {"adapter": "identity"}), "drift")
         check(f"identity with {label} is drift", ok, msg)
 
+    print("mixed types across elements")
+    # The shape check accepts text or numbers in x, so only the cross-element type check
+    # refuses a mix. A string value is also refused by the shape check, so the values
+    # cases pin the "mixed types" wording to prove the cross-element check fired.
+    for label, result, m in (
+        ("identity x", {"x": ["2026-02-02", 5], "series": {"s1": [1, 2]}}, {"adapter": "identity"}),
+        ("paths x", {**hand, "report": {**hand["report"], "weeks": ["2026-02-02", 7, "2026-02-16"]}}, pm),
+        ("identity series values", {"x": ["a", "b"], "series": {"s1": [1, "2"]}}, {"adapter": "identity"}),
+        (
+            "paths series values",
+            {**hand, "report": {**hand["report"], "groups": [
+                {"label": "tool-kilo", "points": [1, "2", None]},
+                {"label": "tool-lima", "points": [0, 5, 6.5]},
+            ]}},
+            pm,
+        ),
+    ):
+        ok, msg = is_error(mapping.map_result, (result, m), "drift", "mixed types")
+        check(f"{label} mixing a number and text is drift", ok, msg)
+
     print("validate_mapping")
     for label, bad_map in (
         ("an unknown key", {**AMP, "colour": "red"}),

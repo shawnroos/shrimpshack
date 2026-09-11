@@ -32,7 +32,17 @@ template without a fingerprint:
     `{"adapter": "identity"}` for data already shaped as `x` and `series`. Add
     `series` (a list, or `"all"`) and `aliases` (short names) when the person asked
     for them.
-  - `present`: `title`, `units`, and `type` when the person asked for a form.
+
+    A `paths` mapping has exactly three dotted paths. A segment is a key, a
+    whole-number index, or `*`. `x` holds at most one `*`, `names` exactly one (one per
+    series), and `values` exactly two (the series, then the x positions). For a result
+    shaped `{"weeks": ["2026-01-05", ...], "rows": [{"name": "a", "counts": [3, ...]}]}`:
+
+    ```json
+    {"adapter": "paths", "paths": {"x": "weeks", "names": "rows.*.name", "values": "rows.*.counts.*"}}
+    ```
+  - `present`: always include it, even as `{}`. Add `title`, `units`, and `type` when
+    the person asked for them.
 
 Only calls made in this conversation, on its current branch, can be saved. If a call
 was made before the conversation was compacted or cleared, make it again first.
@@ -43,13 +53,19 @@ was made before the conversation was compacted or cleared, make it again first.
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" save --draft "<absolute draft path>"
 ```
 
-Relay the `block` verbatim inside a plain fence with no language tag. Follow `next`:
+When `status` is `ok`, relay the `block` verbatim inside a plain fence with no
+language tag. For any other status, relay `message` instead and show no numbers.
+Follow `next`:
 
 - `confirm_save`: ask the person whether this is the report to save.
+- `make_calls`: a drafted call was not found in this conversation. Make it again
+  exactly as drafted, then preview again.
 - `ask_snapshot_or_relative`: a call holds fixed dates, so re-running it would show
   the same window forever. Ask the person to choose: keep it as a fixed snapshot, or
   make the call again with a relative range and redraft.
-- Any other status: relay `message` to the person and stop. Do not work around it.
+- A stop saying a report of that name already exists: ask the person whether to
+  replace it. Only if they say yes, add `--replace` to the save.
+- Anything else: relay `message` to the person and stop. Do not work around it.
 
 ## 3. Save it
 
