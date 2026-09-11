@@ -170,11 +170,12 @@ def _collect(template, found, needle, verb, variation=False):
     for number, block in enumerate(template["blocks"], start=1):
         text = of_block[number].text
         try:
+            reading = mapping.read(text, block["mapping"])
             if marker is None:
-                block["fingerprint"] = mapping.fingerprint(text, block["mapping"])
+                block["fingerprint"] = reading.fingerprint()
             else:
-                mapping.check_fingerprint(block["fingerprint"], text, block["mapping"])
-            mapped.append(mapping.map_result(text, block["mapping"]))
+                reading.check(block["fingerprint"])
+            mapped.append(reading.mapped())
         except MappingError as err:
             raise _mapping_stop(number, err, rebuild=marker is not None, variation=variation) from None
     return mapped
