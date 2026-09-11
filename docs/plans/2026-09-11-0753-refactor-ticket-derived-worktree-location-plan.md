@@ -44,6 +44,8 @@ Three further defects follow from the layout change itself. `herdr_linear::conta
 - **The directory name leads with the identifier.** (session-settled: user-directed — chosen over the short human name the code produces today: the identifier makes the directory self-describing and shares a string with the branch.) Governs R3, R14.
 - **A Linear project maps to many repositories, not one.** (session-settled: user-directed — chosen over a one-to-one mapping and over deriving the repository from the caller's directory: the real workspace spans several repositories per project, and directory-derivation is the defect being removed.) Governs R5, R6, R7.
 - **Linear labels are not the repository mechanism.** (session-settled: user-approved — chosen over the `repo/…` label family the conventions document defines: a real ticket, `WEB-3354`, carries no labels at all, so a label-driven mechanism resolves nothing in practice.) Governs R5.
+- **Herdr state follows the Linear model: a space is a project, a tab is a piece of work, a pane is a session.** (session-settled: user-directed — Shawn named this a central premise of the plugin, not a new feature. Chosen over opening the session beside whatever pane is focused, which is today's behaviour and places work in the wrong space.) Governs R17–R20.
+- **A space's binding is learned from use, never inferred from its label.** (session-settled: user-directed — "if they dont map ask". Chosen over matching a space to a project by label, which is wrong on Shawn's own machine: the only bound space is labelled `AI-Editor` and carries the project `Cue MVP Launch`.) Governs R18, R19.
 
 ### Actors
 
@@ -85,6 +87,14 @@ Three further defects follow from the layout change itself. `herdr_linear::conta
 **Verification**
 
 - R12. Every behaviour above is covered by a test in `plugins/work/tests/unit/`, and no test writes outside its own temporary directory.
+
+**Session placement** (added after the plan was first written; the premise was settled in session but not recorded, and was lost once when the building agent was restarted)
+
+- R17. A session for an issue opens in the herdr space bound to that issue's project, never beside whatever pane happens to be focused. `herdr_linear::open_session` and the layout builder both split today with no pane, workspace or tab target; both change.
+- R18. When the space the person is working from has no binding, the plugin proposes binding it to the issue's project and records the person's answer. The evidence is the pairing it already holds at that moment: `herdr_linear::workspace_id` and the issue's project. `workspace_propose` and `workspace_confirm` in `lib/binding.sh` already exist, nonce-gated, and are unused on this path.
+- R19. When the space is bound to a different project, that is the `Misplaced` state `CONCEPTS.md` already defines: report it, offer to move either side, never pick which one was wrong. A space is never matched to a project by its label.
+- R20. Within the resolved space, a ticket with no tab gets a new tab, and a ticket that already has one gets a pane inside it. The tab a ticket owns is recorded, not inferred from the tab's label, which is prose. `herdr_linear::tab_id`, `tab_of_pane` and `panes_in_tab` in `lib/herdr-read.sh` already exist.
+- R21. No hook binds a space or chooses a tab. A hook has nobody to ask; it records what it would have proposed and surfaces it at the next session start, the same rule the deferred-write notice follows.
 
 ### Scope Boundaries
 
@@ -133,6 +143,9 @@ In scope: `plugins/work/lib/contain.sh`, `start.sh`, `linear.sh`, `herdr-write.s
 - KTD9. **The worktrees-root seam is added to the shared test isolation file before any other change.** `plugins/work/tests/unit/setup_common.bash` points every seam back inside the test's own directory. Without the seam there first, every `start_from_issue` test writes into the real `$HOME/worktrees`. A disk-filling incident already happened in this repository when a runner resolved its root to `/`. Governs R12.
 - KTD10. **A restart after deletion prunes, then reuses the branch.** Before `git worktree add`, the resolved repository is pruned and the derived branch is checked; when the branch already exists the worktree is added onto it without `-b`. The branch lives in the repository, not the worktree, so it survives the delete the Objective calls safe, and git also keeps a registration for the removed path. Without both steps the deterministic path is free, `add -b` refuses, and `start.sh` suppresses both streams — the documented "just run it again" recovery fails silently. Governs R15.
 - KTD11. **A layout child is a sibling of its parent, in the parent's repository.** The layout puts each child at `<parent-worktree-parent-dir>/<CHILD>-<title-slug>` and runs `git worktree add` in `herdr_linear::worktree_repo "<parent worktree>"`. This closes the caller-directory defect at the layout site without giving layout an ask flow of its own: a bound parent's repository is a fact, so R6 applies and R7 never fires, and a mid-loop question that the journal has already partly recorded never arises. It also needs no organisation or scope lookup, and works whether the parent sits at the old per-project layout or the new root. `herdr_linear::layout_build` takes the parent identifier and not a path, so the parent worktree is the directory the layout runs in, verified by comparing its binding to the parent identifier and refused when they disagree. That is identity verification, which `bind` already does, not repository derivation. Governs R16, R11.
+- KTD12. **One resolution rule, not four copies.** Team, repository, space and tab are four instances of one rule: exactly one known answer — resolve it and state the fact and its source (R4 of the parent plan); more than one — ask and name every candidate; none — ask and record the answer. `project_team` / `project_teams` / `no_team_reason` are the reference shape. Writing that logic a third or fourth time is the signal to factor it; each site then supplies only its candidate reader and its record. Governs R5–R7, R17–R20.
+- KTD13. **The binding record is the only authority for a space or a tab.** Labels are prose and drift. Live state on Shawn's machine proves it: four spaces, one bound, and that one's label names a different project than its record. Governs R18–R20.
+- KTD14. **The current directory's repository is a candidate, never an answer.** When the worktree the person stands in is itself bound to an issue in the same project, its repository is a strong default to offer inside the ask. Otherwise it is meaningless and using it is the defect this plan removes. A unit that proposed passing `worktree_repo "$wt"` as the answer was corrected on exactly this point. Governs R5–R7.
 
 ### High-Level Technical Design
 
@@ -332,6 +345,18 @@ U1 first and alone: the test seam must exist before any test can exercise a work
   - The `start` skill cites the repository readers by name, mirroring the existing `propose.bats` assertion that the `bind` skill cites `herdr_linear::path_signal`. The assertion lives in `wire.bats`, beside the other skill-fence checks.
   - The `start` skill's exit table carries a row for the ask value.
 - **Verification:** The suite passes, including the wire smoke, skill-to-lib, brand scan and secret scan phases.
+
+---
+
+### U7. The session opens in the project's space, in the ticket's tab
+
+- **Goal:** Placement follows the Linear model. A session lands in the space bound to the issue's project, in the tab that ticket owns or a new one, and a space with no binding is asked about and recorded rather than guessed.
+- **Requirements:** R17, R18, R19, R20, R21.
+- **Dependencies:** U4 (the resolved worktree path), U5 (the layout site).
+- **Files:** `plugins/work/lib/herdr-write.sh` (`open_session`, the layout builder), `plugins/work/lib/herdr-read.sh`, `plugins/work/lib/binding.sh` (only if the tab record needs a home), the write skills' fences, and their suites.
+- **Approach:** Read `herdr pane split --help` and the `herdr workspace`, `herdr tab` and `herdr pane` vocabulary first; the tool accepts a target and the plugin has never passed one. Resolve space, then tab, through the one rule in KTD12. Record the tab a ticket owns alongside its existing binding before inventing a second store. Extend the single-caller check in `run-tests.sh` to cover `workspace_confirm` if it is not already covered, because a space binding is a person's answer exactly as consent is.
+- **Test scenarios:** a bound space receives the session and the focused space does not; an unbound space proposes a binding and records only on a person's answer; a space bound to a different project reports misplaced and moves nothing; a ticket with a tab gets a pane in it, a ticket without one gets a new tab; a hook proposes nothing and records what it would have proposed; a space whose label names the project but whose record does not is treated as unbound.
+- **Verification:** no real mutation of Shawn's herdr layout while testing. The herdr binary is faked the way `fake-linear.sh` fakes the tracker.
 
 ---
 
