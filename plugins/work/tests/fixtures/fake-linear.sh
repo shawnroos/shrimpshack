@@ -41,6 +41,9 @@
 #                            unset, a mutation exits 97 without answering
 #   FAKE_LINEAR_PROJECT_TEAMS  one | many | none  -- how many teams the
 #                            project(id:) arm answers with (default: one)
+#   FAKE_LINEAR_ORGANIZATION  the URL key the organization arm answers with,
+#                            or `empty` for an organization of null
+#                            (default: acme)
 #   FAKE_LINEAR_UNFILTERED   set to 1 to receive the canned payload whole,
 #                            for a test asserting on a captured SHAPE rather
 #                            than on what a query selected
@@ -450,6 +453,18 @@ esac
 # test, which encodes the call ORDER into the test and breaks the moment the
 # implementation reorders two reads that do not depend on each other.
 case "$body" in
+    # The key is `acme` and never the real workspace's: run-tests.sh's brand_scan
+    # walks tests/fixtures/ too, so the real key here reddens the whole suite.
+    *'organization'*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        if [ "${FAKE_LINEAR_ORGANIZATION:-acme}" = empty ]; then
+            answer "$(printf '{"data":{"organization":null}}')"
+        else
+            answer "$(printf '{"data":{"organization":{"id":"88888888-8888-4888-8888-888888888888","urlKey":"%s","name":"Acme"}}}' \
+                "${FAKE_LINEAR_ORGANIZATION:-acme}")"
+        fi
+        exit 0
+        ;;
     # MUST precede the `teams(` arm below: the project-team query contains
     # `teams(` too, and the workflow-states arm would otherwise answer it with
     # a shape that has no team ids in it at all.

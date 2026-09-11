@@ -22,6 +22,11 @@ setup() {
     # ~/projects is; the repository is the project inside it.
     export HERDR_LINEAR_PROJECTS_ROOT="$WORK/root"
     PROJECT="$WORK/root/alpha"
+    export HERDR_LINEAR_WORKTREES_ROOT="$WORK/wt"
+    WT_ROOT="$WORK/wt"
+    # found_parent answers every fetch with WEB-2870 in AI Canvas Tools, so a
+    # filed issue's worktree derives this path whatever identifier was filed.
+    NEW_WT="$WT_ROOT/acme/ai-canvas-tools/WEB-2870-tool-detach-foreground"
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -43,7 +48,7 @@ setup() {
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh \
-             herdr-read.sh herdr-write.sh start.sh context.sh create.sh; do . "$ROOT/lib/$f"; done
+             herdr-read.sh herdr-write.sh repos.sh start.sh context.sh create.sh; do . "$ROOT/lib/$f"; done
 
     WT="$PROJECT/worktrees/current"
     git -C "$PROJECT" worktree add -q -b feature/web-2870-detach "$WT" >/dev/null 2>&1
@@ -66,6 +71,10 @@ grant_consent() {
 TEAM_ID=55555555-5555-4555-8555-555555555555
 PROJECT_ID=44444444-4444-4444-8444-444444444444
 enable_writes() { grant_consent "$WT" "${1:-$TEAM_ID}" "${2-$PROJECT_ID}"; }
+# The repository question answered for the scope a filed issue lands in. Only
+# the tests whose intent is a worktree need it: a scope with no recorded
+# repository asks rather than creates, which is its own test below.
+record_repo() { herdr_linear::record_scope_repo "$PROJECT" "project-$PROJECT_ID" "team-$TEAM_ID"; }
 # new_project names a team and no project, and is answered for the directory it
 # is run from -- which needs no binding of its own.
 enable_root_writes() { grant_consent "${1:-$PWD}" team-web ""; }
@@ -174,12 +183,13 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 
 # The whole point of the fix, at the verb that was refusing.
 @test "an issue can be filed from a workspace-bound worktree with no binding" {
+    record_repo
     enable_writes "$TEAM_ID" proj-abc
     n="$(herdr_linear::workspace_propose w1 proj-abc)"
     herdr_linear::workspace_confirm w1 proj-abc "$n"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
            FAKE_LINEAR_NEW_IDENT=WEB-4002 FAKE_LINEAR_PROJECT_TEAMS=one
-    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" w1 newthing
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" w1
     [ "$status" -eq 0 ]
     [ "$(printf '%s' "$output" | cut -f1)" = "WEB-4002" ]
 }
@@ -194,7 +204,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     herdr_linear::workspace_confirm w1 proj-abc "$n"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
            FAKE_LINEAR_PROJECT_TEAMS=many
-    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" w1 newthing
+    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" w1
     [ "$status" -eq "$HERDR_LINEAR_CREATE_NO_CONTEXT" ]
     [[ "$output" == *"Web"* ]]
     [[ "$output" == *"Brand"* ]]
@@ -229,9 +239,10 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # for data this plugin then drops. Scoped to the mutation's own selection --
 # fetch_issue selects branchName for a reason.
 @test "the issue-create request asks for no field the caller never reads" {
+    record_repo
     bind_wt; enable_writes
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
-    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
     [ "$status" -eq 0 ]
     [ "$(sent issueCreate)" -eq 1 ]
     [ "$(sent 'issueCreate.*branchName')" -eq 0 ]
@@ -239,9 +250,10 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 }
 
 @test "a new issue is created in the current project, with a session" {
+    record_repo
     bind_wt; enable_writes
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
-    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
     [ "$status" -eq 0 ]
     ident="$(printf '%s' "$output" | cut -f1)"
     path="$(printf '%s' "$output" | cut -f2)"
@@ -254,13 +266,14 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 }
 
 @test "a new issue opens a pane in its own worktree" {
+    record_repo
     bind_wt; enable_writes
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
-    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
     [ "$status" -eq 0 ]
     pane="$(printf '%s' "$output" | cut -f3)"
     [ -n "$pane" ]
-    run grep -c -- "--cwd $PROJECT/worktrees/newthing" "$FAKE_HERDR_RECORD_DIR/argv"
+    run grep -c -- "--cwd $NEW_WT" "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "1" ]
 }
 
@@ -314,9 +327,10 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # ----------------------------------------------------------- new sub-issue
 
 @test "a sub-issue is parented to the issue this worktree is bound to" {
+    record_repo
     bind_wt; enable_writes
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4002
-    run herdr_linear::new_sub_issue "$WT" "A smaller thing" "$DESC" "" smaller
+    run --separate-stderr herdr_linear::new_sub_issue "$WT" "A smaller thing" "$DESC" ""
     [ "$status" -eq 0 ]
     [ "$(printf '%s' "$output" | cut -f1)" = "WEB-4002" ]
     body="$(cat "$FAKE_LINEAR_RECORD_DIR/bodies")"
@@ -378,10 +392,10 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "shadow mode creates no issue, no worktree and no pane" {
     bind_wt
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
-    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
+    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
     [ "$status" -eq 3 ]
     [ "$(sent issueCreate)" = "0" ]
-    [ ! -e "$PROJECT/worktrees/newthing" ]
+    [ ! -e "$WT_ROOT" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
     [[ "$output" == *"SHADOW would create issue"* ]]
 }
@@ -415,10 +429,10 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     git -C "$PROJECT" worktree add -q -b feature/elsewhere-x "$PROJECT/worktrees/elsewhere2" >/dev/null 2>&1
     grant_consent "$PROJECT/worktrees/elsewhere2" "$TEAM_ID" "$PROJECT_ID"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
-    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
+    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
     [ "$status" -eq 3 ]
     [ "$(sent issueCreate)" = "0" ]
-    [ ! -e "$PROJECT/worktrees/newthing" ]
+    [ ! -e "$WT_ROOT" ]
     # R9a holds for every verb, not only the session-end hook: the skip is
     # recorded where the next session is told about it.
     run herdr_linear::binding_pending_consent "$WT"
@@ -431,7 +445,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     bind_wt
     herdr_linear::consent_propose "$WT" "$TEAM_ID" "$PROJECT_ID" >/dev/null
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
-    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" newthing
+    run herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
     [ "$status" -eq 3 ]
     [ "$(sent issueCreate)" = "0" ]
 }
@@ -468,9 +482,10 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # created_children IS the write boundary. An issue this plugin filed but never
 # recorded can never be written to by it.
 @test "a created sub-issue is recorded as a child of the parent worktree" {
+    record_repo
     bind_wt; enable_writes
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4002
-    run herdr_linear::new_sub_issue "$WT" "A smaller thing" "$DESC" "" smaller
+    run --separate-stderr herdr_linear::new_sub_issue "$WT" "A smaller thing" "$DESC" ""
     [ "$status" -eq 0 ]
     rec="$(herdr_linear::binding_read "$WT")"
     [[ "$rec" == *"WEB-4002"* ]]
@@ -637,4 +652,19 @@ worktree_count() { git -C "$PROJECT" worktree list | grep -c .; }
     run herdr_linear::has_consent "$WT"
     [ "$status" -ne 0 ]
     [ "$(herdr_linear::binding_state "$WT")" = "unbound" ]
+}
+
+# The issue is filed before the repository is resolved, so a scope with no
+# recorded repository leaves a real issue and no worktree. That is PARTIAL, and
+# the reason and the retry both reach the person: the question from
+# start_from_issue and the identifier to retry with.
+@test "a new issue in a scope with no recorded repository is partial and carries the question" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_PARTIAL" ]
+    [ "$(sent issueCreate)" -eq 1 ]
+    [[ "$stderr" == *"no repository is recorded"* ]]
+    [[ "$stderr" == *"/work:start WEB-4001"* ]]
+    [ ! -e "$NEW_WT" ]
 }

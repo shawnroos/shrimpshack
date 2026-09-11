@@ -32,14 +32,14 @@ HERDR_LINEAR_CREATE_FAILED=4
 # nothing was filed, PARTIAL means something was and is now unattended.
 HERDR_LINEAR_CREATE_PARTIAL=5
 
-# herdr_linear::new_issue <worktree> <title> <descfile> [workspace-id] [name]
+# herdr_linear::new_issue <worktree> <title> <descfile> [workspace-id]
 #
 # A new issue in the current project, and a session to work it in.
 herdr_linear::new_issue() {
-    herdr_linear::_issue_with_session "$1" "$2" "$3" "" "${4:-}" "${5:-}"
+    herdr_linear::_issue_with_session "$1" "$2" "$3" "" "${4:-}"
 }
 
-# herdr_linear::new_sub_issue <worktree> <title> <descfile> [workspace-id] [name]
+# herdr_linear::new_sub_issue <worktree> <title> <descfile> [workspace-id]
 #
 # The same, parented to the issue this worktree is bound to. Refuses when the
 # worktree is not bound: a sub-issue with no parent is just an issue, and
@@ -51,7 +51,7 @@ herdr_linear::new_sub_issue() {
         printf 'this worktree is not bound to an issue, so there is no parent for a sub-issue\n' >&2
         return "$HERDR_LINEAR_CREATE_NO_CONTEXT"
     fi
-    herdr_linear::_issue_with_session "$1" "$2" "$3" "$parent" "${4:-}" "${5:-}"
+    herdr_linear::_issue_with_session "$1" "$2" "$3" "$parent" "${4:-}"
 }
 
 # herdr_linear::new_issue_here <worktree> <title> <descfile> [workspace-id]
@@ -92,14 +92,14 @@ herdr_linear::new_issue_here() {
 # The tail `new_issue` and `new_sub_issue` share: the issue, then somewhere to
 # work it. Prints `IDENTIFIER<TAB>WORKTREE<TAB>PANE`.
 herdr_linear::_issue_with_session() {
-    local wt="${1:-}" name="${6:-}" ident path pane
+    local wt="${1:-}" ident path pane
 
     ident="$(herdr_linear::_file_issue "$wt" "${2:-}" "${3:-}" "${4:-}" "${5:-}")" || return $?
 
     # A failure here leaves a real issue with no worktree, which is recoverable
     # by hand -- so it is reported, not rolled back. Deleting a freshly filed
     # ticket to tidy up would be worse.
-    path="$(herdr_linear::start_from_issue "$ident" "$name" "" "$wt")" || {
+    path="$(herdr_linear::start_from_issue "$ident" "" "$wt")" || {
         printf 'created %s, but could not make a worktree for it: run /work:start %s\n' "$ident" "$ident" >&2
         return "$HERDR_LINEAR_CREATE_PARTIAL"
     }

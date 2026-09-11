@@ -38,7 +38,7 @@ Writes to Linear are opened by an answer, not by a file somebody edits.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start context create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write repos start context create; do
   source "$R/lib/$f.sh"
 done
 CTX="$(herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)")"
@@ -86,7 +86,7 @@ team or a different project, or made from a different branch, asks again.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write start context create; do
+for f in contain secrets sanitize binding linear reconcile description herdr-read herdr-write repos start context create; do
   source "$R/lib/$f.sh"
 done
 

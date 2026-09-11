@@ -221,3 +221,27 @@ jfield() { python3 -c "$1"; }
     [ -z "$output" ]
     [[ "$stderr" == *"FAKE_LINEAR_UNFILTERED"* ]]
 }
+
+# KTD8. The organisation arm is routed by content like every other, so it answers
+# whatever mode a test happens to be in. Its key is brand-neutral: run-tests.sh's
+# brand scan walks tests/fixtures/ too, so the real key here turns the suite red.
+@test "the organisation query is answered by content, whatever the mode" {
+    for m in found_child found_parent viewer; do
+        run bash -c \
+            "printf '' | FAKE_LINEAR_MODE=$m bash '$FIXTURE' --data '{\"query\":\"{organization{urlKey}}\"}'"
+        [ "$status" -eq 0 ]
+        result="$(printf '%s' "$output" | jfield \
+            'import sys,json;print(json.load(sys.stdin)["data"]["organization"]["urlKey"])')"
+        [ "$result" = "acme" ]
+    done
+}
+
+# The caller's failure path needs a reachable endpoint that names no organisation.
+@test "the organisation arm can answer with no organisation at all" {
+    run bash -c \
+        "printf '' | FAKE_LINEAR_ORGANIZATION=empty bash '$FIXTURE' --data '{\"query\":\"{organization{urlKey}}\"}'"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | jfield \
+        'import sys,json;print(json.load(sys.stdin)["data"]["organization"])')"
+    [ "$result" = "None" ]
+}

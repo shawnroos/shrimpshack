@@ -147,6 +147,18 @@ In scope: `plugins/work/lib/contain.sh`, `start.sh`, `linear.sh`, `herdr-write.s
 - KTD13. **The binding record is the only authority for a space or a tab.** Labels are prose and drift. Live state on Shawn's machine proves it: four spaces, one bound, and that one's label names a different project than its record. Governs R18–R20.
 - KTD14. **The current directory's repository is a candidate, never an answer.** When the worktree the person stands in is itself bound to an issue in the same project, its repository is a strong default to offer inside the ask. Otherwise it is meaningless and using it is the defect this plan removes. A unit that proposed passing `worktree_repo "$wt"` as the answer was corrected on exactly this point. Governs R5–R7.
 
+### Decisions made while building
+
+These were settled during implementation, after the plan was written. Each one is a place the plan was silent or had a gap.
+
+- KTD15. **`start_from_issue` keeps its `<from-dir>` position and derives nothing from it.** The signature is `start_from_issue <identifier> [prefix] [from-dir] [repository]`. `create.sh` and `start_new` still pass the caller's directory, and the tests pass two different directories to prove the path does not change. The directory is not a tiebreaker and is not offered as a default by the library; KTD14's "strong default inside the ask" is the skill's job, because only the skill can ask. Governs R1, R7.
+- KTD16. **The existing-worktree checks run before the repository is resolved.** A retry for an issue whose own worktree is already on disk rebinds or returns it without reading the scope record, so deleting the store does not turn a retry into a question. Governs R15.
+- KTD17. **A supplied repository must be a git repository, and is checked before it is recorded.** The answer is recorded before the worktree is made (U4 step 3), so an answer that is not a repository would otherwise be the only candidate from then on. `start_new` also refuses a relative answer before it files anything, because `start_from_issue` would refuse it only after a real issue existed. Governs R7a, R8.
+- KTD18. **A single recorded repository that is no longer on disk asks again.** This is the Assumptions entry about a moved repository, made concrete: the run returns the ask value and names the missing path, rather than failing inside `git worktree add`. Governs R6, R7.
+- KTD19. **A record file that exists but cannot be opened is an error, not an empty set.** An unreadable record read as empty would ask a question whose answer is on disk and record a second repository beside it. A truncated or malformed record still reads as empty, as U2 specifies. Governs R5.
+- KTD20. **`scope_repo_source` names the record file that answered.** R6 states the source, and after the team fallback the source is the team's file, not the first key passed. The fallback loop lives once, in `_scope_answering_key`, and both readers use it (KTD12). Governs R5a, R6.
+- KTD21. **The create skills' tail reports the ask as `CREATE_PARTIAL`, not a new value.** `new_issue` and `new_sub_issue` file the issue before the worktree is made, exactly as `start_new` does, but they already have a partial value that means "an issue exists and its worktree does not". The repository question from `start_from_issue` reaches stderr unchanged, followed by the `/work:start <identifier>` retry line, and that retry asks the question properly. `start_new` propagates the ask value as KTD7 requires. Governs R7, KTD7.
+
 ### High-Level Technical Design
 
 ```mermaid

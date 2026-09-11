@@ -432,3 +432,27 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
     run herdr_linear::slug "$long" 60
     [ "${#output}" -le 60 ]
 }
+
+# -------------------------------------------------------- the organisation (R1)
+
+@test "the organisation reader returns the workspace URL key" {
+    run herdr_linear::organization_key
+    [ "$status" -eq 0 ]
+    [ "$output" = "acme" ]
+}
+
+# The org is the first path segment. An empty answer must be a refusal, not an
+# empty segment that collapses two directories into one.
+@test "an organisation the API cannot name returns nothing and does not crash" {
+    export FAKE_LINEAR_ORGANIZATION=empty
+    run --separate-stderr herdr_linear::organization_key
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "an unreachable Linear leaves the organisation unanswered" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run --separate-stderr herdr_linear::organization_key
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}

@@ -48,6 +48,7 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
 
 herdr_linear::start_from_issue WEB-3318 drawer-blank

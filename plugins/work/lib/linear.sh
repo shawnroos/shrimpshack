@@ -234,6 +234,22 @@ print(json.dumps({"query": "query($id:String!){issue(id:$id){%s}}" % sys.argv[2]
     herdr_linear::query "$body"
 }
 
+# R1. The workspace's URL key -- the value in every Linear URL -- is the first
+# segment of a worktree path, so an unnameable organisation is a refusal rather
+# than an empty segment that collapses two organisations into one directory.
+herdr_linear::organization_key() {
+    local resp rc key
+    resp="$(herdr_linear::query '{"query":"{organization{urlKey}}"}')"; rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    key="$(printf '%s' "$resp" | python3 -c '
+import sys, json
+d = json.load(sys.stdin).get("data") or {}
+sys.stdout.write((d.get("organization") or {}).get("urlKey") or "")
+' 2>/dev/null)"
+    herdr_linear::is_safe_identifier "$key" || return "$HERDR_LINEAR_UNAVAILABLE"
+    printf '%s' "$key"
+}
+
 herdr_linear::issue_updated_at() {
     local id="$1" resp rc
     resp="$(herdr_linear::fetch_issue "$id")"; rc=$?
