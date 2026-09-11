@@ -146,7 +146,7 @@ herdr_linear::start_from_issue() {
     local ident="${1:-}" prefix="${2:-$HERDR_LINEAR_BRANCH_PREFIX}"
     local answer="${4:-}"
     local resp branch name scope key team_key segment org usable path
-    local repo candidates source nonce existing git="${HERDR_LINEAR_GIT_BIN:-git}"
+    local repo candidates source nonce existing top git="${HERDR_LINEAR_GIT_BIN:-git}"
 
     [ -n "$ident" ] || return "$HERDR_LINEAR_START_REFUSED"
 
@@ -198,8 +198,8 @@ herdr_linear::start_from_issue() {
     if [ -e "$path" ]; then
         # git's own answer, not a `.git` entry: anything can hold one of those,
         # and binding it would claim a restart that did not happen.
-        if [ ! -d "$path" ] \
-            || [ "$("$git" -C "$path" rev-parse --show-toplevel 2>/dev/null)" != "$(cd "$path" && pwd -P)" ]; then
+        top="$("$git" -C "$path" rev-parse --show-toplevel 2>/dev/null)" || top=""
+        if [ ! -d "$path" ] || [ -z "$top" ] || [ "$top" != "$(cd "$path" 2>/dev/null && pwd -P)" ]; then
             printf 'already exists: %s\n' "$path" >&2
             return "$HERDR_LINEAR_START_EXISTS"
         fi

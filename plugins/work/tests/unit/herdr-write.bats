@@ -476,3 +476,53 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     [ "$(herdr_linear::journal_get WEB-2870 worktree.WEB-3001)" = "$started" ]
     [ ! -e "$PROJECT/worktrees/WEB-3001-column-web-3001" ]
 }
+
+# ------------------------------------------------ round-two review (U7 fixes)
+
+# The layout refuses to run from a main checkout; it must not then turn one
+# into a column because the child's branch happens to be checked out there.
+@test "a child branch checked out in the main checkout is not taken as its worktree" {
+    git -C "$PROJECT" checkout -q -b feature/WEB-3001-column-web-3001
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 3 ]
+    [[ "$stderr" == *"WEB-3001"* ]]
+    [ "$(herdr_linear::binding_state "$PROJECT")" = "unbound" ]
+    [ "$(herdr_calls 'tab create')" = "0" ]
+}
+
+# Somebody else's worktree is never re-homed, here any more than in start.
+@test "a child branch held by a worktree bound to another issue is refused" {
+    other="$BASE/elsewhere"
+    git -C "$PROJECT" worktree add -q -b feature/WEB-3001-column-web-3001 "$other" >/dev/null 2>&1
+    bind_as "$other" WEB-9999
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 3 ]
+    [ "$(herdr_linear::binding_identifier "$other")" = "WEB-9999" ]
+}
+
+# A column whose pane died with its old tab is not done. Replacing the tab and
+# skipping the column would exit 0 with the column missing.
+@test "a column journalled in a tab that has since closed is split again in the new tab" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    old="$output"
+    # herdr closes the tab: every pane in it goes too.
+    grep -v "^$old " "$FAKE_HERDR_RECORD_DIR/tabs" > "$WORK/t" || true; mv "$WORK/t" "$FAKE_HERDR_RECORD_DIR/tabs"
+    grep -v " $old " "$FAKE_HERDR_RECORD_DIR/panes" > "$WORK/p" || true; mv "$WORK/p" "$FAKE_HERDR_RECORD_DIR/panes"
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    [ "$output" != "$old" ]
+    pane="$(herdr_linear::journal_get WEB-2870 pane.WEB-3001)"
+    [ "$(herdr_linear::tab_of_pane "$pane")" = "$output" ]
+}
+
+# "Could not ask" is not "no such tab". Treating it as gone makes a second tab
+# on every retry during an outage -- the one thing the journal exists to stop.
+@test "a tab herdr cannot be asked about is not replaced" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    export FAKE_HERDR_TAB_GET_FAILS=1
+    run herdr_linear::layout_build WEB-2870 WEB-3002
+    [ "$status" -eq 3 ]
+    [ "$(herdr_calls 'tab create')" = "1" ]
+}

@@ -265,12 +265,18 @@ except Exception:
 '
 }
 
-# The space a tab sits in, or nothing when herdr has no such tab. herdr answers
-# a missing tab with an error object, so the field is read rather than the exit.
+# The space a tab sits in; nothing, and 0, when herdr says there is no such
+# tab; non-zero when herdr could not be asked. herdr exits 1 for both, so the
+# error code is what tells "gone" from "unknown" -- and a caller that took
+# unknown for gone would make a second tab on every retry during an outage.
 herdr_linear::tab_space() {
-    local bin
+    local bin out ws
     [ -n "${1:-}" ] || return 1
     bin="$(herdr_linear::bin)"
     [ -n "$bin" ] || return 1
-    "$bin" tab get "$1" 2>/dev/null | herdr_linear::json "result.tab.workspace_id"
+    out="$("$bin" tab get "$1" 2>/dev/null)"
+    [ "$(printf '%s' "$out" | herdr_linear::json "error.code")" = "tab_not_found" ] && return 0
+    ws="$(printf '%s' "$out" | herdr_linear::json "result.tab.workspace_id")"
+    [ -n "$ws" ] || return 1
+    printf '%s' "$ws"
 }

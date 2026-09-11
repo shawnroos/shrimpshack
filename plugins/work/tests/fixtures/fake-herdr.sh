@@ -29,6 +29,8 @@
 #   FAKE_HERDR_MODE        running | not_running | running_then_flood | dead
 #   FAKE_HERDR_ALLOW_MUTATION  1 to permit creation verbs (U10 only)
 #   FAKE_HERDR_SLOW_PANE   probes a new pane stays unregistered for
+#   FAKE_HERDR_TAB_GET_FAILS  1 to make `tab get` fail with no answer at all,
+#                          as an unreachable server does, unlike a missing tab
 #   FAKE_HERDR_WORKSPACE_LIST_FAILS  1 to make `workspace list` fail while the
 #                          server otherwise answers
 #   FAKE_HERDR_WORKSPACES  the spaces `workspace list` reports, as
@@ -291,6 +293,7 @@ case "${1:-}" in
             # herdr answers a missing tab with an error object AND exit 1.
             get)
                 [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
+                [ "${FAKE_HERDR_TAB_GET_FAILS:-0}" = 1 ] && { echo "fake-herdr: tab get failed" >&2; exit 1; }
                 _ws=""
                 case "${3:-}" in
                     wA:t1|wA:t2) _ws="wA" ;;

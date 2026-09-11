@@ -770,3 +770,16 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run herdr_linear::scope_repos "$PKEY" "$TKEY"
     [ "$output" = "$PROJECT" ]
 }
+
+# Both sides of the adoption check come back empty for a directory nobody can
+# read. Empty equals empty; that must not read as "this is our worktree".
+@test "an unreadable directory at the path is refused as existing, not adopted" {
+    record_alpha
+    mkdir -p "$BASE/$CHILD"
+    chmod 000 "$BASE/$CHILD"
+    [ -r "$BASE/$CHILD" ] && skip "cannot remove read permission here"
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    chmod 755 "$BASE/$CHILD"
+    [ "$status" -eq 2 ]
+}

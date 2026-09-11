@@ -184,9 +184,12 @@ herdr_linear::_issue_space() {
 
 # KTD28. A pane of <tab> to split from, while herdr still has that tab in
 # <space>. Nothing otherwise, and the caller makes a new tab.
+# Non-zero when herdr could not be asked about the tab.
 herdr_linear::_pane_of_tab_in() {
-    local tab="${1:-}" ws="${2:-}"
-    [ -n "$tab" ] && [ "$(herdr_linear::tab_space "$tab")" = "$ws" ] || return 0
+    local tab="${1:-}" ws="${2:-}" where
+    [ -n "$tab" ] || return 0
+    where="$(herdr_linear::tab_space "$tab")" || return 1
+    [ "$where" = "$ws" ] || return 0
     herdr_linear::panes_in_tab "$tab" 2>/dev/null | head -n1
 }
 
@@ -212,7 +215,10 @@ herdr_linear::open_session() {
     printf 'space %s: the only herdr space bound to the project of %s, read from its workspace record\n' "$ws" "$ident" >&2
 
     tab="$(herdr_linear::binding_tab "$path" 2>/dev/null)" || tab=""
-    target="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")"
+    target="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")" || {
+        printf 'could not ask herdr about tab %s; nothing was opened\n' "$tab" >&2
+        return "$HERDR_LINEAR_SESSION_FAILED"
+    }
     if [ -n "$target" ]; then
         pane="$("$bin" pane split "$target" --direction right --cwd "$path" --no-focus 2>/dev/null \
             | herdr_linear::json "result.pane.pane_id")"
@@ -239,7 +245,7 @@ herdr_linear::open_session() {
 herdr_linear::layout_build() {
     local parent="${1:-}" ; shift || true
     local bin tab tabpane pane slug child branch wt_path journal_file here bound repo resp
-    local ws="" rc made existing i=0 paths=() branches=()
+    local ws="" rc made existing owner i=0 paths=() branches=()
 
     [ -n "$parent" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
@@ -297,8 +303,25 @@ herdr_linear::layout_build() {
             # One worktree per issue: a child already started with /work:start
             # holds this branch in its own worktree, and a second `add -b` of
             # the same branch fails on every retry.
-            existing="$(herdr_linear::_worktree_of_branch "$repo" "$branch")"
-            [ -n "$existing" ] && { wt_path="$existing"; branch=""; }
+            existing="$(herdr_linear::_worktree_of_branch "$repo" "$branch")" || {
+                printf 'could not list the worktrees of %s; nothing was made\n' "$repo" >&2
+                return "$HERDR_LINEAR_LAYOUT_FAILED"
+            }
+            if [ -n "$existing" ]; then
+                owner="$(herdr_linear::binding_identifier "$existing" 2>/dev/null)" || owner=""
+                if [ -n "$owner" ] && [ "$owner" != "$child" ]; then
+                    printf 'the branch for %s is checked out in %s, which is bound to %s; nothing was made\n' \
+                        "$child" "$existing" "$owner" >&2
+                    return "$HERDR_LINEAR_LAYOUT_FAILED"
+                fi
+                wt_path="$existing"; branch=""
+            elif "${HERDR_LINEAR_GIT_BIN:-git}" -C "$repo" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
+                # Checked out in the main checkout, or in no worktree at all.
+                # Neither is a column this layout may make or take over.
+                printf 'the branch for %s (%s) already exists outside any worktree the layout can use; nothing was made\n' \
+                    "$child" "$branch" >&2
+                return "$HERDR_LINEAR_LAYOUT_FAILED"
+            fi
         fi
         paths[i]="$wt_path"; branches[i]="$branch"; i=$(( i + 1 ))
     done
@@ -323,25 +346,30 @@ herdr_linear::layout_build() {
     # KTD28 for the journal as for a binding: its tab counts only while herdr
     # still has it in this space. A dead one would be split from on every retry.
     tab="$(herdr_linear::journal_get "$parent" tab)" || tab=""
-    tabpane="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")"
+    tabpane="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")" || tabpane="?"
     if [ -z "$tabpane" ]; then
         # R20. The parent's ticket may already own a tab in this space; the
         # layout is that piece of work, so its columns go there.
         tab="$(herdr_linear::binding_tab "$here" 2>/dev/null)" || tab=""
-        tabpane="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")"
+        tabpane="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")" || tabpane="?"
         if [ -z "$tabpane" ]; then
             made="$("$bin" tab create --workspace "$ws" --cwd "$here" --label "$slug" --no-focus 2>/dev/null)"
             tab="$(printf '%s' "$made" | herdr_linear::json "result.tab.tab_id")"
             tabpane="$(printf '%s' "$made" | herdr_linear::json "result.root_pane.pane_id")"
         fi
-        if [ -z "$tab" ] || [ -z "$tabpane" ]; then
+        if [ -z "$tab" ] || [ -z "$tabpane" ] || [ "$tabpane" = "?" ]; then
             herdr_linear::_unlock "$journal_file"
+            [ "$tabpane" = "?" ] && printf 'could not ask herdr about tab %s; nothing was made\n' "$tab" >&2
             return "$HERDR_LINEAR_LAYOUT_FAILED"
         fi
         herdr_linear::journal_put "$parent" tab "$tab"
         herdr_linear::binding_set_tab "$here" "$tab"
     fi
     herdr_linear::_unlock "$journal_file"
+    if [ "$tabpane" = "?" ]; then
+        printf 'could not ask herdr about tab %s; nothing was made\n' "$tab" >&2
+        return "$HERDR_LINEAR_LAYOUT_FAILED"
+    fi
 
     i=-1
     for child in "$@"; do
@@ -349,8 +377,10 @@ herdr_linear::layout_build() {
         wt_path="${paths[i]}"; branch="${branches[i]}"
         herdr_linear::_lock "$journal_file" || return "$HERDR_LINEAR_LAYOUT_FAILED"
 
-        # Already done on an earlier attempt: skip, do not remake.
-        if herdr_linear::journal_get "$parent" "pane.$child" >/dev/null 2>&1; then
+        # Done on an earlier attempt only while its pane is still in this tab.
+        # A pane that closed with an old tab is a column still to make.
+        pane="$(herdr_linear::journal_get "$parent" "pane.$child" 2>/dev/null)" || pane=""
+        if [ -n "$pane" ] && [ "$(herdr_linear::tab_of_pane "$pane" 2>/dev/null)" = "$tab" ]; then
             herdr_linear::_unlock "$journal_file"
             continue
         fi
@@ -395,10 +425,18 @@ herdr_linear::_bind_created() {
     return 0
 }
 
-# The checked-out worktree of <branch> in <repository>, or nothing.
+# The linked worktree that has <branch> checked out in <repository>, or
+# nothing. The main checkout (the first entry) and a worktree git reports as
+# prunable are never an answer. Non-zero when git could not list them.
 herdr_linear::_worktree_of_branch() {
-    "${HERDR_LINEAR_GIT_BIN:-git}" -C "$1" worktree list --porcelain 2>/dev/null \
-        | awk -v want="branch refs/heads/$2" '/^worktree /{p=substr($0,10)} $0==want{print p; exit}'
+    local list
+    list="$("${HERDR_LINEAR_GIT_BIN:-git}" -C "$1" worktree list --porcelain 2>/dev/null)" || return 1
+    printf '%s\n' "$list" | awk -v want="branch refs/heads/$2" '
+        function flush() { if (hit && !dead && n > 1 && !done) { print p; done = 1 } }
+        /^worktree / { flush(); n++; p = substr($0, 10); hit = 0; dead = 0; next }
+        /^prunable/ { dead = 1 }
+        $0 == want { hit = 1 }
+        END { flush() }'
 }
 
 # herdr_linear::_make_worktree <path> <branch> <repository>
