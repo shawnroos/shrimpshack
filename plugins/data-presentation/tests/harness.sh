@@ -17,6 +17,7 @@ EXPECTED=(
   present_test.py
   session_log_test.py
   templates_test.py
+  credentials_test.py
   mapping_test.py
   changes_test.py
   sources_test.py

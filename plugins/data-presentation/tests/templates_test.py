@@ -15,6 +15,8 @@ sys.path.insert(0, SCRIPTS)
 REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
 os.environ["HOME"] = tempfile.mkdtemp(prefix="templates-test-home-")
 
+import credentials  # noqa: E402
+import mapping  # noqa: E402
 import templates  # noqa: E402
 
 passed = failed = 0
@@ -87,14 +89,6 @@ def template(name="fake-report", blocks=None):
     }
 
 
-def secret_kind(command):
-    return kind_of(refusal(templates.secret_scan, {"kind": "command", "command": command}))
-
-
-def accepted(command):
-    return refusal(templates.secret_scan, {"kind": "command", "command": command}) is None
-
-
 GOOD_CURL = 'curl -fsS -H "Authorization: Bearer $FAKE_TOKEN" "https://api.example.test/v1/x" -o {output}'
 
 
@@ -113,7 +107,7 @@ def main():
     )
     check("the name pattern is the pinned one", templates.NAME_PATTERN == r"^[a-z0-9][a-z0-9-]{0,23}$")
     check("the source kinds are closed", templates.SOURCE_KINDS == ("tool", "command", "file"))
-    check("the adapters are closed", templates.ADAPTERS == ("amplitude-segmentation", "paths", "identity"))
+    check("templates takes its adapters from mapping", templates.ADAPTERS is mapping.ADAPTERS)
 
     # --- names ---
     for bad in ("a/b", "a.b", "Upper", "a" * 25, "", "-lead", "../x", "a b", "abc\n", None, 7):
@@ -196,227 +190,22 @@ def main():
     t = template(blocks=[file_block("relative/path.json")])
     check("a relative file path is refused", kind_of(refusal(templates.validate, t)) == "invalid")
 
-    # --- secrets: credential positions in a command (KTD10) ---
-    check("a literal bearer token is refused",
-          secret_kind('curl -f -H "Authorization: Bearer abc123def456ghi789jkl" https://api.example.test -o {output}')
-          == "secret")
-    check("a short literal bearer token is refused by the header rule alone",
-          secret_kind('curl -f -H "Authorization: Bearer abc" https://api.example.test -o {output}') == "secret")
-    check("a bearer env reference is accepted", accepted(GOOD_CURL))
-    check("a braced env reference is accepted",
-          accepted('curl -f -H "Authorization: Bearer ${FAKE_TOKEN}" https://api.example.test -o {output}'))
-    check("a literal X-Api-Key header is refused",
-          secret_kind('curl -f -H "X-Api-Key: abc123" https://api.example.test -o {output}') == "secret")
-    check("an X-Api-Key env reference is accepted",
-          accepted('curl -f -H "X-Api-Key: $FAKE_KEY" https://api.example.test -o {output}'))
-    check("a header name is matched without regard to case",
-          secret_kind('curl -f -H "x-api-key: abc123" https://api.example.test -o {output}') == "secret")
-    check("an attached -H value is still a credential position",
-          secret_kind('curl -f -H"X-Api-Key: abc123" https://api.example.test -o {output}') == "secret")
-    check("a --header value is a credential position",
-          secret_kind('curl -f --header "X-Api-Key: abc123" https://api.example.test -o {output}') == "secret")
-    check("a header in a combined short flag cluster is a credential position",
-          secret_kind('curl -fsSH "X-Api-Key: abc123" https://api.example.test -o {output}') == "secret")
-    check("a literal Accept header is accepted",
-          accepted('curl -f -H "Accept: application/json" https://api.example.test -o {output}'))
-    check("a literal Content-Type and User-Agent are accepted",
-          accepted('curl -f -H "Content-Type: application/json" -H "User-Agent: fake-agent" '
-                   "https://api.example.test -o {output}"))
-    check("URL userinfo is refused",
-          secret_kind("curl -f https://user:pass@api.example.test/v1 -o {output}") == "secret")
-    check("URL userinfo from env references is accepted",
-          accepted("curl -f https://$FAKE_USER:$FAKE_PASS@api.example.test/v1 -o {output}"))
-    check("URL userinfo is refused outside a curl command",
-          secret_kind("wget -O {output} https://user:pass@api.example.test/v1") == "secret")
-    check("a literal -u value is refused",
-          secret_kind("curl -f -u me:pw https://api.example.test -o {output}") == "secret")
-    check("a literal --user value is refused",
-          secret_kind("curl -f --user me:pw https://api.example.test -o {output}") == "secret")
-    check("a -u value from env references is accepted",
-          accepted("curl -f -u $FAKE_USER:$FAKE_PASS https://api.example.test -o {output}"))
-    check("a literal --oauth2-bearer is refused",
-          secret_kind("curl -f --oauth2-bearer short https://api.example.test -o {output}") == "secret")
-    check("an --oauth2-bearer env reference is accepted",
-          accepted("curl -f --oauth2-bearer $FAKE_TOKEN https://api.example.test -o {output}"))
-    for key in ("api_key", "token", "client_secret", "password", "auth"):
-        check(f"a literal query value under {key!r} is refused",
-              secret_kind(f'curl -f "https://api.example.test/v1?{key}=short&x=1" -o {{output}}') == "secret")
-    check("an empty query value under a credential key is refused",
-          secret_kind('curl -f "https://api.example.test/v1?token=" -o {output}') == "secret")
-    check("a query value under a credential key from an env reference is accepted",
-          accepted('curl -f "https://api.example.test/v1?api_key=$FAKE_KEY&start=-90d" -o {output}'))
-    check("an ordinary query value is accepted",
-          accepted('curl -f "https://api.example.test/v1?limit=10&m=uniques" -o {output}'))
-    check("a bare $ is not a reference",
-          secret_kind('curl -f -H "Authorization: Bearer $" https://api.example.test -o {output}') == "secret")
-    check("an empty braced reference is not a reference",
-          secret_kind('curl -f -H "Authorization: Bearer ${}" https://api.example.test -o {output}') == "secret")
-    check("a lowercase $name is not a reference",
-          secret_kind('curl -f -H "Authorization: Bearer $token" https://api.example.test -o {output}') == "secret")
-    check("a -u flag in a later non-curl segment is not a credential position",
-          accepted("curl -f https://api.example.test | sort -u > {output}"))
-    check("a literal credential assignment before a command is refused",
-          secret_kind("FAKE_API_KEY=abc123 curl -f https://api.example.test -o {output}") == "secret")
-    check("a credential assignment from an env reference is accepted",
-          accepted("FAKE_API_KEY=$FAKE_KEY curl -f https://api.example.test -o {output}"))
-    err = refusal(templates.secret_scan, {
-        "kind": "command", "command": 'curl -f -H "fakesecretvalue" https://api.example.test -o {output}'})
-    check("a header with no name is refused without echoing it",
-          kind_of(err) == "secret" and "fakesecretvalue" not in str(err), str(err))
-    check("a header that is not Name: value is refused",
-          secret_kind("curl -f -H @/tmp/fake-headers.txt https://api.example.test -o {output}") == "secret")
-    check("sort -u on a non-curl segment is accepted",
-          accepted("sort -u /tmp/fake-input.txt > {output}"))
-
-    err = refusal(templates.secret_scan, {
-        "kind": "command",
-        "command": 'curl -f -H "X-Api-Key: abc123" https://api.example.test -o {output}',
-    })
-    check("a secret refusal never prints the literal value", err is not None and "abc123" not in str(err), str(err))
-    check("a secret refusal names the position", err is not None and "X-Api-Key" in str(err), str(err))
-
-    # --- secrets: the 20-character mixed rule, anywhere ---
-    twenty = "abcdefghij0123456789"
-    nineteen = "abcdefghij012345678"
-    src = {"kind": "tool", "tool": "mcp__fake__q", "args": {"filter": {"note": [f"x {twenty} y"]}}}
-    check("a 20-char mixed token inside tool args is refused", kind_of(refusal(templates.secret_scan, src)) == "secret")
-    src = {"kind": "tool", "tool": "mcp__fake__q", "args": {"filter": {"note": [f"x {nineteen} y"]}}}
-    check("a 19-char mixed token inside tool args is accepted", refusal(templates.secret_scan, src) is None)
-    src = {"kind": "tool", "tool": "mcp__fake__q", "args": {"event": "abcdefghijklmnopqrstuvwxyz"}}
-    check("a long all-letter value is accepted", refusal(templates.secret_scan, src) is None)
-    src = {"kind": "tool", "tool": "mcp__fake__q", "args": {"event": "fake_tool_used_v2_remove_background_x"}}
-    check("a long snake_case event name is accepted", refusal(templates.secret_scan, src) is None)
-    src = {"kind": "tool", "tool": "mcp__fake__q", "args": {"k": "0123456789abcdef0123456789abcdef"}}
-    check("a 32-hex key in tool args is refused", kind_of(refusal(templates.secret_scan, src)) == "secret")
-    check("a 20-char mixed token in a command is refused",
-          secret_kind(f'curl -f "https://api.example.test/v1/{twenty}" -o {{output}}') == "secret")
-    check("a long env reference name is not a token",
-          accepted('curl -f -H "Authorization: Bearer $FAKE_TOKEN_NAME_1234567890" https://api.example.test -o {output}'))
-
-    # --- secrets: tool sources get no $NAME expansion, so no credential value at all ---
-    def tool_refusal(args, tool="mcp__fake__q"):
-        return refusal(templates.secret_scan, {"kind": "tool", "tool": tool, "args": args})
-
-    err = tool_refusal({"command": "curl -f https://api.example.test -o /tmp/fake.json"}, tool="Bash")
-    check("a Bash tool source is refused", err is not None, repr(err))
-    check("the Bash refusal says to save it as a command", err is not None and "command source" in str(err), str(err))
-
-    for label, args, secret in (
-        ("a short value under api_key", {"api_key": "fakeshort"}, "fakeshort"),
-        ("a nested password under auth", {"auth": {"password": "fakepw"}}, "fakepw"),
-        ("any value under an auth ancestor", {"auth": {"user": "fakeuser"}}, "fakeuser"),
-        ("a list under a tokens key", {"tokens": ["fakeone"]}, "fakeone"),
-        ("an env reference under a key (tool args never expand it)", {"apiKey": "$FAKE_KEY"}, "$FAKE_KEY"),
-        ("a number under a secret key", {"client_secret": 123456}, "123456"),
-        ("a query api_key in a tool URL", {"url": "https://api.example.test/v1?api_key=fakeabc"}, "fakeabc"),
-        ("userinfo in a tool URL", {"endpoint": {"base": "https://fakeuser:fakepw@api.example.test/v1"}}, "fakepw"),
-        ("userinfo after a missing scheme", {"base": "see ://fakeuser:fakepw@api.example.test"}, "fakepw"),
-        ("any value under a headers key", {"headers": {"X-Session": "fakesess"}}, "fakesess"),
-        ("a value under a cookie key", {"cookie": "session=fakesess"}, "fakesess"),
+    # --- the scan through templates keeps report.py's TemplateError contract ---
+    for label, source, kind in (
+        ("a literal header", {"kind": "command", "command": 'curl -f -H "X-Api-Key: fakeabc" https://api.example.test -o {output}'},
+         "secret"),
+        ("a curl without -f", {"kind": "command", "command": "curl https://api.example.test -o {output}"}, "invalid"),
+        ("a Bash tool source", {"kind": "tool", "tool": "Bash", "args": {}}, "invalid"),
+        ("an unbalanced quote", {"kind": "command", "command": 'curl -f "https://x {output}'}, "invalid"),
     ):
-        err = tool_refusal(args)
-        check(f"tool args: {label} is refused", kind_of(err) == "secret", repr(err))
-        check(f"tool args: the refusal for {label} does not echo it", err is not None and secret not in str(err), str(err))
-        check(f"tool args: the refusal for {label} points at a command source",
-              err is not None and "command source" in str(err), str(err))
-
-    amplitude_args = {
-        "chartIds": ["abc1def2", "ghi3jkl4"],
-        "include": "data",
-        "excludeIncompleteDatapoints": True,
-        "groupByLimit": 10,
-        "rationale": "A fake reason for the weekly pull",
-        "projectId": "123456",
-        "chart": "abc1def2",
-        "date_range": {"relative": "Last 90 Days"},
-    }
-    check("the real Amplitude argument shape is accepted", tool_refusal(amplitude_args) is None,
-          str(tool_refusal(amplitude_args)))
-    check("an ordinary tool URL is accepted",
-          tool_refusal({"url": "https://api.example.test/v1?limit=10&m=uniques"}) is None)
-    check("a true/false under a credential key is accepted", tool_refusal({"useAuth": True}) is None)
-
-    # --- secrets: credential options in any program, not only curl ---
-    for label, command, secret in (
-        ("wget --header with a literal bearer",
-         'wget --header "Authorization: Bearer fakeabc" -O {output} https://api.example.test', "fakeabc"),
-        ("gh api -H with a literal key", 'gh api -H "X-Api-Key: fakeabc" /repos/x > {output}', "fakeabc"),
-        ("gh api -H with a literal header of any name", 'gh api -H "X-Session: fakeabc" /repos/x > {output}',
-         "fakeabc"),
-        ("gh api -H with no header name", "gh api -H fakesecretvalue /repos/x > {output}", "fakesecretvalue"),
-        ("an attached -H in any program", 'gh api -H"X-Session: fakeabc" /repos/x > {output}', "fakeabc"),
-        ("an httpie Authorization:value word", "http GET https://api.example.test Authorization:fakeabc > {output}",
-         "fakeabc"),
-        ("an httpie X-Api-Key:value word", "http https://api.example.test X-Api-Key:fakeabc > {output}", "fakeabc"),
-        ("curl -b with a literal cookie", 'curl -f -b "session=fakeabc" https://api.example.test -o {output}',
-         "fakeabc"),
-        ("curl --cookie with a literal cookie", 'curl -f --cookie "session=fakeabc" https://api.example.test -o {output}',
-         "fakeabc"),
-        ("a curl cluster ending in b", 'curl -fsSb "session=fakeabc" https://api.example.test -o {output}', "fakeabc"),
-        ("an attached --token=value", "fetchtool --token=fakeabc https://api.example.test > {output}", "fakeabc"),
-        ("a spaced --password value", "fetchtool --password fakeabc https://api.example.test > {output}", "fakeabc"),
-        ("an --api-key value", "fetchtool --api-key fakeabc > {output}", "fakeabc"),
-        ("an --auth value", "http --auth fakeuser:fakeabc https://api.example.test > {output}", "fakeabc"),
-        ("a --cookie value in any program", "fetchtool --cookie session=fakeabc > {output}", "fakeabc"),
-        ("an option with no value to read", "fetchtool -o {output} --token", None),
-        ("an option name glued to its value", "fetchtool --api-keyfake123 > {output}", "fake123"),
-    ):
-        err = refusal(templates.secret_scan, {"kind": "command", "command": command})
-        check(f"{label} is refused", kind_of(err) == "secret", repr(err))
-        if secret:
-            check(f"the refusal for {label} does not echo it", err is not None and secret not in str(err), str(err))
-    err = refusal(templates.secret_scan, {"kind": "command", "command": "fetchtool --token=fakeabc > {output}"})
-    check("an option refusal names the option", err is not None and "--token" in str(err), str(err))
-    check("an option refusal says to use an environment variable",
-          err is not None and "environment variable" in str(err), str(err))
-    check("curl -fsS -H with a bearer env reference is still accepted",
-          accepted('curl -fsS -H "Authorization: Bearer $TOKEN" https://api.example.test -o {output}'))
-    check("wget --header with a bearer env reference is accepted",
-          accepted('wget --header "Authorization: Bearer $FAKE_TOKEN" -O {output} https://api.example.test'))
-    check("an httpie header from an env reference is accepted",
-          accepted("http https://api.example.test X-Api-Key:$FAKE_KEY > {output}"))
-    check("--token=$NAME is accepted", accepted("fetchtool --token=$FAKE_TOKEN > {output}"))
-    check("--password ${NAME} is accepted", accepted("fetchtool --password ${FAKE_PASS} > {output}"))
-    check("curl -b from an env reference is accepted",
-          accepted('curl -f -b "$FAKE_COOKIE" https://api.example.test -o {output}'))
-    check("gh api -H with a safe Accept header is accepted",
-          accepted('gh api -H "Accept: application/json" /repos/x > {output}'))
-    check("URL userinfo after a missing scheme is refused in a command",
-          secret_kind("wget -O {output} ://fakeuser:fakepw@api.example.test") == "secret")
-    check("a URL is not read as a header word", accepted("wget -O {output} https://api.example.test/v1"))
-    check("an ordinary long option is accepted", accepted("fetchtool --limit 10 --format json > {output}"))
-
-    # --- the -f rule ---
-    err = refusal(templates.secret_scan, {
-        "kind": "command", "command": 'curl -H "Authorization: Bearer $FAKE_TOKEN" https://api.example.test -o {output}'})
-    check("a curl command without -f is refused", kind_of(err) == "invalid", repr(kind_of(err)))
-    check("the -f refusal says so", err is not None and "-f" in str(err), str(err))
-    check("-fsS is accepted", accepted("curl -fsS https://api.example.test -o {output}"))
-    check("--fail is accepted", accepted("curl --fail https://api.example.test -o {output}"))
-    check("-sf is accepted", accepted("curl -sf https://api.example.test -o {output}"))
-    check("an f inside an -H value is not -f",
-          kind_of(refusal(templates.secret_scan, {
-              "kind": "command", "command": 'curl -H"Accept: fake/f" https://api.example.test -o {output}'}))
-          == "invalid")
-    check("a curl called by path still needs -f",
-          kind_of(refusal(templates.secret_scan, {
-              "kind": "command", "command": "/usr/bin/curl https://api.example.test -o {output}"})) == "invalid")
-    check("a second curl in a pipeline still needs -f",
-          kind_of(refusal(templates.secret_scan, {
-              "kind": "command",
-              "command": "curl -f https://api.example.test/a | curl https://api.example.test/b -o {output}"}))
-          == "invalid")
-    check("an unbalanced quote is refused as invalid",
-          kind_of(refusal(templates.secret_scan, {"kind": "command", "command": 'curl -f "https://x {output}'}))
-          == "invalid")
-
-    # --- env_names ---
-    names = templates.env_names({"kind": "command", "command":
-                                 'curl -f -H "Authorization: Bearer $FAKE_TOKEN" '
-                                 '"https://api.example.test?k=${FAKE_KEY}" -u $FAKE_TOKEN:$FAKE_PASS -o {output}'})
-    check("env_names lists each reference once, in order", names == ["FAKE_TOKEN", "FAKE_KEY", "FAKE_PASS"], repr(names))
-    check("env_names of a tool source is empty", templates.env_names(tool_block()["source"]) == [])
-    check("env_names ignores a bare $", templates.env_names({"kind": "command", "command": "echo $ > {output}"}) == [])
+        err = None
+        try:
+            templates.secret_scan(source)
+        except templates.TemplateError as caught:
+            err = caught
+        check(f"templates.secret_scan raises TemplateError {kind!r} for {label}", kind_of(err) == kind, repr(err))
+    check("templates.secret_scan accepts a clean source", refusal(templates.secret_scan, tool_block()["source"]) is None)
+    check("templates.env_names is the credentials one", templates.env_names is credentials.env_names)
 
     # --- absolute dates (R4) ---
     found = templates.absolute_dates({"date_range": {"start": 1788393600, "end": 1789119554}})
@@ -536,6 +325,40 @@ def main():
     check("a failed write leaves no temp file", leftovers == [], repr(leftovers))
     check("a failed write leaves the old template byte-identical", open(path, "rb").read() == before)
     check("a failed write leaves the old run record", templates.load_run("fake-report", home=home) == record)
+
+    # --- create is atomic: a name that appears after the exists check is not overwritten ---
+    race = fresh_home()
+    first = template(name="raced-report")
+    templates.save(first, home=race)
+    raced_path = os.path.join(templates.root(race), "templates", "raced-report.json")
+    first_bytes = open(raced_path, "rb").read()
+    second = copy.deepcopy(first)
+    second["purpose"] = "The second session's report"
+    real_exists = templates.exists
+    templates.exists = lambda *_a, **_k: False
+    try:
+        err = refusal(templates.save, second, home=race)
+    finally:
+        templates.exists = real_exists
+    check("a save that loses the create race is refused as exists", kind_of(err) == "exists", repr(err))
+    check("the save that won the race is intact", open(raced_path, "rb").read() == first_bytes)
+    check("a lost create race leaves no temp file",
+          os.listdir(os.path.join(templates.root(race), "templates")) == ["raced-report.json"],
+          repr(os.listdir(os.path.join(templates.root(race), "templates"))))
+
+    templates.save(template(name="mover"), home=race)
+    mover_bytes = open(os.path.join(templates.root(race), "templates", "mover.json"), "rb").read()
+    templates.exists = lambda *_a, **_k: False
+    try:
+        err = refusal(templates.rename, "mover", "raced-report", home=race)
+    finally:
+        templates.exists = real_exists
+    check("a rename that loses the create race is refused as exists", kind_of(err) == "exists", repr(err))
+    check("the rename's target is intact", open(raced_path, "rb").read() == first_bytes)
+    check("the refused rename keeps its source",
+          open(os.path.join(templates.root(race), "templates", "mover.json"), "rb").read() == mover_bytes)
+    check("a lost rename race leaves no temp file",
+          sorted(os.listdir(os.path.join(templates.root(race), "templates"))) == ["mover.json", "raced-report.json"])
 
     # --- list ---
     open(os.path.join(base, "templates", "Bad.Name.json"), "w").write("{}")

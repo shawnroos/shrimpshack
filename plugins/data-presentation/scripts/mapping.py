@@ -16,12 +16,16 @@ ADAPTERS = ("amplitude-segmentation", "paths", "identity")
 
 _KEYS = {"adapter", "chart", "paths", "series", "aliases"}
 _SEGMENT = re.compile(r"^(\*|\d+|[A-Za-z_][A-Za-z0-9_]*)$")
-_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?)?$")
+_X_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?)?$")
 
 _AMP_X = ["data", "jsonResponse", "xValuesForTimeSeries", "*"]
 _AMP_NAMES = ["data", "jsonResponse", "seriesLabels", "*", "1"]
 _AMP_VALUES = ["data", "jsonResponse", "timeSeries", "*", "*", "value"]
 _AMP_PARAMS = ["definition", "params"]
+
+_IDENTITY_X = ["x", "*"]
+_IDENTITY_NAMES = ["series", "names", "*"]
+_IDENTITY_VALUES = ["series", "values", "*", "*"]
 
 # A name from a result is data, and it lands in a message the agent relays. Capped so a
 # long or hostile name cannot dominate the message.
@@ -170,36 +174,41 @@ def _refuse_error_shape(result, expected):
             )
 
 
-def _record(types, path, value):
+def _record(types, path, value, at):
     key = ".".join(path)
     kind = _type(value)
     if types.setdefault(key, kind) != kind:
-        raise _drift(f"{key} holds mixed types ({types[key]} and {kind}).")
+        where = ".".join(at)
+        named = f" ({where} is a {kind})" if where != key else ""
+        raise _drift(f"{key} holds mixed types ({types[key]} and {kind}){named}.")
 
 
-def _read(node, segments, done, types):
+def _read(node, segments, done, types, at=None):
+    # `done` is the pattern (with *) that types are recorded under; `at` is the concrete
+    # path, so a message can say which element broke.
+    at = list(done) if at is None else at
     if done:
-        _record(types, done, node)
+        _record(types, done, node, at)
     if not segments:
         return node
     segment, rest = segments[0], segments[1:]
-    here = ".".join(done) or "The result"
+    here = ".".join(at) or "The result"
     if segment == "*" or segment.isdigit():
         if not isinstance(node, list):
             raise _drift(f"{here} should be a list but is a {_type(node)}.")
         if segment == "*":
             if not node:
                 raise _drift(f"{here} is an empty list.")
-            return [_read(item, rest, done + ["*"], types) for item in node]
+            return [_read(item, rest, done + ["*"], types, at + [str(i)]) for i, item in enumerate(node)]
         index = int(segment)
         if index >= len(node):
             raise _drift(f"{here} has no element {index}.")
-        return _read(node[index], rest, done + [segment], types)
+        return _read(node[index], rest, done + [segment], types, at + [segment])
     if not isinstance(node, dict):
         raise _drift(f"{here} should be an object but is a {_type(node)}.")
     if segment not in node:
-        raise _drift(f"{'.'.join(done + [segment])} is missing from the result.")
-    return _read(node[segment], rest, done + [segment], types)
+        raise _drift(f"{'.'.join(at + [segment])} is missing from the result.")
+    return _read(node[segment], rest, done + [segment], types, at + [segment])
 
 
 def _amplitude_entry(result, chart):
@@ -254,7 +263,112 @@ def _check_shape(x, names, values, x_key, names_key, values_key):
                 )
 
 
-def _extract(result, mapping):
+def _identity_root(result):
+    if not isinstance(result, dict):
+        raise _drift(f"The result should be an object with x and series but is a {_type(result)}.")
+    for key, kind in (("x", "list"), ("series", "dict")):
+        if key not in result:
+            raise _drift(f"{key} is missing from the result.")
+        if _type(result[key]) != kind:
+            raise _drift(f"{key} should be a {kind} but is a {_type(result[key])}.")
+    series = result["series"]
+    return {"x": result["x"], "series": {"names": list(series), "values": list(series.values())}}
+
+
+def _latest(row):
+    for value in reversed(row):
+        if value is not None:
+            return value
+    return -math.inf
+
+
+class Reading:
+    def __init__(self, mapping, x, names, values, types, definition):
+        self._mapping = mapping
+        self._x, self._names, self._values = x, names, values
+        self._types = types
+        self._definition = definition
+
+    def fingerprint(self):
+        out = {"paths": dict(sorted(self._types.items())), "x": _x_kind(self._x)}
+        if self._definition is not None:
+            out["definition"] = self._definition
+        return out
+
+    def check(self, saved):
+        if not isinstance(saved, dict) or not isinstance(saved.get("paths"), dict) or not isinstance(saved.get("x"), dict):
+            raise _invalid("The saved fingerprint must be an object with paths and x.")
+        current = self.fingerprint()
+
+        if saved.get("definition") != current.get("definition"):
+            raise _drift(
+                f"Chart {_name(self._mapping.get('chart', ''))} was edited in the source since this template "
+                "was saved: its definition no longer matches."
+            )
+        for path, kind in saved["paths"].items():
+            if path not in current["paths"]:
+                raise _drift(f"{path} is no longer in the result.")
+            if current["paths"][path] != kind:
+                raise _drift(f"{path} held a {kind} when the template was saved and now holds a {current['paths'][path]}.")
+        for path in current["paths"]:
+            if path not in saved["paths"]:
+                raise _drift(f"{path} is read now but was not in the saved fingerprint.")
+
+        was, now = saved["x"], current["x"]
+        if was.get("kind") != now["kind"]:
+            raise _drift(f"The x values were {was.get('kind')}s when the template was saved and are now {now['kind']}s.")
+        if now["kind"] == "date":
+            before, after = was.get("step_days"), now["step_days"]
+            # One x value shows no step, and counts never decide drift.
+            if before is not None and after is not None and before != after:
+                raise _drift(
+                    f"The x values were {before} days apart when the template was saved and are now "
+                    f"{after} day(s) apart."
+                )
+
+    def mapped(self):
+        names, values = self._names, self._values
+        aliases = self._mapping.get("aliases", {})
+
+        shown_by = {}
+        display = []
+        for raw in names:
+            shown = aliases.get(raw, raw)
+            if shown in shown_by:
+                first = shown_by[shown]
+
+                def said(n):
+                    return f"{_name(n)} (renamed by an alias)" if n in aliases else _name(n)
+
+                raise _invalid(
+                    f"Two series would both show as {_name(shown)}: {said(first)} and {said(raw)}. "
+                    "Two displayed series never share a name; change or remove the alias."
+                )
+            shown_by[shown] = raw
+            display.append(shown)
+        rows = dict(zip(display, values))
+
+        wanted = self._mapping.get("series", "all")
+        if wanted == "all":
+            order = list(display)
+            if len(order) > constants.MAX_SERIES:
+                ranked = sorted(range(len(display)), key=lambda i: (-_latest(values[i]), i))
+                keep = set(ranked[: constants.MAX_SERIES])
+                order = [display[i] for i in range(len(display)) if i in keep]
+        else:
+            gone = [n for n in wanted if n not in rows]
+            if gone:
+                raise _drift(f"The template shows the series {_name(gone[0])}, but the result no longer returns it.")
+            order = list(wanted)
+        kept = set(order)
+        return {
+            "x": list(self._x),
+            "series": {n: list(rows[n]) for n in order},
+            "not_shown": [n for n in display if n not in kept],
+        }
+
+
+def read(result, mapping):
     validate_mapping(mapping)
     result = _parse(result)
     adapter = mapping["adapter"]
@@ -264,45 +378,23 @@ def _extract(result, mapping):
     if adapter == "amplitude-segmentation":
         _refuse_error_shape(result, ("results", "success"))
         chart = mapping["chart"]
-        entry = _amplitude_entry(result, chart)
+        root = _amplitude_entry(result, chart)
         base = [f"results[{chart}]"]
-        params = _read(entry, _AMP_PARAMS, base, types)
+        params = _read(root, _AMP_PARAMS, base, types)
         if not isinstance(params, dict):
             raise _drift(f"{'.'.join(base + _AMP_PARAMS)} should be an object.")
         definition = "sha256:" + hashlib.sha256(canonical_json(params).encode("utf-8")).hexdigest()
-        specs = (base, _AMP_X, _AMP_NAMES, _AMP_VALUES)
-        root = entry
+        x_path, names_path, values_path = _AMP_X, _AMP_NAMES, _AMP_VALUES
     elif adapter == "paths":
         x_path, names_path, values_path = _path_spec(mapping["paths"])
         head = x_path[0]
         _refuse_error_shape(result, (head,) if head != "*" and not head.isdigit() else ())
-        specs = ([], x_path, names_path, values_path)
-        root = result
+        root, base = result, []
     else:
         _refuse_error_shape(result, ("x", "series"))
-        if not isinstance(result, dict):
-            raise _drift(f"The result should be an object with x and series but is a {_type(result)}.")
-        for key, kind in (("x", "list"), ("series", "dict")):
-            if key not in result:
-                raise _drift(f"{key} is missing from the result.")
-            _record(types, [key], result[key])
-            if types[key] != kind:
-                raise _drift(f"{key} should be a {kind} but is a {types[key]}.")
-        if not result["x"]:
-            raise _drift("x is an empty list.")
-        if not result["series"]:
-            raise _drift("series is an empty object.")
-        for value in result["x"]:
-            _record(types, ["x", "*"], value)
-        for row in result["series"].values():
-            _record(types, ["series", "*"], row)
-            for value in row if isinstance(row, list) else ():
-                _record(types, ["series", "*", "*"], value)
-        x, names, values = result["x"], list(result["series"]), list(result["series"].values())
-        _check_shape(x, names, values, "x", "series", "series")
-        return x, names, values, types, None
+        root, base = _identity_root(result), []
+        x_path, names_path, values_path = _IDENTITY_X, _IDENTITY_NAMES, _IDENTITY_VALUES
 
-    base, x_path, names_path, values_path = specs
     x = _read(root, x_path, base, types)
     names = _read(root, names_path, base, types)
     values = _read(root, values_path, base, types)
@@ -315,62 +407,15 @@ def _extract(result, mapping):
         ".".join(base + names_path),
         ".".join(base + values_path[:series_depth]),
     )
-    return x, names, values, types, definition
+    return Reading(mapping, x, names, values, types, definition)
 
 
-def _latest(row):
-    for value in reversed(row):
-        if value is not None:
-            return value
-    return -math.inf
-
-
-def map_result(result, mapping):
-    x, names, values, _, _ = _extract(result, mapping)
-    aliases = mapping.get("aliases", {})
-
-    shown_by = {}
-    display = []
-    for raw in names:
-        shown = aliases.get(raw, raw)
-        if shown in shown_by:
-            first = shown_by[shown]
-
-            def said(n):
-                return f"{_name(n)} (renamed by an alias)" if n in aliases else _name(n)
-
-            raise _invalid(
-                f"Two series would both show as {_name(shown)}: {said(first)} and {said(raw)}. "
-                "Two displayed series never share a name; change or remove the alias."
-            )
-        shown_by[shown] = raw
-        display.append(shown)
-    rows = dict(zip(display, values))
-
-    wanted = mapping.get("series", "all")
-    if wanted == "all":
-        order = list(display)
-        if len(order) > constants.MAX_SERIES:
-            ranked = sorted(range(len(display)), key=lambda i: (-_latest(values[i]), i))
-            keep = set(ranked[: constants.MAX_SERIES])
-            order = [display[i] for i in range(len(display)) if i in keep]
-    else:
-        gone = [n for n in wanted if n not in rows]
-        if gone:
-            raise _drift(f"The template shows the series {_name(gone[0])}, but the result no longer returns it.")
-        order = list(wanted)
-    kept = set(order)
-    return {
-        "x": list(x),
-        "series": {n: list(rows[n]) for n in order},
-        "newly_shown": [],
-        "not_shown": [n for n in display if n not in kept],
-        "selected_order": order,
-    }
+def fingerprint(result, mapping):
+    return read(result, mapping).fingerprint()
 
 
 def _as_datetime(value):
-    if not isinstance(value, str) or not _ISO_DATE.match(value):
+    if not isinstance(value, str) or not _X_DATE.match(value):
         return None
     try:
         return datetime.datetime.fromisoformat(value)
@@ -398,46 +443,6 @@ def _x_kind(x):
     else:
         step = "irregular"
     return {"kind": "date", "step_days": step}
-
-
-def fingerprint(result, mapping):
-    x, _, _, types, definition = _extract(result, mapping)
-    out = {"paths": dict(sorted(types.items())), "x": _x_kind(x)}
-    if definition is not None:
-        out["definition"] = definition
-    return out
-
-
-def check_fingerprint(saved, result, mapping):
-    if not isinstance(saved, dict) or not isinstance(saved.get("paths"), dict) or not isinstance(saved.get("x"), dict):
-        raise _invalid("The saved fingerprint must be an object with paths and x.")
-    current = fingerprint(result, mapping)
-
-    if saved.get("definition") != current.get("definition"):
-        raise _drift(
-            f"Chart {_name(mapping.get('chart', ''))} was edited in the source since this template "
-            "was saved: its definition no longer matches."
-        )
-    for path, kind in saved["paths"].items():
-        if path not in current["paths"]:
-            raise _drift(f"{path} is no longer in the result.")
-        if current["paths"][path] != kind:
-            raise _drift(f"{path} held a {kind} when the template was saved and now holds a {current['paths'][path]}.")
-    for path in current["paths"]:
-        if path not in saved["paths"]:
-            raise _drift(f"{path} is read now but was not in the saved fingerprint.")
-
-    was, now = saved["x"], current["x"]
-    if was.get("kind") != now["kind"]:
-        raise _drift(f"The x values were {was.get('kind')}s when the template was saved and are now {now['kind']}s.")
-    if now["kind"] == "date":
-        before, after = was.get("step_days"), now["step_days"]
-        # One x value shows no step, and counts never decide drift.
-        if before is not None and after is not None and before != after:
-            raise _drift(
-                f"The x values were {before} days apart when the template was saved and are now "
-                f"{after} day(s) apart."
-            )
 
 
 def display_x(raw_x):
