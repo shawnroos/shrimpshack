@@ -145,7 +145,7 @@ sys.stdout.write("\t".join([p.get("id") or "", p.get("name") or "",
 herdr_linear::start_from_issue() {
     local ident="${1:-}" prefix="${2:-$HERDR_LINEAR_BRANCH_PREFIX}"
     local answer="${4:-}"
-    local resp branch name scope key team_key segment org usable path
+    local resp branch name scope key team_key segment org usable path current
     local repo candidates source nonce existing top git="${HERDR_LINEAR_GIT_BIN:-git}"
 
     [ -n "$ident" ] || return "$HERDR_LINEAR_START_REFUSED"
@@ -206,6 +206,14 @@ herdr_linear::start_from_issue() {
         existing="$(herdr_linear::binding_identifier "$path" 2>/dev/null)" || existing=""
         if [ -n "$existing" ] && [ "$existing" != "$ident" ]; then
             printf 'already exists and belongs to %s: %s\n' "$existing" "$path" >&2
+            return "$HERDR_LINEAR_START_EXISTS"
+        fi
+        # The recovery above covers a binding that failed partway, on the branch
+        # this issue made. A worktree someone has since moved to another branch
+        # is not that: it may be live work on something else.
+        current="$("$git" -C "$path" symbolic-ref --quiet --short HEAD 2>/dev/null)" || current=""
+        if [ "$current" != "$branch" ]; then
+            printf 'already exists on %s, not %s: %s\n' "${current:-a detached HEAD}" "$branch" "$path" >&2
             return "$HERDR_LINEAR_START_EXISTS"
         fi
         if [ "$existing" = "$ident" ] \

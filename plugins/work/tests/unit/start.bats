@@ -352,6 +352,23 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$(herdr_linear::binding_identifier "$wt")" = "WEB-3318" ]
 }
 
+# Shawn's call on the review's P1: a worktree that is this issue's own, but
+# that someone has since switched to another branch, may be live work on
+# something else. A retry refuses it rather than confirming it again.
+@test "a retry refuses this issue's own worktree once it is on another branch" {
+    record_alpha
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 0 ]
+    wt="$output"
+    git -C "$wt" checkout -q -b somebody-elses-work
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == *"somebody-elses-work"* ]]
+    [ "$(git -C "$wt" rev-parse --abbrev-ref HEAD)" = "somebody-elses-work" ]
+    [ "$(herdr_linear::binding_state "$wt")" != "bound" ]
+}
+
 # Somebody else's work, still never adopted. The path is derived per issue now,
 # so the collision is staged rather than provoked: the directory WEB-2870 derives,
 # already bound to WEB-3318.
