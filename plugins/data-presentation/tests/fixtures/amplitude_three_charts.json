@@ -1,0 +1,781 @@
+{
+ "success": true,
+ "totalRequested": 3,
+ "successfulCount": 3,
+ "failedCount": 0,
+ "results": [
+  {
+   "success": true,
+   "chartId": "chart-bbbb",
+   "url": "https://example.invalid/chart/chart-bbbb",
+   "definition": {
+    "app": "000000",
+    "name": "Synthetic chart chart-bbbb",
+    "type": "chart-type-fake",
+    "params": {
+     "vis": "vis-fake",
+     "range": "range-fake",
+     "events": [
+      {
+       "event_type": "synthetic_event_b",
+       "filters": [],
+       "group_by": [
+        {
+         "type": "kind-fake",
+         "value": "prop-fake"
+        }
+       ]
+      }
+     ],
+     "metric": "metric-fake",
+     "groupBy": [],
+     "interval": 7,
+     "segments": [
+      {
+       "conditions": []
+      }
+     ],
+     "countGroup": "group-fake",
+     "nthTimeLookbackWindow": 365
+    },
+    "version": 1,
+    "description": "",
+    "selectedSet": []
+   },
+   "metadata": {
+    "chartId": "chart-bbbb",
+    "projectId": "000000",
+    "projectName": "Synthetic project",
+    "name": "Synthetic chart chart-bbbb"
+   },
+   "data": {
+    "isCsvResponse": false,
+    "jsonResponse": {
+     "timeSeries": [
+      [
+       {
+        "value": 14
+       },
+       {
+        "value": 17
+       },
+       {
+        "value": 20
+       },
+       {
+        "value": 23
+       },
+       {
+        "value": 26
+       },
+       {
+        "value": 29
+       },
+       {
+        "value": 32
+       },
+       {
+        "value": 35
+       },
+       {
+        "value": 38
+       },
+       {
+        "value": 41
+       },
+       {
+        "value": 44
+       },
+       {
+        "value": 47
+       },
+       {
+        "value": 0
+       }
+      ],
+      [
+       {
+        "value": 26
+       },
+       {
+        "value": 29
+       },
+       {
+        "value": 32
+       },
+       {
+        "value": 35
+       },
+       {
+        "value": 38
+       },
+       {
+        "value": 41
+       },
+       {
+        "value": 44
+       },
+       {
+        "value": 47
+       },
+       {
+        "value": 50
+       },
+       {
+        "value": 3
+       },
+       {
+        "value": 6
+       },
+       {
+        "value": 9
+       },
+       {
+        "value": 12
+       }
+      ]
+     ],
+     "overallSeries": [
+      [
+       {
+        "value": 366
+       }
+      ],
+      [
+       {
+        "value": 372
+       }
+      ]
+     ],
+     "seriesLabels": [
+      [
+       0,
+       "tool-golf"
+      ],
+      [
+       0,
+       "tool-hotel"
+      ]
+     ],
+     "seriesMetadata": [
+      {
+       "segmentIndex": 0,
+       "eventGroupBys": [
+        "tool-golf"
+       ],
+       "eventGroupBy": "prop-fake",
+       "eventIndex": 0
+      },
+      {
+       "segmentIndex": 0,
+       "eventGroupBys": [
+        "tool-hotel"
+       ],
+       "eventGroupBy": "prop-fake",
+       "eventIndex": 0
+      }
+     ],
+     "xValuesForTimeSeries": [
+      "2026-01-05T00:00:00",
+      "2026-01-12T00:00:00",
+      "2026-01-19T00:00:00",
+      "2026-01-26T00:00:00",
+      "2026-02-02T00:00:00",
+      "2026-02-09T00:00:00",
+      "2026-02-16T00:00:00",
+      "2026-02-23T00:00:00",
+      "2026-03-02T00:00:00",
+      "2026-03-09T00:00:00",
+      "2026-03-16T00:00:00",
+      "2026-03-23T00:00:00",
+      "2026-03-30T00:00:00"
+     ]
+    },
+    "seriesNames": [
+     "tool-golf",
+     "tool-hotel"
+    ]
+   }
+  },
+  {
+   "success": true,
+   "chartId": "chart-aaaa",
+   "url": "https://example.invalid/chart/chart-aaaa",
+   "definition": {
+    "app": "000000",
+    "name": "Synthetic chart chart-aaaa",
+    "type": "chart-type-fake",
+    "params": {
+     "vis": "vis-fake",
+     "range": "range-fake",
+     "events": [
+      {
+       "event_type": "synthetic_event_a",
+       "filters": [],
+       "group_by": [
+        {
+         "type": "kind-fake",
+         "value": "prop-fake"
+        }
+       ]
+      }
+     ],
+     "metric": "metric-fake",
+     "groupBy": [],
+     "interval": 7,
+     "segments": [
+      {
+       "conditions": []
+      }
+     ],
+     "countGroup": "group-fake",
+     "nthTimeLookbackWindow": 365
+    },
+    "version": 1,
+    "description": "",
+    "selectedSet": []
+   },
+   "metadata": {
+    "chartId": "chart-aaaa",
+    "projectId": "000000",
+    "projectName": "Synthetic project",
+    "name": "Synthetic chart chart-aaaa"
+   },
+   "data": {
+    "isCsvResponse": false,
+    "jsonResponse": {
+     "timeSeries": [
+      [
+       {
+        "value": 7
+       },
+       {
+        "value": 10
+       },
+       {
+        "value": 13
+       },
+       {
+        "value": 16
+       },
+       {
+        "value": 19
+       },
+       {
+        "value": 22
+       },
+       {
+        "value": 25
+       },
+       {
+        "value": 28
+       },
+       {
+        "value": 31
+       },
+       {
+        "value": 34
+       },
+       {
+        "value": 37
+       },
+       {
+        "value": 40
+       },
+       {
+        "value": 43
+       }
+      ],
+      [
+       {
+        "value": 19
+       },
+       {
+        "value": 22
+       },
+       {
+        "value": 25
+       },
+       {
+        "value": 28
+       },
+       {
+        "value": 31
+       },
+       {
+        "value": 34
+       },
+       {
+        "value": 37
+       },
+       {
+        "value": 40
+       },
+       {
+        "value": 43
+       },
+       {
+        "value": 46
+       },
+       {
+        "value": 49
+       },
+       {
+        "value": 2
+       },
+       {
+        "value": 5
+       }
+      ],
+      [
+       {
+        "value": 31
+       },
+       {
+        "value": 34
+       },
+       {
+        "value": 37
+       },
+       {
+        "value": 40
+       },
+       {
+        "value": 43
+       },
+       {
+        "value": 46
+       },
+       {
+        "value": 49
+       },
+       {
+        "value": 2
+       },
+       {
+        "value": 5
+       },
+       {
+        "value": 8
+       },
+       {
+        "value": 11
+       },
+       {
+        "value": 14
+       },
+       {
+        "value": 17
+       }
+      ],
+      [
+       {
+        "value": 43
+       },
+       {
+        "value": 46
+       },
+       {
+        "value": 49
+       },
+       {
+        "value": 52
+       },
+       {
+        "value": 5
+       },
+       {
+        "value": 8
+       },
+       {
+        "value": 11
+       },
+       {
+        "value": 14
+       },
+       {
+        "value": 17
+       },
+       {
+        "value": 20
+       },
+       {
+        "value": 23
+       },
+       {
+        "value": 26
+       },
+       {
+        "value": 29
+       }
+      ],
+      [
+       {
+        "value": 5
+       },
+       {
+        "value": 8
+       },
+       {
+        "value": 11
+       },
+       {
+        "value": 14
+       },
+       {
+        "value": 17
+       },
+       {
+        "value": 20
+       },
+       {
+        "value": 23
+       },
+       {
+        "value": 26
+       },
+       {
+        "value": 29
+       },
+       {
+        "value": 32
+       },
+       {
+        "value": 35
+       },
+       {
+        "value": 38
+       },
+       {
+        "value": 41
+       }
+      ],
+      [
+       {
+        "value": 17
+       },
+       {
+        "value": 20
+       },
+       {
+        "value": 23
+       },
+       {
+        "value": 26
+       },
+       {
+        "value": 29
+       },
+       {
+        "value": 32
+       },
+       {
+        "value": 35
+       },
+       {
+        "value": 38
+       },
+       {
+        "value": 41
+       },
+       {
+        "value": 44
+       },
+       {
+        "value": 47
+       },
+       {
+        "value": 50
+       },
+       {
+        "value": 53
+       }
+      ]
+     ],
+     "overallSeries": [
+      [
+       {
+        "value": 325
+       }
+      ],
+      [
+       {
+        "value": 381
+       }
+      ],
+      [
+       {
+        "value": 337
+       }
+      ],
+      [
+       {
+        "value": 343
+       }
+      ],
+      [
+       {
+        "value": 299
+       }
+      ],
+      [
+       {
+        "value": 455
+       }
+      ]
+     ],
+     "seriesLabels": [
+      [
+       0,
+       "tool-alpha"
+      ],
+      [
+       0,
+       "tool-bravo"
+      ],
+      [
+       0,
+       "tool-charlie"
+      ],
+      [
+       0,
+       "tool-delta"
+      ],
+      [
+       0,
+       "tool-echo"
+      ],
+      [
+       0,
+       "tool-foxtrot"
+      ]
+     ],
+     "seriesMetadata": [
+      {
+       "segmentIndex": 0,
+       "eventGroupBys": [
+        "tool-alpha"
+       ],
+       "eventGroupBy": "prop-fake",
+       "eventIndex": 0
+      },
+      {
+       "segmentIndex": 0,
+       "eventGroupBys": [
+        "tool-bravo"
+       ],
+       "eventGroupBy": "prop-fake",
+       "eventIndex": 0
+      },
+      {
+       "segmentIndex": 0,
+       "eventGroupBys": [
+        "tool-charlie"
+       ],
+       "eventGroupBy": "prop-fake",
+       "eventIndex": 0
+      },
+      {
+       "segmentIndex": 0,
+       "eventGroupBys": [
+        "tool-delta"
+       ],
+       "eventGroupBy": "prop-fake",
+       "eventIndex": 0
+      },
+      {
+       "segmentIndex": 0,
+       "eventGroupBys": [
+        "tool-echo"
+       ],
+       "eventGroupBy": "prop-fake",
+       "eventIndex": 0
+      },
+      {
+       "segmentIndex": 0,
+       "eventGroupBys": [
+        "tool-foxtrot"
+       ],
+       "eventGroupBy": "prop-fake",
+       "eventIndex": 0
+      }
+     ],
+     "xValuesForTimeSeries": [
+      "2026-01-05T00:00:00",
+      "2026-01-12T00:00:00",
+      "2026-01-19T00:00:00",
+      "2026-01-26T00:00:00",
+      "2026-02-02T00:00:00",
+      "2026-02-09T00:00:00",
+      "2026-02-16T00:00:00",
+      "2026-02-23T00:00:00",
+      "2026-03-02T00:00:00",
+      "2026-03-09T00:00:00",
+      "2026-03-16T00:00:00",
+      "2026-03-23T00:00:00",
+      "2026-03-30T00:00:00"
+     ]
+    },
+    "seriesNames": [
+     "tool-alpha",
+     "tool-bravo",
+     "tool-charlie",
+     "tool-delta",
+     "tool-echo",
+     "tool-foxtrot"
+    ]
+   }
+  },
+  {
+   "success": true,
+   "chartId": "chart-cccc",
+   "url": "https://example.invalid/chart/chart-cccc",
+   "definition": {
+    "app": "000000",
+    "name": "Synthetic chart chart-cccc",
+    "type": "chart-type-fake",
+    "params": {
+     "vis": "vis-fake",
+     "range": "range-fake",
+     "events": [
+      {
+       "event_type": "synthetic_event_c",
+       "filters": [],
+       "group_by": [
+        {
+         "type": "kind-fake",
+         "value": "prop-fake"
+        }
+       ]
+      }
+     ],
+     "metric": "metric-fake",
+     "groupBy": [],
+     "interval": 7,
+     "segments": [
+      {
+       "conditions": []
+      }
+     ],
+     "countGroup": "group-fake",
+     "nthTimeLookbackWindow": 365
+    },
+    "version": 1,
+    "description": "",
+    "selectedSet": []
+   },
+   "metadata": {
+    "chartId": "chart-cccc",
+    "projectId": "000000",
+    "projectName": "Synthetic project",
+    "name": "Synthetic chart chart-cccc"
+   },
+   "data": {
+    "isCsvResponse": false,
+    "jsonResponse": {
+     "timeSeries": [
+      [
+       {
+        "value": 21
+       },
+       {
+        "value": 24
+       },
+       {
+        "value": 27
+       },
+       {
+        "value": 30
+       },
+       {
+        "value": 33
+       },
+       {
+        "value": 36
+       },
+       {
+        "value": 39
+       },
+       {
+        "value": 42
+       },
+       {
+        "value": 45
+       },
+       {
+        "value": 48
+       },
+       {
+        "value": 1
+       },
+       {
+        "value": 4
+       },
+       {
+        "value": 7
+       }
+      ]
+     ],
+     "overallSeries": [
+      [
+       {
+        "value": 357
+       }
+      ]
+     ],
+     "seriesLabels": [
+      [
+       0,
+       "tool-india"
+      ]
+     ],
+     "seriesMetadata": [
+      {
+       "segmentIndex": 0,
+       "eventGroupBys": [
+        "tool-india"
+       ],
+       "eventGroupBy": "prop-fake",
+       "eventIndex": 0
+      }
+     ],
+     "xValuesForTimeSeries": [
+      "2026-01-05T00:00:00",
+      "2026-01-12T00:00:00",
+      "2026-01-19T00:00:00",
+      "2026-01-26T00:00:00",
+      "2026-02-02T00:00:00",
+      "2026-02-09T00:00:00",
+      "2026-02-16T00:00:00",
+      "2026-02-23T00:00:00",
+      "2026-03-02T00:00:00",
+      "2026-03-09T00:00:00",
+      "2026-03-16T00:00:00",
+      "2026-03-23T00:00:00",
+      "2026-03-30T00:00:00"
+     ]
+    },
+    "seriesNames": [
+     "tool-india"
+    ]
+   }
+  }
+ ],
+ "summary": {
+  "successful": [
+   {
+    "chartId": "chart-bbbb",
+    "url": "https://example.invalid/chart/chart-bbbb"
+   },
+   {
+    "chartId": "chart-aaaa",
+    "url": "https://example.invalid/chart/chart-aaaa"
+   },
+   {
+    "chartId": "chart-cccc",
+    "url": "https://example.invalid/chart/chart-cccc"
+   }
+  ],
+  "failed": []
+ }
+}
