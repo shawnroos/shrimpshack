@@ -30,6 +30,8 @@
 #   FAKE_HERDR_ALLOW_MUTATION  1 to permit creation verbs (U10 only)
 #   FAKE_HERDR_SLOW_PANE   probes a new pane stays unregistered for
 #   FAKE_HERDR_SNAPSHOT_FAILS  1 to make `api snapshot` fail
+#   FAKE_HERDR_SNAPSHOT_FAILS_FROM  N to make the Nth `api snapshot` and every
+#                          later one fail: a server that goes away mid-run
 #   FAKE_HERDR_TAB_GET_FAILS  1 to make `tab get` fail with no answer at all,
 #                          as an unreachable server does, unlike a missing tab
 #   FAKE_HERDR_WORKSPACE_LIST_FAILS  1 to make `workspace list` fail while the
@@ -226,6 +228,12 @@ emit_status() {
 emit_snapshot() {
     [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; return 1; }
     [ "${FAKE_HERDR_SNAPSHOT_FAILS:-0}" = 1 ] && { echo "fake-herdr: snapshot failed" >&2; return 1; }
+    if [ -n "${FAKE_HERDR_SNAPSHOT_FAILS_FROM:-}" ]; then
+        local _c=0
+        [ -f "$REC_DIR/snapshots" ] && _c="$(cat "$REC_DIR/snapshots")"
+        _c=$(( _c + 1 )); printf '%s' "$_c" > "$REC_DIR/snapshots"
+        [ "$_c" -ge "$FAKE_HERDR_SNAPSHOT_FAILS_FROM" ] && { echo "fake-herdr: snapshot failed" >&2; return 1; }
+    fi
     canned_snapshot | REC_DIR="$REC_DIR" python3 -c '
 import sys, json, os
 d = json.load(sys.stdin)

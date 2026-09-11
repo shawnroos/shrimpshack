@@ -553,3 +553,16 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     [[ "$stderr" == *"$gone"* ]]
     [ "$(herdr_calls 'tab create')" = "0" ]
 }
+
+# The tab check reads the snapshot first. A server that goes away after that
+# read must still not have its silence taken for "this column's pane is gone".
+@test "a snapshot lost after the tab check makes no second pane" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    splits="$(herdr_calls 'pane split')"
+    rm -f "$FAKE_HERDR_RECORD_DIR/snapshots"
+    export FAKE_HERDR_SNAPSHOT_FAILS_FROM=2
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 3 ]
+    [ "$(herdr_calls 'pane split')" = "$splits" ]
+}
