@@ -313,11 +313,28 @@ def rename(old, new, home=None):
         _atomic_write(new_path, template, replace=False)
     except FileExistsError:
         raise taken from None
-    if os.path.exists(old_run):
-        os.replace(old_run, new_run)
-    elif os.path.exists(new_run):
-        os.unlink(new_run)
-    os.unlink(old_path)
+    # Between the write of the new name and the unlink of the old one the report exists twice,
+    # and which name to delete depends on which step failed: the run record is still under the
+    # old name until the move lands.
+    try:
+        if os.path.exists(old_run):
+            os.replace(old_run, new_run)
+        elif os.path.exists(new_run):
+            os.unlink(new_run)
+    except OSError as err:
+        raise TemplateError(
+            "exists",
+            f"The report now exists under both {old!r} and {new!r}: its run record could not be moved "
+            f"({err.strerror}). The record is still {old!r}'s, so delete {new!r} and rename again.",
+        ) from None
+    try:
+        os.unlink(old_path)
+    except OSError as err:
+        raise TemplateError(
+            "exists",
+            f"The report now exists under both {old!r} and {new!r}: {old!r} could not be removed "
+            f"({err.strerror}). The run record moved to {new!r}, so delete {old!r} to keep the new name.",
+        ) from None
 
 
 def load_run(name, home=None):

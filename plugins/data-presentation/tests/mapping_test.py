@@ -11,7 +11,9 @@ TESTS = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(os.path.dirname(TESTS), "scripts")
 sys.path.insert(0, SCRIPTS)
 
+import changes  # noqa: E402
 import constants  # noqa: E402
+import credentials  # noqa: E402
 import mapping  # noqa: E402
 
 passed = failed = 0
@@ -445,6 +447,68 @@ def main():
     except mapping.MappingError as err:
         where = str(err)
     check("a path error names the concrete index", "rows.1.n is missing" in where, where)
+
+    # --- a credential-looking source name stops before any message can quote it ---
+    print("the source's own names are screened")
+    secretish = "tok3nABCDEFGH1234567890"
+
+    def secret_error(fn, *args):
+        try:
+            fn(*args)
+        except credentials.CredentialError as err:
+            return err
+        return None
+
+    def ident(x, series):
+        return json.dumps({"x": list(x), "series": series})
+
+    twice = ident(["a", "b"], {secretish: [1, 2], secretish + " ": [3, 4]})
+    err = secret_error(mapping.read, twice, {"adapter": "identity"})
+    check("two credential-looking names stop at read, not at the collision message",
+          err is not None and err.kind == "secret", repr(err))
+    check("that stop names a series name and no value",
+          err is not None and "a series name" in str(err) and secretish not in str(err), repr(err))
+    for label, call in (
+        ("mapped", lambda r: mapping.read(r, {"adapter": "identity"}).mapped()),
+        ("fingerprint", lambda r: mapping.read(r, {"adapter": "identity"}).fingerprint()),
+    ):
+        check(f"{label} cannot be reached with a credential-looking name",
+              secretish not in str(secret_error(call, twice)), repr(secret_error(call, twice)))
+    alias = {"adapter": "identity", "aliases": {secretish: "clean-name"}}
+    check("an alias does not exempt the raw name from the screen",
+          secretish not in str(secret_error(mapping.read, ident(["a"], {secretish: [1]}), alias)))
+
+    ordinary = ident(["a", "b"], {"plain-rows": [1, 2]})
+    dupe = {"adapter": "identity", "aliases": {"plain-rows": "other-rows"}}
+    doubled = json.dumps({"x": ["a", "b"], "series": {"plain-rows": [1, 2], "other-rows": [3, 4]}})
+    ok, msg = is_error(map_result, (doubled, dupe), "invalid", "both show as", "'other-rows'", "'plain-rows'")
+    check("an ordinary collision still names the ordinary names", ok, msg)
+    check("an ordinary name passes the screen", secret_error(mapping.read, ordinary, {"adapter": "identity"}) is None)
+    check("a credential-looking x label stops at read",
+          "an x label" in str(secret_error(mapping.read, ident(["fake-a", secretish], {"r": [1, 2]}),
+                                           {"adapter": "identity"})))
+
+    # --- x values that carry a zone read as dates at both layers ---
+    print("zoned x values")
+    zoned = ["2026-08-17T00:00:00Z", "2026-08-24T00:00:00Z", "2026-08-31T00:00:00Z"]
+    offset = ["2026-08-17T00:00:00+02:00", "2026-08-24T00:00:00+02:00"]
+    check("zoned x values become date labels", mapping.display_x(zoned) == ["Aug 17", "Aug 24", "Aug 31"],
+          repr(mapping.display_x(zoned)))
+    check("offset x values become date labels", mapping.display_x(offset) == ["Aug 17", "Aug 24"],
+          repr(mapping.display_x(offset)))
+    zfp = mapping.fingerprint(ident(zoned, {"rows": [1, 2, 3]}), {"adapter": "identity"})
+    check("zoned x values are a date kind a week apart", zfp["x"] == {"kind": "date", "step_days": 7}, repr(zfp["x"]))
+    check("changes reads the same values as dates too",
+          changes.open_x(zoned, "2026-09-01T00:00:00Z") == zoned[-1],
+          repr(changes.open_x(zoned, "2026-09-01T00:00:00Z")))
+    daily = ["2026-08-17T00:00:00Z", "2026-08-18T00:00:00Z", "2026-08-19T00:00:00Z"]
+    ok, msg = is_error(check_fingerprint, (zfp, ident(daily, {"rows": [1, 2, 3]}), {"adapter": "identity"}),
+                       "drift", "7 days apart", "1 day")
+    check("the step check still catches a changed step on zoned values", ok, msg)
+    check("a naive date list is unchanged", mapping.display_x(["2026-08-17T00:00:00"]) == ["Aug 17"])
+    check("a mix of naive and zoned values still reads as dates",
+          mapping.display_x(["2026-08-17T00:00:00", "2026-08-24T00:00:00Z"]) == ["Aug 17", "Aug 24"],
+          repr(mapping.display_x(["2026-08-17T00:00:00", "2026-08-24T00:00:00Z"])))
 
     print(f"mapping_test: {passed} passed, {failed} failed")
     return 1 if failed else 0

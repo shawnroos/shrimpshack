@@ -908,10 +908,12 @@ def test_command_source():
     command, out_path = p["calls"][0]["command"], out_of(p)
     s.bash(command, "")
     s.bash(command.replace("fake-fetch", "fake-other-fetch"), "")
-    write_rows(out_path, [1, 2, 9], at=s.clock)
+    write_rows(out_path, [1, 2, 9], at=s.clock + datetime.timedelta(seconds=1))
     out = finish(s, "cmd-fake", p["marker"])
+    # The exact call still pairs; a rewrite after its result is caught by the write-time
+    # ceiling, not by pairing, so a read-only call naming the path cannot unpair it.
     stopped_unchanged("the exact command, then a changed one writing the same path", out, "cmd-fake", before,
-                      next_move="make_calls", needle="not the saved call")
+                      next_move="none", needle="after")
 
     p = prepare(s, "cmd-fake")
     command, out_path = p["calls"][0]["command"], out_of(p)
@@ -1309,6 +1311,120 @@ def test_fault():
     check("a stop exits 0", proc.returncode == 0 and body.get("status") == "stopped", proc.stdout + proc.stderr)
 
 
+def failing_write_run():
+    def boom(*_a, **_k):
+        raise OSError(28, "forced failure")
+
+    return boom
+
+
+def test_record_cannot_be_written():
+    print("the run record cannot be written")
+    s = fresh()
+    baseline(s)
+    before = record_bytes("ai-fake")
+    p = prepare(s, "ai-fake")
+    s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), ts=INSIDE_WEEK)
+    real = templates.write_run
+    templates.write_run = failing_write_run()
+    try:
+        out = finish(s, "ai-fake", p["marker"])
+    finally:
+        templates.write_run = real
+    check("a finish whose record cannot be written stops", out["status"] == "stopped", out)
+    check("it is not a fault", "Error:" not in out["message"], out["message"])
+    check("its next is none", out["next"] == "none", out)
+    check("the message says the baseline could not be recorded",
+          "baseline could not be recorded" in out["message"], out["message"])
+    check("the message names the reason", "forced failure" in out["message"], out["message"])
+    check("the message says the next run starts fresh", "starts fresh" in out["message"], out["message"])
+    check("no block is shown, and the message says so",
+          out["block"] == "" and "not shown here" in out["message"], out)
+    check("the old record is untouched", record_bytes("ai-fake") == before)
+
+    s = fresh()
+    s.user("fake: build the weekly report")
+    s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), ts=INSIDE_WEEK)
+    path = draft_file(s, "fresh-fake", [draft_block("chart-aaaa", args_for("chart-aaaa"))])
+    real = templates.write_run
+    templates.write_run = failing_write_run()
+    try:
+        out = save(s, path, "--confirm")
+    finally:
+        templates.write_run = real
+    check("a save whose first record cannot be written stops", out["status"] == "stopped", out)
+    check("the save message says the report was saved", "Saved fresh-fake" in out["message"], out["message"])
+    check("the save message says the baseline could not be recorded",
+          "baseline could not be recorded" in out["message"], out["message"])
+    check("the save message names the reason", "forced failure" in out["message"], out["message"])
+    check("the template really was saved", template_exists("fresh-fake"))
+    check("no run record was left behind", record_bytes("fresh-fake") is None)
+
+
+def test_draft_path_forms():
+    print("the draft path as typed")
+    s = fresh()
+    s.user("fake: build the weekly report")
+    s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), ts=INSIDE_WEEK)
+    path = draft_file(s, "tilde-fake", [draft_block("chart-aaaa", args_for("chart-aaaa"))])
+    check("the draft sits directly in the temporary home", path == os.path.join(s.home, "draft.json"), path)
+    for label, typed in (("a ~ path", "~/draft.json"), ("a $HOME path", "$HOME/draft.json")):
+        argv = ["save", "--draft", typed]
+        tid = s.use("Bash", {"command": "python3 report.py save --draft " + path})
+        out = report.main(argv)
+        s.result(tid, json.dumps(out))
+        check(f"{label} reads the draft and finds its own call",
+              out["status"] == "ok" and out["next"] == "confirm_save", out)
+
+    s = fresh()
+    s.user("fake: build the weekly report")
+    s.tool(AMP, args_for("chart-aaaa"), weekly_reply(), ts=INSIDE_WEEK)
+    path = draft_file(s, "lost-fake", [draft_block("chart-aaaa", args_for("chart-aaaa"))])
+    s.use("Bash", {"command": "python3 report.py save --draft $HOME/draft.json"})
+    out = report.main(["save", "--draft", path])
+    check("a save whose own call is not in the log stops", out["status"] == "stopped", out)
+    check("that stop points at make_calls", out["next"] == "make_calls", out)
+    check("that stop still names the path it looked for", path in out["message"], out["message"])
+    check("that stop asks for the path written out in full",
+          "written out in full" in out["message"] and "no ~" in out["message"], out["message"])
+    check("that stop writes no template", not template_exists("lost-fake"))
+
+
+def twice_named(name):
+    # seriesLabels is a list, so one name really can arrive twice; a dict of series cannot
+    # carry the duplicate that mapped()'s collision message quotes.
+    reply = weekly_reply({name: [1, 2, 3]})
+    j = reply["results"][0]["data"]["jsonResponse"]
+    j["seriesLabels"].append([0, name])
+    j["timeSeries"].append([{"value": v} for v in (4, 5, 6)])
+    return reply
+
+
+def test_duplicate_secret_names():
+    print("a source returning one name twice")
+    s = fresh()
+    make("dupe-fake", [amp_block("chart-aaaa", weekly_reply({"fake-rows": [1, 2, 3]}))])
+    p = prepare(s, "dupe-fake")
+    s.tool(AMP, args_for("chart-aaaa"), twice_named(SECRETISH), ts=INSIDE_WEEK)
+    out = finish(s, "dupe-fake", p["marker"])
+    check("the run stops", out["status"] == "stopped" and out["block"] == "", out)
+    check("the stop names the block and a series name",
+          "Block 1: a series name" in out["message"], out["message"])
+    check("the stop names no value at all", SECRETISH not in json.dumps(out), out)
+    check("the collision message never reaches the agent",
+          "both show as" not in out["message"], out["message"])
+    check("the run record is untouched", record_bytes("dupe-fake") is None)
+
+    s = fresh()
+    make("plain-dupe", [amp_block("chart-aaaa", weekly_reply({"fake-rows": [1, 2, 3]}))])
+    p = prepare(s, "plain-dupe")
+    s.tool(AMP, args_for("chart-aaaa"), twice_named("plain-rows"), ts=INSIDE_WEEK)
+    out = finish(s, "plain-dupe", p["marker"])
+    check("an ordinary duplicate still stops", out["status"] == "stopped", out)
+    check("an ordinary duplicate still names the ordinary name",
+          "both show as" in out["message"] and "'plain-rows'" in out["message"], out["message"])
+
+
 def main():
     set_zone("UTC")
     try:
@@ -1316,7 +1432,8 @@ def main():
             test_list, test_prepare, test_env, test_save_then_finish, test_save_gates, test_ae1_revision,
             test_call_equality, test_two_blocks, test_source_errors, test_drift, test_present_refused,
             test_variation, test_pending_and_start_over, test_command_source, test_file_source,
-            test_source_secrets, test_bad_record, test_sweep,
+            test_source_secrets, test_duplicate_secret_names, test_record_cannot_be_written,
+            test_draft_path_forms, test_bad_record, test_sweep,
             test_already_finished, test_times,
             test_width, test_ae5_seventh, test_template_changed, test_delete_rename, test_fault,
         ):

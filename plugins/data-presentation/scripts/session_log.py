@@ -15,6 +15,8 @@ UNREADABLE = "cannot read this session log"
 CONVERSATION = ("user", "assistant")
 PERSISTED_TAG = "<persisted-output>"
 SAVED_TO = re.compile(r"Full output saved to: (.+)")
+UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
+NAME_CAP = 40
 
 
 class LogError(Exception):
@@ -49,6 +51,10 @@ def find_log(session_id=None, projects_root=None):
 
 def _unreadable(detail):
     return LogError("unreadable", f"{UNREADABLE}: {detail}")
+
+
+def _short_name(path):
+    return UNSAFE_NAME.sub("?", os.path.basename(path.rstrip("/")))[:NAME_CAP] or "(unnamed)"
 
 
 def _is_text_item(item):
@@ -112,26 +118,45 @@ def load(path):
     return Log(path, entries)
 
 
-def _bash_commands(entry):
-    if not isinstance(entry, dict) or entry.get("type") != "assistant":
-        return
+def _content(entry):
+    if not isinstance(entry, dict) or entry.get("type") not in CONVERSATION:
+        return []
     message = entry.get("message")
     content = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, list):
+    return content if isinstance(content, list) else []
+
+
+def _bash_calls(entry):
+    if entry.get("type") != "assistant":
         return
-    for block in content:
+    for block in _content(entry):
         if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Bash":
             command = block.get("input", {}).get("command") if isinstance(block.get("input"), dict) else None
             if isinstance(command, str):
-                yield command
+                yield block.get("id"), command
 
 
-def _latest_invocation(entries, needle):
-    latest = None
+def _answered(entries):
+    found = set()
     for entry in entries:
-        if any(needle in command for command in _bash_commands(entry)):
-            latest = entry
-    return latest
+        for block in _content(entry):
+            if isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                found.add(block["tool_use_id"])
+    return found
+
+
+def _invocations(entries, needle):
+    """Any Bash call holding the needle, and the latest one whose result has not come back."""
+    entries = list(entries)
+    answered = _answered(entries)
+    matched = running = None
+    for entry in entries:
+        for call_id, command in _bash_calls(entry):
+            if needle in command:
+                matched = entry
+                if call_id not in answered:
+                    running = entry
+    return matched, running
 
 
 def _message_id(entry):
@@ -180,18 +205,21 @@ class Log:
         self._position = {id(e): i for i, e in enumerate(entries)}
 
     def find_invocation(self, needle):
-        found = _latest_invocation(self.entries, needle)
-        if found is not None:
-            return found
+        # Only a call still waiting for its result can be this one. A finished main-log match is
+        # an earlier run of the same command, and taking it would let a subagent's call pass as
+        # the main session's.
+        _, running = _invocations(self.entries, needle)
+        if running is not None:
+            return running
         pattern = os.path.join(glob.escape(self.session_dir), "subagents", "*.jsonl")
         for sub in sorted(glob.glob(pattern)):
             entries = (entry for _, entry in _parsed_lines(sub, "subagent log " + os.path.basename(sub)))
-            if _latest_invocation(entries, needle) is not None:
+            if _invocations(entries, needle)[0] is not None:
                 raise LogError(
                     "subagent",
                     "This was run from a subagent; reports only run in the main session. Run it again from the main conversation.",
                 )
-        raise LogError("no_invocation", f"No Bash call containing {needle} is in this session log.")
+        raise LogError("no_invocation", f"No Bash call containing {needle} is still running in this session log.")
 
     def branch(self, from_entry):
         path = []
@@ -254,7 +282,7 @@ class Log:
                         raise _unreadable(f"the tool call {block['id']} appears twice on this branch")
                     seen.add(block["id"])
                     if entry is not invoking:
-                        uses.append((position, block))
+                        uses.append((position, entry, block))
                 elif block.get("type") == "tool_result":
                     answered = block["tool_use_id"]
                     if answered in results:
@@ -265,13 +293,14 @@ class Log:
                         start, prepared = position, entry
         if start is None:
             return None, []
-        return prepared, [self._call(block, results.get(block["id"])) for position, block in uses if position > start]
+        return prepared, [self._call(entry, block, results.get(block["id"])) for position, entry, block in uses if position > start]
 
-    def _call(self, use, result):
+    def _call(self, made_in, use, result):
         call = {
             "id": use["id"],
             "tool": use["name"],
             "input": use["input"],
+            "started_at": made_in.get("timestamp"),
             "timestamp": None,
             "has_result": result is not None,
             "is_error": False,
@@ -295,7 +324,11 @@ class Log:
         # realpath before the check, so a symlink or ".." cannot lead out of tool-results/.
         real = os.path.realpath(target)
         if not os.path.isabs(target) or os.path.commonpath([allowed, real]) != allowed or real == allowed:
-            raise _unreadable(f"a <persisted-output> notice points outside this session's tool-results directory: {target}")
+            # The notice comes from a tool result, so the path is untrusted text: name a short,
+            # scrubbed basename and never the path itself.
+            raise _unreadable(
+                "a <persisted-output> notice points outside this session's tool-results directory: " + _short_name(target)
+            )
         try:
             with open(real, encoding="utf-8") as f:
                 return f.read()

@@ -398,6 +398,53 @@ def main():
     check("delete of a missing template is refused as missing",
           kind_of(refusal(templates.delete, "renamed-report", home=home)) == "missing")
 
+    # --- a rename that fails half way says which name to delete ---
+    half = fresh_home()
+    templates.save(template(name="half-mover"), home=half)
+    templates.write_run("half-mover", record, home=half)
+    real_replace = templates.os.replace
+
+    def replace_boom(*_a, **_k):
+        raise OSError(5, "forced failure")
+
+    templates.os.replace = replace_boom
+    try:
+        err = refusal(templates.rename, "half-mover", "half-target", home=half)
+    finally:
+        templates.os.replace = real_replace
+    check("a run record that cannot move refuses the rename as exists", kind_of(err) == "exists", repr(err))
+    check("that refusal names both names",
+          err is not None and "'half-mover'" in str(err) and "'half-target'" in str(err), repr(err))
+    check("that refusal says to delete the new name, which has no record",
+          err is not None and "delete 'half-target'" in str(err), repr(err))
+    check("both templates really do exist",
+          templates.exists("half-mover", home=half) and templates.exists("half-target", home=half))
+    check("the run record is still the old name's",
+          templates.load_run("half-mover", home=half) == record and templates.load_run("half-target", home=half) is None)
+
+    later = fresh_home()
+    templates.save(template(name="late-mover"), home=later)
+    templates.write_run("late-mover", record, home=later)
+    real_unlink = templates.os.unlink
+
+    def unlink_boom(path):
+        if path.endswith("late-mover.json"):
+            raise OSError(5, "forced failure")
+        return real_unlink(path)
+
+    templates.os.unlink = unlink_boom
+    try:
+        err = refusal(templates.rename, "late-mover", "late-target", home=later)
+    finally:
+        templates.os.unlink = real_unlink
+    check("an old file that cannot be removed refuses the rename as exists", kind_of(err) == "exists", repr(err))
+    check("that refusal says to delete the old name, whose record already moved",
+          err is not None and "delete 'late-mover'" in str(err), repr(err))
+    check("the run record did move to the new name",
+          templates.load_run("late-target", home=later) == record)
+    check("both templates exist after the failed unlink",
+          templates.exists("late-mover", home=later) and templates.exists("late-target", home=later))
+
     # --- an invalid name never reaches a path ---
     untouched = fresh_home()
     for label, call in (

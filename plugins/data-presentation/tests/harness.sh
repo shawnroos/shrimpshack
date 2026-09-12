@@ -71,7 +71,8 @@ check "report SKILL.md lists before every prepare" "grep -qi 'even when the sess
 check "the data-presentation skill stays name-only" "grep -qi 'invoked by name only' '$SKILL'"
 
 # A command and a skill sharing a name hide the skill with no error. The floor stops
-# two empty listings from passing.
+# two empty listings from passing. A crashed scanner prints nothing on stdout, which
+# reads the same as "no collision" unless its exit status is checked too.
 collide="$(python3 - "$PLUGIN" <<'PY'
 import os, sys
 root = sys.argv[1]
@@ -82,6 +83,8 @@ if len(commands) < 1 or len(skills) < 2:
 print(" ".join(sorted(commands & skills)))
 PY
 )"
+collide_rc=$?
+[ "$collide_rc" -eq 0 ] || collide="scanner exited $collide_rc"
 check "no command shares a skill's name (and both listings are populated)" "[ -z '$collide' ]"
 
 # Naming the auto-loaded hooks file in the manifest makes the whole plugin fail to load.
@@ -103,6 +106,9 @@ check "the session start hook ignores a file whose name breaks the pattern" \
 rm -rf "$hook_home"
 
 # The repo is public. A fixture copies the structure of real data, never its values.
+# A crashed scanner prints nothing on stdout, which reads the same as "no leak" unless
+# its exit status is checked too — so a non-UTF-8 fixture is read with replacement
+# instead of raising, and stays scanned rather than aborting the whole check.
 leaks="$(python3 - "$TESTS/fixtures" <<'PY'
 import hashlib, os, re, sys
 real = {8: "6dba4b006cd64ffdc496602f37a51279376d96f037827cead1117de3e70403e1",
@@ -110,7 +116,7 @@ real = {8: "6dba4b006cd64ffdc496602f37a51279376d96f037827cead1117de3e70403e1",
 fake_uuid = re.compile(r"00000000-0000-4000-8000-\d{12}")
 hits = []
 for name in sorted(os.listdir(sys.argv[1])):
-    text = open(os.path.join(sys.argv[1], name), encoding="utf-8").read()
+    text = open(os.path.join(sys.argv[1], name), encoding="utf-8", errors="replace").read()
     if "/Users/" in text:
         hits.append(name + ": /Users/ path")
     for u in re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text):
@@ -123,6 +129,8 @@ for name in sorted(os.listdir(sys.argv[1])):
 print("; ".join(hits))
 PY
 )"
+leaks_rc=$?
+[ "$leaks_rc" -eq 0 ] || leaks="scanner exited $leaks_rc"
 check "no fixture holds a real path, id or session (${leaks:-clean})" "[ -z '$leaks' ]"
 
 echo "harness: $PASS passed, $FAIL failed"

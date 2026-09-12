@@ -153,6 +153,9 @@ def _collect(template, found, needle, verb, variation=False):
             mapped.append(reading.mapped())
         except MappingError as err:
             raise _mapping_stop(number, err, rebuild=marker is not None, variation=variation) from None
+        except CredentialError as err:
+            # mapping screens the source's own names, which knows nothing of block numbers.
+            raise changes.at_block(number, err) from None
     return mapped
 
 
@@ -319,7 +322,14 @@ def _finish(args, template, found):
             f"Offer to save it as a new report with /data-presentation:new, or to update {args.name}.",
             block, changed, notes,
         )
-    templates.write_run(args.name, changes.run_record(templates.template_hash(template), currents, args.marker))
+    record = changes.run_record(templates.template_hash(template), currents, args.marker)
+    try:
+        templates.write_run(args.name, record)
+    except OSError as err:
+        raise Stop(
+            f"The report ran, but this run's baseline could not be recorded ({err.strerror}), so it is not "
+            "shown here and the next run starts fresh with nothing to compare against."
+        ) from None
     return _response("ok", "none", "", block, changed, notes)
 
 
@@ -385,14 +395,23 @@ def _gate_draft(template, snapshot):
 
 
 def cmd_save(args):
-    path = os.path.abspath(args.draft)
+    path = os.path.abspath(os.path.expanduser(os.path.expandvars(args.draft)))
     template, outputs = _from_draft(_read_draft(path))
     _gate_draft(template, args.snapshot)
     name = template["name"]
     if not args.replace and templates.exists(name):
         raise Stop(f"A report named {name!r} already exists. Replacing it needs an explicit replace request.")
     found = sources.for_draft(template, outputs)
-    mapped = _collect(template, found, path, "save")
+    try:
+        mapped = _collect(template, found, path, "save")
+    except LogError as err:
+        if err.kind != "no_invocation":
+            raise
+        raise Stop(
+            f"{err} Run save again with the draft's path written out in full, starting from / with no ~ "
+            "and no $HOME, so it matches the call already in this conversation.",
+            "make_calls",
+        ) from None
     templates.validate(template)
     block, changed, notes, currents = _render(
         template, found, mapped, None, f"Report: {name}", None, PREVIEW_REASON
@@ -406,7 +425,14 @@ def cmd_save(args):
         )
     template["created_at"] = datetime.datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     templates.save(template, replace=args.replace)
-    templates.write_run(name, changes.run_record(templates.template_hash(template), currents))
+    record = changes.run_record(templates.template_hash(template), currents)
+    try:
+        templates.write_run(name, record)
+    except OSError as err:
+        raise Stop(
+            f"Saved {name}, but its first baseline could not be recorded ({err.strerror}), so the preview is "
+            "not shown here and the next run starts fresh with nothing to compare against."
+        ) from None
     return _response("ok", "none", f"Saved {name}. Its preview is the first baseline.", block, changed, notes)
 
 
