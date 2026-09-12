@@ -319,6 +319,110 @@ def main():
     ):
         check(f"{label} is still refused", secret_kind(command) == "secret", repr(secret_kind(command)))
 
+    # --- secrets: a token split across adjacent quotes is still one token ---
+    for label, command in (
+        ("adjacent single quotes", "echo 'Abc1234567890''Def1234567890' > {output}"),
+        ("adjacent double quotes", 'mytool "Abc1234567890""Def1234567890" > {output}'),
+        ("a quoted and an unquoted half", 'mytool Abc1234567890"Def1234567890" > {output}'),
+        ("an empty pair of quotes between the halves", 'mytool Abc1234567890""Def1234567890 > {output}'),
+    ):
+        err = refusal(credentials.scan_source, {"kind": "command", "command": command})
+        check(f"a token split across {label} is refused", kind_of(err) == "secret", repr(err))
+        check(f"the refusal for {label} does not echo it",
+              err is not None and "Abc1234567890" not in str(err), str(err))
+    check("a bearer env reference in a quoted header still passes the word check",
+          accepted('curl -fsS -H "Authorization: Bearer $TOKEN" https://api.example.test -o {output}'))
+    check("an ordinary long path still passes the word check",
+          accepted("wget -O {output} https://api.example.test/v1/reports/2026/fake-export/part-0001.json"))
+    check("a quoted ordinary long path still passes the word check",
+          accepted('jq . "/tmp/fake-dir/2026/weekly-export/part-0001.json" > {output}'))
+
+    # --- secrets: request bodies ---
+    check("a credential in a form body is refused",
+          secret_kind('curl -f -d "a=1&token=fakeabc123" https://api.example.test -o {output}') == "secret")
+    check("a form body credential from an env reference is accepted",
+          accepted('curl -f -d "a=1&token=$FAKE_TOKEN" https://api.example.test -o {output}'))
+    check("an ordinary form body is accepted",
+          accepted('curl -f -d "limit=10&m=uniques" https://api.example.test -o {output}'))
+    check("a credential in a JSON body is refused",
+          secret_kind('curl -f -d \'{"query":"x","api_key":"fakeabc"}\' https://api.example.test -o {output}')
+          == "secret")
+    err = refusal(credentials.scan_source, {
+        "kind": "command",
+        "command": 'curl -f -d \'{"query":"x","api_key":"fakeabc"}\' https://api.example.test -o {output}'})
+    check("the JSON body refusal names the path without echoing the value",
+          err is not None and "api_key" in str(err) and "fakeabc" not in str(err), str(err))
+    check("a nested credential in a JSON body is refused",
+          secret_kind('curl -f -d \'{"conf":{"client_secret":"fakeabc"}}\' https://api.example.test -o {output}')
+          == "secret")
+    check("a JSON body bearer header from an env reference is accepted",
+          accepted('curl -f -d \'{"headers":{"Authorization":"Bearer $FAKE_TOKEN"}}\' '
+                   "https://api.example.test -o {output}"))
+    check("an ordinary JSON body is accepted",
+          accepted('curl -f -d \'{"limit":10,"metric":"uniques"}\' https://api.example.test -o {output}'))
+    check("a JSON-looking body that is not JSON is refused as invalid",
+          kind_of(refusal(credentials.scan_source, {
+              "kind": "command",
+              "command": 'curl -f -d \'{query: fakeabc}\' https://api.example.test -o {output}'})) == "invalid")
+    check("the {output} placeholder is not read as a JSON body", accepted("curl -f https://api.example.test -o {output}"))
+
+    # Only a request body is read as JSON: a jq filter and a shell group are braced words
+    # that carry no credential the option scan misses, and refusing them would refuse a
+    # normal fetch-and-shape command.
+    check("a jq filter in braces is accepted",
+          accepted("curl -f https://api.example.test | jq '[.[] | {n: .name}]' > {output}"))
+    check("a shell group is accepted", accepted("{ curl -f https://api.example.test; } > {output}"))
+    check("a credential still refused inside a --json= body",
+          secret_kind('curl -f --json=\'{"api_key":"fakeabc"}\' https://api.example.test -o {output}') == "secret")
+    check("a credential still refused inside an attached -d body",
+          secret_kind('curl -f -d\'{"api_key":"fakeabc"}\' https://api.example.test -o {output}') == "secret")
+
+    # --- secrets: httpie's -a and --auth are credential positions ---
+    check("a literal httpie -a value is refused",
+          secret_kind("http -a fakeuser:fakepw https://api.example.test > {output}") == "secret")
+    check("a literal xh -a value is refused",
+          secret_kind("xh -a fakeuser:fakepw https://api.example.test > {output}") == "secret")
+    check("an httpie -a from env references is accepted",
+          accepted("http -a $FAKE_USER:$FAKE_PASS https://api.example.test > {output}"))
+    check("an httpie --auth from env references is accepted",
+          accepted("http --auth $FAKE_USER:$FAKE_PASS https://api.example.test > {output}"))
+    check("curl -a, which appends and takes no value, is accepted",
+          accepted("curl -f -a https://api.example.test -o {output}"))
+    check("ls -a is accepted", accepted("ls -a /tmp/fake-dir > {output}"))
+    check("a -a flag before the http client word is not a credential position",
+          accepted("env -a /tmp/fake-dir/http > {output}"))
+
+    # --- secrets: the widened credential names ---
+    for key in ("pwd", "cred", "session", "bearer", "jwt"):
+        check(f"a literal query value under {key!r} is refused",
+              secret_kind(f'curl -f "https://api.example.test/v1?{key}=short&x=1" -o {{output}}') == "secret")
+        check(f"tool args under {key!r} are refused", kind_of(tool_refusal({key: "fakeabc"})) == "secret")
+    check("a literal FAKE_SESSION assignment is refused",
+          secret_kind("FAKE_SESSION=fakeabc curl -f https://api.example.test -o {output}") == "secret")
+    check("a 'signal' name is not read as a credential", tool_refusal({"signal": "fakevalue"}) is None)
+    check("a 'sigma' name is not read as a credential", tool_refusal({"sigma": "fakevalue"}) is None)
+
+    # --- secrets: the command-word checks reach string leaves in tool args ---
+    for label, args, secret in (
+        ("a form body with a token", {"body": "a=1&token=fakeabc"}, "fakeabc"),
+        ("a JSON body with an api_key", {"body": '{"q":"x","api_key":"fakeabc"}'}, "fakeabc"),
+        ("a JSON body with a nested secret", {"body": '{"conf":{"client_secret":"fakeabc"}}'}, "fakeabc"),
+        ("a header leaf", {"h": "X-Api-Key: fakeabc"}, "fakeabc"),
+        ("a header leaf from an env reference, which tool args never expand",
+         {"h": "Authorization: Bearer $FAKE_TOKEN"}, "$FAKE_TOKEN"),
+    ):
+        err = tool_refusal(args)
+        check(f"tool args: {label} is refused", kind_of(err) == "secret", repr(err))
+        check(f"tool args: the refusal for {label} does not echo it",
+              err is not None and secret not in str(err), str(err))
+    check("tool args: a JSON-looking leaf that is not JSON is refused as invalid",
+          kind_of(tool_refusal({"body": "{q: fakeabc}"})) == "invalid")
+    check("tool args: an ordinary form body is accepted", tool_refusal({"body": "limit=10&m=uniques"}) is None)
+    check("tool args: an ordinary JSON body is accepted",
+          tool_refusal({"body": '{"limit":10,"metric":"uniques"}'}) is None)
+    check("tool args: an ordinary Name: value leaf is accepted",
+          tool_refusal({"note": "Range: last 90 days"}) is None)
+
     # --- looks_secret: the bare mixed-run rule a source value can be screened with ---
     check("looks_secret flags a 20-char mixed run", credentials.looks_secret(f"x {twenty} y"))
     check("looks_secret passes a 19-char mixed run", not credentials.looks_secret(f"x {nineteen} y"))

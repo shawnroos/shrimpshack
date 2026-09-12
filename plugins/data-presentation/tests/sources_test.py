@@ -15,6 +15,7 @@ from sources import CommandSource, FileSource, Stop, ToolSource  # noqa: E402
 
 UTC = datetime.timezone.utc
 RESULT_AT = datetime.datetime(2026, 9, 7, 6, 0, tzinfo=UTC)
+STARTED_AT = datetime.datetime(2026, 9, 7, 5, 58, tzinfo=UTC)
 PREPARED_AT = datetime.datetime(2026, 9, 7, 5, 0, tzinfo=UTC)
 COMMAND = {"kind": "command", "command": "fake-fetch --out {output}"}
 
@@ -31,9 +32,13 @@ def check(name, condition, detail=""):
         print(f"  FAIL - {name}{(': ' + str(detail)[:600]) if detail else ''}", file=sys.stderr)
 
 
-def result(tool="Bash", inp=None, is_error=False, at=RESULT_AT):
+def stamp(at):
+    return at.strftime("%Y-%m-%dT%H:%M:%S.000Z") if at else None
+
+
+def result(tool="Bash", inp=None, is_error=False, at=RESULT_AT, started=STARTED_AT):
     return {"id": "toolu_fake_0001", "tool": tool, "input": inp if inp is not None else {}, "has_result": True,
-            "is_error": is_error, "text": "fake reply", "timestamp": at.strftime("%Y-%m-%dT%H:%M:%S.000Z") if at else None}
+            "is_error": is_error, "text": "fake reply", "started_at": stamp(started), "timestamp": stamp(at)}
 
 
 def write(path, text="fake rows", at=None):
@@ -156,16 +161,27 @@ def test_command_source(home):
 
     write(path, at=PREPARED_AT - datetime.timedelta(seconds=1))
     stop = stop_of(command_at(path), PREPARED_AT, check_age=True)
-    check("an output older than prepare stops", stop and "older" in str(stop), stop)
-    check("save skips the age check", stop_of(command_at(path)) is None)
+    check("an output older than prepare stops", stop and "older than this run's prepare" in str(stop), stop)
     stop = stop_of(command_at(path), None, check_age=True)
-    check("an unknown prepare time stops the age check", stop and "older" in str(stop), stop)
+    check("an unknown prepare time stops the age check", stop and "older than this run's prepare" in str(stop), stop)
 
-    write(path, at=RESULT_AT + datetime.timedelta(seconds=sources.WRITE_SLACK_SECONDS))
-    check("an output written within the slack of the result is read", stop_of(command_at(path)) is None)
-    write(path, at=RESULT_AT + datetime.timedelta(seconds=sources.WRITE_SLACK_SECONDS + 1))
+    write(path, at=STARTED_AT - datetime.timedelta(seconds=1))
+    for verb, args in (("finish", (PREPARED_AT, True)), ("save", (None, False))):
+        stop = stop_of(command_at(path), *args)
+        check(f"{verb}: an output written before the command started stops",
+              stop and "older than the command" in str(stop), stop)
+    write(path, at=STARTED_AT + datetime.timedelta(seconds=1))
+    for verb, args in (("finish", (PREPARED_AT, True)), ("save", (None, False))):
+        check(f"{verb}: an output written during the command is read", stop_of(command_at(path), *args) is None)
+    stop = stop_of(command_at(path, result(started=None)))
+    check("a call with no start time stops", stop and "older than the command" in str(stop), stop)
+
+    check("the write slack is two seconds", sources.WRITE_SLACK_SECONDS == 2, sources.WRITE_SLACK_SECONDS)
+    write(path, at=RESULT_AT + datetime.timedelta(seconds=2))
+    check("an output written two seconds after the result is read", stop_of(command_at(path)) is None)
+    write(path, at=RESULT_AT + datetime.timedelta(seconds=3))
     stop = stop_of(command_at(path))
-    check("an output written after the slack stops", stop and "after the command's result" in str(stop), stop)
+    check("an output written three seconds after the result stops", stop and "after the command's result" in str(stop), stop)
     stop = stop_of(command_at(path, result(at=None)))
     check("a result with no time stops", stop and "after the command's result" in str(stop), stop)
 

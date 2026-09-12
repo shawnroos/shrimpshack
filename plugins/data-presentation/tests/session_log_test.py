@@ -273,6 +273,10 @@ def test_main_fixture(tmp):
     check("its result text is the innermost text of the MCP envelope", amp.get("text") == inner, repr(amp.get("text"))[:200])
     check("the innermost text is the result JSON", json.loads(amp.get("text", "{}")).get("success") is True)
     check("the reply time is the result line's timestamp", amp.get("timestamp") == raw[10]["timestamp"], repr(amp.get("timestamp")))
+    check("the start time is the line that holds the call", amp.get("started_at") == raw[9]["timestamp"], repr(amp.get("started_at")))
+    check("the start time is before the reply time",
+          isinstance(amp.get("started_at"), str) and amp["started_at"] < str(amp.get("timestamp")),
+          repr((amp.get("started_at"), amp.get("timestamp"))))
     check("a returned call has its result", amp.get("has_result") is True and amp.get("is_error") is False, repr(amp))
 
     spill = by_id.get("toolu_fixture_spill", {})
@@ -288,6 +292,7 @@ def test_main_fixture(tmp):
     pending = by_id.get("toolu_fixture_pending", {})
     check("a call with no result yet has has_result False", pending.get("has_result") is False, repr(pending))
     check("a call with no result yet has no timestamp", pending.get("timestamp") is None, repr(pending))
+    check("a call with no result yet still has its start time", isinstance(pending.get("started_at"), str), repr(pending))
 
     prep = log.calls(branch)[1]
     check("a plain Bash result is returned as is", prep["text"].startswith(f"MARKER {MARKER}"), repr(prep["text"]))
@@ -380,11 +385,48 @@ def test_invocation_lookup(tmp):
     )
     log = session_log.load(project.path)
     entry = log.find_invocation(MARKER)
-    check("the latest matching Bash call wins", entry["uuid"] == uid(5), repr(entry.get("uuid")))
+    check("the running match in the main log wins, subagent match or not", entry["uuid"] == uid(5), repr(entry.get("uuid")))
     got = [c["id"] for c in log.calls(log.branch(entry))]
     check("a call under subagents/ is never returned", "toolu_sub_call" not in got, repr(got))
     check("the main log's calls are returned", got == ["toolu_other", "toolu_first_fin"], repr(got))
 
+    finished_main = main + [
+        use(3, uid(2), "toolu_first_fin", "Bash", {"command": f"finish {MARKER}"}),
+        res(4, uid(3), "toolu_first_fin", "fixture first run"),
+    ]
+    project.write(finished_main)
+    ok, e = raises(lambda: session_log.load(project.path).find_invocation(MARKER), "subagent")
+    check("a finished main-log match does not beat a running subagent match", ok, repr(e))
+    project.write_subagent(
+        [
+            use(1, None, "toolu_sub_done", "Bash", {"command": f"finish {MARKER}"}),
+            res(2, uid(1), "toolu_sub_done", "fixture subagent run"),
+        ]
+    )
+    ok, e = raises(lambda: session_log.load(project.path).find_invocation(MARKER), "subagent")
+    check("a finished subagent match still stops as a subagent run", ok, repr(e))
+
+    project.write_subagent([line(1, None, "user", "fixture subagent prompt", isSidechain=True)])
+    ok, e = raises(lambda: session_log.load(project.path).find_invocation(MARKER), "no_invocation")
+    check("only finished matches anywhere stops as no_invocation", ok, repr(e))
+
+    project.write(
+        finished_main
+        + [
+            use(5, uid(4), "toolu_running_fin", "Bash", {"command": f"finish {MARKER}"}),
+            use(6, uid(5), "toolu_later_fin", "Bash", {"command": f"finish {MARKER}"}),
+            res(7, uid(6), "toolu_later_fin", "fixture later run"),
+        ]
+    )
+    entry = session_log.load(project.path).find_invocation(MARKER)
+    check("a running match wins over a later finished one", entry["uuid"] == uid(5), repr(entry.get("uuid")))
+
+    project.write_subagent(
+        [
+            line(1, None, "user", "fixture subagent prompt", isSidechain=True),
+            use(2, uid(1), "toolu_sub_fin", "Bash", {"command": f"finish {MARKER}"}),
+        ]
+    )
     project.write([use(1, None, "toolu_read", "Read", {"file_path": f"/tmp/{MARKER}"})])
     ok, e = raises(lambda: session_log.load(project.path).find_invocation(MARKER), "subagent")
     check("only a Bash command counts as the invocation", ok, repr(e))
@@ -409,6 +451,13 @@ def test_persisted_output(tmp):
         f.write("fixture outside text\n")
     ok, e = raises(lambda: text_of_spill(project, 3, outside), "unreadable")
     check("a notice pointing outside the session directory is refused", ok, repr(e))
+    check("the refusal does not repeat the notice's path", e is not None and outside not in str(e) and tmp not in str(e), str(e))
+
+    planted = os.path.join(tmp, "fixture plant/../" + "z" * 90 + " rm -rf $HOME.txt")
+    ok, e = raises(lambda: text_of_spill(project, 9, planted), "unreadable")
+    check("a planted notice path is still refused", ok, repr(e))
+    check("the refusal names no part of the planted path", e is not None and "rm -rf" not in str(e) and "fixture plant" not in str(e), str(e))
+    check("the refusal names at most a capped basename", e is not None and "z" * 41 not in str(e) and "z" * 40 in str(e), str(e))
 
     beside = os.path.join(project.session_dir, "beside.txt")
     shutil.copy(outside, beside)

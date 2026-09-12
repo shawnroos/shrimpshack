@@ -93,13 +93,28 @@ def test_exact():
     stop = stop_of(found, [call(OTHER, {"t": "b"}), call(OTHER, {"t": "c"})])
     check("two unequal candidates name no difference", stop and "was not made" in str(stop) and "changed" not in str(stop), stop)
 
+    command = built({"kind": "command", "command": "fake-fetch --out {output}"})[0].args["command"]
+    for verb in ("finish", "save"):
+        found = built({"kind": "command", "command": "fake-fetch --out {output}"})
+        equal, reader = call("Bash", {"command": command}), call("Bash", {"command": f"cat {found[0].output}"})
+        check(f"{verb}: reading the output after the exact command does not unpair it",
+              stop_of(found, [equal, reader], verb=verb) is None and found[0].call is equal, found[0].call)
+
     found = built({"kind": "command", "command": "fake-fetch --out {output}"})
-    command = found[0].args["command"]
-    equal, other = call("Bash", {"command": command}), call("Bash", {"command": command + " --extra"})
-    stop = stop_of(found, [equal, other])
-    check("a command pairs with the last call that writes its path, not the last equal one",
+    stop = stop_of(found, [call("Bash", {"command": command + " --extra"})])
+    check("the one call writing the path, and it is not equal, names the difference",
           stop and "not the saved call" in str(stop) and stop.next == "make_calls", stop)
     check("a changed command is not echoed", stop and "--extra" not in str(stop), stop)
+
+    found = built({"kind": "command", "command": "fake-fetch --out {output}"})
+    stop = stop_of(found, [call("Bash", {"command": command + " --extra"}), call("Bash", {"command": command + " --other"})])
+    check("two unequal commands writing the path name no difference",
+          stop and "was not made" in str(stop) and "changed" not in str(stop), stop)
+
+    found = built({"kind": "command", "command": "fake-fetch --out {output}"})
+    equal, rewriter = call("Bash", {"command": command}), call("Bash", {"command": command.replace("fake-fetch", "fake-other")})
+    check("a later writer of the same path does not take the exact call's place",
+          stop_of(found, [equal, rewriter]) is None and found[0].call is equal, found[0].call)
 
     found = built({"kind": "file", "path": "/fake/data.json"})
     check("a file source needs no call", stop_of(found, []) is None and found[0].call is None)
@@ -157,7 +172,10 @@ def test_ready():
         stop = stop_of(found, [pending], verb=verb)
         check(f"{verb}: a call with no result yet stops to run again",
               stop and "no result yet" in str(stop) and f"Run {verb} again" in str(stop)
-              and stop.next == "run_finish_again", stop)
+              and stop.next == f"run_{verb}_again", stop)
+
+    check("each verb has its own next move",
+          pairing.RUN_AGAIN == {"finish": "run_finish_again", "save": "run_save_again"}, pairing.RUN_AGAIN)
 
     found = built({"kind": "command", "command": "fake-fetch --out {output}"})
     both = dict(call("Bash", {"command": found[0].args["command"], "run_in_background": True}), has_result=False)

@@ -4,6 +4,7 @@ A template never stores a credential. The scan refuses a literal value in any po
 that can carry one, and refuses what it cannot read rather than guessing it is harmless.
 """
 
+import json
 import os
 import re
 import shlex
@@ -13,7 +14,10 @@ KINDS = ("invalid", "secret")
 
 SAFE_HEADERS = ("accept", "content-type", "user-agent")
 AUTH_SCHEMES = ("bearer", "basic", "token", "bot")
-CREDENTIAL_WORDS = ("token", "key", "secret", "pass", "auth")
+# "sig" is left out: it reads inside "signal" and "sigma", which name ordinary data.
+CREDENTIAL_WORDS = (
+    "token", "key", "secret", "pass", "auth", "pwd", "cred", "session", "bearer", "jwt",
+)
 # Matched as substrings in URL query keys, assignments, tool argument keys and header
 # words, where a camelCase or plural spelling (apiKey, tokens) must still count.
 CREDENTIAL_NAMES = CREDENTIAL_WORDS + ("header", "cookie")
@@ -30,6 +34,9 @@ OPTION_QUALIFIERS = ("type", "method", "scheme")
 # Programs whose -H is a header. wget is left out: its -H is --span-hosts and takes no
 # value, so reading it as a header refuses a harmless command.
 HTTP_CLIENTS = ("curl", "http", "https", "xh", "xhs")
+# httpie and xh read -a as --auth. curl's -a is --append and takes no value, so reading it
+# as a credential refuses a harmless command.
+AUTH_SHORT_CLIENTS = ("http", "https", "xh", "xhs")
 # KTD10: the shortest run of mixed letters and digits treated as a credential. Chart ids
 # (8 characters) and ISO dates sit well under it; a 32-hex API key sits well over.
 TOKEN_MIN = 20
@@ -40,6 +47,8 @@ _URL_TAIL = re.compile(r"://\S*")
 _ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.S)
 _HEADER_WORD = re.compile(r"([A-Za-z][A-Za-z0-9_-]*):(.*)", re.S)
 _PRINTABLE_OPTION = re.compile(r"--[a-z]+(?:-[a-z]+)*")
+# The template placeholder sources.py substitutes ({output}); it is not a JSON body.
+_PLACEHOLDER = re.compile(r"\{[a-z_]+\}")
 
 # Short curl options that take a value. A cluster stops at the first of these, so the
 # f in -H"Accept: fake/f" is part of the header, not the -f flag.
@@ -83,6 +92,14 @@ def _long_token(text):
     return looks_secret(_ENV_REF.sub(" ", text))
 
 
+def _refuse_long_token(position):
+    raise CredentialError(
+        "secret",
+        f"{position} holds a run of {TOKEN_MIN} or more mixed letters and digits, which looks "
+        "like a credential. Put it in an environment variable and write $NAME instead.",
+    )
+
+
 def _refuse_literal(position):
     raise CredentialError(
         "secret",
@@ -112,6 +129,68 @@ def _check_header(header):
 def _credential_name(name):
     name = name.lower()
     return any(word in name for word in CREDENTIAL_NAMES)
+
+
+def _env_value(text):
+    # What _check_header accepts as a value that holds no literal: a reference on its own,
+    # or a scheme and a reference.
+    words = text.split()
+    if len(words) == 1:
+        return _is_env_ref(words[0])
+    return len(words) == 2 and words[0].lower() in AUTH_SCHEMES and _is_env_ref(words[1])
+
+
+def _assignment_names(text, expand):
+    # A request body joins its assignments with &, so each one is checked on its own.
+    names = []
+    for part in text.split("&"):
+        assignment = _ASSIGNMENT.fullmatch(part)
+        if not assignment or not any(w in assignment.group(1).lower() for w in CREDENTIAL_WORDS):
+            continue
+        if expand and _is_env_ref(assignment.group(2)):
+            continue
+        names.append(assignment.group(1))
+    return names
+
+
+BODY_FLAGS = ("-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json")
+
+
+def _body_text(word):
+    """The request body a word carries, when it is one: -d{...}, --data={...}, or nothing."""
+    for flag in BODY_FLAGS:
+        if word.startswith(flag + "="):
+            return word[len(flag) + 1:]
+        if flag.startswith("--"):
+            continue
+        if word.startswith(flag) and len(word) > len(flag):
+            return word[len(flag):]
+    return None
+
+
+def _json_body(text, position):
+    try:
+        return json.loads(text)
+    except ValueError:
+        raise CredentialError(
+            "invalid",
+            f"{position} starts like JSON but cannot be read as JSON, so it cannot be checked "
+            "for a credential. Write it as JSON, or keep it out of a saved source.",
+        ) from None
+
+
+def _json_credential_paths(text, position, expand):
+    """The paths in a JSON body that sit under a name marking a credential."""
+    paths = []
+    for keys, leaf in _leaves(_json_body(text, position), ()):
+        if isinstance(leaf, bool) or leaf is None:
+            continue
+        if not any(isinstance(k, str) and _credential_name(k) for k in keys):
+            continue
+        if expand and isinstance(leaf, str) and _env_value(leaf):
+            continue
+        paths.append(".".join(str(k) for k in keys))
+    return paths
 
 
 def _credential_option(option):
@@ -195,26 +274,29 @@ def _http_client_start(words):
     for k, word in enumerate(words):
         program = os.path.basename(word)
         if program in HTTP_CLIENTS:
-            return k + 1
+            return k + 1, program
         if program == "gh" and k + 1 < len(words) and words[k + 1] == "api":
-            return k + 2
-    return None
+            return k + 2, program
+    return None, None
 
 
 def _check_options(words):
-    header_from = _http_client_start(words)
+    header_from, client = _http_client_start(words)
     i = 0
     while i < len(words):
         word = words[i]
         i += 1
         if word.startswith("--"):
             option, eq, value = word.partition("=")
-            if not _credential_option(option):
+            client_auth = option == "--auth" and header_from is not None and i > header_from
+            if not client_auth and not _credential_option(option):
                 continue
             if not eq:
                 value = words[i] if i < len(words) else ""
                 i += 1
-            if "header" in option.lower():
+            if client_auth:
+                _check_user(value, "The --auth value")
+            elif "header" in option.lower():
                 _check_header(value)
             elif not _is_env_ref(value):
                 # Without an = the option and a glued-on value are one word, so only a
@@ -228,6 +310,12 @@ def _check_options(words):
                 value = words[i] if i < len(words) else ""
                 i += 1
             _check_header(value)
+        elif word.startswith("-a") and client in AUTH_SHORT_CLIENTS and i > header_from:
+            value = word[2:]
+            if not value:
+                value = words[i] if i < len(words) else ""
+                i += 1
+            _check_user(value, "The -a value")
         else:
             header = _HEADER_WORD.fullmatch(word)
             if header and _credential_name(header.group(1)):
@@ -256,17 +344,23 @@ def _segments(command):
 
 def _scan_command(command):
     if _long_token(command):
-        raise CredentialError(
-            "secret",
-            f"The command holds a run of {TOKEN_MIN} or more mixed letters and digits, which looks "
-            "like a credential. Put it in an environment variable and write $NAME instead.",
-        )
+        _refuse_long_token("The command")
     for words in _segments(command):
+        body_next = False
         for word in words:
-            assignment = _ASSIGNMENT.fullmatch(word)
-            if assignment and any(w in assignment.group(1).lower() for w in CREDENTIAL_WORDS):
-                if not _is_env_ref(assignment.group(2)):
-                    _refuse_literal(f"The {assignment.group(1)} assignment")
+            # The raw text breaks a run at every quote, so a token split across adjacent
+            # quotes is only whole once the word is dequoted.
+            if _long_token(word):
+                _refuse_long_token("A word of the command")
+            for name in _assignment_names(word, expand=True):
+                _refuse_literal(f"The {name} assignment")
+            body = _body_text(word) if not body_next else word
+            # Only a request body is read as JSON. Any braced word would also catch a jq
+            # filter or a shell group, which carry no credential the option scan misses.
+            if body is not None and body[:1] in ("{", "[") and not _PLACEHOLDER.fullmatch(body):
+                for path in _json_credential_paths(body, "A word of the command", expand=True):
+                    _refuse_literal(f"The JSON body value at {path}")
+            body_next = word in BODY_FLAGS
             for url in _urls(word):
                 _check_url(url)
         _check_options(words)
@@ -314,6 +408,14 @@ def _scan_tool(source):
             _refuse_tool_arg(
                 path, f"holds a run of {TOKEN_MIN} or more mixed letters and digits, which looks like a credential"
             )
+        for name in _assignment_names(leaf, expand=False):
+            _refuse_tool_arg(path, f"holds a {name} assignment")
+        if leaf[:1] in ("{", "["):
+            for json_path in _json_credential_paths(leaf, f"The tool argument {path}", expand=False):
+                _refuse_tool_arg(path, f"holds JSON with a value at {json_path} under a name that marks a credential")
+        header = _HEADER_WORD.fullmatch(leaf)
+        if header and _credential_name(header.group(1)):
+            _refuse_tool_arg(path, f"holds a {header.group(1)} header, which carries a credential")
         for url in _urls(leaf):
             try:
                 _check_url(url)

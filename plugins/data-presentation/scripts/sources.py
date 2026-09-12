@@ -185,6 +185,14 @@ class CommandSource(FileSource):
                 f"{self.which()}: the output file is older than this run's prepare, so it is not this "
                 "run's data."
             )
+        # No slack below: a file the command did not write is one that predates the call, and a
+        # command can exit 0 without writing anything at all.
+        started = changes.parse_time(self.call.get("started_at"))
+        if started is None or mtime < started.timestamp():
+            raise Stop(
+                f"{self.which()}: the output file is older than the command that was to write it, so it "
+                "is not that command's output."
+            )
         replied = changes.parse_time(self.call["timestamp"])
         if replied is None or mtime > replied.timestamp() + WRITE_SLACK_SECONDS:
             raise Stop(

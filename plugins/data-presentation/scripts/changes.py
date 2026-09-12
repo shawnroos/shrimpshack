@@ -89,16 +89,47 @@ def open_x(block_x, replied_at):
     return block_x[latest] if _as_utc(reply) < _as_utc(end) else None
 
 
+SERIES_WHERE = "a series name"
+X_WHERE = "an x label"
+
+# The screen reads the name the source returned, before any alias is applied, so that no
+# error can quote the value; saying "use an alias" here would name a way forward that the
+# screen itself refuses.
+_WAY_FORWARD = {
+    SERIES_WHERE: " A template alias cannot rename it: the screen reads the name the source "
+                  "returned, so change the call or the source.",
+    X_WHERE: " Change the call or the source so it does not return a label like that.",
+}
+
+
+def secret_error(where, number=None):
+    at = f"Block {number}: " if number is not None else ""
+    return credentials.CredentialError(
+        "secret",
+        f"{at}{where} from the source looks like a credential, so it was not shown or stored. "
+        f"The value is not repeated here.{_WAY_FORWARD[where]}",
+    )
+
+
+def at_block(number, err):
+    return credentials.CredentialError(err.kind, f"Block {number}: {err}")
+
+
+def screen_source(x, names):
+    for value in x:
+        if isinstance(value, str) and credentials.looks_secret(value):
+            raise secret_error(X_WHERE)
+    for name in names:
+        if isinstance(name, str) and credentials.looks_secret(name):
+            raise secret_error(SERIES_WHERE)
+
+
 def screen(number, block):
-    named = [("an x label", x) for x in block["x"]]
-    named += [("a series name", name) for name in [*block["series"], *(block.get("not_shown") or [])]]
+    named = [(X_WHERE, x) for x in block["x"]]
+    named += [(SERIES_WHERE, name) for name in [*block["series"], *(block.get("not_shown") or [])]]
     for where, value in named:
         if isinstance(value, str) and credentials.looks_secret(value):
-            raise credentials.CredentialError(
-                "secret",
-                f"Block {number}: {where} from the source looks like a credential, so it was not shown "
-                "or stored. The value is not repeated here.",
-            )
+            raise secret_error(where, number)
 
 
 def record_block(mapped, replied_at):

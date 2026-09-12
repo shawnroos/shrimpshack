@@ -60,6 +60,8 @@ Follow `next`:
 - `confirm_save`: ask the person whether this is the report to save.
 - `make_calls`: a drafted call was not found in this conversation. Make it again
   exactly as drafted, then preview again.
+- `run_save_again`: a call's result had not arrived yet. Run save again in a later
+  message, without making the calls again.
 - `ask_snapshot_or_relative`: a call holds fixed dates, so re-running it would show
   the same window forever. Ask the person to choose: keep it as a fixed snapshot, or
   make the call again with a relative range and redraft.

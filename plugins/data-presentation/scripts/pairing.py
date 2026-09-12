@@ -6,6 +6,7 @@ from sources import CommandSource, Stop, clean_name, join_words
 BASH_IGNORED = ("description", "timeout", "run_in_background", "dangerouslyDisableSandbox")
 AMPLITUDE_IGNORED = ("rationale",)
 MAX_NAMED = 6
+RUN_AGAIN = {"finish": "run_finish_again", "save": "run_save_again"}
 
 
 def _ignored(tool):
@@ -88,15 +89,6 @@ def _pair_exact(sources, calls, verb):
     for source in sources:
         if source.expected() is None:
             continue
-        if isinstance(source, CommandSource):
-            last = next((c for c in reversed(calls) if source.claims(c)), None)
-            if last is None:
-                raise _not_made(source, verb)
-            if not _same(source.tool, source.args, last):
-                raise _difference(source, last, verb)
-            source.call = last
-            used.add(last["id"])
-            continue
         for call in reversed(calls):
             if _same(source.tool, source.args, call):
                 source.call = call
@@ -162,7 +154,7 @@ def _require_results(sources, verb):
             raise Stop(
                 f"{source.which()}'s call has no result yet. Run {verb} again in a later message, "
                 "after every result has returned.",
-                "run_finish_again",
+                RUN_AGAIN[verb],
             )
 
 

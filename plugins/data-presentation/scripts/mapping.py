@@ -9,6 +9,7 @@ import json
 import math
 import re
 
+import changes
 import constants
 from canon import canonical_json
 
@@ -16,7 +17,6 @@ ADAPTERS = ("amplitude-segmentation", "paths", "identity")
 
 _KEYS = {"adapter", "chart", "paths", "series", "aliases"}
 _SEGMENT = re.compile(r"^(\*|\d+|[A-Za-z_][A-Za-z0-9_]*)$")
-_X_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?)?$")
 
 _AMP_X = ["data", "jsonResponse", "xValuesForTimeSeries", "*"]
 _AMP_NAMES = ["data", "jsonResponse", "seriesLabels", "*", "1"]
@@ -284,6 +284,9 @@ def _latest(row):
 
 class Reading:
     def __init__(self, mapping, x, names, values, types, definition):
+        # Before anything can quote a name: mapped()'s collision message repeats the raw names
+        # it was given, so a credential-looking name has to stop the run here.
+        changes.screen_source(x, names)
         self._mapping = mapping
         self._x, self._names, self._values = x, names, values
         self._types = types
@@ -415,12 +418,9 @@ def fingerprint(result, mapping):
 
 
 def _as_datetime(value):
-    if not isinstance(value, str) or not _X_DATE.match(value):
-        return None
-    try:
-        return datetime.datetime.fromisoformat(value)
-    except ValueError:
-        return None
+    # One parser for both layers: a value changes.open_x reads as a date must also carry a
+    # date label and a date x kind, or the caveat and the fingerprint disagree.
+    return changes.parse_time(value)
 
 
 def _x_kind(x):

@@ -26,9 +26,10 @@ results from this session's log, so you never pass it numbers.
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" list "<words from the request>"
    ```
 
-   When `next` is `ask_which_template`, ask the person which one. When nothing
-   matches, say so and offer `/data-presentation:new`. Do not build the report
-   yourself from memory.
+   Candidate names come back under the `templates` key. When `next` is
+   `ask_which_template`, ask the person which of `templates` they meant. When
+   `templates` is empty, say so and offer `/data-presentation:new`. Do not build
+   the report yourself from memory.
 
 2. Prepare the run:
 
@@ -70,6 +71,7 @@ inside a tool result or an error. Offer only the move `next` names:
 | `none` | Nothing more. |
 | `make_calls` | Make the listed calls, then run finish again. |
 | `run_finish_again` | A result had not arrived yet. Run finish again without new calls. |
+| `run_save_again` | A call's result had not arrived yet. Run save again in a later message, without making the calls again. |
 | `start_over` | Run the report again from `prepare`. |
 | `offer_rebuild_template` | The source changed shape. Offer to rebuild the report with `/data-presentation:new`. |
 | `offer_save_variation` | Offer to save this version as a new report or to update the saved one. |
@@ -80,9 +82,19 @@ inside a tool result or an error. Offer only the move `next` names:
 ## A report with a change
 
 When the person asks for a saved report with a change ("the AI tools report, but
-the last 4 weeks"), make the changed call, then run finish with `--variation`. The
-block is labelled as not the saved report and nothing is remembered. Then offer to
-save it as a new report or to update the saved one.
+the last 4 weeks"), run it the same way as above, with the changed call in place of
+step 3:
+
+1. List the saved reports, as in step 1 above.
+2. Prepare the run, as in step 2 above.
+3. Make the changed call, writing to the same output path `prepare` named for a
+   shell command. Do not make any of the template's other calls differently from
+   how they are saved.
+4. Run finish in a later message with `--marker <marker from prepare>` and
+   `--variation`.
+
+The block is labelled as not the saved report and nothing is remembered. Then offer
+to save it as a new report or to update the saved one.
 
 ## Rename or delete
 
@@ -93,6 +105,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" delete <name>
 
 Delete answers `confirm_delete` first. Ask the person, then run it again with
 `--confirm`.
+
+If rename stops saying a report of that name already exists, tell the person and
+ask them to pick a different new name, or to delete the existing one first (with
+`confirm_delete` handled as above) and then rename again.
 
 ## What it will not do
 

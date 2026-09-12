@@ -411,6 +411,35 @@ plain = {"x": ["blurry-background-regional"], "series": {"blurry-background-regi
 check("an ordinary long name with no digits passes the screen", refused_secret(changes.screen, 1, plain) is None)
 check("a number x is never screened", refused_secret(changes.screen, 1, {"x": [12345678901234567890123], "series": {}}) is None)
 
+# The screen stays strict, and the stop names a way forward that the screen itself allows.
+for label, value in (("40-character hex", "a" * 20 + "1" * 20), ("64-character hex", "b" * 32 + "2" * 32)):
+    err = refused_secret(changes.screen, 1, {"x": WEEKS, "series": {value: [1, 2, 3]}})
+    check(f"a {label} series name is still refused", err is not None and err.kind == "secret", repr(err))
+    check(f"a {label} name is never repeated", err is not None and value not in str(err))
+series_err = refused_secret(changes.screen, 1, {"x": WEEKS, "series": {SECRETISH: [1, 2, 3]}})
+check("the series stop says it was not shown or stored",
+      series_err is not None and "not shown or stored" in str(series_err), repr(series_err))
+check("the series stop says an alias cannot rename it and what to change instead",
+      series_err is not None and "alias cannot rename it" in str(series_err)
+      and "change the call or the source" in str(series_err), repr(series_err))
+label_err = refused_secret(changes.screen, 1, {"x": ["fake-a", SECRETISH], "series": {}})
+check("the x-label stop names changing the call or the source",
+      label_err is not None and "Change the call or the source" in str(label_err), repr(label_err))
+check("the x-label stop offers no alias, which cannot rename an x label",
+      label_err is not None and "alias" not in str(label_err), repr(label_err))
+
+# screen_source is the same message without a block number; at_block adds one.
+bare = refused_secret(changes.screen_source, [], [SECRETISH])
+check("screen_source refuses a raw source name", bare is not None and bare.kind == "secret", repr(bare))
+check("screen_source names no block and no value",
+      bare is not None and not str(bare).startswith("Block") and SECRETISH not in str(bare), repr(bare))
+check("screen_source passes ordinary names", refused_secret(changes.screen_source, ["fake-a"], ["fake-rows"]) is None)
+check("screen_source refuses a raw x label",
+      "an x label" in str(refused_secret(changes.screen_source, [SECRETISH], ["fake-rows"])))
+numbered = changes.at_block(4, bare)
+check("at_block prefixes the block and keeps the kind",
+      str(numbered) == f"Block 4: {bare}" and numbered.kind == "secret", str(numbered))
+
 # baseline: the three reasons, and the shape a loaded record must have.
 check("no record is no earlier run", changes.baseline(None, "fake-hash", 1) == (None, "no earlier run"))
 check("a record from another template says the template changed",
