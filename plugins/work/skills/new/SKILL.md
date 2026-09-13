@@ -123,7 +123,7 @@ name.
 
 | Exit | Meaning |
 |---|---|
-| 0 | filed, worktree made, pane opened |
+| 0 | filed, worktree made, and a pane opened unless the session switch says otherwise |
 | 1 | refused — no title, no description, or a bad description |
 | 2 | no team could be derived; nothing was created |
 | 3 | shadow mode: nothing was created, local or remote |
@@ -135,13 +135,18 @@ focused pane.** A tab is a piece of work: the new ticket gets its own tab in
 that space. When `PANE` is empty and stderr says which space is a question,
 nothing was opened. Ask it, using the host's blocking question tool:
 
+**`PANE` is also empty when the session switch is set to `false`**, and then
+stderr carries no question, because nothing went wrong. The switch is
+`HERDR_LINEAR_OPEN_SESSION` in `docs/settings.md`; unset, this path opens a
+session as it always has.
+
 - **This space has no binding:** propose binding it to `$PROJECT`, the
   project the issue was filed into. Record only what the person answers:
 
 ```bash
 nonce="$(herdr_linear::workspace_propose "$(herdr_linear::workspace_id)" "$PROJECT")"
 herdr_linear::workspace_confirm "$(herdr_linear::workspace_id)" "$PROJECT" "$nonce"
-herdr_linear::open_session "$WORKTREE"
+herdr_linear::place_session "$WORKTREE" open
 ```
 
 - **This space is bound to a different project:** that is Misplaced. Say both

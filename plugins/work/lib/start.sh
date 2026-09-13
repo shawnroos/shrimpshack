@@ -46,6 +46,74 @@ HERDR_LINEAR_START_SHADOW=5
 # was created, and the retry carries the answer.
 HERDR_LINEAR_START_ASK=6
 
+# ------------------------------------------------------- the session switch
+#
+# R8. Whether work opens a session is a setting rather than a property of which
+# command was used. The two paths disagree today -- filing a new issue always
+# opens one, starting from a ticket never does -- so a single boolean cannot
+# keep both: a default of off silently stops the filing path, and a default of
+# on silently starts the other. The switch is TRI-STATE. Unset leaves each path
+# exactly as it behaves today, false withholds a session on both, true opens one
+# on both.
+#
+# `:-` and not `-`, unlike the branch prefix above. An empty prefix MEANS
+# something -- no prefix -- so there the two states have to stay apart. An empty
+# switch names no answer, so it can only mean the switch was not chosen; that is
+# the reading lib/schemes.sh gives every scheme setting for the same reason.
+
+# Prints `true`, `false`, or `unset`.
+herdr_linear::session_switch() {
+    local want="${HERDR_LINEAR_OPEN_SESSION:-}" shown
+    case "$want" in
+        true|false) printf '%s' "$want"; return 0 ;;
+        '')         printf 'unset'; return 0 ;;
+    esac
+    # A typo that quietly means "as it was" is the failure lib/schemes.sh
+    # refuses for naming, so it is said out loud. It does not stop the work:
+    # by the time this is read the issue and the worktree are already real.
+    if herdr_linear::is_safe_identifier "$want"; then shown="$want"; else shown='(unprintable)'; fi
+    printf 'HERDR_LINEAR_OPEN_SESSION is %s, which is neither true nor false; this path keeps its own behaviour\n' \
+        "$shown" >&2
+    printf 'unset'
+}
+
+# herdr_linear::place_session <worktree-path> <default: open|none>
+#
+# The session the switch asks for, or nothing at all. <default> is what this
+# path does when the switch is unset: the filing path opens one, the start path
+# does not.
+#
+# Prints the pane id when a session was opened and nothing otherwise. A session
+# that could not be opened is REPORTED, never fatal -- the worktree is what the
+# calling verb is for, and it is made and bound before this is reached.
+herdr_linear::place_session() {
+    local path="${1:-}" fallback="${2:-none}" want pane rc
+    want="$(herdr_linear::session_switch)"
+    case "$want" in
+        true)  want=open ;;
+        false) want=none ;;
+        *)     want="$fallback" ;;
+    esac
+    [ "$want" = open ] || return 0
+
+    # lib/herdr-write.sh is where the open lives, and no lib sources another:
+    # unsourced, the call below would be 127, which a `||` branch reads as a
+    # session that was considered and declined rather than one never attempted.
+    command -v herdr_linear::open_session >/dev/null 2>&1 || {
+        printf 'a session was asked for, but lib/herdr-write.sh is not sourced, so no session was opened\n' >&2
+        return 1
+    }
+
+    # stderr is left open: when the space is a choice, the question is there and
+    # nowhere else.
+    pane="$(herdr_linear::open_session "$path")"; rc=$?
+    [ "$rc" -eq 0 ] || {
+        printf 'the worktree is made and bound, but no session was opened for it\n' >&2
+        return "$rc"
+    }
+    printf '%s' "$pane"
+}
+
 # R3, KTD2. The name leads with the identifier in its own case, so the directory
 # says which ticket it is. Linear's own branchName is lowercase, so a name
 # derived from it could not -- which is why the plugin renders its own.
