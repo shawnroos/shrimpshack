@@ -126,11 +126,12 @@ herdr_linear::doc_publish() {
     # Project-scoped kinds have no mutation path: this function always resolves
     # an issue from the worktree's binding and always sets issueId. Whether an
     # agent may create a project-scoped document at all is listed under "Not
-    # yet settled" in this plugin's docs/linear-conventions.md (path relative to
-    # the plugin root) -- a question for Shawn, not
+    # yet settled" in the conventions document -- a question for Shawn, not
     # one this function gets to answer by building a projectId path.
     herdr_linear::_kind_is_project "$kind" && {
-        printf 'doc: "%s" is a project-scoped kind; publishing a project document is not implemented (see "Not yet settled" in this plugin, at docs/linear-conventions.md) -- ask before deciding this\n' "$kind" >&2
+        local conv
+        conv="$(herdr_linear::conventions_path 2>/dev/null)" || conv="the conventions document"
+        printf 'doc: "%s" is a project-scoped kind; publishing a project document is not implemented (see "Not yet settled" in %s) -- ask before deciding this\n' "$kind" "$conv" >&2
         return "$HERDR_LINEAR_DOC_REFUSED"
     }
 
