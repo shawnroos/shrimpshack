@@ -32,7 +32,7 @@ The plugin has accumulated a lot of opinion, and all of it is settled in code. I
 
 The conventions are also uneven in how reachable they are. About a dozen settings already work as environment variables, but they are documented only at the line that reads them, so they cannot be found by someone looking for them — including the person who wrote them. That cost has already been paid once: renaming `HERDR_LINEAR_SLATE_ROOT` to `HERDR_LINEAR_PROJECTS_ROOT` silently orphaned a setting that was in use, which is why a deprecation warning now exists at `plugins/work/lib/contain.sh:45`.
 
-Other conventions have no seam at all. The worktree name shape and its length caps are fixed in `plugins/work/lib/start.sh`. There is no notion of a Scheme anywhere: a name is either what one shell function returns or a hardcoded literal, and neither can be chosen. The cost is already visible as drift — `herdr_linear::layout_build` slugs the tab label it sets, `herdr_linear::open_session` sets its label unslugged, and nothing reconciles the two.
+Other conventions have no seam at all. The worktree name shape and its length caps are fixed in `plugins/work/lib/start.sh`. There is no notion of a Scheme anywhere: a name is either what one shell function returns or a hardcoded literal, and neither can be chosen. A tab is labelled with the ticket identifier at two sites that reach it by different routes, and nothing lets a person ask for anything else.
 
 ### Key Decisions
 
@@ -124,13 +124,13 @@ flowchart TB
 - A per-space record already has a home. `plugins/work/lib/binding.sh:736` stores one file per workspace under the plugin's store.
 - There is no continuous integration in this repository, so `plugins/work/tests/run-tests.sh` is the whole automated contract for anything added here.
 - The repository's existing check for brand names in the plugin carries an exemption list that a new configuration surface has to account for.
+- Routing the tab label through the resolver narrowed which identifiers are accepted: `herdr_linear::slug` accepts a leading underscore and `herdr_linear::is_safe_identifier` does not, so `_foo` was previously labellable and now is not. Verified by running both validators, not read off their source. It is unreachable — `layout_build` refuses unless the parent equals a binding identifier, which has already passed `is_safe_identifier` — and the stricter side is the safer one, so it is recorded rather than reverted.
 - R16 accepts a known cost: where the unresolved space had its own mapping, the global one is applied instead and the substitution is silent. This was weighed against refusing and chosen so that a machine without herdr stays usable.
 
 ### Outstanding Questions
 
 **Raised by document review, deferred to implementation.** Six reviewers ran; four blocking findings were fixed in place. These are the rest, each to be settled by the unit that owns it rather than before work starts.
 
-- U3 — the two tab-label sites differ over which fact they name, not over slugging: `herdr-write.sh:229` labels from the bare identifier, `:368` from the parent's title slug. One of the two labels necessarily changes; decide which fact the default tab scheme renders.
 - U6 — the loader does not check ownership or mode before parsing, while `workspace_read` gates on `herdr_linear::_mode_ok` first. Decide whether a mode fault takes the refusal path or the absent path.
 - U9 — the set verb lives in `lib/config.sh`, so any sourcing skill or hook can call it; KTD4's guarantee rests on the skill document's frontmatter alone. Consider adding it to `placement_caller_check`'s banned list so the guarantee is checkable.
 - U9 — a written value can be shadowed by an exported environment variable and the set verb has no obligation to say so, which is the silent-orphan failure the Problem Frame already cites once.
@@ -215,6 +215,8 @@ These are harness obligations, not design choices. Each one fails `run-tests.sh`
 - `skill_lib_sync_check` derives each document's required `source` lines from the call graph and owns nine documents — the eight skills plus `commands/work.md`. A new `lib/*.sh` file needs a `source` line in every document that reaches it; three skills (`new`, `new-project`, `new-sub-issue`) declare their libs through a `for f in ...` loop rather than a hand-list.
 - `identifier_path_check` requires any function building a path segment from a variable to call `is_safe_identifier` first, or to be added to its allowlist with a justifying comment.
 - Every new `.bats` file under `tests/unit/` carries a `load setup_common` line, or `suite_setup_check` fails the smoke phase.
+- `skill_lib_sync_check` reads a `herdr_linear::` name written inside a **comment** as a real call. Naming a function in a new file's header prose invents a dependency on the file that defines it, and every skill reaching the new file must then declare libs it never uses. Name files in comments, not functions. Found while routing `schemes.sh`, which appeared to depend on `herdr-write.sh` for exactly this reason.
+- `hooks/` is outside `skill_lib_sync_check` entirely — it globs `skills/` and `commands/` only. A hook's source list is maintained by hand, so a lib a hook reaches must be added to both hooks' loops manually. A missing one gives exit 127, which a hook's `||` branch reads as a refusal, and nothing turns red.
 - `setup_common.bash:16-19` clears the whole `HERDR_|LINEAR_` namespace before every suite, so a new variable is isolated automatically — but a suite needing a real configuration file must export its path explicitly, as the existing `*_DIR` lines do.
 
 ### Assumptions
@@ -281,7 +283,7 @@ U1 and U2 are independent and can run in parallel. U3 depends on U2. U4 and U5 a
 - **Approach:**
   1. Pin the current output of `start_worktree_name`, `start_branch_name`, and both tab-label sites before changing any of them.
   2. Route `start_worktree_name` and `start_branch_name` through the resolver.
-  3. Route `layout_build`'s label (`herdr-write.sh:265`) and `open_session`'s label (`herdr-write.sh:229`) through it. These two disagree today — one slugs, one does not. Adopt the slugged form as the tab scheme's default and record the change; it is a behaviour change, small and deliberate.
+  3. Route `layout_build`'s label (`herdr-write.sh:265`) and `open_session`'s label (`herdr-write.sh:229`) through it. One calls `slug` and the other does not, but both are passed an identifier and `slug` neither lowercases nor alters `[A-Za-z0-9._-]`, so the two already render the same label. Routing them is behaviour-preserving; the default tab scheme renders the identifier. Do not "fix" the difference — there is no output difference to fix.
   4. Resolve the scheme before `layout_build`'s existing name-validation block (`herdr-write.sh:264-269`), which already validates every child name ahead of creating anything. A scheme resolved inside the creation loop would leave a half-built tab and fail AE2 in the way that looks like a pass.
   5. Add the `source` line for `lib/schemes.sh` to every skill document that now reaches it.
 - **Execution note:** Characterization coverage first. The proof this unit worked is that the pinned names did not move, so the pins must exist before the routing does.
