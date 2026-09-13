@@ -112,6 +112,7 @@ flowchart TB
 
 ### Scope Boundaries
 
+- Space and pane naming is not made settable. R4 names five kinds; only worktree, branch and tab have a rendering site. A space label is set once at `plugins/work/lib/create.sh:241` and a pane is never labelled at all, since herdr's pane split takes no label. Schemes cover the three that exist.
 - Shadow mode stays on by default and does not become a switch. `plugins/work/lib/reconcile.sh:4` defends the default in place.
 - Horizontal splits are not built. The layout makes columns only, so a choice of orientation has nothing to choose between yet.
 - No first-run experience, no validation written for a stranger, and no documentation aimed at anyone other than the author.
@@ -140,6 +141,7 @@ flowchart TB
 - U7 — `_workspace_record_path` already validates the space id, so the new work is the mapping field rather than a new path builder.
 - U4 — `/work:new` also opens a session from `skills/new/SKILL.md:144`, not only from `create.sh:109`; both call sites need the switch.
 - U2 — extending the scheme enum is a code change carrying a new test and a suite-floor bump. Say so in the refusal text so it reads as a request to file rather than a dead end.
+- The harness itself — `skill_lib_sync_check` can pass over a fence that dies at runtime (see Implementation Constraints). Narrowing it to collect declarations per fence rather than per document is a repo-wide fix outside this plan's scope, and worth its own change.
 - A space mapped to a level other than project leaves the workspace record's project field without a stated meaning under the parent plan's KTD13.
 - Nothing reports which mapping a given worktree was judged under, and R17 guarantees no cross-space difference is ever reported.
 
@@ -216,6 +218,7 @@ These are harness obligations, not design choices. Each one fails `run-tests.sh`
 - `identifier_path_check` requires any function building a path segment from a variable to call `is_safe_identifier` first, or to be added to its allowlist with a justifying comment.
 - Every new `.bats` file under `tests/unit/` carries a `load setup_common` line, or `suite_setup_check` fails the smoke phase.
 - `skill_lib_sync_check` reads a `herdr_linear::` name written inside a **comment** as a real call. Naming a function in a new file's header prose invents a dependency on the file that defines it, and every skill reaching the new file must then declare libs it never uses. Name files in comments, not functions. Found while routing `schemes.sh`, which appeared to depend on `herdr-write.sh` for exactly this reason.
+- `skill_lib_sync_check` joins every bash fence in a document into one string before collecting declarations (`run-tests.sh:441-442`), but each fence is its own shell at run time. So a `source` in one fence satisfies a call in another, and the fence that actually runs dies with exit 127 while the check prints *every owned document sources what it calls*. Proved by deleting the conventions fence's own `source` from `skills/doc/SKILL.md`, whose other fences already declare that lib: `smoke` passed. The same deletion in `skills/describe/SKILL.md`, which has no second fence declaring it, is caught — so the masking needs a sibling fence sourcing the same lib. **Every fence carries its own `source` line regardless of what the check says.**
 - `hooks/` is outside `skill_lib_sync_check` entirely — it globs `skills/` and `commands/` only. A hook's source list is maintained by hand, so a lib a hook reaches must be added to both hooks' loops manually. A missing one gives exit 127, which a hook's `||` branch reads as a refusal, and nothing turns red.
 - `setup_common.bash:16-19` clears the whole `HERDR_|LINEAR_` namespace before every suite, so a new variable is isolated automatically — but a suite needing a real configuration file must export its path explicitly, as the existing `*_DIR` lines do.
 
