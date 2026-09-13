@@ -26,6 +26,9 @@ string, and the default does not come back.
 | `HERDR_LINEAR_JOURNAL_DIR` | `$HOME/.claude/work/layouts` | Where a layout the plugin built is journalled. | `lib/herdr-write.sh` | no |
 | `HERDR_LINEAR_DESC_BACKUP_DIR` | `$HOME/.claude/work/descriptions` | Where a ticket description is copied before it is overwritten. | `lib/description.sh` | no |
 | `HERDR_LINEAR_SHADOW_LOG` | `$HOME/.claude/work/shadow.log` | Where a write that was only rehearsed is logged instead of sent. | `lib/binding.sh` | no |
+| `HERDR_LINEAR_WORKTREE_SCHEME` | `identifier-title` | Which shape a worktree's directory name takes. Every scheme carries the ticket identifier, so the worktree stays findable from its branch whichever one is chosen. Valid: `identifier-title`, `identifier`. | `lib/schemes.sh` | no |
+| `HERDR_LINEAR_BRANCH_SCHEME` | `prefix-worktree` | Which shape a branch name takes. It composes on the worktree scheme, so changing that changes both and the identifier stays in each. Valid: `prefix-worktree`, `worktree`. | `lib/schemes.sh` | no |
+| `HERDR_LINEAR_TAB_SCHEME` | `identifier` | Which shape a herdr tab's label takes. Valid: `identifier`, `identifier-title`. | `lib/schemes.sh` | no |
 | `HERDR_LINEAR_BRANCH_PREFIX` | `feature` | The prefix a branch started from a ticket is given. Set it empty and the branch takes the identical form as the worktree directory, with no code change. | `lib/start.sh` | yes |
 | `HERDR_LINEAR_BIN_PATHS` | `/opt/homebrew/bin:/usr/local/bin:${HOME:-}/.local/bin` | The directories searched for the herdr executable when it is not on `PATH`. Set it empty to mean no known locations, so nothing resolves. | `lib/herdr-read.sh` | yes |
 | `HERDR_LINEAR_API_URL` | `https://api.linear.app/graphql` | The endpoint every Linear query and mutation is sent to. | `lib/linear.sh` | no |
