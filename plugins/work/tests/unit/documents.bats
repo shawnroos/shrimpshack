@@ -252,8 +252,8 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # doc_publish has no projectId path -- it always resolves the bound issue and
 # always sets issueId -- so a project-scoped kind must be refused rather than
 # silently mis-scoped as an issue document. Whether an agent may create a
-# project-scoped document is unsettled (the plugin's docs/linear-conventions.md);
-# this function must not answer that by implementing a path around it.
+# project-scoped document is unsettled (the conventions document); this
+# function must not answer that by implementing a path around it.
 @test "a project-scoped kind is refused, not silently attached to the issue" {
     bind_wt; enable_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1
@@ -262,9 +262,24 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$(sent documentCreate)" = "0" ]
     # The refusal points the reader at a document they can open. A bare
     # `docs/linear-conventions.md` reads as a repository path the reader may
-    # not have; the message must say what the path is relative to.
-    [[ "$output" == *"in this plugin, at docs/linear-conventions.md"* ]]
+    # not have, so the message carries a path that resolves on its own.
+    [[ "$output" == *"$(herdr_linear::conventions_path)"* ]]
     refute_match -qF ' in docs/linear-conventions.md)' <<<"$output"
+}
+
+# The refusal must name the document actually governing it. Naming the bundled
+# copy sends anyone who moved their conventions elsewhere to a file that is not
+# the one being enforced.
+@test "the project-scoped refusal names the configured conventions document" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    local elsewhere="$WORK/my-own-rules.md"
+    printf 'mine\n' > "$elsewhere"
+    HERDR_LINEAR_CONVENTIONS_PATH="$elsewhere" \
+        run herdr_linear::doc_publish "$WT" RFC "Brand Vocab" "$DOC"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"$elsewhere"* ]]
+    refute_match -qF "$ROOT/docs/linear-conventions.md" <<<"$output"
 }
 
 @test "a missing content file is refused before anything is sent" {
