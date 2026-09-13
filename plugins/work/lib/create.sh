@@ -104,9 +104,9 @@ herdr_linear::_issue_with_session() {
         return "$HERDR_LINEAR_CREATE_PARTIAL"
     }
 
-    # stderr is left open: when the space is a choice, the question is there and
-    # nowhere else.
-    pane="$(herdr_linear::open_session "$path")" || pane=""
+    # R8. `open` is what this path does when the switch is unset, which is what
+    # it has always done. Only `false` withholds the session here.
+    pane="$(herdr_linear::place_session "$path" open)" || pane=""
     printf '%s\t%s\t%s' "$ident" "$path" "$pane"
     return "$HERDR_LINEAR_CREATE_OK"
 }

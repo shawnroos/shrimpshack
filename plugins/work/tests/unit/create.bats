@@ -281,6 +281,87 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$output" = "1" ]
 }
 
+# ------------------------------------------------------- the session switch
+
+# R8. The switch is tri-state because the two paths disagree today: this one
+# opens a session and the start path does not. Unset has to reproduce BOTH, so
+# it cannot be a boolean whose default is one of them.
+#
+# A space bound to the issue's project, so a session has somewhere to open and
+# the argv record tells the two answers apart.
+a_space_for_the_project() {
+    local n
+    export FAKE_HERDR_WORKSPACES='wG=AI Canvas Tools'
+    n="$(herdr_linear::workspace_propose wG "$PROJECT_ID")"
+    herdr_linear::workspace_confirm wG "$PROJECT_ID" "$n"
+}
+panes_opened() {
+    local n; n="$(grep -c -- "--cwd $NEW_WT" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/null)" || n=0
+    printf '%s' "${n:-0}"
+}
+
+@test "with the switch unset, filing a new issue opens a session as it always has" {
+    record_repo; a_space_for_the_project
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
+    [ "$status" -eq 0 ]
+    [ -n "$(printf '%s' "$output" | cut -f3)" ]
+    [ "$(panes_opened)" = "1" ]
+}
+
+@test "with the switch false, filing a new issue opens no session" {
+    record_repo; a_space_for_the_project
+    bind_wt; enable_writes
+    export HERDR_LINEAR_OPEN_SESSION=false
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
+    [ "$status" -eq 0 ]
+    # The issue and its worktree are unaffected; only the session is withheld.
+    [ "$(printf '%s' "$output" | cut -f1)" = "WEB-4001" ]
+    [ -d "$NEW_WT" ]
+    [ -z "$(printf '%s' "$output" | cut -f3)" ]
+    [ "$(panes_opened)" = "0" ]
+}
+
+@test "with the switch true, filing a new issue opens a session" {
+    record_repo; a_space_for_the_project
+    bind_wt; enable_writes
+    export HERDR_LINEAR_OPEN_SESSION=true
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
+    [ "$status" -eq 0 ]
+    [ -n "$(printf '%s' "$output" | cut -f3)" ]
+    [ "$(panes_opened)" = "1" ]
+}
+
+# A value that is neither is a typo, and a typo that silently means "as it was"
+# is the failure lib/schemes.sh refuses for the same reason. It is said out
+# loud; it does not fail the filing, because the issue is already real.
+@test "a switch value that is neither true nor false is named and the path keeps its own behaviour" {
+    record_repo; a_space_for_the_project
+    bind_wt; enable_writes
+    export HERDR_LINEAR_OPEN_SESSION=yes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"HERDR_LINEAR_OPEN_SESSION is yes"* ]]
+    [[ "$stderr" == *"neither true nor false"* ]]
+    [ "$(panes_opened)" = "1" ]
+}
+
+# An empty value names no answer, so it can only mean the switch was not
+# chosen -- the reading lib/schemes.sh gives every scheme setting.
+@test "an empty switch is the same as an unset one" {
+    record_repo; a_space_for_the_project
+    bind_wt; enable_writes
+    export HERDR_LINEAR_OPEN_SESSION=
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" ""
+    [ "$status" -eq 0 ]
+    [ "$(panes_opened)" = "1" ]
+}
+
 @test "with no team derivable, nothing is created and the reason is given" {
     enable_writes
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1

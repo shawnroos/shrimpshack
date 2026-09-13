@@ -47,7 +47,13 @@ setup() {
     export LINEAR_CACHE_DIR="$WORK/cache"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
     export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
-    mkdir -p "$PROJECT" "$WORK/rec" "$WORK/cache"
+    # The start path can now be asked to open a session, so herdr is a
+    # stand-in here too rather than the absent path setup_common leaves.
+    export HERDR_BIN="$FIX/fake-herdr.sh"
+    export FAKE_HERDR_RECORD_DIR="$WORK/hrec"
+    export FAKE_HERDR_ALLOW_MUTATION=1
+    export HERDR_LINEAR_PANE_POLL_MS=5
+    mkdir -p "$PROJECT" "$WORK/rec" "$WORK/cache" "$WORK/hrec"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_STARTSTARTSTARTSTAR" > "$LINEAR_SECRETS_FILE"
 
     # A project that is a real repository, so `git worktree add` works.
@@ -55,7 +61,8 @@ setup() {
     git -C "$PROJECT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh repos.sh start.sh; do . "$ROOT/lib/$f"; done
+    for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh \
+             herdr-read.sh herdr-write.sh repos.sh start.sh; do . "$ROOT/lib/$f"; done
 
     # Standing inside a repository, deliberately: the path and the repository
     # must both come from the ticket now, so every test here runs from a place
@@ -850,4 +857,83 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run --separate-stderr herdr_linear::start_from_issue WEB-3318
     chmod 755 "$BASE/$CHILD"
     [ "$status" -eq 2 ]
+}
+
+# ------------------------------------------------------- the session switch
+
+# R8. Starting work does not open a session today, and filing a new issue
+# always does. One boolean cannot keep both, so the switch is tri-state: unset
+# leaves each path as it is, false withholds a session on both, true opens one
+# on both. These pin the start half; tests/unit/create.bats pins the other.
+
+SWITCH_PID=44444444-4444-4444-8444-444444444444
+
+a_space_for_the_project() {
+    local n
+    export FAKE_HERDR_WORKSPACES='wG=AI Canvas Tools'
+    n="$(herdr_linear::workspace_propose wG "$SWITCH_PID")"
+    herdr_linear::workspace_confirm wG "$SWITCH_PID" "$n"
+}
+panes_opened() {
+    local n; n="$(grep -c -- "--cwd $BASE/$CHILD" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/null)" || n=0
+    printf '%s' "${n:-0}"
+}
+# The worktree the switch is then asked about, made the ordinary way. The
+# space and the tracker mode are set by the CALLER: an export made inside a
+# command substitution dies with the subshell, and a space nothing can see
+# turns "no session opened" into a pass for the wrong reason.
+started_worktree() {
+    herdr_linear::start_from_issue WEB-3318 2>/dev/null
+}
+
+@test "with the switch unset, starting from a ticket opens no session" {
+    record_alpha; a_space_for_the_project
+    export FAKE_LINEAR_MODE=found_child
+    path="$(started_worktree)"
+    [ "$path" = "$BASE/$CHILD" ]
+    run --separate-stderr herdr_linear::place_session "$path" none
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$(panes_opened)" = "0" ]
+}
+
+@test "with the switch true, starting from a ticket opens a session" {
+    record_alpha; a_space_for_the_project
+    export FAKE_LINEAR_MODE=found_child
+    path="$(started_worktree)"
+    export HERDR_LINEAR_OPEN_SESSION=true
+    run --separate-stderr herdr_linear::place_session "$path" none
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+    [ "$(panes_opened)" = "1" ]
+}
+
+@test "with the switch false, starting from a ticket opens no session" {
+    record_alpha; a_space_for_the_project
+    export FAKE_LINEAR_MODE=found_child
+    path="$(started_worktree)"
+    export HERDR_LINEAR_OPEN_SESSION=false
+    run --separate-stderr herdr_linear::place_session "$path" none
+    [ "$status" -eq 0 ]
+    [ "$(panes_opened)" = "0" ]
+}
+
+# The worktree is the point of the verb and the session is not, so a server
+# that is not there costs the session and nothing else -- said out loud, since
+# a session that was asked for and never appeared is otherwise silent.
+@test "with herdr unreachable and the switch true, the worktree is still made and bound" {
+    export HERDR_LINEAR_OPEN_SESSION=true
+    record_alpha; a_space_for_the_project
+    export FAKE_LINEAR_MODE=found_child FAKE_HERDR_MODE=not_running
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 0 ]
+    path="$output"
+    [ -d "$path" ]
+    [ "$(herdr_linear::binding_state "$path")" = "bound" ]
+    run --separate-stderr herdr_linear::place_session "$path" none
+    [ "$status" -ne 0 ]
+    [[ "$stderr" == *"no session was opened"* ]]
+    [ -d "$path" ]
+    [ "$(herdr_linear::binding_state "$path")" = "bound" ]
+    [ "$(panes_opened)" = "0" ]
 }

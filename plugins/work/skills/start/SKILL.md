@@ -50,12 +50,28 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
 
 herdr_linear::start_from_issue WEB-3318
 ```
 
 It prints the worktree path. `cd` there and work.
+
+**A session is opened only when the switch asks for one.** This path opens none
+by default, which is what it has always done. Pass the worktree it printed:
+
+```bash
+herdr_linear::place_session "$WORKTREE" none
+```
+
+`none` is what this path does when the switch is unset. The switch is
+`HERDR_LINEAR_OPEN_SESSION` in `docs/settings.md`: set it to `true` and this
+opens a pane in the space bound to the ticket's project, printing its id. A
+session that could not be opened is reported on stderr and costs nothing else —
+the worktree is made and bound either way.
 
 **The path comes from the ticket, never from where you are standing.** It is
 `<worktrees-root>/<org>/<project or team>/<IDENTIFIER>-<title-slug>` — for
