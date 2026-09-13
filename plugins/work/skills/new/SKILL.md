@@ -164,5 +164,6 @@ Follow the conventions for the title, and ask about anything they list under
 "Not yet settled" rather than defaulting:
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+source "${CLAUDE_PLUGIN_ROOT}/lib/documents.sh"
+P="$(herdr_linear::conventions_path)" && cat "$P"
 ```

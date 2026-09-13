@@ -134,7 +134,8 @@ conventions for the title and description, ask about anything they list under
 "Not yet settled", and record the new identifier:
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+source "${CLAUDE_PLUGIN_ROOT}/lib/documents.sh"
+P="$(herdr_linear::conventions_path)" && cat "$P"
 ```
 
 ```bash

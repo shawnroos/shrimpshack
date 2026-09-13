@@ -118,5 +118,6 @@ Title it as a full sentence naming the problem or the outcome — the parent
 carries the noun phrase:
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+source "${CLAUDE_PLUGIN_ROOT}/lib/documents.sh"
+P="$(herdr_linear::conventions_path)" && cat "$P"
 ```

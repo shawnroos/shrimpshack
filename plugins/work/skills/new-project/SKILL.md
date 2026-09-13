@@ -91,7 +91,8 @@ project is created rather than a parent issue* as **not yet settled** — so ask
 Do not decide it because a project was the thing that was mentioned.
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+source "${CLAUDE_PLUGIN_ROOT}/lib/documents.sh"
+P="$(herdr_linear::conventions_path)" && cat "$P"
 ```
 
 The content file is the project's own document — what this body of work is for,

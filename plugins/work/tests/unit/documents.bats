@@ -44,6 +44,23 @@ refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
     fi
 }
 
+# The bash fence in a skill document that reads the conventions, lifted out so
+# the test runs the fence a session would run rather than a rewrite of it. Each
+# fence is its own shell, so a fence that calls the resolver without sourcing
+# the library it lives in is broken at runtime and green to every check that
+# reads the document as one text.
+fence_reading_conventions() {
+    python3 - "$ROOT/skills/$1/SKILL.md" <<'PY'
+import re, sys
+text = open(sys.argv[1]).read()
+fences = [b for b in re.findall(r'```bash\n(.*?)```', text, re.S) if 'conventions_path' in b]
+if len(fences) != 1:
+    sys.stderr.write('expected one conventions fence in %s, found %d\n' % (sys.argv[1], len(fences)))
+    raise SystemExit(1)
+sys.stdout.write(fences[0])
+PY
+}
+
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
 bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2670)"; herdr_linear::binding_confirm "$WT" WEB-2670 "$n"; }
@@ -205,9 +222,15 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # travel inside the plugin, not sit in a repository the reader may not have.
 # The plugin-relative path and the old repo-root path are the SAME string, so a
 # substring match on the filename proves nothing -- readability under the
-# plugin root is what discriminates.
+# plugin root is what discriminates. R9 moved the path behind a setting, so the
+# claim is now made where a reader arrives: whatever the unset default resolves
+# to has to be the copy that ships.
 @test "the conventions document ships inside the plugin" {
-    [ -r "$ROOT/docs/linear-conventions.md" ]
+    export CLAUDE_PLUGIN_ROOT="$ROOT"
+    run herdr_linear::conventions_path
+    [ "$status" -eq 0 ]
+    [ "$output" = "$ROOT/docs/linear-conventions.md" ]
+    [ -r "$output" ]
     run test -e "$ROOT/../../docs/linear-conventions.md"
     [ "$status" -ne 0 ]
 }
@@ -215,13 +238,15 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # R8. The document is cited by a plugin being generalised away from one
 # company, so its title cannot name that company.
 @test "the conventions document is not titled for one organisation" {
+    export CLAUDE_PLUGIN_ROOT="$ROOT"
+    local doc; doc="$(herdr_linear::conventions_path)"
     # head of a missing file is empty, and an empty stream matches nothing --
     # so without this the refutation passes on a doc that does not exist.
-    [ -r "$ROOT/docs/linear-conventions.md" ]
+    [ -r "$doc" ]
     # Assembled, not written out: the literal would itself be a hit for the
     # tree-wide brand scan in run-tests.sh that enforces this same rule.
     local name; name="$(printf 'S%s' late)"
-    refute_match -qF "$name" < <(head -1 "$ROOT/docs/linear-conventions.md")
+    refute_match -qF "$name" < <(head -1 "$doc")
 }
 
 # doc_publish has no projectId path -- it always resolves the bound issue and
@@ -302,4 +327,51 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     run herdr_linear::binding_read "$WT"
     ids="$(printf '%s' "$output" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["created_documents"]))')"
     [ "$ids" = "0" ]
+}
+
+# R9. The rulebook the plugin follows may live outside the plugin. The path is
+# an environment variable and nothing else: seven skills read that file as
+# instructions and it governs what the plugin writes to Linear, so a path an
+# agent could write into a configuration file would let a written setting steer
+# real writes.
+
+@test "a conventions path naming nothing readable is refused, not quietly replaced" {
+    export CLAUDE_PLUGIN_ROOT="$ROOT"
+    export HERDR_LINEAR_CONVENTIONS_PATH="$WORK/no-such-rulebook.md"
+    run herdr_linear::conventions_path
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$WORK/no-such-rulebook.md"* ]]
+    # The line that matters. A typo must not restore the bundled rulebook
+    # invisibly, so the refusal may not carry the default path either.
+    refute_match -qF "$ROOT/docs/linear-conventions.md" <<<"$output"
+}
+
+@test "every skill that reads the conventions reads the one that is configured" {
+    local skill
+    printf 'the rulebook from somewhere else\n' > "$WORK/elsewhere.md"
+    for skill in layout describe new-project new doc new-sub-issue bind; do
+        fence_reading_conventions "$skill" > "$WORK/fence.sh"
+        run env CLAUDE_PLUGIN_ROOT="$ROOT" \
+            HERDR_LINEAR_CONVENTIONS_PATH="$WORK/elsewhere.md" \
+            bash "$WORK/fence.sh"
+        [ "$status" -eq 0 ] || { printf '%s: reading the conventions exited %s: %s\n' "$skill" "$status" "$output" >&2; return 1; }
+        [ "$output" = "the rulebook from somewhere else" ] \
+            || { printf '%s: read something other than the configured document: %s\n' "$skill" "$output" >&2; return 1; }
+    done
+}
+
+@test "a skill asked for a conventions document that is not there prints none" {
+    local skill
+    for skill in layout describe new-project new doc new-sub-issue bind; do
+        fence_reading_conventions "$skill" > "$WORK/fence.sh"
+        run env CLAUDE_PLUGIN_ROOT="$ROOT" \
+            HERDR_LINEAR_CONVENTIONS_PATH="$WORK/absent-rulebook.md" \
+            bash "$WORK/fence.sh"
+        [ "$status" -ne 0 ] || { printf '%s: read a missing conventions document without complaint\n' "$skill" >&2; return 1; }
+        [[ "$output" == *"$WORK/absent-rulebook.md"* ]] \
+            || { printf '%s: refused without naming the path: %s\n' "$skill" "$output" >&2; return 1; }
+        # The bundled copy is not quietly served in its place, so the first
+        # heading of the shipped document may not appear in what came back.
+        refute_match -qF "$(head -1 "$ROOT/docs/linear-conventions.md")" <<<"$output"
+    done
 }
