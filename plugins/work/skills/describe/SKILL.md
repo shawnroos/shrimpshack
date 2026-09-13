@@ -59,7 +59,8 @@ from the template and want the spine held.
 Full rules ship with the plugin:
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+source "${CLAUDE_PLUGIN_ROOT}/lib/documents.sh"
+P="$(herdr_linear::conventions_path)" && cat "$P"
 ```
 
 The three that decide whether a description is any good:

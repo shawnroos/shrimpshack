@@ -280,10 +280,10 @@ rlo="$(printf '\342\200\256')"
 
 @test "the bind skill defers to the conventions doc on unsettled questions" {
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
-    # Single-quoted, so the pattern is the literal token. Double quotes expand
-    # the variable, and the test would then pass on any path merely ENDING in
-    # docs/linear-conventions.md -- including a bare prose citation.
-    [[ "$body" == *'${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md'* ]]
+    # The skill must reach the rulebook through the plugin's own resolver, so
+    # that a reader who has moved it is sent to the file they chose. A bare
+    # prose citation, or the old hardcoded path, does not satisfy this.
+    [[ "$body" == *'herdr_linear::conventions_path'* ]]
     [[ "$body" == *"Not yet settled"* ]]
     [ -r "$ROOT/docs/linear-conventions.md" ]
 }
