@@ -455,6 +455,57 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$output" = "WEB-3318-a-blank-drawer" ]
 }
 
+# ------------------------------------------------- the names, pinned (U3)
+#
+# What the plugin rendered before naming moved behind the scheme resolver.
+# These exist so the move can be shown to have changed no byte: a name that
+# moved would be a re-homed worktree and a branch nobody can find it from.
+
+@test "the default worktree name for a child issue is unchanged" {
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-3318)"
+    [ "$status" -eq 0 ]
+    [ "$output" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+}
+
+@test "the default worktree name for a parent issue is unchanged" {
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-2870)"
+    [ "$status" -eq 0 ]
+    [ "$output" = "WEB-2870-tool-detach-foreground" ]
+}
+
+@test "the default branch name is that worktree name behind feature/" {
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::start_branch_name "$(herdr_linear::fetch_issue WEB-3318)"
+    [ "$status" -eq 0 ]
+    [ "$output" = "feature/WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+}
+
+# R4, R5. The point of asking for a name rather than composing one: the branch
+# follows the worktree scheme, so one setting moves both and the identifier
+# stays in each.
+@test "a non-default worktree scheme moves the branch name with it" {
+    export FAKE_LINEAR_MODE=found_child HERDR_LINEAR_WORKTREE_SCHEME=identifier
+    resp="$(herdr_linear::fetch_issue WEB-3318)"
+    run herdr_linear::start_worktree_name "$resp"
+    [ "$status" -eq 0 ]
+    [ "$output" = "WEB-3318" ]
+    run herdr_linear::start_branch_name "$resp"
+    [ "$status" -eq 0 ]
+    [ "$output" = "feature/WEB-3318" ]
+}
+
+# R6. A typo re-homes every worktree it touches, so it is refused rather than
+# silently replaced with the default.
+@test "a worktree scheme that does not exist is refused and names the valid ones" {
+    export FAKE_LINEAR_MODE=found_child HERDR_LINEAR_WORKTREE_SCHEME=identifier-slug
+    run --separate-stderr herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-3318)"
+    [ "$status" -eq 2 ]
+    [ -z "$output" ]
+    [[ "$stderr" == *"identifier-title identifier"* ]]
+}
+
 @test "an issue with no title yields no name" {
     resp='{"data":{"issue":{"identifier":"WEB-3318","title":""}}}'
     run herdr_linear::start_worktree_name "$resp"

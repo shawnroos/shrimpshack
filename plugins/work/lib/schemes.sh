@@ -3,9 +3,9 @@
 #
 # R4/R5. A name is ASKED FOR by kind, not composed by the caller. Before this,
 # a name was either what one shell function returned or a literal at the line
-# that used it, and the two drifted: `herdr_linear::layout_build` slugs the tab
-# label it sets, `herdr_linear::open_session` sets its label unslugged, and
-# nothing reconciled them.
+# that used it, and the two drifted: the layout verb in lib/herdr-write.sh slugs
+# the tab label it sets, the session verb beside it sets its label unslugged,
+# and nothing reconciled them. Both ask here now.
 #
 # R6, and the reason this is an ENUMERATION rather than a template. A scheme is
 # a name in a fixed set that this file renders. A placeholder language would let
@@ -95,10 +95,9 @@ herdr_linear::_scheme_for() {
 
 # ----------------------------------------------------------------- rendering
 
-# Lifted verbatim from herdr_linear::start_worktree_name. It is duplicated for
-# the length of this unit and U3 deletes the original when it routes start.sh
-# through here; rewriting it while copying would break KTD5 in the one place
-# nothing else would catch.
+# The only title-slug pipeline in the plugin. `start_worktree_name` held a
+# byte-for-byte copy of it until it was routed through here; two copies of a
+# name's shape is a divergence waiting for the day somebody improves one.
 #
 # The 40-character cut can sever a word in half, so the severed remnant is
 # dropped -- but only when the cut actually happened. Trimming unconditionally
@@ -126,6 +125,28 @@ herdr_linear::_scheme_render_worktree() {
             herdr_linear::slug "$ident" 60 ;;
         *)  return 1 ;;
     esac
+}
+
+# herdr_linear::scheme_wants_title <kind>
+#
+# True when the kind's chosen scheme renders the title as well as the
+# identifier. A site holding only an identifier -- both tab labels do -- uses
+# this to decide whether to go and read the title. The DEFAULT tab scheme does
+# not want one, so the common path still asks Linear nothing it did not already
+# ask; without this the alternative was to make `identifier-title` a tab scheme
+# no site could render.
+herdr_linear::scheme_wants_title() {
+    local kind="${1-}" scheme
+    # A branch is rendered from the WORKTREE scheme, so that is the one to ask.
+    if [ "$kind" = branch ]; then kind=worktree; fi
+    # Silenced: an unrecognised scheme is reported by the render that refuses,
+    # and a caller that asks this first would otherwise print the same complaint
+    # twice for one typo.
+    scheme="$(herdr_linear::_scheme_for "$kind" 2>/dev/null)" || return 1
+    case "$scheme" in
+        identifier-title) return 0 ;;
+    esac
+    return 1
 }
 
 # ----------------------------------------------------------------- the resolver

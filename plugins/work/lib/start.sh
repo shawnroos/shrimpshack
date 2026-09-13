@@ -33,6 +33,8 @@ command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 command -v herdr_linear::scope_repos >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/repos.sh"
+command -v herdr_linear::scheme_name >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/schemes.sh"
 
 HERDR_LINEAR_START_OK=0
 HERDR_LINEAR_START_REFUSED=1
@@ -44,40 +46,47 @@ HERDR_LINEAR_START_SHADOW=5
 # was created, and the retry carries the answer.
 HERDR_LINEAR_START_ASK=6
 
-# R3, KTD2. `<IDENTIFIER>-<title-slug>`, identifier first and its case kept, so
-# the directory says which ticket it is. Linear's own branchName is lowercase, so
-# a name derived from it could not lead with an uppercase identifier -- the two
-# strings are composed here instead.
+# R3, KTD2. The name leads with the identifier in its own case, so the directory
+# says which ticket it is. Linear's own branchName is lowercase, so a name
+# derived from it could not -- which is why the plugin renders its own.
+#
+# R5. Neither of these composes a name any more. They extract what the resolver
+# needs from the response their callers already hold and ask for the name by
+# kind, so changing a scheme changes both of them together.
+
+herdr_linear::_start_issue_field() {
+    printf '%s' "$1" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["issue"].get(sys.argv[1]) or "")' "$2" 2>/dev/null
+}
+
+# Refuses SILENTLY, as it always has. A caller reads this as "this ticket cannot
+# be named"; the resolver's own refusals still reach stderr, and these two
+# guards are what keep an unreadable response from becoming one of them.
 herdr_linear::start_worktree_name() {
-    local resp="$1" ident title slug
-    ident="$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["issue"].get("identifier") or "")' 2>/dev/null)"
-    title="$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["issue"].get("title") or "")' 2>/dev/null)"
+    local resp="$1" ident title
+    ident="$(herdr_linear::_start_issue_field "$resp" identifier)"
+    title="$(herdr_linear::_start_issue_field "$resp" title)"
     [ -n "$ident" ] && [ -n "$title" ] || return 1
     herdr_linear::is_safe_identifier "$ident" || return 1
-    slug="$(printf '%s' "$title" \
-        | tr '[:upper:]' '[:lower:]' \
-        | tr -c 'a-z0-9' '-' \
-        | sed -E 's/-+/-/g; s/^-+//; s/-+$//')"
-    # The 40-character cut can sever a word in half, so the severed remnant is
-    # dropped -- but only when the cut actually happened. Trimming
-    # unconditionally cost every short title its last word. The cut is on the
-    # TITLE, so the identifier the name leads with can never be severed.
-    if [ "${#slug}" -gt 40 ]; then
-        slug="$(printf '%s' "$slug" | cut -c1-40 | sed -E 's/-[^-]*$//; s/-+$//')"
-    fi
-    [ -n "$slug" ] || return 1
-    herdr_linear::slug "$ident-$slug" 60
+    herdr_linear::scheme_name worktree "$ident" "$title"
 }
 
 # KTD1. The branch is the directory name behind the repository's prefix
 # convention, so the identifier appears in both and branch matching finds this
 # worktree forever after. An empty prefix makes the two strings identical, which
 # is what makes trading the identical-string form away safe.
+#
+# The prefix is passed to the resolver EXPLICITLY, empty value and all: the
+# resolver spells it `${4-...}`, so an explicit empty survives where a defaulted
+# one would collapse back to `feature`. Asking for the branch rather than
+# prefixing the worktree name is what makes the no-prefix branch scheme
+# reachable at all.
 herdr_linear::start_branch_name() {
-    local resp="$1" prefix="${2-$HERDR_LINEAR_BRANCH_PREFIX}" name
-    name="$(herdr_linear::start_worktree_name "$resp")" || return 1
-    [ -n "$prefix" ] || { printf '%s' "$name"; return 0; }
-    printf '%s/%s' "$prefix" "$name"
+    local resp="$1" prefix="${2-$HERDR_LINEAR_BRANCH_PREFIX}" ident title
+    ident="$(herdr_linear::_start_issue_field "$resp" identifier)"
+    title="$(herdr_linear::_start_issue_field "$resp" title)"
+    [ -n "$ident" ] && [ -n "$title" ] || return 1
+    herdr_linear::is_safe_identifier "$ident" || return 1
+    herdr_linear::scheme_name branch "$ident" "$title" "$prefix"
 }
 
 # R5a, KTD3. Prints `<typed-key><TAB><team-key><TAB><segment>`. The key is typed
