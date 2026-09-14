@@ -217,6 +217,26 @@ tab_label() { sed -n 's/.*--label \([^ ]*\).*/\1/p' "$FAKE_HERDR_RECORD_DIR/argv
     [[ "$stderr" != *"cannot become a safe name"* ]]
 }
 
+# The parent is read for its title the way a child is read for its name, and a
+# read that failed is a retry, not a name to fix -- exit 3, as a child's is.
+@test "a parent that cannot be read for its tab title fails the layout as retryable" {
+    export HERDR_LINEAR_TAB_SCHEME=identifier-title FAKE_LINEAR_MODE=rate_limited
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq "$HERDR_LINEAR_LAYOUT_FAILED" ]
+    [ "$(herdr_calls 'tab create')" = "0" ]
+    [[ "$stderr" == *"could not read WEB-2870"* ]]
+}
+
+# With Linear failing, a 3 here would mean the title was read before the typo
+# was refused.
+@test "a worktree scheme typo refuses the layout before the tab title is read" {
+    export HERDR_LINEAR_TAB_SCHEME=identifier-title HERDR_LINEAR_WORKTREE_SCHEME=identifier-slug \
+           FAKE_LINEAR_MODE=rate_limited
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq "$HERDR_LINEAR_LAYOUT_BAD_NAME" ]
+    [[ "$stderr" != *"could not read"* ]]
+}
+
 # ------------------------------------------------------------- resumability
 
 # The property the journal exists for. A retry after a partial failure must

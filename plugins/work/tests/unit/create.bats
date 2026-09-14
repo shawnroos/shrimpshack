@@ -211,6 +211,35 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$(printf '%s' "$stderr" | grep -c 'not one this plugin renders')" -eq 1 ]
 }
 
+# This path opens a session unless told not to, so it renders a tab: a typo in
+# that scheme found after filing leaves a real issue and no session.
+@test "a new issue with an unknown tab scheme files nothing" {
+    record_repo
+    enable_writes "$TEAM_ID" proj-abc
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_NEW_IDENT=WEB-4002 FAKE_LINEAR_PROJECT_TEAMS=one
+    export HERDR_LINEAR_TAB_SCHEME=identifier-slug
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" w1
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_REFUSED" ]
+    [ "$(sent issueCreate)" -eq 0 ]
+    [ "$(printf '%s' "$stderr" | grep -c 'not one this plugin renders')" -eq 1 ]
+}
+
+@test "with the session switch false, a new issue is not refused for a tab scheme it never renders" {
+    record_repo
+    enable_writes "$TEAM_ID" proj-abc
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_NEW_IDENT=WEB-4002 FAKE_LINEAR_PROJECT_TEAMS=one
+    export HERDR_LINEAR_TAB_SCHEME=identifier-slug HERDR_LINEAR_OPEN_SESSION=false
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" w1
+    [ "$status" -eq 0 ]
+    [ "$(sent issueCreate)" -eq 1 ]
+}
+
 # Covers AE2. Naming the candidates is the whole of the ask half of act-or-ask:
 # "cannot tell which team" leaves the reader to go find out which teams exist.
 # Writes are ENABLED and mutation is permitted here on purpose -- otherwise the

@@ -77,6 +77,30 @@ herdr_linear::session_switch() {
     printf 'unset'
 }
 
+# herdr_linear::session_wanted <default: open|none>
+#
+# 0 when the switch, or <default> when it is unset, asks for a session.
+herdr_linear::session_wanted() {
+    case "$(herdr_linear::session_switch)" in
+        true)  return 0 ;;
+        false) return 1 ;;
+        *)     [ "${1:-none}" = open ] ;;
+    esac
+}
+
+# herdr_linear::usable_schemes <default: open|none>
+#
+# Whether every scheme this path will render is one the plugin knows. The tab is
+# rendered only when a session opens, so a path that opens none is not refused
+# for a tab scheme it never uses.
+herdr_linear::usable_schemes() {
+    if herdr_linear::session_wanted "${1:-none}" 2>/dev/null; then
+        herdr_linear::schemes_usable worktree branch tab
+    else
+        herdr_linear::schemes_usable worktree branch
+    fi
+}
+
 # herdr_linear::place_session <worktree-path> <default: open|none>
 #
 # The session the switch asks for, or nothing at all. <default> is what this
@@ -87,14 +111,8 @@ herdr_linear::session_switch() {
 # that could not be opened is REPORTED, never fatal -- the worktree is what the
 # calling verb is for, and it is made and bound before this is reached.
 herdr_linear::place_session() {
-    local path="${1:-}" fallback="${2:-none}" want pane rc
-    want="$(herdr_linear::session_switch)"
-    case "$want" in
-        true)  want=open ;;
-        false) want=none ;;
-        *)     want="$fallback" ;;
-    esac
-    [ "$want" = open ] || return 0
+    local path="${1:-}" fallback="${2:-none}" pane rc
+    herdr_linear::session_wanted "$fallback" || return 0
 
     # lib/herdr-write.sh is where the open lives, and no lib sources another:
     # unsourced, the call below would be 127, which a `||` branch reads as a
@@ -245,7 +263,7 @@ herdr_linear::start_from_issue() {
 
     # Refused, not failed: the table's failure promises a worktree or binding that
     # went wrong, and a scheme that cannot render has made neither.
-    herdr_linear::schemes_usable worktree branch || return "$HERDR_LINEAR_START_REFUSED"
+    herdr_linear::usable_schemes none || return "$HERDR_LINEAR_START_REFUSED"
 
     # The issue must exist. A worktree created for a typo'd identifier is worse
     # than a refusal: it looks like work and is bound to nothing.
@@ -395,7 +413,7 @@ herdr_linear::start_new() {
     herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_START_REFUSED"
     # Before filing: filed first, a scheme that cannot render leaves a real ticket
     # that no retry can start.
-    herdr_linear::schemes_usable worktree branch || return "$HERDR_LINEAR_START_REFUSED"
+    herdr_linear::usable_schemes none || return "$HERDR_LINEAR_START_REFUSED"
 
     if ! herdr_linear::consent_gate "$from" "$team" "" \
         "create issue \"$title\" on team $team, and a worktree for it"; then

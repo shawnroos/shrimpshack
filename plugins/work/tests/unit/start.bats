@@ -530,6 +530,26 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     done
 }
 
+# The tab is rendered only when a session opens, so its scheme is checked up
+# front only on a path that will open one.
+@test "with the switch true, a start with an unknown tab scheme is refused before anything is made" {
+    record_alpha; a_space_for_the_project
+    export FAKE_LINEAR_MODE=found_child HERDR_LINEAR_OPEN_SESSION=true HERDR_LINEAR_TAB_SCHEME=identifier-slug
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
+    [ ! -e "$WT_ROOT" ]
+    [ "$(sent 'issue(id')" -eq 0 ]
+    [ "$(printf '%s' "$stderr" | grep -c 'not one this plugin renders')" -eq 1 ]
+}
+
+@test "with the switch unset, a start is not refused for a tab scheme it never renders" {
+    record_alpha; a_space_for_the_project
+    export FAKE_LINEAR_MODE=found_child HERDR_LINEAR_TAB_SCHEME=identifier-slug
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 0 ]
+    [ -d "$output" ]
+}
+
 # The table has always called this a refusal; the code reported a failed
 # worktree, which promises a directory that may exist when nothing was made.
 @test "a ticket whose identifier cannot become a safe path is refused, not reported as a failed worktree" {
@@ -557,6 +577,15 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "an issue with no title yields no name" {
     resp='{"data":{"issue":{"identifier":"WEB-3308","title":""}}}'
     run herdr_linear::start_worktree_name "$resp"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "an issue with no title or no identifier yields no branch name" {
+    run herdr_linear::start_branch_name '{"data":{"issue":{"identifier":"WEB-3318","title":""}}}'
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+    run herdr_linear::start_branch_name '{"data":{"issue":{"identifier":"","title":"A thing"}}}'
     [ "$status" -ne 0 ]
     [ -z "$output" ]
 }
