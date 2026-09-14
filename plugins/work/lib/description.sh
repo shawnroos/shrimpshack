@@ -123,10 +123,10 @@ print(json.dumps({"order": order, "parts": parts}))
 # is the default a NEW description starts from, not a gate every description
 # must pass.
 #
-# Why advisory: WEB-3214 "Improve AI tools analytics" is a ticket Shawn holds up
-# as good, and it uses none of those three headings. It uses `## Why`, `## The
-# shape of this work`, `## Two things everyone reading these dashboards needs to
-# know`, `## Worth agreeing before GA, not after`. Those headings are arguments
+# Why advisory: a ticket held up as good (fixture: WEB-3184) uses none of those
+# three headings. It uses `## Why`, `## How the work splits`, `## Two caveats
+# for anyone reading these charts`, `## Settle before launch, not after`. Those
+# headings are arguments
 # -- a reader can act on them -- where `## Constraints` is a heading people skim
 # past. An earlier version of this function REJECTED that ticket, which is the
 # validator being wrong rather than the ticket.
@@ -165,14 +165,14 @@ for name in order:
     if not body.strip():
         hard.append("%s is empty" % name)
     # A placeholder is `<lowercase prose>`. It is NOT a markdown autolink:
-    # WEB-3214 ends with `<https://claude.ai/...>`, which is valid markdown and
+    # WEB-3184 ends with `<https://...>`, which is valid markdown and
     # matched the first version of this pattern -- the validator calling a real
     # ticket unfinished because it cited a source properly.
     if re.search(r"<(?![^>]*(?:://|@))[a-z][^>]{4,}>", body or ""):
         hard.append("%s still contains template placeholders" % name)
 
 # NEVER A DIARY. Two independent shapes, because a writer reaches for both.
-# A date in PROSE is fine -- WEB-3214 opens with "Measured 25 Aug 2026" and is
+# A date in PROSE is fine -- WEB-3184 opens with "Measured 25 Aug 2026" and is
 # not a diary. It is dated HEADINGS that mark a log.
 head_dates = re.findall(
     r"^#{2,4}\s.*(?:\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b)",

@@ -277,7 +277,7 @@ start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.
 # R14. No caller supplies the name, so the skill must not tell anyone to.
 @test "the start skill passes no worktree name and asks for none" {
     body="$(start_skill)"
-    [[ "$body" != *"start_from_issue WEB-3318 drawer-blank"* ]]
+    [[ "$body" != *"start_from_issue WEB-3308 panel-empty"* ]]
     [[ "$body" != *"Ask for the short name"* ]]
 }
 

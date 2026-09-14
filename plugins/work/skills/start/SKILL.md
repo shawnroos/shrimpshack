@@ -20,7 +20,7 @@ disable-model-invocation: true
 **Say every resolution out loud before you act on it**, naming three things:
 the fact, where you read it, and how you derived it.
 
-> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+> Team: Web — the only team on project Frame Effects, read from Linear.
 
 That one line lets a reader catch a wrong answer and its cause without opening a
 log. And nothing here refuses: a reader answering `outside`, `negative` or
@@ -51,21 +51,21 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
 
-herdr_linear::start_from_issue WEB-3318
+herdr_linear::start_from_issue WEB-3308
 ```
 
 It prints the worktree path. `cd` there and work.
 
 **The path comes from the ticket, never from where you are standing.** It is
 `<worktrees-root>/<org>/<project or team>/<IDENTIFIER>-<title-slug>` — for
-example `~/worktrees/<org>/ai-canvas-tools/WEB-3318-ai-tools-drawer-is-blank-when-a-still`.
+example `~/worktrees/<org>/frame-effects/WEB-3308-export-panel-is-empty-when-a-still`.
 The worktrees root is `$HOME/worktrees` unless `HERDR_LINEAR_WORKTREES_ROOT`
 says otherwise, and it is kept apart from `~/projects` so deleting all of it
 only ever loses uncommitted work. Nobody supplies the name, so nothing can drop
 the identifier out of it.
 
 **The branch is the directory name behind the prefix:**
-`feature/WEB-3318-ai-tools-drawer-is-blank-when-a-still`. The identifier is in
+`feature/WEB-3308-export-panel-is-empty-when-a-still`. The identifier is in
 both, so the worktree is findable from its branch forever after. Pass a second
 argument to use `bugfix` or `task` instead of `feature`.
 
@@ -94,7 +94,7 @@ herdr_linear::scope_repos "project-$PROJECT_ID" "team-$TEAM_ID"
   refused, because resolving it would let the current directory decide again:
 
 ```bash
-herdr_linear::start_from_issue WEB-3318 "" "$PWD" /Users/me/projects/web-app
+herdr_linear::start_from_issue WEB-3308 "" "$PWD" /Users/me/projects/web-app
 ```
 
 The answer is recorded for the project and for its team, so the question is

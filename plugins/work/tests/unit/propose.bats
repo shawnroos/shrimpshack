@@ -32,7 +32,7 @@ setup() {
     for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh propose.sh; do . "$ROOT/lib/$f"; done
 
     WT="$WORK/root/wt"; mkdir -p "$WT"
-    git -C "$WT" init -q -b feature/web-3318-drawer
+    git -C "$WT" init -q -b feature/web-3308-panel
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     NOID="$WORK/root/noid"; mkdir -p "$NOID"
@@ -40,7 +40,7 @@ setup() {
     git -C "$NOID" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     OUTSIDE="$WORK/elsewhere/wt"; mkdir -p "$OUTSIDE"
-    git -C "$OUTSIDE" init -q -b feature/web-3318-drawer
+    git -C "$OUTSIDE" init -q -b feature/web-3308-panel
     git -C "$OUTSIDE" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 }
 
@@ -57,7 +57,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     export FAKE_LINEAR_MODE=found_child
     run herdr_linear::candidates "$OUTSIDE"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"WEB-3318"* ]]
+    [[ "$output" == *"WEB-3308"* ]]
     [ "$(mutations)" = "0" ]
 }
 
@@ -70,7 +70,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run herdr_linear::candidates "$WT"
     [ "$status" -eq 0 ]
     [ "$(printf '%s' "$output" | grep -c .)" = "1" ]
-    [[ "$output" == "WEB-3318	"* ]]
+    [[ "$output" == "WEB-3308	"* ]]
     [[ "$output" == *"	branch" ]]
     run herdr_linear::binding_state "$WT"
     [ "$output" = "unbound" ]
@@ -176,20 +176,20 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     export FAKE_LINEAR_MODE=found_child
     run herdr_linear::candidates "$WT"
     [ "$status" -eq 0 ]
-    [[ "$output" == "WEB-3318"* ]]
+    [[ "$output" == "WEB-3308"* ]]
 
-    herdr_linear::binding_decline "$WT" WEB-3318
+    herdr_linear::binding_decline "$WT" WEB-3308
     run herdr_linear::candidates "$WT"
     [ "$status" -eq 1 ]
 }
 
 @test "a declined candidate is filtered out of the fallback list too" {
-    herdr_linear::binding_decline "$NOID" WEB-3317
+    herdr_linear::binding_decline "$NOID" WEB-3307
     export FAKE_LINEAR_MODE=candidates
     run herdr_linear::candidates "$NOID"
     [ "$status" -eq 0 ]
-    [[ "$output" != *"WEB-3317"* ]]
-    [[ "$output" == *"WEB-3318"* ]]
+    [[ "$output" != *"WEB-3307"* ]]
+    [[ "$output" == *"WEB-3308"* ]]
 }
 
 # ------------------------------------------------- untrusted text (R28, KTD16)
@@ -221,8 +221,8 @@ rlo="$(printf '\342\200\256')"
     run herdr_linear::candidates "$NOID"
     [ "$status" -eq 0 ]
     [ "$(printf '%s' "$output" | grep -c .)" = "2" ]
-    [[ "$output" == *"drawer is blank"* ]]
-    [[ "$output" == *"WEB-3317"* ]]
+    [[ "$output" == *"panel is empty"* ]]
+    [[ "$output" == *"WEB-3307"* ]]
     [[ "$output" != *"$esc"* ]]
     [[ "$output" != *"$rlo"* ]]
 }

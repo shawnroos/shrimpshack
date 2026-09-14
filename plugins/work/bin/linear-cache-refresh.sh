@@ -2,7 +2,7 @@
 # Fills ~/.claude/linear-cache from Linear's GraphQL API.
 #
 #   linear-cache-refresh.sh              refresh every assigned issue (bulk)
-#   linear-cache-refresh.sh WEB-3156     refresh one issue
+#   linear-cache-refresh.sh WEB-3146     refresh one issue
 #
 # Never called from the statusline render path directly — the statusline spawns
 # it detached on a cache miss, so a slow API call can never stall a redraw.

@@ -370,11 +370,11 @@ fh() { FAKE_HERDR_ALLOW_MUTATION=1 bash "$FIX/fake-herdr.sh" "$@"; }
 }
 
 @test "fixture: the workspace list reports the spaces it was given, with labels" {
-    export FAKE_HERDR_WORKSPACES='wG=AI Canvas Tools,wJ=Plugins'
+    export FAKE_HERDR_WORKSPACES='wG=Frame Effects,wJ=Plugins'
     run fh workspace list
     [ "$status" -eq 0 ]
     [ "$(printf '%s' "$output" | herdr_linear::json result.workspaces.0.workspace_id)" = "wG" ]
-    [ "$(printf '%s' "$output" | herdr_linear::json result.workspaces.0.label)" = "AI Canvas Tools" ]
+    [ "$(printf '%s' "$output" | herdr_linear::json result.workspaces.0.label)" = "Frame Effects" ]
 }
 
 @test "fixture: the snapshot reports created panes in their tabs" {

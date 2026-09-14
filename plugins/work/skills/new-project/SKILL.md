@@ -20,7 +20,7 @@ disable-model-invocation: true
 **Say every resolution out loud before you act on it**, naming three things:
 the fact, where you read it, and how you derived it.
 
-> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+> Team: Web — the only team on project Frame Effects, read from Linear.
 
 That one line lets a reader catch a wrong answer and its cause without opening a
 log. And nothing here refuses: a reader answering `outside`, `negative` or
@@ -77,7 +77,7 @@ for f in contain secrets sanitize binding linear reconcile description herdr-rea
   source "$R/lib/$f.sh"
 done
 
-herdr_linear::new_project "AI Canvas Tools" /tmp/content.md "$TEAM_ID"
+herdr_linear::new_project "Frame Effects" /tmp/content.md "$TEAM_ID"
 ```
 
 Prints `PROJECT_ID<TAB>WORKSPACE_ID`.

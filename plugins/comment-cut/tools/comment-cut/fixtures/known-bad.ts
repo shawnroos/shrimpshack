@@ -15,7 +15,7 @@ real();
 // added for WEB-1234
 code();
 
-// WEB-2932 U4: single owner of the Remove-Logo region domain
+// WEB-4322 U4: single owner of the Warm-Filter region domain
 code();
 
 // R2 (Logo Removal v2, WEB-2845) / FD5 (WEB-2896, U5): the box-crosshair

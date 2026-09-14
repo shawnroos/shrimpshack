@@ -268,14 +268,14 @@ seam() {
 # that delete one root are what hold that apart.
 
 wt_setup() {
-    mkdir -p "$WORK/wt/acme/ai-canvas-tools/WEB-1-x" "$WORK/wtOther"
+    mkdir -p "$WORK/wt/acme/frame-effects/WEB-1-x" "$WORK/wtOther"
     export HERDR_LINEAR_WORKTREES_ROOT="$WORK/wt"
 }
 
 # AE7.
 @test "a path under the worktrees root is inside" {
     wt_setup
-    run herdr_linear::path_signal "$WORK/wt/acme/ai-canvas-tools/WEB-1-x"
+    run herdr_linear::path_signal "$WORK/wt/acme/frame-effects/WEB-1-x"
     [ "$status" -eq 0 ]
     [ "$output" = "inside" ]
 }
@@ -291,7 +291,7 @@ wt_setup() {
 @test "a worktrees-root path is inside when the projects root does not exist" {
     wt_setup
     rm -rf "$WORK/root"
-    run herdr_linear::path_signal "$WORK/wt/acme/ai-canvas-tools/WEB-1-x"
+    run herdr_linear::path_signal "$WORK/wt/acme/frame-effects/WEB-1-x"
     [ "$status" -eq 0 ]
     [ "$output" = "inside" ]
 }

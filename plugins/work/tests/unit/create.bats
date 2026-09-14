@@ -24,9 +24,9 @@ setup() {
     PROJECT="$WORK/root/alpha"
     export HERDR_LINEAR_WORKTREES_ROOT="$WORK/wt"
     WT_ROOT="$WORK/wt"
-    # found_parent answers every fetch with WEB-2870 in AI Canvas Tools, so a
+    # found_parent answers every fetch with WEB-2670 in Frame Effects, so a
     # filed issue's worktree derives this path whatever identifier was filed.
-    NEW_WT="$WT_ROOT/acme/ai-canvas-tools/WEB-2870-tool-detach-foreground"
+    NEW_WT="$WT_ROOT/acme/frame-effects/WEB-2670-tool-blur-backdrop"
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -51,7 +51,7 @@ setup() {
              herdr-read.sh herdr-write.sh repos.sh start.sh context.sh create.sh; do . "$ROOT/lib/$f"; done
 
     WT="$PROJECT/worktrees/current"
-    git -C "$PROJECT" worktree add -q -b feature/web-2870-detach "$WT" >/dev/null 2>&1
+    git -C "$PROJECT" worktree add -q -b feature/web-2670-blur "$WT" >/dev/null 2>&1
 
     DESC="$WORK/d.md"
     printf '## Problem\n\nA real problem for the actor, at length.\n\n## Solution\n\nThe world without it.\n\n## Proposal\n\nWhat we build.\n' > "$DESC"
@@ -59,7 +59,7 @@ setup() {
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
-bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
+bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2670)"; herdr_linear::binding_confirm "$WT" WEB-2670 "$n"; }
 # The answer a person would have given, recorded the only way the store accepts
 # one: propose, then confirm with the nonce it returned. Scoped to the team and
 # project the question named, and to the branch it was answered on.
@@ -89,7 +89,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     export FAKE_LINEAR_MODE=found_parent
     run --separate-stderr herdr_linear::current_context "$WT"
     [ "$(herdr_linear::context_fields "$output" project_id team_id identifier)" \
-      = "$PROJECT_ID"$'\t'"$TEAM_ID"$'\t'"WEB-2870" ]
+      = "$PROJECT_ID"$'\t'"$TEAM_ID"$'\t'"WEB-2670" ]
 }
 
 # The first issue in a new space has no bound worktree to ask.
@@ -133,7 +133,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     export FAKE_LINEAR_MODE=found_parent
     run --separate-stderr herdr_linear::current_context "$WT"
     [ "$(herdr_linear::context_fields "$output" team_id team_name)" \
-      = "$TEAM_ID"$'\t'"Web Creation" ]
+      = "$TEAM_ID"$'\t'"Web Team" ]
     [ "$(sent 'project(id:')" -eq 0 ]
 }
 
@@ -268,7 +268,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "a new issue opens a pane in its own worktree" {
     record_repo
     # R17. The session opens in the space bound to the issue's project.
-    export FAKE_HERDR_WORKSPACES='wG=AI Canvas Tools'
+    export FAKE_HERDR_WORKSPACES='wG=Frame Effects'
     n="$(herdr_linear::workspace_propose wG "$PROJECT_ID")"
     herdr_linear::workspace_confirm wG "$PROJECT_ID" "$n"
     bind_wt; enable_writes
@@ -309,7 +309,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # unprefixed form: lenient writes "description: note: not using ...".
 @test "a description with no template headings is refused before anything is filed" {
     bind_wt; enable_writes
-    printf '## Why\n\nA real reason, stated at length for whoever reads it.\n\n## The shape of this work\n\nWhat we do about it.\n' > "$WORK/headingless.md"
+    printf '## Why\n\nA real reason, stated at length for whoever reads it.\n\n## How the work splits\n\nWhat we do about it.\n' > "$WORK/headingless.md"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$WORK/headingless.md"
     [ "$status" -eq 1 ]
@@ -320,7 +320,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # The same bar on the sub-issue path, which reaches the same validate call.
 @test "a sub-issue with no template headings is refused before anything is filed" {
     bind_wt; enable_writes
-    printf '## Why\n\nA real reason, stated at length for whoever reads it.\n\n## The shape of this work\n\nWhat we do about it.\n' > "$WORK/headingless.md"
+    printf '## Why\n\nA real reason, stated at length for whoever reads it.\n\n## How the work splits\n\nWhat we do about it.\n' > "$WORK/headingless.md"
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run --separate-stderr herdr_linear::new_sub_issue "$WT" "A smaller thing" "$WORK/headingless.md"
     [ "$status" -eq 1 ]
@@ -419,7 +419,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::new_sub_issue "$WT" "A smaller thing" "$DESC"
     [ "$status" -eq 3 ]
-    [[ "$output" == *"under WEB-2870"* ]]
+    [[ "$output" == *"under WEB-2670"* ]]
     [ "$(sent issueCreate)" = "0" ]
 }
 
@@ -503,7 +503,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     enable_root_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1
     printf '# P\n\ncontent\n' > "$WORK/p.md"
-    run herdr_linear::new_project "AI Canvas Tools" "$WORK/p.md" team-web "canvas"
+    run herdr_linear::new_project "Frame Effects" "$WORK/p.md" team-web "canvas"
     [ "$status" -eq 0 ]
     run grep -c -- '--label canvas' "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "1" ]
@@ -635,9 +635,9 @@ worktree_count() { git -C "$PROJECT" worktree list | grep -c .; }
     before="$(worktree_count)"
     run --separate-stderr herdr_linear::new_issue_here "$WT" "A new thing" "$DESC"
     [ "$status" -eq "$HERDR_LINEAR_CREATE_REFUSED" ]
-    [[ "$stderr" == *"already bound to WEB-2870"* ]]
+    [[ "$stderr" == *"already bound to WEB-2670"* ]]
     [ "$(sent issueCreate)" = "0" ]
-    [ "$(herdr_linear::binding_identifier "$WT")" = "WEB-2870" ]
+    [ "$(herdr_linear::binding_identifier "$WT")" = "WEB-2670" ]
     [ "$(worktree_count)" = "$before" ]
 }
 

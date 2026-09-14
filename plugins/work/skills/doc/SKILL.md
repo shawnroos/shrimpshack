@@ -20,7 +20,7 @@ disable-model-invocation: true
 **Say every resolution out loud before you act on it**, naming three things:
 the fact, where you read it, and how you derived it.
 
-> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+> Team: Web — the only team on project Frame Effects, read from Linear.
 
 That one line lets a reader catch a wrong answer and its cause without opening a
 log. And nothing here refuses: a reader answering `outside`, `negative` or
@@ -93,7 +93,7 @@ source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/sanitize.
 source "$R/lib/binding.sh"
 source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"; source "$R/lib/documents.sh"
 
-herdr_linear::doc_publish "$PWD" diagnosis "texture leak on image swap" ./notes.md
+herdr_linear::doc_publish "$PWD" diagnosis "gradient banding on frame swap" ./notes.md
 ```
 
 Or take the subject from a file's own first heading:
@@ -120,7 +120,7 @@ create a project-scoped document at all is listed under "Not yet settled" in
 the conventions document; that is a question for Shawn to answer, not one this
 skill implements a path around.
 
-Titles are built for you: `WEB-3127 diagnosis: texture leak on image swap`.
+Titles are built for you: `WEB-3137 diagnosis: gradient banding on frame swap`.
 `:mag:` is applied to `diagnosis` and `findings`; everything else gets no icon,
 which is what 22 of 40 documents in the workspace do.
 

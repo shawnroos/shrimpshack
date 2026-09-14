@@ -333,7 +333,7 @@ argv_record() { cat "$WORK/rec/argv" 2>/dev/null; }
 # Identifier construction (R28, the validation half)
 
 @test "an identifier is CLOSED against [A-Za-z0-9._-], not filtered by denylist" {
-    for good in "WEB-2757" "herdr_linear" "v1.2.3" "a" "ABC-1_x.y"; do
+    for good in "WEB-2557" "herdr_linear" "v1.2.3" "a" "ABC-1_x.y"; do
         run herdr_linear::is_safe_identifier "$good"
         [ "$status" -eq 0 ]
     done

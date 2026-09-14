@@ -31,11 +31,11 @@ setup() {
     export HERDR_LINEAR_WORKTREES_ROOT="$WORK/wt"
     WT_ROOT="$WORK/wt"
     # <worktrees-root>/<org>/<scope-segment>. The fake tracker answers `acme`
-    # for the organisation and `AI Canvas Tools` for the project of every issue
+    # for the organisation and `Frame Effects` for the project of every issue
     # the found_child and found_parent modes serve.
-    BASE="$WT_ROOT/acme/ai-canvas-tools"
-    CHILD="WEB-3318-ai-tools-drawer-is-blank-when-a-still"
-    PARENT="WEB-2870-tool-detach-foreground"
+    BASE="$WT_ROOT/acme/frame-effects"
+    CHILD="WEB-3308-export-panel-is-empty-when-a-still"
+    PARENT="WEB-2670-tool-blur-backdrop"
     PKEY="project-44444444-4444-4444-8444-444444444444"
     TKEY="team-55555555-5555-4555-8555-555555555555"
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
@@ -98,12 +98,12 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "starting from a ticket creates a worktree at the ticket-derived path and binds it" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     [ "$output" = "$BASE/$CHILD" ]
     [ -d "$output" ]
     [ "$(herdr_linear::binding_state "$output")" = "bound" ]
-    [ "$(herdr_linear::binding_identifier "$output")" = "WEB-3318" ]
+    [ "$(herdr_linear::binding_identifier "$output")" = "WEB-3308" ]
 }
 
 # R6. The repository is the one thing here nobody can read off the path, so the
@@ -111,7 +111,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "the single recorded repository is stated with its source before anything is made" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     [ "$output" = "$BASE/$CHILD" ]
     [[ "$stderr" == *"$PROJECT"* ]]
@@ -125,7 +125,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "the worktree goes under the worktrees root, not inside the repository" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ -d "$BASE/$CHILD" ]
     [ ! -e "$PROJECT/worktrees" ]
     [ ! -e "$PROJECT/$CHILD" ]
@@ -136,7 +136,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "starting from a ticket writes nothing to Linear" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     [ "$(mutations)" = "0" ]
 }
@@ -148,21 +148,21 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "the branch is the directory name behind the prefix, identifier case kept" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     wt="$output"
     branch="$(git -C "$wt" branch --show-current)"
     [ "$branch" = "feature/$(basename "$wt")" ]
-    [ "$branch" = "feature/WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$branch" = "feature/WEB-3308-export-panel-is-empty-when-a-still" ]
     run herdr_linear::branch_identifier "$branch"
-    [ "$output" = "WEB-3318" ]
+    [ "$output" = "WEB-3308" ]
 }
 
 @test "a custom branch prefix is honoured" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318 bugfix
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308 bugfix
     branch="$(git -C "$output" branch --show-current)"
-    [[ "$branch" == bugfix/WEB-3318-* ]]
+    [[ "$branch" == bugfix/WEB-3308-* ]]
 }
 
 # KTD1 trades the identical-string form away for the branch convention. An empty
@@ -173,8 +173,8 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     # would collapse the empty value back to `feature` and this is the only
     # assertion that would see it.
     . "$ROOT/lib/start.sh"
-    run herdr_linear::start_branch_name "$(herdr_linear::fetch_issue WEB-3318)"
-    [ "$output" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    run herdr_linear::start_branch_name "$(herdr_linear::fetch_issue WEB-3308)"
+    [ "$output" = "WEB-3308-export-panel-is-empty-when-a-still" ]
 }
 
 # R14. No caller supplies the name, so nothing can drop the identifier out of it.
@@ -182,7 +182,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "the second argument is the branch prefix, not a worktree name" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318 hotfix
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308 hotfix
     [ "$status" -eq 0 ]
     [ "$(basename "$output")" = "$CHILD" ]
     [ ! -e "$BASE/hotfix" ]
@@ -200,7 +200,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 
 @test "an unreachable Linear creates no worktree" {
     export HERDR_LINEAR_CURL_BIN=/bin/false
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 3 ]
     [ ! -e "$WT_ROOT" ]
 }
@@ -212,7 +212,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     mkdir -p "$taken"
     printf 'someone else work\n' > "$taken/file.txt"
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 2 ]
     [[ "$stderr" == *"already exists"* ]]
     [ -f "$taken/file.txt" ]
@@ -224,11 +224,11 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # traversal in the path. Nothing is composed from it at all.
 @test "an identifier that is a traversal produces no name and no path" {
     export FAKE_LINEAR_MODE=traversal_identifier
-    run herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-3318)"
+    run herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-3308)"
     [ "$status" -ne 0 ]
     [ -z "$output" ]
     record_alpha
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -ne 0 ]
     [ ! -e "$WORK/root/escaped" ]
     [ ! -e "$WT_ROOT/acme/escaped" ]
@@ -278,7 +278,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # START_REFUSED is shared with a missing title and a missing team, so the stderr
 # line is what identifies the refusal -- lenient writes "note: not using ...".
 @test "a description with no template headings is refused before anything is created" {
-    printf '## Why\n\nA real reason, stated at length for whoever reads it.\n\n## The shape of this work\n\nWhat we do about it.\n' > "$WORK/d.md"
+    printf '## Why\n\nA real reason, stated at length for whoever reads it.\n\n## How the work splits\n\nWhat we do about it.\n' > "$WORK/d.md"
     enable_root_writes
     export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1
     run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web
@@ -310,10 +310,10 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "retrying start on an already-bound worktree succeeds with the same path" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     first="$output"
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     [ "$output" = "$first" ]
 }
@@ -323,33 +323,33 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "retrying start on an existing but unbound worktree binds it" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     rm -rf "$HERDR_LINEAR_STORE_DIR"
     run herdr_linear::binding_state "$BASE/$CHILD"
     [ "$output" = "unbound" ]
 
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     [ "$output" = "$BASE/$CHILD" ]
-    [ "$(herdr_linear::binding_identifier "$output")" = "WEB-3318" ]
+    [ "$(herdr_linear::binding_identifier "$output")" = "WEB-3308" ]
 }
 
 # The realistic partial: propose landed, confirm did not.
 @test "retrying start on a worktree left at proposed finishes the binding" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     wt="$BASE/$CHILD"
     rm -rf "$HERDR_LINEAR_STORE_DIR"
-    herdr_linear::binding_propose "$wt" WEB-3318 >/dev/null
+    herdr_linear::binding_propose "$wt" WEB-3308 >/dev/null
     [ "$(herdr_linear::binding_state "$wt")" = "proposed" ]
 
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     [ "$(herdr_linear::binding_state "$wt")" = "bound" ]
-    [ "$(herdr_linear::binding_identifier "$wt")" = "WEB-3318" ]
+    [ "$(herdr_linear::binding_identifier "$wt")" = "WEB-3308" ]
 }
 
 # Shawn's call on the review's P1: a worktree that is this issue's own, but
@@ -358,11 +358,11 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "a retry refuses this issue's own worktree once it is on another branch" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     wt="$output"
     git -C "$wt" checkout -q -b somebody-elses-work
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 2 ]
     [[ "$stderr" == *"somebody-elses-work"* ]]
     [ "$(git -C "$wt" rev-parse --abbrev-ref HEAD)" = "somebody-elses-work" ]
@@ -370,20 +370,20 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 }
 
 # Somebody else's work, still never adopted. The path is derived per issue now,
-# so the collision is staged rather than provoked: the directory WEB-2870 derives,
-# already bound to WEB-3318.
+# so the collision is staged rather than provoked: the directory WEB-2670 derives,
+# already bound to WEB-3308.
 @test "a worktree bound to a different issue is still refused" {
     record_alpha
     other="$BASE/$PARENT"
     mkdir -p "$BASE"
     git -C "$PROJECT" worktree add -q -b f/other "$other" >/dev/null 2>&1
-    n="$(herdr_linear::binding_propose "$other" WEB-3318)"
-    herdr_linear::binding_confirm "$other" WEB-3318 "$n"
+    n="$(herdr_linear::binding_propose "$other" WEB-3308)"
+    herdr_linear::binding_confirm "$other" WEB-3308 "$n"
     export FAKE_LINEAR_MODE=found_parent
-    run --separate-stderr herdr_linear::start_from_issue WEB-2870
+    run --separate-stderr herdr_linear::start_from_issue WEB-2670
     [ "$status" -eq 2 ]
-    [[ "$stderr" == *"WEB-3318"* ]]
-    [ "$(herdr_linear::binding_identifier "$other")" = "WEB-3318" ]
+    [[ "$stderr" == *"WEB-3308"* ]]
+    [ "$(herdr_linear::binding_identifier "$other")" = "WEB-3308" ]
 }
 
 # ------------------------------------------------------------- the gate (F1)
@@ -435,28 +435,28 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # to run unconditionally, so every short title lost its last word. The cut applies
 # to the title, so the identifier the name leads with can never be severed.
 @test "a short title keeps its last word" {
-    resp='{"data":{"issue":{"identifier":"WEB-3318","title":"AI tools drawer is blank"}}}'
+    resp='{"data":{"issue":{"identifier":"WEB-3308","title":"Export panel is empty"}}}'
     run herdr_linear::start_worktree_name "$resp"
-    [ "$output" = "WEB-3318-ai-tools-drawer-is-blank" ]
+    [ "$output" = "WEB-3308-export-panel-is-empty" ]
 }
 
 @test "a long title is cut at 40 characters with no severed word left behind" {
-    resp='{"data":{"issue":{"identifier":"WEB-3318","title":"AI Tools drawer is blank when a still-processing layer is selected"}}}'
+    resp='{"data":{"issue":{"identifier":"WEB-3308","title":"Export panel is empty when a still-rendering frame is selected"}}}'
     run herdr_linear::start_worktree_name "$resp"
-    [ "$output" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$output" = "WEB-3308-export-panel-is-empty-when-a-still" ]
     [[ "$output" != *- ]]
 }
 
 # R3, KTD2. The identifier leads and keeps its case, so the directory says which
 # ticket it is and shares a string with the branch.
 @test "the name leads with the identifier in its original case" {
-    resp='{"data":{"issue":{"identifier":"WEB-3318","title":"a blank drawer"}}}'
+    resp='{"data":{"issue":{"identifier":"WEB-3308","title":"a blank drawer"}}}'
     run herdr_linear::start_worktree_name "$resp"
-    [ "$output" = "WEB-3318-a-blank-drawer" ]
+    [ "$output" = "WEB-3308-a-blank-drawer" ]
 }
 
 @test "an issue with no title yields no name" {
-    resp='{"data":{"issue":{"identifier":"WEB-3318","title":""}}}'
+    resp='{"data":{"issue":{"identifier":"WEB-3308","title":""}}}'
     run herdr_linear::start_worktree_name "$resp"
     [ "$status" -ne 0 ]
     [ -z "$output" ]
@@ -468,7 +468,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # lowercased.
 @test "an issue with no project resolves a team-typed key and a team segment" {
     export FAKE_LINEAR_MODE=traversal_identifier
-    resp="$(herdr_linear::fetch_issue WEB-3318)"
+    resp="$(herdr_linear::fetch_issue WEB-3308)"
     run herdr_linear::start_scope "$resp"
     [ "$status" -eq 0 ]
     [ "$(printf '%s' "$output" | cut -f1)" = "team-e" ]
@@ -480,12 +480,12 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # under both and a later project-carrying issue must find the team-keyed answer.
 @test "an issue with a project resolves a project-typed key, the team key, and a slugged segment" {
     export FAKE_LINEAR_MODE=found_child
-    resp="$(herdr_linear::fetch_issue WEB-3318)"
+    resp="$(herdr_linear::fetch_issue WEB-3308)"
     run herdr_linear::start_scope "$resp"
     [ "$status" -eq 0 ]
     [ "$(printf '%s' "$output" | cut -f1)" = "project-44444444-4444-4444-8444-444444444444" ]
     [ "$(printf '%s' "$output" | cut -f2)" = "team-55555555-5555-4555-8555-555555555555" ]
-    [ "$(printf '%s' "$output" | cut -f3)" = "ai-canvas-tools" ]
+    [ "$(printf '%s' "$output" | cut -f3)" = "frame-effects" ]
 }
 
 # slug() would REPAIR a separator into a hyphen rather than refuse it, so the
@@ -530,11 +530,11 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     record_alpha
     mkdir -p "$WORK/elsewhere"
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$PROJECT"
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT"
     [ "$status" -eq 0 ]
     first="$output"
     rm -rf "$first"
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$WORK/elsewhere"
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$WORK/elsewhere"
     [ "$status" -eq 0 ]
     [ "$output" = "$first" ]
     [ "$output" = "$BASE/$CHILD" ]
@@ -546,7 +546,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "an organisation the API cannot name creates nothing" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ORGANIZATION=empty
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 4 ]
     [ ! -e "$WT_ROOT" ]
 }
@@ -559,7 +559,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "several recorded repositories create nothing and name every candidate" {
     record_three
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 6 ]
     [ -z "$output" ]
     [ ! -e "$BASE/$CHILD" ]
@@ -573,7 +573,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "standing inside one candidate does not break the tie" {
     record_three
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$PROJECT"
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT"
     [ "$status" -eq 6 ]
     [ ! -e "$BASE/$CHILD" ]
     [[ "$stderr" == *"several repositories"* ]]
@@ -583,13 +583,13 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # whole recovery: the answer is recorded so it is never asked again.
 @test "no recorded repository asks, and the answered retry creates and records" {
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 6 ]
     [ -z "$output" ]
     [ ! -e "$BASE/$CHILD" ]
     [[ "$stderr" == *"no repository is recorded"* ]]
 
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$PROJECT" "$PROJECT"
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT" "$PROJECT"
     [ "$status" -eq 0 ]
     [ "$output" = "$BASE/$CHILD" ]
     # R8. Under BOTH keys, so a later issue reaching this scope by only one of
@@ -604,7 +604,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # repository again, which is the defect being removed.
 @test "a relative repository answer is refused, and nothing is recorded or created" {
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$PROJECT" "./alpha"
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT" "./alpha"
     [ "$status" -eq 1 ]
     [ ! -e "$BASE/$CHILD" ]
     [ ! -e "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json" ]
@@ -618,7 +618,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     record_alpha
     chmod 000 "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json"
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     chmod 600 "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json"
     [ "$status" -ne 6 ]
     [ ! -e "$BASE/$CHILD" ]
@@ -633,18 +633,18 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "a worktree deleted from disk is restarted on the same branch" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     wt="$output"
     branch="$(git -C "$wt" branch --show-current)"
     rm -rf "$wt"
 
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     [ "$output" = "$wt" ]
     [ -d "$output" ]
     [ "$(git -C "$output" branch --show-current)" = "$branch" ]
-    [ "$(herdr_linear::binding_identifier "$output")" = "WEB-3318" ]
+    [ "$(herdr_linear::binding_identifier "$output")" = "WEB-3308" ]
 }
 
 # AE10, R13. The promise is a property of the CONFIGURATION. A root that is the
@@ -654,7 +654,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     record_alpha
     export HERDR_LINEAR_WORKTREES_ROOT="$HERDR_LINEAR_PROJECTS_ROOT"
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 1 ]
     [ -z "$output" ]
     [ ! -e "$HERDR_LINEAR_PROJECTS_ROOT/acme" ]
@@ -668,7 +668,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "a failing worktree add leaves no binding" {
     record_alpha
     export FAKE_LINEAR_MODE=found_child HERDR_LINEAR_GIT_BIN=/bin/false
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 4 ]
     [ ! -d "$BASE/$CHILD" ]
     [ "$(herdr_linear::binding_state "$BASE/$CHILD")" = "unbound" ]
@@ -719,7 +719,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "an answer that is not a git repository is refused and not recorded" {
     mkdir -p "$WORK/plain"
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$PROJECT" "$WORK/plain"
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT" "$WORK/plain"
     [ "$status" -eq 1 ]
     [ ! -e "$BASE/$CHILD" ]
     [ ! -e "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json" ]
@@ -734,7 +734,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     record_repo "$WORK/root/moved"
     rm -rf "$WORK/root/moved"
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 6 ]
     [ ! -e "$BASE/$CHILD" ]
     [[ "$stderr" == *"$WORK/root/moved"* ]]
@@ -748,7 +748,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     mkdir -p "$BASE/$CHILD"
     : > "$BASE/$CHILD/.git"
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 2 ]
     [ "$(herdr_linear::binding_state "$BASE/$CHILD")" = "unbound" ]
 }
@@ -780,9 +780,9 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     record_repo "$WORK/root/moved"
     rm -rf "$WORK/root/moved"
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 6 ]
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$PROJECT" "$PROJECT"
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT" "$PROJECT"
     [ "$status" -eq 0 ]
     run herdr_linear::scope_repos "$PKEY" "$TKEY"
     [ "$output" = "$PROJECT" ]
@@ -796,7 +796,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     chmod 000 "$BASE/$CHILD"
     [ -r "$BASE/$CHILD" ] && skip "cannot remove read permission here"
     export FAKE_LINEAR_MODE=found_child
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     chmod 755 "$BASE/$CHILD"
     [ "$status" -eq 2 ]
 }

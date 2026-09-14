@@ -226,7 +226,7 @@ KEEPERS = [
 
 # --- learned on the Slate ai-tools comment cut, 2026-08-20 ---
 FIXTURES = FIXTURES + [
-    ("// WEB-2932 U4: single owner of the Remove-Logo region domain\ncode();", 'ticket-label'),
+    ("// WEB-4322 U4: single owner of the Warm-Filter region domain\ncode();", 'ticket-label'),
     ("// R2 (Logo Removal v2, WEB-2845) / FD5 (WEB-2896, U5): the box-crosshair\ncode();", 'ticket-label'),
     ("// Pure geometry for the canvas overlays that track a MEDIA layer (WEB-2957).\ncode();", 'ticket-label'),
 ]

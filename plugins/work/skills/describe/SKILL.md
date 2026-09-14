@@ -20,7 +20,7 @@ disable-model-invocation: true
 **Say every resolution out loud before you act on it**, naming three things:
 the fact, where you read it, and how you derived it.
 
-> Team: Web — the only team on project AI Canvas Tools, read from Linear.
+> Team: Web — the only team on project Frame Effects, read from Linear.
 
 That one line lets a reader catch a wrong answer and its cause without opening a
 log. And nothing here refuses: a reader answering `outside`, `negative` or
@@ -48,7 +48,7 @@ herdr_linear::description_template > /tmp/desc.md
 
 **The template is where a NEW description starts. It is not a cage.** A ticket
 that has earned its own headings keeps them — the conventions document walks
-through `WEB-3214` as the worked example, which uses none of the three spine
+through `WEB-3184` as the worked example, which uses none of the three spine
 headings and is better for it, because a heading that carries the point beats a
 heading that carries a category.
 
@@ -193,8 +193,8 @@ enforcing the one rule that keeps these tickets readable.
 Every write saves the prior description first.
 
 ```bash
-herdr_linear::describe_backups WEB-3318      # what is saved
-herdr_linear::describe_restore WEB-3318      # prints the newest
+herdr_linear::describe_backups WEB-3308      # what is saved
+herdr_linear::describe_restore WEB-3308      # prints the newest
 ```
 
 `describe_restore` prints; it does not push. Review it, then write it back with

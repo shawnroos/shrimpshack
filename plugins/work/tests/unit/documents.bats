@@ -30,11 +30,11 @@ setup() {
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh documents.sh; do . "$ROOT/lib/$f"; done
 
     WT="$WORK/root/wt"; mkdir -p "$WT"
-    git -C "$WT" init -q -b feature/web-2870-detach
+    git -C "$WT" init -q -b feature/web-2670-blur
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     DOC="$WORK/note.md"
-    printf '# Texture leak on image swap\n\nThe pool is never drained.\n\n```ts\nconst x = 1;\n```\n' > "$DOC"
+    printf '# Gradient banding on frame swap\n\nThe pool is never drained.\n\n```ts\nconst x = 1;\n```\n' > "$DOC"
 }
 
 refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
@@ -46,7 +46,7 @@ refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
-bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
+bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2670)"; herdr_linear::binding_confirm "$WT" WEB-2670 "$n"; }
 # The answer a person would have given, recorded the only way the store accepts
 # one: propose, then confirm with the nonce it returned. The ids are the fake
 # tracker's -- the same pair every issue in these fixtures sits in.
@@ -66,8 +66,8 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # rather than passed through: a new kind is a decision, and a shared vocabulary
 # only works if a title tells you what you are about to read.
 @test "an issue-scoped title leads with the identifier and a known kind" {
-    run herdr_linear::doc_title WEB-3127 diagnosis "texture leak on image swap"
-    [ "$output" = "WEB-3127 diagnosis: texture leak on image swap" ]
+    run herdr_linear::doc_title WEB-3137 diagnosis "gradient banding on frame swap"
+    [ "$output" = "WEB-3137 diagnosis: gradient banding on frame swap" ]
 }
 
 @test "a project-scoped title carries no identifier" {
@@ -102,10 +102,10 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "a document is created against the bound issue and its id recorded" {
     bind_wt; enable_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1
-    run herdr_linear::doc_publish "$WT" diagnosis "texture leak" "$DOC"
+    run herdr_linear::doc_publish "$WT" diagnosis "gradient banding" "$DOC"
     [ "$status" -eq 0 ]
     [ "$(sent documentCreate)" = "1" ]
-    run grep -c 'WEB-2870' "$FAKE_LINEAR_RECORD_DIR/bodies"
+    run grep -c 'WEB-2670' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$output" -ge 1 ]
     run herdr_linear::binding_read "$WT"
     ids="$(printf '%s' "$output" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["created_documents"]))')"
@@ -116,9 +116,9 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "a second publish of the same document updates in place" {
     bind_wt; enable_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1
-    herdr_linear::doc_publish "$WT" diagnosis "texture leak" "$DOC"
+    herdr_linear::doc_publish "$WT" diagnosis "gradient banding" "$DOC"
     [ "$(sent documentCreate)" = "1" ]
-    run herdr_linear::doc_publish "$WT" diagnosis "texture leak" "$DOC"
+    run herdr_linear::doc_publish "$WT" diagnosis "gradient banding" "$DOC"
     [ "$status" -eq 0 ]
     [ "$(sent documentCreate)" = "1" ]
     [ "$(sent documentUpdate)" = "1" ]
@@ -130,7 +130,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "the file content is sent intact, including code fences" {
     bind_wt; enable_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1
-    herdr_linear::doc_publish "$WT" diagnosis "texture leak" "$DOC"
+    herdr_linear::doc_publish "$WT" diagnosis "gradient banding" "$DOC"
     body="$(cat "$FAKE_LINEAR_RECORD_DIR/bodies")"
     [[ "$body" == *"The pool is never drained"* ]]
     [[ "$body" == *'const x = 1;'* ]]
@@ -143,7 +143,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     run herdr_linear::doc_publish_file "$WT" diagnosis "$DOC"
     [ "$status" -eq 0 ]
     body="$(cat "$FAKE_LINEAR_RECORD_DIR/bodies")"
-    [[ "$body" == *"WEB-2870 diagnosis: Texture leak on image swap"* ]]
+    [[ "$body" == *"WEB-2670 diagnosis: Gradient banding on frame swap"* ]]
 }
 
 @test "a file with no heading falls back to its filename" {
@@ -174,7 +174,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     OUT="$WORK/elsewhere/wt"; mkdir -p "$OUT"
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
-    n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"; herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
+    n="$(herdr_linear::binding_propose "$OUT" WEB-2670)"; herdr_linear::binding_confirm "$OUT" WEB-2670 "$n"
     grant_consent "$OUT"
     export FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::doc_publish "$OUT" diagnosis "x" "$DOC"
@@ -186,7 +186,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     OUT="$WORK/elsewhere/wt2"; mkdir -p "$OUT"
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
-    n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"; herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
+    n="$(herdr_linear::binding_propose "$OUT" WEB-2670)"; herdr_linear::binding_confirm "$OUT" WEB-2670 "$n"
     export FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::doc_publish "$OUT" diagnosis "x" "$DOC"
     [ "$status" -eq "$HERDR_LINEAR_DOC_SHADOW" ]
@@ -256,7 +256,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "a reported success carrying no document is treated as a failure" {
     bind_wt; enable_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=no_document
-    run herdr_linear::doc_publish "$WT" diagnosis "texture leak" "$DOC"
+    run herdr_linear::doc_publish "$WT" diagnosis "gradient banding" "$DOC"
     [ "$status" -eq 3 ]
     run herdr_linear::binding_read "$WT"
     ids="$(printf '%s' "$output" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["created_documents"]))')"
@@ -271,7 +271,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::has_consent "$WT"
     [ "$status" -eq 1 ]
-    run herdr_linear::doc_publish "$WT" diagnosis "a texture leak" "$DOC"
+    run herdr_linear::doc_publish "$WT" diagnosis "a gradient banding" "$DOC"
     [ "$status" -eq "$HERDR_LINEAR_DOC_SHADOW" ]
     [ "$(sent documentCreate)" = "0" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
@@ -284,12 +284,12 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "shadow mode logs the document and sends nothing" {
     bind_wt
     export FAKE_LINEAR_ALLOW_MUTATION=1
-    run herdr_linear::doc_publish "$WT" diagnosis "texture leak" "$DOC"
+    run herdr_linear::doc_publish "$WT" diagnosis "gradient banding" "$DOC"
     [ "$status" -eq 2 ]
     [ "$(sent documentCreate)" = "0" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
     [[ "$output" == *"SHADOW would create document"* ]]
-    [[ "$output" == *"WEB-2870 diagnosis: texture leak"* ]]
+    [[ "$output" == *"WEB-2670 diagnosis: gradient banding"* ]]
 }
 
 # A 200 carrying success:false is a failed write that a "did we finish" check
@@ -297,7 +297,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "a document the API reports as unsuccessful is not recorded" {
     bind_wt; enable_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=fail
-    run herdr_linear::doc_publish "$WT" diagnosis "texture leak" "$DOC"
+    run herdr_linear::doc_publish "$WT" diagnosis "gradient banding" "$DOC"
     [ "$status" -eq 3 ]
     run herdr_linear::binding_read "$WT"
     ids="$(printf '%s' "$output" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["created_documents"]))')"

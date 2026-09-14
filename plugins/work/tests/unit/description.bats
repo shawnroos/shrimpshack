@@ -38,45 +38,45 @@ setup() {
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh; do . "$ROOT/lib/$f"; done
 
     WT="$WORK/root/wt"; mkdir -p "$WT"
-    git -C "$WT" init -q -b feature/web-2870-detach
+    git -C "$WT" init -q -b feature/web-2670-blur
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     GOOD="$WORK/good.md"
     cat > "$GOOD" <<'EOF'
 ## Problem
 
-Editors open the AI Tools drawer while a layer is still processing and see
-nothing at all, so they assume the tool is broken and start again.
+Editors open the export panel while a frame is still rendering and see
+nothing at all, so they assume export is broken and start again.
 
 ### For example:
-- A user selects a still-uploading image and sees an empty panel.
-- They reopen twice, then switch tools for that shot.
+- A user selects a frame that is still rendering and sees an empty list.
+- They reopen twice, then export that frame another way.
 
 ## Solution
 
-Opening the drawer on a processing layer says what is happening and roughly how
+Opening the panel on a rendering frame says what is happening and roughly how
 long is left, so waiting is a choice rather than a guess.
 
 ### For example:
-- The panel keeps their place while the layer finishes.
+- The panel keeps their place while the frame finishes.
 - Nobody re-runs a render that was already running.
 
 ## Proposal
 
-Show the drawer contents for a layer as soon as we know what it is, and a clear
-processing state until then.
+Show the panel contents for a frame as soon as we know what it is, and a clear
+rendering state until then.
 
 ### Key Requirements
-- The drawer never renders empty for a selectable layer.
+- The panel never renders empty for a selectable frame.
 
 ### Constraints
-- No new endpoint; layer status already arrives on the existing channel.
+- No new endpoint; frame status already arrives on the existing channel.
 EOF
 }
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
-bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
+bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2670)"; herdr_linear::binding_confirm "$WT" WEB-2670 "$n"; }
 # The answer a person would have given, recorded the only way the store accepts
 # one: propose, then confirm with the nonce it returned. The ids are the fake
 # tracker's -- the same pair every issue in these fixtures sits in.
@@ -111,9 +111,9 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ ! -e "$HERDR_LINEAR_DESC_BACKUP_DIR/../escaped" ]
 
     # The positive control: a real identifier still round-trips.
-    mkdir -p "$HERDR_LINEAR_DESC_BACKUP_DIR/WEB-3318"
-    printf 'kept\n' > "$HERDR_LINEAR_DESC_BACKUP_DIR/WEB-3318/20200101T000000Z.md"
-    run herdr_linear::describe_restore WEB-3318
+    mkdir -p "$HERDR_LINEAR_DESC_BACKUP_DIR/WEB-3308"
+    printf 'kept\n' > "$HERDR_LINEAR_DESC_BACKUP_DIR/WEB-3308/20200101T000000Z.md"
+    run herdr_linear::describe_restore WEB-3308
     [ "$status" -eq 0 ]
     [ "$output" = "kept" ]
 }
@@ -143,18 +143,18 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$status" -eq 0 ]
 }
 
-# THE CONFORMANCE TEST FOR THIS UNIT. WEB-3214 "Improve AI tools analytics" is a
-# real ticket Shawn holds up as good, and it uses none of the spine headings --
-# it uses `## Why`, `## The shape of this work`, `## Two things everyone reading
-# these dashboards needs to know`, `## Worth agreeing before GA, not after`.
+# THE CONFORMANCE TEST FOR THIS UNIT. The WEB-3184 fixture is fictional, modelled
+# on the shape of a ticket held up as good, and it uses none of the spine
+# headings -- it uses `## Why`, `## How the work splits`, `## Two caveats for
+# anyone reading these charts`, `## Settle before launch, not after`.
 # Those headings are arguments a reader can act on, where `## Constraints` is a
 # heading people skim past.
 #
 # An earlier version of the validator REJECTED it. A validator that refuses the
 # work it is meant to protect is the wrong validator, so the spine became
 # advisory and the fixture stays as a regression guard.
-@test "WEB-3214, a ticket held up as good, passes validation" {
-    run --separate-stderr herdr_linear::description_validate "$FIX/descriptions/web-3214.md"
+@test "WEB-3184, a ticket held up as good, passes validation" {
+    run --separate-stderr herdr_linear::description_validate "$FIX/descriptions/web-3184.md"
     [ "$status" -eq 0 ]
     # Reported as a note, not a refusal.
     [[ "$stderr" == *"note: not using the Problem/Solution/Proposal shape"* ]]
@@ -163,12 +163,12 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # The spine is the default a NEW description starts from, so strict mode -- used
 # when composing from the template -- does hold it.
 @test "the same ticket does not pass strict mode, which is the point of the two modes" {
-    run --separate-stderr herdr_linear::description_validate "$FIX/descriptions/web-3214.md" strict
+    run --separate-stderr herdr_linear::description_validate "$FIX/descriptions/web-3184.md" strict
     [ "$status" -eq "$HERDR_LINEAR_DESC_MALFORMED" ]
     [[ "$stderr" == *"not using the Problem/Solution/Proposal shape"* ]]
 }
 
-# `<https://...>` is a markdown autolink, and WEB-3214 ends with one. The first
+# `<https://...>` is a markdown autolink, and WEB-3184 ends with one. The first
 # placeholder pattern matched it -- the validator calling a real ticket
 # unfinished because it cited its source properly.
 @test "a markdown autolink is not a template placeholder" {
@@ -178,7 +178,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [[ "$stderr" != *"placeholder"* ]]
 }
 
-# A date in PROSE is fine. WEB-3214 opens with "Measured 25 Aug 2026" and is not
+# A date in PROSE is fine. WEB-3184 opens with "Measured 25 Aug 2026" and is not
 # a diary; it is dated HEADINGS that mark a log.
 @test "a date in prose is not a diary" {
     printf '## Why\n\nMeasured 25 Aug 2026 in PROD, last 90 days. Numbers followed.\n' > "$WORK/x.md"
@@ -249,7 +249,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 @test "a write that only appends to the current description is refused as a diary" {
     bind_wt; enable_writes
     export FAKE_LINEAR_MODE=desc_issue FAKE_LINEAR_ALLOW_MUTATION=1
-    current="$(FAKE_LINEAR_MODE=desc_issue herdr_linear::_fetch_description WEB-2870 \
+    current="$(FAKE_LINEAR_MODE=desc_issue herdr_linear::_fetch_description WEB-2670 \
         | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["issue"]["description"])')"
     { printf '%s' "$current"; printf '\n\n## Notes\n\nand one more thing\n'; } > "$WORK/appended.md"
     run --separate-stderr herdr_linear::describe "$WT" "$WORK/appended.md"
@@ -275,8 +275,8 @@ entirely rewritten text"
     run herdr_linear::describe "$WT" "$GOOD"
     [ "$status" -eq 0 ]
     [ "$(sent issueUpdate)" = "1" ]
-    [ "$(herdr_linear::describe_backups WEB-2870 | grep -c .)" = "1" ]
-    restored="$(herdr_linear::describe_restore WEB-2870)"
+    [ "$(herdr_linear::describe_backups WEB-2670 | grep -c .)" = "1" ]
+    restored="$(herdr_linear::describe_restore WEB-2670)"
     [[ "$restored" == *"Nobody re-runs a render"* ]]
 }
 
@@ -289,16 +289,16 @@ entirely rewritten text"
     run herdr_linear::describe "$WT" "$WORK/x.md"
     [ "$status" -eq 5 ]
     [ "$(sent issueUpdate)" = "0" ]
-    [ -z "$(herdr_linear::describe_backups WEB-2870)" ]
+    [ -z "$(herdr_linear::describe_backups WEB-2670)" ]
 }
 
 # The other half of the two modes. `describe` edits a description that has
 # earned its own headings, so it stays LENIENT -- strict there would refuse
-# WEB-3214, the ticket the validator exists to protect.
+# WEB-3184, the ticket the validator exists to protect.
 @test "a ticket with its own headings is still written by describe" {
     bind_wt; enable_writes
     export FAKE_LINEAR_MODE=desc_issue FAKE_LINEAR_ALLOW_MUTATION=1
-    run herdr_linear::describe "$WT" "$FIX/descriptions/web-3214.md"
+    run herdr_linear::describe "$WT" "$FIX/descriptions/web-3184.md"
     [ "$status" -eq 0 ]
     [ "$(sent issueUpdate)" = "1" ]
 }
@@ -306,7 +306,7 @@ entirely rewritten text"
 @test "a description identical to the current one is not rewritten" {
     bind_wt; enable_writes
     export FAKE_LINEAR_MODE=desc_issue FAKE_LINEAR_ALLOW_MUTATION=1
-    FAKE_LINEAR_MODE=desc_issue herdr_linear::_fetch_description WEB-2870 \
+    FAKE_LINEAR_MODE=desc_issue herdr_linear::_fetch_description WEB-2670 \
         | python3 -c 'import sys,json;sys.stdout.write(json.load(sys.stdin)["data"]["issue"]["description"])' > "$WORK/same.md"
     run herdr_linear::describe "$WT" "$WORK/same.md"
     [ "$status" -eq 1 ]
@@ -326,10 +326,10 @@ entirely rewritten text"
     [ "$status" -eq "$HERDR_LINEAR_DESC_SHADOW" ]
     [ "$(sent issueUpdate)" = "0" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
-    [[ "$output" == *"SHADOW would rewrite the description of WEB-2870"* ]]
+    [[ "$output" == *"SHADOW would rewrite the description of WEB-2670"* ]]
     run herdr_linear::binding_pending_consent "$WT"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"rewrite the description of WEB-2870"* ]]
+    [[ "$output" == *"rewrite the description of WEB-2670"* ]]
 }
 
 # An answer given for this team and project on a DIFFERENT branch is not an
@@ -354,7 +354,7 @@ entirely rewritten text"
     [ "$status" -eq 3 ]
     [ "$(sent issueUpdate)" = "0" ]
     [[ "$output" == *"## Problem"* ]]
-    [ -z "$(herdr_linear::describe_backups WEB-2870)" ]
+    [ -z "$(herdr_linear::describe_backups WEB-2670)" ]
 }
 
 @test "a ticket with an empty description is filled from a valid file" {
@@ -397,8 +397,8 @@ entirely rewritten text"
     [ "$status" -eq 2 ]
     [ "$(sent issueUpdate)" = "0" ]
 
-    n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"
-    herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
+    n="$(herdr_linear::binding_propose "$OUT" WEB-2670)"
+    herdr_linear::binding_confirm "$OUT" WEB-2670 "$n"
     grant_consent "$OUT"
     run herdr_linear::describe "$OUT" "$GOOD"
     [ "$status" -eq 0 ]

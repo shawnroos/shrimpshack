@@ -339,8 +339,8 @@ Also pass `--label` — the display name for **every** surface the run opens: th
 tab, the split, the workspace, and the Claude session itself. The convention is:
 
 ```
-Ticket: Title          WEB-2757: Remove Logo
-Title                  Remove Logo            ← no ticket
+Ticket: Title          WEB-4321: Warm Filter
+Title                  Warm Filter            ← no ticket
 ```
 
 **Resolve the ticket here, before dispatch.** The script has no Linear access and

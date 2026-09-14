@@ -38,7 +38,7 @@ setup() {
     export HERDR_LINEAR_PANE_POLL_TRIES=10
     # Three live spaces. wG's LABEL names the issue's project; only a record
     # can say it is that project's space.
-    export FAKE_HERDR_WORKSPACES='wA=Plugins,wG=AI Canvas Tools,wR=AI-Editor'
+    export FAKE_HERDR_WORKSPACES='wA=Plugins,wG=Frame Effects,wR=AI-Editor'
     # The space this session is working from. No pane id, so the reader takes
     # the environment's word for it.
     export HERDR_WORKSPACE_ID=wA
@@ -53,11 +53,11 @@ setup() {
     PROJECT="$WORK/root/alpha"
     git -C "$PROJECT" init -q -b main
     git -C "$PROJECT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
-    WT="$WORK/wt/acme/ai-canvas-tools/WEB-3318-ai-tools-drawer-is-blank-when-a-still"
+    WT="$WORK/wt/acme/frame-effects/WEB-3308-export-panel-is-empty-when-a-still"
     mkdir -p "${WT%/*}"
-    git -C "$PROJECT" worktree add -q -b feature/WEB-3318-x "$WT" >/dev/null 2>&1
-    n="$(herdr_linear::binding_propose "$WT" WEB-3318)"
-    herdr_linear::binding_confirm "$WT" WEB-3318 "$n"
+    git -C "$PROJECT" worktree add -q -b feature/WEB-3308-x "$WT" >/dev/null 2>&1
+    n="$(herdr_linear::binding_propose "$WT" WEB-3308)"
+    herdr_linear::binding_confirm "$WT" WEB-3308 "$n"
 }
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
@@ -95,7 +95,7 @@ creations() { local n; n="$(grep -cE '^(tab create|pane split|workspace create)'
     bind_space wG "$PID"
     run herdr_linear::open_session "$WT"
     [ "$status" -eq 0 ]
-    [ "$(herdr_calls "tab create --workspace wG --cwd $WT --label WEB-3318")" = "1" ]
+    [ "$(herdr_calls "tab create --workspace wG --cwd $WT --label WEB-3308")" = "1" ]
 }
 
 # ------------------------------------------------------------- the tab (R20)
@@ -239,7 +239,7 @@ creations() { local n; n="$(grep -cE '^(tab create|pane split|workspace create)'
 }
 
 @test "a worktree bound to nothing opens no session" {
-    unbound="$WORK/wt/acme/ai-canvas-tools/loose"
+    unbound="$WORK/wt/acme/frame-effects/loose"
     git -C "$PROJECT" worktree add -q -b f/loose "$unbound" >/dev/null 2>&1
     bind_space wG "$PID"
     run herdr_linear::open_session "$unbound"
