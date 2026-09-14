@@ -451,3 +451,200 @@ assert hits == [{"mapping": "global", "space": None, "level": "space"}], hits'
     [[ "$stderr" == *"assignee"* ]]
     [[ "$stderr" == *"label-group:<name>"* ]]
 }
+
+# ------------------------------------------------------------------ U3: writes
+
+LEVELS_A='{"space": "team", "tab": "assignee"}'
+FILTER_A='{"team": "acme-web"}'
+
+sum() { shasum "$CFG" | cut -d' ' -f1; }
+
+no_leftovers() {
+    [ -z "$(find "$HERDR_LINEAR_STORE_DIR" -maxdepth 1 -name '.tmp.*' -print)" ]
+    [ ! -e "$CFG.lock" ]
+}
+
+@test "a set that fails validation is refused and the file on disk is byte-unchanged" {
+    write_cfg "$GOOD"
+    before="$(sum)"
+    run --separate-stderr herdr_linear::board_config_set mapping global '{"space": "labels"}' "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_REFUSED" ]
+    [ -z "$output" ]
+    [[ "$stderr" == *"$CFG"* ]]
+    [[ "$stderr" == *"not a level kind"* ]]
+    [ "$(sum)" = "$before" ]
+    [ "$(stat -f %Lp "$CFG")" = "600" ]
+    no_leftovers
+}
+
+@test "a set carrying the computed exclusion is refused and the file is byte-unchanged" {
+    write_cfg "$GOOD"
+    before="$(sum)"
+    run --separate-stderr herdr_linear::board_config_set filter global '{"team": "acme-web", "state-type-not": ["triage"]}'
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_REFUSED" ]
+    [[ "$stderr" == *"state-type-not"* ]]
+    [ "$(sum)" = "$before" ]
+    no_leftovers
+}
+
+@test "a set onto a file that is itself refused is refused and leaves it untouched" {
+    write_cfg "$GOOD"
+    chmod 660 "$CFG"
+    before="$(sum)"
+    run --separate-stderr herdr_linear::board_config_set mapping global "$LEVELS_A" "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_REFUSED" ]
+    [[ "$stderr" == *"writable by group"* ]]
+    [ "$(sum)" = "$before" ]
+    [ "$(stat -f %Lp "$CFG")" = "660" ]
+    no_leftovers
+}
+
+@test "a set on an absent file creates it with only that mapping and the version" {
+    run --separate-stderr herdr_linear::board_config_set mapping global "$LEVELS_A" "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_OK" ]
+    python3 - "$CFG" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d == {"version": 1, "global": {"levels": {"space": "team", "tab": "assignee"},
+                                      "filter": {"team": "acme-web"}}}, d
+PY
+    no_leftovers
+}
+
+@test "a space or filter set on an absent file is refused and creates nothing" {
+    run --separate-stderr herdr_linear::board_config_set mapping space Mine "$LEVELS_A" "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_REFUSED" ]
+    [[ "$stderr" == *"global"* ]]
+    [ ! -e "$CFG" ]
+    run --separate-stderr herdr_linear::board_config_set filter global "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_REFUSED" ]
+    [ ! -e "$CFG" ]
+}
+
+@test "two sets in sequence keep the first value" {
+    run herdr_linear::board_config_set mapping global "$LEVELS_A" "$FILTER_A"
+    [ "$status" -eq 0 ]
+    run herdr_linear::board_config_set mapping space Mine '{"space": "assignee"}' '{"assignee": "me"}'
+    [ "$status" -eq 0 ]
+    run --separate-stderr herdr_linear::board_config_load
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_OK" ]
+    printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert d["global"]["levels"] == {"space": "team", "tab": "assignee"}, d
+assert d["global"]["filter"]["team"] == "acme-web", d
+assert d["spaces"]["Mine"]["levels"] == {"space": "assignee"}, d'
+}
+
+@test "a filter set replaces only that mapping's filter" {
+    write_cfg "$GOOD"
+    run --separate-stderr herdr_linear::board_config_set filter space Mine '{"assignee": "me"}'
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_OK" ]
+    python3 - "$CFG" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["spaces"]["Mine"] == {"levels": {"space": "assignee", "tab": "project"},
+                               "filter": {"assignee": "me"}}, d
+assert d["global"]["filter"] == {"team": ["acme-web", "acme-api"]}, d
+PY
+}
+
+@test "a set keeps the order of the spaces in the file" {
+    write_cfg '{"version": 1, "global": {"levels": {"space": "team"}, "filter": {"team": "a"}},
+      "spaces": {"Zed": {"levels": {"tab": "project"}, "filter": {"team": "a"}},
+                 "Alpha": {"levels": {"tab": "cycle"}, "filter": {"team": "a"}}}}'
+    run herdr_linear::board_config_set filter space Zed '{"team": "b"}'
+    [ "$status" -eq 0 ]
+    run herdr_linear::board_config_set mapping space Mid '{"tab": "state"}' '{"team": "c"}'
+    [ "$status" -eq 0 ]
+    python3 - "$CFG" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert list(d["spaces"]) == ["Zed", "Alpha", "Mid"], list(d["spaces"])
+PY
+}
+
+@test "a file written by the set verb passes the loader's owner and mode check" {
+    # 0277 strips the owner's write bit from a bare O_CREAT, so only an explicit
+    # chmod yields 0600. bats' own temp files need it restored before `run`.
+    rc=0
+    umask 0277
+    herdr_linear::board_config_set mapping global "$LEVELS_A" "$FILTER_A" >/dev/null || rc=$?
+    umask 022
+    [ "$rc" -eq 0 ]
+    [ "$(stat -f %Lp "$CFG")" = "600" ]
+    [ "$(stat -f %u "$CFG")" = "$(id -u)" ]
+    run --separate-stderr herdr_linear::board_config_load
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_OK" ]
+    [ -z "$stderr" ]
+}
+
+@test "a set with malformed arguments is a usage refusal and writes nothing" {
+    write_cfg "$GOOD"
+    before="$(sum)"
+    run --separate-stderr herdr_linear::board_config_set mapping global "{not json" "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_USAGE" ]
+    run --separate-stderr herdr_linear::board_config_set mapping everywhere "$LEVELS_A" "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_USAGE" ]
+    run --separate-stderr herdr_linear::board_config_set filter space "" "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_USAGE" ]
+    run --separate-stderr herdr_linear::board_config_set mapping global "$LEVELS_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_USAGE" ]
+    [ "$(sum)" = "$before" ]
+    no_leftovers
+}
+
+@test "a set that cannot take the lock writes nothing and says so" {
+    write_cfg "$GOOD"
+    before="$(sum)"
+    mkdir "$CFG.lock"
+    HERDR_LINEAR_LOCK_WAIT_SECONDS=0
+    run --separate-stderr herdr_linear::board_config_set mapping global "$LEVELS_A" "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_CONFIG_LOCKED" ]
+    [ "$(sum)" = "$before" ]
+    rmdir "$CFG.lock"
+}
+
+# ---------------------------------------------------------------- U3: preview
+
+@test "a preview of a changed tab level names the level, its old and new kind, and writes nothing" {
+    write_cfg "$GOOD"
+    before="$(sum)"
+    run --separate-stderr herdr_linear::board_config_preview mapping global \
+        '{"space": "team", "tab": "project", "column": "state", "row": "label-group:Area"}' \
+        '{"team": ["acme-web", "acme-api"]}'
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_OK" ]
+    [ -z "$stderr" ]
+    [ "$(sum)" = "$before" ]
+    no_leftovers
+    printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert d["scope"] == "global" and d["space"] is None, d
+assert d["levels"] == [{"level": "tab", "from": "assignee", "to": "project"}], d
+assert d["filter_changed"] is False, d
+assert d["panes"] == [], d'
+}
+
+@test "a preview of a new space mapping lists every level it adds and a changed filter" {
+    write_cfg "$GOOD"
+    run --separate-stderr herdr_linear::board_config_preview mapping space Ops '{"space": "project"}' '{"state-type": "started"}'
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_OK" ]
+    printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert d["scope"] == "space" and d["space"] == "Ops", d
+assert d["levels"] == [{"level": "space", "from": None, "to": "project"}], d
+assert d["filter_changed"] is True, d'
+}
+
+@test "a preview of a change that set would refuse is refused the same way" {
+    write_cfg "$GOOD"
+    before="$(sum)"
+    run --separate-stderr herdr_linear::board_config_preview mapping global '{"space": "team", "tab": "team"}' "$FILTER_A"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_REFUSED" ]
+    [ -z "$output" ]
+    [[ "$stderr" == *"distinct"* ]]
+    [ "$(sum)" = "$before" ]
+    no_leftovers
+}

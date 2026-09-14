@@ -314,6 +314,19 @@ placement_tree() {
     done
 }
 
+# A configuration change moves and closes panes; a hook has nobody to show it to.
+@test "a hook that writes the board configuration turns the placement check red" {
+    for verb in board_config_set _board_config_py; do
+        placement_tree
+        printf 'herdr_linear::%s set x y\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"ground.sh"* ]]
+        [[ "$output" == *"$verb"* ]]
+        rm -rf "$WORK/p"
+    done
+}
+
 @test "a second lib caller of workspace_confirm turns the placement check red" {
     placement_tree
     printf 'herdr_linear::open_session() {\n    herdr_linear::workspace_confirm a b c\n}\n' >> "$WORK/p/lib/create.sh"

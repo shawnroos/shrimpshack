@@ -98,6 +98,7 @@ in for that answer.
 | `/work:describe` | write the issue description |
 | `/work:doc` | publish a document to the issue |
 | `/work:layout` | build a herdr tab and its columns from an issue |
+| `/work:board` | change which Linear field each herdr level groups by, and which tickets are on the board |
 
 **Never invent state.** If a command fails or Linear is unreachable, say so.
 A confident wrong answer about what a worktree is bound to is worse than "I
