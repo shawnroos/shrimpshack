@@ -340,3 +340,16 @@ placement_tree() {
     run placement_caller_check "$WORK/q"
     [ "$status" -ne 0 ]
 }
+
+# A hook has nobody to ask before a pane in use moves or a board pane closes.
+@test "a hook that closes, creates or moves a board pane turns the placement check red" {
+    for verb in board_close_pane board_move_in_use board_apply_tab_in_use board_move_pane board_apply_tab board_create_pane; do
+        placement_tree
+        printf 'herdr_linear::%s "$space" "$issue"\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"ground.sh"* ]]
+        [[ "$output" == *"$verb"* ]]
+        rm -rf "$WORK/p"
+    done
+}

@@ -586,7 +586,9 @@ import os, re, sys
 root = sys.argv[1]
 DEF = re.compile(r"^(herdr_linear::[A-Za-z0-9_]+)\(\)\s*\{")
 HOOK_BANNED = ("workspace_confirm", "workspace_propose", "open_session", "place_session", "layout_build",
-               "board_config_set", "_board_config_py")
+               "board_config_set", "_board_config_py",
+               "board_close_pane", "board_move_in_use", "board_apply_tab_in_use",
+               "board_move_pane", "board_apply_tab", "board_create_pane")
 LIB_ALLOWED = {("create.sh", "herdr_linear::new_project")}
 
 def files(d):

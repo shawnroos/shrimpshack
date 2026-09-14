@@ -40,6 +40,14 @@
 #                          as an unreachable server does, unlike a missing tab
 #   FAKE_HERDR_WORKSPACE_LIST_FAILS  1 to make `workspace list` fail while the
 #                          server otherwise answers
+#   FAKE_HERDR_BOARD_STATE  a board state file. When set, every call but
+#                          `status` is answered by fake-herdr-socket.py from that
+#                          file, the one the fake socket server edits too: the
+#                          board's moves go over the socket and its closes,
+#                          renames and metadata over the CLI, and a test reads
+#                          both effects from one snapshot
+#   FAKE_HERDR_SOCKET_PATH  the socket line `status server` prints
+#   FAKE_HERDR_STATUS_NO_SOCKET  1 to leave the socket line out
 #   FAKE_HERDR_WORKSPACES  the spaces `workspace list` reports, as
 #                          `id=label,id=label` (default: wA=Plugins). Created
 #                          tabs and panes are remembered in the record dir, so
@@ -119,6 +127,10 @@ for _verb in $FAKE_HERDR_MUTATING_VERBS; do
         _mutating="$_verb"
     fi
 done
+
+if [ -n "${FAKE_HERDR_BOARD_STATE:-}" ] && [ "${1:-}" != status ]; then
+    exec python3 "${BASH_SOURCE[0]%/*}/fake-herdr-socket.py" cli "$@"
+fi
 
 # Creation responses, shaped as herdr 0.8.2 actually answers: `tab create`
 # returns .result.tab and .result.root_pane; `pane split` returns .result.pane.
@@ -224,7 +236,8 @@ emit_status() {
             printf 'version: 0.8.2\n'
             printf 'protocol: 20\n'
             printf 'compatible: yes\n'
-            printf 'socket: /tmp/fake-herdr.sock\n'
+            [ "${FAKE_HERDR_STATUS_NO_SOCKET:-0}" = 1 ] \
+                || printf 'socket: %s\n' "${FAKE_HERDR_SOCKET_PATH:-/tmp/fake-herdr.sock}"
             ;;
     esac
 }
