@@ -96,7 +96,7 @@ herdr_linear::_issue_with_session() {
 
     # Here and not in _file_issue: an issue filed into the current worktree names
     # nothing, so it must not be refused for a scheme it never renders.
-    herdr_linear::schemes_usable worktree branch || return "$HERDR_LINEAR_CREATE_REFUSED"
+    herdr_linear::usable_schemes open || return "$HERDR_LINEAR_CREATE_REFUSED"
 
     ident="$(herdr_linear::_file_issue "$wt" "${2:-}" "${3:-}" "${4:-}" "${5:-}")" || return $?
 

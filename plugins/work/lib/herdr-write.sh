@@ -174,9 +174,11 @@ herdr_linear::_tab_label() {
     # leaked. The render refuses it again, and says so.
     herdr_linear::is_safe_identifier "$ident" || return 1
     if herdr_linear::scheme_wants_title tab; then
+        # 3, apart from the render's 1 and 2: a read that failed is worth
+        # retrying, a name that cannot render is not.
         resp="$(herdr_linear::fetch_issue "$ident")" || {
             printf 'could not read %s from Linear, so its tab has no label; nothing was made\n' "$ident" >&2
-            return 1
+            return 3
         }
         title="$(herdr_linear::_start_issue_field "$resp" title)"
     fi
@@ -298,8 +300,14 @@ herdr_linear::layout_build() {
     # leave a tab behind with no columns under it. The tab's label is RESOLVED
     # here rather than at the creation below for the same reason: a scheme that
     # refuses inside the loop leaves a half-built tab.
-    label="$(herdr_linear::_tab_label "$parent")" || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
-    herdr_linear::schemes_usable worktree branch || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
+    # The schemes first: the label may read Linear, and a typo is refused unread.
+    herdr_linear::schemes_usable tab worktree branch || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
+    label="$(herdr_linear::_tab_label "$parent")"; rc=$?
+    case "$rc" in
+        0) ;;
+        3) return "$HERDR_LINEAR_LAYOUT_FAILED" ;;
+        *) return "$HERDR_LINEAR_LAYOUT_BAD_NAME" ;;
+    esac
     for child in "$@"; do
         herdr_linear::slug "$child" >/dev/null || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
     done
