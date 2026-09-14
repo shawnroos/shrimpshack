@@ -149,6 +149,94 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
     [ ! -d "$(col WEB-3001)" ]
 }
 
+# ------------------------------------------------- the tab label, pinned (U3)
+#
+# Two sites label a tab and they reach it by different routes: the layout slugs
+# the parent identifier, the session passes it through. Both are pinned to the
+# bare identifier BEFORE either moved behind the scheme resolver, because "the
+# two already agree" is the claim the move rests on.
+
+tab_label() { sed -n 's/.*--label \([^ ]*\).*/\1/p' "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/null | tail -n1; }
+
+@test "the layout labels its tab with the parent identifier" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    [ "$(tab_label)" = "WEB-2870" ]
+}
+
+@test "a session labels its tab with the issue identifier" {
+    run herdr_linear::open_session "$PARENT_WT"
+    [ "$status" -eq 0 ]
+    [ "$(tab_label)" = "WEB-2870" ]
+}
+
+@test "both tab-label sites render the same label for the same issue" {
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    from_layout="$(tab_label)"
+    rm -rf "$FAKE_HERDR_RECORD_DIR"; mkdir -p "$FAKE_HERDR_RECORD_DIR"
+    herdr_linear::binding_set_tab "$PARENT_WT" ""
+    run herdr_linear::open_session "$PARENT_WT"
+    [ "$status" -eq 0 ]
+    [ "$from_layout" = "$(tab_label)" ]
+}
+
+# R4. The tab scheme is what a label follows now, including at the site that
+# never had a title to render from -- it reads one only when the scheme asks.
+@test "a tab scheme that renders a title reaches both label sites" {
+    export HERDR_LINEAR_TAB_SCHEME=identifier-title
+    run herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 0 ]
+    [ "$(tab_label)" = "WEB-2870-column-web-2870" ]
+    rm -rf "$FAKE_HERDR_RECORD_DIR"; mkdir -p "$FAKE_HERDR_RECORD_DIR"
+    herdr_linear::binding_set_tab "$PARENT_WT" ""
+    run herdr_linear::open_session "$PARENT_WT"
+    [ "$status" -eq 0 ]
+    [ "$(tab_label)" = "WEB-2870-column-web-2870" ]
+}
+
+# R6. A tab scheme that does not exist is a typo, and a typo is refused once --
+# the render is the reporter, so asking whether the scheme wants a title must
+# not print the same complaint a second time.
+@test "a tab scheme that does not exist refuses the layout once, naming the valid ones" {
+    export HERDR_LINEAR_TAB_SCHEME=identifier-slug
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 2 ]
+    [ "$(herdr_calls 'tab create')" = "0" ]
+    [[ "$stderr" == *"identifier identifier-title"* ]]
+    [ "$(printf '%s' "$stderr" | grep -c 'not one this plugin renders')" -eq 1 ]
+}
+
+@test "a worktree scheme that does not exist refuses the layout once, without blaming a title" {
+    export HERDR_LINEAR_WORKTREE_SCHEME=identifier-slug
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 2 ]
+    [ "$(herdr_calls 'tab create')" = "0" ]
+    [[ "$stderr" == *"identifier-title identifier"* ]]
+    [ "$(printf '%s' "$stderr" | grep -c 'not one this plugin renders')" -eq 1 ]
+    [[ "$stderr" != *"cannot become a safe name"* ]]
+}
+
+# The parent is read for its title the way a child is read for its name, and a
+# read that failed is a retry, not a name to fix -- exit 3, as a child's is.
+@test "a parent that cannot be read for its tab title fails the layout as retryable" {
+    export HERDR_LINEAR_TAB_SCHEME=identifier-title FAKE_LINEAR_MODE=rate_limited
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq "$HERDR_LINEAR_LAYOUT_FAILED" ]
+    [ "$(herdr_calls 'tab create')" = "0" ]
+    [[ "$stderr" == *"could not read WEB-2870"* ]]
+}
+
+# With Linear failing, a 3 here would mean the title was read before the typo
+# was refused.
+@test "a worktree scheme typo refuses the layout before the tab title is read" {
+    export HERDR_LINEAR_TAB_SCHEME=identifier-title HERDR_LINEAR_WORKTREE_SCHEME=identifier-slug \
+           FAKE_LINEAR_MODE=rate_limited
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq "$HERDR_LINEAR_LAYOUT_BAD_NAME" ]
+    [[ "$stderr" != *"could not read"* ]]
+}
+
 # ------------------------------------------------------------- resumability
 
 # The property the journal exists for. A retry after a partial failure must

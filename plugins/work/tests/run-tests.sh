@@ -38,7 +38,7 @@ EOF
 # up whenever a suite file is added; if it is ever lowered, say why in the
 # commit — this number is what turns "the tests directory got renamed" into a
 # failure instead of a smaller, silently-green run.
-HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-20}"
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-22}"
 
 run_suite() {
     local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
@@ -585,7 +585,7 @@ import os, re, sys
 
 root = sys.argv[1]
 DEF = re.compile(r"^(herdr_linear::[A-Za-z0-9_]+)\(\)\s*\{")
-HOOK_BANNED = ("workspace_confirm", "workspace_propose", "open_session", "layout_build")
+HOOK_BANNED = ("workspace_confirm", "workspace_propose", "open_session", "place_session", "layout_build")
 LIB_ALLOWED = {("create.sh", "herdr_linear::new_project")}
 
 def files(d):

@@ -14,11 +14,31 @@
 # anyone who can attach a document move it into the writable set. Exactly the
 # reasoning behind created_children, and the same failure it prevents.
 #
-# TITLES FOLLOW docs/linear-conventions.md IN THIS PLUGIN (path relative to the
-# plugin root), WHICH WAS DERIVED, NOT INVENTED.
+# TITLES FOLLOW THE CONVENTIONS DOCUMENT, WHICH WAS DERIVED, NOT INVENTED.
+# It ships at docs/linear-conventions.md under the plugin root, and it is the
+# only file HERDR_LINEAR_CONVENTIONS_PATH moves.
 # Its Documents section came from 40 real documents in the workspace. An
 # issue-scoped title leads with the identifier and a kind word from the observed
 # set; icons are sparse, with `:mag:` reserved for findings and diagnosis.
+
+# The rulebook every title, description and document in this plugin is written
+# to. Settable so it can live in a repository of its own, and settable ONLY
+# from the environment: seven skills read this file as instructions and it
+# governs what the plugin writes to Linear, so a path an agent could write into
+# a configuration file would let a written setting steer real writes. It is not
+# a configuration-file field, and it does not become one for convenience.
+#
+# A path that names nothing readable is REFUSED with the path printed. Falling
+# back to the bundled copy would let a typo restore the old rulebook invisibly,
+# and the skills would carry on citing conventions nobody chose.
+herdr_linear::conventions_path() {
+    local p="${HERDR_LINEAR_CONVENTIONS_PATH:-${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md}"
+    if [ ! -r "$p" ]; then
+        printf 'conventions: no readable document at %s -- set HERDR_LINEAR_CONVENTIONS_PATH to one, or unset it for the copy that ships with the plugin\n' "$p" >&2
+        return 1
+    fi
+    printf '%s' "$p"
+}
 
 # The kinds actually in use. A new kind is a decision, and the point of a shared
 # vocabulary is that a title tells you what you are about to read -- so an
@@ -106,11 +126,12 @@ herdr_linear::doc_publish() {
     # Project-scoped kinds have no mutation path: this function always resolves
     # an issue from the worktree's binding and always sets issueId. Whether an
     # agent may create a project-scoped document at all is listed under "Not
-    # yet settled" in this plugin's docs/linear-conventions.md (path relative to
-    # the plugin root) -- a question for Shawn, not
+    # yet settled" in the conventions document -- a question for Shawn, not
     # one this function gets to answer by building a projectId path.
     herdr_linear::_kind_is_project "$kind" && {
-        printf 'doc: "%s" is a project-scoped kind; publishing a project document is not implemented (see "Not yet settled" in this plugin, at docs/linear-conventions.md) -- ask before deciding this\n' "$kind" >&2
+        local conv
+        conv="$(herdr_linear::conventions_path 2>/dev/null)" || conv="the conventions document"
+        printf 'doc: "%s" is a project-scoped kind; publishing a project document is not implemented (see "Not yet settled" in %s) -- ask before deciding this\n' "$kind" "$conv" >&2
         return "$HERDR_LINEAR_DOC_REFUSED"
     }
 

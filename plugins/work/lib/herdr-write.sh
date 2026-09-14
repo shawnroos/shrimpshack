@@ -29,6 +29,8 @@ command -v herdr_linear::start_worktree_name >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/start.sh"
 command -v herdr_linear::_issue_project_id >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/states.sh"
+command -v herdr_linear::scheme_name >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/schemes.sh"
 
 HERDR_LINEAR_JOURNAL_DIR="${HERDR_LINEAR_JOURNAL_DIR:-$HOME/.claude/work/layouts}"
 HERDR_LINEAR_PANE_POLL_TRIES="${HERDR_LINEAR_PANE_POLL_TRIES:-40}"
@@ -153,6 +155,36 @@ herdr_linear::no_space_reason() {
     printf 'no herdr space is bound to project %s. This space (%s) has no binding: propose binding it to project %s, and ask.\n' "$pid" "$here" "$pid"
 }
 
+# herdr_linear::_tab_label <identifier>
+#
+# R5. The label of a tab, from the tab scheme. Both sites that label a tab reach
+# it through here, so the two cannot drift apart again: the layout used to slug
+# the identifier and the session used to pass it through, and only the fact that
+# `slug` alters neither the case nor the charset of an identifier kept them
+# agreeing.
+#
+# The title is read only when the scheme renders one. Both callers hold an
+# identifier and no title, and the default scheme wants none -- so the default
+# path reads nothing, and a layout refused for an unusable name has not queried
+# Linear to find that out.
+herdr_linear::_tab_label() {
+    local ident="${1-}" title="" resp
+    # Before the fetch, not after: the identifier is about to be a query, and a
+    # refusal that has already asked Linear about `--rf` is a refusal that
+    # leaked. The render refuses it again, and says so.
+    herdr_linear::is_safe_identifier "$ident" || return 1
+    if herdr_linear::scheme_wants_title tab; then
+        # 3, apart from the render's 1 and 2: a read that failed is worth
+        # retrying, a name that cannot render is not.
+        resp="$(herdr_linear::fetch_issue "$ident")" || {
+            printf 'could not read %s from Linear, so its tab has no label; nothing was made\n' "$ident" >&2
+            return 3
+        }
+        title="$(herdr_linear::_start_issue_field "$resp" title)"
+    fi
+    herdr_linear::scheme_name tab "$ident" "$title"
+}
+
 # herdr_linear::_issue_space <identifier> <worktree> <what>
 #
 # The space bound to the issue's project, on stdout. 1 when it could not be
@@ -206,9 +238,13 @@ herdr_linear::_pane_of_tab_in() {
 # nothing is made, the question is on stderr, and it is recorded on the binding
 # because this verb cannot tell whether anybody is there to answer (KTD29).
 herdr_linear::open_session() {
-    local path="${1:-}" bin ident ws rc tab target made pane
+    local path="${1:-}" bin ident label ws rc tab target made pane
     [ -d "$path" ] || return "$HERDR_LINEAR_SESSION_FAILED"
     ident="$(herdr_linear::binding_identifier "$path" 2>/dev/null)" || return "$HERDR_LINEAR_SESSION_FAILED"
+    # Before the server is touched, as the layout resolves its own label before
+    # it creates anything: a scheme that cannot render is a refusal, not a tab
+    # with a name nobody chose.
+    label="$(herdr_linear::_tab_label "$ident")" || return "$HERDR_LINEAR_SESSION_FAILED"
     herdr_linear::probe || return "$HERDR_LINEAR_SESSION_FAILED"
     bin="$(herdr_linear::bin)"; [ -n "$bin" ] || return "$HERDR_LINEAR_SESSION_FAILED"
 
@@ -226,7 +262,7 @@ herdr_linear::open_session() {
         pane="$("$bin" pane split "$target" --direction right --cwd "$path" --no-focus 2>/dev/null \
             | herdr_linear::json "result.pane.pane_id")"
     else
-        made="$("$bin" tab create --workspace "$ws" --cwd "$path" --label "$ident" --no-focus 2>/dev/null)"
+        made="$("$bin" tab create --workspace "$ws" --cwd "$path" --label "$label" --no-focus 2>/dev/null)"
         tab="$(printf '%s' "$made" | herdr_linear::json "result.tab.tab_id")"
         pane="$(printf '%s' "$made" | herdr_linear::json "result.root_pane.pane_id")"
         [ -n "$tab" ] && herdr_linear::binding_set_tab "$path" "$tab"
@@ -247,7 +283,7 @@ herdr_linear::open_session() {
 # creates nothing twice.
 herdr_linear::layout_build() {
     local parent="${1:-}" ; shift || true
-    local bin tab tabpane pane slug child branch wt_path journal_file here bound repo resp
+    local bin tab tabpane pane label child branch wt_path journal_file here bound repo resp
     local ws="" rc made existing owner orc ptab prc i=0 paths=() branches=()
 
     [ -n "$parent" ] || return "$HERDR_LINEAR_LAYOUT_FAILED"
@@ -261,8 +297,17 @@ herdr_linear::layout_build() {
     [ -n "$bin" ] || return "$HERDR_LINEAR_LAYOUT_NO_SERVER"
 
     # Names are validated BEFORE anything is created, so a bad title cannot
-    # leave a tab behind with no columns under it.
-    slug="$(herdr_linear::slug "$parent")" || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
+    # leave a tab behind with no columns under it. The tab's label is RESOLVED
+    # here rather than at the creation below for the same reason: a scheme that
+    # refuses inside the loop leaves a half-built tab.
+    # The schemes first: the label may read Linear, and a typo is refused unread.
+    herdr_linear::schemes_usable tab worktree branch || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
+    label="$(herdr_linear::_tab_label "$parent")"; rc=$?
+    case "$rc" in
+        0) ;;
+        3) return "$HERDR_LINEAR_LAYOUT_FAILED" ;;
+        *) return "$HERDR_LINEAR_LAYOUT_BAD_NAME" ;;
+    esac
     for child in "$@"; do
         herdr_linear::slug "$child" >/dev/null || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
     done
@@ -365,7 +410,7 @@ herdr_linear::layout_build() {
         tab="$(herdr_linear::binding_tab "$here" 2>/dev/null)" || tab=""
         tabpane="$(herdr_linear::_pane_of_tab_in "$tab" "$ws")" || tabpane="?"
         if [ -z "$tabpane" ]; then
-            made="$("$bin" tab create --workspace "$ws" --cwd "$here" --label "$slug" --no-focus 2>/dev/null)"
+            made="$("$bin" tab create --workspace "$ws" --cwd "$here" --label "$label" --no-focus 2>/dev/null)"
             tab="$(printf '%s' "$made" | herdr_linear::json "result.tab.tab_id")"
             tabpane="$(printf '%s' "$made" | herdr_linear::json "result.root_pane.pane_id")"
         fi
