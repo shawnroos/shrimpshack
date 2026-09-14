@@ -124,7 +124,7 @@ name.
 | Exit | Meaning |
 |---|---|
 | 0 | filed, worktree made, and a pane opened unless the session switch says otherwise |
-| 1 | refused — no title, no description, or a bad description |
+| 1 | refused, and nothing was filed — no title, no description, a bad description, or a naming scheme this plugin does not render |
 | 2 | no team could be derived; nothing was created |
 | 3 | shadow mode: nothing was created, local or remote |
 | 4 | the tracker call failed; nothing was filed |

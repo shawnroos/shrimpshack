@@ -93,6 +93,18 @@ herdr_linear::_scheme_for() {
     printf '%s' "$scheme"
 }
 
+# herdr_linear::schemes_usable <kind>...
+#
+# For a path that must refuse before it reads or files anything, and so has no
+# issue yet to render a name from. The refusal printed is the same one a render
+# prints, once per kind that fails.
+herdr_linear::schemes_usable() {
+    local kind
+    for kind in "$@"; do
+        herdr_linear::_scheme_for "$kind" >/dev/null || return
+    done
+}
+
 # ----------------------------------------------------------------- rendering
 
 # The only title-slug pipeline in the plugin. `start_worktree_name` held a

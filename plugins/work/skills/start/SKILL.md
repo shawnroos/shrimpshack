@@ -123,7 +123,7 @@ beside it). There is no verb for that yet.
 | Exit | Meaning |
 |---|---|
 | 0 | created; the path is on stdout, and stderr says which repository and why |
-| 1 | refused — no such issue, a name that cannot become a safe path, a relative or non-repository answer, or a worktrees root that overlaps `~/projects`, `/` or `$HOME` |
+| 1 | refused — no such issue, a naming scheme this plugin does not render (stderr names the valid ones), a name that cannot become a safe path, a relative or non-repository answer, or a worktrees root that overlaps `~/projects`, `/` or `$HOME` |
 | 2 | a directory of that name already exists; nothing was touched |
 | 3 | Linear was unreachable; nothing was created |
 | 4 | the issue was read, but the worktree or its binding failed; a directory may exist |
@@ -185,7 +185,7 @@ runs in shadow until somebody answers.
 | Exit | Meaning |
 |---|---|
 | 0 | created; the path is on stdout |
-| 1 | refused — no title, no team, or a description that fails strict validation (the Problem/Solution/Proposal spine is required here) |
+| 1 | refused, and nothing was filed — no title, no team, a description that fails strict validation (the Problem/Solution/Proposal spine is required here), or a naming scheme this plugin does not render |
 | 4 | the issue was filed but the worktree or binding failed; stderr says which |
 | 5 | shadow mode: nothing created, local or remote; the sentence is on stderr |
 | 6 | the issue was filed, and which repository is a choice; stderr names the identifier and every candidate |

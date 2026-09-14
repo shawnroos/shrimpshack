@@ -243,6 +243,10 @@ herdr_linear::start_from_issue() {
         return "$HERDR_LINEAR_START_REFUSED"
     fi
 
+    # Refused, not failed: the table's failure promises a worktree or binding that
+    # went wrong, and a scheme that cannot render has made neither.
+    herdr_linear::schemes_usable worktree branch || return "$HERDR_LINEAR_START_REFUSED"
+
     # The issue must exist. A worktree created for a typo'd identifier is worse
     # than a refusal: it looks like work and is bound to nothing.
     resp="$(herdr_linear::fetch_issue "$ident")"
@@ -252,8 +256,8 @@ herdr_linear::start_from_issue() {
         *) return "$HERDR_LINEAR_START_UNAVAILABLE" ;;
     esac
 
-    branch="$(herdr_linear::start_branch_name "$resp" "$prefix")" || return "$HERDR_LINEAR_START_FAILED"
-    name="$(herdr_linear::start_worktree_name "$resp")" || return "$HERDR_LINEAR_START_FAILED"
+    branch="$(herdr_linear::start_branch_name "$resp" "$prefix")" || return "$HERDR_LINEAR_START_REFUSED"
+    name="$(herdr_linear::start_worktree_name "$resp")" || return "$HERDR_LINEAR_START_REFUSED"
     scope="$(herdr_linear::start_scope "$resp")" || return "$HERDR_LINEAR_START_FAILED"
     key="$(printf '%s' "$scope" | cut -f1)"
     team_key="$(printf '%s' "$scope" | cut -f2)"
@@ -389,6 +393,9 @@ herdr_linear::start_new() {
     # Strict, not lenient: this description was composed fresh from the
     # template, so a missing spine means the template was abandoned halfway.
     herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_START_REFUSED"
+    # Before filing: filed first, a scheme that cannot render leaves a real ticket
+    # that no retry can start.
+    herdr_linear::schemes_usable worktree branch || return "$HERDR_LINEAR_START_REFUSED"
 
     if ! herdr_linear::consent_gate "$from" "$team" "" \
         "create issue \"$title\" on team $team, and a worktree for it"; then

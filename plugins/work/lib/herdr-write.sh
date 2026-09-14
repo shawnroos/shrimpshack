@@ -299,6 +299,7 @@ herdr_linear::layout_build() {
     # here rather than at the creation below for the same reason: a scheme that
     # refuses inside the loop leaves a half-built tab.
     label="$(herdr_linear::_tab_label "$parent")" || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
+    herdr_linear::schemes_usable worktree branch || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
     for child in "$@"; do
         herdr_linear::slug "$child" >/dev/null || return "$HERDR_LINEAR_LAYOUT_BAD_NAME"
     done
