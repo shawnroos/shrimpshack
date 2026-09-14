@@ -31,7 +31,7 @@ setup() {
     . "$LIB/secrets.sh"; . "$LIB/binding.sh"; . "$LIB/linear.sh"
 
     WT="$WORK/wt"; mkdir -p "$WT"
-    git -C "$WT" init -q -b feature/web-2870-detach
+    git -C "$WT" init -q -b feature/web-2670-blur
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 }
 
@@ -99,7 +99,7 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # ------------------------------------------------------------- the credential
 
 @test "no fragment of the credential reaches argv, and it arrives on stdin" {
-    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::fetch_issue WEB-2870
+    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::fetch_issue WEB-2670
     [ "$status" -eq 0 ]
     [ "$(tail -1 "$FAKE_LINEAR_RECORD_DIR/auth_on_stdin")" = "yes" ]
     run grep -c "$KEYLIKE" "$FAKE_LINEAR_RECORD_DIR/argv"
@@ -118,7 +118,7 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
         exec 9>"$trace"
         BASH_XTRACEFD=9
         set -x
-        herdr_linear::fetch_issue WEB-2870 >/dev/null 2>&1
+        herdr_linear::fetch_issue WEB-2670 >/dev/null 2>&1
         set +x
     )
     # A trace of a call that never reached the credential is green for the
@@ -132,7 +132,7 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 @test "the refresh script does not put the credential in its xtrace stream" {
     export FAKE_LINEAR_MODE=found_parent
     trace="$WORK/xtrace-refresh"
-    bash -x "${BATS_TEST_DIRNAME}/../../bin/linear-cache-refresh.sh" WEB-2870 \
+    bash -x "${BATS_TEST_DIRNAME}/../../bin/linear-cache-refresh.sh" WEB-2670 \
         >/dev/null 2>"$trace"
     [ "$(tail -1 "$FAKE_LINEAR_RECORD_DIR/auth_on_stdin")" = "yes" ]
     run grep -c "$KEYLIKE" "$trace"
@@ -155,7 +155,7 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
     marker="$LINEAR_CACHE_DIR/_plaintext_fallback_used"
     rm -f "$marker"
     export FAKE_LINEAR_MODE=found_parent
-    run herdr_linear::fetch_issue WEB-2870
+    run herdr_linear::fetch_issue WEB-2670
     [ "$status" -eq 0 ]
     [ -s "$marker" ]
 }
@@ -166,14 +166,14 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
     marker="$LINEAR_CACHE_DIR/_plaintext_fallback_used"
     rm -f "$marker"
     export FAKE_LINEAR_MODE=found_parent
-    run herdr_linear::fetch_issue WEB-2870
+    run herdr_linear::fetch_issue WEB-2670
     [ "$status" -eq 0 ]
     [ ! -e "$marker" ]
 }
 
 @test "with no credential anywhere the client reports auth failure, not unavailable" {
     rm -f "$LINEAR_SECRETS_FILE"
-    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::fetch_issue WEB-2870
+    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::fetch_issue WEB-2670
     [ "$status" -eq 3 ]
 }
 
@@ -182,34 +182,34 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # KTD5: identity from the cache, parent and team always from the API. The saving
 # is one field-set, not one call -- so exactly one API call still happens.
 @test "a fresh cache entry supplies identity while the parent still comes from the API" {
-    cache_issue WEB-3318 "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    export FAKE_LINEAR_MODE=found_child; run herdr_linear::issue_context WEB-3318
+    cache_issue WEB-3308 "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    export FAKE_LINEAR_MODE=found_child; run herdr_linear::issue_context WEB-3308
     [ "$status" -eq 0 ]
     got="$(printf '%s' "$output" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["identity_from_cache"],d["title"],"|",d["parent"])')"
-    [ "$got" = "True Cached Title | WEB-2870" ]
+    [ "$got" = "True Cached Title | WEB-2670" ]
     [ "$(api_calls)" = "1" ]
 }
 
 @test "a cache entry past the freshness bound is a miss, and identity comes from the API" {
-    cache_issue WEB-3318 "2020-01-01T00:00:00Z"
-    export FAKE_LINEAR_MODE=found_child; run herdr_linear::issue_context WEB-3318
+    cache_issue WEB-3308 "2020-01-01T00:00:00Z"
+    export FAKE_LINEAR_MODE=found_child; run herdr_linear::issue_context WEB-3308
     [ "$status" -eq 0 ]
     got="$(printf '%s' "$output" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["identity_from_cache"],d["title"])')"
-    [ "$got" = "False AI Tools drawer is blank when a still-processing layer is selected" ]
+    [ "$got" = "False Export panel is empty when a still-rendering frame is selected" ]
 }
 
 # The parent is typically someone else's issue, so it is never in a cache keyed
 # on issues assigned to this user. It must come from the API every time.
 @test "a parent absent from the cache is still fetched" {
-    cache_issue WEB-3318 "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    [ ! -f "$LINEAR_CACHE_DIR/WEB-2870.json" ]
-    export FAKE_LINEAR_MODE=found_child; run herdr_linear::issue_context WEB-3318
+    cache_issue WEB-3308 "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    [ ! -f "$LINEAR_CACHE_DIR/WEB-2670.json" ]
+    export FAKE_LINEAR_MODE=found_child; run herdr_linear::issue_context WEB-3308
     got="$(printf '%s' "$output" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["parent"],d["parent_title"])')"
-    [ "$got" = "WEB-2870 Tool: Detach Foreground" ]
+    [ "$got" = "WEB-2670 Tool: Blur Backdrop" ]
 }
 
 @test "an issue with no parent reports an empty parent rather than failing" {
-    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::issue_context WEB-2870
+    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::issue_context WEB-2670
     [ "$status" -eq 0 ]
     got="$(printf '%s' "$output" | python3 -c 'import sys,json;print(repr(json.load(sys.stdin)["parent"]))')"
     [ "$got" = "''" ]
@@ -218,17 +218,17 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # ------------------------------------------------------- unavailability (R14)
 
 @test "an unreachable Linear returns unavailable rather than blocking" {
-    export HERDR_LINEAR_CURL_BIN=/bin/false; run herdr_linear::fetch_issue WEB-2870
+    export HERDR_LINEAR_CURL_BIN=/bin/false; run herdr_linear::fetch_issue WEB-2670
     [ "$status" -eq 1 ]
 }
 
 @test "a malformed body is unavailable, not a successful empty answer" {
-    export FAKE_LINEAR_MODE=malformed_json; run herdr_linear::fetch_issue WEB-2870
+    export FAKE_LINEAR_MODE=malformed_json; run herdr_linear::fetch_issue WEB-2670
     [ "$status" -eq 1 ]
 }
 
 @test "an empty body is unavailable" {
-    export FAKE_LINEAR_MODE=empty_body; run herdr_linear::fetch_issue WEB-2870
+    export FAKE_LINEAR_MODE=empty_body; run herdr_linear::fetch_issue WEB-2670
     [ "$status" -eq 1 ]
 }
 
@@ -240,7 +240,7 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # ------------------------------------------------------------- rate limiting
 
 @test "a rate-limited call backs off and retries before giving up" {
-    export HERDR_LINEAR_RETRY_MAX=3; export FAKE_LINEAR_MODE=rate_limited; run herdr_linear::fetch_issue WEB-2870
+    export HERDR_LINEAR_RETRY_MAX=3; export FAKE_LINEAR_MODE=rate_limited; run herdr_linear::fetch_issue WEB-2670
     [ "$status" -eq 4 ]
     [ "$(api_calls)" = "3" ]
 }
@@ -248,7 +248,7 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # Retrying a validation error or a refused credential only delays the failure --
 # the answer is identical every time.
 @test "an authentication error is not retried" {
-    export FAKE_LINEAR_MODE=auth_error; run herdr_linear::fetch_issue WEB-2870
+    export FAKE_LINEAR_MODE=auth_error; run herdr_linear::fetch_issue WEB-2670
     [ "$status" -eq 3 ]
     [ "$(api_calls)" = "1" ]
 }
@@ -257,13 +257,13 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 
 @test "updatedAt moving within the pass refuses the write" {
     opening="2026-09-04T18:11:48.336Z"
-    export FAKE_LINEAR_MODE=found_parent_moved; run herdr_linear::guard_unchanged WEB-2870 "$opening"
+    export FAKE_LINEAR_MODE=found_parent_moved; run herdr_linear::guard_unchanged WEB-2670 "$opening"
     [ "$status" -eq 5 ]
 }
 
 @test "updatedAt stable within the pass allows the write" {
     opening="2026-09-04T18:11:48.336Z"
-    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::guard_unchanged WEB-2870 "$opening"
+    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::guard_unchanged WEB-2670 "$opening"
     [ "$status" -eq 0 ]
 }
 
@@ -273,27 +273,27 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # opening value from this pass, so a value from last week is simply irrelevant.
 @test "a value stored in an earlier session does not block a write that is stable in this pass" {
     stale_from_last_session="2026-01-01T00:00:00Z"
-    opening="$(export FAKE_LINEAR_MODE=found_parent; herdr_linear::issue_updated_at WEB-2870)"
+    opening="$(export FAKE_LINEAR_MODE=found_parent; herdr_linear::issue_updated_at WEB-2670)"
     [ "$opening" != "$stale_from_last_session" ]
-    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::guard_unchanged WEB-2870 "$opening"
+    export FAKE_LINEAR_MODE=found_parent; run herdr_linear::guard_unchanged WEB-2670 "$opening"
     [ "$status" -eq 0 ]
 }
 
 @test "the guard refuses when it cannot read the current value at all" {
-    export HERDR_LINEAR_CURL_BIN=/bin/false; run herdr_linear::guard_unchanged WEB-2870 "anything"
+    export HERDR_LINEAR_CURL_BIN=/bin/false; run herdr_linear::guard_unchanged WEB-2670 "anything"
     [ "$status" -ne 0 ]
 }
 
 # ------------------------------------------------------- the write bound (R30)
 
 @test "the bound issue may be written to" {
-    bind_to WEB-2870
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    bind_to WEB-2670
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 0 ]
 }
 
 @test "a recorded child may be written to" {
-    bind_to WEB-2870
+    bind_to WEB-2670
     herdr_linear::binding_add_child "$WT" WEB-5001
     run herdr_linear::write_allowed "$WT" WEB-5001
     [ "$status" -eq 0 ]
@@ -303,16 +303,16 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # created, and anyone who can re-parent an issue could put it there. The
 # writable set therefore comes from the binding record and never from Linear.
 @test "an issue Linear reports as a child, but the record does not list, is refused" {
-    bind_to WEB-2870
-    # found_child's fixture says WEB-3318's parent IS the bound issue.
-    export FAKE_LINEAR_MODE=found_child; run herdr_linear::fetch_issue WEB-3318
+    bind_to WEB-2670
+    # found_child's fixture says WEB-3308's parent IS the bound issue.
+    export FAKE_LINEAR_MODE=found_child; run herdr_linear::fetch_issue WEB-3308
     [ "$status" -eq 0 ]
-    run herdr_linear::write_allowed "$WT" WEB-3318
+    run herdr_linear::write_allowed "$WT" WEB-3308
     [ "$status" -eq 5 ]
 }
 
 @test "an unrelated issue is refused" {
-    bind_to WEB-2870
+    bind_to WEB-2670
     run herdr_linear::write_allowed "$WT" WEB-9999
     [ "$status" -eq 5 ]
 }
@@ -320,8 +320,8 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # Only Bound permits an automatic write. proposed, misplaced and stale are
 # reported and wait for a person.
 @test "a worktree that is only proposed cannot be written from" {
-    herdr_linear::binding_propose "$WT" WEB-2870 >/dev/null
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    herdr_linear::binding_propose "$WT" WEB-2670 >/dev/null
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 5 ]
 }
 
@@ -332,24 +332,24 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # actually exercises it -- only Bound permits an automatic write.
 @test "a misplaced or stale worktree cannot be written from even though it still names the issue" {
     for st in misplaced stale; do
-        bind_to WEB-2870
+        bind_to WEB-2670
         herdr_linear::binding_set_state "$WT" "$st"
         run herdr_linear::binding_identifier "$WT"
-        [ "$output" = "WEB-2870" ]
-        run herdr_linear::write_allowed "$WT" WEB-2870
+        [ "$output" = "WEB-2670" ]
+        run herdr_linear::write_allowed "$WT" WEB-2670
         [ "$status" -eq 5 ]
     done
 }
 
 @test "an unbound worktree cannot be written from" {
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 5 ]
 }
 
 @test "a bound worktree whose branch changed cannot be written from" {
-    bind_to WEB-2870
+    bind_to WEB-2670
     git -C "$WT" checkout -q -b somewhere-else
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 5 ]
 }
 
@@ -371,8 +371,8 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 }
 
 @test "an ordinary title slugs to safe characters only" {
-    run herdr_linear::slug "Tool: Detach Foreground"
-    [ "$output" = "Tool-Detach-Foreground" ]
+    run herdr_linear::slug "Tool: Blur Backdrop"
+    [ "$output" = "Tool-Blur-Backdrop" ]
     run herdr_linear::slug 'a/b\c;d$(e)`f`'
     [[ "$output" =~ ^[A-Za-z0-9._-]+$ ]]
 }

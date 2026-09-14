@@ -28,7 +28,7 @@ herdr_linear::description_template > /tmp/desc.md
 
 **The template is where a NEW description starts. It is not a cage.** A ticket
 that has earned its own headings keeps them — `docs/linear-conventions.md` walks
-through `WEB-3214` as the worked example, which uses none of the three spine
+through `WEB-3184` as the worked example, which uses none of the three spine
 headings and is better for it, because a heading that carries the point beats a
 heading that carries a category.
 
@@ -95,8 +95,8 @@ enforcing the one rule that keeps these tickets readable.
 Every write saves the prior description first.
 
 ```bash
-herdr_linear::describe_backups WEB-3318      # what is saved
-herdr_linear::describe_restore WEB-3318      # prints the newest
+herdr_linear::describe_backups WEB-3308      # what is saved
+herdr_linear::describe_restore WEB-3308      # prints the newest
 ```
 
 `describe_restore` prints; it does not push. Review it, then write it back with

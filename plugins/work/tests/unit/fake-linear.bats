@@ -79,7 +79,7 @@ jfield() { python3 -c "$1"; }
     [ "$status" -eq 0 ]
     result="$(printf '%s' "$output" | jfield \
         'import sys,json;print(json.load(sys.stdin)["data"]["issue"]["parent"]["identifier"])')"
-    [ "$result" = "WEB-2870" ]
+    [ "$result" = "WEB-2670" ]
 }
 
 # The parent case is not the child case minus a field. parent is explicitly

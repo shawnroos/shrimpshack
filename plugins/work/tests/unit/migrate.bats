@@ -49,7 +49,7 @@ seed_keychain() {
 # ---------------------------------------------------------------- the leak
 
 @test "the refresh sends the credential on stdin, never on argv" {
-    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3318"
+    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
     # NOT asserted on $status. curl runs inside a command substitution whose
     # pipeline ends in wc, and the script exits from a later echo, so the
     # fixture's 98 never reaches here -- an exit-code assertion would pass
@@ -68,7 +68,7 @@ seed_keychain() {
 }
 
 @test "the recorded argv holds no fragment of the credential" {
-    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3318"
+    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
     run grep -c "$KEYLIKE" "$FAKE_LINEAR_RECORD_DIR/argv"
     [ "$output" = "0" ]
 }
@@ -77,7 +77,7 @@ seed_keychain() {
 
 @test "the Keychain is preferred over the plaintext copy, and no fallback marker appears" {
     seed_keychain
-    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3318"
+    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
     [ "$status" -eq 0 ]
     [ ! -f "$LINEAR_CACHE_DIR/_plaintext_fallback_used" ]
 }
@@ -86,7 +86,7 @@ seed_keychain() {
 # A warning alone would make a plaintext read invisible; the marker is what
 # keeps it detectable after the fact.
 @test "a plaintext fallback read is recorded in a marker, not only on stderr" {
-    run --separate-stderr bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3318"
+    run --separate-stderr bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
     [ "$status" -eq 0 ]
     [[ "$stderr" == *"read the Linear key from plaintext"* ]]
     [ -f "$LINEAR_CACHE_DIR/_plaintext_fallback_used" ]
@@ -94,7 +94,7 @@ seed_keychain() {
 
 @test "with no credential anywhere the refresh fails loudly instead of calling Linear unauthenticated" {
     rm -f "$LINEAR_SECRETS_FILE"
-    run --separate-stderr bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3318"
+    run --separate-stderr bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
     [ "$status" -eq 1 ]
     [[ "$stderr" == *"no Linear credential"* ]]
     # The decisive part: it never reached the network at all.
@@ -194,7 +194,7 @@ seed_keychain() {
     seed_keychain
     run bash -c "FAKE_LINEAR_MODE=viewer bash '$BIN/migrate-credential.sh' remove-plaintext"
     [ "$status" -eq 0 ]
-    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3318"
+    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
     [ "$status" -eq 0 ]
     [ ! -f "$LINEAR_CACHE_DIR/_plaintext_fallback_used" ]
     run bash "$BIN/migrate-credential.sh" report

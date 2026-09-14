@@ -28,7 +28,7 @@ setup() {
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh documents.sh; do . "$ROOT/lib/$f"; done
 
     WT="$WORK/Slate/wt"; mkdir -p "$WT"
-    git -C "$WT" init -q -b feature/web-2870-detach
+    git -C "$WT" init -q -b feature/web-2670-blur
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     DOC="$WORK/note.md"
@@ -37,7 +37,7 @@ setup() {
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
-bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
+bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2670)"; herdr_linear::binding_confirm "$WT" WEB-2670 "$n"; }
 enable_writes() { (cd "$WT" && pwd -P) > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
 sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 
@@ -86,7 +86,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     run herdr_linear::doc_publish "$WT" diagnosis "texture leak" "$DOC"
     [ "$status" -eq 0 ]
     [ "$(sent documentCreate)" = "1" ]
-    run grep -c 'WEB-2870' "$FAKE_LINEAR_RECORD_DIR/bodies"
+    run grep -c 'WEB-2670' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$output" -ge 1 ]
     run herdr_linear::binding_read "$WT"
     ids="$(printf '%s' "$output" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["created_documents"]))')"
@@ -124,7 +124,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     run herdr_linear::doc_publish_file "$WT" diagnosis "$DOC"
     [ "$status" -eq 0 ]
     body="$(cat "$FAKE_LINEAR_RECORD_DIR/bodies")"
-    [[ "$body" == *"WEB-2870 diagnosis: Texture leak on image swap"* ]]
+    [[ "$body" == *"WEB-2670 diagnosis: Texture leak on image swap"* ]]
 }
 
 @test "a file with no heading falls back to its filename" {
@@ -151,7 +151,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     OUT="$WORK/NotSlate/wt"; mkdir -p "$OUT"
     git -C "$OUT" init -q -b main
     git -C "$OUT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
-    n="$(herdr_linear::binding_propose "$OUT" WEB-2870)"; herdr_linear::binding_confirm "$OUT" WEB-2870 "$n"
+    n="$(herdr_linear::binding_propose "$OUT" WEB-2670)"; herdr_linear::binding_confirm "$OUT" WEB-2670 "$n"
     printf '%s\n' "$(cd "$OUT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"
     export FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::doc_publish "$OUT" diagnosis "x" "$DOC"
@@ -211,7 +211,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$(sent documentCreate)" = "0" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
     [[ "$output" == *"SHADOW would create document"* ]]
-    [[ "$output" == *"WEB-2870 diagnosis: texture leak"* ]]
+    [[ "$output" == *"WEB-2670 diagnosis: texture leak"* ]]
 }
 
 # A 200 carrying success:false is a failed write that a "did we finish" check

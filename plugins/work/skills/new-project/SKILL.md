@@ -16,7 +16,7 @@ for f in contain secrets binding linear reconcile description herdr-read herdr-w
   source "$R/lib/$f.sh"
 done
 
-herdr_linear::new_project "AI Canvas Tools" /tmp/content.md "$TEAM_ID"
+herdr_linear::new_project "Frame Effects" /tmp/content.md "$TEAM_ID"
 ```
 
 Prints `PROJECT_ID<TAB>WORKSPACE_ID`.

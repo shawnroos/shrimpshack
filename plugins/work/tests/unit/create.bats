@@ -38,7 +38,7 @@ setup() {
              herdr-read.sh herdr-write.sh start.sh create.sh; do . "$ROOT/lib/$f"; done
 
     WT="$WORK/Slate/worktrees/current"
-    git -C "$WORK/Slate" worktree add -q -b feature/web-2870-detach "$WT" >/dev/null 2>&1
+    git -C "$WORK/Slate" worktree add -q -b feature/web-2670-blur "$WT" >/dev/null 2>&1
 
     DESC="$WORK/d.md"
     printf '## Problem\n\nA real problem for the actor, at length.\n\n## Solution\n\nThe world without it.\n\n## Proposal\n\nWhat we build.\n' > "$DESC"
@@ -46,7 +46,7 @@ setup() {
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
-bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
+bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2670)"; herdr_linear::binding_confirm "$WT" WEB-2670 "$n"; }
 enable_writes() { printf '%s\n' "$(cd "$WT" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
 # new_project has no worktree of its own; the worktrees root stands in for one.
 enable_root_writes() { printf '%s\n' "$(cd "$WORK/Slate/worktrees" && pwd -P)" > "$HERDR_LINEAR_WRITE_ALLOWLIST"; }
@@ -62,7 +62,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     run herdr_linear::current_context "$WT"
     [[ "$output" == *"project=44444444-4444-4444-8444-444444444444"* ]]
     [[ "$output" == *"team=55555555-5555-4555-8555-555555555555"* ]]
-    [[ "$output" == *"issue=WEB-2870"* ]]
+    [[ "$output" == *"issue=WEB-2670"* ]]
 }
 
 # The first issue in a new space has no bound worktree to ask.
@@ -217,7 +217,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::new_sub_issue "$WT" "A smaller thing" "$DESC"
     [ "$status" -eq 3 ]
-    [[ "$output" == *"under WEB-2870"* ]]
+    [[ "$output" == *"under WEB-2670"* ]]
     [ "$(sent issueCreate)" = "0" ]
 }
 
@@ -290,7 +290,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     enable_root_writes
     export FAKE_LINEAR_ALLOW_MUTATION=1
     printf '# P\n\ncontent\n' > "$WORK/p.md"
-    run herdr_linear::new_project "AI Canvas Tools" "$WORK/p.md" team-web "canvas"
+    run herdr_linear::new_project "Frame Effects" "$WORK/p.md" team-web "canvas"
     [ "$status" -eq 0 ]
     run grep -c -- '--label canvas' "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "1" ]

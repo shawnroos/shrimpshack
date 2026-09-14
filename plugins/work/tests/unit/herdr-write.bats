@@ -43,7 +43,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 # ------------------------------------------------------------------ building
 
 @test "an issue with three children produces a tab with three columns, each bound" {
-    run herdr_linear::layout_build WEB-2870 WEB-3001 WEB-3002 WEB-3003
+    run herdr_linear::layout_build WEB-2670 WEB-3001 WEB-3002 WEB-3003
     [ "$status" -eq 0 ]
     [ -n "$output" ]
     [ "$(herdr_calls 'tab create')" = "1" ]
@@ -58,7 +58,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 # <root>/<name>, which is beside the repositories rather than among the
 # worktrees -- the tests were holding a real defect in place.
 @test "each column gets its own worktree, and the pane is opened in it" {
-    run herdr_linear::layout_build WEB-2870 WEB-3001
+    run herdr_linear::layout_build WEB-2670 WEB-3001
     [ "$status" -eq 0 ]
     [ -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" ]
     run grep -c -- "--cwd $HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" "$FAKE_HERDR_RECORD_DIR/argv"
@@ -71,7 +71,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 # server has gone. Reporting is a complete answer; half a layout is not.
 @test "a server that is not running is reported, and nothing is built" {
     export FAKE_HERDR_MODE=not_running
-    run herdr_linear::layout_build WEB-2870 WEB-3001
+    run herdr_linear::layout_build WEB-2670 WEB-3001
     [ "$status" -eq 1 ]
     [ "$(herdr_calls 'tab create')" = "0" ]
     [ ! -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" ]
@@ -79,7 +79,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 
 @test "a dead server is reported the same way" {
     export FAKE_HERDR_MODE=dead
-    run herdr_linear::layout_build WEB-2870 WEB-3001
+    run herdr_linear::layout_build WEB-2670 WEB-3001
     [ "$status" -eq 1 ]
     [ "$(herdr_calls 'tab create')" = "0" ]
 }
@@ -91,7 +91,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 @test "a title that cannot become a safe name is refused before anything is created" {
     for bad in "--rf" ".." "." "   "; do
         rm -rf "$FAKE_HERDR_RECORD_DIR"; mkdir -p "$FAKE_HERDR_RECORD_DIR"
-        run herdr_linear::layout_build WEB-2870 "$bad"
+        run herdr_linear::layout_build WEB-2670 "$bad"
         [ "$status" -eq 2 ]
         [ "$(herdr_calls 'tab create')" = "0" ]
     done
@@ -104,7 +104,7 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 }
 
 @test "a bad name among good ones stops the whole build, not just that column" {
-    run herdr_linear::layout_build WEB-2870 WEB-3001 ".." WEB-3003
+    run herdr_linear::layout_build WEB-2670 WEB-3001 ".." WEB-3003
     [ "$status" -eq 2 ]
     [ "$(herdr_calls 'tab create')" = "0" ]
     [ ! -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001" ]
@@ -118,14 +118,14 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 @test "a retry after a partial failure creates no duplicate tab or worktree" {
     # First run builds one column, then fails: the pane never registers.
     export FAKE_HERDR_SLOW_PANE=999
-    run herdr_linear::layout_build WEB-2870 WEB-3001 WEB-3002
+    run herdr_linear::layout_build WEB-2670 WEB-3001 WEB-3002
     [ "$status" -eq 3 ]
     first_tabs="$(herdr_calls 'tab create')"
     [ "$first_tabs" = "1" ]
 
     # Retry with the pane registering normally.
     unset FAKE_HERDR_SLOW_PANE
-    run herdr_linear::layout_build WEB-2870 WEB-3001 WEB-3002
+    run herdr_linear::layout_build WEB-2670 WEB-3001 WEB-3002
     [ "$status" -eq 0 ]
 
     # Still exactly one tab: the journal was consulted, not ignored.
@@ -137,27 +137,27 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 # repo shares no history with Slate and can never push.
 @test "a branch that already exists fails the worktree instead of git-init a fresh repo" {
     git -C "$HERDR_LINEAR_SLATE_ROOT" branch WEB-3001
-    run herdr_linear::layout_build WEB-2870 WEB-3001
+    run herdr_linear::layout_build WEB-2670 WEB-3001
     [ "$status" -eq 3 ]
     [ ! -d "$HERDR_LINEAR_SLATE_ROOT/worktrees/WEB-3001/.git" ]
 }
 
 @test "a completed column is not rebuilt on a second run" {
-    run herdr_linear::layout_build WEB-2870 WEB-3001
+    run herdr_linear::layout_build WEB-2670 WEB-3001
     [ "$status" -eq 0 ]
     splits_before="$(herdr_calls 'pane split')"
-    run herdr_linear::layout_build WEB-2870 WEB-3001
+    run herdr_linear::layout_build WEB-2670 WEB-3001
     [ "$status" -eq 0 ]
     [ "$(herdr_calls 'pane split')" = "$splits_before" ]
 }
 
 @test "the journal is append-only, so a crash between read and write loses nothing" {
-    herdr_linear::journal_put WEB-2870 tab "w1:t1"
-    herdr_linear::journal_put WEB-2870 tab "w1:t2"
-    run herdr_linear::journal_get WEB-2870 tab
+    herdr_linear::journal_put WEB-2670 tab "w1:t1"
+    herdr_linear::journal_put WEB-2670 tab "w1:t2"
+    run herdr_linear::journal_get WEB-2670 tab
     [ "$output" = "w1:t2" ]
     # Both entries survive on disk; the reader takes the last.
-    run grep -c '^tab=' "$HERDR_LINEAR_JOURNAL_DIR/WEB-2870.journal"
+    run grep -c '^tab=' "$HERDR_LINEAR_JOURNAL_DIR/WEB-2670.journal"
     [ "$output" = "2" ]
 }
 
@@ -171,8 +171,8 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 }
 
 @test "a key that could corrupt the sed program is refused" {
-    herdr_linear::journal_put WEB-2870 tab "kept"
-    run herdr_linear::journal_get WEB-2870 "tab/../broken"
+    herdr_linear::journal_put WEB-2670 tab "kept"
+    run herdr_linear::journal_get WEB-2670 "tab/../broken"
     [ "$status" -ne 0 ]
 }
 
@@ -180,18 +180,18 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 # problem: two sessions building the same parent's layout must not both miss
 # `journal_get parent tab` and both create a tab, orphaning the first.
 @test "the tab section is locked, so a held lock blocks a concurrent build" {
-    journal_file="$(herdr_linear::_journal WEB-2870)"
+    journal_file="$(herdr_linear::_journal WEB-2670)"
     herdr_linear::_lock "$journal_file"
     export HERDR_LINEAR_LOCK_WAIT_SECONDS=1
-    run herdr_linear::layout_build WEB-2870 WEB-3001
+    run herdr_linear::layout_build WEB-2670 WEB-3001
     herdr_linear::_unlock "$journal_file"
     [ "$status" -eq 3 ]
     [ "$(herdr_calls 'tab create')" = "0" ]
 }
 
 @test "the journal is not world-readable" {
-    herdr_linear::journal_put WEB-2870 tab "w1:t1"
-    [ "$(stat -f %Lp "$HERDR_LINEAR_JOURNAL_DIR/WEB-2870.journal")" = "600" ]
+    herdr_linear::journal_put WEB-2670 tab "w1:t1"
+    [ "$(stat -f %Lp "$HERDR_LINEAR_JOURNAL_DIR/WEB-2670.journal")" = "600" ]
 }
 
 # ---------------------------------------------------------- pane registration
@@ -201,14 +201,14 @@ herdr_calls() { local n; n="$(grep -c "$1" "$FAKE_HERDR_RECORD_DIR/argv" 2>/dev/
 @test "a pane slow to register is waited for" {
     export FAKE_HERDR_SLOW_PANE=3
     export HERDR_LINEAR_PANE_POLL_TRIES=40
-    run herdr_linear::layout_build WEB-2870 WEB-3001
+    run herdr_linear::layout_build WEB-2670 WEB-3001
     [ "$status" -eq 0 ]
 }
 
 @test "a pane that never registers is a failure, not a shrug" {
     export FAKE_HERDR_SLOW_PANE=999
     export HERDR_LINEAR_PANE_POLL_TRIES=3
-    run herdr_linear::layout_build WEB-2870 WEB-3001
+    run herdr_linear::layout_build WEB-2670 WEB-3001
     [ "$status" -eq 3 ]
 }
 

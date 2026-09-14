@@ -32,7 +32,7 @@ setup() {
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh states.sh; do . "$ROOT/lib/$f"; done
 
     WT="$WORK/Slate/wt"; mkdir -p "$WT"
-    git -C "$WT" init -q -b feature/web-2870-detach
+    git -C "$WT" init -q -b feature/web-2670-blur
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     CANVAS="44444444-4444-4444-8444-444444444444"
@@ -41,7 +41,7 @@ setup() {
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 
-bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2870)"; herdr_linear::binding_confirm "$WT" WEB-2870 "$n"; }
+bind_wt() { local n; n="$(herdr_linear::binding_propose "$WT" WEB-2670)"; herdr_linear::binding_confirm "$WT" WEB-2670 "$n"; }
 # classify RETURNS the state as its exit code, so every call goes through `run`.
 # A bare call trips errexit on a perfectly normal "this is misplaced" answer.
 bind_ws() { local n; n="$(herdr_linear::workspace_propose "$1" "$2")"; herdr_linear::workspace_confirm "$1" "$2" "$n"; }
@@ -57,7 +57,7 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     export FAKE_LINEAR_MODE=other_project_issue
     run herdr_linear::check_placement "$WT" w1
     [ "$status" -eq 1 ]
-    [[ "$output" == *"WEB-2870"* ]]
+    [[ "$output" == *"WEB-2670"* ]]
     [[ "$output" == *"$OTHER"* ]]
     [[ "$output" == *"$CANVAS"* ]]
     [[ "$output" == *"writes are suspended"* ]]
@@ -120,7 +120,7 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     export FAKE_LINEAR_MODE=completed_issue FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::check_liveness "$WT"
     [ "$status" -eq 2 ]
-    [[ "$output" == *"WEB-2870 is completed in Linear"* ]]
+    [[ "$output" == *"WEB-2670 is completed in Linear"* ]]
     [[ "$output" == *"Nothing has been changed"* ]]
     [ "$(mutations_sent)" = "0" ]
 }
@@ -158,7 +158,7 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     [ "$(mutations_sent)" = "0" ]
 
     # And the bound itself refuses, not only reconcile's own state check.
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 5 ]
 }
 
@@ -169,7 +169,7 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     run herdr_linear::classify "$WT" ""
     [ "$status" -eq 2 ]
     [ "$(herdr_linear::binding_state "$WT")" = "stale" ]
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 5 ]
 }
 
@@ -188,7 +188,7 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     run herdr_linear::classify "$WT" w1
     [ "$status" -eq 0 ]
     [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 0 ]
 }
 
@@ -208,7 +208,7 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     run herdr_linear::classify "$WT" w1
     [ "$status" -eq 1 ]
     [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 5 ]
 }
 
@@ -222,7 +222,7 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     run herdr_linear::classify "$WT" ""
     [ "$status" -eq 2 ]
     [ "$(herdr_linear::binding_state "$WT")" = "stale" ]
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 5 ]
 }
 
@@ -254,8 +254,8 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
 }
 
 @test "classify never binds a worktree whose candidate was declined" {
-    herdr_linear::binding_propose "$WT" WEB-2870 >/dev/null
-    herdr_linear::binding_decline "$WT" WEB-2870
+    herdr_linear::binding_propose "$WT" WEB-2670 >/dev/null
+    herdr_linear::binding_decline "$WT" WEB-2670
     export FAKE_LINEAR_MODE=found_parent
     run herdr_linear::classify "$WT" ""
     [ "$(herdr_linear::binding_state "$WT")" = "unbound" ]

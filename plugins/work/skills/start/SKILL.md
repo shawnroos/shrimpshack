@@ -29,7 +29,7 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
 
-herdr_linear::start_from_issue WEB-3318 drawer-blank
+herdr_linear::start_from_issue WEB-3308 panel-empty
 ```
 
 It prints the worktree path. `cd` there and work.
@@ -40,7 +40,7 @@ ask. Every worktree here is called something a person chose — `cue-read`,
 the title, which is a fallback, not the goal.
 
 **The branch is not the worktree name.** It is `feature/` plus the branch name
-Linear supplies, so it carries the identifier: `feature/web-3318-ai-tools-drawer-is-blank…`.
+Linear supplies, so it carries the identifier: `feature/web-3308-export-panel-is-empty…`.
 That is deliberate — most branches here carry no identifier, which is why
 matching a branch to an issue only ever worked for about a fifth of worktrees.
 One started this way is findable forever after. Pass a third argument to use
