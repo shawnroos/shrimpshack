@@ -41,7 +41,7 @@ def truncate_escaped(text, limit):
     return cut + "…"
 
 
-def _clean(text, limit, notes, what):
+def clean_text(text, limit, notes, what):
     """Make caller text safe to place inside a Markdown table and a fenced block."""
     original = "" if text is None else str(text)
     # Default-deny. A blocklist of ASCII control codes left bidi overrides (U+202E)
@@ -82,7 +82,7 @@ def _to_number(value, series_name, position):
         except ValueError:
             raise Refusal(
                 f"The {series_name} series has the value "
-                f"'{_clean(text, constants.MAX_LABEL_CHARS, [], 'A value')}' at "
+                f"'{clean_text(text, constants.MAX_LABEL_CHARS, [], 'A value')}' at "
                 f"position {position + 1}, which is not a number."
             )
     if not math.isfinite(number):
@@ -124,7 +124,7 @@ def validate(request):
             "without the table growing past a readable width."
         )
 
-    x_labels = [_clean(label, constants.MAX_LABEL_CHARS, notes, "An x-axis label") for label in raw_x]
+    x_labels = [clean_text(label, constants.MAX_LABEL_CHARS, notes, "An x-axis label") for label in raw_x]
     # Labels that arrive different and leave the same are rows the reader cannot tell
     # apart. Genuinely repeated labels are fine and stay accepted: the comparison is
     # against the distinct labels that came in, not against the row count.
@@ -138,7 +138,7 @@ def validate(request):
     series = {}
     missing = {}
     for raw_name, values in raw_series.items():
-        name = _clean(raw_name, constants.MAX_LABEL_CHARS, notes, "A series name")
+        name = clean_text(raw_name, constants.MAX_LABEL_CHARS, notes, "A series name")
         if not isinstance(values, list):
             raise Refusal(f"The {name} series must be a list of numbers.")
         if len(values) != len(raw_x):
@@ -186,22 +186,22 @@ def validate(request):
     if requested not in FORMS:
         notes.append(
             f"The requested form "
-            f"'{_clean(requested, constants.MAX_LABEL_CHARS, [], 'A form name')}' is "
+            f"'{clean_text(requested, constants.MAX_LABEL_CHARS, [], 'A form name')}' is "
             "not one this version provides; the form was chosen from the data instead."
         )
         requested = "auto"
 
     return {
-        "title": _clean(request.get("title"), constants.MAX_TITLE_CHARS, notes, "The title"),
+        "title": clean_text(request.get("title"), constants.MAX_TITLE_CHARS, notes, "The title"),
         "requested_form": requested,
         "width": width,
         "x": x_labels,
         "series": series,
         "missing": missing,
-        "units": _clean(request.get("units"), constants.MAX_LABEL_CHARS, notes, "The units"),
+        "units": clean_text(request.get("units"), constants.MAX_LABEL_CHARS, notes, "The units"),
         "source": {
-            _clean(k, constants.MAX_LABEL_CHARS, notes, "A source field"):
-            _clean(v, constants.MAX_LABEL_CHARS, notes, "A source value")
+            clean_text(k, constants.MAX_LABEL_CHARS, notes, "A source field"):
+            clean_text(v, constants.MAX_LABEL_CHARS, notes, "A source value")
             for k, v in raw_source.items()
         },
         "notes": notes,
