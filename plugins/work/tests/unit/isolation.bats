@@ -60,3 +60,22 @@ load setup_common
     [ -n "${HERDR_LINEAR_BIN_PATHS+set}" ]
     [ -z "$HERDR_LINEAR_BIN_PATHS" ]
 }
+
+# Five verbs fall back to the working directory when a caller omits one. Bats
+# starts a test inside the real checkout, so an omitted directory resolved the
+# plugin's own repository, and a test once ran `git worktree add` there and left
+# a real worktree and branch behind while passing. The repository is derived
+# from this file, never written down, so the test holds wherever the plugin lives.
+@test "the working directory is not inside the repository under test" {
+    real="$(git -C "$BATS_TEST_DIRNAME" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+    [ -n "$real" ]
+    here="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || here=""
+    [ "$here" != "$real" ]
+}
+
+@test "a verb that defaults to the working directory cannot reach the real repository" {
+    . "$BATS_TEST_DIRNAME/../../lib/contain.sh"
+    real="$(git -C "$BATS_TEST_DIRNAME" rev-parse --path-format=absolute --git-common-dir)"
+    run herdr_linear::worktree_repo
+    [[ "$output" != "${real%/.git}"* ]]
+}

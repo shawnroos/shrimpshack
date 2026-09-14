@@ -45,6 +45,13 @@ herdr_linear_test::isolate() {
     # Set-but-empty, never unset: the reader spells this ${VAR-default}, so only
     # an empty value stops the scan reaching this machine's real install paths.
     export HERDR_LINEAR_BIN_PATHS=""
+
+    # The one seam that is not a variable. Bats starts inside the real checkout,
+    # and several verbs default a directory to $PWD, so a test that omits one
+    # resolves the plugin's own repository. That is how a real worktree and
+    # branch were once created in it by a passing test. A suite that needs a
+    # project directory still cd's into its own fixture after this.
+    cd "$sandbox" || return 1
 }
 
 herdr_linear_test::isolate
