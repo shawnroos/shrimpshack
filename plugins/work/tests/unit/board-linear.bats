@@ -21,6 +21,8 @@ setup() {
     export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
     export HERDR_LINEAR_RETRY_MAX=1
+    export HERDR_LINEAR_STORE_DIR="$WORK/store"
+    export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
     mkdir -p "$WORK/rec"
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_BOARDBOARDBOARDBOARD" > "$LINEAR_SECRETS_FILE"
 
@@ -270,4 +272,111 @@ assert "position" in b["query"], b
     run --separate-stderr herdr_linear::board_first_unstarted_state "55555555-5555-4555-8555-555555555555"
     [ "$status" -eq "$HERDR_LINEAR_NOT_FOUND" ]
     [ -z "$output" ]
+}
+
+# ------------------------------------------------------------------ complete
+
+TEAM=55555555-5555-4555-8555-555555555555
+TICKET=bbbbbbbb-0000-4000-8000-000000000001
+
+# The ticket is in the last complete read, so consent is the one fact a refusal
+# can be for. The board groups by assignee, not state: completion must not need
+# a rendered completed group.
+board_read_with_done() {
+    herdr_linear::board_sync_complete "$(printf '{"observed":{},"unknown":{},"pending_questions":0,"members":["%s"],"rendered":{"Board":{"assignee":["66666666-6666-4666-8666-666666666666"]}}}' "$TICKET")"
+}
+consent_for_state() {
+    local n; n="$(herdr_linear::board_consent_propose Board state)"
+    herdr_linear::board_consent_confirm Board state "$n"
+}
+shadow_lines() { if [ -e "$HERDR_LINEAR_SHADOW_LOG" ]; then grep -c . "$HERDR_LINEAR_SHADOW_LOG" || true; else echo 0; fi; }
+
+@test "completing a ticket in shadow mode logs and writes nothing" {
+    board_read_with_done
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_SHADOW" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+    [ "$(shadow_lines)" = "1" ]
+    grep -q "SHADOW board would complete \"$TICKET\" (state \"st-done\") in \"Board\": no consent for state writes in this space$" "$HERDR_LINEAR_SHADOW_LOG"
+}
+
+@test "completing a consented ticket on a board not grouped by state is allowed" {
+    board_read_with_done
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq 0 ]
+    [ "$(bodies_named issueUpdate)" -eq 1 ]
+    [ "$(shadow_lines)" = "0" ]
+}
+
+@test "completing a ticket absent from the last complete read is refused and writes nothing" {
+    board_read_with_done
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board bbbbbbbb-0000-4000-8000-000000000099 "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_SHADOW" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+    [ "$(shadow_lines)" = "1" ]
+    grep -q 'ticket is not in the last complete filter read$' "$HERDR_LINEAR_SHADOW_LOG"
+}
+
+@test "completing with no complete read recorded is refused and writes nothing" {
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_SHADOW" ]
+    # A sync-state record that holds only a plugin write is still no complete read.
+    herdr_linear::board_record_linear_write
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_SHADOW" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+    [ "$(grep -c 'no complete filter read is recorded$' "$HERDR_LINEAR_SHADOW_LOG")" -eq 2 ]
+}
+
+@test "a completion gate that cannot evaluate its facts refuses and still logs a line" {
+    mkdir -p "$WORK/nopy"
+    printf '#!/bin/sh\nexit 1\n' > "$WORK/nopy/python3"; chmod +x "$WORK/nopy/python3"
+    PATH="$WORK/nopy:$PATH" run herdr_linear::board_complete_gate Board "$TICKET" st-done
+    [ "$status" -eq 1 ]
+    grep -q 'the gate could not evaluate its facts' "$HERDR_LINEAR_SHADOW_LOG"
+}
+
+@test "completing a consented board ticket writes its team's first completed state and marks the board behind" {
+    board_read_with_done
+    consent_for_state
+    run herdr_linear::board_behind
+    [ "$status" -eq 1 ]
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq 0 ]
+    [ "$(bodies_named issueUpdate)" -eq 1 ]
+    last_body issueUpdate | python3 -c '
+import sys, json
+b = json.load(sys.stdin)
+assert b["variables"] == {"id": "bbbbbbbb-0000-4000-8000-000000000001", "input": {"stateId": "st-done"}}, b
+'
+    [ "$(shadow_lines)" = "0" ]
+    run herdr_linear::board_behind
+    [ "$status" -eq 0 ]
+}
+
+@test "a team with no completed state completes nothing" {
+    board_read_with_done
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_BOARD_STATES=no_completed
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_NOT_FOUND" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+}
+
+@test "a completion Linear rejects is reported as a failed write and does not mark the board behind" {
+    board_read_with_done
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=fail
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_REJECTED" ]
+    run herdr_linear::board_behind
+    [ "$status" -eq 1 ]
 }

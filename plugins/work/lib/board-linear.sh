@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# The board's Linear reads and its one field write. Sourced, never executed.
-# Transport is lib/linear.sh `herdr_linear::query`; this file only builds bodies
-# and reads answers.
+# The board's Linear reads, its one field write, and completing a ticket.
+# Sourced, never executed. Transport is lib/linear.sh `herdr_linear::query`.
 #
 # WHY A SEPARATE SELECTION SET (KTD10)
 # HERDR_LINEAR_ISSUE_FIELDS is read by every existing verb. The board needs
@@ -15,6 +14,8 @@
 
 command -v herdr_linear::query >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/linear.sh"
+command -v herdr_linear::board_consent_covers >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/board-store.sh"
 
 HERDR_LINEAR_BOARD_PAGE_SIZE="${HERDR_LINEAR_BOARD_PAGE_SIZE:-50}"
 # A cursor that never advances must not spin; 100 pages of 50 is a board no
@@ -24,6 +25,7 @@ HERDR_LINEAR_BOARD_MAX_PAGES="${HERDR_LINEAR_BOARD_MAX_PAGES:-100}"
 # Outside linear.sh's 0-5, so a caller can tell these from a transport answer.
 HERDR_LINEAR_BOARD_READ_PARTIAL=6    # stopped at the page cap or on an unreadable page
 HERDR_LINEAR_BOARD_WRITE_REJECTED=7  # Linear answered, and success was not true
+HERDR_LINEAR_BOARD_WRITE_SHADOW=8    # the board consent gate refused; logged, nothing sent
 
 HERDR_LINEAR_BOARD_ISSUE_FIELDS='id identifier title state { id name type } team { id key } project { id name } projectMilestone { id name } cycle { id } assignee { id name } priority parent { id identifier } labels { nodes { id name parent { id name } } }'
 
@@ -197,12 +199,12 @@ def main():
         except Exception:
             return 1
         return 0 if ok is True else 1
-    if verb == "unstarted":
+    if verb == "first-state":
         try:
             states = json.load(sys.stdin)["data"]["team"]["states"]["nodes"]
         except Exception:
             return 1
-        cands = [s for s in states if s.get("type") == "unstarted"
+        cands = [s for s in states if s.get("type") == args[0]
                  and isinstance(s.get("position"), (int, float)) and s.get("id")]
         if not cands:
             return 2
@@ -232,7 +234,7 @@ herdr_linear::_board_linear_py() {
 
 # herdr_linear::board_issues <filter-json>
 #
-# Reads every ticket the resolved filter from `herdr_linear::board_mapping_for`
+# Reads every ticket the resolved filter from `board_mapping_for`
 # matches. Always prints {"complete": bool, "tickets": [...]}.
 # Exit 0 only when every page was read. Otherwise the tickets read so far are
 # printed with complete false, and the exit is the failing page's linear.sh code
@@ -288,11 +290,8 @@ herdr_linear::board_write_field() {
     return "$HERDR_LINEAR_OK"
 }
 
-# herdr_linear::board_first_unstarted_state <team-id>
-# Prints the id of the team's unstarted state with the lowest position (R34).
-# NOT_FOUND when the team has none; REFUSED for an empty team id.
-herdr_linear::board_first_unstarted_state() {
-    local team="${1-}" body resp rc
+herdr_linear::_board_first_state() {
+    local team="${1-}" type="$2" body resp rc
     [ -n "$team" ] || return "$HERDR_LINEAR_REFUSED"
     body="$(python3 -c '
 import sys, json
@@ -301,10 +300,81 @@ print(json.dumps({"query": q, "variables": {"id": sys.argv[1]}}))
 ' "$team")" || return "$HERDR_LINEAR_UNAVAILABLE"
     resp="$(herdr_linear::query "$body")"; rc=$?
     [ "$rc" -eq 0 ] || return "$rc"
-    printf '%s' "$resp" | herdr_linear::_board_linear_py unstarted; rc=$?
+    printf '%s' "$resp" | herdr_linear::_board_linear_py first-state "$type"; rc=$?
     case "$rc" in
         0) return "$HERDR_LINEAR_OK" ;;
         2) return "$HERDR_LINEAR_NOT_FOUND" ;;
         *) return "$HERDR_LINEAR_UNAVAILABLE" ;;
     esac
+}
+
+# herdr_linear::board_first_unstarted_state <team-id>
+# Prints the id of the team's unstarted state with the lowest position (R34).
+# NOT_FOUND when the team has none; REFUSED for an empty team id.
+herdr_linear::board_first_unstarted_state() {
+    herdr_linear::_board_first_state "${1-}" unstarted
+}
+
+# herdr_linear::board_completed_state <team-id>
+# The same lookup for the team's completed state.
+herdr_linear::board_completed_state() {
+    herdr_linear::_board_first_state "${1-}" completed
+}
+
+# herdr_linear::board_complete_gate <space> <issue-id> <completed-state-id>
+#   0  the space consented to state writes and the ticket is in the last
+#      complete filter read
+#   1  refused; exactly one shadow log line names every failed fact
+#
+# Not board_consent_gate: that gate also requires the target to be a group the
+# board rendered, which protects a move whose value comes from the layout. A
+# completion's value is looked up by the plugin, and most boards render no
+# completed group, so that bound would refuse completion everywhere (R28).
+herdr_linear::board_complete_gate() {
+    local space="${1-}" issue="${2-}" completed="${3-}" consented=1 sync line
+    herdr_linear::board_consent_covers "$space" state && consented=0
+    sync="$(herdr_linear::board_sync_state 2>/dev/null)" || sync=""
+    line="$(printf '%s' "$sync" | python3 -c '
+import json, sys
+consented, space, issue, completed = sys.argv[1:5]
+reasons = []
+if consented != "0":
+    reasons.append("no consent for state writes in this space")
+try:
+    rec = json.load(sys.stdin)
+    assert isinstance(rec, dict) and rec.get("last_complete_sync_at")
+except Exception:
+    reasons.append("no complete filter read is recorded")
+else:
+    if not issue or issue not in (rec.get("members") or []):
+        reasons.append("ticket is not in the last complete filter read")
+if not reasons:
+    sys.exit(0)
+sys.stdout.write("SHADOW board would complete %s (state %s) in %s: %s" % (
+    json.dumps(issue), json.dumps(completed), json.dumps(space), "; ".join(reasons)))
+sys.exit(1)
+' "$consented" "$space" "$issue" "$completed")" && return 0
+    [ -n "$line" ] || line="SHADOW board would complete a ticket: the gate could not evaluate its facts"
+    herdr_linear::_shadow_log "$line"
+    return 1
+}
+
+# herdr_linear::board_complete <space> <issue-id> <team-id>
+#
+# R28. Moves a board ticket to its team's completed state. It needs no worktree:
+# the write is keyed by issue id and allowed by board_complete_gate, not by a
+# binding's consent record.
+# Exit 0 written; BOARD_WRITE_SHADOW when the gate refused (one shadow log line,
+# nothing sent); NOT_FOUND when the team has no completed state; otherwise
+# board_write_field's code.
+herdr_linear::board_complete() {
+    local space="${1-}" issue="${2-}" team="${3-}" completed rc
+    completed="$(herdr_linear::board_completed_state "$team")" || return $?
+    herdr_linear::board_complete_gate "$space" "$issue" "$completed" \
+        || return "$HERDR_LINEAR_BOARD_WRITE_SHADOW"
+    herdr_linear::board_write_field "$issue" stateId "$completed"; rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    # The write happened; a store that cannot record it must not report a failed write.
+    herdr_linear::board_record_linear_write >/dev/null 2>&1 || true
+    return "$HERDR_LINEAR_OK"
 }

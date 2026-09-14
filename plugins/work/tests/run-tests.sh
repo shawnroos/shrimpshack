@@ -486,6 +486,11 @@ consent_mutation_check() {
         "documents.bats:a document is not published when nobody has answered"
         "reconcile.bats:a hook with no recorded answer records the question rather than sending"
     )
+    # Board writes read space consent through board_consent_covers, directly or
+    # through board_consent_gate. One named red test per call site under lib/.
+    local -a board_expect=(
+        "board-linear.bats:completing a ticket in shadow mode logs and writes nothing"
+    )
     # The names above are the point of the list and they stay. What a hand-kept
     # list cannot do is notice the write verb added next year: a seventh call
     # site with no line here is forgotten in the one phase that then reports
@@ -504,6 +509,21 @@ consent_mutation_check() {
         diff <(printf '%s\n' "$expected") <(printf '%s\n' "$derived") | sed 's/^/  /'
         return 1
     fi
+    local board_derived board_expected
+    # board-store.sh defines both verbs and board-store.bats covers its own gate.
+    # A `command -v` guard names a verb but calls nothing.
+    board_derived="$(awk '
+        FILENAME ~ /\/board-store\.sh$/ { next }
+        /herdr_linear::board_consent_(gate|covers)/ && $0 !~ /^[[:space:]]*#/ \
+            && $0 !~ /herdr_linear::board_consent_(gate|covers)\(\)/ && $0 !~ /command -v/ {
+            n = split(FILENAME, p, "/"); f = p[n]; sub(/\.sh$/, ".bats", f); print f
+        }' "$PLUGIN_ROOT"/lib/*.sh | sort)"
+    board_expected="$(printf '%s\n' "${board_expect[@]}" | sed 's/:.*//' | sort)"
+    if [ "$board_derived" != "$board_expected" ]; then
+        printf '%sconsent mutation FAILED%s — the named board list and the real board consent call sites disagree.\n' "$RED" "$NC"
+        diff <(printf '%s\n' "$board_expected") <(printf '%s\n' "$board_derived") | sed 's/^/  /'
+        return 1
+    fi
     local tmp; tmp="$(mktemp -d)"
     # The whole plugin, because a .bats file resolves lib/ from its OWN
     # directory -- copying lib/ alone would run every test against the real one
@@ -514,8 +534,12 @@ consent_mutation_check() {
 
 herdr_linear::consent_ok() { return 0; }
 EOF
+    cat >> "$tmp/work/lib/board-store.sh" <<'EOF'
+
+herdr_linear::board_consent_covers() { return 0; }
+EOF
     local rc=0 entry file name out
-    for entry in "${expect[@]}"; do
+    for entry in "${expect[@]}" "${board_expect[@]}"; do
         file="${entry%%:*}"; name="${entry#*:}"
         out="$(bats -f "$name" "$tmp/work/tests/unit/$file" 2>&1 || true)"
         # The filter matching nothing prints "0 tests" and exits 0, which reads

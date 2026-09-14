@@ -35,7 +35,7 @@ worktree is bound to, or from the project the herdr workspace is bound to.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context create; do
+for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context board-store board-linear create; do
   source "$R/lib/$f.sh"
 done
 
@@ -129,6 +129,48 @@ name.
 | 3 | shadow mode: nothing was created, local or remote |
 | 4 | the tracker call failed; nothing was filed |
 | 5 | the issue exists but its worktree did not follow; stderr says what to run, and may carry the repository question |
+
+## Filing into a board group
+
+When the person files from a board column, pass that group as a fifth argument:
+each level kind the pane sits under, mapped to the Linear id of its group, and
+`null` for a "No <level>" group.
+
+```bash
+TARGET='{"assignee":"<user id>","project":null}'
+OUT="$(herdr_linear::new_issue "$PWD" "The title" /tmp/desc.md "$(herdr_linear::workspace_id)" "$TARGET")"; RC=$?
+```
+
+The group's fields go into the one create call, and the ticket starts in its
+team's first unstarted state, so it stays in the column it was filed into
+instead of landing in triage. A `state` group files into that state instead. A
+`null` group leaves the field unset, including a project the worktree would have
+supplied. The consent question has to name the group's team and project: a
+group on a different team or project than the recorded answer runs in shadow.
+
+Exit 1 also covers a refused target: an empty string, an unknown level kind, a
+`ticket` group, `null` for team or state, or a parent group on a sub-issue that
+already has a parent. Exit 4 also covers a team with no unstarted state. Nothing
+is filed in either case.
+
+## Completing a board ticket
+
+A ticket on the board can be completed without a worktree:
+
+```bash
+herdr_linear::board_complete "<space name>" "<issue id>" "<team id>"; RC=$?
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | moved to the team's completed state, and the board is marked behind |
+| 8 | shadow: the space has not consented to state writes, or the ticket is not in the last complete board read; one shadow log line says which, and nothing was sent |
+| 2 | the team has no completed state; nothing was sent |
+| 7 | Linear refused the write |
+| other | 5 for an empty team id, otherwise the Linear transport code (unavailable, auth, rate limited); nothing was written |
+
+Consent for completing is the board's per-space consent for the `state` field,
+not this worktree's answer. The board does not need to group by state.
 
 **The pane opens in the space bound to the issue's project, never beside the
 focused pane.** A tab is a piece of work: the new ticket gets its own tab in

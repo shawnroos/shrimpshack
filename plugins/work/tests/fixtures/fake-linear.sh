@@ -528,12 +528,15 @@ print(json.dumps({"data": {"issues": {"nodes": nodes, "pageInfo": {
     # are listed out of position order, so taking the first listed one and
     # taking the lowest position give different answers.
     #   FAKE_LINEAR_BOARD_STATES   none: the team has no unstarted state
+    #                              no_completed: the team has no completed state
     *'BoardTeamStates('*)
         [ "$wants_headers" = 1 ] && emit_headers 200
         if [ "${FAKE_LINEAR_BOARD_STATES:-}" = none ]; then
             answer '{"data":{"team":{"states":{"nodes":[{"id":"st-prog","name":"In Progress","type":"started","position":3},{"id":"st-done","name":"Done","type":"completed","position":4}]}}}}'
+        elif [ "${FAKE_LINEAR_BOARD_STATES:-}" = no_completed ]; then
+            answer '{"data":{"team":{"states":{"nodes":[{"id":"st-todo","name":"Todo","type":"unstarted","position":2},{"id":"st-prog","name":"In Progress","type":"started","position":3}]}}}}'
         else
-            answer '{"data":{"team":{"states":{"nodes":[{"id":"st-backlog","name":"Backlog","type":"backlog","position":0},{"id":"st-todo","name":"Todo","type":"unstarted","position":2},{"id":"st-ready","name":"Ready","type":"unstarted","position":1.5},{"id":"st-prog","name":"In Progress","type":"started","position":3}]}}}}'
+            answer '{"data":{"team":{"states":{"nodes":[{"id":"st-backlog","name":"Backlog","type":"backlog","position":0},{"id":"st-todo","name":"Todo","type":"unstarted","position":2},{"id":"st-ready","name":"Ready","type":"unstarted","position":1.5},{"id":"st-prog","name":"In Progress","type":"started","position":3},{"id":"st-archive","name":"Archived","type":"completed","position":6},{"id":"st-done","name":"Done","type":"completed","position":4}]}}}}'
         fi
         exit 0
         ;;
