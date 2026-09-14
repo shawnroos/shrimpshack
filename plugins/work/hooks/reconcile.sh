@@ -35,6 +35,13 @@ except Exception:
 
 command -v herdr_linear::reconcile >/dev/null 2>&1 || exit 0
 
+# The lib verb no longer refuses for being outside the root, so the silence is
+# the hook's to keep: a session ending in another repository writes
+# nothing and says nothing.
+if command -v herdr_linear::path_signal >/dev/null 2>&1; then
+    [ "$(herdr_linear::path_signal "$cwd")" = "inside" ] || exit 0
+fi
+
 # The untidy states first. Nothing called classify before this line, so
 # misplaced and stale were states production never set and reconcile's
 # suspension had nothing to read -- a ticket someone cancelled mid-session came

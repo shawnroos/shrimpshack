@@ -25,7 +25,6 @@ HERDR_LINEAR_CANDIDATE_LIMIT="${HERDR_LINEAR_CANDIDATE_LIMIT:-5}"
 
 HERDR_LINEAR_PROPOSE_OK=0
 HERDR_LINEAR_PROPOSE_NONE=1       # the filter was empty; say so, do not widen
-HERDR_LINEAR_PROPOSE_OUTSIDE=2    # not under the Slate root
 HERDR_LINEAR_PROPOSE_UNAVAILABLE=3
 
 # The GraphQL for the fallback list. Assigned to the viewer, not in a terminal
@@ -53,8 +52,6 @@ print(json.dumps({"query": q, "variables": {"f": f, "n": limit}}))
 # see why an issue is on the list.
 herdr_linear::candidates() {
     local wt="${1:-}" ws="${2:-}" branch ident resp project declined out=""
-
-    herdr_linear::contains "$wt" || return "$HERDR_LINEAR_PROPOSE_OUTSIDE"
 
     # R4. A candidate already declined for this worktree is never offered again,
     # whichever rule would have produced it.

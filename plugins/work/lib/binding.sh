@@ -36,6 +36,11 @@
 
 # Outside version control, which R7 requires, and outside ${CLAUDE_PLUGIN_ROOT},
 # which changes on plugin update.
+# No lib sources another, and ground.sh sources sanitize.sh AFTER this file:
+# without this the call below is 127, which its `||` branch reads as a refusal.
+command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+
 HERDR_LINEAR_STORE_DIR="${HERDR_LINEAR_STORE_DIR:-$HOME/.claude/work}"
 HERDR_LINEAR_PIN_DIR="${HERDR_LINEAR_PIN_DIR:-$HOME/.claude/linear-pin}"
 HERDR_LINEAR_RECORD_VERSION=1
@@ -67,8 +72,11 @@ herdr_linear::_pin_branch_key() {
     printf '%s' "${root}#${branch}" | shasum | cut -c1-16
 }
 
+# Never fails. A directory that is not a repository at all still has to answer
+# -- the consent reader runs from an unbound checkout, and under `set -e` a
+# non-zero here would take the caller down with it.
 herdr_linear::_current_branch() {
-    git -C "$1" --no-optional-locks branch --show-current 2>/dev/null
+    git -C "$1" --no-optional-locks branch --show-current 2>/dev/null || true
 }
 
 herdr_linear::binding_key() {
@@ -161,6 +169,11 @@ def load(path):
     rec.setdefault("declined", [])
     rec.setdefault("proposal", None)
     rec.setdefault("pending_judgment", None)
+    rec.setdefault("consent", None)
+    rec.setdefault("consent_proposal", None)
+    rec.setdefault("pending_consent", None)
+    rec.setdefault("pending_placement", None)
+    rec.setdefault("tab", "")
     rec.setdefault("created_children", [])
     rec.setdefault("created_documents", [])
     rec.setdefault("description_head", "")
@@ -174,7 +187,10 @@ def blank(path_value):
     return {
         "version": VERSION, "worktree_path": path_value, "state": "unbound",
         "branch_at_confirmation": "", "issue_identifier": "", "declined": [],
-        "proposal": None, "pending_judgment": None, "created_children": [],
+        "proposal": None, "pending_judgment": None,
+        "consent": None, "consent_proposal": None, "pending_consent": None,
+        "pending_placement": None, "tab": "",
+        "created_children": [],
         "created_documents": [], "description_head": "",
         "issue_updated_at": "", "updated_at": now(),
     }
@@ -210,6 +226,43 @@ if op == "field":
         sys.exit(1)
     v = rec.get(args[0])
     sys.stdout.write("" if v is None else (v if isinstance(v, str) else json.dumps(v)))
+    sys.exit(0)
+
+def consent_covers(rec, team, project, branch):
+    """R10. Team and branch are exact. A request naming no project is covered by
+    the answer for that team -- start_new and new_project name a team only. The
+    reverse is not covered: an answer that named no project never named one."""
+    c = rec.get("consent")
+    if not isinstance(c, dict):
+        return False
+    if c.get("team", "") != team:
+        return False
+    if project and c.get("project", "") != project:
+        return False
+    return c.get("branch", "") == branch
+
+if op == "has-consent":
+    rec = load(path)
+    sys.exit(0 if rec is not None and isinstance(rec.get("consent"), dict) else 1)
+
+if op == "consent-ok":
+    rec = load(path)
+    if rec is None:
+        sys.exit(1)
+    sys.exit(0 if consent_covers(rec, args[0], args[1], args[2]) else 1)
+
+if op == "pending-consent":
+    rec = load(path)
+    if rec is None or not rec.get("pending_consent"):
+        sys.exit(1)
+    sys.stdout.write(rec["pending_consent"])
+    sys.exit(0)
+
+if op == "pending-placement":
+    rec = load(path)
+    if rec is None or not rec.get("pending_placement"):
+        sys.exit(1)
+    sys.stdout.write(rec["pending_placement"])
     sys.exit(0)
 
 # ---- mutations. Each loads, applies, saves. The caller holds the lock.
@@ -301,6 +354,76 @@ if op == "set-description-head":
     save(path, rec)
     sys.exit(0)
 
+if op == "consent-propose":
+    worktree, team, project = args[0], args[1], args[2]
+    if not rec["worktree_path"]:
+        rec["worktree_path"] = worktree
+    rec["consent_proposal"] = {
+        "team": team, "project": project,
+        "nonce": secrets.token_hex(16), "presented_at": now(),
+    }
+    save(path, rec)
+    sys.stdout.write(rec["consent_proposal"]["nonce"])
+    sys.exit(0)
+
+if op == "consent-confirm":
+    # The same nonce rule the binding uses, and the same limit on what it
+    # proves: it orders confirm after propose. What makes the answer a PERSON'S
+    # is that every skill carrying the fence is disable-model-invocation, and
+    # that nothing under lib/, hooks/ or commands/ calls this op.
+    team, project, branch, nonce = args[0], args[1], args[2], args[3]
+    p = rec.get("consent_proposal")
+    if (not p or not nonce or p.get("nonce") != nonce
+            or p.get("team") != team or p.get("project") != project):
+        sys.exit(2)
+    rec["consent"] = {
+        "team": team, "project": project, "branch": branch, "answered_at": now(),
+    }
+    rec["consent_proposal"] = None
+    rec["pending_consent"] = None
+    save(path, rec)
+    sys.exit(0)
+
+if op == "consent-decline":
+    # An absent answer and a refused one both mean do not write, so this records
+    # no third state: it clears the proposal and the notice and leaves `consent`
+    # as it found it. Not a revoke -- a recorded yes is never offered this.
+    #
+    # The same nonce rule the confirm half uses, for a different reason. A
+    # decline authorises nothing, but it CLEARS the deferred-write notice, which
+    # is the only surfaced evidence that a write was skipped. The nonce makes a
+    # decline answer a proposal that actually happened, so nothing can erase
+    # that evidence by answering a question nobody asked.
+    team, project, nonce = args[0], args[1], args[2]
+    p = rec.get("consent_proposal")
+    if (not p or not nonce or p.get("nonce") != nonce
+            or p.get("team") != team or p.get("project") != project):
+        sys.exit(2)
+    rec["consent_proposal"] = None
+    rec["pending_consent"] = None
+    save(path, rec)
+    sys.exit(0)
+
+if op == "set-pending-consent":
+    # KTD3. Its own slot. `set-judgment` replaces its single slot wholesale, and
+    # a consent question landing there would evict the squash-merge question --
+    # which has already happened once.
+    rec["pending_consent"] = args[0]
+    save(path, rec)
+    sys.exit(0)
+
+if op == "set-tab":
+    rec["tab"] = args[0]
+    save(path, rec)
+    sys.exit(0)
+
+if op == "set-pending-placement":
+    # KTD29. Its own slot: consent-confirm clears pending_consent, and a space
+    # question landing there would be cleared by an answer to a different one.
+    rec["pending_placement"] = args[0] or None
+    save(path, rec)
+    sys.exit(0)
+
 if op == "set-judgment":
     rec["pending_judgment"] = {"text": args[0], "recorded_at": now(), "presented_in": []}
     save(path, rec)
@@ -380,9 +503,16 @@ herdr_linear::binding_state() {
 }
 
 herdr_linear::binding_identifier() {
-    local rec
+    local rec id
     rec="$(herdr_linear::binding_read "$1")" || return "$HERDR_LINEAR_BINDING_ABSENT"
-    printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("issue_identifier",""))' 2>/dev/null
+    id="$(printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("issue_identifier",""))' 2>/dev/null)"
+    # A proposed record has no identifier yet; that is absent, not hostile, and
+    # callers distinguish the two.
+    [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_ABSENT"
+    # A record written before this guard existed, or edited by anything that can
+    # reach the store, is untrusted at read time too.
+    herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    printf '%s' "$id"
 }
 
 # The pin store is a SEED and is never written. It holds a bare identifier with
@@ -426,6 +556,9 @@ herdr_linear::_mutate() {
 herdr_linear::binding_propose() {
     local wt="${1:-}" id="${2:-}"
     [ -n "$wt" ] && [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    # The record is a delivery channel: what is written here comes back out of
+    # binding_identifier and becomes a path segment downstream.
+    herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
     herdr_linear::_mutate "$wt" propose "$(cd "$wt" && pwd -P)" "$id"
 }
 
@@ -434,13 +567,17 @@ herdr_linear::binding_propose() {
 herdr_linear::binding_confirm() {
     local wt="${1:-}" id="${2:-}" nonce="${3:-}" branch
     [ -n "$wt" ] && [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
     branch="$(herdr_linear::_current_branch "$wt")"
     herdr_linear::_mutate "$wt" confirm "$id" "$nonce" "$branch"
 }
 
 herdr_linear::binding_decline()       { herdr_linear::_mutate "${1:-}" decline "${2:-}"; }
 herdr_linear::binding_set_state()     { herdr_linear::_mutate "${1:-}" set-state "${2:-}"; }
-herdr_linear::binding_add_child()     { herdr_linear::_mutate "${1:-}" add-child "${2:-}"; }
+herdr_linear::binding_add_child() {
+    herdr_linear::is_safe_identifier "${2:-}" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::_mutate "${1:-}" add-child "$2"
+}
 herdr_linear::binding_add_document()  { herdr_linear::_mutate "${1:-}" add-document "${2:-}" "${3:-}"; }
 herdr_linear::binding_set_desc_head() { herdr_linear::_mutate "${1:-}" set-description-head "${2:-}"; }
 herdr_linear::binding_desc_head() {
@@ -456,6 +593,132 @@ herdr_linear::binding_clear_judgment(){ herdr_linear::_mutate "${1:-}" clear-jud
 # Prints the pending judgment once per session, then not again for that session.
 herdr_linear::binding_take_judgment() {
     herdr_linear::_mutate "${1:-}" take-judgment "${2:-${CLAUDE_SESSION_ID:-}}"
+}
+
+# ------------------------------------------------------------ write consent
+#
+# KTD1. Consent shares ONE mechanism with the binding: the path-hash key. It
+# carries its own team, project and branch, and the reader compares all three
+# itself. It cannot ride on `branch_at_confirmation`, which is compared only
+# when the state is `bound`, is rewritten by every confirm including the
+# no-human pairs in start.sh and create.sh, and is empty for the unbound
+# checkout R9 has to cover.
+#
+# The reader requires no binding at all: `start_new` and `new_project` run from
+# a checkout that has none.
+
+# herdr_linear::has_consent <dir> -> 0 when an answer is RECORDED here.
+# Presence, asked separately from value: the store reads through `_py field`,
+# which prints an empty string for an absent key and for a null one alike.
+herdr_linear::has_consent() {
+    local f
+    f="$(herdr_linear::_record_path "${1:-}")" || return 1
+    herdr_linear::_mode_ok "$f" || return 1
+    herdr_linear::_py has-consent "$f"
+}
+
+# herdr_linear::consent_ok <dir> <team> [project] -> 0 when the recorded answer
+# covers this write. Never writes, never locks -- it is on the path of every
+# mutation, and a read that takes the lock blocks during one.
+herdr_linear::consent_ok() {
+    local dir="${1:-}" team="${2:-}" project="${3:-}" f branch
+    [ -n "$team" ] || return 1
+    f="$(herdr_linear::_record_path "$dir")" || return 1
+    herdr_linear::_mode_ok "$f" || return 1
+    branch="$(herdr_linear::_current_branch "$dir")"
+    herdr_linear::_py consent-ok "$f" "$team" "$project" "$branch"
+}
+
+# The write half. KTD2: `consent_confirm` has exactly one class of caller -- the
+# ask-and-record fence in a write skill, every one of which is
+# disable-model-invocation. Nothing under lib/, hooks/ or commands/ may call it.
+herdr_linear::consent_propose() {
+    local dir="${1:-}" team="${2:-}" project="${3:-}" resolved
+    [ -n "$dir" ] && [ -n "$team" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    resolved="$(cd "$dir" 2>/dev/null && pwd -P)" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::_mutate "$dir" consent-propose "$resolved" "$team" "$project"
+}
+
+herdr_linear::consent_confirm() {
+    local dir="${1:-}" team="${2:-}" project="${3:-}" nonce="${4:-}" branch
+    [ -n "$dir" ] && [ -n "$team" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    branch="$(herdr_linear::_current_branch "$dir")"
+    herdr_linear::_mutate "$dir" consent-confirm "$team" "$project" "$branch" "$nonce"
+}
+
+# R9a. What a run with nobody to ask would have written, kept where the next
+# session can find it -- and NOT in the judgment slot, which holds one thing.
+herdr_linear::binding_set_pending_consent() {
+    herdr_linear::_mutate "${1:-}" set-pending-consent "${2:-}"
+}
+
+herdr_linear::binding_pending_consent() {
+    local f
+    f="$(herdr_linear::_record_path "${1:-}")" || return 1
+    herdr_linear::_mode_ok "$f" || return 1
+    herdr_linear::_py pending-consent "$f"
+}
+
+# KTD28. The tab a ticket owns, on that ticket's own binding. A tab's label is
+# prose; this record is the only thing that says which tab is the ticket's.
+herdr_linear::binding_set_tab() { herdr_linear::_mutate "${1:-}" set-tab "${2:-}"; }
+
+herdr_linear::binding_tab() {
+    local f
+    f="$(herdr_linear::_record_path "${1:-}")" || return 1
+    herdr_linear::_mode_ok "$f" || return 1
+    herdr_linear::_py field "$f" tab
+}
+
+# KTD29. A placement question nobody was there to answer, kept for the next
+# session start. An empty text clears it.
+herdr_linear::binding_set_pending_placement() {
+    herdr_linear::_mutate "${1:-}" set-pending-placement "${2:-}"
+}
+
+herdr_linear::binding_pending_placement() {
+    local f
+    f="$(herdr_linear::_record_path "${1:-}")" || return 1
+    herdr_linear::_mode_ok "$f" || return 1
+    herdr_linear::_py pending-placement "$f"
+}
+
+# The answer to no, and symmetric with confirm in both halves of the rule. KTD2
+# governs who may call it -- a decline is a person's answer, so nothing under
+# lib/, hooks/ or commands/ may -- and the nonce governs what it may answer.
+herdr_linear::consent_decline() {
+    local dir="${1:-}" team="${2:-}" project="${3:-}" nonce="${4:-}"
+    [ -n "$dir" ] && [ -n "$team" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::_mutate "$dir" consent-decline "$team" "$project" "$nonce"
+}
+
+HERDR_LINEAR_SHADOW_LOG="${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}"
+
+herdr_linear::_shadow_log() {
+    mkdir -p "$(dirname "$HERDR_LINEAR_SHADOW_LOG")" 2>/dev/null
+    printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$HERDR_LINEAR_SHADOW_LOG"
+}
+
+# herdr_linear::consent_gate <dir> <team> <project> <what> [detail]
+#   0  the recorded answer covers this write; proceed
+#   1  it does not; the skip is logged and recorded, and the caller returns its
+#      own shadow code
+#
+# The record is written on EVERY path, not just the hook's. No verb here can
+# tell whether a person is watching -- all six are reachable from a subagent, a
+# headless run, or another plugin sourcing lib/ -- and the costs are asymmetric:
+# over-recording costs one line in one session, and only while the write still
+# has not happened, while under-recording drops a write silently in exactly the
+# unattended case R9a exists for.
+herdr_linear::consent_gate() {
+    local dir="${1:-}" team="${2:-}" project="${3:-}" what="${4:-}" detail="${5:-}"
+    herdr_linear::consent_ok "$dir" "$team" "$project" && return 0
+    herdr_linear::_shadow_log "SHADOW would $what${detail:+ $detail}"
+    # A locked or unreadable store must not turn a refusal into a proceed.
+    herdr_linear::binding_set_pending_consent "$dir" \
+        "Nothing here has answered the write question yet, so this did not happen: $what. Run /work:describe or /work:new from this worktree to answer it; answering no clears this notice." \
+        || true
+    return 1
 }
 
 # ------------------------------------------------- workspace to project (R9, R10)

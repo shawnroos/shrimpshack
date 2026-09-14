@@ -3,7 +3,7 @@
 # tests.
 #
 # lib/secrets.sh is the plugin's only toucher of the Keychain. Pointing it at
-# this script through HERDR_LINEAR_SECURITY_BIN (the HERDR_LINEAR_SLATE_ROOT
+# this script through HERDR_LINEAR_SECURITY_BIN (the HERDR_LINEAR_PROJECTS_ROOT
 # seam precedent in contain.sh) lets the whole credential path run with no real
 # Keychain, no unlock prompt, and no Linear key on this machine's login
 # keychain.

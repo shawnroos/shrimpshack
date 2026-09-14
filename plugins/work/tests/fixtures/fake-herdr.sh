@@ -29,6 +29,22 @@
 #   FAKE_HERDR_MODE        running | not_running | running_then_flood | dead
 #   FAKE_HERDR_ALLOW_MUTATION  1 to permit creation verbs (U10 only)
 #   FAKE_HERDR_SLOW_PANE   probes a new pane stays unregistered for
+#   FAKE_HERDR_SNAPSHOT_FAILS  1 to make `api snapshot` fail
+#   FAKE_HERDR_SNAPSHOT_FAILS_FROM  N to make the Nth `api snapshot` and every
+#                          later one fail: a server that goes away mid-run
+#   FAKE_HERDR_SNAPSHOT_NO_PANES  1 to make `api snapshot` succeed with no
+#                          pane list in it
+#   FAKE_HERDR_SNAPSHOT_FAILS_AT  N to make only the Nth `api snapshot` fail: a
+#                          server busy for one read, readable on the next
+#   FAKE_HERDR_TAB_GET_FAILS  1 to make `tab get` fail with no answer at all,
+#                          as an unreachable server does, unlike a missing tab
+#   FAKE_HERDR_WORKSPACE_LIST_FAILS  1 to make `workspace list` fail while the
+#                          server otherwise answers
+#   FAKE_HERDR_WORKSPACES  the spaces `workspace list` reports, as
+#                          `id=label,id=label` (default: wA=Plugins). Created
+#                          tabs and panes are remembered in the record dir, so
+#                          `tab get`, `pane get` and the snapshot answer for
+#                          them the way the live server does
 #     running            the five faithful lines
 #     not_running        `status: not running`, exit 0 (herdr does not fail)
 #     running_then_flood `status: running` mid-output, then far more than one
@@ -56,6 +72,40 @@ if [ "${1:-}" = "--list-mutating-verbs" ]; then
     printf '%s\n' "$FAKE_HERDR_MUTATING_VERBS"
     exit 0
 fi
+
+# The value after a flag, or nothing.
+_flag() {
+    local want="$1"; shift
+    while [ "$#" -gt 0 ]; do
+        [ "$1" = "$want" ] && { printf '%s' "${2:-}"; return 0; }
+        shift
+    done
+}
+
+# `pane split [PANE_ID]` or `--pane <id>`. Flags that take a value are skipped
+# with their value, so a --cwd path is never read as the target.
+_split_target() {
+    shift 2
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --pane) printf '%s' "${2:-}"; return 0 ;;
+            --direction|--ratio|--cwd|--env|--right-click) shift ;;
+            --*) ;;
+            *) printf '%s' "$1"; return 0 ;;
+        esac
+        shift
+    done
+}
+
+# `<tab> <workspace>` for a pane this fixture made or the canned snapshot holds.
+_pane_where() {
+    case "$1" in
+        wA:p1|wA:p2) printf 'wA:t1 wA'; return 0 ;;
+        wA:p9) printf 'wA:t2 wA'; return 0 ;;
+    esac
+    [ -f "$REC_DIR/panes" ] || return 1
+    awk -v p="$1" '$1 == p { print $2 " " $3; found=1; exit } END { exit !found }' "$REC_DIR/panes"
+}
 
 # U11's accessor must never reach a mutating verb, and the refusal is how that
 # is asserted. U10 builds layout and legitimately needs them, so it opts in --
@@ -88,18 +138,36 @@ if [ "${FAKE_HERDR_ALLOW_MUTATION:-0}" = 1 ]; then
             ;;
         tab:create)
             _n=$(( _n + 1 )); printf '%s' "$_n" > "$_seq"
-            printf '{"result":{"tab":{"tab_id":"w1:t%s","label":"tab%s"},"root_pane":{"pane_id":"w1:p%s0","tab_id":"w1:t%s","workspace_id":"w1"}}}\n' \
-                "$_n" "$_n" "$_n" "$_n"
+            # The tab is made in the space it was asked for. Answering w1
+            # whatever was asked let a caller that never passed --workspace
+            # pass here and land in the focused space live.
+            _ws="$(_flag --workspace "$@")"; _ws="${_ws:-w1}"
+            _tab="$_ws:t$_n"; _root="$_ws:p0$_n"
+            printf '%s %s\n' "$_tab" "$_ws" >> "$REC_DIR/tabs"
+            printf '%s %s %s\n' "$_root" "$_tab" "$_ws" >> "$REC_DIR/panes"
+            printf '%s' "${FAKE_HERDR_SLOW_PANE:-0}" > "$REC_DIR/countdown.$_root"
+            printf '{"result":{"tab":{"tab_id":"%s","label":"tab%s","workspace_id":"%s"},"root_pane":{"pane_id":"%s","tab_id":"%s","workspace_id":"%s"}}}\n' \
+                "$_tab" "$_n" "$_ws" "$_root" "$_tab" "$_ws"
             exit 0
             ;;
         pane:split)
             _n=$(( _n + 1 )); printf '%s' "$_n" > "$_seq"
+            # The new pane lands in the TARGET's tab, as herdr does. With no
+            # target herdr splits the focused pane, modelled as w1:t1.
+            _target="$(_split_target "$@")"
+            _tab="w1:t1"; _ws="w1"
+            if [ -n "$_target" ]; then
+                _where="$(_pane_where "$_target")" || {
+                    echo "fake-herdr: no such pane '$_target'" >&2; exit 1; }
+                _tab="${_where% *}"; _ws="${_where#* }"
+            fi
             # A created pane becomes known to `pane get` only after
             # FAKE_HERDR_SLOW_PANE further probes. Answering immediately would
             # let a caller that assumes registration-on-return pass here and
             # race against the real server, which is the defect this models.
-            printf '%s' "${FAKE_HERDR_SLOW_PANE:-0}" > "$REC_DIR/countdown.w1:p$_n"
-            printf '{"result":{"pane":{"pane_id":"w1:p%s","tab_id":"w1:t1","workspace_id":"w1"}}}\n' "$_n"
+            printf '%s %s %s\n' "$_ws:p$_n" "$_tab" "$_ws" >> "$REC_DIR/panes"
+            printf '%s' "${FAKE_HERDR_SLOW_PANE:-0}" > "$REC_DIR/countdown.$_ws:p$_n"
+            printf '{"result":{"pane":{"pane_id":"%s:p%s","tab_id":"%s","workspace_id":"%s"}}}\n' "$_ws" "$_n" "$_tab" "$_ws"
             exit 0
             ;;
     esac
@@ -112,7 +180,9 @@ if [ "${1:-}" = "pane" ] && [ "${2:-}" = "get" ] && [ -n "${3:-}" ]; then
     if [ -f "$_cd_file" ]; then
         _cd="$(cat "$_cd_file" 2>/dev/null || echo 0)"
         if [ "${_cd:-0}" -le 0 ] 2>/dev/null; then
-            printf '{"result":{"pane":{"pane_id":"%s","tab_id":"w1:t1","workspace_id":"w1"}}}\n' "$3"
+            _where="$(_pane_where "$3")" || _where="w1:t1 w1"
+            printf '{"result":{"pane":{"pane_id":"%s","tab_id":"%s","workspace_id":"%s"}}}\n' \
+                "$3" "${_where% *}" "${_where#* }"
             exit 0
         fi
         printf '%s' "$(( _cd - 1 ))" > "$_cd_file"
@@ -161,6 +231,34 @@ emit_status() {
 
 emit_snapshot() {
     [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; return 1; }
+    [ "${FAKE_HERDR_SNAPSHOT_FAILS:-0}" = 1 ] && { echo "fake-herdr: snapshot failed" >&2; return 1; }
+    [ "${FAKE_HERDR_SNAPSHOT_NO_PANES:-0}" = 1 ] && { printf '{"result":{}}\n'; return 0; }
+    if [ -n "${FAKE_HERDR_SNAPSHOT_FAILS_FROM:-}${FAKE_HERDR_SNAPSHOT_FAILS_AT:-}" ]; then
+        local _c=0
+        [ -f "$REC_DIR/snapshots" ] && _c="$(cat "$REC_DIR/snapshots")"
+        _c=$(( _c + 1 )); printf '%s' "$_c" > "$REC_DIR/snapshots"
+        [ "$_c" -ge "${FAKE_HERDR_SNAPSHOT_FAILS_FROM:-999999}" ] && { echo "fake-herdr: snapshot failed" >&2; return 1; }
+        [ "$_c" -eq "${FAKE_HERDR_SNAPSHOT_FAILS_AT:-0}" ] && { echo "fake-herdr: snapshot failed" >&2; return 1; }
+    fi
+    canned_snapshot | REC_DIR="$REC_DIR" python3 -c '
+import sys, json, os
+d = json.load(sys.stdin)
+snap = d["result"]["snapshot"]
+rec = os.environ["REC_DIR"]
+def rows(name):
+    try:
+        return [l.split() for l in open(os.path.join(rec, name)) if l.strip()]
+    except OSError:
+        return []
+for tab, ws in rows("tabs"):
+    snap["tabs"].append({"tab_id": tab, "workspace_id": ws, "label": tab, "pane_count": 1})
+for pane, tab, ws in rows("panes"):
+    snap["panes"].append({"pane_id": pane, "tab_id": tab, "workspace_id": ws, "agent": None, "cwd": "/"})
+print(json.dumps(d))
+'
+}
+
+canned_snapshot() {
     cat <<'JSON'
 {"id":"cli:api:snapshot","result":{"snapshot":{
 "focused_pane_id":"wA:p1","focused_tab_id":"wA:t1","focused_workspace_id":"wA",
@@ -204,6 +302,47 @@ case "${1:-}" in
                 esac
                 ;;
             *) echo "fake-herdr: unsupported pane subcommand '${2:-}'" >&2; exit 2 ;;
+        esac
+        ;;
+    tab)
+        case "${2:-}" in
+            # herdr answers a missing tab with an error object on STDERR and
+            # exit 1 (herdr 0.9.0, checked live). Stdout is empty.
+            get)
+                [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
+                [ "${FAKE_HERDR_TAB_GET_FAILS:-0}" = 1 ] && { echo "fake-herdr: tab get failed" >&2; exit 1; }
+                _ws=""
+                case "${3:-}" in
+                    wA:t1|wA:t2) _ws="wA" ;;
+                    *) [ -f "$REC_DIR/tabs" ] && _ws="$(awk -v t="${3:-}" '$1 == t { print $2; exit }' "$REC_DIR/tabs")" ;;
+                esac
+                if [ -z "$_ws" ]; then
+                    printf '{"error":{"code":"tab_not_found","message":"tab %s not found"},"id":"cli:tab:get"}\n' "${3:-}" >&2
+                    exit 1
+                fi
+                printf '{"id":"cli:tab:get","result":{"tab":{"tab_id":"%s","workspace_id":"%s"},"type":"tab_info"}}\n' "${3:-}" "$_ws"
+                ;;
+            *) echo "fake-herdr: unsupported tab subcommand '${2:-}'" >&2; exit 2 ;;
+        esac
+        ;;
+    workspace)
+        case "${2:-}" in
+            list)
+                [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
+                # A server that answers status but fails this one read: the
+                # probe passes, so only the reader's own exit can report it.
+                [ "${FAKE_HERDR_WORKSPACE_LIST_FAILS:-0}" = 1 ] && { echo "fake-herdr: workspace list failed" >&2; exit 1; }
+                FAKE_HERDR_WORKSPACES="${FAKE_HERDR_WORKSPACES-wA=Plugins}" python3 -c '
+import json, os
+out = []
+for item in os.environ["FAKE_HERDR_WORKSPACES"].split(","):
+    if "=" in item:
+        wid, label = item.split("=", 1)
+        out.append({"workspace_id": wid, "label": label})
+print(json.dumps({"id": "cli:workspace:list", "result": {"type": "workspace_list", "workspaces": out}}))
+'
+                ;;
+            *) echo "fake-herdr: unsupported workspace subcommand '${2:-}'" >&2; exit 2 ;;
         esac
         ;;
     api)

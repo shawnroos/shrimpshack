@@ -22,6 +22,11 @@
 # 3. A read cannot hang a session (R14). Every call is bounded well inside the
 #    hook's budget and answers "unavailable" rather than blocking.
 
+# No lib sources another, and ground.sh sources sanitize.sh AFTER this file:
+# without this the call below is 127, which its `||` branch reads as a refusal.
+command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+
 HERDR_LINEAR_API_URL="${HERDR_LINEAR_API_URL:-https://api.linear.app/graphql}"
 HERDR_LINEAR_CURL_BIN="${HERDR_LINEAR_CURL_BIN:-curl}"
 HERDR_LINEAR_CACHE_DIR="${LINEAR_CACHE_DIR:-$HOME/.claude/linear-cache}"
@@ -229,6 +234,22 @@ print(json.dumps({"query": "query($id:String!){issue(id:$id){%s}}" % sys.argv[2]
     herdr_linear::query "$body"
 }
 
+# R1. The workspace's URL key -- the value in every Linear URL -- is the first
+# segment of a worktree path, so an unnameable organisation is a refusal rather
+# than an empty segment that collapses two organisations into one directory.
+herdr_linear::organization_key() {
+    local resp rc key
+    resp="$(herdr_linear::query '{"query":"{organization{urlKey}}"}')"; rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    key="$(printf '%s' "$resp" | python3 -c '
+import sys, json
+d = json.load(sys.stdin).get("data") or {}
+sys.stdout.write((d.get("organization") or {}).get("urlKey") or "")
+' 2>/dev/null)"
+    herdr_linear::is_safe_identifier "$key" || return "$HERDR_LINEAR_UNAVAILABLE"
+    printf '%s' "$key"
+}
+
 herdr_linear::issue_updated_at() {
     local id="$1" resp rc
     resp="$(herdr_linear::fetch_issue "$id")"; rc=$?
@@ -242,6 +263,9 @@ herdr_linear::issue_updated_at() {
 # session in an hour-old status is worse than one extra API call.
 herdr_linear::cache_read() {
     local id="${1:-}" f age fetched now
+    # A path segment built from a tracker-authored value. Refusing at the sink
+    # is what makes the traversal impossible however the identifier arrived.
+    herdr_linear::is_safe_identifier "$id" || return 1
     f="$HERDR_LINEAR_CACHE_DIR/$id.json"
     [ -r "$f" ] || return 1
     fetched="$(python3 -c 'import sys,json;print(json.load(open(sys.argv[1])).get("fetchedAt",""))' "$f" 2>/dev/null)" || return 1
@@ -256,6 +280,22 @@ except Exception:
 ' "$fetched" "$now" 2>/dev/null) || return 1
     [ "$age" -le "$HERDR_LINEAR_CACHE_MAX_AGE_SECONDS" ] || return 1
     cat "$f"
+}
+
+# herdr_linear::context_fields <context-json> <field>...
+#
+# The named fields off one context blob, tab-separated on one line, from one
+# python3. Consume with `cut -f N`, not `read`: a field can legitimately be
+# empty -- an issue with no project -- and tab in IFS collapses the gap.
+# Only an absent field and a null one come back empty; `false` and `0` come
+# back as themselves, which `or ""` folded in with the absent ones.
+herdr_linear::context_fields() {
+    local json="${1:-}"; shift
+    printf '%s' "$json" | python3 -c '
+import sys, json
+ctx = json.load(sys.stdin)
+sys.stdout.write("\t".join("" if ctx.get(f) is None else str(ctx.get(f)) for f in sys.argv[1:]) + "\n")
+' "$@" 2>/dev/null
 }
 
 # KTD5. Identity from the cache when it is fresh; parent, team and updatedAt
@@ -275,6 +315,11 @@ out = {
     "state": (api.get("state") or {}).get("name", ""),
     "project": (api.get("project") or {}).get("name", ""),
     "team": (api.get("team") or {}).get("key", ""),
+    # The ids, beside the human-readable key and name. The write-consent record
+    # is compared against what `current_context` derives, which is ids -- so a
+    # key here and an id there would make every second verb ask again.
+    "project_id": (api.get("project") or {}).get("id", ""),
+    "team_id": (api.get("team") or {}).get("id", ""),
     "parent": (api.get("parent") or {}).get("identifier", ""),
     "parent_title": (api.get("parent") or {}).get("title", ""),
     "url": api.get("url", ""),
