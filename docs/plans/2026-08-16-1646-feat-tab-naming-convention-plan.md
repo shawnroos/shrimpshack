@@ -127,7 +127,7 @@ guidance that teaches the new shape.
 ### Key Flows
 
 - F1. **Spinoff with a ticket.** **Trigger:** Shawn runs `/start-session` on work with a known
-  ticket. The model composes `WEB-2757: Remove Logo` and passes it as `--label`. The script
+  ticket. The model composes `WEB-4321: Warm Filter` and passes it as `--label`. The script
   applies it to every surface it opens. **Covers R1, R3, R7.**
 
 - F2. **Spinoff with no ticket.** **Trigger:** Shawn runs `/start-session` on personal-repo
@@ -141,8 +141,8 @@ guidance that teaches the new shape.
 
 ### Acceptance Examples
 
-- AE1. Ticket known. **Covers R1, R7.** Label is `WEB-2757: Remove Logo`. Tab, split,
-  workspace, and session all read `WEB-2757: Remove Logo`.
+- AE1. Ticket known. **Covers R1, R7.** Label is `WEB-4321: Warm Filter`. Tab, split,
+  workspace, and session all read `WEB-4321: Warm Filter`.
 - AE2. No ticket. **Covers R2.** Label is `Tab naming convention`. No `Ticket:` prefix and no
   repo token appears.
 - AE3. Linear unreachable. **Covers R4.** The spinoff completes at normal speed and produces
@@ -152,7 +152,7 @@ guidance that teaches the new shape.
 - AE5. Rename rejected by the backend. **Covers R8, R12.** The run warns, completes, and lists
   that surface as unnamed. `KICKOFF_OK` is unaffected.
 - AE6. Label carries a colon and spaces. **Covers R1.** `herdr pane rename` stores
-  `WEB-2757: Remove Logo` verbatim as one argument. It is not split into two positionals.
+  `WEB-4321: Warm Filter` verbatim as one argument. It is not split into two positionals.
 
 ### Success Criteria
 
@@ -223,7 +223,7 @@ guidance that teaches the new shape.
   `set_tab_title:` names the tab, `set_surface_title:` names a split, and both target a
   `terminal`. The `name` property is read-only. This route also pins the title against the
   shell's own OSC writes, so the running session does not overwrite it. The action string
-  carries two colons under R1 (`set_tab_title:WEB-2757: Remove Logo`); verified live on
+  carries two colons under R1 (`set_tab_title:WEB-4321: Warm Filter`); verified live on
   Ghostty 1.3.2 that the parser splits on the first colon and the title survives whole.
 
 - KTD4. **Set, read back the object that actually changed, then retry on a delay.**
@@ -272,13 +272,13 @@ The model owns ticket resolution; the script owns application. One label crosses
   model (SKILL.md)                    │  script (spinoff.sh)
   ────────────────────────────────────┼──────────────────────────────────
   ticket known?                       │
-    ├─ yes → "WEB-2757: Remove Logo"  │
+    ├─ yes → "WEB-4321: Warm Filter"  │
     ├─ no  → Linear lookup (optional) │
     │         ├─ hit    → use it      │
     │         ├─ miss   → offer to    │
     │         │            create (R6)│
     │         └─ error  → fall through│
-    └─ none → "Remove Logo"           │
+    └─ none → "Warm Filter"           │
                     │                 │
                     └── --label ──────┼──▶ $LABEL
                                       │      ├─▶ workspace/window   (existing)
@@ -387,7 +387,7 @@ Measured on 2026-08-16 against herdr 0.8.0, cmux from `/Applications/cmux.app`, 
 **Test scenarios:**
 - `Covers AE2.` `--name tab-naming-convention` with no `--label` produces
   `label: Tab naming convention`, with no repo token and no `Ticket:` prefix.
-- `--label 'WEB-2757: Remove Logo'` is used verbatim and the default does not fire.
+- `--label 'WEB-4321: Warm Filter'` is used verbatim and the default does not fire.
 - A `$NAME` that de-kebabs to an empty string falls back to the raw `$NAME`; the run never
   prints `label: ` with an empty value.
 - A `$NAME` of `---` falls back to the raw value rather than producing an empty label, so no

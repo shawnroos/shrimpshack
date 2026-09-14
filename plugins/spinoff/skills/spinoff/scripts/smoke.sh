@@ -88,8 +88,8 @@ out="$(run --name feat-label --handoff "$HANDOFF" --label 'smoke·work')"
 echo "$out" | grep -qE 'label: +smoke·work' \
   && ok "explicit --label used verbatim" \
   || bad "explicit label wrong: $(echo "$out" | grep -i 'label:' || echo '<none>')"
-out="$(run --name feat-ticket --handoff "$HANDOFF" --label 'WEB-2757: Remove Logo')"
-echo "$out" | grep -qE 'label: +WEB-2757: Remove Logo *$' \
+out="$(run --name feat-ticket --handoff "$HANDOFF" --label 'WEB-4321: Warm Filter')"
+echo "$out" | grep -qE 'label: +WEB-4321: Warm Filter *$' \
   && ok "ticketed label survives colon and spaces" \
   || bad "ticketed label wrong: $(echo "$out" | grep -i 'label:' || echo '<none>')"
 
