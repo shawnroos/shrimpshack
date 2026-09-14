@@ -37,7 +37,7 @@ Rules that hold at both levels:
   condition that is wrong, or the outcome wanted.
 - A topic prefix is allowed when it disambiguates: `Upscale: the card has no art`.
 - A child that records a decision may be phrased as the decision:
-  `Decide whether to hold Remove Logo containers open for 20 minutes (~$70/mo)`.
+  `Decide whether to hold Warm Filter containers open for 20 minutes (~$40/mo)`.
 
 ---
 
