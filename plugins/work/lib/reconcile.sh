@@ -10,7 +10,7 @@
 #
 # WHAT IT DOES NOT DO (R15)
 # Linear's own GitHub integration is live for this team and already moves an
-# issue Todo -> In Progress -> Done from a pull request. Verified on WEB-3172:
+# issue Todo -> In Progress -> Done from a pull request. Verified on WEB-3174:
 # the attachment was created from the branch name and the state moved with no
 # manual step. So this covers only what that integration leaves behind -- most
 # importantly work that landed with no pull request at all, which it never sees.

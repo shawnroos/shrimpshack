@@ -59,7 +59,7 @@ herdr_linear::_kind_is_project() {
 }
 
 # herdr_linear::doc_title <identifier> <kind> <what>
-# `WEB-3127 diagnosis: texture leak on image swap`
+# `WEB-3137 diagnosis: gradient banding on frame swap`
 herdr_linear::doc_title() {
     local ident="${1:-}" kind="${2:-}" what="${3:-}" pretty
     herdr_linear::_kind_known "$kind" || return 1

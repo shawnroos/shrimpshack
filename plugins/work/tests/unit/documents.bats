@@ -47,8 +47,8 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # rather than passed through: a new kind is a decision, and a shared vocabulary
 # only works if a title tells you what you are about to read.
 @test "an issue-scoped title leads with the identifier and a known kind" {
-    run herdr_linear::doc_title WEB-3127 diagnosis "texture leak on image swap"
-    [ "$output" = "WEB-3127 diagnosis: texture leak on image swap" ]
+    run herdr_linear::doc_title WEB-3137 diagnosis "gradient banding on frame swap"
+    [ "$output" = "WEB-3137 diagnosis: gradient banding on frame swap" ]
 }
 
 @test "a project-scoped title carries no identifier" {

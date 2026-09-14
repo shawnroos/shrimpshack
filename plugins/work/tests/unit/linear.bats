@@ -53,21 +53,21 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # ------------------------------------------------------ branch matching (AE1)
 
 @test "AE1: hyphenated, unhyphenated, and no-identifier branches" {
-    run herdr_linear::branch_identifier "feature/web-3124-analysis-tiers"
-    [ "$output" = "WEB-3124" ]
-    run herdr_linear::branch_identifier "task/web3045-placeholder"
-    [ "$output" = "WEB-3045" ]
+    run herdr_linear::branch_identifier "feature/web-3134-sample-tiers"
+    [ "$output" = "WEB-3134" ]
+    run herdr_linear::branch_identifier "task/web3055-placeholder"
+    [ "$output" = "WEB-3055" ]
     run herdr_linear::branch_identifier "rehome-sprawl"
     [ "$status" -ne 0 ]
 }
 
 # The greedy split this closes had TWO sites -- the match and the normaliser --
-# and each one alone turns web3045 into WEB304-5, a different issue that may
+# and each one alone turns web3055 into WEB305-5, a different issue that may
 # well exist. A single-site fix here reads green on the hyphenated case.
 @test "an unhyphenated identifier is not split at the wrong place" {
-    for b in "task/web3045-placeholder" "web3045" "fix/WEB3045-thing"; do
+    for b in "task/web3055-placeholder" "web3055" "fix/WEB3055-thing"; do
         run herdr_linear::branch_identifier "$b"
-        [ "$output" = "WEB-3045" ]
+        [ "$output" = "WEB-3055" ]
     done
 }
 
@@ -82,7 +82,7 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
 # property is still worth pinning -- it is what would break first if either
 # pattern changed.
 @test "whatever the matcher returns is always a well-formed identifier" {
-    for b in "feature/ab12cd34-thing" "feature/xyz123456789" "task/web3045-y" "feature/x2-14-z"; do
+    for b in "feature/ab12cd34-thing" "feature/xyz123456789" "task/web3055-y" "feature/x2-14-z"; do
         run herdr_linear::branch_identifier "$b"
         [ "$status" -eq 0 ]
         [[ "$output" =~ ^[A-Z][A-Z0-9]{0,7}-[0-9]{1,6}$ ]]
