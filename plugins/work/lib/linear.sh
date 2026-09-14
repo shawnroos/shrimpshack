@@ -84,11 +84,11 @@ herdr_linear::branch_identifier() {
     local branch="${1:-}" m
     [ -n "$branch" ] || return 1
     # TWO alternatives, hyphenated first. A single pattern with an optional
-    # hyphen cannot do this: `[A-Z][A-Z0-9]{1,7}-?[0-9]{1,6}` against `web3045`
+    # hyphen cannot do this: `[A-Z][A-Z0-9]{1,7}-?[0-9]{1,6}` against `web3055`
     # lets the letter class eat the digits and then backtrack one, yielding
-    # WEB304-5 instead of WEB-3045 -- silently the wrong issue, on the plan's
+    # WEB305-5 instead of WEB-3055 -- silently the wrong issue, on the plan's
     # own example. Hyphenated form allows digits in the team key (X2-14);
-    # unhyphenated requires a letters-only key, because `X23045` cannot be split
+    # unhyphenated requires a letters-only key, because `X23055` cannot be split
     # correctly by any rule and guessing is worse than not matching.
     m="$(printf '%s' "$branch" \
         | grep -oiE '[A-Z][A-Z0-9]{0,7}-[0-9]{1,6}|[A-Z]{2,8}[0-9]{1,6}' \
@@ -97,7 +97,7 @@ herdr_linear::branch_identifier() {
     # Normalise to the canonical UPPER-NNN form Linear uses. The SAME two
     # alternatives as the match above, and for the same reason: one pattern with
     # an optional hyphen re-introduces the greedy split here even after the grep
-    # gets it right, so WEB3045 normalises to WEB304-5. The bug has two sites.
+    # gets it right, so WEB3055 normalises to WEB305-5. The bug has two sites.
     local norm
     norm="$(printf '%s' "$m" | tr '[:lower:]' '[:upper:]' \
         | sed -E 's/^([A-Z][A-Z0-9]{0,7})-([0-9]{1,6})$/\1-\2/; s/^([A-Z]{2,8})([0-9]{1,6})$/\1-\2/')"

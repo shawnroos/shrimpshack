@@ -21,7 +21,7 @@ R="${CLAUDE_PLUGIN_ROOT}"
 source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/binding.sh"
 source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"; source "$R/lib/documents.sh"
 
-herdr_linear::doc_publish "$PWD" diagnosis "texture leak on image swap" ./notes.md
+herdr_linear::doc_publish "$PWD" diagnosis "gradient banding on frame swap" ./notes.md
 ```
 
 Or take the subject from a file's own first heading:
@@ -47,7 +47,7 @@ create a project-scoped document at all is listed under "Not yet settled" in
 `docs/linear-conventions.md`; that is a question for Shawn to answer, not one
 this skill implements a path around.
 
-Titles are built for you: `WEB-3127 diagnosis: texture leak on image swap`.
+Titles are built for you: `WEB-3137 diagnosis: gradient banding on frame swap`.
 `:mag:` is applied to `diagnosis` and `findings`; everything else gets no icon,
 which is what 22 of 40 documents in the workspace do.
 

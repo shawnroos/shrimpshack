@@ -30,7 +30,7 @@ HERDR_LINEAR_START_UNAVAILABLE=3
 HERDR_LINEAR_START_FAILED=4
 HERDR_LINEAR_START_SHADOW=5
 
-# Linear supplies a branch name per issue -- `web-3318-ai-tools-drawer-is-blank`.
+# Linear supplies a branch name per issue -- `web-3308-export-panel-is-empty`.
 # Prefixing it with the repository's own convention gives a branch that carries
 # the identifier, so branch matching finds this worktree forever after. Most
 # branches here do NOT carry one (`feat/single-command-router`), which is why
