@@ -207,6 +207,16 @@ tab_label() { sed -n 's/.*--label \([^ ]*\).*/\1/p' "$FAKE_HERDR_RECORD_DIR/argv
     [ "$(printf '%s' "$stderr" | grep -c 'not one this plugin renders')" -eq 1 ]
 }
 
+@test "a worktree scheme that does not exist refuses the layout once, without blaming a title" {
+    export HERDR_LINEAR_WORKTREE_SCHEME=identifier-slug
+    run --separate-stderr herdr_linear::layout_build WEB-2870 WEB-3001
+    [ "$status" -eq 2 ]
+    [ "$(herdr_calls 'tab create')" = "0" ]
+    [[ "$stderr" == *"identifier-title identifier"* ]]
+    [ "$(printf '%s' "$stderr" | grep -c 'not one this plugin renders')" -eq 1 ]
+    [[ "$stderr" != *"cannot become a safe name"* ]]
+}
+
 # ------------------------------------------------------------- resumability
 
 # The property the journal exists for. A retry after a partial failure must

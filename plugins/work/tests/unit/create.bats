@@ -194,6 +194,23 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
     [ "$(printf '%s' "$output" | cut -f1)" = "WEB-4002" ]
 }
 
+# The issue is filed before any worktree is named, so the scheme is checked
+# first. Not in the shared filing body: an issue filed into the current worktree
+# names nothing, and must not be refused for a scheme it never renders.
+@test "a new issue with an unknown naming scheme files nothing" {
+    record_repo
+    enable_writes "$TEAM_ID" proj-abc
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_NEW_IDENT=WEB-4002 FAKE_LINEAR_PROJECT_TEAMS=one
+    export HERDR_LINEAR_WORKTREE_SCHEME=identifier-slug
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" w1
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_REFUSED" ]
+    [ "$(sent issueCreate)" -eq 0 ]
+    [ "$(printf '%s' "$stderr" | grep -c 'not one this plugin renders')" -eq 1 ]
+}
+
 # Covers AE2. Naming the candidates is the whole of the ask half of act-or-ask:
 # "cannot tell which team" leaves the reader to go find out which teams exist.
 # Writes are ENABLED and mutation is permitted here on purpose -- otherwise the
@@ -687,6 +704,19 @@ worktree_count() { git -C "$PROJECT" worktree list | grep -c .; }
     [ "$(herdr_linear::binding_identifier "$WT")" = "WEB-4002" ]
     [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
     [ "$(sent issueCreate)" = "1" ]
+}
+
+@test "an issue filed into the current worktree is not refused for a naming scheme it never renders" {
+    enable_writes "$TEAM_ID" proj-abc
+    n="$(herdr_linear::workspace_propose w1 proj-abc)"
+    herdr_linear::workspace_confirm w1 proj-abc "$n"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 \
+           FAKE_LINEAR_NEW_IDENT=WEB-4002 FAKE_LINEAR_PROJECT_TEAMS=one
+    export HERDR_LINEAR_WORKTREE_SCHEME=identifier-slug
+    run herdr_linear::new_issue_here "$WT" "A new thing" "$DESC" w1
+    [ "$status" -eq 0 ]
+    [ "$(sent issueCreate)" = "1" ]
+    [ "$(herdr_linear::binding_identifier "$WT")" = "WEB-4002" ]
 }
 
 # The whole of R12. A count, not a spot check: a second worktree anywhere under

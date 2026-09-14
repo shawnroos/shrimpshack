@@ -513,6 +513,47 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [[ "$stderr" == *"identifier-title identifier"* ]]
 }
 
+# Exit 1, not 4: the table's 4 promises a worktree or binding that failed and a
+# directory that may exist, and a typo'd scheme has made neither.
+@test "a start from a ticket with an unknown naming scheme is refused before anything is made" {
+    record_alpha
+    export FAKE_LINEAR_MODE=found_child
+    for knob in HERDR_LINEAR_WORKTREE_SCHEME HERDR_LINEAR_BRANCH_SCHEME; do
+        export "$knob=identifier-slug"
+        run --separate-stderr herdr_linear::start_from_issue WEB-3318
+        [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
+        [ ! -e "$WT_ROOT" ]
+        [ "$(sent 'issue(id')" -eq 0 ]
+        [[ "$stderr" == *"valid:"* ]]
+        [ "$(printf '%s' "$stderr" | grep -c 'not one this plugin renders')" -eq 1 ]
+        unset "$knob"
+    done
+}
+
+# The table has always called this a refusal; the code reported a failed
+# worktree, which promises a directory that may exist when nothing was made.
+@test "a ticket whose identifier cannot become a safe path is refused, not reported as a failed worktree" {
+    record_alpha
+    export FAKE_LINEAR_MODE=traversal_identifier
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
+    [ ! -e "$WT_ROOT" ]
+}
+
+# The issue is filed before any name is rendered, so the scheme is checked first;
+# otherwise a typo files a real ticket that no retry can start.
+@test "starting something new with an unknown naming scheme files no issue" {
+    printf '## Problem\n\nreal problem text for the actor\n\n## Solution\n\nreal solution text\n\n## Proposal\n\nreal proposal\n' > "$WORK/d.md"
+    record_alpha
+    enable_root_writes
+    export FAKE_LINEAR_MODE=found_child FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    export HERDR_LINEAR_WORKTREE_SCHEME=identifier-slug
+    run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web
+    [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
+    [ "$(sent issueCreate)" -eq 0 ]
+    [ ! -e "$WT_ROOT" ]
+}
+
 @test "an issue with no title yields no name" {
     resp='{"data":{"issue":{"identifier":"WEB-3318","title":""}}}'
     run herdr_linear::start_worktree_name "$resp"
