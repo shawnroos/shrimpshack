@@ -1,0 +1,16 @@
+{
+  "WEB": {
+    "iss-1": {"pane_id": "w1:p1", "role": "home", "board_created": true, "hidden": false, "hidden_fingerprint": "", "pending_linear_change": false,
+              "groups": {"team": "team-web", "assignee": "user-ana", "state": "st-todo"}},
+    "iss-6": {"pane_id": "w1:p6", "role": "home", "board_created": true, "hidden": false, "hidden_fingerprint": "", "pending_linear_change": false,
+              "groups": {"team": "team-web", "assignee": "user-ana", "state": "st-todo"}},
+    "iss-3": {"pane_id": "w1:p3", "role": "home", "board_created": true, "hidden": false, "hidden_fingerprint": "", "pending_linear_change": false,
+              "groups": {"team": "team-web", "assignee": "user-ana", "state": "st-prog"}},
+    "iss-2": {"pane_id": "w1:p2", "role": "home", "board_created": true, "hidden": false, "hidden_fingerprint": "", "pending_linear_change": false,
+              "groups": {"team": "team-web", "assignee": null, "state": "st-todo"}}
+  },
+  "OPS": {
+    "iss-4": {"pane_id": "w2:p4", "role": "home", "board_created": true, "hidden": false, "hidden_fingerprint": "", "pending_linear_change": false,
+              "groups": {"team": "team-ops", "assignee": "user-ben", "state": "st-ops-todo"}}
+  }
+}

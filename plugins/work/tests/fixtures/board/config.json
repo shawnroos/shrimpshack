@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "global": {
+    "source": "global",
+    "levels": {"space": "team", "tab": "assignee", "column": "state"},
+    "filter": {"team": ["WEB", "OPS"], "state-type-not": ["triage", "backlog"]}
+  },
+  "spaces": {
+    "Mine": {
+      "source": "space",
+      "levels": {"tab": "priority"},
+      "filter": {"assignee": "me", "state-type-not": ["triage", "backlog"]}
+    },
+    "Later": {
+      "source": "space",
+      "levels": {"tab": "priority"},
+      "filter": {"label": "later", "state-type-not": ["triage", "backlog"]}
+    }
+  }
+}
