@@ -147,17 +147,32 @@ the issue exists — and the plugin never requires an issue to be created for it
 ### Misplaced
 A bound worktree whose herdr workspace does not correspond to its issue's Linear project.
 The plugin reports it and offers to move either side; it never picks which one was wrong.
+It applies only to worktrees outside a board: on a board, Linear decides placement and a
+pane in the wrong place is only out of date until the next sync.
 
 ### Stale
 A binding whose issue has been closed in Linear while the worktree is still in use. It is
 reported and otherwise left alone — the plugin does not reopen an issue on its own.
 
 ### Mapping
-What a herdr space, tab and pane each correspond to. The current meanings — a space is a
-project, a tab is a piece of work, a pane is a session — are one mapping among possible
-ones, not the only one. A mapping is set once for the machine and may be overridden for an
-individual space, so two spaces can disagree and both be right; a space that states nothing
-uses the current meanings.
+What a herdr space, tab, split column and split row each group Linear tickets by, together
+with the filter that decides which tickets appear. Each level is one single-valued Linear
+field, one label group, or the ticket or sub-ticket itself. One global mapping is the
+default; a space may carry its own mapping that replaces it entirely. With no mapping
+configured, a space is a project, a tab is a piece of work and a pane is a session.
+
+### Board
+The herdr layout a mapping produces: every ticket the filter matches has a pane, placed by
+its values at each level. A sync keeps it in line with Linear, and moving a pane writes the
+change back when writes are enabled. The board only ever moves or closes panes it created.
+
+### Reservation
+An unstarted board ticket's claim on a worktree name and branch, with nothing on disk. The
+worktree is created only when work starts through the plugin.
+
+### Pointer pane
+A board pane in a space whose mapping claims a ticket that lives elsewhere. It holds no
+worktree or session and leads to the ticket's one home pane.
 
 ### Scheme
 A named way of composing one kind of name — a worktree, branch, tab, space or pane. The set
