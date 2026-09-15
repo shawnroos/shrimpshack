@@ -40,6 +40,7 @@ herdr_linear_test::isolate() {
     export HERDR_LINEAR_SECURITY_BIN="$sandbox/absent/security"
     export HERDR_LINEAR_OSASCRIPT_BIN="$sandbox/absent/osascript"
     export HERDR_LINEAR_GH_BIN="$sandbox/absent/gh"
+    export HERDR_LINEAR_LSOF_BIN="$sandbox/absent/lsof"
     export HERDR_BIN="$sandbox/absent/herdr"
 
     # Set-but-empty, never unset: the reader spells this ${VAR-default}, so only
