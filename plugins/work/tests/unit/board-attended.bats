@@ -26,6 +26,8 @@ setup() {
     export HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS=20
     # Most scenarios stack more than the default soft limit in one tab.
     export HERDR_LINEAR_BOARD_TAB_LIMIT=16
+    # A loaded machine runs an answer's sync slowly; only the time-bound test lowers it.
+    export HERDR_LINEAR_BOARD_FENCE_SECONDS=300
     mkdir -p "$WORK/rec" "$WORK/linear" "$HERDR_LINEAR_WORKTREES_ROOT" "$HERDR_LINEAR_STORE_DIR"
 
     export LINEAR_SECRETS_FILE="$WORK/secrets"

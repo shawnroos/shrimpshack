@@ -829,6 +829,11 @@ class Engine:
                     for r in row_values:
                         heights[r] = max([len(cells.get((c, r), [])) for c in col_values] + [1])
                 columns = []
+                if ck is None and rk is None:
+                    # With no column or row level a tab's panes sit side by side,
+                    # one column each, rather than stacked in one column.
+                    columns = [self.chain([leaf(x)], "down") for x in sorted(cells.get((ANY, ANY), []), key=cell_order)]
+                    col_values = []
                 for c in col_values:
                     if rk is None:
                         slots = [leaf(x) for x in sorted(cells.get((c, ANY), []), key=cell_order)]

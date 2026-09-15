@@ -116,6 +116,13 @@ PY
     [ "$output" = "[]" ]
 }
 
+@test "a tab with no column or row level lays its panes side by side, one column each" {
+    edit 'd["config"]["global"]["levels"] = {"space": "team", "tab": "assignee"}'
+    plan
+    run ask '[issues(c) for c in columns(tab("WEB", "Ana")["tree"])]'
+    [ "$output" = '[["iss-1"], ["iss-3"], ["iss-6"]]' ]
+}
+
 @test "the same inputs always produce the same bytes" {
     edit 'T("iss-1")["state"] = {"id": "st-prog", "name": "In Progress", "type": "started"}; read("Mine")["tickets"] = [T("iss-3")]'
     plan

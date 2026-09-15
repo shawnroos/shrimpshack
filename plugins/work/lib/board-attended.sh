@@ -16,7 +16,9 @@ command -v herdr_linear::worktree_remove >/dev/null 2>&1 \
 command -v herdr_linear::record_scope_repo >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/repos.sh"
 
-HERDR_LINEAR_BOARD_FENCE_SECONDS="${HERDR_LINEAR_BOARD_FENCE_SECONDS:-30}"
+# A first sync on a real board took about 30s (placing 16 panes in 6 new
+# workspaces), so the bound sits well above that.
+HERDR_LINEAR_BOARD_FENCE_SECONDS="${HERDR_LINEAR_BOARD_FENCE_SECONDS:-90}"
 HERDR_LINEAR_BOARD_ATTENDED_LIB="${BASH_SOURCE[0]}"
 
 HERDR_LINEAR_BOARD_ANSWER_OK=0
@@ -30,7 +32,7 @@ HERDR_LINEAR_BOARD_ANSWER_FAILED=4
 # 124 when it was stopped.
 herdr_linear::board_sync_bounded() {
     local seconds="${1:-$HERDR_LINEAR_BOARD_FENCE_SECONDS}"
-    case "$seconds" in ''|*[!0-9]*) seconds=30 ;; esac
+    case "$seconds" in ''|*[!0-9]*) seconds=90 ;; esac
     python3 -c '
 import os, signal, subprocess, sys
 p = subprocess.Popen(["bash", "-c", ". \"$1\" && herdr_linear::board_sync", "board-fence", sys.argv[1]],
