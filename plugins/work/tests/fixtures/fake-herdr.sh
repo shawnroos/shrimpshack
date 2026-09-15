@@ -128,6 +128,11 @@ for _verb in $FAKE_HERDR_MUTATING_VERBS; do
     fi
 done
 
+if [ -n "${FAKE_HERDR_HANG:-}" ] && [ "${1:-} ${2:-}" = "$FAKE_HERDR_HANG" ]; then
+    sleep 30
+    exit 0
+fi
+
 if [ "${FAKE_HERDR_SPLIT_FAILS:-0}" = 1 ] && [ "${1:-}" = pane ] && [ "${2:-}" = split ]; then
     echo "fake-herdr: split refused" >&2
     exit 1

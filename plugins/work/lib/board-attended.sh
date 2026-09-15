@@ -80,6 +80,47 @@ herdr_linear::_board_pre() {
     printf '%s' "$1" | python3 -c 'import sys, json; v = json.load(sys.stdin).get(sys.argv[1]); print(v if isinstance(v, str) else json.dumps(v))' "$2"
 }
 
+# herdr_linear::_board_answer_synced <sync-exit> -> 0 when the answer's sync ran.
+herdr_linear::_board_answer_synced() {
+    case "$1" in
+        "$HERDR_LINEAR_BOARD_SYNC_CLEAN"|"$HERDR_LINEAR_BOARD_SYNC_QUESTIONS"|"$HERDR_LINEAR_BOARD_SYNC_UNKNOWN") return 0 ;;
+        124) printf 'failed: the sync that applies the answer did not finish\n' >&2 ;;
+        *) printf 'failed: the sync that applies the answer stopped with %s\n' "$1" >&2 ;;
+    esac
+    return "$HERDR_LINEAR_BOARD_ANSWER_FAILED"
+}
+
+# herdr_linear::_board_close_after <space> <issue_id> <pid>
+# Closes a board pane and forgets it from a detached process, once <pid> has
+# exited: the pane may be the one this answer runs in, and closing it first
+# would end the answer before the ledger is updated.
+herdr_linear::_board_close_after() {
+    python3 -c '
+import os, signal, sys, time
+lib, space, issue, pid, limit = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
+if os.fork():
+    sys.exit(0)
+os.setsid()
+if os.fork():
+    os._exit(0)
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+null = os.open(os.devnull, os.O_RDWR)
+for fd in (0, 1, 2):
+    os.dup2(null, fd)
+os.closerange(3, 1024)
+end = time.time() + limit
+while time.time() < end:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        break
+    except PermissionError:
+        pass
+    time.sleep(0.05)
+os.execvp("bash", ["bash", "-c", ". \"$1\" && herdr_linear::board_close_pane \"$2\" \"$3\" && herdr_linear::board_ledger_remove \"$2\" \"$3\"", "board-close", lib, space, issue])
+' "$HERDR_LINEAR_BOARD_ATTENDED_LIB" "$1" "$2" "$3" "$HERDR_LINEAR_BOARD_CLOSE_AFTER_SECONDS"
+}
+
 herdr_linear::_board_answer_refuse() {
     printf 'refused: %s\n' "$1" >&2
     return "$HERDR_LINEAR_BOARD_ANSWER_REFUSED"
@@ -123,16 +164,24 @@ herdr_linear::board_answer() {
     esac
 
     if [ "$kind" = remove-worktree ]; then
-        herdr_linear::worktree_remove "$(herdr_linear::_board_pre "$pre" worktree)" "$nonce"
-        return
+        local rc=0
+        herdr_linear::worktree_remove "$(herdr_linear::_board_pre "$pre" worktree)" "$nonce" || rc=$?
+        [ "$rc" -eq "$HERDR_LINEAR_REMOVE_FAILED" ] && return "$HERDR_LINEAR_BOARD_ANSWER_FAILED"
+        return "$rc"
     fi
     if [ "$kind" = repository ] && [ -z "$value" ]; then
         herdr_linear::_board_answer_refuse "a repository answer names the repository"; return
     fi
+    local why="" used=1
     if [ "$kind" = close ]; then
         [ "$(herdr_linear::board_ledger_entry "$space" "$issue" 2>/dev/null \
             | python3 -c 'import sys, json; print(json.load(sys.stdin)["pane_id"])' 2>/dev/null)" = "$(herdr_linear::_board_pre "$pre" pane_id)" ] \
             || { herdr_linear::_board_answer_refuse "the pane for that ticket is no longer the one asked about"; return; }
+        why="$(herdr_linear::board_in_use "$(herdr_linear::_board_pre "$pre" pane_id)" 2>/dev/null)" && used=0
+        case "$used:$why" in
+            0:*invoking*|1:*) ;;
+            *) herdr_linear::_board_answer_refuse "that pane is in use (${why:-unknown}); close it when it is done"; return ;;
+        esac
     fi
     herdr_linear::board_question_answer "$key" "$nonce" "$pre" \
         || { herdr_linear::_board_answer_refuse "that nonce does not answer $key"; return; }
@@ -140,24 +189,32 @@ herdr_linear::board_answer() {
     case "$kind" in
         move)
             HL_ANSWERED_MOVES="$issue" herdr_linear::board_sync_bounded >/dev/null 2>&1
-            [ "$?" -ne 124 ] || { printf 'failed: the sync that moves the pane did not finish\n' >&2; return "$HERDR_LINEAR_BOARD_ANSWER_FAILED"; } ;;
+            herdr_linear::_board_answer_synced $? || return ;;
         close)
             local wt n
-            herdr_linear::board_close_pane "$space" "$issue" >/dev/null 2>&1 \
-                || { printf 'failed: herdr did not close the pane\n' >&2; return "$HERDR_LINEAR_BOARD_ANSWER_FAILED"; }
-            herdr_linear::board_ledger_remove "$space" "$issue" >/dev/null 2>&1
-            if wt="$(herdr_linear::_board_worktree_of "$issue")"; then
-                n="$(herdr_linear::worktree_remove_propose "$wt")" || return 0
+            # The worktree question first: when the pane closing is the one this
+            # answer runs in, nothing after the close would run.
+            if wt="$(herdr_linear::_board_worktree_of "$issue")" \
+                && n="$(herdr_linear::worktree_remove_propose "$wt")"; then
                 printf 'board question: %s\n' "$(herdr_linear::board_question "$(herdr_linear::worktree_remove_key "$wt")" \
                     | python3 -c 'import sys, json; d = json.load(sys.stdin); print(json.dumps({k: d[k] for k in ("key", "kind", "preconditions", "nonce")}, sort_keys=True))')"
-            fi ;;
+            fi
+            if [ "$used" -eq 0 ]; then
+                herdr_linear::_board_close_after "$space" "$issue" "$$"
+                return 0
+            fi
+            herdr_linear::board_close_pane "$space" "$issue" >/dev/null 2>&1 \
+                || { printf 'failed: herdr did not close the pane\n' >&2; return "$HERDR_LINEAR_BOARD_ANSWER_FAILED"; }
+            herdr_linear::board_ledger_remove "$space" "$issue" >/dev/null 2>&1 ;;
         conflict)
             herdr_linear::board_ledger_mark_linear_change "$space" "$issue" >/dev/null 2>&1
-            herdr_linear::board_sync_bounded >/dev/null 2>&1 ;;
+            herdr_linear::board_sync_bounded >/dev/null 2>&1
+            herdr_linear::_board_answer_synced $? || return ;;
         cap)
             local more
             more="$(printf '%s' "$pre" | python3 -c 'import sys, json; print(",".join(json.load(sys.stdin)["issues"]))')"
-            HL_PLACE_MORE="$more" herdr_linear::board_sync_bounded >/dev/null 2>&1 ;;
+            HL_PLACE_MORE="$more" herdr_linear::board_sync_bounded >/dev/null 2>&1
+            herdr_linear::_board_answer_synced $? || return ;;
         write-consent)
             local c
             c="$(herdr_linear::board_consent_propose "$space" "$field")" \

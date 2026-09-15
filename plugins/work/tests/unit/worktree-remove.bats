@@ -87,6 +87,25 @@ branch_exists() { git -C "$MAIN" show-ref --verify --quiet refs/heads/feature/we
     [ -z "$output" ]
 }
 
+@test "a worktree holding an ignored local file is kept, and a regenerable ignored directory does not block removal" {
+    push_branch
+    printf '.env\nnode_modules/\n' >"$WT/.gitignore"
+    git -C "$WT" add .gitignore && git -C "$WT" -c user.email=t@t -c user.name=t commit -q -m ignore
+    git -C "$WT" push -q origin HEAD 2>/dev/null
+    printf 'SECRET=1\n' >"$WT/.env"
+    mkdir -p "$WT/node_modules/x" && printf 'x\n' >"$WT/node_modules/x/index.js"
+    nonce="$(answer_nonce)"
+    run herdr_linear::worktree_remove "$WT" "$nonce"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"kept: it holds ignored local files git would delete: .env"* ]]
+    [ -e "$WT/.env" ]
+    rm "$WT/.env"
+    nonce="$(answer_nonce)"
+    run herdr_linear::worktree_remove "$WT" "$nonce"
+    [ "$status" -eq 0 ]
+    [ ! -e "$WT" ]
+}
+
 @test "a worktree with an uncommitted file is kept and the refusal names the reason" {
     push_branch
     nonce="$(answer_nonce)"

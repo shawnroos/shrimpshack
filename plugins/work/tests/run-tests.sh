@@ -585,8 +585,9 @@ consent_caller_check() {
     # place a board answer is applied, so it alone may call the board consent
     # verbs, and it is called only from skills.
     for verb in consent_confirm consent_decline board_consent_confirm board_consent_decline board_answer; do
-        hits="$(grep -rn "herdr_linear::$verb\b" \
-            "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" 2>/dev/null \
+        # The sync driver calls verbs by bare name through call("verb", ...).
+        hits="$(grep -rnE "herdr_linear::$verb\b|call\(\"$verb\"" \
+            "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" "$PLUGIN_ROOT/bin" 2>/dev/null \
             | grep -v "^.*/lib/binding.sh:.*herdr_linear::$verb() {" \
             | grep -v "^.*/lib/board-store.sh:.*herdr_linear::$verb() {" \
             | grep -v "^.*/lib/board-attended.sh:.*herdr_linear::board_answer() {" \

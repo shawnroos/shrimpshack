@@ -694,6 +694,33 @@ PY2
     [ ! -e "$HERDR_LINEAR_STORE_DIR/board/sync.lock" ]
 }
 
+@test "the lock wait is bounded by the clock, not by how long each sleep takes" {
+    config '{"tab":"state"}'
+    empty_board; serve
+    mkdir -p "$HERDR_LINEAR_STORE_DIR/board/sync.lock" "$WORK/noperl"
+    sleep 60 & holder=$!
+    BG_PIDS="$holder"
+    printf '%s\n' "$holder" > "$HERDR_LINEAR_STORE_DIR/board/sync.lock/pid"
+    printf '#!/bin/sh\nexit 1\n' > "$WORK/noperl/perl"; chmod +x "$WORK/noperl/perl"
+    export HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS=2 PATH="$WORK/noperl:$PATH"
+    local start=$SECONDS
+    run herdr_linear::board_sync
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_SYNC_LOCKED" ]
+    [ $(( SECONDS - start )) -lt 10 ]
+}
+
+@test "a sync that crashes part way is reported as failed, never as no board" {
+    config '{"tab":"state"}'
+    empty_board; serve
+    tickets "iss-1:todo"
+    mkdir -p "$HERDR_LINEAR_STORE_DIR/board/plan-input.json"
+    run herdr_linear::board_sync
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_SYNC_FAILED" ]
+    [[ "$output" == *"board sync failed"* ]]
+    run -0 herdr_linear::board_sync_state
+    [ "$(printf '%s' "$output" | field 'd["last_failure"]["stage"]')" = "internal" ]
+}
+
 @test "a lock held by a live process is refused however old, and nothing is read" {
     config '{"tab":"state"}'
     empty_board; serve

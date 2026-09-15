@@ -32,6 +32,7 @@ HERDR_LINEAR_BOARD_PANE_GONE=6
 
 # KTD11: 120x40 cells at a readable 30x10 per pane is four by four.
 HERDR_LINEAR_BOARD_PANE_CAP="${HERDR_LINEAR_BOARD_PANE_CAP:-16}"
+HERDR_LINEAR_BOARD_CALL_SECONDS="${HERDR_LINEAR_BOARD_CALL_SECONDS:-15}"
 HERDR_LINEAR_BOARD_METADATA_SOURCE="work-board"
 
 herdr_linear::_board_pane_refuse() {
@@ -558,7 +559,7 @@ herdr_linear::_board_herdr_py() {
     case "${1:-}" in
         columns|move|apply|focus) sock="$(herdr_linear::board_socket_path)" ;;
     esac
-    HL_BIN="$bin" HL_SOCK="$sock" HL_CAP="$HERDR_LINEAR_BOARD_PANE_CAP" \
+    HL_BIN="$bin" HL_SOCK="$sock" HL_CAP="$HERDR_LINEAR_BOARD_PANE_CAP" HL_CALL_SECONDS="$HERDR_LINEAR_BOARD_CALL_SECONDS" \
         HL_POLL_TRIES="${HERDR_LINEAR_PANE_POLL_TRIES:-40}" HL_POLL_MS="${HERDR_LINEAR_PANE_POLL_MS:-100}" \
         HL_SOURCE="$HERDR_LINEAR_BOARD_METADATA_SOURCE" python3 - "$@" <<'PYEOF'
 import json, os, socket, subprocess, sys, time
@@ -574,7 +575,11 @@ def say(msg):
 
 def herdr(*argv):
     """(result, error-code). error-code 'unreachable' when herdr gave no JSON at all."""
-    p = subprocess.run([BIN] + list(argv), capture_output=True, text=True)
+    try:
+        p = subprocess.run([BIN] + list(argv), capture_output=True, text=True,
+                           timeout=int(os.environ.get("HL_CALL_SECONDS") or 15))
+    except subprocess.TimeoutExpired:
+        return None, "unreachable"
     for stream in (p.stdout, p.stderr):
         try:
             d = json.loads(stream.strip().splitlines()[-1]) if stream.strip() else None

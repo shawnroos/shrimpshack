@@ -303,6 +303,75 @@ for l in sys.stdin:
     [[ "$(board_panes)" == *"work:iss-5"* ]]
 }
 
+@test "a close answered from inside the pane it closes asks about the worktree first, then closes the pane after the answer returns" {
+    five_on_the_board
+    export HERDR_PANE_ID=w9:p9
+    tickets "iss-1:todo iss-2:todo iss-3:todo iss-4:todo"
+    run herdr_linear::board_sync
+    read -r key nonce < <(q_of_kind close)
+    pane="$(pane_of_issue iss-5)"
+    # Closing the pane ends every process in it, as herdr does, and the caller's
+    # group is torn down once the answer returns, as a harness does.
+    HERDR_PANE_ID="$pane" FAKE_HERDR_CLOSE_KILLS_PANE="$pane" FAKE_HERDR_CLOSE_KILLS_PGID_FILE="$WORK/pgid" \
+        perl -e 'setpgrp(0, 0); exec @ARGV' bash -c '
+        printf "%s\n" "$$" > "$4/pgid"
+        for f in herdr-read.sh board-store.sh board-herdr.sh board-sync.sh board-attended.sh; do . "$1/$f"; done
+        herdr_linear::board_answer "$2" "$3" yes > "$4/answer.out" 2>&1
+        printf "%s\n" "$?" > "$4/answer.rc"
+        kill -KILL -$$' _ "$LIB" "$key" "$nonce" "$WORK" || true
+    [ "$(cat "$WORK/answer.rc")" = 0 ]
+    i=0
+    until ! herdr_linear::board_ledger_entry Board iss-5 >/dev/null 2>&1; do
+        i=$((i + 1))
+        [ "$i" -lt 200 ] || { echo "the pane was never closed" >&2; return 1; }
+        perl -e 'select undef, undef, undef, 0.05'
+    done
+    [[ "$(board_panes)" != *"work:iss-5"* ]]
+}
+
+@test "a close for a ticket back on the board is refused and the pane stays" {
+    five_on_the_board
+    export HERDR_PANE_ID=w9:p9
+    tickets "iss-1:todo iss-2:todo iss-3:todo iss-4:todo"
+    run herdr_linear::board_sync
+    read -r key nonce < <(q_of_kind close)
+    tickets "iss-1:todo iss-2:todo iss-3:todo iss-4:todo iss-5:todo"
+    run herdr_linear::board_sync
+    [ -z "$(question_kinds)" ]
+    run herdr_linear::board_answer "$key" "$nonce" yes
+    [ "$status" -eq 2 ]
+    [[ "$(board_panes)" == *"work:iss-5"* ]]
+}
+
+@test "a close of a pane someone else's agent is running in is refused and the question stays" {
+    five_on_the_board
+    export HERDR_PANE_ID=w9:p9
+    tickets "iss-1:todo iss-2:todo iss-3:todo iss-4:todo"
+    run herdr_linear::board_sync
+    read -r key nonce < <(q_of_kind close)
+    python3 "$FIX/fake-herdr-socket.py" set-agent "$(pane_of_issue iss-5)" claude working
+    run herdr_linear::board_answer "$key" "$nonce" yes
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"in use"* ]]
+    [[ "$(board_panes)" == *"work:iss-5"* ]]
+    [ "$(question_kinds)" = "close" ]
+}
+
+@test "an answer whose sync cannot run reports failure, not success" {
+    five_on_the_board
+    export HERDR_PANE_ID="$(pane_of_issue iss-1)"
+    tickets "iss-1:doing iss-2:todo iss-3:todo iss-4:todo iss-5:todo"
+    run herdr_linear::board_sync
+    read -r key nonce < <(q_of_kind move)
+    export HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS=1
+    sleep 60 & BG_PIDS="$BG_PIDS $!"
+    mkdir -p "$HERDR_LINEAR_STORE_DIR/board/sync.lock"
+    printf '%s' "${BG_PIDS##* }" > "$HERDR_LINEAR_STORE_DIR/board/sync.lock/pid"
+    run herdr_linear::board_answer "$key" "$nonce" yes
+    [ "$status" -eq 4 ]
+    [[ "$output" == *"stopped with"* ]]
+}
+
 @test "a close declined is not asked again and the pane stays" {
     five_on_the_board
     export HERDR_PANE_ID=w9:p9

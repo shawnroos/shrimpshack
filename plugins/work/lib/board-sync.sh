@@ -70,7 +70,8 @@ herdr_linear::_board_pid_alive() {
 # Takeover runs under binding.sh's lock on the lock itself, so two syncs cannot
 # both remove a dead holder's lock and one of them remove the other's new one.
 herdr_linear::_board_sync_lock() {
-    local lock me="$1" pid age waited=0
+    local lock me="$1" pid age waited
+    waited="$(date +%s)"
     lock="$(herdr_linear::_board_sync_lock_dir)"
     mkdir -p "${lock%/*}" 2>/dev/null || return 1
     chmod 700 "$HERDR_LINEAR_STORE_DIR" "$HERDR_LINEAR_STORE_DIR/board" 2>/dev/null
@@ -91,8 +92,7 @@ herdr_linear::_board_sync_lock() {
             fi
             herdr_linear::_unlock "$lock"
         fi
-        waited=$(( waited + 1 ))
-        [ "$waited" -gt $(( HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS * 20 )) ] && return 1
+        [ $(( $(date +%s) - waited )) -ge "$HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS" ] && return 1
         perl -e 'select undef, undef, undef, 0.05' 2>/dev/null || sleep 1
     done
 }
@@ -303,6 +303,7 @@ class Sync:
         self.created = 0
         self.surplus = []
         self.asked_scopes = set()
+        self.asked = set()
         self.restarted = False
         self.parks = []
 
@@ -405,6 +406,7 @@ class Sync:
 
 
     def ask(self, kind, key, pre):
+        self.asked.add("%s-%s" % (kind, key))
         rc, _, err = call("board_question_propose", "%s-%s" % (kind, key), kind, dump(pre))
         if rc == 0:
             self.count(self.observed, "questions_recorded")
@@ -568,11 +570,23 @@ class Sync:
         self.execute(plan, snap, led, ambiguous)
         self.finish_parks()
 
+        complete = plan["complete"] and self.read_failure is None
+        if complete:
+            # A question whose facts this complete read no longer produces is over:
+            # the ticket came back, the pane is free, the conflict resolved. Left
+            # pending, a person's later yes would act on facts that are gone.
+            rc, pending, _ = call("board_questions_pending")
+            for line in pending.splitlines() if rc == 0 else []:
+                try:
+                    q = json.loads(line)
+                except ValueError:
+                    continue
+                if q.get("kind") in ("close", "move", "conflict", "cap") and q.get("key") not in self.asked:
+                    call("board_question_drop", q["key"])
         rc, pending, _ = call("board_questions_pending")
         waiting = len([l for l in pending.splitlines() if l.strip()])
         if rc != 0:
             self.count(self.unknown, "questions")
-        complete = plan["complete"] and self.read_failure is None
         if complete:
             body = {"observed": self.observed, "unknown": self.unknown, "pending_questions": waiting,
                     "members": plan["members"], "rendered": plan["rendered"]}
@@ -1040,4 +1054,9 @@ try:
     Sync().run()
 except Stop as s:
     sys.exit(s.code)
+except Exception as e:
+    # Python's own exit 1 is NO_BOARD, which the fence reads as nothing to show.
+    call("board_sync_failed", "internal", repr(e)[:200])
+    print("board sync failed: %r" % e)
+    sys.exit(FAILED)
 PYEOF

@@ -17,6 +17,10 @@ HERDR_LINEAR_REMOVE_REFUSED=2
 HERDR_LINEAR_REMOVE_FAILED=3
 
 HERDR_LINEAR_REMOVE_KIND=remove-worktree
+# Ignored directories a build or install recreates. Any other ignored entry (a
+# local .env, notes, a scratch database) keeps the worktree: git status does not
+# show ignored files, and git worktree remove deletes them without asking.
+HERDR_LINEAR_REMOVE_REGENERABLE="node_modules/ dist/ build/ .next/ target/ .venv/ __pycache__/ coverage/"
 
 herdr_linear::_rm_git() { "${HERDR_LINEAR_GIT_BIN:-git}" -C "$1" --no-optional-locks "${@:2}" 2>/dev/null; }
 
@@ -165,7 +169,7 @@ herdr_linear::_rm_in_use() {
 # 0 removed (stdout says whether the branch went too); 1 kept, reason on stderr;
 # 2 refused; 3 git could not remove it.
 herdr_linear::worktree_remove() {
-    local path="${1:-}" nonce="${2:-}" resolved key pre branch head main dirty why rc
+    local path="${1:-}" nonce="${2:-}" resolved key pre branch head main dirty ignored why rc
     resolved="$(herdr_linear::_rm_target "$path")" || return
     [ -n "$nonce" ] || { herdr_linear::_rm_refuse "removing a worktree needs the nonce of an answered question"; return; }
     key="$(herdr_linear::worktree_remove_key "$resolved")" || return
@@ -190,6 +194,14 @@ herdr_linear::worktree_remove() {
     dirty="$(herdr_linear::_rm_git "$resolved" status --porcelain --untracked-files=all)" \
         || { herdr_linear::_rm_keep "its status cannot be read"; return; }
     [ -z "$dirty" ] || { herdr_linear::_rm_keep "it has uncommitted changes"; return; }
+    ignored="$(herdr_linear::_rm_git "$resolved" ls-files --others --ignored --exclude-standard --directory)" \
+        || { herdr_linear::_rm_keep "its ignored files cannot be listed"; return; }
+    ignored="$(printf '%s\n' "$ignored" | HL_KEEP="$HERDR_LINEAR_REMOVE_REGENERABLE" python3 -c '
+import os, sys
+keep = os.environ["HL_KEEP"].split()
+left = [l for l in sys.stdin.read().splitlines() if l and not any(l == k or l.startswith(k) or ("/" + k) in ("/" + l) for k in keep)]
+print(", ".join(left[:3]) + (" and %d more" % (len(left) - 3) if len(left) > 3 else ""), end="")')"
+    [ -z "$ignored" ] || { herdr_linear::_rm_keep "it holds ignored local files git would delete: $ignored"; return; }
     why="$(herdr_linear::_rm_delivered "$resolved" "$head" "$branch")" \
         || { herdr_linear::_rm_keep "$why"; return; }
     why="$(herdr_linear::_rm_in_use "$resolved")" && { herdr_linear::_rm_keep "$why"; return; }

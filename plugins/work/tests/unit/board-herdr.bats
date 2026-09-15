@@ -394,6 +394,15 @@ assert_moves_went_over_the_socket() {
     [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_GONE" ]
 }
 
+@test "a herdr command that never answers is given up on within the call bound, not waited on forever" {
+    standard_board; serve
+    export FAKE_HERDR_HANG="pane close" HERDR_LINEAR_BOARD_CALL_SECONDS=2
+    local start=$SECONDS
+    run herdr_linear::board_close_pane "$SPACE" "$C"
+    [ "$status" -ne 0 ]
+    [ $(( SECONDS - start )) -lt 20 ]
+}
+
 @test "a close whose effect cannot be read back is unknown" {
     standard_board; serve
     export FAKE_HERDR_SNAPSHOT_FAILS_AFTER_CLOSE=1
