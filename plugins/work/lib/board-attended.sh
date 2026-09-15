@@ -75,6 +75,11 @@ herdr_linear::board_fence() {
     return 0
 }
 
+# herdr_linear::_board_pre <preconditions-json> <key> -> that value, JSON unless a string.
+herdr_linear::_board_pre() {
+    printf '%s' "$1" | python3 -c 'import sys, json; v = json.load(sys.stdin).get(sys.argv[1]); print(v if isinstance(v, str) else json.dumps(v))' "$2"
+}
+
 herdr_linear::_board_answer_refuse() {
     printf 'refused: %s\n' "$1" >&2
     return "$HERDR_LINEAR_BOARD_ANSWER_REFUSED"
@@ -106,8 +111,7 @@ herdr_linear::board_answer() {
         || { herdr_linear::_board_answer_refuse "there is no pending question $key"; return; }
     kind="$(printf '%s' "$q" | python3 -c 'import sys, json; print(json.load(sys.stdin)["kind"])')"
     pre="$(printf '%s' "$q" | python3 -c 'import sys, json; print(json.load(sys.stdin)["preconditions"])')"
-    _pre() { printf '%s' "$pre" | python3 -c 'import sys, json; v = json.load(sys.stdin).get(sys.argv[1]); print(v if isinstance(v, str) else json.dumps(v))' "$1"; }
-    space="$(_pre space)" issue="$(_pre issue)" field="$(_pre field)"
+    space="$(herdr_linear::_board_pre "$pre" space)" issue="$(herdr_linear::_board_pre "$pre" issue)" field="$(herdr_linear::_board_pre "$pre" field)"
 
     case "$answer" in
         no)
@@ -119,7 +123,7 @@ herdr_linear::board_answer() {
     esac
 
     if [ "$kind" = remove-worktree ]; then
-        herdr_linear::worktree_remove "$(_pre worktree)" "$nonce"
+        herdr_linear::worktree_remove "$(herdr_linear::_board_pre "$pre" worktree)" "$nonce"
         return
     fi
     if [ "$kind" = repository ] && [ -z "$value" ]; then
@@ -127,7 +131,7 @@ herdr_linear::board_answer() {
     fi
     if [ "$kind" = close ]; then
         [ "$(herdr_linear::board_ledger_entry "$space" "$issue" 2>/dev/null \
-            | python3 -c 'import sys, json; print(json.load(sys.stdin)["pane_id"])' 2>/dev/null)" = "$(_pre pane_id)" ] \
+            | python3 -c 'import sys, json; print(json.load(sys.stdin)["pane_id"])' 2>/dev/null)" = "$(herdr_linear::_board_pre "$pre" pane_id)" ] \
             || { herdr_linear::_board_answer_refuse "the pane for that ticket is no longer the one asked about"; return; }
     fi
     herdr_linear::board_question_answer "$key" "$nonce" "$pre" \
@@ -160,7 +164,7 @@ herdr_linear::board_answer() {
                 && herdr_linear::board_consent_confirm "$space" "$field" "$c" \
                 || { printf 'failed: the consent was not recorded\n' >&2; return "$HERDR_LINEAR_BOARD_ANSWER_FAILED"; } ;;
         repository)
-            herdr_linear::record_scope_repo "$value" "$(_pre scope)" \
+            herdr_linear::record_scope_repo "$value" "$(herdr_linear::_board_pre "$pre" scope)" \
                 || { printf 'failed: the repository was not recorded\n' >&2; return "$HERDR_LINEAR_BOARD_ANSWER_FAILED"; } ;;
         write-rejected|layout|space) ;;
         *) printf 'failed: no way to apply a %s question\n' "$kind" >&2; return "$HERDR_LINEAR_BOARD_ANSWER_FAILED" ;;
