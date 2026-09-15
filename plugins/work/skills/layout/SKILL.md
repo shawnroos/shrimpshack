@@ -43,6 +43,7 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-store.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 

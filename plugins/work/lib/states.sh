@@ -20,6 +20,24 @@ HERDR_LINEAR_STATE_MISPLACED=1
 HERDR_LINEAR_STATE_STALE=2
 HERDR_LINEAR_STATE_UNKNOWN=3   # not enough information to judge; not a problem
 
+command -v herdr_linear::board_reservation_field >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/board-store.sh"
+
+# A board worktree sits where the mapping put it, so a workspace bound to
+# another project says nothing about it (KTD14). Owned means a started
+# reservation whose frozen name and identifier match this worktree.
+herdr_linear::_board_owns_worktree() {
+    local wt="$1" ident="$2" f issue
+    for f in "$HERDR_LINEAR_STORE_DIR"/board/reservations/*.json; do
+        [ -e "$f" ] || continue
+        issue="$(basename "$f" .json)"
+        [ "$(herdr_linear::board_reservation_field "$issue" state 2>/dev/null)" = started ] || continue
+        [ "$(herdr_linear::board_reservation_field "$issue" identifier 2>/dev/null)" = "$ident" ] || continue
+        [ "$(herdr_linear::board_reservation_field "$issue" worktree_name 2>/dev/null)" = "${wt##*/}" ] && return 0
+    done
+    return 1
+}
+
 # herdr_linear::check_placement <worktree> <workspace-id>
 # Prints a human-readable report on a mismatch and returns MISPLACED.
 herdr_linear::check_placement() {
@@ -50,6 +68,7 @@ herdr_linear::check_placement() {
     [ -n "$ws_project" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
 
     ident="$(herdr_linear::binding_identifier "$wt")" || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    herdr_linear::_board_owns_worktree "$wt" "$ident" && return "$HERDR_LINEAR_STATE_OK"
     # issue_context reports the project NAME; the workspace binding stores the
     # project ID. Compare on the id rather than on names -- two projects can
     # share a name, and a rename would silently clear a real mismatch.

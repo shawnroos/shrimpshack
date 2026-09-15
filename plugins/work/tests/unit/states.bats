@@ -74,6 +74,51 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     [ "$(mutations_sent)" = "0" ]
 }
 
+# KTD14. The board put this worktree where its mapping says, so the workspace's
+# project binding is not a judgement on it.
+@test "a board-owned worktree in a workspace bound to another project reports ok, not misplaced" {
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::board_reserve issue-2870 WEB-2870 wt feature/web-2870-detach false
+    herdr_linear::board_reservation_start issue-2870
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::check_placement "$WT" w1
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$(mutations_sent)" = "0" ]
+}
+
+@test "a reserved but unstarted ticket does not make its namesake worktree board-owned" {
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::board_reserve issue-2870 WEB-2870 wt feature/web-2870-detach false
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::check_placement "$WT" w1
+    [ "$status" -eq 1 ]
+}
+
+@test "a started reservation for another ticket leaves a boardless worktree misplaced" {
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::board_reserve issue-9999 WEB-9999 wt feature/web-9999-other false
+    herdr_linear::board_reservation_start issue-9999
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::check_placement "$WT" w1
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"writes are suspended"* ]]
+}
+
+@test "a binding stored as misplaced before the board still reads as a valid record" {
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+    run herdr_linear::binding_identifier "$WT"
+    [ "$status" -eq 0 ]
+    [ "$output" = "WEB-2870" ]
+}
+
 @test "matching projects are not a mismatch" {
     bind_wt
     bind_ws w1 "$CANVAS"
