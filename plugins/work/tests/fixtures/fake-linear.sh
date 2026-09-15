@@ -57,12 +57,13 @@
 #                            the pool the `$filter:IssueFilter` listing arm
 #                            answers from, after applying the request's own
 #                            filter (default: project)
-#   FAKE_LINEAR_VIEWS        none | one | many -- how many views the
+#   FAKE_LINEAR_VIEWS        none | one | many | endless -- how many views the
 #                            customViews arm lists (default: one)
 #   FAKE_LINEAR_VIEW_MISSING   set to 1 and customView(id:) answers not found
 #   FAKE_LINEAR_VIEW_ARCHIVED  set to 1 and customView(id:) carries archivedAt
 #   FAKE_LINEAR_VIEW_GROUPING  the issueGrouping customView(id:) reports
 #                            (default: workflowState)
+#   FAKE_LINEAR_VIEW_NAME      the name customView(id:) reports
 #   FAKE_LINEAR_VIEW_PROJECT   the project id customView(id:)'s filter names
 #                            (default: the canned project)
 #   FAKE_LINEAR_VIEW_PREFS   unarranged -- columnOrderBoard and hiddenColumns
@@ -71,6 +72,8 @@
 #   FAKE_LINEAR_MUTATION_RESULT  fail | prefs_fail -- prefs_fail fails only
 #                            viewPreferencesCreate, so the view exists and
 #                            its board layout does not
+#   FAKE_LINEAR_LISTING_OUTAGE  set to 1 and only the issue listing answers
+#                            http_500
 #   FAKE_LINEAR_OUTAGE       http_500 | rate_limited | empty_body | ... --
 #                            answer EVERY request from that mode and skip the
 #                            content routing below: an endpoint that is down
@@ -473,9 +476,9 @@ JSON
 # would otherwise still receive the right issues.
 issue_pool() {
     cat <<'JSON'
-[{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3318","title":"AI Tools drawer is blank when a still-processing layer is selected","url":"https://linear.app/example/issue/web-3318/x","branchName":"web-3318-ai-tools-drawer-is-blank","updatedAt":"2026-09-04T15:55:10.206Z","completedAt":null,"priority":0,"state":{"id":"st-backlog","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[{"id":"77777777-7777-4777-8777-777777777777","name":"Bug"}]}},
- {"id":"12121212-1212-4121-8121-121212121212","identifier":"WEB-3317","title":"AI tools that run a custom pipeline stop when the drawer is closed","url":"https://linear.app/example/issue/web-3317/x","branchName":"web-3317-ai-tools-custom-pipeline","updatedAt":"2026-09-04T14:00:00.000Z","completedAt":null,"priority":3,"state":{"id":"st-todo","name":"Todo","type":"unstarted"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}},
- {"id":"13131313-1313-4131-8131-131313131313","identifier":"WEB-3312","title":"Separate Background leaves an empty layer after reload","url":"https://linear.app/example/issue/web-3312/x","branchName":"web-3312-separate-background-empty-layer","updatedAt":"2026-09-03T10:00:00.000Z","completedAt":null,"priority":2,"state":{"id":"st-prog","name":"In Progress","type":"started"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[]}},
+[{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3318","title":"Example issue: a panel is blank while an item is still loading","url":"https://linear.app/example/issue/web-3318/x","branchName":"web-3318-example-panel-blank","updatedAt":"2026-09-04T15:55:10.206Z","completedAt":null,"priority":0,"state":{"id":"st-backlog","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[{"id":"77777777-7777-4777-8777-777777777777","name":"Bug"}]}},
+ {"id":"12121212-1212-4121-8121-121212121212","identifier":"WEB-3317","title":"Example issue: a long task stops when its panel is closed","url":"https://linear.app/example/issue/web-3317/x","branchName":"web-3317-example-long-task","updatedAt":"2026-09-04T14:00:00.000Z","completedAt":null,"priority":3,"state":{"id":"st-todo","name":"Todo","type":"unstarted"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}},
+ {"id":"13131313-1313-4131-8131-131313131313","identifier":"WEB-3312","title":"Example issue: a saved item is empty after reload","url":"https://linear.app/example/issue/web-3312/x","branchName":"web-3312-example-saved-item","updatedAt":"2026-09-03T10:00:00.000Z","completedAt":null,"priority":2,"state":{"id":"st-prog","name":"In Progress","type":"started"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[]}},
  {"id":"13001300-1300-4130-8130-130013001300","identifier":"WEB-3300","title":"Old approach, dropped","url":"https://linear.app/example/issue/web-3300/x","branchName":"web-3300-old-approach","updatedAt":"2026-08-20T10:00:00.000Z","completedAt":null,"priority":4,"state":{"id":"st-cancel","name":"Canceled","type":"canceled"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}]
 JSON
 }
@@ -554,6 +557,9 @@ PY
 views_listing() {
     case "${FAKE_LINEAR_VIEWS:-one}" in
         none) printf '{"data":{"customViews":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}' ;;
+        # Every page offers one matching view and another page after it, so
+        # the listing only ends at the caller's page cap.
+        endless) printf '{"data":{"customViews":{"nodes":[{"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}' ;;
         many) cat <<'JSON'
 {"data":{"customViews":{"nodes":[
  {"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}},
@@ -584,7 +590,7 @@ else:
     order = ["st-backlog", "st-todo", "st-prog", "st-devdone", "st-done", "st-cancel"]
     hidden = ["st-cancel"]
 print(json.dumps({"data": {"customView": {
-    "id": asked, "name": "Canvas board", "modelName": "Issue", "archivedAt": archived,
+    "id": asked, "name": os.environ.get("FAKE_LINEAR_VIEW_NAME") or "Canvas board", "modelName": "Issue", "archivedAt": archived,
     "filterData": {"and": [{"project": {"id": {"in": [
         os.environ.get("FAKE_LINEAR_VIEW_PROJECT") or "44444444-4444-4444-8444-444444444444"]}}}]},
     "viewPreferencesValues": {
@@ -627,6 +633,80 @@ if [ -n "${FAKE_LINEAR_OUTAGE:-}" ]; then
     body_routed=""
 else
     body_routed="$body"
+fi
+
+# Request-level schema checks, before any route answers. Captured 2026-09-15:
+# IDComparator takes ID, and a variable declared String! is refused before the
+# query runs. The snapshot script shipped that mistake past a fake that only
+# checked one route, so every request is checked here. The two view creates
+# are checked against the input types introspected in
+# tests/probe/customviews-transcript.md: a fake that answers any body proves
+# only that a body was sent.
+if [ -n "$body_routed" ]; then
+    schema_err="$(HERDR_FAKE_BODY="$body" python3 -c '
+import json, os, re, sys
+try:
+    b = json.loads(os.environ["HERDR_FAKE_BODY"])
+except Exception:
+    sys.exit(0)
+q = b.get("query") or ""
+v = b.get("variables") or {}
+declared = dict(re.findall(r"\$(\w+)\s*:\s*([\[\]\w!]+)", q))
+def bad(msg):
+    print(msg)
+    sys.exit(0)
+for op, name in re.findall(r"\bid\s*:\s*\{\s*(eq|neq|in|nin)\s*:\s*\$(\w+)", q):
+    if declared.get(name, "").strip("[]!") != "ID":
+        bad("Variable \"$%s\" of type \"%s\" used in position expecting type \"ID\"." % (name, declared.get(name, "")))
+def check(inp, typename, allowed, required):
+    if not isinstance(inp, dict):
+        bad("Variable \"$i\" got invalid value; Expected type \"%s\" to be an object." % typename)
+    for k in inp:
+        if k not in allowed:
+            bad("Variable \"$i\" got invalid value; Field \"%s\" is not defined by type \"%s\"." % (k, typename))
+    for k in required:
+        if inp.get(k) in (None, ""):
+            bad("Variable \"$i\" got invalid value; Field \"%s\" of required type was not provided." % k)
+    for k, want in allowed.items():
+        if inp.get(k) is not None and not isinstance(inp[k], want):
+            bad("Variable \"$i\" got invalid value at \"i.%s\"." % k)
+S = str
+if "customViewCreate" in q:
+    if declared.get("i") != "CustomViewCreateInput!":
+        bad("customViewCreate takes $i:CustomViewCreateInput!")
+    check(v.get("i"), "CustomViewCreateInput",
+          {"id": S, "name": S, "description": S, "icon": S, "color": S, "teamId": S,
+           "projectId": S, "initiativeId": S, "ownerId": S, "filterData": dict,
+           "projectFilterData": dict, "initiativeFilterData": dict,
+           "feedItemFilterData": dict, "shared": bool},
+          ["name"])
+elif "viewPreferencesCreate" in q:
+    if declared.get("i") != "ViewPreferencesCreateInput!":
+        bad("viewPreferencesCreate takes $i:ViewPreferencesCreateInput!")
+    i = v.get("i")
+    check(i, "ViewPreferencesCreateInput",
+          {"id": S, "type": S, "viewType": S, "preferences": dict, "insights": dict,
+           "teamId": S, "projectId": S, "initiativeId": S, "labelId": S, "projectLabelId": S,
+           "initiativeLabelId": S, "releasePipelineId": S, "customViewId": S, "userId": S},
+          ["type", "viewType", "preferences"])
+    if i["type"] not in ("organization", "user"):
+        bad("Value \"%s\" does not exist in \"ViewPreferencesType\" enum." % i["type"])
+    if i["viewType"] != "customView":
+        bad("Value \"%s\" is not the ViewType a custom view takes." % i["viewType"])
+' 2>/dev/null)"
+    if [ -n "$schema_err" ]; then
+        [ "$wants_headers" = 1 ] && emit_headers 400
+        answer "$(HERDR_FAKE_MSG="$schema_err" python3 -c 'import json,os;print(json.dumps({"errors":[{"message":os.environ["HERDR_FAKE_MSG"],"extensions":{"http":{"status":400,"headers":{}},"code":"GRAPHQL_VALIDATION_FAILED","type":"graphql error","userError":True}}]}))')"
+        exit 0
+    fi
+fi
+
+# A listing-only outage: the view and project reads answer, the issue listing
+# does not, so a test can fail the read that comes after the view read.
+if [ "${FAKE_LINEAR_LISTING_OUTAGE:-0}" = 1 ]; then
+    case "$body_routed" in
+        *'$filter:IssueFilter'*) mode=http_500; body_routed="" ;;
+    esac
 fi
 
 # Content routing, before the mode is consulted. A real endpoint answers by what
@@ -708,19 +788,6 @@ case "$body_routed" in
         exit 0
         ;;
     *'teams('*)
-        # Captured 2026-09-15: IDComparator takes ID, and a variable declared
-        # String! is refused before the query runs. The snapshot script shipped
-        # that mistake past every fake-only test, so the fake now refuses it too.
-        case "$body" in
-            *'$id:String!'*'{id:{eq:$id}}'*)
-                [ "$wants_headers" = 1 ] && emit_headers 400
-                answer "$(cat <<'JSON'
-{"errors":[{"message":"Variable \"$id\" of type \"String!\" used in position expecting type \"ID\".","locations":[{"line":1,"column":7},{"line":1,"column":41}],"extensions":{"http":{"status":400,"headers":{}},"code":"GRAPHQL_VALIDATION_FAILED","type":"graphql error","userError":true}}]}
-JSON
-)"
-                exit 0
-                ;;
-        esac
         [ "$wants_headers" = 1 ] && emit_headers 200
         answer "$(cat <<'JSON'
 {"data":{"teams":{"nodes":[{"states":{"nodes":[{"id":"st-backlog","name":"Backlog","type":"backlog"},{"id":"st-todo","name":"Todo","type":"unstarted"},{"id":"st-prog","name":"In Progress","type":"started"},{"id":"st-devdone","name":"Dev Done","type":"started"},{"id":"st-done","name":"Done","type":"completed"},{"id":"st-cancel","name":"Canceled","type":"canceled"}]}}]}}}

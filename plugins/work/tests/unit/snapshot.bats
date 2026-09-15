@@ -46,7 +46,7 @@ setup() {
     LAYOUT='{"grouping":"workflowState","column_order":[],"hidden":[]}'
 
     WT="$WORK/worktrees/web-3312"; mkdir -p "$WT"
-    git -C "$WT" init -q -b feature/web-3312-separate-background
+    git -C "$WT" init -q -b feature/web-3312-example
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
     local n
     n="$(herdr_linear::binding_propose "$WT" WEB-3312)"
@@ -111,12 +111,30 @@ api_calls() { [ -f "$FAKE_LINEAR_RECORD_DIR/argv" ] && wc -l < "$FAKE_LINEAR_REC
 
 # Pretty-printed, as bin/linear-cache-refresh.sh writes it: a cache file is
 # several lines, never one.
-cache_issue() {   # cache_issue <id> <title> <status> <fetchedAt>
+cache_issue() {   # cache_issue <id> <title> <status> <fetchedAt> [project]
     python3 -c '
 import json, sys
-json.dump({"id": sys.argv[1], "title": sys.argv[2], "project": "AI Canvas Tools",
+json.dump({"id": sys.argv[1], "title": sys.argv[2], "project": sys.argv[6],
            "status": sys.argv[3], "fetchedAt": sys.argv[4]}, open(sys.argv[5], "w"), indent=2)
-' "$1" "$2" "$3" "$4" "$LINEAR_CACHE_DIR/$1.json"
+' "$1" "$2" "$3" "$4" "$LINEAR_CACHE_DIR/$1.json" "${5:-AI Canvas Tools}"
+}
+
+# The project id the last issue-listing request's filter named.
+sent_listing_filter_project() {
+    python3 -c '
+import json, sys, re
+found = ""
+for line in open(sys.argv[1]):
+    try:
+        b = json.loads(line)
+    except Exception:
+        continue
+    if "$filter:IssueFilter" not in (b.get("query") or ""):
+        continue
+    m = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", json.dumps((b.get("variables") or {}).get("filter")))
+    found = m.group(0) if m else ""
+print(found)
+' "$FAKE_LINEAR_RECORD_DIR/bodies"
 }
 
 # ------------------------------------------------------- the contract's hashes
@@ -125,14 +143,14 @@ json.dump({"id": sys.argv[1], "title": sys.argv[2], "project": "AI Canvas Tools"
 # crates/board-core/tests/fixtures/linear-snapshot/VERSION; the lines below
 # are that file's, so a change on either side fails here or there.
 @test "every fixture matches the hash the board pins" {
-    local expected="16bc3f5c801a85e5e0c6a6efa438cfd85ab246b02f7a9d8e7ea58431ed34487b  bound-no-view.json
-ac1497a0e3dacb3c2eeacb76de43adb051bb8aa1c4169b459a106d1bdd494e04  bound-view-unsupported-grouping.json
-81bbcde5ff03f72f1b9b568129ba718345df2e249dde9832ee3753c96b874370  bound-with-view.json
-e05f5b0c04f858c7223b2ca9662c0959a37e8723c63ababa7aa11c34515dccb8  herdr-unavailable.json
-1c7ee551b373b6a65576ed303debe7c69118886809f75b1d2af6fdc2561d3e2b  linear-unavailable.json
+    local expected="beb6b1e1f8b6f9678540a80e304afb18ca579101274d6a1fd842bf720feb23ca  bound-no-view.json
+be4f319596c1570490871b19297786c3b6ad9cf6d70baf2d5ba891733c4a15c0  bound-view-unsupported-grouping.json
+76a6cb77e60425d9aaf89add3be76957e4f501cdd26e187b9bafbf0f9c6b3ca9  bound-with-view.json
+a78f33d96fc70332547df343a9996f9dd5028e468f0a884b4c8385bcf88fe32e  herdr-unavailable.json
+dccba6c109bc9e4a125fe76ba38abd8239f7477fa778ae072d313e683f0ea26c  linear-unavailable.json
 d70ddd3e9e77ef658362b5696623e87c9b7de97b6af3b00b912e76dd288ebc6c  record-unreadable.json
 f2c2f12bff7a153bd8ddf4492eaaad28392ad169b3d5abc343c96a786f28dcf7  unbound.json
-9eeb74fb70e28e6b32b3d9da9b4f1c571c8c6e12e21d677af89ae3422432dd1c  worktree-missing.json"
+bcab66a6ac98a4c88e449d6bc39af0784a1e0d7dccca0b429afa584c37be5116  worktree-missing.json"
     local actual
     actual="$(cd "$SNAPFIX" && shasum -a 256 -- *.json)"
     [ "$(printf '%s' "$actual" | grep -c .)" -eq 8 ]
@@ -164,7 +182,7 @@ f2c2f12bff7a153bd8ddf4492eaaad28392ad169b3d5abc343c96a786f28dcf7  unbound.json
 
 @test "AE4: Linear down with a warm cache reproduces linear-unavailable.json" {
     with_view
-    cache_issue WEB-3312 "Separate Background leaves an empty layer after reload" "In Progress" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    cache_issue WEB-3312 "Example issue: a saved item is empty after reload" "In Progress" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     export FAKE_LINEAR_OUTAGE=http_500
     expect_fixture linear-unavailable.json
     run bash "$BIN" wA
@@ -179,6 +197,117 @@ f2c2f12bff7a153bd8ddf4492eaaad28392ad169b3d5abc343c96a786f28dcf7  unbound.json
     [ "$(field "$output" 'd["linear"]["status"]')" = "unavailable" ]
     [ "$(field "$output" 'd["view"]["status"]')" = "unreadable" ]
     [ "$(api_calls)" = "0" ]
+}
+
+@test "a herdr that accepts calls and never answers reads as herdr unavailable within the bound" {
+    with_view
+    export FAKE_HERDR_MODE=stall HERDR_LINEAR_HERDR_TIMEOUT_SECONDS=1
+    local start; start="$(date +%s)"
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ $(( $(date +%s) - start )) -lt 15 ]
+    [ "$(field "$output" 'd["herdr"]["status"]')" = "unavailable" ]
+    [ "$(field "$output" 'd["linear"]["status"]')" = "ok" ]
+}
+
+@test "a keychain read held on an unlock prompt is abandoned at the bound and the secrets file still answers" {
+    with_view
+    export FAKE_SECURITY_MODE=stall HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS=1 FAKE_SECURITY_RECORD_DIR="$WORK/kc-rec"
+    local start; start="$(date +%s)"
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ $(( $(date +%s) - start )) -lt 15 ]
+    [ "$(field "$output" 'd["linear"]["status"]')" = "ok" ]
+    [ "$(grep -c find-generic-password "$FAKE_SECURITY_RECORD_DIR/argv")" -eq 1 ]
+}
+
+@test "a view Linear no longer has keeps not_found when the listing read after it fails" {
+    with_view
+    export FAKE_LINEAR_VIEW_MISSING=1 FAKE_LINEAR_LISTING_OUTAGE=1
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" 'd["linear"]["status"]')" = "unavailable" ]
+    [ "$(field "$output" 'd["view"]["status"]')" = "not_found" ]
+}
+
+@test "a view read as ok becomes unreadable when the listing read after it fails" {
+    with_view
+    export FAKE_LINEAR_LISTING_OUTAGE=1
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" 'd["view"]["status"]')" = "unreadable" ]
+    [ "$(field "$output" 'd["view"]["layout"]')" = "None" ]
+}
+
+@test "a recorded view whose filter no longer names the project is not_in_project and the board lists the project" {
+    with_view
+    export FAKE_LINEAR_VIEW_PROJECT=99999999-9999-4999-8999-999999999999
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" 'd["view"]["status"]')" = "not_in_project" ]
+    [ "$(field "$output" 'd["view"]["layout"]')" = "None" ]
+    [ "$(field "$output" 'sorted(d["issues"])')" = "['WEB-3312', 'WEB-3317', 'WEB-3318']" ]
+    [ "$(sent_listing_filter_project)" = "44444444-4444-4444-8444-444444444444" ]
+}
+
+@test "under label grouping an arranged view's state-id column order makes no empty state columns" {
+    with_view
+    export FAKE_LINEAR_VIEW_GROUPING=label
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" '[g["key"] for g in d["groups"] if g["key"].startswith("st-")]')" = "[]" ]
+    [ "$(field "$output" 'sorted(g["key"] for g in d["groups"])')" = "['77777777-7777-4777-8777-777777777777', 'nolabel']" ]
+}
+
+@test "under assignee grouping an issue with no assignee sits under unassigned" {
+    with_view
+    export FAKE_LINEAR_VIEW_GROUPING=assignee FAKE_LINEAR_VIEW_PREFS=unarranged
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" '[sorted(g["issues"]) for g in d["groups"] if g["key"] == "unassigned"]')" = "[['WEB-3300', 'WEB-3317']]" ]
+    [ "$(field "$output" '[g["label"] for g in d["groups"] if g["key"] == "unassigned"]')" = "['Unassigned']" ]
+    [ "$(field "$output" 'sorted(sum((g["issues"] for g in d["groups"]), [])) == sorted(d["issues"])')" = "True" ]
+}
+
+@test "offline, the project name is the one most cached issues carry, and a tie takes the later name" {
+    local i id
+    for id in WEB-4001 WEB-4002 WEB-4003; do
+        i="$WORK/worktrees/$id"; mkdir -p "$i"
+        git -C "$i" init -q -b "feature/$(printf '%s' "$id" | tr 'A-Z' 'a-z')-x"
+        git -C "$i" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i
+        herdr_linear::binding_confirm "$i" "$id" "$(herdr_linear::binding_propose "$i" "$id")"
+    done
+    local now; now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    cache_issue WEB-4001 "one" "Todo" "$now" "Project Beta"
+    cache_issue WEB-4002 "two" "Todo" "$now" "Project Beta"
+    cache_issue WEB-4003 "three" "Todo" "$now" "Project Alpha"
+    export FAKE_LINEAR_OUTAGE=http_500
+    run --separate-stderr bash "$BIN" wA
+    [ "$(field "$output" 'd["project"]["name"]')" = "Project Beta" ]
+    cache_issue WEB-4003 "three" "Todo" "$now" "Project Gamma"
+    cache_issue WEB-4002 "two" "Todo" "$now" "Project Gamma"
+    run --separate-stderr bash "$BIN" wA
+    [ "$(field "$output" 'd["project"]["name"]')" = "Project Gamma" ]
+    cache_issue WEB-4001 "one" "Todo" "$now" "Project Alpha"
+    cache_issue WEB-4002 "two" "Todo" "$now" "Project Beta"
+    cache_issue WEB-4003 "three" "Todo" "$now" "Project Alpha"
+    rm -f "$LINEAR_CACHE_DIR/WEB-4003.json"
+    run --separate-stderr bash "$BIN" wA
+    [ "$(field "$output" 'd["project"]["name"]')" = "Project Beta" ]
+}
+
+@test "the script runs under the daemon's cleared environment" {
+    with_view
+    local keep=() name
+    while IFS= read -r name; do
+        case "$name" in
+            HOME|PATH|HERDR_BIN|HERDR_SOCKET_PATH|HERDR_LINEAR_*|LINEAR_*|FAKE_*) keep+=("$name=${!name}") ;;
+        esac
+    done < <(compgen -e)
+    run --separate-stderr env -i "${keep[@]}" bash "$BIN" wA
+    [ "$status" -eq 0 ] || { printf '%s\n' "$stderr" >&2; false; }
+    [ "$(field "$output" 'd["linear"]["status"]')" = "ok" ]
+    [ "$(field "$output" 'd["herdr"]["status"]')" = "ok" ]
 }
 
 @test "herdr not running reproduces herdr-unavailable.json" {
@@ -353,13 +482,13 @@ json.dump(d, open(p, "w"), indent=2)
     with_view
     local rlo; rlo="$(printf '\xe2\x80\xae')"
     export FAKE_HERDR_WORKSPACES="wA=Plug${rlo}ins"
-    cache_issue WEB-3312 "Separate ${rlo}Background" "In ${rlo}Progress" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    cache_issue WEB-3312 "Example ${rlo}issue" "In ${rlo}Progress" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     export FAKE_LINEAR_OUTAGE=http_500
     run --separate-stderr bash "$BIN" wA
     [ "$status" -eq 0 ]
     refute_match -F "$rlo" <<< "$output"
     [ "$(field "$output" 'd["workspace"]["label"]')" = "Plugins" ]
-    [ "$(field "$output" 'd["issues"]["WEB-3312"]["title"]')" = "Separate Background" ]
+    [ "$(field "$output" 'd["issues"]["WEB-3312"]["title"]')" = "Example issue" ]
     [ "$(field "$output" 'd["groups"][0]["key"]')" = "In Progress" ]
 }
 
@@ -406,23 +535,33 @@ json.dump(d, open(p, "w"), indent=2)
     [ "$(field "$output" '[g["key"] for g in d["groups"]]')" = "['st-backlog', 'st-todo', 'st-prog', 'st-devdone', 'st-done']" ]
 }
 
-# The script carries its own copy of the display-control table because it
-# cannot shell out to jq per string; this pins the two copies to one another.
-@test "clean() in the script strips the same codepoints as HERDR_LINEAR_SANITIZE_JQ_DEF" {
-    local got
-    got="$(python3 - "$ROOT/lib/sanitize.sh" "$BIN" <<'PY'
-import re, sys
-lib = open(sys.argv[1]).read()
-jq = lib[lib.index("HERDR_LINEAR_SANITIZE_JQ_DEF='"):]
-jq = jq[:jq.index("\n'\n")]
-script = open(sys.argv[2]).read()
-py = script[script.index("def clean("):script.index("def deep_clean(")]
-a = sorted(set(int(n) for n in re.findall(r"\b\d+\b", jq)))
-b = sorted(set(int(n) for n in re.findall(r"\b\d+\b", py)))
-print(len(a) > 10, a == b, sorted(set(a) ^ set(b)))
-PY
-)"
-    [ "$got" = "True True []" ]
+# Both cleaners are built from HERDR_LINEAR_STRIP_RANGES; this runs every range
+# edge and its outside neighbours through the snapshot and through the library
+# filter and requires the same text from each.
+@test "the snapshot strips exactly what sanitize_for_display strips, at every range edge" {
+    local ranges probe want got
+    ranges="$(bash -c '. "$1"; printf %s "$HERDR_LINEAR_STRIP_RANGES"' _ "$ROOT/lib/sanitize.sh")"
+    [ -n "$ranges" ]
+    # NUL cannot ride in an environment string; tab, newline, "=" and "," are
+    # the fake herdr listing's own separators.
+    probe="$(python3 -c '
+import sys
+cps = set()
+for r in sys.argv[1].split():
+    lo, _, hi = r.partition("-")
+    lo, hi = int(lo), int(hi or lo)
+    cps.update((lo - 1, lo, hi, hi + 1))
+keep = [c for c in sorted(cps) if c > 0 and c not in (9, 10, 44, 61) and not 0xD800 <= c <= 0xDFFF]
+sys.stdout.write("".join("x" + chr(c) for c in keep) + "x")
+' "$ranges")"
+    [ "${#probe}" -gt 40 ]
+    want="$(bash -c '. "$1"; herdr_linear::sanitize_for_display "$2"' _ "$ROOT/lib/sanitize.sh" "$probe")"
+    export FAKE_HERDR_WORKSPACES="wA=$probe"
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    got="$(field "$output" 'd["workspace"]["label"]')"
+    [ "$got" != "$probe" ]
+    [ "$got" = "$want" ]
 }
 
 @test "a crash inside the script prints nothing and exits non-zero" {
