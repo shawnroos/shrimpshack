@@ -163,12 +163,16 @@ configured, a space is a project, a tab is a piece of work and a pane is a sessi
 
 ### Board
 The herdr layout a mapping produces: every ticket the filter matches has a pane, placed by
-its values at each level. A sync keeps it in line with Linear, and moving a pane writes the
-change back when writes are enabled. The board only ever moves or closes panes it created.
+its values at each level. A sync keeps it in line with Linear. Moving a pane writes the
+change back only for a field the space has consented to; otherwise the pane is put back. A
+pane in use is moved, and a pane is closed, only on a person's answer at the next `/work`
+command. The board only ever moves or closes panes it created.
 
 ### Reservation
 An unstarted board ticket's claim on a worktree name and branch, with nothing on disk. The
-worktree is created only when work starts through the plugin.
+name and branch are fixed when the ticket is first reserved, so a later title change or a
+team move that renumbers the ticket does not rename them. The worktree is created only
+when work starts through the plugin, which then replaces the reserved pane.
 
 ### Pointer pane
 A board pane in a space whose mapping claims a ticket that lives elsewhere. It holds no
