@@ -2,8 +2,8 @@
 # The unattended half of a board sync (KTD2): one call brings herdr in line with
 # Linear as far as it can without asking anyone, records every question for the
 # next /work command, and never asks or closes. Its one Linear write is a
-# consented write-back of a pane a person moved (R25-R27). Sourced; run
-# directly it performs one sync, so an agent can be told a path, not a verb.
+# consented write-back of a pane a person moved (R25-R27). Sourced, never
+# executed; bin/board-sync.sh is the path an agent is given.
 #
 # The python3 driver calls each board verb in a fresh bash, so every herdr and
 # store effect goes through the verb that owns it.
@@ -210,8 +210,10 @@ class Stop(Exception):
 
 
 def call(verb, *args):
-    p = subprocess.run(["bash", "-c", '. "$0" 2>/dev/null || exit 70; "$@"', LIB, "herdr_linear::" + verb]
-                       + [str(a) for a in args], capture_output=True, text=True)
+    # The lib is $1, never $0: run directly it performs a whole sync, and a
+    # sourced file's BASH_SOURCE[0] equals whatever $0 the shell was given.
+    p = subprocess.run(["bash", "-c", '. "$1" 2>/dev/null || exit 70; shift; "$@"', "board-verb", LIB,
+                        "herdr_linear::" + verb] + [str(a) for a in args], capture_output=True, text=True)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -1009,8 +1011,3 @@ try:
 except Stop as s:
     sys.exit(s.code)
 PYEOF
-
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    herdr_linear::board_sync
-    exit
-fi

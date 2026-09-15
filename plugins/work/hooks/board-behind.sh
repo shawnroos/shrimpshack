@@ -49,7 +49,7 @@ herdr_linear::board_mark_behind >/dev/null 2>&1 || true
 command -v herdr_linear::path_signal >/dev/null 2>&1 || exit 0
 [ "$(herdr_linear::path_signal "$fields")" = "inside" ] || exit 0
 
-HERDR_LINEAR_BOARD_SYNC_LIB_PATH="$LIB/board-sync.sh" python3 -c '
+HERDR_LINEAR_BOARD_SYNC_LIB_PATH="$LIB/../bin/board-sync.sh" python3 -c '
 import json, os
 lib = os.environ["HERDR_LINEAR_BOARD_SYNC_LIB_PATH"]
 print(json.dumps({"hookSpecificOutput": {

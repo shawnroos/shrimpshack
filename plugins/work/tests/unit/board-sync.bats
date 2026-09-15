@@ -742,3 +742,27 @@ PY2
     run grep -nE 'board_(close_pane|move_in_use|apply_tab_in_use)|board_config_set' "$LIB/board-sync.sh"
     [ "$status" -eq 1 ]
 }
+
+# The library is sourced by shells whose $0 is not the library, so nothing in it
+# may run a sync on being sourced: that re-entered the sync on every verb call.
+@test "sourcing the sync library runs no sync, whatever the shell calls itself" {
+    config '{"tab":"state"}'
+    local name
+    for name in board-verb "$LIB/board-sync.sh"; do
+        run bash -c '. "$1" 2>/dev/null || exit 70; shift; "$@"' "$name" "$LIB/board-sync.sh" \
+            herdr_linear::board_config_load
+        [ "$status" -eq 0 ]
+        [[ "$output" != *"board sync"* ]]
+        [ "$(printf '%s' "$output" | field 'd["global"]["levels"]["tab"]')" = "state" ]
+    done
+}
+
+@test "the runnable entry point performs one sync" {
+    config '{"tab":"state"}'
+    empty_board; serve
+    tickets "iss-1:todo"
+    run bash "$LIB/../bin/board-sync.sh"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_SYNC_CLEAN" ]
+    run -0 herdr_linear::board_sync_state
+    [ -n "$output" ]
+}
