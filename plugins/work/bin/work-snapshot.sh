@@ -18,6 +18,9 @@ for f in sanitize.sh secrets.sh binding.sh linear.sh herdr-read.sh context.sh; d
     . "$LIB_DIR/$f"
 done
 
+# Nobody can answer a keychain unlock prompt from here.
+export HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS="${HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS:-5}"
+
 SNAP_TMP="$(mktemp -d)" || exit 1
 trap 'rm -rf "$SNAP_TMP"' EXIT
 
@@ -30,33 +33,6 @@ except Exception:
     v = None
 sys.stdout.write("" if v is None else (v if isinstance(v, str) else json.dumps(v)))
 ' 2>/dev/null
-}
-
-# Every binding record in the store, raw: file, identifier, worktree path, tab.
-# Raw because the records are keyed by a path hash, so the
-# only way to find the ones that name this project's issues is to open each.
-bindings_list() {
-    HERDR_SNAP_STORE="$HERDR_LINEAR_STORE_DIR" python3 - <<'PY'
-import glob, json, os
-for f in sorted(glob.glob(os.path.join(os.environ["HERDR_SNAP_STORE"], "bindings", "*.json"))):
-    # The loader's own test (_mode_ok): a record another user owns, or one
-    # anyone else can write, is not evidence of a binding.
-    try:
-        st = os.stat(f)
-        if st.st_uid != os.getuid() or st.st_mode & 0o022:
-            continue
-        rec = json.load(open(f))
-    except Exception:
-        continue
-    if not isinstance(rec, dict):
-        continue
-    tab = rec.get("tab")
-    tab = tab if isinstance(tab, str) else ""
-    row = [f, str(rec.get("issue_identifier") or ""), str(rec.get("worktree_path") or ""), tab]
-    if any("\x1f" in c or "\n" in c for c in row):
-        continue
-    print("\x1f".join(row))
-PY
 }
 
 snapshot_main() {
@@ -96,6 +72,15 @@ snapshot_main() {
             view_status=unreadable
         fi
 
+        # Every Linear call reads the credential again. A keychain held on an
+        # unlock prompt is asked once; if that read is ended at its bound, the
+        # rest of the run skips the keychain and uses the secrets file, so a
+        # locked keychain costs one bound rather than one per call.
+        herdr_linear::keychain_read "$HERDR_LINEAR_KEYCHAIN_SERVICE" "$HERDR_LINEAR_KEYCHAIN_ACCOUNT" >/dev/null 2>&1
+        if [ $? -eq "$HERDR_LINEAR_SECRET_TIMEOUT" ]; then
+            HERDR_LINEAR_SECURITY_BIN="$(command -v false)"
+            export HERDR_LINEAR_SECURITY_BIN
+        fi
         herdr_linear::credential >/dev/null 2>&1; rc=$?
         case "$rc" in 0|2) have_cred=1 ;; esac
 
@@ -108,6 +93,11 @@ snapshot_main() {
                         view_json="$vr"
                         if [ "$(json_field "$vr" archived)" = true ]; then
                             view_status=archived
+                        elif ! herdr_linear::filter_names_project "$(json_field "$vr" filter)" "$project_id"; then
+                            # Checked on every read, not only when chosen: a
+                            # filter edited in Linear to drop the project
+                            # would otherwise board another project's issues.
+                            view_status=not_in_project
                         else
                             case "$(json_field "$(json_field "$vr" layout)" grouping)" in
                                 workflowState|assignee|priority|label|project) view_status=ok ;;
@@ -149,7 +139,9 @@ print(json.dumps({"key": teams[0].get("key"), "states": states}))
             linear_status=unavailable
         fi
         if [ "$linear_status" = unavailable ]; then
-            [ -n "$view_id" ] && view_status=unreadable
+            # A view that was read keeps what the read found; only a status
+            # that needs the view's layout, now dropped, becomes unreadable.
+            case "$view_status" in ok|unsupported_grouping) view_status=unreadable ;; esac
             view_json=""; issues_json=""; project_json=""; states_json=""
         fi
     fi
@@ -157,17 +149,11 @@ print(json.dumps({"key": teams[0].get("key"), "states": states}))
     : >"$SNAP_TMP/bindings"
     : >"$SNAP_TMP/cache"
     if [ "$record_status" = ok ] && [ "$record_state" = bound ]; then
-        local file ident path tab rec eff cached
+        local file ident path tab eff cached
         # A non-whitespace separator: `read` collapses consecutive tabs, so an
         # empty tab field would shift the state into the tab's place.
-        while IFS=$'\x1f' read -r file ident path tab; do
-            [ -n "$file" ] || continue
-            if [ -d "$path" ]; then
-                rec="$(herdr_linear::binding_read "$path" 2>/dev/null)" && eff="$(json_field "$rec" state)" || eff=""
-                [ -n "$eff" ] || continue
-            else
-                eff=worktree_missing
-            fi
+        while IFS=$'\x1f' read -r file ident path tab eff; do
+            [ -n "$file" ] && [ -n "$eff" ] || continue
             printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\n' "$file" "$ident" "$path" "$tab" "$eff" >>"$SNAP_TMP/bindings"
             if [ "$linear_status" = unavailable ] && [ -n "$ident" ]; then
                 # One line per entry: the cache writer pretty-prints, and the
@@ -176,7 +162,7 @@ print(json.dumps({"key": teams[0].get("key"), "states": states}))
                     | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin)))' 2>/dev/null)" || cached=""
                 [ -n "$cached" ] && printf '%s\t%s\n' "$ident" "$cached" >>"$SNAP_TMP/cache"
             fi
-        done < <(bindings_list)
+        done < <(herdr_linear::bindings_effective)
     fi
 
     # The listing, the project and the herdr snapshot go to python3 as files:
@@ -192,6 +178,7 @@ print(json.dumps({"key": teams[0].get("key"), "states": states}))
     SNAP_VIEW_ID="$view_id" SNAP_VIEW_NAME="$view_name" SNAP_VIEW="$view_json" \
     SNAP_ISSUES_FILE="$SNAP_TMP/issues" SNAP_PROJECT_FILE="$SNAP_TMP/project" SNAP_STATES="$states_json" \
     SNAP_BINDINGS="$SNAP_TMP/bindings" SNAP_CACHE="$SNAP_TMP/cache" \
+    SNAP_STRIP_RANGES="${HERDR_LINEAR_STRIP_RANGES:-}" \
     python3 - <<'PY'
 import calendar, json, os, sys, time
 
@@ -216,21 +203,17 @@ project = file_json("SNAP_PROJECT_FILE") or {}
 team = env_json("SNAP_STATES") or {}
 states = team.get("states") or []
 
-# The same codepoint set as HERDR_LINEAR_SANITIZE_JQ_DEF in lib/sanitize.sh.
+# The ranges come from HERDR_LINEAR_STRIP_RANGES in lib/sanitize.sh; an empty
+# or unparsable list stops the script rather than printing uncleaned text.
+STRIP = []
+for r in E["SNAP_STRIP_RANGES"].split():
+    lo, _, hi = r.partition("-")
+    STRIP.append((int(lo), int(hi or lo)))
+if not STRIP:
+    sys.exit(1)
 def clean(s):
-    out = []
-    for ch in s:
-        c = ord(ch)
-        if c in (9, 10):
-            out.append(ch); continue
-        if c <= 31 or c == 127 or 128 <= c <= 159 or c in (173, 1564, 6158, 65279):
-            continue
-        if 8203 <= c <= 8207 or 8232 <= c <= 8238 or 8288 <= c <= 8303:
-            continue
-        if 65529 <= c <= 65531 or 917504 <= c <= 917631:
-            continue
-        out.append(ch)
-    return "".join(out)
+    return "".join(ch for ch in s
+                   if not any(lo <= ord(ch) <= hi for lo, hi in STRIP))
 
 def deep_clean(v):
     if isinstance(v, str):
@@ -244,7 +227,9 @@ def deep_clean(v):
 label, live = ws, None
 if herdr_ok:
     live = False
-    for line in (E.get("SNAP_SPACES") or "").splitlines():
+    # split("\n"), not splitlines(): splitlines also breaks on U+2028, VT, FF
+    # and the other line-like codepoints a label may carry, and cuts it short.
+    for line in (E.get("SNAP_SPACES") or "").split("\n"):
         parts = line.split("\t", 1)
         if parts[0] == ws:
             live = True
@@ -352,6 +337,10 @@ if bound and linear_status in ("ok", "truncated"):
                 put(p["id"], p.get("name") or p["id"], ident)
             else:
                 put("noproject", "No project", ident)
+    if grouping != "workflowState":
+        # columnOrderBoard holds state ids for a view that was ever a state
+        # board; under another grouping they would be empty columns.
+        order = [k for k in order if k not in state_name]
     if grouping == "workflowState" and not order:
         order = [s.get("id") for s in states
                  if usable or s.get("type") != "canceled"]

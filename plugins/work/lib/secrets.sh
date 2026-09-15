@@ -71,6 +71,7 @@ HERDR_LINEAR_SECRET_FAIL=1       # the store or the dialog failed
 HERDR_LINEAR_SECRET_EMPTY=2      # refused: an empty value is not a secret
 HERDR_LINEAR_SECRET_CANCELLED=3  # the operator pressed Cancel
 HERDR_LINEAR_SECRET_MALFORMED=4  # refused: the value cannot survive the write
+HERDR_LINEAR_SECRET_TIMEOUT=5    # the read was ended at HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS
 
 # xtrace guard. A caller running with `set -x` would echo every secret-bearing
 # command — including the builtin printf whose entire purpose is keeping the
@@ -102,12 +103,22 @@ HERDR_LINEAR_SECRET_MALFORMED=4  # refused: the value cannot survive the write
 herdr_linear::keychain_read() (
     set +x
     local service="$1" account="$2" out rc
-    out="$("$HERDR_LINEAR_SECURITY_BIN" find-generic-password -a "$account" -s "$service" -w 2>/dev/null)"
+    # A locked login keychain can hold this call on an unlock prompt. A caller
+    # with no one to answer it (the board's snapshot) sets the bound; SIGALRM
+    # then ends the read as a failed one, and the file fallback still runs.
+    if [ -n "${HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS:-}" ] && command -v perl >/dev/null 2>&1; then
+        out="$(perl -e 'alarm shift @ARGV; exec { $ARGV[0] } @ARGV or exit 127' "$HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS" \
+            "$HERDR_LINEAR_SECURITY_BIN" find-generic-password -a "$account" -s "$service" -w 2>/dev/null)"
+    else
+        out="$("$HERDR_LINEAR_SECURITY_BIN" find-generic-password -a "$account" -s "$service" -w 2>/dev/null)"
+    fi
     rc=$?
     if [ "$rc" -eq 0 ]; then
         printf '%s' "$out"
     fi
     [ "$rc" -eq 0 ] && return "$HERDR_LINEAR_SECRET_OK"
+    # 142 is 128 + SIGALRM: the bound above ended the read.
+    [ "$rc" -eq 142 ] && return "$HERDR_LINEAR_SECRET_TIMEOUT"
     return "$HERDR_LINEAR_SECRET_FAIL"
 )
 

@@ -83,7 +83,8 @@ project, and `team_key` and `url` are `null`.
 | `none` | the record names no view |
 | `not_found` | Linear answered that the id does not exist |
 | `archived` | the view is archived |
-| `unreadable` | Linear could not be asked (see `linear.status`) or the answer could not be parsed |
+| `not_in_project` | the view was read, and its filter does not name the space's project; the board falls back to the project's issues |
+| `unreadable` | Linear could not be asked (see `linear.status`) or the answer could not be parsed. A view already found `not_found`, `archived` or `not_in_project` keeps that status when a later read fails |
 | `unsupported_grouping` | the view groups by something the board does not render |
 
 `id` and `name` are the record's values whenever the record names a view, so a
