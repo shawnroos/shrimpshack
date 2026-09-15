@@ -456,3 +456,189 @@ cache_issue() {   # cache_issue <id> <fetchedAt>
     [ "$status" -ne 0 ]
     [ -z "$output" ]
 }
+
+# ----------------------------------------------------------- the views (U3)
+#
+# Every listing goes through the fake's `$filter:IssueFilter` arm, which
+# applies the REQUEST's filter to its pool: a client that dropped or rewrote
+# its filter would get the wrong issues, not the same ones.
+
+PROJECT=44444444-4444-4444-8444-444444444444
+VIEW=cccccccc-cccc-4ccc-8ccc-cccccccccccc
+
+identifiers() { python3 -c 'import sys,json;print(",".join(n["identifier"] for n in json.load(sys.stdin)["nodes"]))'; }
+
+refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
+    if grep "$@"; then
+        printf 'refute_match: unexpectedly matched: %s\n' "$*" >&2
+        return 1
+    fi
+}
+
+@test "project_issues lists the project's issues in nodes, never a teams shape, never a canceled one" {
+    run --separate-stderr herdr_linear::project_issues "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317,WEB-3312" ]
+    refute_match -qF '"teams"' <<<"$output"
+    refute_match -qF 'project(id:' "$FAKE_LINEAR_RECORD_DIR/bodies"
+    [ "$(printf '%s' "$output" | python3 -c 'import sys,json;print(json.load(sys.stdin)["truncated"])')" = "False" ]
+}
+
+@test "view_issues with a filter that excludes completed issues yields no completed issue" {
+    export FAKE_LINEAR_ISSUES=completed
+    filter='{"and":[{"project":{"id":{"in":["'"$PROJECT"'"]}}},{"state":{"type":{"nin":["completed","canceled"]}}}]}'
+    run --separate-stderr herdr_linear::view_issues "$filter"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317,WEB-3312" ]
+    # The positive control: the same pool with no state clause carries the
+    # Done issue, so the exclusion above is the filter's doing.
+    run --separate-stderr herdr_linear::view_issues '{"and":[{"project":{"id":{"in":["'"$PROJECT"'"]}}}]}'
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317,WEB-3312,WEB-3300,WEB-3303" ]
+}
+
+@test "view_issues passes the view's filter through unchanged" {
+    filter='{"and":[{"project":{"id":{"in":["'"$PROJECT"'"]}}},{"priority":{"in":[1,2,3]}},{"assignee":{"or":[{"isMe":{"eq":true}}]}}]}'
+    run --separate-stderr herdr_linear::view_issues "$filter"
+    [ "$status" -eq 0 ]
+    sent="$(head -1 "$FAKE_LINEAR_RECORD_DIR/bodies" | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin)["variables"]["filter"],sort_keys=True))')"
+    want="$(printf '%s' "$filter" | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin),sort_keys=True))')"
+    [ "$sent" = "$want" ]
+}
+
+@test "view_issues refuses a filter that is not a JSON object, and sends nothing" {
+    run --separate-stderr herdr_linear::view_issues '["not","a","filter"]'
+    [ "$status" -eq 5 ]
+    [ -z "$output" ]
+    [ ! -e "$FAKE_LINEAR_RECORD_DIR/bodies" ]
+}
+
+@test "view_issues pages through every node of a multi-page connection" {
+    export FAKE_LINEAR_ISSUES=paged
+    run --separate-stderr herdr_linear::project_issues "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317,WEB-3312" ]
+    [ "$(api_calls)" = "2" ]
+    second="$(tail -1 "$FAKE_LINEAR_RECORD_DIR/bodies" | python3 -c 'import sys,json;print(json.load(sys.stdin)["variables"].get("after",""))')"
+    [ "$second" = "c1" ]
+    [ "$(printf '%s' "$output" | python3 -c 'import sys,json;print(json.load(sys.stdin)["truncated"])')" = "False" ]
+}
+
+@test "a connection that never ends stops at the page cap and is marked truncated" {
+    export FAKE_LINEAR_ISSUES=capped HERDR_LINEAR_VIEW_PAGE_MAX=2
+    run --separate-stderr herdr_linear::project_issues "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(api_calls)" = "2" ]
+    [ "$(printf '%s' "$output" | python3 -c 'import sys,json;print(json.load(sys.stdin)["truncated"])')" = "True" ]
+}
+
+@test "an unreachable Linear leaves a listing unavailable, with nothing on stdout" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run --separate-stderr herdr_linear::project_issues "$PROJECT"
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+# KTD12. Kept: an Issue view whose filter names the project by id, under the
+# `and` wrapper the UI saves, bare with eq, or in a two-project list. Dropped:
+# another project, a Project-model view, an archived one, and a `project`
+# clause that carries no id.
+@test "project_views keeps only live Issue views whose filter names the project" {
+    export FAKE_LINEAR_VIEWS=many
+    run --separate-stderr herdr_linear::project_views "$PROJECT"
+    [ "$status" -eq 0 ]
+    ids="$(printf '%s\n' "$output" | cut -f1 | sort | tr '\n' ' ')"
+    [ "$ids" = "c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2 c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3 cccccccc-cccc-4ccc-8ccc-cccccccccccc " ]
+    [ "$(printf '%s\n' "$output" | grep -c .)" = "3" ]
+    [ "$(printf '%s\n' "$output" | head -1 | cut -f2)" = "Canvas board" ]
+}
+
+@test "project_views with no views at all answers nothing and succeeds" {
+    export FAKE_LINEAR_VIEWS=none
+    run --separate-stderr herdr_linear::project_views "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "view_read returns id, name, filter and the board layout" {
+    run --separate-stderr herdr_linear::view_read "$VIEW"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | python3 -c '
+import sys,json;d=json.load(sys.stdin)
+print(d["id"], d["name"], d["archived"], d["layout"]["grouping"], ",".join(d["layout"]["column_order"]), ",".join(d["layout"]["hidden"]), "and" in d["filter"])')"
+    [ "$result" = "$VIEW Canvas board False workflowState st-backlog,st-todo,st-prog,st-devdone,st-done,st-cancel st-cancel True" ]
+}
+
+# Linear answers null, not [], for the two column lists on a view whose
+# columns were never arranged (captured 2026-09-14).
+@test "view_read turns null column lists into empty ones" {
+    export FAKE_LINEAR_VIEW_PREFS=unarranged
+    run --separate-stderr herdr_linear::view_read "$VIEW"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | python3 -c 'import sys,json;l=json.load(sys.stdin)["layout"];print(l["column_order"], l["hidden"])')"
+    [ "$result" = "[] []" ]
+}
+
+@test "view_read on an archived view returns the archived marker and succeeds" {
+    export FAKE_LINEAR_VIEW_ARCHIVED=1
+    run --separate-stderr herdr_linear::view_read "$VIEW"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | python3 -c 'import sys,json;print(json.load(sys.stdin)["archived"])')" = "True" ]
+}
+
+@test "view_read on an unknown id is not-found, with nothing on stdout" {
+    export FAKE_LINEAR_VIEW_MISSING=1
+    run --separate-stderr herdr_linear::view_read 00000000-0000-4000-8000-000000000000
+    [ "$status" -eq 2 ]
+    [ -z "$output" ]
+}
+
+@test "view_create without permission is refused by the fixture and sends no second mutation" {
+    run --separate-stderr herdr_linear::view_create "$PROJECT" "Canvas board"
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+    [ "$(api_calls)" = "1" ]
+    refute_match -qF 'viewPreferencesCreate' "$FAKE_LINEAR_RECORD_DIR/bodies"
+}
+
+@test "view_create sends the create and then the board preferences, and prints the id" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::view_create "$PROJECT" "Canvas board"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$VIEW" ]
+    [ "$(api_calls)" = "2" ]
+    # The input shapes introspection confirmed (tests/probe/customviews-transcript.md):
+    # CustomViewCreateInput carries no modelName; ViewPreferencesCreateInput
+    # needs viewType, and preferences is a plain JSON object.
+    first="$(head -1 "$FAKE_LINEAR_RECORD_DIR/bodies" | python3 -c 'import sys,json;i=json.load(sys.stdin)["variables"]["i"];print(sorted(i), i["shared"], i["filterData"]["project"]["id"]["in"][0])')"
+    [ "$first" = "['filterData', 'name', 'shared'] False $PROJECT" ]
+    second="$(tail -1 "$FAKE_LINEAR_RECORD_DIR/bodies" | python3 -c 'import sys,json;i=json.load(sys.stdin)["variables"]["i"];print(i["type"], i["viewType"], i["customViewId"], i["preferences"]["layout"], i["preferences"]["issueGrouping"])')"
+    [ "$second" = "user customView $VIEW board workflowState" ]
+}
+
+# The view exists the moment the first mutation succeeds. A caller that only
+# saw "failed" would have no id to record, and an unrecorded view is one
+# nobody can find to delete.
+@test "view_create still prints the id when only the preferences fail, under its own code" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=prefs_fail
+    run --separate-stderr herdr_linear::view_create "$PROJECT" "Canvas board"
+    [ "$status" -eq 6 ]
+    [ "$output" = "$VIEW" ]
+}
+
+@test "view_create whose create reports success:false prints nothing and stops" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=fail
+    run --separate-stderr herdr_linear::view_create "$PROJECT" "Canvas board"
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+    [ "$(api_calls)" = "1" ]
+}
+
+@test "the credential reaches the listing and view reads on stdin, never argv" {
+    herdr_linear::project_issues "$PROJECT" >/dev/null
+    herdr_linear::project_views "$PROJECT" >/dev/null
+    herdr_linear::view_read "$VIEW" >/dev/null
+    [ "$(api_calls)" = "3" ]
+    [ "$(sort -u "$FAKE_LINEAR_RECORD_DIR/auth_on_stdin")" = "yes" ]
+    run grep -c "$KEYLIKE" "$FAKE_LINEAR_RECORD_DIR/argv"
+    [ "$output" = "0" ]
+}

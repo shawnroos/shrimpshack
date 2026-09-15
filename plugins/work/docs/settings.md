@@ -36,6 +36,9 @@ string, and the default does not come back.
 | `HERDR_LINEAR_API_URL` | `https://api.linear.app/graphql` | The endpoint every Linear query and mutation is sent to. | `lib/linear.sh` | no |
 | `HERDR_LINEAR_KEYCHAIN_SERVICE` | `work-linear` | The keychain service the Linear credential is stored under. | `lib/linear.sh` | no |
 | `HERDR_LINEAR_KEYCHAIN_ACCOUNT` | `linear-api-key` | The keychain account the Linear credential is stored under. | `lib/linear.sh` | no |
+| `HERDR_LINEAR_VIEW_PAGE_MAX` | `10` | How many pages of fifty a board listing reads before it stops. The issue listing reports the result as truncated; the list of views exits 7 and says so on stderr. | `lib/linear.sh` | no |
+| `HERDR_LINEAR_HERDR_TIMEOUT_SECONDS` | `5` | How long one herdr read may take before it is ended and herdr is read as unavailable. Needs `perl` on `PATH`; without it the read is not bounded. | `lib/herdr-read.sh` | no |
+| `HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS` | `(none)` | How long a keychain read may wait, for a caller nobody can answer an unlock prompt for. Unset, the read waits. `bin/work-snapshot.sh` sets it to `5`. Needs `perl` on `PATH`. | `lib/secrets.sh` | no |
 | `HERDR_LINEAR_CACHE_MAX_AGE_SECONDS` | `3600` | How long a cached ticket is treated as current before it is fetched again. | `lib/linear.sh` | no |
 | `LINEAR_CACHE_DIR` | `$HOME/.claude/linear-cache` | Where fetched tickets are cached. | `lib/linear.sh` | no |
 | `LINEAR_SECRETS_FILE` | `$HOME/.secrets` | The file a `LINEAR_API_KEY` line is read from when the keychain holds nothing. | `lib/linear.sh` | no |

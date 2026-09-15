@@ -109,6 +109,21 @@ herdr_linear::bin_rejected() {
 # may not be the first, so both sides are wrapped in newlines and one glob
 # matches an exact line anywhere.
 
+# Every herdr read is bounded. A server that accepts the socket and never
+# answers would otherwise hold the caller until its own deadline, and the
+# board's daemon kills a snapshot that overruns rather than taking herdr as
+# unavailable. coreutils `timeout` is not on every machine this runs on, and
+# perl is: an alarm set before exec survives it, so SIGALRM ends the herdr
+# process itself. Without perl the call runs unbounded, as before.
+HERDR_LINEAR_HERDR_TIMEOUT_SECONDS="${HERDR_LINEAR_HERDR_TIMEOUT_SECONDS:-5}"
+herdr_linear::_bounded() {
+    if command -v perl >/dev/null 2>&1; then
+        perl -e 'alarm shift @ARGV; exec { $ARGV[0] } @ARGV or exit 127' "$HERDR_LINEAR_HERDR_TIMEOUT_SECONDS" "$@"
+    else
+        "$@"
+    fi
+}
+
 HERDR_LINEAR_PROBE_OUT=""
 HERDR_LINEAR_PROBE_ERR=""
 
@@ -121,12 +136,12 @@ herdr_linear::probe() {
 
     err="$(mktemp 2>/dev/null)" || err="${TMPDIR:-/tmp}/herdr-linear-probe.$$"
     if : >"$err" 2>/dev/null; then
-        HERDR_LINEAR_PROBE_OUT="$("$bin" status server 2>"$err" || true)"
+        HERDR_LINEAR_PROBE_OUT="$(herdr_linear::_bounded "$bin" status server 2>"$err" || true)"
         HERDR_LINEAR_PROBE_ERR="$(cat "$err" 2>/dev/null || true)"
         rm -f "$err"
     else
         # No writable scratch file. Keep stdout — the match input — intact.
-        HERDR_LINEAR_PROBE_OUT="$("$bin" status server 2>/dev/null || true)"
+        HERDR_LINEAR_PROBE_OUT="$(herdr_linear::_bounded "$bin" status server 2>/dev/null || true)"
     fi
 
     case $'\n'"$HERDR_LINEAR_PROBE_OUT"$'\n' in
@@ -156,7 +171,7 @@ herdr_linear::_resolve_position() {
     [ -n "$env_value" ] || return 1
     bin="$(herdr_linear::bin)"
     if [ -n "$bin" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
-        out="$("$bin" pane get "$HERDR_PANE_ID" 2>/dev/null | herdr_linear::json "result.pane.$field")"
+        out="$(herdr_linear::_bounded "$bin" pane get "$HERDR_PANE_ID" 2>/dev/null | herdr_linear::json "result.pane.$field")"
         if [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
     fi
     printf '%s' "$env_value"
@@ -175,7 +190,7 @@ herdr_linear::snapshot() {
     local bin
     bin="$(herdr_linear::bin)"
     [ -n "$bin" ] || return 1
-    "$bin" api snapshot 2>/dev/null
+    herdr_linear::_bounded "$bin" api snapshot 2>/dev/null
 }
 
 # herdr_linear::json <dotted.path> — read one field from JSON on stdin.
@@ -259,7 +274,7 @@ herdr_linear::live_spaces() {
     local bin out
     bin="$(herdr_linear::bin)"
     [ -n "$bin" ] || return 1
-    out="$("$bin" workspace list 2>/dev/null)" || return 1
+    out="$(herdr_linear::_bounded "$bin" workspace list 2>/dev/null)" || return 1
     printf '%s' "$out" | python3 -c '
 import sys, json
 try:
@@ -281,9 +296,9 @@ herdr_linear::tab_space() {
     [ -n "${1:-}" ] || return 1
     bin="$(herdr_linear::bin)"
     [ -n "$bin" ] || return 1
-    ws="$("$bin" tab get "$1" 2>/dev/null | herdr_linear::json "result.tab.workspace_id")"
+    ws="$(herdr_linear::_bounded "$bin" tab get "$1" 2>/dev/null | herdr_linear::json "result.tab.workspace_id")"
     [ -n "$ws" ] && { printf '%s' "$ws"; return 0; }
-    err="$("$bin" tab get "$1" 2>&1 >/dev/null)"
+    err="$(herdr_linear::_bounded "$bin" tab get "$1" 2>&1 >/dev/null)"
     [ "$(printf '%s' "$err" | herdr_linear::json "error.code")" = "tab_not_found" ] && return 0
     return 1
 }

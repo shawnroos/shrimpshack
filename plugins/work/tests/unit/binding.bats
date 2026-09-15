@@ -330,6 +330,84 @@ bind_it() {   # propose + confirm, the happy path, used as a fixture
     [ "$kids" = "WEB-5001,WEB-5002" ]
 }
 
+@test "rebinding a worktree to another issue takes the old children out of created_children" {
+    bind_it WEB-1234
+    herdr_linear::binding_add_child "$WT" WEB-5001
+    herdr_linear::binding_set_desc_head "$WT" "old head"
+    [ "$(herdr_linear::binding_read "$WT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["description_head"])')" = "old head" ]
+    bind_it WEB-7777
+    run herdr_linear::binding_read "$WT"
+    result="$(printf '%s' "$output" | python3 -c '
+import sys,json;d=json.load(sys.stdin);p=d["prior_bindings"]
+print(d["issue_identifier"], d["created_children"], d["description_head"], p[0]["issue_identifier"], p[0]["created_children"])')"
+    [ "$result" = "WEB-7777 []  WEB-1234 ['WEB-5001']" ]
+}
+
+@test "bindings_effective reports, for every record, the state binding_read reports" {
+    local mk n row
+    mk() {   # mk <name> <identifier>
+        local d="$WORK/$1"; mkdir -p "$d"
+        git -C "$d" init -q -b "feature/$(printf '%s' "$2" | tr 'A-Z' 'a-z')-x"
+        git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i
+        n="$(herdr_linear::binding_propose "$d" "$2")"
+        herdr_linear::binding_confirm "$d" "$2" "$n"
+    }
+    mk bound WEB-2001
+    mk moved WEB-2002
+    git -C "$WORK/moved" checkout -q -b elsewhere
+    mk proposed WEB-2003
+    herdr_linear::binding_propose "$WORK/proposed" WEB-2004 >/dev/null
+    mk gone WEB-2005
+    local gone_key; gone_key="$(herdr_linear::binding_key "$WORK/gone")"
+    rm -rf "$WORK/gone"
+    mk refused WEB-2006
+    chmod 664 "$HERDR_LINEAR_STORE_DIR/bindings/$(herdr_linear::binding_key "$WORK/refused").json"
+
+    run herdr_linear::bindings_effective
+    [ "$status" -eq 0 ]
+    eff_of() {
+        printf '%s\n' "$output" | python3 -c '
+import sys
+for line in sys.stdin.read().split("\n"):
+    f = line.split("\x1f")
+    if len(f) == 5 and f[2] == sys.argv[1]:
+        print(f[4])' "$1"
+    }
+    for row in bound moved proposed; do
+        want="$(herdr_linear::binding_read "$WORK/$row" | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
+        got="$(eff_of "$(cd "$WORK/$row" && pwd -P)")"
+        [ -n "$want" ]
+        [ "$got" = "$want" ]
+    done
+    [ "$(eff_of "$(cd "$WORK/moved" && pwd -P)")" = "proposed" ]
+    [ "$(printf '%s\n' "$output" | grep -c "$gone_key.json.*worktree_missing")" -eq 1 ]
+    [ "$(printf '%s\n' "$output" | grep -c 'WEB-2006')" -eq 0 ]
+}
+
+@test "bindings_effective leaves out a record whose fields carry the row separator or a newline" {
+    bind_it WEB-1234
+    local f; f="$(record_file)"
+    python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1])); d["tab"] = "wA:t1\nwA:t2"
+json.dump(d, open(sys.argv[1], "w"))' "$f"
+    run herdr_linear::bindings_effective
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1])); d["tab"] = "wA:t1\x1fbound"
+json.dump(d, open(sys.argv[1], "w"))' "$f"
+    run herdr_linear::bindings_effective
+    [ -z "$output" ]
+    python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1])); d["tab"] = "wA:t1"
+json.dump(d, open(sys.argv[1], "w"))' "$f"
+    run herdr_linear::bindings_effective
+    [ "$(printf '%s' "$output" | grep -c 'WEB-1234')" -eq 1 ]
+}
+
 # ------------------------------------------------------------------- the seed
 
 # The pin key is copied verbatim from linear-pin.sh, so the fixture is planted
@@ -646,4 +724,161 @@ grant() {  # <team> <project>
     [ "$status" -eq 2 ]
     run herdr_linear::binding_pending_consent "$WT"
     [ "$output" = "would have set WEB-1234 to Done" ]
+}
+
+# ------------------------------------------------------ the workspace's view (U4)
+
+ws_file() { printf '%s/workspaces/%s.json' "$HERDR_LINEAR_STORE_DIR" "$1"; }
+
+bind_ws() {   # bind_ws <ws> <project>
+    local n
+    n="$(herdr_linear::workspace_propose "$1" "$2")"
+    herdr_linear::workspace_confirm "$1" "$2" "$n"
+}
+
+LAYOUT='{"grouping":"workflowState","column_order":["st-backlog","st-todo"],"hidden":["st-cancel"]}'
+
+@test "set-view on a bound record writes id, name, layout and fetched_at, at version 1 and mode 600" {
+    bind_ws w1 proj-ai-canvas
+    run herdr_linear::workspace_set_view w1 cccc-1 "Canvas board" "$LAYOUT"
+    [ "$status" -eq 0 ]
+    result="$(python3 -c '
+import sys,json;d=json.load(open(sys.argv[1]));v=d["view"]
+print(d["version"], d["state"], v["id"], v["name"], v["layout"]["grouping"], ",".join(v["layout"]["column_order"]), v["layout"]["hidden"][0], len(v["fetched_at"]))' "$(ws_file w1)")"
+    [ "$result" = "1 bound cccc-1 Canvas board workflowState st-backlog,st-todo st-cancel 20" ]
+    [ "$(stat -f %Lp "$(ws_file w1)" 2>/dev/null || stat -c %a "$(ws_file w1)")" = "600" ]
+    run herdr_linear::workspace_view w1
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')" = "cccc-1" ]
+}
+
+@test "rebinding a space to another project drops the old view and moves what was created to prior_bindings" {
+    bind_ws w1 proj-ai-canvas
+    herdr_linear::workspace_add_view w1 cccc-1
+    herdr_linear::workspace_set_view w1 cccc-1 "Canvas board" "$LAYOUT"
+    bind_ws w1 proj-other
+    result="$(python3 -c '
+import sys,json;d=json.load(open(sys.argv[1]));p=d["prior_bindings"]
+print(d["state"], d["issue_identifier"], d["view"], d["created_views"], len(p), p[0]["issue_identifier"], p[0]["view"]["id"], p[0]["created_views"])' "$(ws_file w1)")"
+    [ "$result" = "bound proj-other None [] 1 proj-ai-canvas cccc-1 ['cccc-1']" ]
+    run herdr_linear::workspace_owns_view w1 cccc-1
+    [ "$status" -ne 0 ]
+}
+
+@test "confirming the same project again keeps the view and created_views" {
+    bind_ws w1 proj-ai-canvas
+    herdr_linear::workspace_add_view w1 cccc-1
+    herdr_linear::workspace_set_view w1 cccc-1 "Canvas board" "$LAYOUT"
+    bind_ws w1 proj-ai-canvas
+    result="$(python3 -c '
+import sys,json;d=json.load(open(sys.argv[1]))
+print(d["view"]["id"], d["created_views"], d["prior_bindings"])' "$(ws_file w1)")"
+    [ "$result" = "cccc-1 ['cccc-1'] []" ]
+}
+
+@test "set-view with no layout records a null layout, and clear-view removes the view" {
+    bind_ws w1 proj-ai-canvas
+    herdr_linear::workspace_set_view w1 cccc-1 "Canvas board"
+    [ "$(python3 -c 'import sys,json;print(json.load(open(sys.argv[1]))["view"]["layout"])' "$(ws_file w1)")" = "None" ]
+    run herdr_linear::workspace_clear_view w1
+    [ "$status" -eq 0 ]
+    [ "$(python3 -c 'import sys,json;d=json.load(open(sys.argv[1]));print("view" in d, d["view"])' "$(ws_file w1)")" = "True None" ]
+    run herdr_linear::workspace_view w1
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+@test "set-view refuses a layout that is not a JSON object" {
+    bind_ws w1 proj-ai-canvas
+    run herdr_linear::workspace_set_view w1 cccc-1 "Canvas board" '["not","an","object"]'
+    [ "$status" -eq 2 ]
+    [ "$(python3 -c 'import sys,json;print(json.load(open(sys.argv[1]))["view"])' "$(ws_file w1)")" = "None" ]
+}
+
+# Records written before the view existed carry neither key. The loader adds
+# both, so a reader can index them without a presence check of its own --
+# and the KEYS are asserted, not only the values, because a reader that gets
+# a KeyError and one that gets None are different failures.
+@test "a record written before this change reads with view null and created_views empty, keys present" {
+    bind_ws w1 proj-ai-canvas
+    python3 - "$(ws_file w1)" <<'PY'
+import sys, json
+p = sys.argv[1]
+d = json.load(open(p))
+d.pop("view", None); d.pop("created_views", None)
+json.dump(d, open(p, "w"))
+PY
+    run herdr_linear::workspace_read w1
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("view" in d, d["view"], "created_views" in d, d["created_views"])')"
+    [ "$result" = "True None True []" ]
+    run herdr_linear::workspace_owns_view w1 anything
+    [ "$status" -eq 1 ]
+}
+
+@test "owns-view is true only for an id in created_views" {
+    bind_ws w1 proj-ai-canvas
+    herdr_linear::workspace_set_view w1 cccc-2 "Someone else's board"
+    run herdr_linear::workspace_owns_view w1 cccc-2
+    [ "$status" -eq 1 ]
+    herdr_linear::workspace_add_view w1 cccc-1
+    herdr_linear::workspace_add_view w1 cccc-1
+    run herdr_linear::workspace_owns_view w1 cccc-1
+    [ "$status" -eq 0 ]
+    run herdr_linear::workspace_owns_view w1 cccc-2
+    [ "$status" -eq 1 ]
+    [ "$(python3 -c 'import sys,json;print(",".join(json.load(open(sys.argv[1]))["created_views"]))' "$(ws_file w1)")" = "cccc-1" ]
+}
+
+@test "a created_views that is not a list makes the record absent" {
+    bind_ws w1 proj-ai-canvas
+    python3 -c 'import sys,json;p=sys.argv[1];d=json.load(open(p));d["created_views"]="cccc-1";json.dump(d,open(p,"w"))' "$(ws_file w1)"
+    run herdr_linear::workspace_read w1
+    [ "$status" -eq 1 ]
+}
+
+# The loader returns nothing for a future version, and the view ops stop
+# there. They do NOT fall through to a blank record the way older mutations
+# do: a view on a fabricated unbound record would be a board for a space
+# nobody bound.
+@test "set-view on a record from a future version is refused and the record is untouched" {
+    bind_ws w1 proj-ai-canvas
+    python3 -c 'import sys,json;p=sys.argv[1];d=json.load(open(p));d["version"]=2;json.dump(d,open(p,"w"),sort_keys=True)' "$(ws_file w1)"
+    before="$(cat "$(ws_file w1)")"
+    run herdr_linear::workspace_set_view w1 cccc-1 "Canvas board" "$LAYOUT"
+    [ "$status" -eq 1 ]
+    run herdr_linear::workspace_add_view w1 cccc-1
+    [ "$status" -eq 1 ]
+    [ "$(cat "$(ws_file w1)")" = "$before" ]
+}
+
+@test "set-view on a workspace with no record does not create one" {
+    run herdr_linear::workspace_set_view w9 cccc-1 "Canvas board"
+    [ "$status" -eq 1 ]
+    [ ! -e "$(ws_file w9)" ]
+}
+
+@test "a view id that is not a safe identifier never enters the record" {
+    bind_ws w1 proj-ai-canvas
+    for bad in "../outside" ".." "-D" 'a$b' "a/b"; do
+        run herdr_linear::workspace_set_view w1 "$bad" "n"
+        [ "$status" -eq 2 ]
+        run herdr_linear::workspace_add_view w1 "$bad"
+        [ "$status" -eq 2 ]
+    done
+    [ "$(python3 -c 'import sys,json;d=json.load(open(sys.argv[1]));print(d["view"], d["created_views"])' "$(ws_file w1)")" = "None []" ]
+}
+
+@test "two concurrent set-view calls serialise through the lock, and the last one wins intact" {
+    bind_ws w1 proj-ai-canvas
+    HERDR_LINEAR_LOCK_HOLD_MS=250 herdr_linear::workspace_set_view w1 cccc-1 "First" "$LAYOUT" &
+    p1=$!
+    sleep 0.05
+    HERDR_LINEAR_LOCK_HOLD_MS=250 herdr_linear::workspace_set_view w1 cccc-2 "Second" "$LAYOUT" &
+    p2=$!
+    wait $p1; wait $p2
+    run herdr_linear::workspace_read w1
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["view"]["id"], d["view"]["name"], d["state"])')"
+    [ "$result" = "cccc-2 Second bound" ]
 }

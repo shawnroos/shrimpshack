@@ -37,7 +37,9 @@
 #   FAKE_SECURITY_STORE_DIR   where items land   (default: $TMPDIR/fake-security-store)
 #   FAKE_SECURITY_RECORD_DIR  where argv/stdin records land
 #                             (default: $TMPDIR/fake-security-record)
-#   FAKE_SECURITY_MODE        ok | silent_empty | duplicate | leak_argv
+#   FAKE_SECURITY_MODE        ok | silent_empty | duplicate | leak_argv | stall
+#                             stall        every call sleeps 30s, as a locked
+#                                          keychain waiting on its prompt
 #                             ok           faithful (see above)
 #                             silent_empty stores empty EVEN when fed twice —
 #                                          the trap, forced, so the read-back
@@ -56,6 +58,7 @@
 set -uo pipefail
 
 MODE="${FAKE_SECURITY_MODE:-ok}"
+
 STORE="${FAKE_SECURITY_STORE_DIR:-${TMPDIR:-/tmp}/fake-security-store}"
 REC_DIR="${FAKE_SECURITY_RECORD_DIR:-${TMPDIR:-/tmp}/fake-security-record}"
 
@@ -66,6 +69,10 @@ mkdir -p "$STORE" "$REC_DIR"
   echo "--- invocation ---"
   for a in "$@"; do printf '%s\n' "$a"; done
 } >> "$REC_DIR/argv"
+# A keychain locked behind an unlock prompt nobody answers.
+if [ "$MODE" = stall ]; then
+    exec sleep 30
+fi
 
 SUBCMD="${1:-}"
 shift || true

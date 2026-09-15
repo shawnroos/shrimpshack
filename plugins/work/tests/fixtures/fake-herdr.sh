@@ -26,7 +26,8 @@
 # Environment:
 #   FAKE_HERDR_RECORD_DIR  where the argv record lands
 #                          (default: $TMPDIR/fake-herdr-record)
-#   FAKE_HERDR_MODE        running | not_running | running_then_flood | dead
+#   FAKE_HERDR_MODE        running | not_running | running_then_flood | dead | stall
+#                          (stall: every call sleeps FAKE_HERDR_STALL_SECONDS, default 30)
 #   FAKE_HERDR_ALLOW_MUTATION  1 to permit creation verbs (U10 only)
 #   FAKE_HERDR_SLOW_PANE   probes a new pane stays unregistered for
 #   FAKE_HERDR_SNAPSHOT_FAILS  1 to make `api snapshot` fail
@@ -67,6 +68,11 @@ printf '%s\n' "$*" >>"$REC_DIR/argv" 2>/dev/null || true
 # second copy: two hand-maintained lists guarding one boundary drift apart, and
 # the drift silently empties the assertion that the accessor never mutates.
 FAKE_HERDR_MUTATING_VERBS="create split move swap close rename focus run send-keys resize zoom report-metadata report-agent"
+
+# A server that accepts the call and never answers.
+if [ "$MODE" = stall ]; then
+    exec sleep "${FAKE_HERDR_STALL_SECONDS:-30}"
+fi
 
 if [ "${1:-}" = "--list-mutating-verbs" ]; then
     printf '%s\n' "$FAKE_HERDR_MUTATING_VERBS"
@@ -262,7 +268,7 @@ canned_snapshot() {
     cat <<'JSON'
 {"id":"cli:api:snapshot","result":{"snapshot":{
 "focused_pane_id":"wA:p1","focused_tab_id":"wA:t1","focused_workspace_id":"wA",
-"protocol":20,"version":"0.8.2",
+"protocol":22,"version":"0.9.0",
 "workspaces":[{"workspace_id":"wA","label":"Plugins","active_tab_id":"wA:t1","tab_count":2}],
 "tabs":[
  {"tab_id":"wA:t1","workspace_id":"wA","label":"Plugin PM","pane_count":2},

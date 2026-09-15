@@ -39,34 +39,33 @@
 # Does NOT do NFKC / homoglyph / confusable defence — that is a separate
 # concern, and saying so beats implying coverage.
 
-# The filter, as a jq program. jq is this plugin's JSON reader for every Linear
-# API response, so it is present wherever the plugin does real work; it is
-# UTF-8-aware, and it replaces invalid bytes with U+FFFD instead of erroring —
-# so no input can make it fail open.
+# The codepoints stripped, as inclusive decimal ranges. This list is the only
+# statement of the set: the jq filter below is built from it, and
+# bin/work-snapshot.sh reads it to clean the document it prints.
 #
 # Codepoints are numeric on purpose: a range written with backslash-u escapes
 # is one editor accident away from embedding the literal control byte it is
 # supposed to describe, in the very file whose job is removing it.
-HERDR_LINEAR_SANITIZE_JQ_DEF='
+HERDR_LINEAR_STRIP_RANGES='0-8 11-31 127-159 173 1564 6158 8203-8207 8232-8238 8288-8303 65279 65529-65531 917504-917631'
+
+# The filter, as a jq program. jq is this plugin's JSON reader for every Linear
+# API response, so it is present wherever the plugin does real work; it is
+# UTF-8-aware, and it replaces invalid bytes with U+FFFD instead of erroring --
+# so no input can make it fail open.
+herdr_linear::_strip_jq_def() {
+    local r lo hi keep=""
+    for r in $HERDR_LINEAR_STRIP_RANGES; do
+        lo="${r%-*}"; hi="${r#*-}"
+        keep="$keep and (. < $lo or . > $hi)"
+    done
+    printf '%s' "
 def strip_display_controls:
-  explode
-  | map(select(
-      (. == 9 or . == 10)
-      or ( . > 31 and . != 127
-           and (. < 128 or . > 159)
-           and . != 173
-           and . != 1564
-           and (. < 8203 or . > 8207)
-           and (. < 8232 or . > 8238)
-           and (. < 8288 or . > 8303)
-           and . != 65279
-           and . != 6158
-           and (. < 65529 or . > 65531)
-           and (. < 917504 or . > 917631) )))
-  | implode;
+  explode | map(select(true$keep)) | implode;
 def strip_display_deep:
-  walk(if type == "string" then strip_display_controls else . end);
-'
+  walk(if type == \"string\" then strip_display_controls else . end);
+"
+}
+HERDR_LINEAR_SANITIZE_JQ_DEF="$(herdr_linear::_strip_jq_def)"
 
 # herdr_linear::sanitize_for_display <string>
 # Prints the string with display-control characters removed.
