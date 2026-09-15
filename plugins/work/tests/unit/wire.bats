@@ -399,3 +399,29 @@ placement_tree() {
     run placement_caller_check "$WORK/p"
     [ "$status" -eq 0 ]
 }
+
+# KTD19. Every /work skill and the /work command catch the board up first, and
+# the fence sits outside the shared rubric so the rubric stays one text.
+@test "the attended board fence appears in all nine skills and the work command" {
+    local f n=0 root
+    root="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
+    for f in "$root"/skills/*/SKILL.md; do
+        grep -q '^herdr_linear::board_fence$' "$f" || { echo "no fence: $f" >&2; return 1; }
+        grep -q 'herdr_linear::board_answer "\$KEY" "\$NONCE" yes' "$f" || { echo "no answer step: $f" >&2; return 1; }
+        n=$((n + 1))
+    done
+    [ "$n" -eq 9 ]
+    grep -q '^herdr_linear::board_fence$' "$root/commands/work.md"
+}
+
+@test "a hook that runs the attended fence or answers a board question turns the placement check red" {
+    local verb
+    for verb in board_fence board_sync_bounded board_answer; do
+        placement_tree
+        printf 'herdr_linear::%s\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"$verb"* ]]
+        rm -rf "$WORK/p"
+    done
+}

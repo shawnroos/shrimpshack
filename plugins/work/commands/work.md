@@ -6,6 +6,43 @@ allowed-tools: Bash, Skill, AskUserQuestion
 
 Where this worktree stands, and what to do next.
 
+## The board first
+
+Before this command's own work, bring the herdr board up to date with Linear and
+deal with what it is waiting on. With no board configured this prints nothing;
+carry straight on.
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-store.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-config.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-plan.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-herdr.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-sync.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/worktree-remove.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-attended.sh"
+
+herdr_linear::board_fence
+```
+
+It always exits 0 and never stops this command. A `board:` line says how the
+sync went; say it in one sentence. Each `board question:` line is a waiting
+question: name how many there are and what they are about, and say that any
+`/work:` skill asks them. This command answers none of them.
+
 ## With no argument
 
 Report the state of the worktree you are in. Read it, do not guess it:

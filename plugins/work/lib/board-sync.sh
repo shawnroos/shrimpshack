@@ -198,6 +198,10 @@ BOARD = os.path.join(os.environ["HERDR_LINEAR_STORE_DIR"], "board")
 JOURNAL = os.path.join(BOARD, "journal.json")
 HELD_TABS = os.path.join(BOARD, "held-tabs.json")
 CAP = int(os.environ.get("HL_CAP") or 16)
+# Tickets whose move-in-use question a person answered this run; the attended
+# answer verb consumed each question's nonce before passing them here.
+ANSWERED = {i for i in (os.environ.get("HL_ANSWERED_MOVES") or "").split(",") if i}
+CONSENTED = set()
 PANE_DIR = os.environ["HL_PANE_DIR"]
 PLACING = ("place", "recreate-pointer")
 PARKING = "work:parking"
@@ -265,7 +269,7 @@ def in_use_panes(snap, everything):
     busy = {os.environ.get("HL_INVOKING"), snap.get("focused_pane_id")}
     busy |= {p["pane_id"] for p in snap["panes"] if p.get("focused") or p.get("agent")}
     busy |= {a.get("pane_id") for a in snap.get("agents") or [] if isinstance(a, dict)}
-    return busy - {None, ""}
+    return busy - {None, ""} - CONSENTED
 
 
 def chain(n, d):
@@ -515,6 +519,7 @@ class Sync:
         restarted = self.restarted = self.relink(snap, led)
         if restarted:
             self.count(self.observed, "herdr_restarts")
+        CONSENTED.update(e["pane_id"] for es in led.values() for i, e in es.items() if i in ANSWERED)
 
         layouts, ambiguous = {}, []
         ledger_panes = {e["pane_id"] for es in led.values() for e in es.values()}
@@ -535,9 +540,17 @@ class Sync:
             previous = {"rendered": json.loads(state_text).get("rendered") or {}}
         # Every person's move is a write-back candidate; the gate decides which
         # are written. With no consent recorded that is none: shadow mode.
-        doc = {"config": config, "reads": reads, "snapshot": self.unparked(snap), "layouts": layouts, "ledger": led,
+        view = self.unparked(snap)
+        for p in view["panes"]:
+            if p["pane_id"] in CONSENTED:
+                p["focused"], p["agent"] = False, None
+        view["agents"] = [a for a in view.get("agents") or [] if not isinstance(a, dict) or a.get("pane_id") not in CONSENTED]
+        if view.get("focused_pane_id") in CONSENTED:
+            view["focused_pane_id"] = None
+        invoking = os.environ.get("HL_INVOKING") or None
+        doc = {"config": config, "reads": reads, "snapshot": view, "layouts": layouts, "ledger": led,
                "previous": previous, "aliases": {},
-               "in_use": {"invoking_pane_id": os.environ.get("HL_INVOKING") or None,
+               "in_use": {"invoking_pane_id": None if invoking in CONSENTED else invoking,
                           "treat_all_in_use": restarted},
                "writes_enabled": True}
         self.reads_complete = self.read_failure is None and all(r["complete"] for r in reads)
@@ -955,7 +968,10 @@ class Sync:
             self.journal_put(iid, None)
             return
 
-        rc, out, err = call("board_apply_tab", space, tab or "new:%s:%s" % (ws, label), dump(intent["columns"]),
+        consented = any(not leaf["hold"] and (pane_of(i, leaf["role"]) or {}).get("pane_id") in CONSENTED
+                        for i, leaf in intent["leaves"].items())
+        rc, out, err = call("board_apply_tab_in_use" if consented else "board_apply_tab", space,
+                            tab or "new:%s:%s" % (ws, label), dump(intent["columns"]),
                             *(["held:" + ",".join(held)] if held else []))
         if rc == P_OK:
             self.settle(intent, out)

@@ -738,9 +738,12 @@ PY2
 
 # ---------------------------------------------------------------- boundaries
 
-@test "the sync never calls a verb that asks or closes" {
-    run grep -nE 'board_(close_pane|move_in_use|apply_tab_in_use)|board_config_set' "$LIB/board-sync.sh"
+@test "the sync never calls a verb that asks or closes, and moves a pane in use only for an answered question" {
+    run grep -nE 'board_(close_pane|move_in_use)|board_config_set' "$LIB/board-sync.sh"
     [ "$status" -eq 1 ]
+    run grep -n 'board_apply_tab_in_use' "$LIB/board-sync.sh"
+    [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+    [[ "$output" == *'"board_apply_tab_in_use" if consented else'* ]]
 }
 
 # The library is sourced by shells whose $0 is not the library, so nothing in it

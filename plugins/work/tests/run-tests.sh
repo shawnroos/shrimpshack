@@ -38,7 +38,7 @@ EOF
 # up whenever a suite file is added; if it is ever lowered, say why in the
 # commit — this number is what turns "the tests directory got renamed" into a
 # failure instead of a smaller, silently-green run.
-HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-22}"
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-32}"
 
 run_suite() {
     local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
@@ -581,10 +581,17 @@ consent_caller_check() {
             return 1
         fi
     done
-    for verb in consent_confirm consent_decline; do
-        hits="$(grep -rn "herdr_linear::$verb" \
+    # The board's answer verbs follow the same rule. board_answer is the one
+    # place a board answer is applied, so it alone may call the board consent
+    # verbs, and it is called only from skills.
+    for verb in consent_confirm consent_decline board_consent_confirm board_consent_decline board_answer; do
+        hits="$(grep -rn "herdr_linear::$verb\b" \
             "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" 2>/dev/null \
-            | grep -v "^.*/lib/binding.sh:.*herdr_linear::$verb() {" || true)"
+            | grep -v "^.*/lib/binding.sh:.*herdr_linear::$verb() {" \
+            | grep -v "^.*/lib/board-store.sh:.*herdr_linear::$verb() {" \
+            | grep -v "^.*/lib/board-attended.sh:.*herdr_linear::board_answer() {" \
+            | grep -v "^.*/lib/board-attended.sh:[0-9]*:# herdr_linear::board_answer " \
+            | grep -v "^.*/lib/board-attended.sh:[0-9]*: *&& herdr_linear::board_consent_confirm " || true)"
         if [ -n "$hits" ]; then
             printf '%s\n' "$hits"
             printf '%s%s caller check FAILED%s — only a write skill may record an answer.\n' \
@@ -592,7 +599,7 @@ consent_caller_check() {
             return 1
         fi
     done
-    printf '%sneither answer verb has a caller under lib/, hooks/ or commands/%s\n' "$GREEN" "$NC"
+    printf '%sno answer verb has a caller under lib/, hooks/ or commands/ beyond board_answer%s\n' "$GREEN" "$NC"
 }
 
 # KTD31. A space binding is a person's answer, as consent is, and a hook has
@@ -619,7 +626,7 @@ HOOK_BANNED = ("workspace_confirm", "workspace_propose", "open_session", "place_
                "board_config_set", "_board_config_py",
                "board_close_pane", "board_move_in_use", "board_apply_tab_in_use",
                "board_move_pane", "board_apply_tab", "board_create_pane",
-               "worktree_remove")
+               "worktree_remove", "board_fence", "board_sync_bounded", "board_answer")
 LIB_ALLOWED = {("create.sh", "herdr_linear::new_project")}
 
 def files(d):

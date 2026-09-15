@@ -31,6 +31,7 @@ string, and the default does not come back.
 | `HERDR_LINEAR_BOARD_PAGE_SIZE` | `50` | How many tickets the board reads from Linear in one request. A smaller page costs less rate limit per request and needs more requests. | `lib/board-linear.sh` | no |
 | `HERDR_LINEAR_BOARD_MAX_PAGES` | `100` | The most pages one board read takes. A read that reaches it is incomplete, and an incomplete read changes nothing on the board. | `lib/board-linear.sh` | no |
 | `HERDR_LINEAR_BOARD_PANE_CAP` | `16` | The most panes one tab build moves or places at a time. The rest wait for a person to ask for more at the next `/work` command. | `lib/board-herdr.sh` | no |
+| `HERDR_LINEAR_BOARD_FENCE_SECONDS` | `30` | How long the board sync at the start of a `/work` command may run before it is stopped. The command carries on either way, and the next sync finishes what a stopped one left. | `lib/board-attended.sh` | no |
 | `HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS` | `10` | How long a board sync waits for another sync that holds the board lock before it gives up and changes nothing. A lock whose holder is no longer running is taken at once. | `lib/board-sync.sh` | no |
 | `HERDR_LINEAR_SOCKET_PATH` | `(none)` | The herdr socket the board moves panes through. Unset asks the running herdr server where its socket is. | `lib/board-herdr.sh` | no |
 | `HERDR_LINEAR_TAB_SCHEME` | `identifier` | Which shape a herdr tab's label takes. Valid: `identifier`, `identifier-title`. | `lib/schemes.sh` | no |
