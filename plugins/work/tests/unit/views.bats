@@ -82,6 +82,35 @@ grant_consent() {
     [ "$(sent mutation)" = "0" ]
 }
 
+@test "a view listing stopped by the page cap prints what it read, says so, and exits PARTIAL" {
+    export FAKE_LINEAR_VIEWS=endless HERDR_LINEAR_VIEW_PAGE_MAX=2
+    run --separate-stderr herdr_linear::views_for_space wA
+    [ "$status" -eq "$HERDR_LINEAR_PARTIAL" ]
+    [ "$(printf '%s\n' "$output" | grep -c 'Canvas board')" -eq 2 ]
+    [[ "$stderr" == *"first 2 pages"* ]]
+    FAKE_LINEAR_VIEWS=one run --separate-stderr herdr_linear::views_for_space wA
+    [ "$status" -eq 0 ]
+}
+
+@test "view_choose records a view name with its escape and bidi characters removed" {
+    local esc rlo
+    esc="$(printf '\033')"; rlo="$(printf '\xe2\x80\xae')"
+    export FAKE_LINEAR_VIEW_NAME="Canvas${esc}]2;owned${esc}\\ ${rlo}board"
+    run --separate-stderr herdr_linear::view_choose wA "$VIEW"
+    [ "$status" -eq 0 ]
+    [ "$(ws_field 'd["view"]["name"]')" = "Canvas]2;owned\\ board" ]
+    refute_match -F "$rlo" "$(ws_file wA)"
+    refute_match -F "$esc" "$(ws_file wA)"
+}
+
+@test "view_choose refuses an id that is not a safe identifier before asking Linear" {
+    run --separate-stderr herdr_linear::view_choose wA "../$VIEW"
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+    run --separate-stderr herdr_linear::view_choose wA "-$VIEW"
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+    [ "$(sent customView)" = "0" ]
+}
+
 @test "views_for_space refuses a space that is not bound" {
     rm -f "$(ws_file wA)"
     run --separate-stderr herdr_linear::views_for_space wA

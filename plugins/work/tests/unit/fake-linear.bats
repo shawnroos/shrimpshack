@@ -385,7 +385,7 @@ VIEW_Q='{"query":"query($id:String!){customView(id:$id){id name archivedAt viewP
 }
 
 CREATE_Q='{"query":"mutation($i:CustomViewCreateInput!){customViewCreate(input:$i){success customView{id}}}","variables":{"i":{"name":"x"}}}'
-PREFS_Q='{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}","variables":{"i":{}}}'
+PREFS_Q='{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}","variables":{"i":{"type":"user","viewType":"customView","customViewId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","preferences":{"layout":"board"}}}}'
 
 @test "the view mutations are refused with 97 unless the test permits them" {
     for b in "$CREATE_Q" "$PREFS_Q"; do
@@ -404,6 +404,35 @@ PREFS_Q='{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreat
     run bash -c "printf '' | FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=fail bash '$FIXTURE' --data '$CREATE_Q'"
     result="$(printf '%s' "$output" | jfield 'import sys,json;d=json.load(sys.stdin)["data"]["customViewCreate"];print(d["success"], d["customView"])')"
     [ "$result" = "False None" ]
+}
+
+@test "a view create body outside the introspected input type is refused before any answer" {
+    local bad
+    for bad in \
+        '{"query":"mutation($i:CustomViewCreateInput!){customViewCreate(input:$i){success customView{id}}}","variables":{"i":{"name":"x","modelName":"Issue"}}}' \
+        '{"query":"mutation($i:CustomViewCreateInput!){customViewCreate(input:$i){success customView{id}}}","variables":{"i":{"shared":false}}}' \
+        '{"query":"mutation($i:CustomViewCreateInput!){customViewCreate(input:$i){success customView{id}}}","variables":{"i":{"name":"x","shared":"no"}}}' \
+        '{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}","variables":{"i":{"type":"user","customViewId":"c","preferences":{}}}}' \
+        '{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}","variables":{"i":{"type":"team","viewType":"customView","preferences":{}}}}' \
+        '{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}","variables":{"i":{"type":"user","viewType":"customView","preferences":"board"}}}'
+    do
+        run bash -c "printf '' | FAKE_LINEAR_ALLOW_MUTATION=1 bash '$FIXTURE' --data '$bad'"
+        [ "$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["errors"][0]["extensions"]["code"])')" = "GRAPHQL_VALIDATION_FAILED" ]
+    done
+}
+
+@test "an id comparison on a String variable is refused on every route, not only teams" {
+    local q
+    for q in \
+        '{"query":"query($id:String!){teams(filter:{id:{eq:$id}}){nodes{id}}}","variables":{"id":"x"}}' \
+        '{"query":"query($p:String){issues(filter:{project:{id:{eq:$p}}}){nodes{id}}}","variables":{"p":"x"}}' \
+        '{"query":"query($v:[String!]){customViews(filter:{id:{in:$v}}){nodes{id}}}","variables":{"v":["x"]}}'
+    do
+        run bash -c "printf '' | bash '$FIXTURE' --data '$q'"
+        [ "$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["errors"][0]["extensions"]["code"])')" = "GRAPHQL_VALIDATION_FAILED" ]
+    done
+    run bash -c "printf '' | bash '$FIXTURE' --data '{\"query\":\"query(\$id:ID!){teams(filter:{id:{eq:\$id}}){nodes{id}}}\",\"variables\":{\"id\":\"x\"}}'"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;print("errors" in json.load(sys.stdin))')" = "False" ]
 }
 
 @test "viewPreferencesCreate fails on prefs_fail while customViewCreate still succeeds" {
