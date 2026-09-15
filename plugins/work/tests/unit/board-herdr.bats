@@ -504,3 +504,136 @@ assert_moves_went_over_the_socket() {
     [ "$status" -ne 0 ]
     [ -z "$output" ]
 }
+
+# ---------------------------------------------------------------- start
+
+pane_field() { snap | field "[p.get('$2') for p in d['result']['snapshot']['panes'] if p['pane_id'] == '$1'][0]"; }
+is_open() { snap | field "any(p['pane_id'] == '$1' for p in d['result']['snapshot']['panes'])"; }
+
+a_worktree() {
+    git init -q "$WORK/wt-a"
+    printf '%s' "$WORK/wt-a"
+}
+
+@test "a start opens a shell in the worktree beside the reserved pane, moves the label onto it and starts the agent, without taking focus" {
+    standard_board; serve
+    wt="$(a_worktree)"
+    run -0 herdr_linear::board_start_pane "$SPACE" "$A" "$wt" WEB-1
+    pane="$(printf '%s' "$output" | cut -f1)"
+    [ "$(printf '%s' "$output" | cut -f5)" = w1:p1 ]
+    [ "$(printf '%s' "$output" | cut -f2)" = "$(pane_field "$pane" terminal_id)" ]
+    [ "$(tree_of w1:t1)" = "right(w1:p1,$pane)" ]
+    [ "$(pane_field "$pane" cwd)" = "$wt" ]
+    [ "$(pane_field "$pane" label)" = "$(label "$A")" ]
+    [ "$(pane_field w1:p1 label)" = "$(label "$A"):replaced" ]
+    [ "$(pane_field "$pane" agent)" = claude ]
+    grep -q "^agent start WEB-1 --kind claude --pane $pane$" "$FAKE_HERDR_RECORD_DIR/argv"
+    grep -q "^pane split w1:p1 .*--no-focus" "$FAKE_HERDR_RECORD_DIR/argv"
+    [ "$(snap | field 'd["result"]["snapshot"]["focused_pane_id"]')" = "w1:p9" ]
+    # The ledger and the close are the caller's.
+    [ "$(herdr_linear::board_ledger_entry "$SPACE" "$A" | field 'd["pane_id"]')" = w1:p1 ]
+    [ "$(is_open w1:p1)" = True ]
+}
+
+@test "a start from a focused reserved pane hands focus to the new pane" {
+    standard_board
+    python3 - "$FAKE_HERDR_BOARD_STATE" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1]))
+st["focused_pane_id"], st["focused_tab_id"], st["focused_workspace_id"] = "w1:p1", "w1:t1", "w1"
+json.dump(st, open(sys.argv[1], "w"))
+PY
+    serve
+    run -0 herdr_linear::board_start_pane "$SPACE" "$A" "$(a_worktree)" WEB-1
+    pane="$(printf '%s' "$output" | cut -f1)"
+    [ "$(snap | field 'd["result"]["snapshot"]["focused_pane_id"]')" = "$pane" ]
+}
+
+@test "a start whose reserved pane is not open opens nothing" {
+    standard_board; serve
+    own "$E" w1:p77
+    run --separate-stderr herdr_linear::board_start_pane "$SPACE" "$E" "$(a_worktree)" WEB-5
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_GONE" ]
+    [ -z "$output" ]
+    refute_match -q '^pane split' "$FAKE_HERDR_RECORD_DIR/argv"
+}
+
+@test "a start replaces only a home pane the board created" {
+    standard_board; serve
+    own "$E" w1:p3 pointer
+    run herdr_linear::board_start_pane "$SPACE" "$E" "$(a_worktree)" WEB-5
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_REFUSED" ]
+    own "$C" w1:p3 home false
+    run herdr_linear::board_start_pane "$SPACE" "$C" "$(a_worktree)" WEB-3
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_REFUSED" ]
+    refute_match -q '^pane split' "$FAKE_HERDR_RECORD_DIR/argv"
+}
+
+@test "a pane whose agent is not detected is reported unknown, with its row" {
+    standard_board; serve
+    export FAKE_HERDR_AGENT_START_FAILS=1
+    run --separate-stderr herdr_linear::board_start_pane "$SPACE" "$A" "$(a_worktree)" WEB-1
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_UNKNOWN" ]
+    pane="$(printf '%s' "$output" | cut -f1)"
+    [ "$(pane_field "$pane" label)" = "$(label "$A")" ]
+    [[ "$stderr" == *"could not be confirmed"* ]]
+}
+
+@test "labels that cannot be read back are unknown, with no row, so the caller keeps the reserved pane" {
+    standard_board; serve
+    export FAKE_HERDR_RENAME_IGNORED=1
+    run --separate-stderr herdr_linear::board_start_pane "$SPACE" "$A" "$(a_worktree)" WEB-1
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_UNKNOWN" ]
+    [ -z "$output" ]
+    refute_match -q '^agent start' "$FAKE_HERDR_RECORD_DIR/argv"
+}
+
+@test "the replaced close closes only a pane carrying the replaced label, and records it for the tab's next rebuild" {
+    standard_board; serve
+    run -0 herdr_linear::board_start_pane "$SPACE" "$A" "$(a_worktree)" WEB-1
+    pane="$(printf '%s' "$output" | cut -f1)"
+    run herdr_linear::board_close_replaced "$A" "$pane"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_REFUSED" ]
+    [ "$(is_open "$pane")" = True ]
+    run herdr_linear::board_close_replaced "$A" w1:p2
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_REFUSED" ]
+    run -0 herdr_linear::board_close_replaced "$A" w1:p1
+    [ "$(is_open w1:p1)" = False ]
+    [ "$(is_open "$pane")" = True ]
+    grep -qx w1:p1 "$HERDR_LINEAR_JOURNAL_DIR/board-placeholders"
+    run herdr_linear::board_close_replaced "$A" w1:p1
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_GONE" ]
+}
+
+@test "the detached close returns at once, waits for the process that asked, then closes" {
+    standard_board; serve
+    run -0 herdr_linear::board_start_pane "$SPACE" "$A" "$(a_worktree)" WEB-1
+    sleep 30 &
+    caller=$!
+    run -0 herdr_linear::board_close_replaced_after "$A" w1:p1 "$caller"
+    perl -e 'select undef, undef, undef, 0.5'
+    [ "$(is_open w1:p1)" = True ]
+    kill "$caller"
+    i=0
+    until [ "$(is_open w1:p1)" = False ]; do
+        i=$((i + 1))
+        [ "$i" -lt 200 ] || { echo "the detached close never landed" >&2; return 1; }
+        perl -e 'select undef, undef, undef, 0.05'
+    done
+}
+
+@test "a ticket's home space is the ledger that holds its home pane, not one holding a pointer" {
+    standard_board
+    herdr_linear::board_ledger_put "Alpha" "$E" w1:p50 pointer '{}' true
+    herdr_linear::board_ledger_put "Zeta" "$E" w1:p51 home '{}' true
+    run -0 herdr_linear::board_home_space "$E"
+    [ "$output" = Zeta ]
+    run -0 herdr_linear::board_home_space "$A"
+    [ "$output" = "$SPACE" ]
+    herdr_linear::board_ledger_put "Beta" "$D" w1:p52 pointer '{}' true
+    run herdr_linear::board_home_space "$D"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$SPACE" ]
+    run herdr_linear::board_home_space dddddddd-0000-4000-8000-0000000000ff
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_ABSENT" ]
+}

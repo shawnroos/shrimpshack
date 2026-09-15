@@ -51,6 +51,7 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-store.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
@@ -85,6 +86,63 @@ the identifier out of it.
 `feature/WEB-3318-ai-tools-drawer-is-blank-when-a-still`. The identifier is in
 both, so the worktree is findable from its branch forever after. Pass a second
 argument to use `bugfix` or `task` instead of `feature`.
+
+## A ticket the board reserved
+
+**Try this first, before `start_from_issue`.** When the herdr board shows a
+ticket nobody has started, it holds a reserved pane for it: a shell outside any
+worktree, under a worktree name and branch fixed when the pane was made. Starting
+through the board makes the worktree under that reserved name, opens a pane in it
+where the reserved pane is, starts the agent there, and closes the reserved pane.
+A session started by hand in a reserved pane is told to come here; run this from
+that pane and the pane is replaced once your shell has finished.
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-store.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-config.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-plan.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-herdr.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-sync.sh"
+
+herdr_linear::board_start_reserved WEB-3318
+```
+
+It prints the worktree path and the new pane's id, separated by a tab. Do not
+call `place_session` after it: the board already gave the ticket its pane. **The
+name and branch are the reservation's, not the title's:** a ticket renamed since
+it was reserved keeps its reserved name. The project segment and the repository
+are read now, so a ticket moved to another project since then lands under that
+project.
+
+| Exit | Meaning |
+|---|---|
+| 0 | started; the worktree and the pane id are on stdout |
+| 1–4 | as in the table under **Which repository**; the board changed nothing |
+| 6 | which repository is a choice; nothing was made and the reserved pane stays. Ask, then pass the answer as a second argument |
+| 7 | no reserved pane is waiting for this ticket, so nothing was done. Start it with `start_from_issue` above |
+| 8 | a board sync kept the board busy past its wait; nothing was done. Run this again |
+| 9 | the worktree is made and bound, but the pane or its agent is not confirmed; stderr says which. Say so to the person |
+
+**Exit 7 is the ordinary answer when there is no board**, or when the ticket has
+no reserved pane, including one somebody closed by hand. It is not an error.
+
+**A reserved pane somebody else is using is left open.** When another agent runs
+in it, or it has focus, the start still happens and stderr says the pane was
+left open. Tell the person, so they can close it.
 
 ## Which repository
 

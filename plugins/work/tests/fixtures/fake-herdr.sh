@@ -74,7 +74,7 @@ printf '%s\n' "$*" >>"$REC_DIR/argv" 2>/dev/null || true
 # The one list. herdr-read.bats reads it back from here rather than carrying a
 # second copy: two hand-maintained lists guarding one boundary drift apart, and
 # the drift silently empties the assertion that the accessor never mutates.
-FAKE_HERDR_MUTATING_VERBS="create split move swap close rename focus run send-keys resize zoom report-metadata report-agent"
+FAKE_HERDR_MUTATING_VERBS="create split move swap close rename focus run send-keys resize zoom report-metadata report-agent start"
 
 if [ "${1:-}" = "--list-mutating-verbs" ]; then
     printf '%s\n' "$FAKE_HERDR_MUTATING_VERBS"
@@ -127,6 +127,11 @@ for _verb in $FAKE_HERDR_MUTATING_VERBS; do
         _mutating="$_verb"
     fi
 done
+
+if [ "${FAKE_HERDR_SPLIT_FAILS:-0}" = 1 ] && [ "${1:-}" = pane ] && [ "${2:-}" = split ]; then
+    echo "fake-herdr: split refused" >&2
+    exit 1
+fi
 
 if [ -n "${FAKE_HERDR_BOARD_STATE:-}" ] && [ "${1:-}" != status ]; then
     exec python3 "${BASH_SOURCE[0]%/*}/fake-herdr-socket.py" cli "$@"

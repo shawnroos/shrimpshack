@@ -33,6 +33,12 @@ Environment:
   FAKE_HERDR_SLOW_PANE     N: a created pane is unknown to every verb and to the
                            snapshot until N `pane get` probes have missed it, as
                            a live pane registers after `split` returns
+  FAKE_HERDR_AGENT_START_FAILS 1: `agent start` answers agent_not_detected and
+                           the pane keeps no agent
+  FAKE_HERDR_CLOSE_KILLS_PANE  a pane id: once a CLI `pane close` of that pane is
+                           applied and saved, SIGKILL the process group named in
+                           FAKE_HERDR_CLOSE_KILLS_PGID_FILE, as herdr ends every
+                           process in a pane it closes, the closing caller's too
 
 Test helpers: seed <spec>, tree <tab>, restart, set-agent <pane> <agent|none> [status].
 """
@@ -299,6 +305,14 @@ def op_metadata(st, pid, source, title):
     return {"type": "ok"}
 
 
+def op_agent_start(st, pid, name, kind):
+    p = find_pane(st, pid)
+    if os.environ.get("FAKE_HERDR_AGENT_START_FAILS") == "1":
+        raise Err("agent_not_detected", "no %s agent was detected in %s" % (kind, pid))
+    p["agent"], p["agent_status"], p["agent_name"] = kind, "idle", name
+    return {"type": "agent_started", "pane": public_pane(st, p)}
+
+
 def op_focus(st, pid):
     focus(st, find_pane(st, pid))
     return {"type": "ok"}
@@ -354,7 +368,8 @@ def flags_all(args, name):
 
 
 VALUED = {"--pane", "--direction", "--ratio", "--cwd", "--env", "--right-click", "--tab", "--split",
-          "--target-pane", "--workspace", "--label", "--tab-label", "--source", "--title", "--agent"}
+          "--target-pane", "--workspace", "--label", "--tab-label", "--source", "--title", "--agent",
+          "--kind", "--timeout"}
 
 
 def positional(args):
@@ -413,7 +428,16 @@ def cli(argv):
         params = {"pane_id": pos[0] if pos else "", "destination": dest, "focus": "--no-focus" not in rest}
         return {"id": "cli:pane:move", "result": mutate(op_move, params)}
     if cmd == "pane close":
-        return {"id": "cli:pane:close", "result": mutate(op_close, rest[0] if rest else "")}
+        out = {"id": "cli:pane:close", "result": mutate(op_close, rest[0] if rest else "")}
+        if rest and rest[0] == os.environ.get("FAKE_HERDR_CLOSE_KILLS_PANE"):
+            pgid = int(open(os.environ["FAKE_HERDR_CLOSE_KILLS_PGID_FILE"]).read().strip() or 0)
+            if pgid <= 1:
+                raise SystemExit("fake-herdr: refusing to kill process group %d" % pgid)
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        return out
     if cmd == "pane rename":
         pos = positional(rest)
         return {"id": "cli:pane:rename", "result": mutate(op_rename, pos[0] if pos else "", " ".join(pos[1:]) or None)}
@@ -421,6 +445,10 @@ def cli(argv):
         pos = positional(rest)
         return {"id": "cli:pane:report-metadata", "result": mutate(op_metadata, pos[0] if pos else "",
                                                                      flag(rest, "--source"), flag(rest, "--title"))}
+    if cmd == "agent start":
+        pos = positional(rest)
+        return {"id": "cli:agent:start", "result": mutate(op_agent_start, flag(rest, "--pane") or "",
+                                                            pos[0] if pos else "", flag(rest, "--kind") or "")}
     raise Err("unsupported", "fake-herdr board mode: unsupported command '%s'" % " ".join(argv))
 
 

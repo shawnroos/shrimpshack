@@ -70,7 +70,12 @@ setup() {
     cd "$PROJECT" || return 1
 }
 
-teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
+teardown() {
+    local p
+    for p in ${BG_PIDS:-} ${SERVER_PID:-}; do kill "$p" 2>/dev/null; done
+    [ -n "${SOCK_DIR:-}" ] && rm -rf "$SOCK_DIR"
+    [ -n "${WORK:-}" ] && rm -rf "$WORK"
+}
 
 # start_new names a team and no project -- there is no project yet -- and the
 # answer is recorded for the directory the command was run from.
@@ -1006,4 +1011,377 @@ started_worktree() {
     [ -d "$path" ]
     [ "$(herdr_linear::binding_state "$path")" = "bound" ]
     [ "$(panes_opened)" = "0" ]
+}
+
+# ------------------------------------------------------- a reserved ticket
+#
+# U12, KTD13. The board reserves a pane for a ticket nobody has started: a shell
+# outside any worktree, under a worktree name and branch fixed then. Starting it
+# makes the worktree, opens a pane in it where the reserved pane is, starts the
+# agent there, and closes the reserved pane last. The reserved pane is made by a
+# real unattended sync, so the start is tested against what a sync leaves.
+#
+# herdr is the fake board (one state file, a fake socket server under a short
+# directory, since a Unix socket path over 104 bytes cannot be bound on macOS).
+# Linear is fake-linear.sh, except the board's paginated read, which answers
+# from a ticket file this test writes.
+
+CHILD_ID=11111111-1111-4111-8111-111111111111
+PARENT_ID=33333333-3333-4333-8333-333333333333
+
+board_env() {
+    local f
+    SOCK_DIR="$(mktemp -d /tmp/sb.XXXXXX)"
+    mkdir -p "$HERDR_LINEAR_STORE_DIR"
+    export FAKE_HERDR_BOARD_STATE="$WORK/board-state.json"
+    export FAKE_HERDR_SOCKET_PATH="$SOCK_DIR/h.sock"
+    export HERDR_LINEAR_PANE_POLL_TRIES=5
+    export HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS=20
+    export FAKE_BOARD_TICKETS="$WORK/tickets.json"
+    cat > "$WORK/curl.sh" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+    case "\$a" in
+        *BoardIssues\(*)
+            cat >/dev/null
+            python3 -c 'import json, sys; print(json.dumps({"data": {"issues": {"nodes": json.load(open(sys.argv[1])), "pageInfo": {"hasNextPage": False, "endCursor": None}}}}))' "\$FAKE_BOARD_TICKETS"
+            exit 0 ;;
+    esac
+done
+exec "$FIX/fake-linear.sh" "\$@"
+SH
+    chmod +x "$WORK/curl.sh"
+    export HERDR_LINEAR_CURL_BIN="$WORK/curl.sh"
+    for f in schemes.sh board-store.sh board-herdr.sh board-sync.sh; do . "$ROOT/lib/$f"; done
+    printf '{"version":1,"global":{"levels":{"tab":"state"},"filter":{"team":["WEB"]}},"spaces":{}}\n' \
+        > "$HERDR_LINEAR_STORE_DIR/board.json"
+    chmod 600 "$HERDR_LINEAR_STORE_DIR/board.json"
+    python3 "$FIX/fake-herdr-socket.py" seed '{"focused":"w9:p9",
+      "workspaces":[{"workspace_id":"w1","label":"Board"},{"workspace_id":"w9","label":"Scratch"}],
+      "tabs":[{"tab_id":"w9:t1","label":"shell","tree":"w9:p9"}],"panes":{}}'
+    python3 "$FIX/fake-herdr-socket.py" serve 3>&- &
+    SERVER_PID=$!
+    local i=0
+    until [ -S "$FAKE_HERDR_SOCKET_PATH" ]; do
+        i=$((i + 1))
+        [ "$i" -lt 200 ] || { echo "fake socket server never bound" >&2; return 1; }
+        perl -e 'select undef, undef, undef, 0.02'
+    done
+}
+
+# board_ticket <id> <identifier> <title> <project-id> <project-name>
+board_ticket() {
+    python3 - "$FAKE_BOARD_TICKETS" "$@" <<'PY'
+import json, sys
+path, issue, ident, title, pid, pname = sys.argv[1:]
+json.dump([{"id": issue, "identifier": ident, "title": title, "updatedAt": "2026-09-14T10:00:00.000Z",
+            "state": {"id": "st-todo", "name": "Todo", "type": "unstarted"},
+            "team": {"id": "55555555-5555-4555-8555-555555555555", "key": "WEB"},
+            "project": {"id": pid, "name": pname}, "projectMilestone": None, "cycle": None,
+            "assignee": None, "priority": 0, "parent": None, "labels": {"nodes": []}}], open(path, "w"))
+PY
+}
+
+# A sync that reserves the ticket; prints nothing.
+reserved_by_a_sync() {
+    board_ticket "$@"
+    run herdr_linear::board_sync
+    [ "$status" -eq 0 ] || { printf 'sync: %s %s\n' "$status" "$output" >&2; return 1; }
+    [ "$(herdr_linear::board_reservation_field "$1" state)" = reserved ]
+}
+
+bsnap() { "$HERDR_BIN" api snapshot; }
+bfield() { python3 -c "import sys,json; d=json.load(sys.stdin); print(eval(sys.argv[1]))" "$1"; }
+panes_labelled() {
+    bsnap | bfield "sorted(p['pane_id'] for p in d['result']['snapshot']['panes'] if p.get('label') == '$1')"
+}
+pane_attr() {
+    bsnap | bfield "[p.get('$2') for p in d['result']['snapshot']['panes'] if p['pane_id'] == '$1'][0]"
+}
+ledger_attr() {
+    herdr_linear::board_ledger_entry Board "$1" | bfield "d['$2']"
+}
+reserved_pane_of() { ledger_attr "$1" pane_id; }
+pane_open() {
+    bsnap | bfield "any(p['pane_id'] == '$1' for p in d['result']['snapshot']['panes'])"
+}
+
+@test "AE3: a reserved ticket has no worktree; started, the worktree exists under the reserved name and the new pane runs inside it" {
+    record_alpha; board_env
+    reserved_by_a_sync "$CHILD_ID" WEB-3318 "AI Tools drawer is blank when a still-processing layer is selected" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    name="$(herdr_linear::board_reservation_field "$CHILD_ID" worktree_name)"
+    [ "$name" = "$CHILD" ]
+    reserved="$(reserved_pane_of "$CHILD_ID")"
+    [ ! -e "$BASE/$CHILD" ]
+    [ "$(pane_attr "$reserved" cwd)" = "$HERDR_LINEAR_WORKTREES_ROOT" ]
+    tab="$(pane_attr "$reserved" tab_id)"
+
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    [ "$status" -eq 0 ]
+    path="${output%%$'\t'*}"
+    pane="${output#*$'\t'}"
+    [ "$path" = "$BASE/$CHILD" ]
+    [ -d "$path" ]
+    [ "$(git -C "$path" symbolic-ref --short HEAD)" = "feature/$CHILD" ]
+    [ "$(herdr_linear::binding_state "$path")" = bound ]
+    [ "$(pane_attr "$pane" cwd)" = "$path" ]
+    [ "$(pane_attr "$pane" agent)" = claude ]
+    grep -q "^agent start WEB-3318 --kind claude --pane $pane$" "$FAKE_HERDR_RECORD_DIR/argv"
+    [ "$(panes_labelled "work:$CHILD_ID")" = "['$pane']" ]
+    [ "$(pane_open "$reserved")" = False ]
+    [ "$(ledger_attr "$CHILD_ID" pane_id)" = "$pane" ]
+    [ "$(ledger_attr "$CHILD_ID" terminal_id)" = "$(pane_attr "$pane" terminal_id)" ]
+    [ "$(herdr_linear::board_reservation_field "$CHILD_ID" state)" = started ]
+    [ "$(pane_attr "$pane" tab_id)" = "$tab" ]
+    [ "$(python3 "$FIX/fake-herdr-socket.py" tree "$tab")" = "$pane" ]
+}
+
+@test "a title changed between reservation and start keeps the reserved name and branch" {
+    record_alpha; board_env
+    reserved_by_a_sync "$CHILD_ID" WEB-3318 "Drawer was blank" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    [ "$status" -eq 0 ]
+    path="${output%%$'\t'*}"
+    [ "$path" = "$BASE/WEB-3318-drawer-was-blank" ]
+    [ "$(git -C "$path" symbolic-ref --short HEAD)" = "feature/WEB-3318-drawer-was-blank" ]
+    [ ! -e "$BASE/$CHILD" ]
+}
+
+@test "a project changed between reservation and start puts the worktree under the new project's segment and repository" {
+    record_repo "$PROJECT"
+    mkdir -p "$WORK/root/beta"
+    git -C "$WORK/root/beta" init -q -b main
+    git -C "$WORK/root/beta" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    herdr_linear::record_scope_repo "$WORK/root/beta" project-99999999-9999-4999-8999-999999999999 "$TKEY"
+    board_env
+    reserved_by_a_sync "$PARENT_ID" WEB-2870 "Tool: Detach Foreground" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    name="$(herdr_linear::board_reservation_field "$PARENT_ID" worktree_name)"
+
+    export FAKE_LINEAR_MODE=other_project_issue
+    run --separate-stderr herdr_linear::board_start_reserved WEB-2870
+    [ "$status" -eq 0 ]
+    path="${output%%$'\t'*}"
+    [ "$path" = "$WT_ROOT/acme/a-different-project/$name" ]
+    [ "$(cd "$(git -C "$path" rev-parse --git-common-dir)" && pwd -P)" = "$WORK/root/beta/.git" ]
+    [ ! -e "$BASE/$name" ]
+}
+
+@test "a start while a sync holds the board lock waits for it, and the ticket gets one pane" {
+    record_alpha; board_env
+    reserved_by_a_sync "$CHILD_ID" WEB-3318 "AI Tools drawer is blank when a still-processing layer is selected" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    sleep 30 &
+    holder=$!
+    BG_PIDS="$holder"
+    mkdir "$HERDR_LINEAR_STORE_DIR/board/sync.lock"
+    printf '%s\n' "$holder" > "$HERDR_LINEAR_STORE_DIR/board/sync.lock/pid"
+
+    export FAKE_LINEAR_MODE=found_child
+    starters=""
+    for n in one two; do
+        ( rc=0; herdr_linear::board_start_reserved WEB-3318 || rc=$?; printf '%s\n' "$rc" > "$WORK/$n.rc" ) \
+            > "$WORK/$n.out" 2>"$WORK/$n.err" &
+        starters="$starters $!"
+    done
+    BG_PIDS="$BG_PIDS$starters"
+    perl -e 'select undef, undef, undef, 0.8'
+    [ ! -e "$BASE/$CHILD" ]
+    [ "$(panes_labelled "work:$CHILD_ID")" = "['$(reserved_pane_of "$CHILD_ID")']" ]
+
+    kill "$holder"
+    wait $starters
+    [ -d "$BASE/$CHILD" ]
+    # One of the two waiting starts made the pane; the other found it started.
+    [ "$(sort "$WORK/one.rc" "$WORK/two.rc" | tr '\n' ' ')" = "0 $HERDR_LINEAR_BOARD_START_NOT_RESERVED " ]
+    pane="$(cat "$WORK/one.out" "$WORK/two.out" | cut -f2)"
+    [ "$(printf '%s\n' "$pane" | grep -c .)" = 1 ]
+    [ "$(panes_labelled "work:$CHILD_ID")" = "['$pane']" ]
+
+    # A second start finds the ticket started and opens nothing.
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_START_NOT_RESERVED" ]
+    [ "$(panes_labelled "work:$CHILD_ID")" = "['$pane']" ]
+    [ "$(grep -c '^pane split' "$FAKE_HERDR_RECORD_DIR/argv")" = 1 ]
+}
+
+@test "a start run inside the reserved pane closes it after the caller is gone, and the ticket stays started, not hidden" {
+    record_alpha; board_env
+    reserved_by_a_sync "$CHILD_ID" WEB-3318 "AI Tools drawer is blank when a still-processing layer is selected" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    reserved="$(reserved_pane_of "$CHILD_ID")"
+
+    # The caller runs in its own process group and, once the verb returns, that
+    # whole group is killed, as a harness tears down a finished command.
+    # Closing the reserved pane ends every process in it, as herdr does.
+    FAKE_LINEAR_MODE=found_child HERDR_PANE_ID="$reserved" \
+        FAKE_HERDR_CLOSE_KILLS_PANE="$reserved" FAKE_HERDR_CLOSE_KILLS_PGID_FILE="$WORK/pgid" \
+        perl -e 'setpgrp(0, 0); exec @ARGV' bash -c '
+            printf "%s\n" "$$" > "$2/pgid"
+            for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh \
+                     herdr-read.sh herdr-write.sh repos.sh start.sh schemes.sh board-store.sh board-herdr.sh; do
+                . "$1/lib/$f"
+            done
+            herdr_linear::board_start_reserved WEB-3318 > "$2/start.out" 2>"$2/start.err"
+            printf "%s\n" "$?" > "$2/start.rc"
+            kill -KILL -$$' _ "$ROOT" "$WORK" || true
+    [ "$(cat "$WORK/start.rc")" = 0 ]
+    pane="$(cut -f2 "$WORK/start.out")"
+    [ -n "$pane" ]
+
+    i=0
+    until [ "$(pane_open "$reserved")" = False ]; do
+        i=$((i + 1))
+        [ "$i" -lt 200 ] || { echo "the reserved pane was never closed" >&2; return 1; }
+        perl -e 'select undef, undef, undef, 0.05'
+    done
+    [ "$(herdr_linear::board_reservation_field "$CHILD_ID" state)" = started ]
+    [ "$(ledger_attr "$CHILD_ID" pane_id)" = "$pane" ]
+    [ "$(ledger_attr "$CHILD_ID" hidden)" = False ]
+
+    run herdr_linear::board_sync
+    [ "$status" -eq 0 ]
+    [ "$(ledger_attr "$CHILD_ID" hidden)" = False ]
+    [ "$(ledger_attr "$CHILD_ID" pane_id)" = "$pane" ]
+    [ "$(panes_labelled "work:$CHILD_ID")" = "['$pane']" ]
+    run python3 -c 'import sys,json; print(" ".join(a["kind"] for a in json.load(open(sys.argv[1]))["actions"]))' \
+        "$HERDR_LINEAR_STORE_DIR/board/last-plan.json"
+    [[ "$output" != *hide* ]]
+    [[ "$output" != *place* ]]
+}
+
+@test "a reserved pane someone else's agent is running in is left open, and said so" {
+    record_alpha; board_env
+    reserved_by_a_sync "$CHILD_ID" WEB-3318 "AI Tools drawer is blank when a still-processing layer is selected" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    reserved="$(reserved_pane_of "$CHILD_ID")"
+    python3 "$FIX/fake-herdr-socket.py" set-agent "$reserved" claude idle
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"is in use"*"left open"* ]]
+    [ "$(pane_open "$reserved")" = True ]
+    [ "$(ledger_attr "$CHILD_ID" pane_id)" = "${output#*$'\t'}" ]
+}
+
+@test "an agent that cannot be confirmed still leaves the ticket started in its worktree pane, and says so" {
+    record_alpha; board_env
+    reserved_by_a_sync "$CHILD_ID" WEB-3318 "AI Tools drawer is blank when a still-processing layer is selected" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    export FAKE_LINEAR_MODE=found_child FAKE_HERDR_AGENT_START_FAILS=1
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_START_PANE_UNKNOWN" ]
+    [[ "$stderr" == *"could not be confirmed"* ]]
+    pane="${output#*$'\t'}"
+    [ "$(pane_attr "$pane" cwd)" = "$BASE/$CHILD" ]
+    [ "$(ledger_attr "$CHILD_ID" pane_id)" = "$pane" ]
+    [ "$(herdr_linear::board_reservation_field "$CHILD_ID" state)" = started ]
+}
+
+@test "a start where herdr makes no pane keeps the reserved pane and the reservation, and says so" {
+    record_alpha; board_env
+    reserved_by_a_sync "$CHILD_ID" WEB-3318 "AI Tools drawer is blank when a still-processing layer is selected" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    reserved="$(reserved_pane_of "$CHILD_ID")"
+    export FAKE_LINEAR_MODE=found_child FAKE_HERDR_SPLIT_FAILS=1
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_START_PANE_UNKNOWN" ]
+    [[ "$stderr" == *"no pane was confirmed"* ]]
+    [ "$output" = "$BASE/$CHILD" ]
+    [ "$(pane_open "$reserved")" = True ]
+    [ "$(ledger_attr "$CHILD_ID" pane_id)" = "$reserved" ]
+    [ "$(herdr_linear::board_reservation_field "$CHILD_ID" state)" = reserved ]
+}
+
+@test "a reserved ticket whose repository is a choice asks, makes nothing, and keeps its reserved pane" {
+    board_env
+    run herdr_linear::board_sync
+    board_ticket "$CHILD_ID" WEB-3318 "AI Tools drawer is blank when a still-processing layer is selected" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    run herdr_linear::board_sync
+    reserved="$(reserved_pane_of "$CHILD_ID")"
+    [ "$(herdr_linear::board_reservation_field "$CHILD_ID" state)" = reserved ]
+    # The sync may already have marked it; the start must mark it on its own.
+    herdr_linear::board_reservation_set_repo_unknown "$CHILD_ID" false
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_START_ASK" ]
+    [ ! -e "$BASE/$CHILD" ]
+    [ "$(herdr_linear::board_reservation_field "$CHILD_ID" repository_unknown)" = true ]
+    [ "$(panes_labelled "work:$CHILD_ID")" = "['$reserved']" ]
+    run grep -c '^pane split' "$FAKE_HERDR_RECORD_DIR/argv"
+    [ "$output" = 0 ]
+
+    # R12: the answer is recorded and the reservation no longer waits on it.
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318 "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "${output%%$'\t'*}" = "$BASE/$CHILD" ]
+    [ "$(herdr_linear::board_reservation_field "$CHILD_ID" repository_unknown)" = false ]
+}
+
+@test "a reserved pane closed by hand starts nothing through the board" {
+    record_alpha; board_env
+    reserved_by_a_sync "$CHILD_ID" WEB-3318 "AI Tools drawer is blank when a still-processing layer is selected" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    "$HERDR_BIN" pane close "$(reserved_pane_of "$CHILD_ID")" >/dev/null
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_START_NOT_RESERVED" ]
+    [[ "$stderr" == *"not open"* ]]
+    [ ! -e "$BASE/$CHILD" ]
+    refute_split="$(grep -c '^pane split' "$FAKE_HERDR_RECORD_DIR/argv" || true)"
+    [ "$refute_split" = 0 ]
+}
+
+@test "a ledger that cannot name the new pane keeps the reserved pane open" {
+    record_alpha; board_env
+    reserved_by_a_sync "$CHILD_ID" WEB-3318 "AI Tools drawer is blank when a still-processing layer is selected" \
+        44444444-4444-4444-8444-444444444444 "AI Canvas Tools"
+    reserved="$(reserved_pane_of "$CHILD_ID")"
+    ledger="$(ls "$HERDR_LINEAR_STORE_DIR"/board/ledger/*.json)"
+    mkdir "$ledger.lock"
+    export HERDR_LINEAR_LOCK_WAIT_SECONDS=1 HERDR_LINEAR_LOCK_STALE_SECONDS=600
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    rmdir "$ledger.lock"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_START_PANE_UNKNOWN" ]
+    [[ "$stderr" == *"ledger still names the reserved pane"* ]]
+    [ "$(pane_open "$reserved")" = True ]
+    [ "$(ledger_attr "$CHILD_ID" pane_id)" = "$reserved" ]
+    [ "$(herdr_linear::board_reservation_field "$CHILD_ID" state)" = reserved ]
+}
+
+@test "a reserved name and branch are refused unless both are given and safe" {
+    record_alpha
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "" "" "../escape" feature/x
+    [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "" "" WEB-3318-kept ""
+    [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "" "" "" feature/WEB-3318-kept
+    [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "" "" WEB-3318-kept "feature/a..b"
+    [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
+    [ ! -e "$WT_ROOT/acme" ]
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "" "" WEB-3318-kept feature/WEB-3318-kept
+    [ "$status" -eq 0 ]
+    [ "$output" = "$BASE/WEB-3318-kept" ]
+}
+
+@test "with no board configured, a reserved start does nothing and today's start is unchanged" {
+    record_alpha
+    for f in schemes.sh board-store.sh board-herdr.sh; do . "$ROOT/lib/$f"; done
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::board_start_reserved WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_START_NOT_RESERVED" ]
+    [ ! -e "$BASE/$CHILD" ]
+    [ ! -e "$FAKE_HERDR_RECORD_DIR/argv" ]
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 0 ]
+    [ "$output" = "$BASE/$CHILD" ]
+    [ "$(git -C "$output" symbolic-ref --short HEAD)" = "feature/$CHILD" ]
 }

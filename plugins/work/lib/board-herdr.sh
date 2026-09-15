@@ -262,6 +262,222 @@ herdr_linear::board_close_pane() {
     herdr_linear::_board_herdr_py close "$(printf '%s' "$owned" | cut -f1)" "$(printf '%s' "$owned" | cut -f2)"
 }
 
+# ---------------------------------------------------------------- start
+
+# herdr_linear::board_home_space <issue_id>
+# The space whose ledger holds the ticket's home pane; the first by name when
+# several do, as the sync reads them. ABSENT when none does.
+herdr_linear::board_home_space() {
+    local issue="${1:-}" space entry
+    herdr_linear::is_safe_identifier "$issue" \
+        || { herdr_linear::_board_pane_refuse "that issue id is not a safe identifier"; return; }
+    while IFS= read -r space; do
+        entry="$(herdr_linear::board_ledger_entry "$space" "$issue" 2>/dev/null)" || continue
+        if [ "$(printf '%s' "$entry" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("role"))' 2>/dev/null)" = home ]; then
+            printf '%s' "$space"
+            return 0
+        fi
+    done < <(python3 -c '
+import json, os, sys
+d = sys.argv[1]
+names = set()
+for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+    try:
+        s = json.load(open(os.path.join(d, n))).get("space")
+    except (OSError, ValueError, AttributeError):
+        continue
+    if isinstance(s, str) and s and "\n" not in s:
+        names.add(s)
+for s in sorted(names):
+    print(s)
+' "$HERDR_LINEAR_STORE_DIR/board/ledger")
+    return "$HERDR_LINEAR_BOARD_ABSENT"
+}
+
+HERDR_LINEAR_BOARD_AGENT_KIND=claude
+# How long a detached close waits for the process that asked for it to exit.
+HERDR_LINEAR_BOARD_CLOSE_AFTER_SECONDS=30
+HERDR_LINEAR_BOARD_HERDR_LIB="${BASH_SOURCE[0]}"
+
+# herdr_linear::board_start_pane <space> <issue_id> <worktree> <agent-name>
+# KTD13. Opens a shell in <worktree> beside the ticket's reserved pane, starts
+# the agent in it with `herdr agent start`, and moves the ticket's label onto it.
+# The reserved pane is relabelled `work:<issue>:replaced`. The ledger and the
+# close are the caller's. Focus follows only when the reserved pane had it.
+# Prints `<pane_id>\t<terminal_id>\t<tab_id>\t<workspace_id>\t<reserved_pane_id>`.
+# OK with the agent read back. UNKNOWN with the row when the pane is open and
+# labelled but its agent is not confirmed, and with no row when the pane itself
+# is not. GONE when the reserved pane is not open; FAILED when herdr made no pane.
+herdr_linear::board_start_pane() {
+    local space="${1:-}" issue="${2:-}" dir="${3:-}" name="${4:-}" owned
+    owned="$(herdr_linear::_board_owned "$space" "$issue")" || return
+    [ "$(printf '%s' "$owned" | cut -f1)" = "work:$issue" ] \
+        || { herdr_linear::_board_pane_refuse "only a home pane is replaced by a start"; return; }
+    [ -d "$dir" ] || { herdr_linear::_board_pane_refuse "the worktree $dir is not a directory"; return; }
+    herdr_linear::is_safe_identifier "$name" \
+        || { herdr_linear::_board_pane_refuse "that agent name is not a safe identifier"; return; }
+    herdr_linear::_board_ready || return
+    HL_ISSUE="$issue" HL_DIR="$dir" HL_KIND="$HERDR_LINEAR_BOARD_AGENT_KIND" \
+        herdr_linear::_board_herdr_py start "$(printf '%s' "$owned" | cut -f1)" "$(printf '%s' "$owned" | cut -f2)" "$name"
+}
+
+# A tab apply closes a recorded placeholder by pane id, so a replaced pane whose
+# close never lands is closed by the next rebuild of its tab instead of refusing
+# it as foreign. Only after the ledger names the new pane: recorded while the
+# ledger still names it, the ticket's own pane would be closed.
+herdr_linear::_board_record_placeholder() {
+    local f
+    f="$(herdr_linear::_board_placeholders)"
+    grep -qxF -- "$1" "$f" 2>/dev/null || printf '%s\n' "$1" >> "$f"
+    chmod 600 "$f" 2>/dev/null
+}
+
+# herdr_linear::board_close_replaced <issue_id> <pane_id>
+# Closes the pane a start replaced, by its id and only while it carries the
+# replaced label: once the ledger names the new pane, a close through the ledger
+# would close that one. Call it only after the ledger names the new pane. GONE
+# when it is already closed.
+herdr_linear::board_close_replaced() {
+    herdr_linear::is_safe_identifier "${1:-}" \
+        || { herdr_linear::_board_pane_refuse "that issue id is not a safe identifier"; return; }
+    herdr_linear::_board_pane_ref "pane id" "${2:-}" || return
+    herdr_linear::_board_record_placeholder "$2"
+    herdr_linear::_board_ready || return
+    herdr_linear::_board_herdr_py close-replaced "work:$1:replaced" "$2"
+}
+
+# herdr_linear::board_close_replaced_after <issue_id> <pane_id> <pid>
+# The same close, from a process in its own session, once <pid> has exited or
+# HERDR_LINEAR_BOARD_CLOSE_AFTER_SECONDS have passed. For a start run inside the
+# pane it closes: that close ends the caller, and a harness that tears down the
+# caller's process group must not take the close with it. Returns at once;
+# nothing reports the close's result.
+herdr_linear::board_close_replaced_after() {
+    herdr_linear::is_safe_identifier "${1:-}" \
+        || { herdr_linear::_board_pane_refuse "that issue id is not a safe identifier"; return; }
+    herdr_linear::_board_pane_ref "pane id" "${2:-}" || return
+    case "${3:-}" in ''|*[!0-9]*) herdr_linear::_board_pane_refuse "a close waits on a process id"; return ;; esac
+    herdr_linear::_board_record_placeholder "$2"
+    python3 -c '
+import os, signal, sys, time
+lib, issue, pane, pid, limit = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
+if os.fork():
+    sys.exit(0)
+os.setsid()
+if os.fork():
+    os._exit(0)
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+null = os.open(os.devnull, os.O_RDWR)
+for fd in (0, 1, 2):
+    os.dup2(null, fd)
+os.closerange(3, 1024)
+end = time.time() + limit
+while time.time() < end:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        break
+    except PermissionError:
+        pass
+    time.sleep(0.05)
+os.execvp("bash", ["bash", "-c", ". \"$0\" && herdr_linear::board_close_replaced \"$1\" \"$2\"", lib, issue, pane])
+' "$HERDR_LINEAR_BOARD_HERDR_LIB" "$1" "$2" "$3" "$HERDR_LINEAR_BOARD_CLOSE_AFTER_SECONDS"
+}
+
+HERDR_LINEAR_BOARD_START_NOT_RESERVED=7
+HERDR_LINEAR_BOARD_START_LOCKED=8
+HERDR_LINEAR_BOARD_START_PANE_UNKNOWN=9
+
+# herdr_linear::board_start_reserved <identifier> [repository]
+# R14, KTD13. Starts a ticket the board reserved: under the board lock, makes the
+# worktree under the reservation's name and branch with start_from_issue (the
+# project segment and repository are read now), opens a pane in it where the
+# reserved pane is and starts the agent there, points the ledger at that pane,
+# marks the reservation started, and closes the reserved pane last. A start run
+# inside the reserved pane closes it from a detached process once this shell has
+# exited. A reserved pane in use by anyone else is left open, and said so.
+# Prints `<worktree>\t<pane_id>`, or the worktree alone when no pane opened.
+# Exit: start_from_issue's own codes, nothing done by the board on a non-zero one
+# (ASK marks the reservation repository-unknown); NOT_RESERVED when the ticket
+# has no reservation still waiting or no open reserved pane, and nothing was
+# made; LOCKED when a sync kept the board lock past its wait; PANE_UNKNOWN when
+# the worktree is made and bound and the pane or its agent is not confirmed,
+# with stderr naming which.
+herdr_linear::board_start_reserved() (
+    local ident="${1:-}" answer="${2:-}" resp rc=0 used=0 issue space name branch path out pane term reserved why me
+    command -v herdr_linear::start_from_issue >/dev/null 2>&1 \
+        || . "${HERDR_LINEAR_BOARD_HERDR_LIB%/*}/start.sh"
+    command -v herdr_linear::_board_sync_lock >/dev/null 2>&1 \
+        || . "${HERDR_LINEAR_BOARD_HERDR_LIB%/*}/board-sync.sh"
+    [ -n "$ident" ] || return "$HERDR_LINEAR_START_REFUSED"
+    resp="$(herdr_linear::fetch_issue "$ident")" || rc=$?
+    case $rc in
+        0) ;;
+        2) printf 'no such issue: %s\n' "$ident" >&2; return "$HERDR_LINEAR_START_REFUSED" ;;
+        *) return "$HERDR_LINEAR_START_UNAVAILABLE" ;;
+    esac
+    issue="$(printf '%s' "$resp" | python3 -c 'import sys, json; print(json.load(sys.stdin)["data"]["issue"].get("id") or "")' 2>/dev/null)"
+    herdr_linear::is_safe_identifier "$issue" || return "$HERDR_LINEAR_START_REFUSED"
+    [ "$(herdr_linear::board_reservation_field "$issue" state 2>/dev/null)" = reserved ] \
+        || return "$HERDR_LINEAR_BOARD_START_NOT_RESERVED"
+
+    me="$BASHPID"
+    if ! herdr_linear::_board_sync_lock "$me"; then
+        printf 'a board sync is still running; nothing was started\n' >&2
+        return "$HERDR_LINEAR_BOARD_START_LOCKED"
+    fi
+    trap 'herdr_linear::_board_sync_unlock "'"$me"'"' EXIT
+    # Again under the lock: a sync or another start may have run while this waited.
+    [ "$(herdr_linear::board_reservation_field "$issue" state 2>/dev/null)" = reserved ] \
+        || return "$HERDR_LINEAR_BOARD_START_NOT_RESERVED"
+    space="$(herdr_linear::board_home_space "$issue" 2>/dev/null)" || {
+        printf 'the board has no pane for %s; start it without the board\n' "$ident" >&2
+        return "$HERDR_LINEAR_BOARD_START_NOT_RESERVED"
+    }
+    herdr_linear::board_locate "$space" "$issue" >/dev/null 2>&1 || {
+        printf 'the reserved pane for %s is not open; start it without the board\n' "$ident" >&2
+        return "$HERDR_LINEAR_BOARD_START_NOT_RESERVED"
+    }
+    name="$(herdr_linear::board_reservation_field "$issue" worktree_name)" || return "$HERDR_LINEAR_START_FAILED"
+    branch="$(herdr_linear::board_reservation_field "$issue" branch)" || return "$HERDR_LINEAR_START_FAILED"
+
+    path="$(herdr_linear::start_from_issue "$ident" "" "" "$answer" "$name" "$branch")" || rc=$?
+    if [ "$rc" -eq "$HERDR_LINEAR_START_ASK" ]; then
+        herdr_linear::board_reservation_set_repo_unknown "$issue" true >/dev/null 2>&1
+        return "$rc"
+    fi
+    [ "$rc" -eq 0 ] || return "$rc"
+    herdr_linear::board_reservation_set_repo_unknown "$issue" false >/dev/null 2>&1
+
+    out="$(herdr_linear::board_start_pane "$space" "$issue" "$path" "$ident")" || rc=$?
+    pane="$(printf '%s' "$out" | cut -f1)"
+    term="$(printf '%s' "$out" | cut -f2)"
+    reserved="$(printf '%s' "$out" | cut -f5)"
+    if [ -z "$pane" ] || [ -z "$reserved" ]; then
+        printf 'the worktree is made and bound, but no pane was confirmed in it; the reserved pane is kept\n' >&2
+        printf '%s' "$path"
+        return "$HERDR_LINEAR_BOARD_START_PANE_UNKNOWN"
+    fi
+    if ! herdr_linear::board_ledger_set_pane "$space" "$issue" "$pane" "$term"; then
+        printf 'pane %s is open in the worktree, but the ledger still names the reserved pane, which is kept\n' "$pane" >&2
+        printf '%s\t%s' "$path" "$pane"
+        return "$HERDR_LINEAR_BOARD_START_PANE_UNKNOWN"
+    fi
+    herdr_linear::board_reservation_start "$issue" \
+        || printf 'the reservation for %s could not be marked started\n' "$ident" >&2
+
+    why="$(herdr_linear::board_in_use "$reserved" 2>/dev/null)" || used=$?
+    case "$used:$why" in
+        0:invoking*) herdr_linear::board_close_replaced_after "$issue" "$reserved" "$$" ;;
+        1:*) herdr_linear::board_close_replaced "$issue" "$reserved" >/dev/null \
+                 || printf 'the reserved pane %s could not be closed\n' "$reserved" >&2 ;;
+        *) printf 'the reserved pane %s is in use (%s) and is left open; close it when it is done\n' \
+               "$reserved" "${why:-unknown}" >&2 ;;
+    esac
+    printf '%s\t%s' "$path" "$pane"
+    [ "$rc" -eq 0 ] || return "$HERDR_LINEAR_BOARD_START_PANE_UNKNOWN"
+)
+
 # herdr_linear::board_focus_home <issue_id>
 herdr_linear::board_focus_home() {
     local label
@@ -800,6 +1016,74 @@ if op == "apply":
         say("the pane for %s cannot be found after the moves" % ", ".join(lost))
         sys.exit(UNKNOWN)
     report()
+    sys.exit(OK)
+
+if op == "start":
+    label, pane_id, name = args
+    snap = snapshot()
+    if snap is None:
+        say("the herdr snapshot cannot be read; nothing was opened")
+        sys.exit(UNKNOWN)
+    r = locate(snap, label, pane_id, "")
+    if r is None:
+        say("the reserved pane for %s is not open; nothing was opened" % os.environ["HL_ISSUE"])
+        sys.exit(GONE)
+    focus_flag = [] if snap.get("focused_pane_id") == r["pane_id"] else ["--no-focus"]
+    res, err = herdr("pane", "split", r["pane_id"], "--direction", "right", "--cwd", os.environ["HL_DIR"],
+                     *(focus_flag + ["--env", "HERDR_LINEAR_BOARD_ISSUE=%s" % os.environ["HL_ISSUE"]]))
+    pane = (res or {}).get("pane", {}).get("pane_id")
+    if not pane:
+        say("herdr made no pane (%s); the reserved pane is kept" % (err or "no pane id"))
+        sys.exit(UNKNOWN if err == "unreachable" else FAILED)
+    if not await_pane(pane):
+        say("pane %s never registered; the reserved pane is kept" % pane)
+        sys.exit(UNKNOWN)
+    # The reserved pane gives up the label first: two panes under one label
+    # make both unfindable by it.
+    _, err = herdr("pane", "rename", r["pane_id"], label + ":replaced")
+    if not err:
+        _, err = herdr("pane", "rename", pane, label)
+    after = snapshot()
+    n = [p for p in after["panes"] if p["pane_id"] == pane] if after else []
+    old = [p for p in after["panes"] if p["pane_id"] == r["pane_id"]] if after else []
+    if err or not n or n[0].get("label") != label or not old or old[0].get("label") != label + ":replaced":
+        say("the labels of %s and %s cannot be read back; the ledger still names the reserved pane" % (pane, r["pane_id"]))
+        sys.exit(UNKNOWN)
+    agent = subprocess.run([BIN, "agent", "start", name, "--kind", os.environ["HL_KIND"], "--pane", pane],
+                           capture_output=True, text=True)
+    after = snapshot()
+    n = [p for p in after["panes"] if p["pane_id"] == pane] if after else n
+    print("%s\t%s" % (row(n[0]), r["pane_id"]))
+    if agent.returncode != 0 or after is None or not n[0].get("agent"):
+        say("the agent in %s could not be confirmed: %s" % (pane, (agent.stderr or agent.stdout or "no answer").strip()[-200:]))
+        sys.exit(UNKNOWN)
+    sys.exit(OK)
+
+if op == "close-replaced":
+    label, pane_id = args
+    snap = snapshot()
+    if snap is None:
+        say("the herdr snapshot cannot be read; nothing was closed")
+        sys.exit(UNKNOWN)
+    hit = [p for p in snap["panes"] if p["pane_id"] == pane_id]
+    if not hit:
+        sys.exit(GONE)
+    if hit[0].get("label") != label:
+        say("refused: pane %s is not labelled %s; nothing was closed" % (pane_id, label))
+        sys.exit(REFUSED)
+    _, err = herdr("pane", "close", pane_id)
+    if err == "pane_not_found":
+        sys.exit(GONE)
+    if err and err != "unreachable":
+        say("herdr refused to close %s: %s" % (pane_id, err))
+        sys.exit(FAILED)
+    after = snapshot()
+    if after is None:
+        say("the close of %s cannot be read back; its result is unknown" % pane_id)
+        sys.exit(UNKNOWN)
+    if any(p["pane_id"] == pane_id for p in after["panes"]):
+        say("pane %s is still open after the close" % pane_id)
+        sys.exit(FAILED)
     sys.exit(OK)
 
 if op == "close":

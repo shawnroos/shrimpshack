@@ -269,9 +269,35 @@ start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.
 }
 
 # KTD7. An exit the table does not name is an exit the skill reads as failure.
+# Counting the rows counted the tables the skill happened to have; a table added
+# later carried its own row and turned the count red. Each table is read on its
+# own now. The floor is the number of exit tables committed beside it: raise it
+# with a new table, and say why if it is ever lowered, so a deleted table is a
+# failure rather than a smaller, silently-green check.
 @test "the start skill's exit tables carry a row for the ask value" {
-    run bash -c "printf '%s\n' \"\$1\" | grep -cE '^\\| 6 \\|'" _ "$(start_skill)"
-    [ "$output" = "2" ]
+    run python3 -c '
+import sys
+
+lines = open(sys.argv[1], encoding="utf-8").read().splitlines()
+tables, missing, i = 0, [], 0
+while i < len(lines):
+    if lines[i].strip() != "| Exit | Meaning |":
+        i += 1
+        continue
+    tables += 1
+    j = i + 1
+    while j < len(lines) and lines[j].startswith("|"):
+        j += 1
+    if not any(l.startswith("| 6 |") for l in lines[i + 1:j]):
+        missing.append("the table at line %d names no exit 6" % (i + 1))
+    i = j
+if tables < 3:
+    missing.append("%d exit tables found, expected at least 3" % tables)
+print(chr(10).join(missing))
+sys.exit(1 if missing else 0)
+' "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.md"
+    [ "$status" -eq 0 ] || printf '%s\n' "$output" >&2
+    [ "$status" -eq 0 ]
 }
 
 # R14. No caller supplies the name, so the skill must not tell anyone to.
