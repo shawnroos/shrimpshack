@@ -223,6 +223,19 @@ def op_tab_create(st, ws, cwd, label, env, want_focus):
     return {"type": "tab_created", "tab": public_tab(st, tab), "root_pane": public_pane(st, p)}
 
 
+def op_workspace_create(st, label, cwd, want_focus):
+    ws = {"workspace_id": "w%d" % next_seq(st), "label": label}
+    st["workspaces"].append(ws)
+    out = op_tab_create(st, ws["workspace_id"], cwd, "1", {}, want_focus)
+    return {"type": "workspace_created", "workspace": ws, "tab": out["tab"], "root_pane": out["root_pane"]}
+
+
+def op_tab_rename(st, tab_id, label):
+    tab = find_tab(st, tab_id)
+    tab["label"] = label
+    return {"type": "tab_info", "tab": public_tab(st, tab)}
+
+
 def op_move(st, params):
     p = find_pane(st, params.get("pane_id", ""))
     dest = params.get("destination") or {}
@@ -418,6 +431,12 @@ def cli(argv):
         return {"id": "cli:tab:create", "result": mutate(op_tab_create, flag(rest, "--workspace") or "",
                                                            flag(rest, "--cwd"), flag(rest, "--label"), env_map(rest),
                                                            "--no-focus" not in rest)}
+    if cmd == "workspace create":
+        return {"id": "cli:workspace:create", "result": mutate(op_workspace_create, flag(rest, "--label"),
+                                                                 flag(rest, "--cwd"), "--no-focus" not in rest)}
+    if cmd == "tab rename":
+        pos = positional(rest)
+        return {"id": "cli:tab:rename", "result": mutate(op_tab_rename, pos[0] if pos else "", " ".join(pos[1:]))}
     if cmd == "pane move":
         pos = positional(rest)
         if "--new-tab" in rest:

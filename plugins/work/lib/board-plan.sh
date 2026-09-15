@@ -438,13 +438,17 @@ class Engine:
                 return True
         return False
 
-    def label_value(self, space, kind, label, own):
+    def label_value(self, space, kind, label, own, within=None):
         """A herdr space or tab label read back as a group value of <kind>."""
         if label == self.none_name(kind):
             return None
         known = [v for v, n in self.names.get(kind, {}).items() if v is not None and n == label]
         if kind == "priority":
             known = sorted(set(known) | {v for v, n in PRIORITY_NAMES.items() if n == label})
+        # Names repeat across teams ("In Progress" in every team), so a label is
+        # read against the groups this space renders before it counts as ambiguous.
+        if within is not None and len(known) > 1:
+            known = [v for v in known if v in within] or known
         if len(known) == 1:
             return known[0]
         if len(known) > 1:
@@ -470,7 +474,9 @@ class Engine:
             sk = lv.get("space")
             if sk is None:
                 return OUTSIDE
-            v = self.label_value(space, sk, ws_label, MISSING)
+            groups_there = {e["groups"].get(sk) for e in self.ledger.get(ws_label, {}).values()} | \
+                           {pl["groups"].get(sk) for pl in self.desired.values() if pl["space"] == ws_label}
+            v = self.label_value(space, sk, ws_label, MISSING, groups_there)
             rendered = {pl["space"] for pl in self.desired.values() if pl["mapping"] == "global"} | \
                        {s for s in self.ledger if self.mapping_of_space(s) == "global"}
             if v is OUTSIDE or v is AMBIG or ws_label not in rendered:
@@ -479,7 +485,8 @@ class Engine:
             target = ws_label
         elif mapping == "global" and "space" in lv:
             H[lv["space"]] = E.get(lv["space"], MISSING) if E.get(lv["space"], MISSING) is not MISSING \
-                else self.label_value(space, lv["space"], ws_label, MISSING)
+                else self.label_value(space, lv["space"], ws_label, MISSING,
+                                      {e["groups"].get(lv["space"]) for e in self.ledger.get(space, {}).values()})
 
         tk = lv.get("tab")
         if tk is None:
@@ -488,11 +495,11 @@ class Engine:
             tab_value = None
         else:
             own = E.get(tk, MISSING) if target == space else MISSING
-            v = self.label_value(target, tk, tab.get("label"), own)
-            if v is OUTSIDE or v is AMBIG:
-                return OUTSIDE
             rendered_tabs = {e["groups"].get(tk) for e in self.ledger.get(target, {}).values()}
             rendered_tabs |= {pl["groups"].get(tk) for pl in self.desired.values() if pl["space"] == target}
+            v = self.label_value(target, tk, tab.get("label"), own, rendered_tabs)
+            if v is OUTSIDE or v is AMBIG:
+                return OUTSIDE
             if v not in rendered_tabs:
                 return OUTSIDE
             H[tk] = v

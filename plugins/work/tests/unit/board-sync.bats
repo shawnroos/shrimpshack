@@ -533,6 +533,21 @@ PY
 
 # ---------------------------------------------------------------- refusals and limits
 
+@test "a space with no herdr workspace gets one, its tabs are built in it, and no shell is left behind" {
+    config '{"space":"project","tab":"state"}'
+    empty_board; serve
+    tickets "iss-1:todo iss-2:doing"
+    run herdr_linear::board_sync
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_SYNC_CLEAN" ]
+    [ -z "$(question_kinds)" ]
+    [ "$(snap | field '[w["label"] for w in d["result"]["snapshot"]["workspaces"]].count("Alpha")')" = 1 ]
+    [ "$(snap | field 'sorted(t["label"] for t in d["result"]["snapshot"]["tabs"] for w in d["result"]["snapshot"]["workspaces"] if w["label"] == "Alpha" and t["workspace_id"] == w["workspace_id"])')" = "['Doing', 'Todo']" ]
+    [ "$(board_panes | tr -d "[]' ")" = "work:iss-1,work:iss-2" ]
+    [ "$(snap | field 'sum(1 for p in d["result"]["snapshot"]["panes"] for w in d["result"]["snapshot"]["workspaces"] if w["label"] == "Alpha" and p["workspace_id"] == w["workspace_id"])')" = 2 ]
+    run -0 herdr_linear::board_sync
+    [ "$(snap | field '[w["label"] for w in d["result"]["snapshot"]["workspaces"]].count("Alpha")')" = 1 ]
+}
+
 @test "a refused configuration exits with its own code and a sync state that names the refusal, not zero changes" {
     config '{"tab":"state"}'
     empty_board; serve
@@ -565,6 +580,18 @@ PY
     [ "$(question_kinds)" = "cap" ]
     run -0 herdr_linear::board_question cap-surplus
     [[ "$(printf '%s' "$output" | field 'd["preconditions"]')" == *'"issues":["iss-4","iss-5"]'* ]]
+}
+
+@test "a tab never grows past the cap across syncs: the tickets beyond it wait on the one question" {
+    export HERDR_LINEAR_BOARD_PANE_CAP=3
+    config '{"tab":"state"}'
+    empty_board; serve
+    tickets "iss-1:todo iss-2:todo iss-3:todo iss-4:todo iss-5:todo iss-6:todo iss-7:todo"
+    run herdr_linear::board_sync
+    run herdr_linear::board_sync
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_SYNC_QUESTIONS" ]
+    [ "$(board_panes | tr -d "[]' ")" = "work:iss-1,work:iss-2,work:iss-3" ]
+    [ "$(question_kinds)" = "cap" ]
 }
 
 @test "an incomplete read closes nothing, asks nothing about leaving, and says so in the sync state" {

@@ -227,6 +227,23 @@ herdr_linear::_board_apply() {
     return "$rc"
 }
 
+# herdr_linear::board_create_space <space> <first-tab-label>
+# Makes the herdr workspace a space renders, when none is labelled with its name.
+# Its first tab takes the label of the first board tab, and its root shell is a
+# recorded placeholder, so that tab's apply builds in it and closes the shell.
+# Prints `<workspace_id>\t<tab_id>\t<root_pane_id>`. REFUSED when a workspace
+# with that label is already open.
+herdr_linear::board_create_space() {
+    local space="${1:-}" tab="${2:-}"
+    case "$space$tab" in *$'\n'*) herdr_linear::_board_pane_refuse "a space and tab label are one line each"; return ;; esac
+    [ -n "$space" ] && [ -n "$tab" ] || { herdr_linear::_board_pane_refuse "a space needs a name and a first tab"; return; }
+    [ -d "${HERDR_LINEAR_WORKTREES_ROOT:-}" ] \
+        || { herdr_linear::_board_pane_refuse "a new space's shell opens in the worktrees root, and it is not a directory"; return; }
+    herdr_linear::_board_ready || return
+    HL_PLACEHOLDERS="$(herdr_linear::_board_placeholders)" HL_DIR="$HERDR_LINEAR_WORKTREES_ROOT" \
+        herdr_linear::_board_herdr_py create-space "$space" "$tab"
+}
+
 # herdr_linear::board_apply_tab <space> <tab_id|new:<workspace_id>:<label>> <columns-json> [kept_tab_id...] [held:<issue>,...]
 # Builds the tab as columns of rows (`[["issue",...],...]`, left to right, top
 # to bottom) by chained moves: column heads first, then rows under them. The
@@ -771,6 +788,35 @@ if op == "create":
         say("pane %s was created but its label cannot be read back; its state is unknown" % pane)
         sys.exit(UNKNOWN)
     print(row(p))
+    sys.exit(OK)
+
+if op == "create-space":
+    space, tab_label = args
+    snap = snapshot()
+    if snap is None:
+        say("the herdr snapshot cannot be read; no workspace was made")
+        sys.exit(UNKNOWN)
+    if any(w.get("label") == space for w in snap.get("workspaces", [])):
+        say("refused: a workspace labelled %s is already open" % space)
+        sys.exit(REFUSED)
+    res, err = herdr("workspace", "create", "--label", space, "--cwd", os.environ["HL_DIR"], "--no-focus")
+    ws = ((res or {}).get("workspace") or {}).get("workspace_id")
+    tab = ((res or {}).get("tab") or {}).get("tab_id")
+    root = ((res or {}).get("root_pane") or {}).get("pane_id")
+    if not ws or not tab or not root:
+        say("herdr made no workspace (%s)" % (err or "no workspace id"))
+        sys.exit(UNKNOWN if err == "unreachable" else FAILED)
+    # Recorded first: an unrecorded shell is a foreign pane that refuses the tab.
+    with open(os.environ["HL_PLACEHOLDERS"], "a") as f:
+        f.write("%s\n" % root)
+    os.chmod(os.environ["HL_PLACEHOLDERS"], 0o600)
+    _, err = herdr("tab", "rename", tab, tab_label)
+    if not err and await_pane(root):
+        herdr("pane", "rename", root, "work:placeholder")
+    if err:
+        say("workspace %s was made but its first tab could not be named (%s)" % (ws, err))
+        sys.exit(UNKNOWN)
+    print("\t".join([ws, tab, root]))
     sys.exit(OK)
 
 if op == "move":

@@ -106,6 +106,16 @@ PY
     [ "$output" = '["iss-1", "iss-2", "iss-3", "iss-4", "iss-6"]' ]
 }
 
+# Live boards repeat names across teams: every team has its own "In Progress".
+@test "a tab label two groups share is read as the group its own space renders, not as outside the board" {
+    edit 'T("iss-4")["assignee"] = {"id": "user-ana-ops", "name": "Ana"}'
+    plan
+    run ask 'A("hide")'
+    [ "$output" = "[]" ]
+    run ask 'A(None, "iss-1") + A(None, "iss-3") + A(None, "iss-6")'
+    [ "$output" = "[]" ]
+}
+
 @test "the same inputs always produce the same bytes" {
     edit 'T("iss-1")["state"] = {"id": "st-prog", "name": "In Progress", "type": "started"}; read("Mine")["tickets"] = [T("iss-3")]'
     plan

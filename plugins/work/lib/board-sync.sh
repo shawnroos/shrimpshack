@@ -720,6 +720,12 @@ class Sync:
         for s in plan["spaces"]:
             ws = self.workspace(snap, s["name"])
             for t in s["tabs"]:
+                if ws is None and any((s["name"], leaf["issue_id"]) in touching
+                                      for c in columns_of(t["tree"]) for leaf in c):
+                    rc, out, _ = call("board_create_space", s["name"], t["name"])
+                    if rc == P_OK and out.strip():
+                        ws = out.strip().split("\t")[0]
+                        self.count(self.observed, "spaces_made")
                 cols = columns_of(t["tree"])
                 live = self.tab_named(snap, ws, t["name"], set()) if ws else None
                 if not any((s["name"], leaf["issue_id"]) in touching for c in cols for leaf in c) \
@@ -908,7 +914,9 @@ class Sync:
                 elif (space, issue) in self.deferred:
                     continue
                 elif place is not None:
-                    if self.created >= CAP:
+                    # herdr's apply refuses a tab over the cap, so a full tab takes no
+                    # new pane: placed, it could never be built again.
+                    if self.created >= CAP or len(intent["leaves"]) >= CAP:
                         self.surplus.append(issue)
                         continue
                     if role == "home" and not (issue in self.tickets and self.reserve(self.tickets[issue])):
