@@ -64,3 +64,20 @@ beginning with `PROBE-`. Compare against the `.tokens` file the hook writes.
 
 Note: `timeout` does not exist on this machine and returns success without
 running the command. Do not wrap the probe in it.
+
+## customviews.sh — the CustomView shapes
+
+`tests/probe/customviews.sh` captures what `herdr_linear::project_views`,
+`view_read`, `view_issues` and `view_create` depend on: introspection of
+`CustomView`, `ViewPreferencesValues`, `CustomViewCreateInput` and
+`ViewPreferencesCreateInput`, a page of `customViews` with their `filterData`,
+one `customView(id)` with `viewPreferencesValues`, one `issues(filter:)` call
+that passes a view's filter through unchanged, and the unknown-id error. The
+redacted result is `customviews-transcript.md`.
+
+Its create arm is **the one mutation in this directory**. It creates a
+throwaway view, gives it board preferences, reads it back and deletes it. It
+runs only with `--mutate` and a terminal on stdin, and exits 64 otherwise, so
+nothing unattended can reach it. The read arms are the default and send only
+queries. The credential goes to curl on stdin, never argv; do not `ps -f` or
+`pgrep -f` while it runs.

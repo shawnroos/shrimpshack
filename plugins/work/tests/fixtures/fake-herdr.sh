@@ -262,7 +262,7 @@ canned_snapshot() {
     cat <<'JSON'
 {"id":"cli:api:snapshot","result":{"snapshot":{
 "focused_pane_id":"wA:p1","focused_tab_id":"wA:t1","focused_workspace_id":"wA",
-"protocol":20,"version":"0.8.2",
+"protocol":22,"version":"0.9.0",
 "workspaces":[{"workspace_id":"wA","label":"Plugins","active_tab_id":"wA:t1","tab_count":2}],
 "tabs":[
  {"tab_id":"wA:t1","workspace_id":"wA","label":"Plugin PM","pane_count":2},

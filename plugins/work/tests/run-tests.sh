@@ -38,7 +38,7 @@ EOF
 # up whenever a suite file is added; if it is ever lowered, say why in the
 # commit — this number is what turns "the tests directory got renamed" into a
 # failure instead of a smaller, silently-green run.
-HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-22}"
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-24}"
 
 run_suite() {
     local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
@@ -485,6 +485,7 @@ consent_mutation_check() {
         "description.bats:a description is not written when nobody has answered"
         "documents.bats:a document is not published when nobody has answered"
         "reconcile.bats:a hook with no recorded answer records the question rather than sending"
+        "views.bats:a view is not created when nobody has answered"
     )
     # The names above are the point of the list and they stay. What a hand-kept
     # list cannot do is notice the write verb added next year: a seventh call
