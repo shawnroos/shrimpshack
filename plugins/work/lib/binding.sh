@@ -180,7 +180,8 @@ def load(path):
     rec.setdefault("created_documents", [])
     rec.setdefault("description_head", "")
     rec.setdefault("issue_updated_at", "")
-    for k in ("declined", "created_children", "created_documents", "created_views"):
+    rec.setdefault("prior_bindings", [])
+    for k in ("declined", "created_children", "created_documents", "created_views", "prior_bindings"):
         if not isinstance(rec[k], list):
             return None
     return rec
@@ -195,7 +196,7 @@ def blank(path_value):
         "view": None, "created_views": [],
         "created_children": [],
         "created_documents": [], "description_head": "",
-        "issue_updated_at": "", "updated_at": now(),
+        "issue_updated_at": "", "prior_bindings": [], "updated_at": now(),
     }
 
 def save(path, rec):
@@ -275,6 +276,54 @@ if op == "view":
     sys.stdout.write(json.dumps(rec["view"], sort_keys=True))
     sys.exit(0)
 
+if op == "list-effective":
+    # Every binding in the store with the state binding_read would report, in
+    # one process: the snapshot used to spend about seven processes a record,
+    # which is 25 seconds at 40 worktrees against the board's refresh deadline.
+    # The state comes from load() on the record at the worktree's own key, as
+    # binding_read reads it, and a bound record whose branch has moved reads as
+    # proposed, as binding_read downgrades it.
+    import glob, hashlib, subprocess
+    def mode_ok(f):
+        try:
+            st = os.stat(f)
+        except OSError:
+            return False
+        return os.path.isfile(f) and st.st_uid == os.getuid() and not st.st_mode & 0o022
+    for f in sorted(glob.glob(os.path.join(path, "bindings", "*.json"))):
+        if not mode_ok(f):
+            continue
+        try:
+            raw = json.load(open(f))
+        except Exception:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        tab = raw.get("tab") if isinstance(raw.get("tab"), str) else ""
+        wt = str(raw.get("worktree_path") or "")
+        row = [f, str(raw.get("issue_identifier") or ""), wt, tab]
+        if any("\x1f" in c or "\n" in c for c in row):
+            continue
+        if not os.path.isdir(wt):
+            print("\x1f".join(row + ["worktree_missing"]))
+            continue
+        key = hashlib.sha1(os.path.realpath(wt).encode()).hexdigest()[:16]
+        kf = os.path.join(path, "bindings", key + ".json")
+        rec = load(kf) if mode_ok(kf) else None
+        if rec is None:
+            continue
+        eff = rec["state"]
+        if eff == "bound":
+            try:
+                branch = subprocess.run(["git", "-C", wt, "--no-optional-locks", "branch", "--show-current"],
+                                        capture_output=True, text=True).stdout.rstrip("\n")
+            except Exception:
+                branch = ""
+            if rec.get("branch_at_confirmation", "") != branch:
+                eff = "proposed"
+        print("\x1f".join(row + [eff]))
+    sys.exit(0)
+
 if op == "owns-view":
     rec = load(path)
     sys.exit(0 if rec is not None and args[0] in rec["created_views"] else 1)
@@ -313,6 +362,25 @@ if op == "confirm":
     p = rec.get("proposal")
     if not p or p.get("identifier") != identifier or not nonce or p.get("nonce") != nonce:
         sys.exit(2)
+    prev = rec.get("issue_identifier") or ""
+    if prev and prev != identifier:
+        # What the plugin created and chose under the previous binding does not
+        # carry over: created_children and created_documents are the write
+        # bound, and a view names the old project. They move to prior_bindings
+        # rather than vanish, so a created item can still be found to delete.
+        rec["prior_bindings"].append({
+            "issue_identifier": prev, "view": rec["view"],
+            "created_views": rec["created_views"],
+            "created_children": rec["created_children"],
+            "created_documents": rec["created_documents"],
+            "until": now(),
+        })
+        rec["view"] = None
+        rec["created_views"] = []
+        rec["created_children"] = []
+        rec["created_documents"] = []
+        rec["description_head"] = ""
+        rec["issue_updated_at"] = ""
     rec["state"] = "bound"
     rec["issue_identifier"] = identifier
     rec["branch_at_confirmation"] = branch
@@ -526,6 +594,15 @@ herdr_linear::_mode_ok() {
 # herdr_linear::binding_read <worktree>
 # Prints the record as JSON with `state` replaced by the EFFECTIVE state. Never
 # writes, never locks.
+# herdr_linear::bindings_effective
+# One `file US identifier US worktree_path US tab US state` line per binding
+# record in the store, with the state binding_read reports, or
+# `worktree_missing` when the worktree directory is gone. Records the loader
+# refuses, and rows carrying US or a newline, are left out.
+herdr_linear::bindings_effective() {
+    herdr_linear::_py list-effective "$HERDR_LINEAR_STORE_DIR"
+}
+
 herdr_linear::binding_read() {
     local wt="${1:-}" rec f branch recorded state
     f="$(herdr_linear::_record_path "$wt")" || return "$HERDR_LINEAR_BINDING_ABSENT"

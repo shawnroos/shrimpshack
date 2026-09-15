@@ -56,6 +56,7 @@ HERDR_LINEAR_AUTH=3            # the credential was refused
 HERDR_LINEAR_RATELIMITED=4     # still limited after backing off
 HERDR_LINEAR_REFUSED=5         # the plugin's own bound said no
 HERDR_LINEAR_VIEW_PREFS_FAILED=6  # the view exists; its board preferences do not
+HERDR_LINEAR_PARTIAL=7         # a listing stopped at its page cap; what printed is real
 
 # _post returns either curl's own exit code or this. It is deliberately outside
 # curl's range: curl 3 means "malformed URL" and would otherwise be
@@ -468,10 +469,10 @@ sys.exit(0 if names_project(f, os.environ["HERDR_LINEAR_PROJECT"]) else 1)
 }
 
 herdr_linear::project_views() {
-    local project="${1:-}" after="" body resp rc pages=0 out=""
+    local project="${1:-}" after="" body resp rc pages=0 out="" partial=0
     [ -n "$project" ] || return "$HERDR_LINEAR_REFUSED"
     while :; do
-        [ "$pages" -lt "$HERDR_LINEAR_VIEW_PAGE_MAX" ] || break
+        if [ "$pages" -ge "$HERDR_LINEAR_VIEW_PAGE_MAX" ]; then partial=1; break; fi
         body="$(HERDR_LINEAR_AFTER="$after" python3 -c '
 import sys, json, os
 q = "query($n:Int,$after:String){customViews(first:$n,after:$after){nodes{id name modelName archivedAt filterData} pageInfo{hasNextPage endCursor}}}"
@@ -509,8 +510,14 @@ print("\x01%s %s" % ("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") 
             *)     break ;;
         esac
     done
-    [ -n "$out" ] || return "$HERDR_LINEAR_OK"
-    printf '%s' "$out" | herdr_linear::sanitize_stream
+    [ -n "$out" ] && printf '%s' "$out" | herdr_linear::sanitize_stream
+    if [ "$partial" -eq 1 ]; then
+        # The organisation has more views than the page cap reads. The lines
+        # above are real candidates, and a view past the cap is not among them.
+        printf 'listed the first %s pages of views only; a view past that can be chosen by its id\n' "$HERDR_LINEAR_VIEW_PAGE_MAX" >&2
+        return "$HERDR_LINEAR_PARTIAL"
+    fi
+    return "$HERDR_LINEAR_OK"
 }
 
 # The layout fields were confirmed by introspection on 2026-09-14
