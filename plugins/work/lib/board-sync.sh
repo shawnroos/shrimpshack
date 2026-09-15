@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The unattended half of a board sync (KTD2): one call brings herdr in line with
 # Linear as far as it can without asking anyone, records every question for the
-# next /work command, and never asks, closes, or writes Linear. Sourced, never
+# next /work command, and never asks or closes. Its one Linear write is a
+# consented write-back of a pane a person moved (R25-R27). Sourced, never
 # executed.
 #
 # The python3 driver calls each board verb in a fresh bash, so every herdr and
@@ -99,6 +100,69 @@ herdr_linear::_board_sync_unlock() {
     [ "$(cat "$lock/pid" 2>/dev/null)" = "$1" ] || return 0
     rm -f "$lock/pid"
     rmdir "$lock" 2>/dev/null
+}
+
+# herdr_linear::board_write_back_gate <space> <issue> <level-kind> <target|--none> [<descendant-id>...]
+#   0  allowed: the board write bound and the space's consent (KTD8)
+#   HERDR_LINEAR_BOARD_WRITE_SHADOW  refused; exactly one shadow log line
+# The descendants are the moved ticket's sub-tickets, at any depth, from the
+# last complete read: a parent write under one of them makes a cycle.
+herdr_linear::board_write_back_gate() {
+    local space="${1-}" issue="${2-}" kind="${3-}" target="${4-}" d
+    shift 4 2>/dev/null || set --
+    case "$kind" in
+        team|project|milestone|cycle|assignee|state|priority|parent|sub-ticket|label-group:?*) ;;
+        *)
+            herdr_linear::_shadow_log "SHADOW board would set \"$kind\" on \"$issue\" in \"$space\": a $kind group is not a Linear field"
+            return "$HERDR_LINEAR_BOARD_WRITE_SHADOW" ;;
+    esac
+    case "$kind" in
+        parent|sub-ticket)
+            for d in "$issue" "$@"; do
+                [ "$target" = "$d" ] || continue
+                herdr_linear::_shadow_log "SHADOW board would set \"$kind\" to \"$target\" on \"$issue\" in \"$space\": the target is the ticket itself or one of its sub-tickets"
+                return "$HERDR_LINEAR_BOARD_WRITE_SHADOW"
+            done ;;
+    esac
+    herdr_linear::board_consent_gate "$space" "$kind" "$issue" "$target" \
+        || return "$HERDR_LINEAR_BOARD_WRITE_SHADOW"
+    return 0
+}
+
+# herdr_linear::board_write_back <space> <issue> <level-kind> <target|--none> <from|--none> [<descendant-id>...]
+# R25. Sets the field a pane was moved across to the group it was moved into.
+# <from> is the group it left; a label group removes that label.
+# Exit 0 written; BOARD_WRITE_SHADOW refused by the gate (nothing sent);
+# otherwise the field write's code.
+herdr_linear::board_write_back() {
+    local space="${1-}" issue="${2-}" kind="${3-}" target="${4-}" from="${5-}" field rc why
+    local -a descendants=("${@:6}") removed=()
+    herdr_linear::board_write_back_gate "$space" "$issue" "$kind" "$target" ${descendants[@]+"${descendants[@]}"} \
+        || return "$HERDR_LINEAR_BOARD_WRITE_SHADOW"
+    case "$kind" in
+        team) field=teamId ;;
+        project) field=projectId ;;
+        milestone) field=projectMilestoneId ;;
+        cycle) field=cycleId ;;
+        assignee) field=assigneeId ;;
+        state) field=stateId ;;
+        priority) field=priority ;;
+        parent|sub-ticket) field=parentId ;;
+        *) field=labelGroup; removed=("${from:---none}") ;;
+    esac
+    herdr_linear::board_write_field "$issue" "$field" "$target" ${removed[@]+"${removed[@]}"}; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        case "$rc" in
+            "$HERDR_LINEAR_BOARD_WRITE_REJECTED") why="Linear rejected the write" ;;
+            "$HERDR_LINEAR_REFUSED") why="the write was refused before it was sent" ;;
+            *) why="the Linear request failed with code $rc" ;;
+        esac
+        herdr_linear::_shadow_log "SHADOW board did not set \"$kind\" to \"$target\" on \"$issue\" in \"$space\": $why"
+        return "$rc"
+    fi
+    # The write happened; a store that cannot record it must not report a failed write.
+    herdr_linear::board_record_linear_write >/dev/null 2>&1 || true
+    return 0
 }
 
 # herdr_linear::board_sync
@@ -467,18 +531,19 @@ class Sync:
         rc, state_text, _ = call("board_sync_state")
         if rc == 0:
             previous = {"rendered": json.loads(state_text).get("rendered") or {}}
+        # Every person's move is a write-back candidate; the gate decides which
+        # are written. With no consent recorded that is none: shadow mode.
         doc = {"config": config, "reads": reads, "snapshot": self.unparked(snap), "layouts": layouts, "ledger": led,
                "previous": previous, "aliases": {},
                "in_use": {"invoking_pane_id": os.environ.get("HL_INVOKING") or None,
                           "treat_all_in_use": restarted},
-               "writes_enabled": self.writes_enabled()}
-        inp = os.path.join(BOARD, "plan-input.json")
-        write_private(inp, json.dumps(doc))
-        rc, plan_text, err = call("board_plan", inp)
-        if rc != 0:
-            self.fail("plan", err or "the placement engine refused its input", FAILED)
+               "writes_enabled": True}
+        self.reads_complete = self.read_failure is None and all(r["complete"] for r in reads)
+        self.sent = set()
+        plan_text, plan = self.plan(doc)
+        if self.settle_write_backs(plan, led):
+            plan_text, plan = self.plan(doc)
         write_private(os.path.join(BOARD, "last-plan.json"), plan_text)
-        plan = json.loads(plan_text)
 
         self.execute(plan, snap, led, ambiguous)
         self.finish_parks()
@@ -509,24 +574,91 @@ class Sync:
             raise Stop(QUESTIONS)
         raise Stop(UNKNOWN if self.unknown else CLEAN)
 
-    @staticmethod
-    def writes_enabled():
-        """No global writes flag exists, only recorded consent: a board with no
-        space consent is in shadow mode. U9 decides per space and field."""
-        d = os.path.join(BOARD, "consent")
-        for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-            try:
-                with open(os.path.join(d, n)) as f:
-                    if json.load(f).get("fields"):
-                        return True
-            except (OSError, ValueError, AttributeError):
-                pass
-        return False
+    def plan(self, doc):
+        inp = os.path.join(BOARD, "plan-input.json")
+        write_private(inp, json.dumps(doc))
+        rc, plan_text, err = call("board_plan", inp)
+        if rc != 0:
+            self.fail("plan", err or "the placement engine refused its input", FAILED)
+        return plan_text, json.loads(plan_text)
+
+    def descendants(self, issue):
+        children = {}
+        for t in self.tickets.values():
+            parent = (t.get("parent") or {}).get("id") if isinstance(t.get("parent"), dict) else None
+            if parent:
+                children.setdefault(parent, []).append(t["id"])
+        out, todo = [], list(children.get(issue, []))
+        while todo:
+            i = todo.pop()
+            if i not in out and i != issue:
+                out.append(i)
+                todo += children.get(i, [])
+        return sorted(out)
+
+    def settle_write_backs(self, plan, led):
+        """Every candidate is gated, and with a complete read the allowed ones are
+        written now. A move that is refused or not written is restored at this
+        sync and never replayed: its ticket is marked as a Linear change, so the
+        next plan puts the pane back and never offers the move again. A ticket
+        with any such field is restored whole."""
+        self.homes(led)
+        refused, allowed = set(), []
+        for a in plan["actions"]:
+            if a["kind"] != "write-back-candidate":
+                continue
+            space, issue, kind = a["space"], a["issue_id"], a["field"]
+            target = a["target_value"] if a["target_value"] is not None else "--none"
+            if call("board_write_back_gate", space, issue, kind, target, *self.descendants(issue))[0] == 0:
+                allowed.append(a)
+                continue
+            refused.add((self.source(space, issue, a["role"]), issue))
+            if call("board_consent_covers", space, kind)[0] != 0:
+                self.ask("write-consent", "%s-%s" % (space_key(space), space_key(kind)), {"space": space, "field": kind})
+        for a in allowed if self.reads_complete else []:
+            space, issue, kind = a["space"], a["issue_id"], a["field"]
+            src = self.source(space, issue, a["role"])
+            if (src, issue) in refused:
+                continue
+            target = a["target_value"] if a["target_value"] is not None else "--none"
+            was = a["from_value"] if a["from_value"] is not None else "--none"
+            if call("board_write_back", space, issue, kind, target, was, *self.descendants(issue))[0] == 0:
+                self.sent.add((space, issue, kind))
+                self.count(self.observed, "written_back")
+                continue
+            refused.add((src, issue))
+            self.count(self.observed, "write_backs_rejected")
+            self.ask("write-rejected", "%s-%s-%s" % (issue, space_key(space), space_key(kind)),
+                     {"space": space, "issue": issue, "field": kind, "target": a["target_value"]})
+        for src, issue in sorted(refused):
+            e = led.get(src, {}).get(issue)
+            if e is not None and call("board_ledger_mark_linear_change", src, issue)[0] == 0:
+                e["pending_linear_change"] = True
+                self.count(self.observed, "write_backs_refused")
+            else:
+                self.count(self.unknown, "write_backs")
+        return bool(refused)
+
+    def write_back(self, a, led):
+        space, issue, role, kind = a["space"], a["issue_id"], a["role"], a["field"]
+        if (space, issue, kind) not in self.sent:
+            return
+        src = self.source(space, issue, role)
+        e = led.get(src, {}).get(issue)
+        if e is None:
+            self.count(self.unknown, "ledger")
+            return
+        groups = self.written.setdefault((src, issue), dict(a["restore_groups"]))
+        groups[kind] = a["target_value"]
+        if self.put(src, issue, e["pane_id"], {"role": e["role"], "groups": groups, "created": e["board_created"]},
+                    e.get("terminal_id")):
+            e["groups"] = dict(groups)
 
     def execute(self, plan, snap, led, ambiguous):
         self.plan_actions = plan["actions"]
         self.homes(led)
         self.deferred = set()
+        self.written = {}
 
         for a in plan["actions"]:
             k, space, issue, role = a["kind"], a["space"], a["issue_id"], a["role"]
@@ -554,7 +686,7 @@ class Sync:
                 self.ask("move", key, {"space": space, "issue": issue, "groups": a.get("groups")})
                 call("board_ledger_mark_linear_change", self.source(space, issue, role), issue)
             elif k == "write-back-candidate":
-                self.count(self.observed, "write_back_candidates")
+                self.write_back(a, led)
             elif k == "agreement" and self.source(space, issue, role) == space:
                 e = led.get(space, {}).get(issue)
                 if e and self.put(space, issue, e["pane_id"], {"role": e["role"], "groups": a["groups"],

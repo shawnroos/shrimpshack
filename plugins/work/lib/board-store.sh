@@ -471,7 +471,7 @@ if op == "gate":
             reasons.append("issue id is not a safe identifier")
         elif issue not in rec.get("members", []):
             reasons.append("ticket is not in the last complete filter read")
-        if value not in rec.get("rendered", {}).get(space, {}).get(field, []):
+        if (None if value == "--none" else value) not in rec.get("rendered", {}).get(space, {}).get(field, []):
             reasons.append("target group was not rendered by the board")
     if not reasons:
         sys.exit(0)
@@ -809,7 +809,7 @@ herdr_linear::board_behind() {
 
 # ------------------------------------------------------------- board consent gate
 
-# herdr_linear::board_consent_gate <space> <field> <issue_id> <target_value>
+# herdr_linear::board_consent_gate <space> <field> <issue_id> <target_value|--none>
 #   0  the space consented to this field, the ticket is in the last complete
 #      filter read, and the target is a group the board rendered (KTD8)
 #   1  refused; exactly one shadow log line names every failed fact

@@ -490,6 +490,8 @@ consent_mutation_check() {
     # through board_consent_gate. One named red test per call site under lib/.
     local -a board_expect=(
         "board-linear.bats:completing a ticket in shadow mode logs and writes nothing"
+        "board-write.bats:AE6: in shadow mode a moved pane sends no issueUpdate and is restored"
+        "board-write.bats:moves of two tickets across one unconsented field record one consent question"
     )
     # The names above are the point of the list and they stay. What a hand-kept
     # list cannot do is notice the write verb added next year: a seventh call
@@ -511,12 +513,16 @@ consent_mutation_check() {
     fi
     local board_derived board_expected
     # board-store.sh defines both verbs and board-store.bats covers its own gate.
-    # A `command -v` guard names a verb but calls nothing.
+    # A `command -v` guard names a verb but calls nothing. board-sync.sh's python
+    # driver calls verbs by bare name, and its write-back tests live in
+    # board-write.bats beside the sync's own suite.
     board_derived="$(awk '
         FILENAME ~ /\/board-store\.sh$/ { next }
-        /herdr_linear::board_consent_(gate|covers)/ && $0 !~ /^[[:space:]]*#/ \
+        /herdr_linear::board_consent_(gate|covers)|call\("board_consent_(gate|covers)"/ && $0 !~ /^[[:space:]]*#/ \
             && $0 !~ /herdr_linear::board_consent_(gate|covers)\(\)/ && $0 !~ /command -v/ {
-            n = split(FILENAME, p, "/"); f = p[n]; sub(/\.sh$/, ".bats", f); print f
+            n = split(FILENAME, p, "/"); f = p[n]; sub(/\.sh$/, ".bats", f)
+            if (f == "board-sync.bats") f = "board-write.bats"
+            print f
         }' "$PLUGIN_ROOT"/lib/*.sh | sort)"
     board_expected="$(printf '%s\n' "${board_expect[@]}" | sed 's/:.*//' | sort)"
     if [ "$board_derived" != "$board_expected" ]; then

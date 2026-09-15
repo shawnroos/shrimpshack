@@ -739,6 +739,6 @@ PY2
 # ---------------------------------------------------------------- boundaries
 
 @test "the sync never calls a verb that asks or closes" {
-    run grep -nE 'board_(close_pane|move_in_use|apply_tab_in_use)|board_write_field|board_config_set' "$LIB/board-sync.sh"
+    run grep -nE 'board_(close_pane|move_in_use|apply_tab_in_use)|board_config_set' "$LIB/board-sync.sh"
     [ "$status" -eq 1 ]
 }
