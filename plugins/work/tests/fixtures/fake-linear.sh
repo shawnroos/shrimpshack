@@ -507,6 +507,7 @@ for k in (1, 2):
     nodes.append({
         "id": "bbbbbbbb-0000-4000-8000-%012d" % n, "identifier": "WEB-%d" % (5000 + n),
         "title": "Board ticket %d" % n,
+        "updatedAt": "2026-09-14T10:%02d:00.000Z" % n,
         "state": {"id": "st-todo", "name": "Todo", "type": "unstarted"},
         "team": {"id": "55555555-5555-4555-8555-555555555555", "key": "WEB"},
         "project": {"id": "44444444-4444-4444-8444-444444444444", "name": "AI Canvas Tools"} if k == 1 else None,

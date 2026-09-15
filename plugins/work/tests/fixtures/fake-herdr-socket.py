@@ -25,12 +25,20 @@ Environment:
   FAKE_HERDR_SNAPSHOT_FAILS_AFTER_MOVE 1: reads fail once a move has been applied
   FAKE_HERDR_SNAPSHOT_FAILS_AFTER_CLOSE 1: reads fail once a close has been applied
   FAKE_HERDR_RENAME_IGNORED 1: `pane rename` answers success and changes nothing
+  FAKE_HERDR_KILL_AFTER_MOVES N: once the Nth socket `pane.move` is applied and
+                           saved, SIGKILL the process group named in
+                           FAKE_HERDR_KILL_PGID_FILE and close the connection
+                           unanswered: a sync that dies after herdr moved a
+                           pane and before it heard so
   FAKE_HERDR_SLOW_PANE     N: a created pane is unknown to every verb and to the
                            snapshot until N `pane get` probes have missed it, as
                            a live pane registers after `split` returns
+
+Test helpers: seed <spec>, tree <tab>, restart, set-agent <pane> <agent|none> [status].
 """
 import json
 import os
+import signal
 import socketserver
 import sys
 import threading
@@ -444,8 +452,27 @@ class Handler(socketserver.StreamRequestHandler):
                 out = {"id": rid, "result": METHODS[method](req.get("params") or {})}
             except Err as e:
                 out = {"id": rid, "error": {"code": e.code, "message": e.message}}
+            if method == "pane.move" and "result" in out and kill_now():
+                return
             self.wfile.write((json.dumps(out) + "\n").encode())
             self.wfile.flush()
+
+
+def kill_now():
+    limit = os.environ.get("FAKE_HERDR_KILL_AFTER_MOVES")
+    if not limit:
+        return False
+    with LOCK:
+        path = os.path.join(REC, "moves-applied")
+        n = int(open(path).read() or 0) + 1 if os.path.exists(path) else 1
+        open(path, "w").write(str(n))
+    if n != int(limit):
+        return False
+    pgid = int(open(os.environ["FAKE_HERDR_KILL_PGID_FILE"]).read().strip())
+    if pgid <= 1 or pgid == os.getpgrp():
+        raise SystemExit("fake-herdr: refusing to kill its own process group")
+    os.killpg(pgid, signal.SIGKILL)
+    return True
 
 
 class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
@@ -508,7 +535,7 @@ def main(argv):
     if sub == "set-agent":
         def set_agent(st):
             p = find_pane(st, argv[1])
-            p["agent"], p["agent_status"] = argv[2], argv[3]
+            p["agent"], p["agent_status"] = (None, "unknown") if argv[2] == "none" else (argv[2], argv[3])
         mutate(set_agent)
         return 0
     if sub == "cli":

@@ -330,12 +330,36 @@ d["aliases"] = {"w1:p3": "w1:p7"}'
     run ask '[(a["kind"], a["pane_id"]) for a in A(issue="iss-3")]'
     [ "$output" = '[["relink", "w1:p7"]]' ]
 
-    edit 'd["aliases"] = {}; P("w1:p7")["label"] = "board:iss-3"'
+    edit 'd["aliases"] = {}; P("w1:p7")["label"] = "work:iss-3"'
     plan
     run ask '[a["kind"] for a in A(issue="iss-3")]'
     [ "$output" = '["relink"]' ]
     run ask 'len(A("hide"))'
     [ "$output" = "0" ]
+    run ask '[l["board_label"] for l in leaves(tab("WEB", "Ana")["tree"]) if l.get("issue_id") == "iss-3"]'
+    [ "$output" = '["work:iss-3"]' ]
+}
+
+@test "a pointer pane is found by its own space's pointer label, and never by the home label" {
+    key="$(printf '%s' Mine | shasum | cut -c1-16)"
+    edit '
+read("Mine")["tickets"] = [T("iss-1")]
+snap["workspaces"].append({"workspace_id": "w3", "label": "Mine"})
+snap["tabs"].append({"tab_id": "w3:t1", "workspace_id": "w3", "label": "High"})
+snap["panes"].append({"pane_id": "w3:p9", "tab_id": "w3:t1", "workspace_id": "w3", "agent": None, "label": "work:iss-1"})
+layout("w3:t1", pane("w3:p9"))
+d["ledger"]["Mine"] = {"iss-1": {"pane_id": "w3:p1", "role": "pointer", "board_created": True, "hidden": False,
+                                 "hidden_fingerprint": "", "pending_linear_change": False, "groups": {"priority": "2"}}}'
+    plan
+    run ask '[a["kind"] for a in A(issue="iss-1", space="Mine")]'
+    [ "$output" = '["recreate-pointer"]' ]
+
+    edit "P(\"w3:p9\")[\"label\"] = \"work:iss-1:pointer:$key\""
+    plan
+    run ask '[(a["kind"], a["pane_id"]) for a in A(issue="iss-1", space="Mine")]'
+    [ "$output" = '[["relink", "w3:p9"]]' ]
+    run ask '[l["board_label"] for l in leaves(tab("Mine", "High")["tree"])]'
+    [ "$output" = "[\"work:iss-1:pointer:$key\"]" ]
 }
 
 @test "every ledger pane in a space missing re-places the space and hides nothing" {

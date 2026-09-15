@@ -285,6 +285,51 @@ complete_sync() {
     [ "$status" -eq 0 ]
 }
 
+entry_fields() {
+    python3 -c 'import json,sys; e=json.loads(sys.argv[1]); print(" ".join(str(e.get(k)) for k in sys.argv[2:]))' "$@"
+}
+
+@test "a ledger entry keeps both the pane id and the terminal id, and a put without one keeps the old" {
+    herdr_linear::board_ledger_put "In Progress" "$ISSUE" "w1:p3" home '{"state":"Todo"}' true term-7
+    run -0 herdr_linear::board_ledger_entry "In Progress" "$ISSUE"
+    run entry_fields "$output" pane_id terminal_id
+    [ "$output" = "w1:p3 term-7" ]
+    herdr_linear::board_ledger_put "In Progress" "$ISSUE" "w2:p9" home '{"state":"Todo"}' true
+    run -0 herdr_linear::board_ledger_entry "In Progress" "$ISSUE"
+    run entry_fields "$output" pane_id terminal_id
+    [ "$output" = "w2:p9 term-7" ]
+    run herdr_linear::board_ledger_put "In Progress" "$ISSUE" "w2:p9" home '{}' true 'term;7'
+    [ "$status" -eq 2 ]
+}
+
+@test "an entry written before terminal ids were recorded still reads" {
+    herdr_linear::board_ledger_put "In Progress" "$ISSUE" "w1:p3" home '{"state":"Todo"}' true term-7
+    f="$(only_file_in ledger)"
+    python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); [e.pop("terminal_id") for e in d["panes"].values()]; json.dump(d, open(sys.argv[1],"w"))' "$f"
+    run -0 herdr_linear::board_ledger_entry "In Progress" "$ISSUE"
+    run entry_fields "$output" pane_id terminal_id
+    [ "$output" = "w1:p3 None" ]
+    python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); [e.update(terminal_id=7) for e in d["panes"].values()]; json.dump(d, open(sys.argv[1],"w"))' "$f"
+    run herdr_linear::board_ledger_entry "In Progress" "$ISSUE"
+    [ "$status" -eq 1 ]
+}
+
+@test "setting where a pane is now keeps its groups, hidden flag and pending Linear change" {
+    herdr_linear::board_ledger_put "In Progress" "$ISSUE" "w1:p3" home '{"state":"Todo"}' true term-7
+    herdr_linear::board_ledger_mark_linear_change "In Progress" "$ISSUE"
+    herdr_linear::board_ledger_hide "In Progress" "$ISSUE" fp
+    run -0 herdr_linear::board_ledger_set_pane "In Progress" "$ISSUE" "w2:p4" term-9
+    run -0 herdr_linear::board_ledger_entry "In Progress" "$ISSUE"
+    run entry_fields "$output" pane_id terminal_id groups hidden pending_linear_change
+    [ "$output" = "w2:p4 term-9 {'state': 'Todo'} True True" ]
+    run herdr_linear::board_ledger_set_pane "In Progress" "$OTHER" "w2:p4"
+    [ "$status" -eq 1 ]
+    run herdr_linear::board_ledger_set_pane "In Progress" "$ISSUE" 'w2 p4'
+    [ "$status" -eq 2 ]
+    run herdr_linear::board_ledger_set_pane "In Progress" "$ISSUE" w2:p4 'term 9'
+    [ "$status" -eq 2 ]
+}
+
 # ---------------------------------------------------------------- questions
 
 @test "answering a question with a stale nonce is refused and the question stays" {

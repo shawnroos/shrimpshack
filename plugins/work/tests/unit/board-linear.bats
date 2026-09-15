@@ -123,6 +123,7 @@ v = b["variables"]
 assert v["n"] == 25, v
 assert "a" in v and v["a"] is None, v
 assert "first:$n" in b["query"] and "after:$a" in b["query"], b["query"]
+assert " updatedAt " in b["query"].split("nodes{", 1)[1], b["query"]
 clauses = v["f"]["and"]
 flat = json.dumps(clauses)
 keys = set()

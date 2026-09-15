@@ -27,7 +27,7 @@ HERDR_LINEAR_BOARD_READ_PARTIAL=6    # stopped at the page cap or on an unreadab
 HERDR_LINEAR_BOARD_WRITE_REJECTED=7  # Linear answered, and success was not true
 HERDR_LINEAR_BOARD_WRITE_SHADOW=8    # the board consent gate refused; logged, nothing sent
 
-HERDR_LINEAR_BOARD_ISSUE_FIELDS='id identifier title state { id name type } team { id key } project { id name } projectMilestone { id name } cycle { id } assignee { id name } priority parent { id identifier } labels { nodes { id name parent { id name } } }'
+HERDR_LINEAR_BOARD_ISSUE_FIELDS='id identifier title updatedAt state { id name type } team { id key } project { id name } projectMilestone { id name } cycle { id } assignee { id name } priority parent { id identifier } labels { nodes { id name parent { id name } } }'
 
 # The program is passed with -c, not on a heredoc: a heredoc takes stdin, and
 # the answer verbs read the response from stdin.

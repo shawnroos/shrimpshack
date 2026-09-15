@@ -150,6 +150,19 @@ assert_moves_went_over_the_socket() {
     assert_moves_went_over_the_socket
 }
 
+@test "a move into a new tab opens that tab in the given workspace, and the tab it left closes when empty" {
+    standard_board; serve
+    run -0 herdr_linear::board_move_pane "$SPACE" "$A" new:w1:work:parking
+    tab="$(printf '%s' "$output" | cut -f4)"
+    [ "$(printf '%s' "$output" | cut -f2)" = "w1:p1" ]
+    [ "$(snap | field "[t['label'] for t in d['result']['snapshot']['tabs'] if t['tab_id'] == '$tab'][0]")" = "work:parking" ]
+    [ "$(printf '%s' "$output" | cut -f7)" = "w1:t1" ]
+    [ "$(snap | field 'd["result"]["snapshot"]["focused_pane_id"]')" = "w1:p9" ]
+    run herdr_linear::board_move_pane "$SPACE" "$B" new:w7:x
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_FAILED" ]
+    assert_moves_went_over_the_socket
+}
+
 @test "a cross-workspace move renames the pane and the ledger still finds it by label" {
     standard_board; serve
     run -0 herdr_linear::board_move_pane "$SPACE" "$D" w1:t1 right w1:p1
@@ -305,6 +318,58 @@ assert_moves_went_over_the_socket() {
     [[ "$output" == *"$D"* ]]
     [ ! -e "$FAKE_HERDR_RECORD_DIR/socket" ] || refute_match -q 'pane.move' "$FAKE_HERDR_RECORD_DIR/socket"
     run -0 herdr_linear::board_apply_tab_in_use "$SPACE" w1:t1 "[[\"$A\",\"$D\"]]"
+}
+
+@test "a held pane in the tab never moves: it keeps the first column and the tab is built beside it" {
+    standard_board
+    python3 "$FIX/fake-herdr-socket.py" set-agent w1:p2 claude working
+    serve
+    run -0 herdr_linear::board_apply_tab "$SPACE" w1:t2 "[[\"$A\"],[\"$C\",\"$B\"]]" "held:$B"
+    [ "$(tree_of w1:t2)" = "right(w1:p2,w1:p1,w1:p3)" ]
+    [[ "$output" == *"$B"$'\t'"w1:p2"* ]]
+    refute_match -q '"pane_id": "w1:p2"' "$FAKE_HERDR_RECORD_DIR/socket"
+    assert_moves_went_over_the_socket
+}
+
+@test "a held pane that is already the tab's first pane is built on as usual" {
+    standard_board
+    python3 "$FIX/fake-herdr-socket.py" set-agent w1:p2 claude working
+    serve
+    run -0 herdr_linear::board_apply_tab "$SPACE" w1:t2 "[[\"$B\",\"$A\"],[\"$C\"]]" "held:$B,$E"
+    [ "$(tree_of w1:t2)" = "right(down(w1:p2,w1:p1),w1:p3)" ]
+    refute_match -q '"pane_id": "w1:p2"' "$FAKE_HERDR_RECORD_DIR/socket"
+}
+
+@test "a held pane outside the tab is left out of it, and the rest of the tab is built" {
+    standard_board; serve
+    run -0 herdr_linear::board_apply_tab "$SPACE" w1:t1 "[[\"$A\",\"$D\"]]" "held:$D"
+    [ "$(tree_of w1:t1)" = "w1:p1" ]
+    [ "$(tree_of w2:t1)" = "w2:p1" ]
+}
+
+@test "two held panes stacked in one column cannot have the tab built beside them, and nothing moves" {
+    seed "$(printf '{"focused":"w1:p9","workspaces":[{"workspace_id":"w1","label":"Board"}],
+      "tabs":[{"tab_id":"w1:t1","label":"Todo","tree":"w1:p1"},
+              {"tab_id":"w1:t2","label":"Doing","tree":["down","w1:p2","w1:p3"]},
+              {"tab_id":"w1:t9","label":"Mine","tree":"w1:p9"}],
+      "panes":{"w1:p1":{"label":"%s"},"w1:p2":{"label":"%s"},"w1:p3":{"label":"%s"}}}' \
+      "$(label "$A")" "$(label "$B")" "$(label "$C")")"
+    own "$A" w1:p1; own "$B" w1:p2; own "$C" w1:p3
+    serve
+    run herdr_linear::board_apply_tab "$SPACE" w1:t2 "[[\"$A\"]]" "held:$B,$C"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_IN_USE" ]
+    [[ "$output" == *"$B"$'\t'held* ]]
+    [ ! -e "$FAKE_HERDR_RECORD_DIR/socket" ] || refute_match -q 'pane.move' "$FAKE_HERDR_RECORD_DIR/socket"
+}
+
+@test "holding one pane does not let a pane in use that is not held move" {
+    standard_board
+    python3 "$FIX/fake-herdr-socket.py" set-agent w1:p1 claude idle
+    serve
+    run herdr_linear::board_apply_tab "$SPACE" w1:t2 "[[\"$A\"],[\"$C\"]]" "held:$B"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_PANE_IN_USE" ]
+    [[ "$output" == *"$A"* ]]
+    [ ! -e "$FAKE_HERDR_RECORD_DIR/socket" ] || refute_match -q 'pane.move' "$FAKE_HERDR_RECORD_DIR/socket"
 }
 
 # ---------------------------------------------------------------- close

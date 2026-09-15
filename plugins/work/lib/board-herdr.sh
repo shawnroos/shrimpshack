@@ -165,9 +165,13 @@ herdr_linear::board_create_pane() {
 # ---------------------------------------------------------------- move
 
 herdr_linear::_board_move() {
-    local allow="$1" space="$2" issue="$3" tab="$4" dir="$5" target="$6" owned
-    case "$dir" in right|down) ;; *) herdr_linear::_board_pane_refuse "a split is right or down"; return ;; esac
-    [ -n "$tab" ] && [ -n "$target" ] || { herdr_linear::_board_pane_refuse "a move names its tab and target pane"; return; }
+    local allow="$1" space="$2" issue="$3" tab="$4" dir="${5:-}" target="${6:-}" owned
+    case "$tab" in
+        new:?*:*) ;;
+        *)
+            case "$dir" in right|down) ;; *) herdr_linear::_board_pane_refuse "a split is right or down"; return ;; esac
+            [ -n "$tab" ] && [ -n "$target" ] || { herdr_linear::_board_pane_refuse "a move names its tab and target pane"; return; } ;;
+    esac
     owned="$(herdr_linear::_board_owned "$space" "$issue")" || return
     herdr_linear::_board_ready || return
     HL_INVOKING="$(herdr_linear::_board_invoking)" herdr_linear::_board_herdr_py move \
@@ -175,6 +179,7 @@ herdr_linear::_board_move() {
 }
 
 # herdr_linear::board_move_pane <space> <issue_id> <tab_id> <right|down> <target_pane_id>
+# herdr_linear::board_move_pane <space> <issue_id> new:<workspace_id>:<label>
 # `<issue>\t<pane_id>\t<terminal_id>\t<tab_id>\t<workspace_id>\t<moved|same_tab>\t<closed_tab_id>`.
 # IN_USE, and nothing moved, when the pane is in use (R19).
 herdr_linear::board_move_pane() {
@@ -189,7 +194,8 @@ herdr_linear::board_move_in_use() {
 # ---------------------------------------------------------------- apply
 
 herdr_linear::_board_apply() {
-    local allow="$1" space="$2" tab="$3" tree="$4" keys key owned panes="" rc
+    local allow="$1" space="$2" tab="$3" tree="$4" keys key owned panes="" held="" arg rc
+    local -a kept=()
     shift 4
     [ -n "$tab" ] || { herdr_linear::_board_pane_refuse "an apply names its tab"; return; }
     keys="$(herdr_linear::_board_herdr_py keys "$tree")" || return
@@ -197,23 +203,42 @@ herdr_linear::_board_apply() {
         owned="$(herdr_linear::_board_owned "$space" "$key")" || return
         panes="$panes$key"$'\t'"$owned"$'\n'
     done
+    for arg in "$@"; do
+        case "$arg" in
+            held:*)
+                local IFS=,
+                for key in ${arg#held:}; do
+                    owned="$(herdr_linear::_board_owned "$space" "$key" any 2>/dev/null)" || continue
+                    held="$held$key"$'\t'"$owned"$'\n'
+                done
+                unset IFS ;;
+            *) kept+=("$arg") ;;
+        esac
+    done
+    set -- ${kept[@]+"${kept[@]}"}
     if [ "$#" -gt 0 ] && [ ! -d "${HERDR_LINEAR_WORKTREES_ROOT:-}" ]; then
         herdr_linear::_board_pane_refuse "a kept tab's placeholder opens in the worktrees root, and it is not a directory"
         return
     fi
     herdr_linear::_board_ready || return
     HL_INVOKING="$(herdr_linear::_board_invoking)" HL_PLACEHOLDERS="$(herdr_linear::_board_placeholders)" \
-        HL_DIR="${HERDR_LINEAR_WORKTREES_ROOT:-}" \
+        HL_DIR="${HERDR_LINEAR_WORKTREES_ROOT:-}" HL_HELD="$held" \
         herdr_linear::_board_herdr_py apply "$tab" "$tree" "$panes" "$allow" "$@"; rc=$?
     return "$rc"
 }
 
-# herdr_linear::board_apply_tab <space> <tab_id|new:<workspace_id>:<label>> <columns-json> [kept_tab_id...]
+# herdr_linear::board_apply_tab <space> <tab_id|new:<workspace_id>:<label>> <columns-json> [kept_tab_id...] [held:<issue>,...]
 # Builds the tab as columns of rows (`[["issue",...],...]`, left to right, top
 # to bottom) by chained moves: column heads first, then rows under them. The
 # tab keeps a pane throughout. A kept tab that would lose its last pane gets a
 # placeholder, which its own apply closes. Prints one line per ticket:
 # `<issue>\t<pane_id>\t<terminal_id>\t<tab_id>\t<workspace_id>`.
+# A held ticket's pane is never moved. Held and outside the tab, it is left out
+# of the tab. Held inside the tab and not its first pane, it keeps a column of
+# its own on the left and the columns are built to its right, because herdr
+# splits only right and down: the tab then reads back as the held columns
+# followed by the columns asked for. Held panes stacked in one column leave no
+# room for that, and are IN_USE with nothing moved, one `<issue>\theld` line each.
 # REFUSED before anything moves for a ticket the board did not create, a pane in
 # the tab the board does not own, or more panes than the cap; IN_USE when any
 # pane that would move is in use; UNKNOWN when the result cannot be read back.
@@ -547,10 +572,13 @@ if op == "move":
         print("%s\t%s" % (issue, " ".join(reasons)))
         say("the pane for %s is in use (%s); ask before moving it" % (issue, ", ".join(reasons)))
         sys.exit(IN_USE)
+    if tab.startswith("new:"):
+        new_ws, _, new_label = tab[4:].partition(":")
+        dest = {"type": "new_tab", "workspace_id": new_ws, "label": new_label or None}
+    else:
+        dest = {"type": "tab", "tab_id": tab, "split": direction, "target_pane_id": target}
     try:
-        res, err = sock("pane.move", {"pane_id": p["pane_id"], "focus": False,
-                                      "destination": {"type": "tab", "tab_id": tab, "split": direction,
-                                                      "target_pane_id": target}})
+        res, err = sock("pane.move", {"pane_id": p["pane_id"], "focus": False, "destination": dest})
     except Unreachable as e:
         if not e.sent:
             say("the herdr socket cannot be reached; nothing moved")
@@ -565,6 +593,8 @@ if op == "move":
     if moved is None:
         say("the move of %s cannot be read back; its result is unknown" % issue)
         sys.exit(UNKNOWN)
+    if tab.startswith("new:"):
+        tab = (mr.get("created_tab") or {}).get("tab_id") or tab
     if moved["tab_id"] != tab:
         say("herdr answered the move of %s, but the pane is in %s, not %s" % (issue, moved["tab_id"], tab))
         sys.exit(FAILED)
@@ -592,7 +622,23 @@ if op == "apply":
             say("the pane for %s is gone; nothing moved" % k)
             sys.exit(GONE)
         cur[k] = p
+    held = {}
+    for line in os.environ.get("HL_HELD", "").splitlines():
+        if line:
+            k, label, pid = line.split("\t")
+            p = cur.get(k) or locate(snap, label, pid, "")
+            if p is not None:
+                held[k] = dict(p, label=label)
+
+    def report():
+        for k, p in sorted(list(cur.items()) + [(k, p) for k, p in held.items() if k not in cur]):
+            print("%s\t%s" % (k, row(p)))
+
+    def without(keys):
+        return [c for c in ([k for k in col if k not in keys] for col in tree) if c]
+
     ws_of_tab = {t["tab_id"]: t["workspace_id"] for t in snap["tabs"]}
+    held_cols = []
     if tab_spec.startswith("new:"):
         rest = tab_spec[4:]
         new_ws, _, new_label = rest.partition(":")
@@ -600,6 +646,7 @@ if op == "apply":
             say("refused: no workspace %s" % new_ws)
             sys.exit(REFUSED)
         T, in_t, placeholders_in_t = None, [], []
+        tree = without(held)
     else:
         T = tab_spec
         if T not in ws_of_tab:
@@ -609,28 +656,45 @@ if op == "apply":
         if code != OK:
             say("the layout of %s cannot be read; nothing moved" % T)
             sys.exit(code)
-        want = [[cur[k]["pane_id"] for k in col] for col in tree]
-        if canonical(root) == want:
-            for k in info:
-                print("%s\t%s" % (k, row(cur[k])))
-            sys.exit(OK)
         in_t = leaves(root)
+        held_here = {k for k, p in held.items() if p["pane_id"] in in_t}
+        if held_here and held_here != {tree[0][0]}:
+            tree = without(held)
+            by_pane = {p["pane_id"]: k for k, p in held.items() if k in held_here}
+            layout = canonical(root)
+            held_cols = [c for c in ([by_pane[p] for p in col if p in by_pane] for col in layout or []) if c]
+            if layout is None or any(len(c) > 1 for c in held_cols):
+                for k in sorted(held_here):
+                    print("%s\theld" % k)
+                say("held panes share a column of %s, so nothing can be built beside them; nothing moved" % T)
+                sys.exit(IN_USE)
+        else:
+            tree = without(set(held) - held_here)
+        want = [[held[k]["pane_id"] for k in c] for c in held_cols] + \
+            [[cur[k]["pane_id"] for k in col] for col in tree]
+        if canonical(root) == want:
+            report()
+            sys.exit(OK)
         try:
             recorded = set(l.strip() for l in open(os.environ["HL_PLACEHOLDERS"]) if l.strip())
         except OSError:
             recorded = set()
         # By pane id alone: a restart renews terminal ids and keeps pane ids.
         placeholders_in_t = [p for p in in_t if p in recorded]
-        ours = set(p["pane_id"] for p in cur.values())
+        ours = set(p["pane_id"] for p in cur.values()) | set(p["pane_id"] for p in held.values())
         foreign = [p for p in in_t if p not in ours and p not in placeholders_in_t]
         if foreign:
             say("refused: tab %s holds panes the board does not own (%s); nothing moved" % (T, ", ".join(foreign)))
             sys.exit(REFUSED)
         new_ws = ws_of_tab[T]
+    if not tree:
+        report()
+        sys.exit(OK)
 
-    anchor = tree[0][0]
-    anchor_stays = T is not None and cur[anchor]["pane_id"] in in_t
-    moving = [k for k in info if not (k == anchor and anchor_stays)]
+    building = [k for col in tree for k in col]
+    anchor = None if held_cols else tree[0][0]
+    anchor_stays = anchor is not None and T is not None and cur[anchor]["pane_id"] in in_t
+    moving = [k for k in building if not (k == anchor and anchor_stays)]
     busy = [(k, in_use(snap, cur[k])) for k in moving]
     busy = [(k, r) for k, r in busy if r]
     if busy and allow != "yes":
@@ -689,10 +753,10 @@ if op == "apply":
         T = move(anchor, {"type": "new_tab", "workspace_id": new_ws, "label": new_label or None})
         if not T:
             fail(UNKNOWN, "the new tab for %s was not reported" % anchor)
-    elif not anchor_stays:
+    elif anchor is not None and not anchor_stays:
         move(anchor, {"type": "tab", "tab_id": T, "split": "right", "target_pane_id": in_t[0]})
     scratch = scratch_key = None
-    for k in [k for k in info if k != anchor and cur[k]["tab_id"] == T]:
+    for k in [k for k in building if k != anchor and cur[k]["tab_id"] == T]:
         if scratch is None:
             scratch, scratch_key = move(k, {"type": "new_tab", "workspace_id": new_ws, "label": "work:scratch"}), k
         else:
@@ -703,14 +767,20 @@ if op == "apply":
             fail(UNKNOWN if err == "unreachable" else FAILED, "placeholder %s could not be closed" % pid)
         keep_lines = [l for l in open(os.environ["HL_PLACEHOLDERS"]) if l.strip() != pid]
         open(os.environ["HL_PLACEHOLDERS"], "w").writelines(keep_lines)
-    for j in range(1, len(tree)):
-        into(tree[j][0], "right", tree[j - 1][0])
+    if held_cols:
+        target = held[held_cols[-1][0]]["pane_id"]
+        for col in tree:
+            move(col[0], {"type": "tab", "tab_id": T, "split": "right", "target_pane_id": target})
+            target = cur[col[0]]["pane_id"]
+    else:
+        for j in range(1, len(tree)):
+            into(tree[j][0], "right", tree[j - 1][0])
     for col in tree:
         for i in range(1, len(col)):
             into(col[i], "down", col[i - 1])
 
     root, code = export(T)
-    want = [[cur[k]["pane_id"] for k in col] for col in tree]
+    want = [[held[k]["pane_id"] for k in c] for c in held_cols] + [[cur[k]["pane_id"] for k in col] for col in tree]
     if code != OK:
         say("tab %s cannot be read back after the moves; its layout is unknown" % T)
         sys.exit(UNKNOWN)
@@ -721,12 +791,15 @@ if op == "apply":
     if after is None:
         say("the herdr snapshot cannot be read after the moves; the panes' ids are unknown")
         sys.exit(UNKNOWN)
-    for k in info:
-        p = locate(after, info[k]["label"], cur[k]["pane_id"], cur[k].get("terminal_id"))
-        if p is None:
-            say("the pane for %s cannot be found after the moves" % k)
-            sys.exit(UNKNOWN)
-        print("%s\t%s" % (k, row(p)))
+    for k, p in list(cur.items()):
+        cur[k] = locate(after, info[k]["label"], p["pane_id"], p.get("terminal_id"))
+    for k, p in list(held.items()):
+        held[k] = locate(after, p["label"], p["pane_id"], p.get("terminal_id"))
+    lost = sorted(k for k, p in list(cur.items()) + list(held.items()) if p is None)
+    if lost:
+        say("the pane for %s cannot be found after the moves" % ", ".join(lost))
+        sys.exit(UNKNOWN)
+    report()
     sys.exit(OK)
 
 if op == "close":

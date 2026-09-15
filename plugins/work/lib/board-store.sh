@@ -98,7 +98,8 @@ def valid_entry(e):
     return (isinstance(e, dict) and is_str(e.get("pane_id")) and e.get("role") in ("home", "pointer")
             and valid_groups(e.get("groups")) and is_bool(e.get("board_created"))
             and is_bool(e.get("hidden")) and is_str(e.get("hidden_fingerprint"))
-            and is_bool(e.get("pending_linear_change")))
+            and is_bool(e.get("pending_linear_change"))
+            and ("terminal_id" not in e or is_str(e["terminal_id"])))
 
 def valid_ledger(r):
     return (is_str(r.get("space")) and isinstance(r.get("panes"), dict)
@@ -259,7 +260,7 @@ if op == "ledger-entry":
     sys.exit(0)
 
 if op == "ledger-put":
-    space, issue, pane, role, groups_json, created = args
+    space, issue, pane, role, groups_json, created = args[:6]
     try:
         groups = json.loads(groups_json)
     except Exception:
@@ -273,6 +274,17 @@ if op == "ledger-put":
         "hidden": old.get("hidden", False), "hidden_fingerprint": old.get("hidden_fingerprint", ""),
         "pending_linear_change": False,
     }
+    terminal = args[6] if len(args) > 6 and args[6] else old.get("terminal_id")
+    if terminal:
+        rec["panes"][issue]["terminal_id"] = terminal
+    save(path, rec)
+    sys.exit(0)
+
+if op == "ledger-set-pane":
+    rec, e = entry_for_write(args[0], args[1])
+    e["pane_id"] = args[2]
+    if args[3]:
+        e["terminal_id"] = args[3]
     save(path, rec)
     sys.exit(0)
 
@@ -588,24 +600,39 @@ herdr_linear::board_reservation_remove() {
 
 # ------------------------------------------------------------- pane ledger
 
-# herdr_linear::board_ledger_put <space> <issue_id> <pane_id> <home|pointer> <groups-json> <board_created true|false>
+# herdr_linear::board_ledger_put <space> <issue_id> <pane_id> <home|pointer> <groups-json> <board_created true|false> [terminal_id]
 # Records a pane as observed at a completed sync. Group values change only
-# here (KTD4), and writing them clears a pending Linear change.
+# here (KTD4), and writing them clears a pending Linear change. Without a
+# terminal id the one already recorded is kept.
 herdr_linear::board_ledger_put() {
-    local space="${1:-}" issue="${2:-}" pane="${3:-}" role="${4:-}" groups="${5:-}" created="${6:-}" f
+    local space="${1:-}" issue="${2:-}" pane="${3:-}" role="${4:-}" groups="${5:-}" created="${6:-}" terminal="${7:-}" f
     herdr_linear::is_safe_identifier "$issue" \
         || { herdr_linear::_board_refuse "that issue id is not a safe identifier"; return; }
-    case "$pane" in
-        ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:_.-]*)
-            herdr_linear::_board_refuse "that pane id has characters outside letters, digits and :_.-"; return ;;
-    esac
+    herdr_linear::_board_pane_ref "pane id" "$pane" || return
+    [ -z "$terminal" ] || herdr_linear::_board_pane_ref "terminal id" "$terminal" || return
     case "$role" in
         home|pointer) ;;
         *) herdr_linear::_board_refuse "a ledger role is home or pointer"; return ;;
     esac
     herdr_linear::_board_bool "$created" || return
     f="$(herdr_linear::_board_space_path ledger "$space")" || return
-    herdr_linear::_board_mutate "$f" ledger-put "$space" "$issue" "$pane" "$role" "$groups" "$created"
+    herdr_linear::_board_mutate "$f" ledger-put "$space" "$issue" "$pane" "$role" "$groups" "$created" "$terminal"
+}
+
+herdr_linear::_board_pane_ref() {
+    case "${2:-}" in
+        ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:_.-]*)
+            herdr_linear::_board_refuse "that $1 has characters outside letters, digits and :_.-"; return ;;
+    esac
+}
+
+# herdr_linear::board_ledger_set_pane <space> <issue_id> <pane_id> [terminal_id]
+# Where the pane is now, after a move renamed it or a restart renewed its
+# terminal. Groups, hidden and a pending Linear change are left as they are.
+herdr_linear::board_ledger_set_pane() {
+    herdr_linear::_board_pane_ref "pane id" "${3:-}" || return
+    [ -z "${4:-}" ] || herdr_linear::_board_pane_ref "terminal id" "$4" || return
+    herdr_linear::_board_ledger_op ledger-set-pane "${1:-}" "${2:-}" "$3" "${4:-}"
 }
 
 herdr_linear::_board_ledger_op() {

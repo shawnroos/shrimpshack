@@ -40,7 +40,7 @@ herdr_linear::board_plan() {
         return "$HERDR_LINEAR_BOARD_PLAN_USAGE"
     }
     python3 - "$1" <<'PYEOF'
-import json, re, sys
+import hashlib, json, re, sys
 
 REFUSED = 2
 LEVELS = ("space", "tab", "column", "row")
@@ -90,6 +90,13 @@ def natural(identifier):
 
 def node_id(n):
     return n.get("id") if isinstance(n, dict) and is_str(n.get("id")) else None
+
+
+def board_label(issue, role, space):
+    """The label board-herdr.sh board_pane_label writes."""
+    if role == "home":
+        return "work:%s" % issue
+    return "work:%s:pointer:%s" % (issue, hashlib.sha1(space.encode()).hexdigest()[:16])
 
 
 def load_input(path):
@@ -356,14 +363,14 @@ class Engine:
 
     # ---------------------------------------------------------------- herdr reading
 
-    def resolve(self, entry, issue):
+    def resolve(self, space, entry, issue):
         pid = entry["pane_id"]
         if pid in self.panes:
             return pid, None
         alias = self.aliases.get(pid)
         if is_str(alias) and alias in self.panes:
             return alias, "alias"
-        label = "board:%s" % issue
+        label = board_label(issue, entry["role"], space)
         found = sorted(p for p, pane in self.panes.items() if pane.get("label") == label)
         if found:
             return found[0], "board-label"
@@ -426,7 +433,7 @@ class Engine:
     def tab_lost(self, space, tab_value, tab_id):
         entries, _, _, _ = self.previous_tab(space, tab_value)
         for issue, e in entries.items():
-            pid, _ = self.resolve(e, issue)
+            pid, _ = self.resolve(space, e, issue)
             if pid is None or self.panes[pid].get("tab_id") != tab_id:
                 return True
         return False
@@ -577,7 +584,7 @@ class Engine:
         rebuilt = set()
         for space, entries in self.ledger.items():
             live = [(i, e) for i, e in entries.items() if not e["hidden"]]
-            if live and all(self.resolve(e, i)[0] is None for i, e in live):
+            if live and all(self.resolve(space, e, i)[0] is None for i, e in live):
                 rebuilt.add(space)
 
         for key in sorted(desired, key=lambda k: (k[0], k[1], k[2])):
@@ -618,7 +625,7 @@ class Engine:
                 items.append((space, mapping, issue, role, L, None, False))
                 continue
 
-            pane_id, how = self.resolve(entry, issue)
+            pane_id, how = self.resolve(lspace, entry, issue)
             if pane_id is None:
                 if role == "pointer":
                     self.act("recreate-pointer", space, issue, role, reason="pane-missing", groups=L, tab=tab_name)
@@ -693,7 +700,7 @@ class Engine:
                 entry = self.ledger[space][issue]
                 role = entry["role"]
                 mapping = self.mapping_of_space(space)
-                pane_id, _ = self.resolve(entry, issue)
+                pane_id, _ = self.resolve(space, entry, issue)
                 if not self.complete:
                     if not entry["hidden"] and pane_id is not None:
                         items.append((space, mapping, issue, role, dict(entry["groups"]), pane_id, True))
@@ -795,7 +802,7 @@ class Engine:
                     issue, role, groups, pane_id, hold = x
                     t = self.tickets.get(issue, {})
                     node = {"type": "pane", "issue_id": issue, "identifier": t.get("identifier"), "role": role,
-                            "pane_id": pane_id, "board_label": "board:%s" % issue}
+                            "pane_id": pane_id, "board_label": board_label(issue, role, space)}
                     if hold:
                         node["hold"] = True
                     return node
