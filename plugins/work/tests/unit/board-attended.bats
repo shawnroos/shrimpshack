@@ -24,6 +24,8 @@ setup() {
     export HERDR_LINEAR_PANE_POLL_MS=5
     export HERDR_LINEAR_PANE_POLL_TRIES=5
     export HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS=20
+    # Most scenarios stack more than the default soft limit in one tab.
+    export HERDR_LINEAR_BOARD_TAB_LIMIT=16
     mkdir -p "$WORK/rec" "$WORK/linear" "$HERDR_LINEAR_WORKTREES_ROOT" "$HERDR_LINEAR_STORE_DIR"
 
     export LINEAR_SECRETS_FILE="$WORK/secrets"
@@ -358,14 +360,21 @@ for l in sys.stdin:
     [ "$(herdr_linear::scope_repo project-prj-beta)" = "$WORK/beta" ]
 }
 
-@test "placing more answered yes places every ticket the cap held back, not another capful" {
-    export HERDR_LINEAR_BOARD_PANE_CAP=2
+@test "a tab holds four panes until more are asked for; placing more adds exactly those, and they stay" {
+    export HERDR_LINEAR_BOARD_TAB_LIMIT=4
     config '{"tab":"state"}'
     empty_board; serve
-    tickets "iss-1:todo iss-2:todo iss-3:todo iss-4:todo iss-5:todo"
+    tickets "iss-1:todo iss-2:todo iss-3:todo iss-4:todo iss-5:todo iss-6:todo"
     run herdr_linear::board_sync
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_SYNC_QUESTIONS" ]
+    [ "$(board_panes | tr -d "[]' ")" = "work:iss-1,work:iss-2,work:iss-3,work:iss-4" ]
+    run herdr_linear::board_sync
+    [ "$(board_panes | tr -d "[]' ")" = "work:iss-1,work:iss-2,work:iss-3,work:iss-4" ]
     read -r key nonce < <(q_of_kind cap)
     run herdr_linear::board_answer "$key" "$nonce" yes
     [ "$status" -eq 0 ]
-    [ "$(board_panes | tr -d "[]' ")" = "work:iss-1,work:iss-2,work:iss-3,work:iss-4,work:iss-5" ]
+    [ "$(board_panes | tr -d "[]' ")" = "work:iss-1,work:iss-2,work:iss-3,work:iss-4,work:iss-5,work:iss-6" ]
+    run herdr_linear::board_sync
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_SYNC_CLEAN" ]
+    [ "$(board_panes | tr -d "[]' ")" = "work:iss-1,work:iss-2,work:iss-3,work:iss-4,work:iss-5,work:iss-6" ]
 }

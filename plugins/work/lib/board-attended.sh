@@ -150,8 +150,8 @@ herdr_linear::board_answer() {
             herdr_linear::board_sync_bounded >/dev/null 2>&1 ;;
         cap)
             local more
-            more="$(printf '%s' "$pre" | python3 -c 'import sys, json; d = json.load(sys.stdin); print(int(d["cap"]) + len(d["issues"]))')"
-            HERDR_LINEAR_BOARD_PANE_CAP="$more" herdr_linear::board_sync_bounded >/dev/null 2>&1 ;;
+            more="$(printf '%s' "$pre" | python3 -c 'import sys, json; print(",".join(json.load(sys.stdin)["issues"]))')"
+            HL_PLACE_MORE="$more" herdr_linear::board_sync_bounded >/dev/null 2>&1 ;;
         write-consent)
             local c
             c="$(herdr_linear::board_consent_propose "$space" "$field")" \

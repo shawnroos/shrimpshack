@@ -76,7 +76,7 @@ time, naming the ticket and the groups involved:
 | `remove-worktree` | remove this ticket's worktree and branch? | removes them only when clean, delivered and unused; otherwise keeps them and says why |
 | `repository` | which repository holds this project's or team's work? | records the path given as the fourth argument for that scope |
 | `conflict` | herdr and Linear disagree on this ticket; follow Linear? | puts the pane where Linear says |
-| `cap` | place the tickets held back by the pane limit? | places them |
+| `cap` | a tab holds four panes unless more are asked for; place these tickets too? | places exactly those tickets; they stay |
 | `write-consent` | may moving a pane change this field in Linear, in this space? | records consent for that field in that space only; move the pane again to write it |
 | `write-rejected` | Linear refused a change made from herdr; the pane is back where it was | nothing more; say it, and answer yes to clear it |
 | `layout` | a tab was rearranged or could not be built | nothing more; say it, and answer yes to clear it |

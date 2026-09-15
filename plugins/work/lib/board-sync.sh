@@ -46,6 +46,9 @@ HERDR_LINEAR_BOARD_SYNC_FAILED=7        # an early stage failed; named in sync s
 HERDR_LINEAR_BOARD_SYNC_UNKNOWN=8       # some effects could not be read back
 
 HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS="${HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS:-10}"
+# A soft limit: a tab takes no new pane past it until a person answers the
+# place-more question for those tickets. The hard limit is the pane cap.
+HERDR_LINEAR_BOARD_TAB_LIMIT="${HERDR_LINEAR_BOARD_TAB_LIMIT:-4}"
 # A holder writes its pid in the instant after mkdir; a lock with no pid older
 # than this was left by a process killed in that instant.
 HERDR_LINEAR_BOARD_SYNC_PIDLESS_SECONDS=5
@@ -179,7 +182,7 @@ herdr_linear::board_sync() (
         return "$HERDR_LINEAR_BOARD_SYNC_LOCKED"
     fi
     trap 'herdr_linear::_board_sync_unlock "'"$me"'"' EXIT
-    HL_LIB="$HERDR_LINEAR_BOARD_SYNC_LIB" HL_CAP="$HERDR_LINEAR_BOARD_PANE_CAP" \
+    HL_LIB="$HERDR_LINEAR_BOARD_SYNC_LIB" HL_CAP="$HERDR_LINEAR_BOARD_PANE_CAP" HL_TAB_LIMIT="$HERDR_LINEAR_BOARD_TAB_LIMIT" \
         HL_INVOKING="$(herdr_linear::pane_id 2>/dev/null)" \
         HL_PANE_DIR="${HERDR_LINEAR_WORKTREES_ROOT:-$HOME/worktrees}" \
         python3 -c "$HERDR_LINEAR_BOARD_SYNC_PY"
@@ -198,6 +201,8 @@ BOARD = os.path.join(os.environ["HERDR_LINEAR_STORE_DIR"], "board")
 JOURNAL = os.path.join(BOARD, "journal.json")
 HELD_TABS = os.path.join(BOARD, "held-tabs.json")
 CAP = int(os.environ.get("HL_CAP") or 16)
+TAB_LIMIT = int(os.environ.get("HL_TAB_LIMIT") or 4)
+PLACE_MORE = {i for i in (os.environ.get("HL_PLACE_MORE") or "").split(",") if i}
 # Tickets whose move-in-use question a person answered this run; the attended
 # answer verb consumed each question's nonce before passing them here.
 ANSWERED = {i for i in (os.environ.get("HL_ANSWERED_MOVES") or "").split(",") if i}
@@ -738,7 +743,7 @@ class Sync:
         for job in self.leaving_first(jobs, snap, led):
             self.apply(*job)
         if self.surplus:
-            self.ask("cap", "surplus", {"cap": CAP, "issues": sorted(self.surplus)})
+            self.ask("cap", "surplus", {"cap": CAP, "limit": TAB_LIMIT, "issues": sorted(self.surplus)})
 
     def leaving_first(self, jobs, snap, led):
         """A tab still holding a pane another tab takes is refused as foreign, so
@@ -916,7 +921,8 @@ class Sync:
                 elif place is not None:
                     # herdr's apply refuses a tab over the cap, so a full tab takes no
                     # new pane: placed, it could never be built again.
-                    if self.created >= CAP or len(intent["leaves"]) >= CAP:
+                    asked = issue in PLACE_MORE
+                    if len(intent["leaves"]) >= CAP or (not asked and (self.created >= CAP or len(intent["leaves"]) >= TAB_LIMIT)):
                         self.surplus.append(issue)
                         continue
                     if role == "home" and not (issue in self.tickets and self.reserve(self.tickets[issue])):

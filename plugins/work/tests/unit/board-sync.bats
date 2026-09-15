@@ -23,6 +23,8 @@ setup() {
     export HERDR_LINEAR_PANE_POLL_MS=5
     export HERDR_LINEAR_PANE_POLL_TRIES=5
     export HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS=20
+    # Most scenarios stack more than the default soft limit in one tab.
+    export HERDR_LINEAR_BOARD_TAB_LIMIT=16
     mkdir -p "$WORK/rec" "$WORK/linear" "$HERDR_LINEAR_WORKTREES_ROOT" "$HERDR_LINEAR_STORE_DIR"
 
     export LINEAR_SECRETS_FILE="$WORK/secrets"

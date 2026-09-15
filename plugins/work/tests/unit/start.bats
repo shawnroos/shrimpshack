@@ -1037,6 +1037,7 @@ board_env() {
     export FAKE_HERDR_SOCKET_PATH="$SOCK_DIR/h.sock"
     export HERDR_LINEAR_PANE_POLL_TRIES=5
     export HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS=20
+    export HERDR_LINEAR_BOARD_TAB_LIMIT=16
     export FAKE_BOARD_TICKETS="$WORK/tickets.json"
     cat > "$WORK/curl.sh" <<SH
 #!/usr/bin/env bash
