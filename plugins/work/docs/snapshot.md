@@ -166,9 +166,10 @@ tab has no panes.
 
 Live tabs of the space that no binding claims:
 `{"tab_id", "label", "reason", "panes"}`. `reason` is `no_binding` when no
-record names the tab, else the binding state that explains it (`misplaced`,
-`stale`, `proposed`, `unbound`). Empty when herdr is unavailable or the record
-is not bound.
+record names the tab, else the binding state of a record whose issue is not
+in the project's listing (`bound`, `worktree_missing`, `misplaced`, `stale`,
+`proposed`, `unbound`). Empty when herdr is unavailable or the record is not
+bound.
 
 ## Fixtures
 
