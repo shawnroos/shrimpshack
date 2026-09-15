@@ -413,3 +413,150 @@ print(",".join(sorted(d.keys())), "|", ",".join(sorted(d["hookSpecificOutput"].k
     run grep -c '</work-context>' <<< "$ctx"
     [ "$output" = "1" ]
 }
+
+# ------------------------------------------------------------- the board (U14)
+
+board_lib() { . "$ROOT/lib/board-store.sh"; }
+board_config() {
+    mkdir -p "$HERDR_LINEAR_STORE_DIR"
+    printf '{"version":1,"global":{"levels":{"column":"state"},"filter":{"team":["WEB"]}},"spaces":{}}\n' \
+        > "$HERDR_LINEAR_STORE_DIR/board.json"
+    chmod 600 "$HERDR_LINEAR_STORE_DIR/board.json"
+}
+board_synced() {
+    herdr_linear::board_sync_complete '{"observed":{"tickets":1},"unknown":{},"pending_questions":0,"members":[],"rendered":{}}'
+}
+reserved_pane() {
+    mkdir -p "$HERDR_LINEAR_WORKTREES_ROOT"
+    board_lib
+    herdr_linear::board_reserve iss-1 WEB-4001 web-4001-drawer feature/web-4001-drawer false
+}
+board_owned_wt() {
+    board_lib
+    herdr_linear::board_reserve iss-9 WEB-3318 wt feature/web-3318-drawer false
+    herdr_linear::board_reservation_start iss-9
+}
+wrapped() {
+    python3 -c '
+import sys
+ctx = sys.stdin.read()
+body = ctx.split("<work-context>", 1)[1].split("</work-context>", 1)[0]
+print(sys.argv[1] in body)
+' "$1"
+}
+
+@test "a session in a reserved board pane is told to start through the plugin" {
+    reserved_pane
+    run bash -c "printf '%s' '$(payload "$HERDR_LINEAR_WORKTREES_ROOT")' | HERDR_LINEAR_BOARD_ISSUE=iss-1 bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    ctx="$(printf '%s' "$output" | context_of)"
+    [ "$(printf '%s' "$ctx" | wrapped '/work:start')" = "True" ]
+    [ "$(printf '%s' "$ctx" | wrapped 'WEB-4001')" = "True" ]
+}
+
+@test "a started reservation is not told to start again" {
+    reserved_pane
+    herdr_linear::board_reservation_start iss-1
+    run --separate-stderr bash -c "printf '%s' '$(payload "$HERDR_LINEAR_WORKTREES_ROOT")' | HERDR_LINEAR_BOARD_ISSUE=iss-1 bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a pointer pane is not told to start the ticket it points at" {
+    reserved_pane
+    run --separate-stderr bash -c "printf '%s' '$(payload "$HERDR_LINEAR_WORKTREES_ROOT")' | HERDR_LINEAR_BOARD_ISSUE=iss-1 HERDR_LINEAR_BOARD_HOME=iss-1 bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a pointer pane on a configured board hears the sync state and no start notice" {
+    reserved_pane
+    board_config
+    board_synced
+    run bash -c "printf '%s' '$(payload "$HERDR_LINEAR_WORKTREES_ROOT")' | HERDR_LINEAR_BOARD_ISSUE=iss-1 HERDR_LINEAR_BOARD_HOME=iss-1 bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    ctx="$(printf '%s' "$output" | context_of)"
+    [ "$(printf '%s' "$ctx" | wrapped 'work board: matches Linear')" = "True" ]
+    [[ "$ctx" != *"/work:start"* ]]
+}
+
+@test "a reserved pane gets the board's sync state and pending question count inside the wrapper" {
+    reserved_pane
+    board_config
+    board_synced
+    herdr_linear::board_question_propose move-iss-1-abc move '{}' >/dev/null
+    herdr_linear::board_question_propose close-iss-2-abc close '{}' >/dev/null
+    run bash -c "printf '%s' '$(payload "$HERDR_LINEAR_WORKTREES_ROOT")' | HERDR_LINEAR_BOARD_ISSUE=iss-1 bash '$HOOK'"
+    ctx="$(printf '%s' "$output" | context_of)"
+    [ "$(printf '%s' "$ctx" | wrapped 'work board: matches Linear')" = "True" ]
+    [ "$(printf '%s' "$ctx" | wrapped '"pending_questions": 2')" = "True" ]
+}
+
+@test "a board-owned worktree is told the board is behind" {
+    bind_wt WEB-3318
+    board_owned_wt
+    board_config
+    board_synced
+    herdr_linear::board_mark_behind
+    export FAKE_LINEAR_MODE=found_child
+    run bash -c "printf '%s' '$(payload "$WT")' | bash '$HOOK'"
+    ctx="$(printf '%s' "$output" | context_of)"
+    [ "$(printf '%s' "$ctx" | wrapped 'work board: behind Linear')" = "True" ]
+    [ "$(printf '%s' "$ctx" | wrapped '"pending_questions": 0')" = "True" ]
+}
+
+@test "a board whose last sync failed says at which stage" {
+    bind_wt WEB-3318
+    board_owned_wt
+    board_config
+    herdr_linear::board_sync_failed "linear read" "timed out"
+    export FAKE_LINEAR_MODE=found_child
+    run bash -c "printf '%s' '$(payload "$WT")' | bash '$HOOK'"
+    ctx="$(printf '%s' "$output" | context_of)"
+    [ "$(printf '%s' "$ctx" | wrapped 'work board: sync failed at linear read')" = "True" ]
+}
+
+@test "a bound worktree outside the board receives no board text" {
+    bind_wt WEB-3318
+    board_lib
+    board_config
+    board_synced
+    export FAKE_LINEAR_MODE=found_child
+    run bash -c "printf '%s' '$(payload "$WT")' | bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    ctx="$(printf '%s' "$output" | context_of)"
+    [[ "$ctx" == *'"identifier": "WEB-3318"'* ]]
+    [[ "$ctx" != *"work board"* ]]
+    [[ "$ctx" != *'"sync":'* ]]
+    [[ "$ctx" != *"pending_questions"* ]]
+}
+
+@test "an unbound worktree outside the board stays silent with a board configured" {
+    board_lib
+    board_config
+    board_synced
+    run --separate-stderr bash -c "printf '%s' '$(payload "$WT")' | bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ -z "$stderr" ]
+}
+
+@test "a board pane with no board configured gets the start notice and no sync summary" {
+    reserved_pane
+    run bash -c "printf '%s' '$(payload "$HERDR_LINEAR_WORKTREES_ROOT")' | HERDR_LINEAR_BOARD_ISSUE=iss-1 bash '$HOOK'"
+    ctx="$(printf '%s' "$output" | context_of)"
+    [[ "$ctx" == *"/work:start"* ]]
+    [[ "$ctx" != *'"sync":'* ]]
+    [[ "$ctx" != *"pending_questions"* ]]
+}
+
+@test "a board pane with an unreadable board store still starts the session" {
+    reserved_pane
+    board_config
+    board_synced
+    chmod 000 "$HERDR_LINEAR_STORE_DIR/board" 2>/dev/null || skip "cannot remove read permission here"
+    run --separate-stderr bash -c "printf '%s' '$(payload "$HERDR_LINEAR_WORKTREES_ROOT")' | HERDR_LINEAR_BOARD_ISSUE=iss-1 bash '$HOOK'"
+    chmod 700 "$HERDR_LINEAR_STORE_DIR/board"
+    [ "$status" -eq 0 ]
+    [ -z "$stderr" ]
+}

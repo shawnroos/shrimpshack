@@ -24,6 +24,9 @@
 HERDR_LINEAR_GH_BIN="${HERDR_LINEAR_GH_BIN:-gh}"
 HERDR_LINEAR_GIT_BIN="${HERDR_LINEAR_GIT_BIN:-git}"
 
+command -v herdr_linear::board_record_linear_write >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/board-store.sh"
+
 # Writes are OFF until somebody answers the question this directory's first
 # write asks. The answer lives in the binding store, keyed on the directory and
 # scoped to the team, project and branch it named -- see `consent_ok` in
@@ -218,6 +221,8 @@ except Exception:
 sys.exit(0 if ok is True else 1)
 ' || return "$HERDR_LINEAR_RECONCILE_FAILED"
 
+    # The write happened; a store that cannot record it must not report a failed write.
+    herdr_linear::board_record_linear_write >/dev/null 2>&1 || true
     return "$HERDR_LINEAR_RECONCILE_OK"
 }
 
