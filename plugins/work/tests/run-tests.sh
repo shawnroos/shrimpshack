@@ -627,8 +627,17 @@ def files(d):
         for n in sorted(names):
             yield os.path.join(base, n)
 
+# board_sync reads Linear page by page and creates panes (KTD2). It is refused
+# by name however it is written; board-sync.sh may appear only as the path a
+# hook hands the agent, never as something the hook runs or sources.
+SYNC_VERB = re.compile(r"herdr_linear::board_sync(?![A-Za-z0-9_])")
+SYNC_PATH_ADVICE = re.compile(r'^HERDR_LINEAR_BOARD_SYNC_LIB_PATH="\$LIB/board-sync\.sh" python3 -c \'$')
 for f in files("hooks"):
     for i, line in enumerate(open(f, errors="replace"), 1):
+        if SYNC_VERB.search(line):
+            print("%s:%d: a hook names board_sync; it reads Linear and creates panes (KTD2)" % (f, i))
+        if "board-sync.sh" in line and not SYNC_PATH_ADVICE.match(line.rstrip("\n")):
+            print("%s:%d: a hook runs or sources board-sync.sh; it reads Linear and creates panes (KTD2)" % (f, i))
         for verb in HOOK_BANNED:
             if "herdr_linear::" + verb in line:
                 print("%s:%d: a hook calls %s; a hook has nobody to ask" % (f, i, verb))

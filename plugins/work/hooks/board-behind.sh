@@ -57,7 +57,7 @@ print(json.dumps({"hookSpecificOutput": {
     "additionalContext": (
         "That Linear write may have moved a ticket on the work board, so the board "
         "is now marked behind Linear. Bring it up to date with the unattended sync, "
-        "from a shell: bash -c \x27. \"%s\" && herdr_linear::board_sync\x27. It asks "
+        "from a shell: bash \"%s\". It asks "
         "nobody, never moves a pane in use, and records any question for the next "
         "/work command. If it exits 3, another sync is already running and nothing "
         "more is needed." % lib

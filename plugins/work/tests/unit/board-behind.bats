@@ -54,8 +54,7 @@ no_side_calls() {
     [ "$(marked_behind)" = "True" ]
     ctx="$(printf '%s' "$output" | context_of)"
     [[ "$ctx" == PostToolUse* ]]
-    [[ "$ctx" == *"herdr_linear::board_sync"* ]]
-    [[ "$ctx" == *"/lib/board-sync.sh\" && herdr_linear::board_sync"* ]]
+    [[ "$ctx" == *"bash \""*"/lib/board-sync.sh\""* ]]
 }
 
 @test "a Linear write creates or moves no pane and calls no Linear API" {
@@ -72,7 +71,7 @@ no_side_calls() {
     fire mcp__claude_ai_Linear__save_comment
     [ "$status" -eq 0 ]
     [ "$(marked_behind)" = "True" ]
-    [[ "$(printf '%s' "$output" | context_of)" == *"herdr_linear::board_sync"* ]]
+    [[ "$(printf '%s' "$output" | context_of)" == *"/lib/board-sync.sh"* ]]
 }
 
 @test "a write tool Linear adds later still marks the board behind" {

@@ -353,3 +353,23 @@ placement_tree() {
         rm -rf "$WORK/p"
     done
 }
+
+# KTD2. A sync reads Linear page by page and creates panes, so a hook may only
+# hand the agent the path; the read-only sync_state and sync_title stay allowed.
+@test "a hook that calls, runs or sources the board sync turns the placement check red" {
+    local form
+    for form in 'herdr_linear::board_sync >/dev/null 2>&1 || true' 'x="$(herdr_linear::board_sync)"' \
+                'bash "$LIB/board-sync.sh"' '. "$LIB/board-sync.sh"'; do
+        placement_tree
+        printf '%s\n' "$form" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"ground.sh"* ]]
+        [[ "$output" == *"board"* ]]
+        rm -rf "$WORK/p"
+    done
+    placement_tree
+    printf 'herdr_linear::board_sync_title "$(herdr_linear::board_sync_state)"\n' >> "$WORK/p/hooks/ground.sh"
+    run placement_caller_check "$WORK/p"
+    [ "$status" -eq 0 ]
+}
