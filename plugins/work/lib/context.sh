@@ -125,6 +125,29 @@ for n in nodes:
 '
 }
 
+# herdr_linear::project_read <project-id>
+#
+# The project's id, name, url and teams, each team with its workflow states,
+# as one JSON object. One read on purpose: the board daemon budgets two Linear
+# calls beside the issue pages, and a separate states query was the third.
+herdr_linear::project_read() {
+    local pid="${1:-}" body resp
+    [ -n "$pid" ] || return 1
+    body="$(python3 -c '
+import sys, json
+q = "query($id:String!){project(id:$id){id name url teams(first:50){nodes{id key name states(first:100){nodes{id name type}}}}}}"
+print(json.dumps({"query": q, "variables": {"id": sys.argv[1]}}))
+' "$pid")" || return 1
+    resp="$(herdr_linear::query "$body")" || return 1
+    printf '%s' "$resp" | python3 -c '
+import sys, json
+p = (json.load(sys.stdin).get("data") or {}).get("project")
+if not isinstance(p, dict):
+    sys.exit(1)
+print(json.dumps(p))
+' 2>/dev/null
+}
+
 # herdr_linear::project_team <project-id>
 #
 # The project's ONLY team as `<id><TAB><name>`, or nothing. Several teams print
