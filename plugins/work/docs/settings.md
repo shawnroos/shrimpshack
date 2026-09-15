@@ -36,6 +36,7 @@ string, and the default does not come back.
 | `HERDR_LINEAR_API_URL` | `https://api.linear.app/graphql` | The endpoint every Linear query and mutation is sent to. | `lib/linear.sh` | no |
 | `HERDR_LINEAR_KEYCHAIN_SERVICE` | `work-linear` | The keychain service the Linear credential is stored under. | `lib/linear.sh` | no |
 | `HERDR_LINEAR_KEYCHAIN_ACCOUNT` | `linear-api-key` | The keychain account the Linear credential is stored under. | `lib/linear.sh` | no |
+| `HERDR_LINEAR_VIEW_PAGE_MAX` | `10` | How many pages of fifty a board listing reads before it stops and reports the result as truncated. Applies to the issues a view admits and to the list of views. | `lib/linear.sh` | no |
 | `HERDR_LINEAR_CACHE_MAX_AGE_SECONDS` | `3600` | How long a cached ticket is treated as current before it is fetched again. | `lib/linear.sh` | no |
 | `LINEAR_CACHE_DIR` | `$HOME/.claude/linear-cache` | Where fetched tickets are cached. | `lib/linear.sh` | no |
 | `LINEAR_SECRETS_FILE` | `$HOME/.secrets` | The file a `LINEAR_API_KEY` line is read from when the keychain holds nothing. | `lib/linear.sh` | no |

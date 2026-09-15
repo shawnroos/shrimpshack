@@ -46,12 +46,16 @@ HERDR_LINEAR_CACHE_MAX_AGE_SECONDS="${HERDR_LINEAR_CACHE_MAX_AGE_SECONDS:-3600}"
 HERDR_LINEAR_RETRY_MAX="${HERDR_LINEAR_RETRY_MAX:-3}"
 HERDR_LINEAR_RETRY_BASE_MS="${HERDR_LINEAR_RETRY_BASE_MS:-500}"
 
+HERDR_LINEAR_VIEW_PAGE_MAX="${HERDR_LINEAR_VIEW_PAGE_MAX:-10}"
+HERDR_LINEAR_VIEW_PAGE_SIZE=50
+
 HERDR_LINEAR_OK=0
 HERDR_LINEAR_UNAVAILABLE=1     # network, timeout, or a body we cannot read
 HERDR_LINEAR_NOT_FOUND=2       # Linear answered, and there is no such issue
 HERDR_LINEAR_AUTH=3            # the credential was refused
 HERDR_LINEAR_RATELIMITED=4     # still limited after backing off
 HERDR_LINEAR_REFUSED=5         # the plugin's own bound said no
+HERDR_LINEAR_VIEW_PREFS_FAILED=6  # the view exists; its board preferences do not
 
 # _post returns either curl's own exit code or this. It is deliberately outside
 # curl's range: curl 3 means "malformed URL" and would otherwise be
@@ -338,6 +342,267 @@ if cached_raw:
         pass
 print(json.dumps(out))
 ' <<< "$api"
+}
+
+
+# ------------------------------------------------------------------ the views
+
+# herdr_linear::_issues_paged <filter-json>
+#
+# The filter is Linear's own IssueFilter, passed through as a variable and
+# never rewritten: a view's filterData is what the person built in the UI, and
+# any transcription here would be a second, silently different, view. Pages
+# until the connection is exhausted or the page cap is hit; the cap is reported
+# in the document rather than raised, because a partial board with a marker is
+# more use than no board.
+herdr_linear::_issues_paged() {
+    local filter="${1:-}" acc_file rc
+    printf '%s' "$filter" | python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(0 if isinstance(d, dict) else 1)' 2>/dev/null \
+        || return "$HERDR_LINEAR_REFUSED"
+    # Pages accumulate in a file, not a variable handed to python3 through the
+    # environment: one env string is capped at 128 KiB on Linux and a real
+    # project's listing has already passed 200 KB.
+    acc_file="$(mktemp)" || return "$HERDR_LINEAR_UNAVAILABLE"
+    herdr_linear::_issues_paged_into "$acc_file" "$filter"; rc=$?
+    rm -f "$acc_file"
+    return "$rc"
+}
+
+herdr_linear::_issues_paged_into() {
+    local acc_file="${1:-}" filter="${2:-}" after="" body resp rc pages=0 ctl acc truncated=false
+    while :; do
+        if [ "$pages" -ge "$HERDR_LINEAR_VIEW_PAGE_MAX" ]; then truncated=true; break; fi
+        body="$(HERDR_LINEAR_FILTER="$filter" HERDR_LINEAR_AFTER="$after" python3 -c '
+import sys, json, os
+q = "query($n:Int,$after:String,$filter:IssueFilter){issues(first:$n,after:$after,filter:$filter){nodes{%s} pageInfo{hasNextPage endCursor}}}" % sys.argv[2]
+v = {"n": int(sys.argv[1]), "filter": json.loads(os.environ["HERDR_LINEAR_FILTER"])}
+if os.environ.get("HERDR_LINEAR_AFTER"):
+    v["after"] = os.environ["HERDR_LINEAR_AFTER"]
+print(json.dumps({"query": q, "variables": v}))
+' "$HERDR_LINEAR_VIEW_PAGE_SIZE" "$HERDR_LINEAR_ISSUE_FIELDS")" || return "$HERDR_LINEAR_UNAVAILABLE"
+        resp="$(herdr_linear::query "$body")"; rc=$?
+        [ "$rc" -eq 0 ] || return "$rc"
+        pages=$(( pages + 1 ))
+        # One python3 per page appends that page's nodes as one line of the
+        # file; the loop's control values come out on stdout.
+        ctl="$(printf '%s' "$resp" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+conn = ((d.get("data") or {}).get("issues")) or {}
+nodes = conn.get("nodes")
+if not isinstance(nodes, list):
+    sys.exit(1)
+with open(sys.argv[1], "a") as f:
+    f.write(json.dumps(nodes) + "\n")
+pi = conn.get("pageInfo") or {}
+print("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") or "")
+' "$acc_file" 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+        case "$ctl" in
+            1\ ?*) after="${ctl#1 }" ;;
+            *)     break ;;
+        esac
+    done
+    acc="$(python3 -c '
+import sys, json
+out = []
+for line in open(sys.argv[1]):
+    if line.strip():
+        out.extend(json.loads(line))
+print(json.dumps(out))
+' "$acc_file" 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+    printf '{"nodes":%s,"truncated":%s}' "$acc" "$truncated"
+}
+
+herdr_linear::view_issues() {
+    herdr_linear::_issues_paged "${1:-}"
+}
+
+herdr_linear::project_issues() {
+    local project="${1:-}" filter
+    [ -n "$project" ] || return "$HERDR_LINEAR_REFUSED"
+    filter="$(python3 -c 'import sys,json;print(json.dumps({"project":{"id":{"eq":sys.argv[1]}},"state":{"type":{"neq":"canceled"}}}))' "$project")" \
+        || return "$HERDR_LINEAR_UNAVAILABLE"
+    herdr_linear::_issues_paged "$filter"
+}
+
+# KTD12. A view belongs to a project when its filter NAMES the project: an
+# Issue view whose filterData carries project.id.eq or project.id.in with the
+# id, at any depth under Linear's and/or wrappers (the UI saves every filter
+# as {"and":[...]}). A `project` clause with no `id` -- project.initiatives,
+# for one -- names no project and is not a match.
+#
+# One definition, prepended to both python3 programs that need it: the list a
+# person picks from and the check on what they picked must agree.
+HERDR_LINEAR_NAMES_PROJECT_PY='
+def names_project(node, project):
+    if isinstance(node, list):
+        return any(names_project(n, project) for n in node)
+    if not isinstance(node, dict):
+        return False
+    for k, v in node.items():
+        if k == "project" and isinstance(v, dict):
+            ident = v.get("id")
+            if isinstance(ident, dict):
+                if ident.get("eq") == project:
+                    return True
+                if isinstance(ident.get("in"), list) and project in ident["in"]:
+                    return True
+        elif k in ("and", "or") and names_project(v, project):
+            return True
+    return False
+'
+
+# herdr_linear::filter_names_project <filter-json> <project-id> -> 0 when the
+# filter names the project, 1 when it does not or cannot be read.
+herdr_linear::filter_names_project() {
+    local filter="${1:-}" project="${2:-}"
+    [ -n "$filter" ] && [ -n "$project" ] || return 1
+    printf '%s' "$filter" | HERDR_LINEAR_PROJECT="$project" python3 -c "$HERDR_LINEAR_NAMES_PROJECT_PY"'
+import sys, json, os
+try:
+    f = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if names_project(f, os.environ["HERDR_LINEAR_PROJECT"]) else 1)
+' 2>/dev/null
+}
+
+herdr_linear::project_views() {
+    local project="${1:-}" after="" body resp rc pages=0 out=""
+    [ -n "$project" ] || return "$HERDR_LINEAR_REFUSED"
+    while :; do
+        [ "$pages" -lt "$HERDR_LINEAR_VIEW_PAGE_MAX" ] || break
+        body="$(HERDR_LINEAR_AFTER="$after" python3 -c '
+import sys, json, os
+q = "query($n:Int,$after:String){customViews(first:$n,after:$after){nodes{id name modelName archivedAt filterData} pageInfo{hasNextPage endCursor}}}"
+v = {"n": int(sys.argv[1])}
+if os.environ.get("HERDR_LINEAR_AFTER"):
+    v["after"] = os.environ["HERDR_LINEAR_AFTER"]
+print(json.dumps({"query": q, "variables": v}))
+' "$HERDR_LINEAR_VIEW_PAGE_SIZE")" || return "$HERDR_LINEAR_UNAVAILABLE"
+        resp="$(herdr_linear::query "$body")"; rc=$?
+        [ "$rc" -eq 0 ] || return "$rc"
+        pages=$(( pages + 1 ))
+        resp="$(printf '%s' "$resp" | HERDR_LINEAR_PROJECT="$project" python3 -c "$HERDR_LINEAR_NAMES_PROJECT_PY"'
+import sys, json, os
+project = os.environ["HERDR_LINEAR_PROJECT"]
+d = json.load(sys.stdin)
+conn = ((d.get("data") or {}).get("customViews")) or {}
+nodes = conn.get("nodes")
+if not isinstance(nodes, list):
+    sys.exit(1)
+for v in nodes:
+    if v.get("modelName") != "Issue" or v.get("archivedAt"):
+        continue
+    if not names_project(v.get("filterData"), project):
+        continue
+    name = "".join(ch for ch in str(v.get("name") or "") if ch not in "\t\n\r")
+    print("%s\t%s" % (v.get("id", ""), name))
+pi = conn.get("pageInfo") or {}
+print("\x01%s %s" % ("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") or ""))
+' 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+        after="${resp##*$'\x01'}"
+        resp="${resp%$'\x01'*}"
+        [ -n "$resp" ] && out="$out$resp"
+        case "$after" in
+            1\ ?*) after="${after#1 }" ;;
+            *)     break ;;
+        esac
+    done
+    [ -n "$out" ] || return "$HERDR_LINEAR_OK"
+    printf '%s' "$out" | herdr_linear::sanitize_stream
+}
+
+# The layout fields were confirmed by introspection on 2026-09-14
+# (tests/probe/customviews-transcript.md): viewPreferencesValues carries
+# layout, issueGrouping, columnOrderBoard and hiddenColumns, and the two lists
+# are null on a view that has never had its columns arranged.
+herdr_linear::view_read() {
+    local id="${1:-}" body resp rc
+    [ -n "$id" ] || return "$HERDR_LINEAR_NOT_FOUND"
+    body="$(python3 -c '
+import sys, json
+q = "query($id:String!){customView(id:$id){id name modelName archivedAt filterData viewPreferencesValues{layout issueGrouping columnOrderBoard hiddenColumns}}}"
+print(json.dumps({"query": q, "variables": {"id": sys.argv[1]}}))
+' "$id")" || return "$HERDR_LINEAR_UNAVAILABLE"
+    resp="$(herdr_linear::query "$body")"; rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    printf '%s' "$resp" | python3 -c '
+import sys, json
+v = ((json.load(sys.stdin).get("data") or {}).get("customView"))
+if not isinstance(v, dict) or not v.get("id"):
+    sys.exit(1)
+p = v.get("viewPreferencesValues") or {}
+def lst(x):
+    return [str(i) for i in x] if isinstance(x, list) else []
+print(json.dumps({
+    "id": v["id"],
+    "name": v.get("name") or "",
+    "archived": bool(v.get("archivedAt")),
+    "filter": v.get("filterData") if isinstance(v.get("filterData"), dict) else {},
+    "layout": {
+        "grouping": p.get("issueGrouping"),
+        "column_order": lst(p.get("columnOrderBoard")),
+        "hidden": lst(p.get("hiddenColumns")),
+    },
+}, sort_keys=True))
+' 2>/dev/null || return "$HERDR_LINEAR_UNAVAILABLE"
+}
+
+# herdr_linear::view_create <project-id> <name>
+#
+# Two mutations. The second gives the view its board layout; when it fails the
+# view still exists, so the id is printed anyway under its own code and the
+# caller records it -- an unrecorded view is one nobody can find to delete.
+# Not gated here: the bind skill's consent gate is the only caller (KTD11).
+# CustomViewCreateInput carries no modelName (introspected 2026-09-14): the
+# model follows from which filter field is set, and filterData is the issue one.
+herdr_linear::view_create() {
+    local project="${1:-}" name="${2:-}" body resp rc view_id
+    [ -n "$project" ] && [ -n "$name" ] || return "$HERDR_LINEAR_REFUSED"
+    body="$(python3 -c '
+import sys, json
+q = "mutation($i:CustomViewCreateInput!){customViewCreate(input:$i){success customView{id}}}"
+i = {"name": sys.argv[2], "shared": False,
+     "filterData": {"project": {"id": {"in": [sys.argv[1]]}}}}
+print(json.dumps({"query": q, "variables": {"i": i}}))
+' "$project" "$name")" || return "$HERDR_LINEAR_UNAVAILABLE"
+    resp="$(herdr_linear::query "$body")"; rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    # success alone is not an id: the documents arm answers success:true with
+    # a null document, and a view recorded without an id can never be found.
+    view_id="$(printf '%s' "$resp" | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)["data"]["customViewCreate"]
+    ok = d["success"] is True
+    vid = (d.get("customView") or {}).get("id") or ""
+except Exception:
+    sys.exit(1)
+if not ok or not vid:
+    sys.exit(1)
+sys.stdout.write(vid)
+' 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+
+    body="$(python3 -c '
+import sys, json
+q = "mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}"
+i = {"type": "user", "viewType": "customView", "customViewId": sys.argv[1],
+     "preferences": {"layout": "board", "issueGrouping": "workflowState"}}
+print(json.dumps({"query": q, "variables": {"i": i}}))
+' "$view_id")" || { printf '%s' "$view_id"; return "$HERDR_LINEAR_VIEW_PREFS_FAILED"; }
+    resp="$(herdr_linear::query "$body")"; rc=$?
+    if [ "$rc" -ne 0 ]; then printf '%s' "$view_id"; return "$HERDR_LINEAR_VIEW_PREFS_FAILED"; fi
+    printf '%s' "$resp" | python3 -c '
+import sys, json
+try:
+    ok = json.load(sys.stdin)["data"]["viewPreferencesCreate"]["success"]
+except Exception:
+    sys.exit(1)
+sys.exit(0 if ok is True else 1)
+' 2>/dev/null || { printf '%s' "$view_id"; return "$HERDR_LINEAR_VIEW_PREFS_FAILED"; }
+    printf '%s' "$view_id"
+    return "$HERDR_LINEAR_OK"
 }
 
 # ------------------------------------------------------------ the write bound
