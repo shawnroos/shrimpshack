@@ -101,3 +101,34 @@ herdr_linear::view_create_gated() {
     [ "$rc" -eq 0 ] && return "$HERDR_LINEAR_VIEW_OK"
     return "$HERDR_LINEAR_VIEW_PREFS_FAILED"
 }
+
+# The bind arguments' Linear checks. Unlike view_choose these do not require the
+# space to be bound: they run before the skill's confirmation binds it.
+
+# herdr_linear::view_names_project <view> <project>
+#   0 the view's filter names the project; 1 refused; 3 the view could not be read
+# Both ids pass the bind rule before anything is sent.
+herdr_linear::view_names_project() {
+    local view="${1:-}" project="${2:-}" v filter
+    herdr_linear::is_bind_identifier "$view" || return "$HERDR_LINEAR_VIEW_REFUSED"
+    herdr_linear::is_bind_identifier "$project" || return "$HERDR_LINEAR_VIEW_REFUSED"
+    v="$(herdr_linear::view_read "$view")" || return "$HERDR_LINEAR_VIEW_FAILED"
+    filter="$(printf '%s' "$v" | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin).get("filter") or {}))')" || return "$HERDR_LINEAR_VIEW_FAILED"
+    herdr_linear::filter_names_project "$filter" "$project" || return "$HERDR_LINEAR_VIEW_REFUSED"
+    return "$HERDR_LINEAR_VIEW_OK"
+}
+
+# herdr_linear::bind_issue_fits_branch <worktree> <issue>
+#   0 the branch names this issue or names none; 1 refused
+# A branch with no identifier contradicts nothing. A worktree that is not a
+# directory refuses, because a missing directory reads as "no branch" and would
+# otherwise pass.
+herdr_linear::bind_issue_fits_branch() {
+    local wt="${1:-}" issue="${2:-}" named
+    herdr_linear::is_bind_identifier "$issue" || return "$HERDR_LINEAR_VIEW_REFUSED"
+    [ -n "$wt" ] && [ -d "$wt" ] || return "$HERDR_LINEAR_VIEW_REFUSED"
+    named="$(herdr_linear::branch_identifier "$(herdr_linear::_current_branch "$wt")" 2>/dev/null)" || named=""
+    [ -z "$named" ] && return "$HERDR_LINEAR_VIEW_OK"
+    [ "$named" = "$(printf '%s' "$issue" | tr '[:lower:]' '[:upper:]')" ] || return "$HERDR_LINEAR_VIEW_REFUSED"
+    return "$HERDR_LINEAR_VIEW_OK"
+}
