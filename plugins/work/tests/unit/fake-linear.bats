@@ -453,3 +453,47 @@ PREFS_Q='{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreat
     [ "$status" -eq 0 ]
     [[ "$output" == *st-backlog* ]]
 }
+
+PROJECTS_Q='query($n:Int,$after:String,$filter:ProjectFilter){projects(first:$n,after:$after,filter:$filter){nodes{id name teams(first:1){nodes{key}}} pageInfo{hasNextPage endCursor}}}'
+projects_body() {   # projects_body <query> <variables-json>
+    python3 -c 'import sys,json;print(json.dumps({"query":sys.argv[1],"variables":json.loads(sys.argv[2])}))' "$1" "$2"
+}
+
+@test "projects( is routed ahead of teams( and answers only the members the request's filter asks for" {
+    local b
+    b="$(projects_body "$PROJECTS_Q" '{"n":50,"filter":{"members":{"some":{"isMe":{"eq":true}}}}}')"
+    run bash -c "printf '' | bash '$FIXTURE' --data \"\$1\"" _ "$b"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;n=json.load(sys.stdin)["data"]["projects"]["nodes"];print(len(n), sorted(p["id"][:4] for p in n), "states" in json.dumps(n))')" = "3 ['4444', 'a1a1', 'b2b2'] False" ]
+    b="$(projects_body "$PROJECTS_Q" '{"n":50}')"
+    run bash -c "printf '' | bash '$FIXTURE' --data \"\$1\"" _ "$b"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;n=json.load(sys.stdin)["data"]["projects"]["nodes"];print(len(n), any(p["id"].startswith("9999") for p in n))')" = "4 True" ]
+}
+
+@test "the projects read is refused the way the real API refuses a wrong variable type" {
+    local b
+    b="$(projects_body 'query($n:Int,$filter:IssueFilter){projects(first:$n,filter:$filter){nodes{id}}}' '{"n":1,"filter":{}}')"
+    run bash -c "printf '' | bash '$FIXTURE' --data \"\$1\"" _ "$b"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;d=json.load(sys.stdin);print(d["errors"][0]["extensions"]["code"], "data" in d)')" = "GRAPHQL_VALIDATION_FAILED False" ]
+    [[ "$output" == *'Variable \"$filter\" of type \"IssueFilter\" used in position expecting type \"ProjectFilter\".'* ]]
+    b="$(projects_body 'query($n:String,$filter:ProjectFilter){projects(first:$n,filter:$filter){nodes{id}}}' '{"n":"1","filter":{}}')"
+    run bash -c "printf '' | bash '$FIXTURE' --data \"\$1\"" _ "$b"
+    [[ "$output" == *'Variable \"$n\" of type \"String\" used in position expecting type \"Int\".'* ]]
+    b="$(projects_body 'query($n:Int,$after:String,$filter:ProjectFilter){projects(first:$n,after:$after,filter:$filter){nodes{id}}}' '{"n":1,"filter":{}}')"
+    run bash -c "printf '' | bash '$FIXTURE' --data \"\$1\"" _ "$b"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;print("errors" in json.load(sys.stdin))')" = "False" ]
+}
+
+@test "the projects arm pages, caps, empties and carries hostile bytes on request" {
+    local b
+    b="$(projects_body "$PROJECTS_Q" '{"n":50,"filter":{"members":{"some":{"isMe":{"eq":true}}}}}')"
+    run bash -c "printf '' | FAKE_LINEAR_PROJECTS=paged bash '$FIXTURE' --data \"\$1\"" _ "$b"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;c=json.load(sys.stdin)["data"]["projects"];print(len(c["nodes"]), c["pageInfo"]["hasNextPage"], c["pageInfo"]["endCursor"])')" = "2 True p1" ]
+    run bash -c "printf '' | FAKE_LINEAR_PROJECTS=capped bash '$FIXTURE' --data \"\$1\"" _ "$b"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["data"]["projects"]["pageInfo"]["hasNextPage"])')" = "True" ]
+    run bash -c "printf '' | FAKE_LINEAR_PROJECTS=empty bash '$FIXTURE' --data \"\$1\"" _ "$b"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["data"]["projects"]["nodes"])')" = "[]" ]
+    run bash -c "printf '' | FAKE_LINEAR_PROJECTS=hostile bash '$FIXTURE' --data \"\$1\"" _ "$b"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;print(any("\u202e" in p["name"] for p in json.load(sys.stdin)["data"]["projects"]["nodes"]))')" = "True" ]
+}

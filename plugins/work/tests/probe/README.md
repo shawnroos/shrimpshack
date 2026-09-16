@@ -81,3 +81,14 @@ runs only with `--mutate` and a terminal on stdin, and exits 64 otherwise, so
 nothing unattended can reach it. The read arms are the default and send only
 queries. The credential goes to curl on stdin, never argv; do not `ps -f` or
 `pgrep -f` while it runs.
+
+## projects-shapes.md — the project membership read
+
+`tests/probe/projects-shapes.md` records what `herdr_linear::my_projects`
+depends on: the `projects(filter:)` argument types, the
+`members.some.isMe` filter, the fields read, and the two variable-type
+refusals the real API answered. It is hand-written from a read-only run and
+carries query shapes only, never ids, names or counts (KTD18). There is no
+committed script for it: re-run the read by sourcing `lib/linear.sh` and
+passing the query in that file to `herdr_linear::query`, which keeps the key on
+curl's stdin.

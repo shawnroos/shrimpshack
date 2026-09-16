@@ -520,6 +520,74 @@ print("\x01%s %s" % ("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") 
     return "$HERDR_LINEAR_OK"
 }
 
+# herdr_linear::my_projects -> a JSON array of {id, name, team_key}, the
+# projects the credential's person is a member of. Exit 7 when the page cap
+# stopped the listing; what printed is still real.
+#
+# Membership is Linear's own (tests/probe/projects-shapes.md): `User` has no
+# projects field, so the filter on `projects` is the only way to ask. An
+# assignee-derived list is not a substitute -- it drops every project the
+# person joined and has no issue in.
+herdr_linear::my_projects() {
+    local acc_file rc
+    acc_file="$(mktemp)" || return "$HERDR_LINEAR_UNAVAILABLE"
+    herdr_linear::_my_projects_into "$acc_file"; rc=$?
+    rm -f "$acc_file"
+    return "$rc"
+}
+
+herdr_linear::_my_projects_into() {
+    local acc_file="${1:-}" after="" body resp rc pages=0 ctl out partial=0
+    while :; do
+        if [ "$pages" -ge "$HERDR_LINEAR_VIEW_PAGE_MAX" ]; then partial=1; break; fi
+        body="$(HERDR_LINEAR_AFTER="$after" python3 -c '
+import sys, json, os
+q = "query($n:Int,$after:String,$filter:ProjectFilter){projects(first:$n,after:$after,filter:$filter){nodes{id name teams(first:1){nodes{key}}} pageInfo{hasNextPage endCursor}}}"
+v = {"n": int(sys.argv[1]), "filter": {"members": {"some": {"isMe": {"eq": True}}}}}
+if os.environ.get("HERDR_LINEAR_AFTER"):
+    v["after"] = os.environ["HERDR_LINEAR_AFTER"]
+print(json.dumps({"query": q, "variables": v}))
+' "$HERDR_LINEAR_VIEW_PAGE_SIZE")" || return "$HERDR_LINEAR_UNAVAILABLE"
+        resp="$(herdr_linear::query "$body")"; rc=$?
+        [ "$rc" -eq 0 ] || return "$rc"
+        pages=$(( pages + 1 ))
+        ctl="$(printf '%s' "$resp" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+conn = ((d.get("data") or {}).get("projects")) or {}
+nodes = conn.get("nodes")
+if not isinstance(nodes, list):
+    sys.exit(1)
+rows = []
+for p in nodes:
+    if not isinstance(p, dict) or not p.get("id"):
+        continue
+    teams = ((p.get("teams") or {}).get("nodes")) or []
+    key = teams[0].get("key") if teams and isinstance(teams[0], dict) else None
+    rows.append({"id": p["id"], "name": p.get("name") or "", "team_key": key or None})
+with open(sys.argv[1], "a") as f:
+    f.write(json.dumps(rows) + "\n")
+pi = conn.get("pageInfo") or {}
+print("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") or "")
+' "$acc_file" 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+        case "$ctl" in
+            1\ ?*) after="${ctl#1 }" ;;
+            *)     break ;;
+        esac
+    done
+    out="$(python3 -c '
+import sys, json
+out = []
+for line in open(sys.argv[1]):
+    if line.strip():
+        out.extend(json.loads(line))
+print(json.dumps(out))
+' "$acc_file" 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+    printf '%s' "$out"
+    [ "$partial" -eq 1 ] && return "$HERDR_LINEAR_PARTIAL"
+    return "$HERDR_LINEAR_OK"
+}
+
 # The layout fields were confirmed by introspection on 2026-09-14
 # (tests/probe/customviews-transcript.md): viewPreferencesValues carries
 # layout, issueGrouping, columnOrderBoard and hiddenColumns, and the two lists
