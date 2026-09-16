@@ -265,3 +265,112 @@ grant_consent() {
         [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
     done
 }
+
+# ------------------------------------------------- the list script (U9, R18)
+
+views_bin() { printf '%s/bin/work-views.sh' "$ROOT"; }
+env_field() { printf '%s' "$output" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(json.dumps(eval(sys.argv[1])))' "$1"; }
+
+@test "work-views lists every view that names the project, with ids and names, and nothing else" {
+    export FAKE_LINEAR_VIEWS=many
+    run --separate-stderr "$(views_bin)" "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"ok"' ]
+    [ "$(env_field 'd["message"]')" = 'null' ]
+    [ "$(env_field '[r["id"] for r in d["rows"]]')" = '["cccccccc-cccc-4ccc-8ccc-cccccccccccc", "c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2", "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3"]' ]
+    [ "$(env_field '[r["name"] for r in d["rows"]]')" = '["Canvas board", "Canvas by eq", "Two projects, high priority"]' ]
+    [ "$(env_field 'sorted(set(k for r in d["rows"] for k in r))')" = '["id", "name"]' ]
+    [ "$(env_field 'sorted(d)')" = '["message", "rows", "status"]' ]
+}
+
+@test "work-views on a project with no views prints an empty list with ok" {
+    export FAKE_LINEAR_VIEWS=none
+    run --separate-stderr "$(views_bin)" "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"ok"' ]
+    [ "$(env_field 'd["rows"]')" = '[]' ]
+    FAKE_LINEAR_VIEWS=many run --separate-stderr "$(views_bin)" 88888888-8888-4888-8888-888888888888
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"ok"' ]
+    [ "$(env_field 'd["rows"]')" = '[]' ]
+}
+
+@test "work-views stopped by the page cap prints what it read as partial, with a message" {
+    export FAKE_LINEAR_VIEWS=endless HERDR_LINEAR_VIEW_PAGE_MAX=1
+    run --separate-stderr "$(views_bin)" "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"partial"' ]
+    [ "$(env_field 'len(d["rows"])')" = 1 ]
+    [[ "$(env_field 'd["message"]')" == *"first 1 pages"* ]]
+}
+
+@test "work-views with no credential reports unavailable without asking Linear" {
+    rm -f "$LINEAR_SECRETS_FILE"
+    run --separate-stderr "$(views_bin)" "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"unavailable"' ]
+    [ "$(env_field 'd["rows"]')" = '[]' ]
+    [[ "$(env_field 'd["message"]')" == *"no Linear credential"* ]]
+    [ ! -f "$FAKE_LINEAR_RECORD_DIR/bodies" ]
+}
+
+@test "work-views tells a refused credential from an unreachable API" {
+    FAKE_LINEAR_OUTAGE=auth_error run --separate-stderr "$(views_bin)" "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"unavailable"' ]
+    [ "$(env_field 'd["rows"]')" = '[]' ]
+    local refused; refused="$(env_field 'd["message"]')"
+    [[ "$refused" == *"refused the credential"* ]]
+
+    FAKE_LINEAR_OUTAGE=http_500 run --separate-stderr "$(views_bin)" "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"unavailable"' ]
+    [ "$(env_field 'd["rows"]')" = '[]' ]
+    [[ "$(env_field 'd["message"]')" == *"could not be reached"* ]]
+    [ "$(env_field 'd["message"]')" != "$refused" ]
+}
+
+@test "work-views sanitises a view name and drops a view id outside the identifier shape" {
+    local stub="$WORK/hostile-curl.sh"
+    printf '#!/usr/bin/env bash\ncat >/dev/null\ncat "$FAKE_HOSTILE_BODY"\n' > "$stub"
+    chmod +x "$stub"
+    export HERDR_LINEAR_CURL_BIN="$stub" FAKE_HOSTILE_BODY="$WORK/hostile.json"
+    python3 - "$PROJECT" > "$FAKE_HOSTILE_BODY" <<'PY'
+import json, sys
+f = {"project": {"id": {"eq": sys.argv[1]}}}
+ids = ["../escape", "-rf", "a" * 65, "dotted.id", "has space", "café", "", "two\ttabs"]
+nodes = [{"id": i, "name": "Dropped", "modelName": "Issue", "archivedAt": None, "filterData": f} for i in ids]
+nodes.append({"id": "a" * 64, "name": "Longest", "modelName": "Issue", "archivedAt": None, "filterData": f})
+nodes.append({"id": "Kept_view-1", "name": "Canvas\x1b]2;owned\x07 ‮board​", "modelName": "Issue", "archivedAt": None, "filterData": f})
+print(json.dumps({"data": {"customViews": {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}))
+PY
+    run --separate-stderr "$(views_bin)" "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"ok"' ]
+    [ "$(env_field '[r["id"] for r in d["rows"]]')" = "[\"$(printf 'a%.0s' $(seq 64))\", \"Kept_view-1\"]" ]
+    [ "$(env_field 'd["rows"][1]["name"]')" = '"Canvas]2;owned board"' ]
+    refute_match -F "Dropped" <<< "$output"
+    refute_match -F "$(printf '\033')" <<< "$output"
+}
+
+@test "work-views refuses a project id outside the identifier shape before asking Linear" {
+    local bad
+    for bad in "" "-rf" "../$PROJECT" "a.b" "has space" "$(printf 'b%.0s' $(seq 65))"; do
+        run --separate-stderr "$(views_bin)" "$bad"
+        [ "$status" -eq 2 ]
+        [ -z "$output" ]
+    done
+    run --separate-stderr "$(views_bin)"
+    [ "$status" -eq 2 ]
+    [ -z "$output" ]
+    [ ! -f "$FAKE_LINEAR_RECORD_DIR/bodies" ]
+}
+
+@test "work-views with no library beside it exits non-zero and prints nothing" {
+    mkdir -p "$WORK/lonely/bin"
+    cp "$(views_bin)" "$WORK/lonely/bin/"
+    run --separate-stderr "$WORK/lonely/bin/work-views.sh" "$PROJECT"
+    [ "$status" -ne 0 ]
+    [ "$status" -ne 2 ]
+    [ -z "$output" ]
+}
