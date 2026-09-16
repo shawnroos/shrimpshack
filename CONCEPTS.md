@@ -140,6 +140,9 @@ worktree, never against a pane or tab, so rearranging the layout does not lose i
 the plugin infers is only a proposal; the binding exists once Shawn confirms it, and only a
 confirmed binding permits a write to Linear.
 
+### Session binding
+The recorded link between one herdr named session and one Linear scope: the organization, a team, a project or an initiative. It is held against the session's name, because herdr cannot rename a session, and it scopes what the plugin does inside that session. The unnamed default herdr server is the session named `default`.
+
 ### Unbound
 A worktree with no binding. It is a supported state, not an error — work often starts before
 the issue exists — and the plugin never requires an issue to be created for it.
