@@ -470,6 +470,58 @@ esac
 # test, which encodes the call ORDER into the test and breaks the moment the
 # implementation reorders two reads that do not depend on each other.
 case "$body" in
+    # Session scope reads, keyed on their operation names and answered from a
+    # world a test writes, so one test can hold projects in several teams and
+    # initiatives at once.
+    #   FAKE_LINEAR_SCOPE_WORLD  a JSON file:
+    #     {"teams": [{"id","key","name"}], "initiatives": [{"id","name"}],
+    #      "projects": {"<id>": {"name", "teams": [team ids], "initiatives": [ids]}},
+    #      "issues": {"<identifier>": {"team": "<team id>", "project": "<project id>" or null}}}
+    #   FAKE_LINEAR_SCOPE_FAIL   rate_limited | auth_error: every scope read answers that;
+    #                            null_connection: a 200 whose lists and entities are null
+    *'ScopeProject('*|*'ScopeIssue('*|*'query ScopeTeams '*|*'query ScopeProjects '*|*'query ScopeInitiatives '*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        if [ "${FAKE_LINEAR_SCOPE_FAIL:-}" = null_connection ]; then
+            answer '{"data":{"teams":null,"projects":null,"initiatives":null,"project":null,"issue":null}}'
+            exit 0
+        fi
+        if [ -n "${FAKE_LINEAR_SCOPE_FAIL:-}" ]; then serve "$FAKE_LINEAR_SCOPE_FAIL"; exit 0; fi
+        answer "$(FAKE_BODY="$body" python3 -c '
+import json, os
+body = json.loads(os.environ["FAKE_BODY"]); q = body["query"]; v = body.get("variables", {})
+w = json.load(open(os.environ["FAKE_LINEAR_SCOPE_WORLD"]))
+teams = {t["id"]: t for t in w.get("teams", [])}
+inits = {i["id"]: i for i in w.get("initiatives", [])}
+projects = w.get("projects", {})
+def project(pid):
+    p = projects.get(pid)
+    if p is None:
+        return None
+    return {"id": pid, "name": p.get("name", pid),
+            "teams": {"nodes": [{"id": t, "key": teams.get(t, {}).get("key", ""), "name": teams.get(t, {}).get("name", "")} for t in p.get("teams", [])]},
+            "initiatives": {"nodes": [{"id": i, "name": inits.get(i, {}).get("name", "")} for i in p.get("initiatives", [])]}}
+if "ScopeProject(" in q:
+    p = project(v.get("id"))
+    out = {"data": {"project": p}} if p else {"errors": [{"message": "Entity not found", "extensions": {"code": "INPUT_ERROR"}}], "data": None}
+elif "ScopeIssue(" in q:
+    i = w.get("issues", {}).get(v.get("id"))
+    if i is None:
+        out = {"errors": [{"message": "Entity not found", "extensions": {"code": "INPUT_ERROR"}}], "data": None}
+    else:
+        t = teams.get(i["team"], {"id": i["team"], "key": ""})
+        out = {"data": {"issue": {"id": "iss-" + v["id"], "identifier": v["id"],
+               "team": {"id": t["id"], "key": t.get("key", "")},
+               "project": project(i["project"]) if i.get("project") else None}}}
+elif "query ScopeTeams " in q:
+    out = {"data": {"teams": {"nodes": list(teams.values())}}}
+elif "query ScopeProjects " in q:
+    out = {"data": {"projects": {"nodes": [{"id": k, "name": p.get("name", k)} for k, p in projects.items()]}}}
+else:
+    out = {"data": {"initiatives": {"nodes": list(inits.values())}}}
+print(json.dumps(out))
+')"
+        exit 0
+        ;;
     # The board's paginated read. Keyed on its operation name, which no other
     # query carries, and first so a filter value that happens to contain
     # `organization` or `teams(` cannot route a board read to another arm.
