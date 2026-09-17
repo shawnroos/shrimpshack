@@ -287,3 +287,47 @@ rlo="$(printf '\342\200\256')"
     [[ "$body" == *"Not yet settled"* ]]
     [ -r "$ROOT/docs/linear-conventions.md" ]
 }
+
+# --------------------------------------------- a directory that is not a worktree
+
+@test "a binding is refused on a directory that is not a git worktree, and nothing is recorded" {
+    run herdr_linear::binding_propose "$WORK/root" WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    [[ "$output" == *"not a git worktree"* ]]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/bindings" ] || [ -z "$(ls "$HERDR_LINEAR_STORE_DIR/bindings")" ]
+}
+
+@test "a binding is refused on the projects root even when it is a repository" {
+    git -C "$WORK/root" init -q
+    run herdr_linear::binding_propose "$WORK/root" WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::binding_propose "$WT" WEB-3318
+    [ "$status" -eq 0 ]
+}
+
+@test "the worktrees of the bound project's recorded repository are offered, with branch and binding" {
+    . "$ROOT/lib/repos.sh"
+    REPO="$WORK/root/app"; mkdir -p "$REPO"
+    git -C "$REPO" init -q -b main
+    git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    git -C "$REPO" worktree add -q -b feature/web-4001-thing "$WORK/wt/web-4001"
+    git -C "$REPO" worktree add -q -b spare "$WORK/wt/spare"
+    herdr_linear::record_scope_repo "$REPO" project-p-app
+    n="$(herdr_linear::binding_propose "$WORK/wt/web-4001" WEB-4001)"
+    herdr_linear::binding_confirm "$WORK/wt/web-4001" WEB-4001 "$n"
+    run herdr_linear::worktree_candidates p-app
+    [ "$status" -eq 0 ]
+    real="$(cd "$WORK/wt/web-4001" && pwd -P)"
+    spare="$(cd "$WORK/wt/spare" && pwd -P)"
+    printf '%s\n' "$output" | grep -qxF "$(printf '%s\tfeature/web-4001-thing\tWEB-4001\tbound' "$real")"
+    printf '%s\n' "$output" | grep -qxF "$(printf '%s\tspare\t\tunbound' "$spare")"
+}
+
+@test "a project with no recorded repository offers nothing and says so by succeeding empty" {
+    . "$ROOT/lib/repos.sh"
+    run herdr_linear::worktree_candidates p-none
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run herdr_linear::worktree_candidates '../p'
+    [ "$status" -ne 0 ]
+}

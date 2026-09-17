@@ -130,3 +130,40 @@ for n in nodes:
     printf '%s\n' "$out" | herdr_linear::sanitize_stream
     return "$HERDR_LINEAR_PROPOSE_OK"
 }
+
+# herdr_linear::worktree_candidates <project id>
+# The worktrees of every repository recorded for the project, one per line:
+# path, branch, bound identifier, binding state -- tab-separated. This is what a
+# bind started outside a worktree offers instead of binding where it stands.
+# A project with no recorded repository prints nothing and succeeds.
+herdr_linear::worktree_candidates() {
+    local project="${1:-}" repos repo path branch ident state
+    herdr_linear::is_safe_identifier "$project" || return 1
+    command -v herdr_linear::scope_repos >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/repos.sh"
+    repos="$(herdr_linear::scope_repos "project-$project")" || return 1
+    while IFS= read -r repo; do
+        [ -n "$repo" ] && [ -d "$repo" ] || continue
+        while IFS=$'\t' read -r path branch; do
+            [ -n "$path" ] && [ -d "$path" ] || continue
+            ident="$(herdr_linear::binding_identifier "$path" 2>/dev/null)" || ident=""
+            state="$(herdr_linear::binding_state "$path" 2>/dev/null)" || state="unbound"
+            printf '%s\t%s\t%s\t%s\n' "$path" "$branch" "$ident" "$state"
+        done < <(git -C "$repo" worktree list --porcelain 2>/dev/null | python3 -c '
+import sys
+entry = {}
+def flush():
+    if entry.get("path") and not entry.get("bare"):
+        print("%s\t%s" % (entry["path"], entry.get("branch", "")))
+for line in sys.stdin.read().splitlines() + [""]:
+    if not line:
+        flush(); entry = {}
+    elif line.startswith("worktree "):
+        entry["path"] = line[9:]
+    elif line.startswith("branch refs/heads/"):
+        entry["branch"] = line[18:]
+    elif line == "bare":
+        entry["bare"] = True
+')
+    done <<<"$repos"
+}

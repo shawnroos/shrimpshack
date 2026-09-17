@@ -596,9 +596,26 @@ herdr_linear::_mutate() {
     herdr_linear::_mutate_at "$f" "$@"
 }
 
+# A binding is keyed on a path and applies to every session started there. On a
+# directory that is not a worktree -- the projects root above all -- that would
+# attach one issue to unrelated work, so it is refused rather than asked about.
+herdr_linear::bindable_worktree() {
+    local dir="$1" here root
+    [ "$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || return 1
+    command -v herdr_linear::projects_root >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/contain.sh" 2>/dev/null
+    here="$(cd "$dir" 2>/dev/null && pwd -P)" || return 1
+    root="$(cd "$(herdr_linear::projects_root 2>/dev/null)" 2>/dev/null && pwd -P)" || root=""
+    [ "$here" != "$root" ]
+}
+
 herdr_linear::binding_propose() {
     local wt="${1:-}" id="${2:-}"
     [ -n "$wt" ] && [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    if ! herdr_linear::bindable_worktree "$wt"; then
+        printf 'refused: %s is not a git worktree, so a binding there would reach every session started from it\n' "$wt" >&2
+        return "$HERDR_LINEAR_BINDING_REFUSED"
+    fi
     # The record is a delivery channel: what is written here comes back out of
     # binding_identifier and becomes a path segment downstream.
     herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"

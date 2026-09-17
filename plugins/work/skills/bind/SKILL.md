@@ -241,6 +241,56 @@ Say `outside` out loud before recording a binding somewhere this plugin was
 never pointed at. The path signal alone decides nothing: Step 1 resolves the
 project itself, and that is the stronger signal.
 
+## When this directory is not a worktree
+
+A binding is keyed on a directory and reaches every session started there, so
+it is only ever made from a git worktree. Never offer to bind where you stand
+when this is not one: the library refuses it, and the person should never be
+the last guard against binding a whole projects folder. Find the right worktree
+instead.
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session-binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/scope-linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/propose.sh"
+
+if herdr_linear::bindable_worktree "$PWD"; then
+    echo "worktree"
+else
+    echo "not a worktree: $PWD"
+    PROJECT="$(herdr_linear::workspace_project "$(herdr_linear::workspace_id)" 2>/dev/null)" || PROJECT=""
+    if [ -z "$PROJECT" ]; then
+        SCOPE="$(herdr_linear::session_scope 2>/dev/null)" || SCOPE=""
+        [ "$(printf '%s' "$SCOPE" | cut -f1)" = project ] && PROJECT="$(printf '%s' "$SCOPE" | cut -f2)"
+    fi
+    echo "bound project: ${PROJECT:-none}"
+    [ -z "$PROJECT" ] || herdr_linear::worktree_candidates "$PROJECT" | herdr_linear::sanitize_stream
+fi
+```
+
+`worktree` means carry on to Step 1. Otherwise each candidate line is a path,
+its branch, the issue it is bound to, and its binding state, tab-separated.
+Decide from what came back; do not ask whether to bind here:
+
+- **One candidate** — resolve it yourself. Say the resolution out loud, `cd` into
+  it, and carry on to Step 1 from there.
+  > Worktree: ~/worktrees/web-4001 — the only worktree of the bound project's repository.
+- **Several** — ask which one, using the host's blocking question tool. Name each
+  by its path, branch and bound issue, and add two more choices: **bind this
+  herdr session or workspace instead** (see "This herdr session" and "Binding
+  the workspace to a project"; neither needs a worktree), and **stop**. On a
+  worktree choice, `cd` into it and carry on to Step 1.
+- **None, or no bound project** — say which, and offer the same two choices plus
+  **start a ticket with `/work:start`**, which makes the worktree first.
+
 ## Step 1 — offer the candidates
 
 ```bash

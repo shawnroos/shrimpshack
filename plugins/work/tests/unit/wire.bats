@@ -492,3 +492,16 @@ consent_tree() {
         rm -rf "$WORK/p"
     done
 }
+
+# A bind started outside a worktree resolves the worktree; it never asks to bind in place.
+@test "the bind skill finds a worktree before Step 1 and never offers to bind outside one" {
+    body="$(bind_skill)"
+    python3 - "$body" <<'PY'
+import sys
+b = sys.argv[1]
+at = [b.find(x) for x in ("herdr_linear::bindable_worktree", "herdr_linear::worktree_candidates", "## Step 1")]
+assert all(i >= 0 for i in at) and at == sorted(at), at
+PY
+    [[ "$body" != *"Bind it anyway"* ]]
+    [[ "$body" != *"bind anyway"* ]]
+}
