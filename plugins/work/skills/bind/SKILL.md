@@ -277,8 +277,12 @@ fi
 ```
 
 `worktree` means carry on to Step 1. Otherwise each candidate line is a path,
-its branch, the issue it is bound to, and its binding state, tab-separated.
-Decide from what came back; do not ask whether to bind here:
+its branch, the issue it is bound to, and its binding state, tab-separated. The
+candidates are the worktrees of the repository recorded for that project, or,
+when none is recorded, the worktrees already bound to the project's issues. A
+state ending `(membership unknown)` means Linear could not say whether that
+issue belongs to the project; offer it, and say so. Decide from what came back;
+do not ask whether to bind here:
 
 - **One candidate** — resolve it yourself. Say the resolution out loud, `cd` into
   it, and carry on to Step 1 from there.

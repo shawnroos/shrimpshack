@@ -136,12 +136,57 @@ for n in nodes:
 # path, branch, bound identifier, binding state -- tab-separated. This is what a
 # bind started outside a worktree offers instead of binding where it stands.
 # A project with no recorded repository prints nothing and succeeds.
+# The bound worktrees whose issue Linear places in the project, newest record
+# first. The fallback for a project with no recorded repository, which is the
+# ordinary case until somebody answers the repository question.
+HERDR_LINEAR_BOUND_WORKTREE_LIMIT="${HERDR_LINEAR_BOUND_WORKTREE_LIMIT:-8}"
+
+herdr_linear::_bound_worktree_candidates() {
+    local project="$1" path ident state rc
+    command -v herdr_linear::scope_contains_issue >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/scope-linear.sh"
+    while IFS=$'\t' read -r path ident state; do
+        [ -n "$path" ] && [ -d "$path" ] || continue
+        herdr_linear::scope_contains_issue project "$project" "$ident" >/dev/null; rc=$?
+        case "$rc" in
+            0) printf '%s\t%s\t%s\t%s\n' "$path" "$(herdr_linear::_current_branch "$path")" "$ident" "$state" ;;
+            1) ;;
+            *) printf '%s\t%s\t%s\t%s\n' "$path" "$(herdr_linear::_current_branch "$path")" "$ident" "$state (membership unknown)" ;;
+        esac
+    done < <(python3 - "$HERDR_LINEAR_STORE_DIR/bindings" "$HERDR_LINEAR_BOUND_WORKTREE_LIMIT" <<'PYEOF'
+import glob, json, os, re, stat, sys
+d, limit = sys.argv[1], int(sys.argv[2])
+SAFE = re.compile(r"[A-Z][A-Z0-9]{1,7}-[0-9]{1,6}")
+rows = []
+for f in glob.glob(os.path.join(d, "*.json")):
+    try:
+        st = os.lstat(f)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+            continue
+        r = json.load(open(f))
+    except (OSError, ValueError):
+        continue
+    if not isinstance(r, dict) or r.get("state") not in ("bound", "misplaced", "stale"):
+        continue
+    ident, path = r.get("issue_identifier") or "", r.get("worktree_path") or ""
+    if path and SAFE.fullmatch(ident):
+        rows.append((r.get("updated_at") or "", path, ident, r["state"]))
+for _, path, ident, state in sorted(rows, reverse=True)[:limit]:
+    print("%s\t%s\t%s" % (path, ident, state))
+PYEOF
+)
+}
+
 herdr_linear::worktree_candidates() {
     local project="${1:-}" repos repo path branch ident state
     herdr_linear::is_safe_identifier "$project" || return 1
     command -v herdr_linear::scope_repos >/dev/null 2>&1 \
         || . "${BASH_SOURCE[0]%/*}/repos.sh"
     repos="$(herdr_linear::scope_repos "project-$project")" || return 1
+    if [ -z "$(printf '%s' "$repos" | grep -c . 2>/dev/null | grep -v '^0$')" ]; then
+        herdr_linear::_bound_worktree_candidates "$project"
+        return 0
+    fi
     while IFS= read -r repo; do
         [ -n "$repo" ] && [ -d "$repo" ] || continue
         while IFS=$'\t' read -r path branch; do
