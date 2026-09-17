@@ -822,7 +822,7 @@ herdr_linear::_session_allows_project() {
     command -v herdr_linear::scope_contains_project >/dev/null 2>&1 \
         || . "${BASH_SOURCE[0]%/*}/scope-linear.sh"
     herdr_linear::scope_contains_project "$kind" "$id" "$project" >/dev/null; rc=$?
-    [ "$rc" -eq 1 ] || return 0
+    [ "$rc" -eq "$HERDR_LINEAR_SCOPE_OUTSIDE" ] || return 0
     printf 'refused: project %s is outside this session, which is bound to %s %s\n' "$project" "$kind" "$name" >&2
     return 1
 }
@@ -848,7 +848,7 @@ herdr_linear::_session_allows_part() {
         issue)     herdr_linear::scope_contains_issue project "$id" "$part_id" >/dev/null; rc=$? ;;
         *) printf 'refused: a workspace part is a milestone or an issue\n' >&2; return 1 ;;
     esac
-    if [ "$rc" -eq 1 ]; then
+    if [ "$rc" -eq "$HERDR_LINEAR_SCOPE_OUTSIDE" ]; then
         printf 'refused: %s %s is not in project %s, which this session is bound to\n' "$part_kind" "$part_id" "$name" >&2
         return 1
     fi

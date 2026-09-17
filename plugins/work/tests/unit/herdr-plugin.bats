@@ -237,3 +237,22 @@ PY
     [ "$status" -eq 0 ] || printf '%s\n' "$output" >&2
     [ "$status" -eq 0 ]
 }
+
+@test "a herdr that never answers the popup open cannot hold the startup hook past its bound" {
+    export FAKE_HERDR_PANE_OPEN_SLEEP=30 HL_CALL_SECONDS=1
+    start=$(date +%s)
+    start_hook
+    [ "$status" -eq 0 ]
+    [ $(( $(date +%s) - start )) -lt 10 ]
+    run herdr_linear::session_binding_should_ask canvas
+    [ "$status" -eq 0 ]
+}
+
+@test "the bind action says so when herdr does not open the popup in time" {
+    export FAKE_HERDR_PANE_OPEN_SLEEP=30 HL_CALL_SECONDS=1
+    start=$(date +%s)
+    run bash "$ROOT/bin/session-bind.sh" open
+    [ "$status" -ne 0 ]
+    [ $(( $(date +%s) - start )) -lt 10 ]
+    [[ "$output" == *"did not open"* ]]
+}

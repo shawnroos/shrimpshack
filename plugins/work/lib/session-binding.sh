@@ -149,15 +149,18 @@ herdr_linear::session_binding_read() {
     herdr_linear::_session_binding_py read "$f" "$1" || return "$HERDR_LINEAR_BINDING_ABSENT"
 }
 
-# herdr_linear::session_scope
+# herdr_linear::session_scope [session name]
 # The bound scope of the session this process runs in, as `kind<TAB>id<TAB>name`.
+# A caller that already resolved the name passes it: resolving it again probes
+# herdr when the socket is not in the environment.
 # Fails when there is no session or it is not bound: an unbound session applies
 # no scope checks (R13).
 herdr_linear::session_scope() {
     local name rec
     command -v herdr_linear::session_name >/dev/null 2>&1 \
         || . "${BASH_SOURCE[0]%/*}/session.sh"
-    name="$(herdr_linear::session_name)" || return 1
+    name="${1:-}"
+    [ -n "$name" ] || name="$(herdr_linear::session_name)" || return 1
     rec="$(herdr_linear::session_binding_read "$name")" || return 1
     printf '%s' "$rec" | python3 -c '
 import json, sys
@@ -239,8 +242,8 @@ herdr_linear::session_rebind_preview() {
             herdr_linear::scope_contains_issue "$kind" "$id" "$subject" >/dev/null; rc=$?
         fi
         case "$rc" in
-            0) ;;
-            1) printf 'outside\t%s\t%s\t%s\n' "$what" "$key" "$subject" ;;
+            "$HERDR_LINEAR_SCOPE_INSIDE") ;;
+            "$HERDR_LINEAR_SCOPE_OUTSIDE") printf 'outside\t%s\t%s\t%s\n' "$what" "$key" "$subject" ;;
             *) printf 'unknown\t%s\t%s\t%s\n' "$what" "$key" "$subject" ;;
         esac
     done < <(python3 - "$root/workspaces" "$HERDR_LINEAR_STORE_DIR/bindings" "$session" <<'PYEOF'

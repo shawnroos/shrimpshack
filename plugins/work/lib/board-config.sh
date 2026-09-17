@@ -57,7 +57,11 @@ herdr_linear::_board_session_scope() {
 }
 
 herdr_linear::_board_config_py() {
-    HL_SESSION_SCOPE="$(herdr_linear::_board_session_scope)" \
+    local scope=""
+    case "${1:-}" in
+        load|mapping-for) scope="$(herdr_linear::_board_session_scope)" ;;
+    esac
+    HL_SESSION_SCOPE="$scope" \
     HERDR_LINEAR_BOARD_CONFIG_VERSION="$HERDR_LINEAR_BOARD_CONFIG_VERSION" \
     HERDR_LINEAR_BOARD_FIELD_KINDS="$HERDR_LINEAR_BOARD_FIELD_KINDS" \
     HERDR_LINEAR_BOARD_OK="$HERDR_LINEAR_BOARD_OK" \

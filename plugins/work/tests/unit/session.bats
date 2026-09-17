@@ -110,3 +110,18 @@ teardown() {
     [ "$status" -ne 0 ]
     [ -z "$output" ]
 }
+
+@test "a named session called herdr is that session, not the default" {
+    export HERDR_SOCKET_PATH="/h/.config/herdr/sessions/herdr/herdr.sock"
+    run herdr_linear::session_name
+    [ "$status" -eq 0 ]
+    [ "$output" = "herdr" ]
+}
+
+@test "a named session called default is refused, so it never shares the default session's records" {
+    export HERDR_SOCKET_PATH="/h/.config/herdr/sessions/default/herdr.sock"
+    run herdr_linear::session_name
+    [ "$status" -ne 0 ]
+    run herdr_linear::session_store_root
+    [ "$status" -ne 0 ]
+}

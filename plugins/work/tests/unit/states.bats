@@ -527,3 +527,17 @@ bind_wt_to() {   # bind_wt_to <identifier>
     bind_ws w1 "$OTHER"
     [ "$(herdr_linear::workspace_read w1 | python3 -c 'import sys,json; d=json.load(sys.stdin); print(repr(d["part_kind"]), repr(d["part_id"]))')" = "'' ''" ]
 }
+
+@test "a suspended worktree's report carries only the suspension, and an outside one only its report" {
+    scope_world
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    bind_session team t-ops "OPS Ops"
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::check_session_scope "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_STATE_OUTSIDE_SESSION" ]
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]
+    [[ "$output" == *"writes are suspended"* ]]
+    [[ "$output" != *"Nothing was moved or suspended"* ]]
+}

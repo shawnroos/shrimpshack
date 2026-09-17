@@ -633,3 +633,31 @@ PY
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
+
+@test "AE3: a bound worktree outside the session's scope is reported in the session-start notice" {
+    export HERDR_SOCKET_PATH="/h/.config/herdr/sessions/ops/herdr.sock"
+    export FAKE_LINEAR_SCOPE_WORLD="$WORK/world.json"
+    printf '%s' '{"teams":[{"id":"t-ops","key":"OPS","name":"Ops"}],"projects":{},"issues":{"WEB-3318":{"team":"t-web","project":null}}}' > "$FAKE_LINEAR_SCOPE_WORLD"
+    bind_session ops team t-ops "OPS Ops"
+    bind_wt
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr bash -c "printf '%s' '$(payload "$WT")' | bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    ctx="$(printf '%s' "$output" | context_of)"
+    body="${ctx%%</work-context>*}"
+    [[ "$body" == *"outside this herdr session"* ]]
+    [[ "$body" == *"WEB-3318"* ]]
+    [ "$(herdr_linear::binding_state "$WT")" = bound ]
+}
+
+@test "a bound worktree inside the session's scope gets no outside report" {
+    export HERDR_SOCKET_PATH="/h/.config/herdr/sessions/web/herdr.sock"
+    export FAKE_LINEAR_SCOPE_WORLD="$WORK/world.json"
+    printf '%s' '{"teams":[{"id":"t-web","key":"WEB","name":"Web"}],"projects":{},"issues":{"WEB-3318":{"team":"t-web","project":null}}}' > "$FAKE_LINEAR_SCOPE_WORLD"
+    bind_session web team t-web "WEB Web"
+    bind_wt
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr bash -c "printf '%s' '$(payload "$WT")' | bash '$HOOK'"
+    ctx="$(printf '%s' "$output" | context_of)"
+    [[ "$ctx" != *"outside this herdr session"* ]]
+}

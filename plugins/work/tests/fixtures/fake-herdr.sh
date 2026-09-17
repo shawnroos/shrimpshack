@@ -48,6 +48,7 @@
 #                          both effects from one snapshot
 #   FAKE_HERDR_SOCKET_PATH  the socket line `status server` prints
 #   FAKE_HERDR_PANE_OPEN_FAILS  1 to make `plugin pane open` fail
+#   FAKE_HERDR_PANE_OPEN_SLEEP  seconds `plugin pane open` hangs before answering
 #   FAKE_HERDR_STATUS_NO_SOCKET  1 to leave the socket line out
 #   FAKE_HERDR_WORKSPACES  the spaces `workspace list` reports, as
 #                          `id=label,id=label` (default: wA=Plugins). Created
@@ -383,6 +384,7 @@ print(json.dumps({"id": "cli:workspace:list", "result": {"type": "workspace_list
             "pane open")
                 [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
                 [ "${FAKE_HERDR_PANE_OPEN_FAILS:-0}" = 1 ] && { echo '{"error":{"code":"ui_busy"}}' >&2; exit 1; }
+                [ -n "${FAKE_HERDR_PANE_OPEN_SLEEP:-}" ] && sleep "$FAKE_HERDR_PANE_OPEN_SLEEP"
                 printf '{"id":"cli:plugin","result":{"type":"ok"}}\n'
                 ;;
             *) echo "fake-herdr: unsupported plugin subcommand '${2:-} ${3:-}'" >&2; exit 2 ;;

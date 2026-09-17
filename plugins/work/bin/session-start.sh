@@ -16,6 +16,9 @@ done
 [ -e "${HERDR_PLUGIN_CONFIG_DIR:-/nonexistent}/no-ask" ] && exit 0
 session="$(herdr_linear::session_name 2>/dev/null)" || exit 0
 herdr_linear::session_binding_should_ask "$session" 2>/dev/null || exit 0
-"${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin "$HERDR_PLUGIN_ID" --entrypoint bind >/dev/null 2>&1 || exit 0
+# Bounded: a herdr that does not answer must not hold a server start. perl's
+# alarm survives exec; `timeout` is not installed on macOS.
+perl -e 'alarm shift; exec @ARGV' "${HL_CALL_SECONDS:-15}" \
+    "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin "$HERDR_PLUGIN_ID" --entrypoint bind >/dev/null 2>&1 || exit 0
 herdr_linear::session_binding_mark_asked "$session" >/dev/null 2>&1
 exit 0

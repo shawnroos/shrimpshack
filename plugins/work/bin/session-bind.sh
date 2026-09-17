@@ -13,7 +13,10 @@ done
 
 if [ "${1:-}" = open ]; then
     [ -n "${HERDR_PLUGIN_ID:-}" ] || { echo "not run by herdr: no plugin id" >&2; exit 1; }
-    exec "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin "$HERDR_PLUGIN_ID" --entrypoint bind >/dev/null
+    perl -e 'alarm shift; exec @ARGV' "${HL_CALL_SECONDS:-15}" \
+        "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin "$HERDR_PLUGIN_ID" --entrypoint bind >/dev/null 2>&1 \
+        || { echo "herdr did not open the bind popup; nothing was changed" >&2; exit 1; }
+    exit 0
 fi
 
 done_after() {

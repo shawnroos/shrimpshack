@@ -9,6 +9,5 @@ for f in sanitize.sh session.sh binding.sh session-binding.sh; do
 done
 herdr_linear::session_name >/dev/null 2>&1 || exit 0
 scope="$(herdr_linear::session_scope 2>/dev/null)" || { printf 'unbound'; exit 0; }
-printf '%s' "$scope" | cut -f3 | python3 -c '
-import re, sys
-print(re.sub(r"[\x00-\x1f\x7f-\x9f]", "", sys.stdin.read()).strip()[:40], end="")'
+printf '%s' "$scope" | cut -f3 | herdr_linear::sanitize_stream \
+    | python3 -c 'import sys; print(sys.stdin.read().strip()[:40], end="")'

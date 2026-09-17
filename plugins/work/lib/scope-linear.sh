@@ -18,8 +18,8 @@ HERDR_LINEAR_SCOPE_UNKNOWN=2
 
 herdr_linear::_membership_answer() {
     case "$1" in
-        0) printf 'inside' ;;
-        1) printf 'outside' ;;
+        "$HERDR_LINEAR_SCOPE_INSIDE") printf 'inside' ;;
+        "$HERDR_LINEAR_SCOPE_OUTSIDE") printf 'outside' ;;
         *) printf 'unknown'; return "$HERDR_LINEAR_SCOPE_UNKNOWN" ;;
     esac
     return "$1"
@@ -96,7 +96,7 @@ herdr_linear::scope_contains_project() {
     herdr_linear::is_safe_identifier "$scope" && herdr_linear::is_safe_identifier "$project" \
         || { herdr_linear::_membership_answer 2; return; }
     case "$kind" in
-        organization) herdr_linear::_membership_answer 0; return ;;
+        organization) herdr_linear::_membership_answer "$HERDR_LINEAR_SCOPE_INSIDE"; return ;;
         project) [ "$scope" = "$project" ]; herdr_linear::_membership_answer $?; return ;;
         team|initiative) ;;
         *) herdr_linear::_membership_answer 2; return ;;
@@ -114,7 +114,7 @@ herdr_linear::scope_contains_issue() {
     herdr_linear::is_safe_identifier "$scope" && herdr_linear::is_safe_identifier "$issue" \
         || { herdr_linear::_membership_answer 2; return; }
     case "$kind" in
-        organization) herdr_linear::_membership_answer 0; return ;;
+        organization) herdr_linear::_membership_answer "$HERDR_LINEAR_SCOPE_INSIDE"; return ;;
         team|project|initiative) ;;
         *) herdr_linear::_membership_answer 2; return ;;
     esac
@@ -132,7 +132,7 @@ herdr_linear::scope_contains_milestone() {
     herdr_linear::is_safe_identifier "$scope" && herdr_linear::is_safe_identifier "$milestone" \
         || { herdr_linear::_membership_answer 2; return; }
     case "$kind" in
-        organization) herdr_linear::_membership_answer 0; return ;;
+        organization) herdr_linear::_membership_answer "$HERDR_LINEAR_SCOPE_INSIDE"; return ;;
         project) ;;
         *) herdr_linear::_membership_answer 2; return ;;
     esac

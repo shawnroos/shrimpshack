@@ -20,16 +20,20 @@ HERDR_LINEAR_STORE_DIR="${HERDR_LINEAR_STORE_DIR:-$HOME/.claude/work}"
 # herdr_linear::session_from_socket <socket path>
 herdr_linear::session_from_socket() {
     local p="${1:-}" rest name
+    # The named arm first: a session called `herdr` has a socket that also ends
+    # in herdr/herdr.sock, and would otherwise be read as the default server.
     case "$p" in
-        */herdr/herdr.sock) printf 'default'; return 0 ;;
-        */herdr/sessions/*/herdr.sock) ;;
+        */herdr/sessions/*/herdr.sock)
+            rest="${p%/herdr.sock}"
+            name="${rest##*/}"
+            [ "$rest" = "${p%/herdr/sessions/*/herdr.sock}/herdr/sessions/$name" ] || return 1
+            herdr_linear::is_safe_identifier "$name" || return 1
+            # `default` names the flat store; a named session must never share it.
+            [ "$name" != default ] || return 1
+            printf '%s' "$name" ;;
+        */herdr/herdr.sock) printf 'default' ;;
         *) return 1 ;;
     esac
-    rest="${p%/herdr.sock}"
-    name="${rest##*/}"
-    [ "$rest" = "${p%/herdr/sessions/*/herdr.sock}/herdr/sessions/$name" ] || return 1
-    herdr_linear::is_safe_identifier "$name" || return 1
-    printf '%s' "$name"
 }
 
 # A set HERDR_SOCKET_PATH is authoritative even when it fails the rule: falling

@@ -133,8 +133,8 @@ herdr_linear::check_session_scope() {
         || . "${BASH_SOURCE[0]%/*}/scope-linear.sh"
     herdr_linear::scope_contains_issue "$kind" "$id" "$ident" >/dev/null; rc=$?
     case "$rc" in
-        0) return "$HERDR_LINEAR_STATE_OK" ;;
-        1) ;;
+        "$HERDR_LINEAR_SCOPE_INSIDE") return "$HERDR_LINEAR_STATE_OK" ;;
+        "$HERDR_LINEAR_SCOPE_OUTSIDE") ;;
         *) return "$HERDR_LINEAR_STATE_UNKNOWN" ;;
     esac
     printf 'This worktree is bound to %s, which is outside this herdr session: the session is bound to %s %s.\n' "$ident" "$kind" "$name"
@@ -145,8 +145,9 @@ herdr_linear::check_session_scope() {
 # One pass over both, recording the resulting state on the binding so the write
 # path can consult it without repeating the network calls.
 herdr_linear::classify() {
-    local wt="${1:-}" ws="${2:-}" out place_rc live_rc
-    herdr_linear::check_session_scope "$wt"
+    local wt="${1:-}" ws="${2:-}" out place_rc live_rc outside
+    # Printed only when nothing is suspended: its text says nothing was.
+    outside="$(herdr_linear::check_session_scope "$wt")"
     out="$(herdr_linear::check_placement "$wt" "$ws")"; place_rc=$?
     if [ "$place_rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
         herdr_linear::binding_set_state "$wt" misplaced
@@ -170,5 +171,6 @@ herdr_linear::classify() {
         misplaced) [ "$place_rc" -eq "$HERDR_LINEAR_STATE_OK" ] && herdr_linear::binding_set_state "$wt" bound ;;
         stale)     [ "$live_rc"  -eq "$HERDR_LINEAR_STATE_OK" ] && herdr_linear::binding_set_state "$wt" bound ;;
     esac
+    printf '%s' "$outside"
     return "$HERDR_LINEAR_STATE_OK"
 }
