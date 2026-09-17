@@ -1054,3 +1054,82 @@ load_view_libs() {
     run herdr_linear::view_names_project "$view" "$project"
     [ "$status" -eq 0 ]
 }
+
+# ------------------------------------- the bind skill's argument form (U21, R29)
+
+# The argument form reaches the store only through workspace_propose then
+# workspace_confirm. These prove ordering, not that a person answered.
+
+# With no workspaces directory yet the lock cannot be taken, so the refusal
+# arrives as exit 3; the second half runs where the lock succeeds and the nonce
+# check itself refuses.
+@test "a space confirm with no proposal is refused and leaves no record" {
+    local nonce
+    run herdr_linear::workspace_confirm wA "$PROJ_ID" 0123456789abcdef0123456789abcdef
+    [ "$status" -ne 0 ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/workspaces/wA.json" ]
+
+    nonce="$(herdr_linear::workspace_propose wB "$PROJ_ID")"
+    run herdr_linear::workspace_confirm wA "$PROJ_ID" "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::workspace_confirm wA "$PROJ_ID" ""
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::workspace_state wA
+    [ "$output" = "unbound" ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/workspaces/wA.json" ]
+}
+
+@test "a valid argument set records only through propose then confirm" {
+    load_view_libs
+    local space="" project="" view="" nonce
+    run --separate-stderr herdr_linear::bind_args_parse --space wA --project "$PROJ_ID" --view "$VIEW_ID"
+    [ "$status" -eq 0 ]
+    while IFS=$'\t' read -r k v; do
+        case "$k" in space) space="$v" ;; project) project="$v" ;; view) view="$v" ;; esac
+    done <<< "$output"
+    run herdr_linear::bind_space_is_own "$space" wA
+    [ "$status" -eq 0 ]
+    run herdr_linear::view_names_project "$view" "$project"
+    [ "$status" -eq 0 ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/workspaces/$space.json" ]
+
+    run --separate-stderr herdr_linear::view_choose "$space" "$view"
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+
+    nonce="$(herdr_linear::workspace_propose "$space" "$project")"
+    run herdr_linear::workspace_state "$space"
+    [ "$output" = "proposed" ]
+    run --separate-stderr herdr_linear::view_choose "$space" "$view"
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+
+    run herdr_linear::workspace_confirm "$space" "$project" "$nonce"
+    [ "$status" -eq 0 ]
+    run herdr_linear::workspace_project "$space"
+    [ "$output" = "$project" ]
+    run --separate-stderr herdr_linear::view_choose "$space" "$view"
+    [ "$status" -eq 0 ]
+    run herdr_linear::workspace_view "$space"
+    [[ "$output" == *"$view"* ]]
+}
+
+@test "a used nonce does not confirm a second binding" {
+    local nonce other=55555555-5555-4555-8555-555555555555
+    nonce="$(herdr_linear::workspace_propose wA "$PROJ_ID")"
+    herdr_linear::workspace_confirm wA "$PROJ_ID" "$nonce"
+
+    run herdr_linear::workspace_confirm wA "$PROJ_ID" "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::workspace_confirm wA "$other" "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::workspace_confirm wB "$PROJ_ID" "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::binding_confirm "$WT" WEB-1234 "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+
+    run herdr_linear::workspace_project wA
+    [ "$output" = "$PROJ_ID" ]
+    run herdr_linear::workspace_state wB
+    [ "$output" = "unbound" ]
+    run herdr_linear::binding_state "$WT"
+    [ "$output" = "unbound" ]
+}
