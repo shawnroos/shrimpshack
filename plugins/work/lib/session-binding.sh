@@ -211,3 +211,68 @@ herdr_linear::session_binding_should_ask() {
     herdr_linear::_session_binding_py read "$f" "$name" \
         | python3 -c 'import sys,json; r=json.load(sys.stdin); sys.exit(0 if r["state"]=="unbound" and not r["asked"] else 1)'
 }
+
+# herdr_linear::session_rebind_preview <kind> <scope id>
+# What binding this session to a new scope would leave outside it, before
+# anything is written (R5): one line per workspace of this session and per
+# worktree bound from it, `outside|unknown<TAB>workspace|worktree<TAB>what<TAB>project or issue`.
+# A worktree belongs to this session when its binding holds a tab here.
+herdr_linear::session_rebind_preview() {
+    local kind="${1:-}" id="${2:-}" session root line what key subject rc
+    case "$kind" in
+        organization) return 0 ;;
+        team|project|initiative) ;;
+        *) return "$HERDR_LINEAR_BINDING_REFUSED" ;;
+    esac
+    herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    command -v herdr_linear::session_name >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/session.sh"
+    command -v herdr_linear::scope_contains_project >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/scope-linear.sh"
+    session="$(herdr_linear::session_name)" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    root="$(herdr_linear::session_store_root)" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    while IFS=$'\t' read -r what key subject; do
+        [ -n "$what" ] || continue
+        if [ "$what" = workspace ]; then
+            herdr_linear::scope_contains_project "$kind" "$id" "$subject" >/dev/null; rc=$?
+        else
+            herdr_linear::scope_contains_issue "$kind" "$id" "$subject" >/dev/null; rc=$?
+        fi
+        case "$rc" in
+            0) ;;
+            1) printf 'outside\t%s\t%s\t%s\n' "$what" "$key" "$subject" ;;
+            *) printf 'unknown\t%s\t%s\t%s\n' "$what" "$key" "$subject" ;;
+        esac
+    done < <(python3 - "$root/workspaces" "$HERDR_LINEAR_STORE_DIR/bindings" "$session" <<'PYEOF'
+import glob, json, os, re, stat, sys
+spaces, bindings, session = sys.argv[1:4]
+SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+def records(d):
+    for f in sorted(glob.glob(os.path.join(d, "*.json"))):
+        try:
+            st = os.lstat(f)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+                continue
+            r = json.load(open(f))
+        except (OSError, ValueError):
+            continue
+        if isinstance(r, dict) and r.get("state") in ("bound", "misplaced", "stale"):
+            yield f, r
+
+def clean(s):
+    return re.sub(r"[\t\n\r\x00-\x1f\x7f]", " ", str(s))
+
+for f, r in records(spaces):
+    project = r.get("issue_identifier") or ""
+    if SAFE.fullmatch(project):
+        print("workspace\t%s\t%s" % (clean(os.path.basename(f)[:-5]), project))
+for f, r in records(bindings):
+    tabs = r.get("tabs") if isinstance(r.get("tabs"), dict) else {}
+    tab = r.get("tab") if session == "default" else tabs.get(session)
+    ident = r.get("issue_identifier") or ""
+    if tab and SAFE.fullmatch(ident):
+        print("worktree\t%s\t%s" % (clean(r.get("worktree_path", "")), ident))
+PYEOF
+)
+}

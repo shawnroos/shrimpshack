@@ -425,3 +425,24 @@ placement_tree() {
         rm -rf "$WORK/p"
     done
 }
+
+# ------------------------------------------------ the session in /work:bind (U8)
+
+bind_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/bind/SKILL.md"; }
+
+@test "the bind skill shows the session before the worktree and previews a rebind before asking" {
+    body="$(bind_skill)"
+    python3 - "$body" <<'PY'
+import sys
+b = sys.argv[1]
+order = ["herdr_linear::session_name", "herdr_linear::scope_candidates",
+         "herdr_linear::session_rebind_preview", "herdr_linear::session_binding_propose",
+         "herdr_linear::session_binding_confirm", "## Before anything"]
+at = [b.find(x) for x in order]
+assert all(i >= 0 for i in at), dict(zip(order, at))
+assert at == sorted(at), dict(zip(order, at))
+PY
+    [[ "$body" == *"herdr_linear::session_binding_decline"* ]]
+    [[ "$body" == *"herdr_linear::session_binding_unbind"* ]]
+    [[ "$body" == *"herdr_linear::workspace_propose_part"* ]]
+}

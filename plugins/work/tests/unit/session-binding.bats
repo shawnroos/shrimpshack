@@ -198,3 +198,80 @@ field() {   # field <session> <key>
     [[ "$name" != *$'\033'* ]]
     [ "${#name}" -le 120 ]
 }
+
+# ---------------------------------------------------------- the rebind preview
+
+preview_world() {
+    FIX="${BATS_TEST_DIRNAME}/../fixtures"
+    export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
+    export HERDR_LINEAR_SECURITY_BIN="$FIX/fake-security.sh"
+    export FAKE_SECURITY_STORE_DIR="$BATS_TEST_TMPDIR/kc"
+    export FAKE_LINEAR_RECORD_DIR="$BATS_TEST_TMPDIR/rec"
+    export LINEAR_SECRETS_FILE="$BATS_TEST_TMPDIR/secrets"
+    export HERDR_LINEAR_RETRY_MAX=1
+    mkdir -p "$FAKE_LINEAR_RECORD_DIR"
+    printf 'LINEAR_API_KEY=%s\n' "lin_api""_PREVIEWPREVIEWPREVIEW" > "$LINEAR_SECRETS_FILE"
+    export FAKE_LINEAR_SCOPE_WORLD="$BATS_TEST_TMPDIR/world.json"
+    cat > "$FAKE_LINEAR_SCOPE_WORLD" <<'JSON'
+{"teams": [{"id": "t-web", "key": "WEB", "name": "Web"}, {"id": "t-ops", "key": "OPS", "name": "Ops"}],
+ "projects": {"p-web": {"name": "Web Work", "teams": ["t-web"], "initiatives": []},
+              "p-both": {"name": "Shared", "teams": ["t-web", "t-ops"], "initiatives": []}},
+ "issues": {"WEB-1": {"team": "t-web", "project": "p-web"}, "OPS-2": {"team": "t-ops", "project": null}}}
+JSON
+    for f in secrets.sh linear.sh binding.sh scope-linear.sh; do . "$LIB/$f"; done
+}
+
+repo() {   # repo <name> -> path of a fresh repository
+    local d="$BATS_TEST_TMPDIR/$1"
+    git init -q "$d"; git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    (cd "$d" && pwd -P)
+}
+
+bind_tree() {   # bind_tree <path> <identifier> <tab>
+    local n; n="$(herdr_linear::binding_propose "$1" "$2")"
+    herdr_linear::binding_confirm "$1" "$2" "$n" "$(git -C "$1" branch --show-current)"
+    herdr_linear::binding_set_tab "$1" "$3"
+}
+
+@test "AE6: a rebind preview names each workspace and worktree outside the new scope, and writes nothing" {
+    preview_world
+    local n
+    n="$(herdr_linear::workspace_propose w1 p-web)"; herdr_linear::workspace_confirm w1 p-web "$n"
+    n="$(herdr_linear::workspace_propose w2 p-both)"; herdr_linear::workspace_confirm w2 p-both "$n"
+    web="$(repo web)"; ops="$(repo ops)"
+    bind_tree "$web" WEB-1 w1:t1
+    bind_tree "$ops" OPS-2 w2:t1
+    before="$(cd "$HERDR_LINEAR_STORE_DIR" && find . -type f -exec shasum {} + | sort)"
+    run herdr_linear::session_rebind_preview team t-ops
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$(printf 'outside\tworkspace\tw1\tp-web')"* ]]
+    [[ "$output" != *"w2"* ]]
+    [[ "$output" == *"$(printf 'outside\tworktree\t%s\tWEB-1' "$web")"* ]]
+    [[ "$output" != *"OPS-2"* ]]
+    [ "$(cd "$HERDR_LINEAR_STORE_DIR" && find . -type f -exec shasum {} + | sort)" = "$before" ]
+}
+
+@test "a rebind preview names only this session's worktrees and marks what Linear could not answer" {
+    preview_world
+    web="$(repo web)"; other="$(repo other)"
+    bind_tree "$web" WEB-1 w1:t1
+    export HERDR_SOCKET_PATH="/h/.config/herdr/sessions/ops/herdr.sock"
+    bind_tree "$other" OPS-2 w1:t4
+    export HERDR_SOCKET_PATH="/h/.config/herdr/herdr.sock"
+    export FAKE_LINEAR_SCOPE_FAIL=rate_limited
+    run herdr_linear::session_rebind_preview team t-ops
+    [[ "$output" == *"$(printf 'unknown\tworktree\t%s\tWEB-1' "$web")"* ]]
+    [[ "$output" != *"$other"* ]]
+}
+
+@test "a preview for an organization names nothing, and a project preview needs no read" {
+    preview_world
+    local n
+    n="$(herdr_linear::workspace_propose w1 p-web)"; herdr_linear::workspace_confirm w1 p-web "$n"
+    run herdr_linear::session_rebind_preview organization org-1
+    [ "$status" -eq 0 ]; [ -z "$output" ]
+    run herdr_linear::session_rebind_preview project p-both
+    [[ "$output" == *"$(printf 'outside\tworkspace\tw1\tp-web')"* ]]
+    run herdr_linear::session_rebind_preview milestone m-1
+    [ "$status" -ne 0 ]
+}
