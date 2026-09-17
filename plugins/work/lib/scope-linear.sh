@@ -25,9 +25,9 @@ herdr_linear::_membership_answer() {
     return "$1"
 }
 
-# One read per operation and id. Cached only when HL_SCOPE_CACHE_DIR
-# is set, which a sync does for its own run: membership can change in Linear,
-# and a cache that outlives the sync would keep answering the old relation.
+# One read per operation and id. Cached only when a caller making many reads in
+# one run sets HL_SCOPE_CACHE_DIR for that run; nothing sets it today. Membership
+# can change in Linear, so a cache must not outlive the run that made it.
 herdr_linear::_membership_read() {
     local op="$1" id="$2" query="$3" body resp cache=""
     herdr_linear::is_safe_identifier "$id" || return 1
