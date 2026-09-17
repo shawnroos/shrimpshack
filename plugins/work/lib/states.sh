@@ -19,6 +19,7 @@ HERDR_LINEAR_STATE_OK=0
 HERDR_LINEAR_STATE_MISPLACED=1
 HERDR_LINEAR_STATE_STALE=2
 HERDR_LINEAR_STATE_UNKNOWN=3   # not enough information to judge; not a problem
+HERDR_LINEAR_STATE_OUTSIDE_SESSION=4   # reported only; suspends nothing (R12)
 
 command -v herdr_linear::board_reservation_field >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/board-store.sh"
@@ -113,10 +114,39 @@ herdr_linear::check_liveness() {
     return "$HERDR_LINEAR_STATE_OK"
 }
 
+# herdr_linear::check_session_scope <worktree>
+# The worktree's issue lies outside the scope its herdr session is bound to.
+# Reported and never acted on: which session a ticket is worked from is the
+# person's call, and an unknown answer reports nothing.
+herdr_linear::check_session_scope() {
+    local wt="${1:-}" scope kind id name ident rc
+    command -v herdr_linear::session_scope >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/session-binding.sh"
+    scope="$(herdr_linear::session_scope 2>/dev/null)" || return "$HERDR_LINEAR_STATE_OK"
+    IFS=$'\t' read -r kind id name <<<"$scope"
+    case "$(herdr_linear::binding_state "$wt" 2>/dev/null)" in
+        bound|misplaced|stale) ;;
+        *) return "$HERDR_LINEAR_STATE_OK" ;;
+    esac
+    ident="$(herdr_linear::binding_identifier "$wt")" || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    command -v herdr_linear::scope_contains_issue >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/scope-linear.sh"
+    herdr_linear::scope_contains_issue "$kind" "$id" "$ident" >/dev/null; rc=$?
+    case "$rc" in
+        0) return "$HERDR_LINEAR_STATE_OK" ;;
+        1) ;;
+        *) return "$HERDR_LINEAR_STATE_UNKNOWN" ;;
+    esac
+    printf 'This worktree is bound to %s, which is outside this herdr session: the session is bound to %s %s.\n' "$ident" "$kind" "$name"
+    printf 'Nothing was moved or suspended. Run /work:bind to rebind the worktree or the session.\n'
+    return "$HERDR_LINEAR_STATE_OUTSIDE_SESSION"
+}
+
 # One pass over both, recording the resulting state on the binding so the write
 # path can consult it without repeating the network calls.
 herdr_linear::classify() {
     local wt="${1:-}" ws="${2:-}" out place_rc live_rc
+    herdr_linear::check_session_scope "$wt"
     out="$(herdr_linear::check_placement "$wt" "$ws")"; place_rc=$?
     if [ "$place_rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
         herdr_linear::binding_set_state "$wt" misplaced

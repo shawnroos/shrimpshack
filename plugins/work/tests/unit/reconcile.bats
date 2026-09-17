@@ -545,6 +545,25 @@ plugin_write_recorded() {
     [[ "$output" == *"WEB-2870 is canceled in Linear"* ]]
 }
 
+# R12. A worktree whose issue lies outside its herdr session's scope is reported
+# where a suspension is, and nothing is suspended.
+@test "the hook logs a worktree outside its session's scope and still reconciles" {
+    bind_wt WEB-2870
+    export FAKE_LINEAR_MODE=found_parent
+    export FAKE_LINEAR_SCOPE_WORLD="$WORK/world.json"
+    printf '%s' '{"teams":[{"id":"t-ops","key":"OPS","name":"Ops"}],"projects":{},"issues":{"WEB-2870":{"team":"t-web","project":null}}}' > "$FAKE_LINEAR_SCOPE_WORLD"
+    . "$ROOT/lib/session-binding.sh"
+    n="$(herdr_linear::session_binding_propose default team t-ops "OPS Ops")"
+    herdr_linear::session_binding_confirm default "$n"
+    run bash -c "printf '{\"cwd\":\"$WT\",\"hook_event_name\":\"SessionEnd\"}' | bash '$ROOT/hooks/reconcile.sh'"
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
+    run cat "$HERDR_LINEAR_SHADOW_LOG"
+    [[ "$output" == *"OUTSIDE SESSION"* ]]
+    [[ "$output" == *"WEB-2870"* ]]
+    [[ "$output" != *"SUSPENDED"* ]]
+}
+
 # pending_judgment is ONE slot and set-judgment replaces it wholesale, so the
 # description nudge used to evict the squash-merge question reconcile had just
 # recorded -- the headline case the judgment exists for. Driven through the hook

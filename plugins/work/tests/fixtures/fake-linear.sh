@@ -476,13 +476,14 @@ case "$body" in
     #   FAKE_LINEAR_SCOPE_WORLD  a JSON file:
     #     {"teams": [{"id","key","name"}], "initiatives": [{"id","name"}],
     #      "projects": {"<id>": {"name", "teams": [team ids], "initiatives": [ids]}},
+    #      "milestones": {"<id>": "<project id>"},
     #      "issues": {"<identifier>": {"team": "<team id>", "project": "<project id>" or null}}}
     #   FAKE_LINEAR_SCOPE_FAIL   rate_limited | auth_error: every scope read answers that;
     #                            null_connection: a 200 whose lists and entities are null
-    *'ScopeProject('*|*'ScopeIssue('*|*'query ScopeTeams '*|*'query ScopeProjects '*|*'query ScopeInitiatives '*)
+    *'ScopeProject('*|*'ScopeIssue('*|*'ScopeMilestone('*|*'query ScopeTeams '*|*'query ScopeProjects '*|*'query ScopeInitiatives '*)
         [ "$wants_headers" = 1 ] && emit_headers 200
         if [ "${FAKE_LINEAR_SCOPE_FAIL:-}" = null_connection ]; then
-            answer '{"data":{"teams":null,"projects":null,"initiatives":null,"project":null,"issue":null}}'
+            answer '{"data":{"teams":null,"projects":null,"initiatives":null,"project":null,"issue":null,"projectMilestone":null}}'
             exit 0
         fi
         if [ -n "${FAKE_LINEAR_SCOPE_FAIL:-}" ]; then serve "$FAKE_LINEAR_SCOPE_FAIL"; exit 0; fi
@@ -503,6 +504,12 @@ def project(pid):
 if "ScopeProject(" in q:
     p = project(v.get("id"))
     out = {"data": {"project": p}} if p else {"errors": [{"message": "Entity not found", "extensions": {"code": "INPUT_ERROR"}}], "data": None}
+elif "ScopeMilestone(" in q:
+    m = w.get("milestones", {}).get(v.get("id"))
+    if m is None:
+        out = {"errors": [{"message": "Entity not found", "extensions": {"code": "INPUT_ERROR"}}], "data": None}
+    else:
+        out = {"data": {"projectMilestone": {"id": v["id"], "project": {"id": m}}}}
 elif "ScopeIssue(" in q:
     i = w.get("issues", {}).get(v.get("id"))
     if i is None:

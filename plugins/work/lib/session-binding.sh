@@ -149,6 +149,25 @@ herdr_linear::session_binding_read() {
     herdr_linear::_session_binding_py read "$f" "$1" || return "$HERDR_LINEAR_BINDING_ABSENT"
 }
 
+# herdr_linear::session_scope
+# The bound scope of the session this process runs in, as `kind<TAB>id<TAB>name`.
+# Fails when there is no session or it is not bound: an unbound session applies
+# no scope checks (R13).
+herdr_linear::session_scope() {
+    local name rec
+    command -v herdr_linear::session_name >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/session.sh"
+    name="$(herdr_linear::session_name)" || return 1
+    rec="$(herdr_linear::session_binding_read "$name")" || return 1
+    printf '%s' "$rec" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+if r.get("state") != "bound" or not r.get("scope_id"):
+    sys.exit(1)
+sys.stdout.write("%s\t%s\t%s" % (r["kind"], r["scope_id"], r["scope_name"]))
+'
+}
+
 herdr_linear::session_binding_state() {
     local rec
     rec="$(herdr_linear::session_binding_read "${1:-}")" || { printf 'unbound'; return 0; }

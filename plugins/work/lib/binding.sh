@@ -176,6 +176,8 @@ def load(path):
     rec.setdefault("pending_consent", None)
     rec.setdefault("pending_placement", None)
     rec.setdefault("tab", "")
+    rec.setdefault("part_kind", "")
+    rec.setdefault("part_id", "")
     rec.setdefault("tabs", {})
     if not isinstance(rec["tabs"], dict):
         rec["tabs"] = {}
@@ -195,6 +197,7 @@ def blank(path_value):
         "proposal": None, "pending_judgment": None,
         "consent": None, "consent_proposal": None, "pending_consent": None,
         "pending_placement": None, "tab": "", "tabs": {},
+        "part_kind": "", "part_id": "",
         "created_children": [],
         "created_documents": [], "description_head": "",
         "issue_updated_at": "", "updated_at": now(),
@@ -302,11 +305,31 @@ if op == "propose":
     sys.stdout.write(rec["proposal"]["nonce"])
     sys.exit(0)
 
+# A workspace in a project session binds to a milestone or issue of that
+# project (KTD8): the project stays in issue_identifier, where every reader of a
+# workspace's project looks, and the part rides beside it.
+if op == "propose-part":
+    worktree, identifier, part_kind, part_id = args[0], args[1], args[2], args[3]
+    rec["worktree_path"] = worktree
+    rec["state"] = "proposed"
+    rec["proposal"] = {
+        "identifier": identifier, "part_kind": part_kind, "part_id": part_id,
+        "nonce": secrets.token_hex(16), "presented_at": now(),
+    }
+    save(path, rec)
+    sys.stdout.write(rec["proposal"]["nonce"])
+    sys.exit(0)
+
 if op == "confirm":
     identifier, nonce, branch = args[0], args[1], args[2]
+    part_kind = args[3] if len(args) > 3 else ""
+    part_id = args[4] if len(args) > 4 else ""
     p = rec.get("proposal")
     if not p or p.get("identifier") != identifier or not nonce or p.get("nonce") != nonce:
         sys.exit(2)
+    if p.get("part_kind", "") != part_kind or p.get("part_id", "") != part_id:
+        sys.exit(2)
+    rec["part_kind"], rec["part_id"] = part_kind, part_id
     rec["state"] = "bound"
     rec["issue_identifier"] = identifier
     rec["branch_at_confirmation"] = branch
@@ -781,9 +804,61 @@ herdr_linear::workspace_project() {
     printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("issue_identifier",""))' 2>/dev/null
 }
 
+# The session's scope decides what a workspace may bind to (R10, R11). Nothing
+# is refused on an answer Linear did not give.
+herdr_linear::_session_allows_project() {
+    local project="$1" scope kind id name rc
+    command -v herdr_linear::session_scope >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/session-binding.sh"
+    scope="$(herdr_linear::session_scope 2>/dev/null)" || return 0
+    IFS=$'\t' read -r kind id name <<<"$scope"
+    case "$kind" in
+        project)
+            printf 'refused: this session is bound to project %s, so a workspace here binds to a milestone or issue of it, not to a project\n' "$name" >&2
+            return 1 ;;
+        team|initiative) ;;
+        *) return 0 ;;
+    esac
+    command -v herdr_linear::scope_contains_project >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/scope-linear.sh"
+    herdr_linear::scope_contains_project "$kind" "$id" "$project" >/dev/null; rc=$?
+    [ "$rc" -eq 1 ] || return 0
+    printf 'refused: project %s is outside this session, which is bound to %s %s\n' "$project" "$kind" "$name" >&2
+    return 1
+}
+
+# Prints the project id of a project session whose scope holds the part.
+herdr_linear::_session_allows_part() {
+    local part_kind="$1" part_id="$2" scope kind id name rc
+    command -v herdr_linear::session_scope >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/session-binding.sh"
+    scope="$(herdr_linear::session_scope 2>/dev/null)" || {
+        printf 'refused: only a session bound to a project binds a workspace to a milestone or issue\n' >&2
+        return 1
+    }
+    IFS=$'\t' read -r kind id name <<<"$scope"
+    [ "$kind" = project ] || {
+        printf 'refused: only a session bound to a project binds a workspace to a milestone or issue\n' >&2
+        return 1
+    }
+    command -v herdr_linear::scope_contains_issue >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/scope-linear.sh"
+    case "$part_kind" in
+        milestone) herdr_linear::scope_contains_milestone project "$id" "$part_id" >/dev/null; rc=$? ;;
+        issue)     herdr_linear::scope_contains_issue project "$id" "$part_id" >/dev/null; rc=$? ;;
+        *) printf 'refused: a workspace part is a milestone or an issue\n' >&2; return 1 ;;
+    esac
+    if [ "$rc" -eq 1 ]; then
+        printf 'refused: %s %s is not in project %s, which this session is bound to\n' "$part_kind" "$part_id" "$name" >&2
+        return 1
+    fi
+    printf '%s' "$id"
+}
+
 herdr_linear::workspace_propose() {
     local ws="${1:-}" project="${2:-}" f
     [ -n "$ws" ] && [ -n "$project" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::_session_allows_project "$project" || return "$HERDR_LINEAR_BINDING_REFUSED"
     f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
     mkdir -p "$(dirname "$f")" 2>/dev/null
     herdr_linear::_mutate_at "$f" propose "workspace:$ws" "$project"
@@ -793,6 +868,25 @@ herdr_linear::workspace_propose() {
 herdr_linear::workspace_confirm() {
     local ws="${1:-}" project="${2:-}" nonce="${3:-}" f
     [ -n "$ws" ] && [ -n "$project" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::_session_allows_project "$project" || return "$HERDR_LINEAR_BINDING_REFUSED"
     f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
     herdr_linear::_mutate_at "$f" confirm "$project" "$nonce" ""
+}
+
+# herdr_linear::workspace_propose_part <ws> <milestone|issue> <id>
+herdr_linear::workspace_propose_part() {
+    local ws="${1:-}" kind="${2:-}" id="${3:-}" project f
+    [ -n "$ws" ] && herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    project="$(herdr_linear::_session_allows_part "$kind" "$id")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    mkdir -p "$(dirname "$f")" 2>/dev/null
+    herdr_linear::_mutate_at "$f" propose-part "workspace:$ws" "$project" "$kind" "$id"
+}
+
+herdr_linear::workspace_confirm_part() {
+    local ws="${1:-}" kind="${2:-}" id="${3:-}" nonce="${4:-}" project f
+    [ -n "$ws" ] && herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    project="$(herdr_linear::_session_allows_part "$kind" "$id")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::_mutate_at "$f" confirm "$project" "$nonce" "" "$kind" "$id"
 }

@@ -333,3 +333,197 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
     [[ "$body" == *"misplaced"* ]]
 }
+
+# ------------------------------------------------------ session scope (R10-R13)
+
+# The session binding and the scope world the fake tracker answers membership
+# from. The fake's issue reads still answer by mode; only Scope* reads use this.
+scope_world() {
+    export FAKE_LINEAR_SCOPE_WORLD="$WORK/world.json"
+    cat > "$FAKE_LINEAR_SCOPE_WORLD" <<'JSON'
+{"teams": [{"id": "t-web", "key": "WEB", "name": "Web"}, {"id": "t-ops", "key": "OPS", "name": "Ops"}],
+ "initiatives": [{"id": "i-media", "name": "Media Hub"}],
+ "projects": {"44444444-4444-4444-8444-444444444444": {"name": "AI Canvas Tools", "teams": ["t-web"], "initiatives": ["i-media"]},
+              "99999999-9999-4999-8999-999999999999": {"name": "Ops Work", "teams": ["t-ops"], "initiatives": []}},
+ "milestones": {"m-canvas-1": "44444444-4444-4444-8444-444444444444", "m-ops-1": "99999999-9999-4999-8999-999999999999"},
+ "issues": {"WEB-2870": {"team": "t-web", "project": "44444444-4444-4444-8444-444444444444"},
+            "WEB-2871": {"team": "t-web", "project": "44444444-4444-4444-8444-444444444444"},
+            "OPS-7": {"team": "t-ops", "project": "99999999-9999-4999-8999-999999999999"}}}
+JSON
+}
+
+bind_session() {   # bind_session <kind> <id> <name>
+    . "$ROOT/lib/session-binding.sh"
+    local n
+    n="$(herdr_linear::session_binding_propose default "$1" "$2" "$3")"
+    herdr_linear::session_binding_confirm default "$n"
+}
+
+bind_wt_to() {   # bind_wt_to <identifier>
+    local n; n="$(herdr_linear::binding_propose "$WT" "$1")"; herdr_linear::binding_confirm "$WT" "$1" "$n"
+}
+
+@test "AE3: a worktree bound to an OPS issue in a WEB session is reported outside the session, and its binding is unchanged" {
+    scope_world
+    bind_session team t-web "WEB Web"
+    bind_wt_to OPS-7
+    before="$(herdr_linear::binding_read "$WT")"
+    run herdr_linear::check_session_scope "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_STATE_OUTSIDE_SESSION" ]
+    [[ "$output" == *"OPS-7"* ]]
+    [[ "$output" == *"WEB Web"* ]]
+    run herdr_linear::classify "$WT" ""
+    [[ "$output" == *"outside"* ]]
+    [ "$(herdr_linear::binding_state "$WT")" = bound ]
+    [ "$(herdr_linear::binding_identifier "$WT")" = OPS-7 ]
+    [ "$(mutations_sent)" = "0" ]
+}
+
+@test "an issue inside the session's scope is not reported" {
+    scope_world
+    bind_session team t-web "WEB Web"
+    bind_wt_to WEB-2870
+    run herdr_linear::check_session_scope "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_STATE_OK" ]
+    [ -z "$output" ]
+}
+
+@test "in an unbound or organization session nothing is reported and nothing is read" {
+    scope_world
+    bind_wt_to OPS-7
+    run herdr_linear::check_session_scope "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_STATE_OK" ]; [ -z "$output" ]
+    bind_session organization org-1 "Acme"
+    run herdr_linear::check_session_scope "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_STATE_OK" ]; [ -z "$output" ]
+    local n; n="$(grep -c 'Scope' "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0
+    [ "${n:-0}" = 0 ]
+}
+
+@test "an unknown membership answer reports nothing and refuses nothing" {
+    scope_world
+    bind_session team t-web "WEB Web"
+    bind_wt_to OPS-7
+    export FAKE_LINEAR_SCOPE_FAIL=rate_limited
+    run herdr_linear::check_session_scope "$WT"
+    [ "$status" -eq "$HERDR_LINEAR_STATE_UNKNOWN" ]
+    [ -z "$output" ]
+    run bind_ws w1 "$OTHER"
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::workspace_project w1)" = "$OTHER" ]
+}
+
+@test "in an unbound session every existing placement answer is unchanged" {
+    scope_world
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::check_placement "$WT" w1
+    [ "$status" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]
+    bind_ws w2 "$OTHER"
+    [ "$(herdr_linear::workspace_project w2)" = "$OTHER" ]
+}
+
+@test "in a team session a workspace binds to that team's project, and another team's project is refused" {
+    scope_world
+    bind_session team t-web "WEB Web"
+    bind_ws w1 "$CANVAS"
+    [ "$(herdr_linear::workspace_project w1)" = "$CANVAS" ]
+    run herdr_linear::workspace_propose w2 "$OTHER"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"outside"* ]]
+    [ "$(herdr_linear::workspace_state w2)" = unbound ]
+}
+
+@test "in an initiative session a project outside the initiative is refused" {
+    scope_world
+    bind_session initiative i-media "Media Hub"
+    bind_ws w1 "$CANVAS"
+    run herdr_linear::workspace_propose w2 "$OTHER"
+    [ "$status" -ne 0 ]
+}
+
+@test "a confirmation cannot bind a project the session's scope refuses" {
+    scope_world
+    n="$(herdr_linear::workspace_propose w2 "$OTHER")"
+    bind_session team t-web "WEB Web"
+    run herdr_linear::workspace_confirm w2 "$OTHER" "$n"
+    [ "$status" -ne 0 ]
+    [ "$(herdr_linear::workspace_state w2)" != bound ]
+}
+
+@test "AE4: in a project session a workspace binds to a milestone of that project, and a project is refused" {
+    scope_world
+    bind_session project "$CANVAS" "AI Canvas Tools"
+    run herdr_linear::workspace_propose w1 "$CANVAS"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"milestone or issue"* ]]
+    run herdr_linear::workspace_propose w1 "$OTHER"
+    [ "$status" -ne 0 ]
+    n="$(herdr_linear::workspace_propose_part w1 milestone m-canvas-1)"
+    herdr_linear::workspace_confirm_part w1 milestone m-canvas-1 "$n"
+    [ "$(herdr_linear::workspace_state w1)" = bound ]
+    [ "$(herdr_linear::workspace_project w1)" = "$CANVAS" ]
+    [ "$(herdr_linear::workspace_read w1 | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["part_kind"], d["part_id"])')" = "milestone m-canvas-1" ]
+}
+
+@test "in a project session a milestone or issue of another project is refused" {
+    scope_world
+    bind_session project "$CANVAS" "AI Canvas Tools"
+    run herdr_linear::workspace_propose_part w1 milestone m-ops-1
+    [ "$status" -ne 0 ]
+    run herdr_linear::workspace_propose_part w1 issue OPS-7
+    [ "$status" -ne 0 ]
+    n="$(herdr_linear::workspace_propose_part w1 issue WEB-2871)"
+    herdr_linear::workspace_confirm_part w1 issue WEB-2871 "$n"
+    [ "$(herdr_linear::workspace_state w1)" = bound ]
+}
+
+@test "a part binding needs a project session, a known kind, and a matching confirmation" {
+    scope_world
+    run herdr_linear::workspace_propose_part w1 milestone m-canvas-1
+    [ "$status" -ne 0 ]
+    bind_session project "$CANVAS" "AI Canvas Tools"
+    run herdr_linear::workspace_propose_part w1 cycle c-1
+    [ "$status" -ne 0 ]
+    n="$(herdr_linear::workspace_propose_part w1 milestone m-canvas-1)"
+    run herdr_linear::workspace_confirm_part w1 issue WEB-2871 "$n"
+    [ "$status" -ne 0 ]
+    run herdr_linear::workspace_confirm w1 "$CANVAS" "$n"
+    [ "$status" -ne 0 ]
+    [ "$(herdr_linear::workspace_state w1)" != bound ]
+}
+
+@test "in a team session a part binding is refused even when Linear cannot answer membership" {
+    scope_world
+    bind_session team t-web "WEB Web"
+    export FAKE_LINEAR_SCOPE_FAIL=rate_limited
+    run herdr_linear::workspace_propose_part w1 milestone m-canvas-1
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"only a session bound to a project"* ]]
+    [ "$(herdr_linear::workspace_state w1)" = unbound ]
+}
+
+@test "in a project session, a worktree on an issue of the project in a milestone workspace is not misplaced, and start finds that workspace" {
+    scope_world
+    bind_session project "$CANVAS" "AI Canvas Tools"
+    bind_wt
+    n="$(herdr_linear::workspace_propose_part w1 milestone m-canvas-1)"
+    herdr_linear::workspace_confirm_part w1 milestone m-canvas-1 "$n"
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::check_placement "$WT" w1
+    [ "$status" -eq "$HERDR_LINEAR_STATE_OK" ]
+    . "$ROOT/lib/herdr-read.sh"; . "$ROOT/lib/herdr-write.sh"
+    export HERDR_BIN="$FIX/fake-herdr.sh" FAKE_HERDR_RECORD_DIR="$WORK/hrec" FAKE_HERDR_WORKSPACES="w1=Canvas"
+    [ "$(herdr_linear::project_space "$CANVAS")" = w1 ]
+}
+
+@test "a workspace rebound from a milestone to a project in an unbound session loses its part" {
+    scope_world
+    bind_session project "$CANVAS" "AI Canvas Tools"
+    n="$(herdr_linear::workspace_propose_part w1 milestone m-canvas-1)"
+    herdr_linear::workspace_confirm_part w1 milestone m-canvas-1 "$n"
+    herdr_linear::session_binding_unbind default
+    bind_ws w1 "$OTHER"
+    [ "$(herdr_linear::workspace_read w1 | python3 -c 'import sys,json; d=json.load(sys.stdin); print(repr(d["part_kind"]), repr(d["part_id"]))')" = "'' ''" ]
+}

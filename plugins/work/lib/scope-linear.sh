@@ -125,6 +125,31 @@ herdr_linear::scope_contains_issue() {
     herdr_linear::_membership_answer $?
 }
 
+# herdr_linear::scope_contains_milestone <kind> <scope id> <milestone id>
+# A milestone belongs to one project; only a project scope is answered.
+herdr_linear::scope_contains_milestone() {
+    local kind="${1:-}" scope="${2:-}" milestone="${3:-}" resp
+    herdr_linear::is_safe_identifier "$scope" && herdr_linear::is_safe_identifier "$milestone" \
+        || { herdr_linear::_membership_answer 2; return; }
+    case "$kind" in
+        organization) herdr_linear::_membership_answer 0; return ;;
+        project) ;;
+        *) herdr_linear::_membership_answer 2; return ;;
+    esac
+    resp="$(herdr_linear::_membership_read milestone "$milestone" \
+        'query ScopeMilestone($id: String!) { projectMilestone(id: $id) { id project { id } } }')" \
+        || { herdr_linear::_membership_answer 2; return; }
+    printf '%s' "$resp" | python3 -c '
+import json, sys
+try:
+    p = json.load(sys.stdin)["data"]["projectMilestone"]["project"]["id"]
+except Exception:
+    sys.exit(2)
+sys.exit(0 if p == sys.argv[1] else 1)
+' "$scope"
+    herdr_linear::_membership_answer $?
+}
+
 # herdr_linear::scope_candidates <kind>
 # One line per candidate: kind, id and display name, tab-separated. A read that
 # failed prints nothing and fails, so an empty list always means none exist.
