@@ -516,7 +516,7 @@ class Sync:
         reads, self.read_failure = [], None
         mappings = [("global", config["global"])] + list(config.get("spaces", {}).items())
         for name, m in mappings:
-            rc, out, err = call("board_issues", dump(m["filter"]))
+            rc, out, err = call("board_issues", dump(m["filter"]), dump(m.get("scope") or {}))
             try:
                 doc = json.loads(out)
             except ValueError:

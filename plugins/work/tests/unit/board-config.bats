@@ -648,3 +648,59 @@ assert d["filter_changed"] is True, d'
     [ "$(sum)" = "$before" ]
     no_leftovers
 }
+
+# ------------------------------------------------------------- session scope
+
+bind_session() {   # bind_session <kind> <id> <name>
+    . "$ROOT/lib/session-binding.sh"
+    local n
+    n="$(herdr_linear::session_binding_propose default "$1" "$2" "$3")"
+    herdr_linear::session_binding_confirm default "$n"
+}
+
+@test "an unbound session's resolved mappings carry no scope" {
+    write_cfg "$GOOD"
+    run --separate-stderr herdr_linear::board_config_load
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert "scope" not in d["global"] and "scope" not in d["spaces"]["Mine"], d'
+}
+
+@test "a team session's resolved mappings each carry the scope beside the filter, and the file is unchanged" {
+    write_cfg "$GOOD"
+    before="$(shasum "$CFG")"
+    bind_session team t-web "WEB Web"
+    run --separate-stderr herdr_linear::board_config_load
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+for m in (d["global"], d["spaces"]["Mine"]):
+    assert m["scope"] == {"kind": "team", "id": "t-web"}, m
+assert d["global"]["filter"]["team"] == ["acme-web", "acme-api"], d["global"]
+assert "scope" not in d["global"]["filter"], d["global"]'
+    run --separate-stderr herdr_linear::board_mapping_for Mine
+    printf '%s' "$output" | python3 -c '
+import sys, json
+assert json.load(sys.stdin)["scope"] == {"kind": "team", "id": "t-web"}'
+    [ "$(shasum "$CFG")" = "$before" ]
+}
+
+@test "an organization session's resolved filter equals the mapping's filter, with no scope" {
+    write_cfg "$GOOD"
+    unbound="$(herdr_linear::board_config_load)"
+    bind_session organization org-1 "Acme"
+    [ "$(herdr_linear::board_config_load)" = "$unbound" ]
+}
+
+@test "a scope clause is never made from a session name or a scope that is not bound" {
+    write_cfg "$GOOD"
+    . "$ROOT/lib/session-binding.sh"
+    herdr_linear::session_binding_propose default team t-web "WEB Web" >/dev/null
+    run --separate-stderr herdr_linear::board_config_load
+    printf '%s' "$output" | python3 -c '
+import sys, json
+assert "scope" not in json.load(sys.stdin)["global"]'
+}

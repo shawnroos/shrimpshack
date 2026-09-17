@@ -855,3 +855,20 @@ PY2
     [ ! -e "$HERDR_LINEAR_STORE_DIR/board" ]
     [ ! -e "$HERDR_LINEAR_STORE_DIR/sessions" ]
 }
+
+@test "AE5: a sync in a session bound to team WEB reads WEB tickets only, beside the mapping's filter" {
+    config '{"tab":"state"}'
+    empty_board; serve
+    tickets "iss-1:todo"
+    export HERDR_SOCKET_PATH="/h/.config/herdr/sessions/web/herdr.sock"
+    . "$LIB/session-binding.sh"
+    n="$(herdr_linear::session_binding_propose web team team-web "WEB Web")"
+    herdr_linear::session_binding_confirm web "$n"
+    run -0 herdr_linear::board_sync
+    grep 'BoardIssues' "$FAKE_BOARD_LINEAR_DIR/bodies" | tail -1 | python3 -c '
+import sys, json
+c = json.load(sys.stdin)["variables"]["f"]["and"]
+assert {"team": {"id": {"eq": "team-web"}}} in c, c
+assert any("team" in x and "or" in x["team"] for x in c), c'
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/board/sync-state.json" ]
+}

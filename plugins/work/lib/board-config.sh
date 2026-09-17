@@ -43,7 +43,21 @@ herdr_linear::_board_config_path() {
 
 # One python3 pass does the stat, the parse, the validation and every answer, so
 # no verb can reach a mapping without the whole file having been checked.
+# KTD5. A bound session narrows every mapping by its scope, carried beside the
+# resolved filter and never merged into it. An organization adds nothing.
+herdr_linear::_board_session_scope() {
+    local scope kind id name
+    command -v herdr_linear::session_scope >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/session-binding.sh"
+    scope="$(herdr_linear::session_scope 2>/dev/null)" || return 0
+    IFS=$'\t' read -r kind id name <<<"$scope"
+    case "$kind" in
+        team|project|initiative) printf '%s\t%s' "$kind" "$id" ;;
+    esac
+}
+
 herdr_linear::_board_config_py() {
+    HL_SESSION_SCOPE="$(herdr_linear::_board_session_scope)" \
     HERDR_LINEAR_BOARD_CONFIG_VERSION="$HERDR_LINEAR_BOARD_CONFIG_VERSION" \
     HERDR_LINEAR_BOARD_FIELD_KINDS="$HERDR_LINEAR_BOARD_FIELD_KINDS" \
     HERDR_LINEAR_BOARD_OK="$HERDR_LINEAR_BOARD_OK" \
@@ -222,7 +236,12 @@ def resolved(m, source):
     flt = dict(m["filter"])
     if "state" not in flt and "state-type" not in flt:
         flt["state-type-not"] = list(DEFAULT_EXCLUDED)
-    return {"source": source, "levels": m["levels"], "filter": flt}
+    out = {"source": source, "levels": m["levels"], "filter": flt}
+    scope = env.get("HL_SESSION_SCOPE", "")
+    if scope:
+        kind, _, ident = scope.partition("\t")
+        out["scope"] = {"kind": kind, "id": ident}
+    return out
 
 
 def level_matches(kind, field):

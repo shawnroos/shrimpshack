@@ -118,7 +118,33 @@ def clause(key, raw):
     raise Refusal("unknown filter key %s" % shown(key))
 
 
-def issues_body(filter_json, first, after):
+SCOPE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def scope_clause(scope_json):
+    """KTD5. The session's scope, AND-joined to the mapping's clauses and never
+    read from the mapping's own team or project keys."""
+    if not scope_json:
+        return []
+    try:
+        scope = json.loads(scope_json)
+    except ValueError:
+        raise Refusal("the session scope is not valid JSON")
+    if scope == {}:
+        return []
+    if not isinstance(scope, dict) or not isinstance(scope.get("id"), str) or not SCOPE_ID.fullmatch(scope["id"]):
+        raise Refusal("the session scope %s names no usable id" % shown(scope))
+    kind, ident = scope.get("kind"), scope["id"]
+    if kind == "team":
+        return [{"team": {"id": {"eq": ident}}}]
+    if kind == "project":
+        return [{"project": {"id": {"eq": ident}}}]
+    if kind == "initiative":
+        return [{"project": {"initiatives": {"some": {"id": {"eq": ident}}}}}]
+    raise Refusal("the session scope kind %s is not team, project or initiative" % shown(kind))
+
+
+def issues_body(filter_json, first, after, scope_json=""):
     try:
         flt = json.loads(filter_json)
     except ValueError:
@@ -132,6 +158,7 @@ def issues_body(filter_json, first, after):
     for k in FILTER_KEYS:
         if k in flt:
             clauses += clause(k, flt[k])
+    clauses += scope_clause(scope_json)
     q = ("query BoardIssues($f:IssueFilter,$n:Int,$a:String){issues(first:$n,after:$a,filter:$f){"
          "nodes{%s} pageInfo{hasNextPage endCursor}}}" % os.environ["HERDR_LINEAR_BOARD_ISSUE_FIELDS"])
     return {"query": q, "variables": {"f": {"and": clauses}, "n": first, "a": after or None}}
@@ -171,7 +198,8 @@ def main():
     verb, args = sys.argv[1], sys.argv[2:]
     try:
         if verb == "issues-body":
-            print(json.dumps(issues_body(args[0], int(args[1]), args[2] if len(args) > 2 else "")))
+            print(json.dumps(issues_body(args[0], int(args[1]), args[2] if len(args) > 2 else "",
+                                         args[3] if len(args) > 3 else "")))
             return 0
         if verb == "write-body":
             if len(args) < 3:
@@ -232,7 +260,7 @@ herdr_linear::_board_linear_py() {
         python3 -c "$HERDR_LINEAR_BOARD_LINEAR_PY" "$@"
 }
 
-# herdr_linear::board_issues <filter-json>
+# herdr_linear::board_issues <filter-json> [scope-json]
 #
 # Reads every ticket the resolved filter from `board_mapping_for`
 # matches. Always prints {"complete": bool, "tickets": [...]}.
@@ -242,11 +270,11 @@ herdr_linear::_board_linear_py() {
 # or an unreadable page, or REFUSED for a filter key outside the contract, in
 # which case nothing was sent.
 herdr_linear::board_issues() {
-    local filter="${1-}" body resp rc parsed more cursor="" pages=0 complete=0 tmp
+    local filter="${1-}" scope="${2-}" body resp rc parsed more cursor="" pages=0 complete=0 tmp
     tmp="$(mktemp -d)" || return "$HERDR_LINEAR_UNAVAILABLE"
     rc="$HERDR_LINEAR_BOARD_READ_PARTIAL"
     while [ "$pages" -lt "$HERDR_LINEAR_BOARD_MAX_PAGES" ]; do
-        body="$(herdr_linear::_board_linear_py issues-body "$filter" "$HERDR_LINEAR_BOARD_PAGE_SIZE" "$cursor")" \
+        body="$(herdr_linear::_board_linear_py issues-body "$filter" "$HERDR_LINEAR_BOARD_PAGE_SIZE" "$cursor" "$scope")" \
             || { rc="$HERDR_LINEAR_REFUSED"; break; }
         resp="$(herdr_linear::query "$body")" || { rc=$?; break; }
         parsed="$(printf '%s' "$resp" | herdr_linear::_board_linear_py page)" \

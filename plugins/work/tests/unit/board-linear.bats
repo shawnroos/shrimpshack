@@ -381,3 +381,59 @@ assert b["variables"] == {"id": "bbbbbbbb-0000-4000-8000-000000000001", "input":
     run herdr_linear::board_behind
     [ "$status" -eq 1 ]
 }
+
+# ------------------------------------------------------------- session scope
+
+scope_clauses() {
+    last_body BoardIssues | python3 -c '
+import sys, json
+print(json.dumps(json.load(sys.stdin)["variables"]["f"]["and"], sort_keys=True))'
+}
+
+@test "a team scope is joined to the filter with AND, as its own clause" {
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' '{"kind":"team","id":"t-web"}'
+    [ "$status" -eq 0 ]
+    scope_clauses | python3 -c '
+import sys, json
+c = json.load(sys.stdin)
+assert {"assignee": {"isMe": {"eq": True}}} in c, c
+assert {"team": {"id": {"eq": "t-web"}}} in c, c
+assert len(c) == 2, c'
+}
+
+@test "an initiative scope selects by the project's initiatives" {
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' '{"kind":"initiative","id":"i-media"}'
+    [ "$status" -eq 0 ]
+    scope_clauses | grep -qF '{"project": {"initiatives": {"some": {"id": {"eq": "i-media"}}}}}'
+}
+
+@test "a project scope selects that project" {
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' '{"kind":"project","id":"p-canvas"}'
+    [ "$status" -eq 0 ]
+    scope_clauses | grep -qF '{"project": {"id": {"eq": "p-canvas"}}}'
+}
+
+@test "a mapping whose own filter names another team keeps both clauses and reads an empty board, not an error" {
+    run --separate-stderr herdr_linear::board_issues '{"team":["OPS"]}' '{"kind":"team","id":"t-web"}'
+    [ "$status" -eq 0 ]
+    c="$(scope_clauses)"
+    [[ "$c" == *'"OPS"'* ]]
+    [[ "$c" == *'"t-web"'* ]]
+}
+
+@test "no scope, or an empty one, sends the filter alone" {
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}'
+    [ "$(scope_clauses)" = '[{"assignee": {"isMe": {"eq": true}}}]' ]
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' '{}'
+    [ "$(scope_clauses)" = '[{"assignee": {"isMe": {"eq": true}}}]' ]
+}
+
+@test "a scope of an unknown kind or with an unusable id is refused and nothing is sent" {
+    local s
+    for s in '{"kind":"milestone","id":"m-1"}' '{"kind":"organization","id":"o"}' '{"kind":"team","id":""}' '{"kind":"team"}' '[1]' 'nope'; do
+        : > "$FAKE_LINEAR_RECORD_DIR/bodies"
+        run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' "$s"
+        [ "$status" -ne 0 ] || { echo "accepted: $s"; return 1; }
+        [ "$(bodies_named BoardIssues)" = 0 ]
+    done
+}
