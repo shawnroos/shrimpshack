@@ -446,3 +446,49 @@ PY
     [[ "$body" == *"herdr_linear::session_binding_unbind"* ]]
     [[ "$body" == *"herdr_linear::workspace_propose_part"* ]]
 }
+
+# ------------------------------------------- only a person binds a session (U11)
+
+consent_tree() {
+    mkdir -p "$WORK/c/lib" "$WORK/c/hooks" "$WORK/c/commands" "$WORK/c/bin"
+    printf 'herdr_linear::session_binding_confirm() {\n    :\n}\n' > "$WORK/c/lib/session-binding.sh"
+    printf 'herdr_linear::session_binding_confirm "$s" "$n"\nherdr_linear::session_binding_decline "$s" "$n"\n' > "$WORK/c/bin/session-bind.sh"
+}
+
+@test "the consent caller check passes the bind popup's own confirmation" {
+    consent_tree
+    run consent_caller_check "$WORK/c"
+    [ "$status" -eq 0 ]
+}
+
+@test "a library caller of the session confirm verb, outside the popup script, turns the consent caller check red" {
+    local verb where
+    for verb in session_binding_confirm session_binding_decline session_binding_unbind; do
+        for where in lib/states.sh hooks/ground.sh commands/work.md bin/session-start.sh; do
+            consent_tree
+            printf 'herdr_linear::%s "$s" "$n"\n' "$verb" >> "$WORK/c/$where"
+            run consent_caller_check "$WORK/c"
+            [ "$status" -ne 0 ] || { echo "not caught: $verb in $where"; return 1; }
+            [[ "$output" == *"$where"* ]]
+            rm -rf "$WORK/c"
+        done
+    done
+}
+
+@test "a hook that confirms a session binding turns the placement check red" {
+    local verb
+    for verb in session_binding_propose session_binding_confirm session_binding_decline session_binding_unbind workspace_confirm_part; do
+        placement_tree
+        printf 'herdr_linear::%s x y\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ] || { echo "not caught in a hook: $verb"; return 1; }
+        rm -rf "$WORK/p"
+        placement_tree
+        mkdir -p "$WORK/p/bin"
+        printf 'herdr_linear::%s x y\n' "$verb" > "$WORK/p/bin/session-start.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ] || { echo "not caught in the herdr startup hook: $verb"; return 1; }
+        [[ "$output" == *"session-start.sh"* ]]
+        rm -rf "$WORK/p"
+    done
+}

@@ -38,7 +38,7 @@ EOF
 # up whenever a suite file is added; if it is ever lowered, say why in the
 # commit — this number is what turns "the tests directory got renamed" into a
 # failure instead of a smaller, silently-green run.
-HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-32}"
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-37}"
 
 run_suite() {
     local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
@@ -571,13 +571,13 @@ EOF
 # own question either way.
 consent_caller_check() {
     printf '%sConsent answer-verb caller check...%s\n' "$YELLOW" "$NC"
-    local hits d verb
+    local root="${1:-$PLUGIN_ROOT}" hits d verb
     # An absent directory yields no hits and reads as "no caller", so name the
     # three the rule is about and require each to be there before believing it.
     for d in lib hooks commands; do
-        if [ ! -d "$PLUGIN_ROOT/$d" ]; then
+        if [ ! -d "$root/$d" ]; then
             printf '%sconsent-confirm caller check FAILED%s — %s/%s is not there; it was never swept.\n' \
-                "$RED" "$NC" "$PLUGIN_ROOT" "$d"
+                "$RED" "$NC" "$root" "$d"
             return 1
         fi
     done
@@ -587,7 +587,7 @@ consent_caller_check() {
     for verb in consent_confirm consent_decline board_consent_confirm board_consent_decline board_answer; do
         # The sync driver calls verbs by bare name through call("verb", ...).
         hits="$(grep -rnE "herdr_linear::$verb\b|call\(\"$verb\"" \
-            "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" "$PLUGIN_ROOT/bin" 2>/dev/null \
+            "$root/lib" "$root/hooks" "$root/commands" "$root/bin" 2>/dev/null \
             | grep -v "^.*/lib/binding.sh:.*herdr_linear::$verb() {" \
             | grep -v "^.*/lib/board-store.sh:.*herdr_linear::$verb() {" \
             | grep -v "^.*/lib/board-attended.sh:.*herdr_linear::board_answer() {" \
@@ -596,6 +596,21 @@ consent_caller_check() {
         if [ -n "$hits" ]; then
             printf '%s\n' "$hits"
             printf '%s%s caller check FAILED%s — only a write skill may record an answer.\n' \
+                "$RED" "$verb" "$NC"
+            return 1
+        fi
+    done
+    # A session binding is a person's answer too. It is recorded by /work:bind,
+    # which is a skill and not swept, and by the bind popup a person types into.
+    # Nothing else under lib/, hooks/, commands/ or bin/ may record one.
+    for verb in session_binding_confirm session_binding_decline session_binding_unbind; do
+        hits="$(grep -rnE "herdr_linear::$verb\b" \
+            "$root/lib" "$root/hooks" "$root/commands" "$root/bin" 2>/dev/null \
+            | grep -v "^$root/lib/session-binding.sh:[0-9]*:herdr_linear::$verb() {" \
+            | grep -v "^$root/bin/session-bind.sh:" || true)"
+        if [ -n "$hits" ]; then
+            printf '%s\n' "$hits"
+            printf '%s%s caller check FAILED%s — only /work:bind and the bind popup may record a session binding.\n' \
                 "$RED" "$verb" "$NC"
             return 1
         fi
@@ -627,7 +642,10 @@ HOOK_BANNED = ("workspace_confirm", "workspace_propose", "open_session", "place_
                "board_config_set", "_board_config_py",
                "board_close_pane", "board_move_in_use", "board_apply_tab_in_use",
                "board_move_pane", "board_apply_tab", "board_create_pane", "board_create_space",
-               "worktree_remove", "board_fence", "board_sync_bounded", "board_answer")
+               "worktree_remove", "board_fence", "board_sync_bounded", "board_answer",
+               "workspace_propose_part", "workspace_confirm_part",
+               "session_binding_propose", "session_binding_confirm", "session_binding_decline",
+               "session_binding_unbind")
 LIB_ALLOWED = {("create.sh", "herdr_linear::new_project")}
 
 def files(d):
@@ -640,7 +658,9 @@ def files(d):
 # hook hands the agent, never as something the hook runs or sources.
 SYNC_VERB = re.compile(r"herdr_linear::board_sync(?![A-Za-z0-9_])")
 SYNC_PATH_ADVICE = re.compile(r'^HERDR_LINEAR_BOARD_SYNC_LIB_PATH="\$LIB/\.\./bin/board-sync\.sh" python3 -c \'$')
-for f in files("hooks"):
+# herdr's startup hook runs with nobody watching, as a Claude Code hook does.
+HERDR_HOOKS = [os.path.join(root, "bin", "session-start.sh")]
+for f in list(files("hooks")) + [h for h in HERDR_HOOKS if os.path.exists(h)]:
     for i, line in enumerate(open(f, errors="replace"), 1):
         if SYNC_VERB.search(line):
             print("%s:%d: a hook names board_sync; it reads Linear and creates panes (KTD2)" % (f, i))
@@ -653,6 +673,8 @@ for f in files("commands"):
     for i, line in enumerate(open(f, errors="replace"), 1):
         if "herdr_linear::workspace_confirm" in line:
             print("%s:%d: a command binds a space" % (f, i))
+        if "herdr_linear::session_binding_confirm" in line:
+            print("%s:%d: a command binds a session" % (f, i))
 for f in files("lib"):
     current = None
     for i, line in enumerate(open(f, errors="replace"), 1):
