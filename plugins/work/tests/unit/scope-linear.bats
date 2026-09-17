@@ -24,7 +24,7 @@ setup() {
     export FAKE_LINEAR_SCOPE_WORLD="$WORK/world.json"
     cat > "$FAKE_LINEAR_SCOPE_WORLD" <<'JSON'
 {"teams": [{"id": "t-web", "key": "WEB", "name": "Web"}, {"id": "t-ops", "key": "OPS", "name": "Ops"}],
- "initiatives": [{"id": "i-media", "name": "Media Hub"}, {"id": "i-ai", "name": "Slate AI"}],
+ "initiatives": [{"id": "i-media", "name": "Media Hub"}, {"id": "i-ai", "name": "Canvas AI"}],
  "projects": {"p-canvas": {"name": "AI Canvas Tools", "teams": ["t-web"], "initiatives": ["i-media", "i-ai"]},
               "p-infra": {"name": "Infra", "teams": ["t-ops", "t-web"], "initiatives": []},
               "p-ops": {"name": "Ops Only", "teams": ["t-ops"], "initiatives": []}},
