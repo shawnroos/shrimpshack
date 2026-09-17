@@ -40,6 +40,8 @@
 # without this the call below is 127, which its `||` branch reads as a refusal.
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+command -v herdr_linear::session_path >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/session.sh"
 
 HERDR_LINEAR_STORE_DIR="${HERDR_LINEAR_STORE_DIR:-$HOME/.claude/work}"
 HERDR_LINEAR_PIN_DIR="${HERDR_LINEAR_PIN_DIR:-$HOME/.claude/linear-pin}"
@@ -174,6 +176,9 @@ def load(path):
     rec.setdefault("pending_consent", None)
     rec.setdefault("pending_placement", None)
     rec.setdefault("tab", "")
+    rec.setdefault("tabs", {})
+    if not isinstance(rec["tabs"], dict):
+        rec["tabs"] = {}
     rec.setdefault("created_children", [])
     rec.setdefault("created_documents", [])
     rec.setdefault("description_head", "")
@@ -189,7 +194,7 @@ def blank(path_value):
         "branch_at_confirmation": "", "issue_identifier": "", "declined": [],
         "proposal": None, "pending_judgment": None,
         "consent": None, "consent_proposal": None, "pending_consent": None,
-        "pending_placement": None, "tab": "",
+        "pending_placement": None, "tab": "", "tabs": {},
         "created_children": [],
         "created_documents": [], "description_head": "",
         "issue_updated_at": "", "updated_at": now(),
@@ -263,6 +268,15 @@ if op == "pending-placement":
     if rec is None or not rec.get("pending_placement"):
         sys.exit(1)
     sys.stdout.write(rec["pending_placement"])
+    sys.exit(0)
+
+if op == "tab-get":
+    rec = load(path)
+    if rec is None:
+        sys.exit(1)
+    session = args[0]
+    tab = rec["tab"] if session == "default" else rec["tabs"].get(session, "")
+    sys.stdout.write(tab if isinstance(tab, str) else "")
     sys.exit(0)
 
 # ---- mutations. Each loads, applies, saves. The caller holds the lock.
@@ -412,8 +426,14 @@ if op == "set-pending-consent":
     save(path, rec)
     sys.exit(0)
 
+# A tab id is scoped to the herdr server that issued it. The default session
+# keeps the `tab` field records carried before sessions existed.
 if op == "set-tab":
-    rec["tab"] = args[0]
+    tab, session = args[0], args[1]
+    if session == "default":
+        rec["tab"] = tab
+    else:
+        rec["tabs"][session] = tab
     save(path, rec)
     sys.exit(0)
 
@@ -661,13 +681,18 @@ herdr_linear::binding_pending_consent() {
 
 # KTD28. The tab a ticket owns, on that ticket's own binding. A tab's label is
 # prose; this record is the only thing that says which tab is the ticket's.
-herdr_linear::binding_set_tab() { herdr_linear::_mutate "${1:-}" set-tab "${2:-}"; }
+herdr_linear::binding_set_tab() {
+    local session
+    session="$(herdr_linear::session_name)" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::_mutate "${1:-}" set-tab "${2:-}" "$session"
+}
 
 herdr_linear::binding_tab() {
-    local f
+    local f session
+    session="$(herdr_linear::session_name)" || return 1
     f="$(herdr_linear::_record_path "${1:-}")" || return 1
     herdr_linear::_mode_ok "$f" || return 1
-    herdr_linear::_py field "$f" tab
+    herdr_linear::_py tab-get "$f" "$session"
 }
 
 # KTD29. A placement question nobody was there to answer, kept for the next
@@ -729,11 +754,12 @@ herdr_linear::consent_gate() {
 # `issue_identifier` carries the Linear project id, and the branch fields stay
 # empty because a workspace has no branch to disagree with.
 herdr_linear::_workspace_record_path() {
-    local ws="${1:-}"
+    local ws="${1:-}" root
     herdr_linear::is_safe_identifier "$ws" 2>/dev/null || case "$ws" in
         ''|*[!A-Za-z0-9_:-]*) return 1 ;;
     esac
-    printf '%s/workspaces/%s.json' "$HERDR_LINEAR_STORE_DIR" "$ws"
+    root="$(herdr_linear::session_store_root)" || return 1
+    printf '%s/workspaces/%s.json' "$root" "$ws"
 }
 
 herdr_linear::workspace_read() {

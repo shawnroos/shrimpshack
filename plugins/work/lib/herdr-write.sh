@@ -50,10 +50,11 @@ HERDR_LINEAR_SESSION_FAILED=1
 HERDR_LINEAR_SESSION_ASK=6
 
 herdr_linear::_journal() {
-    local issue="$1"
+    local issue="$1" d
     herdr_linear::is_safe_identifier "$issue" || return 1
-    mkdir -p "$HERDR_LINEAR_JOURNAL_DIR" 2>/dev/null
-    printf '%s/%s.journal' "$HERDR_LINEAR_JOURNAL_DIR" "$issue"
+    d="$(herdr_linear::session_path "$HERDR_LINEAR_JOURNAL_DIR")" || return 1
+    mkdir -p "$d" 2>/dev/null
+    printf '%s/%s.journal' "$d" "$issue"
 }
 
 # journal_get <issue> <key> -> prints the recorded value, or fails.
@@ -102,13 +103,14 @@ herdr_linear::await_pane() {
 # herdr no longer reports is not a candidate: offering it would fail inside
 # `tab create`, after the question could have been asked.
 herdr_linear::project_spaces() {
-    local pid="${1:-}" live f ws
+    local pid="${1:-}" live f ws root
     [ -n "$pid" ] || return 1
+    root="$(herdr_linear::session_store_root)" || return 1
     # Captured before the cut: a pipeline's status is the cut's, and a failed
     # read would come back as a list with no spaces in it.
     live="$(herdr_linear::live_spaces)" || return 1
     live="$(printf '%s' "$live" | cut -f1)"
-    for f in "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json; do
+    for f in "$root"/workspaces/*.json; do
         [ -e "$f" ] || continue
         ws="$(basename "$f" .json)"
         # workspace_project answers only for a bound record, so a proposal

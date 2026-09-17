@@ -825,3 +825,33 @@ PY2
     run -0 herdr_linear::board_sync_state
     [ -n "$output" ]
 }
+
+# ---------------------------------------------------------------- sessions
+
+@test "a sync in a named session keeps its ledger, plan and sync state under that session and leaves the default board untouched" {
+    config '{"tab":"state"}'
+    empty_board; serve
+    tickets "iss-1:todo iss-2:doing"
+    export HERDR_SOCKET_PATH="/h/.config/herdr/sessions/web/herdr.sock"
+    run -0 herdr_linear::board_sync
+    [ "$(board_panes | tr -d "[]' ")" = "work:iss-1,work:iss-2" ]
+    web="$HERDR_LINEAR_STORE_DIR/sessions/web/board"
+    [ -n "$(ls "$web/ledger")" ]
+    [ -f "$web/last-plan.json" ]
+    [ -f "$web/sync-state.json" ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/board/ledger" ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/board/sync-state.json" ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/board/last-plan.json" ]
+}
+
+@test "a sync from a shell outside any herdr session is refused and writes no board state" {
+    config '{"tab":"state"}'
+    empty_board; serve
+    tickets "iss-1:todo"
+    export HERDR_SOCKET_PATH="/tmp/not-a-session.sock"
+    run herdr_linear::board_sync
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_SYNC_REFUSED" ]
+    [ "$(board_panes | tr -d "[]' ")" = "" ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/board" ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/sessions" ]
+}

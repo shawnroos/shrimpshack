@@ -74,7 +74,8 @@ herdr_linear::board_socket_path() {
 }
 
 herdr_linear::_board_placeholders() {
-    local d="${HERDR_LINEAR_JOURNAL_DIR:-$HOME/.claude/work/layouts}"
+    local d
+    d="$(herdr_linear::session_path "${HERDR_LINEAR_JOURNAL_DIR:-$HOME/.claude/work/layouts}")" || return 1
     mkdir -p "$d" 2>/dev/null
     printf '%s/board-placeholders' "$d"
 }
@@ -286,9 +287,10 @@ herdr_linear::board_close_pane() {
 # The space whose ledger holds the ticket's home pane; the first by name when
 # several do, as the sync reads them. ABSENT when none does.
 herdr_linear::board_home_space() {
-    local issue="${1:-}" space entry
+    local issue="${1:-}" space entry board
     herdr_linear::is_safe_identifier "$issue" \
         || { herdr_linear::_board_pane_refuse "that issue id is not a safe identifier"; return; }
+    board="$(herdr_linear::board_root)" || return "$HERDR_LINEAR_BOARD_ABSENT"
     while IFS= read -r space; do
         entry="$(herdr_linear::board_ledger_entry "$space" "$issue" 2>/dev/null)" || continue
         if [ "$(printf '%s' "$entry" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("role"))' 2>/dev/null)" = home ]; then
@@ -308,7 +310,7 @@ for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
         names.add(s)
 for s in sorted(names):
     print(s)
-' "$HERDR_LINEAR_STORE_DIR/board/ledger")
+' "$board/ledger")
     return "$HERDR_LINEAR_BOARD_ABSENT"
 }
 

@@ -54,7 +54,9 @@ HERDR_LINEAR_BOARD_TAB_LIMIT="${HERDR_LINEAR_BOARD_TAB_LIMIT:-4}"
 HERDR_LINEAR_BOARD_SYNC_PIDLESS_SECONDS=5
 
 herdr_linear::_board_sync_lock_dir() {
-    printf '%s/board/sync.lock' "$HERDR_LINEAR_STORE_DIR"
+    local board
+    board="$(herdr_linear::board_root)" || return 1
+    printf '%s/sync.lock' "$board"
 }
 
 # kill -0 fails for a live process of another user too; only "no such process"
@@ -72,9 +74,10 @@ herdr_linear::_board_pid_alive() {
 herdr_linear::_board_sync_lock() {
     local lock me="$1" pid age waited
     waited="$(date +%s)"
-    lock="$(herdr_linear::_board_sync_lock_dir)"
+    lock="$(herdr_linear::_board_sync_lock_dir)" || return 1
     mkdir -p "${lock%/*}" 2>/dev/null || return 1
-    chmod 700 "$HERDR_LINEAR_STORE_DIR" "$HERDR_LINEAR_STORE_DIR/board" 2>/dev/null
+    chmod 700 "$HERDR_LINEAR_STORE_DIR" 2>/dev/null
+    chmod 700 "${lock%/*}" 2>/dev/null
     while :; do
         if mkdir "$lock" 2>/dev/null; then
             printf '%s\n' "$me" > "$lock/pid"
@@ -173,10 +176,14 @@ herdr_linear::board_write_back() {
 # FAILED or UNKNOWN (constants above). One summary line on stdout. Safe from an
 # agent's shell; never from a hook (a paginated read does not fit a hook).
 herdr_linear::board_sync() (
-    local me rc
+    local me rc board
     me="$BASHPID"
     herdr_linear::board_config_load >/dev/null 2>&1
     [ "$?" -eq "$HERDR_LINEAR_BOARD_ABSENT" ] && return "$HERDR_LINEAR_BOARD_SYNC_NO_BOARD"
+    if ! board="$(herdr_linear::board_root)"; then
+        printf 'this shell is not inside a herdr session, so there is no board to sync; nothing was changed\n' >&2
+        return "$HERDR_LINEAR_BOARD_SYNC_REFUSED"
+    fi
     if ! herdr_linear::_board_sync_lock "$me"; then
         printf 'another board sync is running; nothing was changed\n' >&2
         return "$HERDR_LINEAR_BOARD_SYNC_LOCKED"
@@ -184,7 +191,7 @@ herdr_linear::board_sync() (
     trap 'herdr_linear::_board_sync_unlock "'"$me"'"' EXIT
     HL_LIB="$HERDR_LINEAR_BOARD_SYNC_LIB" HL_CAP="$HERDR_LINEAR_BOARD_PANE_CAP" HL_TAB_LIMIT="$HERDR_LINEAR_BOARD_TAB_LIMIT" \
         HL_INVOKING="$(herdr_linear::pane_id 2>/dev/null)" \
-        HL_PANE_DIR="${HERDR_LINEAR_WORKTREES_ROOT:-$HOME/worktrees}" \
+        HL_PANE_DIR="${HERDR_LINEAR_WORKTREES_ROOT:-$HOME/worktrees}" HL_BOARD="$board" \
         python3 -c "$HERDR_LINEAR_BOARD_SYNC_PY"
     rc=$?
     return "$rc"
@@ -197,7 +204,7 @@ import hashlib, json, os, secrets, subprocess, sys
 CLEAN, NO_BOARD, REFUSED, LOCKED, INCOMPLETE, QUESTIONS, NO_SERVER, FAILED, UNKNOWN = range(9)
 P_OK, P_NO_SERVER, P_REFUSED, P_UNKNOWN, P_FAILED, P_IN_USE, P_GONE = range(7)
 LIB = os.environ["HL_LIB"]
-BOARD = os.path.join(os.environ["HERDR_LINEAR_STORE_DIR"], "board")
+BOARD = os.environ["HL_BOARD"]
 JOURNAL = os.path.join(BOARD, "journal.json")
 HELD_TABS = os.path.join(BOARD, "held-tabs.json")
 CAP = int(os.environ.get("HL_CAP") or 16)

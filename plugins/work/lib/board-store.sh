@@ -31,11 +31,20 @@ herdr_linear::_board_refuse() {
     return "$HERDR_LINEAR_BOARD_REFUSED"
 }
 
+# The board state of the session this process runs in (KTD3). Fails with no
+# session: a ledger of herdr pane ids means nothing outside their server.
+herdr_linear::board_root() {
+    local root
+    root="$(herdr_linear::session_store_root)" || return 1
+    printf '%s/board' "$root"
+}
+
 herdr_linear::_board_path() {
-    local family="${1:-}" key="${2:-}"
+    local family="${1:-}" key="${2:-}" board
     herdr_linear::is_safe_identifier "$family" || return 1
     herdr_linear::is_safe_identifier "$key" || return 1
-    printf '%s/board/%s/%s.json' "$HERDR_LINEAR_STORE_DIR" "$family" "$key"
+    board="$(herdr_linear::board_root)" || return 1
+    printf '%s/%s/%s.json' "$board" "$family" "$key"
 }
 
 # herdr_linear::_board_key_path <family> <key> [what the key is, for the refusal]
@@ -57,7 +66,9 @@ herdr_linear::_board_space_path() {
 }
 
 herdr_linear::_board_sync_path() {
-    printf '%s/board/sync-state.json' "$HERDR_LINEAR_STORE_DIR"
+    local board
+    board="$(herdr_linear::board_root)" || return 1
+    printf '%s/sync-state.json' "$board"
 }
 
 herdr_linear::_board_py() {
@@ -494,17 +505,24 @@ herdr_linear::_board_read() {
 }
 
 herdr_linear::_board_mutate() {
-    local f="$1" op="$2" dir rc
+    local f="$1" op="$2" dir rc board session
     shift 2
     case "$f" in
-        "$HERDR_LINEAR_STORE_DIR"/board/*.json) ;;
+        "$HERDR_LINEAR_STORE_DIR"/board/*.json) board="$HERDR_LINEAR_STORE_DIR/board" ;;
+        "$HERDR_LINEAR_STORE_DIR"/sessions/*/board/*.json)
+            session="${f#"$HERDR_LINEAR_STORE_DIR"/sessions/}"; session="${session%%/*}"
+            herdr_linear::is_safe_identifier "$session" \
+                || { herdr_linear::_board_refuse "a board record lives under the board store"; return; }
+            board="$HERDR_LINEAR_STORE_DIR/sessions/$session/board"
+            mkdir -p "$board" 2>/dev/null
+            chmod 700 "$HERDR_LINEAR_STORE_DIR/sessions" "${board%/board}" 2>/dev/null ;;
         *) herdr_linear::_board_refuse "a board record lives under the board store"; return ;;
     esac
     herdr_linear::is_safe_identifier "$(basename "$f" .json)" \
         || { herdr_linear::_board_refuse "that record name is not a safe identifier"; return; }
     dir="${f%/*}"
     mkdir -p "$dir" 2>/dev/null || return "$HERDR_LINEAR_BOARD_ABSENT"
-    chmod 700 "$HERDR_LINEAR_STORE_DIR" "$HERDR_LINEAR_STORE_DIR/board" "$dir" 2>/dev/null
+    chmod 700 "$HERDR_LINEAR_STORE_DIR" "$board" "$dir" 2>/dev/null
     herdr_linear::_lock "$f" || return "$HERDR_LINEAR_BOARD_LOCKED"
     if [ "${HERDR_LINEAR_LOCK_HOLD_MS:-0}" -gt 0 ] 2>/dev/null; then
         perl -e "select undef, undef, undef, ${HERDR_LINEAR_LOCK_HOLD_MS}/1000" 2>/dev/null
@@ -725,9 +743,10 @@ herdr_linear::board_question() {
 
 # One JSON object per line for every open question, sorted by key.
 herdr_linear::board_questions_pending() {
-    local f
+    local f board
     local -a usable=()
-    for f in "$HERDR_LINEAR_STORE_DIR"/board/questions/*.json; do
+    board="$(herdr_linear::board_root)" || return 0
+    for f in "$board"/questions/*.json; do
         [ -f "$f" ] && [ -r "$f" ] || continue
         herdr_linear::_mode_ok "$f" || continue
         usable+=("$f")
@@ -791,6 +810,19 @@ herdr_linear::board_record_linear_write() {
 
 herdr_linear::board_mark_behind() {
     herdr_linear::_board_mutate "$(herdr_linear::_board_sync_path)" sync-mark-behind
+}
+
+# A ticket can sit on several sessions' boards, so a Linear write marks every
+# board behind, not only this session's. The default board is marked as it
+# always was; a named session is marked only once it has a board.
+herdr_linear::board_mark_behind_all() {
+    local d rc=0
+    herdr_linear::_board_mutate "$HERDR_LINEAR_STORE_DIR/board/sync-state.json" sync-mark-behind || rc=$?
+    for d in "$HERDR_LINEAR_STORE_DIR"/sessions/*/board; do
+        [ -d "$d" ] || continue
+        herdr_linear::_board_mutate "$d/sync-state.json" sync-mark-behind || rc=$?
+    done
+    return "$rc"
 }
 
 # The record with a computed `behind`.

@@ -27,8 +27,9 @@ command -v herdr_linear::board_reservation_field >/dev/null 2>&1 \
 # another project says nothing about it (KTD14). Owned means a started
 # reservation whose frozen name and identifier match this worktree.
 herdr_linear::_board_owns_worktree() {
-    local wt="$1" ident="$2" f issue
-    for f in "$HERDR_LINEAR_STORE_DIR"/board/reservations/*.json; do
+    local wt="$1" ident="$2" f issue board
+    board="$(herdr_linear::board_root)" || return 1
+    for f in "$board"/reservations/*.json; do
         [ -e "$f" ] || continue
         issue="$(basename "$f" .json)"
         [ "$(herdr_linear::board_reservation_field "$issue" state 2>/dev/null)" = started ] || continue

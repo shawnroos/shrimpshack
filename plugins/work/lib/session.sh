@@ -54,15 +54,23 @@ EOF
     herdr_linear::session_from_socket "$sock"
 }
 
+# herdr_linear::session_path <base>
 # The default session keeps today's flat paths, so records written before
-# sessions existed keep applying where they were made (R17).
-herdr_linear::session_store_root() {
-    local name
+# sessions existed keep applying where they were made (R17). With no session
+# there is no path: a record keyed by a herdr id means nothing outside the
+# server that issued the id.
+herdr_linear::session_path() {
+    local base="${1:-}" name
+    [ -n "$base" ] || return 1
     name="$(herdr_linear::session_name)" || return 1
     [ -n "$name" ] || return 1
     if [ "$name" = default ]; then
-        printf '%s' "$HERDR_LINEAR_STORE_DIR"
+        printf '%s' "$base"
     else
-        printf '%s/sessions/%s' "$HERDR_LINEAR_STORE_DIR" "$name"
+        printf '%s/sessions/%s' "$base" "$name"
     fi
+}
+
+herdr_linear::session_store_root() {
+    herdr_linear::session_path "$HERDR_LINEAR_STORE_DIR"
 }

@@ -124,6 +124,7 @@ PYEOF
 herdr_linear::_session_binding_mutate() {
     local name="$1" op="$2" f rc
     shift 2
+    herdr_linear::is_safe_identifier "$name" || return "$HERDR_LINEAR_BINDING_REFUSED"
     f="$(herdr_linear::_session_binding_path "$name")" || return "$HERDR_LINEAR_BINDING_REFUSED"
     mkdir -p "${f%/*}" 2>/dev/null || return "$HERDR_LINEAR_BINDING_ABSENT"
     chmod 700 "$HERDR_LINEAR_STORE_DIR" "$HERDR_LINEAR_STORE_DIR/sessions" "${f%/*}" 2>/dev/null

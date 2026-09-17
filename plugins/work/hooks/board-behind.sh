@@ -41,7 +41,7 @@ command -v herdr_linear::board_config_load >/dev/null 2>&1 || exit 0
 herdr_linear::board_config_load >/dev/null 2>&1
 [ "$?" -ne "$HERDR_LINEAR_BOARD_ABSENT" ] || exit 0
 
-herdr_linear::board_mark_behind >/dev/null 2>&1 || true
+herdr_linear::board_mark_behind_all >/dev/null 2>&1 || true
 
 # R26: the board is machine-wide, so the mark is made from anywhere, but a
 # session outside the project roots is told nothing.
