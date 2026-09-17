@@ -98,28 +98,32 @@ The form is `--space <space> --project <project>`, plus `--view <view>` or
 values are candidates: this section reads them, checks them, asks, and only
 then records. No argument or flag skips the question, and none may be added.
 
-**Before any shell command,** look at the argument text. If it holds anything
-other than letters, digits, `-`, `_` and spaces, say the arguments are
-malformed, record nothing, and stop. Do not run the text, quote it into a
-command, or repair it.
+**Before any shell command,** look at the argument text. It must be one line,
+made only of letters, digits, `-`, `_` and spaces. It is malformed if it holds
+a line break, the text `HERDR_BIND_ARGS` anywhere, or any other character: say
+the arguments are malformed, record nothing, and stop. Do not run the text,
+quote it into a command, or repair it.
 
 Then parse and check it. The quoted heredoc expands nothing and reads one line,
 and `read -r -a` splits on spaces and expands no glob, so each word reaches the
-parser as it was sent:
+parser as it was sent. A line equal to the terminator would end the heredoc and
+run the lines after it as bash; the terminator carries a `.`, which the check
+above refuses, so no argument text that passed it can equal the terminator:
 
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/bind-args.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/context.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/views.sh"
 
-read -r ARGS <<'HERDR_BIND_ARGS'
+read -r ARGS <<'HERDR_BIND_ARGS.END'
 $ARGUMENTS
-HERDR_BIND_ARGS
+HERDR_BIND_ARGS.END
 read -r -a WORDS <<< "$ARGS"
 PARSED="$(herdr_linear::bind_args_parse "${WORDS[@]}")"; echo "parse=$?"
 SPACE="$(printf '%s\n' "$PARSED" | awk -F'\t' '$1=="space"{print $2}')"
@@ -192,6 +196,7 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/bind-args.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/views.sh"
 
@@ -382,6 +387,7 @@ bound, `/work:bind` offers only this step.**
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/bind-args.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/context.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/views.sh"

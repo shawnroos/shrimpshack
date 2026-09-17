@@ -16,7 +16,7 @@ if [ -z "$LIB_DIR" ] || [ ! -r "$LIB_DIR/sanitize.sh" ]; then
 fi
 # shellcheck source=/dev/null
 . "$LIB_DIR/sanitize.sh"
-for f in secrets.sh linear.sh; do
+for f in secrets.sh linear.sh bind-args.sh; do
     if [ ! -r "$LIB_DIR/$f" ]; then
         printf 'cannot find lib/%s beside this script\n' "$f" >&2
         exit 1
@@ -31,30 +31,12 @@ export HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS="${HERDR_LINEAR_KEYCHAIN_TIMEOUT_SE
 VIEWS_TMP="$(mktemp -d)" || exit 1
 trap 'rm -rf "$VIEWS_TMP"' EXIT
 
-# KTD4, stricter than is_safe_identifier: no dot, and at most 64 characters.
-# The charset is spelled out because bash 3.2 matches a range by collation.
-views_id_ok() {
-    local s="${1:-}"
-    [ -n "$s" ] && [ "${#s}" -le 64 ] || return 1
-    case "$s" in
-        [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]*) return 1 ;;
-        *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*) return 1 ;;
-    esac
-    return 0
-}
-
 views_main() {
     local project="${1:-}" status message="" rc
 
-    views_id_ok "$project" || return 2
+    herdr_linear::is_bind_identifier "$project" || return 2
 
-    # A keychain held on an unlock prompt is asked once; after its bound the
-    # rest of the run reads the secrets file instead of waiting per call.
-    herdr_linear::keychain_read "$HERDR_LINEAR_KEYCHAIN_SERVICE" "$HERDR_LINEAR_KEYCHAIN_ACCOUNT" >/dev/null 2>&1
-    if [ $? -eq "$HERDR_LINEAR_SECRET_TIMEOUT" ]; then
-        HERDR_LINEAR_SECURITY_BIN="$(command -v false)"
-        export HERDR_LINEAR_SECURITY_BIN
-    fi
+    herdr_linear::keychain_skip_if_stalled "$HERDR_LINEAR_KEYCHAIN_SERVICE" "$HERDR_LINEAR_KEYCHAIN_ACCOUNT"
     : >"$VIEWS_TMP/rows"
     # The query layer reports a missing key and a refused key as the same
     # code, so the missing one is settled here before any request.
@@ -79,23 +61,10 @@ views_main() {
     case "$status" in ok|partial) ;; *) : >"$VIEWS_TMP/rows" ;; esac
 
     VIEWS_STATUS="$status" VIEWS_MESSAGE="$message" VIEWS_ROWS="$VIEWS_TMP/rows" \
-    VIEWS_STRIP_RANGES="${HERDR_LINEAR_STRIP_RANGES:-}" \
-    python3 - <<'PY'
+    python3 -c "$HERDR_LINEAR_STRIP_PY"'
 import json, os, re, sys
 
 E = os.environ
-
-# An empty or unparsable range list stops the script rather than printing
-# uncleaned text.
-STRIP = []
-for r in E["VIEWS_STRIP_RANGES"].split():
-    lo, _, hi = r.partition("-")
-    STRIP.append((int(lo), int(hi or lo)))
-if not STRIP:
-    sys.exit(1)
-def clean(s):
-    return "".join(ch for ch in s
-                   if not any(lo <= ord(ch) <= hi for lo, hi in STRIP))
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", re.ASCII)
 
@@ -113,7 +82,7 @@ for line in open(E["VIEWS_ROWS"], encoding="utf-8", errors="replace").read().spl
 print(json.dumps({"status": E["VIEWS_STATUS"],
                   "message": clean(E["VIEWS_MESSAGE"]) or None,
                   "rows": rows}, sort_keys=True, indent=2))
-PY
+'
 }
 
 out="$(views_main "$@")"; rc=$?

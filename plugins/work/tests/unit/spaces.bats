@@ -227,3 +227,34 @@ SH
         [ "$(env_field 'd["rows"]')" = '[]' ]
     done
 }
+
+@test "space records that cannot be listed, or list as something other than records, are unknown" {
+    local real_py shimdir="$WORK/pyshim"
+    real_py="$(command -v python3)"
+    mkdir -p "$shimdir"
+    # Only the record listing is intercepted; every other python3 the script
+    # runs, including the one that prints the envelope, is the real one.
+    cat > "$shimdir/python3" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+    if [ "\$a" = list-workspaces ]; then
+        printf '%s' "\$SHIM_RECORDS_OUT"
+        exit "\$SHIM_RECORDS_RC"
+    fi
+done
+exec "$real_py" "\$@"
+SH
+    chmod +x "$shimdir/python3"
+
+    SHIM_RECORDS_OUT="" SHIM_RECORDS_RC=1 run --separate-stderr env PATH="$shimdir:$PATH" bash "$BIN"
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"unknown"' ]
+    [ "$(env_field 'd["rows"]')" = '[]' ]
+    [[ "$(env_field 'd["message"]')" == *records* ]]
+
+    SHIM_RECORDS_OUT='not json' SHIM_RECORDS_RC=0 run --separate-stderr env PATH="$shimdir:$PATH" bash "$BIN"
+    [ "$status" -eq 0 ]
+    [ "$(env_field 'd["status"]')" = '"unknown"' ]
+    [ "$(env_field 'd["rows"]')" = '[]' ]
+    [[ "$(env_field 'd["message"]')" == *records* ]]
+}

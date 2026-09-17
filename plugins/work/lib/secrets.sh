@@ -122,6 +122,22 @@ herdr_linear::keychain_read() (
     return "$HERDR_LINEAR_SECRET_FAIL"
 )
 
+# herdr_linear::keychain_skip_if_stalled <service> <account>
+# Every Linear call reads the credential again. A keychain held on an unlock
+# prompt is asked once; if that read is ended at its bound, the rest of the run
+# skips the keychain and uses the secrets file, so a locked keychain costs one
+# bound rather than one per call.
+#
+# A brace body, not a subshell like its neighbours: the export has to reach the
+# caller's shell. It holds no secret -- the value read goes to /dev/null.
+herdr_linear::keychain_skip_if_stalled() {
+    herdr_linear::keychain_read "${1:-}" "${2:-}" >/dev/null 2>&1
+    if [ $? -eq "$HERDR_LINEAR_SECRET_TIMEOUT" ]; then
+        HERDR_LINEAR_SECURITY_BIN="$(command -v false)"
+        export HERDR_LINEAR_SECURITY_BIN
+    fi
+}
+
 # herdr_linear::keychain_exists <service> <account>
 # Yes/no, without the value ever being produced. Deliberately omits `-w`: the
 # attribute dump carries the account and service names and no password, so a

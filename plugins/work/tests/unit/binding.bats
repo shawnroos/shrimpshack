@@ -22,6 +22,8 @@ setup() {
     export CLAUDE_SESSION_ID="session-one"
     # shellcheck source=/dev/null
     . "${BATS_TEST_DIRNAME}/../../lib/binding.sh"
+    # shellcheck source=/dev/null
+    . "${BATS_TEST_DIRNAME}/../../lib/bind-args.sh"
 
     WT="$WORK/wt"
     mkdir -p "$WT"

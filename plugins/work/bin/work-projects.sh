@@ -27,14 +27,7 @@ projects_main() {
 
     [ "$#" -eq 0 ] || return 2
 
-    # Every page reads the credential again. A keychain read ended at its bound
-    # sends the rest of the run to the secrets file, so a locked keychain costs
-    # one bound rather than one per page.
-    herdr_linear::keychain_read "$HERDR_LINEAR_KEYCHAIN_SERVICE" "$HERDR_LINEAR_KEYCHAIN_ACCOUNT" >/dev/null 2>&1
-    if [ $? -eq "$HERDR_LINEAR_SECRET_TIMEOUT" ]; then
-        HERDR_LINEAR_SECURITY_BIN="$(command -v false)"
-        export HERDR_LINEAR_SECURITY_BIN
-    fi
+    herdr_linear::keychain_skip_if_stalled "$HERDR_LINEAR_KEYCHAIN_SERVICE" "$HERDR_LINEAR_KEYCHAIN_ACCOUNT"
 
     # The library maps a missing key and a refused key to the same code, so the
     # credential is resolved here first to tell the two apart.
@@ -58,30 +51,12 @@ projects_main() {
     esac
 
     printf '%s' "$rows" | LIST_STATUS="$status" LIST_MESSAGE="$message" \
-        LIST_STRIP_RANGES="${HERDR_LINEAR_STRIP_RANGES:-}" python3 -c '
+        python3 -c "$HERDR_LINEAR_STRIP_PY"'
 import json, os, sys
 
-# The ranges come from HERDR_LINEAR_STRIP_RANGES in lib/sanitize.sh; an empty
-# or unparsable list stops the script rather than printing uncleaned text.
-STRIP = []
-for r in os.environ["LIST_STRIP_RANGES"].split():
-    lo, _, hi = r.partition("-")
-    STRIP.append((int(lo), int(hi or lo)))
-if not STRIP:
-    sys.exit(1)
 # The ranges keep tab, newline and carriage return for documents; a picker row
 # is one line, so they go too.
 STRIP += [(9, 10), (13, 13)]
-def clean(s):
-    return "".join(ch for ch in s if not any(lo <= ord(ch) <= hi for lo, hi in STRIP))
-def deep_clean(v):
-    if isinstance(v, str):
-        return clean(v)
-    if isinstance(v, list):
-        return [deep_clean(x) for x in v]
-    if isinstance(v, dict):
-        return {k: deep_clean(x) for k, x in v.items()}
-    return v
 
 rows = json.load(sys.stdin)
 if not isinstance(rows, list):

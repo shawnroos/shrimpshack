@@ -8,6 +8,8 @@
 
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+command -v herdr_linear::is_bind_identifier >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/bind-args.sh"
 
 HERDR_LINEAR_VIEW_OK=0
 HERDR_LINEAR_VIEW_REFUSED=1

@@ -72,15 +72,7 @@ snapshot_main() {
             view_status=unreadable
         fi
 
-        # Every Linear call reads the credential again. A keychain held on an
-        # unlock prompt is asked once; if that read is ended at its bound, the
-        # rest of the run skips the keychain and uses the secrets file, so a
-        # locked keychain costs one bound rather than one per call.
-        herdr_linear::keychain_read "$HERDR_LINEAR_KEYCHAIN_SERVICE" "$HERDR_LINEAR_KEYCHAIN_ACCOUNT" >/dev/null 2>&1
-        if [ $? -eq "$HERDR_LINEAR_SECRET_TIMEOUT" ]; then
-            HERDR_LINEAR_SECURITY_BIN="$(command -v false)"
-            export HERDR_LINEAR_SECURITY_BIN
-        fi
+        herdr_linear::keychain_skip_if_stalled "$HERDR_LINEAR_KEYCHAIN_SERVICE" "$HERDR_LINEAR_KEYCHAIN_ACCOUNT"
         herdr_linear::credential >/dev/null 2>&1; rc=$?
         case "$rc" in 0|2) have_cred=1 ;; esac
 
@@ -178,8 +170,7 @@ print(json.dumps({"key": teams[0].get("key"), "states": states}))
     SNAP_VIEW_ID="$view_id" SNAP_VIEW_NAME="$view_name" SNAP_VIEW="$view_json" \
     SNAP_ISSUES_FILE="$SNAP_TMP/issues" SNAP_PROJECT_FILE="$SNAP_TMP/project" SNAP_STATES="$states_json" \
     SNAP_BINDINGS="$SNAP_TMP/bindings" SNAP_CACHE="$SNAP_TMP/cache" \
-    SNAP_STRIP_RANGES="${HERDR_LINEAR_STRIP_RANGES:-}" \
-    python3 - <<'PY'
+    python3 -c "$HERDR_LINEAR_STRIP_PY"'
 import calendar, json, os, sys, time
 
 E = os.environ
@@ -202,27 +193,6 @@ listing = file_json("SNAP_ISSUES_FILE") or {}
 project = file_json("SNAP_PROJECT_FILE") or {}
 team = env_json("SNAP_STATES") or {}
 states = team.get("states") or []
-
-# The ranges come from HERDR_LINEAR_STRIP_RANGES in lib/sanitize.sh; an empty
-# or unparsable list stops the script rather than printing uncleaned text.
-STRIP = []
-for r in E["SNAP_STRIP_RANGES"].split():
-    lo, _, hi = r.partition("-")
-    STRIP.append((int(lo), int(hi or lo)))
-if not STRIP:
-    sys.exit(1)
-def clean(s):
-    return "".join(ch for ch in s
-                   if not any(lo <= ord(ch) <= hi for lo, hi in STRIP))
-
-def deep_clean(v):
-    if isinstance(v, str):
-        return clean(v)
-    if isinstance(v, list):
-        return [deep_clean(x) for x in v]
-    if isinstance(v, dict):
-        return {k: deep_clean(x) for k, x in v.items()}
-    return v
 
 label, live = ws, None
 if herdr_ok:
@@ -459,7 +429,7 @@ doc = {
     "unmapped": unmapped,
 }
 print(json.dumps(deep_clean(doc), sort_keys=True, indent=2))
-PY
+'
 }
 
 out="$(snapshot_main "$@")"; rc=$?

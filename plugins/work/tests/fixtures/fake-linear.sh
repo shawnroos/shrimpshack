@@ -53,16 +53,19 @@
 #   FAKE_LINEAR_UNFILTERED   set to 1 to receive the canned payload whole,
 #                            for a test asserting on a captured SHAPE rather
 #                            than on what a query selected
-#   FAKE_LINEAR_ISSUES       project | completed | paged | capped | empty --
-#                            the pool the `$filter:IssueFilter` listing arm
-#                            answers from, after applying the request's own
-#                            filter (default: project)
-#   FAKE_LINEAR_PROJECTS     member | paged | capped | empty | hostile -- the
-#                            pool the `projects(` arm answers from, after
-#                            applying the request's membership filter
-#                            (default: member)
-#   FAKE_LINEAR_VIEWS        none | one | many | endless -- how many views the
-#                            customViews arm lists (default: one)
+#   FAKE_LINEAR_ISSUES       project | completed | paged | capped | nocursor |
+#                            empty -- the pool the `$filter:IssueFilter`
+#                            listing arm answers from, after applying the
+#                            request's own filter; nocursor reports a next page
+#                            with no endCursor (default: project)
+#   FAKE_LINEAR_PROJECTS     member | paged | capped | nocursor | empty |
+#                            hostile -- the pool the `projects(` arm answers
+#                            from, after applying the request's membership
+#                            filter; nocursor reports a next page with no
+#                            endCursor (default: member)
+#   FAKE_LINEAR_VIEWS        none | one | many | endless | nocursor -- how many
+#                            views the customViews arm lists; nocursor reports
+#                            a next page with no endCursor (default: one)
 #   FAKE_LINEAR_VIEW_MISSING   set to 1 and customView(id:) answers not found
 #   FAKE_LINEAR_VIEW_ARCHIVED  set to 1 and customView(id:) carries archivedAt
 #   FAKE_LINEAR_VIEW_GROUPING  the issueGrouping customView(id:) reports
@@ -547,6 +550,8 @@ if mode == "paged":
 elif mode == "capped":
     n = int((after or "c0")[1:]) + 1
     nodes, has_next, cursor = kept, True, "c%d" % n
+elif mode == "nocursor":
+    nodes, has_next, cursor = kept[:2], True, None
 else:
     nodes, has_next, cursor = kept, False, None
 print(json.dumps({"data": {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}}}}))
@@ -564,6 +569,7 @@ views_listing() {
         # Every page offers one matching view and another page after it, so
         # the listing only ends at the caller's page cap.
         endless) printf '{"data":{"customViews":{"nodes":[{"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}' ;;
+        nocursor) printf '{"data":{"customViews":{"nodes":[{"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}}],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}' ;;
         many) cat <<'JSON'
 {"data":{"customViews":{"nodes":[
  {"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}},
@@ -619,6 +625,8 @@ if mode == "paged":
 elif mode == "capped":
     n = int((after or "p0")[1:]) + 1
     nodes, has_next, cursor = kept[:1], True, "p%d" % n
+elif mode == "nocursor":
+    nodes, has_next, cursor = kept[:1], True, None
 else:
     nodes, has_next, cursor = kept, False, None
 print(json.dumps({"data": {"projects": {"nodes": nodes, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}}}}))

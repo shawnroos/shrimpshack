@@ -398,8 +398,10 @@ with open(sys.argv[1], "a") as f:
 pi = conn.get("pageInfo") or {}
 print("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") or "")
 ' "$acc_file" 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+        # A next page with no cursor to reach it is a list cut short.
         case "$ctl" in
             1\ ?*) after="${ctl#1 }" ;;
+            1*)    truncated=true; break ;;
             *)     break ;;
         esac
     done
@@ -510,8 +512,10 @@ print("\x01%s %s" % ("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") 
         after="${resp##*$'\x01'}"
         resp="${resp%$'\x01'*}"
         [ -n "$resp" ] && out="$out$resp"
+        # A next page with no cursor to reach it is a list cut short.
         case "$after" in
             1\ ?*) after="${after#1 }" ;;
+            1*)    partial=1; break ;;
             *)     break ;;
         esac
     done
@@ -575,8 +579,10 @@ with open(sys.argv[1], "a") as f:
 pi = conn.get("pageInfo") or {}
 print("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") or "")
 ' "$acc_file" 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+        # A next page with no cursor to reach it is a list cut short.
         case "$ctl" in
             1\ ?*) after="${ctl#1 }" ;;
+            1*)    partial=1; break ;;
             *)     break ;;
         esac
     done

@@ -58,6 +58,15 @@ field() {   # field <python-expression over d> -- reads $output as JSON
     [ "$(wc -l < "$FAKE_LINEAR_RECORD_DIR/bodies" | tr -d ' ')" = 2 ]
 }
 
+@test "a page that reports more but gives no cursor is partial, not a complete list" {
+    FAKE_LINEAR_PROJECTS=nocursor run --separate-stderr bash "$BIN"
+    [ "$status" -eq 0 ]
+    [ "$(field 'd["status"]')" = partial ]
+    [ "$(field 'len(d["rows"])')" = 1 ]
+    [ -n "$(field 'd["message"] or ""')" ]
+    [ "$(wc -l < "$FAKE_LINEAR_RECORD_DIR/bodies" | tr -d ' ')" = 1 ]
+}
+
 @test "no memberships is ok with no rows, not a failure" {
     FAKE_LINEAR_PROJECTS=empty run --separate-stderr bash "$BIN"
     [ "$status" -eq 0 ]

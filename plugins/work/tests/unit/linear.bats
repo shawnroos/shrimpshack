@@ -531,6 +531,15 @@ refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
     [ "$(printf '%s' "$output" | python3 -c 'import sys,json;print(json.load(sys.stdin)["truncated"])')" = "True" ]
 }
 
+@test "a page that reports more but gives no cursor is marked truncated" {
+    export FAKE_LINEAR_ISSUES=nocursor
+    run --separate-stderr herdr_linear::project_issues "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(api_calls)" = "1" ]
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317" ]
+    [ "$(printf '%s' "$output" | python3 -c 'import sys,json;print(json.load(sys.stdin)["truncated"])')" = "True" ]
+}
+
 @test "an unreachable Linear leaves a listing unavailable, with nothing on stdout" {
     export HERDR_LINEAR_CURL_BIN=/bin/false
     run --separate-stderr herdr_linear::project_issues "$PROJECT"
@@ -557,6 +566,14 @@ refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
     run --separate-stderr herdr_linear::project_views "$PROJECT"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
+}
+
+@test "project_views on a page that reports more but gives no cursor exits partial and keeps its rows" {
+    export FAKE_LINEAR_VIEWS=nocursor
+    run --separate-stderr herdr_linear::project_views "$PROJECT"
+    [ "$status" -eq "$HERDR_LINEAR_PARTIAL" ]
+    [ "$(printf '%s\n' "$output" | cut -f1)" = "cccccccc-cccc-4ccc-8ccc-cccccccccccc" ]
+    [ "$(wc -l < "$FAKE_LINEAR_RECORD_DIR/bodies" | tr -d ' ')" = 1 ]
 }
 
 @test "view_read returns id, name, filter and the board layout" {

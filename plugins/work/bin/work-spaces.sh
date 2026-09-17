@@ -49,25 +49,14 @@ spaces_main() {
 
     SPACES_STATUS="$status" SPACES_MESSAGE="$message" \
     SPACES_LIVE="$SPACES_TMP/live" SPACES_RECORDS="$SPACES_TMP/records" \
-    SPACES_STRIP_RANGES="${HERDR_LINEAR_STRIP_RANGES:-}" \
-    python3 - <<'PY'
+    python3 -c "$HERDR_LINEAR_STRIP_PY"'
 import json, os, re, sys
 
 E = os.environ
 
-# An empty or unparsable range list stops the script rather than printing
-# uncleaned text.
-STRIP = []
-for r in E["SPACES_STRIP_RANGES"].split():
-    lo, _, hi = r.partition("-")
-    STRIP.append((int(lo), int(hi or lo)))
-if not STRIP:
-    sys.exit(1)
 # The ranges keep tab, newline and carriage return for documents; a picker row
 # is one line, so they go too.
 STRIP += [(9, 10), (13, 13)]
-def clean(s):
-    return "".join(ch for ch in s if not any(lo <= ord(ch) <= hi for lo, hi in STRIP))
 
 # Narrower than _workspace_record_path, which admits a leading dash: a row id
 # is passed on to a bind, where `-rf` would read as an option.
@@ -123,7 +112,7 @@ if status == "ok":
 
 print(json.dumps({"status": status, "message": clean(message) or None, "rows": rows},
                  sort_keys=True, indent=2))
-PY
+'
 }
 
 out="$(spaces_main "$@")"; rc=$?
