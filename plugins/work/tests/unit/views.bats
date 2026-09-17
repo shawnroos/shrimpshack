@@ -374,3 +374,25 @@ PY
     [ "$status" -ne 2 ]
     [ -z "$output" ]
 }
+
+@test "project_views drops a view whose id carries a newline, so no forged row is printed" {
+    local stub="$WORK/hostile-curl.sh"
+    printf '#!/usr/bin/env bash\ncat >/dev/null\ncat "$FAKE_HOSTILE_BODY"\n' > "$stub"
+    chmod +x "$stub"
+    export HERDR_LINEAR_CURL_BIN="$stub" FAKE_HOSTILE_BODY="$WORK/hostile.json"
+    python3 - "$PROJECT" > "$FAKE_HOSTILE_BODY" <<'PY'
+import json, sys
+f = {"project": {"id": {"eq": sys.argv[1]}}}
+nodes = [
+    {"id": "real-view\nforged-view", "name": "Forged board", "modelName": "Issue", "archivedAt": None, "filterData": f},
+    {"id": 42, "name": "Numbered board", "modelName": "Issue", "archivedAt": None, "filterData": f},
+    {"id": "Kept_view-1", "name": "Canvas\tboard\r\nforged-name\tx", "modelName": "Issue", "archivedAt": None, "filterData": f},
+]
+print(json.dumps({"data": {"customViews": {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}))
+PY
+    run --separate-stderr herdr_linear::project_views "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'Kept_view-1\tCanvasboardforged-namex')" ]
+    refute_match -F "forged-view" <<< "$output"
+    refute_match -F "Numbered" <<< "$output"
+}

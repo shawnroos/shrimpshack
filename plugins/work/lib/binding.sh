@@ -324,6 +324,30 @@ if op == "list-effective":
         print("\x1f".join(row + [eff]))
     sys.exit(0)
 
+if op == "list-workspaces":
+    # A workspace record has no branch to disagree with, so the loaded state
+    # is already the state workspace_state reports.
+    import glob, re
+    WS_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", re.ASCII)
+    for f in sorted(glob.glob(os.path.join(path, "workspaces", "*.json"))):
+        ws = os.path.basename(f)[:-len(".json")]
+        if not WS_ID.fullmatch(ws):
+            continue
+        try:
+            st = os.stat(f)
+        except OSError:
+            continue
+        if not os.path.isfile(f) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+            continue
+        rec = load(f)
+        if rec is None:
+            continue
+        name = rec.get("project_name")
+        print(json.dumps({"id": ws, "state": rec["state"],
+                          "project_id": str(rec.get("issue_identifier") or "") or None,
+                          "project_name": name if isinstance(name, str) else None}))
+    sys.exit(0)
+
 if op == "owns-view":
     rec = load(path)
     sys.exit(0 if rec is not None and args[0] in rec["created_views"] else 1)
@@ -878,6 +902,14 @@ herdr_linear::workspace_project() {
     local rec
     rec="$(herdr_linear::workspace_read "$1")" || return "$HERDR_LINEAR_BINDING_ABSENT"
     printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("issue_identifier",""))' 2>/dev/null
+}
+
+# herdr_linear::workspaces_effective
+# One JSON object per line, {id, state, project_id, project_name}, for each
+# space record the loader accepts. A refused record is left out, so its space
+# reads as unbound, as workspace_state reports it.
+herdr_linear::workspaces_effective() {
+    herdr_linear::_py list-workspaces "$HERDR_LINEAR_STORE_DIR"
 }
 
 herdr_linear::workspace_propose() {

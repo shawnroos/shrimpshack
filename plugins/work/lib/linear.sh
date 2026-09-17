@@ -485,7 +485,9 @@ print(json.dumps({"query": q, "variables": v}))
         [ "$rc" -eq 0 ] || return "$rc"
         pages=$(( pages + 1 ))
         resp="$(printf '%s' "$resp" | HERDR_LINEAR_PROJECT="$project" python3 -c "$HERDR_LINEAR_NAMES_PROJECT_PY"'
-import sys, json, os
+import sys, json, os, re
+# An id carrying a newline would print a second, forged row.
+VIEW_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", re.ASCII)
 project = os.environ["HERDR_LINEAR_PROJECT"]
 d = json.load(sys.stdin)
 conn = ((d.get("data") or {}).get("customViews")) or {}
@@ -497,8 +499,11 @@ for v in nodes:
         continue
     if not names_project(v.get("filterData"), project):
         continue
+    vid = v.get("id")
+    if not isinstance(vid, str) or not VIEW_ID.fullmatch(vid):
+        continue
     name = "".join(ch for ch in str(v.get("name") or "") if ch not in "\t\n\r")
-    print("%s\t%s" % (v.get("id", ""), name))
+    print("%s\t%s" % (vid, name))
 pi = conn.get("pageInfo") or {}
 print("\x01%s %s" % ("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") or ""))
 ' 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
