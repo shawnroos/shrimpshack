@@ -59,10 +59,49 @@ work, and none of them is documented as a setting:
   stand-in for `git`, `curl`, `gh`, `security`, `osascript`, or herdr itself.
 - **Lock, retry, poll, and timeout tuning** — how long a lock is waited for, how many
   times a request is retried, how often a pane is polled, how long a request may take.
-- **Herdr's own runtime identity** — the pane, tab, and workspace identifiers herdr
-  exports into a pane it owns. The plugin reads them; nobody sets them.
+- **Herdr's own runtime identity** — the pane, tab, and workspace identifiers and the
+  socket path herdr exports into a pane it owns. The plugin reads them; nobody sets them.
+  The socket path names the herdr session, which is why a record keyed by a herdr id is
+  kept per session.
 - **The old spelling of the projects root** — still honoured, and still warned about. See
   `lib/contain.sh`, which prints the name to rename and what to rename it to.
+
+---
+
+## The herdr plugin
+
+`herdr/herdr-plugin.toml` is a herdr plugin with the id `work.session`. It asks an unbound
+herdr session which Linear scope it is for, and shows that scope. Link it once, and it runs
+in every herdr session you start:
+
+```sh
+herdr plugin link "<plugin root>/herdr"
+```
+
+- **When it asks.** At a session's start, when the session is unbound, has not declined,
+  and has not been asked before. The question opens as a popup, and a popup opened before
+  you attach is there when you do. Pressing Enter leaves the session unbound and does not
+  ask again. `/work:bind`, or the plugin's "Bind this session to a Linear scope" action,
+  asks again whenever you want.
+- **Turning the ask off.** Create a file named `no-ask` in the plugin's config directory.
+  No session is asked at start after that; the action and `/work:bind` still work.
+
+  ```sh
+  touch "$(herdr plugin config-dir work.session)/no-ask"
+  ```
+
+- **Showing the scope.** herdr cannot let a plugin change its tab bar, so add the entry
+  yourself, in `~/.config/herdr/config.toml` under `[ui]`. herdr runs it on each session's
+  own server, so every session shows its own scope, or `unbound`:
+
+  ```toml
+  tab_bar_right = [{ type = "command", command = "bash <plugin root>/bin/session-label.sh" }]
+  ```
+
+- **Settings it cannot see.** herdr starts these scripts, not Claude Code, so a setting
+  made only in `~/.claude/settings.json` does not reach them. They use the defaults above,
+  or the value exported in the environment herdr was started from. A session binding is
+  stored under `sessions/<name>/` in `HERDR_LINEAR_STORE_DIR`.
 
 ---
 

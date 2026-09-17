@@ -47,6 +47,7 @@
 #                          renames and metadata over the CLI, and a test reads
 #                          both effects from one snapshot
 #   FAKE_HERDR_SOCKET_PATH  the socket line `status server` prints
+#   FAKE_HERDR_PANE_OPEN_FAILS  1 to make `plugin pane open` fail
 #   FAKE_HERDR_STATUS_NO_SOCKET  1 to leave the socket line out
 #   FAKE_HERDR_WORKSPACES  the spaces `workspace list` reports, as
 #                          `id=label,id=label` (default: wA=Plugins). Created
@@ -372,6 +373,19 @@ print(json.dumps({"id": "cli:workspace:list", "result": {"type": "workspace_list
         case "${2:-}" in
             snapshot) emit_snapshot ;;
             *) echo "fake-herdr: unsupported api subcommand '${2:-}'" >&2; exit 2 ;;
+        esac
+        ;;
+    # The work plugin's own herdr plugin opens its bind popup this way. herdr
+    # answers ok whether or not a client is attached to see it.
+    #   FAKE_HERDR_PANE_OPEN_FAILS  1 to make the open fail, as a busy UI does
+    plugin)
+        case "${2:-} ${3:-}" in
+            "pane open")
+                [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
+                [ "${FAKE_HERDR_PANE_OPEN_FAILS:-0}" = 1 ] && { echo '{"error":{"code":"ui_busy"}}' >&2; exit 1; }
+                printf '{"id":"cli:plugin","result":{"type":"ok"}}\n'
+                ;;
+            *) echo "fake-herdr: unsupported plugin subcommand '${2:-} ${3:-}'" >&2; exit 2 ;;
         esac
         ;;
     *)
