@@ -511,6 +511,28 @@ launcher_launch_agent_cmux() {
   step "  $LAUNCH_LABEL: $LAUNCH_SFC (launched with the brief)"
 }
 
+# Readiness polls must judge the LIVE bottom of the screen. claude's classic renderer
+# leaves a dismissed modal in scrollback, so matching the whole screen re-answered a
+# folder-trust prompt 19 times after claude had already exited — each Enter landing in
+# the bare shell underneath.
+_screen_tail() {
+  printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -n 15
+}
+
+# Which option the folder-trust prompt's cursor is on: yes | no | unknown.
+# claude has shipped this prompt with "Yes, I trust this folder" first and with
+# "No, exit" first; a bare Enter on the latter quits claude and leaves a bare shell
+# that the summary used to report as "open + briefed".
+_trust_cursor() {
+  local cur
+  cur="$(printf '%s\n' "$1" | grep '❯' | grep -E 'I trust this folder|No, exit' | tail -1)"
+  case "$cur" in
+    *"I trust this folder"*) echo yes ;;
+    *"No, exit"*)            echo no ;;
+    *)                       echo unknown ;;
+  esac
+}
+
 # Wait for the input prompt to be ready (a fixed sleep is unreliable — a fresh
 # claude can spend seconds loading MCP servers, and an Enter sent too early is
 # swallowed). Sets LB_READY=1 on confirmed ready.
@@ -523,16 +545,21 @@ launcher_wait_ready_cmux() {
   local screen
   for _ in $(seq 1 "$(( SPINOFF_READY_TIMEOUT_MS / 1000 + 1 ))"); do
     sleep 1
-    screen="$("$CMUX" read-screen --surface "$LAUNCH_SFC" "${WSR[@]}" 2>/dev/null)"
+    screen="$(_screen_tail "$("$CMUX" read-screen --surface "$LAUNCH_SFC" "${WSR[@]}" 2>/dev/null)")"
     case "$screen" in
-      *"trust this folder"*|*"Is this a project you created"*)
+      *"I trust this folder"*)
         # See the herdr path: the folder-trust prompt blocks a fresh worktree before
         # claude will process a command-line prompt.
         case "${SPINOFF_FOLDER_TRUST:-accept}" in
           reject) "$CMUX" send-key --surface "$LAUNCH_SFC" "${WSR[@]}" escape >/dev/null 2>&1
                   step "  … folder-trust prompt: declined (SPINOFF_FOLDER_TRUST=reject)" ;;
           abort)  step "  … folder-trust prompt is up and SPINOFF_FOLDER_TRUST=abort — leaving it for you"; return ;;
-          *)      "$CMUX" send-key --surface "$LAUNCH_SFC" "${WSR[@]}" enter >/dev/null 2>&1
+          *)      case "$(_trust_cursor "$screen")" in
+                    yes) ;;
+                    no)  "$CMUX" send-key --surface "$LAUNCH_SFC" "${WSR[@]}" down >/dev/null 2>&1 ;;
+                    *)   step "  … folder-trust prompt is up but its selected option is unreadable — leaving it for you"; return ;;
+                  esac
+                  "$CMUX" send-key --surface "$LAUNCH_SFC" "${WSR[@]}" enter >/dev/null 2>&1
                   step "  … folder-trust prompt: accepted for this worktree" ;;
         esac
         # Let the screen redraw before the next poll, or the same prompt is re-read
@@ -871,10 +898,10 @@ launcher_wait_ready_herdr() {
     # one 404s until the agent registers). Piping this through _herdr_json yields an
     # empty string forever, which is exactly why the old resubmit guard below never
     # fired even once. Read it raw.
-    screen="$("$HERDR" pane read "$HERDR_PANE" --source visible 2>/dev/null)"
+    screen="$(_screen_tail "$("$HERDR" pane read "$HERDR_PANE" --source visible 2>/dev/null)")"
     case "$screen" in
       *"shift+tab to cycle"*|*"bypass permissions"*|*"? for shortcuts"*) LB_READY=1; return ;;
-      *"trust this folder"*|*"Is this a project you created"*)
+      *"I trust this folder"*)
         # DIFFERENT modal from the MCP one below, and the one that actually blocks a
         # fresh worktree: claude asks whether it trusts the FOLDER before it will
         # process anything, including a prompt supplied on the command line. Found by
@@ -886,7 +913,11 @@ launcher_wait_ready_herdr() {
           reject) "$HERDR" pane send-keys "$HERDR_PANE" Escape >/dev/null 2>&1
                   step "  … folder-trust prompt: declined (SPINOFF_FOLDER_TRUST=reject) — session will not run here" ;;
           abort)  step "  … folder-trust prompt is up and SPINOFF_FOLDER_TRUST=abort — leaving it for you"; return ;;
-          *)      "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1
+          *)      case "$(_trust_cursor "$screen")" in
+                    yes) "$HERDR" pane send-keys "$HERDR_PANE" Enter >/dev/null 2>&1 ;;
+                    no)  "$HERDR" pane send-keys "$HERDR_PANE" Down Enter >/dev/null 2>&1 ;;
+                    *)   step "  … folder-trust prompt is up but its selected option is unreadable — leaving it for you"; return ;;
+                  esac
                   step "  … folder-trust prompt: accepted for this worktree (same trust as the parent repo)" ;;
         esac
         sleep 2 ;;
@@ -908,6 +939,20 @@ launcher_wait_ready_herdr() {
     [ "$(date +%s)" -ge "$deadline" ] && return
     sleep 1
   done
+}
+
+# True only when herdr positively reports a foreground with no claude in it. An
+# unreadable reply is not evidence, so a slow boot stays a warning, not a failure.
+herdr_claude_gone() {
+  local info
+  info="$("$HERDR" pane process-info --pane "$HERDR_PANE" 2>/dev/null)" || return 1
+  printf '%s' "$info" | python3 -c '
+import sys, json
+try:
+    procs = json.load(sys.stdin)["result"]["process_info"]["foreground_processes"]
+except Exception:
+    sys.exit(1)
+sys.exit(1 if any(p.get("argv0") == "claude" for p in procs) else 0)'
 }
 
 # Right-pane handoff viewer (workspace target only). herdr has NO native markdown
@@ -1982,6 +2027,11 @@ else
       # a fresh project path raises, which is what gets MCP servers enabled for the
       # new session. A session that never draws is now a WARNING, not a failure.
       launcher_wait_ready
+      if [ "$LAUNCHER" = herdr ] && [ "$KICKOFF_OK" = 1 ] && [ "$LB_READY" != 1 ] && herdr_claude_gone; then
+        KICKOFF_OK=0
+        KICKOFF_FAIL="claude is not running in $HERDR_PANE — it exited or never started"
+        echo "  ⚠ $KICKOFF_FAIL (the pane holds a bare shell)" >&2
+      fi
       [ "$TARGET" = "workspace" ] && launcher_open_viewer
     fi
   fi
@@ -2032,7 +2082,9 @@ echo "  launcher:  $LAUNCHER"
 # only claim "briefed" when readiness was confirmed, and only claim the viewer
 # when it actually rendered (R9). The label is driven by $LAUNCHER / $TARGET —
 # never hard-code "cmux" here (a herdr run must not report itself as cmux).
-if [ "$KICKOFF_OK" != "1" ]; then
+if [ -n "${KICKOFF_FAIL:-}" ]; then
+  SESS_STATE="NOT running — $KICKOFF_FAIL"
+elif [ "$KICKOFF_OK" != "1" ]; then
   SESS_STATE="NOT briefed — the launch did not carry the brief"
 elif [ "$LB_READY" != "1" ]; then
   # The launch succeeded, but claude never drew a usable prompt. A real end-to-end
@@ -2096,6 +2148,13 @@ echo "════════════════════════�
 if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
   echo
   echo "⚠ THE NEW SESSION WAS NOT BRIEFED." >&2
+  if [ -n "${KICKOFF_FAIL:-}" ]; then
+    echo "  $KICKOFF_FAIL." >&2
+    echo "  The worktree, branch and handoff are intact. Start the briefed session in that pane:" >&2
+    echo >&2
+    echo "    claude --name $(shq "$LABEL") \"\$(cat .spinoff-brief)\"" >&2
+    exit 3
+  fi
   echo "  The launch itself did not complete — the failure is reported above, not swallowed." >&2
   echo "  The worktree, branch and handoff are intact. To brief it by hand, run this in the tab:" >&2
   echo >&2
