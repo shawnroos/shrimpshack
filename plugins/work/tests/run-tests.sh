@@ -833,6 +833,34 @@ identifier_path_check() {
     printf '%severy identifier that becomes a path is validated, by a validator this file loads%s\n' "$GREEN" "$NC"
 }
 
+# No lib sources another unless it needs to, and a skill fence sources many at
+# once: two libs defining one function name leave whichever was sourced last in
+# force, and the other lib calls a function it never wrote.
+function_collision_check() {
+    printf '%sFunction collision check...%s\n' "$YELLOW" "$NC"
+    local out
+    out="$(python3 - "$PLUGIN_ROOT" <<'PY'
+import glob, os, re, sys
+defs = {}
+files = sorted(glob.glob(os.path.join(sys.argv[1], "lib", "*.sh")))
+if not files:
+    print("no lib file found; nothing was checked"); raise SystemExit
+for f in files:
+    for m in re.finditer(r"^(herdr_linear::[A-Za-z0-9_]+)\s*\(\)", open(f).read(), re.M):
+        defs.setdefault(m.group(1), set()).add(os.path.basename(f))
+for name, where in sorted(defs.items()):
+    if len(where) > 1:
+        print("%s is defined in %s" % (name, ", ".join(sorted(where))))
+PY
+)"
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+        printf '%sfunction collision check FAILED%s\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%sno function is defined in two libs%s\n' "$GREEN" "$NC"
+}
+
 wire_smoke() {
     printf '%sWire smoke...%s\n' "$YELLOW" "$NC"
     local rc=0
@@ -849,6 +877,7 @@ wire_smoke() {
     consent_caller_check || rc=1
     placement_caller_check || rc=1
     identifier_path_check || rc=1
+    function_collision_check || rc=1
     hook_source_stderr_check || rc=1
     return "$rc"
 }

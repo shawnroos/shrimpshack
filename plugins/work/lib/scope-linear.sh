@@ -7,6 +7,8 @@
 # returned. Unknown is any answer Linear did not give, and callers must treat it
 # as neither: it never marks work outside a session and never refuses a binding.
 
+command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 command -v herdr_linear::query >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/linear.sh"
 
@@ -14,7 +16,7 @@ HERDR_LINEAR_SCOPE_INSIDE=0
 HERDR_LINEAR_SCOPE_OUTSIDE=1
 HERDR_LINEAR_SCOPE_UNKNOWN=2
 
-herdr_linear::_scope_answer() {
+herdr_linear::_membership_answer() {
     case "$1" in
         0) printf 'inside' ;;
         1) printf 'outside' ;;
@@ -23,20 +25,21 @@ herdr_linear::_scope_answer() {
     return "$1"
 }
 
-# One read per operation and id. Cached only when HERDR_LINEAR_SCOPE_CACHE_DIR
+# One read per operation and id. Cached only when HL_SCOPE_CACHE_DIR
 # is set, which a sync does for its own run: membership can change in Linear,
 # and a cache that outlives the sync would keep answering the old relation.
-herdr_linear::_scope_read() {
+herdr_linear::_membership_read() {
     local op="$1" id="$2" query="$3" body resp cache=""
-    if [ -n "${HERDR_LINEAR_SCOPE_CACHE_DIR:-}" ]; then
-        cache="$HERDR_LINEAR_SCOPE_CACHE_DIR/$op-$id.json"
+    herdr_linear::is_safe_identifier "$id" || return 1
+    if [ -n "${HL_SCOPE_CACHE_DIR:-}" ]; then
+        cache="$HL_SCOPE_CACHE_DIR/$op-$id.json"
         [ -f "$cache" ] && { cat "$cache"; return 0; }
     fi
     body="$(python3 -c 'import json,sys; print(json.dumps({"query": sys.argv[1], "variables": {"id": sys.argv[2]}}))' "$query" "$id")"
     resp="$(herdr_linear::query "$body")" || return 1
     if [ -n "$cache" ]; then
-        mkdir -p "$HERDR_LINEAR_SCOPE_CACHE_DIR" 2>/dev/null \
-            && chmod 700 "$HERDR_LINEAR_SCOPE_CACHE_DIR" 2>/dev/null \
+        mkdir -p "$HL_SCOPE_CACHE_DIR" 2>/dev/null \
+            && chmod 700 "$HL_SCOPE_CACHE_DIR" 2>/dev/null \
             && printf '%s' "$resp" > "$cache"
     fi
     printf '%s' "$resp"
@@ -91,35 +94,35 @@ PYEOF
 herdr_linear::scope_contains_project() {
     local kind="${1:-}" scope="${2:-}" project="${3:-}" resp
     herdr_linear::is_safe_identifier "$scope" && herdr_linear::is_safe_identifier "$project" \
-        || { herdr_linear::_scope_answer 2; return; }
+        || { herdr_linear::_membership_answer 2; return; }
     case "$kind" in
-        organization) herdr_linear::_scope_answer 0; return ;;
-        project) [ "$scope" = "$project" ]; herdr_linear::_scope_answer $?; return ;;
+        organization) herdr_linear::_membership_answer 0; return ;;
+        project) [ "$scope" = "$project" ]; herdr_linear::_membership_answer $?; return ;;
         team|initiative) ;;
-        *) herdr_linear::_scope_answer 2; return ;;
+        *) herdr_linear::_membership_answer 2; return ;;
     esac
-    resp="$(herdr_linear::_scope_read project "$project" \
+    resp="$(herdr_linear::_membership_read project "$project" \
         'query ScopeProject($id: String!) { project(id: $id) { id teams { nodes { id } } initiatives { nodes { id } } } }')" \
-        || { herdr_linear::_scope_answer 2; return; }
+        || { herdr_linear::_membership_answer 2; return; }
     printf '%s' "$resp" | python3 -c "$HERDR_LINEAR_SCOPE_PY" "$kind" "$scope" project
-    herdr_linear::_scope_answer $?
+    herdr_linear::_membership_answer $?
 }
 
 # herdr_linear::scope_contains_issue <kind> <scope id> <issue identifier or id>
 herdr_linear::scope_contains_issue() {
     local kind="${1:-}" scope="${2:-}" issue="${3:-}" resp
     herdr_linear::is_safe_identifier "$scope" && herdr_linear::is_safe_identifier "$issue" \
-        || { herdr_linear::_scope_answer 2; return; }
+        || { herdr_linear::_membership_answer 2; return; }
     case "$kind" in
-        organization) herdr_linear::_scope_answer 0; return ;;
+        organization) herdr_linear::_membership_answer 0; return ;;
         team|project|initiative) ;;
-        *) herdr_linear::_scope_answer 2; return ;;
+        *) herdr_linear::_membership_answer 2; return ;;
     esac
-    resp="$(herdr_linear::_scope_read issue "$issue" \
+    resp="$(herdr_linear::_membership_read issue "$issue" \
         'query ScopeIssue($id: String!) { issue(id: $id) { id team { id } project { id initiatives { nodes { id } } } } }')" \
-        || { herdr_linear::_scope_answer 2; return; }
+        || { herdr_linear::_membership_answer 2; return; }
     printf '%s' "$resp" | python3 -c "$HERDR_LINEAR_SCOPE_PY" "$kind" "$scope" issue
-    herdr_linear::_scope_answer $?
+    herdr_linear::_membership_answer $?
 }
 
 # herdr_linear::scope_candidates <kind>

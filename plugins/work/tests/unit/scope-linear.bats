@@ -126,7 +126,7 @@ bodies() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/nu
 }
 
 @test "within one sync, a repeated membership question reads Linear once" {
-    export HERDR_LINEAR_SCOPE_CACHE_DIR="$WORK/scope-cache"
+    export HL_SCOPE_CACHE_DIR="$WORK/scope-cache"
     herdr_linear::scope_contains_project team t-web p-canvas >/dev/null
     herdr_linear::scope_contains_project initiative i-ai p-canvas >/dev/null
     herdr_linear::scope_contains_issue team t-web WEB-1 >/dev/null
@@ -136,7 +136,7 @@ bodies() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/nu
 }
 
 @test "a failed read is not cached" {
-    export HERDR_LINEAR_SCOPE_CACHE_DIR="$WORK/scope-cache"
+    export HL_SCOPE_CACHE_DIR="$WORK/scope-cache"
     export FAKE_LINEAR_SCOPE_FAIL=rate_limited
     herdr_linear::scope_contains_project team t-web p-canvas >/dev/null || true
     unset FAKE_LINEAR_SCOPE_FAIL
