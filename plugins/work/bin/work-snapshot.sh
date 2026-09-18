@@ -266,6 +266,7 @@ elif bound and linear_status == "unavailable":
 groups = []
 PRIORITY = {0: "No priority", 1: "Urgent", 2: "High", 3: "Medium", 4: "Low"}
 state_name = {s.get("id"): s.get("name") for s in states}
+state_type = {s.get("id"): s.get("type") for s in states}
 if bound and linear_status in ("ok", "truncated"):
     layout = (view or {}).get("layout") or {}
     usable = view_status == "ok"
@@ -322,7 +323,8 @@ if bound and linear_status in ("ok", "truncated"):
         if k in hidden:
             continue
         label_k, idents = keys.get(k, [state_name.get(k) or k, []])
-        groups.append({"key": k, "label": label_k, "issues": idents})
+        kind = state_type.get(k) if grouping == "workflowState" else None
+        groups.append({"key": k, "label": label_k, "kind": kind, "issues": idents})
         listed.update(idents)
     issues = {i: v for i, v in issues.items() if i in listed}
 elif bound and linear_status == "unavailable":
@@ -330,7 +332,7 @@ elif bound and linear_status == "unavailable":
     for ident in sorted(issues):
         by_status.setdefault(issues[ident]["state"]["name"], []).append(ident)
     for name in by_status:
-        groups.append({"key": name, "label": name, "issues": by_status[name]})
+        groups.append({"key": name, "label": name, "kind": None, "issues": by_status[name]})
 
 claimed = {}
 unlisted_claims = {}
