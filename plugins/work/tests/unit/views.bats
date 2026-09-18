@@ -35,7 +35,7 @@ setup() {
     VIEW=cccccccc-cccc-4ccc-8ccc-cccccccccccc
 
     WT="$WORK/wt"; mkdir -p "$WT"
-    git -C "$WT" init -q -b feature/web-2870-detach
+    git -C "$WT" init -q -b feature/web-2670-detach
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     local n
@@ -154,12 +154,12 @@ grant_consent() {
     export FAKE_LINEAR_ALLOW_MUTATION=1
     run herdr_linear::has_consent "$WT"
     [ "$status" -eq 1 ]
-    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "AI Canvas Tools board" wA
+    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "Frame Effects board" wA
     [ "$status" -eq "$HERDR_LINEAR_VIEW_SHADOW" ]
     [ "$(sent customViewCreate)" = "0" ]
     [ "$(sent mutation)" = "0" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
-    [[ "$output" == *"SHADOW would create view \"AI Canvas Tools board\" on project $PROJECT"* ]]
+    [[ "$output" == *"SHADOW would create view \"Frame Effects board\" on project $PROJECT"* ]]
     run herdr_linear::binding_pending_consent "$WT"
     [ "$status" -eq 0 ]
     [[ "$output" == *"create view"* ]]
@@ -170,7 +170,7 @@ grant_consent() {
 @test "with consent recorded both mutations are sent in order, the id joins created_views and becomes the view" {
     grant_consent
     export FAKE_LINEAR_ALLOW_MUTATION=1
-    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "AI Canvas Tools board" wA
+    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "Frame Effects board" wA
     [ "$status" -eq 0 ]
     [ "$output" = "$VIEW" ]
     [ "$(sent mutation)" = "2" ]
@@ -178,18 +178,18 @@ grant_consent() {
     [ "$(sed -n 2p "$FAKE_LINEAR_RECORD_DIR/bodies" | grep -c viewPreferencesCreate)" = "1" ]
     [ "$(ws_field 'd["created_views"]')" = "['$VIEW']" ]
     [ "$(ws_field 'd["view"]["id"]')" = "$VIEW" ]
-    [ "$(ws_field 'd["view"]["name"]')" = "AI Canvas Tools board" ]
+    [ "$(ws_field 'd["view"]["name"]')" = "Frame Effects board" ]
     [ "$(ws_field 'd["view"]["layout"]["grouping"]')" = "workflowState" ]
     run herdr_linear::workspace_owns_view wA "$VIEW"
     [ "$status" -eq 0 ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
-    [[ "$output" == *"CREATED view \"AI Canvas Tools board\" ($VIEW)"* ]]
+    [[ "$output" == *"CREATED view \"Frame Effects board\" ($VIEW)"* ]]
 }
 
 @test "when the board preferences fail the view is still recorded, with layout list and a reason" {
     grant_consent
     export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=prefs_fail
-    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "AI Canvas Tools board" wA
+    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "Frame Effects board" wA
     [ "$status" -eq "$HERDR_LINEAR_VIEW_PREFS_FAILED" ]
     [ "$output" = "$VIEW" ]
     [[ "$stderr" == *"board preferences were not"* ]]
@@ -203,7 +203,7 @@ grant_consent() {
 @test "a failed create records nothing" {
     grant_consent
     export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=fail
-    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "AI Canvas Tools board" wA
+    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "Frame Effects board" wA
     [ "$status" -eq "$HERDR_LINEAR_VIEW_FAILED" ]
     [ "$(ws_field 'd["created_views"]')" = "[]" ]
     [ "$(ws_field 'd["view"]')" = "None" ]
@@ -215,20 +215,20 @@ grant_consent() {
     # A held record lock: the view is created at Linear, then workspace_add_view
     # cannot write.
     mkdir "$(ws_file wA).lock"
-    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "AI Canvas Tools board" wA
+    run --separate-stderr herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "Frame Effects board" wA
     [ "$status" -eq "$HERDR_LINEAR_VIEW_FAILED" ]
     [ "$output" = "$VIEW" ]
     [[ "$stderr" == *"$VIEW"* ]]
     [ "$(sent customViewCreate)" = "1" ]
     run cat "$HERDR_LINEAR_SHADOW_LOG"
-    [[ "$output" == *"CREATED view \"AI Canvas Tools board\" ($VIEW)"* ]]
+    [[ "$output" == *"CREATED view \"Frame Effects board\" ($VIEW)"* ]]
     [ "$(ws_field 'd["created_views"]')" = "[]" ]
     [ "$(ws_field 'd["view"]')" = "None" ]
 }
 
 @test "a create with no team is refused before the gate: no shadow line, no pending notice" {
     export FAKE_LINEAR_ALLOW_MUTATION=1
-    run --separate-stderr herdr_linear::view_create_gated "$WT" "" "$PROJECT" "AI Canvas Tools board" wA
+    run --separate-stderr herdr_linear::view_create_gated "$WT" "" "$PROJECT" "Frame Effects board" wA
     [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
     [ -z "$output" ]
     [ "$(sent mutation)" = "0" ]
@@ -250,14 +250,14 @@ grant_consent() {
 
 @test "write_allowed refuses customViewUpdate-shaped targets, including a view in created_views" {
     local n
-    n="$(herdr_linear::binding_propose "$WT" WEB-2870)"
-    herdr_linear::binding_confirm "$WT" WEB-2870 "$n"
+    n="$(herdr_linear::binding_propose "$WT" WEB-2670)"
+    herdr_linear::binding_confirm "$WT" WEB-2670 "$n"
     grant_consent
     export FAKE_LINEAR_ALLOW_MUTATION=1
-    herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "AI Canvas Tools board" wA >/dev/null
+    herdr_linear::view_create_gated "$WT" "$TEAM" "$PROJECT" "Frame Effects board" wA >/dev/null
     run herdr_linear::workspace_owns_view wA "$VIEW"
     [ "$status" -eq 0 ]
-    run herdr_linear::write_allowed "$WT" WEB-2870
+    run herdr_linear::write_allowed "$WT" WEB-2670
     [ "$status" -eq 0 ]
     local target
     for target in "$VIEW" "customViewUpdate:$VIEW" "customView:$VIEW" "view:$VIEW"; do

@@ -350,7 +350,7 @@ issue_detail() {
     [ "${FAKE_LINEAR_DETAIL:-full}" = partial ] && more=true
     if [ "${FAKE_LINEAR_DETAIL:-full}" = bare ]; then
         cat <<'JSON'
-{"data":{"issue":{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3318","title":"AI Tools drawer is blank","url":"https://linear.app/example/issue/WEB-3318/ai-tools-drawer-is-blank","branchName":"web-3318-ai-tools-drawer-is-blank","updatedAt":"2026-09-04T15:55:10.206Z","priority":0,"description":null,"dueDate":null,"estimate":null,"state":{"id":"22222222-2222-4222-8222-222222222222","name":"Backlog","type":"backlog"},"parent":null,"project":null,"projectMilestone":null,"cycle":null,"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]},"children":{"nodes":[],"pageInfo":{"hasNextPage":false}},"relations":{"nodes":[],"pageInfo":{"hasNextPage":false}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false}},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false}},"history":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}
+{"data":{"issue":{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3308","title":"Export panel is empty","url":"https://linear.app/example/issue/WEB-3308/export-panel-is-empty","branchName":"web-3308-export-panel-is-empty","updatedAt":"2026-09-04T15:55:10.206Z","priority":0,"description":null,"dueDate":null,"estimate":null,"state":{"id":"22222222-2222-4222-8222-222222222222","name":"Backlog","type":"backlog"},"parent":null,"project":null,"projectMilestone":null,"cycle":null,"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":null,"labels":{"nodes":[]},"children":{"nodes":[],"pageInfo":{"hasNextPage":false}},"relations":{"nodes":[],"pageInfo":{"hasNextPage":false}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false}},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false}},"history":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}
 JSON
         return
     fi
@@ -363,23 +363,23 @@ page = {"hasNextPage": more}
 def conn(nodes): return {"nodes": nodes, "pageInfo": page}
 issue = {
   "id": "11111111-1111-4111-8111-111111111111",
-  "identifier": "WEB-3318",
-  "title": "AI Tools drawer is blank when a still-processing layer is selected",
-  "url": "https://linear.app/example/issue/WEB-3318/ai-tools-drawer-is-blank",
-  "branchName": "web-3318-ai-tools-drawer-is-blank",
+  "identifier": "WEB-3308",
+  "title": "Export panel is empty when a still-processing layer is selected",
+  "url": "https://linear.app/example/issue/WEB-3308/export-panel-is-empty",
+  "branchName": "web-3308-export-panel-is-empty",
   "updatedAt": "2026-09-04T15:55:10.206Z",
   "priority": 2,
   "description": HOSTILE + "## What happens\n\nThe drawer is **blank**.\n\n- [ ] reproduce\n- [x] triage\n\n`selectLayer()` returns early.",
   "dueDate": "2026-09-30",
   "estimate": 3,
   "state": {"id": "22222222-2222-4222-8222-222222222222", "name": "In Progress", "type": "started"},
-  "parent": {"id": "33333333-3333-4333-8333-333333333333", "identifier": "WEB-2870",
-             "title": "Tool: Detach Foreground",
+  "parent": {"id": "33333333-3333-4333-8333-333333333333", "identifier": "WEB-2670",
+             "title": "Tool: Blur Backdrop",
              "state": {"id": "st-prog", "name": "In Progress", "type": "started"}},
-  "project": {"id": "44444444-4444-4444-8444-444444444444", "name": "AI Canvas Tools"},
+  "project": {"id": "44444444-4444-4444-8444-444444444444", "name": "Frame Effects"},
   "projectMilestone": {"id": "ms-1", "name": "M2"},
   "cycle": {"id": "cy-14", "number": 14, "name": "Cycle 14"},
-  "team": {"id": "55555555-5555-4555-8555-555555555555", "key": "WEB", "name": "Web Creation"},
+  "team": {"id": "55555555-5555-4555-8555-555555555555", "key": "WEB", "name": "Web Team"},
   "assignee": {"id": "66666666-6666-4666-8666-666666666666", "name": "Example User"},
   "labels": {"nodes": [{"id": "77777777-7777-4777-8777-777777777777", "name": "Bug"}]},
   "children": conn([
@@ -565,16 +565,16 @@ JSON
 # would otherwise still receive the right issues.
 issue_pool() {
     cat <<'JSON'
-[{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3318","title":"Example issue: a panel is blank while an item is still loading","url":"https://linear.app/example/issue/web-3318/x","branchName":"web-3318-example-panel-blank","updatedAt":"2026-09-04T15:55:10.206Z","completedAt":null,"priority":0,"state":{"id":"st-backlog","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[{"id":"77777777-7777-4777-8777-777777777777","name":"Bug"}]}},
- {"id":"12121212-1212-4121-8121-121212121212","identifier":"WEB-3317","title":"Example issue: a long task stops when its panel is closed","url":"https://linear.app/example/issue/web-3317/x","branchName":"web-3317-example-long-task","updatedAt":"2026-09-04T14:00:00.000Z","completedAt":null,"priority":3,"state":{"id":"st-todo","name":"Todo","type":"unstarted"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}},
- {"id":"13131313-1313-4131-8131-131313131313","identifier":"WEB-3312","title":"Example issue: a saved item is empty after reload","url":"https://linear.app/example/issue/web-3312/x","branchName":"web-3312-example-saved-item","updatedAt":"2026-09-03T10:00:00.000Z","completedAt":null,"priority":2,"state":{"id":"st-prog","name":"In Progress","type":"started"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[]}},
- {"id":"13001300-1300-4130-8130-130013001300","identifier":"WEB-3300","title":"Old approach, dropped","url":"https://linear.app/example/issue/web-3300/x","branchName":"web-3300-old-approach","updatedAt":"2026-08-20T10:00:00.000Z","completedAt":null,"priority":4,"state":{"id":"st-cancel","name":"Canceled","type":"canceled"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}]
+[{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3308","title":"Example issue: a panel is blank while an item is still loading","url":"https://linear.app/example/issue/web-3308/x","branchName":"web-3308-example-panel-blank","updatedAt":"2026-09-04T15:55:10.206Z","completedAt":null,"priority":0,"state":{"id":"st-backlog","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[{"id":"77777777-7777-4777-8777-777777777777","name":"Bug"}]}},
+ {"id":"12121212-1212-4121-8121-121212121212","identifier":"WEB-3307","title":"Example issue: a long task stops when its panel is closed","url":"https://linear.app/example/issue/web-3307/x","branchName":"web-3307-example-long-task","updatedAt":"2026-09-04T14:00:00.000Z","completedAt":null,"priority":3,"state":{"id":"st-todo","name":"Todo","type":"unstarted"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":null,"labels":{"nodes":[]}},
+ {"id":"13131313-1313-4131-8131-131313131313","identifier":"WEB-3302","title":"Example issue: a saved item is empty after reload","url":"https://linear.app/example/issue/web-3302/x","branchName":"web-3302-example-saved-item","updatedAt":"2026-09-03T10:00:00.000Z","completedAt":null,"priority":2,"state":{"id":"st-prog","name":"In Progress","type":"started"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[]}},
+ {"id":"13001300-1300-4130-8130-130013001300","identifier":"WEB-3300","title":"Old approach, dropped","url":"https://linear.app/example/issue/web-3300/x","branchName":"web-3300-old-approach","updatedAt":"2026-08-20T10:00:00.000Z","completedAt":null,"priority":4,"state":{"id":"st-cancel","name":"Canceled","type":"canceled"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":null,"labels":{"nodes":[]}}]
 JSON
 }
 
 completed_pool_extra() {
     cat <<'JSON'
-{"id":"13031303-1303-4130-8130-130313031303","identifier":"WEB-3303","title":"Shipped last week","url":"https://linear.app/example/issue/web-3303/x","branchName":"web-3303-shipped","updatedAt":"2026-09-01T10:00:00.000Z","completedAt":"2026-09-01T10:00:00.000Z","priority":2,"state":{"id":"st-done","name":"Done","type":"completed"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}
+{"id":"13031303-1303-4130-8130-130313031303","identifier":"WEB-3303","title":"Shipped last week","url":"https://linear.app/example/issue/web-3303/x","branchName":"web-3303-shipped","updatedAt":"2026-09-01T10:00:00.000Z","completedAt":"2026-09-01T10:00:00.000Z","priority":2,"state":{"id":"st-done","name":"Done","type":"completed"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":null,"labels":{"nodes":[]}}
 JSON
 }
 
@@ -940,7 +940,7 @@ case "$body_routed" in
         # id, name and url beside the teams, so the snapshot's project query is
         # answered from this one arm; prune drops them for a caller that selects
         # only the teams.
-        _proj='"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools","url":"https://linear.app/example/project/ai-canvas-tools"'
+        _proj='"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects","url":"https://linear.app/example/project/ai-canvas-tools"'
         _states='"states":{"nodes":[{"id":"st-backlog","name":"Backlog","type":"backlog"},{"id":"st-todo","name":"Todo","type":"unstarted"},{"id":"st-prog","name":"In Progress","type":"started"},{"id":"st-devdone","name":"Dev Done","type":"started"},{"id":"st-done","name":"Done","type":"completed"},{"id":"st-cancel","name":"Canceled","type":"canceled"}]}'
         case "${FAKE_LINEAR_PROJECT_TEAMS:-one}" in
             none) answer "$(printf '{"data":{"project":{%s,"teams":{"nodes":[]}}}}' "$_proj")" ;;

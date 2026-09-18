@@ -58,7 +58,7 @@ remedies.
   "message": null,
   "truncated": [],
   "issue": {
-    "id": "…", "identifier": "WEB-3318", "title": "…", "url": "…",
+    "id": "…", "identifier": "WEB-3308", "title": "…", "url": "…",
     "description": "markdown, or null",
     "updated_at": "…", "due_date": "2026-09-30", "estimate": 3, "priority": 2,
     "state":     {"id": "…", "name": "In Progress", "type": "started"},
@@ -67,7 +67,7 @@ remedies.
     "project":   {"id": "…", "name": "…"},
     "milestone": {"id": "…", "name": "M2"},
     "cycle":     {"id": "…", "number": 14, "name": "Cycle 14"},
-    "parent":    {"id": "…", "identifier": "WEB-2870", "title": "…", "state": {…}},
+    "parent":    {"id": "…", "identifier": "WEB-2670", "title": "…", "state": {…}},
     "children":  [{"id": "…", "identifier": "…", "title": "…", "state": {…}}],
     "relations": [{"type": "blocks", "direction": "outward", "issue": {…}}],
     "comments":  [{"id": "…", "body": "…", "created_at": "…", "author": "…", "parent_id": null}],
