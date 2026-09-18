@@ -38,6 +38,14 @@ setup() {
     PARENT="WEB-2670-tool-blur-backdrop"
     PKEY="project-44444444-4444-4444-8444-444444444444"
     TKEY="team-55555555-5555-4555-8555-555555555555"
+    # The Brand team, whose issue the found_other_team mode serves in the same
+    # project as found_child.
+    OTKEY="team-66666666-6666-4666-8666-666666666666"
+    # The key an answer is recorded under: the project and the team together,
+    # because that pair is what decides a repository. The two plain keys above
+    # are read-only fallbacks for what the old rule wrote.
+    PAIRKEY="$PKEY.$TKEY"
+    OTPAIRKEY="$PKEY.$OTKEY"
     export HERDR_LINEAR_STORE_DIR="$WORK/store"
     export HERDR_LINEAR_PIN_DIR="$WORK/pin"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
@@ -81,9 +89,10 @@ grant_consent() {
 }
 enable_root_writes() { grant_consent "${1:-$PWD}" team-web ""; }
 
-# The answer a person gives to the repository question, recorded the way R8
-# records it: under the project key AND the team key.
-record_repo() { herdr_linear::record_scope_repo "$1" "$PKEY" "$TKEY"; }
+# The answer a person gives to the repository question, recorded the way the
+# start path records it: under the project-and-team pair, because that pair is
+# what decides a repository. The two plain keys are read-only fallbacks.
+record_repo() { herdr_linear::record_scope_repo "$1" "$PAIRKEY"; }
 record_alpha() { record_repo "$PROJECT"; }
 
 # Three candidates, so the repository is a choice rather than a fact.
@@ -122,7 +131,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$status" -eq 0 ]
     [ "$output" = "$BASE/$CHILD" ]
     [[ "$stderr" == *"$PROJECT"* ]]
-    [[ "$stderr" == *"$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json"* ]]
+    [[ "$stderr" == *"$HERDR_LINEAR_STORE_DIR/scopes/$PAIRKEY.json"* ]]
     [[ "$stderr" == *"only repository recorded"* ]]
 }
 
@@ -604,8 +613,9 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$(printf '%s' "$output" | cut -f3)" = "web" ]
 }
 
-# KTD3. The team key comes back alongside the project key, because R8 records
-# under both and a later project-carrying issue must find the team-keyed answer.
+# KTD3. The team key comes back alongside the project key: the answer is
+# recorded and resolved against the team, and the project key is the fallback
+# for a scope that has no team record.
 @test "an issue with a project resolves a project-typed key, the team key, and a slugged segment" {
     export FAKE_LINEAR_MODE=found_child
     resp="$(herdr_linear::fetch_issue WEB-3308)"
@@ -614,6 +624,23 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$(printf '%s' "$output" | cut -f1)" = "project-44444444-4444-4444-8444-444444444444" ]
     [ "$(printf '%s' "$output" | cut -f2)" = "team-55555555-5555-4555-8555-555555555555" ]
     [ "$(printf '%s' "$output" | cut -f3)" = "frame-effects" ]
+}
+
+# The pair is what decides a repository, so it is the key an answer is written
+# under. With no project there is no pair to make: a degenerate team-x.team-x
+# would be a second name for a record the team key already holds.
+@test "the scope keys carry the project-and-team pair, and the team alone with no project" {
+    export FAKE_LINEAR_MODE=found_child
+    resp="$(herdr_linear::fetch_issue WEB-3318)"
+    run herdr_linear::start_scope "$resp"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | cut -f4)" = "$PKEY.$TKEY" ]
+
+    export FAKE_LINEAR_MODE=traversal_identifier
+    resp="$(herdr_linear::fetch_issue WEB-3318)"
+    run herdr_linear::start_scope "$resp"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | cut -f4)" = "team-e" ]
 }
 
 # slug() would REPAIR a separator into a hyphen rather than refuse it, so the
@@ -631,6 +658,12 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run herdr_linear::start_scope "$resp"
     [ "$status" -ne 0 ]
     resp='{"data":{"issue":{"project":null,"team":{"id":"../escaped","key":"WEB"}}}}'
+    run herdr_linear::start_scope "$resp"
+    [ "$status" -ne 0 ]
+    # `.` joins the two halves of the pair key and is legal inside an id, so an
+    # id carrying one could spell a plain key as a pair or the reverse. This id
+    # is otherwise safe, so only the dot guard refuses it.
+    resp='{"data":{"issue":{"project":{"id":"p.1","name":"P"},"team":{"id":"t1","key":"WEB"}}}}'
     run herdr_linear::start_scope "$resp"
     [ "$status" -ne 0 ]
 }
@@ -720,12 +753,95 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT" "$PROJECT"
     [ "$status" -eq 0 ]
     [ "$output" = "$BASE/$CHILD" ]
-    # R8. Under BOTH keys, so a later issue reaching this scope by only one of
-    # them still resolves.
-    [ -f "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json" ]
-    [ -f "$HERDR_LINEAR_STORE_DIR/scopes/$TKEY.json" ]
-    run herdr_linear::scope_repo "$TKEY"
+    # Under the PAIR key alone. The project record would answer for every other
+    # team unasked, and the team record would collect one repository per project
+    # it works in until that team asked on every start.
+    [ -f "$HERDR_LINEAR_STORE_DIR/scopes/$PAIRKEY.json" ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/scopes/$TKEY.json" ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json" ]
+    run herdr_linear::scope_repo "$PAIRKEY"
     [ "$output" = "$PROJECT" ]
+}
+
+# A project can span a repository per team. An answer for one team must leave
+# the next team's issue asking, and must not reach the project record, which
+# would answer for every team at once.
+@test "an answer for one team leaves another team in the same project asking" {
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$PROJECT" "$PROJECT"
+    [ "$status" -eq 0 ]
+
+    mkdir -p "$WORK/root/brand"
+    git -C "$WORK/root/brand" init -q -b main
+    export FAKE_LINEAR_MODE=found_other_team
+    run --separate-stderr herdr_linear::start_from_issue BRAND-1200
+    [ "$status" -eq 6 ]
+    [[ "$stderr" == *"no repository is recorded"* ]]
+
+    run --separate-stderr herdr_linear::start_from_issue BRAND-1200 "" "$PROJECT" "$WORK/root/brand"
+    [ "$status" -eq 0 ]
+    run herdr_linear::scope_repo "$OTPAIRKEY"
+    [ "$output" = "$WORK/root/brand" ]
+    run herdr_linear::scope_repos "$PKEY" "$TKEY" "$OTKEY"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+# A team really can own two repositories, and the team's record is the one that
+# answers -- so two under the team is a question even when the project holds a
+# single answer.
+@test "two repositories recorded for the team ask and name both" {
+    mkdir -p "$WORK/root/beta"
+    herdr_linear::record_scope_repo "$PROJECT" "$PKEY"
+    herdr_linear::record_scope_repo "$PROJECT" "$TKEY"
+    herdr_linear::record_scope_repo "$WORK/root/beta" "$TKEY"
+
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 6 ]
+    [ ! -e "$BASE/$CHILD" ]
+    [[ "$stderr" == *"several repositories"* ]]
+    [[ "$stderr" == *"$PROJECT"* ]]
+    [[ "$stderr" == *"$WORK/root/beta"* ]]
+}
+
+# The old rule wrote every answer under BOTH keys, so a team that worked in two
+# projects on two repositories ends up holding both under its own key -- and
+# `add` de-duplicates, so answering again never shrinks that set. Without a key
+# of its own the pair would ask on every start, for ever.
+@test "a team record the old rule filled from two projects is settled by one answer" {
+    mkdir -p "$WORK/root/beta"
+    git -C "$WORK/root/beta" init -q -b main
+    herdr_linear::record_scope_repo "$PROJECT" "$PKEY"
+    herdr_linear::record_scope_repo "$PROJECT" "$TKEY"
+    herdr_linear::record_scope_repo "$WORK/root/beta" "$TKEY"
+
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 6 ]
+    [[ "$stderr" == *"several repositories"* ]]
+
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318 "" "$PROJECT" "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ -f "$HERDR_LINEAR_STORE_DIR/scopes/$PAIRKEY.json" ]
+
+    # The worktree is already there, and the exists branch answers before the
+    # repository is read -- so the resolution is exercised on a fresh start.
+    rm -rf "$BASE/$CHILD"
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"$HERDR_LINEAR_STORE_DIR/scopes/$PAIRKEY.json"* ]]
+}
+
+# The record the old rule wrote is the fallback, so an issue whose team has no
+# record of its own still resolves and nothing has to be migrated.
+@test "a project-only record still answers for a team with no record" {
+    herdr_linear::record_scope_repo "$PROJECT" "$PKEY"
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    [ "$status" -eq 0 ]
+    [ "$output" = "$BASE/$CHILD" ]
+    [[ "$stderr" == *"$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json"* ]]
 }
 
 # R7a. Resolving a relative answer would let the caller's directory decide the
@@ -735,7 +851,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT" "./alpha"
     [ "$status" -eq 1 ]
     [ ! -e "$BASE/$CHILD" ]
-    [ ! -e "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json" ]
+    [ -z "$(find "$HERDR_LINEAR_STORE_DIR/scopes" -name '*.json' -print -quit 2>/dev/null)" ]
     [[ "$stderr" == *"absolute"* ]]
 }
 
@@ -744,10 +860,10 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # for a scope that already has one.
 @test "a repository record that cannot be read fails rather than asking" {
     record_alpha
-    chmod 000 "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json"
+    chmod 000 "$HERDR_LINEAR_STORE_DIR/scopes/$PAIRKEY.json"
     export FAKE_LINEAR_MODE=found_child
     run --separate-stderr herdr_linear::start_from_issue WEB-3308
-    chmod 600 "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json"
+    chmod 600 "$HERDR_LINEAR_STORE_DIR/scopes/$PAIRKEY.json"
     [ "$status" -ne 6 ]
     [ ! -e "$BASE/$CHILD" ]
 }
@@ -827,7 +943,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run --separate-stderr herdr_linear::start_new "A new thing" "$WORK/d.md" team-web "$PROJECT" "$PROJECT"
     [ "$status" -eq 0 ]
     [ "$output" = "$BASE/$CHILD" ]
-    [ -f "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json" ]
+    [ -f "$HERDR_LINEAR_STORE_DIR/scopes/$PAIRKEY.json" ]
 }
 
 # R7a on the path that files first. start_from_issue would refuse the relative
@@ -850,7 +966,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT" "$WORK/plain"
     [ "$status" -eq 1 ]
     [ ! -e "$BASE/$CHILD" ]
-    [ ! -e "$HERDR_LINEAR_STORE_DIR/scopes/$PKEY.json" ]
+    [ -z "$(find "$HERDR_LINEAR_STORE_DIR/scopes" -name '*.json' -print -quit 2>/dev/null)" ]
     [[ "$stderr" == *"not a git repository"* ]]
 }
 
@@ -912,7 +1028,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$status" -eq 6 ]
     run --separate-stderr herdr_linear::start_from_issue WEB-3308 "" "$PROJECT" "$PROJECT"
     [ "$status" -eq 0 ]
-    run herdr_linear::scope_repos "$PKEY" "$TKEY"
+    run herdr_linear::scope_repos "$PAIRKEY" "$TKEY" "$PKEY"
     [ "$output" = "$PROJECT" ]
 }
 

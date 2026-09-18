@@ -84,11 +84,15 @@ lines_of() { printf '%s\n' "$1" | grep -c . || true; }
     [[ "$output" == *"$REPO_A"* ]]
     [[ "$output" == *"$REPO_B"* ]]
     [[ "$output" == *"$REPO_C"* ]]
+    # A candidate that no longer belongs to the scope is why this stays a
+    # question, and the key it is recorded under is on no other line the
+    # reader has.
+    [[ "$output" == *"forget_scope_repo project-p1"* ]]
 }
 
-# AE12. A team-keyed answer is invisible to every later issue in that team once
-# it gains a project, unless the project lookup falls back to the team key.
-@test "a repository recorded under both keys resolves from the team key alone" {
+# AE12. A lookup falls through in the order the caller passes: whichever key
+# comes second answers when the first holds nothing.
+@test "the second key answers when the first holds nothing" {
     herdr_linear::record_scope_repo "$REPO_A" project-p1 team-t1
 
     run herdr_linear::scope_repos project-p9 team-t1
@@ -177,9 +181,9 @@ lines_of() { printf '%s\n' "$1" | grep -c . || true; }
     [[ "$output" == *"$REPO_B"* ]]
 }
 
-# R6 states the record the answer was read from. After the team fallback that
-# is the team's file, not the first key the caller passed.
-@test "the source of a fallback answer is the team record, not the project one" {
+# R6 states the record the answer was read from, which is the key that actually
+# answered and not always the first key the caller passed.
+@test "the source is the key that answered, not the first key passed" {
     herdr_linear::record_scope_repo "$REPO_A" team-t1
 
     run herdr_linear::scope_repo_source project-p9 team-t1
@@ -202,4 +206,93 @@ lines_of() { printf '%s\n' "$1" | grep -c . || true; }
     local rc="$status"
     chmod 600 "$(record_file project-p1)"
     [ "$rc" -ne 0 ]
+}
+
+# The project record is the fallback for a scope with no team of its own. The
+# team key is passed first now, so an absent or empty one must be stepped over
+# rather than end the lookup.
+@test "an empty team key is stepped over and the project record answers" {
+    herdr_linear::record_scope_repo "$REPO_A" project-p1
+
+    run herdr_linear::scope_repos "" project-p1
+    [ "$status" -eq 0 ]
+    [ "$output" = "$REPO_A" ]
+
+    run herdr_linear::scope_repo_source "" project-p1
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(record_file project-p1)" ]
+}
+
+@test "forgetting one repository leaves the rest of the record" {
+    herdr_linear::record_scope_repo "$REPO_A" project-p1
+    herdr_linear::record_scope_repo "$REPO_B" project-p1
+
+    run herdr_linear::forget_scope_repo project-p1 "$REPO_A"
+    [ "$status" -eq 0 ]
+
+    run herdr_linear::scope_repos project-p1
+    [ "$status" -eq 0 ]
+    [ "$output" = "$REPO_B" ]
+}
+
+@test "forgetting with no repository removes the whole record" {
+    herdr_linear::record_scope_repo "$REPO_A" project-p1
+    herdr_linear::record_scope_repo "$REPO_B" project-p1
+
+    run herdr_linear::forget_scope_repo project-p1
+    [ "$status" -eq 0 ]
+    [ ! -e "$(record_file project-p1)" ]
+
+    run herdr_linear::scope_repos project-p1
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+# A record the reader refuses holds no repository to keep, and leaving it would
+# let the person walk away from a file every later read still trips over.
+@test "forgetting a repository takes a record the reader refuses with it" {
+    herdr_linear::record_scope_repo "$REPO_A" project-p1
+    printf '{"version": 1, "repos' > "$(record_file project-p1)"
+
+    run herdr_linear::forget_scope_repo project-p1 "$REPO_A"
+    [ "$status" -eq 0 ]
+    [ ! -e "$(record_file project-p1)" ]
+}
+
+# Refused-but-readable and cannot-be-opened are two different states, and
+# _scope_read keeps them apart. Deleting a record nobody can read, on being
+# asked to drop ONE repository out of it, throws away every other repository in
+# it on the caller's behalf and reports that as done.
+@test "forgetting one repository leaves a record that cannot be read alone" {
+    herdr_linear::record_scope_repo "$REPO_A" project-p1
+    herdr_linear::record_scope_repo "$REPO_B" project-p1
+    chmod 000 "$(record_file project-p1)"
+
+    run herdr_linear::forget_scope_repo project-p1 "$REPO_A"
+    local rc="$status"
+    chmod 600 "$(record_file project-p1)"
+    [ "$rc" -ne 0 ]
+    [ -e "$(record_file project-p1)" ]
+    # The lock is a sibling directory, so a path that returns early still has to
+    # release it or every later write for this scope waits out the stale timeout.
+    [ ! -e "$(record_file project-p1).lock" ]
+
+    run herdr_linear::scope_repos project-p1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$REPO_A"* ]]
+    [[ "$output" == *"$REPO_B"* ]]
+}
+
+# Forgetting is how a wrong answer is undone, and the person undoing it does
+# not know which keys hold a record. Nothing to forget is the state they asked
+# for, so it is success.
+@test "forgetting what was never recorded is not an error" {
+    run herdr_linear::forget_scope_repo project-p1
+    [ "$status" -eq 0 ]
+
+    run herdr_linear::forget_scope_repo project-p1 "$REPO_A"
+    [ "$status" -eq 0 ]
+
+    run herdr_linear::forget_scope_repo ../escaped
+    [ "$status" -ne 0 ]
 }

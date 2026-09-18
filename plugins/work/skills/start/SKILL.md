@@ -88,14 +88,25 @@ argument to use `bugfix` or `task` instead of `feature`.
 
 ## Which repository
 
-A project touches several repositories, so the repository is read from what was
-recorded for the issue's project — or its team, when it has no project — never
-from the directory you are in. `start_from_issue` reads the candidates itself,
-through `herdr_linear::scope_repos`; to see them for an issue you already have
-the ids for:
+A project spans several repositories, one per team, so the repository belongs to
+the **project and the team together** — never to the directory you are in. Three
+keys, each with one job:
+
+| Key | Job |
+|---|---|
+| `project-$PROJECT_ID.team-$TEAM_ID` | the pair. The only key an answer is written to, and the first one read |
+| `team-$TEAM_ID` | read-only fallback, for a pair that has not decided yet |
+| `project-$PROJECT_ID` | read-only fallback, for an issue whose team has no record at all |
+
+An issue with no project has no pair: its team key is the whole lookup.
+
+`start_from_issue` reads the candidates itself, through
+`herdr_linear::scope_repos`; to see them for an issue you already have the ids
+for, in that same order:
 
 ```bash
-herdr_linear::scope_repos "project-$PROJECT_ID" "team-$TEAM_ID"
+herdr_linear::scope_repos \
+  "project-$PROJECT_ID.team-$TEAM_ID" "team-$TEAM_ID" "project-$PROJECT_ID"
 ```
 
 - **One candidate:** `start_from_issue` uses it and says so on stderr — the
@@ -114,11 +125,31 @@ herdr_linear::scope_repos "project-$PROJECT_ID" "team-$TEAM_ID"
 herdr_linear::start_from_issue WEB-3308 "" "$PWD" /Users/me/projects/web-app
 ```
 
-The answer is recorded for the project and for its team, so the question is
-never asked again for that scope. **A wrong answer is undone by deleting the
-scope's record file** under `scopes/` in the store
-(`$HERDR_LINEAR_STORE_DIR/scopes/project-<id>.json`, and the `team-<id>.json`
-beside it). There is no verb for that yet.
+The answer is recorded **against the pair only**, so that project and that team
+never ask again — and the next team in the same project is still asked its own
+question rather than inheriting this answer. Neither fallback record is written,
+so a team that collected a repository per project keeps asking until the pair is
+answered once, and then stops.
+
+**A wrong answer is undone with `herdr_linear::forget_scope_repo`** — one
+repository, or the whole record when you name none. Forgetting what was never
+recorded succeeds. This is local only and changes nothing in Linear.
+
+**Forget the key the run named.** stderr says `read from …/scopes/<key>.json`,
+and that `<key>` is the one holding the answer — the pair when the pair decided,
+a plain key when a fallback answered. Use it verbatim:
+
+```bash
+herdr_linear::forget_scope_repo \
+  "project-$PROJECT_ID.team-$TEAM_ID" /Users/me/projects/web-app
+herdr_linear::forget_scope_repo "project-$PROJECT_ID" /Users/me/projects/web-app
+herdr_linear::forget_scope_repo "project-$PROJECT_ID.team-$TEAM_ID"
+```
+
+**Name the path exactly as `herdr_linear::scope_repos` prints it.** The path is
+matched as recorded and never resolved — the usual reason to forget one is that
+the directory is gone — so a path that matches nothing removes nothing and still
+succeeds. Copy the candidate line; do not retype it or resolve a symlink in it.
 
 | Exit | Meaning |
 |---|---|

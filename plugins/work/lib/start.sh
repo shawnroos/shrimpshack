@@ -175,13 +175,16 @@ herdr_linear::start_branch_name() {
     herdr_linear::scheme_name branch "$ident" "$title" "$prefix"
 }
 
-# R5a, KTD3. Prints `<typed-key><TAB><team-key><TAB><segment>`. The key is typed
-# so a project id and a team id can never collide in one filename space, and the
-# team key comes back alongside the project key because an answer is recorded
-# under both -- without it a team-keyed answer is invisible to every issue in
-# that team that later gains a project.
+# R5a, KTD3. Prints `<typed-key><TAB><team-key><TAB><segment><TAB><pair-key>`.
+# The key is typed so a project id and a team id can never collide in one
+# filename space. All three keys come back because a repository is decided by
+# the project and the team TOGETHER: the pair key is what an answer is recorded
+# under, and the two plain keys are read-only fallbacks for the records the
+# earlier rule wrote. With no project there is no pair, and the pair key is the
+# team key -- a degenerate `team-x.team-x` would be a second name for a record
+# the team key already holds.
 herdr_linear::start_scope() {
-    local resp="$1" fields pid pname tid tkey key team_key segment
+    local resp="$1" fields pid pname tid tkey key team_key pair_key segment
     fields="$(printf '%s' "$resp" | python3 -c '
 import sys, json
 i = json.load(sys.stdin)["data"]["issue"]
@@ -200,9 +203,21 @@ sys.stdout.write("\t".join([p.get("id") or "", p.get("name") or "",
     herdr_linear::is_safe_identifier "$tid" || return 1
     team_key="team-$tid"
 
+    pair_key="$team_key"
+
     if [ -n "$pid" ]; then
         herdr_linear::is_safe_identifier "$pid" || return 1
         key="project-$pid"
+        # `.` is the pair's only separator and is legal inside an id, so an id
+        # carrying one could spell a plain key as a pair or the reverse. The
+        # ids are UUIDs; refusing a dot in them keeps the three key spaces
+        # disjoint by construction rather than by what Linear happens to issue.
+        case "$pid$tid" in
+            *.*) printf 'a Linear id carrying a dot cannot be keyed: %s / %s\n' "$pid" "$tid" >&2
+                 return 1 ;;
+        esac
+        pair_key="$key.$team_key"
+        herdr_linear::is_safe_identifier "$pair_key" || return 1
         # Composed like the title, not slugged: slug() refuses a leading
         # non-alphanumeric, and project names start with emoji and brackets.
         segment="$(printf '%s' "$pname" \
@@ -218,7 +233,7 @@ sys.stdout.write("\t".join([p.get("id") or "", p.get("name") or "",
         segment="$(printf '%s' "$tkey" | tr '[:upper:]' '[:lower:]')"
         herdr_linear::is_safe_identifier "$segment" || return 1
     fi
-    printf '%s\t%s\t%s\n' "$key" "$team_key" "$segment"
+    printf '%s\t%s\t%s\t%s\n' "$key" "$team_key" "$segment" "$pair_key"
 }
 
 # herdr_linear::start_from_issue <identifier> [branch-prefix] [from-dir] [repository]
@@ -240,7 +255,7 @@ sys.stdout.write("\t".join([p.get("id") or "", p.get("name") or "",
 herdr_linear::start_from_issue() {
     local ident="${1:-}" prefix="${2:-$HERDR_LINEAR_BRANCH_PREFIX}"
     local answer="${4:-}"
-    local resp branch name scope key team_key segment org usable path current
+    local resp branch name scope key team_key pair_key segment org usable path current
     local repo candidates source nonce existing top git="${HERDR_LINEAR_GIT_BIN:-git}"
 
     [ -n "$ident" ] || return "$HERDR_LINEAR_START_REFUSED"
@@ -280,6 +295,7 @@ herdr_linear::start_from_issue() {
     key="$(printf '%s' "$scope" | cut -f1)"
     team_key="$(printf '%s' "$scope" | cut -f2)"
     segment="$(printf '%s' "$scope" | cut -f3)"
+    pair_key="$(printf '%s' "$scope" | cut -f4)"
     # An empty organisation would put two workspaces in one directory.
     org="$(herdr_linear::organization_key)" || return "$HERDR_LINEAR_START_FAILED"
 
@@ -331,21 +347,33 @@ herdr_linear::start_from_issue() {
             printf 'not a git repository: %s\n' "$answer" >&2
             return "$HERDR_LINEAR_START_REFUSED"
         fi
-        # R8. Recorded before anything is made, under both keys, so the
-        # question is never asked twice for this scope.
-        herdr_linear::record_scope_repo "$answer" "$key" "$team_key" \
+        # Recorded before anything is made, and under the PAIR key alone. The
+        # project key would answer for every other team unasked; the team key
+        # would accumulate one entry per project it works in, and `add` never
+        # shrinks a set, so that scope would ask on every start for ever.
+        herdr_linear::record_scope_repo "$answer" "$pair_key" \
             || return "$HERDR_LINEAR_START_FAILED"
         repo="$(cd "$answer" && pwd -P)"
     else
+        # Pair key FIRST, then team, then project, and bound once so the three
+        # readers below cannot drift apart: the first key holding anything
+        # answers, so a pair that has decided must never reach a fallback. The
+        # keys coincide when the issue has no project, and naming one twice
+        # would report the same record as two.
+        local -a scope_keys=("$pair_key")
+        if [ "$team_key" != "$pair_key" ]; then scope_keys+=("$team_key"); fi
+        if [ "$key" != "$pair_key" ] && [ "$key" != "$team_key" ]; then
+            scope_keys+=("$key")
+        fi
         # A record that cannot be read is not an empty one: asking would record
         # a second answer beside the one already on disk.
-        candidates="$(herdr_linear::scope_repos "$key" "$team_key")" || {
+        candidates="$(herdr_linear::scope_repos "${scope_keys[@]}")" || {
             printf 'the repository record for this scope could not be read\n' >&2
             return "$HERDR_LINEAR_START_FAILED"
         }
         repo="$(printf '%s' "$candidates" | herdr_linear::the_only_line)"
         if [ -z "$repo" ]; then
-            herdr_linear::no_repo_reason "$key" "$team_key" >&2
+            herdr_linear::no_repo_reason "${scope_keys[@]}" >&2
             return "$HERDR_LINEAR_START_ASK"
         fi
         # A repository that moved is asked about again, not failed on.
@@ -353,7 +381,7 @@ herdr_linear::start_from_issue() {
             printf 'the only repository recorded for this scope is not there any more: %s. Ask which repository to use, then pass it back as an absolute path.\n' "$repo" >&2
             return "$HERDR_LINEAR_START_ASK"
         fi
-        source="$(herdr_linear::scope_repo_source "$key" "$team_key")"
+        source="$(herdr_linear::scope_repo_source "${scope_keys[@]}")"
         # R6. stderr, because stdout is the path alone.
         printf 'repository %s: the only repository recorded for this scope, read from %s\n' \
             "$repo" "$source" >&2

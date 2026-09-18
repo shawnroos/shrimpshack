@@ -10,15 +10,23 @@
 # write-temp-then-rename discipline, rather than a third tenant of the first.
 #
 # WHY THE KEY IS TYPED (KTD3)
-# The key is `project-<id>` or `team-<id>`, so a project id and a team id cannot
-# collide in one namespace. Hyphen and not colon: the key becomes a filename and
-# herdr_linear::is_safe_identifier rejects a colon.
+# The key is `project-<id>`, `team-<id>`, or the two joined by a dot, so a
+# project id and a team id cannot collide in one namespace. Hyphen and not
+# colon: the key becomes a filename and herdr_linear::is_safe_identifier rejects
+# a colon.
 #
-# WHY A LOOKUP TAKES BOTH KEYS (R5a)
-# An answer given while an issue had no project is recorded under its team. Once
-# that issue is triaged into a project, a project-only lookup finds nothing and
-# the plugin asks a question it already holds the answer to. The project key is
-# tried first and the team key answers when it finds nothing.
+# WHY A LOOKUP TAKES THREE KEYS (R5a)
+# A project can span a repository per team, so the decision belongs to neither
+# alone. Each key does one job, and the start path passes them in this order:
+#   * `project-<pid>.team-<tid>` is the only key WRITTEN. That pair decides once
+#     and is never asked again.
+#   * `team-<tid>` is a read-only fallback. The earlier rule wrote every answer
+#     under both plain keys, so most teams have one; it answers a pair that has
+#     not decided yet.
+#   * `project-<pid>` is a read-only fallback too, for an issue whose team has
+#     no record at all.
+# Neither fallback is written any more, so a team that collected a repository
+# per project stops being a permanent question the moment its pair is answered.
 
 # No lib sources another, so neither of these is loaded for us. Without the
 # guards the calls below are 127, which every `||` branch here would read as a
@@ -90,6 +98,26 @@ if op == "read":
     if rec is not None:
         for r in rec["repositories"]:
             sys.stdout.write(r + "\n")
+    sys.exit(0)
+
+if op == "drop":
+    rec = load(path)
+    # A record `load` refuses holds no repository to keep, and leaving it would
+    # have the caller believe a file it still trips over is gone.
+    if rec is None:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        sys.exit(0)
+    rec["repositories"] = [r for r in rec["repositories"] if r != args[0]]
+    # An empty record and no record read the same way out of `scope_repos`, so
+    # the last entry takes the file with it rather than leaving a stub that a
+    # later reader would have to tell apart from a scope nobody answered for.
+    if not rec["repositories"]:
+        os.remove(path)
+    else:
+        save(path, rec)
     sys.exit(0)
 
 if op == "add":
@@ -167,21 +195,27 @@ herdr_linear::scope_repo() {
 # candidates are a QUESTION, not a dead end, so name every one: "cannot tell
 # which repository" alone leaves the reader to go find out what is on offer.
 herdr_linear::no_repo_reason() {
-    local repos=""
+    local repos="" key=""
     repos="$(herdr_linear::scope_repos "$@" 2>/dev/null)" || repos=""
     if [ "$(printf '%s' "$repos" | grep -c .)" -gt 1 ]; then
+        key="$(herdr_linear::_scope_answering_key "$@" 2>/dev/null)" || key=""
         printf 'several repositories are recorded for this scope, so which one this belongs in is a choice, not a fact. Ask, then name one of:\n'
         printf '%s' "$repos" | grep . | while IFS= read -r repo; do
             printf '  %s\n' "$repo"
         done
+        # The way out, not just the question: a candidate that no longer belongs
+        # here keeps this a choice for ever, and the key holding it appears on no
+        # other line the reader has.
+        printf 'One that no longer belongs to this scope is removed with herdr_linear::forget_scope_repo %s <path>, naming the path exactly as it is printed above.\n' \
+            "${key:-<key>}"
         return 0
     fi
     printf 'no repository is recorded for this scope, so there is nothing to make the worktree from. Ask which repository to use, then pass it back as an absolute path.\n'
 }
 
-# Records the repository under every key given -- the project key AND the team
-# key when the issue has both (R8), so a later issue that reaches the scope by
-# only one of them still resolves.
+# Records the repository under every key given. The start path gives one -- the
+# project-and-team pair -- because that pair is what decides a repository; a
+# caller that wants a fallback key written says so by passing it.
 herdr_linear::record_scope_repo() {
     local repo="${1:-}" resolved key rc=0 asked=0
     shift || return 1
@@ -213,6 +247,34 @@ herdr_linear::_scope_record_write() {
     herdr_linear::_scope_py add "$f" "$repo"
     rc=$?
     chmod 600 "$f" 2>/dev/null
+    herdr_linear::_unlock "$f"
+    return "$rc"
+}
+
+# Drops one recorded repository, or the whole record when no repository is
+# given. Nothing recorded is the state the caller asked for, so it succeeds:
+# only an unusable key or a write that failed returns non-zero.
+herdr_linear::forget_scope_repo() {
+    local key="${1:-}" repo="${2-}" f rc=0
+    f="$(herdr_linear::_scope_record_path "$key")" || return 1
+    [ -e "$f" ] || return 0
+    herdr_linear::_lock "$f" || return 1
+    if [ -n "$repo" ]; then
+        # A file that cannot be OPENED is not one the reader refuses: _scope_read
+        # calls the first a hard error and the second empty, and dropping ONE
+        # repository from a record nobody can read would throw away every other
+        # repository in it and report that as done.
+        if [ ! -r "$f" ]; then
+            herdr_linear::_unlock "$f"
+            return 1
+        fi
+        # The path is matched as recorded, never resolved: the usual reason to
+        # forget one is that the directory is gone, and `cd` to it would fail.
+        herdr_linear::_scope_py drop "$f" "$repo"
+        rc=$?
+    else
+        rm -f "$f" || rc=1
+    fi
     herdr_linear::_unlock "$f"
     return "$rc"
 }

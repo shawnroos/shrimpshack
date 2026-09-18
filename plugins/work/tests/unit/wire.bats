@@ -281,10 +281,11 @@ start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.
     [[ "$body" != *"Ask for the short name"* ]]
 }
 
-# The deferred verb's stand-in. Without it a wrong answer is recorded forever.
+# Without it a wrong answer is recorded forever, and hand-deleting a file in
+# the store is no longer the way: the verb exists, so the skill must name it.
 @test "the start skill states how to undo a wrongly recorded repository" {
     body="$(start_skill)"
-    [[ "$body" == *"scopes/"* ]]
+    [[ "$body" == *"forget_scope_repo"* ]]
 }
 
 # ------------------------------------------ nobody places a session unasked (KTD31)
