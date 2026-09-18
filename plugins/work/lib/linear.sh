@@ -239,6 +239,44 @@ print(json.dumps({"query": "query($id:String!){issue(id:$id){%s}}" % sys.argv[2]
     herdr_linear::query "$body"
 }
 
+# The board's issue page reads these on top of the snapshot's fields. They are a
+# separate set because the snapshot carries one row per issue for a whole space:
+# putting a description and a comment thread on that row would multiply the
+# snapshot's size by the length of the longest thread.
+HERDR_LINEAR_DETAIL_PAGE_SIZE=50
+# `parent { state { ... } }` merges with the base set's `parent { id identifier
+# title }` rather than colliding with it, which is how the parent row carries the
+# status every other linked row does without duplicating the base set here.
+HERDR_LINEAR_DETAIL_FIELDS='description dueDate estimate
+  parent { state { id name type } }
+  projectMilestone { id name }
+  cycle { id number name }
+  children(first: %d) { nodes { id identifier title state { id name type } } pageInfo { hasNextPage } }
+  relations(first: %d) { nodes { id type relatedIssue { id identifier title state { id name type } } } pageInfo { hasNextPage } }
+  inverseRelations(first: %d) { nodes { id type issue { id identifier title state { id name type } } } pageInfo { hasNextPage } }
+  comments(first: %d) { nodes { id body createdAt user { id name } parent { id } } pageInfo { hasNextPage } }
+  history(first: %d) { nodes { id createdAt actor { id name } fromState { name } toState { name } fromAssignee { name } toAssignee { name } fromPriority toPriority addedLabels { name } removedLabels { name } } pageInfo { hasNextPage } }'
+
+# One issue with everything the board's issue page shows. Every paged connection
+# is asked for once at the page size and never drained: the caller reports the
+# truncation instead, so the read stays one Linear call whatever the thread
+# length. A connection that says `hasNextPage` is what makes this PARTIAL.
+herdr_linear::fetch_issue_detail() {
+    local id="${1:-}" body detail
+    [ -n "$id" ] || return "$HERDR_LINEAR_NOT_FOUND"
+    # shellcheck disable=SC2059
+    detail="$(printf "$HERDR_LINEAR_DETAIL_FIELDS" \
+        "$HERDR_LINEAR_DETAIL_PAGE_SIZE" "$HERDR_LINEAR_DETAIL_PAGE_SIZE" \
+        "$HERDR_LINEAR_DETAIL_PAGE_SIZE" "$HERDR_LINEAR_DETAIL_PAGE_SIZE" \
+        "$HERDR_LINEAR_DETAIL_PAGE_SIZE")" || return "$HERDR_LINEAR_UNAVAILABLE"
+    body="$(python3 -c '
+import sys, json
+print(json.dumps({"query": "query($id:String!){issue(id:$id){%s %s}}" % (sys.argv[2], sys.argv[3]),
+                  "variables": {"id": sys.argv[1]}}))
+' "$id" "$HERDR_LINEAR_ISSUE_FIELDS" "$detail")" || return "$HERDR_LINEAR_UNAVAILABLE"
+    herdr_linear::query "$body"
+}
+
 # R1. The workspace's URL key -- the value in every Linear URL -- is the first
 # segment of a worktree path, so an unnameable organisation is a refusal rather
 # than an empty segment that collapses two organisations into one directory.
