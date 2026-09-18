@@ -32,6 +32,40 @@ field() {   # field <json> <python-expression over `d`>
     printf '%s' "$1" | python3 -c "import sys,json;d=json.load(sys.stdin);print($2)"
 }
 
+refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
+    if grep "$@"; then
+        printf 'refute_match: unexpectedly matched: %s\n' "$*" >&2
+        return 1
+    fi
+}
+
+# Prints the display-control characters left in any string of the PARSED
+# document, by codepoint. Both greps a reader reaches for first -- the raw byte,
+# and the `` escape JSON actually carries -- pass whether or not the
+# sanitiser ran, so neither can fail; this walks the parsed values instead.
+leftover_controls() {
+    printf '%s' "$1" | python3 -c '
+import sys, json
+
+def strings(v):
+    if isinstance(v, str):
+        yield v
+    elif isinstance(v, list):
+        for x in v:
+            yield from strings(x)
+    elif isinstance(v, dict):
+        for k, x in v.items():
+            yield k
+            yield from strings(x)
+
+bad = sorted({"U+%04X" % ord(c)
+              for s in strings(json.load(sys.stdin))
+              for c in s
+              if (ord(c) < 0x20 and c not in "\n\t") or 0x202A <= ord(c) <= 0x202E})
+print(" ".join(bad))
+'
+}
+
 @test "a full issue carries every section the page shows" {
     run -0 "$ROOT/bin/work-issue.sh" WEB-3318
     [ "$(field "$output" 'd["status"]')" = ok ]
@@ -139,7 +173,8 @@ field() {   # field <json> <python-expression over `d`>
 # The board reads this document out of a pipe; a display-control character in a
 # comment body would reach a terminal that renders it.
 @test "display controls are stripped from every string in the document" {
-    run -0 "$ROOT/bin/work-issue.sh" WEB-3318
-    ! printf '%s' "$output" | grep -q "$(printf '\033')"
-    ! printf '%s' "$output" | grep -q "$(printf '\342\200\256')"
+    FAKE_LINEAR_DETAIL=hostile run -0 "$ROOT/bin/work-issue.sh" WEB-3318
+    [ -z "$(leftover_controls "$output")" ]
+    # The rest of the body survives: stripping is not truncation.
+    [[ "$(field "$output" 'd["issue"]["comments"][0]["body"]')" == *"after the escape"* ]]
 }

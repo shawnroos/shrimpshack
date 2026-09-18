@@ -342,6 +342,9 @@ JSON
 #   full    (default) everything populated
 #   bare    every optional field null or empty -- the page's empty case
 #   partial every connection reports hasNextPage
+#   hostile a comment body and the description carry an ESC sequence and a
+#           right-to-left override, so a reader that does not strip them is
+#           caught by a test rather than by a terminal
 issue_detail() {
     local more=false
     [ "${FAKE_LINEAR_DETAIL:-full}" = partial ] && more=true
@@ -351,9 +354,11 @@ issue_detail() {
 JSON
         return
     fi
-    HERDR_FAKE_MORE="$more" python3 -c '
+    HERDR_FAKE_MORE="$more" HERDR_FAKE_HOSTILE="${FAKE_LINEAR_DETAIL:-full}" python3 -c '
 import json, os
 more = os.environ["HERDR_FAKE_MORE"] == "true"
+# ESC[31m and U+202E: the two shapes lib/sanitize.sh exists to remove.
+HOSTILE = "\u001b[31m\u202e" if os.environ["HERDR_FAKE_HOSTILE"] == "hostile" else ""
 page = {"hasNextPage": more}
 def conn(nodes): return {"nodes": nodes, "pageInfo": page}
 issue = {
@@ -364,7 +369,7 @@ issue = {
   "branchName": "web-3318-ai-tools-drawer-is-blank",
   "updatedAt": "2026-09-04T15:55:10.206Z",
   "priority": 2,
-  "description": "## What happens\n\nThe drawer is **blank**.\n\n- [ ] reproduce\n- [x] triage\n\n`selectLayer()` returns early.",
+  "description": HOSTILE + "## What happens\n\nThe drawer is **blank**.\n\n- [ ] reproduce\n- [x] triage\n\n`selectLayer()` returns early.",
   "dueDate": "2026-09-30",
   "estimate": 3,
   "state": {"id": "22222222-2222-4222-8222-222222222222", "name": "In Progress", "type": "started"},
@@ -391,7 +396,8 @@ issue = {
      "issue": {"id": "c4", "identifier": "WEB-3200", "title": "Layer pipeline",
                "state": {"id": "st-done", "name": "Done", "type": "completed"}}}]),
   "comments": conn([
-    {"id": "cm1", "body": "Repro on staging.", "createdAt": "2026-09-05T09:00:00.000Z",
+    {"id": "cm1", "body": HOSTILE + "Repro on staging, after the escape.",
+     "createdAt": "2026-09-05T09:00:00.000Z",
      "user": {"id": "u1", "name": "Example User"}, "parent": None},
     {"id": "cm2", "body": "Same here.", "createdAt": "2026-09-05T10:00:00.000Z",
      "user": {"id": "u2", "name": "Other User"}, "parent": {"id": "cm1"}}]),
