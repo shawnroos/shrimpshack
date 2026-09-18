@@ -19,6 +19,26 @@ HERDR_LINEAR_STATE_OK=0
 HERDR_LINEAR_STATE_MISPLACED=1
 HERDR_LINEAR_STATE_STALE=2
 HERDR_LINEAR_STATE_UNKNOWN=3   # not enough information to judge; not a problem
+HERDR_LINEAR_STATE_OUTSIDE_SESSION=4   # reported only; suspends nothing (R12)
+
+command -v herdr_linear::board_reservation_field >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/board-store.sh"
+
+# A board worktree sits where the mapping put it, so a workspace bound to
+# another project says nothing about it (KTD14). Owned means a started
+# reservation whose frozen name and identifier match this worktree.
+herdr_linear::_board_owns_worktree() {
+    local wt="$1" ident="$2" f issue board
+    board="$(herdr_linear::board_root)" || return 1
+    for f in "$board"/reservations/*.json; do
+        [ -e "$f" ] || continue
+        issue="$(basename "$f" .json)"
+        [ "$(herdr_linear::board_reservation_field "$issue" state 2>/dev/null)" = started ] || continue
+        [ "$(herdr_linear::board_reservation_field "$issue" identifier 2>/dev/null)" = "$ident" ] || continue
+        [ "$(herdr_linear::board_reservation_field "$issue" worktree_name 2>/dev/null)" = "${wt##*/}" ] && return 0
+    done
+    return 1
+}
 
 # herdr_linear::check_placement <worktree> <workspace-id>
 # Prints a human-readable report on a mismatch and returns MISPLACED.
@@ -50,6 +70,7 @@ herdr_linear::check_placement() {
     [ -n "$ws_project" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
 
     ident="$(herdr_linear::binding_identifier "$wt")" || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    herdr_linear::_board_owns_worktree "$wt" "$ident" && return "$HERDR_LINEAR_STATE_OK"
     # issue_context reports the project NAME; the workspace binding stores the
     # project ID. Compare on the id rather than on names -- two projects can
     # share a name, and a rename would silently clear a real mismatch.
@@ -93,10 +114,40 @@ herdr_linear::check_liveness() {
     return "$HERDR_LINEAR_STATE_OK"
 }
 
+# herdr_linear::check_session_scope <worktree>
+# The worktree's issue lies outside the scope its herdr session is bound to.
+# Reported and never acted on: which session a ticket is worked from is the
+# person's call, and an unknown answer reports nothing.
+herdr_linear::check_session_scope() {
+    local wt="${1:-}" scope kind id name ident rc
+    command -v herdr_linear::session_scope >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/session-binding.sh"
+    scope="$(herdr_linear::session_scope 2>/dev/null)" || return "$HERDR_LINEAR_STATE_OK"
+    IFS=$'\t' read -r kind id name <<<"$scope"
+    case "$(herdr_linear::binding_state "$wt" 2>/dev/null)" in
+        bound|misplaced|stale) ;;
+        *) return "$HERDR_LINEAR_STATE_OK" ;;
+    esac
+    ident="$(herdr_linear::binding_identifier "$wt")" || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    command -v herdr_linear::scope_contains_issue >/dev/null 2>&1 \
+        || . "${BASH_SOURCE[0]%/*}/scope-linear.sh"
+    herdr_linear::scope_contains_issue "$kind" "$id" "$ident" >/dev/null; rc=$?
+    case "$rc" in
+        "$HERDR_LINEAR_SCOPE_INSIDE") return "$HERDR_LINEAR_STATE_OK" ;;
+        "$HERDR_LINEAR_SCOPE_OUTSIDE") ;;
+        *) return "$HERDR_LINEAR_STATE_UNKNOWN" ;;
+    esac
+    printf 'This worktree is bound to %s, which is outside this herdr session: the session is bound to %s %s.\n' "$ident" "$kind" "$name"
+    printf 'Nothing was moved or suspended. Run /work:bind to rebind the worktree or the session.\n'
+    return "$HERDR_LINEAR_STATE_OUTSIDE_SESSION"
+}
+
 # One pass over both, recording the resulting state on the binding so the write
 # path can consult it without repeating the network calls.
 herdr_linear::classify() {
-    local wt="${1:-}" ws="${2:-}" out place_rc live_rc
+    local wt="${1:-}" ws="${2:-}" out place_rc live_rc outside
+    # Printed only when nothing is suspended: its text says nothing was.
+    outside="$(herdr_linear::check_session_scope "$wt")"
     out="$(herdr_linear::check_placement "$wt" "$ws")"; place_rc=$?
     if [ "$place_rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
         herdr_linear::binding_set_state "$wt" misplaced
@@ -120,5 +171,6 @@ herdr_linear::classify() {
         misplaced) [ "$place_rc" -eq "$HERDR_LINEAR_STATE_OK" ] && herdr_linear::binding_set_state "$wt" bound ;;
         stale)     [ "$live_rc"  -eq "$HERDR_LINEAR_STATE_OK" ] && herdr_linear::binding_set_state "$wt" bound ;;
     esac
+    printf '%s' "$outside"
     return "$HERDR_LINEAR_STATE_OK"
 }

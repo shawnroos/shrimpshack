@@ -40,7 +40,12 @@ herdr_linear_test::isolate() {
     export HERDR_LINEAR_SECURITY_BIN="$sandbox/absent/security"
     export HERDR_LINEAR_OSASCRIPT_BIN="$sandbox/absent/osascript"
     export HERDR_LINEAR_GH_BIN="$sandbox/absent/gh"
+    export HERDR_LINEAR_LSOF_BIN="$sandbox/absent/lsof"
     export HERDR_BIN="$sandbox/absent/herdr"
+    # Records keyed by a herdr id are kept per session, and a process with no
+    # session reads and writes none of them. Unset, this would come from the
+    # herdr pane the suite runs inside. Nothing binds it.
+    export HERDR_SOCKET_PATH="$sandbox/herdr/herdr.sock"
 
     # Set-but-empty, never unset: the reader spells this ${VAR-default}, so only
     # an empty value stops the scan reaching this machine's real install paths.

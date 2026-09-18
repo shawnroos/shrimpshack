@@ -269,9 +269,35 @@ start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.
 }
 
 # KTD7. An exit the table does not name is an exit the skill reads as failure.
+# Counting the rows counted the tables the skill happened to have; a table added
+# later carried its own row and turned the count red. Each table is read on its
+# own now. The floor is the number of exit tables committed beside it: raise it
+# with a new table, and say why if it is ever lowered, so a deleted table is a
+# failure rather than a smaller, silently-green check.
 @test "the start skill's exit tables carry a row for the ask value" {
-    run bash -c "printf '%s\n' \"\$1\" | grep -cE '^\\| 6 \\|'" _ "$(start_skill)"
-    [ "$output" = "2" ]
+    run python3 -c '
+import sys
+
+lines = open(sys.argv[1], encoding="utf-8").read().splitlines()
+tables, missing, i = 0, [], 0
+while i < len(lines):
+    if lines[i].strip() != "| Exit | Meaning |":
+        i += 1
+        continue
+    tables += 1
+    j = i + 1
+    while j < len(lines) and lines[j].startswith("|"):
+        j += 1
+    if not any(l.startswith("| 6 |") for l in lines[i + 1:j]):
+        missing.append("the table at line %d names no exit 6" % (i + 1))
+    i = j
+if tables < 3:
+    missing.append("%d exit tables found, expected at least 3" % tables)
+print(chr(10).join(missing))
+sys.exit(1 if missing else 0)
+' "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.md"
+    [ "$status" -eq 0 ] || printf '%s\n' "$output" >&2
+    [ "$status" -eq 0 ]
 }
 
 # R14. No caller supplies the name, so the skill must not tell anyone to.
@@ -314,6 +340,19 @@ placement_tree() {
     done
 }
 
+# A configuration change moves and closes panes; a hook has nobody to show it to.
+@test "a hook that writes the board configuration turns the placement check red" {
+    for verb in board_config_set _board_config_py; do
+        placement_tree
+        printf 'herdr_linear::%s set x y\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"ground.sh"* ]]
+        [[ "$output" == *"$verb"* ]]
+        rm -rf "$WORK/p"
+    done
+}
+
 @test "a second lib caller of workspace_confirm turns the placement check red" {
     placement_tree
     printf 'herdr_linear::open_session() {\n    herdr_linear::workspace_confirm a b c\n}\n' >> "$WORK/p/lib/create.sh"
@@ -326,4 +365,143 @@ placement_tree() {
     mkdir -p "$WORK/q/lib"
     run placement_caller_check "$WORK/q"
     [ "$status" -ne 0 ]
+}
+
+# A hook has nobody to ask before a pane in use moves or a board pane closes.
+@test "a hook that closes, creates or moves a board pane turns the placement check red" {
+    for verb in board_close_pane board_move_in_use board_apply_tab_in_use board_move_pane board_apply_tab board_create_pane; do
+        placement_tree
+        printf 'herdr_linear::%s "$space" "$issue"\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"ground.sh"* ]]
+        [[ "$output" == *"$verb"* ]]
+        rm -rf "$WORK/p"
+    done
+}
+
+# KTD2. A sync reads Linear page by page and creates panes, so a hook may only
+# hand the agent the path; the read-only sync_state and sync_title stay allowed.
+@test "a hook that calls, runs or sources the board sync turns the placement check red" {
+    local form
+    for form in 'herdr_linear::board_sync >/dev/null 2>&1 || true' 'x="$(herdr_linear::board_sync)"' \
+                'bash "$LIB/board-sync.sh"' '. "$LIB/board-sync.sh"'; do
+        placement_tree
+        printf '%s\n' "$form" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"ground.sh"* ]]
+        [[ "$output" == *"board"* ]]
+        rm -rf "$WORK/p"
+    done
+    placement_tree
+    printf 'herdr_linear::board_sync_title "$(herdr_linear::board_sync_state)"\n' >> "$WORK/p/hooks/ground.sh"
+    run placement_caller_check "$WORK/p"
+    [ "$status" -eq 0 ]
+}
+
+# KTD19. Every /work skill and the /work command catch the board up first, and
+# the fence sits outside the shared rubric so the rubric stays one text.
+@test "the attended board fence appears in all nine skills and the work command" {
+    local f n=0 root
+    root="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
+    for f in "$root"/skills/*/SKILL.md; do
+        grep -q '^herdr_linear::board_fence$' "$f" || { echo "no fence: $f" >&2; return 1; }
+        grep -q 'herdr_linear::board_answer "\$KEY" "\$NONCE" yes' "$f" || { echo "no answer step: $f" >&2; return 1; }
+        n=$((n + 1))
+    done
+    [ "$n" -eq 9 ]
+    grep -q '^herdr_linear::board_fence$' "$root/commands/work.md"
+}
+
+@test "a hook that runs the attended fence or answers a board question turns the placement check red" {
+    local verb
+    for verb in board_fence board_sync_bounded board_answer; do
+        placement_tree
+        printf 'herdr_linear::%s\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"$verb"* ]]
+        rm -rf "$WORK/p"
+    done
+}
+
+# ------------------------------------------------ the session in /work:bind (U8)
+
+bind_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/bind/SKILL.md"; }
+
+@test "the bind skill shows the session before the worktree and previews a rebind before asking" {
+    body="$(bind_skill)"
+    python3 - "$body" <<'PY'
+import sys
+b = sys.argv[1]
+order = ["herdr_linear::session_name", "herdr_linear::scope_candidates",
+         "herdr_linear::session_rebind_preview", "herdr_linear::session_binding_propose",
+         "herdr_linear::session_binding_confirm", "## Before anything"]
+at = [b.find(x) for x in order]
+assert all(i >= 0 for i in at), dict(zip(order, at))
+assert at == sorted(at), dict(zip(order, at))
+PY
+    [[ "$body" == *"herdr_linear::session_binding_decline"* ]]
+    [[ "$body" == *"herdr_linear::session_binding_unbind"* ]]
+    [[ "$body" == *"herdr_linear::workspace_propose_part"* ]]
+}
+
+# ------------------------------------------- only a person binds a session (U11)
+
+consent_tree() {
+    mkdir -p "$WORK/c/lib" "$WORK/c/hooks" "$WORK/c/commands" "$WORK/c/bin"
+    printf 'herdr_linear::session_binding_confirm() {\n    :\n}\n' > "$WORK/c/lib/session-binding.sh"
+    printf 'herdr_linear::session_binding_confirm "$s" "$n"\nherdr_linear::session_binding_decline "$s" "$n"\n' > "$WORK/c/bin/session-bind.sh"
+}
+
+@test "the consent caller check passes the bind popup's own confirmation" {
+    consent_tree
+    run consent_caller_check "$WORK/c"
+    [ "$status" -eq 0 ]
+}
+
+@test "a library caller of the session confirm verb, outside the popup script, turns the consent caller check red" {
+    local verb where
+    for verb in session_binding_confirm session_binding_decline session_binding_unbind; do
+        for where in lib/states.sh hooks/ground.sh commands/work.md bin/session-start.sh; do
+            consent_tree
+            printf 'herdr_linear::%s "$s" "$n"\n' "$verb" >> "$WORK/c/$where"
+            run consent_caller_check "$WORK/c"
+            [ "$status" -ne 0 ] || { echo "not caught: $verb in $where"; return 1; }
+            [[ "$output" == *"$where"* ]]
+            rm -rf "$WORK/c"
+        done
+    done
+}
+
+@test "a hook that confirms a session binding turns the placement check red" {
+    local verb
+    for verb in session_binding_propose session_binding_confirm session_binding_decline session_binding_unbind workspace_confirm_part; do
+        placement_tree
+        printf 'herdr_linear::%s x y\n' "$verb" >> "$WORK/p/hooks/ground.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ] || { echo "not caught in a hook: $verb"; return 1; }
+        rm -rf "$WORK/p"
+        placement_tree
+        mkdir -p "$WORK/p/bin"
+        printf 'herdr_linear::%s x y\n' "$verb" > "$WORK/p/bin/session-start.sh"
+        run placement_caller_check "$WORK/p"
+        [ "$status" -ne 0 ] || { echo "not caught in the herdr startup hook: $verb"; return 1; }
+        [[ "$output" == *"session-start.sh"* ]]
+        rm -rf "$WORK/p"
+    done
+}
+
+# A bind started outside a worktree resolves the worktree; it never asks to bind in place.
+@test "the bind skill finds a worktree before Step 1 and never offers to bind outside one" {
+    body="$(bind_skill)"
+    python3 - "$body" <<'PY'
+import sys
+b = sys.argv[1]
+at = [b.find(x) for x in ("herdr_linear::bindable_worktree", "herdr_linear::worktree_candidates", "## Step 1")]
+assert all(i >= 0 for i in at) and at == sorted(at), at
+PY
+    [[ "$body" != *"Bind it anyway"* ]]
+    [[ "$body" != *"bind anyway"* ]]
 }

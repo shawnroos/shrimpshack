@@ -1,0 +1,9 @@
+{
+  "w1:t1": {"tab_id": "w1:t1", "root": {"type": "split", "direction": "right", "ratio": 0.5,
+    "first": {"type": "split", "direction": "down", "ratio": 0.5,
+      "first": {"type": "pane", "pane_id": "w1:p1"}, "second": {"type": "pane", "pane_id": "w1:p6"}},
+    "second": {"type": "pane", "pane_id": "w1:p3"}}},
+  "w1:t2": {"tab_id": "w1:t2", "root": {"type": "pane", "pane_id": "w1:p2"}},
+  "w2:t1": {"tab_id": "w2:t1", "root": {"type": "pane", "pane_id": "w2:p4"}},
+  "w9:t1": {"tab_id": "w9:t1", "root": {"type": "pane", "pane_id": "w9:p9"}}
+}

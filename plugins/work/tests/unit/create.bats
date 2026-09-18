@@ -829,3 +829,146 @@ worktree_count() { git -C "$PROJECT" worktree list | grep -c .; }
     run grep -c '^tab create' "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "0" ]
 }
+
+# ------------------------------------------------------------ board target (U13)
+
+ASSIGNEE_ID=66666666-6666-4666-8666-666666666666
+# The issueCreate input the last filing sent, as JSON.
+create_input() {
+    grep issueCreate "$FAKE_LINEAR_RECORD_DIR/bodies" | tail -1 \
+        | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin)["variables"]["i"]))'
+}
+board_filing() {
+    record_repo
+    bind_wt
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+}
+file_into() {
+    run --separate-stderr herdr_linear::new_issue "$WT" "A new thing" "$DESC" "" "$1"
+}
+
+# Covers AE15. The fixture team lists Backlog first and its unstarted states out
+# of position order, so a team default or the first listed state both miss.
+@test "filing into an assignee column on a triage-default team creates the ticket unstarted with that assignee" {
+    board_filing; enable_writes
+    file_into "{\"assignee\":\"$ASSIGNEE_ID\"}"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | cut -f1)" = "WEB-4001" ]
+    [ "$(sent issueCreate)" -eq 1 ]
+    create_input | python3 -c '
+import sys, json
+i = json.load(sys.stdin)
+assert i["assigneeId"] == "66666666-6666-4666-8666-666666666666", i
+assert i["stateId"] == "st-ready", i
+assert i["teamId"] == "55555555-5555-4555-8555-555555555555", i
+assert i["projectId"] == "44444444-4444-4444-8444-444444444444", i
+'
+    grep BoardTeamStates "$FAKE_LINEAR_RECORD_DIR/bodies" | grep -q "$TEAM_ID"
+    run herdr_linear::board_behind
+    [ "$status" -eq 0 ]
+    [ -n "$(herdr_linear::board_sync_state | python3 -c 'import sys,json;print(json.load(sys.stdin).get("last_plugin_write_at",""))')" ]
+}
+
+@test "filing without a board target sends today's create input and reads no team states" {
+    board_filing; enable_writes
+    file_into ""
+    [ "$status" -eq 0 ]
+    [ "$(create_input | python3 -c 'import sys,json;print(",".join(sorted(json.load(sys.stdin))))')" \
+      = "description,projectId,teamId,title" ]
+    [ "$(sent BoardTeamStates)" -eq 0 ]
+    run herdr_linear::board_behind
+    [ "$status" -eq 0 ]
+    [ -n "$(herdr_linear::board_sync_state | python3 -c 'import sys,json;print(json.load(sys.stdin).get("last_plugin_write_at",""))')" ]
+}
+
+# Linear reads "" as a value and null as a clear; a create call that omits the
+# key is the only form that means "No <level>" for every field alike.
+@test "a No <level> group creates the ticket with that field left unset, never an empty string" {
+    board_filing; enable_writes "$TEAM_ID" ""
+    file_into '{"project":null,"assignee":null,"priority":null,"label-group:Type":null}'
+    [ "$status" -eq 0 ]
+    create_input | python3 -c '
+import sys, json
+i = json.load(sys.stdin)
+for k in ("projectId", "assigneeId", "priority", "labelIds"):
+    assert k not in i, (k, i)
+assert "" not in i.values() and None not in i.values(), i
+assert i["stateId"] == "st-ready", i
+'
+}
+
+@test "an empty or unknown group is refused before anything is read or filed" {
+    board_filing; enable_writes
+    for target in '{"assignee":""}' '{"ticket":"bbbbbbbb-0000-4000-8000-000000000001"}' \
+                  '{"colour":"red"}' '{"team":null}' '{"priority":"7"}' \
+                  '{"parent":"33333333-3333-4333-8333-333333333333","sub-ticket":"bbbbbbbb-0000-4000-8000-000000000001"}' '[]'; do
+        file_into "$target"
+        [ "$status" -eq "$HERDR_LINEAR_CREATE_REFUSED" ]
+        [[ "$stderr" == *"board target refused"* ]]
+    done
+    [[ "$stderr" == *"refused: the target is not a JSON object"* ]]
+    file_into '{"ticket":"bbbbbbbb-0000-4000-8000-000000000001"}'
+    [[ "$stderr" == *"a ticket group is the ticket itself"* ]]
+    [ "$(sent issueCreate)" -eq 0 ]
+    [ "$(sent BoardTeamStates)" -eq 0 ]
+}
+
+@test "a board target in shadow mode reads no team states and files nothing" {
+    board_filing
+    file_into "{\"assignee\":\"$ASSIGNEE_ID\"}"
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_SHADOW" ]
+    [ "$(sent issueCreate)" -eq 0 ]
+    [ "$(sent BoardTeamStates)" -eq 0 ]
+}
+
+@test "a board target whose team has no unstarted state files nothing" {
+    board_filing; enable_writes
+    export FAKE_LINEAR_BOARD_STATES=none
+    file_into "{\"assignee\":\"$ASSIGNEE_ID\"}"
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_FAILED" ]
+    [ "$(sent issueCreate)" -eq 0 ]
+}
+
+# The answer names a team and a project; a group that files somewhere else is a
+# different write, and asks again.
+@test "a group naming another team or project than the answered one files nothing" {
+    board_filing; enable_writes
+    file_into '{"team":"99999999-9999-4999-8999-999999999999"}'
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_SHADOW" ]
+    file_into '{"project":"88888888-8888-4888-8888-888888888888"}'
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_SHADOW" ]
+    [ "$(sent issueCreate)" -eq 0 ]
+}
+
+@test "a group's team is the team filed into and the team whose states are read" {
+    board_filing; enable_writes 99999999-9999-4999-8999-999999999999
+    file_into '{"team":"99999999-9999-4999-8999-999999999999","label-group:Type":"77777777-7777-4777-8777-777777777777"}'
+    [ "$status" -eq 0 ]
+    create_input | python3 -c '
+import sys, json
+i = json.load(sys.stdin)
+assert i["teamId"] == "99999999-9999-4999-8999-999999999999", i
+assert i["labelIds"] == ["77777777-7777-4777-8777-777777777777"], i
+'
+    grep BoardTeamStates "$FAKE_LINEAR_RECORD_DIR/bodies" | grep -q 99999999-9999-4999-8999-999999999999
+}
+
+# A state column is where the ticket was put; the first unstarted state is only
+# the default for a board that does not group by state.
+@test "a state group files the ticket into that state and reads no team states" {
+    board_filing; enable_writes
+    file_into '{"state":"st-prog"}'
+    [ "$status" -eq 0 ]
+    [ "$(create_input | python3 -c 'import sys,json;print(json.load(sys.stdin)["stateId"])')" = "st-prog" ]
+    [ "$(sent BoardTeamStates)" -eq 0 ]
+}
+
+@test "a sub-issue filed into a parent group is refused, because its parent is already bound" {
+    record_repo
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::new_sub_issue "$WT" "A smaller thing" "$DESC" "" \
+        '{"parent":"33333333-3333-4333-8333-333333333333"}'
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_REFUSED" ]
+    [ "$(sent issueCreate)" -eq 0 ]
+}

@@ -287,3 +287,82 @@ rlo="$(printf '\342\200\256')"
     [[ "$body" == *"Not yet settled"* ]]
     [ -r "$ROOT/docs/linear-conventions.md" ]
 }
+
+# --------------------------------------------- a directory that is not a worktree
+
+@test "a binding is refused on a directory that is not a git worktree, and nothing is recorded" {
+    run herdr_linear::binding_propose "$WORK/root" WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    [[ "$output" == *"not a git worktree"* ]]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/bindings" ] || [ -z "$(ls "$HERDR_LINEAR_STORE_DIR/bindings")" ]
+}
+
+@test "a binding is refused on the projects root even when it is a repository" {
+    git -C "$WORK/root" init -q
+    run herdr_linear::binding_propose "$WORK/root" WEB-3318
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::binding_propose "$WT" WEB-3318
+    [ "$status" -eq 0 ]
+}
+
+@test "the worktrees of the bound project's recorded repository are offered, with branch and binding" {
+    . "$ROOT/lib/repos.sh"
+    REPO="$WORK/root/app"; mkdir -p "$REPO"
+    git -C "$REPO" init -q -b main
+    git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    git -C "$REPO" worktree add -q -b feature/web-4001-thing "$WORK/wt/web-4001"
+    git -C "$REPO" worktree add -q -b spare "$WORK/wt/spare"
+    herdr_linear::record_scope_repo "$REPO" project-p-app
+    n="$(herdr_linear::binding_propose "$WORK/wt/web-4001" WEB-4001)"
+    herdr_linear::binding_confirm "$WORK/wt/web-4001" WEB-4001 "$n"
+    run herdr_linear::worktree_candidates p-app
+    [ "$status" -eq 0 ]
+    real="$(cd "$WORK/wt/web-4001" && pwd -P)"
+    spare="$(cd "$WORK/wt/spare" && pwd -P)"
+    printf '%s\n' "$output" | grep -qxF "$(printf '%s\tfeature/web-4001-thing\tWEB-4001\tbound' "$real")"
+    printf '%s\n' "$output" | grep -qxF "$(printf '%s\tspare\t\tunbound' "$spare")"
+}
+
+@test "a project with no recorded repository and no bound worktrees offers nothing" {
+    . "$ROOT/lib/repos.sh"
+    run herdr_linear::worktree_candidates p-none
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run herdr_linear::worktree_candidates '../p'
+    [ "$status" -ne 0 ]
+}
+
+@test "with no recorded repository, worktrees already bound to the project's issues are offered" {
+    . "$ROOT/lib/repos.sh"; . "$ROOT/lib/scope-linear.sh"
+    export FAKE_LINEAR_SCOPE_WORLD="$WORK/world.json"
+    printf '%s' '{"teams":[{"id":"t-web","key":"WEB","name":"Web"}],"projects":{"p-app":{"name":"App","teams":["t-web"],"initiatives":[]}},"issues":{"WEB-4001":{"team":"t-web","project":"p-app"},"OPS-9":{"team":"t-web","project":"p-other"}}}' > "$FAKE_LINEAR_SCOPE_WORLD"
+    for pair in "web-4001 WEB-4001" "ops-9 OPS-9"; do
+        set -- $pair
+        d="$WORK/wt/$1"; mkdir -p "$d"
+        git -C "$d" init -q -b "feature/$1"
+        git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+        n="$(herdr_linear::binding_propose "$d" "$2")"
+        herdr_linear::binding_confirm "$d" "$2" "$n"
+    done
+    run herdr_linear::worktree_candidates p-app
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$(cd "$WORK/wt/web-4001" && pwd -P)"* ]]
+    [[ "$output" == *"WEB-4001"* ]]
+    [[ "$output" != *"OPS-9"* ]]
+}
+
+@test "a worktree whose membership Linear could not answer is still offered, marked unknown" {
+    . "$ROOT/lib/repos.sh"; . "$ROOT/lib/scope-linear.sh"
+    export FAKE_LINEAR_SCOPE_WORLD="$WORK/world.json"
+    printf '%s' '{"teams":[],"projects":{},"issues":{}}' > "$FAKE_LINEAR_SCOPE_WORLD"
+    d="$WORK/wt/web-4002"; mkdir -p "$d"
+    git -C "$d" init -q -b feature/web-4002
+    git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    n="$(herdr_linear::binding_propose "$d" WEB-4002)"
+    herdr_linear::binding_confirm "$d" WEB-4002 "$n"
+    export FAKE_LINEAR_SCOPE_FAIL=rate_limited
+    run herdr_linear::worktree_candidates p-app
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-4002"* ]]
+    [[ "$output" == *"unknown"* ]]
+}

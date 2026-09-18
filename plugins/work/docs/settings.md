@@ -28,6 +28,15 @@ string, and the default does not come back.
 | `HERDR_LINEAR_SHADOW_LOG` | `$HOME/.claude/work/shadow.log` | Where a write that was only rehearsed is logged instead of sent. | `lib/binding.sh` | no |
 | `HERDR_LINEAR_WORKTREE_SCHEME` | `identifier-title` | Which shape a worktree's directory name takes. Every scheme carries the ticket identifier, so the worktree stays findable from its branch whichever one is chosen. Valid: `identifier-title`, `identifier`. | `lib/schemes.sh` | no |
 | `HERDR_LINEAR_BRANCH_SCHEME` | `prefix-worktree` | Which shape a branch name takes. It composes on the worktree scheme, so changing that changes both and the identifier stays in each. Valid: `prefix-worktree`, `worktree`. | `lib/schemes.sh` | no |
+| `HERDR_LINEAR_BOARD_PAGE_SIZE` | `50` | How many tickets the board reads from Linear in one request. A smaller page costs less rate limit per request and needs more requests. | `lib/board-linear.sh` | no |
+| `HERDR_LINEAR_BOARD_MAX_PAGES` | `100` | The most pages one board read takes. A read that reaches it is incomplete, and an incomplete read changes nothing on the board. | `lib/board-linear.sh` | no |
+| `HERDR_LINEAR_BOARD_CALL_SECONDS` | `15` | How long the board waits for one herdr command before treating herdr as unreachable. | `lib/board-herdr.sh` | no |
+| `HERDR_LINEAR_BOARD_PANE_CAP` | `16` | The most panes one tab build moves or places at a time. The rest wait for a person to ask for more at the next `/work` command. | `lib/board-herdr.sh` | no |
+| `HERDR_LINEAR_BOARD_FENCE_SECONDS` | `90` | How long the board sync at the start of a `/work` command may run before it is stopped. The command carries on either way, and the next sync finishes what a stopped one left. | `lib/board-attended.sh` | no |
+| `HERDR_LINEAR_BOARD_TAB_LIMIT` | `4` | How many panes a board tab takes before new tickets for it wait on the place-more question at the next `/work` command. Answering yes places them; panes already in a tab are never removed for being over it. | `lib/board-sync.sh` | no |
+| `HERDR_LINEAR_BOUND_WORKTREE_LIMIT` | `8` | How many already-bound worktrees `/work:bind` offers when it runs outside a worktree and the project has no recorded repository. Each one costs a Linear read. | `lib/propose.sh` | no |
+| `HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS` | `10` | How long a board sync waits for another sync that holds the board lock before it gives up and changes nothing. A lock whose holder is no longer running is taken at once. | `lib/board-sync.sh` | no |
+| `HERDR_LINEAR_SOCKET_PATH` | `(none)` | The herdr socket the board moves panes through. Unset asks the running herdr server where its socket is. | `lib/board-herdr.sh` | no |
 | `HERDR_LINEAR_TAB_SCHEME` | `identifier` | Which shape a herdr tab's label takes. Valid: `identifier`, `identifier-title`. | `lib/schemes.sh` | no |
 | `HERDR_LINEAR_OPEN_SESSION` | `(none)` | Whether starting work also opens a herdr session. Unset leaves each path as it is: `/work:new` opens one and `/work:start` does not. `true` opens one on both; `false` opens one on neither. Anything else is named on stderr and read as unset. | `lib/start.sh` | no |
 | `HERDR_LINEAR_CONVENTIONS_PATH` | `${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md` | The rulebook the plugin follows when it writes a Linear title, description or document. Set it to keep the conventions in a repository of their own. A path naming nothing readable is refused with the path printed, rather than the shipped copy being served in its place, so a typo cannot restore the old rulebook unnoticed. This one is settable from the environment only and is never a field in a configuration file: seven skills read the file as instructions, and it decides what the plugin writes to Linear. | `lib/documents.sh` | no |
@@ -51,10 +60,49 @@ work, and none of them is documented as a setting:
   stand-in for `git`, `curl`, `gh`, `security`, `osascript`, or herdr itself.
 - **Lock, retry, poll, and timeout tuning** — how long a lock is waited for, how many
   times a request is retried, how often a pane is polled, how long a request may take.
-- **Herdr's own runtime identity** — the pane, tab, and workspace identifiers herdr
-  exports into a pane it owns. The plugin reads them; nobody sets them.
+- **Herdr's own runtime identity** — the pane, tab, and workspace identifiers and the
+  socket path herdr exports into a pane it owns. The plugin reads them; nobody sets them.
+  The socket path names the herdr session, which is why a record keyed by a herdr id is
+  kept per session.
 - **The old spelling of the projects root** — still honoured, and still warned about. See
   `lib/contain.sh`, which prints the name to rename and what to rename it to.
+
+---
+
+## The herdr plugin
+
+`herdr/herdr-plugin.toml` is a herdr plugin with the id `work.session`. It asks an unbound
+herdr session which Linear scope it is for, and shows that scope. Link it once, and it runs
+in every herdr session you start:
+
+```sh
+herdr plugin link "<plugin root>/herdr"
+```
+
+- **When it asks.** At a session's start, when the session is unbound, has not declined,
+  and has not been asked before. The question opens as a popup, and a popup opened before
+  you attach is there when you do. Pressing Enter leaves the session unbound and does not
+  ask again. `/work:bind`, or the plugin's "Bind this session to a Linear scope" action,
+  asks again whenever you want.
+- **Turning the ask off.** Create a file named `no-ask` in the plugin's config directory.
+  No session is asked at start after that; the action and `/work:bind` still work.
+
+  ```sh
+  touch "$(herdr plugin config-dir work.session)/no-ask"
+  ```
+
+- **Showing the scope.** herdr cannot let a plugin change its tab bar, so add the entry
+  yourself, in `~/.config/herdr/config.toml` under `[ui]`. herdr runs it on each session's
+  own server, so every session shows its own scope, or `unbound`:
+
+  ```toml
+  tab_bar_right = [{ type = "command", command = "bash <plugin root>/bin/session-label.sh" }]
+  ```
+
+- **Settings it cannot see.** herdr starts these scripts, not Claude Code, so a setting
+  made only in `~/.claude/settings.json` does not reach them. They use the defaults above,
+  or the value exported in the environment herdr was started from. A session binding is
+  stored under `sessions/<name>/` in `HERDR_LINEAR_STORE_DIR`.
 
 ---
 

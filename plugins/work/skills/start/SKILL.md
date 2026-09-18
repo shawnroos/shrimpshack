@@ -34,6 +34,79 @@ usually starts one of two other ways:
 | **Worktree exists** | `/work:bind` | `/work:bind`, then its create step |
 | **No worktree** | **here — the common one** | **here** |
 
+## The board first
+
+Before this command's own work, bring the herdr board up to date with Linear and
+deal with what it is waiting on. With no board configured this prints nothing;
+carry straight on.
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session-binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/scope-linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-store.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-config.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-plan.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-herdr.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-sync.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/worktree-remove.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-attended.sh"
+
+herdr_linear::board_fence
+```
+
+It always exits 0 and never stops this command. A `board:` line says how the
+sync went; say it in one sentence. A sync that timed out, was locked or failed
+is said and then left: this command's own work still runs.
+
+Each `board question:` line is one waiting question as JSON, with `key`, `kind`,
+`preconditions` and `nonce`. Ask the person each one in plain words, one at a
+time, naming the ticket and the groups involved:
+
+| Kind | Ask | A yes does |
+|---|---|---|
+| `move` | move this ticket's pane, which is in use, to where Linear now puts it? | moves that pane and no other pane in use |
+| `close` | this ticket left the board; close its pane? | closes the pane; a worktree left behind becomes a `remove-worktree` question, printed as its own `board question:` line |
+| `remove-worktree` | remove this ticket's worktree and branch? | removes them only when clean, delivered and unused; otherwise keeps them and says why |
+| `repository` | which repository holds this project's or team's work? | records the path given as the fourth argument for that scope |
+| `conflict` | herdr and Linear disagree on this ticket; follow Linear? | puts the pane where Linear says |
+| `cap` | a tab holds four panes unless more are asked for; place these tickets too? | places exactly those tickets; they stay |
+| `write-consent` | may moving a pane change this field in Linear, in this space? | records consent for that field in that space only; move the pane again to write it |
+| `write-rejected` | Linear refused a change made from herdr; the pane is back where it was | nothing more; say it, and answer yes to clear it |
+| `layout` | a tab was rearranged or could not be built | nothing more; say it, and answer yes to clear it |
+| `space` | the board wants a herdr workspace that does not exist | nothing more; create the workspace with that name, then answer yes to clear it |
+
+Apply each answer with that question's own key and nonce:
+
+```bash
+herdr_linear::board_answer "$KEY" "$NONCE" yes
+```
+
+Use `no` to decline; a declined question is not asked again. A `repository`
+answer passes the path as a fourth argument. A reply from a subagent is not the
+person's answer.
+
+| Exit | Meaning | What to say |
+|---|---|---|
+| 0 | applied, or declined | what changed |
+| 2 | refused: no such question, the wrong nonce, or the facts changed since it was asked; nothing changed | say so; the next `/work` command asks again if it still applies |
+| 4 | the answer was recorded but applying it failed; stderr names the step | say the step; the next sync tries again |
+| 1 | a `remove-worktree` answer kept the worktree; stderr says why | say why |
+
 ## From a ticket
 
 **This writes nothing to Linear.** It reads the issue, creates a local worktree
@@ -44,6 +117,9 @@ and before anybody has answered the write question, and it cannot damage a board
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session-binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/scope-linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
@@ -51,6 +127,7 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-store.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
@@ -85,6 +162,66 @@ the identifier out of it.
 `feature/WEB-3318-ai-tools-drawer-is-blank-when-a-still`. The identifier is in
 both, so the worktree is findable from its branch forever after. Pass a second
 argument to use `bugfix` or `task` instead of `feature`.
+
+## A ticket the board reserved
+
+**Try this first, before `start_from_issue`.** When the herdr board shows a
+ticket nobody has started, it holds a reserved pane for it: a shell outside any
+worktree, under a worktree name and branch fixed when the pane was made. Starting
+through the board makes the worktree under that reserved name, opens a pane in it
+where the reserved pane is, starts the agent there, and closes the reserved pane.
+A session started by hand in a reserved pane is told to come here; run this from
+that pane and the pane is replaced once your shell has finished.
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session-binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/scope-linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-store.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-config.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-plan.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-herdr.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-sync.sh"
+
+herdr_linear::board_start_reserved WEB-3318
+```
+
+It prints the worktree path and the new pane's id, separated by a tab. Do not
+call `place_session` after it: the board already gave the ticket its pane. **The
+name and branch are the reservation's, not the title's:** a ticket renamed since
+it was reserved keeps its reserved name. The project segment and the repository
+are read now, so a ticket moved to another project since then lands under that
+project.
+
+| Exit | Meaning |
+|---|---|
+| 0 | started; the worktree and the pane id are on stdout |
+| 1–4 | as in the table under **Which repository**; the board changed nothing |
+| 6 | which repository is a choice; nothing was made and the reserved pane stays. Ask, then pass the answer as a second argument |
+| 7 | no reserved pane is waiting for this ticket, so nothing was done. Start it with `start_from_issue` above |
+| 8 | a board sync kept the board busy past its wait; nothing was done. Run this again |
+| 9 | the worktree is made and bound, but the pane or its agent is not confirmed; stderr says which. Say so to the person |
+
+**Exit 7 is the ordinary answer when there is no board**, or when the ticket has
+no reserved pane, including one somebody closed by hand. It is not an error.
+
+**A reserved pane somebody else is using is left open.** When another agent runs
+in it, or it has focus, the start still happens and stderr says the pane was
+left open. Tell the person, so they can close it.
 
 ## Which repository
 

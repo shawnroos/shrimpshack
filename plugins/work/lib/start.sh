@@ -221,7 +221,7 @@ sys.stdout.write("\t".join([p.get("id") or "", p.get("name") or "",
     printf '%s\t%s\t%s\n' "$key" "$team_key" "$segment"
 }
 
-# herdr_linear::start_from_issue <identifier> [branch-prefix] [from-dir] [repository]
+# herdr_linear::start_from_issue <identifier> [branch-prefix] [from-dir] [repository] [worktree-name branch]
 #
 # Prints the worktree path on success, and nothing else on stdout.
 #
@@ -234,16 +234,24 @@ sys.stdout.write("\t".join([p.get("id") or "", p.get("name") or "",
 # path. Without one, the repository is read from the scope's record: one is
 # stated and used, several or none return START_ASK and create nothing.
 #
-# R14. There is no name parameter. A supplied name can drop the identifier, and
-# the identifier leading the directory is what KTD1 leans on when it lets the
-# branch and the directory differ.
+# R14. A name is never typed. The one supplied pair is a board reservation's
+# (KTD13), passed by board_start_reserved: fixed from the ticket when it was
+# reserved, so a later title change keeps it and a team move that renumbers the
+# ticket never renames it (KTD1). Both or neither; the prefix is then unused.
 herdr_linear::start_from_issue() {
     local ident="${1:-}" prefix="${2:-$HERDR_LINEAR_BRANCH_PREFIX}"
-    local answer="${4:-}"
+    local answer="${4:-}" frozen_name="${5:-}" frozen_branch="${6:-}"
     local resp branch name scope key team_key segment org usable path current
     local repo candidates source nonce existing top git="${HERDR_LINEAR_GIT_BIN:-git}"
 
     [ -n "$ident" ] || return "$HERDR_LINEAR_START_REFUSED"
+    if [ -n "$frozen_name$frozen_branch" ]; then
+        if ! herdr_linear::is_safe_identifier "$frozen_name" \
+            || ! "$git" check-ref-format --branch "$frozen_branch" >/dev/null 2>&1; then
+            printf 'a reserved worktree name and branch must both be given, and be safe\n' >&2
+            return "$HERDR_LINEAR_START_REFUSED"
+        fi
+    fi
 
     # R7a. Resolving a relative answer would let the caller's directory decide
     # the repository again.
@@ -274,8 +282,15 @@ herdr_linear::start_from_issue() {
         *) return "$HERDR_LINEAR_START_UNAVAILABLE" ;;
     esac
 
-    branch="$(herdr_linear::start_branch_name "$resp" "$prefix")" || return "$HERDR_LINEAR_START_REFUSED"
-    name="$(herdr_linear::start_worktree_name "$resp")" || return "$HERDR_LINEAR_START_REFUSED"
+    if [ -n "$frozen_name" ]; then
+        herdr_linear::is_safe_identifier "$(herdr_linear::_start_issue_field "$resp" identifier)" \
+            || return "$HERDR_LINEAR_START_REFUSED"
+        branch="$frozen_branch"
+        name="$frozen_name"
+    else
+        branch="$(herdr_linear::start_branch_name "$resp" "$prefix")" || return "$HERDR_LINEAR_START_REFUSED"
+        name="$(herdr_linear::start_worktree_name "$resp")" || return "$HERDR_LINEAR_START_REFUSED"
+    fi
     scope="$(herdr_linear::start_scope "$resp")" || return "$HERDR_LINEAR_START_FAILED"
     key="$(printf '%s' "$scope" | cut -f1)"
     team_key="$(printf '%s' "$scope" | cut -f2)"

@@ -38,7 +38,7 @@ EOF
 # up whenever a suite file is added; if it is ever lowered, say why in the
 # commit — this number is what turns "the tests directory got renamed" into a
 # failure instead of a smaller, silently-green run.
-HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-22}"
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-37}"
 
 run_suite() {
     local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
@@ -486,6 +486,13 @@ consent_mutation_check() {
         "documents.bats:a document is not published when nobody has answered"
         "reconcile.bats:a hook with no recorded answer records the question rather than sending"
     )
+    # Board writes read space consent through board_consent_covers, directly or
+    # through board_consent_gate. One named red test per call site under lib/.
+    local -a board_expect=(
+        "board-linear.bats:completing a ticket in shadow mode logs and writes nothing"
+        "board-write.bats:AE6: in shadow mode a moved pane sends no issueUpdate and is restored"
+        "board-write.bats:moves of two tickets across one unconsented field record one consent question"
+    )
     # The names above are the point of the list and they stay. What a hand-kept
     # list cannot do is notice the write verb added next year: a seventh call
     # site with no line here is forgotten in the one phase that then reports
@@ -504,6 +511,25 @@ consent_mutation_check() {
         diff <(printf '%s\n' "$expected") <(printf '%s\n' "$derived") | sed 's/^/  /'
         return 1
     fi
+    local board_derived board_expected
+    # board-store.sh defines both verbs and board-store.bats covers its own gate.
+    # A `command -v` guard names a verb but calls nothing. board-sync.sh's python
+    # driver calls verbs by bare name, and its write-back tests live in
+    # board-write.bats beside the sync's own suite.
+    board_derived="$(awk '
+        FILENAME ~ /\/board-store\.sh$/ { next }
+        /herdr_linear::board_consent_(gate|covers)|call\("board_consent_(gate|covers)"/ && $0 !~ /^[[:space:]]*#/ \
+            && $0 !~ /herdr_linear::board_consent_(gate|covers)\(\)/ && $0 !~ /command -v/ {
+            n = split(FILENAME, p, "/"); f = p[n]; sub(/\.sh$/, ".bats", f)
+            if (f == "board-sync.bats") f = "board-write.bats"
+            print f
+        }' "$PLUGIN_ROOT"/lib/*.sh | sort)"
+    board_expected="$(printf '%s\n' "${board_expect[@]}" | sed 's/:.*//' | sort)"
+    if [ "$board_derived" != "$board_expected" ]; then
+        printf '%sconsent mutation FAILED%s — the named board list and the real board consent call sites disagree.\n' "$RED" "$NC"
+        diff <(printf '%s\n' "$board_expected") <(printf '%s\n' "$board_derived") | sed 's/^/  /'
+        return 1
+    fi
     local tmp; tmp="$(mktemp -d)"
     # The whole plugin, because a .bats file resolves lib/ from its OWN
     # directory -- copying lib/ alone would run every test against the real one
@@ -514,8 +540,12 @@ consent_mutation_check() {
 
 herdr_linear::consent_ok() { return 0; }
 EOF
+    cat >> "$tmp/work/lib/board-store.sh" <<'EOF'
+
+herdr_linear::board_consent_covers() { return 0; }
+EOF
     local rc=0 entry file name out
-    for entry in "${expect[@]}"; do
+    for entry in "${expect[@]}" "${board_expect[@]}"; do
         file="${entry%%:*}"; name="${entry#*:}"
         out="$(bats -f "$name" "$tmp/work/tests/unit/$file" 2>&1 || true)"
         # The filter matching nothing prints "0 tests" and exits 0, which reads
@@ -541,20 +571,28 @@ EOF
 # own question either way.
 consent_caller_check() {
     printf '%sConsent answer-verb caller check...%s\n' "$YELLOW" "$NC"
-    local hits d verb
+    local root="${1:-$PLUGIN_ROOT}" hits d verb
     # An absent directory yields no hits and reads as "no caller", so name the
     # three the rule is about and require each to be there before believing it.
     for d in lib hooks commands; do
-        if [ ! -d "$PLUGIN_ROOT/$d" ]; then
+        if [ ! -d "$root/$d" ]; then
             printf '%sconsent-confirm caller check FAILED%s — %s/%s is not there; it was never swept.\n' \
-                "$RED" "$NC" "$PLUGIN_ROOT" "$d"
+                "$RED" "$NC" "$root" "$d"
             return 1
         fi
     done
-    for verb in consent_confirm consent_decline; do
-        hits="$(grep -rn "herdr_linear::$verb" \
-            "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" 2>/dev/null \
-            | grep -v "^.*/lib/binding.sh:.*herdr_linear::$verb() {" || true)"
+    # The board's answer verbs follow the same rule. board_answer is the one
+    # place a board answer is applied, so it alone may call the board consent
+    # verbs, and it is called only from skills.
+    for verb in consent_confirm consent_decline board_consent_confirm board_consent_decline board_answer; do
+        # The sync driver calls verbs by bare name through call("verb", ...).
+        hits="$(grep -rnE "herdr_linear::$verb\b|call\(\"$verb\"" \
+            "$root/lib" "$root/hooks" "$root/commands" "$root/bin" 2>/dev/null \
+            | grep -v "^.*/lib/binding.sh:.*herdr_linear::$verb() {" \
+            | grep -v "^.*/lib/board-store.sh:.*herdr_linear::$verb() {" \
+            | grep -v "^.*/lib/board-attended.sh:.*herdr_linear::board_answer() {" \
+            | grep -v "^.*/lib/board-attended.sh:[0-9]*:# herdr_linear::board_answer " \
+            | grep -v "^.*/lib/board-attended.sh:[0-9]*: *&& herdr_linear::board_consent_confirm " || true)"
         if [ -n "$hits" ]; then
             printf '%s\n' "$hits"
             printf '%s%s caller check FAILED%s — only a write skill may record an answer.\n' \
@@ -562,7 +600,22 @@ consent_caller_check() {
             return 1
         fi
     done
-    printf '%sneither answer verb has a caller under lib/, hooks/ or commands/%s\n' "$GREEN" "$NC"
+    # A session binding is a person's answer too. It is recorded by /work:bind,
+    # which is a skill and not swept, and by the bind popup a person types into.
+    # Nothing else under lib/, hooks/, commands/ or bin/ may record one.
+    for verb in session_binding_confirm session_binding_decline session_binding_unbind; do
+        hits="$(grep -rnE "herdr_linear::$verb\b" \
+            "$root/lib" "$root/hooks" "$root/commands" "$root/bin" 2>/dev/null \
+            | grep -v "^$root/lib/session-binding.sh:[0-9]*:herdr_linear::$verb() {" \
+            | grep -v "^$root/bin/session-bind.sh:" || true)"
+        if [ -n "$hits" ]; then
+            printf '%s\n' "$hits"
+            printf '%s%s caller check FAILED%s — only /work:bind and the bind popup may record a session binding.\n' \
+                "$RED" "$verb" "$NC"
+            return 1
+        fi
+    done
+    printf '%sno answer verb has a caller under lib/, hooks/ or commands/ beyond board_answer%s\n' "$GREEN" "$NC"
 }
 
 # KTD31. A space binding is a person's answer, as consent is, and a hook has
@@ -585,7 +638,14 @@ import os, re, sys
 
 root = sys.argv[1]
 DEF = re.compile(r"^(herdr_linear::[A-Za-z0-9_]+)\(\)\s*\{")
-HOOK_BANNED = ("workspace_confirm", "workspace_propose", "open_session", "place_session", "layout_build")
+HOOK_BANNED = ("workspace_confirm", "workspace_propose", "open_session", "place_session", "layout_build",
+               "board_config_set", "_board_config_py",
+               "board_close_pane", "board_move_in_use", "board_apply_tab_in_use",
+               "board_move_pane", "board_apply_tab", "board_create_pane", "board_create_space",
+               "worktree_remove", "board_fence", "board_sync_bounded", "board_answer",
+               "workspace_propose_part", "workspace_confirm_part",
+               "session_binding_propose", "session_binding_confirm", "session_binding_decline",
+               "session_binding_unbind")
 LIB_ALLOWED = {("create.sh", "herdr_linear::new_project")}
 
 def files(d):
@@ -593,8 +653,19 @@ def files(d):
         for n in sorted(names):
             yield os.path.join(base, n)
 
-for f in files("hooks"):
+# board_sync reads Linear page by page and creates panes (KTD2). It is refused
+# by name however it is written; board-sync.sh may appear only as the path a
+# hook hands the agent, never as something the hook runs or sources.
+SYNC_VERB = re.compile(r"herdr_linear::board_sync(?![A-Za-z0-9_])")
+SYNC_PATH_ADVICE = re.compile(r'^HERDR_LINEAR_BOARD_SYNC_LIB_PATH="\$LIB/\.\./bin/board-sync\.sh" python3 -c \'$')
+# herdr's startup hook runs with nobody watching, as a Claude Code hook does.
+HERDR_HOOKS = [os.path.join(root, "bin", "session-start.sh")]
+for f in list(files("hooks")) + [h for h in HERDR_HOOKS if os.path.exists(h)]:
     for i, line in enumerate(open(f, errors="replace"), 1):
+        if SYNC_VERB.search(line):
+            print("%s:%d: a hook names board_sync; it reads Linear and creates panes (KTD2)" % (f, i))
+        if "board-sync" in line and not SYNC_PATH_ADVICE.match(line.rstrip("\n")):
+            print("%s:%d: a hook runs or sources board-sync.sh; it reads Linear and creates panes (KTD2)" % (f, i))
         for verb in HOOK_BANNED:
             if "herdr_linear::" + verb in line:
                 print("%s:%d: a hook calls %s; a hook has nobody to ask" % (f, i, verb))
@@ -602,6 +673,8 @@ for f in files("commands"):
     for i, line in enumerate(open(f, errors="replace"), 1):
         if "herdr_linear::workspace_confirm" in line:
             print("%s:%d: a command binds a space" % (f, i))
+        if "herdr_linear::session_binding_confirm" in line:
+            print("%s:%d: a command binds a session" % (f, i))
 for f in files("lib"):
     current = None
     for i, line in enumerate(open(f, errors="replace"), 1):
@@ -782,6 +855,34 @@ identifier_path_check() {
     printf '%severy identifier that becomes a path is validated, by a validator this file loads%s\n' "$GREEN" "$NC"
 }
 
+# No lib sources another unless it needs to, and a skill fence sources many at
+# once: two libs defining one function name leave whichever was sourced last in
+# force, and the other lib calls a function it never wrote.
+function_collision_check() {
+    printf '%sFunction collision check...%s\n' "$YELLOW" "$NC"
+    local out
+    out="$(python3 - "$PLUGIN_ROOT" <<'PY'
+import glob, os, re, sys
+defs = {}
+files = sorted(glob.glob(os.path.join(sys.argv[1], "lib", "*.sh")))
+if not files:
+    print("no lib file found; nothing was checked"); raise SystemExit
+for f in files:
+    for m in re.finditer(r"^(herdr_linear::[A-Za-z0-9_]+)\s*\(\)", open(f).read(), re.M):
+        defs.setdefault(m.group(1), set()).add(os.path.basename(f))
+for name, where in sorted(defs.items()):
+    if len(where) > 1:
+        print("%s is defined in %s" % (name, ", ".join(sorted(where))))
+PY
+)"
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+        printf '%sfunction collision check FAILED%s\n' "$RED" "$NC"
+        return 1
+    fi
+    printf '%sno function is defined in two libs%s\n' "$GREEN" "$NC"
+}
+
 wire_smoke() {
     printf '%sWire smoke...%s\n' "$YELLOW" "$NC"
     local rc=0
@@ -798,6 +899,7 @@ wire_smoke() {
     consent_caller_check || rc=1
     placement_caller_check || rc=1
     identifier_path_check || rc=1
+    function_collision_check || rc=1
     hook_source_stderr_check || rc=1
     return "$rc"
 }

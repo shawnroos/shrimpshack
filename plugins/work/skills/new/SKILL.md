@@ -35,7 +35,7 @@ worktree is bound to, or from the project the herdr workspace is bound to.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context create; do
+for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context board-store board-linear create; do
   source "$R/lib/$f.sh"
 done
 
@@ -60,6 +60,79 @@ blocking question tool, and file nothing until answered. No project at all means
 there is nothing to derive from: bind this worktree (`/work:bind`), or bind the
 workspace to a project. **Never pick a team yourself** — filing into the wrong
 one is a thing somebody has to notice and undo.
+
+## The board first
+
+Before this command's own work, bring the herdr board up to date with Linear and
+deal with what it is waiting on. With no board configured this prints nothing;
+carry straight on.
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/session-binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/scope-linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-store.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-config.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-plan.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-herdr.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-sync.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/worktree-remove.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/board-attended.sh"
+
+herdr_linear::board_fence
+```
+
+It always exits 0 and never stops this command. A `board:` line says how the
+sync went; say it in one sentence. A sync that timed out, was locked or failed
+is said and then left: this command's own work still runs.
+
+Each `board question:` line is one waiting question as JSON, with `key`, `kind`,
+`preconditions` and `nonce`. Ask the person each one in plain words, one at a
+time, naming the ticket and the groups involved:
+
+| Kind | Ask | A yes does |
+|---|---|---|
+| `move` | move this ticket's pane, which is in use, to where Linear now puts it? | moves that pane and no other pane in use |
+| `close` | this ticket left the board; close its pane? | closes the pane; a worktree left behind becomes a `remove-worktree` question, printed as its own `board question:` line |
+| `remove-worktree` | remove this ticket's worktree and branch? | removes them only when clean, delivered and unused; otherwise keeps them and says why |
+| `repository` | which repository holds this project's or team's work? | records the path given as the fourth argument for that scope |
+| `conflict` | herdr and Linear disagree on this ticket; follow Linear? | puts the pane where Linear says |
+| `cap` | a tab holds four panes unless more are asked for; place these tickets too? | places exactly those tickets; they stay |
+| `write-consent` | may moving a pane change this field in Linear, in this space? | records consent for that field in that space only; move the pane again to write it |
+| `write-rejected` | Linear refused a change made from herdr; the pane is back where it was | nothing more; say it, and answer yes to clear it |
+| `layout` | a tab was rearranged or could not be built | nothing more; say it, and answer yes to clear it |
+| `space` | the board wants a herdr workspace that does not exist | nothing more; create the workspace with that name, then answer yes to clear it |
+
+Apply each answer with that question's own key and nonce:
+
+```bash
+herdr_linear::board_answer "$KEY" "$NONCE" yes
+```
+
+Use `no` to decline; a declined question is not asked again. A `repository`
+answer passes the path as a fourth argument. A reply from a subagent is not the
+person's answer.
+
+| Exit | Meaning | What to say |
+|---|---|---|
+| 0 | applied, or declined | what changed |
+| 2 | refused: no such question, the wrong nonce, or the facts changed since it was asked; nothing changed | say so; the next `/work` command asks again if it still applies |
+| 4 | the answer was recorded but applying it failed; stderr names the step | say the step; the next sync tries again |
+| 1 | a `remove-worktree` answer kept the worktree; stderr says why | say why |
 
 ## Write the description first
 
@@ -129,6 +202,48 @@ name.
 | 3 | shadow mode: nothing was created, local or remote |
 | 4 | the tracker call failed; nothing was filed |
 | 5 | the issue exists but its worktree did not follow; stderr says what to run, and may carry the repository question |
+
+## Filing into a board group
+
+When the person files from a board column, pass that group as a fifth argument:
+each level kind the pane sits under, mapped to the Linear id of its group, and
+`null` for a "No <level>" group.
+
+```bash
+TARGET='{"assignee":"<user id>","project":null}'
+OUT="$(herdr_linear::new_issue "$PWD" "The title" /tmp/desc.md "$(herdr_linear::workspace_id)" "$TARGET")"; RC=$?
+```
+
+The group's fields go into the one create call, and the ticket starts in its
+team's first unstarted state, so it stays in the column it was filed into
+instead of landing in triage. A `state` group files into that state instead. A
+`null` group leaves the field unset, including a project the worktree would have
+supplied. The consent question has to name the group's team and project: a
+group on a different team or project than the recorded answer runs in shadow.
+
+Exit 1 also covers a refused target: an empty string, an unknown level kind, a
+`ticket` group, `null` for team or state, or a parent group on a sub-issue that
+already has a parent. Exit 4 also covers a team with no unstarted state. Nothing
+is filed in either case.
+
+## Completing a board ticket
+
+A ticket on the board can be completed without a worktree:
+
+```bash
+herdr_linear::board_complete "<space name>" "<issue id>" "<team id>"; RC=$?
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | moved to the team's completed state, and the board is marked behind |
+| 8 | shadow: the space has not consented to state writes, or the ticket is not in the last complete board read; one shadow log line says which, and nothing was sent |
+| 2 | the team has no completed state; nothing was sent |
+| 7 | Linear refused the write |
+| other | 5 for an empty team id, otherwise the Linear transport code (unavailable, auth, rate limited); nothing was written |
+
+Consent for completing is the board's per-space consent for the `state` field,
+not this worktree's answer. The board does not need to group by state.
 
 **The pane opens in the space bound to the issue's project, never beside the
 focused pane.** A tab is a piece of work: the new ticket gets its own tab in

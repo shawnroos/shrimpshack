@@ -61,6 +61,9 @@ if command -v herdr_linear::classify >/dev/null 2>&1; then
             exit 0
             ;;
     esac
+    # R12. Anything classify printed without suspending is an outside-session
+    # report; it is logged where a suspension is, and reconciliation goes on.
+    [ -z "$suspended" ] || herdr_linear::_shadow_log "OUTSIDE SESSION $(printf '%s' "$suspended" | tr '\n' ' ')"
 fi
 
 # Nothing is printed. A SessionEnd hook has no channel to the model, and stray

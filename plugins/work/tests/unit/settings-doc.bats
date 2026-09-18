@@ -34,7 +34,7 @@ code_knobs() {
         | grep -oE 'HERDR_[A-Z_]+' | head -1)"
     all_env_reads \
         | grep -vE '_BIN$' \
-        | grep -vE '^HERDR_(PANE|TAB|WORKSPACE)_ID$' \
+        | grep -vE '^HERDR_((PANE|TAB|WORKSPACE)_ID|SOCKET_PATH)$' \
         | grep -vE '^HERDR_LINEAR_(LOCK_|RETRY_|PANE_POLL_|TIMEOUT_)' \
         | grep -vE '^HERDR_LINEAR_(CANDIDATE_LIMIT|MIN_SUITES)$' \
         | { if [ -n "$deprecated" ]; then grep -vxF "$deprecated" || true; else cat; fi; }

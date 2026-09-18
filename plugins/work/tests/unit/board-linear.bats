@@ -1,0 +1,439 @@
+#!/usr/bin/env bats
+
+load setup_common
+
+# U4 — the board's Linear reads and its one field write.
+#
+# No Linear object is created or modified here. fake-linear.sh refuses every
+# mutation with exit 97 unless a test sets FAKE_LINEAR_ALLOW_MUTATION=1, and
+# only the write tests do.
+
+bats_require_minimum_version 1.5.0
+
+setup() {
+    ROOT="${BATS_TEST_DIRNAME}/../.."
+    FIX="${BATS_TEST_DIRNAME}/../fixtures"
+    WORK="$(mktemp -d)"
+
+    export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
+    export HERDR_LINEAR_SECURITY_BIN="$FIX/fake-security.sh"
+    export FAKE_SECURITY_STORE_DIR="$WORK/kc"
+    export FAKE_LINEAR_RECORD_DIR="$WORK/rec"
+    export LINEAR_SECRETS_FILE="$WORK/secrets"
+    export HERDR_LINEAR_RETRY_MAX=1
+    export HERDR_LINEAR_STORE_DIR="$WORK/store"
+    export HERDR_LINEAR_SHADOW_LOG="$WORK/shadow.log"
+    mkdir -p "$WORK/rec"
+    printf 'LINEAR_API_KEY=%s\n' "lin_api""_BOARDBOARDBOARDBOARD" > "$LINEAR_SECRETS_FILE"
+
+    # shellcheck source=/dev/null
+    for f in sanitize.sh secrets.sh linear.sh board-linear.sh; do . "$ROOT/lib/$f"; done
+
+    FILTER='{"team":["WEB","acme-api"],"assignee":"me","priority":[1,2],"state-type-not":["triage","backlog"]}'
+}
+
+teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
+
+bodies_named() {
+    local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null)" || n=0
+    printf '%s' "${n:-0}"
+}
+
+# Prints the last recorded body carrying $1, as JSON.
+last_body() { grep "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" | tail -1; }
+
+# ----------------------------------------------------------------- the read
+
+@test "a three-page result returns every ticket and the complete flag set" {
+    export FAKE_LINEAR_BOARD_PAGES=3
+    run --separate-stderr herdr_linear::board_issues "$FILTER"
+    [ "$status" -eq 0 ]
+    [ "$(bodies_named BoardIssues)" -eq 3 ]
+    printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert d["complete"] is True, d
+ids = [t["identifier"] for t in d["tickets"]]
+assert ids == ["WEB-5001", "WEB-5002", "WEB-5003", "WEB-5004", "WEB-5005", "WEB-5006"], ids
+assert "cursor" not in d and "endCursor" not in json.dumps(d), d
+t = d["tickets"][0]
+for k in ("id", "identifier", "title", "state", "team", "project", "projectMilestone",
+          "cycle", "assignee", "priority", "parent", "labels"):
+    assert k in t, k
+assert t["labels"]["nodes"][0]["parent"]["name"] == "Type", t
+'
+}
+
+@test "a rate limit on page two returns the first page with the complete flag unset" {
+    export FAKE_LINEAR_BOARD_PAGES=3 FAKE_LINEAR_BOARD_FAIL_AT=2
+    run --separate-stderr herdr_linear::board_issues "$FILTER"
+    [ "$status" -eq "$HERDR_LINEAR_RATELIMITED" ]
+    printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert d["complete"] is False, d
+assert [t["identifier"] for t in d["tickets"]] == ["WEB-5001", "WEB-5002"], d
+'
+    [ "$(bodies_named BoardIssues)" -eq 2 ]
+}
+
+@test "an unreadable page two returns the first page with the complete flag unset" {
+    export FAKE_LINEAR_BOARD_PAGES=3 FAKE_LINEAR_BOARD_FAIL_AT=2 FAKE_LINEAR_BOARD_FAIL_MODE=no_connection
+    run --separate-stderr herdr_linear::board_issues "$FILTER"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_READ_PARTIAL" ]
+    printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert d["complete"] is False, d
+assert [t["identifier"] for t in d["tickets"]] == ["WEB-5001", "WEB-5002"], d
+'
+}
+
+@test "an error on the first page reports nothing read and the complete flag unset" {
+    export FAKE_LINEAR_BOARD_PAGES=2 FAKE_LINEAR_BOARD_FAIL_AT=1 FAKE_LINEAR_BOARD_FAIL_MODE=auth_error
+    run --separate-stderr herdr_linear::board_issues "$FILTER"
+    [ "$status" -eq "$HERDR_LINEAR_AUTH" ]
+    printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert d == {"complete": False, "tickets": []}, d
+'
+}
+
+@test "a cursor that never advances stops at the page cap with the complete flag unset" {
+    export FAKE_LINEAR_BOARD_CURSOR=stuck HERDR_LINEAR_BOARD_MAX_PAGES=4
+    run --separate-stderr herdr_linear::board_issues "$FILTER"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_READ_PARTIAL" ]
+    printf '%s' "$output" | python3 -c '
+import sys, json
+assert json.load(sys.stdin)["complete"] is False
+'
+    [ "$(bodies_named BoardIssues)" -eq 4 ]
+}
+
+@test "the request body carries an explicit first and the filter keys from the configuration" {
+    export HERDR_LINEAR_BOARD_PAGE_SIZE=25
+    run --separate-stderr herdr_linear::board_issues \
+        '{"team":["WEB","acme-api"],"project":"AI Canvas Tools","milestone":"M1","cycle":"c-1","assignee":"me","state":"Todo","parent":"WEB-2870","label":["Bug"],"state-type":["unstarted","started"],"priority":[1,2],"state-type-not":["triage","backlog"]}'
+    [ "$status" -eq 0 ]
+    last_body BoardIssues | python3 -c '
+import sys, json
+b = json.load(sys.stdin)
+v = b["variables"]
+assert v["n"] == 25, v
+assert "a" in v and v["a"] is None, v
+assert "first:$n" in b["query"] and "after:$a" in b["query"], b["query"]
+assert " updatedAt " in b["query"].split("nodes{", 1)[1], b["query"]
+clauses = v["f"]["and"]
+flat = json.dumps(clauses)
+keys = set()
+for c in clauses:
+    keys.update(c.keys())
+for k in ("team", "project", "projectMilestone", "cycle", "assignee", "state", "parent", "labels", "priority"):
+    assert k in keys, (k, keys)
+assert {"assignee": {"isMe": {"eq": True}}} in clauses, clauses
+assert {"priority": {"in": [1, 2]}} in clauses, clauses
+assert {"state": {"type": {"in": ["unstarted", "started"]}}} in clauses, clauses
+assert {"state": {"type": {"nin": ["triage", "backlog"]}}} in clauses, clauses
+team = [c for c in clauses if "team" in c][0]["team"]
+assert {"key": {"in": ["WEB", "acme-api"]}} in team["or"], team
+parent = [c for c in clauses if "parent" in c][0]["parent"]
+assert {"and": [{"team": {"key": {"eq": "WEB"}}}, {"number": {"eq": 2870}}]} in parent["or"], parent
+'
+}
+
+@test "a filter key outside the resolved filter contract is refused before any request" {
+    run --separate-stderr herdr_linear::board_issues '{"team":"WEB","estimate":3}'
+    [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
+    [[ "$stderr" == *'"estimate"'* ]]
+    [ "$(bodies_named BoardIssues)" -eq 0 ]
+}
+
+@test "a filter holding an empty string is refused before any request" {
+    run --separate-stderr herdr_linear::board_issues '{"team":["WEB",""]}'
+    [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
+    [ "$(bodies_named BoardIssues)" -eq 0 ]
+}
+
+# ---------------------------------------------------------------- the write
+
+@test "a label-group write sends addedLabelIds and removedLabelIds and never labelIds" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" labelGroup "lbl-new" "lbl-old"
+    [ "$status" -eq 0 ]
+    last_body issueUpdate | python3 -c '
+import sys, json
+b = json.load(sys.stdin)
+i = b["variables"]["input"]
+assert i == {"addedLabelIds": ["lbl-new"], "removedLabelIds": ["lbl-old"]}, i
+assert b["variables"]["id"] == "issue-uuid-1", b
+assert "labelIds" not in i
+'
+}
+
+@test "moving a ticket to No <group> removes only its current label" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" labelGroup --none "lbl-old"
+    [ "$status" -eq 0 ]
+    last_body issueUpdate | python3 -c '
+import sys, json
+i = json.load(sys.stdin)["variables"]["input"]
+assert i == {"removedLabelIds": ["lbl-old"]}, i
+'
+}
+
+@test "a No <level> target on a nullable field sends an explicit null" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" projectId --none
+    [ "$status" -eq 0 ]
+    last_body issueUpdate | python3 -c '
+import sys, json
+i = json.load(sys.stdin)["variables"]["input"]
+assert "projectId" in i and i["projectId"] is None, i
+assert list(i) == ["projectId"], i
+'
+}
+
+@test "a No <level> target on state or team is refused before any request" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    for field in stateId teamId; do
+        run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" "$field" --none
+        [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
+    done
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+}
+
+@test "No priority is written as priority 0" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" priority --none
+    [ "$status" -eq 0 ]
+    last_body issueUpdate | python3 -c '
+import sys, json
+i = json.load(sys.stdin)["variables"]["input"]
+assert i == {"priority": 0}, i
+'
+}
+
+@test "a set value is sent under its field name" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" assigneeId "user-uuid-2"
+    [ "$status" -eq 0 ]
+    last_body issueUpdate | python3 -c '
+import sys, json
+i = json.load(sys.stdin)["variables"]["input"]
+assert i == {"assigneeId": "user-uuid-2"}, i
+'
+}
+
+# FAKE_LINEAR_ALLOW_MUTATION stays unset: a request that got through would come
+# back as 97, which the lib reports as UNAVAILABLE, never as REFUSED.
+@test "an empty target value is refused before any request is sent" {
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" assigneeId ""
+    [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" labelGroup "" "lbl-old"
+    [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
+    run --separate-stderr herdr_linear::board_write_field "" assigneeId "user-uuid-2"
+    [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+}
+
+@test "an unknown field, a bad priority and an empty label swap are refused before any request" {
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" labelIds "lbl-new"
+    [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" priority 7
+    [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" labelGroup --none --none
+    [ "$status" -eq "$HERDR_LINEAR_REFUSED" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+}
+
+@test "a response with success false is reported as a failed write" {
+    export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=fail
+    run --separate-stderr herdr_linear::board_write_field "issue-uuid-1" cycleId "cycle-uuid-3"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_REJECTED" ]
+    [ "$(bodies_named issueUpdate)" -eq 1 ]
+}
+
+# ------------------------------------------------------ first unstarted state
+
+@test "the first-unstarted-state lookup picks the lowest-position unstarted state" {
+    run --separate-stderr herdr_linear::board_first_unstarted_state "55555555-5555-4555-8555-555555555555"
+    [ "$status" -eq 0 ]
+    [ "$output" = "st-ready" ]
+    last_body BoardTeamStates | python3 -c '
+import sys, json
+b = json.load(sys.stdin)
+assert b["variables"]["id"] == "55555555-5555-4555-8555-555555555555", b
+assert "position" in b["query"], b
+'
+}
+
+@test "a team with no unstarted state answers not found" {
+    export FAKE_LINEAR_BOARD_STATES=none
+    run --separate-stderr herdr_linear::board_first_unstarted_state "55555555-5555-4555-8555-555555555555"
+    [ "$status" -eq "$HERDR_LINEAR_NOT_FOUND" ]
+    [ -z "$output" ]
+}
+
+# ------------------------------------------------------------------ complete
+
+TEAM=55555555-5555-4555-8555-555555555555
+TICKET=bbbbbbbb-0000-4000-8000-000000000001
+
+# The ticket is in the last complete read, so consent is the one fact a refusal
+# can be for. The board groups by assignee, not state: completion must not need
+# a rendered completed group.
+board_read_with_done() {
+    herdr_linear::board_sync_complete "$(printf '{"observed":{},"unknown":{},"pending_questions":0,"members":["%s"],"rendered":{"Board":{"assignee":["66666666-6666-4666-8666-666666666666"]}}}' "$TICKET")"
+}
+consent_for_state() {
+    local n; n="$(herdr_linear::board_consent_propose Board state)"
+    herdr_linear::board_consent_confirm Board state "$n"
+}
+shadow_lines() { if [ -e "$HERDR_LINEAR_SHADOW_LOG" ]; then grep -c . "$HERDR_LINEAR_SHADOW_LOG" || true; else echo 0; fi; }
+
+@test "completing a ticket in shadow mode logs and writes nothing" {
+    board_read_with_done
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_SHADOW" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+    [ "$(shadow_lines)" = "1" ]
+    grep -q "SHADOW board would complete \"$TICKET\" (state \"st-done\") in \"Board\": no consent for state writes in this space$" "$HERDR_LINEAR_SHADOW_LOG"
+}
+
+@test "completing a consented ticket on a board not grouped by state is allowed" {
+    board_read_with_done
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq 0 ]
+    [ "$(bodies_named issueUpdate)" -eq 1 ]
+    [ "$(shadow_lines)" = "0" ]
+}
+
+@test "completing a ticket absent from the last complete read is refused and writes nothing" {
+    board_read_with_done
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board bbbbbbbb-0000-4000-8000-000000000099 "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_SHADOW" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+    [ "$(shadow_lines)" = "1" ]
+    grep -q 'ticket is not in the last complete filter read$' "$HERDR_LINEAR_SHADOW_LOG"
+}
+
+@test "completing with no complete read recorded is refused and writes nothing" {
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_SHADOW" ]
+    # A sync-state record that holds only a plugin write is still no complete read.
+    herdr_linear::board_record_linear_write
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_SHADOW" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+    [ "$(grep -c 'no complete filter read is recorded$' "$HERDR_LINEAR_SHADOW_LOG")" -eq 2 ]
+}
+
+@test "a completion gate that cannot evaluate its facts refuses and still logs a line" {
+    mkdir -p "$WORK/nopy"
+    printf '#!/bin/sh\nexit 1\n' > "$WORK/nopy/python3"; chmod +x "$WORK/nopy/python3"
+    PATH="$WORK/nopy:$PATH" run herdr_linear::board_complete_gate Board "$TICKET" st-done
+    [ "$status" -eq 1 ]
+    grep -q 'the gate could not evaluate its facts' "$HERDR_LINEAR_SHADOW_LOG"
+}
+
+@test "completing a consented board ticket writes its team's first completed state and marks the board behind" {
+    board_read_with_done
+    consent_for_state
+    run herdr_linear::board_behind
+    [ "$status" -eq 1 ]
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq 0 ]
+    [ "$(bodies_named issueUpdate)" -eq 1 ]
+    last_body issueUpdate | python3 -c '
+import sys, json
+b = json.load(sys.stdin)
+assert b["variables"] == {"id": "bbbbbbbb-0000-4000-8000-000000000001", "input": {"stateId": "st-done"}}, b
+'
+    [ "$(shadow_lines)" = "0" ]
+    run herdr_linear::board_behind
+    [ "$status" -eq 0 ]
+}
+
+@test "a team with no completed state completes nothing" {
+    board_read_with_done
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_BOARD_STATES=no_completed
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_NOT_FOUND" ]
+    [ "$(bodies_named issueUpdate)" -eq 0 ]
+}
+
+@test "a completion Linear rejects is reported as a failed write and does not mark the board behind" {
+    board_read_with_done
+    consent_for_state
+    export FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=fail
+    run --separate-stderr herdr_linear::board_complete Board "$TICKET" "$TEAM"
+    [ "$status" -eq "$HERDR_LINEAR_BOARD_WRITE_REJECTED" ]
+    run herdr_linear::board_behind
+    [ "$status" -eq 1 ]
+}
+
+# ------------------------------------------------------------- session scope
+
+scope_clauses() {
+    last_body BoardIssues | python3 -c '
+import sys, json
+print(json.dumps(json.load(sys.stdin)["variables"]["f"]["and"], sort_keys=True))'
+}
+
+@test "a team scope is joined to the filter with AND, as its own clause" {
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' '{"kind":"team","id":"t-web"}'
+    [ "$status" -eq 0 ]
+    scope_clauses | python3 -c '
+import sys, json
+c = json.load(sys.stdin)
+assert {"assignee": {"isMe": {"eq": True}}} in c, c
+assert {"team": {"id": {"eq": "t-web"}}} in c, c
+assert len(c) == 2, c'
+}
+
+@test "an initiative scope selects by the project's initiatives" {
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' '{"kind":"initiative","id":"i-media"}'
+    [ "$status" -eq 0 ]
+    scope_clauses | grep -qF '{"project": {"initiatives": {"some": {"id": {"eq": "i-media"}}}}}'
+}
+
+@test "a project scope selects that project" {
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' '{"kind":"project","id":"p-canvas"}'
+    [ "$status" -eq 0 ]
+    scope_clauses | grep -qF '{"project": {"id": {"eq": "p-canvas"}}}'
+}
+
+@test "a mapping whose own filter names another team keeps both clauses and reads an empty board, not an error" {
+    run --separate-stderr herdr_linear::board_issues '{"team":["OPS"]}' '{"kind":"team","id":"t-web"}'
+    [ "$status" -eq 0 ]
+    c="$(scope_clauses)"
+    [[ "$c" == *'"OPS"'* ]]
+    [[ "$c" == *'"t-web"'* ]]
+}
+
+@test "no scope, or an empty one, sends the filter alone" {
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}'
+    [ "$(scope_clauses)" = '[{"assignee": {"isMe": {"eq": true}}}]' ]
+    run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' '{}'
+    [ "$(scope_clauses)" = '[{"assignee": {"isMe": {"eq": true}}}]' ]
+}
+
+@test "a scope of an unknown kind or with an unusable id is refused and nothing is sent" {
+    local s
+    for s in '{"kind":"milestone","id":"m-1"}' '{"kind":"organization","id":"o"}' '{"kind":"team","id":""}' '{"kind":"team"}' '[1]' 'nope'; do
+        : > "$FAKE_LINEAR_RECORD_DIR/bodies"
+        run --separate-stderr herdr_linear::board_issues '{"assignee":"me"}' "$s"
+        [ "$status" -ne 0 ] || { echo "accepted: $s"; return 1; }
+        [ "$(bodies_named BoardIssues)" = 0 ]
+    done
+}

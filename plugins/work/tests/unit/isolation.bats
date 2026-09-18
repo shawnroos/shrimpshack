@@ -48,7 +48,8 @@ load setup_common
 @test "every external binary seam names a path that is not there" {
     local v
     for v in "$HERDR_LINEAR_CURL_BIN" "$HERDR_LINEAR_SECURITY_BIN" \
-             "$HERDR_LINEAR_OSASCRIPT_BIN" "$HERDR_LINEAR_GH_BIN" "$HERDR_BIN"; do
+             "$HERDR_LINEAR_OSASCRIPT_BIN" "$HERDR_LINEAR_GH_BIN" "$HERDR_BIN" \
+             "$HERDR_LINEAR_LSOF_BIN"; do
         [ -n "$v" ]
         [ ! -e "$v" ]
     done

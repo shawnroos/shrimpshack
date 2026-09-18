@@ -331,6 +331,56 @@ mutations_sent() {
     fi
 }
 
+# ----------------------------------------------------- the board falls behind
+
+plugin_write_recorded() {
+    python3 -c 'import json,sys; print(bool(json.load(open(sys.argv[1])).get("last_plugin_write_at")))' \
+        "$HERDR_LINEAR_STORE_DIR/board/sync-state.json" 2>/dev/null || printf 'False\n'
+}
+
+@test "a state write at session end marks the board behind" {
+    bind_wt WEB-2870
+    merge_into_main
+    enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    run bash -c "printf '{\"cwd\":\"$WT\",\"hook_event_name\":\"SessionEnd\"}' | bash '$ROOT/hooks/reconcile.sh'"
+    [ "$status" -eq 0 ]
+    [ "$(mutations_sent)" = "1" ]
+    [ "$(plugin_write_recorded)" = "True" ]
+}
+
+@test "a state write marks the board behind when the caller sourced no board library" {
+    bind_wt WEB-2870
+    merge_into_main
+    enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    run bash -c "for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh; do . \"$ROOT/lib/\$f\"; done; herdr_linear::reconcile '$WT'"
+    [ "$status" -eq 0 ]
+    [ "$(mutations_sent)" = "1" ]
+    [ "$(plugin_write_recorded)" = "True" ]
+}
+
+@test "a write the API reports as unsuccessful does not mark the board behind" {
+    bind_wt WEB-2870
+    merge_into_main
+    enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1
+    export FAKE_LINEAR_MUTATION_RESULT=fail
+    run herdr_linear::reconcile "$WT"
+    [ "$status" -eq 5 ]
+    [ "$(mutations_sent)" = "1" ]
+    [ "$(plugin_write_recorded)" = "False" ]
+}
+
+@test "a shadow-mode pass does not mark the board behind" {
+    bind_wt WEB-2870
+    merge_into_main
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::reconcile "$WT"
+    [ "$status" -eq 2 ]
+    [ "$(plugin_write_recorded)" = "False" ]
+}
+
 # KTD7, and the reason write_state takes the opening value as an argument: no
 # write path can exist that forgot to guard.
 @test "a write is refused when the issue moved during the pass" {
@@ -493,6 +543,25 @@ mutations_sent() {
     run cat "$HERDR_LINEAR_SHADOW_LOG"
     [[ "$output" == *"SUSPENDED"* ]]
     [[ "$output" == *"WEB-2870 is canceled in Linear"* ]]
+}
+
+# R12. A worktree whose issue lies outside its herdr session's scope is reported
+# where a suspension is, and nothing is suspended.
+@test "the hook logs a worktree outside its session's scope and still reconciles" {
+    bind_wt WEB-2870
+    export FAKE_LINEAR_MODE=found_parent
+    export FAKE_LINEAR_SCOPE_WORLD="$WORK/world.json"
+    printf '%s' '{"teams":[{"id":"t-ops","key":"OPS","name":"Ops"}],"projects":{},"issues":{"WEB-2870":{"team":"t-web","project":null}}}' > "$FAKE_LINEAR_SCOPE_WORLD"
+    . "$ROOT/lib/session-binding.sh"
+    n="$(herdr_linear::session_binding_propose default team t-ops "OPS Ops")"
+    herdr_linear::session_binding_confirm default "$n"
+    run bash -c "printf '{\"cwd\":\"$WT\",\"hook_event_name\":\"SessionEnd\"}' | bash '$ROOT/hooks/reconcile.sh'"
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
+    run cat "$HERDR_LINEAR_SHADOW_LOG"
+    [[ "$output" == *"OUTSIDE SESSION"* ]]
+    [[ "$output" == *"WEB-2870"* ]]
+    [[ "$output" != *"SUSPENDED"* ]]
 }
 
 # pending_judgment is ONE slot and set-judgment replaces it wholesale, so the
