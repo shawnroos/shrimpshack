@@ -40,8 +40,8 @@
 # concern, and saying so beats implying coverage.
 
 # The codepoints stripped, as inclusive decimal ranges. This list is the only
-# statement of the set: the jq filter below is built from it, and
-# bin/work-snapshot.sh reads it to clean the document it prints.
+# statement of the set: the jq filter and the Python cleaner below are both
+# built from it.
 #
 # Codepoints are numeric on purpose: a range written with backslash-u escapes
 # is one editor accident away from embedding the literal control byte it is
@@ -66,6 +66,35 @@ def strip_display_deep:
 "
 }
 HERDR_LINEAR_SANITIZE_JQ_DEF="$(herdr_linear::_strip_jq_def)"
+
+# The same filter as Python, for the bin scripts that print JSON: STRIP,
+# clean(s) and deep_clean(v), prepended as `python3 -c "$HERDR_LINEAR_STRIP_PY"'...'`.
+# The body a caller appends is single-quoted, so it cannot contain a `'`.
+# An empty range list stops the script rather than printing uncleaned text.
+herdr_linear::_strip_py_def() {
+    local r lo hi tuples=""
+    for r in $HERDR_LINEAR_STRIP_RANGES; do
+        lo="${r%-*}"; hi="${r#*-}"
+        tuples="$tuples($lo, $hi), "
+    done
+    printf 'STRIP = [%s]\n' "$tuples"
+    printf '%s' '
+import sys as _strip_sys
+if not STRIP:
+    _strip_sys.exit(1)
+def clean(s):
+    return "".join(ch for ch in s if not any(lo <= ord(ch) <= hi for lo, hi in STRIP))
+def deep_clean(v):
+    if isinstance(v, str):
+        return clean(v)
+    if isinstance(v, list):
+        return [deep_clean(x) for x in v]
+    if isinstance(v, dict):
+        return {k: deep_clean(x) for k, x in v.items()}
+    return v
+'
+}
+HERDR_LINEAR_STRIP_PY="$(herdr_linear::_strip_py_def)"
 
 # herdr_linear::sanitize_for_display <string>
 # Prints the string with display-control characters removed.

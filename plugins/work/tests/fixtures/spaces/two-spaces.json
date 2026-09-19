@@ -1,0 +1,22 @@
+{
+  "message": null,
+  "rows": [
+    {
+      "id": "wA",
+      "label": "Plugins",
+      "live": true,
+      "project_id": "44444444-4444-4444-8444-444444444444",
+      "project_name": null,
+      "state": "bound"
+    },
+    {
+      "id": "wB",
+      "label": "Scratch",
+      "live": true,
+      "project_id": null,
+      "project_name": null,
+      "state": "unbound"
+    }
+  ],
+  "status": "ok"
+}

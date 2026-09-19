@@ -398,8 +398,10 @@ with open(sys.argv[1], "a") as f:
 pi = conn.get("pageInfo") or {}
 print("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") or "")
 ' "$acc_file" 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+        # A next page with no cursor to reach it is a list cut short.
         case "$ctl" in
             1\ ?*) after="${ctl#1 }" ;;
+            1*)    truncated=true; break ;;
             *)     break ;;
         esac
     done
@@ -485,7 +487,9 @@ print(json.dumps({"query": q, "variables": v}))
         [ "$rc" -eq 0 ] || return "$rc"
         pages=$(( pages + 1 ))
         resp="$(printf '%s' "$resp" | HERDR_LINEAR_PROJECT="$project" python3 -c "$HERDR_LINEAR_NAMES_PROJECT_PY"'
-import sys, json, os
+import sys, json, os, re
+# An id carrying a newline would print a second, forged row.
+VIEW_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", re.ASCII)
 project = os.environ["HERDR_LINEAR_PROJECT"]
 d = json.load(sys.stdin)
 conn = ((d.get("data") or {}).get("customViews")) or {}
@@ -497,16 +501,21 @@ for v in nodes:
         continue
     if not names_project(v.get("filterData"), project):
         continue
+    vid = v.get("id")
+    if not isinstance(vid, str) or not VIEW_ID.fullmatch(vid):
+        continue
     name = "".join(ch for ch in str(v.get("name") or "") if ch not in "\t\n\r")
-    print("%s\t%s" % (v.get("id", ""), name))
+    print("%s\t%s" % (vid, name))
 pi = conn.get("pageInfo") or {}
 print("\x01%s %s" % ("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") or ""))
 ' 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
         after="${resp##*$'\x01'}"
         resp="${resp%$'\x01'*}"
         [ -n "$resp" ] && out="$out$resp"
+        # A next page with no cursor to reach it is a list cut short.
         case "$after" in
             1\ ?*) after="${after#1 }" ;;
+            1*)    partial=1; break ;;
             *)     break ;;
         esac
     done
@@ -517,6 +526,76 @@ print("\x01%s %s" % ("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") 
         printf 'listed the first %s pages of views only; a view past that can be chosen by its id\n' "$HERDR_LINEAR_VIEW_PAGE_MAX" >&2
         return "$HERDR_LINEAR_PARTIAL"
     fi
+    return "$HERDR_LINEAR_OK"
+}
+
+# herdr_linear::my_projects -> a JSON array of {id, name, team_key}, the
+# projects the credential's person is a member of. Exit 7 when the page cap
+# stopped the listing; what printed is still real.
+#
+# Membership is Linear's own (tests/probe/projects-shapes.md): `User` has no
+# projects field, so the filter on `projects` is the only way to ask. An
+# assignee-derived list is not a substitute -- it drops every project the
+# person joined and has no issue in.
+herdr_linear::my_projects() {
+    local acc_file rc
+    acc_file="$(mktemp)" || return "$HERDR_LINEAR_UNAVAILABLE"
+    herdr_linear::_my_projects_into "$acc_file"; rc=$?
+    rm -f "$acc_file"
+    return "$rc"
+}
+
+herdr_linear::_my_projects_into() {
+    local acc_file="${1:-}" after="" body resp rc pages=0 ctl out partial=0
+    while :; do
+        if [ "$pages" -ge "$HERDR_LINEAR_VIEW_PAGE_MAX" ]; then partial=1; break; fi
+        body="$(HERDR_LINEAR_AFTER="$after" python3 -c '
+import sys, json, os
+q = "query($n:Int,$after:String,$filter:ProjectFilter){projects(first:$n,after:$after,filter:$filter){nodes{id name teams(first:1){nodes{key}}} pageInfo{hasNextPage endCursor}}}"
+v = {"n": int(sys.argv[1]), "filter": {"members": {"some": {"isMe": {"eq": True}}}}}
+if os.environ.get("HERDR_LINEAR_AFTER"):
+    v["after"] = os.environ["HERDR_LINEAR_AFTER"]
+print(json.dumps({"query": q, "variables": v}))
+' "$HERDR_LINEAR_VIEW_PAGE_SIZE")" || return "$HERDR_LINEAR_UNAVAILABLE"
+        resp="$(herdr_linear::query "$body")"; rc=$?
+        [ "$rc" -eq 0 ] || return "$rc"
+        pages=$(( pages + 1 ))
+        ctl="$(printf '%s' "$resp" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+conn = ((d.get("data") or {}).get("projects")) or {}
+nodes = conn.get("nodes")
+if not isinstance(nodes, list):
+    sys.exit(1)
+rows = []
+for p in nodes:
+    if not isinstance(p, dict) or not p.get("id"):
+        continue
+    teams = ((p.get("teams") or {}).get("nodes")) or []
+    key = teams[0].get("key") if teams and isinstance(teams[0], dict) else None
+    rows.append({"id": p["id"], "name": p.get("name") or "", "team_key": key or None})
+with open(sys.argv[1], "a") as f:
+    f.write(json.dumps(rows) + "\n")
+pi = conn.get("pageInfo") or {}
+print("1" if pi.get("hasNextPage") else "0", pi.get("endCursor") or "")
+' "$acc_file" 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+        # A next page with no cursor to reach it is a list cut short.
+        case "$ctl" in
+            1\ ?*) after="${ctl#1 }" ;;
+            1*)    partial=1; break ;;
+            *)     break ;;
+        esac
+    done
+    out="$(python3 -c '
+import sys, json
+out = []
+for line in open(sys.argv[1]):
+    if line.strip():
+        out.extend(json.loads(line))
+print(json.dumps(out))
+' "$acc_file" 2>/dev/null)" || return "$HERDR_LINEAR_UNAVAILABLE"
+    printf '%s' "$out"
+    [ "$partial" -eq 1 ] && return "$HERDR_LINEAR_PARTIAL"
     return "$HERDR_LINEAR_OK"
 }
 

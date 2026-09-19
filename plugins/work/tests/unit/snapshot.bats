@@ -143,14 +143,14 @@ print(found)
 # crates/board-core/tests/fixtures/linear-snapshot/VERSION; the lines below
 # are that file's, so a change on either side fails here or there.
 @test "every fixture matches the hash the board pins" {
-    local expected="beb6b1e1f8b6f9678540a80e304afb18ca579101274d6a1fd842bf720feb23ca  bound-no-view.json
-be4f319596c1570490871b19297786c3b6ad9cf6d70baf2d5ba891733c4a15c0  bound-view-unsupported-grouping.json
-76a6cb77e60425d9aaf89add3be76957e4f501cdd26e187b9bafbf0f9c6b3ca9  bound-with-view.json
-a78f33d96fc70332547df343a9996f9dd5028e468f0a884b4c8385bcf88fe32e  herdr-unavailable.json
-dccba6c109bc9e4a125fe76ba38abd8239f7477fa778ae072d313e683f0ea26c  linear-unavailable.json
+    local expected="694650b60678e0fa734d62abc7fd70f1f16702dc4e918b45fee55fef4427189c  bound-no-view.json
+dafb3fff575d7b5a2bf1ac1277061d406d49bbfcc464207b939ff796e4c9b29f  bound-view-unsupported-grouping.json
+f7ae46a2c9545c1bc254f53511fc35d3c70d914bdd517453bfeedfd055905fe1  bound-with-view.json
+306a4791a52a10c7c28e00eb19b7719490089f389d0df5e4cf07f3aeb2a67756  herdr-unavailable.json
+334c2630f08515aa4a0f19ba759d3b37813ffcd0e43049a67854c4e18dc0f292  linear-unavailable.json
 d70ddd3e9e77ef658362b5696623e87c9b7de97b6af3b00b912e76dd288ebc6c  record-unreadable.json
 f2c2f12bff7a153bd8ddf4492eaaad28392ad169b3d5abc343c96a786f28dcf7  unbound.json
-bcab66a6ac98a4c88e449d6bc39af0784a1e0d7dccca0b429afa584c37be5116  worktree-missing.json"
+a25ba0b14a499c9bbc02cb862b9ec782d95f53b9240bfe00eae9fe794cf411dc  worktree-missing.json"
     local actual
     actual="$(cd "$SNAPFIX" && shasum -a 256 -- *.json)"
     [ "$(printf '%s' "$actual" | grep -c .)" -eq 8 ]
@@ -579,4 +579,21 @@ sys.stdout.write("".join("x" + chr(c) for c in keep) + "x")
 @test "the fake herdr no longer pins the snapshot to 0.8.2" {
     run --separate-stderr bash "$BIN" wA
     [ "$(field "$output" 'd["herdr"]["version"]')" = "0.9.0" ]
+}
+
+@test "under workflowState grouping each group carries its state's kind" {
+    with_view
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" '[(g["key"], g["kind"]) for g in d["groups"]]')" = "[('st-backlog', 'backlog'), ('st-todo', 'unstarted'), ('st-prog', 'started'), ('st-devdone', 'started'), ('st-done', 'completed')]" ]
+}
+
+@test "under a grouping that is not workflowState every group carries kind null" {
+    with_view
+    export FAKE_LINEAR_VIEW_GROUPING=label FAKE_LINEAR_VIEW_PREFS=unarranged
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" 'd["view"]["layout"]["grouping"]')" = "label" ]
+    [ "$(field "$output" 'len(d["groups"])')" = "2" ]
+    [ "$(field "$output" 'all("kind" in g and g["kind"] is None for g in d["groups"])')" = "True" ]
 }

@@ -22,6 +22,8 @@ setup() {
     export CLAUDE_SESSION_ID="session-one"
     # shellcheck source=/dev/null
     . "${BATS_TEST_DIRNAME}/../../lib/binding.sh"
+    # shellcheck source=/dev/null
+    . "${BATS_TEST_DIRNAME}/../../lib/bind-args.sh"
 
     WT="$WORK/wt"
     mkdir -p "$WT"
@@ -881,4 +883,255 @@ PY
     [ "$status" -eq 0 ]
     result="$(printf '%s' "$output" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["view"]["id"], d["view"]["name"], d["state"])')"
     [ "$result" = "cccc-2 Second bound" ]
+}
+
+# ------------------------------------------------ bind arguments (KTD4, R16)
+
+LONG64="a123456789b123456789c123456789d123456789e123456789f123456789g123"
+LONG65="${LONG64}h"
+PROJ_ID=44444444-4444-4444-8444-444444444444
+VIEW_ID=cccccccc-cccc-4ccc-8ccc-cccccccccccc
+
+hostile_ids() {
+    printf '%s\0' "-rf" "--exec" ".hidden" ".." $'a\nb' "a b" "" "$LONG65" "a.b" "a/b" $'caf\xc3\xa9'
+}
+
+# linear.sh and views.sh are sourced only here: binding.sh must not reach them,
+# and view_read is replaced so a test can see whether a read was attempted.
+load_view_libs() {
+    local f
+    for f in secrets.sh linear.sh views.sh; do . "${BATS_TEST_DIRNAME}/../../lib/$f"; done
+    READS="$WORK/reads"
+    herdr_linear::view_read() {
+        printf '%s\n' "$1" >> "$READS"
+        [ -z "${CANNED_VIEW_FAIL:-}" ] || return 3
+        printf '{"id":"%s","name":"Board","archived":false,"filter":{"project":{"id":{"eq":"%s"}}},"layout":{}}' \
+            "$1" "${CANNED_VIEW_PROJECT:-$PROJ_ID}"
+    }
+}
+
+@test "the bind identifier rule accepts the valid set, up to 64 characters" {
+    for good in wA "$PROJ_ID" WEB-1234 a_b 9 "$LONG64"; do
+        run herdr_linear::is_bind_identifier "$good"
+        [ "$status" -eq 0 ]
+    done
+}
+
+# Mutation note: this is the test that goes red when the first-character rule is
+# removed from is_bind_identifier. Only that rule refuses `-rf` and `--exec`;
+# the charset admits both.
+@test "the bind identifier rule refuses an option-shaped id" {
+    for bad in "-rf" "--exec" "-" "_x"; do
+        run herdr_linear::is_bind_identifier "$bad"
+        [ "$status" -eq 1 ]
+    done
+}
+
+@test "the bind identifier rule refuses every hostile shape" {
+    local bad
+    while IFS= read -r -d '' bad; do
+        run herdr_linear::is_bind_identifier "$bad"
+        [ "$status" -eq 1 ]
+    done < <(hostile_ids)
+    # The library rule stays as it was: it still admits a dot the bind rule refuses.
+    run herdr_linear::is_safe_identifier "a.b"
+    [ "$status" -eq 0 ]
+}
+
+@test "a valid space, project and view parse into four fixed lines" {
+    run --separate-stderr herdr_linear::bind_args_parse --space wA --project "$PROJ_ID" --view "$VIEW_ID"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'space\twA\nproject\t%s\nview\t%s\nissue\t' "$PROJ_ID" "$VIEW_ID")" ]
+}
+
+@test "a valid space, project and issue parse, in any flag order" {
+    run --separate-stderr herdr_linear::bind_args_parse --issue WEB-1234 --project "$PROJ_ID" --space wA
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'space\twA\nproject\t%s\nview\t\nissue\tWEB-1234' "$PROJ_ID")" ]
+}
+
+@test "no arguments is the interactive form, not a refusal" {
+    run --separate-stderr herdr_linear::bind_args_parse
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_ABSENT" ]
+    [ -z "$output" ]
+}
+
+@test "a hostile id in any slot is refused, prints nothing, and is not echoed" {
+    local bad slot
+    while IFS= read -r -d '' bad; do
+        for slot in space project view issue; do
+            set -- --space wA --project "$PROJ_ID"
+            case "$slot" in
+                space)   set -- --space "$bad" --project "$PROJ_ID" ;;
+                project) set -- --space wA --project "$bad" ;;
+                view)    set -- "$@" --view "$bad" ;;
+                issue)   set -- "$@" --issue "$bad" ;;
+            esac
+            run --separate-stderr herdr_linear::bind_args_parse "$@"
+            [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+            [ -z "$output" ]
+            [[ "$stderr" == *"--$slot"* ]]
+            if [ -n "$bad" ]; then [[ "$stderr" != *"$bad"* ]]; fi
+        done
+    done < <(hostile_ids)
+}
+
+@test "a malformed argument form is refused" {
+    local form
+    for form in \
+        "--space wA" \
+        "--project $PROJ_ID" \
+        "--space wA --project $PROJ_ID --space wB" \
+        "--space wA --project $PROJ_ID --view $VIEW_ID --issue WEB-1234" \
+        "--space wA --project $PROJ_ID --team T1" \
+        "--space wA --project $PROJ_ID stray" \
+        "--space=wA --project $PROJ_ID" \
+        "--space wA --project"; do
+        # shellcheck disable=SC2086
+        run --separate-stderr herdr_linear::bind_args_parse $form
+        [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+        [ -z "$output" ]
+    done
+}
+
+@test "a space that is not the pane's own space is refused" {
+    run --separate-stderr herdr_linear::bind_space_is_own wB wA
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run --separate-stderr herdr_linear::bind_space_is_own wA ""
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run --separate-stderr herdr_linear::bind_space_is_own "" ""
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run --separate-stderr herdr_linear::bind_space_is_own wA wA
+    [ "$status" -eq 0 ]
+}
+
+@test "a view whose filter does not name the project is refused" {
+    load_view_libs
+    CANNED_VIEW_PROJECT=99999999-9999-4999-8999-999999999999 \
+        run --separate-stderr herdr_linear::view_names_project "$VIEW_ID" "$PROJ_ID"
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+    run --separate-stderr herdr_linear::view_names_project "$VIEW_ID" "$PROJ_ID"
+    [ "$status" -eq 0 ]
+    CANNED_VIEW_FAIL=1 run --separate-stderr herdr_linear::view_names_project "$VIEW_ID" "$PROJ_ID"
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_FAILED" ]
+}
+
+@test "a hostile view or project id is refused before the view is read" {
+    load_view_libs
+    local bad
+    while IFS= read -r -d '' bad; do
+        run --separate-stderr herdr_linear::view_names_project "$bad" "$PROJ_ID"
+        [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+        run --separate-stderr herdr_linear::view_names_project "$VIEW_ID" "$bad"
+        [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+    done < <(hostile_ids)
+    [ ! -e "$READS" ]
+}
+
+@test "an issue the worktree's branch contradicts is refused" {
+    load_view_libs
+    run --separate-stderr herdr_linear::bind_issue_fits_branch "$WT" WEB-9999
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+    run --separate-stderr herdr_linear::bind_issue_fits_branch "$WT" WEB-1234
+    [ "$status" -eq 0 ]
+    git -C "$WT" checkout -q -b feature/no-ticket-here
+    run --separate-stderr herdr_linear::bind_issue_fits_branch "$WT" WEB-9999
+    [ "$status" -eq 0 ]
+    run --separate-stderr herdr_linear::bind_issue_fits_branch "$WT" "-rf"
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+    run --separate-stderr herdr_linear::bind_issue_fits_branch "$WORK/absent" WEB-1234
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+}
+
+@test "a valid space, project and view parse and validate end to end" {
+    load_view_libs
+    local space="" project="" view=""
+    run --separate-stderr herdr_linear::bind_args_parse --space wA --project "$PROJ_ID" --view "$VIEW_ID"
+    [ "$status" -eq 0 ]
+    while IFS=$'\t' read -r k v; do
+        case "$k" in space) space="$v" ;; project) project="$v" ;; view) view="$v" ;; esac
+    done <<< "$output"
+    run herdr_linear::bind_space_is_own "$space" wA
+    [ "$status" -eq 0 ]
+    run herdr_linear::view_names_project "$view" "$project"
+    [ "$status" -eq 0 ]
+}
+
+# ------------------------------------- the bind skill's argument form (U21, R29)
+
+# The argument form reaches the store only through workspace_propose then
+# workspace_confirm. These prove ordering, not that a person answered.
+
+# With no workspaces directory yet the lock cannot be taken, so the refusal
+# arrives as exit 3; the second half runs where the lock succeeds and the nonce
+# check itself refuses.
+@test "a space confirm with no proposal is refused and leaves no record" {
+    local nonce
+    run herdr_linear::workspace_confirm wA "$PROJ_ID" 0123456789abcdef0123456789abcdef
+    [ "$status" -ne 0 ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/workspaces/wA.json" ]
+
+    nonce="$(herdr_linear::workspace_propose wB "$PROJ_ID")"
+    run herdr_linear::workspace_confirm wA "$PROJ_ID" "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::workspace_confirm wA "$PROJ_ID" ""
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::workspace_state wA
+    [ "$output" = "unbound" ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/workspaces/wA.json" ]
+}
+
+@test "a valid argument set records only through propose then confirm" {
+    load_view_libs
+    local space="" project="" view="" nonce
+    run --separate-stderr herdr_linear::bind_args_parse --space wA --project "$PROJ_ID" --view "$VIEW_ID"
+    [ "$status" -eq 0 ]
+    while IFS=$'\t' read -r k v; do
+        case "$k" in space) space="$v" ;; project) project="$v" ;; view) view="$v" ;; esac
+    done <<< "$output"
+    run herdr_linear::bind_space_is_own "$space" wA
+    [ "$status" -eq 0 ]
+    run herdr_linear::view_names_project "$view" "$project"
+    [ "$status" -eq 0 ]
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/workspaces/$space.json" ]
+
+    run --separate-stderr herdr_linear::view_choose "$space" "$view"
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+
+    nonce="$(herdr_linear::workspace_propose "$space" "$project")"
+    run herdr_linear::workspace_state "$space"
+    [ "$output" = "proposed" ]
+    run --separate-stderr herdr_linear::view_choose "$space" "$view"
+    [ "$status" -eq "$HERDR_LINEAR_VIEW_REFUSED" ]
+
+    run herdr_linear::workspace_confirm "$space" "$project" "$nonce"
+    [ "$status" -eq 0 ]
+    run herdr_linear::workspace_project "$space"
+    [ "$output" = "$project" ]
+    run --separate-stderr herdr_linear::view_choose "$space" "$view"
+    [ "$status" -eq 0 ]
+    run herdr_linear::workspace_view "$space"
+    [[ "$output" == *"$view"* ]]
+}
+
+@test "a used nonce does not confirm a second binding" {
+    local nonce other=55555555-5555-4555-8555-555555555555
+    nonce="$(herdr_linear::workspace_propose wA "$PROJ_ID")"
+    herdr_linear::workspace_confirm wA "$PROJ_ID" "$nonce"
+
+    run herdr_linear::workspace_confirm wA "$PROJ_ID" "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::workspace_confirm wA "$other" "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::workspace_confirm wB "$PROJ_ID" "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+    run herdr_linear::binding_confirm "$WT" WEB-1234 "$nonce"
+    [ "$status" -eq "$HERDR_LINEAR_BINDING_REFUSED" ]
+
+    run herdr_linear::workspace_project wA
+    [ "$output" = "$PROJ_ID" ]
+    run herdr_linear::workspace_state wB
+    [ "$output" = "unbound" ]
+    run herdr_linear::binding_state "$WT"
+    [ "$output" = "unbound" ]
 }

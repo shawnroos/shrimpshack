@@ -118,13 +118,20 @@ reports (`0.9.0`), else `null`. When herdr is unavailable every tab label is
 
 ### `groups`
 
-An ordered list of `{"key", "label", "issues"}`. `issues` holds identifiers
-that are keys of the `issues` map. Under `workflowState` the key is the state
-id; under `assignee` the assignee id or `unassigned`; under `priority` the
-priority number as a string; under `label` the label id (an issue can sit in
-several groups) or `nolabel` for an issue with none; under `project` the
-project id or `noproject` for an issue in none. With Linear unavailable the
-key is the cached status name.
+An ordered list of `{"key", "label", "kind", "issues"}`. `issues` holds
+identifiers that are keys of the `issues` map. Under `workflowState` the key is
+the state id; under `assignee` the assignee id or `unassigned`; under
+`priority` the priority number as a string; under `label` the label id (an
+issue can sit in several groups) or `nolabel` for an issue with none; under
+`project` the project id or `noproject` for an issue in none. With Linear
+unavailable the key is the cached status name.
+
+`kind` is the Linear workflow state type of the group's state: `triage`,
+`backlog`, `unstarted`, `started`, `completed` or `canceled`. It is `null`
+under any other grouping, `null` with Linear unavailable (the cache holds no
+state type), and `null` for a state id the team's state list does not name. The
+key is always present, so a reader orders columns by status type without a
+view's saved column order.
 
 ### `issues`
 

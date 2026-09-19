@@ -53,12 +53,19 @@
 #   FAKE_LINEAR_UNFILTERED   set to 1 to receive the canned payload whole,
 #                            for a test asserting on a captured SHAPE rather
 #                            than on what a query selected
-#   FAKE_LINEAR_ISSUES       project | completed | paged | capped | empty --
-#                            the pool the `$filter:IssueFilter` listing arm
-#                            answers from, after applying the request's own
-#                            filter (default: project)
-#   FAKE_LINEAR_VIEWS        none | one | many | endless -- how many views the
-#                            customViews arm lists (default: one)
+#   FAKE_LINEAR_ISSUES       project | completed | paged | capped | nocursor |
+#                            empty -- the pool the `$filter:IssueFilter`
+#                            listing arm answers from, after applying the
+#                            request's own filter; nocursor reports a next page
+#                            with no endCursor (default: project)
+#   FAKE_LINEAR_PROJECTS     member | paged | capped | nocursor | empty |
+#                            hostile -- the pool the `projects(` arm answers
+#                            from, after applying the request's membership
+#                            filter; nocursor reports a next page with no
+#                            endCursor (default: member)
+#   FAKE_LINEAR_VIEWS        none | one | many | endless | nocursor -- how many
+#                            views the customViews arm lists; nocursor reports
+#                            a next page with no endCursor (default: one)
 #   FAKE_LINEAR_VIEW_MISSING   set to 1 and customView(id:) answers not found
 #   FAKE_LINEAR_VIEW_ARCHIVED  set to 1 and customView(id:) carries archivedAt
 #   FAKE_LINEAR_VIEW_GROUPING  the issueGrouping customView(id:) reports
@@ -543,6 +550,8 @@ if mode == "paged":
 elif mode == "capped":
     n = int((after or "c0")[1:]) + 1
     nodes, has_next, cursor = kept, True, "c%d" % n
+elif mode == "nocursor":
+    nodes, has_next, cursor = kept[:2], True, None
 else:
     nodes, has_next, cursor = kept, False, None
 print(json.dumps({"data": {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}}}}))
@@ -560,6 +569,7 @@ views_listing() {
         # Every page offers one matching view and another page after it, so
         # the listing only ends at the caller's page cap.
         endless) printf '{"data":{"customViews":{"nodes":[{"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}' ;;
+        nocursor) printf '{"data":{"customViews":{"nodes":[{"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}}],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}' ;;
         many) cat <<'JSON'
 {"data":{"customViews":{"nodes":[
  {"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}},
@@ -577,6 +587,50 @@ JSON
 JSON
         ;;
     esac
+}
+
+# The pool holds one project the person is not a member of, answered only to a
+# request that does not filter on membership: a client that dropped its filter
+# would otherwise still receive the right projects.
+projects_listing() {
+    HERDR_FAKE_BODY="$body" python3 - <<'PY2'
+import json, os
+mode = os.environ.get("FAKE_LINEAR_PROJECTS", "member")
+pool = [
+    {"id": "44444444-4444-4444-8444-444444444444", "name": "Example Project Alpha", "member": True,
+     "teams": {"nodes": [{"key": "EXA"}, {"key": "EXZ"}]}},
+    {"id": "99999999-9999-4999-8999-999999999999", "name": "Someone Else's Project", "member": False,
+     "teams": {"nodes": [{"key": "OTH"}]}},
+    {"id": "b2b2b2b2-b2b2-4b2b-8b2b-b2b2b2b2b2b2", "name": "Example Project Gamma", "member": True,
+     "teams": {"nodes": []}},
+    {"id": "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1", "name": "Example Project Beta", "member": True,
+     "teams": {"nodes": [{"key": "EXB"}]}},
+]
+if mode == "empty":
+    pool = []
+if mode == "hostile":
+    pool = [{"id": "44444444-4444-4444-8444-444444444444",
+             "name": "Example Project\n\u202e\u001b[31m\u2028\t Alpha", "member": True,
+             "teams": {"nodes": [{"key": "EXA"}]}}]
+v = json.loads(os.environ["HERDR_FAKE_BODY"]).get("variables") or {}
+flt = v.get("filter") or {}
+mine = (((flt.get("members") or {}).get("some") or {}).get("isMe") or {}).get("eq") is True
+kept = [{k: p[k] for k in ("id", "name", "teams")} for p in pool if p["member"] or not mine]
+after = v.get("after")
+if mode == "paged":
+    if after is None:
+        nodes, has_next, cursor = kept[:2], True, "p1"
+    else:
+        nodes, has_next, cursor = kept[2:], False, None
+elif mode == "capped":
+    n = int((after or "p0")[1:]) + 1
+    nodes, has_next, cursor = kept[:1], True, "p%d" % n
+elif mode == "nocursor":
+    nodes, has_next, cursor = kept[:1], True, None
+else:
+    nodes, has_next, cursor = kept, False, None
+print(json.dumps({"data": {"projects": {"nodes": nodes, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}}}}))
+PY2
 }
 
 view_body() {
@@ -670,6 +724,11 @@ def check(inp, typename, allowed, required):
     for k, want in allowed.items():
         if inp.get(k) is not None and not isinstance(inp[k], want):
             bad("Variable \"$i\" got invalid value at \"i.%s\"." % k)
+# Captured 2026-09-16 (tests/probe/projects-shapes.md).
+if re.search(r"\bprojects\s*\(", q):
+    for var, want in (("filter", "ProjectFilter"), ("n", "Int"), ("after", "String")):
+        if var in declared and declared[var].strip("[]!") != want:
+            bad("Variable \"$%s\" of type \"%s\" used in position expecting type \"%s\"." % (var, declared[var], want))
 S = str
 if "customViewCreate" in q:
     if declared.get("i") != "CustomViewCreateInput!":
@@ -721,6 +780,13 @@ case "$body_routed" in
     *'$filter:IssueFilter'*)
         [ "$wants_headers" = 1 ] && emit_headers 200
         answer "$(issues_listing)"
+        exit 0
+        ;;
+    # MUST precede `project(id:` and `teams(`: the membership read selects
+    # `teams(first:1)`, and the teams arm would answer it with workflow states.
+    *'projects('*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        answer "$(projects_listing)"
         exit 0
         ;;
     # Longer spelling first: `customViews` is not caught by `customView(`, and
