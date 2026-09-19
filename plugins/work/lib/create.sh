@@ -94,6 +94,10 @@ herdr_linear::new_issue_here() {
 herdr_linear::_issue_with_session() {
     local wt="${1:-}" ident path pane
 
+    # Here and not in _file_issue: an issue filed into the current worktree names
+    # nothing, so it must not be refused for a scheme it never renders.
+    herdr_linear::usable_schemes open || return "$HERDR_LINEAR_CREATE_REFUSED"
+
     ident="$(herdr_linear::_file_issue "$wt" "${2:-}" "${3:-}" "${4:-}" "${5:-}")" || return $?
 
     # A failure here leaves a real issue with no worktree, which is recoverable
@@ -104,9 +108,9 @@ herdr_linear::_issue_with_session() {
         return "$HERDR_LINEAR_CREATE_PARTIAL"
     }
 
-    # stderr is left open: when the space is a choice, the question is there and
-    # nowhere else.
-    pane="$(herdr_linear::open_session "$path")" || pane=""
+    # R8. `open` is what this path does when the switch is unset, which is what
+    # it has always done. Only `false` withholds the session here.
+    pane="$(herdr_linear::place_session "$path" open)" || pane=""
     printf '%s\t%s\t%s' "$ident" "$path" "$pane"
     return "$HERDR_LINEAR_CREATE_OK"
 }

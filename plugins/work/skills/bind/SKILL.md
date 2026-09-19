@@ -172,7 +172,8 @@ worse than none, because it silently re-homes work.
 Read the conventions, which ship with the plugin:
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+source "${CLAUDE_PLUGIN_ROOT}/lib/documents.sh"
+P="$(herdr_linear::conventions_path)" && cat "$P"
 ```
 
 A parent title is a noun phrase, a child title is a full sentence naming the

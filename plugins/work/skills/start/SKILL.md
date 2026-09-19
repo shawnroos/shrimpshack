@@ -46,15 +46,32 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/states.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
 
 herdr_linear::start_from_issue WEB-3308
 ```
 
 It prints the worktree path. `cd` there and work.
+
+**A session is opened only when the switch asks for one.** This path opens none
+by default, which is what it has always done. Pass the worktree it printed:
+
+```bash
+herdr_linear::place_session "$WORKTREE" none
+```
+
+`none` is what this path does when the switch is unset. The switch is
+`HERDR_LINEAR_OPEN_SESSION` in `docs/settings.md`: set it to `true` and this
+opens a pane in the space bound to the ticket's project, printing its id. A
+session that could not be opened is reported on stderr and costs nothing else —
+the worktree is made and bound either way.
 
 **The path comes from the ticket, never from where you are standing.** It is
 `<worktrees-root>/<org>/<project or team>/<IDENTIFIER>-<title-slug>` — for
@@ -106,7 +123,7 @@ beside it). There is no verb for that yet.
 | Exit | Meaning |
 |---|---|
 | 0 | created; the path is on stdout, and stderr says which repository and why |
-| 1 | refused — no such issue, a name that cannot become a safe path, a relative or non-repository answer, or a worktrees root that overlaps `~/projects`, `/` or `$HOME` |
+| 1 | refused — no such issue, a naming scheme this plugin does not render (stderr names the valid ones), a name that cannot become a safe path, a relative or non-repository answer, or a worktrees root that overlaps `~/projects`, `/` or `$HOME` |
 | 2 | a directory of that name already exists; nothing was touched |
 | 3 | Linear was unreachable; nothing was created |
 | 4 | the issue was read, but the worktree or its binding failed; a directory may exist |
@@ -168,7 +185,7 @@ runs in shadow until somebody answers.
 | Exit | Meaning |
 |---|---|
 | 0 | created; the path is on stdout |
-| 1 | refused — no title, no team, or a description that fails strict validation (the Problem/Solution/Proposal spine is required here) |
+| 1 | refused, and nothing was filed — no title, no team, a description that fails strict validation (the Problem/Solution/Proposal spine is required here), or a naming scheme this plugin does not render |
 | 4 | the issue was filed but the worktree or binding failed; stderr says which |
 | 5 | shadow mode: nothing created, local or remote; the sentence is on stderr |
 | 6 | the issue was filed, and which repository is a choice; stderr names the identifier and every candidate |

@@ -36,7 +36,7 @@ Writes to Linear are opened by an answer, not by a file somebody edits.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read states herdr-write repos start context create; do
+for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context create; do
   source "$R/lib/$f.sh"
 done
 herdr_linear::has_consent "$PWD" && echo "already answered here" || echo "ask first"
@@ -73,7 +73,7 @@ team, or made from a different branch, asks again.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read states herdr-write repos start context create; do
+for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context create; do
   source "$R/lib/$f.sh"
 done
 
@@ -91,7 +91,8 @@ project is created rather than a parent issue* as **not yet settled** — so ask
 Do not decide it because a project was the thing that was mentioned.
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+source "${CLAUDE_PLUGIN_ROOT}/lib/documents.sh"
+P="$(herdr_linear::conventions_path)" && cat "$P"
 ```
 
 The content file is the project's own document — what this body of work is for,

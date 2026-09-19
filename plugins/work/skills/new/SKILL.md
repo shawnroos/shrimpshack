@@ -35,7 +35,7 @@ worktree is bound to, or from the project the herdr workspace is bound to.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear reconcile description herdr-read states herdr-write repos start context create; do
+for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context create; do
   source "$R/lib/$f.sh"
 done
 
@@ -123,8 +123,8 @@ name.
 
 | Exit | Meaning |
 |---|---|
-| 0 | filed, worktree made, pane opened |
-| 1 | refused — no title, no description, or a bad description |
+| 0 | filed, worktree made, and a pane opened unless the session switch says otherwise |
+| 1 | refused, and nothing was filed — no title, no description, a bad description, or a naming scheme this plugin does not render |
 | 2 | no team could be derived; nothing was created |
 | 3 | shadow mode: nothing was created, local or remote |
 | 4 | the tracker call failed; nothing was filed |
@@ -135,13 +135,18 @@ focused pane.** A tab is a piece of work: the new ticket gets its own tab in
 that space. When `PANE` is empty and stderr says which space is a question,
 nothing was opened. Ask it, using the host's blocking question tool:
 
+**`PANE` is also empty when the session switch is set to `false`**, and then
+stderr carries no question, because nothing went wrong. The switch is
+`HERDR_LINEAR_OPEN_SESSION` in `docs/settings.md`; unset, this path opens a
+session as it always has.
+
 - **This space has no binding:** propose binding it to `$PROJECT`, the
   project the issue was filed into. Record only what the person answers:
 
 ```bash
 nonce="$(herdr_linear::workspace_propose "$(herdr_linear::workspace_id)" "$PROJECT")"
 herdr_linear::workspace_confirm "$(herdr_linear::workspace_id)" "$PROJECT" "$nonce"
-herdr_linear::open_session "$WORKTREE"
+herdr_linear::place_session "$WORKTREE" open
 ```
 
 - **This space is bound to a different project:** that is Misplaced. Say both
@@ -159,5 +164,6 @@ Follow the conventions for the title, and ask about anything they list under
 "Not yet settled" rather than defaulting:
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md"
+source "${CLAUDE_PLUGIN_ROOT}/lib/documents.sh"
+P="$(herdr_linear::conventions_path)" && cat "$P"
 ```

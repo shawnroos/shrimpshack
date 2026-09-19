@@ -151,3 +151,15 @@ The plugin reports it and offers to move either side; it never picks which one w
 ### Stale
 A binding whose issue has been closed in Linear while the worktree is still in use. It is
 reported and otherwise left alone — the plugin does not reopen an issue on its own.
+
+### Mapping
+What a herdr space, tab and pane each correspond to. The current meanings — a space is a
+project, a tab is a piece of work, a pane is a session — are one mapping among possible
+ones, not the only one. A mapping is set once for the machine and may be overridden for an
+individual space, so two spaces can disagree and both be right; a space that states nothing
+uses the current meanings.
+
+### Scheme
+A named way of composing one kind of name — a worktree, branch, tab, space or pane. The set
+of schemes is fixed and each is rendered by the plugin, so a name is chosen from an
+enumeration rather than written as a template.
