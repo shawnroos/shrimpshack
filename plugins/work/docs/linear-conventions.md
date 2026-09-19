@@ -1,9 +1,9 @@
-# Linear conventions for Slate work
+# Linear conventions
 
 The shape a Linear project, issue, and sub-issue takes. Any agent that creates or updates
 Linear on Shawn's behalf follows this document.
 
-Most rules below are derived from issues Shawn wrote in the Web Creation team during 2026.
+Most rules below are derived from issues Shawn wrote in the Web Team during 2026.
 Where a rule could not be derived from evidence, it is listed under **Not yet settled** rather
 than invented.
 
@@ -87,31 +87,31 @@ reader.
 Use it when writing a description from nothing. **A ticket that has earned its
 own headings keeps them.**
 
-`WEB-3214 — Improve AI tools analytics` is the worked example. It uses none of
+`WEB-3184` (the fictional fixture at `tests/fixtures/descriptions/web-3184.md`) is the worked example. It uses none of
 the three spine headings and is a better ticket for it:
 
 | Its heading | What the template would have called it |
 |---|---|
 | `## Why` | `## Problem` |
-| `## The shape of this work` | `## Proposal` |
-| `## Two things everyone reading these dashboards needs to know` | `## Constraints` |
-| `## Worth agreeing before GA, not after` | — |
+| `## How the work splits` | `## Proposal` |
+| `## Two caveats for anyone reading these charts` | `## Constraints` |
+| `## Settle before launch, not after` | — |
 
-Those headings are **arguments**. A reader can act on "Two things everyone
-reading these dashboards needs to know" before reading a word beneath it.
+Those headings are **arguments**. A reader can act on "Two caveats for anyone
+reading these charts" before reading a word beneath it.
 `## Constraints` is a heading people skim past. A heading that carries the point
 beats a heading that carries a category.
 
 What that ticket does that any good description does, whatever it calls its
 sections:
 
-- **Evidence with provenance.** "verified directly against Amplitude, not
+- **Evidence with provenance.** "checked against the raw event stream, not
   inferred from the code" — it says how it knows, so a reader can weigh it.
-- **The second-order effect stated.** Not "we measure the wrong thing" but "GA
+- **The second-order effect stated.** Not "we measure the wrong thing" but "launch
   starts with instrumentation already trusted, instead of a month spent
   debugging telemetry while the numbers finally matter."
-- **The trap named before someone falls in it.** "A pre-GA baseline is staff
-  behaviour, not customer behaviour. Do not carry one across the GA line."
+- **The trap named before someone falls in it.** "A pre-launch baseline is staff
+  behaviour, not customer behaviour. Do not carry one across the launch line."
 - **An open decision left open, and dated by consequence rather than calendar.**
   "A number chosen after seeing the first week tends to be the number the first
   week produced."
@@ -148,7 +148,7 @@ a Slack thread and its date, a call, a QA session, a review finding.
 ## Hierarchy
 
 - **Project** — a body of work with its own milestones, spanning many issues over months.
-  Example: `AI Canvas Tools`.
+  Example: `Frame Effects`.
 - **Parent issue** — one feature or one coherent capability inside a project. It holds the
   overall description and the flag, and it stays open while its children land.
 - **Child issue** — one piece of that feature, or one defect found while building it. Most
@@ -168,7 +168,7 @@ Grouped families, applied when the grouping is meaningful:
 
 | Family | Use |
 |---|---|
-| `repo/…` | the repository the work lands in, e.g. `slateteams/web-app` |
+| `repo/…` | the repository the work lands in, e.g. `acme/web-app` |
 | `platform: …` | the platform affected, e.g. `platform: WCS` |
 | `Requests/…` | the platform a customer request came from |
 
@@ -183,7 +183,7 @@ an agent does not start implementation on a ticket that does not carry it.
 ## Milestones
 
 A milestone marks a shipping increment inside a project, not a date and not a theme. Example:
-`Logo Removal` on the AI Canvas Tools project. Apply one only when the issue must ship as part
+`Logo Removal` on the Frame Effects project. Apply one only when the issue must ship as part
 of that increment. Most issues carry none.
 
 ---
@@ -200,7 +200,7 @@ pass may all be left at `No priority`, because their order comes from the parent
 ## Documents
 
 A Linear document is where anything that would otherwise land in a gitignored
-`/docs` directory belongs. In Slate's web-app `/docs` is ignored, so a durable
+`/docs` directory belongs. Plenty of repositories gitignore `/docs`, so a durable
 document written on a branch dies with the worktree. A Linear document outlives
 the branch, is linked to the work, and is readable by people without the repo.
 
@@ -210,7 +210,7 @@ Derived from 40 documents in the workspace, most of them Shawn's.
 
 | Scope | Attached to | Title shape | Real examples |
 |---|---|---|---|
-| **Issue** | `issueId` | leads with the identifier, then the kind, then what it is | `WEB-3127 diagnosis: texture leak on image swap` · `WEB-2651 — Denoise mix-slider regression report` · `MEDIA-270 Implementation Log: Folder Navigation in Media Hub` |
+| **Issue** | `issueId` | leads with the identifier, then the kind, then what it is | `WEB-3137 diagnosis: gradient banding on frame swap` · `WEB-2651 — Denoise mix-slider regression report` · `MEDIA-270 Implementation Log: Folder Navigation in Media Hub` |
 | **Project** | `projectId` | a noun phrase, no identifier | `Architecture Overview` · `V1 Limitations & Fast-Follow Themes` · `RFC: Brand Vocab` · `PRD: Brand Hub Auditing` |
 
 The separator after the identifier varies in practice — a space, a colon, or an

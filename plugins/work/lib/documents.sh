@@ -2,8 +2,8 @@
 # Linear documents, in place of a gitignored /docs. Sourced, never executed.
 #
 # WHY THIS EXISTS
-# Slate's web-app ignores /docs, so a durable document written on a branch dies
-# with the worktree -- the same failure this whole plugin exists to stop, in a
+# Plenty of repositories gitignore /docs, so a durable document written on a
+# branch dies with the worktree -- the same failure this whole plugin exists to stop, in a
 # different shape. A Linear document outlives the branch, is attached to the
 # work, and is readable by people who do not have the repository.
 #
@@ -14,7 +14,8 @@
 # anyone who can attach a document move it into the writable set. Exactly the
 # reasoning behind created_children, and the same failure it prevents.
 #
-# TITLES FOLLOW docs/linear-conventions.md, WHICH WAS DERIVED, NOT INVENTED.
+# TITLES FOLLOW docs/linear-conventions.md IN THIS PLUGIN (path relative to the
+# plugin root), WHICH WAS DERIVED, NOT INVENTED.
 # Its Documents section came from 40 real documents in the workspace. An
 # issue-scoped title leads with the identifier and a kind word from the observed
 # set; icons are sparse, with `:mag:` reserved for findings and diagnosis.
@@ -100,19 +101,19 @@ print(json.dumps({"query": q, "variables": v}))
 # document as work progresses does not litter the issue with near-duplicates.
 herdr_linear::doc_publish() {
     local wt="${1:-}" kind="${2:-}" what="${3:-}" file="${4:-}"
-    local ident title icon doc_id body resp new_id
+    local ident title icon doc_id body resp new_id ctx fields c_team c_project
 
     # Project-scoped kinds have no mutation path: this function always resolves
     # an issue from the worktree's binding and always sets issueId. Whether an
     # agent may create a project-scoped document at all is listed under "Not
-    # yet settled" in docs/linear-conventions.md -- a question for Shawn, not
+    # yet settled" in this plugin's docs/linear-conventions.md (path relative to
+    # the plugin root) -- a question for Shawn, not
     # one this function gets to answer by building a projectId path.
     herdr_linear::_kind_is_project "$kind" && {
-        printf 'doc: "%s" is a project-scoped kind; publishing a project document is not implemented (see "Not yet settled" in docs/linear-conventions.md) -- ask before deciding this\n' "$kind" >&2
+        printf 'doc: "%s" is a project-scoped kind; publishing a project document is not implemented (see "Not yet settled" in this plugin, at docs/linear-conventions.md) -- ask before deciding this\n' "$kind" >&2
         return "$HERDR_LINEAR_DOC_REFUSED"
     }
 
-    herdr_linear::contains "$wt" || return "$HERDR_LINEAR_DOC_REFUSED"
     [ "$(herdr_linear::binding_state "$wt" 2>/dev/null)" = "bound" ] \
         || return "$HERDR_LINEAR_DOC_REFUSED"
     [ -r "$file" ] || return "$HERDR_LINEAR_DOC_REFUSED"
@@ -138,8 +139,13 @@ herdr_linear::doc_publish() {
             || return "$HERDR_LINEAR_DOC_FAILED"
     fi
 
-    if ! herdr_linear::writes_enabled "$wt"; then
-        herdr_linear::_shadow_log "SHADOW would $( [ -n "$doc_id" ] && printf update || printf create ) document \"$title\" on $ident ($(wc -c < "$file" | tr -d ' ') bytes)"
+    ctx="$(herdr_linear::issue_context "$ident" 2>/dev/null)" || ctx='{}'
+    fields="$(herdr_linear::context_fields "$ctx" team_id project_id)"
+    c_team="$(printf '%s' "$fields" | cut -f1)"
+    c_project="$(printf '%s' "$fields" | cut -f2)"
+
+    if ! herdr_linear::consent_gate "$wt" "$c_team" "$c_project" \
+        "$( [ -n "$doc_id" ] && printf update || printf create ) document \"$title\" on $ident ($(wc -c < "$file" | tr -d ' ') bytes)"; then
         printf '%s' "$title"
         return "$HERDR_LINEAR_DOC_SHADOW"
     fi

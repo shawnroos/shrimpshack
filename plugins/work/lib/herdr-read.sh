@@ -209,12 +209,16 @@ except Exception:
 
 # The snapshot is captured to a variable before it is filtered, for the same
 # reason the probe is: a filter that stops reading early kills herdr mid-write.
+# 1 when the snapshot was read and holds no match; 2 when it could not be read.
+# Only the read that answered can say which: a second read that succeeds says
+# nothing about a first that failed while the server was busy.
 herdr_linear::_pane_field() {
     local match_key="$1" match_val="$2" want="$3" snap
-    snap="$(herdr_linear::snapshot)" || return 1
-    [ -n "$snap" ] || return 1
+    snap="$(herdr_linear::snapshot)" || return 2
+    [ -n "$snap" ] || return 2
     local out
     if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$snap" | jq -e '.result.snapshot.panes | type == "array"' >/dev/null 2>&1 || return 2
         out="$(printf '%s' "$snap" | jq -r --arg k "$match_key" --arg v "$match_val" --arg w "$want" \
             '.result.snapshot.panes[]? | select(.[$k] == $v) | .[$w] // empty' 2>/dev/null)"
     else
@@ -222,20 +226,21 @@ herdr_linear::_pane_field() {
 import sys, json, os
 try:
     panes = json.load(sys.stdin)["result"]["snapshot"]["panes"]
-    for p in panes:
-        if p.get(os.environ["HL_K"]) == os.environ["HL_V"]:
-            v = p.get(os.environ["HL_W"])
-            if v is not None:
-                print(v)
+    assert isinstance(panes, list)
 except Exception:
-    pass
-' 2>/dev/null)"
+    sys.exit(2)
+for p in panes:
+    if isinstance(p, dict) and p.get(os.environ["HL_K"]) == os.environ["HL_V"]:
+        v = p.get(os.environ["HL_W"])
+        if v is not None:
+            print(v)
+' 2>/dev/null)" || return 2
     fi
     [ -n "$out" ] || return 1
     printf '%s' "$out"
 }
 
-# Which tab a pane sits in.
+# Which tab a pane sits in. 1 for no such pane, 2 when herdr could not be read.
 herdr_linear::tab_of_pane() {
     [ -n "${1:-}" ] || return 1
     herdr_linear::_pane_field pane_id "$1" tab_id
@@ -246,3 +251,40 @@ herdr_linear::panes_in_tab() {
     [ -n "${1:-}" ] || return 1
     herdr_linear::_pane_field tab_id "$1" pane_id
 }
+
+# Every space herdr reports, one `<id><TAB><label>` line each. Nothing on a
+# failure: a server that cannot be asked offers no space, rather than a space
+# that is not there.
+herdr_linear::live_spaces() {
+    local bin out
+    bin="$(herdr_linear::bin)"
+    [ -n "$bin" ] || return 1
+    out="$("$bin" workspace list 2>/dev/null)" || return 1
+    printf '%s' "$out" | python3 -c '
+import sys, json
+try:
+    for w in json.load(sys.stdin)["result"]["workspaces"]:
+        sys.stdout.write("%s\t%s\n" % (w.get("workspace_id", ""), w.get("label", "")))
+except Exception:
+    sys.exit(1)
+'
+}
+
+# The space a tab sits in; nothing, and 0, when herdr says there is no such
+# tab; non-zero when herdr could not be asked. herdr exits 1 for both, so the
+# error code is what tells "gone" from "unknown" -- and a caller that took
+# unknown for gone would make a second tab on every retry during an outage.
+# herdr writes that error object to STDERR (0.9.0), so the miss is asked again
+# for its stderr alone.
+herdr_linear::tab_space() {
+    local bin ws err
+    [ -n "${1:-}" ] || return 1
+    bin="$(herdr_linear::bin)"
+    [ -n "$bin" ] || return 1
+    ws="$("$bin" tab get "$1" 2>/dev/null | herdr_linear::json "result.tab.workspace_id")"
+    [ -n "$ws" ] && { printf '%s' "$ws"; return 0; }
+    err="$("$bin" tab get "$1" 2>&1 >/dev/null)"
+    [ "$(printf '%s' "$err" | herdr_linear::json "error.code")" = "tab_not_found" ] && return 0
+    return 1
+}
+
