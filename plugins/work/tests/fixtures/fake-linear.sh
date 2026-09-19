@@ -336,6 +336,88 @@ found_child() {
 JSON
 }
 
+# The board's issue page, whole: a description with markdown in it, two
+# children, both relation directions, a comment thread with a reply, and a
+# history run. `FAKE_LINEAR_DETAIL` picks the shape:
+#   full    (default) everything populated
+#   bare    every optional field null or empty -- the page's empty case
+#   partial every connection reports hasNextPage
+#   hostile a comment body and the description carry an ESC sequence and a
+#           right-to-left override, so a reader that does not strip them is
+#           caught by a test rather than by a terminal
+issue_detail() {
+    local more=false
+    [ "${FAKE_LINEAR_DETAIL:-full}" = partial ] && more=true
+    if [ "${FAKE_LINEAR_DETAIL:-full}" = bare ]; then
+        cat <<'JSON'
+{"data":{"issue":{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3308","title":"Export panel is empty","url":"https://linear.app/example/issue/WEB-3308/export-panel-is-empty","branchName":"web-3308-export-panel-is-empty","updatedAt":"2026-09-04T15:55:10.206Z","priority":0,"description":null,"dueDate":null,"estimate":null,"state":{"id":"22222222-2222-4222-8222-222222222222","name":"Backlog","type":"backlog"},"parent":null,"project":null,"projectMilestone":null,"cycle":null,"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":null,"labels":{"nodes":[]},"children":{"nodes":[],"pageInfo":{"hasNextPage":false}},"relations":{"nodes":[],"pageInfo":{"hasNextPage":false}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false}},"comments":{"nodes":[],"pageInfo":{"hasNextPage":false}},"history":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}
+JSON
+        return
+    fi
+    HERDR_FAKE_MORE="$more" HERDR_FAKE_HOSTILE="${FAKE_LINEAR_DETAIL:-full}" python3 -c '
+import json, os
+more = os.environ["HERDR_FAKE_MORE"] == "true"
+# ESC[31m and U+202E: the two shapes lib/sanitize.sh exists to remove.
+HOSTILE = "\u001b[31m\u202e" if os.environ["HERDR_FAKE_HOSTILE"] == "hostile" else ""
+page = {"hasNextPage": more}
+def conn(nodes): return {"nodes": nodes, "pageInfo": page}
+issue = {
+  "id": "11111111-1111-4111-8111-111111111111",
+  "identifier": "WEB-3308",
+  "title": "Export panel is empty when a still-processing layer is selected",
+  "url": "https://linear.app/example/issue/WEB-3308/export-panel-is-empty",
+  "branchName": "web-3308-export-panel-is-empty",
+  "updatedAt": "2026-09-04T15:55:10.206Z",
+  "priority": 2,
+  "description": HOSTILE + "## What happens\n\nThe drawer is **blank**.\n\n- [ ] reproduce\n- [x] triage\n\n`selectLayer()` returns early.",
+  "dueDate": "2026-09-30",
+  "estimate": 3,
+  "state": {"id": "22222222-2222-4222-8222-222222222222", "name": "In Progress", "type": "started"},
+  "parent": {"id": "33333333-3333-4333-8333-333333333333", "identifier": "WEB-2670",
+             "title": "Tool: Blur Backdrop",
+             "state": {"id": "st-prog", "name": "In Progress", "type": "started"}},
+  "project": {"id": "44444444-4444-4444-8444-444444444444", "name": "Frame Effects"},
+  "projectMilestone": {"id": "ms-1", "name": "M2"},
+  "cycle": {"id": "cy-14", "number": 14, "name": "Cycle 14"},
+  "team": {"id": "55555555-5555-4555-8555-555555555555", "key": "WEB", "name": "Web Team"},
+  "assignee": {"id": "66666666-6666-4666-8666-666666666666", "name": "Example User"},
+  "labels": {"nodes": [{"id": "77777777-7777-4777-8777-777777777777", "name": "Bug"}]},
+  "children": conn([
+    {"id": "c1", "identifier": "WEB-3319", "title": "Per-issue fetch script",
+     "state": {"id": "st-done", "name": "Done", "type": "completed"}},
+    {"id": "c2", "identifier": "WEB-3320", "title": "Markdown renderer",
+     "state": {"id": "st-todo", "name": "Todo", "type": "unstarted"}}]),
+  "relations": conn([
+    {"id": "r1", "type": "blocks",
+     "relatedIssue": {"id": "c3", "identifier": "WEB-3400", "title": "Ship the drawer",
+                      "state": {"id": "st-todo", "name": "Todo", "type": "unstarted"}}}]),
+  "inverseRelations": conn([
+    {"id": "r2", "type": "blocks",
+     "issue": {"id": "c4", "identifier": "WEB-3200", "title": "Layer pipeline",
+               "state": {"id": "st-done", "name": "Done", "type": "completed"}}}]),
+  "comments": conn([
+    {"id": "cm1", "body": HOSTILE + "Repro on staging, after the escape.",
+     "createdAt": "2026-09-05T09:00:00.000Z",
+     "user": {"id": "u1", "name": "Example User"}, "parent": None},
+    {"id": "cm2", "body": "Same here.", "createdAt": "2026-09-05T10:00:00.000Z",
+     "user": {"id": "u2", "name": "Other User"}, "parent": {"id": "cm1"}}]),
+  "history": conn([
+    {"id": "h1", "createdAt": "2026-09-05T08:00:00.000Z", "actor": {"id": "u1", "name": "Example User"},
+     "fromState": {"name": "Backlog"}, "toState": {"name": "In Progress"},
+     "fromAssignee": None, "toAssignee": None, "fromPriority": None, "toPriority": None,
+     "addedLabels": [], "removedLabels": []},
+    {"id": "h2", "createdAt": "2026-09-05T08:05:00.000Z", "actor": {"id": "u1", "name": "Example User"},
+     "fromState": None, "toState": None, "fromAssignee": None,
+     "toAssignee": {"name": "Example User"}, "fromPriority": None, "toPriority": None,
+     "addedLabels": [{"name": "Bug"}], "removedLabels": []},
+    {"id": "h3", "createdAt": "2026-09-05T08:06:00.000Z", "actor": {"id": "u1", "name": "Example User"},
+     "fromState": None, "toState": None, "fromAssignee": None, "toAssignee": None,
+     "fromPriority": None, "toPriority": None, "addedLabels": [], "removedLabels": []}]),
+}
+print(json.dumps({"data": {"issue": issue}}))
+'
+}
+
 # The parent case is not the child case with a field removed: parent is
 # explicitly null, labels.nodes is an empty array rather than absent, and
 # priority is non-zero. Each of those is a real distinction a reader can trip on.
@@ -483,16 +565,16 @@ JSON
 # would otherwise still receive the right issues.
 issue_pool() {
     cat <<'JSON'
-[{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3318","title":"Example issue: a panel is blank while an item is still loading","url":"https://linear.app/example/issue/web-3318/x","branchName":"web-3318-example-panel-blank","updatedAt":"2026-09-04T15:55:10.206Z","completedAt":null,"priority":0,"state":{"id":"st-backlog","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[{"id":"77777777-7777-4777-8777-777777777777","name":"Bug"}]}},
- {"id":"12121212-1212-4121-8121-121212121212","identifier":"WEB-3317","title":"Example issue: a long task stops when its panel is closed","url":"https://linear.app/example/issue/web-3317/x","branchName":"web-3317-example-long-task","updatedAt":"2026-09-04T14:00:00.000Z","completedAt":null,"priority":3,"state":{"id":"st-todo","name":"Todo","type":"unstarted"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}},
- {"id":"13131313-1313-4131-8131-131313131313","identifier":"WEB-3312","title":"Example issue: a saved item is empty after reload","url":"https://linear.app/example/issue/web-3312/x","branchName":"web-3312-example-saved-item","updatedAt":"2026-09-03T10:00:00.000Z","completedAt":null,"priority":2,"state":{"id":"st-prog","name":"In Progress","type":"started"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[]}},
- {"id":"13001300-1300-4130-8130-130013001300","identifier":"WEB-3300","title":"Old approach, dropped","url":"https://linear.app/example/issue/web-3300/x","branchName":"web-3300-old-approach","updatedAt":"2026-08-20T10:00:00.000Z","completedAt":null,"priority":4,"state":{"id":"st-cancel","name":"Canceled","type":"canceled"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}]
+[{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3308","title":"Example issue: a panel is blank while an item is still loading","url":"https://linear.app/example/issue/web-3308/x","branchName":"web-3308-example-panel-blank","updatedAt":"2026-09-04T15:55:10.206Z","completedAt":null,"priority":0,"state":{"id":"st-backlog","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[{"id":"77777777-7777-4777-8777-777777777777","name":"Bug"}]}},
+ {"id":"12121212-1212-4121-8121-121212121212","identifier":"WEB-3307","title":"Example issue: a long task stops when its panel is closed","url":"https://linear.app/example/issue/web-3307/x","branchName":"web-3307-example-long-task","updatedAt":"2026-09-04T14:00:00.000Z","completedAt":null,"priority":3,"state":{"id":"st-todo","name":"Todo","type":"unstarted"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":null,"labels":{"nodes":[]}},
+ {"id":"13131313-1313-4131-8131-131313131313","identifier":"WEB-3302","title":"Example issue: a saved item is empty after reload","url":"https://linear.app/example/issue/web-3302/x","branchName":"web-3302-example-saved-item","updatedAt":"2026-09-03T10:00:00.000Z","completedAt":null,"priority":2,"state":{"id":"st-prog","name":"In Progress","type":"started"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[]}},
+ {"id":"13001300-1300-4130-8130-130013001300","identifier":"WEB-3300","title":"Old approach, dropped","url":"https://linear.app/example/issue/web-3300/x","branchName":"web-3300-old-approach","updatedAt":"2026-08-20T10:00:00.000Z","completedAt":null,"priority":4,"state":{"id":"st-cancel","name":"Canceled","type":"canceled"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":null,"labels":{"nodes":[]}}]
 JSON
 }
 
 completed_pool_extra() {
     cat <<'JSON'
-{"id":"13031303-1303-4130-8130-130313031303","identifier":"WEB-3303","title":"Shipped last week","url":"https://linear.app/example/issue/web-3303/x","branchName":"web-3303-shipped","updatedAt":"2026-09-01T10:00:00.000Z","completedAt":"2026-09-01T10:00:00.000Z","priority":2,"state":{"id":"st-done","name":"Done","type":"completed"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}
+{"id":"13031303-1303-4130-8130-130313031303","identifier":"WEB-3303","title":"Shipped last week","url":"https://linear.app/example/issue/web-3303/x","branchName":"web-3303-shipped","updatedAt":"2026-09-01T10:00:00.000Z","completedAt":"2026-09-01T10:00:00.000Z","priority":2,"state":{"id":"st-done","name":"Done","type":"completed"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":null,"labels":{"nodes":[]}}
 JSON
 }
 
@@ -775,6 +857,20 @@ fi
 # test, which encodes the call ORDER into the test and breaks the moment the
 # implementation reorders two reads that do not depend on each other.
 case "$body_routed" in
+    # The board's issue-page read. Routed on `inverseRelations`, which no other
+    # query selects: the detail query also carries `issue(id:` and would
+    # otherwise be answered by the mode path with a body that has no comments,
+    # no history and no children in it.
+    # An explicitly-set FAKE_LINEAR_MODE still wins, so a test can point the
+    # detail read at auth_error or any other failure body; content routing only
+    # decides what a SUCCESSFUL read answers.
+    *'inverseRelations('*)
+        if [ -z "${FAKE_LINEAR_MODE:-}" ]; then
+            [ "$wants_headers" = 1 ] && emit_headers 200
+            answer "$(issue_detail)"
+            exit 0
+        fi
+        ;;
     # The view listing spells its filter variable `$filter:IssueFilter`; the
     # candidate query spells its own `$f:IssueFilter`, and stays on the mode path.
     *'$filter:IssueFilter'*)
@@ -844,7 +940,7 @@ case "$body_routed" in
         # id, name and url beside the teams, so the snapshot's project query is
         # answered from this one arm; prune drops them for a caller that selects
         # only the teams.
-        _proj='"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools","url":"https://linear.app/example/project/ai-canvas-tools"'
+        _proj='"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects","url":"https://linear.app/example/project/ai-canvas-tools"'
         _states='"states":{"nodes":[{"id":"st-backlog","name":"Backlog","type":"backlog"},{"id":"st-todo","name":"Todo","type":"unstarted"},{"id":"st-prog","name":"In Progress","type":"started"},{"id":"st-devdone","name":"Dev Done","type":"started"},{"id":"st-done","name":"Done","type":"completed"},{"id":"st-cancel","name":"Canceled","type":"canceled"}]}'
         case "${FAKE_LINEAR_PROJECT_TEAMS:-one}" in
             none) answer "$(printf '{"data":{"project":{%s,"teams":{"nodes":[]}}}}' "$_proj")" ;;

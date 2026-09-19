@@ -337,7 +337,7 @@ sent() { local n; n="$(grep -c "$1" "$FAKE_LINEAR_RECORD_DIR/bodies" 2>/dev/null
 # the argv record tells the two answers apart.
 a_space_for_the_project() {
     local n
-    export FAKE_HERDR_WORKSPACES='wG=AI Canvas Tools'
+    export FAKE_HERDR_WORKSPACES='wG=Frame Effects'
     n="$(herdr_linear::workspace_propose wG "$PROJECT_ID")"
     herdr_linear::workspace_confirm wG "$PROJECT_ID" "$n"
 }

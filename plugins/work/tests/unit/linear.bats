@@ -478,7 +478,7 @@ refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
 @test "project_issues lists the project's issues in nodes, never a teams shape, never a canceled one" {
     run --separate-stderr herdr_linear::project_issues "$PROJECT"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317,WEB-3312" ]
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3308,WEB-3307,WEB-3302" ]
     refute_match -qF '"teams"' <<<"$output"
     refute_match -qF 'project(id:' "$FAKE_LINEAR_RECORD_DIR/bodies"
     [ "$(printf '%s' "$output" | python3 -c 'import sys,json;print(json.load(sys.stdin)["truncated"])')" = "False" ]
@@ -489,11 +489,11 @@ refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
     filter='{"and":[{"project":{"id":{"in":["'"$PROJECT"'"]}}},{"state":{"type":{"nin":["completed","canceled"]}}}]}'
     run --separate-stderr herdr_linear::view_issues "$filter"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317,WEB-3312" ]
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3308,WEB-3307,WEB-3302" ]
     # The positive control: the same pool with no state clause carries the
     # Done issue, so the exclusion above is the filter's doing.
     run --separate-stderr herdr_linear::view_issues '{"and":[{"project":{"id":{"in":["'"$PROJECT"'"]}}}]}'
-    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317,WEB-3312,WEB-3300,WEB-3303" ]
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3308,WEB-3307,WEB-3302,WEB-3300,WEB-3303" ]
 }
 
 @test "view_issues passes the view's filter through unchanged" {
@@ -516,7 +516,7 @@ refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
     export FAKE_LINEAR_ISSUES=paged
     run --separate-stderr herdr_linear::project_issues "$PROJECT"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317,WEB-3312" ]
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3308,WEB-3307,WEB-3302" ]
     [ "$(api_calls)" = "2" ]
     second="$(tail -1 "$FAKE_LINEAR_RECORD_DIR/bodies" | python3 -c 'import sys,json;print(json.load(sys.stdin)["variables"].get("after",""))')"
     [ "$second" = "c1" ]
@@ -536,7 +536,7 @@ refute_match() {   # refute_match <grep-args...> -- fails when grep MATCHES
     run --separate-stderr herdr_linear::project_issues "$PROJECT"
     [ "$status" -eq 0 ]
     [ "$(api_calls)" = "1" ]
-    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3318,WEB-3317" ]
+    [ "$(printf '%s' "$output" | identifiers)" = "WEB-3308,WEB-3307" ]
     [ "$(printf '%s' "$output" | python3 -c 'import sys,json;print(json.load(sys.stdin)["truncated"])')" = "True" ]
 }
 

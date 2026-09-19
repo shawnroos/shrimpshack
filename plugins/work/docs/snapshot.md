@@ -140,7 +140,7 @@ A map from identifier to issue:
 | Key | Value |
 |---|---|
 | `id` | Linear's id, `null` from the cache |
-| `identifier` | `WEB-3312` |
+| `identifier` | `WEB-3302` |
 | `title` | sanitised |
 | `url` | `null` from the cache |
 | `state` | `{"id", "name", "type"}`; `id` and `type` are `null` from the cache |

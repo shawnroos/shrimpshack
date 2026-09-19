@@ -32,7 +32,7 @@ setup() {
 
 # The long title whose slug overruns the 40-character title cap mid-word, so the
 # severed remnant is dropped. This is start.bats' own fixture ticket.
-LONG_TITLE="AI tools drawer is blank when a still image is selected"
+LONG_TITLE="Export panel is empty when a still-rendering frame is selected"
 
 # ------------------------------------------------------------ unknown schemes
 
@@ -40,7 +40,7 @@ LONG_TITLE="AI tools drawer is blank when a still image is selected"
 # caller gets no string it could mistake for a name and go create something with.
 @test "an unrecognised worktree scheme is refused and nothing is rendered" {
     export HERDR_LINEAR_WORKTREE_SCHEME=ticket-only
-    run --separate-stderr herdr_linear::scheme_name worktree WEB-3318 "$LONG_TITLE"
+    run --separate-stderr herdr_linear::scheme_name worktree WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_UNKNOWN" ]
     [ -z "$output" ]
     [[ "$stderr" == *"ticket-only"* ]]
@@ -51,7 +51,7 @@ LONG_TITLE="AI tools drawer is blank when a still image is selected"
 @test "an unrecognised scheme names every valid scheme for that kind on stderr" {
     local scheme
     export HERDR_LINEAR_BRANCH_SCHEME=nonsense
-    run --separate-stderr herdr_linear::scheme_name branch WEB-3318 "$LONG_TITLE"
+    run --separate-stderr herdr_linear::scheme_name branch WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_UNKNOWN" ]
     for scheme in $HERDR_LINEAR_BRANCH_SCHEMES; do
         [[ "$stderr" == *"$scheme"* ]]
@@ -63,7 +63,7 @@ LONG_TITLE="AI tools drawer is blank when a still image is selected"
 # end rather than as a request to file.
 @test "the refusal says a new scheme is a code change rather than a setting" {
     export HERDR_LINEAR_TAB_SCHEME=whatever
-    run --separate-stderr herdr_linear::scheme_name tab WEB-3318 "$LONG_TITLE"
+    run --separate-stderr herdr_linear::scheme_name tab WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_UNKNOWN" ]
     [[ "$stderr" == *"code change"* ]]
 }
@@ -73,7 +73,7 @@ LONG_TITLE="AI tools drawer is blank when a still image is selected"
 # R4 names them, and neither has a rendering site in the plugin.
 @test "an unrecognised name kind is refused and the valid kinds are named" {
     local kind
-    run --separate-stderr herdr_linear::scheme_name pane WEB-3318 "$LONG_TITLE"
+    run --separate-stderr herdr_linear::scheme_name pane WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_UNKNOWN" ]
     [ -z "$output" ]
     for kind in $HERDR_LINEAR_SCHEME_KINDS; do
@@ -89,9 +89,9 @@ LONG_TITLE="AI tools drawer is blank when a still image is selected"
     local scheme out
     for scheme in $HERDR_LINEAR_WORKTREE_SCHEMES; do
         export HERDR_LINEAR_WORKTREE_SCHEME="$scheme"
-        out="$(herdr_linear::scheme_name worktree WEB-3318 "$LONG_TITLE")"
+        out="$(herdr_linear::scheme_name worktree WEB-3308 "$LONG_TITLE")"
         [ -n "$out" ]
-        [[ "$out" == *"WEB-3318"* ]]
+        [[ "$out" == *"WEB-3308"* ]]
     done
 }
 
@@ -99,32 +99,32 @@ LONG_TITLE="AI tools drawer is blank when a still image is selected"
     local scheme out
     for scheme in $HERDR_LINEAR_BRANCH_SCHEMES; do
         export HERDR_LINEAR_BRANCH_SCHEME="$scheme"
-        out="$(herdr_linear::scheme_name branch WEB-3318 "$LONG_TITLE")"
+        out="$(herdr_linear::scheme_name branch WEB-3308 "$LONG_TITLE")"
         [ -n "$out" ]
-        [[ "$out" == *"WEB-3318"* ]]
+        [[ "$out" == *"WEB-3308"* ]]
     done
 }
 
 # ------------------------------------------------------ KTD5, byte-identity
 
 @test "the default worktree scheme reproduces today's name at the 40-character title cap" {
-    run herdr_linear::scheme_name worktree WEB-3318 "$LONG_TITLE"
+    run herdr_linear::scheme_name worktree WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$output" = "WEB-3308-export-panel-is-empty-when-a-still" ]
 }
 
 @test "the default branch scheme reproduces today's prefixed name" {
-    run herdr_linear::scheme_name branch WEB-3318 "$LONG_TITLE"
+    run herdr_linear::scheme_name branch WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "feature/WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$output" = "feature/WEB-3308-export-panel-is-empty-when-a-still" ]
 }
 
 # A title short enough to leave the cap untouched keeps its last word. Trimming
 # the severed remnant unconditionally once cost every short title a word.
 @test "a title under the cap keeps its final word" {
-    run herdr_linear::scheme_name worktree WEB-2870 "Tool detach foreground"
+    run herdr_linear::scheme_name worktree WEB-2670 "Tool blur backdrop"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "WEB-2870-tool-detach-foreground" ]
+    [ "$output" = "WEB-2670-tool-blur-backdrop" ]
 }
 
 # Separator runs and punctuation collapse the same way they do today.
@@ -172,34 +172,34 @@ LONG_TITLE="AI tools drawer is blank when a still image is selected"
 @test "an unset scheme setting renders the default scheme" {
     local unset_out set_out
     unset HERDR_LINEAR_WORKTREE_SCHEME
-    unset_out="$(herdr_linear::scheme_name worktree WEB-3318 "$LONG_TITLE")"
+    unset_out="$(herdr_linear::scheme_name worktree WEB-3308 "$LONG_TITLE")"
     export HERDR_LINEAR_WORKTREE_SCHEME="$HERDR_LINEAR_WORKTREE_SCHEME_DEFAULT"
-    set_out="$(herdr_linear::scheme_name worktree WEB-3318 "$LONG_TITLE")"
+    set_out="$(herdr_linear::scheme_name worktree WEB-3308 "$LONG_TITLE")"
     [ "$unset_out" = "$set_out" ]
-    [ "$unset_out" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$unset_out" = "WEB-3308-export-panel-is-empty-when-a-still" ]
 }
 
 # An empty value carries no alternative meaning for a scheme — unlike the branch
 # prefix, where empty means "no prefix" — so it reads as "not chosen".
 @test "a scheme setting that is set but empty renders the default scheme" {
     export HERDR_LINEAR_WORKTREE_SCHEME=""
-    run herdr_linear::scheme_name worktree WEB-3318 "$LONG_TITLE"
+    run herdr_linear::scheme_name worktree WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$output" = "WEB-3308-export-panel-is-empty-when-a-still" ]
 }
 
 @test "the identifier worktree scheme renders the identifier alone" {
     export HERDR_LINEAR_WORKTREE_SCHEME=identifier
-    run herdr_linear::scheme_name worktree WEB-3318 "$LONG_TITLE"
+    run herdr_linear::scheme_name worktree WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "WEB-3318" ]
+    [ "$output" = "WEB-3308" ]
 }
 
 @test "the worktree branch scheme renders the worktree name with no prefix" {
     export HERDR_LINEAR_BRANCH_SCHEME=worktree
-    run herdr_linear::scheme_name branch WEB-3318 "$LONG_TITLE"
+    run herdr_linear::scheme_name branch WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$output" = "WEB-3308-export-panel-is-empty-when-a-still" ]
 }
 
 # KTD1. An empty prefix is what makes trading the identical-string form away
@@ -207,28 +207,28 @@ LONG_TITLE="AI tools drawer is blank when a still image is selected"
 @test "an empty branch prefix makes the branch and the worktree name identical" {
     local worktree branch
     export HERDR_LINEAR_BRANCH_PREFIX=""
-    worktree="$(herdr_linear::scheme_name worktree WEB-3318 "$LONG_TITLE")"
-    branch="$(herdr_linear::scheme_name branch WEB-3318 "$LONG_TITLE")"
+    worktree="$(herdr_linear::scheme_name worktree WEB-3308 "$LONG_TITLE")"
+    branch="$(herdr_linear::scheme_name branch WEB-3308 "$LONG_TITLE")"
     # Pinned, not just compared: two renderings of the same wrong string are
     # equal to each other, so equality alone is an assertion that cannot fail.
-    [ "$worktree" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$worktree" = "WEB-3308-export-panel-is-empty-when-a-still" ]
     [ "$branch" = "$worktree" ]
 }
 
 @test "a branch prefix passed as an argument beats the environment" {
     export HERDR_LINEAR_BRANCH_PREFIX=feature
-    run herdr_linear::scheme_name branch WEB-2870 "Tool detach foreground" bugfix
+    run herdr_linear::scheme_name branch WEB-2670 "Tool blur backdrop" bugfix
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "bugfix/WEB-2870-tool-detach-foreground" ]
+    [ "$output" = "bugfix/WEB-2670-tool-blur-backdrop" ]
 }
 
 # The branch scheme composes on the WORKTREE scheme, which is what makes a
 # worktree findable from its branch: changing one changes both together.
 @test "the branch name follows the worktree scheme it is built from" {
     export HERDR_LINEAR_WORKTREE_SCHEME=identifier
-    run herdr_linear::scheme_name branch WEB-3318 "$LONG_TITLE"
+    run herdr_linear::scheme_name branch WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "feature/WEB-3318" ]
+    [ "$output" = "feature/WEB-3308" ]
 }
 
 # ------------------------------------------------------------------ the tab
@@ -237,16 +237,16 @@ LONG_TITLE="AI tools drawer is blank when a still image is selected"
 # squeezes separator runs. `herdr-write.sh:229` labels a tab from the bare
 # identifier today and this scheme must reproduce it byte for byte.
 @test "the default tab scheme renders the bare identifier" {
-    run herdr_linear::scheme_name tab WEB-3318 "$LONG_TITLE"
+    run herdr_linear::scheme_name tab WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "WEB-3318" ]
+    [ "$output" = "WEB-3308" ]
 }
 
 @test "the identifier-title tab scheme renders the worktree-shaped name" {
     export HERDR_LINEAR_TAB_SCHEME=identifier-title
-    run herdr_linear::scheme_name tab WEB-3318 "$LONG_TITLE"
+    run herdr_linear::scheme_name tab WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
-    [ "$output" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$output" = "WEB-3308-export-panel-is-empty-when-a-still" ]
 }
 
 # A tab label is not a path segment, so a title that slugs to empty is not fatal

@@ -470,23 +470,23 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 
 @test "the default worktree name for a child issue is unchanged" {
     export FAKE_LINEAR_MODE=found_child
-    run herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-3318)"
+    run herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-3308)"
     [ "$status" -eq 0 ]
-    [ "$output" = "WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$output" = "WEB-3308-export-panel-is-empty-when-a-still" ]
 }
 
 @test "the default worktree name for a parent issue is unchanged" {
     export FAKE_LINEAR_MODE=found_parent
-    run herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-2870)"
+    run herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-2670)"
     [ "$status" -eq 0 ]
-    [ "$output" = "WEB-2870-tool-detach-foreground" ]
+    [ "$output" = "WEB-2670-tool-blur-backdrop" ]
 }
 
 @test "the default branch name is that worktree name behind feature/" {
     export FAKE_LINEAR_MODE=found_child
-    run herdr_linear::start_branch_name "$(herdr_linear::fetch_issue WEB-3318)"
+    run herdr_linear::start_branch_name "$(herdr_linear::fetch_issue WEB-3308)"
     [ "$status" -eq 0 ]
-    [ "$output" = "feature/WEB-3318-ai-tools-drawer-is-blank-when-a-still" ]
+    [ "$output" = "feature/WEB-3308-export-panel-is-empty-when-a-still" ]
 }
 
 # R4, R5. The point of asking for a name rather than composing one: the branch
@@ -494,20 +494,20 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 # stays in each.
 @test "a non-default worktree scheme moves the branch name with it" {
     export FAKE_LINEAR_MODE=found_child HERDR_LINEAR_WORKTREE_SCHEME=identifier
-    resp="$(herdr_linear::fetch_issue WEB-3318)"
+    resp="$(herdr_linear::fetch_issue WEB-3308)"
     run herdr_linear::start_worktree_name "$resp"
     [ "$status" -eq 0 ]
-    [ "$output" = "WEB-3318" ]
+    [ "$output" = "WEB-3308" ]
     run herdr_linear::start_branch_name "$resp"
     [ "$status" -eq 0 ]
-    [ "$output" = "feature/WEB-3318" ]
+    [ "$output" = "feature/WEB-3308" ]
 }
 
 # R6. A typo re-homes every worktree it touches, so it is refused rather than
 # silently replaced with the default.
 @test "a worktree scheme that does not exist is refused and names the valid ones" {
     export FAKE_LINEAR_MODE=found_child HERDR_LINEAR_WORKTREE_SCHEME=identifier-slug
-    run --separate-stderr herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-3318)"
+    run --separate-stderr herdr_linear::start_worktree_name "$(herdr_linear::fetch_issue WEB-3308)"
     [ "$status" -eq 2 ]
     [ -z "$output" ]
     [[ "$stderr" == *"identifier-title identifier"* ]]
@@ -520,7 +520,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
     export FAKE_LINEAR_MODE=found_child
     for knob in HERDR_LINEAR_WORKTREE_SCHEME HERDR_LINEAR_BRANCH_SCHEME; do
         export "$knob=identifier-slug"
-        run --separate-stderr herdr_linear::start_from_issue WEB-3318
+        run --separate-stderr herdr_linear::start_from_issue WEB-3308
         [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
         [ ! -e "$WT_ROOT" ]
         [ "$(sent 'issue(id')" -eq 0 ]
@@ -535,7 +535,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "with the switch true, a start with an unknown tab scheme is refused before anything is made" {
     record_alpha; a_space_for_the_project
     export FAKE_LINEAR_MODE=found_child HERDR_LINEAR_OPEN_SESSION=true HERDR_LINEAR_TAB_SCHEME=identifier-slug
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
     [ ! -e "$WT_ROOT" ]
     [ "$(sent 'issue(id')" -eq 0 ]
@@ -545,7 +545,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "with the switch unset, a start is not refused for a tab scheme it never renders" {
     record_alpha; a_space_for_the_project
     export FAKE_LINEAR_MODE=found_child HERDR_LINEAR_TAB_SCHEME=identifier-slug
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     [ -d "$output" ]
 }
@@ -555,7 +555,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 @test "a ticket whose identifier cannot become a safe path is refused, not reported as a failed worktree" {
     record_alpha
     export FAKE_LINEAR_MODE=traversal_identifier
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq "$HERDR_LINEAR_START_REFUSED" ]
     [ ! -e "$WT_ROOT" ]
 }
@@ -582,7 +582,7 @@ mutations() { local n; n="$(grep -cE 'mutation' "$FAKE_LINEAR_RECORD_DIR/bodies"
 }
 
 @test "an issue with no title or no identifier yields no branch name" {
-    run herdr_linear::start_branch_name '{"data":{"issue":{"identifier":"WEB-3318","title":""}}}'
+    run herdr_linear::start_branch_name '{"data":{"issue":{"identifier":"WEB-3308","title":""}}}'
     [ "$status" -ne 0 ]
     [ -z "$output" ]
     run herdr_linear::start_branch_name '{"data":{"issue":{"identifier":"","title":"A thing"}}}'
@@ -940,7 +940,7 @@ SWITCH_PID=44444444-4444-4444-8444-444444444444
 
 a_space_for_the_project() {
     local n
-    export FAKE_HERDR_WORKSPACES='wG=AI Canvas Tools'
+    export FAKE_HERDR_WORKSPACES='wG=Frame Effects'
     n="$(herdr_linear::workspace_propose wG "$SWITCH_PID")"
     herdr_linear::workspace_confirm wG "$SWITCH_PID" "$n"
 }
@@ -953,7 +953,7 @@ panes_opened() {
 # command substitution dies with the subshell, and a space nothing can see
 # turns "no session opened" into a pass for the wrong reason.
 started_worktree() {
-    herdr_linear::start_from_issue WEB-3318 2>/dev/null
+    herdr_linear::start_from_issue WEB-3308 2>/dev/null
 }
 
 @test "with the switch unset, starting from a ticket opens no session" {
@@ -995,7 +995,7 @@ started_worktree() {
     export HERDR_LINEAR_OPEN_SESSION=true
     record_alpha; a_space_for_the_project
     export FAKE_LINEAR_MODE=found_child FAKE_HERDR_MODE=not_running
-    run --separate-stderr herdr_linear::start_from_issue WEB-3318
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
     [ "$status" -eq 0 ]
     path="$output"
     [ -d "$path" ]

@@ -287,10 +287,10 @@ list_ids() { jfield 'import sys,json;d=json.load(sys.stdin)["data"]["issues"];pr
 @test "the listing arm applies the request's own filter to its pool" {
     run bash -c "printf '' | bash '$FIXTURE' --data '$(list_body '{"project":{"id":{"eq":"'"$PROJECT"'"}},"state":{"type":{"neq":"canceled"}}}')'"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317,WEB-3312 False None" ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3308,WEB-3307,WEB-3302 False None" ]
     # No state clause: the canceled issue is in the pool and comes back.
     run bash -c "printf '' | bash '$FIXTURE' --data '$(list_body '{"project":{"id":{"eq":"'"$PROJECT"'"}}}')'"
-    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317,WEB-3312,WEB-3300 False None" ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3308,WEB-3307,WEB-3302,WEB-3300 False None" ]
     # A project the pool does not carry yields nothing, not the pool whole.
     run bash -c "printf '' | bash '$FIXTURE' --data '$(list_body '{"project":{"id":{"eq":"99999999-9999-4999-8999-999999999999"}}}')'"
     [ "$(printf '%s' "$output" | list_ids)" = " False None" ]
@@ -300,27 +300,27 @@ list_ids() { jfield 'import sys,json;d=json.load(sys.stdin)["data"]["issues"];pr
     f='{"and":[{"project":{"id":{"in":["'"$PROJECT"'"]}}},{"or":[{"state":{"type":{"eq":"completed"}}},{"state":{"type":{"eq":"started"}}}]}]}'
     run bash -c "printf '' | FAKE_LINEAR_ISSUES=completed bash '$FIXTURE' --data '$(list_body "$f")'"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3312,WEB-3303 False None" ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3302,WEB-3303 False None" ]
 }
 
 @test "the listing arm ignores the mode, and the candidate spelling ignores the arm" {
     run bash -c "printf '' | FAKE_LINEAR_MODE=not_found bash '$FIXTURE' --data '$(list_body '{}')'"
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317,WEB-3312,WEB-3300 False None" ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3308,WEB-3307,WEB-3302,WEB-3300 False None" ]
     body='{"query":"query($f:IssueFilter,$n:Int){issues(first:$n,filter:$f){nodes{identifier}}}","variables":{"f":{"project":{"id":{"eq":"nope"}}}}}'
     run bash -c "printf '' | FAKE_LINEAR_MODE=candidates bash '$FIXTURE' --data '$body'"
     [ "$status" -eq 0 ]
     result="$(printf '%s' "$output" | jfield 'import sys,json;print(",".join(n["identifier"] for n in json.load(sys.stdin)["data"]["issues"]["nodes"]))')"
-    [ "$result" = "WEB-3318,WEB-3317,WEB-3312" ]
+    [ "$result" = "WEB-3308,WEB-3307,WEB-3302" ]
 }
 
 @test "paged answers two pages through after, and capped never ends" {
     run bash -c "printf '' | FAKE_LINEAR_ISSUES=paged bash '$FIXTURE' --data '$(list_body '{}')'"
-    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317 True c1" ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3308,WEB-3307 True c1" ]
     run bash -c "printf '' | FAKE_LINEAR_ISSUES=paged bash '$FIXTURE' --data '$(list_body '{}' c1)'"
-    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3312,WEB-3300 False None" ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3302,WEB-3300 False None" ]
     run bash -c "printf '' | FAKE_LINEAR_ISSUES=capped bash '$FIXTURE' --data '$(list_body '{}' c7)'"
-    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317,WEB-3312,WEB-3300 True c8" ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3308,WEB-3307,WEB-3302,WEB-3300 True c8" ]
     run bash -c "printf '' | FAKE_LINEAR_ISSUES=empty bash '$FIXTURE' --data '$(list_body '{}')'"
     [ "$(printf '%s' "$output" | list_ids)" = " False None" ]
 }

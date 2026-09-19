@@ -45,12 +45,12 @@ setup() {
     VIEW=cccccccc-cccc-4ccc-8ccc-cccccccccccc
     LAYOUT='{"grouping":"workflowState","column_order":[],"hidden":[]}'
 
-    WT="$WORK/worktrees/web-3312"; mkdir -p "$WT"
-    git -C "$WT" init -q -b feature/web-3312-example
+    WT="$WORK/worktrees/web-3302"; mkdir -p "$WT"
+    git -C "$WT" init -q -b feature/web-3302-example
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
     local n
-    n="$(herdr_linear::binding_propose "$WT" WEB-3312)"
-    herdr_linear::binding_confirm "$WT" WEB-3312 "$n"
+    n="$(herdr_linear::binding_propose "$WT" WEB-3302)"
+    herdr_linear::binding_confirm "$WT" WEB-3302 "$n"
     herdr_linear::binding_set_tab "$WT" wA:t1
 
     n="$(herdr_linear::workspace_propose wA "$PROJECT")"
@@ -116,7 +116,7 @@ cache_issue() {   # cache_issue <id> <title> <status> <fetchedAt> [project]
 import json, sys
 json.dump({"id": sys.argv[1], "title": sys.argv[2], "project": sys.argv[6],
            "status": sys.argv[3], "fetchedAt": sys.argv[4]}, open(sys.argv[5], "w"), indent=2)
-' "$1" "$2" "$3" "$4" "$LINEAR_CACHE_DIR/$1.json" "${5:-AI Canvas Tools}"
+' "$1" "$2" "$3" "$4" "$LINEAR_CACHE_DIR/$1.json" "${5:-Frame Effects}"
 }
 
 # The project id the last issue-listing request's filter named.
@@ -143,14 +143,14 @@ print(found)
 # crates/board-core/tests/fixtures/linear-snapshot/VERSION; the lines below
 # are that file's, so a change on either side fails here or there.
 @test "every fixture matches the hash the board pins" {
-    local expected="694650b60678e0fa734d62abc7fd70f1f16702dc4e918b45fee55fef4427189c  bound-no-view.json
-dafb3fff575d7b5a2bf1ac1277061d406d49bbfcc464207b939ff796e4c9b29f  bound-view-unsupported-grouping.json
-f7ae46a2c9545c1bc254f53511fc35d3c70d914bdd517453bfeedfd055905fe1  bound-with-view.json
-306a4791a52a10c7c28e00eb19b7719490089f389d0df5e4cf07f3aeb2a67756  herdr-unavailable.json
-334c2630f08515aa4a0f19ba759d3b37813ffcd0e43049a67854c4e18dc0f292  linear-unavailable.json
+    local expected="c819a78126b8ff00026e280de85b456f61811345789141068ccfcd6886b837c3  bound-no-view.json
+005a5c384b39c5dedb853ee8ffab5f8eb7675408c7c38dd5d3c168c47e46cd47  bound-view-unsupported-grouping.json
+9609e6593efc1fb921f2acf3182254962cd50075a71820179ea001e288de4793  bound-with-view.json
+14e191dfc02b0480d4b3508ae8457bcff69a923138afb623384b0cadffca7d76  herdr-unavailable.json
+2217a6a42f58d49ab4374c10e8119b9f10d69ae897070a3b3c6a1c42c8ed4d66  linear-unavailable.json
 d70ddd3e9e77ef658362b5696623e87c9b7de97b6af3b00b912e76dd288ebc6c  record-unreadable.json
 f2c2f12bff7a153bd8ddf4492eaaad28392ad169b3d5abc343c96a786f28dcf7  unbound.json
-a25ba0b14a499c9bbc02cb862b9ec782d95f53b9240bfe00eae9fe794cf411dc  worktree-missing.json"
+1a3a5f01c4eeba9be2ed322a34f70eb191d1fd8b6102ef0baa4cb509f3a0af2c  worktree-missing.json"
     local actual
     actual="$(cd "$SNAPFIX" && shasum -a 256 -- *.json)"
     [ "$(printf '%s' "$actual" | grep -c .)" -eq 8 ]
@@ -182,7 +182,7 @@ a25ba0b14a499c9bbc02cb862b9ec782d95f53b9240bfe00eae9fe794cf411dc  worktree-missi
 
 @test "AE4: Linear down with a warm cache reproduces linear-unavailable.json" {
     with_view
-    cache_issue WEB-3312 "Example issue: a saved item is empty after reload" "In Progress" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    cache_issue WEB-3302 "Example issue: a saved item is empty after reload" "In Progress" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     export FAKE_LINEAR_OUTAGE=http_500
     expect_fixture linear-unavailable.json
     run bash "$BIN" wA
@@ -246,7 +246,7 @@ a25ba0b14a499c9bbc02cb862b9ec782d95f53b9240bfe00eae9fe794cf411dc  worktree-missi
     [ "$status" -eq 0 ]
     [ "$(field "$output" 'd["view"]["status"]')" = "not_in_project" ]
     [ "$(field "$output" 'd["view"]["layout"]')" = "None" ]
-    [ "$(field "$output" 'sorted(d["issues"])')" = "['WEB-3312', 'WEB-3317', 'WEB-3318']" ]
+    [ "$(field "$output" 'sorted(d["issues"])')" = "['WEB-3302', 'WEB-3307', 'WEB-3308']" ]
     [ "$(sent_listing_filter_project)" = "44444444-4444-4444-8444-444444444444" ]
 }
 
@@ -264,7 +264,7 @@ a25ba0b14a499c9bbc02cb862b9ec782d95f53b9240bfe00eae9fe794cf411dc  worktree-missi
     export FAKE_LINEAR_VIEW_GROUPING=assignee FAKE_LINEAR_VIEW_PREFS=unarranged
     run --separate-stderr bash "$BIN" wA
     [ "$status" -eq 0 ]
-    [ "$(field "$output" '[sorted(g["issues"]) for g in d["groups"] if g["key"] == "unassigned"]')" = "[['WEB-3300', 'WEB-3317']]" ]
+    [ "$(field "$output" '[sorted(g["issues"]) for g in d["groups"] if g["key"] == "unassigned"]')" = "[['WEB-3300', 'WEB-3307']]" ]
     [ "$(field "$output" '[g["label"] for g in d["groups"] if g["key"] == "unassigned"]')" = "['Unassigned']" ]
     [ "$(field "$output" 'sorted(sum((g["issues"] for g in d["groups"]), [])) == sorted(d["issues"])')" = "True" ]
 }
@@ -350,8 +350,8 @@ json.dump(d, open(p, "w"), indent=2)
         chmod 600 "$f"
         run --separate-stderr bash "$BIN" wA
         [ "$status" -eq 0 ]
-        [ "$(field "$output" 'd["issues"]["WEB-3312"]["bindings"][0]["tab"]')" = "None" ]
-        [ "$(field "$output" 'd["issues"]["WEB-3312"]["bindings"][0]["panes"]')" = "[]" ]
+        [ "$(field "$output" 'd["issues"]["WEB-3302"]["bindings"][0]["tab"]')" = "None" ]
+        [ "$(field "$output" 'd["issues"]["WEB-3302"]["bindings"][0]["panes"]')" = "[]" ]
         # Nothing is inferred from a pane's cwd: the tab whose panes sit in
         # this worktree is unmapped like any other.
         [ "$(field "$output" '[u["tab_id"] for u in d["unmapped"]]')" = "['wA:t1', 'wA:t2']" ]
@@ -397,7 +397,7 @@ json.dump(d, open(p, "w"), indent=2)
     run --separate-stderr bash "$BIN" wA
     [ "$status" -eq 0 ]
     [ "$(field "$output" 'd["unmapped"][0]["reason"]')" = "proposed" ]
-    [ "$(field "$output" 'sorted(d["issues"])')" = "['WEB-3312', 'WEB-3317', 'WEB-3318']" ]
+    [ "$(field "$output" 'sorted(d["issues"])')" = "['WEB-3302', 'WEB-3307', 'WEB-3308']" ]
 }
 
 @test "an argument that is not an identifier exits 2 with nothing on stdout" {
@@ -482,13 +482,13 @@ json.dump(d, open(p, "w"), indent=2)
     with_view
     local rlo; rlo="$(printf '\xe2\x80\xae')"
     export FAKE_HERDR_WORKSPACES="wA=Plug${rlo}ins"
-    cache_issue WEB-3312 "Example ${rlo}issue" "In ${rlo}Progress" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    cache_issue WEB-3302 "Example ${rlo}issue" "In ${rlo}Progress" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     export FAKE_LINEAR_OUTAGE=http_500
     run --separate-stderr bash "$BIN" wA
     [ "$status" -eq 0 ]
     refute_match -F "$rlo" <<< "$output"
     [ "$(field "$output" 'd["workspace"]["label"]')" = "Plugins" ]
-    [ "$(field "$output" 'd["issues"]["WEB-3312"]["title"]')" = "Example issue" ]
+    [ "$(field "$output" 'd["issues"]["WEB-3302"]["title"]')" = "Example issue" ]
     [ "$(field "$output" 'd["groups"][0]["key"]')" = "In Progress" ]
 }
 
@@ -498,10 +498,10 @@ json.dump(d, open(p, "w"), indent=2)
     run --separate-stderr bash "$BIN" wA
     [ "$status" -eq 0 ]
     [ "$(field "$output" 'd["view"]["layout"]["grouping"]')" = "label" ]
-    [ "$(field "$output" '[g["issues"] for g in d["groups"] if g["key"] == "nolabel"][0].count("WEB-3317")')" = "1" ]
+    [ "$(field "$output" '[g["issues"] for g in d["groups"] if g["key"] == "nolabel"][0].count("WEB-3307")')" = "1" ]
     [ "$(field "$output" '[g["label"] for g in d["groups"] if g["key"] == "nolabel"]')" = "['No label']" ]
-    [ "$(field "$output" '[g["issues"] for g in d["groups"] if g["key"] == "77777777-7777-4777-8777-777777777777"]')" = "[['WEB-3318']]" ]
-    [ "$(field "$output" '"WEB-3317" in d["issues"]')" = "True" ]
+    [ "$(field "$output" '[g["issues"] for g in d["groups"] if g["key"] == "77777777-7777-4777-8777-777777777777"]')" = "[['WEB-3308']]" ]
+    [ "$(field "$output" '"WEB-3307" in d["issues"]')" = "True" ]
 }
 
 @test "a binding record the loader would refuse is left out of bindings and unmapped" {
@@ -513,7 +513,7 @@ json.dump(d, open(p, "w"), indent=2)
     chmod 664 "$f"
     run --separate-stderr bash "$BIN" wA
     [ "$status" -eq 0 ]
-    [ "$(field "$output" 'd["issues"]["WEB-3312"]["bindings"]')" = "[]" ]
+    [ "$(field "$output" 'd["issues"]["WEB-3302"]["bindings"]')" = "[]" ]
     [ "$(field "$output" 'sorted(u["tab_id"] for u in d["unmapped"])')" = "['wA:t1', 'wA:t2']" ]
     [ "$(field "$output" '[u["reason"] for u in d["unmapped"]]')" = "['no_binding', 'no_binding']" ]
     refute_match -F worktree_missing <<< "$output"
