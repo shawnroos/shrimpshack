@@ -53,6 +53,31 @@
 #   FAKE_LINEAR_UNFILTERED   set to 1 to receive the canned payload whole,
 #                            for a test asserting on a captured SHAPE rather
 #                            than on what a query selected
+#   FAKE_LINEAR_ISSUES       project | completed | paged | capped | empty --
+#                            the pool the `$filter:IssueFilter` listing arm
+#                            answers from, after applying the request's own
+#                            filter (default: project)
+#   FAKE_LINEAR_VIEWS        none | one | many | endless -- how many views the
+#                            customViews arm lists (default: one)
+#   FAKE_LINEAR_VIEW_MISSING   set to 1 and customView(id:) answers not found
+#   FAKE_LINEAR_VIEW_ARCHIVED  set to 1 and customView(id:) carries archivedAt
+#   FAKE_LINEAR_VIEW_GROUPING  the issueGrouping customView(id:) reports
+#                            (default: workflowState)
+#   FAKE_LINEAR_VIEW_NAME      the name customView(id:) reports
+#   FAKE_LINEAR_VIEW_PROJECT   the project id customView(id:)'s filter names
+#                            (default: the canned project)
+#   FAKE_LINEAR_VIEW_PREFS   unarranged -- columnOrderBoard and hiddenColumns
+#                            null, as Linear answers for a view whose columns
+#                            were never arranged
+#   FAKE_LINEAR_MUTATION_RESULT  fail | prefs_fail -- prefs_fail fails only
+#                            viewPreferencesCreate, so the view exists and
+#                            its board layout does not
+#   FAKE_LINEAR_LISTING_OUTAGE  set to 1 and only the issue listing answers
+#                            http_500
+#   FAKE_LINEAR_OUTAGE       http_500 | rate_limited | empty_body | ... --
+#                            answer EVERY request from that mode and skip the
+#                            content routing below: an endpoint that is down
+#                            is down for the view read as much as for an issue
 #
 # Exit codes distinguish the two boundary breaks from an ordinary HTTP answer:
 #   98  the credential appeared in argv          (KTD9 broken)
@@ -443,6 +468,146 @@ rate_limited() {
 JSON
 }
 
+# The project's issues, as tests/fixtures/snapshot/bound-with-view.json
+# describes them, plus one canceled issue that every project listing must
+# filter out. `completed` adds a Done issue for the tests about view filters
+# that exclude completed work. The listing arm applies the REQUEST's filter to
+# this pool rather than answering it whole: a client that dropped its filter
+# would otherwise still receive the right issues.
+issue_pool() {
+    cat <<'JSON'
+[{"id":"11111111-1111-4111-8111-111111111111","identifier":"WEB-3318","title":"Example issue: a panel is blank while an item is still loading","url":"https://linear.app/example/issue/web-3318/x","branchName":"web-3318-example-panel-blank","updatedAt":"2026-09-04T15:55:10.206Z","completedAt":null,"priority":0,"state":{"id":"st-backlog","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[{"id":"77777777-7777-4777-8777-777777777777","name":"Bug"}]}},
+ {"id":"12121212-1212-4121-8121-121212121212","identifier":"WEB-3317","title":"Example issue: a long task stops when its panel is closed","url":"https://linear.app/example/issue/web-3317/x","branchName":"web-3317-example-long-task","updatedAt":"2026-09-04T14:00:00.000Z","completedAt":null,"priority":3,"state":{"id":"st-todo","name":"Todo","type":"unstarted"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}},
+ {"id":"13131313-1313-4131-8131-131313131313","identifier":"WEB-3312","title":"Example issue: a saved item is empty after reload","url":"https://linear.app/example/issue/web-3312/x","branchName":"web-3312-example-saved-item","updatedAt":"2026-09-03T10:00:00.000Z","completedAt":null,"priority":2,"state":{"id":"st-prog","name":"In Progress","type":"started"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[]}},
+ {"id":"13001300-1300-4130-8130-130013001300","identifier":"WEB-3300","title":"Old approach, dropped","url":"https://linear.app/example/issue/web-3300/x","branchName":"web-3300-old-approach","updatedAt":"2026-08-20T10:00:00.000Z","completedAt":null,"priority":4,"state":{"id":"st-cancel","name":"Canceled","type":"canceled"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}]
+JSON
+}
+
+completed_pool_extra() {
+    cat <<'JSON'
+{"id":"13031303-1303-4130-8130-130313031303","identifier":"WEB-3303","title":"Shipped last week","url":"https://linear.app/example/issue/web-3303/x","branchName":"web-3303-shipped","updatedAt":"2026-09-01T10:00:00.000Z","completedAt":"2026-09-01T10:00:00.000Z","priority":2,"state":{"id":"st-done","name":"Done","type":"completed"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Creation"},"assignee":null,"labels":{"nodes":[]}}
+JSON
+}
+
+# The request's filter, applied. Comparators eq/neq/in/nin/null on the leaf the
+# clause path names, and/or lists recursed; a path the pool does not carry reads
+# as null, which is what Linear answers for an unset field.
+issues_listing() {
+    HERDR_FAKE_POOL="$(issue_pool)" HERDR_FAKE_EXTRA="$(completed_pool_extra)" \
+    HERDR_FAKE_BODY="$body" python3 - <<'PY'
+import json, os, sys
+mode = os.environ.get("FAKE_LINEAR_ISSUES", "project")
+pool = json.loads(os.environ["HERDR_FAKE_POOL"])
+if mode == "completed":
+    pool.append(json.loads(os.environ["HERDR_FAKE_EXTRA"]))
+if mode == "empty":
+    pool = []
+req = json.loads(os.environ["HERDR_FAKE_BODY"])
+v = req.get("variables") or {}
+flt = v.get("filter")
+after = v.get("after")
+COMPARATORS = {"eq", "neq", "in", "nin", "null"}
+
+def leaf_ok(value, cmp):
+    for op, want in cmp.items():
+        if op == "eq" and value != want: return False
+        if op == "neq" and value == want: return False
+        if op == "in" and value not in want: return False
+        if op == "nin" and value in want: return False
+        if op == "null" and (value is None) != bool(want): return False
+    return True
+
+def matches(issue, clause, ctx):
+    if isinstance(clause, list):
+        return all(matches(issue, c, ctx) for c in clause)
+    if not isinstance(clause, dict):
+        return True
+    if set(clause) & COMPARATORS:
+        return leaf_ok(ctx, clause)
+    for k, sub in clause.items():
+        if k == "and":
+            if not all(matches(issue, c, ctx) for c in sub): return False
+        elif k == "or":
+            if not any(matches(issue, c, ctx) for c in sub): return False
+        else:
+            nxt = ctx.get(k) if isinstance(ctx, dict) else None
+            if not matches(issue, sub, nxt): return False
+    return True
+
+kept = [i for i in pool if flt is None or matches(i, flt, i)]
+if mode == "paged":
+    if after is None:
+        nodes, has_next, cursor = kept[:2], True, "c1"
+    else:
+        nodes, has_next, cursor = kept[2:], False, None
+elif mode == "capped":
+    n = int((after or "c0")[1:]) + 1
+    nodes, has_next, cursor = kept, True, "c%d" % n
+else:
+    nodes, has_next, cursor = kept, False, None
+print(json.dumps({"data": {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}}}}))
+PY
+}
+
+# The project this fixture answers for is 44444444-…; the views name it the
+# ways the real API saved them on 2026-09-14 (tests/probe/customviews-transcript.md):
+# under an `and` wrapper with project.id.in, bare with project.id.eq, and in a
+# two-project `in` list. The initiatives view carries a `project` clause with no
+# id under it and must not match.
+views_listing() {
+    case "${FAKE_LINEAR_VIEWS:-one}" in
+        none) printf '{"data":{"customViews":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}' ;;
+        # Every page offers one matching view and another page after it, so
+        # the listing only ends at the caller's page cap.
+        endless) printf '{"data":{"customViews":{"nodes":[{"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}' ;;
+        many) cat <<'JSON'
+{"data":{"customViews":{"nodes":[
+ {"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}},
+ {"id":"c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2","name":"Canvas by eq","modelName":"Issue","archivedAt":null,"filterData":{"project":{"id":{"eq":"44444444-4444-4444-8444-444444444444"}}}},
+ {"id":"c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3","name":"Two projects, high priority","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444","99999999-9999-4999-8999-999999999999"]}}},{"priority":{"in":[1,2]}}]}},
+ {"id":"c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c4c4","name":"A different project","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["99999999-9999-4999-8999-999999999999"]}}}]}},
+ {"id":"c5c5c5c5-c5c5-4c5c-8c5c-c5c5c5c5c5c5","name":"All projects","modelName":"Project","archivedAt":null,"filterData":{}},
+ {"id":"c6c6c6c6-c6c6-4c6c-8c6c-c6c6c6c6c6c6","name":"Old canvas board","modelName":"Issue","archivedAt":"2026-08-01T00:00:00.000Z","filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}},
+ {"id":"c7c7c7c7-c7c7-4c7c-8c7c-c7c7c7c7c7c7","name":"Initiative issues","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"initiatives":{"or":[{"id":{"eq":"44444444-4444-4444-8444-444444444444"}}]}}}]}}
+],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}
+JSON
+        ;;
+        *) cat <<'JSON'
+{"data":{"customViews":{"nodes":[{"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Canvas board","modelName":"Issue","archivedAt":null,"filterData":{"and":[{"project":{"id":{"in":["44444444-4444-4444-8444-444444444444"]}}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}
+JSON
+        ;;
+    esac
+}
+
+view_body() {
+    HERDR_FAKE_BODY="$body" python3 - <<'PY'
+import json, os
+asked = (json.loads(os.environ["HERDR_FAKE_BODY"]).get("variables") or {}).get("id", "")
+archived = "2026-08-01T00:00:00.000Z" if os.environ.get("FAKE_LINEAR_VIEW_ARCHIVED") == "1" else None
+if os.environ.get("FAKE_LINEAR_VIEW_PREFS") == "unarranged":
+    order, hidden = None, None
+else:
+    order = ["st-backlog", "st-todo", "st-prog", "st-devdone", "st-done", "st-cancel"]
+    hidden = ["st-cancel"]
+print(json.dumps({"data": {"customView": {
+    "id": asked, "name": os.environ.get("FAKE_LINEAR_VIEW_NAME") or "Canvas board", "modelName": "Issue", "archivedAt": archived,
+    "filterData": {"and": [{"project": {"id": {"in": [
+        os.environ.get("FAKE_LINEAR_VIEW_PROJECT") or "44444444-4444-4444-8444-444444444444"]}}}]},
+    "viewPreferencesValues": {
+        "layout": "board",
+        "issueGrouping": os.environ.get("FAKE_LINEAR_VIEW_GROUPING") or "workflowState",
+        "columnOrderBoard": order, "hiddenColumns": hidden}}}}))
+PY
+}
+
+# Captured 2026-09-14: the same INPUT_ERROR shape as an unknown issue, naming
+# the CustomView entity.
+view_not_found() {
+    cat <<'JSON'
+{"errors":[{"message":"Entity not found: CustomView","path":["customView"],"locations":[{"line":1,"column":20}],"extensions":{"type":"invalid input","code":"INPUT_ERROR","statusCode":400,"userError":true,"userPresentableMessage":"Could not find referenced CustomView."}}],"data":null}
+JSON
+}
+
 # A mode of the form `seq:a,b,c` serves a different body per call: the first
 # call gets a, the second b, and the last entry repeats thereafter. KTD7's
 # stale-write guard is about updatedAt moving BETWEEN two reads in one pass, so
@@ -463,13 +628,136 @@ case "$mode" in
         ;;
 esac
 
+if [ -n "${FAKE_LINEAR_OUTAGE:-}" ]; then
+    mode="$FAKE_LINEAR_OUTAGE"
+    body_routed=""
+else
+    body_routed="$body"
+fi
+
+# Request-level schema checks, before any route answers. Captured 2026-09-15:
+# IDComparator takes ID, and a variable declared String! is refused before the
+# query runs. The snapshot script shipped that mistake past a fake that only
+# checked one route, so every request is checked here. The two view creates
+# are checked against the input types introspected in
+# tests/probe/customviews-transcript.md: a fake that answers any body proves
+# only that a body was sent.
+if [ -n "$body_routed" ]; then
+    schema_err="$(HERDR_FAKE_BODY="$body" python3 -c '
+import json, os, re, sys
+try:
+    b = json.loads(os.environ["HERDR_FAKE_BODY"])
+except Exception:
+    sys.exit(0)
+q = b.get("query") or ""
+v = b.get("variables") or {}
+declared = dict(re.findall(r"\$(\w+)\s*:\s*([\[\]\w!]+)", q))
+def bad(msg):
+    print(msg)
+    sys.exit(0)
+for op, name in re.findall(r"\bid\s*:\s*\{\s*(eq|neq|in|nin)\s*:\s*\$(\w+)", q):
+    if declared.get(name, "").strip("[]!") != "ID":
+        bad("Variable \"$%s\" of type \"%s\" used in position expecting type \"ID\"." % (name, declared.get(name, "")))
+def check(inp, typename, allowed, required):
+    if not isinstance(inp, dict):
+        bad("Variable \"$i\" got invalid value; Expected type \"%s\" to be an object." % typename)
+    for k in inp:
+        if k not in allowed:
+            bad("Variable \"$i\" got invalid value; Field \"%s\" is not defined by type \"%s\"." % (k, typename))
+    for k in required:
+        if inp.get(k) in (None, ""):
+            bad("Variable \"$i\" got invalid value; Field \"%s\" of required type was not provided." % k)
+    for k, want in allowed.items():
+        if inp.get(k) is not None and not isinstance(inp[k], want):
+            bad("Variable \"$i\" got invalid value at \"i.%s\"." % k)
+S = str
+if "customViewCreate" in q:
+    if declared.get("i") != "CustomViewCreateInput!":
+        bad("customViewCreate takes $i:CustomViewCreateInput!")
+    check(v.get("i"), "CustomViewCreateInput",
+          {"id": S, "name": S, "description": S, "icon": S, "color": S, "teamId": S,
+           "projectId": S, "initiativeId": S, "ownerId": S, "filterData": dict,
+           "projectFilterData": dict, "initiativeFilterData": dict,
+           "feedItemFilterData": dict, "shared": bool},
+          ["name"])
+elif "viewPreferencesCreate" in q:
+    if declared.get("i") != "ViewPreferencesCreateInput!":
+        bad("viewPreferencesCreate takes $i:ViewPreferencesCreateInput!")
+    i = v.get("i")
+    check(i, "ViewPreferencesCreateInput",
+          {"id": S, "type": S, "viewType": S, "preferences": dict, "insights": dict,
+           "teamId": S, "projectId": S, "initiativeId": S, "labelId": S, "projectLabelId": S,
+           "initiativeLabelId": S, "releasePipelineId": S, "customViewId": S, "userId": S},
+          ["type", "viewType", "preferences"])
+    if i["type"] not in ("organization", "user"):
+        bad("Value \"%s\" does not exist in \"ViewPreferencesType\" enum." % i["type"])
+    if i["viewType"] != "customView":
+        bad("Value \"%s\" is not the ViewType a custom view takes." % i["viewType"])
+' 2>/dev/null)"
+    if [ -n "$schema_err" ]; then
+        [ "$wants_headers" = 1 ] && emit_headers 400
+        answer "$(HERDR_FAKE_MSG="$schema_err" python3 -c 'import json,os;print(json.dumps({"errors":[{"message":os.environ["HERDR_FAKE_MSG"],"extensions":{"http":{"status":400,"headers":{}},"code":"GRAPHQL_VALIDATION_FAILED","type":"graphql error","userError":True}}]}))')"
+        exit 0
+    fi
+fi
+
+# A listing-only outage: the view and project reads answer, the issue listing
+# does not, so a test can fail the read that comes after the view read.
+if [ "${FAKE_LINEAR_LISTING_OUTAGE:-0}" = 1 ]; then
+    case "$body_routed" in
+        *'$filter:IssueFilter'*) mode=http_500; body_routed="" ;;
+    esac
+fi
+
 # Content routing, before the mode is consulted. A real endpoint answers by what
 # was asked, not by what the caller expected, and one reconciliation pass sends
 # three different queries -- an issue read, a team's workflow states, and the
 # mutation. A mode-only fixture would have to be sequenced by hand for every
 # test, which encodes the call ORDER into the test and breaks the moment the
 # implementation reorders two reads that do not depend on each other.
-case "$body" in
+case "$body_routed" in
+    # The view listing spells its filter variable `$filter:IssueFilter`; the
+    # candidate query spells its own `$f:IssueFilter`, and stays on the mode path.
+    *'$filter:IssueFilter'*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        answer "$(issues_listing)"
+        exit 0
+        ;;
+    # Longer spelling first: `customViews` is not caught by `customView(`, and
+    # neither is `customViewCreate`.
+    *'customViews'*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        answer "$(views_listing)"
+        exit 0
+        ;;
+    *'customView('*)
+        if [ "${FAKE_LINEAR_VIEW_MISSING:-0}" = 1 ]; then
+            [ "$wants_headers" = 1 ] && emit_headers 400
+            answer "$(view_not_found)"
+        else
+            [ "$wants_headers" = 1 ] && emit_headers 200
+            answer "$(view_body)"
+        fi
+        exit 0
+        ;;
+    *customViewCreate*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        if [ "${FAKE_LINEAR_MUTATION_RESULT:-ok}" = "fail" ]; then
+            answer "$(printf '{"data":{"customViewCreate":{"success":false,"customView":null}}}')"
+        else
+            answer "$(printf '{"data":{"customViewCreate":{"success":true,"customView":{"id":"%s","name":"Canvas board","modelName":"Issue"}}}}' \
+                "${FAKE_LINEAR_NEW_VIEW_ID:-cccccccc-cccc-4ccc-8ccc-cccccccccccc}")"
+        fi
+        exit 0
+        ;;
+    *viewPreferencesCreate*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        case "${FAKE_LINEAR_MUTATION_RESULT:-ok}" in
+            fail|prefs_fail) answer "$(printf '{"data":{"viewPreferencesCreate":{"success":false,"viewPreferences":null}}}')" ;;
+            *) answer "$(printf '{"data":{"viewPreferencesCreate":{"success":true,"viewPreferences":{"id":"pfpfpfpf-pfpf-4pfp-8pfp-pfpfpfpfpfpf","type":"user","viewType":"customView"}}}}')" ;;
+        esac
+        exit 0
+        ;;
     # The key is `acme` and never the real workspace's: run-tests.sh's brand_scan
     # walks tests/fixtures/ too, so the real key here reddens the whole suite.
     *'organization'*)
@@ -487,10 +775,15 @@ case "$body" in
     # a shape that has no team ids in it at all.
     *'project(id:'*)
         [ "$wants_headers" = 1 ] && emit_headers 200
+        # id, name and url beside the teams, so the snapshot's project query is
+        # answered from this one arm; prune drops them for a caller that selects
+        # only the teams.
+        _proj='"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools","url":"https://linear.app/example/project/ai-canvas-tools"'
+        _states='"states":{"nodes":[{"id":"st-backlog","name":"Backlog","type":"backlog"},{"id":"st-todo","name":"Todo","type":"unstarted"},{"id":"st-prog","name":"In Progress","type":"started"},{"id":"st-devdone","name":"Dev Done","type":"started"},{"id":"st-done","name":"Done","type":"completed"},{"id":"st-cancel","name":"Canceled","type":"canceled"}]}'
         case "${FAKE_LINEAR_PROJECT_TEAMS:-one}" in
-            none) answer "$(printf '{"data":{"project":{"teams":{"nodes":[]}}}}')" ;;
-            many) answer "$(printf '{"data":{"project":{"teams":{"nodes":[{"id":"55555555-5555-4555-8555-555555555555","name":"Web"},{"id":"66666666-6666-4666-8666-666666666666","name":"Brand"},{"id":"77777777-7777-4777-8777-777777777777","name":"Platform"}]}}}}')" ;;
-            *)    answer "$(printf '{"data":{"project":{"teams":{"nodes":[{"id":"55555555-5555-4555-8555-555555555555","name":"Web"}]}}}}')" ;;
+            none) answer "$(printf '{"data":{"project":{%s,"teams":{"nodes":[]}}}}' "$_proj")" ;;
+            many) answer "$(printf '{"data":{"project":{%s,"teams":{"nodes":[{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web",%s},{"id":"66666666-6666-4666-8666-666666666666","key":"BRAND","name":"Brand",%s},{"id":"77777777-7777-4777-8777-777777777777","key":"PLAT","name":"Platform",%s}]}}}}' "$_proj" "$_states" "$_states" "$_states")" ;;
+            *)    answer "$(printf '{"data":{"project":{%s,"teams":{"nodes":[{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web",%s}]}}}}' "$_proj" "$_states")" ;;
         esac
         exit 0
         ;;

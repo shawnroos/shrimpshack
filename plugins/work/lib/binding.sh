@@ -174,11 +174,14 @@ def load(path):
     rec.setdefault("pending_consent", None)
     rec.setdefault("pending_placement", None)
     rec.setdefault("tab", "")
+    rec.setdefault("view", None)
+    rec.setdefault("created_views", [])
     rec.setdefault("created_children", [])
     rec.setdefault("created_documents", [])
     rec.setdefault("description_head", "")
     rec.setdefault("issue_updated_at", "")
-    for k in ("declined", "created_children", "created_documents"):
+    rec.setdefault("prior_bindings", [])
+    for k in ("declined", "created_children", "created_documents", "created_views", "prior_bindings"):
         if not isinstance(rec[k], list):
             return None
     return rec
@@ -190,9 +193,10 @@ def blank(path_value):
         "proposal": None, "pending_judgment": None,
         "consent": None, "consent_proposal": None, "pending_consent": None,
         "pending_placement": None, "tab": "",
+        "view": None, "created_views": [],
         "created_children": [],
         "created_documents": [], "description_head": "",
-        "issue_updated_at": "", "updated_at": now(),
+        "issue_updated_at": "", "prior_bindings": [], "updated_at": now(),
     }
 
 def save(path, rec):
@@ -265,6 +269,71 @@ if op == "pending-placement":
     sys.stdout.write(rec["pending_placement"])
     sys.exit(0)
 
+if op == "view":
+    rec = load(path)
+    if rec is None or not rec.get("view"):
+        sys.exit(1)
+    sys.stdout.write(json.dumps(rec["view"], sort_keys=True))
+    sys.exit(0)
+
+if op == "list-effective":
+    # Every binding in the store with the state binding_read would report, in
+    # one process: the snapshot used to spend about seven processes a record,
+    # which is 25 seconds at 40 worktrees against the board's refresh deadline.
+    # The state comes from load() on the record at the worktree's own key, as
+    # binding_read reads it, and a bound record whose branch has moved reads as
+    # proposed, as binding_read downgrades it.
+    import glob, hashlib, subprocess
+    def mode_ok(f):
+        try:
+            st = os.stat(f)
+        except OSError:
+            return False
+        return os.path.isfile(f) and st.st_uid == os.getuid() and not st.st_mode & 0o022
+    for f in sorted(glob.glob(os.path.join(path, "bindings", "*.json"))):
+        if not mode_ok(f):
+            continue
+        try:
+            raw = json.load(open(f))
+        except Exception:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        tab = raw.get("tab") if isinstance(raw.get("tab"), str) else ""
+        wt = str(raw.get("worktree_path") or "")
+        row = [f, str(raw.get("issue_identifier") or ""), wt, tab]
+        if any("\x1f" in c or "\n" in c for c in row):
+            continue
+        if not os.path.isdir(wt):
+            print("\x1f".join(row + ["worktree_missing"]))
+            continue
+        key = hashlib.sha1(os.path.realpath(wt).encode()).hexdigest()[:16]
+        kf = os.path.join(path, "bindings", key + ".json")
+        rec = load(kf) if mode_ok(kf) else None
+        if rec is None:
+            continue
+        eff = rec["state"]
+        if eff == "bound":
+            try:
+                branch = subprocess.run(["git", "-C", wt, "--no-optional-locks", "branch", "--show-current"],
+                                        capture_output=True, text=True).stdout.rstrip("\n")
+            except Exception:
+                branch = ""
+            if rec.get("branch_at_confirmation", "") != branch:
+                eff = "proposed"
+        print("\x1f".join(row + [eff]))
+    sys.exit(0)
+
+if op == "owns-view":
+    rec = load(path)
+    sys.exit(0 if rec is not None and args[0] in rec["created_views"] else 1)
+
+# The view ops refuse a record the loader cannot read instead of writing a
+# blank one: a view landing on a fabricated unbound record is a board for a
+# space nobody bound.
+if op in ("set-view", "clear-view", "add-view") and load(path) is None:
+    sys.exit(1)
+
 # ---- mutations. Each loads, applies, saves. The caller holds the lock.
 rec = load(path) or blank(args[0] if op == "init" else "")
 
@@ -293,6 +362,25 @@ if op == "confirm":
     p = rec.get("proposal")
     if not p or p.get("identifier") != identifier or not nonce or p.get("nonce") != nonce:
         sys.exit(2)
+    prev = rec.get("issue_identifier") or ""
+    if prev and prev != identifier:
+        # What the plugin created and chose under the previous binding does not
+        # carry over: created_children and created_documents are the write
+        # bound, and a view names the old project. They move to prior_bindings
+        # rather than vanish, so a created item can still be found to delete.
+        rec["prior_bindings"].append({
+            "issue_identifier": prev, "view": rec["view"],
+            "created_views": rec["created_views"],
+            "created_children": rec["created_children"],
+            "created_documents": rec["created_documents"],
+            "until": now(),
+        })
+        rec["view"] = None
+        rec["created_views"] = []
+        rec["created_children"] = []
+        rec["created_documents"] = []
+        rec["description_head"] = ""
+        rec["issue_updated_at"] = ""
     rec["state"] = "bound"
     rec["issue_identifier"] = identifier
     rec["branch_at_confirmation"] = branch
@@ -417,6 +505,34 @@ if op == "set-tab":
     save(path, rec)
     sys.exit(0)
 
+if op == "set-view":
+    view_id, name = args[0], args[1]
+    layout = None
+    if len(args) > 2 and args[2]:
+        try:
+            layout = json.loads(args[2])
+        except ValueError:
+            sys.exit(2)
+        if not isinstance(layout, dict):
+            sys.exit(2)
+    rec["view"] = {"id": view_id, "name": name, "layout": layout, "fetched_at": now()}
+    save(path, rec)
+    sys.exit(0)
+
+if op == "clear-view":
+    rec["view"] = None
+    save(path, rec)
+    sys.exit(0)
+
+if op == "add-view":
+    # Same bound as created_children: the list of views this plugin created
+    # is what a later change-view verb may touch, and it is never read from
+    # Linear.
+    if args[0] not in rec["created_views"]:
+        rec["created_views"].append(args[0])
+    save(path, rec)
+    sys.exit(0)
+
 if op == "set-pending-placement":
     # KTD29. Its own slot: consent-confirm clears pending_consent, and a space
     # question landing there would be cleared by an answer to a different one.
@@ -478,6 +594,15 @@ herdr_linear::_mode_ok() {
 # herdr_linear::binding_read <worktree>
 # Prints the record as JSON with `state` replaced by the EFFECTIVE state. Never
 # writes, never locks.
+# herdr_linear::bindings_effective
+# One `file US identifier US worktree_path US tab US state` line per binding
+# record in the store, with the state binding_read reports, or
+# `worktree_missing` when the worktree directory is gone. Records the loader
+# refuses, and rows carrying US or a newline, are left out.
+herdr_linear::bindings_effective() {
+    herdr_linear::_py list-effective "$HERDR_LINEAR_STORE_DIR"
+}
+
 herdr_linear::binding_read() {
     local wt="${1:-}" rec f branch recorded state
     f="$(herdr_linear::_record_path "$wt")" || return "$HERDR_LINEAR_BINDING_ABSENT"
@@ -769,4 +894,46 @@ herdr_linear::workspace_confirm() {
     [ -n "$ws" ] && [ -n "$project" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
     f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
     herdr_linear::_mutate_at "$f" confirm "$project" "$nonce" ""
+}
+
+# ------------------------------------------------------ the workspace's view (KTD6)
+
+herdr_linear::workspace_set_view() {
+    local ws="${1:-}" id="${2:-}" name="${3:-}" layout="${4:-}" f
+    [ -n "$ws" ] && [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    [ -f "$f" ] || return "$HERDR_LINEAR_BINDING_ABSENT"
+    herdr_linear::_mutate_at "$f" set-view "$id" "$name" "$layout"
+}
+
+herdr_linear::workspace_clear_view() {
+    local ws="${1:-}" f
+    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    [ -f "$f" ] || return "$HERDR_LINEAR_BINDING_ABSENT"
+    herdr_linear::_mutate_at "$f" clear-view
+}
+
+herdr_linear::workspace_view() {
+    local f
+    f="$(herdr_linear::_workspace_record_path "${1:-}")" || return "$HERDR_LINEAR_BINDING_ABSENT"
+    herdr_linear::_mode_ok "$f" || return "$HERDR_LINEAR_BINDING_ABSENT"
+    herdr_linear::_py view "$f" || return "$HERDR_LINEAR_BINDING_ABSENT"
+}
+
+herdr_linear::workspace_add_view() {
+    local ws="${1:-}" id="${2:-}" f
+    [ -n "$ws" ] && [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
+    herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    [ -f "$f" ] || return "$HERDR_LINEAR_BINDING_ABSENT"
+    herdr_linear::_mutate_at "$f" add-view "$id"
+}
+
+herdr_linear::workspace_owns_view() {
+    local ws="${1:-}" id="${2:-}" f
+    [ -n "$id" ] || return 1
+    f="$(herdr_linear::_workspace_record_path "$ws")" || return 1
+    herdr_linear::_mode_ok "$f" || return 1
+    herdr_linear::_py owns-view "$f" "$id"
 }

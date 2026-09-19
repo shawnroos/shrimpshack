@@ -266,3 +266,190 @@ jfield() { python3 -c "$1"; }
     result="$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["data"])')"
     [ "$result" = "None" ]
 }
+
+# --- the view arms (U3) -----------------------------------------------------
+#
+# Routed by body text before the mode, like every arm above. The listing arm
+# is keyed on the `$filter:IssueFilter` spelling so the candidate query, which
+# spells `$f:IssueFilter`, stays on the mode path it always had.
+
+PROJECT=44444444-4444-4444-8444-444444444444
+LIST_Q='query($n:Int,$after:String,$filter:IssueFilter){issues(first:$n,after:$after,filter:$filter){nodes{identifier state{type}} pageInfo{hasNextPage endCursor}}}'
+
+list_body() {   # list_body <filter-json> [after]
+    python3 -c 'import sys,json;v={"n":50,"filter":json.loads(sys.argv[2])}
+if len(sys.argv)>3: v["after"]=sys.argv[3]
+print(json.dumps({"query":sys.argv[1],"variables":v}))' "$LIST_Q" "$@"
+}
+
+list_ids() { jfield 'import sys,json;d=json.load(sys.stdin)["data"]["issues"];print(",".join(n["identifier"] for n in d["nodes"]), d["pageInfo"]["hasNextPage"], d["pageInfo"]["endCursor"])'; }
+
+@test "the listing arm applies the request's own filter to its pool" {
+    run bash -c "printf '' | bash '$FIXTURE' --data '$(list_body '{"project":{"id":{"eq":"'"$PROJECT"'"}},"state":{"type":{"neq":"canceled"}}}')'"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317,WEB-3312 False None" ]
+    # No state clause: the canceled issue is in the pool and comes back.
+    run bash -c "printf '' | bash '$FIXTURE' --data '$(list_body '{"project":{"id":{"eq":"'"$PROJECT"'"}}}')'"
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317,WEB-3312,WEB-3300 False None" ]
+    # A project the pool does not carry yields nothing, not the pool whole.
+    run bash -c "printf '' | bash '$FIXTURE' --data '$(list_body '{"project":{"id":{"eq":"99999999-9999-4999-8999-999999999999"}}}')'"
+    [ "$(printf '%s' "$output" | list_ids)" = " False None" ]
+}
+
+@test "the listing arm honours and/or wrappers and the completed pool" {
+    f='{"and":[{"project":{"id":{"in":["'"$PROJECT"'"]}}},{"or":[{"state":{"type":{"eq":"completed"}}},{"state":{"type":{"eq":"started"}}}]}]}'
+    run bash -c "printf '' | FAKE_LINEAR_ISSUES=completed bash '$FIXTURE' --data '$(list_body "$f")'"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3312,WEB-3303 False None" ]
+}
+
+@test "the listing arm ignores the mode, and the candidate spelling ignores the arm" {
+    run bash -c "printf '' | FAKE_LINEAR_MODE=not_found bash '$FIXTURE' --data '$(list_body '{}')'"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317,WEB-3312,WEB-3300 False None" ]
+    body='{"query":"query($f:IssueFilter,$n:Int){issues(first:$n,filter:$f){nodes{identifier}}}","variables":{"f":{"project":{"id":{"eq":"nope"}}}}}'
+    run bash -c "printf '' | FAKE_LINEAR_MODE=candidates bash '$FIXTURE' --data '$body'"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | jfield 'import sys,json;print(",".join(n["identifier"] for n in json.load(sys.stdin)["data"]["issues"]["nodes"]))')"
+    [ "$result" = "WEB-3318,WEB-3317,WEB-3312" ]
+}
+
+@test "paged answers two pages through after, and capped never ends" {
+    run bash -c "printf '' | FAKE_LINEAR_ISSUES=paged bash '$FIXTURE' --data '$(list_body '{}')'"
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317 True c1" ]
+    run bash -c "printf '' | FAKE_LINEAR_ISSUES=paged bash '$FIXTURE' --data '$(list_body '{}' c1)'"
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3312,WEB-3300 False None" ]
+    run bash -c "printf '' | FAKE_LINEAR_ISSUES=capped bash '$FIXTURE' --data '$(list_body '{}' c7)'"
+    [ "$(printf '%s' "$output" | list_ids)" = "WEB-3318,WEB-3317,WEB-3312,WEB-3300 True c8" ]
+    run bash -c "printf '' | FAKE_LINEAR_ISSUES=empty bash '$FIXTURE' --data '$(list_body '{}')'"
+    [ "$(printf '%s' "$output" | list_ids)" = " False None" ]
+}
+
+VIEWS_Q='{"query":"query($n:Int,$after:String){customViews(first:$n,after:$after){nodes{id name modelName archivedAt filterData} pageInfo{hasNextPage endCursor}}}","variables":{"n":50}}'
+
+@test "customViews answers none, one or many views by content, whatever the mode" {
+    for pair in none:0 one:1 many:7; do
+        run bash -c "printf '' | FAKE_LINEAR_MODE=auth_error FAKE_LINEAR_VIEWS=${pair%%:*} bash '$FIXTURE' --data '$VIEWS_Q'"
+        [ "$status" -eq 0 ]
+        result="$(printf '%s' "$output" | jfield 'import sys,json;print(len(json.load(sys.stdin)["data"]["customViews"]["nodes"]))')"
+        [ "$result" = "${pair##*:}" ]
+    done
+    run bash -c "printf '' | bash '$FIXTURE' --data '$VIEWS_Q'"
+    result="$(printf '%s' "$output" | jfield 'import sys,json;v=json.load(sys.stdin)["data"]["customViews"]["nodes"][0];print(v["modelName"], v["filterData"]["and"][0]["project"]["id"]["in"][0])')"
+    [ "$result" = "Issue $PROJECT" ]
+}
+
+# The `many` list carries every form the matcher has to decide on: the id
+# under an `and` wrapper, bare with eq, in a two-project list, another
+# project, a Project-model view, an archived one, and a `project` clause with
+# no id under it.
+@test "the many listing carries the filter forms the matcher must decide on" {
+    run bash -c "printf '' | FAKE_LINEAR_VIEWS=many bash '$FIXTURE' --data '$VIEWS_Q'"
+    result="$(printf '%s' "$output" | jfield '
+import sys,json
+vs=json.load(sys.stdin)["data"]["customViews"]["nodes"]
+print(sum(1 for v in vs if v["modelName"]=="Project"), sum(1 for v in vs if v["archivedAt"]),
+      sum(1 for v in vs if "and" not in v["filterData"] and "project" in v["filterData"]),
+      sum(1 for v in vs if json.dumps(v["filterData"]).count("9999")))')"
+    [ "$result" = "1 1 1 2" ]
+}
+
+VIEW_Q='{"query":"query($id:String!){customView(id:$id){id name archivedAt viewPreferencesValues{layout issueGrouping columnOrderBoard hiddenColumns}}}","variables":{"id":"c9c9c9c9-c9c9-4c9c-8c9c-c9c9c9c9c9c9"}}'
+
+@test "customView(id:) echoes the id asked for, with a board layout" {
+    run bash -c "printf '' | bash '$FIXTURE' --data '$VIEW_Q'"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | jfield 'import sys,json;v=json.load(sys.stdin)["data"]["customView"];p=v["viewPreferencesValues"];print(v["id"], v["archivedAt"], p["layout"], p["issueGrouping"], len(p["columnOrderBoard"]), p["hiddenColumns"][0])')"
+    [ "$result" = "c9c9c9c9-c9c9-4c9c-8c9c-c9c9c9c9c9c9 None board workflowState 6 st-cancel" ]
+}
+
+@test "customView(id:) can answer archived, another grouping, or unarranged columns" {
+    run bash -c "printf '' | FAKE_LINEAR_VIEW_ARCHIVED=1 FAKE_LINEAR_VIEW_GROUPING=cycle bash '$FIXTURE' --data '$VIEW_Q'"
+    result="$(printf '%s' "$output" | jfield 'import sys,json;v=json.load(sys.stdin)["data"]["customView"];print(bool(v["archivedAt"]), v["viewPreferencesValues"]["issueGrouping"])')"
+    [ "$result" = "True cycle" ]
+    run bash -c "printf '' | FAKE_LINEAR_VIEW_PREFS=unarranged bash '$FIXTURE' --data '$VIEW_Q'"
+    result="$(printf '%s' "$output" | jfield 'import sys,json;p=json.load(sys.stdin)["data"]["customView"]["viewPreferencesValues"];print(p["columnOrderBoard"], p["hiddenColumns"])')"
+    [ "$result" = "None None" ]
+    run bash -c "printf '' | FAKE_LINEAR_VIEW_PROJECT=99999999-9999-4999-8999-999999999999 FAKE_LINEAR_UNFILTERED=1 bash '$FIXTURE' --data '$VIEW_Q'"
+    result="$(printf '%s' "$output" | jfield 'import sys,json;v=json.load(sys.stdin)["data"]["customView"];print(v["filterData"]["and"][0]["project"]["id"]["in"][0])')"
+    [ "$result" = "99999999-9999-4999-8999-999999999999" ]
+}
+
+# Captured 2026-09-14: the unknown-view answer has the not_found shape --
+# errors[] beside "data": null -- naming the CustomView entity.
+@test "customView(id:) on a missing view nulls data beside an INPUT_ERROR" {
+    run bash -c "printf '' | FAKE_LINEAR_VIEW_MISSING=1 FAKE_LINEAR_UNFILTERED=1 bash '$FIXTURE' --data '$VIEW_Q'"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | jfield 'import sys,json;d=json.load(sys.stdin);print(d["data"], d["errors"][0]["extensions"]["code"], "CustomView" in d["errors"][0]["message"])')"
+    [ "$result" = "None INPUT_ERROR True" ]
+}
+
+CREATE_Q='{"query":"mutation($i:CustomViewCreateInput!){customViewCreate(input:$i){success customView{id}}}","variables":{"i":{"name":"x"}}}'
+PREFS_Q='{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}","variables":{"i":{"type":"user","viewType":"customView","customViewId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","preferences":{"layout":"board"}}}}'
+
+@test "the view mutations are refused with 97 unless the test permits them" {
+    for b in "$CREATE_Q" "$PREFS_Q"; do
+        run --separate-stderr bash -c "printf '' | bash '$FIXTURE' --data '$b'"
+        [ "$status" -eq 97 ]
+        [ -z "$output" ]
+        [[ "$stderr" == *"unpermitted mutation"* ]]
+    done
+}
+
+@test "a permitted customViewCreate answers success and an id, or success:false on fail" {
+    run bash -c "printf '' | FAKE_LINEAR_ALLOW_MUTATION=1 bash '$FIXTURE' --data '$CREATE_Q'"
+    [ "$status" -eq 0 ]
+    result="$(printf '%s' "$output" | jfield 'import sys,json;d=json.load(sys.stdin)["data"]["customViewCreate"];print(d["success"], d["customView"]["id"])')"
+    [ "$result" = "True cccccccc-cccc-4ccc-8ccc-cccccccccccc" ]
+    run bash -c "printf '' | FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=fail bash '$FIXTURE' --data '$CREATE_Q'"
+    result="$(printf '%s' "$output" | jfield 'import sys,json;d=json.load(sys.stdin)["data"]["customViewCreate"];print(d["success"], d["customView"])')"
+    [ "$result" = "False None" ]
+}
+
+@test "a view create body outside the introspected input type is refused before any answer" {
+    local bad
+    for bad in \
+        '{"query":"mutation($i:CustomViewCreateInput!){customViewCreate(input:$i){success customView{id}}}","variables":{"i":{"name":"x","modelName":"Issue"}}}' \
+        '{"query":"mutation($i:CustomViewCreateInput!){customViewCreate(input:$i){success customView{id}}}","variables":{"i":{"shared":false}}}' \
+        '{"query":"mutation($i:CustomViewCreateInput!){customViewCreate(input:$i){success customView{id}}}","variables":{"i":{"name":"x","shared":"no"}}}' \
+        '{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}","variables":{"i":{"type":"user","customViewId":"c","preferences":{}}}}' \
+        '{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}","variables":{"i":{"type":"team","viewType":"customView","preferences":{}}}}' \
+        '{"query":"mutation($i:ViewPreferencesCreateInput!){viewPreferencesCreate(input:$i){success}}","variables":{"i":{"type":"user","viewType":"customView","preferences":"board"}}}'
+    do
+        run bash -c "printf '' | FAKE_LINEAR_ALLOW_MUTATION=1 bash '$FIXTURE' --data '$bad'"
+        [ "$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["errors"][0]["extensions"]["code"])')" = "GRAPHQL_VALIDATION_FAILED" ]
+    done
+}
+
+@test "an id comparison on a String variable is refused on every route, not only teams" {
+    local q
+    for q in \
+        '{"query":"query($id:String!){teams(filter:{id:{eq:$id}}){nodes{id}}}","variables":{"id":"x"}}' \
+        '{"query":"query($p:String){issues(filter:{project:{id:{eq:$p}}}){nodes{id}}}","variables":{"p":"x"}}' \
+        '{"query":"query($v:[String!]){customViews(filter:{id:{in:$v}}){nodes{id}}}","variables":{"v":["x"]}}'
+    do
+        run bash -c "printf '' | bash '$FIXTURE' --data '$q'"
+        [ "$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["errors"][0]["extensions"]["code"])')" = "GRAPHQL_VALIDATION_FAILED" ]
+    done
+    run bash -c "printf '' | bash '$FIXTURE' --data '{\"query\":\"query(\$id:ID!){teams(filter:{id:{eq:\$id}}){nodes{id}}}\",\"variables\":{\"id\":\"x\"}}'"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;print("errors" in json.load(sys.stdin))')" = "False" ]
+}
+
+@test "viewPreferencesCreate fails on prefs_fail while customViewCreate still succeeds" {
+    run bash -c "printf '' | FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=prefs_fail bash '$FIXTURE' --data '$CREATE_Q'"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["data"]["customViewCreate"]["success"])')" = "True" ]
+    run bash -c "printf '' | FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_MUTATION_RESULT=prefs_fail bash '$FIXTURE' --data '$PREFS_Q'"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["data"]["viewPreferencesCreate"]["success"])')" = "False" ]
+    run bash -c "printf '' | FAKE_LINEAR_ALLOW_MUTATION=1 bash '$FIXTURE' --data '$PREFS_Q'"
+    [ "$(printf '%s' "$output" | jfield 'import sys,json;print(json.load(sys.stdin)["data"]["viewPreferencesCreate"]["success"])')" = "True" ]
+}
+
+@test "a teams id filter whose variable is String! is refused the way the real API refuses it" {
+    run bash -c "printf '' | bash '$FIXTURE' --config - -d '{\"query\":\"query(\$id:String!){teams(filter:{id:{eq:\$id}},first:1){nodes{id}}}\",\"variables\":{\"id\":\"t\"}}'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *GRAPHQL_VALIDATION_FAILED* ]]
+    [[ "$output" == *"expecting type"* ]]
+    run bash -c "printf '' | bash '$FIXTURE' --config - -d '{\"query\":\"query(\$id:ID!){teams(filter:{id:{eq:\$id}},first:1){nodes{states{nodes{id}}}}}\",\"variables\":{\"id\":\"t\"}}'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *st-backlog* ]]
+}
