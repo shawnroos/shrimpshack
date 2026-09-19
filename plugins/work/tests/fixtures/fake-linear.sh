@@ -34,7 +34,7 @@
 #                            auth_error | validation_error | rate_limited |
 #                            http_500 | empty_body | malformed_json |
 #                            hostile | hostile_candidates | candidates |
-#                            no_candidates | echo_issue
+#                            no_candidates | echo_issue | found_other_team
 #                            (default: found_child)
 #                            echo_issue answers found_child's shape with the
 #                            identifier that was asked for and the title
@@ -424,6 +424,14 @@ print(json.dumps({"data": {"issue": issue}}))
 found_parent() {
     cat <<'JSON'
 {"data":{"issue":{"id":"33333333-3333-4333-8333-333333333333","identifier":"WEB-2670","title":"Tool: Blur Backdrop","url":"https://linear.app/example/issue/WEB-2670/tool-blur-backdrop","branchName":"web-2670-tool-blur-backdrop","updatedAt":"2026-09-04T18:11:48.336Z","priority":3,"state":{"id":"88888888-8888-4888-8888-888888888888","name":"Dev Done","type":"started"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB","name":"Web Team"},"assignee":{"id":"66666666-6666-4666-8666-666666666666","name":"Example User"},"labels":{"nodes":[]}}}}
+JSON
+}
+
+# A second team's issue in the SAME project as found_child. The repository is
+# decided per team, so one project needs two teams under it to test that at all.
+found_other_team() {
+    cat <<'JSON'
+{"data":{"issue":{"id":"1b1b1b1b-1b1b-41b1-81b1-1b1b1b1b1b1b","identifier":"BRAND-1200","title":"Brand kit colours drift after an import","url":"https://linear.app/example/issue/BRAND-1200/brand-kit-colours-drift","branchName":"brand-1200-brand-kit-colours-drift-after-an-import","updatedAt":"2026-09-04T16:20:00.000Z","priority":2,"state":{"id":"22222222-2222-4222-8222-222222222222","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"66666666-6666-4666-8666-666666666666","key":"BRAND","name":"Brand"},"assignee":null,"labels":{"nodes":[]}}}}
 JSON
 }
 
@@ -1023,6 +1031,7 @@ case "$mode" in
             *) [ "$wants_headers" = 1 ] && emit_headers 200; serve echo_issue ;;
         esac
         ;;
+    found_other_team) [ "$wants_headers" = 1 ] && emit_headers 200; serve found_other_team ;;
     found_parent)     [ "$wants_headers" = 1 ] && emit_headers 200; serve found_parent ;;
     found_parent_moved) [ "$wants_headers" = 1 ] && emit_headers 200; serve found_parent_moved ;;
     completed_issue)  [ "$wants_headers" = 1 ] && emit_headers 200; serve completed_issue ;;
