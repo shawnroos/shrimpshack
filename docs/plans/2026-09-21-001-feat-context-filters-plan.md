@@ -104,9 +104,12 @@ An **unattended** read has nobody to ask — `hooks/ground.sh` fails open and ne
 
 **Filing a Linear issue outside the context is allowed when the person names the target and confirms; the surface carries an `UNBOUND:` title prefix while it holds work its context does not cover.** (user-directed, over refusing the write and making the person attach another session — the deliberate case needs a path that touches no other record, and the accidental case is caught by the prefix being visible rather than by a refusal.) A record write stays refused outside the context.
 
-## Open questions
+## Settled: consent stays per worktree
 
-- **Consent.** Write consent is recorded per worktree and compared on team, project and branch (`consent_covers`). Declaring a session's team does not satisfy it, so a new worktree still asks. Does a declared team count as consent for that team, or does the fence stay per worktree?
+**Declaring a session's team does not grant write consent; the per-worktree fence stands.** (user-approved, over a declared team counting as consent for that team — the session answers "who am I working as" and consent answers "may I write here", and keeping them separate holds the blast radius of a wrong answer to one directory.) `consent_covers` is unchanged, and a new worktree asks once, as it does today.
+
+## Open question
+
 - Is a filter ever set per pane, or is the tab the leaf? The tab is the leaf until something needs otherwise.
 
 ## Verification
