@@ -20,7 +20,9 @@ Three levels, each narrowing the one above, in the shape of a Linear view:
 
 **A level may only narrow.** A space may bind a project that spans several teams, as long as the session's team is one of them — Linear projects do span teams, and the plugin already says so (`project_teams`, `no_team_reason`). An issue is inside the context when its project is the space's project **and**, when a session team is declared, its team is that team. Both halves are needed: without the second, a Web issue inside a Web-and-Product project passes the guard in a Product session.
 
-**Reads are filtered, not forbidden; writes are contained.** Listing issues, projects or views inside a session shows that team's, and a read that reaches outside it is answered and labelled as outside. A record write — a space's project, a tab's issue, a worktree — is refused outside the resolved context, naming what would have to change. Cross-team reading is ordinary; cross-team recording is the accident this exists to stop. (Whether *filing a Linear issue* outside the context is refused or allowed-when-named is an open question below.)
+**Reads are filtered, not forbidden; writes are contained.** Listing issues, projects or views inside a session shows that team's, and a read that reaches outside it is answered and labelled as outside. A record write — a space's project, a tab's issue, a worktree — is refused outside the resolved context, naming what would have to change. Cross-team reading is ordinary; cross-team recording is the accident this exists to stop.
+
+**Filing outside the context is allowed, and the surface says so.** A person in a Product session who names the Web team and confirms files that issue into Web; no worktree and no binding are recorded, so nothing outside the context is committed to. What makes it safe is that it is visible: the surface holding work its context does not cover is titled `UNBOUND: <title>` — the pane, the tab or the space, whichever the plugin owns the title of. The prefix clears when the surface is bound to what it is working on. A fresh tab standing in no worktree wears the same prefix for the same reason: the state is legible from the surface, not from a record somebody has to query.
 
 **The intended shape is one herdr session per team.** A session that hosts several teams' work leaves its team undeclared and gets space- and tab-level filtering only. Working as another team means attaching a different session, not re-pointing this one — which is what makes the settled decision below affordable.
 
@@ -71,7 +73,11 @@ The tab's issue is the worktree binding. `/work:bind` records the current tab on
 - `/work:start` resolves the repository from the context's project and team, skipping the question whenever the pair record holds one path.
 - `/work:bind`'s candidate list is filtered by the context, using the same two-part test.
 
-### 6. Expected working directory
+### 6. The UNBOUND surface prefix
+
+One place decides the prefix and one place applies it, so a title cannot drift from the record: a surface whose work its context does not cover is titled `UNBOUND: <title>`, and the prefix is removed when it is bound. The plugin already composes tab labels through one helper (`_tab_label`), which is where this belongs; the board titles its own pane `Linear: …` and keeps doing so, with the prefix in front when it applies.
+
+### 7. Expected working directory
 
 `herdr_linear::expected_cwd` resolves what the pane's directory should be: the bound issue's worktree — found from the pane's own directory first, else from the binding whose recorded tab matches this tab — else the repository the project-and-team pair names, else nothing. The path check stops refusing and starts correcting. It states and offers; it never relocates on its own, because standing somewhere else on purpose is legitimate.
 
@@ -94,9 +100,12 @@ Cancelling the change that caused the conflict stays available. Proceeding with 
 
 An **unattended** read has nobody to ask — `hooks/ground.sh` fails open and never prompts, `hooks/reconcile.sh` never prompts, subagents have no question tool. There the check records the existing `misplaced` state on the affected record and suspends writes, exactly as `check_placement` already does for a tab-versus-space contradiction; the grounding hook surfaces it the way it surfaces `misplaced` today, and the next attended verb offers the two ways forward. `context_allows` becomes the one comparison behind both, so a single contradiction has a single detector.
 
+## Settled: filing outside the context
+
+**Filing a Linear issue outside the context is allowed when the person names the target and confirms; the surface carries an `UNBOUND:` title prefix while it holds work its context does not cover.** (user-directed, over refusing the write and making the person attach another session — the deliberate case needs a path that touches no other record, and the accidental case is caught by the prefix being visible rather than by a refusal.) A record write stays refused outside the context.
+
 ## Open questions
 
-- **Filing outside the context.** A record write outside the context is always refused. Is *filing a Linear issue* into another team also refused — so a Product session must be left to file a Web bug — or allowed when the person names the team explicitly and confirms, labelled as outside, with no worktree or binding recorded? The second keeps the accidental case blocked while giving the deliberate one a path that touches no other record.
 - **Consent.** Write consent is recorded per worktree and compared on team, project and branch (`consent_covers`). Declaring a session's team does not satisfy it, so a new worktree still asks. Does a declared team count as consent for that team, or does the fence stay per worktree?
 - Is a filter ever set per pane, or is the tab the leaf? The tab is the leaf until something needs otherwise.
 
@@ -109,6 +118,8 @@ An **unattended** read has nobody to ask — `hooks/ground.sh` fails open and ne
 - Changing a session's team under a bound space stops and offers re-point or unbind; unbind leaves the space `unbound` and its view cleared; cancel leaves every record as it was.
 - A `SessionStart` in a tab whose issue fell outside its space's project exits 0, records `misplaced`, and shows the suspension.
 - A read of another team's issue inside a filtered session: answered, and labelled outside.
+- `/work:new` in a Product session naming the Web team files into Web, records no worktree and no binding, and leaves the surface titled `UNBOUND: …`; the same run without naming a team files into Product and changes no title.
+- A tab standing in no worktree carries the `UNBOUND:` prefix; binding it to its issue clears the prefix.
 - `/work:new` with a declared team files into it; with no declared team and a space bound to a single-team project, it files into that project's team, as today.
 - `/work:start` asks no repository question when the pair record holds one repository; several stays the question it is today.
 - `/work:bind`'s candidates in a filtered session exclude another team's issues.
