@@ -39,7 +39,7 @@ The repository for a piece of work is already recorded per project-and-team pair
 One record per level in the existing store, beside `scopes/`:
 
 - `contexts/session-<id>.json` → `{"team_id", "team_key"}`
-- `contexts/space-<id>.json` → `{"project_id"}` (the view stays where it is, on the workspace record)
+- `contexts/space-<id>.json` → `{"project_id"}` (the view stays where it is, on the workspace record; the team is the session's, never copied here)
 - the tab's issue is the worktree binding that exists today; no new record
 
 Written through the plugin's propose/confirm pair, like every other record, so nothing is recorded without a person answering. Refuse a write that widens: a project whose team is not the session's team, an issue whose project is not the space's project.
@@ -65,16 +65,30 @@ Written through the plugin's propose/confirm pair, like every other record, so n
 - The board's Linear mode, beyond reading the same records if it wants them later.
 - Sharing a context between machines; the store is local, as it is now.
 
-## Open questions
+## Settled decisions
 
-- Does a space inherit its session's team, or restate it? Inheriting is less to keep in sync; restating survives a space moving between sessions.
-- What happens when a session's team changes under spaces already bound to another team's projects: refuse the change, or mark those spaces as outside it and keep them readable?
+**A space inherits its session's team; it does not restate it.** (user-directed, over each level holding its own copy — one value in one place, and a space that moves between sessions takes the new session's team rather than carrying a stale one.) So a space records a project, and its team is whatever the session says.
+
+**A binding that contradicts its parent is broken, and broken is a state to resolve, not to live in.** (user-directed, over marking it outside the filter and keeping it readable — a half-true binding makes it impossible to know what is what.) When a session's team changes under a space bound to another team's project, or a tab's issue falls outside its space's project, the run stops and offers exactly two ways forward:
+
+1. **Re-point it** so it matches the new state — a project of the session's team, an issue of the space's project.
+2. **Unbind it** — the space's record returns to `unbound`, the worktree's binding is cleared.
+
+Cancelling the change that caused the conflict stays available, because a person who did not mean it should not have to repair anything. What is not available is proceeding with the contradiction recorded.
+
+The check runs at both moments: when a context is declared or changed, over the levels below it, and lazily on read, so a record that drifted by any other route is caught the next time it matters. `unbound` already exists on the workspace record and the worktree binding, so this needs a verb to reach it rather than a new state.
+
+## Open question
+
 - Is a filter ever set per pane, or is the tab the leaf? The tab is the leaf until something needs otherwise.
 
 ## Verification
 
 - A session with a team, a space with a project of another team: the space write is refused and names the conflict.
 - A tab bound to an issue outside its space's project: refused the same way.
+- Changing a session's team under a bound space stops and offers re-point or unbind; taking unbind leaves the space's record `unbound` and its view cleared; taking cancel leaves every record as it was.
+- A space whose session's team changed by another route is caught on the next read, with the same two ways forward.
+- A space never holds a team of its own: reading its team after its session changes gives the new one.
 - A read of another team's issue inside a filtered session: answered, and labelled outside.
 - `/work:new` in a session with a team and no project files into that team.
 - `/work:start` in a resolved context asks no repository question, and the one it would have asked is answered by the pair record.
