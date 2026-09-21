@@ -15,49 +15,65 @@ Three levels, each narrowing the one above, in the shape of a Linear view:
 | Level | Carries | Identified by |
 |---|---|---|
 | herdr session (the server, holding the spaces) | team | the session's socket path |
-| space | project, and the view already bound to it | `workspace_id` |
-| tab | issue | `tab_id`, via the worktree binding that already exists |
+| space | project, and the view already bound to it | session id + `workspace_id` |
+| tab | issue | the worktree binding, with the tab recorded on it |
 
-**A level may only narrow.** A space cannot name a project outside its session's team; a tab cannot name an issue outside its space's project. This is the whole invariant, and it is what makes the cascade predictable.
+**A level may only narrow.** A space may bind a project that spans several teams, as long as the session's team is one of them — Linear projects do span teams, and the plugin already says so (`project_teams`, `no_team_reason`). An issue is inside the context when its project is the space's project **and**, when a session team is declared, its team is that team. Both halves are needed: without the second, a Web issue inside a Web-and-Product project passes the guard in a Product session.
 
-**Reads are filtered, not forbidden; writes are contained.** Listing issues, projects or views inside a session shows that team's, and a read that reaches outside it is answered and labelled as outside. A write — filing an issue, recording a binding, making a worktree — is refused outside the resolved context, naming what would have to change. Cross-team reading is ordinary; cross-team writing is the accident this exists to stop.
+**Reads are filtered, not forbidden; writes are contained.** Listing issues, projects or views inside a session shows that team's, and a read that reaches outside it is answered and labelled as outside. A record write — a space's project, a tab's issue, a worktree — is refused outside the resolved context, naming what would have to change. Cross-team reading is ordinary; cross-team recording is the accident this exists to stop. (Whether *filing a Linear issue* outside the context is refused or allowed-when-named is an open question below.)
 
-**One resolver, one guard.** Every read path consults one function that resolves session → space → tab into a single filter, and one that answers whether a given team, project or issue is inside it. Scattering either is how this rots.
+**The intended shape is one herdr session per team.** A session that hosts several teams' work leaves its team undeclared and gets space- and tab-level filtering only. Working as another team means attaching a different session, not re-pointing this one — which is what makes the settled decision below affordable.
+
+**One resolver, one guard.** Every read path consults one function that resolves session → space → tab into a single filter, and one that answers whether a given team, project or issue is inside it. `herdr_linear::current_context` (`lib/context.sh`), which resolves worktree → issue → project → team today, becomes the fallback the resolver calls when no level is declared; its callers in `lib/create.sh` move onto the new resolver. Two resolvers with different answers is the failure this must avoid.
 
 ## Why now
 
-The repository for a piece of work is already recorded per project-and-team pair (#91). So a resolved context of one team plus one project names exactly one repository — which means the expected working directory is derivable, with nothing to ask. That was not true a week ago.
+The repository for a piece of work is recorded per project-and-team pair (#91). A resolved context of one team and one project names that pair record, which answers the repository whenever it holds exactly one path — several remains the question it is today.
 
 ## Changes
 
-### 1. A session identity (`lib/herdr-read.sh`)
+Ordering: **5 ships first** (the space half of the declare verb, on the record that already exists), because it is the motion that is missing today. The session level, the resolver and `expected_cwd` follow.
 
-`herdr_linear::session_id` — derived from the herdr socket path, the way the board derives a session name from it, sanitised into a safe identifier. Every other level already has an id.
+### 1. Space records are keyed by session and space
 
-### 2. Context records (`lib/context-filter.sh`, new)
+`workspaces/<id>.json` is keyed by the workspace id alone, and herdr workspace ids are per server: `hs-mock` and `slate-product` each hold a space called `w1` on this machine, verified live. Two spaces in two sessions therefore share one project binding, one view and one state **today**, before any of this plan. Key the record `workspaces/<session-id>/<workspace-id>.json`, and migrate an existing flat record into the session that holds that id, else leave it readable in place.
 
-One record per level in the existing store, beside `scopes/`:
+This is a bug fix the rest of the plan depends on: inheritance makes a shared space record resolve to whichever session read it last.
 
-- `contexts/session-<id>.json` → `{"team_id", "team_key"}`
-- `contexts/space-<id>.json` → `{"project_id"}` (the view stays where it is, on the workspace record; the team is the session's, never copied here)
-- the tab's issue is the worktree binding that exists today; no new record
+### 2. A session identity (`lib/herdr-read.sh`)
 
-Written through the plugin's propose/confirm pair, like every other record, so nothing is recorded without a person answering. Refuse a write that widens: a project whose team is not the session's team, an issue whose project is not the space's project.
+`herdr_linear::session_id` reads `HERDR_SOCKET_PATH`, which herdr exports into every pane:
 
-### 3. The resolver (`lib/context-filter.sh`)
+| Socket | Id |
+|---|---|
+| `…/sessions/<name>/herdr.sock` | `<name>`, through `is_safe_identifier` |
+| `<herdr config dir>/herdr.sock` | the literal `default` |
+| unset | no session level; nothing is filtered |
 
-`herdr_linear::context` prints the effective filter — team, project, issue, and which level each came from, so a caller can say where a value was decided. `herdr_linear::context_allows <kind> <id>` answers the guard question. Absent levels are absent, not empty: a session with no team filters nothing, which is today's behaviour and stays the default.
+The board's own derivation answers nothing for the default socket, which is the session most work happens in — copying it unchanged would ship a feature that only works in named sessions.
 
-### 4. Verbs that read it
+### 3. The session record (`lib/context-filter.sh`, new)
 
-- `/work:new` files into the session's team instead of deriving one from a project that may not exist.
-- `/work:start` resolves the repository from the context's project and team, and skips the question the pair already answers.
-- The candidate list in `/work:bind` is filtered by the context rather than by the branch name alone.
-- A new verb declares a session's team and a space's project **without requiring a worktree** — the missing thing that started this.
+`contexts/session-<id>.json`, written through `propose`/`confirm` the way a workspace record is: binding-shaped, the team id where a workspace record carries its project id, the team key in a display field. That gives the record the `unbound` / `proposed` / `bound` / `misplaced` states the settled decision below needs, with no new machinery. The bare `{team_id, team_key}` shape the pair cannot write is gone.
 
-### 5. Expected working directory
+The space level is the existing workspace record — no second file for a value it already holds. `workspace_confirm` additionally records the project's team ids on it, so the guard and the lazy check compare locally instead of making a Linear call per read.
 
-`herdr_linear::expected_cwd` resolves what the pane's directory should be: the bound issue's worktree, else the repository recorded for the project-and-team pair, else nothing. The path check stops refusing and starts correcting: it names where the work belongs. It states and offers; it never relocates on its own, because standing somewhere else on purpose is legitimate.
+The tab's issue is the worktree binding. `/work:bind` records the current tab on it (`binding_set_tab`), which only `lib/herdr-write.sh` does today, so a hand-opened tab has no tab-to-issue link at all.
+
+### 4. The resolver and the guard (`lib/context-filter.sh`)
+
+`herdr_linear::context` prints the effective filter — team, project, issue, and which level each came from. `herdr_linear::context_allows <kind> <id>` answers the guard question, including the two-part issue test above. Absent levels are absent, not empty: a session with no team filters nothing, which is today's behaviour and stays the default.
+
+### 5. Verbs that read it
+
+- **The declare verb** sets a space's project, and a session's team, **without requiring a worktree** — the missing motion that started this.
+- `/work:new` files into the session's team when one is declared; otherwise today's derivation from the space's project stands (its single team, or a question when it spans several).
+- `/work:start` resolves the repository from the context's project and team, skipping the question whenever the pair record holds one path.
+- `/work:bind`'s candidate list is filtered by the context, using the same two-part test.
+
+### 6. Expected working directory
+
+`herdr_linear::expected_cwd` resolves what the pane's directory should be: the bound issue's worktree — found from the pane's own directory first, else from the binding whose recorded tab matches this tab — else the repository the project-and-team pair names, else nothing. The path check stops refusing and starts correcting. It states and offers; it never relocates on its own, because standing somewhere else on purpose is legitimate.
 
 ## Out of scope
 
@@ -67,34 +83,38 @@ Written through the plugin's propose/confirm pair, like every other record, so n
 
 ## Settled decisions
 
-**A space inherits its session's team; it does not restate it.** (user-directed, over each level holding its own copy — one value in one place, and a space that moves between sessions takes the new session's team rather than carrying a stale one.) So a space records a project, and its team is whatever the session says.
+**A space inherits its session's team; it does not restate it.** (user-directed, over each level holding its own copy — one value in one place, and a space that moves between sessions takes the new session's team rather than carrying a stale one.)
 
-**A binding that contradicts its parent is broken, and broken is a state to resolve, not to live in.** (user-directed, over marking it outside the filter and keeping it readable — a half-true binding makes it impossible to know what is what.) When a session's team changes under a space bound to another team's project, or a tab's issue falls outside its space's project, the run stops and offers exactly two ways forward:
+**A binding that contradicts its parent is broken, and broken is a state to resolve, not to live in.** (user-directed, over marking it outside the filter and keeping it readable — a half-true binding makes it impossible to know what is what.) An **attended** run stops and offers exactly two ways forward:
 
-1. **Re-point it** so it matches the new state — a project of the session's team, an issue of the space's project.
+1. **Re-point it** — a project of the session's team, an issue of the space's project.
 2. **Unbind it** — the space's record returns to `unbound`, the worktree's binding is cleared.
 
-Cancelling the change that caused the conflict stays available, because a person who did not mean it should not have to repair anything. What is not available is proceeding with the contradiction recorded.
+Cancelling the change that caused the conflict stays available. Proceeding with the contradiction recorded does not.
 
-The check runs at both moments: when a context is declared or changed, over the levels below it, and lazily on read, so a record that drifted by any other route is caught the next time it matters. `unbound` already exists on the workspace record and the worktree binding, so this needs a verb to reach it rather than a new state.
+An **unattended** read has nobody to ask — `hooks/ground.sh` fails open and never prompts, `hooks/reconcile.sh` never prompts, subagents have no question tool. There the check records the existing `misplaced` state on the affected record and suspends writes, exactly as `check_placement` already does for a tab-versus-space contradiction; the grounding hook surfaces it the way it surfaces `misplaced` today, and the next attended verb offers the two ways forward. `context_allows` becomes the one comparison behind both, so a single contradiction has a single detector.
 
-## Open question
+## Open questions
 
+- **Filing outside the context.** A record write outside the context is always refused. Is *filing a Linear issue* into another team also refused — so a Product session must be left to file a Web bug — or allowed when the person names the team explicitly and confirms, labelled as outside, with no worktree or binding recorded? The second keeps the accidental case blocked while giving the deliberate one a path that touches no other record.
+- **Consent.** Write consent is recorded per worktree and compared on team, project and branch (`consent_covers`). Declaring a session's team does not satisfy it, so a new worktree still asks. Does a declared team count as consent for that team, or does the fence stay per worktree?
 - Is a filter ever set per pane, or is the tab the leaf? The tab is the leaf until something needs otherwise.
 
 ## Verification
 
-- A session with a team, a space with a project of another team: the space write is refused and names the conflict.
-- A tab bound to an issue outside its space's project: refused the same way.
-- Changing a session's team under a bound space stops and offers re-point or unbind; taking unbind leaves the space's record `unbound` and its view cleared; taking cancel leaves every record as it was.
-- A space whose session's team changed by another route is caught on the next read, with the same two ways forward.
-- A space never holds a team of its own: reading its team after its session changes gives the new one.
+- A pane in the **default** session declares a team, and `herdr_linear::context` reports it.
+- Two sessions each holding a space with the same workspace id resolve to their own project and team; an existing flat record still reads.
+- A session with a team, a space whose project has no such team: the write is refused and names the conflict.
+- A space bound to a project spanning two teams, in a session that is one of them: allowed. An issue of the other team in that project: outside the context.
+- Changing a session's team under a bound space stops and offers re-point or unbind; unbind leaves the space `unbound` and its view cleared; cancel leaves every record as it was.
+- A `SessionStart` in a tab whose issue fell outside its space's project exits 0, records `misplaced`, and shows the suspension.
 - A read of another team's issue inside a filtered session: answered, and labelled outside.
-- `/work:new` in a session with a team and no project files into that team.
-- `/work:start` in a resolved context asks no repository question, and the one it would have asked is answered by the pair record.
-- `expected_cwd` in a fresh tab of a bound space names the recorded repository; in a tab bound to an issue, that issue's worktree; in neither, nothing.
+- `/work:new` with a declared team files into it; with no declared team and a space bound to a single-team project, it files into that project's team, as today.
+- `/work:start` asks no repository question when the pair record holds one repository; several stays the question it is today.
+- `/work:bind`'s candidates in a filtered session exclude another team's issues.
+- `expected_cwd`: in a fresh tab of a bound space, the repository the pair names; in a tab bound to an issue, that issue's worktree; in neither, nothing.
 - A session with no context behaves exactly as the plugin does today.
 
 ## Done when
 
-A person opens a session, says "this is Product", and every space, tab and pane inside it files, lists and builds inside Product without being told again — while a worktree remains one checkout of one issue, and nothing is written outside the context that was declared.
+A person opens a session, says "this is Product", and every space, tab and pane inside it files, lists and builds inside Product **without deriving the team again** — while a worktree remains one checkout of one issue, and no record is written outside the context that was declared. The write-consent question still asks once per worktree and branch, as it does today.
