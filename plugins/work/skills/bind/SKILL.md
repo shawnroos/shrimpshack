@@ -198,14 +198,17 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/bind-args.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/context.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/views.sh"
 
 if [ "$(herdr_linear::workspace_state "$SPACE")" = "bound" ] \
     && [ "$(herdr_linear::workspace_project "$SPACE")" = "$PROJECT" ]; then
     echo "space=0 (already bound)"
 else
+    TEAMS="$(herdr_linear::project_teams "$PROJECT" | cut -f1 | tr '\n' ' ')"
     nonce="$(herdr_linear::workspace_propose "$SPACE" "$PROJECT")" \
-        && herdr_linear::workspace_confirm "$SPACE" "$PROJECT" "$nonce"; echo "space=$?"
+        && herdr_linear::workspace_confirm "$SPACE" "$PROJECT" "$nonce" $TEAMS; echo "space=$?"
 fi
 
 [ -z "$VIEW" ] || { herdr_linear::view_choose "$SPACE" "$VIEW"; echo "view=$?"; }
@@ -213,6 +216,8 @@ fi
 if [ -n "$ISSUE" ]; then
     nonce="$(herdr_linear::binding_propose "$PWD" "$ISSUE")" \
         && herdr_linear::binding_confirm "$PWD" "$ISSUE" "$nonce"; echo "issue=$?"
+    TAB="$(herdr_linear::tab_id 2>/dev/null)" || TAB=""
+    [ -z "$TAB" ] || herdr_linear::binding_set_tab "$PWD" "$TAB"
 fi
 ```
 
@@ -298,9 +303,15 @@ On a choice, record it in two steps, because `confirm` requires the nonce that
 `propose` returns:
 
 ```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
 nonce="$(herdr_linear::binding_propose "$PWD" "$CHOSEN")"
 herdr_linear::binding_confirm "$PWD" "$CHOSEN" "$nonce"
+TAB="$(herdr_linear::tab_id 2>/dev/null)" || TAB=""
+[ -z "$TAB" ] || herdr_linear::binding_set_tab "$PWD" "$TAB"
 ```
+
+Recording the tab is what gives this issue a tab-to-issue link. Without it only
+a tab this plugin opened has one, and a tab opened by hand has none.
 
 If they reject a candidate, record it so it is never offered for this worktree
 again:

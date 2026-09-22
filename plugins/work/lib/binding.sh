@@ -185,7 +185,9 @@ def load(path):
     rec.setdefault("description_head", "")
     rec.setdefault("issue_updated_at", "")
     rec.setdefault("prior_bindings", [])
-    for k in ("declined", "created_children", "created_documents", "created_views", "prior_bindings"):
+    rec.setdefault("display_name", "")
+    rec.setdefault("team_ids", [])
+    for k in ("declined", "created_children", "created_documents", "created_views", "prior_bindings", "team_ids"):
         if not isinstance(rec[k], list):
             return None
     return rec
@@ -200,7 +202,8 @@ def blank(path_value):
         "view": None, "created_views": [],
         "created_children": [],
         "created_documents": [], "description_head": "",
-        "issue_updated_at": "", "prior_bindings": [], "updated_at": now(),
+        "issue_updated_at": "", "prior_bindings": [],
+        "display_name": "", "team_ids": [], "updated_at": now(),
     }
 
 def save(path, rec):
@@ -395,12 +398,20 @@ if op == "propose":
     sys.exit(0)
 
 if op == "confirm":
+    # Two optional trailing fields, written in the SAME save as the binding:
+    # a display label, and the ids of the teams the bound thing belongs to. A
+    # second op for them would leave a window in which the record reads bound
+    # and the guard finds no teams to compare against.
     identifier, nonce, branch = args[0], args[1], args[2]
+    display = args[3] if len(args) > 3 else None
+    team_ids = list(args[4:])
     p = rec.get("proposal")
     if not p or p.get("identifier") != identifier or not nonce or p.get("nonce") != nonce:
         sys.exit(2)
     prev = rec.get("issue_identifier") or ""
     if prev and prev != identifier:
+        rec["display_name"] = ""
+        rec["team_ids"] = []
         # What the plugin created and chose under the previous binding does not
         # carry over: created_children and created_documents are the write
         # bound, and a view names the old project. They move to prior_bindings
@@ -422,6 +433,10 @@ if op == "confirm":
     rec["issue_identifier"] = identifier
     rec["branch_at_confirmation"] = branch
     rec["proposal"] = None
+    if display is not None:
+        rec["display_name"] = display
+    if team_ids:
+        rec["team_ids"] = team_ids
     save(path, rec)
     sys.exit(0)
 
@@ -970,6 +985,20 @@ herdr_linear::workspace_project() {
     printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("issue_identifier",""))' 2>/dev/null
 }
 
+# The ids of the teams the space's project belonged to when it was bound. One
+# per line. Recorded at confirmation so a guard comparing against them costs no
+# Linear call; empty when the confirmation did not carry them, which the caller
+# must read as "ask Linear", never as "no teams".
+herdr_linear::workspace_team_ids() {
+    local rec
+    rec="$(herdr_linear::workspace_read "$1")" || return "$HERDR_LINEAR_BINDING_ABSENT"
+    printf '%s' "$rec" | python3 -c '
+import sys, json
+for t in json.load(sys.stdin).get("team_ids") or []:
+    print(t)
+' 2>/dev/null
+}
+
 # herdr_linear::workspaces_effective
 # One JSON object per line, {id, state, project_id, project_name}, for each
 # space record the loader accepts. A refused record is left out, so its space
@@ -986,11 +1015,15 @@ herdr_linear::workspace_propose() {
 }
 
 # Same nonce rule, and the same limit on what it proves. See the header.
+# The trailing arguments are the ids of the project's teams. The caller supplies
+# them rather than this reading them, because the two callers already hold the
+# answer -- and a fetch here would make every file that binds a space depend on
+# the Linear client.
 herdr_linear::workspace_confirm() {
     local ws="${1:-}" project="${2:-}" nonce="${3:-}" f
     [ -n "$ws" ] && [ -n "$project" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
     f="$(herdr_linear::_workspace_claim_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    herdr_linear::_mutate_at "$f" confirm "$project" "$nonce" ""
+    herdr_linear::_mutate_at "$f" confirm "$project" "$nonce" "" "" "${@:4}"
 }
 
 # ------------------------------------------------------ the workspace's view (KTD6)

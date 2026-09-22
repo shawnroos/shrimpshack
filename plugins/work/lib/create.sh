@@ -252,7 +252,7 @@ except Exception:
     # Bound on creation: making the space FROM the project is the statement that
     # they are the same thing.
     nonce="$(herdr_linear::workspace_propose "$ws" "$pid")" && \
-        herdr_linear::workspace_confirm "$ws" "$pid" "$nonce" || {
+        herdr_linear::workspace_confirm "$ws" "$pid" "$nonce" "$team" || {
         printf 'created project %s and workspace %s, but could not bind them\n' "$pid" "$ws" >&2
         return "$HERDR_LINEAR_CREATE_PARTIAL"
     }
