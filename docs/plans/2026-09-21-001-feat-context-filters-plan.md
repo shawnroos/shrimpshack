@@ -38,7 +38,7 @@ Ordering: **5 ships first** (the space half of the declare verb, on the record t
 
 ### 1. Space records are keyed by session and space
 
-`workspaces/<id>.json` is keyed by the workspace id alone, and herdr workspace ids are per server: `hs-mock` and `slate-product` each hold a space called `w1` on this machine, verified live. Two spaces in two sessions therefore share one project binding, one view and one state **today**, before any of this plan. Key the record `workspaces/<session-id>/<workspace-id>.json`, and migrate an existing flat record into the session that holds that id, else leave it readable in place.
+`workspaces/<id>.json` is keyed by the workspace id alone, and herdr workspace ids are per server: two sessions on this machine each hold a space called `w1`, verified live. Two spaces in two sessions therefore share one project binding, one view and one state **today**, before any of this plan. Key the record `workspaces/<session-id>/<workspace-id>.json`, and migrate an existing flat record into the session that holds that id, else leave it readable in place.
 
 This is a bug fix the rest of the plan depends on: inheritance makes a shared space record resolve to whichever session read it last.
 

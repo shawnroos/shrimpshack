@@ -102,19 +102,20 @@ herdr_linear::await_pane() {
 # herdr no longer reports is not a candidate: offering it would fail inside
 # `tab create`, after the question could have been asked.
 herdr_linear::project_spaces() {
-    local pid="${1:-}" live f ws
+    local pid="${1:-}" live ws
     [ -n "$pid" ] || return 1
     # Captured before the cut: a pipeline's status is the cut's, and a failed
     # read would come back as a list with no spaces in it.
     live="$(herdr_linear::live_spaces)" || return 1
     live="$(printf '%s' "$live" | cut -f1)"
-    for f in "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json; do
-        [ -e "$f" ] || continue
-        ws="$(basename "$f" .json)"
+    # Walked from the LIVE spaces rather than from the store's files: space
+    # records are keyed by session and space, so one directory of them is this
+    # session's records and not the set of candidates.
+    for ws in $(printf '%s\n' "$live" | grep . | sort); do
         # workspace_project answers only for a bound record, so a proposal
         # nobody confirmed is not a candidate.
         [ "$(herdr_linear::workspace_project "$ws" 2>/dev/null)" = "$pid" ] || continue
-        printf '%s\n' "$live" | grep -qxF -- "$ws" && printf '%s\n' "$ws"
+        printf '%s\n' "$ws"
     done
     return 0
 }

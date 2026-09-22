@@ -41,7 +41,7 @@ Writes to Linear are opened by an answer, not by a file somebody edits.
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
 source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/sanitize.sh"
-source "$R/lib/binding.sh"
+source "$R/lib/herdr-read.sh"; source "$R/lib/binding.sh"
 source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"; source "$R/lib/documents.sh"
 CTX="$(herdr_linear::issue_context "$(herdr_linear::binding_identifier "$PWD")")"
 TEAM="$(printf '%s' "$CTX" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))')"
@@ -90,7 +90,7 @@ team or a different project, or made from a different branch, asks again.
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
 source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/sanitize.sh"
-source "$R/lib/binding.sh"
+source "$R/lib/herdr-read.sh"; source "$R/lib/binding.sh"
 source "$R/lib/linear.sh"; source "$R/lib/reconcile.sh"; source "$R/lib/documents.sh"
 
 herdr_linear::doc_publish "$PWD" diagnosis "gradient banding on frame swap" ./notes.md

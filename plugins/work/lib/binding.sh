@@ -36,10 +36,14 @@
 
 # Outside version control, which R7 requires, and outside ${CLAUDE_PLUGIN_ROOT},
 # which changes on plugin update.
-# No lib sources another, and ground.sh sources sanitize.sh AFTER this file:
-# without this the call below is 127, which its `||` branch reads as a refusal.
+# ground.sh sources sanitize.sh AFTER this file: without this the call below is
+# 127, which its `||` branch reads as a refusal. Same for the session identity a
+# space record is keyed on -- herdr-read.sh is read-only by construction, so
+# sourcing it costs nothing and disturbs nothing.
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+command -v herdr_linear::session_id >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/herdr-read.sh"
 
 HERDR_LINEAR_STORE_DIR="${HERDR_LINEAR_STORE_DIR:-$HOME/.claude/work}"
 HERDR_LINEAR_PIN_DIR="${HERDR_LINEAR_PIN_DIR:-$HOME/.claude/linear-pin}"
@@ -327,25 +331,34 @@ if op == "list-effective":
 if op == "list-workspaces":
     # A workspace record has no branch to disagree with, so the loaded state
     # is already the state workspace_state reports.
+    #
+    # This session's directory first, then the flat one for records written
+    # before space records were keyed by session -- and an id found in both is
+    # this session's, which is the same precedence the read path applies. Other
+    # sessions' directories are not walked: their spaces are not this one's.
     import glob, re
     WS_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", re.ASCII)
-    for f in sorted(glob.glob(os.path.join(path, "workspaces", "*.json"))):
-        ws = os.path.basename(f)[:-len(".json")]
-        if not WS_ID.fullmatch(ws):
-            continue
-        try:
-            st = os.stat(f)
-        except OSError:
-            continue
-        if not os.path.isfile(f) or st.st_uid != os.getuid() or st.st_mode & 0o022:
-            continue
-        rec = load(f)
-        if rec is None:
-            continue
-        name = rec.get("project_name")
-        print(json.dumps({"id": ws, "state": rec["state"],
-                          "project_id": str(rec.get("issue_identifier") or "") or None,
-                          "project_name": name if isinstance(name, str) else None}))
+    session_dir = args[0] if args else os.path.join(path, "workspaces")
+    seen = set()
+    for d in (session_dir, os.path.join(path, "workspaces")):
+        for f in sorted(glob.glob(os.path.join(d, "*.json"))):
+            ws = os.path.basename(f)[:-len(".json")]
+            if not WS_ID.fullmatch(ws) or ws in seen:
+                continue
+            try:
+                st = os.stat(f)
+            except OSError:
+                continue
+            if not os.path.isfile(f) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+                continue
+            rec = load(f)
+            if rec is None:
+                continue
+            seen.add(ws)
+            name = rec.get("project_name")
+            print(json.dumps({"id": ws, "state": rec["state"],
+                              "project_id": str(rec.get("issue_identifier") or "") or None,
+                              "project_name": name if isinstance(name, str) else None}))
     sys.exit(0)
 
 if op == "owns-view":
@@ -872,17 +885,70 @@ herdr_linear::consent_gate() {
 
 # ------------------------------------------------- workspace to project (R9, R10)
 #
-# Keyed on the herdr workspace ID, which is a stable opaque handle -- a rename
-# changes the workspace's label and not its id, which is exactly why R10 holds
-# without any extra machinery. The record shape is the worktree one reused:
-# `issue_identifier` carries the Linear project id, and the branch fields stay
-# empty because a workspace has no branch to disagree with.
+# Keyed on the herdr SESSION and the workspace ID. The id alone is a stable
+# opaque handle within one server -- a rename changes the workspace's label and
+# not its id, which is why R10 holds without extra machinery -- but it is not
+# unique ACROSS servers: two sessions on one machine each hold a space called
+# `w1`, verified live with `herdr session list`. A flat key gave those two
+# spaces one project binding, one view and one state.
+#
+# The record shape is the worktree one reused: `issue_identifier` carries the
+# Linear project id, and the branch fields stay empty because a workspace has no
+# branch to disagree with.
+
+# Where this session's space records live. A pane with no herdr socket has no
+# session level, and keeps the flat directory -- which is also where every
+# record written before this keying still sits.
+herdr_linear::_workspace_dir() {
+    local sid
+    sid="$(herdr_linear::session_id 2>/dev/null)" || sid=""
+    # session_id validates a named session already; repeated here because this
+    # is the line that turns the value into a path.
+    if [ -n "$sid" ] && herdr_linear::is_safe_identifier "$sid"; then
+        printf '%s/workspaces/%s' "$HERDR_LINEAR_STORE_DIR" "$sid"
+    else
+        printf '%s/workspaces' "$HERDR_LINEAR_STORE_DIR"
+    fi
+}
+
+# The READ path. A record written before session keying stays readable where it
+# is until a write claims it, so the whole store does not have to be rewritten
+# on upgrade.
 herdr_linear::_workspace_record_path() {
-    local ws="${1:-}"
+    local ws="${1:-}" f flat
     herdr_linear::is_safe_identifier "$ws" 2>/dev/null || case "$ws" in
         ''|*[!A-Za-z0-9_:-]*) return 1 ;;
     esac
-    printf '%s/workspaces/%s.json' "$HERDR_LINEAR_STORE_DIR" "$ws"
+    f="$(herdr_linear::_workspace_dir)/$ws.json"
+    flat="$HERDR_LINEAR_STORE_DIR/workspaces/$ws.json"
+    if [ "$flat" != "$f" ] && [ ! -e "$f" ] && [ -e "$flat" ]; then
+        printf '%s' "$flat"
+        return 0
+    fi
+    printf '%s' "$f"
+}
+
+# The WRITE path, and the migration with it. The first write from a session
+# MOVES a flat record into that session rather than copying it: a copy would
+# hand a second session the first one's project binding and its created views,
+# which is the defect being fixed. The move claims the record once, and the
+# session that does not get it reads unbound, which is a state a person can see
+# and resolve. Which session a flat record "really" belongs to is not derivable
+# -- both servers report the id -- so it is not guessed.
+herdr_linear::_workspace_claim_path() {
+    local ws="${1:-}" dir f flat
+    herdr_linear::is_safe_identifier "$ws" 2>/dev/null || case "$ws" in
+        ''|*[!A-Za-z0-9_:-]*) return 1 ;;
+    esac
+    dir="$(herdr_linear::_workspace_dir)"
+    f="$dir/$ws.json"
+    flat="$HERDR_LINEAR_STORE_DIR/workspaces/$ws.json"
+    mkdir -p "$dir" 2>/dev/null
+    chmod 700 "$HERDR_LINEAR_STORE_DIR" "$dir" 2>/dev/null
+    if [ "$flat" != "$f" ] && [ ! -e "$f" ] && [ -e "$flat" ]; then
+        mv -f "$flat" "$f" 2>/dev/null
+    fi
+    printf '%s' "$f"
 }
 
 herdr_linear::workspace_read() {
@@ -909,14 +975,13 @@ herdr_linear::workspace_project() {
 # space record the loader accepts. A refused record is left out, so its space
 # reads as unbound, as workspace_state reports it.
 herdr_linear::workspaces_effective() {
-    herdr_linear::_py list-workspaces "$HERDR_LINEAR_STORE_DIR"
+    herdr_linear::_py list-workspaces "$HERDR_LINEAR_STORE_DIR" "$(herdr_linear::_workspace_dir)"
 }
 
 herdr_linear::workspace_propose() {
     local ws="${1:-}" project="${2:-}" f
     [ -n "$ws" ] && [ -n "$project" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
-    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    mkdir -p "$(dirname "$f")" 2>/dev/null
+    f="$(herdr_linear::_workspace_claim_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
     herdr_linear::_mutate_at "$f" propose "workspace:$ws" "$project"
 }
 
@@ -924,7 +989,7 @@ herdr_linear::workspace_propose() {
 herdr_linear::workspace_confirm() {
     local ws="${1:-}" project="${2:-}" nonce="${3:-}" f
     [ -n "$ws" ] && [ -n "$project" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
-    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    f="$(herdr_linear::_workspace_claim_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
     herdr_linear::_mutate_at "$f" confirm "$project" "$nonce" ""
 }
 
@@ -934,14 +999,14 @@ herdr_linear::workspace_set_view() {
     local ws="${1:-}" id="${2:-}" name="${3:-}" layout="${4:-}" f
     [ -n "$ws" ] && [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
     herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    f="$(herdr_linear::_workspace_claim_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
     [ -f "$f" ] || return "$HERDR_LINEAR_BINDING_ABSENT"
     herdr_linear::_mutate_at "$f" set-view "$id" "$name" "$layout"
 }
 
 herdr_linear::workspace_clear_view() {
     local ws="${1:-}" f
-    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    f="$(herdr_linear::_workspace_claim_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
     [ -f "$f" ] || return "$HERDR_LINEAR_BINDING_ABSENT"
     herdr_linear::_mutate_at "$f" clear-view
 }
@@ -957,7 +1022,7 @@ herdr_linear::workspace_add_view() {
     local ws="${1:-}" id="${2:-}" f
     [ -n "$ws" ] && [ -n "$id" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
     herdr_linear::is_safe_identifier "$id" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    f="$(herdr_linear::_workspace_record_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
+    f="$(herdr_linear::_workspace_claim_path "$ws")" || return "$HERDR_LINEAR_BINDING_REFUSED"
     [ -f "$f" ] || return "$HERDR_LINEAR_BINDING_ABSENT"
     herdr_linear::_mutate_at "$f" add-view "$id"
 }

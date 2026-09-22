@@ -476,6 +476,161 @@ json.dump(d, open(sys.argv[1], "w"))' "$f"
     [ "$output" = "proj-ai-canvas" ]
 }
 
+# ------------------------------------------- one space record per session
+#
+# herdr workspace ids are per server: two sessions on one machine each hold a
+# space called `w1`, verified live with `herdr session list`. A record keyed on
+# the id alone therefore gave both sessions one project binding, one view and
+# one state.
+
+# A `!`-negated command cannot fail its test, so an absence is asserted by a
+# command that returns non-zero on a match.
+refute_ws_listed() {   # <listing> <ws-id>
+    if printf '%s' "$1" | grep -q "\"id\": \"$2\""; then
+        printf 'refute_ws_listed: %s is listed and must not be\n' "$2" >&2
+        return 1
+    fi
+    return 0
+}
+
+in_session() {   # <session-name> -- what herdr exports into that session's panes
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/$1/herdr.sock"
+}
+
+no_session() { unset HERDR_SOCKET_PATH; }
+
+bind_space() {   # <ws> <project>
+    local n
+    n="$(herdr_linear::workspace_propose "$1" "$2")"
+    herdr_linear::workspace_confirm "$1" "$2" "$n"
+}
+
+@test "two sessions holding a space with the same id do not share its record" {
+    in_session alpha
+    bind_space w1 proj-alpha
+
+    in_session beta
+    run herdr_linear::workspace_state w1
+    [ "$output" = "unbound" ]
+    bind_space w1 proj-beta
+    run herdr_linear::workspace_project w1
+    [ "$output" = "proj-beta" ]
+
+    in_session alpha
+    run herdr_linear::workspace_project w1
+    [ "$output" = "proj-alpha" ]
+    run herdr_linear::workspace_state w1
+    [ "$output" = "bound" ]
+}
+
+# The other half of the same defect: a view belongs to the space that chose it.
+@test "two sessions holding a space with the same id do not share its view" {
+    in_session alpha
+    bind_space w1 proj-alpha
+    herdr_linear::workspace_add_view w1 view-alpha
+    herdr_linear::workspace_set_view w1 view-alpha "Alpha board"
+
+    in_session beta
+    run herdr_linear::workspace_view w1
+    [ "$status" -ne 0 ]
+    run herdr_linear::workspace_owns_view w1 view-alpha
+    [ "$status" -ne 0 ]
+}
+
+# A record written before space records were keyed by session. It stays readable
+# where it is -- the whole store is not rewritten on upgrade.
+@test "a space record written before session keying still reads inside a session" {
+    no_session
+    bind_space w1 proj-legacy
+    [ -f "$HERDR_LINEAR_STORE_DIR/workspaces/w1.json" ]
+
+    in_session alpha
+    run herdr_linear::workspace_state w1
+    [ "$output" = "bound" ]
+    run herdr_linear::workspace_project w1
+    [ "$output" = "proj-legacy" ]
+}
+
+# The migration. The first write from a session MOVES the flat record into it:
+# a copy would hand a second session the first one's project binding and its
+# created views, which is the defect above.
+@test "the first write in a session claims a record written before session keying" {
+    no_session
+    bind_space w1 proj-legacy
+    herdr_linear::workspace_add_view w1 view-legacy
+
+    in_session alpha
+    bind_space w1 proj-legacy
+    [ ! -e "$HERDR_LINEAR_STORE_DIR/workspaces/w1.json" ]
+    [ -f "$HERDR_LINEAR_STORE_DIR/workspaces/alpha/w1.json" ]
+    # Claimed, not recreated: what the space had chosen came with it.
+    run herdr_linear::workspace_owns_view w1 view-legacy
+    [ "$status" -eq 0 ]
+
+    in_session beta
+    run herdr_linear::workspace_state w1
+    [ "$output" = "unbound" ]
+}
+
+# A space bound before session keying can still take a view without being
+# re-bound first: the view verbs refuse a record that is not there, and the
+# record they must find is the flat one until something claims it.
+@test "a view can be set on a space record written before session keying" {
+    no_session
+    bind_space w1 proj-legacy
+
+    in_session alpha
+    run herdr_linear::workspace_set_view w1 view-1 "A board"
+    [ "$status" -eq 0 ]
+    run herdr_linear::workspace_view w1
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | grep -q view-1
+}
+
+@test "the space listing shows this session's records and not another session's" {
+    in_session alpha
+    bind_space wA proj-alpha
+    in_session beta
+    bind_space wB proj-beta
+    no_session
+    bind_space wL proj-legacy
+
+    in_session alpha
+    run herdr_linear::workspaces_effective
+    printf '%s' "$output" | grep -q '"id": "wA"'
+    printf '%s' "$output" | grep -q '"id": "wL"'
+    run herdr_linear::workspaces_effective
+    refute_ws_listed "$output" wB
+}
+
+# A claimed record must not be listed twice, once per key.
+@test "a claimed record is listed once, under the session that claimed it" {
+    no_session
+    bind_space w1 proj-legacy
+    in_session alpha
+    bind_space w1 proj-alpha
+    run herdr_linear::workspaces_effective
+    [ "$(printf '%s\n' "$output" | grep -c '"id": "w1"')" -eq 1 ]
+    printf '%s' "$output" | grep -q proj-alpha
+}
+
+# The claim is a move, so the two keys normally never both hold the id. They can
+# when a later no-session write recreates the flat one, or when the move lost a
+# race -- and then the session's record is the one that counts, once.
+@test "an id held under both keys is listed once, as this session's" {
+    in_session alpha
+    bind_space w1 proj-alpha
+    no_session
+    bind_space w1 proj-legacy
+    [ -f "$HERDR_LINEAR_STORE_DIR/workspaces/w1.json" ]
+    [ -f "$HERDR_LINEAR_STORE_DIR/workspaces/alpha/w1.json" ]
+
+    in_session alpha
+    run herdr_linear::workspaces_effective
+    [ "$(printf '%s\n' "$output" | grep -c '"id": "w1"')" -eq 1 ]
+    printf '%s' "$output" | grep -q proj-alpha
+}
+
 @test "a workspace id that is not a safe identifier is refused" {
     run herdr_linear::workspace_propose "../../etc/passwd" "proj"
     [ "$status" -ne 0 ]

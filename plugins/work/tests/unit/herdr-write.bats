@@ -668,3 +668,25 @@ tab_label() { sed -n 's/.*--label \([^ ]*\).*/\1/p' "$FAKE_HERDR_RECORD_DIR/argv
     [ "$status" -eq 3 ]
     [ "$(herdr_calls 'pane split')" = "$splits" ]
 }
+
+# Space records are keyed by session and space. A reader that enumerates them by
+# globbing one flat directory sees none of this session's.
+@test "the project's space is found from a record written inside a session" {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    rm -f "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json
+    bind_space wG 44444444-4444-4444-8444-444444444444
+    run herdr_linear::project_spaces 44444444-4444-4444-8444-444444444444
+    [ "$status" -eq 0 ]
+    [ "$output" = "wG" ]
+}
+
+# And not another session's: a space bound in a different session is a different
+# space that happens to share an id.
+@test "another session's space record is not this project's space" {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/beta/herdr.sock"
+    rm -f "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json
+    bind_space wG 44444444-4444-4444-8444-444444444444
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    run herdr_linear::project_spaces 44444444-4444-4444-8444-444444444444
+    [ -z "$output" ]
+}

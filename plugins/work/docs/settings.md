@@ -40,6 +40,7 @@ string, and the default does not come back.
 | `HERDR_LINEAR_HERDR_TIMEOUT_SECONDS` | `5` | How long one herdr read may take before it is ended and herdr is read as unavailable. Needs `perl` on `PATH`; without it the read is not bounded. | `lib/herdr-read.sh` | no |
 | `HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS` | `(none)` | How long a keychain read may wait, for a caller nobody can answer an unlock prompt for. Unset, the read waits. `bin/work-snapshot.sh` sets it to `5`. Needs `perl` on `PATH`. | `lib/secrets.sh` | no |
 | `HERDR_LINEAR_CACHE_MAX_AGE_SECONDS` | `3600` | How long a cached ticket is treated as current before it is fetched again. | `lib/linear.sh` | no |
+| `HERDR_SOCKET_PATH` | `(none)` | The herdr session this pane belongs to, which herdr exports into every pane it opens. The plugin only reads it, to name the session a space record is filed under: a socket at `sessions/<name>/herdr.sock` is that session, any other `herdr.sock` is `default`, and unset means no session level at all. Set it by hand only to address another running session deliberately. | `lib/herdr-read.sh` | no |
 | `LINEAR_CACHE_DIR` | `$HOME/.claude/linear-cache` | Where fetched tickets are cached. | `lib/linear.sh` | no |
 | `LINEAR_SECRETS_FILE` | `$HOME/.secrets` | The file a `LINEAR_API_KEY` line is read from when the keychain holds nothing. | `lib/linear.sh` | no |
 
