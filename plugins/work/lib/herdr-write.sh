@@ -31,6 +31,10 @@ command -v herdr_linear::_issue_project_id >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/states.sh"
 command -v herdr_linear::scheme_name >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/schemes.sh"
+# The prefix below is decided there, and an undefined decider would title every
+# tab as though its context covered the work.
+command -v herdr_linear::unbound_prefix >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/context-filter.sh"
 
 HERDR_LINEAR_JOURNAL_DIR="${HERDR_LINEAR_JOURNAL_DIR:-$HOME/.claude/work/layouts}"
 HERDR_LINEAR_PANE_POLL_TRIES="${HERDR_LINEAR_PANE_POLL_TRIES:-40}"
@@ -165,9 +169,16 @@ herdr_linear::no_space_reason() {
 # agreeing.
 #
 # The title is read only when the scheme renders one. Both callers hold an
-# identifier and no title, and the default scheme wants none -- so the default
-# path reads nothing, and a layout refused for an unusable name has not queried
-# Linear to find that out.
+# identifier and no title, and the default scheme wants none -- so a layout
+# refused for an unusable name has not queried Linear to find that out. The
+# prefix below may still read the issue, and only inside a session that declared
+# a team; a read it cannot make answers UNKNOWN, which brands nothing.
+#
+# THE ONLY PLACE THE `UNBOUND:` PREFIX IS APPLIED, as `unbound_prefix` is the
+# only place it is decided. Neither caller passes a space, and neither needs to:
+# both open their tab in the space bound to the issue's OWN project, so the
+# project half of the test is satisfied by construction and the declared team is
+# what is left to judge.
 herdr_linear::_tab_label() {
     local ident="${1-}" title="" resp
     # Before the fetch, not after: the identifier is about to be a query, and a
@@ -183,6 +194,7 @@ herdr_linear::_tab_label() {
         }
         title="$(herdr_linear::_start_issue_field "$resp" title)"
     fi
+    herdr_linear::unbound_prefix "$ident"
     herdr_linear::scheme_name tab "$ident" "$title"
 }
 

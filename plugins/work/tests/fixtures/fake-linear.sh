@@ -34,7 +34,8 @@
 #                            auth_error | validation_error | rate_limited |
 #                            http_500 | empty_body | malformed_json |
 #                            hostile | hostile_candidates | candidates |
-#                            no_candidates | echo_issue | found_other_team
+#                            no_candidates | candidates_mixed | echo_issue |
+#                            found_other_team
 #                            (default: found_child)
 #                            echo_issue answers found_child's shape with the
 #                            identifier that was asked for and the title
@@ -486,7 +487,7 @@ JSON
 # sink from the single-issue read above and needs its own fixture.
 hostile_candidates() {
     cat <<'JSON'
-{"data":{"issues":{"nodes":[{"identifier":"WEB-6666","title":"panel is empty\u001b[2K\u001b[1A\u202eyes, approve","updatedAt":"2026-09-04T15:55:10.206Z","state":{"name":"Backlog","type":"backlog"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"key":"WEB"}},{"identifier":"WEB-3307","title":"Long exports that run a custom pipeline stop when the panel is closed","updatedAt":"2026-09-04T14:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"key":"WEB"}}]}}}
+{"data":{"issues":{"nodes":[{"identifier":"WEB-6666","title":"panel is empty\u001b[2K\u001b[1A\u202eyes, approve","updatedAt":"2026-09-04T15:55:10.206Z","state":{"name":"Backlog","type":"backlog"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB"}},{"identifier":"WEB-3307","title":"Long exports that run a custom pipeline stop when the panel is closed","updatedAt":"2026-09-04T14:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB"}}]}}}
 JSON
 }
 
@@ -495,7 +496,17 @@ JSON
 # the branch carries no identifier.
 candidates() {
     cat <<'JSON'
-{"data":{"issues":{"nodes":[{"identifier":"WEB-3308","title":"Export panel is empty when a still-rendering frame is selected","updatedAt":"2026-09-04T15:55:10.206Z","state":{"name":"Backlog","type":"backlog"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"key":"WEB"}},{"identifier":"WEB-3307","title":"Long exports that run a custom pipeline stop when the panel is closed","updatedAt":"2026-09-04T14:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"key":"WEB"}},{"identifier":"WEB-3302","title":"Blur Backdrop leaves an empty frame after reload","updatedAt":"2026-09-03T10:00:00.000Z","state":{"name":"In Progress","type":"started"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"key":"WEB"}}]}}}
+{"data":{"issues":{"nodes":[{"identifier":"WEB-3308","title":"Export panel is empty when a still-rendering frame is selected","updatedAt":"2026-09-04T15:55:10.206Z","state":{"name":"Backlog","type":"backlog"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB"}},{"identifier":"WEB-3307","title":"Long exports that run a custom pipeline stop when the panel is closed","updatedAt":"2026-09-04T14:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB"}},{"identifier":"WEB-3302","title":"Blur Backdrop leaves an empty frame after reload","updatedAt":"2026-09-03T10:00:00.000Z","state":{"name":"In Progress","type":"started"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB"}}]}}}
+JSON
+}
+
+# Two teams' issues in ONE project, which is the only shape that can tell a
+# project-only filter from the two-part one: a project filter offers both rows.
+# The third row has NO project, which is what an issue filed outside a project
+# looks like and the row a field-collapsing reader loses.
+candidates_mixed() {
+    cat <<'JSON'
+{"data":{"issues":{"nodes":[{"identifier":"WEB-3308","title":"Export panel is empty when a still-rendering frame is selected","updatedAt":"2026-09-04T15:55:10.206Z","state":{"name":"Backlog","type":"backlog"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB"}},{"identifier":"BRAND-1200","title":"Brand kit colours drift after an import","updatedAt":"2026-09-04T14:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"66666666-6666-4666-8666-666666666666","key":"BRAND"}},{"identifier":"WEB-3309","title":"Panel state is lost between reloads","updatedAt":"2026-09-04T13:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"project":null,"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB"}}]}}}
 JSON
 }
 
@@ -1019,6 +1030,7 @@ status=200
 case "$mode" in
     viewer)           [ "$wants_headers" = 1 ] && emit_headers 200; serve viewer ;;
     candidates)       [ "$wants_headers" = 1 ] && emit_headers 200; serve candidates ;;
+    candidates_mixed) [ "$wants_headers" = 1 ] && emit_headers 200; serve candidates_mixed ;;
     no_candidates)    [ "$wants_headers" = 1 ] && emit_headers 200; serve no_candidates ;;
     hostile)          [ "$wants_headers" = 1 ] && emit_headers 200; serve hostile ;;
     traversal_identifier) [ "$wants_headers" = 1 ] && emit_headers 200; serve traversal_identifier ;;

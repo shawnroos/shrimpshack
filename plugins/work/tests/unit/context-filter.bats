@@ -40,7 +40,7 @@ setup() {
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     # shellcheck source=/dev/null
-    for f in sanitize.sh secrets.sh contain.sh herdr-read.sh binding.sh linear.sh context.sh context-filter.sh; do
+    for f in sanitize.sh secrets.sh contain.sh herdr-read.sh binding.sh linear.sh context.sh repos.sh context-filter.sh; do
         . "$ROOT/lib/$f"
     done
 }
@@ -294,4 +294,176 @@ sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", text, re.S)))
 ' "$ROOT/skills/bind/SKILL.md")"
     [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::binding_confirm')" -eq 2 ]
     [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::binding_set_tab')" -eq 2 ]
+}
+
+# --------------------------------------------------- the membership test itself
+
+@test "a team the space recorded for its project is inside it, with no Linear call" {
+    bind_space wA "$PROJECT" "$WEB_TEAM" "$BRAND_TEAM"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::team_in_project "$BRAND_TEAM" "$PROJECT" wA
+    [ "$status" -eq 0 ]
+}
+
+@test "a team the space's project does not carry is outside it" {
+    bind_space wA "$PROJECT" "$WEB_TEAM"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::team_in_project "$BRAND_TEAM" "$PROJECT" wA
+    [ "$status" -eq 1 ]
+}
+
+@test "with no record to read the membership comes from Linear" {
+    export FAKE_LINEAR_PROJECT_TEAMS=many
+    run herdr_linear::team_in_project "$BRAND_TEAM" "$PROJECT"
+    [ "$status" -eq 0 ]
+    export FAKE_LINEAR_PROJECT_TEAMS=one
+    run herdr_linear::team_in_project "$BRAND_TEAM" "$PROJECT"
+    [ "$status" -eq 1 ]
+}
+
+@test "a membership that could not be asked is unknown, never outside" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::team_in_project "$BRAND_TEAM" "$PROJECT"
+    [ "$status" -eq 3 ]
+}
+
+# ------------------------------------------- the guard, on fields already held
+
+@test "the two-part test answers from fields a listing already carries" {
+    declare_team "$WEB_TEAM" WEB
+    bind_space wA "$PROJECT" "$WEB_TEAM" "$BRAND_TEAM"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::context_allows_fields "$PROJECT" "$WEB_TEAM" wA
+    [ "$status" -eq 0 ]
+    run herdr_linear::context_allows_fields "$PROJECT" "$BRAND_TEAM" wA
+    [ "$status" -eq 1 ]
+    run herdr_linear::context_allows_fields "$OTHER_PROJECT" "$WEB_TEAM" wA
+    [ "$status" -eq 1 ]
+}
+
+@test "no declared level lets any fields through" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::context_allows_fields "$OTHER_PROJECT" "$BRAND_TEAM"
+    [ "$status" -eq 0 ]
+}
+
+# --------------------------------------------------------- the UNBOUND prefix
+
+@test "a surface standing in no worktree wears the prefix" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::unbound_prefix ""
+    [ "$status" -eq 0 ]
+    [ "$output" = "UNBOUND: " ]
+}
+
+@test "work the context covers wears no prefix" {
+    export FAKE_LINEAR_MODE=found_child
+    declare_team "$WEB_TEAM" WEB
+    bind_space wA "$PROJECT" "$WEB_TEAM"
+    run herdr_linear::unbound_prefix WEB-3308 wA
+    [ -z "$output" ]
+}
+
+@test "work outside the context wears the prefix" {
+    export FAKE_LINEAR_MODE=found_other_team
+    declare_team "$WEB_TEAM" WEB
+    bind_space wA "$PROJECT" "$WEB_TEAM"
+    run herdr_linear::unbound_prefix BRAND-1200 wA
+    [ "$output" = "UNBOUND: " ]
+}
+
+@test "a context that could not be asked does not brand the surface" {
+    declare_team "$WEB_TEAM" WEB
+    bind_space wA "$PROJECT" "$WEB_TEAM"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::unbound_prefix WEB-3308 wA
+    [ -z "$output" ]
+}
+
+# ---------------------------------------------------- the expected directory
+
+@test "the pane's own worktree is where it is expected to be" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    bind_wt WEB-3308
+    run herdr_linear::expected_cwd "$WT"
+    [ "$output" = "$WT" ]
+}
+
+@test "a subdirectory of the bound worktree still expects the worktree" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    bind_wt WEB-3308
+    mkdir -p "$WT/src/deep"
+    run herdr_linear::expected_cwd "$WT/src/deep"
+    [ "$output" = "$WT" ]
+}
+
+@test "the binding whose recorded tab is this tab names the worktree" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    bind_wt WEB-3308
+    herdr_linear::binding_set_tab "$WT" t7
+    export HERDR_TAB_ID=t7
+    mkdir -p "$WORK/elsewhere"
+    run herdr_linear::expected_cwd "$WORK/elsewhere"
+    [ "$output" = "$WT" ]
+}
+
+@test "with no binding the pair's only repository is offered" {
+    declare_team "$WEB_TEAM" WEB
+    bind_space wA "$PROJECT" "$WEB_TEAM"
+    mkdir -p "$WORK/repo" "$WORK/elsewhere"
+    herdr_linear::record_scope_repo "$WORK/repo" "project-$PROJECT.team-$WEB_TEAM"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::expected_cwd "$WORK/elsewhere" wA
+    [ "$output" = "$WORK/repo" ]
+}
+
+@test "several repositories for the pair name none of them" {
+    declare_team "$WEB_TEAM" WEB
+    bind_space wA "$PROJECT" "$WEB_TEAM"
+    mkdir -p "$WORK/repo" "$WORK/repo2" "$WORK/elsewhere"
+    herdr_linear::record_scope_repo "$WORK/repo" "project-$PROJECT.team-$WEB_TEAM"
+    herdr_linear::record_scope_repo "$WORK/repo2" "project-$PROJECT.team-$WEB_TEAM"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::expected_cwd "$WORK/elsewhere" wA
+    [ -z "$output" ]
+}
+
+@test "nothing bound and nothing recorded expects nothing" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    mkdir -p "$WORK/elsewhere"
+    run herdr_linear::expected_cwd "$WORK/elsewhere"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+# -------------------------------------------------------------- the declare verb
+
+@test "the declare verb cannot be invoked by the model" {
+    run grep -q '^disable-model-invocation: true$' "$ROOT/skills/declare/SKILL.md"
+    [ "$status" -eq 0 ]
+}
+
+# It is the one verb that needs no worktree, and the one that must refuse to
+# widen. Both halves go through the same membership test, so a skill that
+# recorded either level without it is the drift this pins.
+@test "the declare verb checks both levels before recording either" {
+    local fences
+    fences="$(python3 -c '
+import re, sys
+sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", open(sys.argv[1]).read(), re.S)))
+' "$ROOT/skills/declare/SKILL.md")"
+    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::team_in_project')" -ge 1 ]
+    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::context_allows project')" -ge 1 ]
+    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::session_confirm')" -ge 1 ]
+    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::workspace_confirm')" -ge 1 ]
+}
+
+@test "the filing skill reads the resolver, not the worktree derivation alone" {
+    local fences
+    fences="$(python3 -c '
+import re, sys
+sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", open(sys.argv[1]).read(), re.S)))
+' "$ROOT/skills/new/SKILL.md")"
+    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::context ')" -ge 1 ]
+    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::current_context')" -eq 0 ]
 }

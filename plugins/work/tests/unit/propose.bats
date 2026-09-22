@@ -29,7 +29,7 @@ setup() {
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_PROPOSEPROPOSEPROPO" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh propose.sh; do . "$ROOT/lib/$f"; done
+    for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh context.sh repos.sh context-filter.sh propose.sh; do . "$ROOT/lib/$f"; done
 
     WT="$WORK/root/wt"; mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-3308-panel
@@ -286,4 +286,86 @@ rlo="$(printf '\342\200\256')"
     [[ "$body" == *'herdr_linear::conventions_path'* ]]
     [[ "$body" == *"Not yet settled"* ]]
     [ -r "$ROOT/docs/linear-conventions.md" ]
+}
+
+# ------------------------------------------------------- the context filter
+
+# The candidates a filtered session is offered. The two-part test, on the fields
+# the listing already carried back: a project filter alone offers another team's
+# issue in the very project the space is bound to.
+
+WEB_TEAM=55555555-5555-4555-8555-555555555555
+BRAND_TEAM=66666666-6666-4666-8666-666666666666
+CTX_PROJECT=44444444-4444-4444-8444-444444444444
+
+declare_team() {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose "$1")"
+    herdr_linear::session_confirm "$1" "$n" "${2:-}"
+}
+
+bind_space() { local n; n="$(herdr_linear::workspace_propose "$1" "$2")"; herdr_linear::workspace_confirm "$1" "$2" "$n" "${@:3}"; }
+
+@test "another team's issue in the space's own project is not a candidate" {
+    export FAKE_LINEAR_MODE=candidates_mixed
+    declare_team "$WEB_TEAM" WEB
+    bind_space wA "$CTX_PROJECT" "$WEB_TEAM" "$BRAND_TEAM"
+    run herdr_linear::candidates "$NOID" wA
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-3308"* ]]
+    [[ "$output" != *"BRAND-1200"* ]]
+}
+
+# An issue in no project at all. A reader that collapses its empty project field
+# reads the team id as the project, judges the row outside, and reports the
+# filter empty -- a list the person is told not to widen out of.
+@test "an issue with no project is still this team's candidate" {
+    export FAKE_LINEAR_MODE=candidates_mixed
+    declare_team "$WEB_TEAM" WEB
+    run herdr_linear::candidates "$NOID"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-3309"* ]]
+    [[ "$output" == *"WEB-3308"* ]]
+    [[ "$output" != *"BRAND-1200"* ]]
+}
+
+# And the other half: a space bound to a project does narrow it out, because an
+# issue in no project is not in that project.
+@test "a bound space leaves a projectless issue outside" {
+    export FAKE_LINEAR_MODE=candidates_mixed
+    declare_team "$WEB_TEAM" WEB
+    bind_space wA "$CTX_PROJECT" "$WEB_TEAM" "$BRAND_TEAM"
+    run herdr_linear::candidates "$NOID" wA
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"WEB-3309"* ]]
+    [[ "$output" == *"WEB-3308"* ]]
+}
+
+@test "with nothing declared every candidate is still offered" {
+    export FAKE_LINEAR_MODE=candidates_mixed
+    run herdr_linear::candidates "$NOID"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-3308"* ]]
+    [[ "$output" == *"BRAND-1200"* ]]
+}
+
+@test "a filter that leaves nothing says so rather than widening" {
+    export FAKE_LINEAR_MODE=candidates_mixed
+    declare_team 77777777-7777-4777-8777-777777777777 PLAT
+    run herdr_linear::candidates "$NOID"
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+# The branch is the strongest signal and still not a licence: an issue the
+# context does not cover is not proposed for this worktree, and the fallback
+# list is offered instead.
+@test "a branch naming an issue outside the context falls through to the list" {
+    export FAKE_LINEAR_MODE=found_other_team
+    declare_team "$WEB_TEAM" WEB
+    BRANCHWT="$WORK/root/brandwt"; mkdir -p "$BRANCHWT"
+    git -C "$BRANCHWT" init -q -b feature/brand-1200-colours
+    git -C "$BRANCHWT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    run herdr_linear::candidates "$BRANCHWT"
+    [[ "$output" != *"	branch"* ]]
 }

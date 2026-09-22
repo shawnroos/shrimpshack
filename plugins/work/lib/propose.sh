@@ -20,6 +20,12 @@ if ! command -v herdr_linear::sanitize_stream >/dev/null 2>&1; then
     # shellcheck source=/dev/null
     . "$(dirname "${BASH_SOURCE[0]}")/sanitize.sh"
 fi
+# The context filter, for the same reason: undefined, every guard call is 127
+# and the list comes back unfiltered, which is the wide list this narrows.
+if ! command -v herdr_linear::context_allows_fields >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    . "$(dirname "${BASH_SOURCE[0]}")/context-filter.sh"
+fi
 
 HERDR_LINEAR_CANDIDATE_LIMIT="${HERDR_LINEAR_CANDIDATE_LIMIT:-5}"
 
@@ -40,9 +46,32 @@ if project:
     f["project"] = {"id": {"eq": project}}
 q = ("query($f:IssueFilter,$n:Int){issues(first:$n,filter:$f,"
      "orderBy:updatedAt){nodes{identifier title updatedAt "
-     "state{name type} project{id name} team{key}}}}")
+     "state{name type} project{id} team{id}}}}")
 print(json.dumps({"query": q, "variables": {"f": f, "n": limit}}))
 ' "$project" "$limit"
+}
+
+# Keeps the rows the context covers, dropping the two fields the filter needed.
+# Every candidate reaches this, whichever rule produced it, so the branch rule
+# and the fallback list cannot answer the same issue differently.
+#
+# An `unknown` verdict is kept, never dropped: a row that could not be judged is
+# a candidate somebody may still be looking for, and dropping it would shorten
+# the list for a reason nobody can see.
+#
+# US, not tab, between the fields on the way IN. A tab is IFS whitespace, so
+# `read` folds two of them into one and an issue with no project arrives with
+# its team id in the project's place -- judged outside, dropped, and the list
+# reported empty for a reason nobody can see. The row printed OUT is
+# tab-separated, as every caller reads it.
+herdr_linear::_inside_context() {
+    local ws="${1:-}" ident title src project team rc
+    while IFS=$'\037' read -r ident title src project team; do
+        [ -n "$ident" ] || continue
+        herdr_linear::context_allows_fields "$project" "$team" "$ws"; rc=$?
+        [ "$rc" -eq "$HERDR_LINEAR_CONTEXT_OUTSIDE" ] && continue
+        printf '%s\t%s\t%s\n' "$ident" "$title" "$src"
+    done
 }
 
 # herdr_linear::candidates <worktree> [workspace-id]
@@ -72,11 +101,17 @@ herdr_linear::candidates() {
         resp="$(herdr_linear::fetch_issue "$ident" 2>/dev/null)"
         case $? in
             0)
+                # The branch is the strongest signal and still not a licence: an
+                # issue the context does not cover is passed over the way a
+                # declined one is, and the fallback list is offered instead.
                 out="$(printf '%s' "$resp" | python3 -c '
 import sys, json
 i = json.load(sys.stdin)["data"]["issue"]
-print("%s\t%s\tbranch" % (i["identifier"], i.get("title", "")))
+print("%s\x1f%s\x1fbranch\x1f%s\x1f%s" % (i["identifier"], i.get("title", ""),
+                                  (i.get("project") or {}).get("id", ""),
+                                  (i.get("team") or {}).get("id", "")))
 ' 2>/dev/null)"
+                out="$(herdr_linear::_inside_context "$ws" <<< "$out")"
                 if [ -n "$out" ]; then
                     printf '%s\n' "$out" | herdr_linear::sanitize_stream
                     return "$HERDR_LINEAR_PROPOSE_OK"
@@ -120,12 +155,18 @@ nodes = json.load(sys.stdin)["data"]["issues"]["nodes"]
 for n in nodes:
     if n["identifier"] in declined:
         continue
-    print("%s\t%s\t%s" % (n["identifier"], n.get("title", ""), src))
+    print("%s\x1f%s\x1f%s\x1f%s\x1f%s" % (n["identifier"], n.get("title", ""), src,
+                                  (n.get("project") or {}).get("id", ""),
+                                  (n.get("team") or {}).get("id", "")))
 ' 2>/dev/null)"
 
-    # Emptiness is judged on the raw block, before the filter: a title made
-    # entirely of stripped characters must still count as a candidate, or the
-    # list silently shortens and the caller is told the filter found nothing.
+    out="$(printf '%s\n' "$out" | herdr_linear::_inside_context "$ws")"
+
+    # Emptiness is judged before the SANITISER: a title made entirely of
+    # stripped characters must still count as a candidate, or the list silently
+    # shortens and the caller is told the filter found nothing. The context
+    # filter above is the other way round -- a list it empties IS empty, and
+    # KTD12's answer to that is to say so rather than widen.
     [ -n "$out" ] || return "$HERDR_LINEAR_PROPOSE_NONE"
     printf '%s\n' "$out" | herdr_linear::sanitize_stream
     return "$HERDR_LINEAR_PROPOSE_OK"

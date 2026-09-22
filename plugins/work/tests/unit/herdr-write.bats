@@ -53,7 +53,7 @@ setup() {
     git -C "$PROJECT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh repos.sh start.sh herdr-write.sh; do . "$ROOT/lib/$f"; done
+    for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh repos.sh context.sh context-filter.sh start.sh herdr-write.sh; do . "$ROOT/lib/$f"; done
 
     # KTD11. The layout runs from the parent's own worktree, and its children
     # are made beside it, from its repository.
@@ -689,4 +689,43 @@ tab_label() { sed -n 's/.*--label \([^ ]*\).*/\1/p' "$FAKE_HERDR_RECORD_DIR/argv
     export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
     run herdr_linear::project_spaces 44444444-4444-4444-8444-444444444444
     [ -z "$output" ]
+}
+
+# ------------------------------------------------------ the UNBOUND prefix
+
+# The label is composed in one place and the prefix decided in one place, so a
+# title cannot say a surface is bound while the record says otherwise.
+
+labelled() { grep -qF -- "--label $1 --no-focus" "$FAKE_HERDR_RECORD_DIR/argv"; }
+
+declare_team() {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose "$1")"
+    herdr_linear::session_confirm "$1" "$n" "${2:-}"
+}
+
+@test "a session opened for work the declared team does not cover is titled UNBOUND" {
+    declare_team 66666666-6666-4666-8666-666666666666 BRAND
+    run herdr_linear::open_session "$PARENT_WT"
+    [ "$status" -eq 0 ]
+    run labelled "UNBOUND: WEB-2670"
+    [ "$status" -eq 0 ]
+}
+
+@test "a layout for work the declared team does not cover is titled UNBOUND too" {
+    declare_team 66666666-6666-4666-8666-666666666666 BRAND
+    run herdr_linear::layout_build WEB-2670 WEB-3001
+    [ "$status" -eq 0 ]
+    run labelled "UNBOUND: WEB-2670"
+    [ "$status" -eq 0 ]
+}
+
+@test "work the declared team covers keeps its plain label" {
+    declare_team 55555555-5555-4555-8555-555555555555 WEB
+    run herdr_linear::open_session "$PARENT_WT"
+    [ "$status" -eq 0 ]
+    run labelled "WEB-2670"
+    [ "$status" -eq 0 ]
+    run labelled "UNBOUND: WEB-2670"
+    [ "$status" -ne 0 ]
 }

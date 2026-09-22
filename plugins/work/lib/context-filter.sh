@@ -22,6 +22,15 @@ command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 command -v herdr_linear::workspace_read >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/binding.sh"
+# The resolver's fallback and the session id are not optional extras: undefined,
+# `current_context` is 127, the `||` branch reads it as no derivation, and the
+# filter silently widens to everything.
+command -v herdr_linear::current_context >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/context.sh"
+command -v herdr_linear::session_id >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/herdr-read.sh"
+command -v herdr_linear::scope_repo >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/repos.sh"
 
 HERDR_LINEAR_CONTEXT_INSIDE=0
 HERDR_LINEAR_CONTEXT_OUTSIDE=1
@@ -181,6 +190,54 @@ print(json.dumps({"team_id": team, "team_key": key, "team_name": name,
 
 # --------------------------------------------------------------------- the guard
 
+# herdr_linear::team_in_project <team-id> <project-id> [workspace-id]
+#
+# Whether the project carries the team. 0 inside, 1 outside, 3 when it could not
+# be asked. The space's own record answers for the project it is bound to, which
+# is what keeps a read off the network; any other project is asked about once.
+#
+# Both directions of the narrowing rule are this one comparison: a space
+# declaring a project under a session team, and a session declaring a team under
+# a bound space, differ only in which value is held and which is offered.
+herdr_linear::team_in_project() {
+    local team="${1:-}" project="${2:-}" ws="${3:-}" lines rc
+    [ -n "$team" ] && [ -n "$project" ] || return "$HERDR_LINEAR_CONTEXT_UNKNOWN"
+
+    if [ "$(herdr_linear::_space_project "$ws")" = "$project" ]; then
+        lines="$(herdr_linear::workspace_team_ids "$ws" 2>/dev/null)" || lines=""
+        if [ -n "$lines" ]; then
+            printf '%s\n' "$lines" | grep -qxF "$team" \
+                && return "$HERDR_LINEAR_CONTEXT_INSIDE"
+            return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
+        fi
+    fi
+
+    lines="$(herdr_linear::project_teams "$project" 2>/dev/null)"; rc=$?
+    [ "$rc" -eq 0 ] || return "$HERDR_LINEAR_CONTEXT_UNKNOWN"
+    printf '%s\n' "$lines" | cut -f1 | grep -qxF "$team" \
+        && return "$HERDR_LINEAR_CONTEXT_INSIDE"
+    return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
+}
+
+# herdr_linear::context_allows_fields <project-id> <team-id> [workspace-id]
+#
+# The two-part issue test on fields the caller already holds, for a listing that
+# read them once for every row. `context_allows issue` fetches the same two
+# values and ends here, so there is one comparison and not two that can disagree.
+herdr_linear::context_allows_fields() {
+    local ip="${1:-}" it="${2:-}" ws="${3:-}" team project
+    team="$(herdr_linear::session_team 2>/dev/null)" || team=""
+    project="$(herdr_linear::_space_project "$ws")"
+    [ -n "$team" ] || [ -n "$project" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
+    if [ -n "$project" ] && [ "$ip" != "$project" ]; then
+        return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
+    fi
+    if [ -n "$team" ] && [ "$it" != "$team" ]; then
+        return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
+    fi
+    return "$HERDR_LINEAR_CONTEXT_INSIDE"
+}
+
 # herdr_linear::context_allows <kind> <id> [workspace-id]
 #
 # `team`, `project` or `issue`. 0 inside, 1 outside, 3 when it could not be
@@ -192,7 +249,7 @@ print(json.dumps({"team_id": team, "team_key": key, "team_name": name,
 # span several teams, so the project test alone admits another team's issue in
 # the very project the space is bound to.
 herdr_linear::context_allows() {
-    local kind="${1:-}" id="${2:-}" ws="${3:-}" team project lines rc ctx ip it
+    local kind="${1:-}" id="${2:-}" ws="${3:-}" team project ctx ip it
     [ -n "$id" ] || return "$HERDR_LINEAR_CONTEXT_KIND"
     team="$(herdr_linear::session_team 2>/dev/null)" || team=""
 
@@ -204,20 +261,8 @@ herdr_linear::context_allows() {
             ;;
         project)
             [ -n "$team" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
-            project="$(herdr_linear::_space_project "$ws")"
-            if [ -n "$project" ] && [ "$project" = "$id" ]; then
-                lines="$(herdr_linear::workspace_team_ids "$ws" 2>/dev/null)" || lines=""
-                if [ -n "$lines" ]; then
-                    printf '%s\n' "$lines" | grep -qxF "$team" \
-                        && return "$HERDR_LINEAR_CONTEXT_INSIDE"
-                    return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
-                fi
-            fi
-            lines="$(herdr_linear::project_teams "$id" 2>/dev/null)"; rc=$?
-            [ "$rc" -eq 0 ] || return "$HERDR_LINEAR_CONTEXT_UNKNOWN"
-            printf '%s\n' "$lines" | cut -f1 | grep -qxF "$team" \
-                && return "$HERDR_LINEAR_CONTEXT_INSIDE"
-            return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
+            herdr_linear::team_in_project "$team" "$id" "$ws"
+            return $?
             ;;
         issue)
             project="$(herdr_linear::_space_project "$ws")"
@@ -226,14 +271,80 @@ herdr_linear::context_allows() {
                 || return "$HERDR_LINEAR_CONTEXT_UNKNOWN"
             ip="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project_id",""))' 2>/dev/null)"
             it="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))' 2>/dev/null)"
-            if [ -n "$project" ] && [ "$ip" != "$project" ]; then
-                return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
-            fi
-            if [ -n "$team" ] && [ "$it" != "$team" ]; then
-                return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
-            fi
-            return "$HERDR_LINEAR_CONTEXT_INSIDE"
+            herdr_linear::context_allows_fields "$ip" "$it" "$ws"
+            return $?
             ;;
     esac
     return "$HERDR_LINEAR_CONTEXT_KIND"
+}
+
+# ------------------------------------------------------- the surface's prefix
+
+# herdr_linear::unbound_prefix [identifier] [workspace-id]
+#
+# The prefix a surface wears while it holds work its context does not cover, or
+# nothing. THE ONLY PLACE THE PREFIX IS DECIDED; lib/herdr-write.sh's
+# `_tab_label` is the only place it is applied, so a title cannot drift from the
+# record it is meant to report.
+#
+# No identifier is the fresh tab standing in no worktree: it holds no work the
+# context covers, for want of any work at all. Only a definite OUTSIDE brands a
+# surface -- a context that could not be asked is not an answer, and branding on
+# it would title every tab UNBOUND whenever Linear is unreachable.
+herdr_linear::unbound_prefix() {
+    local ident="${1:-}" ws="${2:-}" rc
+    if [ -z "$ident" ]; then
+        printf 'UNBOUND: '
+        return 0
+    fi
+    herdr_linear::context_allows issue "$ident" "$ws"; rc=$?
+    [ "$rc" -eq "$HERDR_LINEAR_CONTEXT_OUTSIDE" ] && printf 'UNBOUND: '
+    return 0
+}
+
+# ---------------------------------------------------- the expected directory
+
+# herdr_linear::expected_cwd [directory] [workspace-id]
+#
+# Where the pane holding <directory> should be standing: the bound issue's
+# worktree, from this directory first and then from the binding whose recorded
+# tab is this tab, else the repository the project-and-team pair names, else
+# nothing.
+#
+# IT STATES, AND IT NEVER MOVES ANYTHING. Standing somewhere else on purpose is
+# legitimate, so this prints a path for a caller to offer and refuses nothing.
+herdr_linear::expected_cwd() {
+    local dir="${1:-$PWD}" ws="${2:-}" git="${HERDR_LINEAR_GIT_BIN:-git}"
+    local top tab wt ctx project team repo
+
+    top="$("$git" -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || top=""
+    [ -n "$top" ] && top="$(cd "$top" 2>/dev/null && pwd -P)"
+    if [ -n "$top" ] && herdr_linear::binding_identifier "$top" >/dev/null 2>&1; then
+        printf '%s' "$top"
+        return 0
+    fi
+
+    tab="$(herdr_linear::tab_id 2>/dev/null)" || tab=""
+    if [ -n "$tab" ]; then
+        wt="$(herdr_linear::bindings_effective 2>/dev/null \
+            | awk -F'\037' -v t="$tab" '$4 == t && $3 != "" { print $3; exit }')" || wt=""
+        if [ -n "$wt" ] && [ -d "$wt" ]; then
+            printf '%s' "$wt"
+            return 0
+        fi
+    fi
+
+    ctx="$(herdr_linear::context "$dir" "$ws" 2>/dev/null)" || return 0
+    project="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project_id",""))' 2>/dev/null)"
+    team="$(printf '%s' "$ctx" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team_id",""))' 2>/dev/null)"
+    [ -n "$project" ] && [ -n "$team" ] || return 0
+    # The pair key becomes a filename under the store, and `.` separates its two
+    # halves, so an id carrying one could spell a plain key as a pair.
+    herdr_linear::is_safe_identifier "$project" || return 0
+    herdr_linear::is_safe_identifier "$team" || return 0
+    case "$project$team" in *.*) return 0 ;; esac
+
+    repo="$(herdr_linear::scope_repo "project-$project.team-$team" 2>/dev/null)" || return 0
+    [ -n "$repo" ] && [ -d "$repo" ] && printf '%s' "$repo"
+    return 0
 }

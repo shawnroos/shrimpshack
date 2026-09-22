@@ -48,7 +48,7 @@ setup() {
 
     # shellcheck source=/dev/null
     for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh \
-             herdr-read.sh herdr-write.sh repos.sh start.sh context.sh create.sh; do . "$ROOT/lib/$f"; done
+             herdr-read.sh herdr-write.sh repos.sh start.sh context.sh context-filter.sh create.sh; do . "$ROOT/lib/$f"; done
 
     WT="$PROJECT/worktrees/current"
     git -C "$PROJECT" worktree add -q -b feature/web-2670-blur "$WT" >/dev/null 2>&1
@@ -828,4 +828,71 @@ worktree_count() { git -C "$PROJECT" worktree list | grep -c .; }
     [[ "$stderr" == *"no herdr space is bound to project $PROJECT_ID"* ]]
     run grep -c '^tab create' "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "0" ]
+}
+
+# ------------------------------------------------- the context decides the team
+
+BRAND_TEAM_ID=66666666-6666-4666-8666-666666666666
+
+declare_session_team() {
+    export HERDR_SOCKET_PATH="$WORK/herdr/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose "$1")"
+    herdr_linear::session_confirm "$1" "$n" "${2:-}"
+}
+
+@test "a declared session team is the team the issue is filed into" {
+    declare_session_team "$BRAND_TEAM_ID" BRAND
+    bind_wt; enable_writes "$BRAND_TEAM_ID" "$PROJECT_ID"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::_file_issue "$WT" "A new thing" "$DESC" "" ""
+    [ "$status" -eq 0 ]
+    [ "$(sent "$BRAND_TEAM_ID")" -ge 1 ]
+    [ "$(sent "\"teamId\": \"$TEAM_ID\"")" -eq 0 ]
+}
+
+# The middle case the plan is explicit about: no session team, and the team the
+# worktree derives still decides. A resolver whose fallback is not loaded
+# answers empty here and this is the test that sees it.
+@test "with no team declared the worktree's own derivation still files the issue" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::_file_issue "$WT" "A new thing" "$DESC" "" ""
+    [ "$status" -eq 0 ]
+    [ "$(sent "$TEAM_ID")" -ge 1 ]
+}
+
+# ------------------------------------------------- filing outside the context
+
+@test "filing into a named team outside the context records no worktree and no binding" {
+    enable_writes "$BRAND_TEAM_ID" ""
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 0 ]
+    [ "$output" = "BRAND-4002" ]
+    [ "$(sent "$BRAND_TEAM_ID")" -ge 1 ]
+    [ ! -d "$NEW_WT" ]
+    run herdr_linear::binding_identifier "$WT"
+    [ "$status" -ne 0 ]
+}
+
+@test "filing outside the context carries no project of the context with it" {
+    enable_writes "$BRAND_TEAM_ID" ""
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 0 ]
+    [ "$(sent "projectId")" -eq 0 ]
+}
+
+@test "filing outside the context still asks the write question for this worktree" {
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 3 ]
+    [ "$(sent issueCreate)" -eq 0 ]
+}
+
+@test "filing outside the context refuses when no team is named" {
+    enable_writes "$BRAND_TEAM_ID" ""
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" ""
+    [ "$status" -eq 1 ]
+    [ "$(sent issueCreate)" -eq 0 ]
 }

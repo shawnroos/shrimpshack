@@ -22,6 +22,12 @@
 # herdr workspace bound to a project that does not exist is worse, because it
 # looks like a place to work.
 
+# No lib sources another, and the resolver is what decides which team an issue
+# is filed into: undefined, `context` is 127 and the `||` branch below reads it
+# as no context at all.
+command -v herdr_linear::context >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/context-filter.sh"
+
 HERDR_LINEAR_CREATE_OK=0
 HERDR_LINEAR_CREATE_REFUSED=1
 HERDR_LINEAR_CREATE_NO_CONTEXT=2
@@ -115,14 +121,39 @@ herdr_linear::_issue_with_session() {
     return "$HERDR_LINEAR_CREATE_OK"
 }
 
-# herdr_linear::_file_issue <worktree> <title> <descfile> <parent> [workspace-id]
+# herdr_linear::new_issue_outside <worktree> <title> <descfile> <team> [project]
+#
+# An issue filed into a team the context does not cover, which is allowed once
+# the person has named the target and confirmed. It stops at the tracker: no
+# worktree, no binding, and no pane, so nothing local is recorded outside the
+# context. The surface holding it wears the `UNBOUND:` prefix instead, which is
+# what makes the deliberate case visible and the accidental one catchable.
+#
+# The write question is unchanged -- it is answered per worktree, for the team
+# and project this names, through the one gate `_file_issue` already passes.
+herdr_linear::new_issue_outside() {
+    local wt="${1:-}" title="${2:-}" descfile="${3:-}" team="${4:-}" project="${5:-}"
+    if [ -z "$team" ]; then
+        printf 'filing outside the context needs the team named; nothing was filed\n' >&2
+        return "$HERDR_LINEAR_CREATE_REFUSED"
+    fi
+    herdr_linear::_file_issue "$wt" "$title" "$descfile" "" "" "$team" "$project"
+}
+
+# herdr_linear::_file_issue <worktree> <title> <descfile> <parent> [workspace-id] [team] [project]
 #
 # Everything the three filing verbs share, ending at the tracker. STDOUT CARRIES
 # THE IDENTIFIER AND NOTHING ELSE -- every message here goes to stderr, because
 # a stray line would prepend a sentence to what the caller reads back as an
 # identifier.
+#
+# <team> and <project> are the named target of a deliberate write outside the
+# context. Given, they replace the resolved pair WHOLE: carrying the context's
+# project into another team's issue would file it into a project that team may
+# not even be on.
 herdr_linear::_file_issue() {
     local wt="${1:-}" title="${2:-}" descfile="${3:-}" parent="${4:-}" ws="${5:-}"
+    local named_team="${6:-}" named_project="${7:-}"
     local ctx fields project team body resp ident parent_id
 
     [ -n "$title" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
@@ -131,10 +162,15 @@ herdr_linear::_file_issue() {
     # template, so a missing spine means the template was abandoned halfway.
     herdr_linear::description_validate "$descfile" strict || return "$HERDR_LINEAR_CREATE_REFUSED"
 
-    ctx="$(herdr_linear::current_context "$wt" "$ws")"
-    fields="$(herdr_linear::context_fields "$ctx" project_id team_id)"
-    project="$(printf '%s' "$fields" | cut -f1)"
-    team="$(printf '%s' "$fields" | cut -f2)"
+    if [ -n "$named_team" ]; then
+        team="$named_team"
+        project="$named_project"
+    else
+        ctx="$(herdr_linear::context "$wt" "$ws")"
+        fields="$(herdr_linear::context_fields "$ctx" project_id team_id)"
+        project="$(printf '%s' "$fields" | cut -f1)"
+        team="$(printf '%s' "$fields" | cut -f2)"
+    fi
 
     if [ -z "$team" ]; then
         herdr_linear::no_team_reason "$project" >&2

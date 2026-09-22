@@ -235,6 +235,9 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/context.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/context-filter.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/propose.sh"
 
 herdr_linear::candidates "$PWD" "$(herdr_linear::workspace_id)"
@@ -248,6 +251,13 @@ produced it:
 | `branch` | the branch name carries this identifier — the strongest signal |
 | `project` | the herdr workspace is bound to a project, and this issue is in it |
 | `assignee` | the workspace is unbound, so the list is only "assigned to you and not finished" — a wide scope, and you should treat it as such |
+
+**The list is already filtered by the context**, whichever rule produced it: an
+issue whose project is not the space's, or whose team is not the session's
+declared team, is not offered — including one the branch names. So a branch
+carrying an identifier and no `branch` line on the list means that issue sits
+outside this session's context. Say so, and offer `/work:declare` or a different
+session rather than binding around it.
 
 **Exit 1 means the filter found nothing.** Say so and stop. Do not widen the
 search, do not drop the assignee filter, do not list every issue in the

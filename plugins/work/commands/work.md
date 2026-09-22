@@ -15,11 +15,26 @@ R="${CLAUDE_PLUGIN_ROOT}"
 source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/binding.sh"
 source "$R/lib/linear.sh"; source "$R/lib/sanitize.sh"
 source "$R/lib/herdr-read.sh"; source "$R/lib/context.sh"
+source "$R/lib/repos.sh"; source "$R/lib/context-filter.sh"
 
-herdr_linear::scope_signals "$PWD" "$(herdr_linear::workspace_id)"
+WS="$(herdr_linear::workspace_id)"
+herdr_linear::scope_signals "$PWD" "$WS"
 herdr_linear::binding_state "$PWD"
 herdr_linear::binding_identifier "$PWD" 2>/dev/null
+herdr_linear::context "$PWD" "$WS"
+herdr_linear::expected_cwd "$PWD" "$WS"
 ```
+
+`context` names the team, the project and the issue, each with the level that
+decided it — `session`, `space`, `tab`, `derived` or `none`. Nothing declared at
+any level is the plugin's behaviour before any of this, and is not a problem to
+report; `/work:declare` is how a session or a space says what it is for.
+
+**`expected_cwd` states, and you never act on it.** It prints where this pane is
+expected to stand — the bound issue's worktree, else the repository the
+project-and-team pair names — or nothing. Say it beside the directory the pane
+is actually in when the two differ, and **offer** the move. Never `cd`, and
+never move anybody: standing somewhere else on purpose is legitimate.
 
 `scope_signals` prints two lines and never refuses. `path=` says whether this
 directory sits under a known projects root; `project=` names the tracker project
@@ -51,6 +66,12 @@ herdr_linear::binding_pending_consent "$PWD" 2>/dev/null | herdr_linear::sanitiz
 # whoever files the tickets. It never reaches the terminal unfiltered.
 tail -5 "${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}" 2>/dev/null | herdr_linear::sanitize_stream
 ```
+
+## With no context declared
+
+`/work:declare` records the team this herdr session is worked as and the project
+this space holds, and needs no worktree. Point at it when the report above says
+every level is `none` and the person is standing somewhere that derives nothing.
 
 ## With an issue identifier
 
