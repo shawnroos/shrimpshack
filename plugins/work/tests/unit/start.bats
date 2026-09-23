@@ -69,7 +69,7 @@ setup() {
     git -C "$PROJECT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh \
+    for f in contain.sh secrets.sh binding.sh scope-record.sh linear.sh reconcile.sh description.sh \
              herdr-read.sh herdr-write.sh repos.sh start.sh; do . "$ROOT/lib/$f"; done
 
     # Standing inside a repository, deliberately: the path and the repository

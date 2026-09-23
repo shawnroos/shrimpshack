@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The session record, and the one resolver and one guard every read path asks.
+# The one resolver and one guard every read path asks.
 # Sourced, never executed.
 #
 # THE MODEL. Three levels, each narrowing the one above: the herdr session
@@ -7,12 +7,6 @@
 # level that declares nothing narrows nothing -- which is the plugin's behaviour
 # before any of this, and stays the default.
 #
-# WHY THE SESSION RECORD IS BINDING-SHAPED. It reuses the worktree record: the
-# team id sits where an issue identifier sits, the team key in the display
-# field, and `worktree_path` names the session. That is what gives it the
-# unbound / proposed / bound / misplaced states with no second state machine,
-# and what makes declaring a team a proposal somebody answers rather than a
-# value anything can write.
 #
 # ONE COMPARISON, NOT TWO. `context_allows` is the only place a team, a project
 # or an issue is judged against the context. Two comparisons that can disagree
@@ -21,6 +15,8 @@
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 command -v herdr_linear::workspace_read >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/scope-record.sh"
+command -v herdr_linear::binding_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/binding.sh"
 # The resolver's fallback and the session id are not optional extras: undefined,
 # `current_context` is 127, the `||` branch reads it as no derivation, and the
@@ -36,85 +32,6 @@ HERDR_LINEAR_CONTEXT_INSIDE=0
 HERDR_LINEAR_CONTEXT_OUTSIDE=1
 HERDR_LINEAR_CONTEXT_KIND=2      # not a kind this guard judges
 HERDR_LINEAR_CONTEXT_UNKNOWN=3   # could not be asked; not an answer of "outside"
-
-# ------------------------------------------------------------ the session record
-
-herdr_linear::_session_record_path() {
-    local sid
-    sid="$(herdr_linear::session_id 2>/dev/null)" || return 1
-    # session_id validates a named session already; repeated here because this
-    # is the line that turns the value into a path.
-    herdr_linear::is_safe_identifier "$sid" || return 1
-    printf '%s/contexts/session-%s.json' "$HERDR_LINEAR_STORE_DIR" "$sid"
-}
-
-# The write path, which must make the directory: _mutate_at takes its lock by
-# creating a directory beside the record, and a missing parent turns that into
-# the full lock wait and then a refusal.
-herdr_linear::_session_claim_path() {
-    local f sid
-    sid="$(herdr_linear::session_id 2>/dev/null)" || return 1
-    herdr_linear::is_safe_identifier "$sid" || return 1
-    f="$(herdr_linear::_session_record_path)" || return 1
-    mkdir -p "${f%/*}" 2>/dev/null
-    chmod 700 "$HERDR_LINEAR_STORE_DIR" "${f%/*}" 2>/dev/null
-    printf '%s' "$f"
-}
-
-herdr_linear::session_read() {
-    local f
-    f="$(herdr_linear::_session_record_path)" || return "$HERDR_LINEAR_BINDING_ABSENT"
-    herdr_linear::_mode_ok "$f" || return "$HERDR_LINEAR_BINDING_ABSENT"
-    herdr_linear::_py read "$f" || return "$HERDR_LINEAR_BINDING_ABSENT"
-}
-
-herdr_linear::session_state() {
-    local rec
-    rec="$(herdr_linear::session_read)" || { printf 'unbound'; return "$HERDR_LINEAR_BINDING_ABSENT"; }
-    printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])' 2>/dev/null
-}
-
-# The team only once it is ANSWERED. A proposed team is a question that was
-# asked, not an answer, and answering the guard from it would let the asking
-# narrow the session.
-herdr_linear::session_team() {
-    local rec
-    rec="$(herdr_linear::session_read)" || return "$HERDR_LINEAR_BINDING_ABSENT"
-    printf '%s' "$rec" | python3 -c '
-import sys, json
-rec = json.load(sys.stdin)
-print(rec.get("issue_identifier", "") if rec.get("state") == "bound" else "")
-' 2>/dev/null
-}
-
-herdr_linear::session_team_key() {
-    local rec
-    rec="$(herdr_linear::session_read)" || return "$HERDR_LINEAR_BINDING_ABSENT"
-    printf '%s' "$rec" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("display_name",""))' 2>/dev/null
-}
-
-herdr_linear::session_propose() {
-    local team="${1:-}" sid f
-    [ -n "$team" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
-    herdr_linear::is_safe_identifier "$team" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    sid="$(herdr_linear::session_id 2>/dev/null)" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    f="$(herdr_linear::_session_claim_path)" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    herdr_linear::_mutate_at "$f" propose "session:$sid" "$team"
-}
-
-# The same nonce rule the worktree and space records use, and the same limit on
-# what it proves: it orders confirm after propose, and nothing here can tell an
-# attended session from a headless one.
-herdr_linear::session_confirm() {
-    local team="${1:-}" nonce="${2:-}" key="${3:-}" f
-    [ -n "$team" ] || return "$HERDR_LINEAR_BINDING_REFUSED"
-    herdr_linear::is_safe_identifier "$team" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    if [ -n "$key" ]; then
-        herdr_linear::is_safe_identifier "$key" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    fi
-    f="$(herdr_linear::_session_claim_path)" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    herdr_linear::_mutate_at "$f" confirm "$team" "$nonce" "" "$key"
-}
 
 # ------------------------------------------------------------------ the resolver
 

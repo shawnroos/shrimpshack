@@ -54,7 +54,7 @@ write question once, exactly as it does today.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear herdr-read context repos context-filter space-bind; do
+for f in contain secrets sanitize record binding scope-record linear herdr-read context repos context-filter space-bind; do
   source "$R/lib/$f.sh"
 done
 

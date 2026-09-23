@@ -29,7 +29,7 @@ setup() {
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_PROPOSEPROPOSEPROPO" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh context.sh repos.sh context-filter.sh propose.sh; do . "$ROOT/lib/$f"; done
+    for f in contain.sh secrets.sh binding.sh scope-record.sh linear.sh herdr-read.sh context.sh repos.sh context-filter.sh propose.sh; do . "$ROOT/lib/$f"; done
 
     WT="$WORK/root/wt"; mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-3308-panel

@@ -25,7 +25,7 @@ setup() {
     mkdir -p "$FAKE_HERDR_RECORD_DIR"
 
     # shellcheck source=/dev/null
-    for f in sanitize.sh binding.sh; do . "$ROOT/lib/$f"; done
+    for f in sanitize.sh binding.sh scope-record.sh; do . "$ROOT/lib/$f"; done
 
     PROJECT=44444444-4444-4444-8444-444444444444
     OTHER=99999999-9999-4999-8999-999999999999

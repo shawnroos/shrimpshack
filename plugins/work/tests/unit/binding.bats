@@ -22,6 +22,7 @@ setup() {
     export CLAUDE_SESSION_ID="session-one"
     # shellcheck source=/dev/null
     . "${BATS_TEST_DIRNAME}/../../lib/binding.sh"
+    . "${BATS_TEST_DIRNAME}/../../lib/scope-record.sh"
     # shellcheck source=/dev/null
     . "${BATS_TEST_DIRNAME}/../../lib/bind-args.sh"
 

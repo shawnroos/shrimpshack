@@ -46,7 +46,7 @@ setup() {
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_PLACEPLACEPLACEPLAC" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh repos.sh start.sh states.sh herdr-write.sh; do
+    for f in contain.sh secrets.sh binding.sh scope-record.sh linear.sh herdr-read.sh repos.sh start.sh states.sh herdr-write.sh; do
         . "$ROOT/lib/$f"
     done
 

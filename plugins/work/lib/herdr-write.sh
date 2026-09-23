@@ -411,7 +411,7 @@ herdr_linear::layout_build() {
     # Two sessions building the same parent's layout within the poll window
     # both miss `journal_get parent tab`, both run `tab create`, and the
     # journal's `tail -1` orphans the first tab -- the concurrency twin of the
-    # retry this journal exists to prevent. Reuse binding.sh's mkdir lock: it
+    # retry this journal exists to prevent. Reuse record.sh's mkdir lock: it
     # is already a dependency (binding_propose/confirm below) and solves the
     # same class of problem there.
     journal_file="$(herdr_linear::_journal "$parent")" || return "$HERDR_LINEAR_LAYOUT_FAILED"

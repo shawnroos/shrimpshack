@@ -21,7 +21,7 @@ string, and the default does not come back.
 |---|---|---|---|---|
 | `HERDR_LINEAR_PROJECTS_ROOT` | `$HOME/projects` | The root every canonical checkout must sit under. A session outside it is refused. The old spelling of this setting is still honoured, and `lib/contain.sh` prints what to rename it to. | `lib/contain.sh` | no |
 | `HERDR_LINEAR_WORKTREES_ROOT` | `$HOME/worktrees` | Where a worktree started from a ticket is created. Nothing under it is canonical, so the whole tree stays safe to delete. | `lib/contain.sh` | no |
-| `HERDR_LINEAR_STORE_DIR` | `$HOME/.claude/work` | Where bindings between a worktree and a ticket are recorded. | `lib/binding.sh` | no |
+| `HERDR_LINEAR_STORE_DIR` | `$HOME/.claude/work` | Where bindings between a worktree and a ticket are recorded. | `lib/record.sh` | no |
 | `HERDR_LINEAR_PIN_DIR` | `$HOME/.claude/linear-pin` | Where a pinned ticket for the current session is held. | `lib/binding.sh` | no |
 | `HERDR_LINEAR_JOURNAL_DIR` | `$HOME/.claude/work/layouts` | Where a layout the plugin built is journalled. | `lib/herdr-write.sh` | no |
 | `HERDR_LINEAR_DESC_BACKUP_DIR` | `$HOME/.claude/work/descriptions` | Where a ticket description is copied before it is overwritten. | `lib/description.sh` | no |

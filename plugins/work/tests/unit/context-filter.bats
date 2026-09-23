@@ -40,7 +40,7 @@ setup() {
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     # shellcheck source=/dev/null
-    for f in sanitize.sh secrets.sh contain.sh herdr-read.sh binding.sh linear.sh context.sh repos.sh context-filter.sh space-bind.sh; do
+    for f in sanitize.sh secrets.sh contain.sh herdr-read.sh binding.sh scope-record.sh linear.sh context.sh repos.sh context-filter.sh space-bind.sh; do
         . "$ROOT/lib/$f"
     done
 }

@@ -9,7 +9,7 @@
 # SAYS SO AND STOPS rather than widening. Widening a filter that found nothing
 # is how a chooser ends up looking at every issue in the workspace.
 #
-# NOTHING HERE WRITES. It proposes. Only lib/binding.sh moves a record, and only
+# NOTHING HERE WRITES. It proposes. Only lib/record.sh moves a record, and only
 # a confirmation moves it to bound.
 
 # Self-sourced rather than left to the caller's source list. The candidate block

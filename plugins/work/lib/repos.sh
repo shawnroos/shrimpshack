@@ -34,7 +34,7 @@
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 command -v herdr_linear::_lock >/dev/null 2>&1 \
-    || . "${BASH_SOURCE[0]%/*}/binding.sh"
+    || . "${BASH_SOURCE[0]%/*}/record.sh"
 
 HERDR_LINEAR_STORE_DIR="${HERDR_LINEAR_STORE_DIR:-$HOME/.claude/work}"
 HERDR_LINEAR_SCOPE_RECORD_VERSION=1

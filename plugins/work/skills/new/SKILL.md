@@ -38,7 +38,7 @@ each value came from.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context context-filter space-bind create; do
+for f in contain secrets sanitize record binding scope-record linear schemes reconcile description herdr-read states herdr-write repos start context context-filter space-bind create; do
   source "$R/lib/$f.sh"
 done
 

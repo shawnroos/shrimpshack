@@ -12,7 +12,8 @@ Report the state of the worktree you are in. Read it, do not guess it:
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/binding.sh"
+source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/record.sh"
+source "$R/lib/binding.sh"; source "$R/lib/scope-record.sh"
 source "$R/lib/linear.sh"; source "$R/lib/sanitize.sh"
 source "$R/lib/herdr-read.sh"; source "$R/lib/context.sh"
 source "$R/lib/repos.sh"; source "$R/lib/context-filter.sh"

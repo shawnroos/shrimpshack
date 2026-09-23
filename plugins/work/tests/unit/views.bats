@@ -28,7 +28,7 @@ setup() {
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_VIEWSVIEWSVIEWSVIEWS" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
-    for f in secrets.sh binding.sh linear.sh views.sh; do . "$ROOT/lib/$f"; done
+    for f in secrets.sh binding.sh scope-record.sh linear.sh views.sh; do . "$ROOT/lib/$f"; done
 
     TEAM=55555555-5555-4555-8555-555555555555
     PROJECT=44444444-4444-4444-8444-444444444444

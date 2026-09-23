@@ -24,8 +24,8 @@ command -v herdr_linear::context_allows >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/context-filter.sh"
 command -v herdr_linear::project_teams >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/context.sh"
-command -v herdr_linear::workspace_confirm >/dev/null 2>&1 \
-    || . "${BASH_SOURCE[0]%/*}/binding.sh"
+command -v herdr_linear::workspace_read >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/scope-record.sh"
 
 HERDR_LINEAR_SPACE_BIND_OK=0
 HERDR_LINEAR_SPACE_BIND_OUTSIDE=1

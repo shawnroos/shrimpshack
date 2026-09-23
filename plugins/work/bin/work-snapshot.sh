@@ -9,7 +9,7 @@
 set -uo pipefail
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd -P)" || LIB_DIR=""
-for f in sanitize.sh secrets.sh binding.sh linear.sh herdr-read.sh context.sh; do
+for f in sanitize.sh secrets.sh record.sh binding.sh scope-record.sh linear.sh herdr-read.sh context.sh; do
     if [ -z "$LIB_DIR" ] || [ ! -r "$LIB_DIR/$f" ]; then
         printf 'cannot find lib/%s beside this script\n' "$f" >&2
         exit 1

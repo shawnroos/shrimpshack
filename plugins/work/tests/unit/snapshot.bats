@@ -39,7 +39,7 @@ setup() {
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_SNAPSNAPSNAPSNAPSNAP" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
-    for f in secrets.sh binding.sh linear.sh; do . "$ROOT/lib/$f"; done
+    for f in secrets.sh binding.sh scope-record.sh linear.sh; do . "$ROOT/lib/$f"; done
 
     PROJECT=44444444-4444-4444-8444-444444444444
     VIEW=cccccccc-cccc-4ccc-8ccc-cccccccccccc
