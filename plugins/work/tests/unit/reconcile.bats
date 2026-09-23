@@ -593,3 +593,27 @@ mutations_sent() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"description does not cover"* ]]
 }
+
+# The hook is where classify actually runs, and it is the only place the new
+# lib chain (states -> herdr-write -> start -> schemes) is loaded under
+# `set -u`. A top-level failure there dies at source time, behind the loop's
+# own `2>/dev/null`, and the hook still exits 0 -- so the rename reaching herdr
+# is the only proof the chain loaded.
+@test "the session-end hook titles the tab of a binding it finds misplaced" {
+    # shellcheck source=/dev/null
+    for f in scope-record.sh sanitize.sh repos.sh herdr-read.sh context.sh context-filter.sh; do . "$ROOT/lib/$f"; done
+    export HERDR_BIN="$FIX/fake-herdr.sh"
+    export FAKE_HERDR_RECORD_DIR="$WORK/hrec"
+    export FAKE_HERDR_ALLOW_MUTATION=1
+    mkdir -p "$WORK/hrec"
+    bind_wt WEB-2670
+    herdr_linear::binding_set_tab "$WT" wA:t1
+    local n; n="$(herdr_linear::workspace_propose w1 44444444-4444-4444-8444-444444444444)"
+    herdr_linear::workspace_confirm w1 44444444-4444-4444-8444-444444444444 "$n"
+    export FAKE_LINEAR_MODE=other_project_issue
+    run bash -c "printf '{\"cwd\":\"$WT\",\"hook_event_name\":\"SessionEnd\"}' | HERDR_WORKSPACE_ID=w1 bash '$ROOT/hooks/reconcile.sh'"
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+    run bash -c "tr '\037' '|' < '$WORK/hrec/argvq' | grep '^4|tab|rename|'"
+    [ "$output" = "4|tab|rename|wA:t1|UNBOUND: Plugin PM" ]
+}

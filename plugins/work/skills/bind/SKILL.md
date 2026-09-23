@@ -207,6 +207,12 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/context.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/context-filter.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/space-bind.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/views.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 
 herdr_linear::workspace_bind_checked "$SPACE" "$PROJECT"; echo "space=$?"
 
@@ -216,7 +222,8 @@ if [ -n "$ISSUE" ]; then
     nonce="$(herdr_linear::binding_propose "$PWD" "$ISSUE")" \
         && herdr_linear::binding_confirm "$PWD" "$ISSUE" "$nonce"; echo "issue=$?"
     TAB="$(herdr_linear::tab_id 2>/dev/null)" || TAB=""
-    [ -z "$TAB" ] || herdr_linear::binding_set_tab "$PWD" "$TAB"
+    [ -z "$TAB" ] || { herdr_linear::binding_set_tab "$PWD" "$TAB"
+                       herdr_linear::retitle_tab "$TAB" bound; }
 fi
 ```
 
@@ -323,14 +330,18 @@ On a choice, record it in two steps, because `confirm` requires the nonce that
 
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 nonce="$(herdr_linear::binding_propose "$PWD" "$CHOSEN")"
 herdr_linear::binding_confirm "$PWD" "$CHOSEN" "$nonce"
 TAB="$(herdr_linear::tab_id 2>/dev/null)" || TAB=""
-[ -z "$TAB" ] || herdr_linear::binding_set_tab "$PWD" "$TAB"
+[ -z "$TAB" ] || { herdr_linear::binding_set_tab "$PWD" "$TAB"
+                   herdr_linear::retitle_tab "$TAB" bound; }
 ```
 
 Recording the tab is what gives this issue a tab-to-issue link. Without it only
-a tab this plugin opened has one, and a tab opened by hand has none.
+a tab this plugin opened has one, and a tab opened by hand has none. The retitle
+is the other half: a tab that was carrying `UNBOUND:` is now bound to the work
+it holds, so the prefix comes off.
 
 If they reject a candidate, record it so it is never offered for this worktree
 again:

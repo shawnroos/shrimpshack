@@ -925,3 +925,27 @@ declare_session_team() {
     [ "$status" -eq 1 ]
     [ "$(sent issueCreate)" -eq 0 ]
 }
+
+# The decision this verb exists for: nothing local is recorded, so the ONLY
+# thing that makes the write visible is the title of the surface it was made
+# from. The tab the person is sitting in is that surface.
+renames() {
+    tr '\037' '|' < "$FAKE_HERDR_RECORD_DIR/argvq" 2>/dev/null | grep '^4|tab|rename|' || true
+}
+
+@test "filing outside the context titles the tab it was filed from UNBOUND" {
+    enable_writes "$BRAND_TEAM_ID" ""
+    export HERDR_TAB_ID=wA:t1
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 0 ]
+    [ "$(renames)" = "4|tab|rename|wA:t1|UNBOUND: Plugin PM" ]
+}
+
+@test "a refused filing leaves the tab title alone" {
+    export HERDR_TAB_ID=wA:t1
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 3 ]
+    [ -z "$(renames)" ]
+}

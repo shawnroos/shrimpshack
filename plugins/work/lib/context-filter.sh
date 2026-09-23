@@ -230,31 +230,25 @@ herdr_linear::context_allows() {
 
 # ------------------------------------------------------- the surface's prefix
 
+HERDR_LINEAR_UNBOUND_PREFIX='UNBOUND: '
+
 # herdr_linear::unbound_prefix [identifier] [workspace-id]
 #
 # The prefix a surface wears while it holds work its context does not cover, or
-# nothing. THE ONLY PLACE THE PREFIX IS DECIDED; lib/herdr-write.sh's
-# `_tab_label` is the only place it is applied, so a title cannot drift from the
-# record it is meant to report.
+# nothing. THE ONLY PLACE THE PREFIX IS DECIDED. lib/herdr-write.sh applies it,
+# to a new tab in `_tab_label` and to one already open in `retitle_tab`, so a
+# title cannot drift from the record it is meant to report.
 #
-# No identifier is the fresh tab standing in no worktree: it holds no work the
-# context covers, for want of any work at all -- but only where there IS a
-# context, by the same rule the guard follows. A level that declared nothing
-# narrows nothing, and branding every tab of every unconfigured session is a
-# warning people learn to ignore. Only a definite OUTSIDE brands a surface --
-# a context that could not be asked is not an answer, and branding on it would
-# title every tab UNBOUND whenever Linear is unreachable.
+# Only a definite OUTSIDE brands a surface -- a context that could not be asked
+# is not an answer, and branding on it would title every tab UNBOUND whenever
+# Linear is unreachable. With no identifier there is no work to judge, so
+# nothing is reported; a surface holding work no binding names is branded by
+# whatever verb knows it, not by guessing here.
 herdr_linear::unbound_prefix() {
     local ident="${1:-}" ws="${2:-}" rc
-    if [ -z "$ident" ]; then
-        if [ -n "$(herdr_linear::session_team 2>/dev/null)" ] \
-            || [ -n "$(herdr_linear::_space_project "$ws")" ]; then
-            printf 'UNBOUND: '
-        fi
-        return 0
-    fi
+    [ -n "$ident" ] || return 0
     herdr_linear::context_allows issue "$ident" "$ws"; rc=$?
-    [ "$rc" -eq "$HERDR_LINEAR_CONTEXT_OUTSIDE" ] && printf 'UNBOUND: '
+    [ "$rc" -eq "$HERDR_LINEAR_CONTEXT_OUTSIDE" ] && printf '%s' "$HERDR_LINEAR_UNBOUND_PREFIX"
     return 0
 }
 

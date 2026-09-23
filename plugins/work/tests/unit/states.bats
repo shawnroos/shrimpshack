@@ -369,3 +369,86 @@ bind_other_wt() {   # bind_other_wt <dir> <identifier>
     [ "$status" -eq 0 ]
     [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
 }
+
+# -------------------------------------------------- the title on the surface
+
+# The prefix is only honest if it tracks the state. classify is the one place
+# that decides a binding is misplaced and the one place that decides it is not,
+# so it is where the tab holding that work is retitled.
+herdr_on() {
+    export HERDR_BIN="$FIX/fake-herdr.sh"
+    export FAKE_HERDR_RECORD_DIR="$WORK/hrec"
+    export FAKE_HERDR_ALLOW_MUTATION=1
+    mkdir -p "$WORK/hrec"
+}
+renames() {
+    tr '\037' '|' < "$FAKE_HERDR_RECORD_DIR/argvq" 2>/dev/null | grep '^4|tab|rename|' || true
+}
+
+@test "the tab holding a binding that has just gone misplaced is titled UNBOUND" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::binding_set_tab "$WT" wA:t1
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    [ "$(renames)" = "4|tab|rename|wA:t1|UNBOUND: Plugin PM" ]
+}
+
+@test "the prefix comes off the tab when the mismatch is resolved" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::binding_set_tab "$WT" wA:t1
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 0 ]
+    [ "$(renames | tail -n1)" = "4|tab|rename|wA:t1|Plugin PM" ]
+}
+
+# classify runs at every session end. A pass that changed nothing must not
+# spend a herdr round trip, and must not rewrite a title nobody moved.
+@test "a mismatch that was already recorded does not retitle the tab again" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::binding_set_tab "$WT" wA:t1
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    rm -f "$FAKE_HERDR_RECORD_DIR/argv" "$FAKE_HERDR_RECORD_DIR/argvq"
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    [ ! -s "$FAKE_HERDR_RECORD_DIR/argv" ]
+}
+
+@test "a binding with no tab recorded asks herdr nothing" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    [ ! -s "$FAKE_HERDR_RECORD_DIR/argv" ]
+}
+
+# The title reports PLACEMENT. A binding that goes straight from misplaced to
+# stale used to skip the clearing branch entirely and keep the prefix for a
+# mismatch that was already resolved.
+@test "the prefix comes off even when the issue was closed in the same pass" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::binding_set_tab "$WT" wA:t1
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    # Placed correctly now, and closed.
+    export FAKE_LINEAR_MODE=completed_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 2 ]
+    [ "$(renames | tail -n1)" = "4|tab|rename|wA:t1|Plugin PM" ]
+}

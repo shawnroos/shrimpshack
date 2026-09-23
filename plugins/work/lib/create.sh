@@ -27,6 +27,10 @@
 # as no context at all.
 command -v herdr_linear::context >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/context-filter.sh"
+# The tab titled below. Undefined, a filing outside the context leaves no trace
+# at all -- no worktree, no binding, and now no title either.
+command -v herdr_linear::retitle_tab >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/herdr-write.sh"
 
 HERDR_LINEAR_CREATE_OK=0
 HERDR_LINEAR_CREATE_REFUSED=1
@@ -132,12 +136,19 @@ herdr_linear::_issue_with_session() {
 # The write question is unchanged -- it is answered per worktree, for the team
 # and project this names, through the one gate `_file_issue` already passes.
 herdr_linear::new_issue_outside() {
-    local wt="${1:-}" title="${2:-}" descfile="${3:-}" team="${4:-}" project="${5:-}"
+    local wt="${1:-}" title="${2:-}" descfile="${3:-}" team="${4:-}" project="${5:-}" ident rc
     if [ -z "$team" ]; then
         printf 'filing outside the context needs the team named; nothing was filed\n' >&2
         return "$HERDR_LINEAR_CREATE_REFUSED"
     fi
-    herdr_linear::_file_issue "$wt" "$title" "$descfile" "" "" "$team" "$project"
+    ident="$(herdr_linear::_file_issue "$wt" "$title" "$descfile" "" "" "$team" "$project")"; rc=$?
+    # Only once the issue exists. The tab is the person's own -- this verb makes
+    # no surface of its own -- and titling it for a write that was refused would
+    # report a state nothing is in.
+    [ "$rc" -eq "$HERDR_LINEAR_CREATE_OK" ] \
+        && herdr_linear::retitle_tab "$(herdr_linear::tab_id 2>/dev/null)" unbound
+    printf '%s' "$ident"
+    return "$rc"
 }
 
 # herdr_linear::_file_issue <worktree> <title> <descfile> <parent> [workspace-id] [team] [project]

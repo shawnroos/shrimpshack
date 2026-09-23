@@ -309,6 +309,9 @@ sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", text, re.S)))
 ' "$ROOT/skills/bind/SKILL.md")"
     [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::binding_confirm')" -eq 2 ]
     [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::binding_set_tab')" -eq 2 ]
+    # Binding a tab to its issue is one of the moments the prefix clears, and
+    # the skill is the only place that moment happens.
+    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::retitle_tab')" -eq 2 ]
 }
 
 # --------------------------------------------------- the membership test itself
@@ -410,30 +413,17 @@ sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", text, re.S)))
 
 # --------------------------------------------------------- the UNBOUND prefix
 
-@test "a surface standing in no worktree wears the prefix" {
+# The prefix reports work the context does not cover, so with no work named
+# there is nothing to report. A surface is branded by the verb that knows what
+# changed -- `retitle_tab`, from classify or from a filing outside the context
+# -- and never by this, which is only asked about an identifier.
+@test "a surface with no work named on it is not branded" {
     export HERDR_LINEAR_CURL_BIN=/bin/false
     declare_team "$WEB_TEAM" WEB
-    run herdr_linear::unbound_prefix ""
-    [ "$status" -eq 0 ]
-    [ "$output" = "UNBOUND: " ]
-}
-
-# The same rule the guard follows: a level that declared nothing narrows
-# nothing. With no context at all there is nothing for a surface to be outside
-# of, and branding every tab in every unconfigured session is a warning people
-# learn to ignore.
-@test "a surface in a session that declared nothing wears no prefix" {
-    export HERDR_LINEAR_CURL_BIN=/bin/false
-    run herdr_linear::unbound_prefix ""
-    [ "$status" -eq 0 ]
-    [ -z "$output" ]
-}
-
-@test "a space's project alone is enough context to brand a bare surface" {
-    export HERDR_LINEAR_CURL_BIN=/bin/false
     bind_space wA "$PROJECT"
     run herdr_linear::unbound_prefix "" wA
-    [ "$output" = "UNBOUND: " ]
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
 }
 
 @test "work the context covers wears no prefix" {

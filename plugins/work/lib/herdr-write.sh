@@ -27,8 +27,6 @@ command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 command -v herdr_linear::start_worktree_name >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/start.sh"
-command -v herdr_linear::_issue_project_id >/dev/null 2>&1 \
-    || . "${BASH_SOURCE[0]%/*}/states.sh"
 command -v herdr_linear::scheme_name >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/schemes.sh"
 # The prefix below is decided there, and an undefined decider would title every
@@ -178,8 +176,9 @@ herdr_linear::no_space_reason() {
 # prefix below may still read the issue, and only inside a session that declared
 # a team; a read it cannot make answers UNKNOWN, which brands nothing.
 #
-# THE ONLY PLACE THE `UNBOUND:` PREFIX IS APPLIED, as `unbound_prefix` is the
-# only place it is decided. Neither caller passes a space, and neither needs to:
+# WHERE THE `UNBOUND:` PREFIX GOES ON A NEW TAB; `retitle_tab` is where it goes
+# on or comes off one that is already open, and `unbound_prefix` is the only
+# place it is decided. Neither caller passes a space, and neither needs to:
 # both open their tab in the space bound to the issue's OWN project, so the
 # project half of the test is satisfied by construction and the declared team is
 # what is left to judge.
@@ -200,6 +199,49 @@ herdr_linear::_tab_label() {
     fi
     herdr_linear::unbound_prefix "$ident"
     herdr_linear::scheme_name tab "$ident" "$title"
+}
+
+# herdr_linear::retitle_tab <tab-id> unbound|bound
+#
+# The `UNBOUND:` prefix on a tab that is already open. The CALLER says which,
+# because every moment this fires from is a moment that has just decided the
+# answer -- classify recording or clearing `misplaced`, a bind, a filing outside
+# the context -- and re-deriving it here would be a second judgement that can
+# disagree with the first.
+#
+# Idempotent: the tab's own title is read back and the prefix added or stripped,
+# so a pass that changes nothing sends nothing.
+#
+# Best-effort, as every herdr mutation here is. The caller is mid-flow, and a
+# server that is not there is not a reason to fail what it was doing.
+herdr_linear::retitle_tab() {
+    local tab="${1:-}" want="${2:-}" bin resp label base
+    [ -n "$tab" ] || return 0
+    bin="$(herdr_linear::bin)"
+    [ -n "$bin" ] || return 0
+    # The read is kept out of the pipeline so its own exit is visible. Piped
+    # into the parser, a server that answered nothing at all is indistinguishable
+    # from a tab with no title -- and the difference decides whether a title gets
+    # invented for a tab nobody could ask about.
+    resp="$(herdr_linear::_bounded "$bin" tab get "$tab" 2>/dev/null)" || return 0
+    [ -n "$resp" ] || return 0
+    label="$(printf '%s' "$resp" | herdr_linear::json "result.tab.label")"
+    base="${label#"$HERDR_LINEAR_UNBOUND_PREFIX"}"
+    [ "$want" = unbound ] && base="$HERDR_LINEAR_UNBOUND_PREFIX$base"
+    [ "$base" = "$label" ] && return 0
+    # The empty label is sent, not skipped: herdr has no `--clear` for a tab, so
+    # a tab whose whole title was the prefix would otherwise keep reading
+    # `UNBOUND:` after the thing it reported was resolved.
+    herdr_linear::_bounded "$bin" tab rename "$tab" "$base" >/dev/null 2>&1 || true
+    return 0
+}
+
+# Here rather than beside the other checks: `_issue_space` is the only reader,
+# and states.sh now sources this file, so the old home was a cycle.
+herdr_linear::_issue_project_id() {
+    local resp
+    resp="$(herdr_linear::fetch_issue "$1")" || return 1
+    printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("project") or {}).get("id",""))' 2>/dev/null
 }
 
 # herdr_linear::_issue_space <identifier> <worktree> <what>

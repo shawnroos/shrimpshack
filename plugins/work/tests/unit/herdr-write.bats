@@ -745,3 +745,63 @@ declare_team() {
     run labelled "UNBOUND: WEB-2670"
     [ "$status" -ne 0 ]
 }
+
+# ------------------------------------------- the prefix on a tab that exists
+
+# `$*` folds an empty argument into the separator, so the argv line cannot tell
+# a rename to nothing from a rename with no label at all. The per-argument
+# record can, and clearing a title is the case that turns on it.
+renames() {
+    tr '\037' '|' < "$FAKE_HERDR_RECORD_DIR/argvq" 2>/dev/null | grep '^4|tab|rename|' || true
+}
+
+@test "a tab that is already there takes the prefix in front of its own title" {
+    run herdr_linear::retitle_tab wA:t1 unbound
+    [ "$status" -eq 0 ]
+    [ "$(renames)" = "4|tab|rename|wA:t1|UNBOUND: Plugin PM" ]
+}
+
+@test "clearing the prefix leaves the title that was under it" {
+    herdr_linear::retitle_tab wA:t1 unbound
+    run herdr_linear::retitle_tab wA:t1 bound
+    [ "$status" -eq 0 ]
+    [ "$(renames | tail -n1)" = "4|tab|rename|wA:t1|Plugin PM" ]
+}
+
+# Idempotent, because every moment that fires this may fire again: classify runs
+# at every session end.
+@test "a tab that already reads the way it should is not renamed" {
+    herdr_linear::retitle_tab wA:t1 unbound
+    rm -f "$FAKE_HERDR_RECORD_DIR/argvq"
+    run herdr_linear::retitle_tab wA:t1 unbound
+    [ "$status" -eq 0 ]
+    [ -z "$(renames)" ]
+    run herdr_linear::retitle_tab wA:t2 bound
+    [ "$status" -eq 0 ]
+    [ -z "$(renames)" ]
+}
+
+# A tab herdr never gave a title wears the prefix alone; clearing it must send
+# the empty label rather than leaving the tab reading UNBOUND: forever. herdr
+# has no --clear for a tab, so the empty argument IS the clear.
+@test "clearing a title that was only the prefix sends the empty label" {
+    printf '%s' "UNBOUND: " > "$FAKE_HERDR_RECORD_DIR/label.wA:t1"
+    run herdr_linear::retitle_tab wA:t1 bound
+    [ "$status" -eq 0 ]
+    [ "$(renames)" = "4|tab|rename|wA:t1|" ]
+}
+
+@test "with no tab to title nothing is asked of herdr" {
+    run herdr_linear::retitle_tab "" unbound
+    [ "$status" -eq 0 ]
+    [ "$(herdr_calls 'tab')" = "0" ]
+}
+
+# Best-effort, as every herdr mutation here is: the caller is mid-flow and a
+# server that is not there is not a reason to fail the thing it was doing.
+@test "a herdr that cannot be reached leaves the title alone and the flow intact" {
+    export FAKE_HERDR_MODE=dead
+    run herdr_linear::retitle_tab wA:t1 unbound
+    [ "$status" -eq 0 ]
+    [ -z "$(renames)" ]
+}

@@ -19,6 +19,10 @@
 # reads as "outside" and would report every bound worktree as misplaced.
 command -v herdr_linear::pair_inside >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/context-filter.sh"
+# The tab this file retitles. Undefined, the title silently stops tracking the
+# state -- which is the whole failure the prefix exists to prevent.
+command -v herdr_linear::retitle_tab >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/herdr-write.sh"
 
 HERDR_LINEAR_STATE_OK=0
 HERDR_LINEAR_STATE_MISPLACED=1
@@ -87,14 +91,6 @@ herdr_linear::check_placement() {
     return "$HERDR_LINEAR_STATE_OK"
 }
 
-# Only lib/herdr-write.sh reads this now; check_placement takes both halves off
-# one issue_context.
-herdr_linear::_issue_project_id() {
-    local resp
-    resp="$(herdr_linear::fetch_issue "$1")" || return 1
-    printf '%s' "$resp" | python3 -c 'import sys,json;print((json.load(sys.stdin)["data"]["issue"].get("project") or {}).get("id",""))' 2>/dev/null
-}
-
 # herdr_linear::check_liveness <worktree>
 # The issue was closed in Linear while its worktree is still in use. Report it;
 # never reopen it. Someone closed that ticket on purpose.
@@ -121,13 +117,25 @@ herdr_linear::check_liveness() {
 # One pass over both, recording the resulting state on the binding so the write
 # path can consult it without repeating the network calls.
 herdr_linear::classify() {
-    local wt="${1:-}" ws="${2:-}" out place_rc live_rc
+    local wt="${1:-}" ws="${2:-}" out place_rc live_rc was
+    # Read before anything is written: the two retitles below fire on the
+    # TRANSITION, not on the state. This runs at every session end, and a pass
+    # that changed nothing must not spend a herdr round trip.
+    was="$(herdr_linear::binding_state "$wt" 2>/dev/null)"
     out="$(herdr_linear::check_placement "$wt" "$ws")"; place_rc=$?
     if [ "$place_rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
         herdr_linear::binding_set_state "$wt" misplaced
+        [ "$was" = misplaced ] \
+            || herdr_linear::retitle_tab "$(herdr_linear::binding_tab "$wt" 2>/dev/null)" unbound
         printf '%s' "$out"
         return "$place_rc"
     fi
+    # Before liveness is asked, because the title reports PLACEMENT and nothing
+    # else. Left in the clearing block below, a binding that went from misplaced
+    # straight to stale returned before it and kept the prefix for a mismatch
+    # that was already resolved.
+    [ "$was" = misplaced ] && [ "$place_rc" -eq "$HERDR_LINEAR_STATE_OK" ] \
+        && herdr_linear::retitle_tab "$(herdr_linear::binding_tab "$wt" 2>/dev/null)" bound
 
     out="$(herdr_linear::check_liveness "$wt")"; live_rc=$?
     if [ "$live_rc" -eq "$HERDR_LINEAR_STATE_STALE" ]; then
@@ -141,9 +149,9 @@ herdr_linear::classify() {
     # is not the same answer as OK -- UNKNOWN means the check could not judge,
     # and treating that as a pass cleared the suspension on a mismatch nobody
     # had resolved.
-    case "$(herdr_linear::binding_state "$wt" 2>/dev/null)" in
+    case "$was" in
         misplaced) [ "$place_rc" -eq "$HERDR_LINEAR_STATE_OK" ] && herdr_linear::binding_set_state "$wt" bound ;;
-        stale)     [ "$live_rc"  -eq "$HERDR_LINEAR_STATE_OK" ] && herdr_linear::binding_set_state "$wt" bound ;;
+        stale) [ "$live_rc" -eq "$HERDR_LINEAR_STATE_OK" ] && herdr_linear::binding_set_state "$wt" bound ;;
     esac
     return "$HERDR_LINEAR_STATE_OK"
 }
