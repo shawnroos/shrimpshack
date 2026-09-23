@@ -34,7 +34,8 @@
 #                            auth_error | validation_error | rate_limited |
 #                            http_500 | empty_body | malformed_json |
 #                            hostile | hostile_candidates | candidates |
-#                            no_candidates | candidates_mixed | echo_issue |
+#                            no_candidates | candidates_mixed | candidates_pool |
+#                            echo_issue |
 #                            found_other_team
 #                            (default: found_child)
 #                            echo_issue answers found_child's shape with the
@@ -508,6 +509,72 @@ candidates_mixed() {
     cat <<'JSON'
 {"data":{"issues":{"nodes":[{"identifier":"WEB-3308","title":"Export panel is empty when a still-rendering frame is selected","updatedAt":"2026-09-04T15:55:10.206Z","state":{"name":"Backlog","type":"backlog"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB"}},{"identifier":"BRAND-1200","title":"Brand kit colours drift after an import","updatedAt":"2026-09-04T14:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"66666666-6666-4666-8666-666666666666","key":"BRAND"}},{"identifier":"WEB-3309","title":"Panel state is lost between reloads","updatedAt":"2026-09-04T13:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"project":null,"team":{"id":"55555555-5555-4555-8555-555555555555","key":"WEB"}}]}}}
 JSON
+}
+
+# A candidate pool the request's OWN filter is applied to, and its own `n` cut
+# afterwards -- the only candidate arm that behaves like a server. The pool is
+# one page of another team's issues followed by this team's, which is the shape
+# that tells a filter sent to Linear from one applied after the page came back.
+candidates_pool() {
+    HERDR_FAKE_BODY="$body" python3 - <<'PY3'
+import json, os
+req = json.loads(os.environ["HERDR_FAKE_BODY"])
+v = req.get("variables") or {}
+n = int(v.get("n") or 5)
+BRAND = "66666666-6666-4666-8666-666666666666"
+WEB = "55555555-5555-4555-8555-555555555555"
+PROJECT = "44444444-4444-4444-8444-444444444444"
+
+
+def row(ident, team, hour):
+    return {"identifier": ident, "title": "Example issue " + ident,
+            "updatedAt": "2026-09-04T%02d:00:00.000Z" % hour,
+            "state": {"name": "Todo", "type": "unstarted"},
+            "project": {"id": PROJECT}, "team": {"id": team}}
+
+
+pool = [row("BRAND-%d" % (i + 1), BRAND, 23 - i) for i in range(n)]
+pool.append(row("WEB-3308", WEB, 1))
+
+COMPARATORS = {"eq", "neq", "in", "nin", "null"}
+
+
+def leaf_ok(value, cmp):
+    for op, want in cmp.items():
+        if op == "eq" and value != want: return False
+        if op == "neq" and value == want: return False
+        if op == "in" and value not in want: return False
+        if op == "nin" and value in want: return False
+        if op == "null" and (value is None) != bool(want): return False
+    return True
+
+
+def matches(clause, ctx):
+    if isinstance(clause, list):
+        return all(matches(c, ctx) for c in clause)
+    if not isinstance(clause, dict):
+        return True
+    if set(clause) & COMPARATORS:
+        return leaf_ok(ctx, clause)
+    for k, sub in clause.items():
+        if k == "and":
+            if not all(matches(c, ctx) for c in sub): return False
+        elif k == "or":
+            if not any(matches(c, ctx) for c in sub): return False
+        # The assignee and state clauses name nothing in this pool; every row
+        # here is the viewer's and none is terminal.
+        elif k in ("assignee", "state"):
+            continue
+        else:
+            nxt = ctx.get(k) if isinstance(ctx, dict) else None
+            if not matches(sub, nxt): return False
+    return True
+
+
+flt = v.get("f")
+kept = [i for i in pool if flt is None or matches(flt, i)]
+print(json.dumps({"data": {"issues": {"nodes": kept[:n]}}}))
+PY3
 }
 
 # The filter matched nothing. KTD12 says say so and stop rather than widening.
@@ -1031,6 +1098,7 @@ case "$mode" in
     viewer)           [ "$wants_headers" = 1 ] && emit_headers 200; serve viewer ;;
     candidates)       [ "$wants_headers" = 1 ] && emit_headers 200; serve candidates ;;
     candidates_mixed) [ "$wants_headers" = 1 ] && emit_headers 200; serve candidates_mixed ;;
+    candidates_pool)  [ "$wants_headers" = 1 ] && emit_headers 200; serve candidates_pool ;;
     no_candidates)    [ "$wants_headers" = 1 ] && emit_headers 200; serve no_candidates ;;
     hostile)          [ "$wants_headers" = 1 ] && emit_headers 200; serve hostile ;;
     traversal_identifier) [ "$wants_headers" = 1 ] && emit_headers 200; serve traversal_identifier ;;

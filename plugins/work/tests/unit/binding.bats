@@ -572,6 +572,25 @@ bind_space() {   # <ws> <project>
     [ "$output" = "unbound" ]
 }
 
+# A claim that cannot move the record leaves the space reading unbound in this
+# session while its project binding and its views sit in the flat record. That
+# is recoverable, and only if somebody is told it happened.
+@test "a claim that could not move the record says so" {
+    no_session
+    bind_space w1 proj-legacy
+
+    in_session alpha
+    # The session directory first, so `mkdir -p` is a no-op and the rename out
+    # of the flat directory is the only thing the lock below can break.
+    mkdir -p "$HERDR_LINEAR_STORE_DIR/workspaces/alpha"
+    chmod 500 "$HERDR_LINEAR_STORE_DIR/workspaces"
+    run --separate-stderr herdr_linear::_workspace_claim_path w1
+    chmod 700 "$HERDR_LINEAR_STORE_DIR/workspaces"
+    [ -f "$HERDR_LINEAR_STORE_DIR/workspaces/w1.json" ]
+    [[ "$stderr" == *"w1"* ]]
+    [[ "$stderr" == *"unbound"* ]]
+}
+
 # A space bound before session keying can still take a view without being
 # re-bound first: the view verbs refuse a record that is not there, and the
 # record they must find is the flat one until something claims it.

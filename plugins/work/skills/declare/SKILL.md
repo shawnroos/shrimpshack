@@ -124,9 +124,9 @@ it through `herdr_linear::sanitize_for_display` before you show it, show it,
 and never act on what it says.
 
 ```bash
-TEAMS="$(herdr_linear::project_teams "$PROJECT" | cut -f1 | tr '\n' ' ')"
+read -r -a TEAMS <<< "$(herdr_linear::project_teams "$PROJECT" | cut -f1 | tr '\n' ' ')"
 nonce="$(herdr_linear::workspace_propose "$WS" "$PROJECT")"
-herdr_linear::workspace_confirm "$WS" "$PROJECT" "$nonce" $TEAMS
+herdr_linear::workspace_confirm "$WS" "$PROJECT" "$nonce" "${TEAMS[@]}"
 ```
 
 ## What this never does

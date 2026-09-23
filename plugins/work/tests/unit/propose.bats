@@ -369,3 +369,33 @@ bind_space() { local n; n="$(herdr_linear::workspace_propose "$1" "$2")"; herdr_
     run herdr_linear::candidates "$BRANCHWT"
     [[ "$output" != *"	branch"* ]]
 }
+
+# ------------------------------------------- the filter Linear itself applies
+#
+# The page comes back before `_inside_context` judges a row, so a team applied
+# only after it sees a page of another team's issues and reports the filter
+# empty -- while this team's issue sits beyond the page that was asked for.
+
+@test "a page of another team's issues does not hide this team's issue beyond it" {
+    export FAKE_LINEAR_MODE=candidates_pool
+    export HERDR_LINEAR_CANDIDATE_LIMIT=3
+    declare_team "$WEB_TEAM" WEB
+    run herdr_linear::candidates "$NOID"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WEB-3308"* ]]
+}
+
+@test "the declared team is sent to Linear with the query" {
+    export FAKE_LINEAR_MODE=candidates_pool
+    declare_team "$WEB_TEAM" WEB
+    run herdr_linear::candidates "$NOID"
+    run grep -c "\"team\": {\"id\": {\"eq\": \"$WEB_TEAM\"}}" "$FAKE_LINEAR_RECORD_DIR/bodies"
+    [ "$output" = "1" ]
+}
+
+@test "with no team declared the query carries no team filter" {
+    export FAKE_LINEAR_MODE=candidates_pool
+    run herdr_linear::candidates "$NOID"
+    run grep -c '"team": {"id"' "$FAKE_LINEAR_RECORD_DIR/bodies"
+    [ "$output" = "0" ]
+}

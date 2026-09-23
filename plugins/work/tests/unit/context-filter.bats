@@ -108,11 +108,17 @@ field() { printf '%s' "$1" | python3 -c 'import sys,json;print(json.load(sys.std
     [ "$(field "$ctx" team_source)" = "session" ]
 }
 
-@test "a session marked misplaced stops answering with its team" {
+# misplaced suspends writes; it does not widen the session. A team that stopped
+# answering here would let every write the guard was narrowing through at the
+# moment a contradiction was found, and would leave the check that set the state
+# unable to run again and clear it.
+@test "a session marked misplaced still narrows, so writes stay contained" {
     declare_team "$WEB_TEAM" WEB
     herdr_linear::session_set_state misplaced
     [ "$(herdr_linear::session_state)" = "misplaced" ]
-    [ -z "$(herdr_linear::session_team)" ]
+    [ "$(herdr_linear::session_team)" = "$WEB_TEAM" ]
+    run herdr_linear::context_allows team "$BRAND_TEAM"
+    [ "$status" -eq 1 ]
 }
 
 @test "two sessions do not share a team" {
@@ -134,6 +140,18 @@ field() { printf '%s' "$1" | python3 -c 'import sys,json;print(json.load(sys.std
     bind_space wA "$PROJECT" "$WEB_TEAM" "$BRAND_TEAM"
     run herdr_linear::workspace_team_ids wA
     [ "$status" -eq 0 ]
+    [ "$output" = "$WEB_TEAM
+$BRAND_TEAM" ]
+}
+
+# The spelling the skills use, run for real: `read -r -a` then "${TEAMS[@]}" is
+# quoted AND still several arguments, which neither $TEAMS nor "$TEAMS" is.
+@test "the array spelling the skills use records every team id" {
+    local n
+    read -r -a TEAMS <<< "$WEB_TEAM $BRAND_TEAM "
+    n="$(herdr_linear::workspace_propose wA "$PROJECT")"
+    herdr_linear::workspace_confirm wA "$PROJECT" "$n" "${TEAMS[@]}"
+    run herdr_linear::workspace_team_ids wA
     [ "$output" = "$WEB_TEAM
 $BRAND_TEAM" ]
 }
@@ -168,6 +186,16 @@ $BRAND_TEAM" ]
     [ "$(field "$ctx" team_source)" = "session" ]
     [ "$(field "$ctx" project_id)" = "$PROJECT" ]
     [ "$(field "$ctx" project_source)" = "space" ]
+}
+
+# The record carries the team's KEY, never its name, and /work:new prints the
+# name field beside the id. An empty one reads as "the team is unresolved" for a
+# team that was declared out loud.
+@test "a declared team reports its key where it has no name" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    declare_team "$BRAND_TEAM" BRAND
+    local ctx; ctx="$(herdr_linear::context "$WT")"
+    [ "$(field "$ctx" team_name)" = "BRAND" ]
 }
 
 @test "a resolved session and space make no Linear call" {
@@ -351,8 +379,27 @@ sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", text, re.S)))
 
 @test "a surface standing in no worktree wears the prefix" {
     export HERDR_LINEAR_CURL_BIN=/bin/false
+    declare_team "$WEB_TEAM" WEB
     run herdr_linear::unbound_prefix ""
     [ "$status" -eq 0 ]
+    [ "$output" = "UNBOUND: " ]
+}
+
+# The same rule the guard follows: a level that declared nothing narrows
+# nothing. With no context at all there is nothing for a surface to be outside
+# of, and branding every tab in every unconfigured session is a warning people
+# learn to ignore.
+@test "a surface in a session that declared nothing wears no prefix" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::unbound_prefix ""
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a space's project alone is enough context to brand a bare surface" {
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    bind_space wA "$PROJECT"
+    run herdr_linear::unbound_prefix "" wA
     [ "$output" = "UNBOUND: " ]
 }
 
@@ -466,4 +513,88 @@ sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", open(sys.argv[1]).re
 ' "$ROOT/skills/new/SKILL.md")"
     [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::context ')" -ge 1 ]
     [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::current_context')" -eq 0 ]
+}
+
+# ------------------------------ every place that binds a space asks the guard
+#
+# A space bound to a project the session's team is not on is a widening, and it
+# cannot be caught afterwards: the record is already written. So the check is a
+# property of the CLASS of binding sites, not of the one site the declare verb
+# happens to be.
+
+@test "every skill that records a space's project asks the guard first" {
+    run python3 - "$ROOT" <<'PY'
+import re, sys, glob, os
+
+root = sys.argv[1]
+bad, seen = [], 0
+for path in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md"))):
+    text = "\n".join(re.findall(r"```bash\n(.*?)```", open(path).read(), re.S))
+    if "herdr_linear::workspace_confirm" not in text:
+        continue
+    seen += 1
+    guard = text.find("herdr_linear::context_allows project")
+    confirm = text.find("herdr_linear::workspace_confirm")
+    if guard == -1 or guard > confirm:
+        bad.append("%s: records a space's project with no context check before it" % path)
+if seen < 3:
+    bad.append("only %d binding document(s) were swept; the check proved nothing" % seen)
+print("\n".join(bad))
+PY
+    [ -z "$output" ]
+}
+
+@test "every skill that records a space's project records the project's teams" {
+    run python3 - "$ROOT" <<'PY'
+import re, sys, glob, os
+
+root = sys.argv[1]
+bad, seen = [], 0
+for path in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md"))):
+    for fence in re.findall(r"```bash\n(.*?)```", open(path).read(), re.S):
+        for line in fence.splitlines():
+            if "herdr_linear::workspace_confirm" not in line or line.lstrip().startswith("#"):
+                continue
+            seen += 1
+            # Quoted, and still several arguments: a bare $TEAMS is one unquoted
+            # expansion, and "$TEAMS" is one id made of every id with spaces in
+            # it. The array is the only spelling that is both.
+            if '"${TEAMS[@]}"' not in line:
+                bad.append("%s: %s" % (path, line.strip()))
+if seen < 3:
+    bad.append("only %d binding line(s) were swept; the check proved nothing" % seen)
+print("\n".join(bad))
+PY
+    [ -z "$output" ]
+}
+
+# ------------------------------------------ the pair key cannot be spelled two ways
+#
+# The repository is recorded per project-and-team pair under the key
+# `project-<project>.team-<team>`, and `.` is what separates its two halves. An
+# id carrying one lets two DIFFERENT pairs spell one key: project `x.team-y`
+# with team `z`, and project `x` with team `y.team-z`, are both
+# `project-x.team-y.team-z`. Offering the first pair's repository to the second
+# is offering somebody else's checkout.
+
+@test "a dot-bearing team does not collect another pair's repository" {
+    declare_team y.team-z
+    bind_space wA x
+    mkdir -p "$WORK/repo" "$WORK/elsewhere"
+    herdr_linear::record_scope_repo "$WORK/repo" "project-x.team-y.team-z"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::expected_cwd "$WORK/elsewhere" wA
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a dot-bearing project is offered no repository either" {
+    declare_team z
+    bind_space wA x.team-y
+    mkdir -p "$WORK/repo" "$WORK/elsewhere"
+    herdr_linear::record_scope_repo "$WORK/repo" "project-x.team-y.team-z"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::expected_cwd "$WORK/elsewhere" wA
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
 }

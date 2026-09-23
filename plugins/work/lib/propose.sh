@@ -35,20 +35,29 @@ HERDR_LINEAR_PROPOSE_UNAVAILABLE=3
 
 # The GraphQL for the fallback list. Assigned to the viewer, not in a terminal
 # state, most recently updated first, and hard-capped.
+#
+# THE CONTEXT GOES IN THE FILTER, NOT ONLY AFTER THE PAGE. The cap is applied by
+# the server, so a page that is all another team's issues comes back full and
+# `_inside_context` empties it -- reported as "no candidates" while this team's
+# issues sit beyond the page that was asked for. The team narrows the page
+# itself, the way the project already does; `_inside_context` stays the one
+# comparison that judges a row.
 herdr_linear::_candidate_query() {
-    local project="${1:-}" limit="$2"
+    local project="${1:-}" limit="$2" team="${3:-}"
     python3 -c '
 import sys, json
-project, limit = sys.argv[1], int(sys.argv[2])
+project, limit, team = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 f = {"assignee": {"isMe": {"eq": True}},
      "state": {"type": {"nin": ["completed", "canceled"]}}}
 if project:
     f["project"] = {"id": {"eq": project}}
+if team:
+    f["team"] = {"id": {"eq": team}}
 q = ("query($f:IssueFilter,$n:Int){issues(first:$n,filter:$f,"
      "orderBy:updatedAt){nodes{identifier title updatedAt "
      "state{name type} project{id} team{id}}}}")
 print(json.dumps({"query": q, "variables": {"f": f, "n": limit}}))
-' "$project" "$limit"
+' "$project" "$limit" "$team"
 }
 
 # Keeps the rows the context covers, dropping the two fields the filter needed.
@@ -80,7 +89,7 @@ herdr_linear::_inside_context() {
 # relevant first. SOURCE says which rule produced it, so whoever is choosing can
 # see why an issue is on the list.
 herdr_linear::candidates() {
-    local wt="${1:-}" ws="${2:-}" branch ident resp project declined out=""
+    local wt="${1:-}" ws="${2:-}" branch ident resp project team declined out=""
 
     # R4. A candidate already declined for this worktree is never offered again,
     # whichever rule would have produced it.
@@ -141,7 +150,8 @@ print("%s\x1f%s\x1fbranch\x1f%s\x1f%s" % (i["identifier"], i.get("title", ""),
         [ "$(herdr_linear::workspace_state "$ws" 2>/dev/null)" = "bound" ] || project=""
     fi
 
-    resp="$(herdr_linear::query "$(herdr_linear::_candidate_query "$project" "$HERDR_LINEAR_CANDIDATE_LIMIT")" 2>/dev/null)" \
+    team="$(herdr_linear::session_team 2>/dev/null)" || team=""
+    resp="$(herdr_linear::query "$(herdr_linear::_candidate_query "$project" "$HERDR_LINEAR_CANDIDATE_LIMIT" "$team")" 2>/dev/null)" \
         || return "$HERDR_LINEAR_PROPOSE_UNAVAILABLE"
 
     out="$(HERDR_LINEAR_SRC="$([ -n "$project" ] && echo project || echo assignee)" \

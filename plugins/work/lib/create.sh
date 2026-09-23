@@ -236,10 +236,22 @@ except Exception:
 herdr_linear::new_project() {
     local name="${1:-}" contentfile="${2:-}" team="${3:-}" label="${4:-$1}"
     local from="${5:-$PWD}"
-    local body resp pid bin ws nonce
+    local body resp pid bin ws nonce rc
 
     [ -n "$name" ] && [ -n "$team" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
     [ -r "$contentfile" ] || return "$HERDR_LINEAR_CREATE_REFUSED"
+
+    # This verb ends in a space bound to the new project, and a level may only
+    # narrow the one above it. Asked BEFORE the tracker write, because a refusal
+    # afterwards leaves a real Linear project nobody asked for; asked of the team
+    # rather than of the project, because the project does not exist yet and the
+    # team it is created on is the only team it will have.
+    herdr_linear::context_allows team "$team"; rc=$?
+    if [ "$rc" -eq "$HERDR_LINEAR_CONTEXT_OUTSIDE" ]; then
+        printf 'this session is declared as team %s, so a project on team %s would bind its space outside the session. Declare the other team first, or create the project from a session of it.\n' \
+            "$(herdr_linear::session_team)" "$team" >&2
+        return "$HERDR_LINEAR_CREATE_REFUSED"
+    fi
 
     # A project names a team and no project of its own, so the answer that
     # covers it is the team-scoped one, recorded for the directory the session

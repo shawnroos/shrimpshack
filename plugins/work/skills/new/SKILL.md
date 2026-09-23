@@ -173,10 +173,23 @@ session as it always has.
   project the issue was filed into. Record only what the person answers:
 
 ```bash
-nonce="$(herdr_linear::workspace_propose "$(herdr_linear::workspace_id)" "$PROJECT")"
-herdr_linear::workspace_confirm "$(herdr_linear::workspace_id)" "$PROJECT" "$nonce"
-herdr_linear::place_session "$WORKTREE" open
+WS="$(herdr_linear::workspace_id)"
+herdr_linear::context_allows project "$PROJECT" "$WS"; INSIDE=$?
+
+if [ "$INSIDE" -eq 1 ]; then
+    echo "space=outside"
+else
+    read -r -a TEAMS <<< "$(herdr_linear::project_teams "$PROJECT" | cut -f1 | tr '\n' ' ')"
+    nonce="$(herdr_linear::workspace_propose "$WS" "$PROJECT")"
+    herdr_linear::workspace_confirm "$WS" "$PROJECT" "$nonce" "${TEAMS[@]}"
+    herdr_linear::place_session "$WORKTREE" open
+fi
 ```
+
+`space=outside` means this project's teams do not include the team the session
+was declared as. Say both sides and bind nothing; the issue is already filed
+and the pane can be opened by hand. `INSIDE` 3 means the project's teams could
+not be read: say which, and ask before recording, as `/work:declare` does.
 
 - **This space is bound to a different project:** that is Misplaced. Say both
   sides, offer to move either one, and do not pick which was wrong.

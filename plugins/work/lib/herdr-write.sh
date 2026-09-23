@@ -115,12 +115,16 @@ herdr_linear::project_spaces() {
     # Walked from the LIVE spaces rather than from the store's files: space
     # records are keyed by session and space, so one directory of them is this
     # session's records and not the set of candidates.
-    for ws in $(printf '%s\n' "$live" | grep . | sort); do
+    # Read, not word-split: an id is whatever the server said it is, and an
+    # unquoted expansion turns a `*` among them into the working directory's
+    # file names.
+    while IFS= read -r ws; do
+        [ -n "$ws" ] || continue
         # workspace_project answers only for a bound record, so a proposal
         # nobody confirmed is not a candidate.
         [ "$(herdr_linear::workspace_project "$ws" 2>/dev/null)" = "$pid" ] || continue
         printf '%s\n' "$ws"
-    done
+    done <<< "$(printf '%s\n' "$live" | grep . | sort)"
     return 0
 }
 

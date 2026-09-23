@@ -961,7 +961,12 @@ herdr_linear::_workspace_claim_path() {
     mkdir -p "$dir" 2>/dev/null
     chmod 700 "$HERDR_LINEAR_STORE_DIR" "$dir" 2>/dev/null
     if [ "$flat" != "$f" ] && [ ! -e "$f" ] && [ -e "$flat" ]; then
-        mv -f "$flat" "$f" 2>/dev/null
+        # A silent failure here leaves the space reading unbound in this session
+        # while its project binding and its views sit in the record that did not
+        # move. That is recoverable, and only if somebody is told.
+        mv -f "$flat" "$f" 2>/dev/null \
+            || printf 'the space record for %s could not be moved into this session; it reads unbound here and its project binding is still in %s\n' \
+                "$ws" "$flat" >&2
     fi
     printf '%s' "$f"
 }

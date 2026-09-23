@@ -691,6 +691,22 @@ tab_label() { sed -n 's/.*--label \([^ ]*\).*/\1/p' "$FAKE_HERDR_RECORD_DIR/argv
     [ -z "$output" ]
 }
 
+# The space ids come from the server and are walked as words. Unquoted, a `*`
+# among them is expanded against the working directory, and a file whose name
+# happens to be a bound space's id becomes a space the server never reported.
+@test "a space id that is a glob does not conjure a space from the directory" {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    rm -f "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json
+    bind_space wG 44444444-4444-4444-8444-444444444444
+    export FAKE_HERDR_WORKSPACES='*=Star'
+    mkdir -p "$WORK/glob"
+    : > "$WORK/glob/wG"
+    cd "$WORK/glob"
+    run herdr_linear::project_spaces 44444444-4444-4444-8444-444444444444
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
 # ------------------------------------------------------ the UNBOUND prefix
 
 # The label is composed in one place and the prefix decided in one place, so a

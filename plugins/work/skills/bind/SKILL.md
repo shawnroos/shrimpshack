@@ -202,13 +202,17 @@ source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/context.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/views.sh"
 
-if [ "$(herdr_linear::workspace_state "$SPACE")" = "bound" ] \
+herdr_linear::context_allows project "$PROJECT" "$SPACE"; INSIDE=$?
+
+if [ "$INSIDE" -eq 1 ]; then
+    echo "space=outside"
+elif [ "$(herdr_linear::workspace_state "$SPACE")" = "bound" ] \
     && [ "$(herdr_linear::workspace_project "$SPACE")" = "$PROJECT" ]; then
     echo "space=0 (already bound)"
 else
-    TEAMS="$(herdr_linear::project_teams "$PROJECT" | cut -f1 | tr '\n' ' ')"
+    read -r -a TEAMS <<< "$(herdr_linear::project_teams "$PROJECT" | cut -f1 | tr '\n' ' ')"
     nonce="$(herdr_linear::workspace_propose "$SPACE" "$PROJECT")" \
-        && herdr_linear::workspace_confirm "$SPACE" "$PROJECT" "$nonce" $TEAMS; echo "space=$?"
+        && herdr_linear::workspace_confirm "$SPACE" "$PROJECT" "$nonce" "${TEAMS[@]}"; echo "space=$?"
 fi
 
 [ -z "$VIEW" ] || { herdr_linear::view_choose "$SPACE" "$VIEW"; echo "view=$?"; }
@@ -220,6 +224,13 @@ if [ -n "$ISSUE" ]; then
     [ -z "$TAB" ] || herdr_linear::binding_set_tab "$PWD" "$TAB"
 fi
 ```
+
+`space=outside` means this project's teams do not include the team the session
+was declared as: say both sides, record nothing, and stop. A space bound there
+would be a level widening the one above it, and nothing can catch that
+afterwards — the record is already written. `INSIDE` 3 means the project's teams
+could not be read: say which, and ask before recording, exactly as
+`/work:declare` does on the same code.
 
 Stop at the first non-zero result and say what was recorded before it. `space`
 2 means the proposal was superseded or refused. `view` follows the `view_choose`
@@ -393,9 +404,21 @@ that resembles a project name is a candidate, never a conclusion — the plugin
 never assumes the correspondence from the two names.
 
 ```bash
-nonce="$(herdr_linear::workspace_propose "$WS" "$PROJECT_ID")"
-herdr_linear::workspace_confirm "$WS" "$PROJECT_ID" "$nonce"
+herdr_linear::context_allows project "$PROJECT_ID" "$WS"; INSIDE=$?
+
+if [ "$INSIDE" -eq 1 ]; then
+    echo "space=outside"
+else
+    read -r -a TEAMS <<< "$(herdr_linear::project_teams "$PROJECT_ID" | cut -f1 | tr '\n' ' ')"
+    nonce="$(herdr_linear::workspace_propose "$WS" "$PROJECT_ID")"
+    herdr_linear::workspace_confirm "$WS" "$PROJECT_ID" "$nonce" "${TEAMS[@]}"
+fi
 ```
+
+`space=outside` is the same refusal as above: name the session's team and the
+project's teams, and record nothing. `INSIDE` 3 is the same "could not be read"
+answer — say which, and ask before recording. The team ids go on the record so
+the guard compares locally afterwards instead of asking Linear on every read.
 
 ## Choosing the space's view
 

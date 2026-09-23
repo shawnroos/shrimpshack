@@ -288,3 +288,51 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
     [[ "$body" == *"misplaced"* ]]
 }
+
+# ------------------------------------- the session level's own contradiction
+#
+# The unattended half of the settled decision: a read path that finds the bound
+# issue outside the session's declared team has nobody to ask, so it records
+# `misplaced` on the session record and suspends writes. UNKNOWN is not a
+# contradiction -- a Linear that could not be asked must change nothing.
+
+declare_session_team() {
+    export HERDR_SOCKET_PATH="$WORK/herdr/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose "$1")"
+    herdr_linear::session_confirm "$1" "$n" "${2:-}"
+}
+
+@test "an issue outside the session's team records misplaced on the session" {
+    declare_session_team 55555555-5555-4555-8555-555555555555 WEB
+    bind_wt
+    export FAKE_LINEAR_MODE=found_other_team
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]
+    [[ "$output" == *"WEB-2670"* ]]
+    [[ "$output" == *"55555555-5555-4555-8555-555555555555"* ]]
+    [ "$(herdr_linear::session_state)" = "misplaced" ]
+}
+
+# Started from a session that is NOT already misplaced, because a re-record of
+# the state it already holds is indistinguishable from leaving it alone.
+@test "a session that could not be judged is left exactly as it was" {
+    declare_session_team 55555555-5555-4555-8555-555555555555 WEB
+    bind_wt
+    [ "$(herdr_linear::session_state)" = "bound" ]
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::session_state)" = "bound" ]
+}
+
+@test "an issue back inside the session's team clears the suspension" {
+    declare_session_team 55555555-5555-4555-8555-555555555555 WEB
+    bind_wt
+    export FAKE_LINEAR_MODE=found_other_team
+    run herdr_linear::classify "$WT" ""
+    [ "$(herdr_linear::session_state)" = "misplaced" ]
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::session_state)" = "bound" ]
+}

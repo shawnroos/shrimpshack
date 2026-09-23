@@ -504,6 +504,35 @@ panes_opened() {
     [[ "$body" == *'"teamIds": ["team-web"]'* ]] || [[ "$body" == *'team-web'* ]]
 }
 
+# A project made on another team ends as a space bound to it, which is a level
+# widening the one above it -- the thing the guard exists to refuse. Refused
+# BEFORE the tracker write, because a refusal afterwards leaves a real Linear
+# project nobody asked for.
+@test "a project on a team the session was not declared as is refused" {
+    export HERDR_SOCKET_PATH="$WORK/herdr/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose "$BRAND_TEAM_ID")"
+    herdr_linear::session_confirm "$BRAND_TEAM_ID" "$n" BRAND
+    enable_root_writes
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    printf '# P\n\ncontent\n' > "$WORK/p.md"
+    run --separate-stderr herdr_linear::new_project "P" "$WORK/p.md" team-web
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_REFUSED" ]
+    [ "$(sent projectCreate)" = "0" ]
+    [[ "$stderr" == *"team-web"* ]]
+    [[ "$stderr" == *"$BRAND_TEAM_ID"* ]]
+}
+
+@test "a project on the session's own team is still created" {
+    export HERDR_SOCKET_PATH="$WORK/herdr/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose team-web)"
+    herdr_linear::session_confirm team-web "$n" WEB
+    enable_root_writes
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    printf '# P\n\ncontent\n' > "$WORK/p.md"
+    run herdr_linear::new_project "P" "$WORK/p.md" team-web
+    [ "$status" -eq 0 ]
+}
+
 # Without herdr the project still exists and is usable, so this reports rather
 # than failing silently.
 @test "an unreachable herdr server leaves the project made and says so" {

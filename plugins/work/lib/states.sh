@@ -15,6 +15,12 @@
 # and a warning nobody can clear is a warning everybody learns to ignore. A
 # mismatch requires BOTH sides to be positively known and to disagree.
 
+# The guard and the session record. Undefined, `context_allows` is 127, which
+# the case below reads as a state it does not judge -- the session's half of the
+# contradiction would then be silently unreachable, which is what it was.
+command -v herdr_linear::context_allows >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/context-filter.sh"
+
 HERDR_LINEAR_STATE_OK=0
 HERDR_LINEAR_STATE_MISPLACED=1
 HERDR_LINEAR_STATE_STALE=2
@@ -93,10 +99,49 @@ herdr_linear::check_liveness() {
     return "$HERDR_LINEAR_STATE_OK"
 }
 
+# herdr_linear::check_session <worktree> [workspace-id]
+#
+# The session level's own contradiction: the worktree is bound to an issue the
+# session's declared team does not cover. Asked only when a team IS declared --
+# a session that declared nothing narrows nothing, and asking anyway would spend
+# a Linear call per pass to learn that.
+herdr_linear::check_session() {
+    local wt="${1:-}" ws="${2:-}" team ident rc
+    team="$(herdr_linear::session_team 2>/dev/null)" || team=""
+    [ -n "$team" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    ident="$(herdr_linear::binding_identifier "$wt" 2>/dev/null)" || return "$HERDR_LINEAR_STATE_UNKNOWN"
+
+    herdr_linear::context_allows issue "$ident" "$ws"; rc=$?
+    case "$rc" in
+        "$HERDR_LINEAR_CONTEXT_INSIDE") return "$HERDR_LINEAR_STATE_OK" ;;
+        "$HERDR_LINEAR_CONTEXT_OUTSIDE") ;;
+        *) return "$HERDR_LINEAR_STATE_UNKNOWN" ;;
+    esac
+
+    printf 'This worktree is bound to %s, which is outside the team this session was declared as.\n' "$ident"
+    printf 'The session is declared as team %s.\n' "$team"
+    printf 'Automatic writes are suspended until this is resolved. Run /work:bind, which offers re-pointing the binding or unbinding it.\n'
+    return "$HERDR_LINEAR_STATE_MISPLACED"
+}
+
 # One pass over both, recording the resulting state on the binding so the write
 # path can consult it without repeating the network calls.
 herdr_linear::classify() {
-    local wt="${1:-}" ws="${2:-}" out place_rc live_rc
+    local wt="${1:-}" ws="${2:-}" out place_rc live_rc sess_rc
+    # The outermost level first: a session whose team the bound issue is outside
+    # contradicts every level under it, so reporting the inner disagreement
+    # would name the wrong two sides.
+    out="$(herdr_linear::check_session "$wt" "$ws")"; sess_rc=$?
+    if [ "$sess_rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
+        herdr_linear::session_set_state misplaced
+        printf '%s' "$out"
+        return "$sess_rc"
+    fi
+    if [ "$sess_rc" -eq "$HERDR_LINEAR_STATE_OK" ] \
+        && [ "$(herdr_linear::session_state 2>/dev/null)" = "misplaced" ]; then
+        herdr_linear::session_set_state bound
+    fi
+
     out="$(herdr_linear::check_placement "$wt" "$ws")"; place_rc=$?
     if [ "$place_rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
         herdr_linear::binding_set_state "$wt" misplaced
