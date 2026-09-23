@@ -15,10 +15,9 @@
 # and a warning nobody can clear is a warning everybody learns to ignore. A
 # mismatch requires BOTH sides to be positively known and to disagree.
 
-# The guard and the session record. Undefined, `context_allows` is 127, which
-# the case below reads as a state it does not judge -- the session's half of the
-# contradiction would then be silently unreachable, which is what it was.
-command -v herdr_linear::context_allows >/dev/null 2>&1 \
+# The context and the one comparison. Undefined, `pair_inside` is 127, which
+# reads as "outside" and would report every bound worktree as misplaced.
+command -v herdr_linear::pair_inside >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/context-filter.sh"
 
 HERDR_LINEAR_STATE_OK=0
@@ -27,9 +26,17 @@ HERDR_LINEAR_STATE_STALE=2
 HERDR_LINEAR_STATE_UNKNOWN=3   # not enough information to judge; not a problem
 
 # herdr_linear::check_placement <worktree> <workspace-id>
-# Prints a human-readable report on a mismatch and returns MISPLACED.
+#
+# The binding against the context it sits in: the space's project and, when one
+# is declared, the session's team. Prints a human-readable report naming both
+# sides of whichever half disagrees, and returns MISPLACED.
+#
+# THE STATE BELONGS TO THE BINDING. The binding is the leaf that contradicts its
+# parent; recorded on the session, one bad worktree would suspend every pane in
+# it and the next worktree that is inside would clear the state while the first
+# contradiction was still true.
 herdr_linear::check_placement() {
-    local wt="${1:-}" ws="${2:-}" ident issue_project ws_project
+    local wt="${1:-}" ws="${2:-}" ident ctx pair cp ct ip it
 
     # misplaced and stale are states THIS FILE sets, so refusing to run outside
     # `bound` meant neither check could ever run again -- the suspension lasted
@@ -39,37 +46,49 @@ herdr_linear::check_placement() {
         bound|misplaced|stale) ;;
         *) return "$HERDR_LINEAR_STATE_UNKNOWN" ;;
     esac
-    [ -n "$ws" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
 
-    # Both sides must be positively known. An unbound workspace is the normal
-    # case, not a mismatch.
-    #
-    # A backstop, deliberately redundant: workspace_project below already
-    # answers empty for anything but a bound record, so mutating this line away
-    # turns no test red. It stays so that a future change to what
-    # workspace_propose records cannot silently make a proposed workspace
-    # produce a mismatch report. The property itself is pinned by
-    # propose.bats -- "a proposed workspace has no project recorded".
-    [ "$(herdr_linear::workspace_state "$ws" 2>/dev/null)" = "bound" ] \
-        || return "$HERDR_LINEAR_STATE_UNKNOWN"
-    ws_project="$(herdr_linear::workspace_project "$ws" 2>/dev/null)" || return "$HERDR_LINEAR_STATE_UNKNOWN"
-    [ -n "$ws_project" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    pair="$(herdr_linear::context_pair "$ws")"
+    cp="${pair%%$'\037'*}"; ct="${pair##*$'\037'}"
+    [ -n "$cp" ] || [ -n "$ct" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
 
     ident="$(herdr_linear::binding_identifier "$wt")" || return "$HERDR_LINEAR_STATE_UNKNOWN"
-    # issue_context reports the project NAME; the workspace binding stores the
-    # project ID. Compare on the id rather than on names -- two projects can
-    # share a name, and a rename would silently clear a real mismatch.
-    issue_project="$(herdr_linear::_issue_project_id "$ident")" || return "$HERDR_LINEAR_STATE_UNKNOWN"
-    [ -n "$issue_project" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    # One fetch for both halves. issue_context reports the project and team
+    # NAMES beside their IDS; compare on the ids -- two projects can share a
+    # name, and a rename would silently clear a real mismatch.
+    ctx="$(herdr_linear::issue_context "$ident" 2>/dev/null)" || return "$HERDR_LINEAR_STATE_UNKNOWN"
+    pair="$(herdr_linear::_ctx_pair "$ctx")"
+    ip="$(printf '%s' "$pair" | cut -f1)"
+    it="$(printf '%s' "$pair" | cut -f2)"
 
-    [ "$issue_project" != "$ws_project" ] || return "$HERDR_LINEAR_STATE_OK"
+    # Both sides must be positively known. An unbound workspace, or an issue in
+    # no project, is the normal case and not a mismatch -- so a half the issue
+    # cannot answer is dropped rather than judged, and a pass with no half left
+    # judges nothing.
+    [ -n "$ip" ] || cp=""
+    [ -n "$it" ] || ct=""
+    [ -n "$cp" ] || [ -n "$ct" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
 
-    printf 'This worktree is bound to %s, whose project is %s.\n' "$ident" "$issue_project"
-    printf 'The herdr workspace it sits in is bound to project %s.\n' "$ws_project"
-    printf 'Automatic writes are suspended until this is resolved. Run /work:bind to move either side.\n'
-    return "$HERDR_LINEAR_STATE_MISPLACED"
+    # The outermost level first: a session whose team the bound issue is outside
+    # contradicts every level under it, so reporting the inner disagreement
+    # would name the wrong two sides. Each half is the same predicate, asked
+    # about one half at a time.
+    if ! herdr_linear::pair_inside "" "$it" "" "$ct"; then
+        printf 'This worktree is bound to %s, which is outside the team this session was declared as.\n' "$ident"
+        printf 'The session is declared as team %s.\n' "$ct"
+        printf 'Automatic writes are suspended until this is resolved. Run /work:bind, which offers re-pointing the binding or unbinding it.\n'
+        return "$HERDR_LINEAR_STATE_MISPLACED"
+    fi
+    if ! herdr_linear::pair_inside "$ip" "" "$cp" ""; then
+        printf 'This worktree is bound to %s, whose project is %s.\n' "$ident" "$ip"
+        printf 'The herdr workspace it sits in is bound to project %s.\n' "$cp"
+        printf 'Automatic writes are suspended until this is resolved. Run /work:bind to move either side.\n'
+        return "$HERDR_LINEAR_STATE_MISPLACED"
+    fi
+    return "$HERDR_LINEAR_STATE_OK"
 }
 
+# Only lib/herdr-write.sh reads this now; check_placement takes both halves off
+# one issue_context.
 herdr_linear::_issue_project_id() {
     local resp
     resp="$(herdr_linear::fetch_issue "$1")" || return 1
@@ -99,49 +118,10 @@ herdr_linear::check_liveness() {
     return "$HERDR_LINEAR_STATE_OK"
 }
 
-# herdr_linear::check_session <worktree> [workspace-id]
-#
-# The session level's own contradiction: the worktree is bound to an issue the
-# session's declared team does not cover. Asked only when a team IS declared --
-# a session that declared nothing narrows nothing, and asking anyway would spend
-# a Linear call per pass to learn that.
-herdr_linear::check_session() {
-    local wt="${1:-}" ws="${2:-}" team ident rc
-    team="$(herdr_linear::session_team 2>/dev/null)" || team=""
-    [ -n "$team" ] || return "$HERDR_LINEAR_STATE_UNKNOWN"
-    ident="$(herdr_linear::binding_identifier "$wt" 2>/dev/null)" || return "$HERDR_LINEAR_STATE_UNKNOWN"
-
-    herdr_linear::context_allows issue "$ident" "$ws"; rc=$?
-    case "$rc" in
-        "$HERDR_LINEAR_CONTEXT_INSIDE") return "$HERDR_LINEAR_STATE_OK" ;;
-        "$HERDR_LINEAR_CONTEXT_OUTSIDE") ;;
-        *) return "$HERDR_LINEAR_STATE_UNKNOWN" ;;
-    esac
-
-    printf 'This worktree is bound to %s, which is outside the team this session was declared as.\n' "$ident"
-    printf 'The session is declared as team %s.\n' "$team"
-    printf 'Automatic writes are suspended until this is resolved. Run /work:bind, which offers re-pointing the binding or unbinding it.\n'
-    return "$HERDR_LINEAR_STATE_MISPLACED"
-}
-
 # One pass over both, recording the resulting state on the binding so the write
 # path can consult it without repeating the network calls.
 herdr_linear::classify() {
-    local wt="${1:-}" ws="${2:-}" out place_rc live_rc sess_rc
-    # The outermost level first: a session whose team the bound issue is outside
-    # contradicts every level under it, so reporting the inner disagreement
-    # would name the wrong two sides.
-    out="$(herdr_linear::check_session "$wt" "$ws")"; sess_rc=$?
-    if [ "$sess_rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
-        herdr_linear::session_set_state misplaced
-        printf '%s' "$out"
-        return "$sess_rc"
-    fi
-    if [ "$sess_rc" -eq "$HERDR_LINEAR_STATE_OK" ] \
-        && [ "$(herdr_linear::session_state 2>/dev/null)" = "misplaced" ]; then
-        herdr_linear::session_set_state bound
-    fi
-
+    local wt="${1:-}" ws="${2:-}" out place_rc live_rc
     out="$(herdr_linear::check_placement "$wt" "$ws")"; place_rc=$?
     if [ "$place_rc" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]; then
         herdr_linear::binding_set_state "$wt" misplaced

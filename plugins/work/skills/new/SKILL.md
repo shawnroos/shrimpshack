@@ -38,7 +38,7 @@ each value came from.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context context-filter create; do
+for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context context-filter space-bind create; do
   source "$R/lib/$f.sh"
 done
 
@@ -174,22 +174,16 @@ session as it always has.
 
 ```bash
 WS="$(herdr_linear::workspace_id)"
-herdr_linear::context_allows project "$PROJECT" "$WS"; INSIDE=$?
-
-if [ "$INSIDE" -eq 1 ]; then
-    echo "space=outside"
-else
-    read -r -a TEAMS <<< "$(herdr_linear::project_teams "$PROJECT" | cut -f1 | tr '\n' ' ')"
-    nonce="$(herdr_linear::workspace_propose "$WS" "$PROJECT")"
-    herdr_linear::workspace_confirm "$WS" "$PROJECT" "$nonce" "${TEAMS[@]}"
-    herdr_linear::place_session "$WORKTREE" open
-fi
+herdr_linear::workspace_bind_checked "$WS" "$PROJECT"; SPACE=$?
+echo "space=$SPACE"
+[ "$SPACE" -eq 0 ] && herdr_linear::place_session "$WORKTREE" open
 ```
 
-`space=outside` means this project's teams do not include the team the session
-was declared as. Say both sides and bind nothing; the issue is already filed
-and the pane can be opened by hand. `INSIDE` 3 means the project's teams could
-not be read: say which, and ask before recording, as `/work:declare` does.
+`space` is `workspace_bind_checked`'s status and the table is in
+`lib/space-bind.sh`'s header. `space=1` is outside: this project's teams do not
+include the team the session was declared as. Say both sides and bind nothing;
+the issue is already filed and the pane can be opened by hand. `space=3` means
+the project's teams could not be read, so nothing was recorded.
 
 - **This space is bound to a different project:** that is Misplaced. Say both
   sides, offer to move either one, and do not pick which was wrong.

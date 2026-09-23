@@ -293,8 +293,12 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
 #
 # The unattended half of the settled decision: a read path that finds the bound
 # issue outside the session's declared team has nobody to ask, so it records
-# `misplaced` on the session record and suspends writes. UNKNOWN is not a
-# contradiction -- a Linear that could not be asked must change nothing.
+# `misplaced` and suspends writes. UNKNOWN is not a contradiction -- a Linear
+# that could not be asked must change nothing.
+#
+# The state goes on the BINDING, which is the record that contradicts its
+# parent. On the session it would suspend every pane in that session for one
+# bad worktree, and the clear-back would be last-writer-wins.
 
 declare_session_team() {
     export HERDR_SOCKET_PATH="$WORK/herdr/sessions/alpha/herdr.sock"
@@ -302,7 +306,15 @@ declare_session_team() {
     herdr_linear::session_confirm "$1" "$n" "${2:-}"
 }
 
-@test "an issue outside the session's team records misplaced on the session" {
+bind_other_wt() {   # bind_other_wt <dir> <identifier>
+    mkdir -p "$1"
+    git -C "$1" init -q -b feature/other
+    git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    local n; n="$(herdr_linear::binding_propose "$1" "$2")"
+    herdr_linear::binding_confirm "$1" "$2" "$n"
+}
+
+@test "an issue outside the session's team records misplaced on the binding" {
     declare_session_team 55555555-5555-4555-8555-555555555555 WEB
     bind_wt
     export FAKE_LINEAR_MODE=found_other_team
@@ -310,19 +322,40 @@ declare_session_team() {
     [ "$status" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]
     [[ "$output" == *"WEB-2670"* ]]
     [[ "$output" == *"55555555-5555-4555-8555-555555555555"* ]]
-    [ "$(herdr_linear::session_state)" = "misplaced" ]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
 }
 
-# Started from a session that is NOT already misplaced, because a re-record of
-# the state it already holds is indistinguishable from leaving it alone.
-@test "a session that could not be judged is left exactly as it was" {
+# The finding itself. One worktree outside the team must not suspend the
+# session, and a second worktree that IS inside must not clear the first
+# worktree's contradiction while it is still true.
+@test "a worktree inside the team does not clear another worktree's contradiction" {
     declare_session_team 55555555-5555-4555-8555-555555555555 WEB
     bind_wt
+    bind_other_wt "$WORK/root/wtb" WEB-2671
+
+    export FAKE_LINEAR_MODE=found_other_team
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::classify "$WORK/root/wtb" ""
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+    [ "$(herdr_linear::binding_state "$WORK/root/wtb")" = "bound" ]
     [ "$(herdr_linear::session_state)" = "bound" ]
+}
+
+# Started from a binding that is NOT already misplaced, because a re-record of
+# the state it already holds is indistinguishable from leaving it alone.
+@test "a session contradiction that could not be judged is left exactly as it was" {
+    declare_session_team 55555555-5555-4555-8555-555555555555 WEB
+    bind_wt
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
     export HERDR_LINEAR_CURL_BIN=/bin/false
     run herdr_linear::classify "$WT" ""
     [ "$status" -eq 0 ]
-    [ "$(herdr_linear::session_state)" = "bound" ]
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
 }
 
 @test "an issue back inside the session's team clears the suspension" {
@@ -330,9 +363,9 @@ declare_session_team() {
     bind_wt
     export FAKE_LINEAR_MODE=found_other_team
     run herdr_linear::classify "$WT" ""
-    [ "$(herdr_linear::session_state)" = "misplaced" ]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
     export FAKE_LINEAR_MODE=found_child
     run herdr_linear::classify "$WT" ""
     [ "$status" -eq 0 ]
-    [ "$(herdr_linear::session_state)" = "bound" ]
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
 }

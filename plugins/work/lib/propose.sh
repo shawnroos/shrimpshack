@@ -22,7 +22,7 @@ if ! command -v herdr_linear::sanitize_stream >/dev/null 2>&1; then
 fi
 # The context filter, for the same reason: undefined, every guard call is 127
 # and the list comes back unfiltered, which is the wide list this narrows.
-if ! command -v herdr_linear::context_allows_fields >/dev/null 2>&1; then
+if ! command -v herdr_linear::pair_inside >/dev/null 2>&1; then
     # shellcheck source=/dev/null
     . "$(dirname "${BASH_SOURCE[0]}")/context-filter.sh"
 fi
@@ -74,10 +74,14 @@ print(json.dumps({"query": q, "variables": {"f": f, "n": limit}}))
 # reported empty for a reason nobody can see. The row printed OUT is
 # tab-separated, as every caller reads it.
 herdr_linear::_inside_context() {
-    local ws="${1:-}" ident title src project team rc
+    local ws="${1:-}" ident title src project team rc pair cp ct
+    # Resolved once, above the loop: the judgement itself reads no record, so a
+    # five-row list no longer re-reads the session and the space thirty times.
+    pair="$(herdr_linear::context_pair "$ws")"
+    cp="${pair%%$'\037'*}"; ct="${pair##*$'\037'}"
     while IFS=$'\037' read -r ident title src project team; do
         [ -n "$ident" ] || continue
-        herdr_linear::context_allows_fields "$project" "$team" "$ws"; rc=$?
+        herdr_linear::pair_inside "$project" "$team" "$cp" "$ct"; rc=$?
         [ "$rc" -eq "$HERDR_LINEAR_CONTEXT_OUTSIDE" ] && continue
         printf '%s\t%s\t%s\n' "$ident" "$title" "$src"
     done

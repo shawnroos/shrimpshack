@@ -77,18 +77,13 @@ herdr_linear::session_state() {
 # The team only once it is ANSWERED. A proposed team is a question that was
 # asked, not an answer, and answering the guard from it would let the asking
 # narrow the session.
-#
-# `misplaced` still answers, the way a misplaced worktree still reports its
-# issue: the state suspends writes, and a filter that went empty on it would
-# WIDEN the session at the moment a contradiction was found. It is also what
-# lets the check that set the state run again and clear it.
 herdr_linear::session_team() {
     local rec
     rec="$(herdr_linear::session_read)" || return "$HERDR_LINEAR_BINDING_ABSENT"
     printf '%s' "$rec" | python3 -c '
 import sys, json
 rec = json.load(sys.stdin)
-print(rec.get("issue_identifier", "") if rec.get("state") in ("bound", "misplaced") else "")
+print(rec.get("issue_identifier", "") if rec.get("state") == "bound" else "")
 ' 2>/dev/null
 }
 
@@ -119,12 +114,6 @@ herdr_linear::session_confirm() {
     fi
     f="$(herdr_linear::_session_claim_path)" || return "$HERDR_LINEAR_BINDING_REFUSED"
     herdr_linear::_mutate_at "$f" confirm "$team" "$nonce" "" "$key"
-}
-
-herdr_linear::session_set_state() {
-    local f
-    f="$(herdr_linear::_session_claim_path)" || return "$HERDR_LINEAR_BINDING_REFUSED"
-    herdr_linear::_mutate_at "$f" set-state "${1:-}"
 }
 
 # ------------------------------------------------------------------ the resolver
@@ -238,35 +227,59 @@ herdr_linear::team_in_project() {
     return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
 }
 
-# herdr_linear::context_allows_fields <project-id> <team-id> [workspace-id]
+# herdr_linear::context_pair [workspace-id]
 #
-# The two-part issue test on fields the caller already holds, for a listing that
-# read them once for every row. `context_allows issue` fetches the same two
-# values and ends here, so there is one comparison and not two that can disagree.
-herdr_linear::context_allows_fields() {
-    local ip="${1:-}" it="${2:-}" ws="${3:-}" team project
+# The context's own (project, team) as `project<US>team`. The two store reads a
+# judgement would otherwise make per row, made once.
+#
+# US, not tab: a tab is IFS whitespace, so an empty project would fold and the
+# team would arrive in the project's place -- everything then reads as outside.
+herdr_linear::context_pair() {
+    local ws="${1:-}" team project
     team="$(herdr_linear::session_team 2>/dev/null)" || team=""
     project="$(herdr_linear::_space_project "$ws")"
-    [ -n "$team" ] || [ -n "$project" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
-    if [ -n "$project" ] && [ "$ip" != "$project" ]; then
+    printf '%s\037%s' "$project" "$team"
+}
+
+# herdr_linear::pair_inside <project> <team> <context-project> <context-team>
+#
+# THE ONE COMPARISON. Nothing here reads a record or asks Linear, so a listing
+# resolves the context once and judges every row against the pair it holds, and
+# "one comparison" is a property of the code rather than a claim in a comment.
+#
+# An issue is inside when its project is the context's project AND, when a team
+# is declared, its team is that team. Both halves are needed: a project may span
+# several teams, so the project test alone admits another team's issue in the
+# very project the space is bound to. A half the context left empty declares
+# nothing and narrows nothing.
+herdr_linear::pair_inside() {
+    local ip="${1:-}" it="${2:-}" cp="${3:-}" ct="${4:-}"
+    [ -n "$cp" ] || [ -n "$ct" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
+    if [ -n "$cp" ] && [ "$ip" != "$cp" ]; then
         return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
     fi
-    if [ -n "$team" ] && [ "$it" != "$team" ]; then
+    if [ -n "$ct" ] && [ "$it" != "$ct" ]; then
         return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
     fi
     return "$HERDR_LINEAR_CONTEXT_INSIDE"
+}
+
+# herdr_linear::context_allows_fields <project-id> <team-id> [workspace-id]
+#
+# The one-shot form: resolve the context, then judge. A caller with more than
+# one row to judge resolves once with `context_pair` and calls `pair_inside`.
+herdr_linear::context_allows_fields() {
+    local ws="${3:-}" pair
+    pair="$(herdr_linear::context_pair "$ws")"
+    herdr_linear::pair_inside "${1:-}" "${2:-}" "${pair%%$'\037'*}" "${pair##*$'\037'}"
 }
 
 # herdr_linear::context_allows <kind> <id> [workspace-id]
 #
 # `team`, `project` or `issue`. 0 inside, 1 outside, 3 when it could not be
 # asked, 2 for a kind this does not judge. A level that declared nothing does
-# not narrow, so a session with no team answers 0 to everything.
-#
-# An issue is inside when its project is the space's project AND, when a session
-# team is declared, its team is that team. Both halves are needed: a project may
-# span several teams, so the project test alone admits another team's issue in
-# the very project the space is bound to.
+# not narrow, so a session with no team answers 0 to everything. `issue` fetches
+# the pair and hands it to `pair_inside`, which is where the rule is written.
 herdr_linear::context_allows() {
     local kind="${1:-}" id="${2:-}" ws="${3:-}" team project ctx ip it pair
     [ -n "$id" ] || return "$HERDR_LINEAR_CONTEXT_KIND"

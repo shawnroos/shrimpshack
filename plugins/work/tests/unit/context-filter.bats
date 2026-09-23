@@ -40,7 +40,7 @@ setup() {
     git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
     # shellcheck source=/dev/null
-    for f in sanitize.sh secrets.sh contain.sh herdr-read.sh binding.sh linear.sh context.sh repos.sh context-filter.sh; do
+    for f in sanitize.sh secrets.sh contain.sh herdr-read.sh binding.sh linear.sh context.sh repos.sh context-filter.sh space-bind.sh; do
         . "$ROOT/lib/$f"
     done
 }
@@ -106,19 +106,6 @@ field() { printf '%s' "$1" | python3 -c 'import sys,json;print(json.load(sys.std
     local ctx; ctx="$(herdr_linear::context "$WT")"
     [ "$(field "$ctx" team_id)" = "$WEB_TEAM" ]
     [ "$(field "$ctx" team_source)" = "session" ]
-}
-
-# misplaced suspends writes; it does not widen the session. A team that stopped
-# answering here would let every write the guard was narrowing through at the
-# moment a contradiction was found, and would leave the check that set the state
-# unable to run again and clear it.
-@test "a session marked misplaced still narrows, so writes stay contained" {
-    declare_team "$WEB_TEAM" WEB
-    herdr_linear::session_set_state misplaced
-    [ "$(herdr_linear::session_state)" = "misplaced" ]
-    [ "$(herdr_linear::session_team)" = "$WEB_TEAM" ]
-    run herdr_linear::context_allows team "$BRAND_TEAM"
-    [ "$status" -eq 1 ]
 }
 
 @test "two sessions do not share a team" {
@@ -375,6 +362,52 @@ sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", text, re.S)))
     [ "$status" -eq 0 ]
 }
 
+# ------------------------------------------ the comparison, with nothing behind it
+#
+# THE ONE COMPARISON. It reads no record and makes no call, so a listing resolves
+# the context once and judges every row against the pair it already holds.
+
+@test "the comparison touches no store and no network" {
+    export HERDR_LINEAR_STORE_DIR=/nonexistent/store
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::pair_inside "$PROJECT" "$WEB_TEAM" "$PROJECT" "$WEB_TEAM"
+    [ "$status" -eq 0 ]
+    run herdr_linear::pair_inside "$PROJECT" "$BRAND_TEAM" "$PROJECT" "$WEB_TEAM"
+    [ "$status" -eq 1 ]
+    run herdr_linear::pair_inside "$OTHER_PROJECT" "$WEB_TEAM" "$PROJECT" "$WEB_TEAM"
+    [ "$status" -eq 1 ]
+}
+
+@test "a context half that declares nothing narrows nothing" {
+    export HERDR_LINEAR_STORE_DIR=/nonexistent/store
+    run herdr_linear::pair_inside "$OTHER_PROJECT" "$BRAND_TEAM" "" ""
+    [ "$status" -eq 0 ]
+    run herdr_linear::pair_inside "$OTHER_PROJECT" "$WEB_TEAM" "" "$WEB_TEAM"
+    [ "$status" -eq 0 ]
+    run herdr_linear::pair_inside "$OTHER_PROJECT" "$BRAND_TEAM" "" "$WEB_TEAM"
+    [ "$status" -eq 1 ]
+}
+
+# An empty project on the LEFT is a candidate whose project is unknown, and the
+# separator between the two halves must survive it -- a tab would fold and the
+# team would arrive in the project's place.
+@test "the resolved pair survives an empty half" {
+    declare_team "$WEB_TEAM" WEB
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    local pair; pair="$(herdr_linear::context_pair wA)"
+    [ -z "${pair%%$'\037'*}" ]
+    [ "${pair##*$'\037'}" = "$WEB_TEAM" ]
+}
+
+@test "the resolved pair is the space's project and the session's team" {
+    declare_team "$WEB_TEAM" WEB
+    bind_space wA "$PROJECT" "$WEB_TEAM"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    local pair; pair="$(herdr_linear::context_pair wA)"
+    [ "${pair%%$'\037'*}" = "$PROJECT" ]
+    [ "${pair##*$'\037'}" = "$WEB_TEAM" ]
+}
+
 # --------------------------------------------------------- the UNBOUND prefix
 
 @test "a surface standing in no worktree wears the prefix" {
@@ -500,9 +533,8 @@ import re, sys
 sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", open(sys.argv[1]).read(), re.S)))
 ' "$ROOT/skills/declare/SKILL.md")"
     [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::team_in_project')" -ge 1 ]
-    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::context_allows project')" -ge 1 ]
+    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::workspace_bind_checked')" -ge 1 ]
     [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::session_confirm')" -ge 1 ]
-    [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::workspace_confirm')" -ge 1 ]
 }
 
 @test "the filing skill reads the resolver, not the worktree derivation alone" {
@@ -515,57 +547,73 @@ sys.stdout.write("\n".join(re.findall(r"```bash\n(.*?)```", open(sys.argv[1]).re
     [ "$(printf '%s' "$fences" | grep -c 'herdr_linear::current_context')" -eq 0 ]
 }
 
-# ------------------------------ every place that binds a space asks the guard
+# ------------------------------ every place that binds a space calls one helper
 #
 # A space bound to a project the session's team is not on is a widening, and it
-# cannot be caught afterwards: the record is already written. So the check is a
-# property of the CLASS of binding sites, not of the one site the declare verb
-# happens to be.
+# cannot be caught afterwards: the record is already written. So the guard and
+# the write are one function, and the property checked here is that no document
+# writes the sequence out for itself -- a hand-written copy is free to drop the
+# guard, and one of the four already had.
 
-@test "every skill that records a space's project asks the guard first" {
-    run python3 - "$ROOT" <<'PY'
+@test "no skill hand-writes the space-binding sequence" {
+    run python3 - "$ROOT" <<'SWEEP'
 import re, sys, glob, os
 
 root = sys.argv[1]
 bad, seen = [], 0
-for path in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md"))):
+for path in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md"))
+                   + glob.glob(os.path.join(root, "commands", "*.md"))):
     text = "\n".join(re.findall(r"```bash\n(.*?)```", open(path).read(), re.S))
-    if "herdr_linear::workspace_confirm" not in text:
-        continue
-    seen += 1
-    guard = text.find("herdr_linear::context_allows project")
-    confirm = text.find("herdr_linear::workspace_confirm")
-    if guard == -1 or guard > confirm:
-        bad.append("%s: records a space's project with no context check before it" % path)
+    if "herdr_linear::workspace_bind_checked" in text:
+        seen += 1
+    for verb in ("workspace_propose", "workspace_confirm"):
+        if "herdr_linear::" + verb in text:
+            bad.append("%s: calls %s itself instead of workspace_bind_checked" % (path, verb))
 if seen < 3:
-    bad.append("only %d binding document(s) were swept; the check proved nothing" % seen)
+    bad.append("only %d document(s) call the helper; the check proved nothing" % seen)
 print("\n".join(bad))
-PY
+SWEEP
     [ -z "$output" ]
 }
 
-@test "every skill that records a space's project records the project's teams" {
-    run python3 - "$ROOT" <<'PY'
-import re, sys, glob, os
+# ------------------------------------------------- the space-binding helper
 
-root = sys.argv[1]
-bad, seen = [], 0
-for path in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md"))):
-    for fence in re.findall(r"```bash\n(.*?)```", open(path).read(), re.S):
-        for line in fence.splitlines():
-            if "herdr_linear::workspace_confirm" not in line or line.lstrip().startswith("#"):
-                continue
-            seen += 1
-            # Quoted, and still several arguments: a bare $TEAMS is one unquoted
-            # expansion, and "$TEAMS" is one id made of every id with spaces in
-            # it. The array is the only spelling that is both.
-            if '"${TEAMS[@]}"' not in line:
-                bad.append("%s: %s" % (path, line.strip()))
-if seen < 3:
-    bad.append("only %d binding line(s) were swept; the check proved nothing" % seen)
-print("\n".join(bad))
-PY
-    [ -z "$output" ]
+@test "the helper records the project's team ids with the binding" {
+    export FAKE_LINEAR_PROJECT_TEAMS=many
+    declare_team "$WEB_TEAM" WEB
+    run herdr_linear::workspace_bind_checked wA "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::workspace_project wA)" = "$PROJECT" ]
+    run herdr_linear::workspace_team_ids wA
+    [ "$output" = "$WEB_TEAM
+$BRAND_TEAM
+77777777-7777-4777-8777-777777777777" ]
+}
+
+@test "the helper records nothing for a project outside the session's team" {
+    export FAKE_LINEAR_PROJECT_TEAMS=one
+    declare_team "$BRAND_TEAM" BRAND
+    run herdr_linear::workspace_bind_checked wA "$PROJECT"
+    [ "$status" -eq 1 ]
+    [ "$(herdr_linear::workspace_state wA)" = "unbound" ]
+}
+
+@test "the helper records nothing when the project's teams could not be read" {
+    declare_team "$WEB_TEAM" WEB
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::workspace_bind_checked wA "$PROJECT"
+    [ "$status" -eq 3 ]
+    [ "$(herdr_linear::workspace_state wA)" = "unbound" ]
+}
+
+# Re-proposing a value the record already holds would supersede an answer a
+# person gave, and hand back a nonce nobody was asked to confirm.
+@test "the helper leaves a space already bound to the project alone" {
+    bind_space wA "$PROJECT" "$WEB_TEAM"
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::workspace_bind_checked wA "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::workspace_state wA)" = "bound" ]
 }
 
 # ------------------------------------------ the pair key cannot be spelled two ways

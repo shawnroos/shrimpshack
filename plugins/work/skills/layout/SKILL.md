@@ -100,7 +100,7 @@ herdr_linear::layout_build "$PARENT" "$CHILD_A" "$CHILD_B"
 | 2 | a title cannot become a safe name, or a naming scheme is not one this plugin renders; nothing was made | stderr says which: name the issue, or name the setting and its valid values, and stop |
 | 3 | a step failed partway, or an issue could not be read | say which; **re-running continues** |
 | 4 | not run from the parent's own worktree | say where it ran and what that is bound to; `cd` to the parent's worktree, or run `/work:start` on the parent first |
-| 5 | which herdr space the layout belongs in is a question; nothing was made | ask it; the question names the parent's project id. Record a yes with `workspace_propose` then `workspace_confirm` on that id, as `/work:new` shows, then re-run |
+| 5 | which herdr space the layout belongs in is a question; nothing was made | ask it; the question names the parent's project id. Record a yes with `herdr_linear::workspace_bind_checked <space> <project>`, as `/work:new` shows, then re-run |
 
 The tab is made in the space bound to the parent's project, or the parent's
 own tab is used when it already has one there. Every column is split inside
