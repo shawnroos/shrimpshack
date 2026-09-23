@@ -208,17 +208,17 @@ $BRAND_TEAM" ]
 
 @test "no declared level filters nothing" {
     export HERDR_LINEAR_CURL_BIN=/bin/false
-    run herdr_linear::context_allows team "$BRAND_TEAM"
+    run herdr_linear::context_allows_team "$BRAND_TEAM"
     [ "$status" -eq 0 ]
-    run herdr_linear::context_allows project "$OTHER_PROJECT"
+    run herdr_linear::space_may_bind_project "$OTHER_PROJECT"
     [ "$status" -eq 0 ]
 }
 
 @test "the session's own team is inside and another team is outside" {
     declare_team "$WEB_TEAM" WEB
-    run herdr_linear::context_allows team "$WEB_TEAM"
+    run herdr_linear::context_allows_team "$WEB_TEAM"
     [ "$status" -eq 0 ]
-    run herdr_linear::context_allows team "$BRAND_TEAM"
+    run herdr_linear::context_allows_team "$BRAND_TEAM"
     [ "$status" -eq 1 ]
 }
 
@@ -226,7 +226,7 @@ $BRAND_TEAM" ]
     declare_team "$WEB_TEAM" WEB
     bind_space wA "$PROJECT" "$WEB_TEAM" "$BRAND_TEAM"
     export HERDR_LINEAR_CURL_BIN=/bin/false
-    run herdr_linear::context_allows project "$PROJECT" wA
+    run herdr_linear::space_may_bind_project "$PROJECT" wA
     [ "$status" -eq 0 ]
 }
 
@@ -234,21 +234,21 @@ $BRAND_TEAM" ]
     declare_team "$BRAND_TEAM" BRAND
     bind_space wA "$PROJECT" "$WEB_TEAM"
     export HERDR_LINEAR_CURL_BIN=/bin/false
-    run herdr_linear::context_allows project "$PROJECT" wA
+    run herdr_linear::space_may_bind_project "$PROJECT" wA
     [ "$status" -eq 1 ]
 }
 
 @test "a project spanning the session's team is inside" {
     export FAKE_LINEAR_PROJECT_TEAMS=many
     declare_team "$BRAND_TEAM" BRAND
-    run herdr_linear::context_allows project "$PROJECT"
+    run herdr_linear::space_may_bind_project "$PROJECT"
     [ "$status" -eq 0 ]
 }
 
 @test "a project without the session's team is outside" {
     export FAKE_LINEAR_PROJECT_TEAMS=one
     declare_team "$BRAND_TEAM" BRAND
-    run herdr_linear::context_allows project "$PROJECT"
+    run herdr_linear::space_may_bind_project "$PROJECT"
     [ "$status" -eq 1 ]
 }
 
@@ -256,7 +256,7 @@ $BRAND_TEAM" ]
     export FAKE_LINEAR_MODE=found_child
     declare_team "$WEB_TEAM" WEB
     bind_space wA "$PROJECT" "$WEB_TEAM" "$BRAND_TEAM"
-    run herdr_linear::context_allows issue WEB-3308 wA
+    run herdr_linear::context_allows_issue WEB-3308 wA
     [ "$status" -eq 0 ]
 }
 
@@ -264,21 +264,21 @@ $BRAND_TEAM" ]
     export FAKE_LINEAR_MODE=found_other_team
     declare_team "$WEB_TEAM" WEB
     bind_space wA "$PROJECT" "$WEB_TEAM" "$BRAND_TEAM"
-    run herdr_linear::context_allows issue BRAND-1200 wA
+    run herdr_linear::context_allows_issue BRAND-1200 wA
     [ "$status" -eq 1 ]
 }
 
 @test "an issue outside the space's project is outside" {
     export FAKE_LINEAR_MODE=found_child
     bind_space wA "$OTHER_PROJECT"
-    run herdr_linear::context_allows issue WEB-3308 wA
+    run herdr_linear::context_allows_issue WEB-3308 wA
     [ "$status" -eq 1 ]
 }
 
 @test "an issue is inside when only its team is declared and it matches" {
     export FAKE_LINEAR_MODE=found_child
     declare_team "$WEB_TEAM" WEB
-    run herdr_linear::context_allows issue WEB-3308
+    run herdr_linear::context_allows_issue WEB-3308
     [ "$status" -eq 0 ]
 }
 
@@ -286,16 +286,15 @@ $BRAND_TEAM" ]
     declare_team "$WEB_TEAM" WEB
     bind_space wA "$PROJECT"
     export HERDR_LINEAR_CURL_BIN=/bin/false
-    run herdr_linear::context_allows issue WEB-3308 wA
+    run herdr_linear::context_allows_issue WEB-3308 wA
     [ "$status" -eq 3 ]
-    run herdr_linear::context_allows project "$OTHER_PROJECT"
+    run herdr_linear::space_may_bind_project "$OTHER_PROJECT"
     [ "$status" -eq 3 ]
 }
 
-@test "a kind the guard does not know is refused rather than allowed" {
+@test "a misspelled guard call fails loudly instead of silently allowing" {
     declare_team "$WEB_TEAM" WEB
-    run herdr_linear::context_allows cycle something
-    [ "$status" -ne 0 ]
+    run -127 herdr_linear::context_allows_tema "$BRAND_TEAM"
 }
 
 # ------------------------------------------------------------ the tab on a bind

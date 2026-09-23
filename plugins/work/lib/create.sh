@@ -257,7 +257,7 @@ herdr_linear::new_project() {
     # afterwards leaves a real Linear project nobody asked for; asked of the team
     # rather than of the project, because the project does not exist yet and the
     # team it is created on is the only team it will have.
-    herdr_linear::context_allows team "$team"; rc=$?
+    herdr_linear::context_allows_team "$team"; rc=$?
     if [ "$rc" -eq "$HERDR_LINEAR_CONTEXT_OUTSIDE" ]; then
         printf 'this session is declared as team %s, so a project on team %s would bind its space outside the session. Declare the other team first, or create the project from a session of it.\n' \
             "$(herdr_linear::session_team)" "$team" >&2

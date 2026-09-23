@@ -8,9 +8,12 @@
 # before any of this, and stays the default.
 #
 #
-# ONE COMPARISON, NOT TWO. `context_allows` is the only place a team, a project
-# or an issue is judged against the context. Two comparisons that can disagree
-# is the failure this exists to prevent.
+# ONE COMPARISON, NOT TWO. `context_allows_team`, `space_may_bind_project` and
+# `context_allows_issue` are the only places a team, a project or an issue is
+# judged against the context. Two comparisons that can disagree is the failure
+# this exists to prevent. Three named functions rather than one string-keyed
+# dispatcher: a misspelled call is then a missing function -- 127 -- instead of
+# a `case` falling to a default that every caller reads as "proceed".
 
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
@@ -30,7 +33,6 @@ command -v herdr_linear::scope_repo >/dev/null 2>&1 \
 
 HERDR_LINEAR_CONTEXT_INSIDE=0
 HERDR_LINEAR_CONTEXT_OUTSIDE=1
-HERDR_LINEAR_CONTEXT_KIND=2      # not a kind this guard judges
 HERDR_LINEAR_CONTEXT_UNKNOWN=3   # could not be asked; not an answer of "outside"
 
 # ------------------------------------------------------------------ the resolver
@@ -191,41 +193,52 @@ herdr_linear::context_allows_fields() {
     herdr_linear::pair_inside "${1:-}" "${2:-}" "${pair%%$'\037'*}" "${pair##*$'\037'}"
 }
 
-# herdr_linear::context_allows <kind> <id> [workspace-id]
+# herdr_linear::context_allows_team <team-id>
 #
-# `team`, `project` or `issue`. 0 inside, 1 outside, 3 when it could not be
-# asked, 2 for a kind this does not judge. A level that declared nothing does
-# not narrow, so a session with no team answers 0 to everything. `issue` fetches
-# the pair and hands it to `pair_inside`, which is where the rule is written.
-herdr_linear::context_allows() {
-    local kind="${1:-}" id="${2:-}" ws="${3:-}" team project ctx ip it pair
-    [ -n "$id" ] || return "$HERDR_LINEAR_CONTEXT_KIND"
+# Whether the session's own declared team is <team-id>. A session with no
+# declared team answers INSIDE to every team -- a level that declares nothing
+# narrows nothing.
+herdr_linear::context_allows_team() {
+    local id="${1:-}" team
+    [ -n "$id" ] || return "$HERDR_LINEAR_CONTEXT_UNKNOWN"
     team="$(herdr_linear::session_team 2>/dev/null)" || team=""
+    [ -n "$team" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
+    [ "$team" = "$id" ] && return "$HERDR_LINEAR_CONTEXT_INSIDE"
+    return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
+}
 
-    case "$kind" in
-        team)
-            [ -n "$team" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
-            [ "$team" = "$id" ] && return "$HERDR_LINEAR_CONTEXT_INSIDE"
-            return "$HERDR_LINEAR_CONTEXT_OUTSIDE"
-            ;;
-        project)
-            [ -n "$team" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
-            herdr_linear::team_in_project "$team" "$id" "$ws"
-            return $?
-            ;;
-        issue)
-            project="$(herdr_linear::_space_project "$ws")"
-            [ -n "$team" ] || [ -n "$project" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
-            ctx="$(herdr_linear::issue_context "$id" 2>/dev/null)" \
-                || return "$HERDR_LINEAR_CONTEXT_UNKNOWN"
-            pair="$(herdr_linear::_ctx_pair "$ctx")"
-            ip="$(printf '%s' "$pair" | cut -f1)"
-            it="$(printf '%s' "$pair" | cut -f2)"
-            herdr_linear::context_allows_fields "$ip" "$it" "$ws"
-            return $?
-            ;;
-    esac
-    return "$HERDR_LINEAR_CONTEXT_KIND"
+# herdr_linear::space_may_bind_project <project-id> [workspace-id]
+#
+# Whether this space may be BOUND to <project-id> -- true when the project
+# carries the session's declared team. This is the question every caller asks
+# before writing a binding; it does not compare against the space's current
+# project (that comparison is `context_allows_fields`, via `pair_inside`), so a
+# space already bound elsewhere still answers this on the session's team alone.
+herdr_linear::space_may_bind_project() {
+    local id="${1:-}" ws="${2:-}" team
+    [ -n "$id" ] || return "$HERDR_LINEAR_CONTEXT_UNKNOWN"
+    team="$(herdr_linear::session_team 2>/dev/null)" || team=""
+    [ -n "$team" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
+    herdr_linear::team_in_project "$team" "$id" "$ws"
+}
+
+# herdr_linear::context_allows_issue <identifier> [workspace-id]
+#
+# Whether <identifier> is inside the resolved context. Fetches the issue's own
+# project-and-team pair and hands it to `pair_inside`, which is where the rule
+# is written.
+herdr_linear::context_allows_issue() {
+    local id="${1:-}" ws="${2:-}" team project ctx ip it pair
+    [ -n "$id" ] || return "$HERDR_LINEAR_CONTEXT_UNKNOWN"
+    team="$(herdr_linear::session_team 2>/dev/null)" || team=""
+    project="$(herdr_linear::_space_project "$ws")"
+    [ -n "$team" ] || [ -n "$project" ] || return "$HERDR_LINEAR_CONTEXT_INSIDE"
+    ctx="$(herdr_linear::issue_context "$id" 2>/dev/null)" \
+        || return "$HERDR_LINEAR_CONTEXT_UNKNOWN"
+    pair="$(herdr_linear::_ctx_pair "$ctx")"
+    ip="$(printf '%s' "$pair" | cut -f1)"
+    it="$(printf '%s' "$pair" | cut -f2)"
+    herdr_linear::context_allows_fields "$ip" "$it" "$ws"
 }
 
 # ------------------------------------------------------- the surface's prefix
@@ -247,7 +260,7 @@ HERDR_LINEAR_UNBOUND_PREFIX='UNBOUND: '
 herdr_linear::unbound_prefix() {
     local ident="${1:-}" ws="${2:-}" rc
     [ -n "$ident" ] || return 0
-    herdr_linear::context_allows issue "$ident" "$ws"; rc=$?
+    herdr_linear::context_allows_issue "$ident" "$ws"; rc=$?
     [ "$rc" -eq "$HERDR_LINEAR_CONTEXT_OUTSIDE" ] && printf '%s' "$HERDR_LINEAR_UNBOUND_PREFIX"
     return 0
 }
@@ -265,7 +278,7 @@ herdr_linear::unbound_prefix() {
 # legitimate, so this prints a path for a caller to offer and refuses nothing.
 herdr_linear::expected_cwd() {
     local dir="${1:-$PWD}" ws="${2:-}" git="${HERDR_LINEAR_GIT_BIN:-git}"
-    local top tab wt ctx pair project team repo
+    local top tab wt ctx pair project team pair_key repo
 
     top="$("$git" -C "$dir" --no-optional-locks rev-parse --show-toplevel 2>/dev/null)" || top=""
     [ -n "$top" ] && top="$(cd "$top" 2>/dev/null && pwd -P)"
@@ -288,14 +301,12 @@ herdr_linear::expected_cwd() {
     pair="$(herdr_linear::_ctx_pair "$ctx")"
     project="$(printf '%s' "$pair" | cut -f1)"
     team="$(printf '%s' "$pair" | cut -f2)"
-    [ -n "$project" ] && [ -n "$team" ] || return 0
-    # The pair key becomes a filename under the store, and `.` separates its two
-    # halves, so an id carrying one could spell a plain key as a pair.
-    herdr_linear::is_safe_identifier "$project" || return 0
-    herdr_linear::is_safe_identifier "$team" || return 0
-    case "$project$team" in *.*) return 0 ;; esac
+    # A key `pair_key` refuses states nothing to place a pane at, and this
+    # refuses nothing itself: the unsafe or dot-bearing id reads the same as no
+    # repository recorded, and only the caller of a WRITE path says why.
+    pair_key="$(herdr_linear::pair_key "$project" "$team" 2>/dev/null)" || return 0
 
-    repo="$(herdr_linear::scope_repo "project-$project.team-$team" 2>/dev/null)" || return 0
+    repo="$(herdr_linear::scope_repo "$pair_key" 2>/dev/null)" || return 0
     [ -n "$repo" ] && [ -d "$repo" ] && printf '%s' "$repo"
     return 0
 }

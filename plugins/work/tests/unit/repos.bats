@@ -31,6 +31,53 @@ record_file() { printf '%s/scopes/%s.json' "$HERDR_LINEAR_STORE_DIR" "$1"; }
 
 lines_of() { printf '%s\n' "$1" | grep -c . || true; }
 
+# ---------------------------------------------------------------- the pair key
+#
+# `start.sh` and `context-filter.sh` both used to compose this key and both
+# re-implemented the dot guard below. One composer, one failure behaviour:
+# nothing on stdout and a non-zero return, same as `_scope_record_path` refuses
+# an unsafe key today. Neither caller writes or offers something a person
+# cannot see on the strength of a key this function refused to make, so a
+# silent refusal costs nothing here -- a caller that must say why out loud
+# reads the non-zero return and writes its own message.
+
+@test "the pair key joins the project and team keys" {
+    run herdr_linear::pair_key p1 t1
+    [ "$status" -eq 0 ]
+    [ "$output" = "project-p1.team-t1" ]
+}
+
+@test "a project id carrying a dot refuses the pair key, printing nothing" {
+    run herdr_linear::pair_key p.1 t1
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "a team id carrying a dot refuses the pair key, printing nothing" {
+    run herdr_linear::pair_key p1 t.1
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "an unsafe project id refuses the pair key" {
+    run herdr_linear::pair_key ../escaped t1
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "an unsafe team id refuses the pair key" {
+    run herdr_linear::pair_key p1 ../escaped
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "either id missing refuses the pair key" {
+    run herdr_linear::pair_key p1 ""
+    [ "$status" -ne 0 ]
+    run herdr_linear::pair_key "" t1
+    [ "$status" -ne 0 ]
+}
+
 @test "an unrecorded scope answers empty from both readers and succeeds" {
     run herdr_linear::scope_repos project-p1 team-t1
     [ "$status" -eq 0 ]

@@ -20,7 +20,7 @@
 #   3  the project's teams could not be read, so nothing could be judged and
 #      nothing was recorded. Say so, and offer to try again.
 
-command -v herdr_linear::context_allows >/dev/null 2>&1 \
+command -v herdr_linear::space_may_bind_project >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/context-filter.sh"
 command -v herdr_linear::project_teams >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/context.sh"
@@ -38,7 +38,7 @@ herdr_linear::workspace_bind_checked() {
     local ids=()
     [ -n "$ws" ] && [ -n "$project" ] || return "$HERDR_LINEAR_SPACE_BIND_REFUSED"
 
-    herdr_linear::context_allows project "$project" "$ws"; rc=$?
+    herdr_linear::space_may_bind_project "$project" "$ws"; rc=$?
     case "$rc" in
         "$HERDR_LINEAR_CONTEXT_INSIDE") ;;
         "$HERDR_LINEAR_CONTEXT_OUTSIDE") return "$HERDR_LINEAR_SPACE_BIND_OUTSIDE" ;;

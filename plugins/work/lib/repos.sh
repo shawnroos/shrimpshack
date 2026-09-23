@@ -45,6 +45,29 @@ herdr_linear::_scope_record_path() {
     printf '%s/scopes/%s.json' "$HERDR_LINEAR_STORE_DIR" "$key"
 }
 
+# herdr_linear::pair_key <project-id> <team-id>
+#
+# The key an answer is recorded under: `project-<pid>.team-<tid>`. `.` is the
+# pair's only separator and is legal inside a Linear id, so an id carrying one
+# could spell a plain key as a pair or the reverse -- two different pairs would
+# then collide on one key, and one pair's repository would answer for the
+# other's.
+#
+# Prints nothing and returns non-zero on a missing id, an unsafe one, or a dot
+# in either -- one failure behaviour, matching `_scope_record_path` above. This
+# never writes and never speaks for itself: a caller composing a key to WRITE a
+# record refuses loudly on the same non-zero return; a caller only offering a
+# path back reads it the same way `scope_repo` reads none recorded, and says
+# nothing.
+herdr_linear::pair_key() {
+    local pid="${1:-}" tid="${2:-}"
+    [ -n "$pid" ] && [ -n "$tid" ] || return 1
+    herdr_linear::is_safe_identifier "$pid" || return 1
+    herdr_linear::is_safe_identifier "$tid" || return 1
+    case "$pid$tid" in *.*) return 1 ;; esac
+    printf 'project-%s.team-%s' "$pid" "$tid"
+}
+
 herdr_linear::_scope_ensure_store() {
     mkdir -p "$HERDR_LINEAR_STORE_DIR/scopes" 2>/dev/null || return 1
     chmod 700 "$HERDR_LINEAR_STORE_DIR" "$HERDR_LINEAR_STORE_DIR/scopes" 2>/dev/null
