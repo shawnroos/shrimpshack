@@ -22,7 +22,9 @@ Three levels, each narrowing the one above, in the shape of a Linear view:
 
 **Reads are filtered, not forbidden; writes are contained.** Listing issues, projects or views inside a session shows that team's, and a read that reaches outside it is answered and labelled as outside. A record write — a space's project, a tab's issue, a worktree — is refused outside the resolved context, naming what would have to change. Cross-team reading is ordinary; cross-team recording is the accident this exists to stop.
 
-**Filing outside the context is allowed, and the surface says so.** A person in a Product session who names the Web team and confirms files that issue into Web; no worktree and no binding are recorded, so nothing outside the context is committed to. What makes it safe is that it is visible: the surface holding work its context does not cover is titled `UNBOUND: <title>` — the pane, the tab or the space, whichever the plugin owns the title of. The prefix clears when the surface is bound to what it is working on. A fresh tab standing in no worktree wears the same prefix for the same reason: the state is legible from the surface, not from a record somebody has to query.
+**Filing outside the context is allowed, and the surface says so.** A person in a Product session who names the Web team and confirms files that issue into Web; no worktree and no binding are recorded, so nothing outside the context is committed to. What makes it safe is that it is visible: the surface holding work its context does not cover is titled `UNBOUND: <title>` — the pane, the tab or the space, whichever the plugin owns the title of. The prefix clears when the surface is bound to what it is working on: the state is legible from the surface, not from a record somebody has to query.
+
+It marks a surface holding work the context does not cover — not an empty one. A fresh tab holds no work at all, and nothing in the plugin observes a tab a person opened by hand; branding every such tab would need a sweep over surfaces that are none of this plugin's business, and a warning that appears everywhere is one people stop reading.
 
 **The intended shape is one herdr session per team.** A session that hosts several teams' work leaves its team undeclared and gets space- and tab-level filtering only. Working as another team means attaching a different session, not re-pointing this one — which is what makes the settled decision below affordable.
 
@@ -75,7 +77,7 @@ The tab's issue is the worktree binding. `/work:bind` records the current tab on
 
 ### 6. The UNBOUND surface prefix
 
-One place decides the prefix and one place applies it, so a title cannot drift from the record: a surface whose work its context does not cover is titled `UNBOUND: <title>`, and the prefix is removed when it is bound. The plugin already composes tab labels through one helper (`_tab_label`), which is where this belongs; the board titles its own pane `Linear: …` and keeps doing so, with the prefix in front when it applies.
+One place decides the prefix and one place spells it, so a title cannot drift from the record: a surface whose work its context does not cover is titled `UNBOUND: <title>`, and the prefix is removed when it is bound. `_tab_label` applies it to a tab the plugin creates; `retitle_tab` applies or clears it on a tab that already exists, through `herdr tab rename`, reading the current title back first so a failed read cannot invent a prefix. It fires on the four transitions that change the answer: a binding recorded `misplaced`, that state clearing, a tab bound to its issue, and a filing outside the context, which titles the tab the person is sitting in. Best-effort, like every other herdr mutation here.
 
 ### 7. Expected working directory
 
