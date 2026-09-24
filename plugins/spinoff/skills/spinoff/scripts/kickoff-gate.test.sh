@@ -42,6 +42,10 @@ printf '# Spinoff: gate\n## Source session\n<!-- SESSION -->\n' > "$HANDOFF"
 #   ready   → claude's prompt footer is up
 #   trust   → claude's FOLDER-trust prompt, which blocks a fresh worktree before
 #             claude will process its command-line prompt; flips to `ready` on Enter
+#   trust-no → the same prompt with the cursor on "No, exit": Down+Enter flips to
+#             `ready`, a bare Enter quits claude and leaves a bare shell
+#   exited  → claude already quit; the old trust prompt is still in scrollback above
+#             the shell prompt, and process-info shows no claude
 #   modal   → the first-run MCP trust modal, which flips to `ready` once an Enter
 #             (or Escape) is delivered — mirroring the real dismissal.
 # The stub records every call, which is how the negatives are asserted.
@@ -52,6 +56,13 @@ SCREEN="${HERDR_SCREEN:-ready}"
 # Real herdr `pane read` emits RAW TEXT (not JSON) — the stub must too, or the
 # suite would go green against a script that JSON-parses it into "".
 _emit() { printf '%s\n' "$1"; }
+STALE_TRUST=' Quick safety check: Is this a project you created or one you trust?
+ ❯ No, exit
+   Yes, I trust this folder
+ Enter to confirm · Esc to cancel'
+for _ in 1 2 3 4 5 6 7 8 9; do STALE_TRUST="$STALE_TRUST
+repo on main
+❯"; done
 case "$1 ${2:-}" in
   "status server") echo "status: running"; exit 0 ;;
   "tab create")    echo '{"result":{"tab":{"tab_id":"w1:t1","pane_id":"w1:p1"}}}'; exit 0 ;;
@@ -61,19 +72,40 @@ case "$1 ${2:-}" in
   "agent send")    exit 0 ;;
   "pane send-keys")
      # An Enter/Escape against the modal dismisses it → subsequent reads are ready.
-     case "$SCREEN" in modal|trust) [ -n "${MODAL_FLAG:-}" ] && touch "$MODAL_FLAG" ;; esac
+     case "$SCREEN" in
+       modal|trust) [ -n "${MODAL_FLAG:-}" ] && touch "$MODAL_FLAG" ;;
+       trust-no)    case "$*" in *Down*) touch "$MODAL_FLAG" ;; *) touch "$MODAL_FLAG.exited" ;; esac ;;
+     esac
+     exit 0 ;;
+  "pane process-info")
+     if [ "$SCREEN" = exited ] || [ -f "${MODAL_FLAG:-/nonexistent}.exited" ]; then
+       echo '{"result":{"process_info":{"foreground_processes":[{"argv0":"zsh"}]}}}'
+     else
+       echo '{"result":{"process_info":{"foreground_processes":[{"argv0":"zsh"},{"argv0":"claude"}]}}}'
+     fi
      exit 0 ;;
   "pane read")
      case "$SCREEN" in
        booting) _emit '~ $ cd /repo && claude
 ❯ ' ;;
        trust)   if [ -n "${MODAL_FLAG:-}" ] && [ -f "$MODAL_FLAG" ]; then
-                  _emit '  ? for shortcuts Â· shift+tab to cycle'
+                  _emit '  ? for shortcuts · shift+tab to cycle'
                 else
                   _emit ' Quick safety check: Is this a project you created or one you trust?
- â¯ 1. Yes, I trust this folder
+ ❯ 1. Yes, I trust this folder
    2. No, exit'
                 fi ;;
+       trust-no) if [ -f "$MODAL_FLAG" ]; then
+                  _emit '  ? for shortcuts · shift+tab to cycle'
+                elif [ -f "$MODAL_FLAG.exited" ]; then
+                  _emit "$STALE_TRUST"
+                else
+                  _emit ' Quick safety check: Is this a project you created or one you trust?
+ ❯ No, exit
+   Yes, I trust this folder
+ Enter to confirm · Esc to cancel'
+                fi ;;
+       exited)  _emit "$STALE_TRUST" ;;
        modal)   if [ -n "${MODAL_FLAG:-}" ] && [ -f "$MODAL_FLAG" ]; then
                   _emit '  📁 repo
   ⏵⏵ auto mode on (shift+tab to cycle)'
@@ -94,7 +126,7 @@ export CALLS
 
 run() {  # run <screen> <name>
   : > "$CALLS"
-  export MODAL_FLAG="$WORK/modal.dismissed"; rm -f "$MODAL_FLAG"
+  export MODAL_FLAG="$WORK/modal.dismissed"; rm -f "$MODAL_FLAG" "$MODAL_FLAG.exited"
   ( cd "$REPO" \
     && unset CMUX_WORKSPACE_ID HERDR_PANE_ID \
     && PATH="$BIN:$PATH" HERDR_ENV=1 HERDR_WORKSPACE_ID=w1 HERDR_SCREEN="$1" \
@@ -211,6 +243,38 @@ echo "$out" | grep -q '✓ Spinoff complete' && [ "$rc" -eq 0 ] \
 echo "$out" | grep -q 'a dialog may still be up' \
   && bad "folder trust: still warns about a dialog after answering it" \
   || ok  "folder trust: no stale dialog warning after answering"
+
+# ---- 5. TRUST PROMPT WITH "No, exit" SELECTED → Down, then Enter ---------------
+# claude 2.1.274 draws the cursor on "No, exit". A bare Enter quit claude, and the
+# summary still said "open + briefed" over a bare shell.
+out="$(run trust-no trust-no-first)"; rc=$?
+
+grep -qE 'pane send-keys [^ ]+ Down Enter$' "$CALLS" \
+  && ok  "trust, No selected: moved to Yes before confirming" \
+  || bad "trust, No selected: confirmed without moving off 'No, exit'"
+
+grep -E 'pane send-keys [^ ]+ Enter$' "$CALLS" | grep -qv 'Down Enter$' \
+  && bad "trust, No selected: sent a bare Enter" \
+  || ok  "trust, No selected: no bare Enter"
+
+echo "$out" | grep -q '✓ Spinoff complete' && [ "$rc" -eq 0 ] \
+  && ok  "trust, No selected: reported complete" \
+  || bad "trust, No selected: did not complete (rc=$rc)"
+
+# ---- 6. CLAUDE EXITED, OLD PROMPT IN SCROLLBACK → no keys, loud failure ---------
+out="$(run exited claude-exited)"; rc=$?
+
+grep -q 'pane send-keys' "$CALLS" \
+  && bad "claude exited: answered a stale prompt into the bare shell" \
+  || ok  "claude exited: stale prompt in scrollback left alone"
+
+echo "$out" | grep -q 'Spinoff INCOMPLETE' && [ "$rc" -eq 3 ] \
+  && ok  "claude exited: reported INCOMPLETE and exited 3" \
+  || bad "claude exited: reported as success (rc=$rc)"
+
+echo "$out" | grep -q 'claude is not running' \
+  && ok  "claude exited: named the cause" \
+  || bad "claude exited: cause not named"
 
 echo
 echo "  $PASS passed, $FAIL failed"
