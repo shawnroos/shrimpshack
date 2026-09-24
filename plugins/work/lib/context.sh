@@ -17,6 +17,8 @@
 # No lib sources another. Without this the_only_line is 127 in project_team.
 command -v herdr_linear::the_only_line >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+command -v herdr_linear::path_signal >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/contain.sh"
 
 # herdr_linear::current_context <worktree> [workspace-id]
 #
