@@ -30,21 +30,26 @@ Filing a ticket and then separately making somewhere to work on it are two acts
 that always happen together, so this is one command: the issue is created, a
 worktree is made and bound to it, and a pane opens in that worktree.
 
-**"Current project" is derived, not asked for.** It comes from the issue this
-worktree is bound to, or from the project the herdr workspace is bound to.
+**"Current project" is declared, or derived.** The session's team comes first
+when one has been declared — `/work:declare` is how — then the space's project,
+and then today's derivation from the issue this worktree is bound to or the
+project the space holds. The resolver answers all three, and says which level
+each value came from.
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-for f in contain secrets sanitize binding linear schemes reconcile description herdr-read states herdr-write repos start context create; do
+for f in contain secrets sanitize record binding scope-record linear schemes reconcile description herdr-read states herdr-write repos start context context-filter space-bind create; do
   source "$R/lib/$f.sh"
 done
 
-CTX="$(herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)")"
+CTX="$(herdr_linear::context "$PWD" "$(herdr_linear::workspace_id)")"
 herdr_linear::context_fields "$CTX" project_id team_id team_name identifier
 ```
 
 One tab-separated line: the project id, the team id, the team's name, and the
-issue this worktree is bound to. **State the team's name and its id, and where
+issue this worktree is bound to. The same JSON carries `team_source` and
+`project_source` — `session`, `space`, `tab`, `derived` or `none` — and that is
+what you say out loud beside the value. **State the team's name and its id, and where
 they came from, before you file** — "Team: Web, the only team on project AI
 Canvas Tools".
 
@@ -61,6 +66,30 @@ there is nothing to derive from: bind this worktree (`/work:bind`), or bind the
 workspace to a project. **Never pick a team yourself** — filing into the wrong
 one is a thing somebody has to notice and undo.
 
+## Filing into a team the context does not cover
+
+Sometimes the ticket genuinely belongs to another team. That is allowed, and it
+is deliberate: **the person names the team and confirms**, and nothing local is
+recorded for it — no worktree, no binding, no pane.
+
+```bash
+herdr_linear::new_issue_outside "$PWD" "The title" /tmp/desc.md "$TEAM" "$PROJECT"
+```
+
+It prints the identifier and nothing else, and its exits are the table below
+minus the worktree rows. `$PROJECT` is optional and is the target's own project,
+never the context's — a project of this team may not carry that one.
+
+**Ask first, every time.** Never infer the team from the title, and never reach
+for this because the resolver came back empty; an empty team is a question to
+ask, not a reason to file elsewhere. The write question is unchanged: it is
+answered per worktree, for the team and project this names.
+
+**Say that the surface is now UNBOUND.** A tab holding work its context does not
+cover is titled `UNBOUND: <identifier>` when this plugin makes it. This path
+makes none, so say in the report that this session is holding work outside its
+context, and what would bind it.
+
 ## Write the description first
 
 A HIGHER bar than an edit: this description is composed fresh, so the
@@ -73,7 +102,7 @@ a ticket somebody has to come back to.
 Writes to Linear are opened by an answer, not by a file somebody edits.
 
 ```bash
-CTX="$(herdr_linear::current_context "$PWD" "$(herdr_linear::workspace_id)")"
+CTX="$(herdr_linear::context "$PWD" "$(herdr_linear::workspace_id)")"
 FIELDS="$(herdr_linear::context_fields "$CTX" team_id project_id)"
 TEAM="$(printf '%s' "$FIELDS" | cut -f1)"
 PROJECT="$(printf '%s' "$FIELDS" | cut -f2)"
@@ -144,10 +173,17 @@ session as it always has.
   project the issue was filed into. Record only what the person answers:
 
 ```bash
-nonce="$(herdr_linear::workspace_propose "$(herdr_linear::workspace_id)" "$PROJECT")"
-herdr_linear::workspace_confirm "$(herdr_linear::workspace_id)" "$PROJECT" "$nonce"
-herdr_linear::place_session "$WORKTREE" open
+WS="$(herdr_linear::workspace_id)"
+herdr_linear::workspace_bind_checked "$WS" "$PROJECT"; SPACE=$?
+echo "space=$SPACE"
+[ "$SPACE" -eq 0 ] && herdr_linear::place_session "$WORKTREE" open
 ```
+
+`space` is `workspace_bind_checked`'s status and the table is in
+`lib/space-bind.sh`'s header. `space=1` is outside: this project's teams do not
+include the team the session was declared as. Say both sides and bind nothing;
+the issue is already filed and the pane can be opened by hand. `space=3` means
+the project's teams could not be read, so nothing was recorded.
 
 - **This space is bound to a different project:** that is Misplaced. Say both
   sides, offer to move either one, and do not pick which was wrong.

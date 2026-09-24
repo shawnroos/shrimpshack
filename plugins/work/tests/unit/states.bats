@@ -31,7 +31,7 @@ setup() {
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_STATESSTATESSTATES1" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh states.sh; do . "$ROOT/lib/$f"; done
+    for f in contain.sh secrets.sh binding.sh scope-record.sh linear.sh reconcile.sh states.sh; do . "$ROOT/lib/$f"; done
 
     WT="$WORK/root/wt"; mkdir -p "$WT"
     git -C "$WT" init -q -b feature/web-2670-blur
@@ -287,4 +287,168 @@ mutations_sent() { local n; n="$(grep -c 'issueUpdate' "$FAKE_LINEAR_RECORD_DIR/
 @test "the bind skill documents both remedies for a misplaced binding" {
     body="$(cat "$ROOT/skills/bind/SKILL.md")"
     [[ "$body" == *"misplaced"* ]]
+}
+
+# ------------------------------------- the session level's own contradiction
+#
+# The unattended half of the settled decision: a read path that finds the bound
+# issue outside the session's declared team has nobody to ask, so it records
+# `misplaced` and suspends writes. UNKNOWN is not a contradiction -- a Linear
+# that could not be asked must change nothing.
+#
+# The state goes on the BINDING, which is the record that contradicts its
+# parent. On the session it would suspend every pane in that session for one
+# bad worktree, and the clear-back would be last-writer-wins.
+
+declare_session_team() {
+    export HERDR_SOCKET_PATH="$WORK/herdr/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose "$1")"
+    herdr_linear::session_confirm "$1" "$n" "${2:-}"
+}
+
+bind_other_wt() {   # bind_other_wt <dir> <identifier>
+    mkdir -p "$1"
+    git -C "$1" init -q -b feature/other
+    git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    local n; n="$(herdr_linear::binding_propose "$1" "$2")"
+    herdr_linear::binding_confirm "$1" "$2" "$n"
+}
+
+@test "an issue outside the session's team records misplaced on the binding" {
+    declare_session_team 55555555-5555-4555-8555-555555555555 WEB
+    bind_wt
+    export FAKE_LINEAR_MODE=found_other_team
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]
+    [[ "$output" == *"WEB-2670"* ]]
+    [[ "$output" == *"55555555-5555-4555-8555-555555555555"* ]]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+}
+
+# The finding itself. One worktree outside the team must not suspend the
+# session, and a second worktree that IS inside must not clear the first
+# worktree's contradiction while it is still true.
+@test "a worktree inside the team does not clear another worktree's contradiction" {
+    declare_session_team 55555555-5555-4555-8555-555555555555 WEB
+    bind_wt
+    bind_other_wt "$WORK/root/wtb" WEB-2671
+
+    export FAKE_LINEAR_MODE=found_other_team
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq "$HERDR_LINEAR_STATE_MISPLACED" ]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::classify "$WORK/root/wtb" ""
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+    [ "$(herdr_linear::binding_state "$WORK/root/wtb")" = "bound" ]
+    [ "$(herdr_linear::session_state)" = "bound" ]
+}
+
+# Started from a binding that is NOT already misplaced, because a re-record of
+# the state it already holds is indistinguishable from leaving it alone.
+@test "a session contradiction that could not be judged is left exactly as it was" {
+    declare_session_team 55555555-5555-4555-8555-555555555555 WEB
+    bind_wt
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
+    export HERDR_LINEAR_CURL_BIN=/bin/false
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
+}
+
+@test "an issue back inside the session's team clears the suspension" {
+    declare_session_team 55555555-5555-4555-8555-555555555555 WEB
+    bind_wt
+    export FAKE_LINEAR_MODE=found_other_team
+    run herdr_linear::classify "$WT" ""
+    [ "$(herdr_linear::binding_state "$WT")" = "misplaced" ]
+    export FAKE_LINEAR_MODE=found_child
+    run herdr_linear::classify "$WT" ""
+    [ "$status" -eq 0 ]
+    [ "$(herdr_linear::binding_state "$WT")" = "bound" ]
+}
+
+# -------------------------------------------------- the title on the surface
+
+# The prefix is only honest if it tracks the state. classify is the one place
+# that decides a binding is misplaced and the one place that decides it is not,
+# so it is where the tab holding that work is retitled.
+herdr_on() {
+    export HERDR_BIN="$FIX/fake-herdr.sh"
+    export FAKE_HERDR_RECORD_DIR="$WORK/hrec"
+    export FAKE_HERDR_ALLOW_MUTATION=1
+    mkdir -p "$WORK/hrec"
+}
+renames() {
+    tr '\037' '|' < "$FAKE_HERDR_RECORD_DIR/argvq" 2>/dev/null | grep '^4|tab|rename|' || true
+}
+
+@test "the tab holding a binding that has just gone misplaced is titled UNBOUND" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::binding_set_tab "$WT" wA:t1
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    [ "$(renames)" = "4|tab|rename|wA:t1|UNBOUND: Plugin PM" ]
+}
+
+@test "the prefix comes off the tab when the mismatch is resolved" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::binding_set_tab "$WT" wA:t1
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    export FAKE_LINEAR_MODE=found_parent
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 0 ]
+    [ "$(renames | tail -n1)" = "4|tab|rename|wA:t1|Plugin PM" ]
+}
+
+# classify runs at every session end. A pass that changed nothing must not
+# spend a herdr round trip, and must not rewrite a title nobody moved.
+@test "a mismatch that was already recorded does not retitle the tab again" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::binding_set_tab "$WT" wA:t1
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    rm -f "$FAKE_HERDR_RECORD_DIR/argv" "$FAKE_HERDR_RECORD_DIR/argvq"
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    [ ! -s "$FAKE_HERDR_RECORD_DIR/argv" ]
+}
+
+@test "a binding with no tab recorded asks herdr nothing" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    [ ! -s "$FAKE_HERDR_RECORD_DIR/argv" ]
+}
+
+# The title reports PLACEMENT. A binding that goes straight from misplaced to
+# stale used to skip the clearing branch entirely and keep the prefix for a
+# mismatch that was already resolved.
+@test "the prefix comes off even when the issue was closed in the same pass" {
+    herdr_on
+    bind_wt
+    bind_ws w1 "$CANVAS"
+    herdr_linear::binding_set_tab "$WT" wA:t1
+    export FAKE_LINEAR_MODE=other_project_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 1 ]
+    # Placed correctly now, and closed.
+    export FAKE_LINEAR_MODE=completed_issue
+    run herdr_linear::classify "$WT" w1
+    [ "$status" -eq 2 ]
+    [ "$(renames | tail -n1)" = "4|tab|rename|wA:t1|Plugin PM" ]
 }

@@ -53,7 +53,7 @@ setup() {
     git -C "$PROJECT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh herdr-read.sh repos.sh start.sh herdr-write.sh; do . "$ROOT/lib/$f"; done
+    for f in contain.sh secrets.sh binding.sh scope-record.sh linear.sh herdr-read.sh repos.sh context.sh context-filter.sh start.sh herdr-write.sh; do . "$ROOT/lib/$f"; done
 
     # KTD11. The layout runs from the parent's own worktree, and its children
     # are made beside it, from its repository.
@@ -667,4 +667,141 @@ tab_label() { sed -n 's/.*--label \([^ ]*\).*/\1/p' "$FAKE_HERDR_RECORD_DIR/argv
     run --separate-stderr herdr_linear::layout_build WEB-2670 WEB-3001
     [ "$status" -eq 3 ]
     [ "$(herdr_calls 'pane split')" = "$splits" ]
+}
+
+# Space records are keyed by session and space. A reader that enumerates them by
+# globbing one flat directory sees none of this session's.
+@test "the project's space is found from a record written inside a session" {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    rm -f "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json
+    bind_space wG 44444444-4444-4444-8444-444444444444
+    run herdr_linear::project_spaces 44444444-4444-4444-8444-444444444444
+    [ "$status" -eq 0 ]
+    [ "$output" = "wG" ]
+}
+
+# And not another session's: a space bound in a different session is a different
+# space that happens to share an id.
+@test "another session's space record is not this project's space" {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/beta/herdr.sock"
+    rm -f "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json
+    bind_space wG 44444444-4444-4444-8444-444444444444
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    run herdr_linear::project_spaces 44444444-4444-4444-8444-444444444444
+    [ -z "$output" ]
+}
+
+# The space ids come from the server and are walked as words. Unquoted, a `*`
+# among them is expanded against the working directory, and a file whose name
+# happens to be a bound space's id becomes a space the server never reported.
+@test "a space id that is a glob does not conjure a space from the directory" {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    rm -f "$HERDR_LINEAR_STORE_DIR"/workspaces/*.json
+    bind_space wG 44444444-4444-4444-8444-444444444444
+    export FAKE_HERDR_WORKSPACES='*=Star'
+    mkdir -p "$WORK/glob"
+    : > "$WORK/glob/wG"
+    cd "$WORK/glob"
+    run herdr_linear::project_spaces 44444444-4444-4444-8444-444444444444
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+# ------------------------------------------------------ the UNBOUND prefix
+
+# The label is composed in one place and the prefix decided in one place, so a
+# title cannot say a surface is bound while the record says otherwise.
+
+labelled() { grep -qF -- "--label $1 --no-focus" "$FAKE_HERDR_RECORD_DIR/argv"; }
+
+declare_team() {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose "$1")"
+    herdr_linear::session_confirm "$1" "$n" "${2:-}"
+}
+
+@test "a session opened for work the declared team does not cover is titled UNBOUND" {
+    declare_team 66666666-6666-4666-8666-666666666666 BRAND
+    run herdr_linear::open_session "$PARENT_WT"
+    [ "$status" -eq 0 ]
+    run labelled "UNBOUND: WEB-2670"
+    [ "$status" -eq 0 ]
+}
+
+@test "a layout for work the declared team does not cover is titled UNBOUND too" {
+    declare_team 66666666-6666-4666-8666-666666666666 BRAND
+    run herdr_linear::layout_build WEB-2670 WEB-3001
+    [ "$status" -eq 0 ]
+    run labelled "UNBOUND: WEB-2670"
+    [ "$status" -eq 0 ]
+}
+
+@test "work the declared team covers keeps its plain label" {
+    declare_team 55555555-5555-4555-8555-555555555555 WEB
+    run herdr_linear::open_session "$PARENT_WT"
+    [ "$status" -eq 0 ]
+    run labelled "WEB-2670"
+    [ "$status" -eq 0 ]
+    run labelled "UNBOUND: WEB-2670"
+    [ "$status" -ne 0 ]
+}
+
+# ------------------------------------------- the prefix on a tab that exists
+
+# `$*` folds an empty argument into the separator, so the argv line cannot tell
+# a rename to nothing from a rename with no label at all. The per-argument
+# record can, and clearing a title is the case that turns on it.
+renames() {
+    tr '\037' '|' < "$FAKE_HERDR_RECORD_DIR/argvq" 2>/dev/null | grep '^4|tab|rename|' || true
+}
+
+@test "a tab that is already there takes the prefix in front of its own title" {
+    run herdr_linear::retitle_tab wA:t1 unbound
+    [ "$status" -eq 0 ]
+    [ "$(renames)" = "4|tab|rename|wA:t1|UNBOUND: Plugin PM" ]
+}
+
+@test "clearing the prefix leaves the title that was under it" {
+    herdr_linear::retitle_tab wA:t1 unbound
+    run herdr_linear::retitle_tab wA:t1 bound
+    [ "$status" -eq 0 ]
+    [ "$(renames | tail -n1)" = "4|tab|rename|wA:t1|Plugin PM" ]
+}
+
+# Idempotent, because every moment that fires this may fire again: classify runs
+# at every session end.
+@test "a tab that already reads the way it should is not renamed" {
+    herdr_linear::retitle_tab wA:t1 unbound
+    rm -f "$FAKE_HERDR_RECORD_DIR/argvq"
+    run herdr_linear::retitle_tab wA:t1 unbound
+    [ "$status" -eq 0 ]
+    [ -z "$(renames)" ]
+    run herdr_linear::retitle_tab wA:t2 bound
+    [ "$status" -eq 0 ]
+    [ -z "$(renames)" ]
+}
+
+# A tab herdr never gave a title wears the prefix alone; clearing it must send
+# the empty label rather than leaving the tab reading UNBOUND: forever. herdr
+# has no --clear for a tab, so the empty argument IS the clear.
+@test "clearing a title that was only the prefix sends the empty label" {
+    printf '%s' "UNBOUND: " > "$FAKE_HERDR_RECORD_DIR/label.wA:t1"
+    run herdr_linear::retitle_tab wA:t1 bound
+    [ "$status" -eq 0 ]
+    [ "$(renames)" = "4|tab|rename|wA:t1|" ]
+}
+
+@test "with no tab to title nothing is asked of herdr" {
+    run herdr_linear::retitle_tab "" unbound
+    [ "$status" -eq 0 ]
+    [ "$(herdr_calls 'tab')" = "0" ]
+}
+
+# Best-effort, as every herdr mutation here is: the caller is mid-flow and a
+# server that is not there is not a reason to fail the thing it was doing.
+@test "a herdr that cannot be reached leaves the title alone and the flow intact" {
+    export FAKE_HERDR_MODE=dead
+    run herdr_linear::retitle_tab wA:t1 unbound
+    [ "$status" -eq 0 ]
+    [ -z "$(renames)" ]
 }

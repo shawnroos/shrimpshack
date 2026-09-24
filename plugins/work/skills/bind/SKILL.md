@@ -114,7 +114,9 @@ above refuses, so no argument text that passed it can equal the terminator:
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/record.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/scope-record.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/bind-args.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
@@ -195,26 +197,43 @@ space already bound to `$PROJECT` is left as it is. Set `SPACE`, `PROJECT`,
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/record.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/scope-record.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/bind-args.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/context.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/context-filter.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/space-bind.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/views.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/description.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/reconcile.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/start.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 
-if [ "$(herdr_linear::workspace_state "$SPACE")" = "bound" ] \
-    && [ "$(herdr_linear::workspace_project "$SPACE")" = "$PROJECT" ]; then
-    echo "space=0 (already bound)"
-else
-    nonce="$(herdr_linear::workspace_propose "$SPACE" "$PROJECT")" \
-        && herdr_linear::workspace_confirm "$SPACE" "$PROJECT" "$nonce"; echo "space=$?"
-fi
+herdr_linear::workspace_bind_checked "$SPACE" "$PROJECT"; echo "space=$?"
 
 [ -z "$VIEW" ] || { herdr_linear::view_choose "$SPACE" "$VIEW"; echo "view=$?"; }
 
 if [ -n "$ISSUE" ]; then
     nonce="$(herdr_linear::binding_propose "$PWD" "$ISSUE")" \
         && herdr_linear::binding_confirm "$PWD" "$ISSUE" "$nonce"; echo "issue=$?"
+    TAB="$(herdr_linear::tab_id 2>/dev/null)" || TAB=""
+    [ -z "$TAB" ] || { herdr_linear::binding_set_tab "$PWD" "$TAB"
+                       herdr_linear::retitle_tab "$TAB" bound; }
 fi
 ```
+
+`space` is `workspace_bind_checked`'s status; the table is in
+`lib/space-bind.sh`'s header. `space=1` is outside — this project's teams do not
+include the team the session was declared as. Nothing was recorded: say both
+sides and stop. A space bound there would be a level widening the one above it,
+and nothing can catch that afterwards, because the record is already written.
+`space=3` means the project's teams could not be read, so nothing was judged and
+nothing was recorded; say so and offer to try again.
 
 Stop at the first non-zero result and say what was recorded before it. `space`
 2 means the proposal was superseded or refused. `view` follows the `view_choose`
@@ -227,9 +246,14 @@ for this worktree earlier, or its proposal was superseded. Nothing here retries.
 source "${CLAUDE_PLUGIN_ROOT}/lib/contain.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/record.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/scope-record.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/repos.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/context.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/context-filter.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/propose.sh"
 
 herdr_linear::candidates "$PWD" "$(herdr_linear::workspace_id)"
@@ -243,6 +267,13 @@ produced it:
 | `branch` | the branch name carries this identifier — the strongest signal |
 | `project` | the herdr workspace is bound to a project, and this issue is in it |
 | `assignee` | the workspace is unbound, so the list is only "assigned to you and not finished" — a wide scope, and you should treat it as such |
+
+**The list is already filtered by the context**, whichever rule produced it: an
+issue whose project is not the space's, or whose team is not the session's
+declared team, is not offered — including one the branch names. So a branch
+carrying an identifier and no `branch` line on the list means that issue sits
+outside this session's context. Say so, and offer `/work:declare` or a different
+session rather than binding around it.
 
 **Exit 1 means the filter found nothing.** Say so and stop. Do not widen the
 search, do not drop the assignee filter, do not list every issue in the
@@ -298,9 +329,19 @@ On a choice, record it in two steps, because `confirm` requires the nonce that
 `propose` returns:
 
 ```bash
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-read.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/herdr-write.sh"
 nonce="$(herdr_linear::binding_propose "$PWD" "$CHOSEN")"
 herdr_linear::binding_confirm "$PWD" "$CHOSEN" "$nonce"
+TAB="$(herdr_linear::tab_id 2>/dev/null)" || TAB=""
+[ -z "$TAB" ] || { herdr_linear::binding_set_tab "$PWD" "$TAB"
+                   herdr_linear::retitle_tab "$TAB" bound; }
 ```
+
+Recording the tab is what gives this issue a tab-to-issue link. Without it only
+a tab this plugin opened has one, and a tab opened by hand has none. The retitle
+is the other half: a tab that was carrying `UNBOUND:` is now bound to the work
+it holds, so the prefix comes off.
 
 If they reject a candidate, record it so it is never offered for this worktree
 again:
@@ -372,9 +413,13 @@ that resembles a project name is a candidate, never a conclusion — the plugin
 never assumes the correspondence from the two names.
 
 ```bash
-nonce="$(herdr_linear::workspace_propose "$WS" "$PROJECT_ID")"
-herdr_linear::workspace_confirm "$WS" "$PROJECT_ID" "$nonce"
+herdr_linear::workspace_bind_checked "$WS" "$PROJECT_ID"; echo "space=$?"
 ```
+
+The statuses are the ones above, and the table is in `lib/space-bind.sh`'s
+header. The helper puts the project's team ids on the record in the same write,
+so the guard compares locally afterwards instead of asking Linear on every
+read.
 
 ## Choosing the space's view
 
@@ -386,7 +431,9 @@ bound, `/work:bind` offers only this step.**
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/secrets.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/record.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/binding.sh"
+source "${CLAUDE_PLUGIN_ROOT}/lib/scope-record.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/bind-args.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/linear.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/context.sh"

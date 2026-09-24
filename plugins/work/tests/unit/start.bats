@@ -69,7 +69,7 @@ setup() {
     git -C "$PROJECT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh \
+    for f in contain.sh secrets.sh binding.sh scope-record.sh linear.sh reconcile.sh description.sh \
              herdr-read.sh herdr-write.sh repos.sh start.sh; do . "$ROOT/lib/$f"; done
 
     # Standing inside a repository, deliberately: the path and the repository
@@ -1122,4 +1122,36 @@ started_worktree() {
     [ -d "$path" ]
     [ "$(herdr_linear::binding_state "$path")" = "bound" ]
     [ "$(panes_opened)" = "0" ]
+}
+
+# ------------------------------------------- the pair the context names
+
+# The repository is decided by the project and the team TOGETHER, and a declared
+# session team does not re-point it. A start that fell back to the context's own
+# pair would make this issue's worktree from another team's repository and never
+# say so -- the widening this whole filter exists to stop.
+@test "a declared team does not lend its repository to another team's issue" {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    n="$(herdr_linear::session_propose "66666666-6666-4666-8666-666666666666")"
+    herdr_linear::session_confirm "66666666-6666-4666-8666-666666666666" "$n" BRAND
+    herdr_linear::record_scope_repo "$PROJECT" "$OTPAIRKEY"
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
+    [ "$status" -eq 6 ]
+    [ ! -e "$BASE/$CHILD" ]
+    [[ "$stderr" == *"no repository is recorded"* ]]
+}
+
+# The other half, stated rather than assumed: the pair record holding exactly
+# one path is read and the question is not asked, whatever a session declares.
+@test "the pair's only repository still answers under a declared team" {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    n="$(herdr_linear::session_propose "55555555-5555-4555-8555-555555555555")"
+    herdr_linear::session_confirm "55555555-5555-4555-8555-555555555555" "$n" WEB
+    record_alpha
+    export FAKE_LINEAR_MODE=found_child
+    run --separate-stderr herdr_linear::start_from_issue WEB-3308
+    [ "$status" -eq 0 ]
+    [ "$output" = "$BASE/$CHILD" ]
+    [[ "$stderr" != *"which one this belongs in is a choice"* ]]
 }

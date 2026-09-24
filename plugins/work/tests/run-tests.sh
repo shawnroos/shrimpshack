@@ -568,9 +568,12 @@ consent_caller_check() {
 
 # KTD31. A space binding is a person's answer, as consent is, and a hook has
 # nobody to ask. So no hook binds a space or places a session, nothing under
-# commands/ binds one, and under lib/ the one caller of workspace_confirm is
-# new_project -- which binds a space it has just made FROM the project, the
-# same bound-on-creation reasoning start_from_issue applies to binding_confirm.
+# commands/ binds one, and under lib/ the callers of workspace_confirm are
+# new_project -- which binds a space it has just made FROM the project, the same
+# bound-on-creation reasoning start_from_issue applies to binding_confirm -- and
+# workspace_bind_checked, the guard-and-write a skill fence calls in place of
+# writing the sequence out for itself. The helper is banned from hooks by name
+# for the same reason workspace_confirm is: it records without asking.
 placement_caller_check() {
     printf '%sPlacement caller check...%s\n' "$YELLOW" "$NC"
     local root="${1:-$PLUGIN_ROOT}" d
@@ -586,8 +589,10 @@ import os, re, sys
 
 root = sys.argv[1]
 DEF = re.compile(r"^(herdr_linear::[A-Za-z0-9_]+)\(\)\s*\{")
-HOOK_BANNED = ("workspace_confirm", "workspace_propose", "open_session", "place_session", "layout_build")
-LIB_ALLOWED = {("create.sh", "herdr_linear::new_project")}
+HOOK_BANNED = ("workspace_confirm", "workspace_propose", "workspace_bind_checked",
+               "open_session", "place_session", "layout_build")
+LIB_ALLOWED = {("create.sh", "herdr_linear::new_project"),
+               ("space-bind.sh", "herdr_linear::workspace_bind_checked")}
 
 def files(d):
     for base, _, names in os.walk(os.path.join(root, d)):
@@ -612,9 +617,10 @@ for f in files("lib"):
             continue
         if "herdr_linear::workspace_confirm" in line and not line.lstrip().startswith("#"):
             if (os.path.basename(f), current) not in LIB_ALLOWED:
-                print("%s:%d: %s calls workspace_confirm; only new_project may" % (f, i, current))
+                print("%s:%d: %s calls workspace_confirm; only %s may"
+                      % (f, i, current, " and ".join(sorted(n for _, n in LIB_ALLOWED))))
 PYEOF
-    printf '%sno hook places a session, and only new_project binds a space from lib/%s\n' "$GREEN" "$NC"
+    printf '%sno hook places a session, and only the two named functions bind a space from lib/%s\n' "$GREEN" "$NC"
 }
 
 # Sourcing lib/ writes to stderr -- the deprecated-root warning in contain.sh

@@ -39,7 +39,7 @@ setup() {
     printf 'LINEAR_API_KEY=%s\n' "lin_api""_SNAPSNAPSNAPSNAPSNAP" > "$LINEAR_SECRETS_FILE"
 
     # shellcheck source=/dev/null
-    for f in secrets.sh binding.sh linear.sh; do . "$ROOT/lib/$f"; done
+    for f in secrets.sh binding.sh scope-record.sh linear.sh; do . "$ROOT/lib/$f"; done
 
     PROJECT=44444444-4444-4444-8444-444444444444
     VIEW=cccccccc-cccc-4ccc-8ccc-cccccccccccc
@@ -596,4 +596,18 @@ sys.stdout.write("".join("x" + chr(c) for c in keep) + "x")
     [ "$(field "$output" 'd["view"]["layout"]["grouping"]')" = "label" ]
     [ "$(field "$output" 'len(d["groups"])')" = "2" ]
     [ "$(field "$output" 'all("kind" in g and g["kind"] is None for g in d["groups"])')" = "True" ]
+}
+
+# Space records are keyed by session and space, and the snapshot reads the
+# record file directly rather than through workspace_read.
+@test "the record of a space bound inside a session is the one reported" {
+    export HERDR_SOCKET_PATH="$WORK/cfg/sessions/alpha/herdr.sock"
+    rm -f "$(ws_file wA)"
+    n="$(herdr_linear::workspace_propose wA "$PROJECT")"
+    herdr_linear::workspace_confirm wA "$PROJECT" "$n"
+    [ -f "$HERDR_LINEAR_STORE_DIR/workspaces/alpha/wA.json" ]
+    run --separate-stderr bash "$BIN" wA
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" 'd["record"]["state"]')" = "bound" ]
+    [ "$(field "$output" 'd["record"]["project_id"]')" = "$PROJECT" ]
 }

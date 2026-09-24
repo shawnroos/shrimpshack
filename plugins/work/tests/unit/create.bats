@@ -47,8 +47,8 @@ setup() {
     git -C "$PROJECT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 
     # shellcheck source=/dev/null
-    for f in contain.sh secrets.sh binding.sh linear.sh reconcile.sh description.sh \
-             herdr-read.sh herdr-write.sh repos.sh start.sh context.sh create.sh; do . "$ROOT/lib/$f"; done
+    for f in contain.sh secrets.sh binding.sh scope-record.sh linear.sh reconcile.sh description.sh \
+             herdr-read.sh herdr-write.sh repos.sh start.sh context.sh context-filter.sh create.sh; do . "$ROOT/lib/$f"; done
 
     WT="$PROJECT/worktrees/current"
     git -C "$PROJECT" worktree add -q -b feature/web-2670-blur "$WT" >/dev/null 2>&1
@@ -504,6 +504,35 @@ panes_opened() {
     [[ "$body" == *'"teamIds": ["team-web"]'* ]] || [[ "$body" == *'team-web'* ]]
 }
 
+# A project made on another team ends as a space bound to it, which is a level
+# widening the one above it -- the thing the guard exists to refuse. Refused
+# BEFORE the tracker write, because a refusal afterwards leaves a real Linear
+# project nobody asked for.
+@test "a project on a team the session was not declared as is refused" {
+    export HERDR_SOCKET_PATH="$WORK/herdr/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose "$BRAND_TEAM_ID")"
+    herdr_linear::session_confirm "$BRAND_TEAM_ID" "$n" BRAND
+    enable_root_writes
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    printf '# P\n\ncontent\n' > "$WORK/p.md"
+    run --separate-stderr herdr_linear::new_project "P" "$WORK/p.md" team-web
+    [ "$status" -eq "$HERDR_LINEAR_CREATE_REFUSED" ]
+    [ "$(sent projectCreate)" = "0" ]
+    [[ "$stderr" == *"team-web"* ]]
+    [[ "$stderr" == *"$BRAND_TEAM_ID"* ]]
+}
+
+@test "a project on the session's own team is still created" {
+    export HERDR_SOCKET_PATH="$WORK/herdr/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose team-web)"
+    herdr_linear::session_confirm team-web "$n" WEB
+    enable_root_writes
+    export FAKE_LINEAR_ALLOW_MUTATION=1
+    printf '# P\n\ncontent\n' > "$WORK/p.md"
+    run herdr_linear::new_project "P" "$WORK/p.md" team-web
+    [ "$status" -eq 0 ]
+}
+
 # Without herdr the project still exists and is usable, so this reports rather
 # than failing silently.
 @test "an unreachable herdr server leaves the project made and says so" {
@@ -828,4 +857,95 @@ worktree_count() { git -C "$PROJECT" worktree list | grep -c .; }
     [[ "$stderr" == *"no herdr space is bound to project $PROJECT_ID"* ]]
     run grep -c '^tab create' "$FAKE_HERDR_RECORD_DIR/argv"
     [ "$output" = "0" ]
+}
+
+# ------------------------------------------------- the context decides the team
+
+BRAND_TEAM_ID=66666666-6666-4666-8666-666666666666
+
+declare_session_team() {
+    export HERDR_SOCKET_PATH="$WORK/herdr/sessions/alpha/herdr.sock"
+    local n; n="$(herdr_linear::session_propose "$1")"
+    herdr_linear::session_confirm "$1" "$n" "${2:-}"
+}
+
+@test "a declared session team is the team the issue is filed into" {
+    declare_session_team "$BRAND_TEAM_ID" BRAND
+    bind_wt; enable_writes "$BRAND_TEAM_ID" "$PROJECT_ID"
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::_file_issue "$WT" "A new thing" "$DESC" "" ""
+    [ "$status" -eq 0 ]
+    [ "$(sent "$BRAND_TEAM_ID")" -ge 1 ]
+    [ "$(sent "\"teamId\": \"$TEAM_ID\"")" -eq 0 ]
+}
+
+# The middle case the plan is explicit about: no session team, and the team the
+# worktree derives still decides. A resolver whose fallback is not loaded
+# answers empty here and this is the test that sees it.
+@test "with no team declared the worktree's own derivation still files the issue" {
+    bind_wt; enable_writes
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=WEB-4001
+    run --separate-stderr herdr_linear::_file_issue "$WT" "A new thing" "$DESC" "" ""
+    [ "$status" -eq 0 ]
+    [ "$(sent "$TEAM_ID")" -ge 1 ]
+}
+
+# ------------------------------------------------- filing outside the context
+
+@test "filing into a named team outside the context records no worktree and no binding" {
+    enable_writes "$BRAND_TEAM_ID" ""
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 0 ]
+    [ "$output" = "BRAND-4002" ]
+    [ "$(sent "$BRAND_TEAM_ID")" -ge 1 ]
+    [ ! -d "$NEW_WT" ]
+    run herdr_linear::binding_identifier "$WT"
+    [ "$status" -ne 0 ]
+}
+
+@test "filing outside the context carries no project of the context with it" {
+    enable_writes "$BRAND_TEAM_ID" ""
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 0 ]
+    [ "$(sent "projectId")" -eq 0 ]
+}
+
+@test "filing outside the context still asks the write question for this worktree" {
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 3 ]
+    [ "$(sent issueCreate)" -eq 0 ]
+}
+
+@test "filing outside the context refuses when no team is named" {
+    enable_writes "$BRAND_TEAM_ID" ""
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" ""
+    [ "$status" -eq 1 ]
+    [ "$(sent issueCreate)" -eq 0 ]
+}
+
+# The decision this verb exists for: nothing local is recorded, so the ONLY
+# thing that makes the write visible is the title of the surface it was made
+# from. The tab the person is sitting in is that surface.
+renames() {
+    tr '\037' '|' < "$FAKE_HERDR_RECORD_DIR/argvq" 2>/dev/null | grep '^4|tab|rename|' || true
+}
+
+@test "filing outside the context titles the tab it was filed from UNBOUND" {
+    enable_writes "$BRAND_TEAM_ID" ""
+    export HERDR_TAB_ID=wA:t1
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 0 ]
+    [ "$(renames)" = "4|tab|rename|wA:t1|UNBOUND: Plugin PM" ]
+}
+
+@test "a refused filing leaves the tab title alone" {
+    export HERDR_TAB_ID=wA:t1
+    export FAKE_LINEAR_MODE=found_parent FAKE_LINEAR_ALLOW_MUTATION=1 FAKE_LINEAR_NEW_IDENT=BRAND-4002
+    run --separate-stderr herdr_linear::new_issue_outside "$WT" "A new thing" "$DESC" "$BRAND_TEAM_ID"
+    [ "$status" -eq 3 ]
+    [ -z "$(renames)" ]
 }

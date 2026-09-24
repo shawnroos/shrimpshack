@@ -17,7 +17,7 @@ if [ -z "$LIB_DIR" ] || [ ! -r "$LIB_DIR/sanitize.sh" ]; then
 fi
 # shellcheck source=/dev/null
 . "$LIB_DIR/sanitize.sh"
-for f in binding.sh herdr-read.sh; do
+for f in record.sh binding.sh scope-record.sh herdr-read.sh; do
     if [ ! -r "$LIB_DIR/$f" ]; then
         printf 'cannot find lib/%s beside this script\n' "$f" >&2
         exit 1

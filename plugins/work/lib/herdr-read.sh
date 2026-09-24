@@ -12,6 +12,13 @@
 # with their own options, and turning either on for them changes their control
 # flow. Every expansion is `${VAR:-}` so a caller running `set -u` is safe.
 
+# A session name becomes a directory segment in the record store, so it goes
+# through the one validator. Sourced the way binding.sh sources it: no caller is
+# required to have loaded sanitize.sh first, and an undefined validator returns
+# 127, which an `||` branch reads as a refusal.
+command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
+
 # Order: an explicit HERDR_BIN override, then PATH, then a list of known
 # install locations.
 #
@@ -175,6 +182,35 @@ herdr_linear::_resolve_position() {
         if [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
     fi
     printf '%s' "$env_value"
+}
+
+# herdr_linear::session_id
+# Which herdr server this pane belongs to, from HERDR_SOCKET_PATH, or nothing
+# when there is no session level to speak of.
+#
+#   …/sessions/<name>/herdr.sock   -> <name>
+#   <herdr config dir>/herdr.sock  -> default
+#   unset, or any other path       -> nothing, and non-zero
+#
+# The default row is the reason this is not the `sessions/` segment alone: the
+# default server is where most work happens, and an identity that answered only
+# for named sessions would leave it sharing every space record. Anything that is
+# not a herdr socket is refused rather than called `default`, because filing
+# another server's spaces under the default key is the sharing this stops.
+herdr_linear::session_id() {
+    local sock="${HERDR_SOCKET_PATH:-}" dir name
+    [ -n "$sock" ] || return 1
+    case "$sock" in */herdr.sock) ;; *) return 1 ;; esac
+    dir="${sock%/herdr.sock}"
+    name="${dir##*/}"
+    case "${dir%/*}" in
+        */sessions)
+            herdr_linear::is_safe_identifier "$name" || return 1
+            printf '%s' "$name"
+            return 0
+            ;;
+    esac
+    printf 'default'
 }
 
 herdr_linear::pane_id()      { herdr_linear::_resolve_position pane_id      "${HERDR_PANE_ID:-}"; }

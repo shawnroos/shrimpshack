@@ -208,16 +208,13 @@ sys.stdout.write("\t".join([p.get("id") or "", p.get("name") or "",
     if [ -n "$pid" ]; then
         herdr_linear::is_safe_identifier "$pid" || return 1
         key="project-$pid"
-        # `.` is the pair's only separator and is legal inside an id, so an id
-        # carrying one could spell a plain key as a pair or the reverse. The
-        # ids are UUIDs; refusing a dot in them keeps the three key spaces
-        # disjoint by construction rather than by what Linear happens to issue.
-        case "$pid$tid" in
-            *.*) printf 'a Linear id carrying a dot cannot be keyed: %s / %s\n' "$pid" "$tid" >&2
-                 return 1 ;;
-        esac
-        pair_key="$key.$team_key"
-        herdr_linear::is_safe_identifier "$pair_key" || return 1
+        # The pair key's own composer owns the dot guard now (KTD3 in
+        # repos.sh); this is the one caller that needs to say why out loud
+        # before refusing, because it is about to WRITE under that key.
+        pair_key="$(herdr_linear::pair_key "$pid" "$tid")" || {
+            printf 'a Linear id carrying a dot cannot be keyed: %s / %s\n' "$pid" "$tid" >&2
+            return 1
+        }
         # Composed like the title, not slugged: slug() refuses a leading
         # non-alphanumeric, and project names start with emoji and brackets.
         segment="$(printf '%s' "$pname" \

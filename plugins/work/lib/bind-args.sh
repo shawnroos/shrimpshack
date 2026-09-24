@@ -2,7 +2,7 @@
 # The bind skill's arguments: parse them, and check each id against the bind rule.
 # Sourced, never executed.
 
-# The same codes binding.sh defines, so this file can be sourced without it and
+# The same codes record.sh defines, so this file can be sourced without it and
 # the skill's parse=1 and parse=2 still mean what its table says.
 HERDR_LINEAR_BINDING_ABSENT=1
 HERDR_LINEAR_BINDING_REFUSED=2

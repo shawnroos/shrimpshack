@@ -63,6 +63,12 @@ REC_DIR="${FAKE_HERDR_RECORD_DIR:-${TMPDIR:-/tmp}/fake-herdr-record}"
 
 mkdir -p "$REC_DIR" 2>/dev/null || true
 printf '%s\n' "$*" >>"$REC_DIR/argv" 2>/dev/null || true
+# The same call again, one argument per field. `$*` folds an empty argument into
+# the separator, so a caller that renamed a tab to nothing and one that passed no
+# label at all record the same line -- and clearing a title is exactly the case
+# worth telling apart.
+{ printf '%s' "$#"; for _a in "$@"; do printf '\037%s' "$_a"; done; printf '\n'; } \
+    >>"$REC_DIR/argvq" 2>/dev/null || true
 
 # The one list. herdr-read.bats reads it back from here rather than carrying a
 # second copy: two hand-maintained lists guarding one boundary drift apart, and
@@ -113,6 +119,20 @@ _pane_where() {
     awk -v p="$1" '$1 == p { print $2 " " $3; found=1; exit } END { exit !found }' "$REC_DIR/panes"
 }
 
+# A tab's label, as the live server carries one: set at creation, replaced by
+# `tab rename`, and readable through `tab get`. Kept in its own file per tab so
+# a label holding spaces, or no label at all, survives the round trip.
+_label_file() { printf '%s/label.%s' "$REC_DIR" "$1"; }
+_label_of() {
+    local f; f="$(_label_file "$1")"
+    [ -f "$f" ] && { cat "$f"; return 0; }
+    case "$1" in
+        wA:t1) printf 'Plugin PM' ;;
+        wA:t2) printf 'Elsewhere' ;;
+    esac
+}
+_json_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
 # U11's accessor must never reach a mutating verb, and the refusal is how that
 # is asserted. U10 builds layout and legitimately needs them, so it opts in --
 # the refusal stays the default so a read path cannot quietly acquire a write.
@@ -152,8 +172,15 @@ if [ "${FAKE_HERDR_ALLOW_MUTATION:-0}" = 1 ]; then
             printf '%s %s\n' "$_tab" "$_ws" >> "$REC_DIR/tabs"
             printf '%s %s %s\n' "$_root" "$_tab" "$_ws" >> "$REC_DIR/panes"
             printf '%s' "${FAKE_HERDR_SLOW_PANE:-0}" > "$REC_DIR/countdown.$_root"
+            printf '%s' "$(_flag --label "$@")" > "$(_label_file "$_tab")"
             printf '{"result":{"tab":{"tab_id":"%s","label":"tab%s","workspace_id":"%s"},"root_pane":{"pane_id":"%s","tab_id":"%s","workspace_id":"%s"}}}\n' \
                 "$_tab" "$_n" "$_ws" "$_root" "$_tab" "$_ws"
+            exit 0
+            ;;
+        tab:rename)
+            printf '%s' "${4-}" > "$(_label_file "${3:-}")"
+            printf '{"id":"cli:tab:rename","result":{"tab":{"tab_id":"%s","label":"%s"},"type":"tab_info"}}\n' \
+                "${3:-}" "$(_json_esc "${4-}")"
             exit 0
             ;;
         pane:split)
@@ -326,7 +353,8 @@ case "${1:-}" in
                     printf '{"error":{"code":"tab_not_found","message":"tab %s not found"},"id":"cli:tab:get"}\n' "${3:-}" >&2
                     exit 1
                 fi
-                printf '{"id":"cli:tab:get","result":{"tab":{"tab_id":"%s","workspace_id":"%s"},"type":"tab_info"}}\n' "${3:-}" "$_ws"
+                printf '{"id":"cli:tab:get","result":{"tab":{"tab_id":"%s","label":"%s","workspace_id":"%s"},"type":"tab_info"}}\n' \
+                    "${3:-}" "$(_json_esc "$(_label_of "${3:-}")")" "$_ws"
                 ;;
             *) echo "fake-herdr: unsupported tab subcommand '${2:-}'" >&2; exit 2 ;;
         esac

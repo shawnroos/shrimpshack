@@ -382,3 +382,51 @@ fh() { FAKE_HERDR_ALLOW_MUTATION=1 bash "$FIX/fake-herdr.sh" "$@"; }
     run herdr_linear::panes_in_tab wG:t1
     [ "$output" = "$root" ]
 }
+
+# ------------------------------------------------------------ session identity
+#
+# herdr exports HERDR_SOCKET_PATH into every pane. A named session's socket sits
+# under `sessions/<name>/`; every other socket is the default server's, and that
+# is the session most work happens in -- a derivation that answered only for the
+# `sessions/` shape would leave the common case with no identity at all.
+# Verified live: `herdr session list` reports the default session at
+# `<config>/herdr.sock` and a named one at `<config>/sessions/<name>/herdr.sock`.
+
+@test "a named session's socket names the session" {
+    HERDR_SOCKET_PATH="$WORK/config/sessions/team-alpha/herdr.sock" \
+        run herdr_linear::session_id
+    [ "$status" -eq 0 ]
+    [ "$output" = "team-alpha" ]
+}
+
+@test "the plain default socket is the literal default" {
+    HERDR_SOCKET_PATH="$WORK/config/herdr.sock" run herdr_linear::session_id
+    [ "$status" -eq 0 ]
+    [ "$output" = "default" ]
+}
+
+@test "no socket means no session level" {
+    run herdr_linear::session_id
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+# The name becomes a directory segment in the record store, so it is closed by
+# construction rather than filtered. A traversal is not a session.
+@test "a session name outside the identifier charset is no session" {
+    for bad in ".." "." "-rf" ".hidden" "a b"; do
+        HERDR_SOCKET_PATH="$WORK/config/sessions/$bad/herdr.sock" \
+            run herdr_linear::session_id
+        [ "$status" -ne 0 ]
+        [ -z "$output" ]
+    done
+}
+
+# A fourth shape the socket table does not name. Calling it `default` would file
+# another server's spaces under the default session's key, which is the sharing
+# this identity exists to stop.
+@test "a socket path that is not a herdr socket is no session" {
+    HERDR_SOCKET_PATH="$WORK/config/something-else.sock" run herdr_linear::session_id
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
