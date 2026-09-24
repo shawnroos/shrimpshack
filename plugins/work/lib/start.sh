@@ -35,6 +35,8 @@ command -v herdr_linear::scope_repos >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/repos.sh"
 command -v herdr_linear::scheme_name >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/schemes.sh"
+command -v herdr_linear::description_validate >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/description.sh"
 
 HERDR_LINEAR_START_OK=0
 HERDR_LINEAR_START_REFUSED=1

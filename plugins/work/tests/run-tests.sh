@@ -668,6 +668,91 @@ hook_source_stderr_check() {
 # what is in context when it runs. Eight copies drift, and a drifted copy ships
 # green -- so the identity is asserted here rather than assumed, and the failure
 # names the file that moved.
+# The doc gate above reads the ```bash fences in skills/ and commands/. Scripts
+# under bin/ and hooks/ source the same libraries and nothing checked them, so
+# splitting lib/binding.sh into four files broke three of them silently.
+#
+# Two things make this different from the doc gate and both are load-bearing. A
+# lib self-heals what it needs (`command -v ... || . "${BASH_SOURCE[0]%/*}/x.sh"`),
+# so the set a script really loads is the closure of that, not the list it names
+# -- without modelling it this reported seven gaps where three existed. And a
+# `herdr_linear::` name inside a comment is not a call: lib/secrets.sh documents
+# the WRONG way to call one, which otherwise reads as a missing definition.
+script_lib_sync_check() {
+    printf '%bScript lib-sourcing check...%b\n' "$YELLOW" "$NC"
+    local root="${1:-$PLUGIN_ROOT}"
+    scan_or_fail "script lib-sourcing check" "$root" <<'PY' || return 1
+import re, sys, glob, os
+
+plugin_root = sys.argv[1]
+scripts = sorted(glob.glob(os.path.join(plugin_root, "bin", "*.sh"))
+                 + glob.glob(os.path.join(plugin_root, "hooks", "*.sh")))
+# A loop that never ran is a loop that never failed.
+if not scripts:
+    print("no script found under %s/{bin,hooks}" % plugin_root); raise SystemExit
+
+def strip_comments(text):
+    return "\n".join(re.sub(r"(^|\s)#.*$", r"\1", line) for line in text.split("\n"))
+
+libs = sorted(os.path.basename(f)[:-3] for f in glob.glob(os.path.join(plugin_root, "lib", "*.sh")))
+if not libs:
+    print("no library found under %s/lib" % plugin_root); raise SystemExit
+
+body = {n: strip_comments(open(os.path.join(plugin_root, "lib", n + ".sh")).read()) for n in libs}
+
+defs = {}
+for n in libs:
+    for m in re.finditer(r"^herdr_linear::([A-Za-z0-9_]+)\s*\(\)", body[n], re.M):
+        defs[m.group(1)] = n
+
+self_heal = {
+    n: set(re.findall(r"\.\s+\"\$\{BASH_SOURCE\[0\]%/\*\}/([a-z][a-z0-9-]*)\.sh\"", body[n])) & set(libs)
+    for n in libs
+}
+
+def loaded_set(named):
+    seen, stack = set(), list(named)
+    while stack:
+        n = stack.pop()
+        if n in seen or n not in self_heal:
+            continue
+        seen.add(n)
+        stack.extend(self_heal[n])
+    return seen
+
+for path in scripts:
+    text = strip_comments(open(path).read())
+    # Only what is actually sourced counts. Every script guards with
+    # `[ -r "$LIB_DIR/x.sh" ]` before sourcing, and names libs in error
+    # messages, so matching the bare token anywhere would call a lib declared
+    # when the `.` line that loads it had been deleted.
+    named = set()
+    for line in text.split("\n"):
+        if re.search(r"(^|;|&&|\|\|)\s*(\.|source)\s", line):
+            named |= set(re.findall(r"([a-z][a-z0-9-]*)\.sh", line))
+    for m in re.finditer(r"\bfor\s+\w+\s+in\s+([^;]*?)\s*;\s*do", text):
+        named |= set(re.findall(r"([a-z][a-z0-9-]*)\.sh", m.group(1)))
+    named &= set(libs)
+    loaded = loaded_set(named)
+
+    referenced = set(re.findall(r"herdr_linear::([A-Za-z0-9_]+)", text))
+    for n in loaded:
+        referenced |= set(re.findall(r"herdr_linear::([A-Za-z0-9_]+)", body[n]))
+
+    rel = os.path.relpath(path, plugin_root)
+
+    unknown = sorted(fn for fn in referenced if fn not in defs)
+    if unknown:
+        print("%s: reaches undefined function(s): %s" % (rel, ", ".join(unknown)))
+
+    missing = sorted({defs[fn] for fn in referenced if fn in defs and defs[fn] not in loaded})
+    if missing:
+        print("%s: loads %s, missing %s (reached through what it sources)"
+              % (rel, sorted(loaded), missing))
+PY
+    printf '%bevery script loads what it reaches%b\n' "$GREEN" "$NC"
+}
+
 rubric_sync_check() {
     printf '%sRubric sync check...%s\n' "$YELLOW" "$NC"
     local root="${1:-$PLUGIN_ROOT}"
@@ -801,6 +886,7 @@ wire_smoke() {
     secret_scan || rc=1
     brand_scan || rc=1
     skill_lib_sync_check || rc=1
+    script_lib_sync_check || rc=1
     rubric_sync_check || rc=1
     consent_caller_check || rc=1
     placement_caller_check || rc=1
