@@ -433,7 +433,7 @@ JSON
 # decided per team, so one project needs two teams under it to test that at all.
 found_other_team() {
     cat <<'JSON'
-{"data":{"issue":{"id":"1b1b1b1b-1b1b-41b1-81b1-1b1b1b1b1b1b","identifier":"BRAND-1200","title":"Brand kit colours drift after an import","url":"https://linear.app/example/issue/BRAND-1200/brand-kit-colours-drift","branchName":"brand-1200-brand-kit-colours-drift-after-an-import","updatedAt":"2026-09-04T16:20:00.000Z","priority":2,"state":{"id":"22222222-2222-4222-8222-222222222222","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"AI Canvas Tools"},"team":{"id":"66666666-6666-4666-8666-666666666666","key":"BRAND","name":"Brand"},"assignee":null,"labels":{"nodes":[]}}}}
+{"data":{"issue":{"id":"1b1b1b1b-1b1b-41b1-81b1-1b1b1b1b1b1b","identifier":"BRAND-1200","title":"Brand kit colours drift after an import","url":"https://linear.app/example/issue/BRAND-1200/brand-kit-colours-drift","branchName":"brand-1200-brand-kit-colours-drift-after-an-import","updatedAt":"2026-09-04T16:20:00.000Z","priority":2,"state":{"id":"22222222-2222-4222-8222-222222222222","name":"Backlog","type":"backlog"},"parent":null,"project":{"id":"44444444-4444-4444-8444-444444444444","name":"Frame Effects"},"team":{"id":"66666666-6666-4666-8666-666666666666","key":"BRAND","name":"Brand"},"assignee":null,"labels":{"nodes":[]}}}}
 JSON
 }
 
@@ -962,6 +962,73 @@ case "$body_routed" in
     *'$filter:IssueFilter'*)
         [ "$wants_headers" = 1 ] && emit_headers 200
         answer "$(issues_listing)"
+        exit 0
+        ;;
+    # one page gets that page again.
+    #   FAKE_LINEAR_BOARD_PAGES    how many pages the result has (default 1)
+    #   FAKE_LINEAR_BOARD_FAIL_AT  the page number answered with FAKE_LINEAR_BOARD_FAIL_MODE
+    #   FAKE_LINEAR_BOARD_FAIL_MODE  rate_limited | validation_error | auth_error |
+    #                              no_connection: a 200 whose issues connection is null
+    #                              (default rate_limited)
+    #   FAKE_LINEAR_BOARD_CURSOR   stuck: every page claims a next page under the same cursor
+    *'BoardIssues('*)
+        _after="$(printf '%s' "$body" | python3 -c 'import sys,json;a=json.load(sys.stdin).get("variables",{}).get("a");print(a or "")' 2>/dev/null)"
+        _page=1
+        case "$_after" in c[0-9]*) _page=$(( ${_after#c} + 1 )) ;; esac
+        if [ "$_page" = "${FAKE_LINEAR_BOARD_FAIL_AT:-0}" ]; then
+            _fail="${FAKE_LINEAR_BOARD_FAIL_MODE:-rate_limited}"
+            if [ "$_fail" = no_connection ]; then
+                [ "$wants_headers" = 1 ] && emit_headers 200
+                answer '{"data":{"issues":null}}'
+                exit 0
+            fi
+            [ "$wants_headers" = 1 ] && emit_headers 429
+            serve "$_fail"
+            exit 0
+        fi
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        answer "$(FAKE_PAGE="$_page" FAKE_PAGES="${FAKE_LINEAR_BOARD_PAGES:-1}" FAKE_STUCK="${FAKE_LINEAR_BOARD_CURSOR:-}" python3 -c '
+import json, os
+page, pages = int(os.environ["FAKE_PAGE"]), int(os.environ["FAKE_PAGES"])
+stuck = os.environ["FAKE_STUCK"] == "stuck"
+nodes = []
+for k in (1, 2):
+    n = (page - 1) * 2 + k
+    nodes.append({
+        "id": "bbbbbbbb-0000-4000-8000-%012d" % n, "identifier": "WEB-%d" % (5000 + n),
+        "title": "Board ticket %d" % n,
+        "updatedAt": "2026-09-14T10:%02d:00.000Z" % n,
+        "state": {"id": "st-todo", "name": "Todo", "type": "unstarted"},
+        "team": {"id": "55555555-5555-4555-8555-555555555555", "key": "WEB"},
+        "project": {"id": "44444444-4444-4444-8444-444444444444", "name": "Frame Effects"} if k == 1 else None,
+        "projectMilestone": None, "cycle": None,
+        "assignee": {"id": "66666666-6666-4666-8666-666666666666", "name": "Example User"},
+        "priority": k,
+        "parent": {"id": "33333333-3333-4333-8333-333333333333", "identifier": "WEB-2670"} if k == 2 else None,
+        "labels": {"nodes": [{"id": "77777777-7777-4777-8777-777777777777", "name": "Bug",
+                              "parent": {"id": "lg-type", "name": "Type"}}]},
+    })
+more = stuck or page < pages
+print(json.dumps({"data": {"issues": {"nodes": nodes, "pageInfo": {
+    "hasNextPage": more, "endCursor": ("c1" if stuck else "c%d" % page) if more else None}}}}))
+')"
+        exit 0
+        ;;
+    # A team's workflow states with their positions. MUST precede `teams(`
+    # below for the same reason the project arm does. The two unstarted states
+    # are listed out of position order, so taking the first listed one and
+    # taking the lowest position give different answers.
+    #   FAKE_LINEAR_BOARD_STATES   none: the team has no unstarted state
+    #                              no_completed: the team has no completed state
+    *'BoardTeamStates('*)
+        [ "$wants_headers" = 1 ] && emit_headers 200
+        if [ "${FAKE_LINEAR_BOARD_STATES:-}" = none ]; then
+            answer '{"data":{"team":{"states":{"nodes":[{"id":"st-prog","name":"In Progress","type":"started","position":3},{"id":"st-done","name":"Done","type":"completed","position":4}]}}}}'
+        elif [ "${FAKE_LINEAR_BOARD_STATES:-}" = no_completed ]; then
+            answer '{"data":{"team":{"states":{"nodes":[{"id":"st-todo","name":"Todo","type":"unstarted","position":2},{"id":"st-prog","name":"In Progress","type":"started","position":3}]}}}}'
+        else
+            answer '{"data":{"team":{"states":{"nodes":[{"id":"st-backlog","name":"Backlog","type":"backlog","position":0},{"id":"st-todo","name":"Todo","type":"unstarted","position":2},{"id":"st-ready","name":"Ready","type":"unstarted","position":1.5},{"id":"st-prog","name":"In Progress","type":"started","position":3},{"id":"st-archive","name":"Archived","type":"completed","position":6},{"id":"st-done","name":"Done","type":"completed","position":4}]}}}}'
+        fi
         exit 0
         ;;
     # MUST precede `project(id:` and `teams(`: the membership read selects

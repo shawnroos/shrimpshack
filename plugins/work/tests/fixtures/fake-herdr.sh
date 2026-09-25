@@ -41,6 +41,16 @@
 #                          as an unreachable server does, unlike a missing tab
 #   FAKE_HERDR_WORKSPACE_LIST_FAILS  1 to make `workspace list` fail while the
 #                          server otherwise answers
+#   FAKE_HERDR_BOARD_STATE  a board state file. When set, every call but
+#                          `status` is answered by fake-herdr-socket.py from that
+#                          file, the one the fake socket server edits too: the
+#                          board's moves go over the socket and its closes,
+#                          renames and metadata over the CLI, and a test reads
+#                          both effects from one snapshot
+#   FAKE_HERDR_SOCKET_PATH  the socket line `status server` prints
+#   FAKE_HERDR_PANE_OPEN_FAILS  1 to make `plugin pane open` fail
+#   FAKE_HERDR_PANE_OPEN_SLEEP  seconds `plugin pane open` hangs before answering
+#   FAKE_HERDR_STATUS_NO_SOCKET  1 to leave the socket line out
 #   FAKE_HERDR_WORKSPACES  the spaces `workspace list` reports, as
 #                          `id=label,id=label` (default: wA=Plugins). Created
 #                          tabs and panes are remembered in the record dir, so
@@ -73,7 +83,7 @@ printf '%s\n' "$*" >>"$REC_DIR/argv" 2>/dev/null || true
 # The one list. herdr-read.bats reads it back from here rather than carrying a
 # second copy: two hand-maintained lists guarding one boundary drift apart, and
 # the drift silently empties the assertion that the accessor never mutates.
-FAKE_HERDR_MUTATING_VERBS="create split move swap close rename focus run send-keys resize zoom report-metadata report-agent"
+FAKE_HERDR_MUTATING_VERBS="create split move swap close rename focus run send-keys resize zoom report-metadata report-agent start"
 
 # A server that accepts the call and never answers.
 if [ "$MODE" = stall ]; then
@@ -145,6 +155,20 @@ for _verb in $FAKE_HERDR_MUTATING_VERBS; do
         _mutating="$_verb"
     fi
 done
+
+if [ -n "${FAKE_HERDR_HANG:-}" ] && [ "${1:-} ${2:-}" = "$FAKE_HERDR_HANG" ]; then
+    sleep 30
+    exit 0
+fi
+
+if [ "${FAKE_HERDR_SPLIT_FAILS:-0}" = 1 ] && [ "${1:-}" = pane ] && [ "${2:-}" = split ]; then
+    echo "fake-herdr: split refused" >&2
+    exit 1
+fi
+
+if [ -n "${FAKE_HERDR_BOARD_STATE:-}" ] && [ "${1:-}" != status ]; then
+    exec python3 "${BASH_SOURCE[0]%/*}/fake-herdr-socket.py" cli "$@"
+fi
 
 # Creation responses, shaped as herdr 0.8.2 actually answers: `tab create`
 # returns .result.tab and .result.root_pane; `pane split` returns .result.pane.
@@ -257,7 +281,8 @@ emit_status() {
             printf 'version: 0.8.2\n'
             printf 'protocol: 20\n'
             printf 'compatible: yes\n'
-            printf 'socket: /tmp/fake-herdr.sock\n'
+            [ "${FAKE_HERDR_STATUS_NO_SOCKET:-0}" = 1 ] \
+                || printf 'socket: %s\n' "${FAKE_HERDR_SOCKET_PATH:-/tmp/fake-herdr.sock}"
             ;;
     esac
 }
@@ -383,6 +408,20 @@ print(json.dumps({"id": "cli:workspace:list", "result": {"type": "workspace_list
         case "${2:-}" in
             snapshot) emit_snapshot ;;
             *) echo "fake-herdr: unsupported api subcommand '${2:-}'" >&2; exit 2 ;;
+        esac
+        ;;
+    # The work plugin's own herdr plugin opens its bind popup this way. herdr
+    # answers ok whether or not a client is attached to see it.
+    #   FAKE_HERDR_PANE_OPEN_FAILS  1 to make the open fail, as a busy UI does
+    plugin)
+        case "${2:-} ${3:-}" in
+            "pane open")
+                [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
+                [ "${FAKE_HERDR_PANE_OPEN_FAILS:-0}" = 1 ] && { echo '{"error":{"code":"ui_busy"}}' >&2; exit 1; }
+                [ -n "${FAKE_HERDR_PANE_OPEN_SLEEP:-}" ] && sleep "$FAKE_HERDR_PANE_OPEN_SLEEP"
+                printf '{"id":"cli:plugin","result":{"type":"ok"}}\n'
+                ;;
+            *) echo "fake-herdr: unsupported plugin subcommand '${2:-} ${3:-}'" >&2; exit 2 ;;
         esac
         ;;
     *)

@@ -28,6 +28,8 @@ command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 command -v herdr_linear::binding_read >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/binding.sh"
+command -v herdr_linear::keychain_read >/dev/null 2>&1 \
+    || . "${BASH_SOURCE[0]%/*}/secrets.sh"
 
 HERDR_LINEAR_API_URL="${HERDR_LINEAR_API_URL:-https://api.linear.app/graphql}"
 HERDR_LINEAR_CURL_BIN="${HERDR_LINEAR_CURL_BIN:-curl}"
