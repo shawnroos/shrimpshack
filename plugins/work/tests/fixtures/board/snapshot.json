@@ -1,0 +1,23 @@
+{"result": {"snapshot": {
+  "focused_workspace_id": "w9", "focused_tab_id": "w9:t1", "focused_pane_id": "w9:p9",
+  "workspaces": [
+    {"workspace_id": "w1", "label": "WEB"},
+    {"workspace_id": "w2", "label": "OPS"},
+    {"workspace_id": "w9", "label": "Scratch"}
+  ],
+  "tabs": [
+    {"tab_id": "w1:t1", "workspace_id": "w1", "label": "Ana"},
+    {"tab_id": "w1:t2", "workspace_id": "w1", "label": "No assignee"},
+    {"tab_id": "w2:t1", "workspace_id": "w2", "label": "Ben"},
+    {"tab_id": "w9:t1", "workspace_id": "w9", "label": "shell"}
+  ],
+  "panes": [
+    {"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "focused": false, "agent": null, "agent_status": "unknown"},
+    {"pane_id": "w1:p6", "tab_id": "w1:t1", "workspace_id": "w1", "focused": false, "agent": null, "agent_status": "unknown"},
+    {"pane_id": "w1:p3", "tab_id": "w1:t1", "workspace_id": "w1", "focused": false, "agent": null, "agent_status": "unknown"},
+    {"pane_id": "w1:p2", "tab_id": "w1:t2", "workspace_id": "w1", "focused": false, "agent": null, "agent_status": "unknown"},
+    {"pane_id": "w2:p4", "tab_id": "w2:t1", "workspace_id": "w2", "focused": false, "agent": null, "agent_status": "unknown"},
+    {"pane_id": "w9:p9", "tab_id": "w9:t1", "workspace_id": "w9", "focused": true, "agent": null, "agent_status": "unknown"}
+  ],
+  "agents": []
+}}}

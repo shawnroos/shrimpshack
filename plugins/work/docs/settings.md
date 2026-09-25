@@ -23,6 +23,14 @@ string, and the default does not come back.
 | `HERDR_LINEAR_WORKTREES_ROOT` | `$HOME/worktrees` | Where a worktree started from a ticket is created. Nothing under it is canonical, so the whole tree stays safe to delete. | `lib/contain.sh` | no |
 | `HERDR_LINEAR_STORE_DIR` | `$HOME/.claude/work` | Where bindings between a worktree and a ticket are recorded. | `lib/record.sh` | no |
 | `HERDR_LINEAR_PIN_DIR` | `$HOME/.claude/linear-pin` | Where a pinned ticket for the current session is held. | `lib/binding.sh` | no |
+| `HERDR_LINEAR_BOARD_PAGE_SIZE` | `50` | How many tickets the board asks Linear for per page. | `lib/board-linear.sh` | no |
+| `HERDR_LINEAR_BOARD_MAX_PAGES` | `100` | The page cap for one board read, so a filter that matches everything cannot run forever. | `lib/board-linear.sh` | no |
+| `HERDR_LINEAR_BOARD_CALL_SECONDS` | `15` | How long a single herdr call made while applying the board may take. | `lib/board-herdr.sh` | no |
+| `HERDR_LINEAR_BOARD_PANE_CAP` | `16` | The most panes the board will open in one space. | `lib/board-herdr.sh` | no |
+| `HERDR_LINEAR_BOARD_TAB_LIMIT` | `4` | The most tabs one sync will build. | `lib/board-sync.sh` | no |
+| `HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS` | `10` | How long a sync waits for another sync's lock before reporting it is held. | `lib/board-sync.sh` | no |
+| `HERDR_LINEAR_BOARD_FENCE_SECONDS` | `90` | The time bound on the attended fence: a sync past it is stopped and reported. | `lib/board-attended.sh` | no |
+| `HERDR_LINEAR_SOCKET_PATH` | none | The herdr socket the board talks to. Unset, the board asks `herdr status server` for it. | `lib/board-herdr.sh` | no |
 | `HERDR_LINEAR_JOURNAL_DIR` | `$HOME/.claude/work/layouts` | Where a layout the plugin built is journalled. | `lib/herdr-write.sh` | no |
 | `HERDR_LINEAR_DESC_BACKUP_DIR` | `$HOME/.claude/work/descriptions` | Where a ticket description is copied before it is overwritten. | `lib/description.sh` | no |
 | `HERDR_LINEAR_SHADOW_LOG` | `$HOME/.claude/work/shadow.log` | Where a write that was only rehearsed is logged instead of sent. | `lib/binding.sh` | no |
