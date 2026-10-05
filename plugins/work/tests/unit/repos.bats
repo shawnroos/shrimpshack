@@ -326,6 +326,34 @@ lines_of() { printf '%s\n' "$1" | grep -c . || true; }
     [ ! -e "$(plugin_file).lock" ]
 }
 
+# A stale lock that cannot be removed must still count toward the wait, or the
+# writer spins forever. macOS has no `timeout`, so the watchdog is a poll loop.
+@test "a stale lock that cannot be removed fails within the wait instead of hanging" {
+    mkdir -p "$CLAUDE_PLUGIN_DATA"
+    mkdir "$(plugin_file).lock"
+    touch "$(plugin_file).lock/held"
+    touch -t 200001010000 "$(plugin_file).lock"
+
+    HERDR_LINEAR_SCOPE_LOCK_WAIT_SECONDS=1 HERDR_LINEAR_SCOPE_LOCK_STALE_SECONDS=1 \
+        bash -c '. "$1"; herdr_linear::record_scope_repo "$2" project-p1' _ "$LIB" "$REPO_A" \
+        >/dev/null 2>&1 &
+    local pid=$! i=0
+    while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+        sleep 0.1
+        i=$(( i + 1 ))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null || true
+        echo "writer still running after 10s: the stale-lock path never times out" >&2
+        return 1
+    fi
+    local rc=0
+    wait "$pid" || rc=$?
+    [ "$rc" -ne 0 ]
+    [ ! -e "$(plugin_file)" ]
+}
+
 @test "forgetting one repository leaves the rest" {
     herdr_linear::record_scope_repo "$REPO_A" project-p1
     herdr_linear::record_scope_repo "$REPO_B" project-p1

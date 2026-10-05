@@ -22,6 +22,8 @@ for f in contain.sh sanitize.sh; do
 done
 command -v herdr_linear::path_signal >/dev/null 2>&1 || exit 0
 [ -n "${HERDR_LINEAR_STRIP_PY:-}" ] || exit 0
+[ -n "${HERDR_WORKSPACE_ID:-}" ] || exit 0
+command -v board >/dev/null 2>&1 || exit 0
 
 payload="$(cat 2>/dev/null || true)"
 
@@ -36,8 +38,6 @@ except Exception:
 [ -n "$cwd" ] || exit 0
 
 [ "$(herdr_linear::path_signal "$cwd")" = "inside" ] || exit 0
-[ -n "${HERDR_WORKSPACE_ID:-}" ] || exit 0
-command -v board >/dev/null 2>&1 || exit 0
 
 # `board linear session` reads its own working directory, not the payload's.
 session="$(cd "$cwd" 2>/dev/null && board linear session --json </dev/null 2>/dev/null)" || exit 0

@@ -48,8 +48,9 @@ herdr_linear::_scope_lock() {
         now="$(date +%s)"
         since="$(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || echo "$now")"
         if [ $(( now - since )) -gt "$HERDR_LINEAR_SCOPE_LOCK_STALE_SECONDS" ]; then
-            rmdir "$lock" 2>/dev/null
-            continue
+            # A stale lock rmdir cannot remove falls through to the wait count;
+            # a bare `continue` here spins forever.
+            rmdir "$lock" 2>/dev/null && continue
         fi
         waited=$(( waited + 1 ))
         [ "$waited" -gt $(( HERDR_LINEAR_SCOPE_LOCK_WAIT_SECONDS * 20 )) ] && return 1
@@ -86,6 +87,7 @@ herdr_linear::_scope_py() {
         python3 - "$@" <<'PYEOF'
 import sys, json, os, stat, time, secrets
 
+OLD_STORE_VERSION = 1
 VERSION = int(os.environ["HERDR_LINEAR_SCOPE_RECORD_VERSION"])
 op, path, old_dir, args = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 
@@ -134,7 +136,7 @@ def old_repos(key):
     except Exception:
         return None
     if (not isinstance(rec, dict) or not isinstance(rec.get("version"), int)
-            or rec["version"] > 1 or not valid_repos(rec.get("repositories"))):
+            or rec["version"] > OLD_STORE_VERSION or not valid_repos(rec.get("repositories"))):
         return None
     return rec["repositories"]
 

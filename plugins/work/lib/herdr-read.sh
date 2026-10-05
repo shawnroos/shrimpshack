@@ -156,10 +156,6 @@ herdr_linear::probe() {
     esac
 }
 
-# herdr exports these into every pane it owns, so a snapshot walk to learn
-# where this session already knows it is would be a round trip for an answer
-# already in hand — and one that can fail when the server is busy.
-
 # The environment carries this pane's identity AT LAUNCH, which stops being its
 # identity the moment the pane is moved to another workspace: herdr keeps the
 # old id resolving for the moved process, but `api snapshot` reports the new
@@ -212,6 +208,9 @@ herdr_linear::session_id() {
     printf 'default'
 }
 
+# herdr exports these into every pane it owns, so a snapshot walk to learn
+# where this session already knows it is would be a round trip for an answer
+# already in hand — and one that can fail when the server is busy.
 herdr_linear::pane_id()      { herdr_linear::_resolve_position pane_id      "${HERDR_PANE_ID:-}"; }
 herdr_linear::tab_id()       { herdr_linear::_resolve_position tab_id       "${HERDR_TAB_ID:-}"; }
 herdr_linear::workspace_id() { herdr_linear::_resolve_position workspace_id "${HERDR_WORKSPACE_ID:-}"; }
@@ -318,41 +317,5 @@ herdr_linear::panes_at_cwd() {
 herdr_linear::tab_labelled() {
     [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
     herdr_linear::_snap_field tabs tab_id workspace_id "$1" label "$2"
-}
-
-# Every space herdr reports, one `<id><TAB><label>` line each. Nothing on a
-# failure: a server that cannot be asked offers no space, rather than a space
-# that is not there.
-herdr_linear::live_spaces() {
-    local bin out
-    bin="$(herdr_linear::bin)"
-    [ -n "$bin" ] || return 1
-    out="$(herdr_linear::_bounded "$bin" workspace list 2>/dev/null)" || return 1
-    printf '%s' "$out" | python3 -c '
-import sys, json
-try:
-    for w in json.load(sys.stdin)["result"]["workspaces"]:
-        sys.stdout.write("%s\t%s\n" % (w.get("workspace_id", ""), w.get("label", "")))
-except Exception:
-    sys.exit(1)
-'
-}
-
-# The space a tab sits in; nothing, and 0, when herdr says there is no such
-# tab; non-zero when herdr could not be asked. herdr exits 1 for both, so the
-# error code is what tells "gone" from "unknown" -- and a caller that took
-# unknown for gone would make a second tab on every retry during an outage.
-# herdr writes that error object to STDERR (0.9.0), so the miss is asked again
-# for its stderr alone.
-herdr_linear::tab_space() {
-    local bin ws err
-    [ -n "${1:-}" ] || return 1
-    bin="$(herdr_linear::bin)"
-    [ -n "$bin" ] || return 1
-    ws="$(herdr_linear::_bounded "$bin" tab get "$1" 2>/dev/null | herdr_linear::json "result.tab.workspace_id")"
-    [ -n "$ws" ] && { printf '%s' "$ws"; return 0; }
-    err="$(herdr_linear::_bounded "$bin" tab get "$1" 2>&1 >/dev/null)"
-    [ "$(printf '%s' "$err" | herdr_linear::json "error.code")" = "tab_not_found" ] && return 0
-    return 1
 }
 

@@ -7,12 +7,11 @@
 #   migrate-credential.sh remove-plaintext   delete the LINEAR_API_KEY line
 #
 # A FRESH KEY, NOT THE OLD ONE.
-# `store` asks for a newly issued key on purpose. The existing one has lived in
-# a plaintext file that dotfile sync and Time Machine may have copied, and it
-# spent every cache refresh of earlier plugin versions in process argv where any
-# process running as this user could read it (measured 2026-09-04: visible in 6
-# of 9 samples taken during one refresh). Moving that key to the Keychain carries the exposure
-# along; issuing a new one and revoking the old one ends it.
+# `store` asks for a newly issued key on purpose. The existing one has lived in a plaintext file
+# that dotfile sync and Time Machine may have copied, and it spent every cache refresh of earlier
+# plugin versions in process argv where any process running as this user could read it (measured
+# 2026-09-04: visible in 6 of 9 samples taken during one refresh). Moving that key to the Keychain
+# carries the exposure along; issuing a new one and revoking the old one ends it.
 #
 # Issue one at https://linear.app/settings/api — a personal API key cannot be
 # created through the API, so this step is a person at a browser and no
