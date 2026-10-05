@@ -51,14 +51,18 @@ Follow these steps in order. Doing them out of order can lose a binding.
 
    ```bash
    touch "$HOME/.work-cutover-M1"
-   board import work-store | tee "$HOME/.work-cutover-import-2.txt"
+   board import work-store > "$HOME/.work-cutover-import-2.txt" 2>&1
+   echo "import exit: $?"
+   cat "$HOME/.work-cutover-import-2.txt"
    ```
+
+   `import exit: 0` means the import worked. Any other number means it failed: read the output, fix the cause, then repeat this step.
 
 7. Check that nothing wrote the store after the second marker:
 
    ```bash
    cd ~/.claude/work
-   find board.json bindings workspaces contexts scopes -newer "$HOME/.work-cutover-M1" -type f 2>/dev/null
+   find board.json board bindings workspaces contexts scopes shadow.log -newer "$HOME/.work-cutover-M1" -type f 2>/dev/null
    ```
 
    It should print nothing. A newer file under `board/` or in `shadow.log` means an old session is still running: end it, then repeat steps 6 and 7.

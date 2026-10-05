@@ -28,12 +28,14 @@ try:
 except Exception:
     print("binding unknown: board linear session did not answer"); sys.exit()
 b = d.get("binding") or {}
+if d.get("space_bound") is False:
+    print("space not bound to a project (bind it in the board)"); sys.exit()
 if not b.get("issue"):
     print("unbound"); sys.exit()
 print("issue:  " + str(b["issue"]))
 print("column: " + str(d.get("column") or "none"))
 for m in d.get("marks") or []:
-    print("mark:   " + str(m.get("kind", "")) + " " + str(m.get("text", "")))
+    print(("mark:   " + str(m.get("kind") or "") + " " + str(m.get("text") or "")).rstrip())
 ' | herdr_linear::sanitize_stream
 fi
 ```
@@ -43,6 +45,7 @@ Say it in one line:
 | Output | Say |
 |---|---|
 | `outside herdr` | this session is not in a herdr pane, so it has no board binding |
+| `space not bound to a project` … | this herdr workspace is not bound to a project on the board. Bind it in the board first |
 | `unbound` | this worktree is not bound. `/work:start WEB-1234` starts bound work |
 | `issue:` … | name the issue and its column, and list any marks |
 | `binding unknown:` … | say why, then rely on the health lines below |
@@ -95,9 +98,11 @@ session's Linear writes.
 
 ## With an issue identifier
 
-`/work WEB-3308` means *start on this*. Hand off to `/work:start`, which
-creates the worktree at a path derived from the ticket and binds it on the
-board — or, when more than one repository or none is recorded for the ticket's
+`/work WEB-3308` means *start on this*. Read
+`${CLAUDE_PLUGIN_ROOT}/skills/start/SKILL.md` and follow it with the
+identifier as its argument. Do not invoke `/work:start` as a skill: only the
+user can invoke it. That flow creates the worktree at a path derived from the
+ticket and binds it on the board — or, when more than one repository or none is recorded for the ticket's
 project, asks which repository to use and creates nothing until that is
 answered.
 
