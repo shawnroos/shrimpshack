@@ -118,8 +118,8 @@
     },
     {
       "name": "work",
-      "description": "Bind each git worktree to a Linear issue, so a session knows what it is working on from where it sits and Linear stays current without being maintained by hand. Start work from a ticket or from nothing; a binding is proposed from the branch and confirmed by a person. Only a confirmed binding permits a write, and writes are bounded in code to the bound issue and what the plugin created beneath it, because a personal Linear key carries the whole account. Hooks do nothing until a worktree is bound. Every write ships in shadow mode until a logged proposal has been checked against a real issue.",
-      "version": "0.5.0",
+      "description": "Ties each Claude session to its Linear issue through the herdr board. Agents write Linear with Linear's own MCP tools; the plugin's hook tells the board about every write, a SessionStart hook names the session's issue, column and marks, and start and layout create bound worktrees. A rules skill carries the write rules. Needs a herdr-board release with `board linear report`; see docs/cutover.md to move from 0.5.",
+      "version": "0.6.0",
       "author": {
         "name": "Shawn Roos"
       },
