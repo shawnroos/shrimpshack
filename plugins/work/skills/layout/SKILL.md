@@ -88,13 +88,28 @@ parent as its parent. The new sub-issue joins the chosen children.
 For each chosen child, render its names. The worktree name and branch come from
 the same scheme `start` uses; the path is beside the parent's worktree.
 
+Put each title on the line between its `read` and its `HERDR_LINEAR.END`,
+exactly as Linear gave it, with no quotes added; the quoted heredoc expands
+nothing. Type an identifier only when it is made of letters, digits, `-`, `_`
+and `.`. If an identifier fails that, or a title holds a line break or the text
+`HERDR_LINEAR.END`, refuse that child and say why; do not edit it to fit.
+
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/lib/sanitize.sh"
 source "${CLAUDE_PLUGIN_ROOT}/lib/schemes.sh"
 
 HERE='/Users/me/worktrees/acme/frame-effects/WEB-3300-frame-effects'
-PARENT='WEB-3300' PARENT_TITLE='Frame effects'
-CHILD='WEB-3308' CHILD_TITLE='Export panel is empty when a still-rendering frame is selected'
+PARENT=WEB-3300 CHILD=WEB-3308
+IFS= read -r PARENT_TITLE <<'HERDR_LINEAR.END'
+Frame effects
+HERDR_LINEAR.END
+IFS= read -r CHILD_TITLE <<'HERDR_LINEAR.END'
+Export panel is empty when a still-rendering frame is selected
+HERDR_LINEAR.END
+
+for v in "$PARENT" "$CHILD"; do
+  herdr_linear::is_safe_identifier "$v" || { echo "refusing: unsafe identifier $v"; exit 1; }
+done
 
 NAME="$(herdr_linear::scheme_name worktree "$CHILD" "$CHILD_TITLE")" || exit 1
 BRANCH="$(herdr_linear::scheme_name branch "$CHILD" "$CHILD_TITLE")" || exit 1

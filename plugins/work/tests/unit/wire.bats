@@ -259,8 +259,10 @@ start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.
 # KTD7. An exit the table does not name is an exit the skill reads as failure.
 @test "the start skill binds through the board with an explicit cwd" {
     body="$(start_skill)"
-    [[ "$body" == *"bind"* ]]
-    [[ "$body" == *"cwd"* ]]
+    run grep -E '`bind`' <<<"$body"
+    [ -n "$output" ]
+    run grep -E '`cwd`' <<<"$body"
+    [ -n "$output" ]
     [[ "$body" != *"/work:bind"* ]]
 }
 
@@ -332,6 +334,35 @@ layout_fences() { awk '/^```bash/ {f=1; next} /^```/ {f=0} f' <<<"$(layout_skill
         | sed -E 's/^.*herdr /herdr /' \
         | grep -vxE 'herdr (tab create|pane split)'" _ "$fences"
     [ -z "$output" ] || { echo "runs: $output"; return 1; }
+}
+
+skill_fences() { awk '/^```bash/ {f=1; next} /^```/ {f=0} f' "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/$1/SKILL.md"; }
+
+# A title is text someone else wrote. Typed between quotes, a title holding
+# the quote character ends the string and the rest of it runs as bash.
+@test "no skill's bash fences assign a title or project name inside quotes" {
+    for skill in start layout; do
+        run grep -nE "(^|[^A-Za-z0-9_])([A-Z_]*TITLE|PROJECT_NAME)=['\"]" <<<"$(skill_fences "$skill")"
+        [ -z "$output" ] || { echo "$skill: $output"; return 1; }
+    done
+}
+
+# A quoted heredoc expands nothing. Only a line equal to the terminator ends
+# it, and the skill refuses a title holding a line break or that text.
+@test "both skills read titles through a quoted heredoc with a dotted terminator" {
+    check() {
+        local fences="$1" var="$2" term
+        term="$(grep -oE "^IFS= read -r $var <<'[A-Za-z0-9_]+\.[A-Za-z0-9_]+'\$" <<<"$fences" \
+            | sed -E "s/.*<<'([^']+)'\$/\1/")"
+        [ -n "$term" ] || { echo "no quoted heredoc read for $var"; return 1; }
+        grep -qxF "$term" <<<"$fences" || { echo "terminator $term for $var never closes"; return 1; }
+    }
+    start="$(skill_fences start)"
+    layout="$(skill_fences layout)"
+    check "$start" TITLE
+    check "$start" PROJECT_NAME
+    check "$layout" PARENT_TITLE
+    check "$layout" CHILD_TITLE
 }
 
 rules_skill_path() { echo "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/linear-rules/SKILL.md"; }
