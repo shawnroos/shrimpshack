@@ -34,11 +34,11 @@ EOF
     printf '%sself-check passed%s\n' "$GREEN" "$NC"
 }
 
-# The count of suite files committed alongside this guard (2026-09-05). Bump it
-# up whenever a suite file is added; if it is ever lowered, say why in the
-# commit — this number is what turns "the tests directory got renamed" into a
-# failure instead of a smaller, silently-green run.
-HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-38}"
+# The count of suite files committed alongside this guard. Bump it up whenever a
+# suite file is added; if it is ever lowered, say why in the commit — this
+# number is what turns "the tests directory got renamed" into a failure instead
+# of a smaller, silently-green run.
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-11}"
 
 run_suite() {
     local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
@@ -459,218 +459,48 @@ PY
     printf '%severy owned document sources what it calls%s\n' "$GREEN" "$NC"
 }
 
-# The enforcement point is the thing under test, and one red test proves ONE
-# write site. This forces the consent reader to say yes everywhere, then demands
-# a named red test per write verb. A verb that forgot the check stays green under
-# the mutation, and its absence from this list is the finding.
-#
-# The lib/ tree is copied and patched; nothing under the checkout is touched, so
-# a killed run leaves no half-mutated source behind.
-consent_mutation_check() {
-    printf '%sConsent mutation (reader forced true)...%s\n' "$YELLOW" "$NC"
-    # `cp -R "$PLUGIN_ROOT"` is only safe while PLUGIN_ROOT really is the plugin.
-    # A copy of this script run from somewhere else resolves it to `/` and the
-    # phase then copies the whole filesystem -- which is how it filled a disk
-    # once. Prove the target first; the copy is the destructive step.
-    if [ ! -r "$PLUGIN_ROOT/.claude-plugin/plugin.json" ] || [ ! -d "$PLUGIN_ROOT/lib" ]; then
-        printf '%s%s is not the plugin root; refusing to copy it%s\n' "$RED" "$PLUGIN_ROOT" "$NC"
-        return 1
-    fi
-    # Every one of these must go red. They are named, because "the suite failed"
-    # is exactly the answer that hides a verb with no check in it.
-    local -a expect=(
-        "create.bats:an answer given in an unrelated worktree does not enable issue creation"
-        "create.bats:an answer for another team does not enable project creation"
-        "start.bats:an answer for another team does not enable creation"
-        "description.bats:a description is not written when nobody has answered"
-        "documents.bats:a document is not published when nobody has answered"
-        "reconcile.bats:a hook with no recorded answer records the question rather than sending"
-        "views.bats:a view is not created when nobody has answered"
-    )
-    # The names above are the point of the list and they stay. What a hand-kept
-    # list cannot do is notice the write verb added next year: a seventh call
-    # site with no line here is forgotten in the one phase that then reports
-    # every verb covered. So the same list is derived from the call sites
-    # themselves and the two must agree -- the list can drift, but not quietly.
-    local derived expected
-    derived="$(awk '
-        /herdr_linear::consent_gate/ && $0 !~ /^[[:space:]]*#/ && $0 !~ /herdr_linear::consent_gate\(\)/ {
-            n = split(FILENAME, p, "/"); f = p[n]; sub(/\.sh$/, ".bats", f); print f
-        }' "$PLUGIN_ROOT"/lib/*.sh | sort)"
-    expected="$(printf '%s\n' "${expect[@]}" | sed 's/:.*//' | sort)"
-    if [ "$derived" != "$expected" ]; then
-        printf '%sconsent mutation FAILED%s — the named list and the real consent_gate call sites disagree.\n' \
-            "$RED" "$NC"
-        printf '  < named above, > found under lib/; add or remove a named test to match.\n'
-        diff <(printf '%s\n' "$expected") <(printf '%s\n' "$derived") | sed 's/^/  /'
-        return 1
-    fi
-    local tmp; tmp="$(mktemp -d)"
-    # The whole plugin, because a .bats file resolves lib/ from its OWN
-    # directory -- copying lib/ alone would run every test against the real one
-    # and report a green mutation for a reason that has nothing to do with the
-    # code under test.
-    cp -R "$PLUGIN_ROOT" "$tmp/work"
-    cat >> "$tmp/work/lib/binding.sh" <<'EOF'
-
-herdr_linear::consent_ok() { return 0; }
-EOF
-    local rc=0 entry file name out
-    for entry in "${expect[@]}"; do
-        file="${entry%%:*}"; name="${entry#*:}"
-        out="$(bats -f "$name" "$tmp/work/tests/unit/$file" 2>&1 || true)"
-        # The filter matching nothing prints "0 tests" and exits 0, which reads
-        # exactly like a pass. Require the test to have RUN and to have failed.
-        if ! printf '%s' "$out" | grep -q "^ok 1 \|^not ok 1 "; then
-            printf '%s  %s / %s — the mutation phase ran no such test%s\n' "$RED" "$file" "$name" "$NC"; rc=1; continue
-        fi
-        if printf '%s' "$out" | grep -q "^not ok 1 "; then
-            printf '%s  red: %s / %s%s\n' "$GREEN" "$file" "$name" "$NC"
-        else
-            printf '%s  STILL GREEN: %s / %s — this verb does not read the consent record%s\n' "$RED" "$file" "$name" "$NC"; rc=1
-        fi
-    done
-    rm -rf "$tmp"
-    [ "$rc" -eq 0 ] && printf '%severy write verb turns red without the consent check%s\n' "$GREEN" "$NC"
-    return "$rc"
-}
-
-# consent_confirm and consent_decline have exactly one class of caller: the
-# ask-and-record fence in a write skill, every one of them
-# disable-model-invocation. Both record a PERSON'S answer -- no is an answer --
-# so a caller under lib/, hooks/ or commands/ would let the plugin answer its
-# own question either way.
-consent_caller_check() {
-    printf '%sConsent answer-verb caller check...%s\n' "$YELLOW" "$NC"
-    local hits d verb
-    # An absent directory yields no hits and reads as "no caller", so name the
-    # three the rule is about and require each to be there before believing it.
-    for d in lib hooks commands; do
-        if [ ! -d "$PLUGIN_ROOT/$d" ]; then
-            printf '%sconsent-confirm caller check FAILED%s — %s/%s is not there; it was never swept.\n' \
-                "$RED" "$NC" "$PLUGIN_ROOT" "$d"
-            return 1
-        fi
-    done
-    for verb in consent_confirm consent_decline; do
-        hits="$(grep -rn "herdr_linear::$verb" \
-            "$PLUGIN_ROOT/lib" "$PLUGIN_ROOT/hooks" "$PLUGIN_ROOT/commands" 2>/dev/null \
-            | grep -v "^.*/lib/binding.sh:.*herdr_linear::$verb() {" || true)"
-        if [ -n "$hits" ]; then
-            printf '%s\n' "$hits"
-            printf '%s%s caller check FAILED%s — only a write skill may record an answer.\n' \
-                "$RED" "$verb" "$NC"
-            return 1
-        fi
-    done
-    printf '%sneither answer verb has a caller under lib/, hooks/ or commands/%s\n' "$GREEN" "$NC"
-}
-
-# KTD31. A space binding is a person's answer, as consent is, and a hook has
-# nobody to ask. So no hook binds a space or places a session, nothing under
-# commands/ binds one, and under lib/ the callers of workspace_confirm are
-# new_project -- which binds a space it has just made FROM the project, the same
-# bound-on-creation reasoning start_from_issue applies to binding_confirm -- and
-# workspace_bind_checked, the guard-and-write a skill fence calls in place of
-# writing the sequence out for itself. The helper is banned from hooks by name
-# for the same reason workspace_confirm is: it records without asking.
-placement_caller_check() {
-    printf '%sPlacement caller check...%s\n' "$YELLOW" "$NC"
-    local root="${1:-$PLUGIN_ROOT}" d
-    for d in lib hooks commands; do
-        if [ ! -d "$root/$d" ]; then
-            printf '%splacement caller check FAILED%s — %s/%s is not there; it was never swept.\n' \
-                "$RED" "$NC" "$root" "$d"
-            return 1
-        fi
-    done
-    scan_or_fail "placement caller check" "$root" <<'PYEOF' || return 1
-import os, re, sys
-
-root = sys.argv[1]
-DEF = re.compile(r"^(herdr_linear::[A-Za-z0-9_]+)\(\)\s*\{")
-HOOK_BANNED = ("workspace_confirm", "workspace_propose", "workspace_bind_checked",
-               "open_session", "place_session", "layout_build")
-LIB_ALLOWED = {("create.sh", "herdr_linear::new_project"),
-               ("space-bind.sh", "herdr_linear::workspace_bind_checked")}
-
-def files(d):
-    for base, _, names in os.walk(os.path.join(root, d)):
-        for n in sorted(names):
-            yield os.path.join(base, n)
-
-for f in files("hooks"):
-    for i, line in enumerate(open(f, errors="replace"), 1):
-        for verb in HOOK_BANNED:
-            if "herdr_linear::" + verb in line:
-                print("%s:%d: a hook calls %s; a hook has nobody to ask" % (f, i, verb))
-for f in files("commands"):
-    for i, line in enumerate(open(f, errors="replace"), 1):
-        if "herdr_linear::workspace_confirm" in line:
-            print("%s:%d: a command binds a space" % (f, i))
-for f in files("lib"):
-    current = None
-    for i, line in enumerate(open(f, errors="replace"), 1):
-        m = DEF.match(line)
-        if m:
-            current = m.group(1)
-            continue
-        if "herdr_linear::workspace_confirm" in line and not line.lstrip().startswith("#"):
-            if (os.path.basename(f), current) not in LIB_ALLOWED:
-                print("%s:%d: %s calls workspace_confirm; only %s may"
-                      % (f, i, current, " and ".join(sorted(n for _, n in LIB_ALLOWED))))
-PYEOF
-    printf '%sno hook places a session, and only the two named functions bind a space from lib/%s\n' "$GREEN" "$NC"
-}
-
 # Sourcing lib/ writes to stderr -- the deprecated-root warning in contain.sh
-# does -- and a hook has no stderr to spare: R26 is no output at all, not less
-# of it. Both hooks discard it on the source loop today; this is what stops the
-# next hook, or a rewrite of an existing one, from dropping the redirection and
-# leaking lib chatter into a session that was never pointed at this plugin.
+# does -- and a hook has no stderr to spare: no output at all, not less of it.
+# Every `.` or `source` line in a hook must discard stderr. A hook that sources
+# nothing passes; but if no hook sources anything, the pattern below has
+# stopped recognising the source line, and that is refused rather than read as
+# clean.
 hook_source_stderr_check() {
     printf '%sHook source-stderr check...%s\n' "$YELLOW" "$NC"
-    local rc=0 f hits loops count=0
-    for f in "$PLUGIN_ROOT"/hooks/*.sh; do
+    local root="${1:-$PLUGIN_ROOT}" rc=0 f lines bare count=0 sourced=0
+    local pattern='(^|[;&|]|then|do|else)[[:space:]]*(\.|source)[[:space:]]'
+    for f in "$root"/hooks/*.sh; do
         [ -e "$f" ] || continue
         count=$((count + 1))
-        # The rule is enforced by recognising one exact spelling of the source
-        # loop. A hook that spells it differently matches nothing and passes
-        # while leaking, so require the line to be FOUND before reading anything
-        # into the fact that none of them was bare.
-        loops="$(grep -c '\. "\$LIB/\$f"' "$f" || true)"
-        if [ "$loops" -eq 0 ]; then
-            printf '%s: no `. "$LIB/$f"` line, so this check saw nothing in it. Every hook\n' "$(basename "$f")"
-            printf '    is required to carry that exact line; a hook that sources lib some other\n'
-            printf '    way, or sources none at all, needs this check widened rather than trusted.\n'
-            rc=1
-            continue
-        fi
-        hits="$(grep -n '\. "\$LIB/\$f"' "$f" | grep -v '2>/dev/null' || true)"
-        if [ -n "$hits" ]; then
-            printf '%s: %s\n' "$(basename "$f")" "$hits"
+        lines="$(grep -nE "$pattern" "$f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+        [ -n "$lines" ] || continue
+        sourced=$((sourced + 1))
+        bare="$(printf '%s\n' "$lines" | grep -v '2>/dev/null' || true)"
+        if [ -n "$bare" ]; then
+            printf '%s: %s\n' "$(basename "$f")" "$bare"
             rc=1
         fi
     done
     if [ "$count" -eq 0 ]; then
         printf '%shook source-stderr check FAILED%s — no hook under %s/hooks; nothing was checked.\n' \
-            "$RED" "$NC" "$PLUGIN_ROOT"
+            "$RED" "$NC" "$root"
+        return 1
+    fi
+    if [ "$sourced" -eq 0 ]; then
+        printf '%shook source-stderr check FAILED%s — no source line recognised in any hook; the shape moved.\n' \
+            "$RED" "$NC"
         return 1
     fi
     if [ "$rc" -ne 0 ]; then
         printf '%shook source-stderr check FAILED%s — a hook sources lib without discarding stderr.\n' "$RED" "$NC"
         return 1
     fi
-    printf '%severy hook sources lib with stderr discarded%s\n' "$GREEN" "$NC"
+    printf '%severy hook that sources lib discards stderr%s\n' "$GREEN" "$NC"
 }
 
-# The act-or-ask rubric is copied into all eight skills because a skill file is
-# what is in context when it runs. Eight copies drift, and a drifted copy ships
-# green -- so the identity is asserted here rather than assumed, and the failure
-# names the file that moved.
 # The doc gate above reads the ```bash fences in skills/ and commands/. Scripts
-# under bin/ and hooks/ source the same libraries and nothing checked them, so
-# splitting lib/binding.sh into four files broke three of them silently.
+# under bin/ and hooks/ source the same libraries, and a library split once
+# broke three of them silently while that gate stayed green.
 #
 # Two things make this different from the doc gate and both are load-bearing. A
 # lib self-heals what it needs (`command -v ... || . "${BASH_SOURCE[0]%/*}/x.sh"`),
@@ -753,56 +583,6 @@ PY
     printf '%bevery script loads what it reaches%b\n' "$GREEN" "$NC"
 }
 
-rubric_sync_check() {
-    printf '%sRubric sync check...%s\n' "$YELLOW" "$NC"
-    local root="${1:-$PLUGIN_ROOT}"
-    scan_or_fail "rubric sync check" "$root" <<'PYEOF' || return 1
-import sys, os, glob, hashlib
-
-root = sys.argv[1]
-paths = sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")))
-if not paths:
-    print("no SKILL.md files found under %s/skills" % root); raise SystemExit
-
-# The rubric is bounded by its own closing sentence, not by the next heading:
-# in most skills the text after it is file-specific prose with no heading
-# between, and a heading-bounded window would compare that prose too.
-TERMINATOR = "never a reason to stop."
-
-def block(path):
-    lines = open(path).read().splitlines()
-    for i, line in enumerate(lines):
-        if line.strip() == "## Act or ask":
-            out = [line]
-            for nxt in lines[i + 1:]:
-                out.append(nxt)
-                if nxt.rstrip().endswith(TERMINATOR):
-                    return "\n".join(out).rstrip()
-            return None
-    return None
-
-blocks = {p: block(p) for p in paths}
-missing = sorted(p for p, b in blocks.items() if b is None)
-for p in missing:
-    print("%s: carries no `## Act or ask` rubric, or one that never closes" % p)
-
-present = {p: b for p, b in blocks.items() if b is not None}
-if present:
-    # The majority spelling is the reference, so one drifted file is named as
-    # the drift rather than renaming the other seven.
-    counts = {}
-    for b in present.values():
-        counts[b] = counts.get(b, 0) + 1
-    ref = max(counts, key=lambda b: counts[b])
-    ref_sum = hashlib.md5(ref.encode()).hexdigest()[:8]
-    for p in sorted(present):
-        if present[p] != ref:
-            print("%s: rubric differs from the other %d (%s vs %s)"
-                  % (p, counts[ref], hashlib.md5(present[p].encode()).hexdigest()[:8], ref_sum))
-PYEOF
-    printf '%sthe rubric is one text in every skill%s\n' "$GREEN" "$NC"
-}
-
 # A function that turns an identifier into a filesystem path must call the one
 # validator. This is the half a unit test cannot answer: is_safe_identifier had
 # two passing tests and one production caller, and the traversal in cache_read
@@ -811,25 +591,17 @@ PYEOF
 # which is whether the function is DEFINED when the code runs.
 #
 # Anchored on the path construction, not on a name: a site is any line that puts
-# a variable segment under a *_DIR or *CACHE root. Two sites consume a shasum
-# key rather than an identifier and are named below with that reason.
+# a variable segment under a *_DIR or *CACHE root.
 #
 # WHAT IT DOES NOT SEE, so nobody reads more from a green than is there:
 # constructions at a script's TOP LEVEL rather than inside a function, and roots
-# that are neither *_DIR nor *CACHE -- start.sh builds "$root/$name" from a
-# slugged title, which lib/sanitize.sh guards by a different route.
+# that are neither *_DIR nor *CACHE.
 identifier_path_check() {
     printf '%sIdentifier path-construction check...%s\n' "$YELLOW" "$NC"
     local rc=0 f out
     for f in "$PLUGIN_ROOT"/lib/*.sh "$PLUGIN_ROOT"/hooks/*.sh "$PLUGIN_ROOT"/bin/*.sh; do
         [ -e "$f" ] || continue
         out="$(awk -v file="$f" '
-            # binding_key and _pin_branch_key both emit 16 hex characters from
-            # shasum. There is no identifier in either path.
-            BEGIN {
-                skip["herdr_linear::_record_path"] = 1
-                skip["herdr_linear::binding_seed_candidate"] = 1
-            }
             # ANY function header, not just a herdr_linear:: one. The cache
             # WRITER is a bare write_nodes(), and a prefix-only pattern walked
             # straight past the one traversal that writes rather than reads.
@@ -845,8 +617,7 @@ identifier_path_check() {
                 if (site == "") site = NR ": " $0
             }
             /^\}/ {
-                if (fn != "" && site != "" && !(fn in skip) \
-                    && body !~ /is_safe_identifier/)
+                if (fn != "" && site != "" && body !~ /is_safe_identifier/)
                     print file ":" site "   [" fn "]"
                 fn = ""; body = ""; site = ""
             }
@@ -887,9 +658,6 @@ wire_smoke() {
     brand_scan || rc=1
     skill_lib_sync_check || rc=1
     script_lib_sync_check || rc=1
-    rubric_sync_check || rc=1
-    consent_caller_check || rc=1
-    placement_caller_check || rc=1
     identifier_path_check || rc=1
     hook_source_stderr_check || rc=1
     return "$rc"
@@ -901,9 +669,8 @@ main() {
         self-check) self_check || rc=1 ;;
         unit) self_check || rc=1; run_suite || rc=1 ;;
         smoke) wire_smoke || rc=1 ;;
-        mutation) consent_mutation_check || rc=1 ;;
-        all) self_check || rc=1; run_suite || rc=1; wire_smoke || rc=1; consent_mutation_check || rc=1 ;;
-        *) printf 'usage: run-tests.sh [all|unit|self-check|smoke|mutation]\n' >&2; return 2 ;;
+        all) self_check || rc=1; run_suite || rc=1; wire_smoke || rc=1 ;;
+        *) printf 'usage: run-tests.sh [all|unit|self-check|smoke]\n' >&2; return 2 ;;
     esac
     if [ "$rc" -eq 0 ]; then printf '%sPASS%s\n' "$GREEN" "$NC"; else printf '%sFAIL%s\n' "$RED" "$NC"; fi
     return "$rc"

@@ -41,12 +41,6 @@
 #                          as an unreachable server does, unlike a missing tab
 #   FAKE_HERDR_WORKSPACE_LIST_FAILS  1 to make `workspace list` fail while the
 #                          server otherwise answers
-#   FAKE_HERDR_BOARD_STATE  a board state file. When set, every call but
-#                          `status` is answered by fake-herdr-socket.py from that
-#                          file, the one the fake socket server edits too: the
-#                          board's moves go over the socket and its closes,
-#                          renames and metadata over the CLI, and a test reads
-#                          both effects from one snapshot
 #   FAKE_HERDR_SOCKET_PATH  the socket line `status server` prints
 #   FAKE_HERDR_PANE_OPEN_FAILS  1 to make `plugin pane open` fail
 #   FAKE_HERDR_PANE_OPEN_SLEEP  seconds `plugin pane open` hangs before answering
@@ -164,10 +158,6 @@ fi
 if [ "${FAKE_HERDR_SPLIT_FAILS:-0}" = 1 ] && [ "${1:-}" = pane ] && [ "${2:-}" = split ]; then
     echo "fake-herdr: split refused" >&2
     exit 1
-fi
-
-if [ -n "${FAKE_HERDR_BOARD_STATE:-}" ] && [ "${1:-}" != status ]; then
-    exec python3 "${BASH_SOURCE[0]%/*}/fake-herdr-socket.py" cli "$@"
 fi
 
 # Creation responses, shaped as herdr 0.8.2 actually answers: `tab create`

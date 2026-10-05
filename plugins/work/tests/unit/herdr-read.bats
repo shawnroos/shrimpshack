@@ -261,6 +261,62 @@ wA:p2" ]
     [ -z "$output" ]
 }
 
+@test "the pane standing in a directory is found by its cwd, and none for a path no pane holds" {
+    export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
+
+    run -0 herdr_linear::panes_at_cwd "/tmp/two"
+    [ "$output" = "wA:p2" ]
+
+    run -1 herdr_linear::panes_at_cwd "/tmp/elsewhere"
+    [ -z "$output" ]
+
+    # A prefix names a different directory.
+    run -1 herdr_linear::panes_at_cwd "/tmp/tw"
+    [ -z "$output" ]
+
+    run -1 herdr_linear::panes_at_cwd ""
+    [ -z "$output" ]
+}
+
+# Read as "no column", an unreadable snapshot would split a duplicate column on
+# every retry during an outage.
+@test "a cwd lookup against a dead server is could-not-read" {
+    export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
+    export FAKE_HERDR_MODE=dead
+    run -2 herdr_linear::panes_at_cwd "/tmp/two"
+    [ -z "$output" ]
+}
+
+@test "a cwd lookup against a snapshot with no pane list is could-not-read" {
+    export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
+    export FAKE_HERDR_SNAPSHOT_NO_PANES=1
+    run -2 herdr_linear::panes_at_cwd "/tmp/two"
+    [ -z "$output" ]
+}
+
+@test "a tab is found by its exact label, within one space only" {
+    export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
+
+    run -0 herdr_linear::tab_labelled wA "Plugin PM"
+    [ "$output" = "wA:t1" ]
+
+    run -1 herdr_linear::tab_labelled wA "Plugin"
+    [ -z "$output" ]
+
+    run -1 herdr_linear::tab_labelled wZ "Plugin PM"
+    [ -z "$output" ]
+
+    run -1 herdr_linear::tab_labelled wA ""
+    [ -z "$output" ]
+}
+
+@test "a tab lookup against a dead server is could-not-read" {
+    export HERDR_BIN="$(plant_herdr "$WORK/opt")/herdr"
+    export FAKE_HERDR_MODE=dead
+    run -2 herdr_linear::tab_labelled wA "Plugin PM"
+    [ -z "$output" ]
+}
+
 # The read-only boundary
 
 @test "no accessor ever invokes a mutating herdr verb" {
@@ -274,6 +330,8 @@ wA:p2" ]
     herdr_linear::snapshot >/dev/null || true
     herdr_linear::tab_of_pane "wA:p2" >/dev/null || true
     herdr_linear::panes_in_tab "wA:t1" >/dev/null || true
+    herdr_linear::panes_at_cwd "/tmp/two" >/dev/null || true
+    herdr_linear::tab_labelled wA "Plugin PM" >/dev/null || true
 
     record="$(argv_record)"
     [ -n "$record" ]  # the fixture WAS reached, so the absence below means something
@@ -305,6 +363,11 @@ wA:p2" ]
     [ "$output" = "wA:t1
 wA:p1
 wA:p2" ]
+
+    run -0 env PATH="$WORK/bin" HERDR_BIN="$FIX/fake-herdr.sh" bash -c \
+        ". '$LIB/herdr-read.sh'; herdr_linear::panes_at_cwd /tmp/nine; echo; herdr_linear::tab_labelled wA Elsewhere"
+    [ "$output" = "wA:p9
+wA:t2" ]
 
     run -0 env PATH="$WORK/bin" bash -c \
         ". '$LIB/herdr-read.sh'; '$FIX/fake-herdr.sh' api snapshot | herdr_linear::json result.snapshot.panes.1.pane_id"

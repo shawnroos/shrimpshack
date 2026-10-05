@@ -12,10 +12,9 @@
 # with their own options, and turning either on for them changes their control
 # flow. Every expansion is `${VAR:-}` so a caller running `set -u` is safe.
 
-# A session name becomes a directory segment in the record store, so it goes
-# through the one validator. Sourced the way binding.sh sources it: no caller is
-# required to have loaded sanitize.sh first, and an undefined validator returns
-# 127, which an `||` branch reads as a refusal.
+# A session name can become a path segment, so it goes through the one
+# validator. No caller is required to have loaded sanitize.sh first, and an
+# undefined validator returns 127, which an `||` branch reads as a refusal.
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 
@@ -157,10 +156,6 @@ herdr_linear::probe() {
     esac
 }
 
-# herdr exports these into every pane it owns, so a snapshot walk to learn
-# where this session already knows it is would be a round trip for an answer
-# already in hand — and one that can fail when the server is busy.
-
 # The environment carries this pane's identity AT LAUNCH, which stops being its
 # identity the moment the pane is moved to another workspace: herdr keeps the
 # old id resolving for the moved process, but `api snapshot` reports the new
@@ -213,6 +208,9 @@ herdr_linear::session_id() {
     printf 'default'
 }
 
+# herdr exports these into every pane it owns, so a snapshot walk to learn
+# where this session already knows it is would be a round trip for an answer
+# already in hand — and one that can fail when the server is busy.
 herdr_linear::pane_id()      { herdr_linear::_resolve_position pane_id      "${HERDR_PANE_ID:-}"; }
 herdr_linear::tab_id()       { herdr_linear::_resolve_position tab_id       "${HERDR_TAB_ID:-}"; }
 herdr_linear::workspace_id() { herdr_linear::_resolve_position workspace_id "${HERDR_WORKSPACE_ID:-}"; }
@@ -263,28 +261,33 @@ except Exception:
 # 1 when the snapshot was read and holds no match; 2 when it could not be read.
 # Only the read that answered can say which: a second read that succeeds says
 # nothing about a first that failed while the server was busy.
-herdr_linear::_pane_field() {
-    local match_key="$1" match_val="$2" want="$3" snap
+herdr_linear::_snap_field() {
+    local coll="$1" want="$2" k1="$3" v1="$4" k2="${5:-}" v2="${6:-}" snap
     snap="$(herdr_linear::snapshot)" || return 2
     [ -n "$snap" ] || return 2
     local out
     if command -v jq >/dev/null 2>&1; then
-        printf '%s' "$snap" | jq -e '.result.snapshot.panes | type == "array"' >/dev/null 2>&1 || return 2
-        out="$(printf '%s' "$snap" | jq -r --arg k "$match_key" --arg v "$match_val" --arg w "$want" \
-            '.result.snapshot.panes[]? | select(.[$k] == $v) | .[$w] // empty' 2>/dev/null)"
+        printf '%s' "$snap" | jq -e --arg c "$coll" '.result.snapshot[$c] | type == "array"' >/dev/null 2>&1 || return 2
+        out="$(printf '%s' "$snap" | jq -r --arg c "$coll" --arg w "$want" \
+            --arg k1 "$k1" --arg v1 "$v1" --arg k2 "$k2" --arg v2 "$v2" \
+            '.result.snapshot[$c][]? | select(.[$k1] == $v1 and ($k2 == "" or .[$k2] == $v2)) | .[$w] // empty' 2>/dev/null)"
     else
-        out="$(printf '%s' "$snap" | HL_K="$match_key" HL_V="$match_val" HL_W="$want" python3 -c '
+        out="$(printf '%s' "$snap" | HL_C="$coll" HL_W="$want" HL_K1="$k1" HL_V1="$v1" HL_K2="$k2" HL_V2="$v2" python3 -c '
 import sys, json, os
+e = os.environ
 try:
-    panes = json.load(sys.stdin)["result"]["snapshot"]["panes"]
-    assert isinstance(panes, list)
+    rows = json.load(sys.stdin)["result"]["snapshot"][e["HL_C"]]
+    assert isinstance(rows, list)
 except Exception:
     sys.exit(2)
-for p in panes:
-    if isinstance(p, dict) and p.get(os.environ["HL_K"]) == os.environ["HL_V"]:
-        v = p.get(os.environ["HL_W"])
-        if v is not None:
-            print(v)
+for r in rows:
+    if not isinstance(r, dict) or r.get(e["HL_K1"]) != e["HL_V1"]:
+        continue
+    if e["HL_K2"] and r.get(e["HL_K2"]) != e["HL_V2"]:
+        continue
+    v = r.get(e["HL_W"])
+    if v is not None:
+        print(v)
 ' 2>/dev/null)" || return 2
     fi
     [ -n "$out" ] || return 1
@@ -294,48 +297,25 @@ for p in panes:
 # Which tab a pane sits in. 1 for no such pane, 2 when herdr could not be read.
 herdr_linear::tab_of_pane() {
     [ -n "${1:-}" ] || return 1
-    herdr_linear::_pane_field pane_id "$1" tab_id
+    herdr_linear::_snap_field panes tab_id pane_id "$1"
 }
 
 # That tab's panes, one id per line, in snapshot order.
 herdr_linear::panes_in_tab() {
     [ -n "${1:-}" ] || return 1
-    herdr_linear::_pane_field tab_id "$1" pane_id
+    herdr_linear::_snap_field panes pane_id tab_id "$1"
 }
 
-# Every space herdr reports, one `<id><TAB><label>` line each. Nothing on a
-# failure: a server that cannot be asked offers no space, rather than a space
-# that is not there.
-herdr_linear::live_spaces() {
-    local bin out
-    bin="$(herdr_linear::bin)"
-    [ -n "$bin" ] || return 1
-    out="$(herdr_linear::_bounded "$bin" workspace list 2>/dev/null)" || return 1
-    printf '%s' "$out" | python3 -c '
-import sys, json
-try:
-    for w in json.load(sys.stdin)["result"]["workspaces"]:
-        sys.stdout.write("%s\t%s\n" % (w.get("workspace_id", ""), w.get("label", "")))
-except Exception:
-    sys.exit(1)
-'
-}
-
-# The space a tab sits in; nothing, and 0, when herdr says there is no such
-# tab; non-zero when herdr could not be asked. herdr exits 1 for both, so the
-# error code is what tells "gone" from "unknown" -- and a caller that took
-# unknown for gone would make a second tab on every retry during an outage.
-# herdr writes that error object to STDERR (0.9.0), so the miss is asked again
-# for its stderr alone.
-herdr_linear::tab_space() {
-    local bin ws err
+# The panes whose cwd is exactly this path, one id per line. The path is
+# compared as given, so pass it resolved (`pwd -P`) the way herdr reports it.
+herdr_linear::panes_at_cwd() {
     [ -n "${1:-}" ] || return 1
-    bin="$(herdr_linear::bin)"
-    [ -n "$bin" ] || return 1
-    ws="$(herdr_linear::_bounded "$bin" tab get "$1" 2>/dev/null | herdr_linear::json "result.tab.workspace_id")"
-    [ -n "$ws" ] && { printf '%s' "$ws"; return 0; }
-    err="$(herdr_linear::_bounded "$bin" tab get "$1" 2>&1 >/dev/null)"
-    [ "$(printf '%s' "$err" | herdr_linear::json "error.code")" = "tab_not_found" ] && return 0
-    return 1
+    herdr_linear::_snap_field panes pane_id cwd "$1"
+}
+
+# The tabs in one space carrying exactly this label, one id per line.
+herdr_linear::tab_labelled() {
+    [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+    herdr_linear::_snap_field tabs tab_id workspace_id "$1" label "$2"
 }
 

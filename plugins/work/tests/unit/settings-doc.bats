@@ -2,9 +2,11 @@
 
 load setup_common
 
-# U1 — the settings inventory. The document is checked against the code in both
+# The settings inventory. The document is checked against the code in both
 # directions, so neither a row for a setting that does not exist nor a setting
-# added later without a row can pass.
+# added later without a row can pass. The code is the libraries, the scripts,
+# and the bash fences of the skills and the command: a setting a skill reads in
+# its own fence is as real as one a library reads.
 
 bats_require_minimum_version 1.5.0
 
@@ -14,16 +16,17 @@ setup() {
     RUNNER="$ROOT/tests/run-tests.sh"
 }
 
-# Every name read with a default under lib/, whether or not a person may set it.
+# Every name read with a default in shipped code, whether or not a person may set it.
 all_env_reads() {
-    grep -ohE '\$\{(HERDR_|LINEAR_)[A-Za-z0-9_]+:?-' "$ROOT"/lib/*.sh \
+    grep -ohE '\$\{((HERDR_|LINEAR_)[A-Za-z0-9_]+|CLAUDE_PLUGIN_DATA):?-' \
+            "$ROOT"/lib/*.sh "$ROOT"/bin/*.sh "$ROOT"/skills/*/SKILL.md "$ROOT"/commands/*.md \
         | sed -E 's/^\$\{//; s/:?-$//' \
         | sort -u
 }
 
 # The subset the document must carry. The excluded classes are test and operator
-# seams, not conventions: executable paths, lock/retry/poll/timeout tuning, and
-# the identifiers herdr exports into a pane it owns.
+# seams, not conventions: executable paths, lock tuning, and the identifiers
+# herdr exports into a pane it owns.
 #
 # The deprecated root spelling is derived from the warning that has to spell it,
 # never written here — the brand scan rejects the literal, and an exclusion that
@@ -35,8 +38,8 @@ code_knobs() {
     all_env_reads \
         | grep -vE '_BIN$' \
         | grep -vE '^HERDR_(PANE|TAB|WORKSPACE)_ID$' \
-        | grep -vE '^HERDR_LINEAR_(LOCK_|RETRY_|PANE_POLL_|TIMEOUT_)' \
-        | grep -vE '^HERDR_LINEAR_(CANDIDATE_LIMIT|MIN_SUITES)$' \
+        | grep -vE '^HERDR_LINEAR_(SCOPE_)?LOCK_' \
+        | grep -vE '^HERDR_LINEAR_MIN_SUITES$' \
         | { if [ -n "$deprecated" ]; then grep -vxF "$deprecated" || true; else cat; fi; }
 }
 
@@ -60,25 +63,25 @@ doc_col() {
     [ -r "$DOC" ]
 }
 
-@test "every documented setting is a real environment read under lib/" {
+@test "every documented setting is a real environment read in shipped code" {
     local reads name
     reads="$(all_env_reads)"
     [ -n "$(doc_knobs)" ]
     while read -r name; do
         [ -n "$name" ] || continue
         printf '%s\n' "$reads" | grep -qxF "$name" \
-            || { printf 'documented but never read under lib/: %s\n' "$name" >&2; return 1; }
+            || { printf 'documented but never read in shipped code: %s\n' "$name" >&2; return 1; }
     done <<<"$(doc_knobs)"
 }
 
-@test "every user-settable knob under lib/ is documented" {
+@test "every user-settable knob in shipped code is documented" {
     local documented name
     documented="$(doc_knobs)"
     [ -n "$(code_knobs)" ]
     while read -r name; do
         [ -n "$name" ] || continue
         printf '%s\n' "$documented" | grep -qxF "$name" \
-            || { printf 'read under lib/ but missing from %s: %s\n' "docs/settings.md" "$name" >&2; return 1; }
+            || { printf 'read in shipped code but missing from %s: %s\n' "docs/settings.md" "$name" >&2; return 1; }
     done <<<"$(code_knobs)"
 }
 

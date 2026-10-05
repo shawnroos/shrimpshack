@@ -1,36 +1,51 @@
 #!/usr/bin/env bash
 # schemes.sh — how the plugin names things. Sourced, never executed.
 #
-# R4/R5. A name is ASKED FOR by kind, not composed by the caller. Before this,
-# a name was either what one shell function returned or a literal at the line
-# that used it, and the two drifted: the layout verb in lib/herdr-write.sh slugs
-# the tab label it sets, the session verb beside it sets its label unslugged,
-# and nothing reconciled them. Both ask here now.
+# A name is ASKED FOR by kind, not composed by the caller: a name composed at
+# each call site drifts, one site slugging what the site beside it does not.
 #
-# R6, and the reason this is an ENUMERATION rather than a template. A scheme is
-# a name in a fixed set that this file renders. A placeholder language would let
-# a setting grow shapes nobody tested; an enum cannot, and every member of it is
-# reachable from one loop in the suite. An unrecognised scheme is REFUSED with
-# the valid set named — never quietly replaced by the default, which would turn
-# a typo into a silently different worktree location.
+# This is an ENUMERATION rather than a template. A scheme is a name in a fixed
+# set that this file renders. A placeholder language would let a setting grow
+# shapes nobody tested; an enum cannot, and every member of it is reachable from
+# one loop in the suite. An unrecognised scheme is REFUSED with the valid set
+# named — never quietly replaced by the default, which would turn a typo into a
+# silently different worktree location.
 #
-# R4 names five kinds. Only three of them have a rendering site in this plugin:
-# a worktree, a branch, and a tab. A space label is set once, at
-# `lib/create.sh:241`, and a pane is never labelled at all — herdr's `pane split`
-# takes no label. Inventing schemes for two levels nothing renders would be an
-# enum whose members no call site can reach.
+# Only three kinds have a rendering site in this plugin: a worktree, a branch,
+# and a tab. The plugin never labels a space, and a pane is never labelled at
+# all — herdr's `pane split` takes no label. Inventing schemes for two levels
+# nothing renders would be an enum whose members no call site can reach.
 #
-# KTD5. The DEFAULT of every scheme renders byte-identical names to today's. A
+# The DEFAULT of every scheme renders byte-identical names to today's. A
 # default that changes an existing name silently re-homes every future worktree
 # and breaks the identifier-in-both-places property that makes a worktree
 # findable from its branch.
 
-# No lib sources another, and the source order is not guaranteed: without these
+# No lib sources another, and the source order is not guaranteed: without this
 # the calls below are 127, which a `||` branch reads as a refusal.
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
-command -v herdr_linear::slug >/dev/null 2>&1 \
-    || . "${BASH_SOURCE[0]%/*}/linear.sh"
+
+# Any Linear-derived name bound for a path, a branch or an argument is
+# reduced to [A-Za-z0-9._-] and then REJECTED outright when the result would be
+# dangerous rather than being repaired into something plausible: empty, `.`,
+# `..`, or a leading hyphen (which every CLI reads as a flag) or dot (which
+# hides the file). Repairing would silently produce a name nobody chose.
+herdr_linear::slug() {
+    local text="${1:-}" max="${2:-60}" raw out
+    raw="$(printf '%s' "$text" | tr -c 'A-Za-z0-9._-' '-')"
+    # Checked BEFORE trimming. Stripping the leading hyphens first and then
+    # testing for them is a check that can never fire: `--rf` would quietly
+    # become `rf`, which is exactly the repair this function must not perform.
+    case "$raw" in
+        -*|.*) return 1 ;;
+    esac
+    out="$(printf '%s' "$raw" | sed -E 's/-+/-/g; s/-+$//' | cut -c1-"$max")"
+    case "$out" in
+        ''|'.'|'..') return 1 ;;
+    esac
+    printf '%s' "$out"
+}
 
 HERDR_LINEAR_SCHEME_OK=0
 HERDR_LINEAR_SCHEME_REFUSED=1
@@ -49,9 +64,7 @@ HERDR_LINEAR_WORKTREE_SCHEME_DEFAULT="identifier-title"
 HERDR_LINEAR_BRANCH_SCHEME_DEFAULT="prefix-worktree"
 HERDR_LINEAR_TAB_SCHEME_DEFAULT="identifier"
 
-# ------------------------------------------------------------------ refusing
-
-# The offending value reaches stderr only when it is closed under R28's charset.
+# The offending value reaches stderr only when it is closed under the slug charset.
 # A scheme comes from an environment variable, so it is text a person typed and
 # printing it raw would put an ESC or an OSC-2 title rewrite on the terminal.
 herdr_linear::_scheme_printable() {
@@ -93,27 +106,12 @@ herdr_linear::_scheme_for() {
     printf '%s' "$scheme"
 }
 
-# herdr_linear::schemes_usable <kind>...
-#
-# For a path that must refuse before it reads or files anything, and so has no
-# issue yet to render a name from. The refusal printed is the same one a render
-# prints, once per kind that fails.
-herdr_linear::schemes_usable() {
-    local kind
-    for kind in "$@"; do
-        herdr_linear::_scheme_for "$kind" >/dev/null || return
-    done
-}
-
-# ----------------------------------------------------------------- rendering
-
-# The only title-slug pipeline in the plugin. `start_worktree_name` held a
-# byte-for-byte copy of it until it was routed through here; two copies of a
-# name's shape is a divergence waiting for the day somebody improves one.
+# The only title-slug pipeline in the plugin: two copies of a name's shape is a
+# divergence waiting for the day somebody improves one.
 #
 # The 40-character cut can sever a word in half, so the severed remnant is
 # dropped -- but only when the cut actually happened. Trimming unconditionally
-# cost every short title its last word.
+# would cost every short title its last word.
 herdr_linear::_scheme_title_slug() {
     local title="$1" slug
     slug="$(printf '%s' "$title" \
@@ -139,39 +137,15 @@ herdr_linear::_scheme_render_worktree() {
     esac
 }
 
-# herdr_linear::scheme_wants_title <kind>
-#
-# True when the kind's chosen scheme renders the title as well as the
-# identifier. A site holding only an identifier -- both tab labels do -- uses
-# this to decide whether to go and read the title. The DEFAULT tab scheme does
-# not want one, so the common path still asks Linear nothing it did not already
-# ask; without this the alternative was to make `identifier-title` a tab scheme
-# no site could render.
-herdr_linear::scheme_wants_title() {
-    local kind="${1-}" scheme
-    # A branch is rendered from the WORKTREE scheme, so that is the one to ask.
-    if [ "$kind" = branch ]; then kind=worktree; fi
-    # Silenced: an unrecognised scheme is reported by the render that refuses,
-    # and a caller that asks this first would otherwise print the same complaint
-    # twice for one typo.
-    scheme="$(herdr_linear::_scheme_for "$kind" 2>/dev/null)" || return 1
-    case "$scheme" in
-        identifier-title) return 0 ;;
-    esac
-    return 1
-}
-
-# ----------------------------------------------------------------- the resolver
-
 # herdr_linear::scheme_name <kind> <identifier> <title> [branch-prefix]
 #
 # Prints the rendered name and returns OK, or prints nothing and returns
 # REFUSED (this ticket cannot be named) or UNKNOWN (the scheme does not exist).
 herdr_linear::scheme_name() {
     local kind="${1-}" ident="${2-}" title="${3-}"
-    # `-` and not `:-`, twice over. KTD1 says setting the prefix empty gets the
-    # branch and the directory back as one identical string; `:-` would collapse
-    # that explicit empty into "feature" and make the claim false.
+    # `-` and not `:-`, twice over. Setting the prefix empty gets the branch
+    # and the directory back as one identical string; `:-` would collapse that
+    # explicit empty into "feature".
     local prefix="${4-${HERDR_LINEAR_BRANCH_PREFIX-feature}}"
     local scheme wt_scheme name wt rc
 
@@ -210,8 +184,8 @@ herdr_linear::scheme_name() {
         tab)
             case "$scheme" in
                 # Verbatim, not through herdr_linear::slug, which squeezes
-                # separator runs. `herdr-write.sh:229` labels a tab from the bare
-                # identifier today and this has to reproduce that byte for byte.
+                # separator runs. Tabs already open carry the bare identifier
+                # as their label, and this has to reproduce that byte for byte.
                 identifier)       name="$ident" ;;
                 identifier-title) name="$(herdr_linear::_scheme_render_worktree identifier-title "$ident" "$title")" || name="" ;;
             esac ;;
@@ -223,7 +197,7 @@ herdr_linear::scheme_name() {
         return "$HERDR_LINEAR_SCHEME_REFUSED"
     }
 
-    # R7, enforced rather than trusted. A scheme is free to compose the name any
+    # Enforced rather than trusted. A scheme is free to compose the name any
     # way it likes, but a worktree that does not carry its identifier cannot be
     # found from its branch -- and the 60-character cut is a live way to lose it
     # without anyone writing a scheme that omits it.

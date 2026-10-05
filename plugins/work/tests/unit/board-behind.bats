@@ -2,164 +2,111 @@
 
 load setup_common
 
-# U14 — an agent's own Linear write marks the board behind (KTD15). The hook
-# records and advises; it never syncs, reads Linear or touches a pane (KTD2).
+# The report hook hands each Linear MCP write to `board linear report` (KTD2).
+# It exits 0 on every path, so each test also checks what the fake board saw.
 
 bats_require_minimum_version 1.5.0
 
-# The board keys its records by herdr session, so these tests need one. It is
-# set here and not in setup_common because suites that assert the no-session
-# behaviour must keep seeing no session.
-herdr_linear_test::board_session() {
-    export HERDR_SOCKET_PATH="${BATS_TEST_TMPDIR:-${TMPDIR:-/tmp}}/herdr/herdr.sock"
-}
-
 setup() {
-    herdr_linear_test::board_session
     ROOT="${BATS_TEST_DIRNAME}/../.."
     HOOK="$ROOT/hooks/board-behind.sh"
     WORK="$BATS_TEST_TMPDIR/work"
     mkdir -p "$WORK/bin" "$HERDR_LINEAR_PROJECTS_ROOT/wt" "$HERDR_LINEAR_STORE_DIR"
-
-    # Any herdr or network call leaves a trace a test can refuse.
-    for b in herdr curl; do
-        printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/%s.calls"\nexit 1\n' "$WORK" "$b" > "$WORK/bin/$b"
-        chmod +x "$WORK/bin/$b"
-    done
-    export HERDR_BIN="$WORK/bin/herdr" HERDR_LINEAR_CURL_BIN="$WORK/bin/curl"
-    export HERDR_LINEAR_BIN_PATHS="$WORK/bin"
-
-    SYNC="$HERDR_LINEAR_STORE_DIR/board/sync-state.json"
+    ln -s "${BATS_TEST_DIRNAME}/../fixtures/fake-board.sh" "$WORK/bin/board"
+    BASE_PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    export PATH="$WORK/bin:$BASE_PATH"
+    export FAKE_BOARD_LOG="$WORK/board.log"
     INSIDE="$HERDR_LINEAR_PROJECTS_ROOT/wt"
+    printf '{"session_id":"s1","cwd":"%s","hook_event_name":"PostToolUse","tool_name":"mcp__linear__save_issue","tool_input":{"id":"WEB-1","title":"t"},"tool_response":{"identifier":"WEB-1"}}' \
+        "$INSIDE" > "$WORK/payload.json"
 }
 
-board_config() {
-    printf '{"version":1,"global":{"levels":{"column":"state"},"filter":{"team":["WEB"]}},"spaces":{}}\n' \
-        > "$HERDR_LINEAR_STORE_DIR/board.json"
-    chmod 600 "$HERDR_LINEAR_STORE_DIR/board.json"
-}
+calls() { grep -c '^argv: ' "$FAKE_BOARD_LOG" 2>/dev/null || printf '0\n'; }
 
-payload() { printf '{"session_id":"s1","cwd":"%s","hook_event_name":"PostToolUse","tool_name":"%s","tool_input":{},"tool_response":{}}' "${2:-$INSIDE}" "$1"; }
-
-fire() { run --separate-stderr bash -c "printf '%s' '$(payload "$@")' | bash '$HOOK'"; }
-
-marked_behind() {
-    python3 -c 'import json,sys; print(bool(json.load(open(sys.argv[1])).get("behind_marked_at")))' "$SYNC" 2>/dev/null \
-        || printf 'False\n'
-}
-
-context_of() { python3 -c 'import sys,json;d=json.load(sys.stdin)["hookSpecificOutput"];print(d["hookEventName"]);print(d["additionalContext"])'; }
-
-no_side_calls() {
-    [ ! -e "$WORK/herdr.calls" ] && [ ! -e "$WORK/curl.calls" ]
-}
-
-@test "a Linear write tool call marks the board behind and names the unattended sync" {
-    board_config
-    fire mcp__linear__save_issue
-    [ "$status" -eq 0 ]
-    [ -z "$stderr" ]
-    [ "$(marked_behind)" = "True" ]
-    ctx="$(printf '%s' "$output" | context_of)"
-    [[ "$ctx" == PostToolUse* ]]
-    [[ "$ctx" == *"bash \""*"/bin/board-sync.sh\""* ]]
-}
-
-@test "a Linear write creates or moves no pane and calls no Linear API" {
-    board_config
-    fire mcp__linear__save_issue
-    [ "$status" -eq 0 ]
-    no_side_calls
-    [ ! -e "$HERDR_LINEAR_STORE_DIR/board/sync.lock" ]
-    [ ! -e "$HERDR_LINEAR_STORE_DIR/board/journal.json" ]
-}
-
-@test "a write through a second Linear server prefix marks the board behind too" {
-    board_config
-    fire mcp__claude_ai_Linear__save_comment
-    [ "$status" -eq 0 ]
-    [ "$(marked_behind)" = "True" ]
-    [[ "$(printf '%s' "$output" | context_of)" == *"/bin/board-sync.sh"* ]]
-}
-
-@test "a write tool Linear adds later still marks the board behind" {
-    board_config
-    fire mcp__linear__archive_issue
-    [ "$(marked_behind)" = "True" ]
-}
-
-@test "a Linear read does not mark the board behind" {
-    board_config
-    for t in mcp__linear__get_issue mcp__linear__list_issues mcp__claude_ai_Linear__search_documentation mcp__linear__extract_images; do
-        fire "$t"
-        [ "$status" -eq 0 ]
-        [ -z "$output" ]
-    done
-    [ ! -e "$SYNC" ]
-}
-
-@test "a write through a server that is not Linear does not mark the board behind" {
-    board_config
-    fire mcp__github__create_issue
+@test "a save_issue payload reaches board linear report once, byte for byte" {
+    run --separate-stderr bash "$HOOK" < "$WORK/payload.json"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
-    [ ! -e "$SYNC" ]
+    [ "$(calls)" = "1" ]
+    [ "$(grep '^argv: ' "$FAKE_BOARD_LOG")" = "argv: linear report" ]
+    cmp "$WORK/payload.json" "$FAKE_BOARD_LOG.stdin"
 }
 
-@test "with no board configured nothing is recorded and nothing is said" {
-    fire mcp__linear__save_issue
+@test "a payload larger than 64 KB passes every byte and exits 0" {
+    python3 -c '
+import json, sys
+print(json.dumps({"session_id": "s1", "cwd": sys.argv[1], "hook_event_name": "PostToolUse",
+    "tool_name": "mcp__linear__save_issue", "tool_input": {},
+    "tool_response": {"description": "x" * 200000}}), end="")
+' "$INSIDE" > "$WORK/big.json"
+    [ "$(wc -c < "$WORK/big.json")" -gt 65536 ]
+    run --separate-stderr bash "$HOOK" < "$WORK/big.json"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
-    [ ! -e "$SYNC" ]
+    [ "$(calls)" = "1" ]
+    cmp "$WORK/big.json" "$FAKE_BOARD_LOG.stdin"
 }
 
-@test "a write from outside the project roots marks the board behind and says nothing" {
-    board_config
-    mkdir -p "$WORK/elsewhere"
-    fire mcp__linear__save_issue "$WORK/elsewhere"
+@test "with board absent from PATH the hook exits 0 with no output at all" {
+    export PATH="$BASE_PATH"
+    run command -v board
+    [ "$status" -ne 0 ]
+    run --separate-stderr bash "$HOOK" < "$WORK/payload.json"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
-    [ "$(marked_behind)" = "True" ]
-}
-
-@test "a hook with an unreadable store still exits 0" {
-    board_config
-    mkdir -p "$HERDR_LINEAR_STORE_DIR/board"
-    printf '{}' > "$SYNC"
-    chmod 000 "$SYNC" "$HERDR_LINEAR_STORE_DIR/board" 2>/dev/null || skip "cannot remove read permission here"
-    fire mcp__linear__save_issue
-    chmod 700 "$HERDR_LINEAR_STORE_DIR/board"; chmod 600 "$SYNC"
-    [ "$status" -eq 0 ]
     [ -z "$stderr" ]
 }
 
-@test "a malformed or empty payload exits 0 and says nothing" {
-    board_config
-    run --separate-stderr bash -c "printf 'not json' | bash '$HOOK'"
+@test "an old board that exits 64 is called, and the hook still exits 0 silently" {
+    export FAKE_BOARD_EXIT=64
+    run --separate-stderr bash "$HOOK" < "$WORK/payload.json"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
-    run --separate-stderr bash -c "bash '$HOOK' </dev/null"
-    [ "$status" -eq 0 ]
-    [ -z "$output" ]
-    [ ! -e "$SYNC" ]
+    [ -z "$stderr" ]
+    [ "$(calls)" = "1" ]
 }
 
-@test "the hook is registered on PostToolUse with a matcher that takes every Linear server" {
-    run python3 - "$ROOT/hooks/hooks.json" <<'PY'
-import json, re, sys
+@test "a board that prints is not heard on the hook's stdout" {
+    printf 'noise\n' > "$WORK/noise"
+    export FAKE_BOARD_RESPONSE="$WORK/noise"
+    run --separate-stderr bash "$HOOK" < "$WORK/payload.json"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$(calls)" = "1" ]
+}
+
+@test "the hook writes nothing under the plugin store" {
+    printf 'keep\n' > "$HERDR_LINEAR_STORE_DIR/existing"
+    before="$(cd "$HERDR_LINEAR_STORE_DIR" && find . | sort)"
+    run --separate-stderr bash "$HOOK" < "$WORK/payload.json"
+    [ "$status" -eq 0 ]
+    [ "$(calls)" = "1" ]
+    after="$(cd "$HERDR_LINEAR_STORE_DIR" && find . | sort)"
+    [ "$before" = "$after" ]
+}
+
+@test "the hook sources no library at all" {
+    run grep -nE '^[[:space:]]*(\.|source)[[:space:]]|\$LIB|lib/' "$HOOK"
+    [ "$status" -eq 1 ]
+}
+
+# bats cannot run the harness timeout, so a hanging board is covered by the
+# value Claude Code enforces.
+@test "hooks.json parses, has no SessionEnd, keeps the Linear matcher and times out above 5 s" {
+    run python3 -c '
+import json, sys
 h = json.load(open(sys.argv[1]))["hooks"]
-groups = [g for g in h.get("PostToolUse", []) if any("board-behind.sh" in x.get("command", "") for x in g["hooks"])]
-assert len(groups) == 1, groups
-m = groups[0]["matcher"]
-for name in ("mcp__linear__save_issue", "mcp__claude_ai_Linear__save_issue", "mcp__linear-eu__save_issue"):
-    assert re.search(m, name), name
-for name in ("mcp__github__create_issue", "Bash", "Edit"):
-    assert not re.search(m, name), name
-for event, groups in h.items():
-    if event != "PostToolUse":
-        assert not any("board-behind.sh" in x.get("command", "") for g in groups for x in g["hooks"]), event
+assert "SessionEnd" not in h, "SessionEnd still registered"
+post = h["PostToolUse"]
+assert len(post) == 1, post
+assert post[0]["matcher"] == "mcp__.*[Ll][Ii][Nn][Ee][Aa][Rr].*__.*", post[0]["matcher"]
+for event in ("PostToolUse", "SessionStart"):
+    for group in h[event]:
+        for cmd in group["hooks"]:
+            t = cmd.get("timeout")
+            assert isinstance(t, (int, float)) and t > 5, "%s timeout is %r" % (event, t)
 print("ok")
-PY
+' "$ROOT/hooks/hooks.json"
     [ "$status" -eq 0 ]
     [ "$output" = "ok" ]
 }

@@ -8,8 +8,8 @@
 # the day it is written.
 #
 # Clearing alone is not enough. An unset seam falls back to a default, and the
-# defaults are $HOME/.secrets, $HOME/.claude/work, /usr/bin/security,
-# /usr/bin/osascript, real curl against the live API and real gh. Every seam
+# defaults are $HOME/.secrets, $HOME/.claude/work, the plugin data directory,
+# /usr/bin/security, /usr/bin/osascript and real curl against the live API. Every seam
 # that would otherwise leave this test's own directory is pointed back inside
 # it. HERDR_LINEAR_GIT_BIN is the one exception: the suites build real
 # repositories, so git stays the machine's own.
@@ -26,11 +26,7 @@ herdr_linear_test::isolate() {
     export HERDR_LINEAR_PROJECTS_ROOT="$sandbox/projects"
     export HERDR_LINEAR_WORKTREES_ROOT="$sandbox/worktrees"
     export HERDR_LINEAR_STORE_DIR="$sandbox/store"
-    export HERDR_LINEAR_PIN_DIR="$sandbox/pin"
-    export HERDR_LINEAR_JOURNAL_DIR="$sandbox/layouts"
-    export HERDR_LINEAR_DESC_BACKUP_DIR="$sandbox/descriptions"
-    export HERDR_LINEAR_SHADOW_LOG="$sandbox/shadow.log"
-    export LINEAR_CACHE_DIR="$sandbox/cache"
+    export CLAUDE_PLUGIN_DATA="$sandbox/plugin-data"
     export LINEAR_SECRETS_FILE="$sandbox/secrets"
 
     # Deliberately absent paths rather than the fixtures: a suite that forgot to
@@ -39,8 +35,6 @@ herdr_linear_test::isolate() {
     export HERDR_LINEAR_CURL_BIN="$sandbox/absent/curl"
     export HERDR_LINEAR_SECURITY_BIN="$sandbox/absent/security"
     export HERDR_LINEAR_OSASCRIPT_BIN="$sandbox/absent/osascript"
-    export HERDR_LINEAR_GH_BIN="$sandbox/absent/gh"
-    export HERDR_LINEAR_LSOF_BIN="$sandbox/absent/lsof"
     export HERDR_BIN="$sandbox/absent/herdr"
 
     # Set-but-empty, never unset: the reader spells this ${VAR-default}, so only
