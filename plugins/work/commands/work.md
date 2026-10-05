@@ -1,126 +1,124 @@
 ---
-description: Report where this git worktree stands — which Linear issue it is bound to, what state that binding is in, whether anything is waiting for a decision, and whether writes are enabled. With an issue identifier, start work on it instead.
+description: Report what this session is bound to on the board, and whether the board can hear this session's Linear writes. With an issue identifier, start work on it instead.
 argument-hint: "[WEB-1234] | [status] | nothing"
 allowed-tools: Bash, Skill, AskUserQuestion
 ---
 
-Where this worktree stands, and what to do next.
+What this session is bound to, and whether the board is listening.
 
 ## With no argument
 
-Report the state of the worktree you are in. Read it, do not guess it:
+Run both parts and report what they print. Read the state, do not guess it.
+
+### 1. The binding
 
 ```bash
 R="${CLAUDE_PLUGIN_ROOT}"
-source "$R/lib/contain.sh"; source "$R/lib/secrets.sh"; source "$R/lib/record.sh"
-source "$R/lib/binding.sh"; source "$R/lib/scope-record.sh"
-source "$R/lib/linear.sh"; source "$R/lib/sanitize.sh"
-source "$R/lib/herdr-read.sh"; source "$R/lib/context.sh"
-source "$R/lib/repos.sh"; source "$R/lib/context-filter.sh"
+source "$R/lib/sanitize.sh"
 
-WS="$(herdr_linear::workspace_id)"
-herdr_linear::scope_signals "$PWD" "$WS"
-herdr_linear::binding_state "$PWD"
-herdr_linear::binding_identifier "$PWD" 2>/dev/null
-herdr_linear::context "$PWD" "$WS"
-herdr_linear::expected_cwd "$PWD" "$WS"
+if [ -z "${HERDR_WORKSPACE_ID:-}" ]; then
+    echo "outside herdr"
+elif ! command -v board >/dev/null 2>&1; then
+    echo "binding unknown: board is not installed"
+else
+    board linear session --json 2>/dev/null | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("binding unknown: board linear session did not answer"); sys.exit()
+b = d.get("binding") or {}
+if not b.get("issue"):
+    print("unbound"); sys.exit()
+print("issue:  " + str(b["issue"]))
+print("column: " + str(d.get("column") or "none"))
+for m in d.get("marks") or []:
+    print("mark:   " + str(m.get("kind", "")) + " " + str(m.get("text", "")))
+' | herdr_linear::sanitize_stream
+fi
 ```
 
-`context` names the team, the project and the issue, each with the level that
-decided it — `session`, `space`, `tab`, `derived` or `none`. Nothing declared at
-any level is the plugin's behaviour before any of this, and is not a problem to
-report; `/work:declare` is how a session or a space says what it is for.
+Say it in one line:
 
-**`expected_cwd` states, and you never act on it.** It prints where this pane is
-expected to stand — the bound issue's worktree, else the repository the
-project-and-team pair names — or nothing. Say it beside the directory the pane
-is actually in when the two differ, and **offer** the move. Never `cd`, and
-never move anybody: standing somewhere else on purpose is legitimate.
-
-`scope_signals` prints two lines and never refuses. `path=` says whether this
-directory sits under a known projects root; `project=` names the tracker project
-it maps to, or `negative` when none does, or `unknown` when the tracker could not
-be reached. **Report both and carry on.** `outside` and `negative` together mean
-nothing here maps to tracked work, which is worth saying and is not a reason to
-stop. `unknown` is not `negative` — an unread signal is not an absent one.
-
-Then say, in one or two lines, what state it is in and the single most useful
-next step:
-
-| State | Say |
+| Output | Say |
 |---|---|
-| `unbound` | not bound. `/work:bind` to bind it, or `/work:start` for new work elsewhere |
-| `proposed` | a candidate was offered and not confirmed. `/work:bind` to finish |
-| `bound` | name the issue, its state, and whether anything is waiting (below) |
-| `misplaced` | the workspace's project is not the issue's. `/work:bind` to move either side |
-| `stale` | the issue is closed and this worktree is not. Nothing was changed |
+| `outside herdr` | this session is not in a herdr pane, so it has no board binding |
+| `unbound` | this worktree is not bound. `/work:start WEB-1234` starts bound work |
+| `issue:` … | name the issue and its column, and list any marks |
+| `binding unknown:` … | say why, then rely on the health lines below |
 
-When bound, also report:
+### 2. Health
+
+Each check is fast and none starts the daemon. A check that passes prints
+nothing.
 
 ```bash
-# anything recorded for this session to see
-herdr_linear::binding_read "$PWD" | python3 -c 'import sys,json;d=json.load(sys.stdin);j=d.get("pending_judgment");print(j["text"] if j else "nothing waiting")' | herdr_linear::sanitize_stream
-# whether anyone has answered the write question for this directory
-herdr_linear::has_consent "$PWD" && echo "an answer is recorded here" || echo "no answer recorded — the first write will ask"
-herdr_linear::binding_pending_consent "$PWD" 2>/dev/null | herdr_linear::sanitize_stream
-# The shadow log holds issue titles and API error bodies, both written by
-# whoever files the tickets. It never reaches the terminal unfiltered.
-tail -5 "${HERDR_LINEAR_SHADOW_LOG:-$HOME/.claude/work/shadow.log}" 2>/dev/null | herdr_linear::sanitize_stream
+if ! command -v board >/dev/null 2>&1; then
+    echo "board is not installed. Install board, then run /work again."
+else
+    board linear report --help >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq 64 ]; then
+        echo "board is too old to receive Linear writes. Upgrade board."
+    elif [ "$rc" -ne 0 ]; then
+        echo "board linear report --help exited $rc. Upgrade board."
+    fi
+
+    board version --json 2>/dev/null | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("board version --json did not answer. Reinstall board."); sys.exit()
+cli, daemon = d.get("cli_version"), d.get("daemon_version")
+if not daemon:
+    print("the board daemon is not answering. Run: board daemon start")
+elif daemon != cli:
+    print("the board daemon runs " + daemon + " and the CLI is " + str(cli) + ". Run: board daemon stop")
+'
+fi
+
+claude mcp list 2>/dev/null | grep -qE '^board:' \
+    || echo "board mcp is not registered. Run: claude mcp add --scope user board -- board mcp"
+
+for f in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json" \
+         "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/settings.json" \
+         "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/settings.local.json"; do
+    if grep -q 'board linear report' "$f" 2>/dev/null; then
+        echo "$f has its own board linear report hook, so every write is reported twice. Remove that hook; the plugin already runs one."
+    fi
+done
 ```
 
-## With no context declared
-
-`/work:declare` records the team this herdr session is worked as and the project
-this space holds, and needs no worktree. Point at it when the report above says
-every level is `none` and the person is standing somewhere that derives nothing.
+Pass every line on as printed. When nothing prints, say the board hears this
+session's Linear writes.
 
 ## With an issue identifier
 
-`/work WEB-3308` means *start on this*. Hand off to `/work:start`, which creates
-the worktree at a path derived from the ticket and binds it — or, when more
-than one repository or none is recorded for the ticket's project, comes back
-asking which repository to use and creates nothing until that is answered.
-That path writes nothing to Linear.
+`/work WEB-3308` means *start on this*. Hand off to `/work:start`, which
+creates the worktree at a path derived from the ticket and binds it on the
+board — or, when more than one repository or none is recorded for the ticket's
+project, asks which repository to use and creates nothing until that is
+answered.
 
 ## With `status`
 
-The same report, plus the credential and the recorded answer:
+The same report, plus the credential:
 
 ```bash
-bash "$R/bin/migrate-credential.sh" report
-herdr_linear::binding_read "$PWD" 2>/dev/null \
-  | python3 -c 'import sys,json;c=json.load(sys.stdin).get("consent");print(json.dumps(c) if c else "no answer recorded for this directory")'
+bash "${CLAUDE_PLUGIN_ROOT}/bin/migrate-credential.sh" report
 ```
-
-**There is no allowlist file.** Writes are opened by answering the question the
-first write asks, and the answer is scoped to the team, project and branch it
-named. A different team, a different project, or a different branch asks again.
-
-## Reading a lot to decide a little
-
-When a step's raw output is large and the part you decide on is small — reading
-each candidate issue, fetching a parent's children, reading a branch's history —
-**send a subagent to do the reading**. Give it a scratch path, have it write the
-raw output there, and take back the path plus one line per thing you may choose.
-Open the file only for a detail those lines do not carry. `/work:bind`,
-`/work:layout` and `/work:describe` each say what to brief it with.
-
-**A subagent reads and reports. It never asks and it never records.** It has no
-prompt channel, so a question handed to it is a decision lost — it names what is
-ambiguous, and you ask here. The question each write skill asks before its first
-write is answered in this session, by a person, and no subagent's reply stands
-in for that answer.
 
 ## The rest
 
 | Command | For |
 |---|---|
-| `/work:start` | begin work — from a ticket, or from nothing |
-| `/work:bind` | bind a worktree that already exists |
-| `/work:describe` | write the issue description |
-| `/work:doc` | publish a document to the issue |
-| `/work:layout` | build a herdr tab and its columns from an issue |
+| `/work:start` | begin work, from a ticket or from nothing |
+| `/work:layout` | give each sub-issue of a bound parent a worktree and a column |
 
-**Never invent state.** If a command fails or Linear is unreachable, say so.
-A confident wrong answer about what a worktree is bound to is worse than "I
+Linear tickets are created and changed through Linear's own MCP tools. The
+board hears about each change through the plugin's hook.
+
+**Never invent state.** If a check fails or the board does not answer, say so.
+A confident wrong answer about what a session is bound to is worse than "I
 could not read it".

@@ -329,8 +329,6 @@ placement_tree() {
     [ "$status" -ne 0 ]
 }
 
-# ------------------------------------------------ the rules skill (KTD6)
-
 rules_skill_path() { echo "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/linear-rules/SKILL.md"; }
 rules_frontmatter() { awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f' "$(rules_skill_path)"; }
 
@@ -359,4 +357,36 @@ rules_frontmatter() { awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f' "
     body="$(cat "$(rules_skill_path)")"
     [[ "$body" == *"docs/linear-conventions.md"* ]]
     [[ "$body" == *"board skill"* ]]
+}
+
+work_command() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/commands/work.md"; }
+
+@test "the command names no retired skill" {
+    body="$(work_command)"
+    for s in bind declare describe doc new new-project new-sub-issue board; do
+        run grep -qE "/work:${s}([^a-z-]|\$)" <<<"$body"
+        [ "$status" -ne 0 ] || { echo "names /work:$s"; return 1; }
+    done
+}
+
+@test "the command's bash fences source only kept libraries" {
+    run bash -c "awk '/^\`\`\`bash/ {f=1; next} /^\`\`\`/ {f=0} f' <<<\"\$1\" \
+        | grep -oE 'lib/[A-Za-z0-9_-]+\.sh' \
+        | grep -vxE 'lib/(contain|sanitize|schemes|secrets|herdr-read|repos)\.sh'" _ "$(work_command)"
+    [ -z "$output" ] || { echo "sources: $output"; return 1; }
+}
+
+@test "the command runs the board health checks" {
+    body="$(work_command)"
+    [[ "$body" == *"board version --json"* ]]
+    [[ "$body" == *"board linear report --help"* ]]
+    [[ "$body" == *"claude mcp list"* ]]
+    [[ "$body" == *"claude mcp add --scope user board -- board mcp"* ]]
+    [[ "$body" == *"board daemon stop"* ]]
+}
+
+@test "the command keeps the start hand-off and the credential line" {
+    body="$(work_command)"
+    [[ "$body" == *"/work:start"* ]]
+    [[ "$body" == *"bin/migrate-credential.sh"* ]]
 }
