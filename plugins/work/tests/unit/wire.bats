@@ -328,3 +328,35 @@ placement_tree() {
     run placement_caller_check "$WORK/q"
     [ "$status" -ne 0 ]
 }
+
+# ------------------------------------------------ the rules skill (KTD6)
+
+rules_skill_path() { echo "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/linear-rules/SKILL.md"; }
+rules_frontmatter() { awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f' "$(rules_skill_path)"; }
+
+@test "the rules skill exists" {
+    [ -f "$(rules_skill_path)" ]
+}
+
+# The guards it carries are only guards if the model loads the skill on its own.
+@test "the rules skill is model-invocable" {
+    run rules_frontmatter
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"description:"* ]]
+    [[ "$output" != *"disable-model-invocation"* ]]
+}
+
+# The /work command shadows a skill named work.
+@test "the rules skill is not named work" {
+    run rules_frontmatter
+    [[ "$output" == *"name: "* ]]
+    run bash -c "awk -F': *' '/^name:/ {print \$2}' <<<\"\$1\"" _ "$output"
+    [ -n "$output" ]
+    [ "$output" != "work" ]
+}
+
+@test "the rules skill links the conventions doc and the board tool reference" {
+    body="$(cat "$(rules_skill_path)")"
+    [[ "$body" == *"docs/linear-conventions.md"* ]]
+    [[ "$body" == *"board skill"* ]]
+}
