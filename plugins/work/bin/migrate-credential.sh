@@ -9,9 +9,9 @@
 # A FRESH KEY, NOT THE OLD ONE.
 # `store` asks for a newly issued key on purpose. The existing one has lived in
 # a plaintext file that dotfile sync and Time Machine may have copied, and it
-# spent every cache refresh in process argv where any process running as this
-# user could read it (measured 2026-09-04: visible in 6 of 9 samples taken
-# during one refresh). Moving that key to the Keychain carries the exposure
+# spent every cache refresh of earlier plugin versions in process argv where any
+# process running as this user could read it (measured 2026-09-04: visible in 6
+# of 9 samples taken during one refresh). Moving that key to the Keychain carries the exposure
 # along; issuing a new one and revoking the old one ends it.
 #
 # Issue one at https://linear.app/settings/api — a personal API key cannot be
@@ -26,8 +26,6 @@
 set -uo pipefail
 
 SECRETS_FILE="${LINEAR_SECRETS_FILE:-$HOME/.secrets}"
-CACHE="${LINEAR_CACHE_DIR:-$HOME/.claude/linear-cache}"
-FALLBACK_MARKER="$CACHE/_plaintext_fallback_used"
 KEYCHAIN_SERVICE="${HERDR_LINEAR_KEYCHAIN_SERVICE:-work-linear}"
 KEYCHAIN_ACCOUNT="${HERDR_LINEAR_KEYCHAIN_ACCOUNT:-linear-api-key}"
 CURL_BIN="${HERDR_LINEAR_CURL_BIN:-curl}"
@@ -55,15 +53,6 @@ report() {
         printf '  plaintext %s : STILL PRESENT\n' "$SECRETS_FILE"
     else
         printf '  plaintext %s : gone\n' "$SECRETS_FILE"
-    fi
-    # The marker is the honest signal. The refresh script runs detached, so its
-    # stderr warning reaches nobody; this file is how a fallback read stays
-    # visible after the fact.
-    if [ -f "$FALLBACK_MARKER" ]; then
-        printf '  plaintext fallback last used : %s\n' "$(cat "$FALLBACK_MARKER")"
-        printf '  -> something still reads the plaintext copy; the migration is not finished\n'
-    else
-        printf '  plaintext fallback : never used since the marker was last cleared\n'
     fi
 }
 
@@ -146,7 +135,6 @@ remove_plaintext() {
     grep -v '^LINEAR_API_KEY=' "$SECRETS_FILE" >"$tmp" || true
     mv -f "$tmp" "$SECRETS_FILE" || { rm -f "$tmp"; return 1; }
 
-    rm -f "$FALLBACK_MARKER"
     printf 'removed the LINEAR_API_KEY line; backup at %s\n' "$backup"
     printf 'the backup STILL CONTAINS the old key -- delete it once you have revoked that key in Linear\n'
     return 0

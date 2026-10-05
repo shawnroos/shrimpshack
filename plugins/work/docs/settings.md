@@ -19,38 +19,22 @@ string, and the default does not come back.
 
 | Setting | Default | What changes when it is set | Defining file | Empty differs from unset |
 |---|---|---|---|---|
-| `HERDR_LINEAR_PROJECTS_ROOT` | `$HOME/projects` | The root every canonical checkout must sit under. A session outside it is refused. The old spelling of this setting is still honoured, and `lib/contain.sh` prints what to rename it to. | `lib/contain.sh` | no |
+| `HERDR_LINEAR_PROJECTS_ROOT` | `$HOME/projects` | The root every canonical checkout must sit under. A session outside it and outside the worktrees root gets no grounding block. The old spelling of this setting is still honoured, and `lib/contain.sh` prints what to rename it to. | `lib/contain.sh` | no |
 | `HERDR_LINEAR_WORKTREES_ROOT` | `$HOME/worktrees` | Where a worktree started from a ticket is created. Nothing under it is canonical, so the whole tree stays safe to delete. | `lib/contain.sh` | no |
-| `HERDR_LINEAR_STORE_DIR` | `$HOME/.claude/work` | Where bindings between a worktree and a ticket are recorded. | `lib/record.sh` | no |
-| `HERDR_LINEAR_PIN_DIR` | `$HOME/.claude/linear-pin` | Where a pinned ticket for the current session is held. | `lib/binding.sh` | no |
-| `HERDR_LINEAR_BOARD_PAGE_SIZE` | `50` | How many tickets the board asks Linear for per page. | `lib/board-linear.sh` | no |
-| `HERDR_LINEAR_BOARD_MAX_PAGES` | `100` | The page cap for one board read, so a filter that matches everything cannot run forever. | `lib/board-linear.sh` | no |
-| `HERDR_LINEAR_BOARD_CALL_SECONDS` | `15` | How long a single herdr call made while applying the board may take. | `lib/board-herdr.sh` | no |
-| `HERDR_LINEAR_BOARD_PANE_CAP` | `16` | The most panes the board will open in one space. | `lib/board-herdr.sh` | no |
-| `HERDR_LINEAR_BOARD_TAB_LIMIT` | `4` | The most tabs one sync will build. | `lib/board-sync.sh` | no |
-| `HERDR_LINEAR_BOARD_SYNC_WAIT_SECONDS` | `10` | How long a sync waits for another sync's lock before reporting it is held. | `lib/board-sync.sh` | no |
-| `HERDR_LINEAR_BOARD_FENCE_SECONDS` | `90` | The time bound on the attended fence: a sync past it is stopped and reported. | `lib/board-attended.sh` | no |
-| `HERDR_LINEAR_SOCKET_PATH` | none | The herdr socket the board talks to. Unset, the board asks `herdr status server` for it. | `lib/board-herdr.sh` | no |
-| `HERDR_LINEAR_JOURNAL_DIR` | `$HOME/.claude/work/layouts` | Where a layout the plugin built is journalled. | `lib/herdr-write.sh` | no |
-| `HERDR_LINEAR_DESC_BACKUP_DIR` | `$HOME/.claude/work/descriptions` | Where a ticket description is copied before it is overwritten. | `lib/description.sh` | no |
-| `HERDR_LINEAR_SHADOW_LOG` | `$HOME/.claude/work/shadow.log` | Where a write that was only rehearsed is logged instead of sent. | `lib/binding.sh` | no |
+| `CLAUDE_PLUGIN_DATA` | `$HOME/.claude/plugins/data/work-shrimpshack` | The plugin's data directory. `scopes.json` in it records which repository a team's work lives in. Claude Code sets it for a running plugin; the default is used only outside a session. | `lib/repos.sh` | no |
+| `HERDR_LINEAR_STORE_DIR` | `$HOME/.claude/work` | Where an earlier version of the plugin kept its records. It is read, never written: an answer about a team's repository found under `scopes/` there is copied into the data directory once. | `lib/repos.sh` | no |
 | `HERDR_LINEAR_WORKTREE_SCHEME` | `identifier-title` | Which shape a worktree's directory name takes. Every scheme carries the ticket identifier, so the worktree stays findable from its branch whichever one is chosen. Valid: `identifier-title`, `identifier`. | `lib/schemes.sh` | no |
 | `HERDR_LINEAR_BRANCH_SCHEME` | `prefix-worktree` | Which shape a branch name takes. It composes on the worktree scheme, so changing that changes both and the identifier stays in each. Valid: `prefix-worktree`, `worktree`. | `lib/schemes.sh` | no |
 | `HERDR_LINEAR_TAB_SCHEME` | `identifier` | Which shape a herdr tab's label takes. Valid: `identifier`, `identifier-title`. | `lib/schemes.sh` | no |
-| `HERDR_LINEAR_OPEN_SESSION` | `(none)` | Whether starting work also opens a herdr session. Unset leaves each path as it is: `/work:new` opens one and `/work:start` does not. `true` opens one on both; `false` opens one on neither. Anything else is named on stderr and read as unset. | `lib/start.sh` | no |
-| `HERDR_LINEAR_CONVENTIONS_PATH` | `${CLAUDE_PLUGIN_ROOT}/docs/linear-conventions.md` | The rulebook the plugin follows when it writes a Linear title, description or document. Set it to keep the conventions in a repository of their own. A path naming nothing readable is refused with the path printed, rather than the shipped copy being served in its place, so a typo cannot restore the old rulebook unnoticed. This one is settable from the environment only and is never a field in a configuration file: seven skills read the file as instructions, and it decides what the plugin writes to Linear. | `lib/documents.sh` | no |
-| `HERDR_LINEAR_BRANCH_PREFIX` | `feature` | The prefix a branch started from a ticket is given. Set it empty and the branch takes the identical form as the worktree directory, with no code change. | `lib/start.sh` | yes |
+| `HERDR_LINEAR_BRANCH_PREFIX` | `feature` | The prefix a branch started from a ticket is given. Set it empty and the branch takes the identical form as the worktree directory, with no code change. | `lib/schemes.sh` | yes |
+| `HERDR_LINEAR_OPEN_SESSION` | `(none)` | Whether `/work:start` also opens a herdr tab for the new worktree. `true` opens one; unset, empty or `false` opens none. Anything else is named and read as no. | `skills/start/SKILL.md` | no |
 | `HERDR_LINEAR_BIN_PATHS` | `/opt/homebrew/bin:/usr/local/bin:${HOME:-}/.local/bin` | The directories searched for the herdr executable when it is not on `PATH`. Set it empty to mean no known locations, so nothing resolves. | `lib/herdr-read.sh` | yes |
-| `HERDR_LINEAR_API_URL` | `https://api.linear.app/graphql` | The endpoint every Linear query and mutation is sent to. | `lib/linear.sh` | no |
-| `HERDR_LINEAR_KEYCHAIN_SERVICE` | `work-linear` | The keychain service the Linear credential is stored under. | `lib/linear.sh` | no |
-| `HERDR_LINEAR_KEYCHAIN_ACCOUNT` | `linear-api-key` | The keychain account the Linear credential is stored under. | `lib/linear.sh` | no |
-| `HERDR_LINEAR_VIEW_PAGE_MAX` | `10` | How many pages of fifty a board listing reads before it stops. The issue listing reports the result as truncated; the list of views exits 7 and says so on stderr; the list of projects reports `partial`. | `lib/linear.sh` | no |
 | `HERDR_LINEAR_HERDR_TIMEOUT_SECONDS` | `5` | How long one herdr read may take before it is ended and herdr is read as unavailable. Needs `perl` on `PATH`; without it the read is not bounded. | `lib/herdr-read.sh` | no |
-| `HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS` | `(none)` | How long a keychain read may wait, for a caller nobody can answer an unlock prompt for. Unset, the read waits. `bin/work-snapshot.sh` sets it to `5`. Needs `perl` on `PATH`. | `lib/secrets.sh` | no |
-| `HERDR_LINEAR_CACHE_MAX_AGE_SECONDS` | `3600` | How long a cached ticket is treated as current before it is fetched again. | `lib/linear.sh` | no |
-| `HERDR_SOCKET_PATH` | `(none)` | The herdr session this pane belongs to, which herdr exports into every pane it opens. The plugin only reads it, to name the session a space record is filed under: a socket at `sessions/<name>/herdr.sock` is that session, any other `herdr.sock` is `default`, and unset means no session level at all. Set it by hand only to address another running session deliberately. | `lib/herdr-read.sh` | no |
-| `LINEAR_CACHE_DIR` | `$HOME/.claude/linear-cache` | Where fetched tickets are cached. | `lib/linear.sh` | no |
-| `LINEAR_SECRETS_FILE` | `$HOME/.secrets` | The file a `LINEAR_API_KEY` line is read from when the keychain holds nothing. | `lib/linear.sh` | no |
+| `HERDR_SOCKET_PATH` | `(none)` | The herdr session this pane belongs to, which herdr exports into every pane it opens. The plugin only reads it: a socket at `sessions/<name>/herdr.sock` is that session, any other `herdr.sock` is `default`, and unset means no session level at all. Set it by hand only to address another running session deliberately. | `lib/herdr-read.sh` | no |
+| `HERDR_LINEAR_KEYCHAIN_SERVICE` | `work-linear` | The keychain service `bin/migrate-credential.sh` stores and checks the Linear credential under. | `bin/migrate-credential.sh` | no |
+| `HERDR_LINEAR_KEYCHAIN_ACCOUNT` | `linear-api-key` | The keychain account `bin/migrate-credential.sh` stores and checks the Linear credential under. | `bin/migrate-credential.sh` | no |
+| `HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS` | `(none)` | How long a keychain read may wait, for a caller nobody can answer an unlock prompt for. Unset, the read waits. Needs `perl` on `PATH`. | `lib/secrets.sh` | no |
+| `LINEAR_SECRETS_FILE` | `$HOME/.secrets` | The plaintext file `bin/migrate-credential.sh` reports on, and removes the `LINEAR_API_KEY` line from once the keychain copy works. | `bin/migrate-credential.sh` | no |
 
 ---
 
@@ -60,9 +44,9 @@ These are seams for tests and for the machine, not conventions a person chooses.
 work, and none of them is documented as a setting:
 
 - **Executable paths** — every `*_BIN` name. They exist so a test can hand the plugin a
-  stand-in for `git`, `curl`, `gh`, `security`, `osascript`, or herdr itself.
-- **Lock, retry, poll, and timeout tuning** — how long a lock is waited for, how many
-  times a request is retried, how often a pane is polled, how long a request may take.
+  stand-in for `git`, `curl`, `security`, `osascript`, or herdr itself.
+- **Lock tuning** — how long the repository record's lock is waited for, and when a
+  held lock counts as stale.
 - **Herdr's own runtime identity** — the pane, tab, and workspace identifiers herdr
   exports into a pane it owns. The plugin reads them; nobody sets them.
 - **The old spelling of the projects root** — still honoured, and still warned about. See

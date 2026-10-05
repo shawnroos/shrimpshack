@@ -2,19 +2,17 @@
 
 load setup_common
 
-# U12 — the credential migration and the in-tree cache refresh.
+# The credential migration.
 #
 # Nothing here touches the real Keychain, the real ~/.secrets, or the real
 # Linear API. The Keychain goes through tests/fixtures/fake-security.sh and the
 # network through tests/fixtures/fake-linear.sh, which stands in for curl.
 #
-# THAT SECOND SUBSTITUTION IS THE POINT OF THE FILE.
-# The defect this unit exists to fix was measured, not supposed: the previous
-# copy of the refresh script passed the key as `-H "Authorization: $KEY"`, and
-# sampling `ps` during one single-issue refresh caught the real credential in
-# process argv in 6 of 9 samples. fake-linear.sh exits 98 the moment a
-# credential shape appears in argv, so a regression to `-H` fails the suite
-# instead of quietly leaking on every statusline cache miss.
+# The second substitution is what makes `verify` testable. An earlier refresh
+# script passed the key as `-H "Authorization: $KEY"`, and sampling `ps` caught
+# the real credential in process argv in 6 of 9 samples. fake-linear.sh exits 98
+# the moment a credential shape appears in argv, so a regression to `-H` in
+# `verify` fails the suite instead of quietly leaking.
 
 bats_require_minimum_version 1.5.0
 
@@ -28,8 +26,7 @@ setup() {
     export FAKE_SECURITY_STORE_DIR="$WORK/keychain"
     export FAKE_LINEAR_RECORD_DIR="$WORK/linear-record"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
-    export LINEAR_CACHE_DIR="$WORK/cache"
-    mkdir -p "$FAKE_LINEAR_RECORD_DIR" "$LINEAR_CACHE_DIR"
+    mkdir -p "$FAKE_LINEAR_RECORD_DIR"
 
     # Assembled at runtime: written whole it is a credential shape the repo's
     # own secret scan refuses to have anywhere in the tree.
@@ -51,57 +48,29 @@ seed_keychain() {
 
 # ---------------------------------------------------------------- the leak
 
-@test "the refresh sends the credential on stdin, never on argv" {
-    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
-    # NOT asserted on $status. curl runs inside a command substitution whose
-    # pipeline ends in wc, and the script exits from a later echo, so the
-    # fixture's 98 never reaches here -- an exit-code assertion would pass
-    # whether the credential leaked or not. The record is what carries this
-    # test: "yes" means an Authorization header arrived on stdin, and the
-    # fixture writes that line only after its argv guard has let the call
-    # through. A revert to `-H` was mutation-tested and turns this red.
+@test "verify sends the credential on stdin, never on argv" {
+    seed_keychain
+    run bash -c "FAKE_LINEAR_MODE=viewer bash '$BIN/migrate-credential.sh' verify"
+    [ "$status" -eq 0 ]
+    # "yes" means an Authorization header arrived on stdin, and the fixture
+    # writes that line only after its argv guard has let the call through.
     [ "$(tail -1 "$FAKE_LINEAR_RECORD_DIR/auth_on_stdin")" = "yes" ]
 }
 
 @test "reverting to -H would be caught -- the guard is reachable from this path" {
     # Proves the assertion above is load-bearing rather than vacuous: the same
     # fixture, handed the old script's argument shape, refuses it.
-    run bash -c "printf '' | FAKE_LINEAR_MODE=found_child '$HERDR_LINEAR_CURL_BIN' -H 'Authorization: $KEYLIKE' -d '{}'"
+    run bash -c "printf '' | '$HERDR_LINEAR_CURL_BIN' -H 'Authorization: $KEYLIKE' -d '{}'"
     [ "$status" -eq 98 ]
 }
 
 @test "the recorded argv holds no fragment of the credential" {
-    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
+    seed_keychain
+    run bash -c "FAKE_LINEAR_MODE=viewer bash '$BIN/migrate-credential.sh' verify"
+    [ "$status" -eq 0 ]
+    [ -s "$FAKE_LINEAR_RECORD_DIR/argv" ]
     run grep -c "$KEYLIKE" "$FAKE_LINEAR_RECORD_DIR/argv"
     [ "$output" = "0" ]
-}
-
-# ------------------------------------------------------- the source of truth
-
-@test "the Keychain is preferred over the plaintext copy, and no fallback marker appears" {
-    seed_keychain
-    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
-    [ "$status" -eq 0 ]
-    [ ! -f "$LINEAR_CACHE_DIR/_plaintext_fallback_used" ]
-}
-
-# The refresh runs detached from the statusline, so its stderr reaches nobody.
-# A warning alone would make a plaintext read invisible; the marker is what
-# keeps it detectable after the fact.
-@test "a plaintext fallback read is recorded in a marker, not only on stderr" {
-    run --separate-stderr bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
-    [ "$status" -eq 0 ]
-    [[ "$stderr" == *"read the Linear key from plaintext"* ]]
-    [ -f "$LINEAR_CACHE_DIR/_plaintext_fallback_used" ]
-}
-
-@test "with no credential anywhere the refresh fails loudly instead of calling Linear unauthenticated" {
-    rm -f "$LINEAR_SECRETS_FILE"
-    run --separate-stderr bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
-    [ "$status" -eq 1 ]
-    [[ "$stderr" == *"no Linear credential"* ]]
-    # The decisive part: it never reached the network at all.
-    [ ! -s "$FAKE_LINEAR_RECORD_DIR/argv" ] || [ ! -f "$FAKE_LINEAR_RECORD_DIR/argv" ]
 }
 
 # ------------------------------------------------------------- the migration
@@ -113,12 +82,6 @@ seed_keychain() {
     [[ "$output" == *"STILL PRESENT"* ]]
     run grep -c "$KEYLIKE" <<< "$output"
     [ "$output" = "0" ]
-}
-
-@test "report calls the migration unfinished while the fallback marker exists" {
-    date -u > "$LINEAR_CACHE_DIR/_plaintext_fallback_used"
-    run bash "$BIN/migrate-credential.sh" report
-    [[ "$output" == *"the migration is not finished"* ]]
 }
 
 @test "verify proves the stored key is accepted, and names the account" {
@@ -193,13 +156,10 @@ seed_keychain() {
     [[ "$output" == *"already gone"* ]]
 }
 
-@test "after removal the Keychain is the only source and no fallback occurs" {
+@test "after removal the report calls the plaintext copy gone" {
     seed_keychain
     run bash -c "FAKE_LINEAR_MODE=viewer bash '$BIN/migrate-credential.sh' remove-plaintext"
     [ "$status" -eq 0 ]
-    run bash -c "FAKE_LINEAR_MODE=found_child bash '$BIN/linear-cache-refresh.sh' WEB-3308"
-    [ "$status" -eq 0 ]
-    [ ! -f "$LINEAR_CACHE_DIR/_plaintext_fallback_used" ]
     run bash "$BIN/migrate-credential.sh" report
     [[ "$output" == *"plaintext $LINEAR_SECRETS_FILE : gone"* ]]
 }

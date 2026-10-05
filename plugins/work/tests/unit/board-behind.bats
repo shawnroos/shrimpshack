@@ -49,7 +49,8 @@ print(json.dumps({"session_id": "s1", "cwd": sys.argv[1], "hook_event_name": "Po
 
 @test "with board absent from PATH the hook exits 0 with no output at all" {
     export PATH="$BASE_PATH"
-    ! command -v board
+    run command -v board
+    [ "$status" -ne 0 ]
     run --separate-stderr bash "$HOOK" < "$WORK/payload.json"
     [ "$status" -eq 0 ]
     [ -z "$output" ]

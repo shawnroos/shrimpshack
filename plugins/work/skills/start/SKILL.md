@@ -173,6 +173,11 @@ Open a tab only when `HERDR_LINEAR_OPEN_SESSION` is exactly `true` and
 say that it is neither `true` nor `false` and open nothing.
 
 ```bash
+case "${HERDR_LINEAR_OPEN_SESSION:-}" in
+  true) [ -n "${HERDR_WORKSPACE_ID:-}" ] || { echo "not in a herdr pane: no tab"; exit 0; } ;;
+  ""|false) echo "no tab asked for"; exit 0 ;;
+  *) echo "HERDR_LINEAR_OPEN_SESSION is neither true nor false: no tab"; exit 0 ;;
+esac
 LABEL="$(herdr_linear::scheme_name tab "$IDENT" "$TITLE")" || exit 1
 herdr tab create --workspace "$HERDR_WORKSPACE_ID" --no-focus --cwd "$WT" --label "$LABEL"
 ```

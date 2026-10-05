@@ -3,9 +3,9 @@
 #
 # R4/R5. A name is ASKED FOR by kind, not composed by the caller. Before this,
 # a name was either what one shell function returned or a literal at the line
-# that used it, and the two drifted: the layout verb in lib/herdr-write.sh slugs
-# the tab label it sets, the session verb beside it sets its label unslugged,
-# and nothing reconciled them. Both ask here now.
+# that used it, and the two drifted: one verb slugged the tab label it set, the
+# verb beside it set its label unslugged, and nothing reconciled them. Every
+# caller asks here now.
 #
 # R6, and the reason this is an ENUMERATION rather than a template. A scheme is
 # a name in a fixed set that this file renders. A placeholder language would let
@@ -15,10 +15,10 @@
 # a typo into a silently different worktree location.
 #
 # R4 names five kinds. Only three of them have a rendering site in this plugin:
-# a worktree, a branch, and a tab. A space label is set once, at
-# `lib/create.sh:241`, and a pane is never labelled at all — herdr's `pane split`
-# takes no label. Inventing schemes for two levels nothing renders would be an
-# enum whose members no call site can reach.
+# a worktree, a branch, and a tab. The plugin never labels a space, and a pane is
+# never labelled at all — herdr's `pane split` takes no label. Inventing schemes
+# for two levels nothing renders would be an enum whose members no call site can
+# reach.
 #
 # KTD5. The DEFAULT of every scheme renders byte-identical names to today's. A
 # default that changes an existing name silently re-homes every future worktree
@@ -229,8 +229,8 @@ herdr_linear::scheme_name() {
         tab)
             case "$scheme" in
                 # Verbatim, not through herdr_linear::slug, which squeezes
-                # separator runs. `herdr-write.sh:229` labels a tab from the bare
-                # identifier today and this has to reproduce that byte for byte.
+                # separator runs. Tabs already open carry the bare identifier
+                # as their label, and this has to reproduce that byte for byte.
                 identifier)       name="$ident" ;;
                 identifier-title) name="$(herdr_linear::_scheme_render_worktree identifier-title "$ident" "$title")" || name="" ;;
             esac ;;

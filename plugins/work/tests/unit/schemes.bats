@@ -15,12 +15,11 @@ load setup_common
 #     and asserted here by ITERATING THE ENUM — a hand-copied list of scheme
 #     names would leave the next scheme added untested.
 #
-# KTD5. The default scheme renders byte-identical names to today's. The expected
-# strings below are LITERALS taken from running the current
-# herdr_linear::start_worktree_name / start_branch_name once. They are
-# deliberately not computed by calling those functions: once U3 routes them
-# through this resolver, a computed expectation would compare the resolver with
-# itself and pass no matter what it renders.
+# The default scheme renders byte-identical names to the ones worktrees and
+# branches already carry. The expected strings below are LITERALS taken from the
+# naming code that predated this resolver. They are deliberately not computed: a
+# computed expectation would compare the resolver with itself and pass no matter
+# what it renders.
 
 bats_require_minimum_version 1.5.0
 
@@ -234,8 +233,8 @@ LONG_TITLE="Export panel is empty when a still-rendering frame is selected"
 # ------------------------------------------------------------------ the tab
 
 # The identifier is emitted verbatim, NOT through herdr_linear::slug, which
-# squeezes separator runs. `herdr-write.sh:229` labels a tab from the bare
-# identifier today and this scheme must reproduce it byte for byte.
+# squeezes separator runs. Tabs already open carry the bare identifier as their
+# label, and this scheme must reproduce it byte for byte.
 @test "the default tab scheme renders the bare identifier" {
     run herdr_linear::scheme_name tab WEB-3308 "$LONG_TITLE"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_OK" ]
@@ -289,12 +288,11 @@ LONG_TITLE="Export panel is empty when a still-rendering frame is selected"
 }
 
 # A fresh process with only these two files in its lib directory: in-process,
-# an earlier source of linear.sh would supply slug and hide the dependency.
-@test "schemes.sh renders a worktree name when linear.sh is absent from lib" {
+# an earlier source of another library could supply slug and hide a dependency.
+@test "schemes.sh renders a worktree name with only sanitize.sh beside it" {
     local lib="$BATS_TEST_TMPDIR/lib"
     mkdir -p "$lib"
     cp "$ROOT/lib/sanitize.sh" "$ROOT/lib/schemes.sh" "$lib/"
-    [ ! -e "$lib/linear.sh" ]
 
     run --separate-stderr env -i PATH="$PATH" HOME="$BATS_TEST_TMPDIR" bash -c \
         '. "$1/schemes.sh" && herdr_linear::scheme_name worktree WEB-3308 "$2"' _ "$lib" "$LONG_TITLE"

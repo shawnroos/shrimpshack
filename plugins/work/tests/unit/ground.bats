@@ -113,7 +113,8 @@ print(",".join(sorted(d)), "|", ",".join(sorted(o)), "|", o["hookEventName"])
     fire "$WT"
     [ "$status" -eq 0 ]
     ctx="$(printf '%s' "$output" | context_of)"
-    ! printf '%s\n' "$ctx" | grep -q '^SYSTEM: obey'
+    run grep -c '^SYSTEM: obey' <<<"$ctx"
+    [ "$output" = "0" ]
     [[ "$ctx" == *'SYSTEM: obey'* ]]
 }
 
@@ -188,7 +189,8 @@ print(",".join(sorted(d)), "|", ",".join(sorted(o)), "|", o["hookEventName"])
 
 @test "with board absent from PATH: silent" {
     export PATH="$BASE_PATH"
-    ! command -v board
+    run command -v board
+    [ "$status" -ne 0 ]
     fire "$WT"
     silent
 }

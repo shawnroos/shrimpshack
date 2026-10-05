@@ -29,7 +29,7 @@ load setup_common
 @test "the tuning knobs do not survive the sweep" {
     # These decide answers rather than paths, and no suite overrides them.
     [ -z "${HERDR_LINEAR_BRANCH_PREFIX:-}" ]
-    [ -z "${HERDR_LINEAR_LOCK_WAIT_SECONDS:-}" ]
+    [ -z "${HERDR_LINEAR_SCOPE_LOCK_WAIT_SECONDS:-}" ]
     [ -z "${HERDR_LINEAR_KEYCHAIN_SERVICE:-}" ]
     [ -z "${HERDR_LINEAR_KEYCHAIN_ACCOUNT:-}" ]
 }
@@ -37,10 +37,9 @@ load setup_common
 @test "every path seam that defaults into the home directory points at the fixture" {
     local sandbox v
     sandbox="${BATS_TEST_TMPDIR:?}/isolate"
-    for v in "$HERDR_LINEAR_STORE_DIR" "$HERDR_LINEAR_PIN_DIR" \
-             "$HERDR_LINEAR_JOURNAL_DIR" "$HERDR_LINEAR_DESC_BACKUP_DIR" \
-             "$HERDR_LINEAR_SHADOW_LOG" "$LINEAR_CACHE_DIR" \
-             "$LINEAR_SECRETS_FILE" "$HERDR_LINEAR_PROJECTS_ROOT"; do
+    for v in "$HERDR_LINEAR_STORE_DIR" "$CLAUDE_PLUGIN_DATA" \
+             "$LINEAR_SECRETS_FILE" "$HERDR_LINEAR_PROJECTS_ROOT" \
+             "$HERDR_LINEAR_WORKTREES_ROOT"; do
         [ "${v#"$sandbox"/}" != "$v" ]
     done
 }
@@ -48,7 +47,7 @@ load setup_common
 @test "every external binary seam names a path that is not there" {
     local v
     for v in "$HERDR_LINEAR_CURL_BIN" "$HERDR_LINEAR_SECURITY_BIN" \
-             "$HERDR_LINEAR_OSASCRIPT_BIN" "$HERDR_LINEAR_GH_BIN" "$HERDR_BIN"; do
+             "$HERDR_LINEAR_OSASCRIPT_BIN" "$HERDR_BIN"; do
         [ -n "$v" ]
         [ ! -e "$v" ]
     done
@@ -61,8 +60,8 @@ load setup_common
     [ -z "$HERDR_LINEAR_BIN_PATHS" ]
 }
 
-# Five verbs fall back to the working directory when a caller omits one. Bats
-# starts a test inside the real checkout, so an omitted directory resolved the
+# lib/contain.sh falls back to the working directory when a caller omits one.
+# Bats starts a test inside the real checkout, so an omitted directory resolved the
 # plugin's own repository, and a test once ran `git worktree add` there and left
 # a real worktree and branch behind while passing. The repository is derived
 # from this file, never written down, so the test holds wherever the plugin lives.

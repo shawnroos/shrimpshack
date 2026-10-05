@@ -12,10 +12,9 @@
 # with their own options, and turning either on for them changes their control
 # flow. Every expansion is `${VAR:-}` so a caller running `set -u` is safe.
 
-# A session name becomes a directory segment in the record store, so it goes
-# through the one validator. Sourced the way binding.sh sources it: no caller is
-# required to have loaded sanitize.sh first, and an undefined validator returns
-# 127, which an `||` branch reads as a refusal.
+# A session name can become a path segment, so it goes through the one
+# validator. No caller is required to have loaded sanitize.sh first, and an
+# undefined validator returns 127, which an `||` branch reads as a refusal.
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
 

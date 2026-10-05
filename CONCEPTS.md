@@ -135,31 +135,30 @@ a member that is neither finished nor retryable.
 ## Herdr and Linear
 
 ### Binding
-The recorded link between one git worktree and one Linear issue. It is held against the
-worktree, never against a pane or tab, so rearranging the layout does not lose it. A match
-the plugin infers is only a proposal; the binding exists once Shawn confirms it, and only a
-confirmed binding permits a write to Linear.
+The link between one git worktree and one Linear issue. The herdr board holds it, against
+the worktree, never against a pane or tab, so rearranging the layout does not lose it. An
+agent links it through the board's `bind` tool, or the person links it on the board.
 
 ### Unbound
 A worktree with no binding. It is a supported state, not an error — work often starts before
-the issue exists — and the plugin never requires an issue to be created for it.
+the issue exists — and nothing requires an issue to be created for it.
 
 ### Misplaced
 A bound worktree whose herdr workspace does not correspond to its issue's Linear project.
-The plugin reports it and offers to move either side; it never picks which one was wrong.
+The board does not compute this state yet; when it does, it reports it and never picks which
+side was wrong.
 
 ### Stale
-A binding whose issue has been closed in Linear while the worktree is still in use. It is
-reported and otherwise left alone — the plugin does not reopen an issue on its own.
+A binding whose issue has been closed in Linear while the worktree is still in use. The board
+does not compute this state yet; when it does, it reports it and leaves it alone, never
+reopening an issue on its own.
 
 ### Mapping
 What a herdr space, tab and pane each correspond to. The current meanings — a space is a
 project, a tab is a piece of work, a pane is a session — are one mapping among possible
-ones, not the only one. A mapping is set once for the machine and may be overridden for an
-individual space, so two spaces can disagree and both be right; a space that states nothing
-uses the current meanings.
+ones, not the only one.
 
 ### Scheme
-A named way of composing one kind of name — a worktree, branch, tab, space or pane. The set
+A named way of composing one kind of name — a worktree, branch or tab. The set
 of schemes is fixed and each is rendered by the plugin, so a name is chosen from an
 enumeration rather than written as a template.
