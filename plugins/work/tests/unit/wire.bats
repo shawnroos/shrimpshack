@@ -290,6 +290,62 @@ start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.
     [[ "$body" == *"forget_scope_repo"* ]]
 }
 
+layout_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/layout/SKILL.md"; }
+layout_fences() { awk '/^```bash/ {f=1; next} /^```/ {f=0} f' <<<"$(layout_skill)"; }
+
+@test "the layout skill names no retired skill" {
+    body="$(layout_skill)"
+    for s in bind declare describe doc new new-project new-sub-issue board; do
+        run grep -qE "/work:${s}([^a-z-]|\$)" <<<"$body"
+        [ "$status" -ne 0 ] || { echo "names /work:$s"; return 1; }
+    done
+}
+
+@test "the layout skill's bash fences source only kept libraries" {
+    fences="$(layout_fences)"
+    [[ "$fences" == *"lib/herdr-read.sh"* ]]
+    run bash -c "grep -oE 'lib/[A-Za-z0-9_-]+\.sh' <<<\"\$1\" \
+        | grep -vxE 'lib/(contain|sanitize|schemes|secrets|herdr-read|repos)\.sh'" _ "$fences"
+    [ -z "$output" ] || { echo "sources: $output"; return 1; }
+}
+
+# Nothing else checks a skill's fences: the lib-sourcing check sweeps bin/ and
+# hooks/ only, so a fence calling a deleted function would ship green.
+@test "every function the layout skill's fences call is defined in a library they source" {
+    LIB="$(cd "$BATS_TEST_DIRNAME/../../lib" && pwd)"
+    fences="$(layout_fences)"
+    called="$(grep -oE 'herdr_linear::[A-Za-z0-9_]+' <<<"$fences" | sort -u)"
+    [ -n "$called" ]
+    sourced="$(grep -oE 'lib/[A-Za-z0-9_-]+\.sh' <<<"$fences" | sort -u | sed "s#^lib/#$LIB/#")"
+    [ -n "$sourced" ]
+    for fn in $called; do
+        run grep -lE "^${fn}\(\)" $sourced
+        [ -n "$output" ] || { echo "undefined in sourced libs: $fn"; return 1; }
+    done
+}
+
+@test "the layout skill binds through the board with an explicit cwd" {
+    body="$(layout_skill)"
+    run grep -E '`bind`' <<<"$body"
+    [ -n "$output" ]
+    run grep -E '`cwd`' <<<"$body"
+    [ -n "$output" ]
+    [[ "$body" != *"layout_build"* ]]
+    [[ "$body" != *"binding_add_child"* ]]
+}
+
+# The plugin may make a tab and split columns for new work; it never moves,
+# closes or relabels what is already there.
+@test "the layout skill's fences run no herdr verb but tab create and pane split" {
+    fences="$(layout_fences)"
+    [[ "$fences" == *"herdr tab create"* ]]
+    [[ "$fences" == *"herdr pane split"* ]]
+    run bash -c "grep -oE '(^|[;|&)]|\\\$\\() *herdr [a-z-]+ [a-z-]+' <<<\"\$1\" \
+        | sed -E 's/^.*herdr /herdr /' \
+        | grep -vxE 'herdr (tab create|pane split)'" _ "$fences"
+    [ -z "$output" ] || { echo "runs: $output"; return 1; }
+}
+
 # ------------------------------------------ nobody places a session unasked (KTD31)
 
 placement_tree() {

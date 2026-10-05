@@ -263,28 +263,33 @@ except Exception:
 # 1 when the snapshot was read and holds no match; 2 when it could not be read.
 # Only the read that answered can say which: a second read that succeeds says
 # nothing about a first that failed while the server was busy.
-herdr_linear::_pane_field() {
-    local match_key="$1" match_val="$2" want="$3" snap
+herdr_linear::_snap_field() {
+    local coll="$1" want="$2" k1="$3" v1="$4" k2="${5:-}" v2="${6:-}" snap
     snap="$(herdr_linear::snapshot)" || return 2
     [ -n "$snap" ] || return 2
     local out
     if command -v jq >/dev/null 2>&1; then
-        printf '%s' "$snap" | jq -e '.result.snapshot.panes | type == "array"' >/dev/null 2>&1 || return 2
-        out="$(printf '%s' "$snap" | jq -r --arg k "$match_key" --arg v "$match_val" --arg w "$want" \
-            '.result.snapshot.panes[]? | select(.[$k] == $v) | .[$w] // empty' 2>/dev/null)"
+        printf '%s' "$snap" | jq -e --arg c "$coll" '.result.snapshot[$c] | type == "array"' >/dev/null 2>&1 || return 2
+        out="$(printf '%s' "$snap" | jq -r --arg c "$coll" --arg w "$want" \
+            --arg k1 "$k1" --arg v1 "$v1" --arg k2 "$k2" --arg v2 "$v2" \
+            '.result.snapshot[$c][]? | select(.[$k1] == $v1 and ($k2 == "" or .[$k2] == $v2)) | .[$w] // empty' 2>/dev/null)"
     else
-        out="$(printf '%s' "$snap" | HL_K="$match_key" HL_V="$match_val" HL_W="$want" python3 -c '
+        out="$(printf '%s' "$snap" | HL_C="$coll" HL_W="$want" HL_K1="$k1" HL_V1="$v1" HL_K2="$k2" HL_V2="$v2" python3 -c '
 import sys, json, os
+e = os.environ
 try:
-    panes = json.load(sys.stdin)["result"]["snapshot"]["panes"]
-    assert isinstance(panes, list)
+    rows = json.load(sys.stdin)["result"]["snapshot"][e["HL_C"]]
+    assert isinstance(rows, list)
 except Exception:
     sys.exit(2)
-for p in panes:
-    if isinstance(p, dict) and p.get(os.environ["HL_K"]) == os.environ["HL_V"]:
-        v = p.get(os.environ["HL_W"])
-        if v is not None:
-            print(v)
+for r in rows:
+    if not isinstance(r, dict) or r.get(e["HL_K1"]) != e["HL_V1"]:
+        continue
+    if e["HL_K2"] and r.get(e["HL_K2"]) != e["HL_V2"]:
+        continue
+    v = r.get(e["HL_W"])
+    if v is not None:
+        print(v)
 ' 2>/dev/null)" || return 2
     fi
     [ -n "$out" ] || return 1
@@ -294,13 +299,26 @@ for p in panes:
 # Which tab a pane sits in. 1 for no such pane, 2 when herdr could not be read.
 herdr_linear::tab_of_pane() {
     [ -n "${1:-}" ] || return 1
-    herdr_linear::_pane_field pane_id "$1" tab_id
+    herdr_linear::_snap_field panes tab_id pane_id "$1"
 }
 
 # That tab's panes, one id per line, in snapshot order.
 herdr_linear::panes_in_tab() {
     [ -n "${1:-}" ] || return 1
-    herdr_linear::_pane_field tab_id "$1" pane_id
+    herdr_linear::_snap_field panes pane_id tab_id "$1"
+}
+
+# The panes whose cwd is exactly this path, one id per line. The path is
+# compared as given, so pass it resolved (`pwd -P`) the way herdr reports it.
+herdr_linear::panes_at_cwd() {
+    [ -n "${1:-}" ] || return 1
+    herdr_linear::_snap_field panes pane_id cwd "$1"
+}
+
+# The tabs in one space carrying exactly this label, one id per line.
+herdr_linear::tab_labelled() {
+    [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+    herdr_linear::_snap_field tabs tab_id workspace_id "$1" label "$2"
 }
 
 # Every space herdr reports, one `<id><TAB><label>` line each. Nothing on a
