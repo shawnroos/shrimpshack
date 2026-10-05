@@ -5,17 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ground.sh\""
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/reconcile.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ground.sh\"",
+            "timeout": 10
           }
         ]
       }
@@ -26,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/board-behind.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/board-behind.sh\"",
+            "timeout": 10
           }
         ]
       }
