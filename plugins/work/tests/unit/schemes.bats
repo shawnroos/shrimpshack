@@ -27,7 +27,7 @@ bats_require_minimum_version 1.5.0
 setup() {
     ROOT="${BATS_TEST_DIRNAME}/../.."
     # shellcheck source=/dev/null
-    for f in sanitize.sh linear.sh schemes.sh; do . "$ROOT/lib/$f"; done
+    for f in sanitize.sh schemes.sh; do . "$ROOT/lib/$f"; done
 }
 
 # The long title whose slug overruns the 40-character title cap mid-word, so the
@@ -286,4 +286,19 @@ LONG_TITLE="Export panel is empty when a still-rendering frame is selected"
     run --separate-stderr herdr_linear::scheme_name branch "$long_ident" "Some title"
     [ "$status" -eq "$HERDR_LINEAR_SCHEME_REFUSED" ]
     [ -z "$output" ]
+}
+
+# A fresh process with only these two files in its lib directory: in-process,
+# an earlier source of linear.sh would supply slug and hide the dependency.
+@test "schemes.sh renders a worktree name when linear.sh is absent from lib" {
+    local lib="$BATS_TEST_TMPDIR/lib"
+    mkdir -p "$lib"
+    cp "$ROOT/lib/sanitize.sh" "$ROOT/lib/schemes.sh" "$lib/"
+    [ ! -e "$lib/linear.sh" ]
+
+    run --separate-stderr env -i PATH="$PATH" HOME="$BATS_TEST_TMPDIR" bash -c \
+        '. "$1/schemes.sh" && herdr_linear::scheme_name worktree WEB-3308 "$2"' _ "$lib" "$LONG_TITLE"
+    [ "$status" -eq 0 ]
+    [ "$output" = "WEB-3308-export-panel-is-empty-when-a-still" ]
+    [ -z "$stderr" ]
 }

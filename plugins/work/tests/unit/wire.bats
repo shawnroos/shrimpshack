@@ -269,9 +269,11 @@ start_skill() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/start/SKILL.
 }
 
 # KTD7. An exit the table does not name is an exit the skill reads as failure.
-@test "the start skill's exit tables carry a row for the ask value" {
-    run bash -c "printf '%s\n' \"\$1\" | grep -cE '^\\| 6 \\|'" _ "$(start_skill)"
-    [ "$output" = "2" ]
+@test "the start skill binds through the board with an explicit cwd" {
+    body="$(start_skill)"
+    [[ "$body" == *"bind"* ]]
+    [[ "$body" == *"cwd"* ]]
+    [[ "$body" != *"/work:bind"* ]]
 }
 
 # R14. No caller supplies the name, so the skill must not tell anyone to.

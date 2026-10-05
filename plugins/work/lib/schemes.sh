@@ -25,12 +25,31 @@
 # and breaks the identifier-in-both-places property that makes a worktree
 # findable from its branch.
 
-# No lib sources another, and the source order is not guaranteed: without these
+# No lib sources another, and the source order is not guaranteed: without this
 # the calls below are 127, which a `||` branch reads as a refusal.
 command -v herdr_linear::is_safe_identifier >/dev/null 2>&1 \
     || . "${BASH_SOURCE[0]%/*}/sanitize.sh"
-command -v herdr_linear::slug >/dev/null 2>&1 \
-    || . "${BASH_SOURCE[0]%/*}/linear.sh"
+
+# R28. Any Linear-derived name bound for a path, a branch or an argument is
+# reduced to [A-Za-z0-9._-] and then REJECTED outright when the result would be
+# dangerous rather than being repaired into something plausible: empty, `.`,
+# `..`, or a leading hyphen (which every CLI reads as a flag) or dot (which
+# hides the file). Repairing would silently produce a name nobody chose.
+herdr_linear::slug() {
+    local text="${1:-}" max="${2:-60}" raw out
+    raw="$(printf '%s' "$text" | tr -c 'A-Za-z0-9._-' '-')"
+    # Checked BEFORE trimming. Stripping the leading hyphens first and then
+    # testing for them is a check that can never fire: `--rf` would quietly
+    # become `rf`, which is exactly the repair this function must not perform.
+    case "$raw" in
+        -*|.*) return 1 ;;
+    esac
+    out="$(printf '%s' "$raw" | sed -E 's/-+/-/g; s/-+$//' | cut -c1-"$max")"
+    case "$out" in
+        ''|'.'|'..') return 1 ;;
+    esac
+    printf '%s' "$out"
+}
 
 HERDR_LINEAR_SCHEME_OK=0
 HERDR_LINEAR_SCHEME_REFUSED=1

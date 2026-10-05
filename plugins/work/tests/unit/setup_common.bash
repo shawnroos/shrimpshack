@@ -26,6 +26,7 @@ herdr_linear_test::isolate() {
     export HERDR_LINEAR_PROJECTS_ROOT="$sandbox/projects"
     export HERDR_LINEAR_WORKTREES_ROOT="$sandbox/worktrees"
     export HERDR_LINEAR_STORE_DIR="$sandbox/store"
+    export CLAUDE_PLUGIN_DATA="$sandbox/plugin-data"
     export HERDR_LINEAR_PIN_DIR="$sandbox/pin"
     export HERDR_LINEAR_JOURNAL_DIR="$sandbox/layouts"
     export HERDR_LINEAR_DESC_BACKUP_DIR="$sandbox/descriptions"
