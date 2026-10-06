@@ -91,10 +91,14 @@ store() {
     printf 'Issue a FRESH key at https://linear.app/settings/api, then paste it.\n'
     printf 'It is read without echo and never printed.\n'
     local secret rc
-    secret="$(herdr_linear::prompt_secret 'Linear API key')" || {
-        printf 'cancelled; nothing was stored\n' >&2
-        return 1
-    }
+    secret="$(herdr_linear::prompt_secret 'Linear API key' 'Paste a fresh Linear API key')"
+    rc=$?
+    case "$rc" in
+        0) ;;
+        3) printf 'cancelled; nothing was stored\n' >&2; return 1 ;;
+        2) printf 'refused: an empty value is not a credential; nothing was stored\n' >&2; return 1 ;;
+        *) printf 'the key prompt failed; nothing was stored\n' >&2; return 1 ;;
+    esac
     herdr_linear::keychain_write "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT" "$secret"
     rc=$?
     unset secret
