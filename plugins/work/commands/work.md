@@ -1,7 +1,7 @@
 ---
 description: Report what this session is bound to on the board, and whether the board can hear this session's Linear writes. With an issue identifier, start work on it instead.
-argument-hint: "[WEB-1234] | [status] | nothing"
-allowed-tools: Bash, Skill, AskUserQuestion
+argument-hint: "[WEB-1234] | [setup] | [status] | nothing"
+allowed-tools: Bash, Read, Skill, AskUserQuestion, ToolSearch, mcp__board__open_board, mcp__board__close_board, mcp__board__bind, mcp__board__state, mcp__claude_ai_Linear__get_issue, mcp__linear__get_issue
 ---
 
 What this session is bound to, and whether the board is listening.
@@ -56,6 +56,7 @@ Each check is fast and none starts the daemon. A check that passes prints
 nothing.
 
 ```bash
+{
 if ! command -v board >/dev/null 2>&1; then
     echo "board is not installed. Install board, then run /work again."
 else
@@ -75,9 +76,9 @@ except Exception:
     print("board version --json did not answer. Reinstall board."); sys.exit()
 cli, daemon = d.get("cli_version"), d.get("daemon_version")
 if not daemon:
-    print("the board daemon is not answering. Run: board daemon start")
+    print("the board daemon is not answering. Run: board daemon status")
 elif daemon != cli:
-    print("the board daemon runs " + daemon + " and the CLI is " + str(cli) + ". Run: board daemon stop")
+    print("the board daemon runs " + daemon + " and the CLI is " + str(cli) + ". Run: board daemon stop && board daemon status")
 '
 fi
 
@@ -91,6 +92,7 @@ for f in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json" \
         echo "$f has its own board linear report hook, so every write is reported twice. Remove that hook; the plugin already runs one."
     fi
 done
+} | awk '{ print } END { if (NR) print "Run /work setup to fix these." }'
 ```
 
 Pass every line on as printed. When nothing prints, say the board hears this
@@ -105,6 +107,14 @@ user can invoke it. That flow creates the worktree at a path derived from the
 ticket and binds it on the board — or, when more than one repository or none is recorded for the ticket's
 project, asks which repository to use and creates nothing until that is
 answered.
+
+## With `setup`
+
+`/work setup` walks the person through everything the plugin needs: the board,
+its daemon, the board tools, the Linear key, and the first space and worktree
+bindings. Read `${CLAUDE_PLUGIN_ROOT}/skills/setup/SKILL.md` and follow it. Do
+not invoke it as a skill: only the user can invoke it. It shows each fix and
+runs one only after the person says yes, and it is safe to run again.
 
 ## With `status`
 

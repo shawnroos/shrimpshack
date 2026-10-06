@@ -91,17 +91,21 @@ store() {
     printf 'Issue a FRESH key at https://linear.app/settings/api, then paste it.\n'
     printf 'It is read without echo and never printed.\n'
     local secret rc
-    secret="$(herdr_linear::prompt_secret 'Linear API key')" || {
-        printf 'cancelled; nothing was stored\n' >&2
-        return 1
-    }
+    secret="$(herdr_linear::prompt_secret 'Linear API key' 'Paste a fresh Linear API key')"
+    rc=$?
+    case "$rc" in
+        "$HERDR_LINEAR_SECRET_OK") ;;
+        "$HERDR_LINEAR_SECRET_CANCELLED") printf 'cancelled; nothing was stored\n' >&2; return 1 ;;
+        "$HERDR_LINEAR_SECRET_EMPTY") printf 'refused: an empty value is not a credential; nothing was stored\n' >&2; return 1 ;;
+        *) printf 'the key prompt failed; nothing was stored\n' >&2; return 1 ;;
+    esac
     herdr_linear::keychain_write "$KEYCHAIN_SERVICE" "$KEYCHAIN_ACCOUNT" "$secret"
     rc=$?
     unset secret
     case "$rc" in
-        0) printf 'stored, and read back byte-for-byte\n' ;;
-        2) printf 'refused: an empty value is not a credential\n' >&2; return 1 ;;
-        4) printf 'refused: that value cannot survive a Keychain write (a newline or a non-printable byte)\n' >&2; return 1 ;;
+        "$HERDR_LINEAR_SECRET_OK") printf 'stored, and read back byte-for-byte\n' ;;
+        "$HERDR_LINEAR_SECRET_EMPTY") printf 'refused: an empty value is not a credential\n' >&2; return 1 ;;
+        "$HERDR_LINEAR_SECRET_MALFORMED") printf 'refused: that value cannot survive a Keychain write (a newline or a non-printable byte)\n' >&2; return 1 ;;
         *) printf 'the Keychain write failed\n' >&2; return 1 ;;
     esac
     verify_key

@@ -18,7 +18,7 @@ Tasty crustacey morsels for Claude by [@shawnroos](https://github.com/shawnroos)
 | [spinoff](plugins/spinoff/) | 0.10.3 | Moves the topic just discussed into its own worktree and its own briefed session. The handoff links back to the source session. |
 | [stackup](plugins/stackup/) | 0.1.0 | Asks whether work ships as a stack of dependent pull requests. It asks twice, while the answer is still cheap to act on. |
 | [token-bridge](plugins/token-bridge/) | 2.0.0 | Connects the CSS design tokens of one codebase to one Paper file. A config file states the mapping. |
-| [work](plugins/work/) | 0.6.0 | Ties each Claude session to its Linear issue through the herdr board. Agents write Linear through Linear's MCP; the board hears every write. |
+| [work](plugins/work/) | 0.6.1 | Ties each Claude session to its Linear issue through the herdr board. Agents write Linear through Linear's MCP; the board hears every write. |
 
 ## Install
 

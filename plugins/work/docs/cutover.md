@@ -2,6 +2,8 @@
 
 Work 0.6.0 stops keeping its own store. The herdr board keeps the bindings in its own database, agents write Linear through Linear's MCP tools, and the plugin's hook tells the board about each write.
 
+New installs with no 0.5 store skip this page: run `/work setup` instead.
+
 Follow these steps in order. Doing them out of order can lose a binding.
 
 ## Before you start

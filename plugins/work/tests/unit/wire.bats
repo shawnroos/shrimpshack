@@ -421,6 +421,13 @@ work_command() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/commands/work.md";
     [[ "$body" == *"board daemon stop"* ]]
 }
 
+# Setup reads its skill file and loads the deferred board tools itself.
+@test "the command allows Read and ToolSearch" {
+    run awk -F': *' '/^allowed-tools:/ {print $2}' <<<"$(work_command)"
+    [[ ", $output," == *", Read,"* ]]
+    [[ ", $output," == *", ToolSearch,"* ]]
+}
+
 @test "the command keeps the start hand-off and the credential line" {
     body="$(work_command)"
     [[ "$body" == *"/work:start"* ]]
@@ -577,4 +584,224 @@ retired_tree() {
     run retired_write_check "$WORK/r"
     [ "$status" -ne 0 ]
     [[ "$output" == *"hooks/sync.sh"* ]]
+}
+
+# ------------------------------------------------ the setup skill
+
+setup_skill_path() { echo "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/setup/SKILL.md"; }
+setup_skill() { cat "$(setup_skill_path)"; }
+setup_frontmatter() { awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f' "$(setup_skill_path)"; }
+# Its fences sit inside numbered steps, so they are indented.
+setup_fences() { awk '/^ *```bash/ {f=1; next} /^ *```/ {f=0} f' "$(setup_skill_path)"; }
+
+@test "the setup skill exists" {
+    [ -f "$(setup_skill_path)" ]
+}
+
+# The /work command shadows a skill named work, and setup changes the machine,
+# so only the person starts it.
+@test "the setup skill is user-invoked and named setup" {
+    run setup_frontmatter
+    [[ "$output" == *"disable-model-invocation: true"* ]]
+    run bash -c "awk -F': *' '/^name:/ {print \$2}' <<<\"\$1\"" _ "$output"
+    [ "$output" = "setup" ]
+}
+
+@test "the setup skill's bash fences source only kept libraries and call only the two scripts" {
+    fences="$(setup_fences)"
+    [[ "$fences" == *"bin/setup-check.sh"* ]]
+    run bash -c "grep -oE 'lib/[A-Za-z0-9_-]+\.sh' <<<\"\$1\" \
+        | grep -vxE 'lib/(contain|sanitize|secrets)\.sh'" _ "$fences"
+    [ -z "$output" ] || { echo "sources: $output"; return 1; }
+    run bash -c "grep -oE 'bin/[A-Za-z0-9_-]+\.sh' <<<\"\$1\" \
+        | grep -vxE 'bin/(setup-check|migrate-credential)\.sh'" _ "$fences"
+    [ -z "$output" ] || { echo "calls: $output"; return 1; }
+}
+
+@test "the setup skill names no retired skill" {
+    body="$(setup_skill)"
+    for s in bind declare describe doc new new-project new-sub-issue board; do
+        run grep -qE "/work:${s}([^a-z-]|\$)" <<<"$body"
+        [ "$status" -ne 0 ] || { echo "names /work:$s"; return 1; }
+    done
+}
+
+@test "the setup skill binds through the board with an explicit cwd" {
+    body="$(setup_skill)"
+    run grep -E '`bind`' <<<"$body"
+    [ -n "$output" ]
+    run grep -E '`cwd`' <<<"$body"
+    [ -n "$output" ]
+    [[ "$body" == *"linear-rules"* ]]
+}
+
+# The space binding is the person's, in the TUI: the agent opens the board
+# beside them, never focused, and closes only what it opened.
+@test "the setup skill opens the board as a split and closes it" {
+    body="$(setup_skill)"
+    [[ "$body" == *'`open_board`'* ]]
+    run grep -E 'placement.*`split`' <<<"$body"
+    [ -n "$output" ]
+    [[ "$body" == *'`close_board`'* ]]
+}
+
+# setup_section <n>: the body of "## <n>." up to the next "## ".
+setup_section() { awk -v n="## $1." 'index($0, n) == 1 {f=1; next} f && /^## / {exit} f' "$(setup_skill_path)"; }
+
+# The board tools are deferred in a session that has them, so both binding
+# steps load them first, and fall back to a new session when they do not load.
+@test "both binding steps load the board tools before using them" {
+    for n in 6 7; do
+        body="$(setup_section "$n")"
+        [[ "$body" == *'select:mcp__board__open_board,mcp__board__close_board,mcp__board__bind,mcp__board__state'* ]] \
+            || { echo "step $n does not load the board tools"; return 1; }
+        [[ "$body" == *"new Claude Code session"* ]] || { echo "step $n has no new-session path"; return 1; }
+    done
+}
+
+@test "an old store to import ends with the final table, not a bare stop" {
+    body="$(setup_section 3)"
+    [[ "$body" == *"step 8"* ]]
+    [[ "$body" != *"stop setup here"* ]]
+}
+
+# Placement and focus are the board's job; the skill's own bash moves nothing.
+@test "the setup skill's fences run no herdr command" {
+    [ -n "$(setup_fences)" ]
+    run grep -nE '(^|[;|&(]|\$\() *herdr ' <<<"$(setup_fences)"
+    [ -z "$output" ] || { echo "runs: $output"; return 1; }
+}
+
+@test "the setup skill edits no herdr config and installs nothing from upstream" {
+    [ -n "$(setup_fences)" ]
+    [[ "$(setup_fences)" != *"config.toml"* ]]
+    [[ "$(setup_skill)" != *"nelsonPires5"* ]]
+}
+
+# A fix runs only when the check marks it a command; an instruction is the
+# person's to do.
+@test "the setup skill runs a fix only when its fix_kind is command" {
+    body="$(setup_skill)"
+    [[ "$body" == *"fix_kind"* ]]
+    [[ "$body" == *'`command`'* ]]
+    [[ "$body" == *'`instruction`'* ]]
+}
+
+# ------------------------------------------------ /work setup
+
+@test "the command hands setup to the setup skill" {
+    body="$(work_command)"
+    [[ "$body" == *'## With `setup`'* ]]
+    [[ "$body" == *'${CLAUDE_PLUGIN_ROOT}/skills/setup/SKILL.md'* ]]
+    run awk -F': *' '/^argument-hint:/ {print $2}' <<<"$body"
+    [[ "$output" == *setup* ]]
+}
+
+# /work's health block and setup-check.sh both judge the board, its daemon, the
+# board mcp registration and a duplicate report hook. Each fixture below breaks
+# one of those and runs both surfaces against the same fakes on PATH, so the two
+# cannot drift into disagreeing about the same machine.
+
+health_fence() {
+    awk '/^### 2\. Health/ {h=1} h && /^```bash/ {f=1; next} f && /^```/ {exit} f' \
+        "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/commands/work.md"
+}
+
+surfaces() {
+    FIX="$BATS_TEST_DIRNAME/../fixtures"
+    export HOME="$WORK/home"
+    ANS="$WORK/answers"
+    SBIN="$WORK/bin"
+    mkdir -p "$HOME" "$ANS" "$SBIN" "$WORK/project"
+    ln -s "$(command -v python3)" "$SBIN/python3"
+    ln -s "$(command -v git)" "$SBIN/git"
+    cp "$FIX/fake-board.sh" "$SBIN/board"
+    cat > "$SBIN/claude" <<'SH'
+#!/usr/bin/env bash
+if [ "${FAKE_CLAUDE_MCP:-present}" = present ]; then
+    case "$*" in
+        "mcp list") printf 'board: board mcp - Connected\n'; exit 0 ;;
+        "mcp get board") printf 'board:\n  Status: connected\n'; exit 0 ;;
+    esac
+fi
+printf 'No MCP server named "board".\n'
+exit 1
+SH
+    chmod +x "$SBIN/claude"
+    printf '' > "$ANS/linear_report"
+    printf '{"cli_version":"0.18.0","daemon_version":"0.18.0"}\n' > "$ANS/version"
+    export FAKE_BOARD_RESPONSE_DIR="$ANS" FAKE_BOARD_LOG="$WORK/board.log"
+    export HERDR_BIN="$FIX/fake-herdr.sh" FAKE_HERDR_RECORD_DIR="$WORK/herdr" FAKE_HERDR_VERSION=0.9.3
+    export CLAUDE_PROJECT_DIR="$WORK/project"
+    unset HERDR_LINEAR_CLAUDE_BIN HERDR_LINEAR_BOARD_BIN
+    SPATH="$SBIN:/usr/bin:/bin"
+}
+
+run_health() {
+    run env PATH="$SPATH" bash -c "$(health_fence)" </dev/null
+}
+
+check_state() {
+    run env PATH="$SPATH" bash "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/bin/setup-check.sh" </dev/null
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]]["state"])' "$1"
+}
+
+@test "with every shared check passing, neither surface reports a failure" {
+    surfaces
+    run_health
+    [ "$status" -eq 0 ]
+    [ -z "$output" ] || { echo "health: $output"; return 1; }
+    for k in board daemon board_mcp duplicate_hook; do
+        s="$(check_state "$k")"
+        [ "$s" = ok ] || { echo "$k: $s"; return 1; }
+    done
+}
+
+@test "no board fails on both surfaces, and /work points at setup" {
+    surfaces
+    rm "$SBIN/board"
+    run_health
+    [[ "$output" == *"board is not installed"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state board)" = missing ]
+}
+
+@test "a daemon that is not answering fails on both surfaces" {
+    surfaces
+    printf '{"cli_version":"0.18.0","daemon_version":null}\n' > "$ANS/version"
+    run_health
+    [[ "$output" == *"daemon is not answering"* ]]
+    [[ "$output" == *"Run: board daemon status"* ]]
+    [[ "$output" != *"daemon start"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state daemon)" = missing ]
+}
+
+@test "a daemon on another version than the CLI fails on both surfaces" {
+    surfaces
+    printf '{"cli_version":"0.18.0","daemon_version":"0.17.9"}\n' > "$ANS/version"
+    run_health
+    [[ "$output" == *"daemon runs 0.17.9 and the CLI is 0.18.0"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state daemon)" = old ]
+}
+
+@test "an unregistered board mcp fails on both surfaces" {
+    surfaces
+    export FAKE_CLAUDE_MCP=absent
+    run_health
+    [[ "$output" == *"board mcp is not registered"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state board_mcp)" = missing ]
+}
+
+@test "a duplicate report hook fails on both surfaces" {
+    surfaces
+    mkdir -p "$HOME/.claude"
+    printf '{"hooks":{"PostToolUse":[{"command":"board linear report"}]}}\n' > "$HOME/.claude/settings.json"
+    run_health
+    [[ "$output" == *"$HOME/.claude/settings.json has its own board linear report hook"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state duplicate_hook)" = missing ]
 }

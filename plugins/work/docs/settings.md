@@ -34,6 +34,8 @@ string, and the default does not come back.
 | `HERDR_LINEAR_KEYCHAIN_SERVICE` | `work-linear` | The keychain service `bin/migrate-credential.sh` stores and checks the Linear credential under. | `bin/migrate-credential.sh` | no |
 | `HERDR_LINEAR_KEYCHAIN_ACCOUNT` | `linear-api-key` | The keychain account `bin/migrate-credential.sh` stores and checks the Linear credential under. | `bin/migrate-credential.sh` | no |
 | `HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS` | `(none)` | How long a keychain read may wait, for a caller nobody can answer an unlock prompt for. Unset, the read waits. Needs `perl` on `PATH`. | `lib/secrets.sh` | no |
+| `HERDR_LINEAR_SETUP_LOCAL_TIMEOUT_SECONDS` | `10` | How long `bin/setup-check.sh` waits for one local read (herdr, the board's version and session) before it reports that check as unknown. | `bin/setup-check.sh` | no |
+| `HERDR_LINEAR_SETUP_NETWORK_TIMEOUT_SECONDS` | `30` | How long `bin/setup-check.sh` waits for a read that can reach the network (`claude mcp get`, the import dry run, the Linear key check) before it reports that check as unknown. | `bin/setup-check.sh` | no |
 | `LINEAR_SECRETS_FILE` | `$HOME/.secrets` | The plaintext file `bin/migrate-credential.sh` reports on, and removes the `LINEAR_API_KEY` line from once the keychain copy works. | `bin/migrate-credential.sh` | no |
 
 ---

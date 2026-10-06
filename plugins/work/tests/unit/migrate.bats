@@ -24,6 +24,20 @@ setup() {
     export HERDR_LINEAR_SECURITY_BIN="$FIX/fake-security.sh"
     export HERDR_LINEAR_CURL_BIN="$FIX/fake-linear.sh"
     export FAKE_SECURITY_STORE_DIR="$WORK/keychain"
+    export FAKE_SECURITY_RECORD_DIR="$WORK/security-record"
+    export FAKE_OSASCRIPT_RECORD_DIR="$WORK/osascript-record"
+    export HERDR_LINEAR_OSASCRIPT_BIN="$WORK/fake-osascript.sh"
+    cat > "$HERDR_LINEAR_OSASCRIPT_BIN" <<'STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+mkdir -p "$FAKE_OSASCRIPT_RECORD_DIR"
+for a in "$@"; do printf '%s\n' "$a"; done >> "$FAKE_OSASCRIPT_RECORD_DIR/argv"
+case "${FAKE_OSASCRIPT_MODE:-ok}" in
+  cancel) printf '%s\n' "execution error: User canceled. (-128)" >&2; exit 1 ;;
+  *)      printf '%s\n' "${FAKE_OSASCRIPT_ANSWER:?}"; exit 0 ;;
+esac
+STUB
+    chmod +x "$HERDR_LINEAR_OSASCRIPT_BIN"
     export FAKE_LINEAR_RECORD_DIR="$WORK/linear-record"
     export LINEAR_SECRETS_FILE="$WORK/secrets"
     mkdir -p "$FAKE_LINEAR_RECORD_DIR"
@@ -33,6 +47,9 @@ setup() {
     KEYLIKE="lin_api""_MIGRATEMIGRATEMIGRATE"
     printf 'MODAL_KEY=abc\nLINEAR_API_KEY=%s\nUNIFI_USER=someone\n' "$KEYLIKE" > "$LINEAR_SECRETS_FILE"
     chmod 600 "$LINEAR_SECRETS_FILE"
+
+    FRESHKEY="lin_api""_FRESHFRESHFRESHFRESH"
+    export FAKE_OSASCRIPT_ANSWER="$FRESHKEY"
 }
 
 teardown() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
@@ -44,6 +61,42 @@ seed_keychain() {
     printf '%s\n%s\n' "$KEYLIKE" "$KEYLIKE" \
         | "$HERDR_LINEAR_SECURITY_BIN" add-generic-password \
             -a linear-api-key -s work-linear -U -w >/dev/null 2>&1
+}
+
+stored_key() {
+    "$HERDR_LINEAR_SECURITY_BIN" find-generic-password -a linear-api-key -s work-linear -w 2>/dev/null
+}
+
+# ---------------------------------------------------------------- store
+
+@test "store saves the pasted key where the board reads it, then verifies it" {
+    run --separate-stderr bash -c "FAKE_LINEAR_MODE=viewer bash '$BIN/migrate-credential.sh' store"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"authenticates as: Example User"* ]]
+    [ "$(stored_key)" = "$FRESHKEY" ]
+}
+
+@test "a cancelled prompt stores nothing" {
+    run --separate-stderr bash -c "FAKE_OSASCRIPT_MODE=cancel FAKE_LINEAR_MODE=viewer bash '$BIN/migrate-credential.sh' store"
+    [ "$status" -ne 0 ]
+    [[ "$stderr" == *"cancelled"* ]]
+    # The dialog must have been reached: a store that dies before prompting also
+    # stores nothing and says "cancelled".
+    [ -s "$FAKE_OSASCRIPT_RECORD_DIR/argv" ]
+    run stored_key
+    [ "$status" -eq 44 ]
+}
+
+@test "store never puts the key in any process argv" {
+    run bash -c "FAKE_LINEAR_MODE=viewer bash '$BIN/migrate-credential.sh' store"
+    [ "$status" -eq 0 ]
+    [ -s "$FAKE_SECURITY_RECORD_DIR/argv" ]
+    run grep -c "$FRESHKEY" "$FAKE_SECURITY_RECORD_DIR/argv"
+    [ "$output" = "0" ]
+    run grep -c "$FRESHKEY" "$FAKE_OSASCRIPT_RECORD_DIR/argv"
+    [ "$output" = "0" ]
+    run grep -c "$FRESHKEY" "$FAKE_LINEAR_RECORD_DIR/argv"
+    [ "$output" = "0" ]
 }
 
 # ---------------------------------------------------------------- the leak
