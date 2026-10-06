@@ -659,3 +659,120 @@ setup_fences() { awk '/^ *```bash/ {f=1; next} /^ *```/ {f=0} f' "$(setup_skill_
     [[ "$body" == *'`command`'* ]]
     [[ "$body" == *'`instruction`'* ]]
 }
+
+# ------------------------------------------------ /work setup
+
+@test "the command hands setup to the setup skill" {
+    body="$(work_command)"
+    [[ "$body" == *'## With `setup`'* ]]
+    [[ "$body" == *'${CLAUDE_PLUGIN_ROOT}/skills/setup/SKILL.md'* ]]
+    run awk -F': *' '/^argument-hint:/ {print $2}' <<<"$body"
+    [[ "$output" == *setup* ]]
+}
+
+# /work's health block and setup-check.sh both judge the board, its daemon, the
+# board mcp registration and a duplicate report hook. Each fixture below breaks
+# one of those and runs both surfaces against the same fakes on PATH, so the two
+# cannot drift into disagreeing about the same machine.
+
+health_fence() {
+    awk '/^### 2\. Health/ {h=1} h && /^```bash/ {f=1; next} f && /^```/ {exit} f' \
+        "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/commands/work.md"
+}
+
+surfaces() {
+    FIX="$BATS_TEST_DIRNAME/../fixtures"
+    export HOME="$WORK/home"
+    ANS="$WORK/answers"
+    SBIN="$WORK/bin"
+    mkdir -p "$HOME" "$ANS" "$SBIN" "$WORK/project"
+    ln -s "$(command -v python3)" "$SBIN/python3"
+    ln -s "$(command -v git)" "$SBIN/git"
+    cp "$FIX/fake-board.sh" "$SBIN/board"
+    cat > "$SBIN/claude" <<'SH'
+#!/usr/bin/env bash
+if [ "${FAKE_CLAUDE_MCP:-present}" = present ]; then
+    case "$*" in
+        "mcp list") printf 'board: board mcp - Connected\n'; exit 0 ;;
+        "mcp get board") printf 'board:\n  Status: connected\n'; exit 0 ;;
+    esac
+fi
+printf 'No MCP server named "board".\n'
+exit 1
+SH
+    chmod +x "$SBIN/claude"
+    printf '' > "$ANS/linear_report"
+    printf '{"cli_version":"0.18.0","daemon_version":"0.18.0"}\n' > "$ANS/version"
+    export FAKE_BOARD_RESPONSE_DIR="$ANS" FAKE_BOARD_LOG="$WORK/board.log"
+    export HERDR_BIN="$FIX/fake-herdr.sh" FAKE_HERDR_RECORD_DIR="$WORK/herdr" FAKE_HERDR_VERSION=0.9.3
+    export CLAUDE_PROJECT_DIR="$WORK/project"
+    unset HERDR_LINEAR_CLAUDE_BIN HERDR_LINEAR_BOARD_BIN
+    SPATH="$SBIN:/usr/bin:/bin"
+}
+
+run_health() {
+    run env PATH="$SPATH" bash -c "$(health_fence)" </dev/null
+}
+
+check_state() {
+    run env PATH="$SPATH" bash "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/bin/setup-check.sh" </dev/null
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]]["state"])' "$1"
+}
+
+@test "with every shared check passing, neither surface reports a failure" {
+    surfaces
+    run_health
+    [ "$status" -eq 0 ]
+    [ -z "$output" ] || { echo "health: $output"; return 1; }
+    for k in board daemon board_mcp duplicate_hook; do
+        s="$(check_state "$k")"
+        [ "$s" = ok ] || { echo "$k: $s"; return 1; }
+    done
+}
+
+@test "no board fails on both surfaces, and /work points at setup" {
+    surfaces
+    rm "$SBIN/board"
+    run_health
+    [[ "$output" == *"board is not installed"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state board)" = missing ]
+}
+
+@test "a daemon that is not answering fails on both surfaces" {
+    surfaces
+    printf '{"cli_version":"0.18.0","daemon_version":null}\n' > "$ANS/version"
+    run_health
+    [[ "$output" == *"daemon is not answering"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state daemon)" = missing ]
+}
+
+@test "a daemon on another version than the CLI fails on both surfaces" {
+    surfaces
+    printf '{"cli_version":"0.18.0","daemon_version":"0.17.9"}\n' > "$ANS/version"
+    run_health
+    [[ "$output" == *"daemon runs 0.17.9 and the CLI is 0.18.0"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state daemon)" = old ]
+}
+
+@test "an unregistered board mcp fails on both surfaces" {
+    surfaces
+    export FAKE_CLAUDE_MCP=absent
+    run_health
+    [[ "$output" == *"board mcp is not registered"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state board_mcp)" = missing ]
+}
+
+@test "a duplicate report hook fails on both surfaces" {
+    surfaces
+    mkdir -p "$HOME/.claude"
+    printf '{"hooks":{"PostToolUse":[{"command":"board linear report"}]}}\n' > "$HOME/.claude/settings.json"
+    run_health
+    [[ "$output" == *"$HOME/.claude/settings.json has its own board linear report hook"* ]]
+    [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
+    [ "$(check_state duplicate_hook)" = missing ]
+}
