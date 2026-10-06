@@ -83,6 +83,15 @@ print("null" if v is None else v)' "$1" "$2"
 
 answer() { printf '%s\n' "$2" > "$ANS/$1"; }
 
+# one_token <command> <word>: the shell splits the command into words, and
+# <word> is exactly one of them.
+one_token() {
+    python3 -c '
+import shlex, sys
+words = shlex.split(sys.argv[1])
+assert sys.argv[2] in words, words' "$1" "$2"
+}
+
 versions() { answer version "{\"cli_version\":\"$1\",\"daemon_version\":${2:-null}}"; }
 
 managed_board() {
@@ -94,7 +103,7 @@ managed_board() {
 
 # A development checkout whose build ~/.local/bin/board points into.
 symlinked_board() {
-    CHK="$SB/checkout"
+    CHK="${2:-$SB/checkout}"
     mkdir -p "$CHK/target/release" "$HOME/.local/bin"
     printf 'id = "herdr-board"\n' > "$CHK/herdr-plugin.toml"
     cp "$FIX/fake-board.sh" "$CHK/target/release/board"
@@ -234,11 +243,28 @@ for d, dirs, files in os.walk(sys.argv[1]):
 
 @test "a completed cut-over is ok, naming the old rows that would still import" {
     healthy
-    answer import_work-store '{"store_dir":"/x","present":true,"dry_run":true,"imported":[{"kind":"worktree_binding","key":"/a","source":"a","dropped":[]},{"kind":"worktree_binding","key":"/b","source":"b","dropped":[]},{"kind":"worktree_binding","key":"/c","source":"c","dropped":[]}],"skipped":[{"kind":"space_binding","key":"w1","source":"s","reason":"already in the board; the import never overwrites a row","dropped":[]}],"ignored":[]}'
+    answer import_work-store '{"store_dir":"/x","present":true,"dry_run":true,"imported":[{"kind":"worktree_binding","key":"/a","source":"a","dropped":[]},{"kind":"worktree_binding","key":"/b","source":"b","dropped":[]},{"kind":"worktree_binding","key":"/c","source":"c","dropped":[]}],"skipped":[{"kind":"grouping","key":"global","source":"board.json","reason":"already in the board; the import never overwrites a row"},{"kind":"space_binding","key":"w1","source":"s","reason":"already in the board; the import never overwrites a row","dropped":[]}],"ignored":[]}'
     check
     [ "$(field import state)" = ok ]
     [[ "$(field import detail)" == *3* ]]
     [[ "$(field import detail)" == *docs/cutover.md* ]]
+}
+
+# The import writes board.json's global grouping and nothing else does, so one
+# row someone bound by hand before importing is not a finished cut-over.
+@test "one row already in the board without the import's marker still needs importing" {
+    healthy
+    answer import_work-store '{"store_dir":"/x","present":true,"dry_run":true,"imported":[{"kind":"grouping","key":"global","source":"board.json","dropped":[]},{"kind":"worktree_binding","key":"/a","source":"a","dropped":[]}],"skipped":[{"kind":"space_binding","key":"w1","source":"s","reason":"already in the board; the import never overwrites a row","dropped":[]}],"ignored":[]}'
+    check
+    [ "$(field import state)" = needs_import ]
+}
+
+@test "an old store with no board.json falls back to any row already in the board" {
+    healthy
+    answer import_work-store '{"store_dir":"/x","present":true,"dry_run":true,"imported":[{"kind":"worktree_binding","key":"/a","source":"a","dropped":[]}],"skipped":[{"kind":"space_binding","key":"w1","source":"s","reason":"already in the board; the import never overwrites a row","dropped":[]}],"ignored":[]}'
+    check
+    [ "$(field import state)" = ok ]
+    [[ "$(field import detail)" == *board.json* ]]
 }
 
 @test "with the daemon down the import and key probes are never run" {
@@ -246,7 +272,7 @@ for d, dirs, files in os.walk(sys.argv[1]):
     versions 0.18.0 null
     check
     [ "$(field daemon state)" = missing ]
-    [ "$(field daemon fix)" = "board daemon status" ]
+    [ "$(field daemon fix)" = "$HOME/.local/bin/board daemon status" ]
     for k in import linear_key space_binding worktree_binding; do
         [ "$(field "$k" state)" = unknown ] || { echo "$k: $(field "$k" state)"; return 1; }
         [[ "$(field "$k" detail)" == *"start the daemon first"* ]]
@@ -259,7 +285,7 @@ for d, dirs, files in os.walk(sys.argv[1]):
     versions 0.18.0 '"0.17.0"'
     check
     [ "$(field daemon state)" = old ]
-    [ "$(field daemon fix)" = "board daemon stop && board daemon status" ]
+    [ "$(field daemon fix)" = "$HOME/.local/bin/board daemon stop && $HOME/.local/bin/board daemon status" ]
 }
 
 @test "a key the board refuses is missing, with the store fix" {
@@ -269,6 +295,17 @@ for d, dirs, files in os.walk(sys.argv[1]):
     [ "$(field linear_key state)" = missing ]
     [[ "$(field linear_key detail)" == *"Linear refused the API key"* ]]
     [[ "$(field linear_key fix)" == *"migrate-credential.sh store" ]]
+}
+
+@test "a Linear that does not answer leaves the key unknown, never missing" {
+    healthy
+    for msg in "Linear is unavailable: timeout" "Linear rate limited the request"; do
+        answer linear_project_list "{\"status\":\"unavailable\",\"message\":\"$msg\",\"rows\":[]}"
+        check
+        [ "$(field linear_key state)" = unknown ] || { echo "$msg: $(field linear_key state)"; return 1; }
+        [ "$(field linear_key fix)" = null ]
+        [[ "$(field linear_key detail)" == "The board could not reach Linear: $msg" ]]
+    done
 }
 
 @test "a key the board accepts with no Keychain item is ok, with advice to move it" {
@@ -336,6 +373,7 @@ for d, dirs, files in os.walk(sys.argv[1]):
 import json, sys
 bad = {k: v for k, v in json.load(sys.stdin).items() if v["state"] != "ok"}
 assert not bad, bad'
+    [ "$(field path state)" = ok ]
     check
     [ "$output" = "$first" ]
 }
@@ -351,11 +389,105 @@ assert not bad, bad'
     [ "$(home_listing)" = "$before" ]
 }
 
-@test "without python3 it still exits 0 and reports python3 missing" {
+@test "without python3 it still exits 0 and reports python3 missing, with every check" {
     mkdir -p "$WORK/nopy"
     run -0 --separate-stderr env PATH="$WORK/nopy" "$BASH" "$SCRIPT"
     printf '%s' "$output" | /usr/bin/env PATH="$WORK/bin" python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-assert d["python3"]["state"] == "missing", d'
+assert d["python3"]["state"] == "missing", d
+assert sorted(d) == sorted(sys.argv[1:]), sorted(set(d) ^ set(sys.argv[1:]))' $KEYS
+}
+
+@test "a checkout path with a space stays one word in every fix that names it" {
+    symlinked_board 0.17.0 "$SB/my checkout"
+    check
+    fix="$(field board fix)"
+    one_token "$fix" "$CHK"
+    one_token "$fix" "$CHK/Cargo.toml"
+    versions 0.18.0 '"0.18.0"'
+    check
+    one_token "$(field herdr_plugin fix)" "$CHK"
+    [ "$(field herdr_plugin fix)" = "herdr plugin link '$CHK'" ]
+}
+
+@test "a plugin path with a space stays one word in the key store fix" {
+    healthy
+    answer linear_project_list '{"status":"unavailable","message":"Linear refused the API key","rows":[]}'
+    mkdir -p "$SB/my plugin/bin"
+    cp "$SCRIPT" "$SB/my plugin/bin/setup-check.sh"
+    SCRIPT="$SB/my plugin/bin/setup-check.sh"
+    check
+    plugin="$(cd "$SB/my plugin" && pwd -P)"
+    one_token "$(field linear_key fix)" "$plugin/bin/migrate-credential.sh"
+}
+
+@test "a board path with a space stays one word in the move-aside instruction" {
+    mkdir -p "$SB/odd home/.local/bin"
+    export HOME="$SB/odd home"
+    cp "$FIX/fake-board.sh" "$HOME/.local/bin/board"
+    versions 0.17.0 '"0.17.0"'
+    TPATH="$HOME/.local/bin:$WORK/bin:/usr/bin:/bin"
+    check
+    [[ "$(field board fix)" == *"mv '$HOME/.local/bin/board' '$HOME/.local/bin/board.old'"* ]]
+}
+
+# The path fix needs a new shell, which this session never gets, so every fix
+# run in it has to name the board it found.
+@test "a board found only in ~/.local/bin is named by its path in the fixes, and path is missing" {
+    managed_board 0.18.0
+    versions 0.18.0 null
+    export FAKE_CLAUDE_MCP=absent
+    TPATH="$WORK/bin:/usr/bin:/bin"
+    check
+    [ "$(field path state)" = missing ]
+    [ "$(field path fix_kind)" = instruction ]
+    [[ "$(field path fix)" == *'export PATH="$HOME/.local/bin:$PATH"'* ]]
+    [ "$(field daemon fix)" = "$HOME/.local/bin/board daemon status" ]
+    [ "$(field board_mcp fix)" = "claude mcp add --scope user board -- $HOME/.local/bin/board mcp" ]
+    versions 0.18.0 '"0.17.0"'
+    check
+    [ "$(field daemon fix)" = "$HOME/.local/bin/board daemon stop && $HOME/.local/bin/board daemon status" ]
+}
+
+@test "a board on PATH registers as the bare name" {
+    managed_board 0.18.0
+    export FAKE_CLAUDE_MCP=absent
+    check
+    [ "$(field path state)" = ok ]
+    [ "$(field board_mcp fix)" = "claude mcp add --scope user board -- board mcp" ]
+}
+
+@test "without cargo no board install is offered, and the detail says to fix cargo" {
+    export HERDR_LINEAR_CARGO_BIN="$WORK/absent/cargo"
+    check
+    [ "$(field cargo state)" = missing ]
+    [ "$(field board state)" = missing ]
+    [ "$(field board fix)" = null ]
+    [[ "$(field board detail)" == *"Fix cargo first"* ]]
+}
+
+@test "without git no board install is offered, and the detail says to fix git" {
+    export HERDR_LINEAR_GIT_BIN="$WORK/absent/git"
+    check
+    [ "$(field git state)" = missing ]
+    [ "$(field board fix)" = null ]
+    [[ "$(field board detail)" == *"Fix git first"* ]]
+}
+
+# A wedged probe and the grandchild it started must both be ended: the
+# grandchild holds the output pipe open. perl's alarm bounds this test, so a
+# regression fails instead of hanging the suite.
+@test "a claude probe that hangs, with a child of its own, is unknown and the check still returns" {
+    healthy
+    cat > "$WORK/bin/claude" <<'SH'
+#!/usr/bin/env bash
+sleep 60 &
+sleep 60
+SH
+    export HERDR_LINEAR_SETUP_NETWORK_TIMEOUT_SECONDS=1
+    start=$SECONDS
+    run -0 --separate-stderr env PATH="$TPATH" perl -e 'alarm 20; exec @ARGV' bash "$SCRIPT"
+    [ $((SECONDS - start)) -lt 8 ] || { echo "took $((SECONDS - start))s"; return 1; }
+    [ "$(field board_mcp state)" = unknown ]
 }

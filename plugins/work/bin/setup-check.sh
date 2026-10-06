@@ -25,6 +25,8 @@ CARGO_BIN="${HERDR_LINEAR_CARGO_BIN:-cargo}"
 KEYCHAIN_SERVICE="${HERDR_LINEAR_KEYCHAIN_SERVICE:-work-linear}"
 KEYCHAIN_ACCOUNT="${HERDR_LINEAR_KEYCHAIN_ACCOUNT:-linear-api-key}"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+LOCAL_TIMEOUT="${HERDR_LINEAR_SETUP_LOCAL_TIMEOUT_SECONDS:-10}"
+NETWORK_TIMEOUT="${HERDR_LINEAR_SETUP_NETWORK_TIMEOUT_SECONDS:-30}"
 
 # Builtins only up to the python3 check: with python3 absent, the fallback
 # below must still print, and PATH may hold nothing else either.
@@ -47,22 +49,30 @@ SC_BOARD="$BOARD_BIN" SC_HERDR="$HERDR_EXE" SC_SECURITY="$SECURITY_BIN" \
 SC_CLAUDE="$CLAUDE_BIN" SC_GIT="$GIT_BIN" SC_CARGO="$CARGO_BIN" \
 SC_SERVICE="$KEYCHAIN_SERVICE" SC_ACCOUNT="$KEYCHAIN_ACCOUNT" \
 SC_PROJECT="$PROJECT_DIR" SC_PLUGIN="$PLUGIN_ROOT" \
+SC_LOCAL_TIMEOUT="$LOCAL_TIMEOUT" SC_NETWORK_TIMEOUT="$NETWORK_TIMEOUT" \
 python3 -c '
-import json, os, re, shutil, signal, subprocess
+import json, os, re, shlex, shutil, signal, subprocess
 
 E = os.environ
 HOME = E.get("HOME", "")
 PLUGIN = E["SC_PLUGIN"]
 
 # A local read answers in well under a second; these bound a wedged process.
-# `claude mcp get` and the board key check reach the network, so they get longer.
-LOCAL_TIMEOUT = 10
-NETWORK_TIMEOUT = 30
+# `claude mcp get`, the import dry run and the board key check reach the network, so they get longer.
+def seconds(name, default):
+    try:
+        return float(E[name])
+    except ValueError:
+        return default
+
+
+LOCAL_TIMEOUT = seconds("SC_LOCAL_TIMEOUT", 10)
+NETWORK_TIMEOUT = seconds("SC_NETWORK_TIMEOUT", 30)
 
 TAG = "v0.18.0"
 MIN_BOARD = (0, 18, 0)
 INSTALL = "herdr plugin install shawnroos/herdr-linear-board --ref " + TAG + " --yes"
-STORE = "bash " + os.path.join(PLUGIN, "bin", "migrate-credential.sh") + " store"
+STORE = "bash " + shlex.quote(os.path.join(PLUGIN, "bin", "migrate-credential.sh")) + " store"
 CUTOVER = os.path.join(PLUGIN, "docs", "cutover.md")
 OPEN_BOARD = "herdr plugin action invoke open-board --plugin herdr-board"
 
@@ -167,6 +177,7 @@ out["path"] = entry("ok", local_bin + " is on PATH.") if on_path else entry(
 # did not install, a symlink included, so the fix depends on the owner.
 local_board = os.path.join(local_bin, "board")
 board = which(E["SC_BOARD"])
+board_on_path = bool(board)
 if not board and os.path.lexists(local_board):
     board = local_board
 managed = bool(board) and os.path.abspath(board) == os.path.abspath(local_board) \
@@ -184,8 +195,8 @@ if board and os.path.islink(board):
         d = parent
 install_ready = herdr_ok and bool(git) and bool(cargo)
 not_ready = "Fix " + ", ".join(k for k in ("git", "cargo", "herdr") if out[k]["state"] != "ok") + " first; the install needs them."
-move_aside = ("Move " + str(board) + " aside (for example: mv " + str(board) + " " + str(board) + ".old), "
-              "then run setup again to install the board.")
+move_aside = ("Move " + str(board) + " aside (for example: mv " + shlex.quote(str(board)) + " "
+              + shlex.quote(str(board) + ".old") + "), then run setup again to install the board.")
 
 versions = run_json([board, "version", "--json"]) if board else None
 cli_version = versions.get("cli_version") if versions else None
@@ -204,26 +215,32 @@ else:
         out["board"] = entry("old", detail + ("" if install_ready else " " + not_ready),
                              INSTALL if install_ready else None, "command")
     elif checkout:
-        rebuild = ("git -C " + checkout + " fetch --tags && git -C " + checkout + " checkout " + TAG
-                   + " && cargo build --release -p board-cli --manifest-path " + os.path.join(checkout, "Cargo.toml"))
-        ok = bool(git) and bool(cargo)
+        q = shlex.quote(checkout)
+        rebuild = ("git -C " + q + " fetch --tags && git -C " + q + " checkout " + TAG
+                   + " && cargo build --release -p board-cli --manifest-path " + shlex.quote(os.path.join(checkout, "Cargo.toml")))
+        can_build = bool(git) and bool(cargo)
         out["board"] = entry("old", detail + " It is a symlink into the checkout " + checkout
                              + "; rebuild it at " + TAG + ", or move it aside and take the plugin install instead.",
-                             rebuild if ok else None, "command")
+                             rebuild if can_build else None, "command")
     else:
         out["board"] = entry("old", detail + " Setup never overwrites a board it did not install.",
                              move_aside, "instruction")
 board_ok = out["board"]["state"] == "ok"
+# A PATH edit takes a new shell, which this session never gets, so a fix run
+# here names the board it found. The mcp registration outlives this session,
+# so it keeps the bare name whenever PATH already finds it.
+board_q = shlex.quote(board) if board else "board"
+mcp_board = "board" if board_on_path or not board else board_q
 
 if not board:
     out["daemon"] = entry("missing", "There is no board, so there is no daemon. Install the board first.")
 elif not board_ok:
     out["daemon"] = entry("unknown", "Upgrade the board first.")
 elif not daemon_version:
-    out["daemon"] = entry("missing", "The board daemon is not running.", "board daemon status", "command")
+    out["daemon"] = entry("missing", "The board daemon is not running.", board_q + " daemon status", "command")
 elif daemon_version != cli_version:
     out["daemon"] = entry("old", "The daemon runs " + str(daemon_version) + " and the CLI is " + cli_version + ".",
-                          "board daemon stop && board daemon status", "command")
+                          board_q + " daemon stop && " + board_q + " daemon status", "command")
 else:
     out["daemon"] = entry("ok", "The daemon runs " + daemon_version + ".")
 daemon_ok = out["daemon"]["state"] == "ok"
@@ -249,7 +266,7 @@ else:
                                         INSTALL if install_ready else None, "command")
         elif checkout:
             out["herdr_plugin"] = entry("missing", "herdr-board is not registered in herdr. The board is built in " + checkout + ", so that checkout is linked as the plugin.",
-                                        "herdr plugin link " + checkout, "command")
+                                        "herdr plugin link " + shlex.quote(checkout), "command")
         else:
             out["herdr_plugin"] = entry("missing", "herdr-board is not registered in herdr, and the board at " + board + " was not installed by the plugin.",
                                         move_aside, "instruction")
@@ -265,11 +282,12 @@ else:
         out["board_mcp"] = entry("unknown", "claude mcp get board did not answer.")
     else:
         out["board_mcp"] = entry("missing", "board mcp is not registered with Claude Code. A session started after adding it sees its tools.",
-                                 "claude mcp add --scope user board -- board mcp", "command")
+                                 "claude mcp add --scope user board -- " + mcp_board + " mcp", "command")
 
-hook_files = [os.path.join(HOME, ".claude", "settings.json"), os.path.join(HOME, ".claude", "settings.local.json"),
-              os.path.join(E["SC_PROJECT"], ".claude", "settings.json"),
-              os.path.join(E["SC_PROJECT"], ".claude", "settings.local.json")]
+hook_files = list(dict.fromkeys([
+    os.path.join(HOME, ".claude", "settings.json"), os.path.join(HOME, ".claude", "settings.local.json"),
+    os.path.join(E["SC_PROJECT"], ".claude", "settings.json"),
+    os.path.join(E["SC_PROJECT"], ".claude", "settings.local.json")]))
 dupes = []
 for f in hook_files:
     try:
@@ -298,11 +316,29 @@ else:
     elif not d.get("present"):
         out["import"] = entry("ok", "There is no old work store to import.")
     else:
-        pending = len(d.get("imported") or [])
-        landed = [s for s in (d.get("skipped") or []) if "already in the board" in str((s or {}).get("reason", ""))]
-        if landed:
-            out["import"] = entry("ok", "The old work store is imported. " + str(pending) + " old-store rows would still import; "
-                                  "that is expected after " + CUTOVER + " steps 8 and 9, which unbind them, so do not import again.")
+        imported = [r for r in (d.get("imported") or []) if isinstance(r, dict)]
+        skipped = [r for r in (d.get("skipped") or []) if isinstance(r, dict)]
+        pending = len(imported)
+
+        def landed(r):
+            return "already in the board" in str(r.get("reason", ""))
+
+        def is_global(r):
+            return r.get("kind") == "grouping" and r.get("key") == "global"
+
+        # Only the import writes the global grouping from board.json, so that
+        # row already in the board is the one proof a cut-over ran.
+        has_board_json = any(is_global(r) for r in imported + skipped)
+        if has_board_json:
+            done = any(is_global(r) and landed(r) for r in skipped)
+            rule = "the board already holds the global grouping from its board.json, which only the import writes"
+        else:
+            done = any(landed(r) for r in skipped)
+            rule = "it has no board.json, so a row already in the board is taken as the import having run"
+        if done:
+            out["import"] = entry("ok", "The old work store is imported: " + rule + ". " + str(pending)
+                                  + " old-store rows would still import; that is expected after " + CUTOVER
+                                  + " steps 8 and 9, which unbind them, so do not import again.")
         elif pending:
             out["import"] = entry("needs_import", "An old work store at " + str(d.get("store_dir")) + " has " + str(pending)
                                   + " rows the board does not hold. Cut over with " + CUTOVER + " instead of setting up fresh.",
@@ -312,8 +348,6 @@ else:
 
 # The board decides: it also reads LINEAR_API_KEY and ~/.secrets, so a key it
 # accepts is working even with no Keychain item. The Keychain is only advice.
-rc, _ = run([E["SC_SECURITY"], "find-generic-password", "-a", E["SC_ACCOUNT"], "-s", E["SC_SERVICE"]])
-in_keychain = rc == 0
 if not daemon_ok:
     out["linear_key"] = entry("unknown", "To check that the board accepts a Linear key, " + daemon_first)
 else:
@@ -321,9 +355,14 @@ else:
     if d is None:
         out["linear_key"] = entry("unknown", "board linear project list --json did not answer.")
     elif d.get("status") == "unavailable":
-        out["linear_key"] = entry("missing", "The board cannot use a Linear key: " + str(d.get("message") or "no reason given"),
-                                  STORE, "command")
-    elif in_keychain:
+        # The board reports every Linear failure as unavailable; only these two
+        # messages mean the key itself is absent or refused.
+        message = str(d.get("message") or "no reason given")
+        if message.startswith("no Linear API key") or message == "Linear refused the API key":
+            out["linear_key"] = entry("missing", "The board cannot use a Linear key: " + message, STORE, "command")
+        else:
+            out["linear_key"] = entry("unknown", "The board could not reach Linear: " + message)
+    elif run([E["SC_SECURITY"], "find-generic-password", "-a", E["SC_ACCOUNT"], "-s", E["SC_SERVICE"]])[0] == 0:
         out["linear_key"] = entry("ok", "The key is in the Keychain and the board reads Linear with it.")
     else:
         out["linear_key"] = entry("ok", "The board reads Linear, but there is no Keychain item ("

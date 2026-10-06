@@ -1,7 +1,7 @@
 ---
 description: Report what this session is bound to on the board, and whether the board can hear this session's Linear writes. With an issue identifier, start work on it instead.
 argument-hint: "[WEB-1234] | [setup] | [status] | nothing"
-allowed-tools: Bash, Skill, AskUserQuestion, mcp__board__open_board, mcp__board__close_board, mcp__board__bind, mcp__board__state, mcp__claude_ai_Linear__get_issue, mcp__linear__get_issue
+allowed-tools: Bash, Read, Skill, AskUserQuestion, ToolSearch, mcp__board__open_board, mcp__board__close_board, mcp__board__bind, mcp__board__state, mcp__claude_ai_Linear__get_issue, mcp__linear__get_issue
 ---
 
 What this session is bound to, and whether the board is listening.
@@ -76,9 +76,9 @@ except Exception:
     print("board version --json did not answer. Reinstall board."); sys.exit()
 cli, daemon = d.get("cli_version"), d.get("daemon_version")
 if not daemon:
-    print("the board daemon is not answering. Run: board daemon start")
+    print("the board daemon is not answering. Run: board daemon status")
 elif daemon != cli:
-    print("the board daemon runs " + daemon + " and the CLI is " + str(cli) + ". Run: board daemon stop")
+    print("the board daemon runs " + daemon + " and the CLI is " + str(cli) + ". Run: board daemon stop && board daemon status")
 '
 fi
 

@@ -88,17 +88,15 @@ A step whose needs are not met says which one is missing and does nothing.
 
 **`board mcp` added in this session.** Claude Code loads a new MCP server only
 in sessions started after it was added. If setup just registered `board mcp`,
-or the `open_board` and `bind` tools are not available here, the two binding
-steps cannot run in this session. Finish steps 3 and 4, then tell the person to
-start a new Claude Code session in this herdr pane and run `/work setup` again,
-and end with step 8.
+the two binding steps cannot run in this session: finish steps 3 and 4, then
+take the new-session path that opens steps 6 and 7.
 
 ## 3. An old store to import
 
 If `import` is `needs_import`, this machine has a work store from plugin 0.5
 that the board does not hold yet. A fresh setup would bind over it. Point the
-person to `${CLAUDE_PLUGIN_ROOT}/docs/cutover.md` and stop setup here; they run
-setup again after the cut-over.
+person to `${CLAUDE_PLUGIN_ROOT}/docs/cutover.md`, skip steps 4 to 7, and go to
+step 8. They run setup again after the cut-over.
 
 ## 4. The Linear key
 
@@ -134,6 +132,13 @@ worktree, and runs `/work setup` again to finish them. Go to step 8.
 
 Skip this step when `space_binding` is `ok`.
 
+First load the board tools, which can be registered but not yet loaded: call
+ToolSearch with the query
+`select:mcp__board__open_board,mcp__board__close_board,mcp__board__bind,mcp__board__state`.
+If `open_board` and `close_board` still do not resolve, take the new-session path: tell the person to
+start a new Claude Code session in this herdr pane and run `/work setup` again
+(it skips everything already `ok`), and go to step 8.
+
 Binding a space to a project is the person's choice, made in the board's own
 screen. Your part is to open the board beside them and tell them the keys.
 
@@ -148,7 +153,7 @@ screen. Your part is to open the board beside them and tell them the keys.
    not take focus. Note whether its result says it reused a board that was
    already open.
 3. If `open_board` fails, print this for the person to run in a herdr pane, and
-   carry on with the key path below:
+   carry on with the keys in item 4:
    `herdr plugin action invoke open-board --plugin herdr-board`
 4. Tell the person the keys:
    1. Press `s` to pick a space.
@@ -160,15 +165,24 @@ screen. Your part is to open the board beside them and tell them the keys.
    `s`.
 5. Ask them to say when they are done.
 6. Re-check. If `space_binding` is still not `ok`, show its `detail` and ask
-   whether to try again or stop.
-7. Call `close_board` with the same `space`, to close the pane you opened. If
-   `open_board` reused a board that was already open, leave it open: it is not
-   yours to close.
+   whether to try again (back to item 4) or stop.
+7. Every exit from this step comes here, whether the binding worked, the person
+   stopped, or something failed. If `open_board` opened a new pane in item 2,
+   call `close_board` with the same `space` to close it. If it reused a board
+   that was already open, or did not open one, leave it: it is not yours to
+   close.
 
 ## 7. Bind this worktree to an issue
 
 Skip this step when `worktree_binding` is `ok`: report the issue it is bound to
 and leave it alone. Go on only when `space_binding` is `ok`.
+
+First load the board tools, which can be registered but not yet loaded: call
+ToolSearch with the query
+`select:mcp__board__open_board,mcp__board__close_board,mcp__board__bind,mcp__board__state`.
+If `bind` still does not resolve, take the new-session path: tell the person to
+start a new Claude Code session in this herdr pane and run `/work setup` again
+(it skips everything already `ok`), and go to step 8.
 
 Load the `linear-rules` skill and follow it. Never create an issue here: when
 the person has no issue yet, point them to `/work:start` and go to step 8.

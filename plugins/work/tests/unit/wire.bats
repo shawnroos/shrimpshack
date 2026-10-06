@@ -421,6 +421,13 @@ work_command() { cat "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/commands/work.md";
     [[ "$body" == *"board daemon stop"* ]]
 }
 
+# Setup reads its skill file and loads the deferred board tools itself.
+@test "the command allows Read and ToolSearch" {
+    run awk -F': *' '/^allowed-tools:/ {print $2}' <<<"$(work_command)"
+    [[ ", $output," == *", Read,"* ]]
+    [[ ", $output," == *", ToolSearch,"* ]]
+}
+
 @test "the command keeps the start hand-off and the credential line" {
     body="$(work_command)"
     [[ "$body" == *"/work:start"* ]]
@@ -638,6 +645,26 @@ setup_fences() { awk '/^ *```bash/ {f=1; next} /^ *```/ {f=0} f' "$(setup_skill_
     [[ "$body" == *'`close_board`'* ]]
 }
 
+# setup_section <n>: the body of "## <n>." up to the next "## ".
+setup_section() { awk -v n="## $1." 'index($0, n) == 1 {f=1; next} f && /^## / {exit} f' "$(setup_skill_path)"; }
+
+# The board tools are deferred in a session that has them, so both binding
+# steps load them first, and fall back to a new session when they do not load.
+@test "both binding steps load the board tools before using them" {
+    for n in 6 7; do
+        body="$(setup_section "$n")"
+        [[ "$body" == *'select:mcp__board__open_board,mcp__board__close_board,mcp__board__bind,mcp__board__state'* ]] \
+            || { echo "step $n does not load the board tools"; return 1; }
+        [[ "$body" == *"new Claude Code session"* ]] || { echo "step $n has no new-session path"; return 1; }
+    done
+}
+
+@test "an old store to import ends with the final table, not a bare stop" {
+    body="$(setup_section 3)"
+    [[ "$body" == *"step 8"* ]]
+    [[ "$body" != *"stop setup here"* ]]
+}
+
 # Placement and focus are the board's job; the skill's own bash moves nothing.
 @test "the setup skill's fences run no herdr command" {
     [ -n "$(setup_fences)" ]
@@ -745,6 +772,8 @@ check_state() {
     printf '{"cli_version":"0.18.0","daemon_version":null}\n' > "$ANS/version"
     run_health
     [[ "$output" == *"daemon is not answering"* ]]
+    [[ "$output" == *"Run: board daemon status"* ]]
+    [[ "$output" != *"daemon start"* ]]
     [[ "${lines[${#lines[@]}-1]}" == "Run /work setup to fix these." ]]
     [ "$(check_state daemon)" = missing ]
 }
