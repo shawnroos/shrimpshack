@@ -45,6 +45,10 @@
 #   FAKE_HERDR_PANE_OPEN_FAILS  1 to make `plugin pane open` fail
 #   FAKE_HERDR_PANE_OPEN_SLEEP  seconds `plugin pane open` hangs before answering
 #   FAKE_HERDR_STATUS_NO_SOCKET  1 to leave the socket line out
+#   FAKE_HERDR_VERSION     the version `--version` prints (default: 0.9.0)
+#   FAKE_HERDR_PROTOCOL    the protocol `api schema --json` reports (default: 22)
+#   FAKE_HERDR_PLUGINS     the plugins `plugin list --json` reports, as
+#                          `id=root,id=root` (default: none)
 #   FAKE_HERDR_WORKSPACES  the spaces `workspace list` reports, as
 #                          `id=label,id=label` (default: wA=Plugins). Created
 #                          tabs and panes are remembered in the record dir, so
@@ -325,6 +329,9 @@ JSON
 }
 
 case "${1:-}" in
+    --version)
+        printf 'herdr %s\n' "${FAKE_HERDR_VERSION:-0.9.0}"
+        ;;
     status)
         case "${2:-}" in
             server) emit_status ;;
@@ -397,6 +404,10 @@ print(json.dumps({"id": "cli:workspace:list", "result": {"type": "workspace_list
     api)
         case "${2:-}" in
             snapshot) emit_snapshot ;;
+            schema)
+                printf '{"$schema":"https://json-schema.org/draft/2020-12/schema","protocol":%s,"schema_version":1,"schemas":{},"title":"herdr api"}\n' \
+                    "${FAKE_HERDR_PROTOCOL:-22}"
+                ;;
             *) echo "fake-herdr: unsupported api subcommand '${2:-}'" >&2; exit 2 ;;
         esac
         ;;
@@ -405,6 +416,18 @@ print(json.dumps({"id": "cli:workspace:list", "result": {"type": "workspace_list
     #   FAKE_HERDR_PANE_OPEN_FAILS  1 to make the open fail, as a busy UI does
     plugin)
         case "${2:-} ${3:-}" in
+            "list "*)
+                [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
+                FAKE_HERDR_PLUGINS="${FAKE_HERDR_PLUGINS:-}" python3 -c '
+import json, os
+out = []
+for item in os.environ["FAKE_HERDR_PLUGINS"].split(","):
+    if "=" in item:
+        pid, root = item.split("=", 1)
+        out.append({"plugin_id": pid, "plugin_root": root, "source": {"kind": "local"}})
+print(json.dumps({"id": "cli:plugin", "result": {"plugins": out}}))
+'
+                ;;
             "pane open")
                 [ "$MODE" = dead ] && { echo "fake-herdr: no server" >&2; exit 1; }
                 [ "${FAKE_HERDR_PANE_OPEN_FAILS:-0}" = 1 ] && { echo '{"error":{"code":"ui_busy"}}' >&2; exit 1; }

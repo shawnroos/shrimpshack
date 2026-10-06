@@ -38,7 +38,7 @@ EOF
 # suite file is added; if it is ever lowered, say why in the commit — this
 # number is what turns "the tests directory got renamed" into a failure instead
 # of a smaller, silently-green run.
-HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-11}"
+HERDR_LINEAR_MIN_SUITES="${HERDR_LINEAR_MIN_SUITES:-12}"
 
 run_suite() {
     local failed=0 f count=0 dir="${1:-$PLUGIN_ROOT/tests/unit}"
