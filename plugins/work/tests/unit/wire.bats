@@ -578,3 +578,84 @@ retired_tree() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"hooks/sync.sh"* ]]
 }
+
+# ------------------------------------------------ the setup skill
+
+setup_skill_path() { echo "$(cd "$BATS_TEST_DIRNAME/../.." && pwd)/skills/setup/SKILL.md"; }
+setup_skill() { cat "$(setup_skill_path)"; }
+setup_frontmatter() { awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f' "$(setup_skill_path)"; }
+# Its fences sit inside numbered steps, so they are indented.
+setup_fences() { awk '/^ *```bash/ {f=1; next} /^ *```/ {f=0} f' "$(setup_skill_path)"; }
+
+@test "the setup skill exists" {
+    [ -f "$(setup_skill_path)" ]
+}
+
+# The /work command shadows a skill named work, and setup changes the machine,
+# so only the person starts it.
+@test "the setup skill is user-invoked and named setup" {
+    run setup_frontmatter
+    [[ "$output" == *"disable-model-invocation: true"* ]]
+    run bash -c "awk -F': *' '/^name:/ {print \$2}' <<<\"\$1\"" _ "$output"
+    [ "$output" = "setup" ]
+}
+
+@test "the setup skill's bash fences source only kept libraries and call only the two scripts" {
+    fences="$(setup_fences)"
+    [[ "$fences" == *"bin/setup-check.sh"* ]]
+    run bash -c "grep -oE 'lib/[A-Za-z0-9_-]+\.sh' <<<\"\$1\" \
+        | grep -vxE 'lib/(contain|sanitize|secrets)\.sh'" _ "$fences"
+    [ -z "$output" ] || { echo "sources: $output"; return 1; }
+    run bash -c "grep -oE 'bin/[A-Za-z0-9_-]+\.sh' <<<\"\$1\" \
+        | grep -vxE 'bin/(setup-check|migrate-credential)\.sh'" _ "$fences"
+    [ -z "$output" ] || { echo "calls: $output"; return 1; }
+}
+
+@test "the setup skill names no retired skill" {
+    body="$(setup_skill)"
+    for s in bind declare describe doc new new-project new-sub-issue board; do
+        run grep -qE "/work:${s}([^a-z-]|\$)" <<<"$body"
+        [ "$status" -ne 0 ] || { echo "names /work:$s"; return 1; }
+    done
+}
+
+@test "the setup skill binds through the board with an explicit cwd" {
+    body="$(setup_skill)"
+    run grep -E '`bind`' <<<"$body"
+    [ -n "$output" ]
+    run grep -E '`cwd`' <<<"$body"
+    [ -n "$output" ]
+    [[ "$body" == *"linear-rules"* ]]
+}
+
+# The space binding is the person's, in the TUI: the agent opens the board
+# beside them, never focused, and closes only what it opened.
+@test "the setup skill opens the board as a split and closes it" {
+    body="$(setup_skill)"
+    [[ "$body" == *'`open_board`'* ]]
+    run grep -E 'placement.*`split`' <<<"$body"
+    [ -n "$output" ]
+    [[ "$body" == *'`close_board`'* ]]
+}
+
+# Placement and focus are the board's job; the skill's own bash moves nothing.
+@test "the setup skill's fences run no herdr command" {
+    [ -n "$(setup_fences)" ]
+    run grep -nE '(^|[;|&(]|\$\() *herdr ' <<<"$(setup_fences)"
+    [ -z "$output" ] || { echo "runs: $output"; return 1; }
+}
+
+@test "the setup skill edits no herdr config and installs nothing from upstream" {
+    [ -n "$(setup_fences)" ]
+    [[ "$(setup_fences)" != *"config.toml"* ]]
+    [[ "$(setup_skill)" != *"nelsonPires5"* ]]
+}
+
+# A fix runs only when the check marks it a command; an instruction is the
+# person's to do.
+@test "the setup skill runs a fix only when its fix_kind is command" {
+    body="$(setup_skill)"
+    [[ "$body" == *"fix_kind"* ]]
+    [[ "$body" == *'`command`'* ]]
+    [[ "$body" == *'`instruction`'* ]]
+}
