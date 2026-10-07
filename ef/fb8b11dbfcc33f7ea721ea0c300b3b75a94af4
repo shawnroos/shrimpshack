@@ -1,0 +1,23 @@
+plugins/spinoff/.claude-plugin/plugin.json
+  s_5abb44c8324d7f::t_901450cae8cdeb 4
+plugins/spinoff/skills/spinoff/scripts/session-id-passthrough.test.sh
+  s_5abb44c8324d7f::t_ad73f7894501eb 1-92
+plugins/spinoff/skills/spinoff/scripts/spinoff.sh
+  s_5abb44c8324d7f::t_66e9778c9a76d4 1471-1472,1487,1503-1511,1906,1909,2167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "effb8b11dbfcc33f7ea721ea0c300b3b75a94af4",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
