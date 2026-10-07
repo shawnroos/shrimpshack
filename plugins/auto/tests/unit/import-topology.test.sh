@@ -89,15 +89,22 @@
 #                          the prompt lookup is passed in by the caller)
 #   programme_journal    → run_record_core, programme_home
 #   session_registry     → run_record_core, programme_home, driver_session
+#   programme_exec       → programme_sanitize
+#   programme_tracker    → programme_exec, programme_journal, programme_sanitize
+#   programme_tasks      → programme_sanitize
+#   programme_plans      → programme_exec, programme_sanitize, programme_tracker
 #   programme_record     → run_record_core, programme_home, programme_journal,
-#                          programme_protocol, programme_sanitize, driver_session
+#                          programme_protocol, programme_sanitize, driver_session,
+#                          programme_tracker
 #   programme_evidence   → run_record_core, programme_home, programme_journal,
 #                          programme_predicate, programme_record, programme_sanitize,
 #                          programme_protocol, driver_session, verification
 #   programme_sources    → run_record_core, programme_home, programme_journal,
-#                          programme_sanitize, programme_record, session_registry
-#   programme_view       → programme_home, programme_predicate, programme_sanitize,
+#                          programme_sanitize, programme_record, programme_exec,
+#                          programme_tracker, programme_tasks, programme_plans,
 #                          session_registry
+#   programme_view       → programme_home, programme_predicate, programme_sanitize,
+#                          programme_tasks, session_registry
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_protocol, session_registry, driver_session, verb_cli;
 #                          then, after its verb table is built: programme_record,
@@ -108,7 +115,8 @@
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal,
 #                          session_registry, driver_session
 #   programme-watch      → run_record_core, programme_home, programme_predicate,
-#                          programme_record, programme_sanitize, driver_session
+#                          programme_record, programme_sanitize, programme_tracker,
+#                          programme_tasks, programme_plans, driver_session
 #                          (writes go through the programme CLI as a child process)
 #   run_record_evidence  → run_record_core, driver_session; programme_home [lazy],
 #                          programme_journal [lazy], programme_sanitize [lazy],
@@ -413,7 +421,8 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_journal.py session_registry.py on-user-prompt.py on-pre-compact.py \
            programme.py programme.sh verb_cli.py programme_record.py programme_sanitize.py \
            programme_evidence.py programme_sources.py programme-watch.py programme-watch.sh \
-           programme_view.py run_record_evidence.py programme_lifecycle.py; do
+           programme_view.py run_record_evidence.py programme_lifecycle.py \
+           programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -479,6 +488,16 @@ if loads_sibling "programme-watch.py" "programme_sources"; then
 else
   pass
 fi
+
+for _reader in programme_exec programme_tracker programme_tasks programme_plans; do
+  it "${_reader}.py loads no programme verb module (the watcher and the view load it)"
+  if loads_sibling "${_reader}.py" "programme_sources" || loads_sibling "${_reader}.py" "programme_record" \
+     || loads_sibling "${_reader}.py" "programme"; then
+    fail "${_reader}.py must stay a plain reader — programme_record and programme-watch load it"
+  else
+    pass
+  fi
+done
 
 it "run_record.py does NOT load programme_evidence, programme_record or programme"
 if loads_sibling "run_record.py" "programme_evidence" \

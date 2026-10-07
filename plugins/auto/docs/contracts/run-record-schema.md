@@ -671,14 +671,14 @@ keys and keeps unknown ones.
 |-----|-------|
 | `remit` | `{spaces: [{server, workspace}], tabs: []}` |
 | `created_at` | `<iso>` |
-| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, terms: {remit, stop_rule, autonomy, cadence}}` |
-| `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours` |
+| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, terms: {remit, stop_rule, autonomy, cadence, sources}}` |
+| `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `sources` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off). A record without the term reads as all three on. |
 | `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
 | `items` | `{"<source>:<key>": item}` (below) |
 | `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
 | `watchers` | `{"<id>": {process_id?, task_id?, kind?, item?, last_beat_at, prompt?, retry?}}`. `kind` is `cron` or `monitor`, set whenever a task id is recorded (`--kind`, else `cron` with `--prompt` and `monitor` without); a record without `kind` reads a task id with `prompt` as cron and one without as a Monitor. `end` prints `CronDelete` for cron task ids and `TaskStop` for Monitor task ids. Ids: `remit` (the remit watcher), `item-<item id with unsafe chars as ->` (item mode), `retry-<item slug>` (evidence retry, with `retry: {deliverable, argv}`). `prompt` is the armed cron prompt, verbatim; prompt capture reads it to mark a cron-origin prompt. A watcher is live when it has `process_id` or `task_id` and its beat is younger than one cadence period |
-| `sources` | `{"herdr"\|"board"\|"linear": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (its tool is not on PATH, or the board plugin reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. The view shows an unsupported source as "<name>: not available on this machine". |
+| `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered, and is null while the tracker is down. A source the agreement's `sources` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
 | `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
 | `ended` | `null \| {at, reason}` |
 
@@ -794,7 +794,10 @@ the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
 `rules_in_force` holds `agreement`, `rules[] {id, layer, autonomy, requires, caveat,
 adopted_on}`, `autonomy[] {action, level, layer, adopted_on}` (entries not from the
 plugin layer), `rejected_rules[]` and `instructions[]`; an `adopted_on` machine shows
-as "adopted on <machine>". `rows` is
+as "adopted on <machine>". `watching` always holds one row each for tracker, tasks
+and plans (rows with `source` and `state_only`), plus watchers and outages. Each
+item carries `now`: its owner session's in-progress task and how many tasks are
+done, read from the tasks source while it is on. `rows` is
 `[{style: title|head|text|dim|warn, text}]`; `status` prints the rows and the mod
 draws them, so both show the same text. Nothing reads it to decide anything.
 
@@ -850,7 +853,8 @@ predicate; the recompute ignores it.
 | `CLAUDE_AUTO_PERSONAL_PROTOCOL` | `~/.claude/shared/auto/protocol.json` | the protocol loader and the adopt verbs |
 | `CLAUDE_AUTO_MACHINE` | the short host name | adoption records |
 | `CLAUDE_AUTO_CHECK_TIMEOUT_SECONDS` | `30` | each evidence checker command |
-| `CLAUDE_AUTO_SOURCE_TIMEOUT` | herdr 5 s, board 15 s, Linear 15 s | every source read in `sweep` |
+| `CLAUDE_AUTO_SOURCE_TIMEOUT` | herdr 5 s, each tracker provider 15 s | every source read in `sweep` |
+| `CLAUDE_AUTO_TASKS_DIR` | `~/.claude/tasks` | the tasks source in `sweep`, `programme-watch` and the view |
 | `CLAUDE_AUTO_WORKER_WAIT` | `30` | `start-worker`, waiting for the new session |
 | `CLAUDE_AUTO_SPINOFF_TIMEOUT` | `600` | `start-worker`, the spinoff call |
 | `CLAUDE_AUTO_WATCH_INTERVAL_SECONDS` | `30` | `programme-watch`, the poll interval |

@@ -62,7 +62,16 @@ from this session's lease.
    every verb with its arguments and what it refuses.
 4. **Validate.** `P validate` re-checks confirmed evidence that has gone stale.
    A refuted re-check reopens its item; treat it as open work in this sweep.
-5. **Read the remit.** `P sweep --record-sources`.
+5. **Read the remit.** `P sweep --record-sources`. It reads herdr and the
+   three sources the agreement's `sources` term leaves on: the tracker (the
+   issue tracker; `sources.tracker.provider` names the provider that answered),
+   tasks (each remit session's Claude Code task list) and plans (plan docs
+   changed in the last week in each pane's repo). A source turned off reports
+   state `off`: it is never read or watched and never holds the stop.
+   - A pane's `tasks` gives its owner's task counts and the in-progress task as
+     `now`. Use it to judge progress before you prompt a worker.
+   - A proposal signal `plan` means the pane's repo has a recent plan that names
+     the issue, and it is the only issue those plans name.
    - Adopt each `adopt` proposal with `P add-item` (pass `--pane`, `--session`
      and `--title` from the proposal). Decide each `alias` proposal yourself with
      `P alias-item` or `P add-item`.
@@ -118,8 +127,9 @@ from this session's lease.
     `--remove <entry-id>` so the queue matches your next actions.
 14. **Re-arm the wake-ups.**
     - Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh"` with the
-      longest timeout. Add `--linear` only when the space is bound to a Linear
-      project. A second watcher exits by itself, so re-arming is safe. Record
+      longest timeout. Add `--tracker` only when the space has an issue
+      tracker it can poll. Tasks and plans are always watched unless the
+      agreement turns them off. A second watcher exits by itself, so re-arming is safe. Record
       the Monitor: `P watcher-beat remit --task-id <Monitor task id> --kind monitor`.
     - Keep the cron fallback. If it is missing (after a resume or takeover),
       CronCreate it again at the cadence term with the exact text

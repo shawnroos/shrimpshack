@@ -23,20 +23,32 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    native goal fights the programme's own stop rule, and ask him to run
    `/goal clear`. A Bash command cannot see the goal, so this check is yours.
 3. Propose the agreement with the defaults: `programme.sh propose-agreement`.
-   Run `programme.sh sweep` to read the space's shape. If the space suggests a
-   different term value (for example a `tabs` remit), pass it as
-   `--term <key>=<value>`.
+   Then probe the sources: `programme.sh sweep --record-sources`. It reads the
+   space's shape and records each source's state through set-source, so the
+   first sweep starts from them. If the space suggests a different term value
+   (for example a `tabs` remit), pass it as `--term <key>=<value>`.
 4. Show one screen, and nothing else:
-   - the output of `programme.sh rules` (the four terms with their proposed
-     values, plus the protocol layers and rules it loaded);
+   - the output of `programme.sh rules` (the terms with their proposed values,
+     plus the protocol layers and rules it loaded);
+   - the three sources, one line each, from the sweep's `sources` block:
+     - tracker: the provider that answered (`provider`), or unavailable or
+       unsupported with its `reason`;
+     - tasks: how many remit sessions have a task list (`with_lists`);
+     - plans: which repos and how many recent plans (the `plans` list, or
+       `repos` and `recent` in the `sources` block);
    - the items the sweep proposes to adopt, one line each.
 
-   Ask Shawn to accept, or to change terms in plain words. Then wait for his
-   typed reply.
+   Ask Shawn to accept, or to change terms in plain words. He can turn a
+   source off ("no plans for this one"). Then wait for his typed reply.
 5. When he replies, the `<auto-data>` tag in your context names the prompt id.
    - Acceptance: `programme.sh accept-agreement --prompt <id>`.
    - A term change: `programme.sh amend-term <key> <value> --prompt <id>`, then
      ask again.
+   - Turning sources off or on: `programme.sh amend-term sources <list>
+     --prompt <id>`, where the list holds the sources that stay on, comma
+     separated (`tracker,tasks`), or `none`. His reply must name each source
+     that changes. A source turned off is never read or watched and never
+     holds the stop.
    - If a verb refuses because the agreement expired, run `programme.sh expire`
      and tell Shawn to run `/auto:programme` again.
 6. Adopt the items. For each sweep proposal with action `adopt`:
@@ -47,8 +59,9 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    working model, or `/auto:programme-status` for a snapshot."
 8. Arm the wake-ups:
    1. Monitor the remit watcher, with the longest timeout:
-      `bash "<plugin root>/lib/programme-watch.sh"` (add `--linear` only when the
-      space is bound to a Linear project). Each line it prints wakes you.
+      `bash "<plugin root>/lib/programme-watch.sh"` (add `--tracker` only when
+      the sweep found a tracker provider). It also watches tasks and plans
+      unless the agreement turns them off. Each line it prints wakes you.
       Record it: `programme.sh watcher-beat remit --task-id <Monitor task id> --kind monitor`.
    2. CronCreate a recurring prompt at the cadence term (default hourly) with
       exactly this text: `Run the programme sweep: load the auto:programme-sweep skill and follow it.`

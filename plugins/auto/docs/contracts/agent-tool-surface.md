@@ -103,7 +103,11 @@ session.
 - **Agreement**: `propose-agreement` sets proposed term values before acceptance;
   `accept-agreement` records the acceptance; `amend-term` changes one term. A term
   value must be one of that term's options. Wording that fits no option is an
-  instruction.
+  instruction. The sources term holds the sweep sources that stay on: a comma
+  list of tracker, tasks and plans (default all three), or none. Its amend needs
+  a typed prompt that names each source it turns on or off ("no plans" counts).
+  A source turned off is never read by the sweep, never watched, and never holds
+  the stop.
 - **Instructions**: `record-instruction` records the cited words, what they apply
   to (the programme or one item), and until when; `close-instruction` marks one
   fulfilled (needs `--why`) or withdrawn (needs `--prompt`).
@@ -136,9 +140,10 @@ session.
   task id with no kind counts as cron when a prompt is given and as a Monitor
   otherwise.
 - **Handing**: `hand-item` hands an item to Shawn with a question and notifies
-  once: the board's needs-you mark for a Linear item, else a herdr notification.
-  Its journal entry records both exit statuses (null when not run or not found,
-  "skipped" for the board on an item with no Linear issue). `answer-handed`
+  once: the tracker's needs-you mark for an issue item, else a herdr
+  notification. Its journal entry records both exit statuses as tracker and
+  herdr (null when not run or not found, "skipped" for the tracker on an item
+  with no issue). `answer-handed`
   needs a typed `--prompt` and `--choice ship|decline`. Ship reopens the item with
   the deliverables its change kinds imply (or the kinds passed with `--kind`);
   decline drops it.
@@ -150,8 +155,10 @@ session.
   `queue` adds a next action (a worker start is action start_worker with
   `--item`) or removes one; `record-tested-build` stores the tested build's
   shasum on an item for the released check; `set-source` records a source
-  (herdr, board or linear) going unavailable or coming back, or with
+  (herdr, tracker, tasks or plans) going unavailable or coming back, or with
   `--unsupported` as one this machine cannot read, which never holds the stop.
+  `--provider <name>` (tracker only) records the provider that answered; a
+  tracker that goes down loses its provider. Any other source name is refused.
 - **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref,
   optional --repo <clone> for the verified and released checks; the path is
   stored and reused by `validate`)
@@ -174,21 +181,37 @@ session.
   more is final.
 - **Sweep and workers**: `sweep` reads the remit's workspaces from one bounded
   herdr snapshot (behind a status probe), the session registry checked against
-  that snapshot, and the board snapshot, falling back to Linear read directly.
-  It prints panes, issues, proposals and an unavailable flag with a reason for
-  each source; a source that could not be read gives no list, never an empty
-  one. A pane's owner is the snapshot's reported agent session first, then a
-  registry line for the same pane and terminal. Issues are found in the pane's
-  branch, title, label, registry name and board bindings. Shells with no agent,
-  a driver's pane and the board's pane are skipped, never proposed. `sweep`
-  writes nothing unless given `--record-sources`, which records source changes
-  through set-source. `start-worker` (item, then spinoff arguments after
+  that snapshot, and three sources. The tracker is the issue tracker, read
+  through an ordered provider chain (today the herdr-linear-board snapshot, then
+  the Linear API with LINEAR_API_KEY); the first provider that answers wins and
+  the output names it as provider, with each provider tried and its reason.
+  Tasks are the Claude Code task lists of the remit's sessions (pane owners and
+  open items' owners), read from the tasks folder (CLAUDE_AUTO_TASKS_DIR
+  overrides it); a missing or emptied list is an empty list, not an outage. Each
+  pane carries its owner's counts by status and the in-progress task as now.
+  Plans are the plan docs changed in the last 7 days in each pane's repo
+  (docs/plans, or the plans folder under a docs_root set in
+  .compound-engineering/config.yaml inside the repo), with path, title and the
+  issue ids they name; file count and bytes per plan are capped. It prints
+  panes, issues, tasks, plans, proposals and a state with a reason for each
+  source; a source that could not be read gives no list, never an empty one,
+  and a source the sources term turns off reports state off and is not read. A
+  pane's owner is the snapshot's reported agent session first, then a registry
+  line for the same pane and terminal. Issues are found in the tracker's pane
+  bindings and the pane's branch, title, label and registry name, and last in
+  the pane's repo plans when they name exactly one issue the tracker knows (or
+  one issue at all when no tracker answered). Shells with no agent, a driver's
+  pane and a tracker pane are skipped, never proposed. `sweep` writes nothing
+  unless given `--record-sources`, which records through set-source each source
+  whose state or tracker provider changed, and each source seen for the first
+  time; the start flow runs it once so the first sweep starts from the probed
+  states. `start-worker` (item, then spinoff arguments after
   `--`) mints a session id, runs spinoff with `--session-id`, and checks the agent list for
   the new agent, because spinoff can exit 0 with a bare shell. The item records
   every start; a verified start also sets the owner's pane, terminal and
   session. `prompt-item` (item, then text) sends through herdr agent prompt to
   the item's recorded pane only. Right before sending it reads a fresh snapshot
-  and refuses a driver's or the board's pane, a pane whose terminal changed, a
+  and refuses a driver's pane or a tracker pane, a pane whose terminal changed, a
   pane with no live agent, and a pane whose reported session is not the item's
   owner. Refusals and sends are journaled; a pane with no reported or
   registered session is sent to and marked session unknown.
@@ -216,10 +239,14 @@ session.
   captured prompts older than 7 days that no journal line cites. The sweep runs
   it first.
 - **Wake watcher** (`lib/programme-watch.sh`, not a verb): remit mode
-  `programme-watch.sh [--run <id>] [--linear] [--max-polls <n>]` beats the remit
+  `programme-watch.sh [--run <id>] [--tracker] [--max-polls <n>]` beats the remit
   watcher each interval and prints one line when the remit changes
-  (remit-changed, claim, wait-due, linear-changed or source-available),
-  then exits 0; it prints "source-unavailable <name> <reason>" once and keeps
+  (remit-changed, claim, wait-due, tracker-changed, tasks-changed,
+  plans-changed or source-available), naming the source. Tasks (a status or
+  count change in a remit session's list) and plans (a new or edited plan file
+  in a remit repo) are local reads and always watched; --tracker polls the
+  tracker providers that need no token. A source the sources term turns off is
+  never polled. It exits 0 after printing; it prints "source-unavailable <name> <reason>" once and keeps
   polling. Item mode `programme-watch.sh [--run <id>] --item <id> -- <argv>`
   beats that item's watcher while the command runs, then prints
   "item-exited <id> exit=N". Exit codes: 0 change or quiet exit, 1 runtime error

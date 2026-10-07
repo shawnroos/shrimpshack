@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""herdr, board and Linear reads for the programme sweep, plus the worker start and prompt verbs.
+"""herdr, tracker, tasks and plans reads for the programme sweep, plus the worker start and prompt verbs.
 
 ``programme.py`` registers the verbs through ``build_verbs(host)``. Every outside
 call is bounded, and every piece of outside text passes through programme_sanitize.
@@ -11,12 +11,9 @@ import contextlib
 import functools
 import glob
 import io
-import json
 import os
 import re
 import shutil
-import signal
-import subprocess
 import sys
 import time
 import uuid
@@ -31,92 +28,30 @@ programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_record = load_lib_module("programme_record")
+programme_exec = load_lib_module("programme_exec")
+programme_tracker = load_lib_module("programme_tracker")
+programme_tasks = load_lib_module("programme_tasks")
+programme_plans = load_lib_module("programme_plans")
 session_registry = load_lib_module("session_registry")
 
-TIMEOUT_ENV = "CLAUDE_AUTO_SOURCE_TIMEOUT"
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
 HERDR_TIMEOUT = 5.0
-BOARD_TIMEOUT = 15.0
-LINEAR_TIMEOUT = 15.0
 GIT_TIMEOUT = 2.0
 SPINOFF_TIMEOUT = 600.0
 WORKER_WAIT = 30.0
 POLL_SECONDS = 1.0
-LINEAR_BATCH = 50
 PROMPT_CAP = 4000
 QUOTE_CAP = 500
-LINEAR_URL = "https://api.linear.app/graphql"
-LINEAR_KEY = "LINEAR_API_KEY"
 SPINOFF_REL = os.path.join("skills", "spinoff", "scripts", "spinoff.sh")
-SIGNALS = ("board", "branch", "title", "label", "registry")
-_IDENT = re.compile(r"\b([A-Za-z][A-Za-z0-9]{1,7})-(\d{1,6})\b")
-_BOARD_LABEL = re.compile(r"Linear(?:: .+)?")
+SIGNALS = ("tracker", "branch", "title", "label", "registry", "plan")
 _PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
-_UNSUPPORTED_OP = re.compile(r"\bop unsupported\b", re.IGNORECASE)
 
-
-def _seconds(env_name, default) -> float:
-    try:
-        value = float(os.environ.get(env_name) or "")
-    except ValueError:
-        return default
-    return value if value > 0 else default
-
-
-def _source_timeout(default) -> float:
-    return _seconds(TIMEOUT_ENV, default)
-
-
-def _kill(proc) -> None:
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except OSError:
-        pass
-    try:
-        proc.communicate(timeout=1)
-    except (subprocess.SubprocessError, OSError, ValueError):
-        pass
-
-
-def bounded(argv, timeout, stdin_text=None) -> dict:
-    out = {"ran": False, "code": None, "stdout": "", "stderr": "", "timed_out": False, "error": None,
-           "missing": False}
-    path = argv[0] if os.path.isabs(argv[0]) else shutil.which(argv[0])
-    if not path:
-        out.update(error=f"{argv[0]} not found on PATH", missing=True)
-        return out
-    try:
-        proc = subprocess.Popen(
-            [path] + list(argv[1:]), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
-            text=True, errors="replace", start_new_session=True)
-    except OSError as exc:
-        out["error"] = f"could not run {argv[0]}: {exc}"
-        return out
-    try:
-        stdout, stderr = proc.communicate(stdin_text, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        # A killed child's grandchildren keep the pipes open; kill the whole group.
-        _kill(proc)
-        out.update(timed_out=True, error=f"{' '.join(argv[:3])} timed out after {timeout:g}s")
-        return out
-    out.update(ran=True, code=proc.returncode, stdout=stdout or "", stderr=stderr or "")
-    return out
-
-
-def _json(text):
-    try:
-        return json.loads(text)
-    except (TypeError, ValueError):
-        return None
-
-
-def _failure(result, what) -> str:
-    if not result["ran"]:
-        return result["error"]
-    detail = programme_sanitize.clean(result["stderr"] or result["stdout"], 200)
-    return f"{what} exited {result['code']}" + (f": {detail}" if detail else "")
+bounded = programme_exec.bounded
+_json = programme_exec.parse_json
+_failure = programme_exec.failure
+_seconds = programme_exec.seconds
+_source_timeout = programme_exec.source_timeout
 
 
 def _herdr(args):
@@ -252,102 +187,27 @@ def role(pane, drivers) -> str:
     if (pane["pane_id"] in drivers["panes"] or pane["terminal_id"] in drivers["panes"]
             or (pane["owner"]["session_id"] and pane["owner"]["session_id"] == drivers["session"])):
         return "pm"
-    if pane["label"] and _BOARD_LABEL.fullmatch(pane["label"]):
-        return "board"
+    if programme_tracker.is_tracker_pane(pane["label"]):
+        return "tracker"
     return "worker" if pane["agent"] else "shell"
 
 
-def named_issues(pane, board_bindings) -> dict:
+def named_issues(pane, bindings) -> dict:
     found = {}
-    for ident in board_bindings.get(pane["pane_id"], []):
-        found.setdefault(ident, []).append("board")
+    for ident in bindings.get(pane["pane_id"], []):
+        found.setdefault(ident, []).append("tracker")
     texts = (("branch", pane["branch"]), ("title", pane["title"]), ("label", pane["label"]),
              ("registry", pane["owner"]["name"] if pane["owner"]["source"] == "registry" else None))
     for signal_name, text in texts:
-        for match in _IDENT.finditer(text or ""):
-            if int(match.group(2)) == 0:
-                continue
-            ident = f"{match.group(1).upper()}-{match.group(2)}"
+        for ident in programme_tracker.issue_ids(text):
             if signal_name not in found.setdefault(ident, []):
                 found[ident].append(signal_name)
     return found
 
 
-def _issue_view(raw, source) -> dict:
-    state = raw.get("state") if isinstance(raw.get("state"), dict) else {}
-    return {"title": programme_sanitize.clean(raw.get("title"), 200),
-            "state": programme_sanitize.clean(state.get("name"), 60) or None,
-            "state_type": programme_sanitize.token(state.get("type")),
-            "url": programme_sanitize.token(raw.get("url")), "source": source}
-
-
-def read_board(workspaces) -> dict:
-    issues, bindings = {}, {}
-    for ws in workspaces:
-        result = bounded(["board", "linear", "snapshot", "--json", ws], _source_timeout(BOARD_TIMEOUT))
-        doc = (_json(result["stdout"]) or _json(result["stderr"])) if result["ran"] else None
-        if not result["ran"] or result["code"] != 0 or not isinstance(doc, dict) or doc.get("error"):
-            error = (doc or {}).get("error") if isinstance(doc, dict) else None
-            message = error.get("message") if isinstance(error, dict) else None
-            reason = (programme_sanitize.clean(message, 200) if message
-                      else _failure(result, "board linear snapshot"))
-            unsupported = result["missing"] or bool(_UNSUPPORTED_OP.search(reason))
-            return {"unavailable": True, "state": "unsupported" if unsupported else "unavailable",
-                    "reason": f"{ws}: {reason}", "issues": None, "bindings": {}}
-        if not isinstance(doc.get("issues"), dict):
-            return {"unavailable": True, "state": "unavailable", "reason": f"{ws}: board snapshot has no issues",
-                    "issues": None, "bindings": {}}
-        for key, raw in doc["issues"].items():
-            ident = programme_sanitize.token(key)
-            if not ident or not isinstance(raw, dict):
-                continue
-            issues[ident] = _issue_view(raw, "board")
-            for binding in raw.get("bindings") or []:
-                for pane in (binding or {}).get("panes") or []:
-                    bindings.setdefault(pane, []).append(ident)
-    return {"unavailable": False, "state": "available", "reason": None, "issues": issues, "bindings": bindings}
-
-
-def linear_key():
-    value = os.environ.get(LINEAR_KEY)
-    if not value:
-        try:
-            for key, raw in programme_journal.secret_assignments(encoding="utf-8"):
-                if key == LINEAR_KEY:
-                    value = raw.strip("'\"")
-        except OSError:
-            value = None
-    if not value or any(ch in value for ch in "\"\\\n\r ") or len(value) > 200:
-        return None
-    return value
-
-
-def read_linear(idents) -> dict:
-    key = linear_key()
-    if not key:
-        return {"unavailable": True, "reason": f"no {LINEAR_KEY} in the environment or secrets file",
-                "issues": None}
-    idents = sorted(idents)[:LINEAR_BATCH]
-    fields = " ".join(f"i{n}: issue(id: {json.dumps(ident)}) {{ identifier title url state {{ name type }} }}"
-                      for n, ident in enumerate(idents))
-    body = json.dumps({"query": "query { " + fields + " }"})
-    # The key travels in curl's config on stdin so it never appears in a process list.
-    config = (f'url = "{LINEAR_URL}"\nheader = "Authorization: {key}"\n'
-              f'header = "Content-Type: application/json"\ndata = {json.dumps(body)}\n')
-    timeout = _source_timeout(LINEAR_TIMEOUT)
-    result = bounded(["curl", "-sS", "--max-time", str(int(timeout) or 1), "-K", "-"], timeout + 2, config)
-    doc = _json(result["stdout"]) if result["ran"] and result["code"] == 0 else None
-    data = doc.get("data") if isinstance(doc, dict) else None
-    if not isinstance(data, dict):
-        return {"unavailable": True, "state": "unsupported" if result["missing"] else "unavailable",
-                "reason": _failure(result, "Linear read") if not doc else "Linear answered with no data",
-                "issues": None}
-    issues = {}
-    for raw in data.values():
-        ident = programme_sanitize.token((raw or {}).get("identifier")) if isinstance(raw, dict) else None
-        if ident:
-            issues[ident] = _issue_view(raw, "linear-direct")
-    return {"unavailable": False, "reason": None, "issues": issues}
+def _plan_issue(plan_ids, verified):
+    named = set(plan_ids) if verified is None else set(plan_ids) & verified
+    return named.pop() if len(named) == 1 else None
 
 
 def _choose(found, verified):
@@ -382,7 +242,8 @@ def propose(programme, panes, drivers, issues_found, verified) -> dict:
             skipped.append({"pane": pane["pane_id"], "why": why})
             continue
         ident, signals = _choose(issues_found.get(pane["pane_id"]) or {}, verified)
-        item_id = f"linear:{ident}" if ident else "herdr:" + pane["pane_id"].replace(":", "/")
+        item_id = (f"{programme_record.ISSUE_SOURCE}:{ident}" if ident
+                   else f"{programme_record.ISSUELESS_SOURCE}:" + pane["pane_id"].replace(":", "/"))
         action, existing = _existing(programme, item_id, pane["pane_id"])
         entry = {"item": item_id, "action": action, "pane": pane["pane_id"], "issue": ident,
                  "signals": signals, "terminal_id": pane["terminal_id"],
@@ -396,50 +257,84 @@ def propose(programme, panes, drivers, issues_found, verified) -> dict:
     return {"proposals": proposals, "skipped": skipped}
 
 
-def _issue_lookup(candidates, board) -> dict:
-    out = {"linear": {"unavailable": None, "reason": None}, "issues": {}, "verified": None,
-           "issues_source": None}
-    if not board["unavailable"]:
-        out.update(issues=board["issues"], verified=set(board["issues"]), issues_source="board")
-        return out
-    if not candidates:
-        return out
-    linear = read_linear(candidates)
-    out["linear"] = {"unavailable": linear["unavailable"], "state": linear.get("state"),
-                     "reason": linear["reason"]}
-    if not linear["unavailable"]:
-        out.update(issues=linear["issues"], verified=set(linear["issues"]), issues_source="linear-direct")
+def _owner_sessions(programme, panes) -> set:
+    sessions = {p["owner"]["session_id"] for p in panes or [] if p["agent"] and p["owner"]["session_id"]}
+    for item in (programme.get("items") or {}).values():
+        if item.get("state") not in programme_home.FINISHED_ITEM_STATES:
+            sessions.add((item.get("owner") or {}).get("session_id"))
+    sessions.discard(None)
+    return sessions
+
+
+def _off() -> dict:
+    return {"unavailable": None, "state": "off", "reason": "turned off in the agreement"}
+
+
+def _source_entry(found, *keys) -> dict:
+    return dict({"unavailable": found["unavailable"], "state": found["state"], "reason": found["reason"]},
+                **{k: found[k] for k in keys})
+
+
+def _attach_tasks(panes, tasks) -> None:
+    for pane in panes or []:
+        sid = pane["owner"]["session_id"]
+        pane["tasks"] = tasks["sessions"].get(sid) if tasks and sid else None
+
+
+def _plan_ids(panes, plans) -> dict:
+    by_repo = {r["repo"]: sorted({i for p in r["plans"] for i in p["issues"]}) for r in plans["repos"]}
+    out = {}
+    for pane in panes:
+        pane["repo"] = plans["roots"].get(pane["cwd"]) if pane["cwd"] else None
+        out[pane["pane_id"]] = by_repo.get(pane["repo"]) or []
     return out
+
+
+def _sweep_sources(programme, scope, panes, workers):
+    enabled = programme_home.enabled_sources(programme)
+    plans = programme_plans.read([p["cwd"] for p in panes or [] if p["cwd"]]) if "plans" in enabled else None
+    plan_ids = _plan_ids(panes or [], plans) if plans else {}
+    candidates = {i for pane in workers for i in named_issues(pane, {})}
+    candidates |= {i for pane in workers for i in plan_ids.get(pane["pane_id"], [])}
+    tracker = programme_tracker.read(scope["workspaces"], candidates) if "tracker" in enabled else None
+    tasks = programme_tasks.read(_owner_sessions(programme, panes)) if "tasks" in enabled else None
+    return tracker, tasks, plans, plan_ids
 
 
 def sweep(record) -> dict:
     programme = programme_home.normalize_programme(record.get("programme") or {})
     scope = remit(programme)
     snap, herdr_reason = read_herdr()
-    board = read_board(scope["workspaces"])
     panes = pane_views(snap, scope) if snap is not None else None
     drivers = _drivers(record)
+    workers = [p for p in panes or [] if role(p, drivers) == "worker"]
+    tracker, tasks, plans, plan_ids = _sweep_sources(programme, scope, panes, workers)
+    verified = set(tracker["issues"]) if tracker and not tracker["unavailable"] else None
     found = {}
-    if panes is not None:
-        for pane in panes:
-            if role(pane, drivers) == "worker":
-                found[pane["pane_id"]] = named_issues(pane, board["bindings"])
+    for pane in workers:
+        found[pane["pane_id"]] = named_issues(pane, (tracker or {}).get("bindings") or {})
+        ident = _plan_issue(plan_ids.get(pane["pane_id"], []), verified)
+        if ident:
+            found[pane["pane_id"]].setdefault(ident, []).append("plan")
     candidates = {ident for named in found.values() for ident in named}
-    lookup = _issue_lookup(candidates, board)
+    _attach_tasks(panes, tasks)
     result = {
         "run": record.get("run_id"), "at": run_record_core.now_iso(),
         "server": scope["server"], "workspaces": scope["workspaces"], "unreached": scope["unreached"],
         "sources": {"herdr": {"unavailable": snap is None, "state": _herdr_state(snap),
                               "reason": herdr_reason},
-                    "board": {"unavailable": board["unavailable"], "state": board["state"],
-                              "reason": board["reason"]},
-                    "linear": lookup["linear"]},
-        "issues_source": lookup["issues_source"],
-        "issues": {k: v for k, v in lookup["issues"].items() if k in candidates},
+                    "tracker": _source_entry(tracker, "provider", "tried") if tracker else _off(),
+                    "tasks": _source_entry(tasks, "with_lists") if tasks else _off(),
+                    "plans": (dict(_source_entry(plans), repos=len(plans["repos"]),
+                                   recent=sum(len(r["plans"]) for r in plans["repos"]))
+                              if plans else _off())},
+        "issues": {k: v for k, v in ((tracker or {}).get("issues") or {}).items() if k in candidates},
+        "tasks": tasks["sessions"] if tasks else None,
+        "plans": plans["repos"] if plans else None,
         "panes": panes, "proposals": None, "skipped": None,
     }
     if panes is not None:
-        result.update(propose(programme, panes, drivers, found, lookup["verified"]))
+        result.update(propose(programme, panes, drivers, found, verified))
     result["source_changes"] = source_changes(programme, result["sources"])
     return result
 
@@ -466,9 +361,16 @@ def source_changes(programme, sources) -> list:
     recorded = programme.get("sources") or {}
     changes = []
     for name in programme_record.SOURCES:
-        state = _seen_state(sources.get(name) or {})
-        if state is not None and state != _recorded_state(recorded.get(name) or {}):
-            changes.append({"source": name, "state": state, "unavailable": state != "available"})
+        seen = sources.get(name) or {}
+        state = _seen_state(seen)
+        if state is None:
+            continue
+        entry = recorded.get(name)
+        provider = seen.get("provider")
+        if (not isinstance(entry, dict) or state != _recorded_state(entry)
+                or (provider and provider != entry.get("provider"))):
+            changes.append({"source": name, "state": state, "unavailable": state != "available",
+                            "provider": provider})
     return changes
 
 
@@ -481,9 +383,11 @@ def _h_sweep(host, argv):
     result["recorded_sources"] = []
     if opts.get("record-sources"):
         for change in result["source_changes"]:
-            flag = "--" + change["state"]
+            argv = ["set-source", change["source"], "--" + change["state"], "--run", run_id]
+            if change.get("provider"):
+                argv += ["--provider", change["provider"]]
             with contextlib.redirect_stdout(io.StringIO()):
-                programme_record._h_set_source(host, ["set-source", change["source"], flag, "--run", run_id])
+                programme_record._h_set_source(host, argv)
             result["recorded_sources"].append(change)
     host._emit(result)
     return 0
@@ -611,8 +515,8 @@ def check_target(owner, record) -> dict:
     terminal = programme_sanitize.token(row.get("terminal_id"))
     if live and live == drivers["session"]:
         out["reason"] = f"pane {pane} is a programme driver's pane: it runs the driving session"
-    elif _BOARD_LABEL.fullmatch(programme_sanitize.clean(row.get("label"), 200) or ""):
-        out["reason"] = f"pane {pane} is the board's pane"
+    elif programme_tracker.is_tracker_pane(programme_sanitize.clean(row.get("label"), 200)):
+        out["reason"] = f"pane {pane} is a tracker pane"
     elif owner.get("terminal_id") and terminal and owner["terminal_id"] != terminal:
         out["reason"] = f"pane {pane} now holds terminal {terminal}, not the item's {owner['terminal_id']}"
     elif not (agent or row.get("agent")):
@@ -662,11 +566,12 @@ def _h_prompt_item(host, argv):
 
 _SPECS = (
     ("sweep", _h_sweep, "[--record-sources] [--run <id>]",
-     "--record-sources from any session but the driving one. Without it, sweep writes nothing."),
+     "--record-sources from any session but the driving one. Without it, sweep writes nothing. "
+     "A source the agreement's sources term turns off is not read and reports state off."),
     ("start-worker", _h_start_worker, "<item> [--session-name <name>] [--run <id>] -- <spinoff arguments>",
      "an unknown or finished item; spinoff arguments that carry --session-id; no spinoff arguments."),
     ("prompt-item", _h_prompt_item, "<item> <text> [--run <id>]",
-     "an item with no pane; a driver's or the board's pane; a pane whose terminal changed; a pane "
+     "an item with no pane; a driver's pane or a tracker pane; a pane whose terminal changed; a pane "
      "with no live agent; a pane whose reported session is not the item's owner. Refusals are "
      "journaled."),
 )

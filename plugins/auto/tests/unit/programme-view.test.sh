@@ -23,6 +23,7 @@ WORK="$(mktemp -d -t auto-programme-view.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
 export CLAUDE_AUTO_DATA_DIR="${WORK}/data"
+export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
 export CLAUDE_AUTO_PERSONAL_PROTOCOL="${WORK}/personal/protocol.json"
 export CLAUDE_AUTO_MACHINE="studio"
 export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
@@ -277,11 +278,11 @@ def seed(p):
     p["watchers"] = {
         "cron": {"task_id": "c1", "kind": "cron", "prompt": "Run the programme sweep.", "last_beat_at": now},
         "remit": {"process_id": "4242", "last_beat_at": now},
-        "linear-source": {"task_id": "bh1i1vbv7", "kind": "monitor", "last_beat_at": now},
+        "tracker-source": {"task_id": "bh1i1vbv7", "kind": "monitor", "last_beat_at": now},
         "stray": {"task_id": "t9", "kind": "monitor", "last_beat_at": now},
     }
-    p["sources"] = {"board": {"unsupported_since": now, "unavailable_since": None},
-                    "linear": {"unavailable_since": now, "watcher": "linear-source"},
+    p["sources"] = {"plans": {"unsupported_since": now, "unavailable_since": None},
+                    "tracker": {"unavailable_since": now, "watcher": "tracker-source"},
                     "herdr": {"unavailable_since": now, "watcher": "remit"}}
 mutate(args[0], seed)
 EOF
@@ -293,15 +294,19 @@ has "cron (live) — hourly fallback" "$OUT"
 it "the remit watcher renders as watching the space"
 has "remit (live) — watches the space" "$OUT"
 it "a source watcher renders by the source it watches"
-has "linear-source (live) — watches source linear" "$OUT"
+has "tracker-source (live) — watches source tracker" "$OUT"
 it "the remit watcher still watches the space when it also covers a source outage"
 has "herdr: remit (live) — herdr unavailable since" "$OUT"
 it "a watcher that watches nothing recorded says so"
 has "stray (live) — watches nothing recorded" "$OUT"
 it "a source outage with a live watcher renders live"
-has "linear: linear-source (live) — linear unavailable since" "$OUT"
+has "tracker: tracker-source (live) — tracker unavailable since" "$OUT"
 it "an unsupported source renders as not available on this machine"
-has "board: not available on this machine" "$OUT"
+has "plans: not available on this machine" "$OUT"
+it "a source never read yet says so"
+has "tasks: not read yet" "$OUT"
+it "the view never says board"
+lacks "board" "$OUT"
 
 it "the mod reads the view format this module writes"
 FORMAT="$(run_py <<'EOF'

@@ -22,6 +22,7 @@ echo "stop-session-scope.test.sh"
 WORK="$(mktemp -d -t auto-stop-scope.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 export CLAUDE_AUTO_DATA_DIR="${WORK}/data"
+export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
 export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
 unset CLAUDE_CODE_SESSION_ID CLAUDE_AUTO_REPO
 for v in $(env | sed -n 's/^\(HERDR_[A-Z_]*\)=.*/\1/p'); do unset "$v"; done

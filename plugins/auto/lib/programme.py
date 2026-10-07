@@ -279,6 +279,17 @@ def require_named(prompt, *needs) -> None:
         )
 
 
+def require_sources_named(prompt, before, after) -> None:
+    # A source is turned off in words like "no plans", so a negated name still counts here.
+    changed = sorted(set(before) ^ set(after))
+    words = set(_name_words(programme_journal.redact(prompt["quote"]))) if prompt else set()
+    missing = [name for name in changed if name not in words]
+    if prompt and missing:
+        raise ProgrammeError(
+            f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "
+            f"contain {' and '.join(repr(n) for n in missing)}")
+
+
 def _named(words, levels, option) -> bool:
     if option in programme_home.AUTONOMY_LEVELS:
         return option in levels
@@ -336,7 +347,18 @@ def _term(programme, key) -> dict:
     return term
 
 
-def _check_value(term, value, extra) -> None:
+def _source_list(term, value) -> list:
+    names = [] if value == "none" else [part.strip() for part in value.split(",")]
+    unknown = [n for n in names if n not in (term.get("options") or [])]
+    if unknown or not all(names):
+        raise ProgrammeError(
+            f"{value!r} is not a list of {term.get('options')} (comma-separated, or none)")
+    return [n for n in term["options"] if n in names]
+
+
+def _check_value(term, value, extra):
+    if term.get("key") == "sources":
+        return _source_list(term, value)
     if value not in (term.get("options") or []):
         raise ProgrammeError(
             f"{value!r} is not an option of {term.get('key')!r} (options: {term.get('options')}); "
@@ -348,6 +370,7 @@ def _check_value(term, value, extra) -> None:
     if extra.get("seconds") is not None:
         if not str(extra["seconds"]).isdigit() or int(extra["seconds"]) <= 0:
             raise ProgrammeError("--seconds must be a positive whole number")
+    return value
 
 
 def _set_term(term, value, extra, *, set_by, why, prompt=None) -> dict:
@@ -412,7 +435,7 @@ def _h_propose_agreement(argv):
             if not sep:
                 raise ValueError(f"--term needs key=value, got {spec!r}")
             term = _term(programme, key)
-            _check_value(term, value, opts)
+            value = _check_value(term, value, opts)
             _set_term(term, value, opts, set_by="proposal", why=opts.get("why"))
             proposed[key] = value
         programme["agreement"]["proposed_at"] = _now()
@@ -444,9 +467,12 @@ def _h_amend_term(argv):
 
     def change(programme, prompt, rec):
         term = _term(programme, key)
-        _check_value(term, value, opts)
-        require_named(prompt, key, value)
-        return _set_term(term, value, opts, set_by="shawn", why=opts.get("why"), prompt=prompt)
+        checked = _check_value(term, value, opts)
+        if key == "sources":
+            require_sources_named(prompt, term.get("value") or [], checked)
+        else:
+            require_named(prompt, key, value)
+        return _set_term(term, checked, opts, set_by="shawn", why=opts.get("why"), prompt=prompt)
 
     return _write(opts, change, "term_amended", prompt_id=opts.get("prompt"), needs_prompt=True)
 
@@ -665,7 +691,9 @@ _VERBS = {
         _h_amend_term,
         "<key> <value> --prompt <id> [--why <text>] [--until <iso>] [--seconds <n>] [--run <id>]",
         rejects="a value outside the term's options (use record-instruction); a prompt that is "
-        "not typed or does not name the term key and the value; until_time without --until.",
+        "not typed or does not name the term key and the value; until_time without --until. "
+        "The sources term takes a comma list of tracker, tasks and plans, or none; its prompt must "
+        "name each source it turns on or off.",
     ),
     "record-instruction": _Verb(
         _h_record_instruction,

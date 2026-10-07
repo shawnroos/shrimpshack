@@ -22,7 +22,9 @@ exits when anything in the space changes:
 | `remit-changed ...` | sweep: new or changed panes |
 | `claim <n> new` | sweep: read the inbox |
 | `wait-due <item>` | check that item's wait |
-| `linear-changed ...` | sweep: issue states moved |
+| `tracker-changed ...` | sweep: issue states moved |
+| `tasks-changed <session> <before>-><after> ...` | sweep: a worker's task list moved (counts are pending/in progress/completed) |
+| `plans-changed +<repo>/<path> ...` | sweep: a plan was added (`+`) or edited (`~`) in a remit repo |
 | `source-unavailable <name> missing`, or a reason naming `op unsupported` | `set-source <name> --unsupported` (this machine cannot read it; it never holds the stop) |
 | any other `source-unavailable <name> <reason>` | `set-source <name> --unavailable --watcher remit` (a watched outage does not hold the stop) |
 | `source-available <name>` | `set-source <name> --available` |

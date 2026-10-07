@@ -29,6 +29,7 @@ cleanup() {
 trap cleanup EXIT
 
 export CLAUDE_AUTO_DATA_DIR="${WORK}/data"
+export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
 export CLAUDE_AUTO_PERSONAL_PROTOCOL="${WORK}/personal/protocol.json"
 export CLAUDE_AUTO_MACHINE="studio"
 export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
@@ -72,7 +73,7 @@ export CLAUDE_AUTO_PROGRAMME_CLI="${FAKES}/programme-cli"
 
 snap() {
   "$PY" - "$SNAP" "$@" <<'PYEOF'
-import json, sys
+import json, os, sys
 path, seq, own_seq, other_seq = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 panes = sys.argv[5].split(",") if len(sys.argv) > 5 else ["w2:p1", "w2:p2"]
 snapshot = {
@@ -81,7 +82,8 @@ snapshot = {
         {"pane_id": "w2:p2", "workspace_id": "w2", "state_change_seq": seq, "agent_status": "idle"},
         {"pane_id": "w9:p1", "workspace_id": "w9", "state_change_seq": other_seq, "agent_status": "idle"},
     ],
-    "panes": [{"pane_id": p, "workspace_id": p.split(":")[0], "revision": 7} for p in panes + ["w9:p1"]],
+    "panes": [{"pane_id": p, "workspace_id": p.split(":")[0], "revision": 7,
+               "cwd": os.environ.get("SNAP_CWD") if p.startswith("w2:") else None} for p in panes + ["w9:p1"]],
     "tabs": [], "workspaces": [{"workspace_id": "w2"}, {"workspace_id": "w9"}],
 }
 with open(path, "w") as fh:
@@ -284,7 +286,7 @@ prog() { "$PY" "$PROG" "$@" --run "$RUN" >/dev/null 2>&1; }
 prog add-item linear:AI-800 --title "Fix the crop"
 prog set-waiting linear:AI-800 --who ci
 it "a wait that comes due prints wait-due with the item"
-DUE="$("$PY" -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+DUE="$("$PY" -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=3)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 edit "prog['items']['linear:AI-800']['waiting_on']['due_at'] = '${DUE}'"
 start_watch due
 wait_exit "$WPID"
@@ -324,23 +326,88 @@ wait_exit "$WPID"
 check "\"${SPID}\"" "$(field 'prog["watchers"]["remit"]["process_id"]')"
 
 reset_state
-it "linear is off unless asked for"
-start_watch nolinear --max-polls 2
+it "the tracker is off unless asked for"
+start_watch notracker --max-polls 2
 wait_exit "$WPID"
-lacks "linear" "$(cat "${WORK}/nolinear.out")"
-it "a newer Linear updatedAt prints linear-changed"
-start_watch linear --linear
+lacks "tracker" "$(cat "${WORK}/notracker.out")"
+it "a newer tracker updatedAt prints tracker-changed"
+start_watch tracker --tracker
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 board_json "2026-10-06T12:00:00Z"
 wait_exit "$WPID"
-has "linear-changed" "$(cat "${WORK}/linear.out")"
-it "a failing board read is source-unavailable linear, and polling goes on"
+has "tracker-changed AI-1" "$(cat "${WORK}/tracker.out")"
+it "--linear is no longer a flag"
+bash "$WATCH" --run "$RUN" --linear --max-polls 1 > /dev/null 2>&1
+check 2 "$?"
+it "a failing tracker read is source-unavailable tracker, and polling goes on"
 echo 1 > "$BOARD_EXIT_FILE"
-start_watch linerr --linear --max-polls 3
+start_watch trackerr --tracker --max-polls 3
 wait_exit "$WPID"
 check 0 "$?"
-check "source-unavailable linear" "$(cut -d' ' -f1,2 "${WORK}/linerr.out")"
+check "source-unavailable tracker" "$(cut -d' ' -f1,2 "${WORK}/trackerr.out")"
+
+reset_state
+it "a tracker turned off in the agreement is never polled, even with --tracker"
+edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tasks", "plans"]'
+echo 1 > "$BOARD_EXIT_FILE"
+start_watch trackeroff --tracker --max-polls 3
+wait_exit "$WPID"
+check 0 "$(lines "${WORK}/trackeroff.out")"
+has "turns the tracker off" "$(cat "${WORK}/trackeroff.err")"
+edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "tasks", "plans"]'
+
+reset_state
+TASKS="${CLAUDE_AUTO_TASKS_DIR}/sess-w7"
+mkdir -p "$TASKS"
+printf '{"id":"1","subject":"Write tests","activeForm":"Writing tests","status":"pending"}' > "${TASKS}/1.json"
+prog add-item linear:AI-820 --title "Tasks" --session sess-w7
+it "a task status change for a remit session wakes the watcher naming tasks"
+start_watch tasks --max-polls 20
+wait_for "$BEATS" "watcher-beat remit" || true
+sleep 0.4
+printf '{"id":"1","subject":"Write tests","activeForm":"Writing tests","status":"in_progress"}' > "${TASKS}/1.json"
+wait_exit "$WPID"
+check "tasks-changed sess-w7 1/0/0->0/1/0" "$(cat "${WORK}/tasks.out")"
+
+reset_state
+it "a task change is ignored while the agreement turns tasks off"
+edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "plans"]'
+start_watch tasksoff --max-polls 4
+wait_for "$BEATS" "watcher-beat remit" || true
+sleep 0.4
+printf '{"id":"1","subject":"Write tests","activeForm":"Writing tests","status":"completed"}' > "${TASKS}/1.json"
+wait_exit "$WPID"
+check 0 "$(lines "${WORK}/tasksoff.out")"
+edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "tasks", "plans"]'
+prog drop-item linear:AI-820 --reason "test done"
+
+REPO="${WORK}/planrepo"
+mkdir -p "${REPO}/docs/plans"
+( cd "$REPO" && git init -q ) || echo "git setup failed"
+printf '# Old plan\n' > "${REPO}/docs/plans/old.md"
+reset_state
+export SNAP_CWD="$REPO"
+snap 41 5 1
+it "a new plan file in a remit repo wakes the watcher naming plans"
+start_watch plans --max-polls 20
+wait_for "$BEATS" "watcher-beat remit" || true
+sleep 0.4
+printf '# New plan for AI-830\n' > "${REPO}/docs/plans/new.md"
+wait_exit "$WPID"
+check "plans-changed +planrepo/docs/plans/new.md" "$(cat "${WORK}/plans.out")"
+
+reset_state
+it "a new plan is ignored while the agreement turns plans off"
+edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "tasks"]'
+start_watch plansoff --max-polls 4
+wait_for "$BEATS" "watcher-beat remit" || true
+sleep 0.4
+printf '# Another\n' > "${REPO}/docs/plans/another.md"
+wait_exit "$WPID"
+check 0 "$(lines "${WORK}/plansoff.out")"
+edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "tasks", "plans"]'
+unset SNAP_CWD
 
 reset_state
 prog set-waiting linear:AI-800 --who ci

@@ -28,6 +28,7 @@ export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
 export CLAUDE_CODE_SESSION_ID="sess-pm"
 export CLAUDE_AUTO_SOURCE_TIMEOUT="2"
 export CLAUDE_AUTO_WORKER_WAIT="1"
+export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
 unset HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_BIN_PATH HERDR_ENV CLAUDE_AUTO_REPO LINEAR_API_KEY 2>/dev/null || true
 : > "$CLAUDE_AUTO_SECRETS_FILE"
 
@@ -244,8 +245,8 @@ it "sweep proposes exactly the two worker panes"
 check '[["herdr:w2/p31", "adopt"], ["linear:AI-753", "adopt"]]' "$(jq_py 'sorted([p["item"], p["action"]] for p in d["proposals"])')"
 it "the branch names the issue"
 check '["branch"]' "$(jq_py '[p["signals"] for p in d["proposals"] if p["item"] == "linear:AI-753"][0]')"
-it "shells, the PM pane and the board pane are skipped with a reason"
-check '[["w2:p1", "shell"], ["w2:p10", "pm"], ["w2:p11", "board"], ["w2:p2", "shell"]]' "$(jq_py 'sorted([s["pane"], s["why"]] for s in d["skipped"])')"
+it "shells, the PM pane and the tracker pane are skipped with a reason"
+check '[["w2:p1", "shell"], ["w2:p10", "pm"], ["w2:p11", "tracker"], ["w2:p2", "shell"]]' "$(jq_py 'sorted([s["pane"], s["why"]] for s in d["skipped"])')"
 it "a pane outside the remit is not read"
 lacks "w9:p5" "$OUT"
 it "pane titles are stripped of escape sequences"
@@ -262,29 +263,32 @@ it "a pane with no reported session and no registry line is session unknown"
 check '[null, null]' "$(jq_py '[[p["owner"]["session_id"], p["owner"]["source"]] for p in d["panes"] if p["pane_id"] == "w2:p31"][0]')"
 it "the snapshot's agent session is the owner"
 check '["sess-pm", "snapshot"]' "$(jq_py '[[p["owner"]["session_id"], p["owner"]["source"]] for p in d["panes"] if p["pane_id"] == "w2:p10"][0]')"
-it "the board failing marks it unavailable with its reason"
-check 'true' "$(jq_py 'd["sources"]["board"]["unavailable"]')"
-it "with no Linear key, Linear is unavailable too, and issues stay unverified"
-check '[true, null]' "$(jq_py '[d["sources"]["linear"]["unavailable"], d["issues_source"]]')"
+it "every tracker provider failing marks the tracker down with each provider's reason"
+check '[true, null]' "$(jq_py '[d["sources"]["tracker"]["unavailable"], d["sources"]["tracker"]["provider"]]')"
+has "board: w2: plugin op unsupported" "$(jq_py 'd["sources"]["tracker"]["reason"]')"
+it "with no Linear key the linear-api provider is tried too, and issues stay unverified"
+check '[["board", "unsupported"], ["linear-api", "unavailable"]]' "$(jq_py '[[t["provider"], t["state"]] for t in d["sources"]["tracker"]["tried"]]')"
+it "a provider that could not answer named issues leaves the tracker an outage"
+check '"unavailable"' "$(jq_py 'd["sources"]["tracker"]["state"]')"
 it "herdr is available"
 check 'false' "$(jq_py 'd["sources"]["herdr"]["unavailable"]')"
 it "sweep writes nothing to the journal"
 check 0 "$(journal_count source_changed)"
 it "sweep calls herdr snapshot once, bounded behind a probe"
 check '2' "$(grep -cE '^herdr (status server|api snapshot)' "$CALLS")"
-it "a board plugin with no snapshot op is unsupported, not an outage"
-check '"unsupported"' "$(jq_py 'd["sources"]["board"]["state"]')"
+it "a missing snapshot op is unsupported for that provider, not an outage"
+check '"unsupported"' "$(jq_py 'd["sources"]["tracker"]["tried"][0]["state"]')"
 it "herdr answering is available"
 check '"available"' "$(jq_py 'd["sources"]["herdr"]["state"]')"
 export FAKE_BOARD_OUTAGE=1
 prog sweep
 unset FAKE_BOARD_OUTAGE
-it "a supported board command that fails is an outage"
-check '["unavailable", true]' "$(jq_py '[d["sources"]["board"]["state"], d["sources"]["board"]["unavailable"]]')"
+it "a supported provider command that fails is an outage"
+check '["unavailable", true]' "$(jq_py '[d["sources"]["tracker"]["tried"][0]["state"], d["sources"]["tracker"]["unavailable"]]')"
 mkdir -p "${WORK}/nopath"
 PATH="${WORK}/nopath" prog sweep
-it "herdr and board missing from PATH are unsupported"
-check '["unsupported", "unsupported"]' "$(jq_py '[d["sources"]["herdr"]["state"], d["sources"]["board"]["state"]]')"
+it "herdr and every tracker provider missing from PATH are unsupported"
+check '["unsupported", "unsupported"]' "$(jq_py '[d["sources"]["herdr"]["state"], d["sources"]["tracker"]["state"]]')"
 
 registry_line sess-w2 w2:p31 term_p31
 prog sweep
@@ -298,10 +302,12 @@ printf '%s' '{"data":{"i0":{"identifier":"AI-753","title":"Shot kinds \u001b[2Jw
 write_snapshot utf
 prog sweep
 write_snapshot base
-it "a board error falls back to Linear and marks the issues linear-direct"
-check '"linear-direct"' "$(jq_py 'd["issues_source"]')"
-it "Linear-direct is available"
-check 'false' "$(jq_py 'd["sources"]["linear"]["unavailable"]')"
+it "a failing first provider falls back to the next, and the output names the one that answered"
+check '"linear-api"' "$(jq_py 'd["sources"]["tracker"]["provider"]')"
+it "the tracker is available through the fallback"
+check '[false, "available"]' "$(jq_py '[d["sources"]["tracker"]["unavailable"], d["sources"]["tracker"]["state"]]')"
+it "each issue names the provider that answered"
+check '"linear-api"' "$(jq_py 'd["issues"]["AI-753"]["source"]')"
 it "the issue title from Linear is sanitized"
 check '"Shot kinds wipe"' "$(jq_py 'd["issues"]["AI-753"]["title"]')"
 it "the Linear key never appears in a command line"
@@ -315,13 +321,13 @@ check '["herdr:w2/p31", "linear:AI-753"]' "$(jq_py 'sorted(p["item"] for p in d[
 
 export FAKE_CURL_EXIT=7
 prog sweep
-it "a failing Linear read flags Linear unavailable"
-check '[true, null]' "$(jq_py '[d["sources"]["linear"]["unavailable"], d["issues_source"]]')"
+it "a failing fallback read leaves the tracker unavailable, with no provider"
+check '[true, null]' "$(jq_py '[d["sources"]["tracker"]["unavailable"], d["sources"]["tracker"]["provider"]]')"
 unset FAKE_CURL_EXIT
 it "curl missing from PATH makes Linear unsupported"
-check 'unsupported' "$(PATH="${WORK}/nopath" "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); from _bootstrap import load_lib_module; print(load_lib_module("programme_sources").read_linear(["AI-753"])["state"])' "${AUTO_ROOT}/lib" 2>&1)"
+check 'unsupported' "$(PATH="${WORK}/nopath" "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); from _bootstrap import load_lib_module; print(load_lib_module("programme_tracker").read_linear(["AI-753"])["state"])' "${AUTO_ROOT}/lib" 2>&1)"
 it "a failing curl leaves Linear an outage"
-check 'unavailable' "$(FAKE_CURL_EXIT=7 "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); from _bootstrap import load_lib_module; print(load_lib_module("programme_sources").read_linear(["AI-753"])["state"])' "${AUTO_ROOT}/lib" 2>&1)"
+check 'unavailable' "$(FAKE_CURL_EXIT=7 "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); from _bootstrap import load_lib_module; print(load_lib_module("programme_tracker").read_linear(["AI-753"])["state"])' "${AUTO_ROOT}/lib" 2>&1)"
 
 export FAKE_BOARD_JSON="${WORK}/board.json"
 cat > "$FAKE_BOARD_JSON" <<'EOF'
@@ -332,12 +338,12 @@ cat > "$FAKE_BOARD_JSON" <<'EOF'
 EOF
 : > "$CALLS"
 prog sweep
-it "a working board is the issue source"
-check '"board"' "$(jq_py 'd["issues_source"]')"
-it "Linear is not read when the board answers"
+it "the first provider answering is the tracker's provider"
+check '"board"' "$(jq_py 'd["sources"]["tracker"]["provider"]')"
+it "later providers are not read when the first answers"
 lacks "curl" "$(calls)"
-it "a board binding names the issue of an otherwise issueless pane"
-check '[["linear:AI-753", ["branch"]], ["linear:AI-760", ["board"]]]' "$(jq_py 'sorted([p["item"], p["signals"]] for p in d["proposals"])')"
+it "a tracker binding names the issue of an otherwise issueless pane"
+check '[["linear:AI-753", ["branch"]], ["linear:AI-760", ["tracker"]]]' "$(jq_py 'sorted([p["item"], p["signals"]] for p in d["proposals"])')"
 unset FAKE_BOARD_JSON LINEAR_API_KEY
 
 export FAKE_HERDR_SLEEP=5
@@ -363,10 +369,10 @@ it "the herdr source is recorded unavailable"
 check 'true' "$(field 'prog["sources"]["herdr"]["unavailable_since"] is not None')"
 it "the change is journaled through set-source"
 check 1 "$(source_count herdr)"
-it "the failing board is recorded in the same sweep"
-check 1 "$(source_count board)"
-it "the unsupported board is recorded as unsupported, with no outage"
-check '[true, null]' "$(field '[prog["sources"]["board"]["unsupported_since"] is not None, prog["sources"]["board"]["unavailable_since"]]')"
+it "the failing tracker is recorded in the same sweep"
+check 1 "$(source_count tracker)"
+it "a tracker with only unsupported providers is recorded as unsupported, with no outage"
+check '[true, null]' "$(field '[prog["sources"]["tracker"]["unsupported_since"] is not None, prog["sources"]["tracker"]["unavailable_since"]]')"
 prog sweep --record-sources
 it "an unchanged source is not recorded again"
 check 1 "$(source_count herdr)"
@@ -374,9 +380,9 @@ unset FAKE_HERDR_DOWN
 export FAKE_BOARD_OUTAGE=1
 prog sweep --record-sources
 unset FAKE_BOARD_OUTAGE
-it "a real board outage after unsupported is recorded as an outage"
-check '[null, true]' "$(field '[prog["sources"]["board"]["unsupported_since"], prog["sources"]["board"]["unavailable_since"] is not None]')"
-check 2 "$(source_count board)"
+it "a real tracker outage after unsupported is recorded as an outage"
+check '[null, true]' "$(field '[prog["sources"]["tracker"]["unsupported_since"], prog["sources"]["tracker"]["unavailable_since"] is not None]')"
+check 2 "$(source_count tracker)"
 prog sweep --record-sources
 it "herdr coming back is recorded"
 check 'null' "$(field 'prog["sources"]["herdr"]["unavailable_since"]')"
@@ -508,9 +514,9 @@ check 1 "$CODE"
 it "it is refused as the driver's pane"
 has "driver" "$(journal_last prompt_refused)"
 
-prog add-item linear:AI-772 --title "board pane" --pane w2:p11
-prog prompt-item linear:AI-772 "hello board"
-it "prompt-item to the board pane is refused"
+prog add-item linear:AI-772 --title "tracker pane" --pane w2:p11
+prog prompt-item linear:AI-772 "hello tracker"
+it "prompt-item to a tracker pane is refused"
 check 1 "$CODE"
 
 prog add-item linear:AI-773 --title "no pane"

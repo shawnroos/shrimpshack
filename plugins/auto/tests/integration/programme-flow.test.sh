@@ -25,6 +25,7 @@ trap 'rm -rf "$WORK"' EXIT
 for v in $(env | sed -n 's/^\(HERDR_[A-Z_]*\)=.*/\1/p'); do unset "$v"; done
 unset CLAUDE_CODE_SESSION_ID CLAUDE_AUTO_REPO LINEAR_API_KEY CLAUDE_CODE_ENTRYPOINT 2>/dev/null || true
 export CLAUDE_AUTO_DATA_DIR="${WORK}/data"
+export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
 export CLAUDE_AUTO_PERSONAL_PROTOCOL="${WORK}/personal/protocol.json"
 export CLAUDE_AUTO_MACHINE="studio"
 export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
@@ -380,7 +381,7 @@ it "an end request from a worker session is journaled as refused"
 has '"verb": "end"' "$(last_entry "$RUN" request_refused)"
 
 as sess-d watcher-beat cron --task-id cron-77 --prompt "sweep the programme now"
-as sess-d watcher-beat board-source --task-id bh1i1vbv7 --kind monitor
+as sess-d watcher-beat tracker-source --task-id bh1i1vbv7 --kind monitor
 
 it "end with no typed request is refused"
 as sess-d end

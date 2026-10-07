@@ -28,15 +28,16 @@ programme_journal = load_lib_module("programme_journal")
 programme_protocol = load_lib_module("programme_protocol")
 programme_sanitize = load_lib_module("programme_sanitize")
 driver_session = load_lib_module("driver_session")
+programme_tracker = load_lib_module("programme_tracker")
 
 CLAIMS_NAME = "claims.jsonl"
-SOURCES = ("herdr", "board", "linear")
+SOURCES = ("herdr", "tracker", "tasks", "plans")
 SOURCE_STATES = ("available", "unavailable", "unsupported")
 CHOICES = ("ship", "decline")
 ID_CAP = 128
 CRON_PROMPT_CAP = 4000
 NOTIFY_TIMEOUT_SECONDS = 5
-BOARD_SOURCE = "linear"
+ISSUE_SOURCE = "linear"
 ISSUELESS_SOURCE = "herdr"
 WAITABLE_STATES = ("open", "waiting")
 _ID_RE = re.compile(r"[a-z][a-z0-9_-]*:[A-Za-z0-9._/#@+:-]+")
@@ -469,14 +470,14 @@ def _run_tool(argv):
 
 def notify_handed(item_id, question) -> dict:
     source, _, key = item_id.partition(":")
-    board = "skipped"
-    if source == BOARD_SOURCE:
-        board = _run_tool(["board", "mark", key, "needs_you"])
+    tracker = "skipped"
+    if source == ISSUE_SOURCE:
+        tracker = _run_tool(programme_tracker.needs_you_argv(key))
     herdr = None
-    if board != 0:
+    if tracker != 0:
         herdr = _run_tool(["herdr", "notification", "show", f"auto: {item_id} needs you",
                            "--body", question, "--sound", "request"])
-    return {"board": board, "herdr": herdr}
+    return {"tracker": tracker, "herdr": herdr}
 
 
 def _h_hand_item(host, argv):
@@ -649,10 +650,13 @@ def _h_record_tested_build(host, argv):
 
 
 def _h_set_source(host, argv):
-    positional, opts = host._parse(argv, values=("run", "watcher"),
+    positional, opts = host._parse(argv, values=("run", "watcher", "provider"),
                                    flags=("available", "unavailable", "unsupported"))
     if len(positional) != 1 or positional[0] not in SOURCES:
         raise ValueError(f"usage: set-source <{'|'.join(SOURCES)}> --available|--unavailable|--unsupported")
+    provider = opts.get("provider")
+    if provider is not None and (positional[0] != "tracker" or not programme_home._SEGMENT_RE.match(provider)):
+        raise ValueError("--provider names the tracker provider that answered, as a safe name")
     states = [flag for flag in SOURCE_STATES if opts.get(flag)]
     if len(states) != 1:
         raise ValueError("set-source needs exactly one of --available, --unavailable or --unsupported")
@@ -672,9 +676,12 @@ def _h_set_source(host, argv):
             entry["unsupported_since"] = None
         if watcher is not None:
             entry["watcher"] = watcher
+        if provider is not None or name == "tracker":
+            entry["provider"] = provider if state == "available" else None
         sources[name] = entry
         return {"source": name, "state": state, "unavailable_since": entry["unavailable_since"],
-                "unsupported_since": entry["unsupported_since"], "watcher": entry.get("watcher")}
+                "unsupported_since": entry["unsupported_since"], "watcher": entry.get("watcher"),
+                "provider": entry.get("provider")}
 
     return host._write(opts, change, "source_changed")
 
@@ -726,9 +733,11 @@ _SPECS = (
      "<id> --shasum <sha> [--package <name>] [--version <v>] [--run <id>]",
      "a shasum that is not hex sha1/sha256 or an sha integrity string."),
     ("set-source", _h_set_source,
-     "herdr|board|linear --available|--unavailable|--unsupported [--watcher <id>] [--run <id>]",
-     "an unknown source; more than one state flag or none. --unsupported marks a source this "
-     "machine cannot read (a missing tool or plugin op); it never holds the stop."),
+     "herdr|tracker|tasks|plans --available|--unavailable|--unsupported [--provider <name>] "
+     "[--watcher <id>] [--run <id>]",
+     "an unknown source; more than one state flag or none; --provider on a source other than "
+     "tracker. --unsupported marks a source this machine cannot read (a missing tool or plugin "
+     "op); it never holds the stop. --provider names the tracker provider that answered."),
 )
 
 

@@ -15,6 +15,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 programme_home = load_lib_module("programme_home")
 programme_predicate = load_lib_module("programme_predicate")
 programme_sanitize = load_lib_module("programme_sanitize")
+programme_tasks = load_lib_module("programme_tasks")
 session_registry = load_lib_module("session_registry")
 
 VIEW_FORMAT = 1
@@ -83,7 +84,18 @@ def _evidence(item) -> str:
     return f"{confirmed} of {len(deliverables)} confirmed"
 
 
-def _item_view(item_id, item, status, flagged, sessions) -> dict:
+def _tasks_now(owner, tasks_on):
+    if not tasks_on or not owner.get("session_id"):
+        return None
+    summary = programme_tasks.read_session(owner["session_id"])
+    if not summary["total"]:
+        return None
+    counts = summary["counts"]
+    tally = f"{counts['completed']}/{summary['total']} tasks done"
+    return f"now: {summary['now']} ({tally})" if summary["now"] else tally
+
+
+def _item_view(item_id, item, status, flagged, sessions, tasks_on=False) -> dict:
     owner = _dict(item.get("owner"))
     marks = []
     if item_id in status["new_items"]:
@@ -106,6 +118,7 @@ def _item_view(item_id, item, status, flagged, sessions) -> dict:
         "evidence": _evidence(item),
         "waiting_on": item.get("waiting_on") if effective == "waiting" else None,
         "question": handed.get("question") if effective == "handed" else None,
+        "now": _tasks_now(owner, tasks_on) if effective not in programme_home.FINISHED_ITEM_STATES else None,
         "marks": marks,
         "needs_shawn": stopped or (effective == "handed" and not handed.get("answered")),
     }
@@ -150,8 +163,21 @@ def _watching(block, status, now, cadence) -> list:
     for item_id in status["unwatched_waits"]:
         out.append({"watcher": None, "item": item_id, "live": False, "last_beat_at": None,
                     "why": "nothing watches this wait"})
+    enabled = programme_home.enabled_sources(block)
+    for name in programme_home.SWEEP_SOURCES:
+        source = _dict(sources.get(name))
+        if name not in enabled:
+            out.append(_source_row(name, "off: turned off in the agreement", style="dim"))
+        elif source.get("unsupported_since"):
+            out.append(_source_row(name, "not available on this machine", style="dim"))
+        elif not source.get("unavailable_since"):
+            via = f" via {source['provider']}" if source.get("provider") else ""
+            out.append(_source_row(name, f"available{via}" if source else "not read yet", style="text"))
     for name, source in sorted(sources.items()):
         source = _dict(source)
+        sweep_source = name in programme_home.SWEEP_SOURCES
+        if sweep_source and (name not in enabled or source.get("unsupported_since")):
+            continue
         if source.get("unsupported_since"):
             out.append({"watcher": None, "item": None, "source": name, "live": False, "last_beat_at": None,
                         "unsupported": True, "why": "not available on this machine"})
@@ -165,8 +191,15 @@ def _watching(block, status, now, cadence) -> list:
     return out
 
 
+def _source_row(name, why, style) -> dict:
+    return {"watcher": None, "item": None, "source": name, "live": False, "last_beat_at": None,
+            "state_only": style, "why": why}
+
+
 def _watching_row(w) -> dict:
     live = " (live)" if w["live"] else ""
+    if w.get("state_only"):
+        return _row(f"  {w['source']}: {w['why']}", w["state_only"])
     if w.get("unsupported"):
         return _row(f"  {w['source']}: {w['why']}", "dim")
     if w.get("item") or w.get("source"):
@@ -228,7 +261,8 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
     status = programme_predicate.compute(record, now, inbox_size)
     flagged = _stopped_unwatched(journal_entries or [])
     sessions = _sessions(block["items"])
-    items = [_item_view(i, block["items"][i], status, flagged, sessions) for i in sorted(block["items"])]
+    tasks_on = "tasks" in programme_home.enabled_sources(block)
+    items = [_item_view(i, block["items"][i], status, flagged, sessions, tasks_on) for i in sorted(block["items"])]
     waits = [{"item": w.get("item"), "system": w.get("system"), "who": w.get("who") or "system",
               "reporter": w.get("reporter"), "watched": bool(w.get("watched"))}
              for w in status["waits"]]
@@ -288,7 +322,10 @@ def _adopted_on(entry) -> str:
 
 def _term_text(key, term) -> str:
     extras = [f"{name} {term[name]}" for name in ("until", "seconds") if term.get(name) is not None]
-    return f"{key}: {term.get('value')}" + "".join(f", {e}" for e in extras)
+    value = term.get("value")
+    if isinstance(value, list):
+        value = ", ".join(str(v) for v in value) or "none"
+    return f"{key}: {value}" + "".join(f", {e}" for e in extras)
 
 
 def _instruction_text(entry) -> str:
@@ -327,6 +364,8 @@ def _item_lines(item) -> list:
     if item["needs_shawn"]:
         detail.insert(0, "needs Shawn")
     out.append(_row("    " + " · ".join(detail), "dim"))
+    if item.get("now"):
+        out.append(_row(f"    {item['now']}", "dim"))
     for d in item["deliverables"]:
         ref = f" {d['ref']}" if d.get("ref") else ""
         out.append(_row(f"    {d['name']}: {d['result']}{ref}", "dim"))

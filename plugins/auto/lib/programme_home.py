@@ -39,6 +39,7 @@ LEASE_STATES = ("free", "live", "orphaned", "ended", "expired", "newer")
 HELD_LEASE_STATES = ("live", "orphaned", "expired")
 COMPACT_FLAG = ".compact-flag"
 WATCHER_KINDS = ("cron", "monitor")
+SWEEP_SOURCES = ("tracker", "tasks", "plans")
 
 ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
@@ -192,7 +193,20 @@ def default_terms(now_iso: str) -> dict:
         "cadence": term("cadence", ("on_change", "fixed"), "on_change",
                         seconds=DEFAULT_CADENCE_SECONDS, eval_budget_usd_per_day=25,
                         quiet_hours=None),
+        "sources": term("sources", SWEEP_SOURCES, list(SWEEP_SOURCES)),
     }
+
+
+def enabled_sources(programme) -> set:
+    terms = ((programme or {}).get("agreement") or {}).get("terms") or {}
+    value = (terms.get("sources") or {}).get("value") if isinstance(terms.get("sources"), dict) else None
+    if not isinstance(value, list):
+        return set(SWEEP_SOURCES)
+    return {name for name in value if name in SWEEP_SOURCES}
+
+
+def source_enabled(programme, name) -> bool:
+    return name not in SWEEP_SOURCES or name in enabled_sources(programme)
 
 
 def new_programme_block(spaces, now_iso: str) -> dict:

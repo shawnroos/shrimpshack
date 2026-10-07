@@ -126,6 +126,8 @@ def _source_status(block: dict, watchers: dict, now, cadence: int):
     reasons, waits = [], []
     for name, source in sorted(_dict(block.get("sources")).items()):
         source = _dict(source)
+        if not programme_home.source_enabled(block, name):
+            continue
         if source.get("unsupported_since") or source.get("unavailable_since") is None:
             continue
         named = source.get("watcher")

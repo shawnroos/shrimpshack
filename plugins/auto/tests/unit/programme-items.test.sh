@@ -22,6 +22,7 @@ WORK="$(mktemp -d -t auto-programme-items.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
 export CLAUDE_AUTO_DATA_DIR="${WORK}/data"
+export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
 export CLAUDE_AUTO_PERSONAL_PROTOCOL="${WORK}/personal/protocol.json"
 export CLAUDE_AUTO_MACHINE="studio"
 export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
@@ -365,29 +366,29 @@ it "the re-match is journaled as an update"
 has '"linear:AI-802"' "$(journal_last item_updated)"
 
 : > "$CALLS"
-it "hand-item notifies once through the board mark"
+it "hand-item notifies once through the tracker mark"
 prog hand-item linear:AI-802 --question "Ship the new crop now or hold for design?"
 check '"handed"' "$(field 'items["linear:AI-802"]["state"]')"
-it "the board was called and herdr was not"
+it "the tracker provider was called and herdr was not"
 check "board" "$(cut -d' ' -f1 "$CALLS" | sort -u | tr '\n' ' ' | sed 's/ $//')"
-it "the hand is journaled with the board exit status"
-check '[0, null]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["board"], p["herdr"]]))' <<< "$(journal_last item_handed)")"
+it "the hand is journaled with the tracker exit status"
+check '[0, null]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["tracker"], p["herdr"]]))' <<< "$(journal_last item_handed)")"
 it "hand-item on an already handed item is refused and notifies nothing"
 : > "$CALLS"
 prog hand-item linear:AI-802 --question "again?"
 check "1 0" "$CODE $(wc -l < "$CALLS" | tr -d ' ')"
 
-it "hand-item when the board command fails falls back to a herdr notification"
+it "hand-item when the tracker mark fails falls back to a herdr notification"
 : > "$CALLS"
 prog add-item linear:AI-803 --title "Product call" --kind product_question
 FAKE_BOARD_EXIT=3 prog hand-item linear:AI-803 --question "Which crop default?"
 check "board herdr" "$(cut -d' ' -f1 "$CALLS" | tr '\n' ' ' | sed 's/ $//')"
 it "the journal records both exit statuses"
-check '[3, 0]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["board"], p["herdr"]]))' <<< "$(journal_last item_handed)")"
+check '[3, 0]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["tracker"], p["herdr"]]))' <<< "$(journal_last item_handed)")"
 it "the herdr notification names the question"
 has "Which crop default?" "$(cat "$CALLS")"
 
-it "hand-item on a herdr item skips the board"
+it "hand-item on a herdr item skips the tracker"
 : > "$CALLS"
 prog add-item herdr:w2/p40 --title "pane"
 prog hand-item herdr:w2/p40 --question "Keep this pane?"
@@ -449,32 +450,52 @@ prog set-now --clear
 check 'null' "$(field 'prog["working_model"]["doing"]')"
 
 it "set-source --unavailable records the outage time"
-prog set-source linear --unavailable
-has 'T' "$(field 'prog["sources"]["linear"]["unavailable_since"]')"
+prog set-source tracker --unavailable
+has 'T' "$(field 'prog["sources"]["tracker"]["unavailable_since"]')"
 it "a source outage refuses the stop"
 has '"source_unavailable"' "$(predicate -)"
 it "set-source --available clears it"
-prog set-source linear --available
-check 'null' "$(field 'prog["sources"]["linear"]["unavailable_since"]')"
+prog set-source tracker --available
+check 'null' "$(field 'prog["sources"]["tracker"]["unavailable_since"]')"
 it "set-source --unsupported marks the source unusable here and ends the outage"
-prog set-source linear --unavailable
-prog set-source linear --unsupported
-check '[true, null]' "$(field '[prog["sources"]["linear"]["unsupported_since"] is not None, prog["sources"]["linear"]["unavailable_since"]]')"
+prog set-source tracker --unavailable
+prog set-source tracker --unsupported
+check '[true, null]' "$(field '[prog["sources"]["tracker"]["unsupported_since"] is not None, prog["sources"]["tracker"]["unavailable_since"]]')"
 it "an unsupported source does not hold the stop"
 lacks '"source_unavailable"' "$(predicate -)"
 it "set-source --unavailable after --unsupported is a real outage again"
-prog set-source linear --unavailable
-check '[null, true]' "$(field '[prog["sources"]["linear"]["unsupported_since"], prog["sources"]["linear"]["unavailable_since"] is not None]')"
+prog set-source tracker --unavailable
+check '[null, true]' "$(field '[prog["sources"]["tracker"]["unsupported_since"], prog["sources"]["tracker"]["unavailable_since"] is not None]')"
 it "set-source --available clears both states"
-prog set-source linear --unsupported
-prog set-source linear --available
-check '[null, null]' "$(field '[prog["sources"]["linear"]["unsupported_since"], prog["sources"]["linear"]["unavailable_since"]]')"
+prog set-source tracker --unsupported
+prog set-source tracker --available
+check '[null, null]' "$(field '[prog["sources"]["tracker"]["unsupported_since"], prog["sources"]["tracker"]["unavailable_since"]]')"
 it "set-source with two states is refused"
-prog set-source linear --unsupported --available
+prog set-source tracker --unsupported --available
 check 2 "$CODE"
 it "an unknown source is refused"
 prog set-source jira --unavailable
 check 2 "$CODE"
+it "the old board source name is refused"
+prog set-source board --available
+check 2 "$CODE"
+it "the old linear source name is refused"
+prog set-source linear --available
+check 2 "$CODE"
+it "set-source tracker --provider records the provider that answered"
+prog set-source tracker --available --provider linear-api
+check '"linear-api"' "$(field 'prog["sources"]["tracker"]["provider"]')"
+it "a tracker going down clears its provider"
+prog set-source tracker --unavailable
+check 'null' "$(field 'prog["sources"]["tracker"]["provider"]')"
+prog set-source tracker --available
+it "--provider on a source other than tracker is refused"
+prog set-source tasks --available --provider board
+check 2 "$CODE"
+it "set-source takes tasks and plans"
+prog set-source tasks --available
+prog set-source plans --available
+check '[true, true]' "$(field '["tasks" in prog["sources"], "plans" in prog["sources"]]')"
 
 for verb_args in "add-item linear:AI-950 --title x" "alias-item linear:AI-803 linear:AI-951" "drop-item herdr:w2/p27 --reason x" "set-waiting linear:AI-800 --who ci" "watcher-beat w-ci" "hand-item linear:AI-800 --question q" "set-now x" "queue --action sweep" "mark-read" "record-tested-build linear:AI-800 --shasum ${SHA}" "set-source herdr --unavailable"; do
   it "a non-driving session is refused: ${verb_args%% *}"

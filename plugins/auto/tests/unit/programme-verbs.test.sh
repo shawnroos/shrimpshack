@@ -22,6 +22,7 @@ WORK="$(mktemp -d -t auto-programme-verbs.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
 export CLAUDE_AUTO_DATA_DIR="${WORK}/data"
+export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
 export CLAUDE_AUTO_PERSONAL_PROTOCOL="${WORK}/personal/protocol.json"
 export CLAUDE_AUTO_MACHINE="studio"
 export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
