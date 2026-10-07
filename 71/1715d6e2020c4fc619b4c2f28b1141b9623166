@@ -1,0 +1,64 @@
+plugins/auto/skills/programme-tracker/SKILL.md
+  s_5abb44c8324d7f::t_b6a7ab7696660e 1-103
+  s_5abb44c8324d7f::t_efedf11260556d 104-105
+plugins/auto/tests/unit/programme-remit.test.sh
+  s_5abb44c8324d7f::t_f0cbe9ae1b4dae 1-313
+  s_5abb44c8324d7f::t_2b1209014153d5 314-318
+plugins/auto/skills/programme-remit/SKILL.md
+  s_5abb44c8324d7f::t_d1b5912bd47d86 1-88
+  s_5abb44c8324d7f::t_5c80734d14c2f8 89-90
+plugins/auto/tests/unit/programme-tracker-writes.test.sh
+  s_5abb44c8324d7f::t_2d273cd5715858 1-201
+plugins/auto/tests/integration/tracker-guard.test.sh
+  s_5abb44c8324d7f::t_3d754c0c1f5efe 1-220
+plugins/auto/.claude/hooks/hooks.json
+  s_5abb44c8324d7f::t_9b90266327cb5d 2,61
+plugins/auto/.claude/hooks/on-pretooluse-action.sh
+  s_5abb44c8324d7f::t_05dc33374c7491 66-68,70
+plugins/auto/commands/programme.md
+  s_5abb44c8324d7f::t_a0e5cfff1d77af 30-32,34-35,40-43
+plugins/auto/docs/contracts/agent-tool-surface.md
+  s_5abb44c8324d7f::t_f88a47f989de43 162-176,233-248,336-360
+plugins/auto/docs/contracts/run-record-schema.md
+  s_5abb44c8324d7f::t_f23225769c7143 672,681-682,704,708,723
+plugins/auto/lib/on-pretooluse-action.py
+  s_5abb44c8324d7f::t_c4ceb9e489c454 716-860,869-876
+plugins/auto/lib/programme_evidence.py
+  s_5abb44c8324d7f::t_a59f585fcea72e 546-554,559,632-633
+plugins/auto/lib/programme_home.py
+  s_5abb44c8324d7f::t_7a01c797ab8e65 43,213-216,222-223,279-287
+plugins/auto/lib/programme_journal.py
+  s_5abb44c8324d7f::t_4b7108b7bfd527 42-45
+plugins/auto/lib/programme_lifecycle.py
+  s_5abb44c8324d7f::t_9ab22c439ef80f 13,15,28,34-39,365-525,542-547
+plugins/auto/lib/programme_record.py
+  s_5abb44c8324d7f::t_96bde06afb7215 43-48,52,696-787,840-846
+plugins/auto/lib/programme_sources.py
+  s_5abb44c8324d7f::t_a70a44196f561e 47-50,110-111,113-146,276-301,303,309-313,364-365,406-407,409,442-444
+plugins/auto/lib/programme_tracker.py
+  s_5abb44c8324d7f::t_814712d7d9c559 55-63,119
+plugins/auto/lib/programme_view.py
+  s_5abb44c8324d7f::t_1f2712377f272a 282,376-390,393
+plugins/auto/skills/programme-sweep/SKILL.md
+  s_5abb44c8324d7f::t_09e988001c01f3 78-85,88-93,102-104,145-150,160
+plugins/auto/tests/unit/import-topology.test.sh
+  s_5abb44c8324d7f::t_e2d4217a713898 116,129-130
+plugins/auto/tests/unit/programme-verbs.test.sh
+  s_5abb44c8324d7f::t_bab7ea6ff14c43 99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "711715d6e2020c4fc619b4c2f28b1141b9623166",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
