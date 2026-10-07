@@ -1,0 +1,39 @@
+plugins/auto/docs/contracts/agent-tool-surface.md
+  s_5abb44c8324d7f::t_c4a9b0e206261b 113-117,243-244
+plugins/auto/docs/contracts/programme-protocol-format.md
+  s_5abb44c8324d7f::t_1e1cbaca8aef7e 82-85,87-91,166
+plugins/auto/docs/contracts/run-record-schema.md
+  s_5abb44c8324d7f::t_dc6e9c3b9a3b5f 611,733-743,831
+plugins/auto/lib/programme.py
+  s_5abb44c8324d7f::t_a28cb3b0877466 49-55,439-440,446-453,458,472-475,478,480,485-494,510-512,514-515,521-564,608-619
+plugins/auto/lib/programme_lifecycle.py
+  s_5abb44c8324d7f::t_17cdecd8102130 34,38,118-119,183,185,187
+plugins/auto/lib/programme_protocol.py
+  s_5abb44c8324d7f::t_47e31a8c916b67 87-96,158,160,166-190,202,226,243,246,265-266,278-279,281-282,315-316,431,433-439
+plugins/auto/skills/programme-sweep/SKILL.md
+  s_5abb44c8324d7f::t_dd249f0029dedf 26-29,47-48
+plugins/auto/tests/integration/programme-flow.test.sh
+  s_5abb44c8324d7f::t_bef9d750951a13 586-592
+plugins/auto/tests/unit/programme-evidence-more.test.sh
+  s_5abb44c8324d7f::t_36e9125a99c785 146-151,153-163,166,169,295-303,305
+plugins/auto/tests/unit/programme-protocol.test.sh
+  s_5abb44c8324d7f::t_fb13856d9c1e2d 64-65,70,266,279,406-407,417,448,454,471-472,541,555,565-576
+plugins/auto/tests/unit/programme-verbs.test.sh
+  s_5abb44c8324d7f::t_4ba091e6827cdb 98,328-457
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c96847d6e620fd9d8891b09ecc31058f278bc7f6",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
