@@ -1,0 +1,25 @@
+plugins/auto/docs/contracts/programme-protocol-format.md
+  s_5abb44c8324d7f::t_0306c3b6464312 1-156
+plugins/auto/lib/programme_protocol.py
+  s_5abb44c8324d7f::t_a84a5fc968d687 1-456
+plugins/auto/protocol/defaults.json
+  s_5abb44c8324d7f::t_c16a02dcf87544 1-173
+plugins/auto/tests/unit/programme-protocol.test.sh
+  s_5abb44c8324d7f::t_7d4b6d83fe3819 1-530
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "914c67bba9123b8751c4243d5c696b38fe4ad403",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
