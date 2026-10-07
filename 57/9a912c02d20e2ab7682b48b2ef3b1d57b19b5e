@@ -1,0 +1,40 @@
+plugins/auto/tests/unit/programme-evidence-more.test.sh
+  s_5abb44c8324d7f::t_91f8a425e5cdae 1-458
+  s_5abb44c8324d7f::t_44e4d246e65998 459-472
+plugins/auto/lib/programme_evidence.py
+  s_5abb44c8324d7f::t_b792e7987d4d5d 32,52-57,61-64,132-133,139-146,156-167,341-545,555-556,562-567,569,606,612-617,621-645,716,718,729,731,735-737,771,802-806,822
+plugins/auto/tests/helpers/fake-bt.sh
+  s_5abb44c8324d7f::t_65633c9db80ad0 1-9
+plugins/auto/tests/helpers/fake-ldcli.sh
+  s_5abb44c8324d7f::t_52bb71df800ed1 1-11
+plugins/auto/tests/helpers/fake-npm.sh
+  s_5abb44c8324d7f::t_d89f41834c810d 1-15
+plugins/auto/tests/helpers/fake-trace.sh
+  s_5abb44c8324d7f::t_62bd09764a268c 1-10
+plugins/auto/tests/helpers/fixtures/evidence/bt-no-credential-real.json
+  s_5abb44c8324d7f::t_bdb4bad6586735 1
+plugins/auto/tests/helpers/fixtures/evidence/ld-flag-not-found-real.err
+  s_5abb44c8324d7f::t_ce47186217c82c 1
+plugins/auto/tests/helpers/fixtures/evidence/ld-flag-relight-real.json
+  s_5abb44c8324d7f::t_42209df5b1dece 1-125
+plugins/auto/tests/helpers/fixtures/evidence/npm-view-real.json
+  s_5abb44c8324d7f::t_d3a8ce57eeeff7 1-4
+plugins/auto/tests/unit/programme-evidence.test.sh
+  s_5abb44c8324d7f::t_4ca932d0b333bf 449-451
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "579a912c02d20e2ab7682b48b2ef3b1d57b19b5e",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
