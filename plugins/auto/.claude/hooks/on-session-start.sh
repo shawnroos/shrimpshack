@@ -22,10 +22,30 @@
 
 set -uo pipefail
 
+PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
+
+if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  CLAUDE_PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
+
+__cd_stdin_json=""
+if [ ! -t 0 ]; then
+  __cd_stdin_json="$(cat 2>/dev/null || true)"
+fi
+
+# Session registry: runs in every herdr pane, before the presence gate, because
+# a programme's sessions live in any repo or none. Its stdout must stay silent:
+# SessionStart output becomes session context. Under the test harness it runs
+# only with a test data dir, or a suite run inside herdr would report test
+# sessions to the real herdr and write the real registry.
+if [ -n "${HERDR_PANE_ID:-}" ] && { [ -z "${CLAUDE_AUTO_TEST_HARNESS:-}" ] || [ -n "${CLAUDE_AUTO_DATA_DIR:-}" ]; }; then
+  "$PYTHON3" "${CLAUDE_PLUGIN_ROOT}/lib/session_registry.py" record <<< "$__cd_stdin_json" >/dev/null 2>&1
+fi
+
 # ─── Presence gate (walk up from cwd for a <repo>/.claude/auto dir) ──────
 # auto is REPO-scoped. git is NOT an engine dependency, so we walk up
 # the tree rather than shelling to git rev-parse (which would hard-fail on a
-# non-git checkout). Fast no-op exit 0 the moment the walk fails.
+# non-git checkout). Fast no-op exit 0 when the walk fails and no lease exists.
 __cd_find_repo() {
   local dir="${PWD}"
   while [ -n "$dir" ] && [ "$dir" != "/" ]; do
@@ -38,20 +58,26 @@ __cd_find_repo() {
   return 1
 }
 
-__cd_repo="$(__cd_find_repo)" || exit 0
-[ -d "${__cd_repo}/.claude/auto" ] || exit 0
+# Programme gate: a lease file means a programme exists, and its driving session
+# gets the rules in force back, from any cwd.
+__cd_leases="${CLAUDE_AUTO_DATA_DIR:-${HOME:-}/.claude/plugins/data/auto-shrimpshack}/programmes/leases"
+__cd_any_lease=0
+for __cd_f in "${__cd_leases}"/*.json; do
+  [ -e "$__cd_f" ] && __cd_any_lease=1
+  break
+done
 
-PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-
-if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]; then
-  CLAUDE_PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+__cd_repo="$(__cd_find_repo)" || __cd_repo=""
+if [ -n "$__cd_repo" ] && [ ! -d "${__cd_repo}/.claude/auto" ]; then
+  __cd_repo=""
 fi
+[ -n "$__cd_repo" ] || [ "$__cd_any_lease" = 1 ] || exit 0
 
 # Hand off the per-run-record scan + GRACE/orphan/handoff classification to Python
 # (which imports run_record.py's is_orphaned + GRACE_SECONDS — never hardcoded).
 # It prints surfacing lines on stdout; the harness shows them to the operator.
 # `|| true` belt-and-braces so an exec/python failure cannot propagate non-zero.
-exec "$PYTHON3" "${CLAUDE_PLUGIN_ROOT}/lib/on-session-start.py" "$__cd_repo" || true
+exec "$PYTHON3" "${CLAUDE_PLUGIN_ROOT}/lib/on-session-start.py" "$__cd_repo" <<< "$__cd_stdin_json" || true
 
 # If exec returned (it shouldn't), defensive exit-0.
 exit 0
