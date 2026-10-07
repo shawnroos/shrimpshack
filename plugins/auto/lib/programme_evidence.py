@@ -543,10 +543,20 @@ def _pin_for(run_id, item, ref):
     return pin
 
 
+def _require_remit_repo(ref, repos) -> None:
+    names = {r["github"].casefold() for r in repos or [] if isinstance(r, dict) and r.get("github")}
+    if not repos:
+        return
+    owner, name, _ = parse_pr_ref(ref)
+    if f"{owner}/{name}".casefold() not in names:
+        raise Unknown(f"PR {owner}/{name} is outside the remit's repos")
+
+
 def run_check(run_id, item, deliverable, ref, context=None) -> dict:
     context = context or {}
     try:
         if deliverable == "merged":
+            _require_remit_repo(ref, context.get("remit_repos"))
             verdict = check_merged(ref, pin=_pin_for(run_id, item, ref))
         elif deliverable == "recorded":
             verdict = check_recorded(ref)
@@ -619,7 +629,8 @@ def _repo_arg(value):
 
 def _context(host, programme, key, deliverable, repo, cache=None) -> dict:
     item = programme["items"][key]
-    context = {"item": item, "repo": repo, "checks": {}, "waivers": []}
+    context = {"item": item, "repo": repo, "checks": {}, "waivers": [],
+               "remit_repos": list((programme.get("remit") or {}).get("repos") or [])}
     if deliverable == "verified":
         cache = {} if cache is None else cache
         keys = _repo_keys(item, None)

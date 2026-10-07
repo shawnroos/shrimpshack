@@ -27,12 +27,20 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    space's shape and records each source's state through set-source, so the
    first sweep starts from them. If the space suggests a different term value
    (for example a `tabs` remit), pass it as `--term <key>=<value>`.
+   Then work out the remit: load the `auto:programme-remit` skill, find the
+   repos and the tracker scope with your own tools, and store them with
+   `programme.sh set-remit`. Accepting the agreement in step 5 approves it.
 4. Show one screen, and nothing else:
+   - the remit as three short lines (spaces, repos, tracker), as the
+     programme-remit skill shows them;
    - the output of `programme.sh rules` (the terms with their proposed values,
      plus the protocol layers and rules it loaded);
    - the three sources, one line each, from the sweep's `sources` block:
      - tracker: the provider that answered (`provider`), or unavailable or
-       unsupported with its `reason`;
+       unsupported with its `reason`. When it is unavailable, read the remit's
+       issues through `mcp__linear__list_issues` and record them with
+       `programme.sh record-issues` (see the programme-tracker skill), then
+       show provider `linear-mcp`;
      - tasks: how many remit sessions have a task list (`with_lists`);
      - plans: which repos and how many recent plans (the `plans` list, or
        `repos` and `recent` in the `sources` block);

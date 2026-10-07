@@ -669,7 +669,7 @@ keys and keeps unknown ones.
 
 | key | shape |
 |-----|-------|
-| `remit` | `{spaces: [{server, workspace}], tabs: []}` |
+| `remit` | `{spaces: [{server, workspace}], tabs: [], repos: [{path, github}], tracker: {teams: [{key, name, id}], projects: [{name, id}], initiatives: [{name, id}]}}`. `set-remit` writes it (caps: 8 spaces, 20 repos, 10 teams, 20 projects, 10 initiatives); `path` is an absolute directory, `github` is `owner/name` or null, a team `key` is an issue prefix. An empty list sets no limit. A record without `repos` or `tracker` reads them as empty. `set-remit` also stamps the `remit` term's `set_by` (proposal before acceptance, shawn after), `set_at`, `prompt_id` and `quote`; the term's `value` stays the space/tabs mode |
 | `created_at` | `<iso>` |
 | `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, terms: {remit, stop_rule, autonomy, cadence, sources}}` |
 | `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `sources` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off). A record without the term reads as all three on. |
@@ -678,7 +678,8 @@ keys and keeps unknown ones.
 | `items` | `{"<source>:<key>": item}` (below) |
 | `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
 | `watchers` | `{"<id>": {process_id?, task_id?, kind?, item?, last_beat_at, prompt?, retry?}}`. `kind` is `cron` or `monitor`, set whenever a task id is recorded (`--kind`, else `cron` with `--prompt` and `monitor` without); a record without `kind` reads a task id with `prompt` as cron and one without as a Monitor. `end` prints `CronDelete` for cron task ids and `TaskStop` for Monitor task ids. Ids: `remit` (the remit watcher), `item-<item id with unsafe chars as ->` (item mode), `retry-<item slug>` (evidence retry, with `retry: {deliverable, argv}`). `prompt` is the armed cron prompt, verbatim; prompt capture reads it to mark a cron-origin prompt. A watcher is live when it has `process_id` or `task_id` and its beat is younger than one cadence period |
-| `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered, and is null while the tracker is down. A source the agreement's `sources` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
+| `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered (`board`, `linear-api`, or `linear-mcp` after `record-issues`), and is null while the tracker is down. A sweep that cannot read the tracker records no change while the provider is `linear-mcp`. A source the agreement's `sources` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
+| `recorded_issues` | `{provider: "linear-mcp", at, dropped, issues: {"<key>": {title, state, state_type, state_id, url, project: {id, name} \| null, initiatives: [{id, name}] \| null, source: "linear-mcp"}}}`, written by `record-issues` from the PM's MCP read. It claims the tracker provider only when no other provider has it available. `state_type` is one of triage, backlog, unstarted, started, completed, canceled, or null; `state_id` is a UUID or null. The tracker guard reads it to resolve state names and ids; the recorded check never reads it |
 | `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
 | `ended` | `null \| {at, reason}` |
 
@@ -700,10 +701,11 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it |
 | `handed` | `{at, question, answered: null \| {at, choice: ship\|decline, prompt_id}}` |
 | `tested_build` | `{shasum, package, version, at}` |
+| `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
 | `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
 | `task_runs[]` | `{repo, run_id}` |
 | `dropped_reason` | string or `null` |
-| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `tested_build`, `started`, `start_failed`, `reopened` |
+| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `tested_build`, `tracker_synced`, `started`, `start_failed`, `reopened` |
 
 ### 10.6 Journal and claims
 
@@ -718,7 +720,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 key. An unknown kind raises `JournalError`. `KINDS` today:
 
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
-`blocked_driver_send`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
+`blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
 `term_amended`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
 `rule_adopted`, `rules_acked`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,

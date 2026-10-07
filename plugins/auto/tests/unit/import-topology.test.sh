@@ -113,7 +113,7 @@
 #                          Those five receive `programme` as a `host` argument and never
 #                          load it back.
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal,
-#                          session_registry, driver_session
+#                          session_registry, driver_session, programme_sanitize
 #   programme-watch      → run_record_core, programme_home, programme_predicate,
 #                          programme_record, programme_sanitize, programme_tracker,
 #                          programme_tasks, programme_plans, driver_session
@@ -126,7 +126,8 @@
 #   on-session-start     → phase-grammar; on-pre-compact [lazy], programme [lazy]
 #   on-stop              → phase-grammar; programme_home [lazy], programme_predicate [lazy],
 #                          programme_journal [lazy], programme [lazy]
-#   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy]
+#   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy],
+#                          programme_home [lazy], run_record_core [lazy], programme_evidence [lazy]
 #   auto-spawn           → driver_session; auto-workspace [lazy]
 #
 # format_compat is a DAG ROOT (pure stdlib, no sibling import), so every `→ format_compat`

@@ -40,9 +40,16 @@ NOTIFY_TIMEOUT_SECONDS = 5
 ISSUE_SOURCE = "linear"
 ISSUELESS_SOURCE = "herdr"
 WAITABLE_STATES = ("open", "waiting")
+MCP_PROVIDER = "linear-mcp"
+TRACKER_STATE_TYPES = ("triage", "backlog", "unstarted", "started", "completed", "canceled")
+RECORDED_ISSUES_CAP = 200
+RECORD_INPUT_CAP = 1 << 20
+SYNC_LABEL_CAP = 40
+SYNC_NOTE_CAP = 200
 _ID_RE = re.compile(r"[a-z][a-z0-9_-]*:[A-Za-z0-9._/#@+:-]+")
 _ACTION_RE = re.compile(r"[a-z][a-z0-9_]*")
 _PID_RE = re.compile(r"[0-9]+")
+_STATE_ID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _SHASUM_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}|sha(?:1|256|512)-[A-Za-z0-9+/]+={0,2}")
 _EVIDENCE_RANK = {"confirmed": 3, "refuted": 2, "unknown": 1}
 
@@ -686,6 +693,98 @@ def _h_set_source(host, argv):
     return host._write(opts, change, "source_changed")
 
 
+def tracker_due(item, label) -> bool:
+    return (item.get("tracker_synced") or {}).get("state") != label
+
+
+def _h_tracker_synced(host, argv):
+    positional, opts = host._parse(argv, values=("run", "item", "state", "note"), flags=("check",))
+    if positional or not opts.get("item") or not opts.get("state"):
+        raise ValueError("usage: tracker-synced --item <id> --state <label> [--note <text>] [--check]")
+    item_id = check_item_id(opts["item"])
+    label = opts["state"]
+    if not _ACTION_RE.fullmatch(label) or len(label) > SYNC_LABEL_CAP:
+        raise RecordError(f"--state must be a short lower_snake label: {label!r}")
+    note = programme_sanitize.clean(opts.get("note"), SYNC_NOTE_CAP) or None
+    _, home, record = host._locate(opts)
+    programme = programme_home.normalize_programme(record.get("programme") or {})
+    key = _resolve(programme, item_id)
+    item = programme["items"][key]
+    if opts.get("check") or not tracker_due(item, label):
+        host._guard(home, record, compact_exempt=bool(opts.get("check")))
+        host._emit({"ok": True, "item": key, "state": label, "due": tracker_due(item, label),
+                    "changed": False, "synced": item.get("tracker_synced")})
+        return 0
+
+    def change(programme, prompt, rec):
+        current = programme["items"][_resolve(programme, item_id)]
+        synced = {"state": label, "note": note, "at": _now()}
+        current["tracker_synced"] = synced
+        _history(current, "tracker_synced", state=label, note=note)
+        return {"item": key, "state": label, "note": note, "changed": True}
+
+    return host._write(opts, change, "tracker_synced")
+
+
+def _recorded_issue(raw):
+    if not isinstance(raw, dict):
+        return None, None
+    key = raw.get("key") if isinstance(raw.get("key"), str) else ""
+    if not programme_tracker.ISSUE_ID.fullmatch(key.strip()):
+        return None, None
+    state_type = programme_sanitize.token(raw.get("state_type"))
+    state_id = raw.get("state_id") if isinstance(raw.get("state_id"), str) else None
+    url = programme_sanitize.token(raw.get("url"))
+    return key.strip().upper(), {
+        "title": programme_sanitize.clean(raw.get("title"), 200),
+        "state": programme_sanitize.clean(raw.get("state"), 60) or None,
+        "state_type": state_type.lower() if state_type and state_type.lower() in TRACKER_STATE_TYPES else None,
+        "state_id": state_id if state_id and _STATE_ID_RE.fullmatch(state_id) else None,
+        "url": url if url and url.startswith("https://") else None,
+        "project": programme_tracker.named_ref(raw.get("project")),
+        "initiatives": ([i for i in (programme_tracker.named_ref(r) for r in raw["initiatives"][:10]) if i]
+                        if isinstance(raw.get("initiatives"), list) else None),
+        "source": MCP_PROVIDER}
+
+
+def _h_record_issues(host, argv):
+    positional, opts = host._parse(argv, values=("run",))
+    if positional:
+        raise ValueError("usage: record-issues [--run <id>] < issues.json")
+    raw = sys.stdin.read(RECORD_INPUT_CAP + 1) if not sys.stdin.isatty() else ""
+    if len(raw) > RECORD_INPUT_CAP:
+        raise ValueError(f"record-issues input is larger than {RECORD_INPUT_CAP} bytes")
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        raise ValueError("record-issues reads a JSON list of issues on stdin") from None
+    rows = doc.get("issues") if isinstance(doc, dict) else doc
+    if not isinstance(rows, list):
+        raise ValueError("record-issues reads a JSON list of issues on stdin")
+    issues, dropped = {}, 0
+    for raw_issue in rows:
+        key, issue = _recorded_issue(raw_issue)
+        if key is None or len(issues) >= RECORDED_ISSUES_CAP:
+            dropped += 1
+            continue
+        issues[key] = issue
+
+    def change(programme, prompt, rec):
+        at = _now()
+        programme["recorded_issues"] = {"provider": MCP_PROVIDER, "at": at, "issues": issues,
+                                        "dropped": dropped}
+        sources = programme.setdefault("sources", {})
+        entry = dict(sources.get("tracker") or {})
+        held = (entry.get("provider") not in (None, MCP_PROVIDER) and not entry.get("unavailable_since")
+                and not entry.get("unsupported_since"))
+        if not held:
+            entry.update(unavailable_since=None, unsupported_since=None, provider=MCP_PROVIDER)
+        sources["tracker"] = entry
+        return {"provider": entry["provider"], "count": len(issues), "dropped": dropped, "at": at}
+
+    return host._write(opts, change, "issues_recorded")
+
+
 _SPECS = (
     ("add-item", _h_add_item,
      "<source:key> [--title <text>] [--kind <change-kind>]... [--repo <path>] [--pane <id>] "
@@ -738,6 +837,13 @@ _SPECS = (
      "an unknown source; more than one state flag or none; --provider on a source other than "
      "tracker. --unsupported marks a source this machine cannot read (a missing tool or plugin "
      "op); it never holds the stop. --provider names the tracker provider that answered."),
+    ("tracker-synced", _h_tracker_synced,
+     "--item <id> --state <label> [--note <text>] [--check] [--run <id>]",
+     "an unknown item; a label that is not short lower_snake. The same label as the last sync "
+     "changes nothing and is not journaled. --check only prints whether the item is due."),
+    ("record-issues", _h_record_issues, "[--run <id>] < JSON list of {key, title, state, state_type, url}",
+     "input that is not a JSON list or is over 1 MB. Entries that are not issues, and those past "
+     "200, are dropped and counted. Sets the tracker available with provider linear-mcp."),
 )
 
 

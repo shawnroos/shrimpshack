@@ -44,6 +44,10 @@ POLL_SECONDS = 1.0
 PROMPT_CAP = 4000
 QUOTE_CAP = 500
 SPINOFF_REL = os.path.join("skills", "spinoff", "scripts", "spinoff.sh")
+OUT_OF_REMIT = "issue_out_of_remit"
+REPO_OUT_OF_REMIT = "repo_out_of_remit"
+PROJECT_UNKNOWN = "project_unknown"
+UNSTAFFED_CAP = 20
 SIGNALS = ("tracker", "branch", "title", "label", "registry", "plan")
 _PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
 
@@ -103,8 +107,43 @@ def remit(programme) -> dict:
             unreached.append(f"{space.get('server')}.{space.get('workspace')}")
     term = ((programme.get("agreement") or {}).get("terms") or {}).get("remit") or {}
     tabs = (programme.get("remit") or {}).get("tabs") or []
+    block = programme.get("remit") or {}
+    tracker = block.get("tracker") if isinstance(block.get("tracker"), dict) else {}
     return {"server": server, "workspaces": reached, "unreached": unreached,
-            "tabs": list(tabs) if term.get("value") == "tabs" and tabs else None}
+            "tabs": list(tabs) if term.get("value") == "tabs" and tabs else None,
+            "repos": [r for r in block.get("repos") or [] if isinstance(r, dict) and r.get("path")],
+            "tracker": {part: list(tracker.get(part) or []) for part in programme_home.TRACKER_SCOPE_PARTS}}
+
+
+def _matches(entries, value) -> bool:
+    if not isinstance(value, dict):
+        return False
+    wanted = {str(v).casefold() for v in (value.get("id"), value.get("name")) if v}
+    return any({str(v).casefold() for v in (e.get("id"), e.get("name")) if v} & wanted for e in entries)
+
+
+def scope_miss(ident, info, tracker) -> str | None:
+    teams = tracker.get("teams") or []
+    if teams and ident.split("-")[0] not in {t.get("key") for t in teams}:
+        return OUT_OF_REMIT
+    projects, initiatives = tracker.get("projects") or [], tracker.get("initiatives") or []
+    if not (projects or initiatives):
+        return None
+    info = info or {}
+    if _matches(projects, info.get("project")) or any(_matches(initiatives, i) for i in info.get("initiatives") or []):
+        return None
+    if (projects and not info.get("project")) or (initiatives and info.get("initiatives") is None):
+        return PROJECT_UNKNOWN
+    return OUT_OF_REMIT
+
+
+def issue_info(tracker, programme) -> dict:
+    recorded = ((programme.get("recorded_issues") or {}).get("issues") or {})
+    info = {k: dict(v) for k, v in recorded.items() if isinstance(v, dict)} if isinstance(recorded, dict) else {}
+    for key, view in ((tracker or {}).get("issues") or {}).items():
+        merged = dict(info.get(key) or {}, **{k: v for k, v in view.items() if v is not None})
+        info[key] = merged
+    return info
 
 
 def session_of(entry):
@@ -234,14 +273,44 @@ def _existing(programme, item_id, pane_id):
     return "adopt", None
 
 
-def propose(programme, panes, drivers, issues_found, verified) -> dict:
+def _pane_scope(pane, found, scope, info, cache):
+    repos = {r["path"] for r in scope.get("repos") or []}
+    if repos and programme_plans.repo_root(pane["cwd"], cache) not in repos:
+        return REPO_OUT_OF_REMIT, {}
+    misses = {ident: scope_miss(ident, info.get(ident), scope.get("tracker") or {}) for ident in found}
+    kept = {ident: signals for ident, signals in found.items() if misses[ident] is None}
+    if found and not kept:
+        return (PROJECT_UNKNOWN if PROJECT_UNKNOWN in misses.values() else OUT_OF_REMIT), {}
+    return None, kept
+
+
+def unstaffed(programme, info, issues_found, scope) -> list:
+    named = {ident for found in issues_found.values() for ident in found}
+    known = {k.partition(":")[2] for k in programme.get("items") or {}}
+    for item in (programme.get("items") or {}).values():
+        known.update(a.partition(":")[2] for a in item.get("aliases") or [])
+    out = []
+    for ident in sorted(info):
+        if ident in named or ident in known or scope_miss(ident, info[ident], scope.get("tracker") or {}):
+            continue
+        out.append({"issue": ident, "title": info[ident].get("title"), "state": info[ident].get("state"),
+                    "action": "unstaffed"})
+    return out[:UNSTAFFED_CAP]
+
+
+def propose(programme, panes, drivers, issues_found, verified, scope=None, info=None) -> dict:
     proposals, skipped = [], []
+    scope, info, cache = scope or {}, info or {}, {}
     for pane in panes:
         why = role(pane, drivers)
         if why != "worker":
             skipped.append({"pane": pane["pane_id"], "why": why})
             continue
-        ident, signals = _choose(issues_found.get(pane["pane_id"]) or {}, verified)
+        why, found = _pane_scope(pane, issues_found.get(pane["pane_id"]) or {}, scope, info, cache)
+        if why:
+            skipped.append({"pane": pane["pane_id"], "why": why})
+            continue
+        ident, signals = _choose(found, verified)
         item_id = (f"{programme_record.ISSUE_SOURCE}:{ident}" if ident
                    else f"{programme_record.ISSUELESS_SOURCE}:" + pane["pane_id"].replace(":", "/"))
         action, existing = _existing(programme, item_id, pane["pane_id"])
@@ -292,7 +361,8 @@ def _plan_ids(panes, plans) -> dict:
 
 def _sweep_sources(programme, scope, panes, workers):
     enabled = programme_home.enabled_sources(programme)
-    plans = programme_plans.read([p["cwd"] for p in panes or [] if p["cwd"]]) if "plans" in enabled else None
+    cwds = [p["cwd"] for p in panes or [] if p["cwd"]] + [r["path"] for r in scope["repos"]]
+    plans = programme_plans.read(list(dict.fromkeys(cwds))) if "plans" in enabled else None
     plan_ids = _plan_ids(panes or [], plans) if plans else {}
     candidates = {i for pane in workers for i in named_issues(pane, {})}
     candidates |= {i for pane in workers for i in plan_ids.get(pane["pane_id"], [])}
@@ -333,8 +403,10 @@ def sweep(record) -> dict:
         "plans": plans["repos"] if plans else None,
         "panes": panes, "proposals": None, "skipped": None,
     }
+    info = issue_info(tracker, programme)
+    result["unstaffed"] = unstaffed(programme, info, found, scope) if any(scope["tracker"].values()) else []
     if panes is not None:
-        result.update(propose(programme, panes, drivers, found, verified))
+        result.update(propose(programme, panes, drivers, found, verified, scope, info))
     result["source_changes"] = source_changes(programme, result["sources"])
     return result
 
@@ -367,6 +439,9 @@ def source_changes(programme, sources) -> list:
             continue
         entry = recorded.get(name)
         provider = seen.get("provider")
+        if (state != "available" and isinstance(entry, dict)
+                and entry.get("provider") == programme_record.MCP_PROVIDER):
+            continue
         if (not isinstance(entry, dict) or state != _recorded_state(entry)
                 or (provider and provider != entry.get("provider"))):
             changes.append({"source": name, "state": state, "unavailable": state != "available",

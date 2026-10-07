@@ -75,8 +75,22 @@ from this session's lease.
    - Adopt each `adopt` proposal with `P add-item` (pass `--pane`, `--session`
      and `--title` from the proposal). Decide each `alias` proposal yourself with
      `P alias-item` or `P add-item`.
+   - Proposals hold only issues inside the remit. A skipped pane with why
+     `repo_out_of_remit` or `issue_out_of_remit` is outside it; leave it.
+     `project_unknown` means no source gave the issue's project: read it with
+     `mcp__linear__get_issue` and `P record-issues`, then sweep again.
+   - `unstaffed` lists in-scope issues no pane works on. Never adopt one by
+     itself; start a worker for it (`P add-item`, then `P start-worker`) only
+     when it is the next thing to do. Change the remit with the
+     `auto:programme-remit` skill.
    - An item whose owner pane now reports a different session: confirm the new
      owner with `P add-item <item> --pane <pane> --session <session>`.
+   - The tracker reports unavailable (the board and the API key both failed):
+     read the remit's issues yourself with `mcp__linear__get_issue` or
+     `mcp__linear__list_issues`, and record them with `P record-issues`
+     (a JSON list of key, title, state, state_type, state_id and url on stdin).
+     That sets the tracker available with provider `linear-mcp`. Record them
+     again each sweep while the board and the key stay down.
 6. **Sources.** For each watcher line since the last sweep:
    - `source-unavailable <name> missing`, or a reason naming `op unsupported`:
      this machine cannot read the source. Run `P set-source <name> --unsupported`;
@@ -85,6 +99,9 @@ from this session's lease.
      `P set-source <name> --unavailable --watcher remit`. The remit watcher reports
      `source-available` when the source returns, so the outage is a watched wait.
    - `source-available <name>`: run `P set-source <name> --available`.
+   - While the tracker's provider is `linear-mcp`, a `source-unavailable
+     tracker` line is expected: the watcher cannot read through the MCP. Do not
+     record it; record the issues through the MCP again instead.
    The sweep records the changes it saw itself, including unsupported sources.
 7. **Read the inbox.** `P status --json` shows `unread_claims`. Read the new
    lines of `<home>/claims.jsonl` (past the programme's `inbox_offset`), then
@@ -125,7 +142,12 @@ from this session's lease.
 13. **Update the working model.** `P set-now "<what you do next>" --item <item>`
     (or `--clear`), and `P queue --action <name> --item <item>` or
     `--remove <entry-id>` so the queue matches your next actions.
-14. **Re-arm the wake-ups.**
+14. **Update the tracker.** For each issue item whose state changed in this
+    sweep (worker started, PR opened or merged, blocked, handed, unblocked),
+    load the `auto:programme-tracker` skill and follow it. It writes only when
+    `P tracker-synced --item <item> --state <label> --check` says the item is
+    due, and it never writes a done state or a root-cause comment.
+15. **Re-arm the wake-ups.**
     - Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh"` with the
       longest timeout. Add `--tracker` only when the space has an issue
       tracker it can poll. Tasks and plans are always watched unless the
@@ -135,7 +157,7 @@ from this session's lease.
       CronCreate it again at the cadence term with the exact text
       `Run the programme sweep: load the auto:programme-sweep skill and follow it.`
       and run `P watcher-beat cron --task-id <id> --kind cron --prompt "<that exact text>"`.
-15. **Stop.** End the turn. The Stop hook holds you while you have a next action
+16. **Stop.** End the turn. The Stop hook holds you while you have a next action
     of your own or a wait with no watcher; act on the reason it gives.
 
 Show Shawn the live view with `/programme-view`, or a snapshot with

@@ -40,6 +40,7 @@ HELD_LEASE_STATES = ("live", "orphaned", "expired")
 COMPACT_FLAG = ".compact-flag"
 WATCHER_KINDS = ("cron", "monitor")
 SWEEP_SOURCES = ("tracker", "tasks", "plans")
+TRACKER_SCOPE_PARTS = ("teams", "projects", "initiatives")
 
 ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
@@ -209,11 +210,17 @@ def source_enabled(programme, name) -> bool:
     return name not in SWEEP_SOURCES or name in enabled_sources(programme)
 
 
+def empty_tracker_scope() -> dict:
+    return {part: [] for part in TRACKER_SCOPE_PARTS}
+
+
 def new_programme_block(spaces, now_iso: str) -> dict:
     return {
         "remit": {
             "spaces": [{"server": s, "workspace": w} for s, w in spaces],
             "tabs": [],
+            "repos": [],
+            "tracker": empty_tracker_scope(),
         },
         "created_at": now_iso,
         "agreement": {"accepted": None, "terms": default_terms(now_iso)},
@@ -269,6 +276,15 @@ def normalize_programme(block: dict) -> dict:
     agreement["terms"] = terms
     out["agreement"] = agreement
     out["items"] = {k: normalize_item(v, k) for k, v in (out["items"] or {}).items()}
+    remit = dict(out["remit"] or {})
+    remit.setdefault("spaces", [])
+    remit.setdefault("tabs", [])
+    remit.setdefault("repos", [])
+    tracker = dict(remit.get("tracker") or {})
+    for part in TRACKER_SCOPE_PARTS:
+        tracker.setdefault(part, [])
+    remit["tracker"] = tracker
+    out["remit"] = remit
     return out
 
 

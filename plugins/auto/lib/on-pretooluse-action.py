@@ -713,6 +713,151 @@ def driver_send_denial(stdin_raw: str) -> dict | None:
     return None
 
 
+DONE_STATE_NAMES = frozenset({"done", "completed", "complete", "canceled", "cancelled",
+                              "duplicate", "closed"})
+DONE_STATE_TYPES = frozenset({"completed", "canceled", "cancelled"})
+_STATE_FIELDS = ("state", "stateId", "status", "stateType", "type")
+_STRICT_STATE_FIELDS = ("state", "stateId")
+_COMMENT_FIELDS = ("body", "comment")
+_ISSUE_FIELDS = ("issueId", "issue")
+_ISSUE_TOOLS = ("save_issue", "update_issue")
+_ISSUE_KEY = re.compile(r"[A-Z][A-Z0-9]{0,7}-[0-9]{1,6}")
+_STATE_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _is_tracker_tool(name) -> bool:
+    if not isinstance(name, str) or not name.startswith("mcp__"):
+        return False
+    server = name[len("mcp__"):].rpartition("__")[0]
+    return "linear" in server.lower()
+
+
+def _driven_programme(session_id):
+    if not session_id:
+        return None
+    programme_home = load_lib_module("programme_home")
+    run_record_core = load_lib_module("run_record_core")
+    runs = {lease.get("run") for lease in programme_home.leases_for_session(session_id)
+            if programme_home.lease_status(lease) in programme_home.HELD_LEASE_STATES}
+    for run_id in sorted(r for r in runs if isinstance(r, str)):
+        record = run_record_core.read_run_record(programme_home.home_path(run_id), run_id)
+        programme = record.get("programme") if isinstance(record, dict) else None
+        if (isinstance(programme, dict) and not programme.get("ended")
+                and record.get("driving_session_id") == session_id):
+            return run_id, programme
+    return None
+
+
+def _recorded_states(programme) -> list:
+    issues = (programme.get("recorded_issues") or {}).get("issues")
+    return [i for i in issues.values() if isinstance(i, dict)] if isinstance(issues, dict) else []
+
+
+def _done_type(issue) -> bool:
+    return str(issue.get("state_type") or "").casefold() in DONE_STATE_TYPES
+
+
+def _done_state(value, programme, strict):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return f"a state given as {type(value).__name__}, which cannot be checked" if strict else None
+    text = value.strip()
+    if text.casefold() in DONE_STATE_NAMES or text.casefold() in DONE_STATE_TYPES:
+        return f"the done state {value!r}"
+    recorded = _recorded_states(programme)
+    if _STATE_ID.fullmatch(text):
+        known = [i for i in recorded if i.get("state_id") == text]
+        if not known or any(_done_type(i) for i in known):
+            return f"the state id {text!r}, which the recorded issues do not show as open; pass the state by name"
+        return None
+    if any(str(i.get("state") or "").casefold() == text.casefold() and _done_type(i) for i in recorded):
+        return f"{value!r}, a done state in the recorded issues"
+    return None
+
+
+def _proof_write(tool_input, programme):
+    for field in _STATE_FIELDS:
+        found = _done_state(tool_input.get(field), programme, field in _STRICT_STATE_FIELDS)
+        if found:
+            return f"sets {found}"
+    if tool_input.get("duplicateOf"):
+        return "marks the issue a duplicate, which closes it"
+    root_cause = load_lib_module("programme_evidence")._ROOT_CAUSE
+    for field in _COMMENT_FIELDS:
+        text = tool_input.get(field)
+        if text is not None and not isinstance(text, str):
+            return f"posts a {field} that cannot be checked"
+        if text and root_cause.search(text):
+            return "posts a root-cause comment"
+    return None
+
+
+def _ref_hit(entries, value) -> bool:
+    wanted = {str(v).casefold() for v in (_dict_or_empty(value).get("id"), _dict_or_empty(value).get("name")) if v}
+    return any(wanted & {str(v).casefold() for v in (e.get("key"), e.get("id"), e.get("name")) if v}
+               for e in entries if isinstance(e, dict))
+
+
+def _dict_or_empty(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _issue_refs(tool_name, tool_input) -> list:
+    fields = list(_ISSUE_FIELDS) + (["id"] if tool_name.endswith(_ISSUE_TOOLS) else [])
+    return [tool_input[f] for f in fields if tool_input.get(f) is not None]
+
+
+def _remit_write(tool_name, tool_input, programme):
+    scope = _dict_or_empty(_dict_or_empty(programme.get("remit")).get("tracker"))
+    teams = [t for t in scope.get("teams") or [] if isinstance(t, dict)]
+    team = tool_input.get("team")
+    if teams and team is not None and not _ref_hit(teams, {"name": team}):
+        return f"creates an issue in team {team!r}, outside the remit's teams"
+    issues = _dict_or_empty(_dict_or_empty(programme.get("recorded_issues")).get("issues"))
+    for ref in _issue_refs(tool_name, tool_input):
+        key = ref.strip().upper() if isinstance(ref, str) else ""
+        if teams:
+            if not _ISSUE_KEY.fullmatch(key):
+                return f"names the issue {ref!r}, which cannot be checked against the remit; pass the issue key"
+            if key.split("-")[0] not in {t.get("key") for t in teams}:
+                return f"writes to {key}, outside the remit's teams"
+        recorded = _dict_or_empty(issues.get(key))
+        projects, initiatives = scope.get("projects") or [], scope.get("initiatives") or []
+        if (projects or initiatives) and recorded.get("project") and not _ref_hit(projects, recorded["project"]) \
+                and not any(_ref_hit(initiatives, i) for i in recorded.get("initiatives") or []):
+            return f"writes to {key}, whose project is outside the remit"
+    return None
+
+
+def tracker_write_denial(stdin_raw: str) -> dict | None:
+    data = json.loads(stdin_raw) if stdin_raw else None
+    if not isinstance(data, dict) or not _is_tracker_tool(data.get("tool_name")):
+        return None
+    session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
+    driven = _driven_programme(session_id)
+    if driven is None:
+        return None
+    run_id, programme = driven
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    what = _proof_write(tool_input, programme) or _remit_write(data["tool_name"], tool_input, programme)
+    if what is None:
+        return None
+    try:
+        load_lib_module("programme_journal").append(run_id, "blocked_tracker_write", session_id, {
+            "tool": data["tool_name"][:200], "reason": what[:300]})
+    except Exception:
+        pass
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            f"auto: the programme's PM may not make this tracker write; this call {what}. "
+            "A done or canceled state and a root-cause comment come from a worker or Shawn, "
+            "and the PM writes only inside the remit."),
+    }}
+
+
 def _cli(argv) -> int:
     repo_root = argv[0] if argv else os.getcwd()
     stdin_raw = ""
@@ -721,6 +866,14 @@ def _cli(argv) -> int:
             stdin_raw = sys.stdin.read()
         except Exception:
             stdin_raw = ""
+    try:
+        tracker_denial = tracker_write_denial(stdin_raw)
+    except Exception:
+        tracker_denial = None
+    if tracker_denial is not None:
+        json.dump(tracker_denial, sys.stdout)
+        sys.stdout.write("\n")
+        return 0
     try:
         driver_denial = driver_send_denial(stdin_raw)
     except Exception:

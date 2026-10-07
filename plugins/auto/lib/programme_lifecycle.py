@@ -10,7 +10,9 @@ run-record lock.
 from __future__ import annotations
 
 import functools
+import json
 import os
+import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -23,11 +25,18 @@ programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 session_registry = load_lib_module("session_registry")
 driver_session = load_lib_module("driver_session")
+programme_sanitize = load_lib_module("programme_sanitize")
 
 END_REASON = "ended_by_shawn"
 EXPIRED_REASON = "agreement_unaccepted"
 MOVABLE_STATES = ("live", "orphaned")
 CONSUMING_KINDS = ("taken_over", "handed_over", "programme_ended")
+REMIT_CAPS = {"spaces": 8, "repos": 20, "teams": 10, "projects": 20, "initiatives": 10}
+REMIT_INPUT_CAP = 1 << 16
+REMIT_NAME_CAP = 100
+REMIT_ID_CAP = 64
+_TEAM_KEY_RE = re.compile(r"[A-Z][A-Z0-9]{0,7}")
+_GITHUB_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 class _Refused(Exception):
@@ -353,6 +362,167 @@ def _h_beat(host, argv):
     return host._write(opts, change, "beat", compact_exempt=True, journal=False)
 
 
+def _remit_error(text):
+    return programme_home.ProgrammeHomeError(f"set-remit: {text}")
+
+
+def _capped(rows, part, cap) -> list:
+    if not isinstance(rows, list):
+        raise _remit_error(f"{part} must be a list")
+    if len(rows) > cap:
+        raise _remit_error(f"{part} holds {len(rows)} entries; at most {cap}")
+    return rows
+
+
+def _named_entry(raw, part, *, key_re=None):
+    if not isinstance(raw, dict):
+        raise _remit_error(f"each {part} entry is an object")
+    name = programme_sanitize.clean(raw.get("name"), REMIT_NAME_CAP) or None
+    ident = programme_sanitize.token(raw.get("id"), REMIT_ID_CAP) if raw.get("id") is not None else None
+    entry = {"name": name, "id": ident}
+    if key_re is not None:
+        key = raw.get("key")
+        if not isinstance(key, str) or not key_re.fullmatch(key):
+            raise _remit_error(f"{part} key must be an issue prefix such as AI, got {key!r}")
+        entry = dict(key=key, **entry)
+    elif not (name or ident):
+        raise _remit_error(f"each {part} entry needs a name or an id")
+    return entry
+
+
+def _repo_entry(raw):
+    if not isinstance(raw, dict) or not isinstance(raw.get("path"), str):
+        raise _remit_error("each repo is an object with a path")
+    path = raw["path"]
+    if not os.path.isabs(path) or ".." in path.split(os.sep) or not os.path.isdir(path):
+        raise _remit_error(f"repo path must be an absolute directory, got {path!r}")
+    github = raw.get("github")
+    if github is not None and (not isinstance(github, str) or not _GITHUB_RE.fullmatch(github)):
+        raise _remit_error(f"repo github must be owner/name, got {github!r}")
+    return {"path": os.path.normpath(path), "github": github}
+
+
+def parse_remit(doc, current) -> dict:
+    if not isinstance(doc, dict):
+        raise _remit_error("the remit is a JSON object")
+    out = {"spaces": current.get("spaces") or [], "repos": current.get("repos") or [],
+           "tracker": dict(current.get("tracker") or programme_home.empty_tracker_scope())}
+    if "spaces" in doc:
+        spaces = []
+        for spec in _capped(doc["spaces"], "spaces", REMIT_CAPS["spaces"]):
+            server, workspace = programme_home.parse_space(spec)
+            if {"server": server, "workspace": workspace} not in spaces:
+                spaces.append({"server": server, "workspace": workspace})
+        if not spaces:
+            raise _remit_error("the remit needs at least one herdr space")
+        out["spaces"] = spaces
+    if "repos" in doc:
+        out["repos"] = [_repo_entry(r) for r in _capped(doc["repos"], "repos", REMIT_CAPS["repos"])]
+    tracker = doc.get("tracker", {})
+    if not isinstance(tracker, dict):
+        raise _remit_error("tracker is an object of teams, projects and initiatives")
+    for part in programme_home.TRACKER_SCOPE_PARTS:
+        if part in tracker:
+            rows = _capped(tracker[part], part, REMIT_CAPS[part])
+            out["tracker"][part] = [_named_entry(r, part, key_re=_TEAM_KEY_RE if part == "teams" else None)
+                                    for r in rows]
+    return out
+
+
+def _space_key(space) -> str:
+    return f"{space['server']}.{space['workspace']}"
+
+
+def _identity(part, entry) -> str:
+    if part == "spaces":
+        return _space_key(entry)
+    if part == "repos":
+        return entry["path"]
+    if part == "teams":
+        return entry["key"]
+    return entry.get("id") or entry.get("name")
+
+
+def _names(part, entry) -> tuple:
+    if part == "spaces":
+        return (entry["workspace"], _space_key(entry))
+    if part == "repos":
+        options = [os.path.basename(entry["path"])]
+        if entry.get("github"):
+            options += [entry["github"].split("/")[1], entry["github"]]
+        return tuple(options)
+    return tuple(o for o in (entry.get("key"), entry.get("name"), entry.get("id")) if o)
+
+
+def remit_changes(before, after) -> list:
+    changes = []
+    pairs = [("spaces", before["spaces"], after["spaces"]), ("repos", before["repos"], after["repos"])]
+    pairs += [(part, before["tracker"][part], after["tracker"][part])
+              for part in programme_home.TRACKER_SCOPE_PARTS]
+    for part, old, new in pairs:
+        old_ids = {_identity(part, e): e for e in old}
+        new_ids = {_identity(part, e): e for e in new}
+        changes += [(part, "added", e) for k, e in new_ids.items() if k not in old_ids]
+        changes += [(part, "removed", e) for k, e in old_ids.items() if k not in new_ids]
+    return changes
+
+
+def _move_leases(run, sid, home, changes) -> None:
+    stamp = _stamp()
+    moves = []
+    for part, how, space in changes:
+        if part != "spaces":
+            continue
+        path = programme_home.lease_path(space["server"], space["workspace"])
+        lease = programme_home.read_lease(path)
+        ours = bool(lease) and lease.get("run") == run
+        if how == "added" and not ours:
+            status = programme_home.lease_status(lease)
+            if status not in ("free", "ended"):
+                raise programme_home.LeaseHeld(_space_key(space), lease, status)
+        moves.append((how, space, path, ours))
+    for how, space, path, ours in moves:
+        if how == "removed" and ours:
+            os.unlink(path)
+        elif how == "added" and not ours:
+            programme_home._write_lease(space["server"], space["workspace"], run, home, sid, stamp)
+
+
+def _h_set_remit(host, argv):
+    positional, opts = host._parse(argv, values=("run", "prompt"))
+    if positional:
+        raise ValueError("usage: set-remit [--prompt <id>] [--run <id>] < remit.json")
+    raw = sys.stdin.read(REMIT_INPUT_CAP + 1) if not sys.stdin.isatty() else ""
+    if len(raw) > REMIT_INPUT_CAP:
+        raise ValueError(f"set-remit input is larger than {REMIT_INPUT_CAP} bytes")
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        raise ValueError("set-remit reads the remit as a JSON object on stdin") from None
+
+    def change(programme, prompt, rec):
+        before = programme["remit"]
+        after = parse_remit(doc, before)
+        changes = remit_changes(before, after)
+        accepted = programme["agreement"].get("accepted")
+        if accepted and prompt is None:
+            raise host.ProgrammeError("the agreement is accepted; set-remit needs --prompt <id> of a typed prompt")
+        if accepted:
+            host.require_named(prompt, *[_names(part, entry) for part, _, entry in changes])
+        _move_leases(rec["run_id"], rec.get("driving_session_id"), programme_home.home_path(rec["run_id"]),
+                     changes)
+        programme["remit"] = dict(before, **after)
+        term = programme["agreement"]["terms"]["remit"]
+        term.update(set_by="shawn" if prompt else "proposal", set_at=_stamp())
+        if prompt:
+            term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
+        return {"remit": after,
+                "changes": [{"part": part, "change": how, "entry": entry} for part, how, entry in changes]}
+
+    return programme_home._with_leases_lock(
+        lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt")))
+
+
 _SPECS = (
     ("start", _h_start, "[<server.workspace>|--space <server.workspace>]...",
      "a session outside a herdr space with no --space; a space whose lease is live, orphaned or "
@@ -369,6 +539,12 @@ _SPECS = (
      "watcher. Refusals are journaled."),
     ("expire", _h_expire, "[--run <id>]",
      "nothing: it ends the programme only when its agreement stayed unaccepted past one cadence."),
+    ("set-remit", _h_set_remit, "[--prompt <id>] [--run <id>] < JSON {spaces, repos, tracker}",
+     "input that is not a JSON object; a repo path that is not an absolute directory; a github "
+     "name that is not owner/name; a team key that is not an issue prefix; a list over its cap; no "
+     "space; a space another programme holds. Once the agreement is accepted it needs a typed "
+     "--prompt that names each space, repo, team, project or initiative added or removed. A "
+     "part left out keeps its value. Adding a space takes its lease; removing one releases it."),
     ("beat", _h_beat, "[--run <id>]",
      "a caller that is not the driving session. Stamps the driver beat that keeps the lease live; "
      "exempt from the compact flag; not journaled."),

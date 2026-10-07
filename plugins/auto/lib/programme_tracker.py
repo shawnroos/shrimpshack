@@ -52,7 +52,15 @@ def _issue_view(raw, provider) -> dict:
     return {"title": programme_sanitize.clean(raw.get("title"), 200),
             "state": programme_sanitize.clean(state.get("name"), 60) or None,
             "state_type": programme_sanitize.token(state.get("type")),
-            "url": programme_sanitize.token(raw.get("url")), "source": provider}
+            "url": programme_sanitize.token(raw.get("url")), "source": provider,
+            "project": named_ref(raw.get("project"))}
+
+
+def named_ref(raw):
+    if not isinstance(raw, dict):
+        return None
+    out = {"id": programme_sanitize.token(raw.get("id"), 64), "name": programme_sanitize.clean(raw.get("name"), 100) or None}
+    return out if out["id"] or out["name"] else None
 
 
 def _down(state, reason) -> dict:
@@ -108,7 +116,7 @@ def read_linear(idents) -> dict:
     if not key:
         return _down("unavailable", f"no {LINEAR_KEY} in the environment or secrets file")
     idents = sorted(idents)[:LINEAR_BATCH]
-    fields = " ".join(f"i{n}: issue(id: {json.dumps(ident)}) {{ identifier title url state {{ name type }} }}"
+    fields = " ".join(f"i{n}: issue(id: {json.dumps(ident)}) {{ identifier title url state {{ name type }} project {{ id name }} }}"
                       for n, ident in enumerate(idents))
     body = json.dumps({"query": "query { " + fields + " }"})
     # The key travels in curl's config on stdin so it never appears in a process list.

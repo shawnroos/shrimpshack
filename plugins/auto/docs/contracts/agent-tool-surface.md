@@ -159,6 +159,21 @@ session.
   `--unsupported` as one this machine cannot read, which never holds the stop.
   `--provider <name>` (tracker only) records the provider that answered; a
   tracker that goes down loses its provider. Any other source name is refused.
+- **Tracker writes**: the PM writes the tracker itself through the Linear MCP
+  tools (skill programme-tracker), and records what it reported.
+  `tracker-synced` (`--item <id> --state <label> [--note <text>]`) stores the last
+  label the PM reported on the item's issue (`tracker_synced` on the item, a
+  `tracker_synced` history entry, journaled). The same label again changes
+  nothing and is not journaled; `--check` only prints due, true when the
+  label differs from the stored one. `record-issues` reads a JSON list of
+  issues on stdin (key, title, state, state_type, state_id, url), keeps the
+  ones whose key is an issue key (at most 200, the rest counted as dropped),
+  sanitises them (with project and initiatives) into `recorded_issues`, and
+  sets the tracker available with provider linear-mcp unless another provider
+  has it available. It is the read path when the board and the API key both
+  fail; the watcher never reads through the MCP, and a sweep that cannot read
+  the tracker leaves a linear-mcp tracker available. The recorded check never
+  reads `recorded_issues`.
 - **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref,
   optional --repo <clone> for the verified and released checks; the path is
   stored and reused by `validate`)
@@ -215,6 +230,22 @@ session.
   pane with no live agent, and a pane whose reported session is not the item's
   owner. Refusals and sends are journaled; a pane with no reported or
   registered session is sent to and marked session unknown.
+- **Remit**: `set-remit` stores the remit the PM worked out (skill
+  programme-remit): spaces, repos (absolute path and GitHub owner/name) and
+  the tracker scope (team keys, projects, initiatives, each with name and id).
+  It reads JSON on stdin, refuses a bad shape or a list over its cap, keeps a
+  part it was not given, and journals remit_set. Before the agreement is
+  accepted it needs no prompt; after, it needs a typed prompt that names each
+  space, repo, team, project or initiative added or removed. Adding a space
+  takes its lease under the leases lock; removing one releases it; a space
+  another programme holds is refused. Code never discovers or resolves remit
+  names. An empty part sets no limit. The sweep skips a worker pane whose repo
+  is outside the repos (repo_out_of_remit) or whose issues are all outside the
+  team, project or initiative scope (issue_out_of_remit, or project_unknown
+  when no source gave the project), and lists in-scope issues from the board
+  and recorded issues that no pane names and no item holds as unstaffed (at
+  most 20, never adopted). Plans are read in every remit repo. The merged check
+  is unknown for a PR whose repo is not a remit repo's GitHub name.
 - **Lifecycle**: `start` takes the remit lease for the caller's herdr space (or
   each `--space`) before anything else, creates the programme home and journals
   programme_started. It is refused while a space's lease is live, orphaned or
@@ -301,6 +332,31 @@ segments are decoded as bash does (`\xHH`, octal, `\uHHHH`), a `$` before a doub
 quote is dropped, and quote characters and backslashes are removed, however herdr is invoked, and journals
 `blocked_driver_send`. A herdr send call that the hook can parse is also denied
 when its target is a driver's pane, in every session, the driving one included.
+
+The same hook guards the tracker against proof written by the PM. On a Linear
+MCP tool call (a tool whose server name contains "linear") from the driving
+session of a live, orphaned or expired lease of a programme that has not ended,
+it denies the call, with a one-line reason, and journals `blocked_tracker_write`
+when the input:
+
+- sets a done state: a state, stateId, status, stateType or type
+  value named Done, Completed, Complete, Canceled, Cancelled, Duplicate or
+  Closed (any case), or naming the type completed or canceled;
+- names a state that `recorded_issues` shows with a completed or canceled type;
+- names a state id (a UUID) that `recorded_issues` does not show as an open
+  state, or gives state or stateId as something other than a string;
+- sets duplicateOf;
+- has a body or comment that matches the recorded check's root-cause pattern,
+  or one that is not a string.
+
+It also denies a write outside the remit's tracker scope: when the remit names
+teams, an issueId or issue (or an id on save_issue) whose key prefix is not a
+remit team, an issue given by UUID, and a new issue whose team is not a remit
+team by key, name or id; when the remit names projects or initiatives, an issue
+whose recorded project is outside them.
+
+Other sessions, sessions that drive no programme, and every other field
+(an issue description included) are not checked.
 
 The pane guard and the prompt binding stop accidents and casual misuse. A
 determined process running as the same user can still append journal rows or

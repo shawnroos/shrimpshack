@@ -279,6 +279,7 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
             "counts": status["items"],
             "unread_claims": max(inbox_size - offset, 0) if isinstance(inbox_size, int) else None,
         },
+        "remit": {key: _dict(block["remit"]).get(key) for key in ("spaces", "repos", "tracker")},
         "doing_now": working.get("doing"),
         "queue": [_dict(e) for e in working.get("queue") or []],
         "watching": _watching(block, status, now, programme_home.cadence_seconds(record)),
@@ -372,8 +373,24 @@ def _item_lines(item) -> list:
     return out
 
 
+def _scope_names(entries) -> str:
+    names = [str(_dict(e).get("key") or _dict(e).get("name") or _dict(e).get("id")) for e in entries or []]
+    return ", ".join(names) or "none"
+
+
+def remit_texts(remit) -> list:
+    remit = _dict(remit)
+    spaces = ", ".join(f"{_dict(s).get('server')}.{_dict(s).get('workspace')}" for s in remit.get("spaces") or [])
+    repos = ", ".join(_dict(r).get("github") or os.path.basename(str(_dict(r).get("path") or ""))
+                      for r in remit.get("repos") or [])
+    tracker = _dict(remit.get("tracker"))
+    scope = "; ".join(f"{part} {_scope_names(tracker.get(part))}" for part in programme_home.TRACKER_SCOPE_PARTS)
+    return [f"spaces: {spaces or 'none'}", f"repos: {repos or 'any'}", f"tracker: {scope}"]
+
+
 def rows(model) -> list:
     out = [_header(model["programme"])]
+    _section(out, "Remit", [_row(f"  {text}") for text in remit_texts(model.get("remit"))], "none")
     doing = model["doing_now"]
     _section(out, "Doing now", doing and [_row(f"  {doing.get('text')}"
                                                + (f" ({doing['item']})" if doing.get("item") else ""))],

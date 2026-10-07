@@ -63,10 +63,11 @@ if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
 fi
 
-# Outside a repo the only check is the driver-pane check, which denies any Bash
-# command naming a driver's pane however herdr is spelled, so no text prefilter here.
+# Outside a repo the checks are the driver-pane check, which denies any Bash
+# command naming a driver's pane however herdr is spelled, and the tracker guard on
+# Linear MCP calls, so no finer text prefilter here.
 if [ -z "$__cd_repo" ]; then
-  [[ $__cd_stdin_json == *'"Bash"'* ]] || exit 0
+  [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] || exit 0
 fi
 
 # Hand off ALL decision logic to Python. `|| true` keeps the PROCESS exit 0
