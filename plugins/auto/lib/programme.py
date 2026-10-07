@@ -46,9 +46,13 @@ def text_hash(text) -> str:
 
 
 def _approved(rows, prompt_id) -> list:
-    return [(row.get("payload") or {}).get("hash") for row in rows
-            if row.get("kind") in APPROVAL_KINDS and (row.get("cites") or [None])[0] == prompt_id
-            and (row.get("payload") or {}).get("prompt_id") == prompt_id]
+    out = []
+    for row in rows:
+        payload = row.get("payload") or {}
+        if row.get("kind") in APPROVAL_KINDS and (row.get("cites") or [None])[0] == prompt_id \
+                and payload.get("prompt_id") == prompt_id:
+            out.append(programme_protocol.approval_key(payload.get("target"), payload.get("hash")))
+    return out
 
 
 def prompt_lookup(run_id, prompt_id, journals=None):
@@ -432,19 +436,26 @@ def _read_personal(path) -> dict:
         return {"protocol_format": programme_protocol.PROTOCOL_FORMAT, "rules": []}
     except (OSError, ValueError) as exc:
         raise ProgrammeError(f"personal protocol file is unreadable; not overwriting it: {exc}")
-    if not isinstance(doc, dict) or not isinstance(doc.get("rules", []), list):
+    if not isinstance(doc, dict) or not isinstance(doc.get("rules", []), list) \
+            or not isinstance(doc.get("autonomy", {}), dict) or not isinstance(doc.get("checks", {}), dict):
         raise ProgrammeError("personal protocol file is not a protocol layer; not overwriting it")
     doc.setdefault("rules", [])
     return doc
 
 
-def _write_personal(entry) -> None:
+def _put_rule(entry):
+    def update(doc):
+        doc["rules"] = [r for r in doc["rules"]
+                        if not (isinstance(r, dict) and r.get("id") == entry["id"])] + [entry]
+    return update
+
+
+def _write_personal(update) -> None:
     path = programme_protocol.personal_path()
 
     def body():
         doc = _read_personal(path)
-        doc["rules"] = [r for r in doc["rules"]
-                        if not (isinstance(r, dict) and r.get("id") == entry["id"])] + [entry]
+        update(doc)
         folder = os.path.dirname(os.path.abspath(path))
         os.makedirs(folder, exist_ok=True)
 
@@ -458,15 +469,27 @@ def _write_personal(entry) -> None:
     run_record_core._flock_run(lock, body)
 
 
-def _check_widening(rule, widening) -> None:
-    prior = programme_protocol.load(prompt_lookup=prompt_lookup)["rules"].get(rule["id"])
+def _check_widening(section, name, level, widening) -> None:
+    # The loader judges a personal entry against the plugin layer alone, so the verb must too.
+    prior = programme_protocol.plugin_layer()[section].get(name)
+    field = "autonomy" if section == "rules" else "level"
     if prior is None or widening:
         return
-    if programme_protocol._wider(rule["autonomy"], prior["autonomy"]):
+    if programme_protocol._wider(level, prior[field]):
         raise ProgrammeError(
-            f"rule {rule['id']!r} widens autonomy {prior['autonomy']} to {rule['autonomy']}; "
+            f"{name!r} widens autonomy {prior[field]} to {level}; "
             "rerun with --widening only if the cited prompt approves the widening"
         )
+
+
+def _adoption(entry, prompt, rec, widening) -> dict:
+    adoption = {"machine": programme_protocol.machine_name(), "run_id": rec["run_id"],
+                "prompt_id": prompt["prompt_id"],
+                "quote": programme_journal.redact(prompt["quote"]),
+                "prompt_hash": prompt["text_hash"], "hash": programme_protocol.content_hash(entry)}
+    if widening:
+        adoption["widening"] = True
+    return adoption
 
 
 def _h_adopt_rule(argv):
@@ -484,17 +507,57 @@ def _h_adopt_rule(argv):
         verdict = programme_protocol.validate_proposal(rule)
         if not verdict["ok"]:
             raise ProgrammeError(f"rule refused: {verdict['reason']} ({verdict['detail']})")
-        _check_widening(rule, opts.get("widening"))
-        adoption = {"machine": programme_protocol.machine_name(), "run_id": rec["run_id"],
-                    "prompt_id": prompt["prompt_id"],
-                    "quote": programme_journal.redact(prompt["quote"]),
-                    "prompt_hash": prompt["text_hash"], "hash": programme_protocol.content_hash(rule)}
-        if opts.get("widening"):
-            adoption["widening"] = True
-        _write_personal(dict(rule, adoption=adoption))
+        _check_widening("rules", rule["id"], rule["autonomy"], opts.get("widening"))
+        adoption = _adoption(rule, prompt, rec, opts.get("widening"))
+        _write_personal(_put_rule(dict(rule, adoption=adoption)))
         programme["proposed_rules"] = [r for r in proposals if r is not hits[0]]
-        return {"rule": rule_id, "entry": "rule", "personal_path": programme_protocol.personal_path(),
+        return {"rule": rule_id, "entry": "rule", "target": programme_protocol.target_of("rules", rule_id),
+                "personal_path": programme_protocol.personal_path(),
                 "hash": adoption["hash"]}
+
+    return _write(opts, change, "rule_adopted", prompt_id=opts.get("prompt"), needs_prompt=True)
+
+
+def _h_adopt_autonomy(argv):
+    positional, opts = _parse(argv, values=("run", "prompt"), flags=("widening",))
+    if len(positional) != 2:
+        raise ValueError("usage: adopt-autonomy <action> <level> --prompt <id>")
+    action, level = positional
+    entry = {"level": level}
+    verdict = programme_protocol.validate_autonomy(action, entry)
+    if not verdict["ok"]:
+        raise ProgrammeError(f"autonomy entry refused: {verdict['reason']} ({verdict['detail']})")
+    _check_widening("autonomy", action, level, opts.get("widening"))
+
+    def change(programme, prompt, rec):
+        adopted = dict(entry, adoption=_adoption(entry, prompt, rec, opts.get("widening")))
+        _write_personal(lambda doc: doc.setdefault("autonomy", {}).__setitem__(action, adopted))
+        return {"entry": "autonomy", "action": action, "level": level,
+                "target": programme_protocol.target_of("autonomy", action),
+                "personal_path": programme_protocol.personal_path(), "hash": adopted["adoption"]["hash"]}
+
+    return _write(opts, change, "rule_adopted", prompt_id=opts.get("prompt"), needs_prompt=True)
+
+
+def _h_adopt_check(argv):
+    positional, opts = _parse(argv, values=("run", "prompt"))
+    if len(positional) != 3:
+        raise ValueError("usage: adopt-check <repo> <check> <argv-json> --prompt <id>")
+    repo, key, raw = positional
+    try:
+        entry = {"argv": json.loads(raw)}
+    except ValueError:
+        raise ProgrammeError("the check command must be a JSON array of strings")
+    verdict = programme_protocol.validate_check(key, entry)
+    if not verdict["ok"] or not repo.strip():
+        raise ProgrammeError(f"check refused: {verdict['reason'] or 'bad_value'} ({verdict['detail'] or 'repo'})")
+
+    def change(programme, prompt, rec):
+        adopted = dict(entry, adoption=_adoption(entry, prompt, rec, False))
+        _write_personal(lambda doc: doc.setdefault("checks", {}).setdefault(repo, {}).__setitem__(key, adopted))
+        return {"entry": "check", "repo": repo, "check": key,
+                "target": programme_protocol.target_of("checks", key, repo),
+                "personal_path": programme_protocol.personal_path(), "hash": adopted["adoption"]["hash"]}
 
     return _write(opts, change, "rule_adopted", prompt_id=opts.get("prompt"), needs_prompt=True)
 
@@ -541,6 +604,18 @@ _VERBS = {
         _h_adopt_rule,
         "<rule-id> --prompt <id> [--widening] [--run <id>]",
         rejects="no proposal with that id; a prompt that is not typed; a widening without --widening.",
+    ),
+    "adopt-autonomy": _Verb(
+        _h_adopt_autonomy,
+        "<action> <never|propose|act_and_tell|act> --prompt <id> [--widening] [--run <id>]",
+        rejects="an unknown level or a bad action name; a prompt that is not typed; a level wider "
+        "than the plugin default without --widening.",
+    ),
+    "adopt-check": _Verb(
+        _h_adopt_check,
+        "<repo> <verified.lookup|verified.deployed_sha> <argv-json> --prompt <id> [--run <id>]",
+        rejects="an unknown check; an argv that is not a non-empty JSON array of strings or names a "
+        "placeholder other than {id}, {sha} or {repo}; a prompt that is not typed.",
     ),
 }
 

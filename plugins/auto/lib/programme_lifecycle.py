@@ -31,10 +31,11 @@ CONSUMING_KINDS = ("taken_over", "handed_over", "programme_ended")
 
 
 class _Refused(Exception):
-    def __init__(self, reason, status=None):
+    def __init__(self, reason, status=None, ended=None):
         super().__init__(reason)
         self.reason = reason
         self.status = status
+        self.ended = ended
 
 
 def _tokens(argv) -> list:
@@ -114,6 +115,8 @@ def _journal(run, kind, sid, payload, cites=None) -> None:
 
 
 def _refuse(host, run, verb, sid, exc):
+    if exc.ended is not None:
+        _journal(run, "programme_ended", sid, exc.ended)
     _journal(run, "request_refused", sid,
              {"verb": verb, "reason": exc.reason, "lease_status": exc.status})
     raise host.ProgrammeError(exc.reason)
@@ -177,9 +180,11 @@ def _h_takeover(host, argv):
     def body():
         status = _fresh_status(lease)
         if status == "expired":
+            ended = _watcher_ids(programme_home._read_record(run) or {})
             programme_home._end_locked(run, EXPIRED_REASON, _stamp())
+            ended.update(reason=EXPIRED_REASON, lease_status=status, request=None)
             raise _Refused("the agreement was never accepted, so the programme has ended; "
-                           "run /auto:programme to start a new one", status)
+                           "run /auto:programme to start a new one", status, ended)
         if status != "orphaned":
             raise _Refused(f"the lease for {lease.get('key') or run} is {status}; "
                            "takeover needs an orphaned lease", status)

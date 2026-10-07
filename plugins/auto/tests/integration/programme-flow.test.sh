@@ -583,6 +583,13 @@ EOF
 )"
 has '"verb": "takeover"' "$(last_entry "$RUN10" request_refused)"
 
+it "takeover on an expired programme journals programme_ended with the expiry reason"
+ENDED="$(last_entry "$RUN10" programme_ended)"
+has '"reason": "agreement_unaccepted"' "$ENDED"
+has '"lease_status": "expired"' "$ENDED"
+has '"session_id": "sess-s"' "$ENDED"
+has '"cron_task_ids": []' "$ENDED"
+
 it "beat from a session that does not drive the programme is refused"
 WS=w3
 BEAT_BEFORE="$(run_py "$RUN3" <<'EOF'

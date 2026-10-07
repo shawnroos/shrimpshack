@@ -95,7 +95,7 @@ prog() {
 it "describe lists exactly the programme verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-check "accept-agreement add-item adopt-rule alias-item amend-term answer-handed beat check-deliverable claim close-instruction describe drop-item end expire hand-item handover mark-read merge-item prompt-item propose-agreement propose-rule queue record-instruction record-tested-build reopen-item rules set-now set-source set-waiting start start-worker status sweep takeover validate watcher-beat" "$VERBS"
+check "accept-agreement add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed beat check-deliverable claim close-instruction describe drop-item end expire hand-item handover mark-read merge-item prompt-item propose-agreement propose-rule queue record-instruction record-tested-build reopen-item rules set-now set-source set-waiting start start-worker status sweep takeover validate watcher-beat" "$VERBS"
 
 P_TYPED="$(prompt typed 'stop only when everything is done')"
 P_CRON="$(prompt cron 'wake up and sweep the space')"
@@ -324,6 +324,136 @@ has "docs-verified" "$OUT"
 it "adopt-rule for an id with no proposal is refused"
 prog adopt-rule no-such-rule --prompt "$P_ADOPT"
 check 1 "$CODE"
+
+load_personal() {
+  run_py "$1" <<'EOF'
+prog = load_lib_module("programme")
+pp = load_lib_module("programme_protocol")
+loaded = pp.load(prompt_lookup=prog.prompt_lookup)
+print(json.dumps(eval(args[0]), sort_keys=True))
+EOF
+}
+
+personal_doc() {
+  run_py "$1" <<'EOF'
+path = os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]
+with open(path) as fh:
+    doc = json.load(fh)
+exec(args[0])
+with open(path, "w") as fh:
+    json.dump(doc, fh)
+EOF
+}
+
+it "adopt-autonomy without a typed prompt is refused and writes nothing"
+BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+prog adopt-autonomy prod_deploy never --prompt "$P_CRON"
+check "1" "$CODE"
+check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+prog adopt-autonomy prod_deploy never
+check "1" "$CODE"
+
+it "adopt-autonomy refuses an unknown level and a bad action"
+P_AUTO="$(prompt typed 'yes, never deploy prod and act on merges around the gate')"
+prog adopt-autonomy prod_deploy sometimes --prompt "$P_AUTO"
+check "1" "$CODE"
+prog adopt-autonomy 'Bad Action' never --prompt "$P_AUTO"
+check "1" "$CODE"
+
+it "adopt-autonomy narrowing a level loads from the personal layer"
+prog adopt-autonomy prod_deploy never --prompt "$P_AUTO"
+check "0" "$CODE"
+check '["never", "personal", []]' "$(load_personal '[loaded["autonomy"]["prod_deploy"]["level"], loaded["autonomy"]["prod_deploy"]["layer"], [r["id"] for r in loaded["rejected"]]]')"
+
+it "adopt-autonomy journals an approval record with entry kind and hash"
+GOT="$(run_py "$RUN" "$P_AUTO" <<'EOF'
+run, pid = args
+pp = load_lib_module("programme_protocol")
+row = [r for r in pj.read(run) if r["kind"] == "rule_adopted"][-1]
+doc = json.load(open(os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]))
+entry = doc["autonomy"]["prod_deploy"]
+p = row["payload"]
+print(p["entry"], p["action"], p["level"], p["hash"] == entry["adoption"]["hash"] == pp.content_hash(entry), row["cites"] == [pid], p["prompt_id"] == pid)
+EOF
+)"
+check "autonomy prod_deploy never True True True" "$GOT"
+
+it "adopt-autonomy widening a level without --widening is refused and writes nothing"
+BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+prog adopt-autonomy merge_around_gate act --prompt "$P_AUTO"
+check "1" "$CODE"
+has "--widening" "$OUT"
+check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+
+it "adopt-autonomy widening with --widening loads"
+prog adopt-autonomy merge_around_gate act --widening --prompt "$P_AUTO"
+check "0" "$CODE"
+check '["act", "personal"]' "$(load_personal '[loaded["autonomy"]["merge_around_gate"][k] for k in ("level", "layer")]')"
+
+it "an autonomy entry written by hand with a recomputed hash does not load"
+personal_doc '
+pp = load_lib_module("programme_protocol")
+forged = {"level": "act"}
+adoption = dict(doc["autonomy"]["prod_deploy"]["adoption"])
+adoption["hash"] = pp.content_hash(forged)
+adoption["widening"] = True
+forged["adoption"] = adoption
+doc["autonomy"]["full_release"] = forged
+'
+check '["propose", "plugin", [["full_release", "adoption_unverified"]]]' "$(load_personal '[loaded["autonomy"]["full_release"]["level"], loaded["autonomy"]["full_release"]["layer"], [[r["id"], r["reason"]] for r in loaded["rejected"]]]')"
+personal_doc 'del doc["autonomy"]["full_release"]'
+
+LOOKUP_ARGV='["trace-cli","show","{id}"]'
+it "adopt-check without a typed prompt is refused"
+prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$P_CRON"
+check "1" "$CODE"
+
+it "adopt-check refuses an unknown check key, a bad argv and an unknown placeholder"
+P_CHECK="$(prompt typed 'yes, adopt the trace lookup for acme/web')"
+prog adopt-check acme/web verified.other "$LOOKUP_ARGV" --prompt "$P_CHECK"
+check "1" "$CODE"
+prog adopt-check acme/web verified.lookup '[]' --prompt "$P_CHECK"
+check "1" "$CODE"
+prog adopt-check acme/web verified.lookup '["trace-cli","{token}"]' --prompt "$P_CHECK"
+check "1" "$CODE"
+prog adopt-check acme/web verified.lookup 'not json' --prompt "$P_CHECK"
+check "1" "$CODE"
+
+it "adopt-check writes the check under its repo and it loads"
+prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$P_CHECK"
+check "0" "$CODE"
+check '[["trace-cli", "show", "{id}"], "personal", []]' "$(load_personal '[loaded["checks"]["acme/web"]["verified.lookup"][k] for k in ("argv", "layer")] + [[r["id"] for r in loaded["rejected"]]]')"
+
+it "adopt-check journals an approval record with entry kind, repo, check and hash"
+GOT="$(run_py "$RUN" "$P_CHECK" <<'EOF'
+run, pid = args
+row = [r for r in pj.read(run) if r["kind"] == "rule_adopted"][-1]
+doc = json.load(open(os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]))
+p = row["payload"]
+print(p["entry"], p["repo"], p["check"], p["hash"] == doc["checks"]["acme/web"]["verified.lookup"]["adoption"]["hash"], row["cites"] == [pid])
+EOF
+)"
+check "check acme/web verified.lookup True True" "$GOT"
+
+it "an adopted check whose argv is edited afterwards does not load"
+personal_doc 'doc["checks"]["acme/web"]["verified.lookup"]["argv"] = ["evil", "{id}"]'
+check '[false, [["acme/web:verified.lookup", "adoption_unverified"]]]' "$(load_personal '["verified.lookup" in loaded["checks"].get("acme/web", {}), [[r["id"], r["reason"]] for r in loaded["rejected"]]]')"
+personal_doc 'doc["checks"]["acme/web"]["verified.lookup"]["argv"] = ["trace-cli", "show", "{id}"]'
+
+it "a check under a new repo with a recomputed hash and a real prompt does not load"
+personal_doc '
+pp = load_lib_module("programme_protocol")
+entry = {"argv": ["evil-cli", "{id}"]}
+adoption = dict(doc["checks"]["acme/web"]["verified.lookup"]["adoption"])
+adoption["hash"] = pp.content_hash(entry)
+entry["adoption"] = adoption
+doc["checks"]["acme/api"] = {"verified.lookup": entry}
+'
+check '[false, [["acme/api:verified.lookup", "adoption_unverified"]]]' "$(load_personal '["acme/api" in loaded["checks"], [[r["id"], r["reason"]] for r in loaded["rejected"]]]')"
+personal_doc 'del doc["checks"]["acme/api"]'
+
+it "the personal file keeps the adopted rule, autonomy entries and check together"
+check '[["docs-verified"], ["merge_around_gate", "prod_deploy"], ["acme/web"]]' "$(load_personal '[sorted(r for r, v in loaded["rules"].items() if v["layer"] == "personal"), sorted(a for a, v in loaded["autonomy"].items() if v["layer"] == "personal"), sorted(loaded["checks"])]')"
 
 it "each approval journals its own kind"
 GOT="$(journal_kinds)"

@@ -143,20 +143,31 @@ print(json.dumps(rows[-1] if rows else None, sort_keys=True))
 EOF
 }
 
+typed_prompt() {
+  run_py "$RUN" "$1" <<'EOF'
+print(pj.append_prompt(args[0], "sess-pm", args[1], "typed")["prompt_id"])
+EOF
+}
+
 personal_checks() {
-  run_py "$RUN" "$CLAUDE_AUTO_PERSONAL_PROTOCOL" "$1" "$2" <<'EOF'
-run, path, repo, program = args
+  local pid
+  pid="$(typed_prompt "yes, adopt the trace lookup for $1")"
+  prog adopt-check "$1" verified.lookup "[\"$2\", \"show\", \"{id}\"]" --prompt "$pid"
+  ADOPT_CODES="$CODE"
+  prog adopt-check "$1" verified.deployed_sha "[\"$2\", \"sha\", \"{id}\", \"{sha}\"]" --prompt "$pid"
+  ADOPT_CODES="${ADOPT_CODES} $CODE"
+}
+
+forged_checks() {
+  run_py "$RUN" "$CLAUDE_AUTO_PERSONAL_PROTOCOL" "$1" "$2" "$(typed_prompt "yes, adopt the trace lookup for $1")" <<'EOF'
+run, path, repo, program, pid = args
 prog = load_lib_module("programme")
 pp = load_lib_module("programme_protocol")
-text = "yes, adopt the trace lookup for " + repo
-row = pj.append_prompt(run, "sess-pm", text, "typed")
+row = pj.find_prompt(run, pid)
 def adopt(entry):
     entry = dict(entry)
-    entry["adoption"] = {"machine": "studio", "run_id": run, "prompt_id": row["prompt_id"], "quote": text,
+    entry["adoption"] = {"machine": "studio", "run_id": run, "prompt_id": pid, "quote": row["payload"]["text"],
                          "prompt_hash": prog.text_hash(row["payload"]["text"]), "hash": pp.content_hash(entry)}
-    pj.append(run, "rule_adopted", "sess-pm",
-              {"entry": "check", "hash": entry["adoption"]["hash"], "prompt_id": row["prompt_id"]},
-              cites=[row["prompt_id"]])
     return entry
 block = {"verified.lookup": adopt({"argv": [program, "show", "{id}"]}),
          "verified.deployed_sha": adopt({"argv": [program, "sha", "{id}", "{sha}"]})}
@@ -281,7 +292,17 @@ check '"unknown"' "$(result_of linear:AI-1 verified)"
 lacks "worker-lookup" "$(cat "$CALLS")"
 rm -rf "${REPO}/.claude"
 
+it "verified: checks written to the personal file with a typed prompt but no approval record are not run"
+forged_checks acme/web trace-cli
+: > "$CALLS"
+prog check-deliverable linear:AI-1 verified --ref trace-abc123 --repo "$REPO"
+check '"unknown"' "$(result_of linear:AI-1 verified)"
+lacks "trace-cli" "$(cat "$CALLS")"
+rm -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
+
+it "verified: adopt-check adopts both commands for the repo"
 personal_checks acme/web trace-cli
+check "0 0" "$ADOPT_CODES"
 
 it "verified: the build sha of the traced run contains the merge commit: confirmed"
 : > "$CALLS"

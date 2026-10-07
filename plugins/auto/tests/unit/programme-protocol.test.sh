@@ -61,12 +61,13 @@ def rule(rid, kinds, requires, autonomy="act"):
     return {"id": rid, "applies_when": {"change_kinds": kinds}, "requires": requires,
             "evidence_bar": {r: "checked" for r in requires}, "caveat": "", "autonomy": autonomy,
             "added_by": "shawn", "added_at": "2026-10-06T10:00:00Z", "why": "test"}
-def adopt(entry, machine="studio", prompt="p1", widening=None, prompt_hash="h1"):
+def adopt(entry, machine="studio", prompt="p1", widening=None, prompt_hash="h1", target=None):
+    target = target or pp.target_of("rules", entry.get("id"))
     record = {"machine": machine, "run_id": "prog-1", "prompt_id": prompt, "quote": "yes, adopt it",
               "prompt_hash": prompt_hash, "hash": pp.content_hash(entry)}
     if widening is not None:
         record["widening"] = widening
-    approve("prog-1", prompt, record["hash"])
+    approve("prog-1", prompt, pp.approval_key(target, record["hash"]))
     out = dict(entry)
     out["adoption"] = record
     return out
@@ -262,7 +263,7 @@ check "propose personal []" "$OUT"
 
 fresh
 run_py <<'EOF' >/dev/null
-seed("widen", {"autonomy": {"fix_other_team_code": adopt({"level": "act"})},
+seed("widen", {"autonomy": {"fix_other_team_code": adopt({"level": "act"}, target="autonomy:fix_other_team_code")},
                "rules": [adopt(rule("shared-blocker", ["shared_blocker"], ["debugged"], autonomy="act"))]})
 EOF
 REPO_W="$(publish widen)"
@@ -275,7 +276,7 @@ EOF
 check "['project/fix_other_team_code/widening_unmarked', 'project/shared-blocker/widening_unmarked'] never never" "$OUT"
 
 run_py <<'EOF' >/dev/null
-seed("widen2", {"autonomy": {"fix_other_team_code": adopt({"level": "act"}, widening=True)},
+seed("widen2", {"autonomy": {"fix_other_team_code": adopt({"level": "act"}, widening=True, target="autonomy:fix_other_team_code")},
                 "rules": [adopt(rule("shared-blocker", ["shared_blocker"], ["debugged"], autonomy="act"), widening=True)]})
 EOF
 REPO_W2="$(publish widen2)"
@@ -402,8 +403,8 @@ fresh
 it "a valid checks block for a repo, adopted on this machine, loads"
 OUT="$(run_py <<'EOF'
 personal({"checks": {"acme/web": {
-    "verified.lookup": adopt({"argv": ["dd-trace", "{id}"]}),
-    "verified.deployed_sha": adopt({"argv": ["deployed-sha", "{id}", "{sha}"]})}}})
+    "verified.lookup": adopt({"argv": ["dd-trace", "{id}"]}, target="check:acme/web:verified.lookup"),
+    "verified.deployed_sha": adopt({"argv": ["deployed-sha", "{id}", "{sha}"]}, target="check:acme/web:verified.deployed_sha")}}})
 p = pp.load(repo_key="acme/web", prompt_lookup=lookup)
 print(p["rejected"], p["checks"]["acme/web"]["verified.lookup"]["argv"], p["checks"]["acme/web"]["verified.deployed_sha"]["layer"])
 EOF
@@ -413,7 +414,7 @@ check "[] ['dd-trace', '{id}'] personal" "$OUT"
 it "an unknown command key rejects the whole checks block for that repo"
 OUT="$(run_py <<'EOF'
 personal({"checks": {"acme/web": {
-    "verified.lookup": adopt({"argv": ["dd-trace", "{id}"]}),
+    "verified.lookup": adopt({"argv": ["dd-trace", "{id}"]}, target="check:acme/web:verified.lookup"),
     "verified.delete": adopt({"argv": ["rm", "{id}"]})}}})
 p = pp.load(repo_key="acme/web", prompt_lookup=lookup)
 print(reasons(p), "acme/web" in p["checks"])
@@ -444,13 +445,13 @@ check "['personal/acme/web:verified.deployed_sha/check_not_adopted_here', 'perso
 fresh
 run_py <<'EOF' >/dev/null
 seed("worker", {"rules": [adopt(rule("web-flag", ["flagged_code"], ["merged"]))],
-                "checks": {"verified.lookup": adopt({"argv": ["committed-lookup", "{id}"]})}})
+                "checks": {"verified.lookup": adopt({"argv": ["committed-lookup", "{id}"]}, target="check:acme/web:verified.lookup")}})
 EOF
 REPO_K="$(publish worker)"
 run_py "$REPO_K" <<'EOF' >/dev/null
 path = os.path.join(args[0], ".claude", "auto-protocol.json")
 write(path, {"rules": [adopt(rule("worker-rule", ["evals_or_docs"], []))],
-             "checks": {"verified.lookup": adopt({"argv": ["worker-lookup", "{id}"]})}})
+             "checks": {"verified.lookup": adopt({"argv": ["worker-lookup", "{id}"]}, target="check:acme/web:verified.lookup")}})
 EOF
 git -C "$REPO_K" -c user.name=t -c user.email=t@t commit -q -am "worker edit"
 run_py "$REPO_K" <<'EOF' >/dev/null
@@ -467,8 +468,8 @@ check "True False False committed-lookup []" "$OUT"
 
 it "a project checks block overrides the personal one for the same repo"
 OUT="$(run_py "$REPO_K" <<'EOF'
-personal({"checks": {"acme/web": {"verified.lookup": adopt({"argv": ["personal-lookup", "{id}"]}),
-                                  "verified.deployed_sha": adopt({"argv": ["personal-sha", "{sha}"]})}}})
+personal({"checks": {"acme/web": {"verified.lookup": adopt({"argv": ["personal-lookup", "{id}"]}, target="check:acme/web:verified.lookup"),
+                                  "verified.deployed_sha": adopt({"argv": ["personal-sha", "{sha}"]}, target="check:acme/web:verified.deployed_sha")}}})
 p = pp.load(repo_path=args[0], repo_key="acme/web", prompt_lookup=lookup)
 c = p["checks"]["acme/web"]
 print(c["verified.lookup"]["argv"][0], c["verified.lookup"]["layer"], c["verified.deployed_sha"]["argv"][0])
@@ -537,7 +538,7 @@ check "[] laptop []" "$OUT"
 fresh
 run_py <<'EOF' >/dev/null
 seed("foreign", {"rules": [adopt(rule("flagged-code", ["flagged_code"], ["merged"]), machine="nowhere")],
-                 "autonomy": {"merge_around_gate": adopt({"level": "act"}, machine="nowhere", widening=True)}})
+                 "autonomy": {"merge_around_gate": adopt({"level": "act"}, machine="nowhere", widening=True, target="autonomy:merge_around_gate")}})
 EOF
 REPO_F="$(publish foreign)"
 it "a project rule and autonomy entry adopted on another machine are rejected"
@@ -551,7 +552,7 @@ check "['project/flagged-code/not_adopted_here', 'project/merge_around_gate/not_
 fresh
 it "a check whose argv changed after adoption, with its hash recomputed and a real typed prompt, is rejected"
 OUT="$(run_py <<'EOF'
-entry = adopt({"argv": ["dd-trace", "{id}"]})
+entry = adopt({"argv": ["dd-trace", "{id}"]}, target="check:acme/web:verified.lookup")
 entry["argv"] = ["forged-lookup", "{id}"]
 entry["adoption"]["hash"] = pp.content_hash(entry)
 personal({"checks": {"acme/web": {"verified.lookup": entry}}})
@@ -560,6 +561,18 @@ print(reasons(p), [r["detail"] for r in p["rejected"]], "acme/web" in p["checks"
 EOF
 )"
 check "['personal/acme/web:verified.lookup/adoption_unverified'] ['no approval'] False" "$OUT"
+
+it "an approval for one autonomy action or check does not load the same content under another"
+OUT="$(run_py <<'EOF'
+gate = adopt({"level": "act"}, widening=True, target="autonomy:merge_around_gate")
+look = adopt({"argv": ["dd-trace", "{id}"]}, target="check:acme/web:verified.lookup")
+personal({"autonomy": {"merge_around_gate": gate, "full_release": dict(gate)},
+          "checks": {"acme/web": {"verified.lookup": look}, "acme/api": {"verified.lookup": dict(look)}}})
+p = pp.load(repo_key="acme/web", prompt_lookup=lookup)
+print(reasons(p), p["autonomy"]["merge_around_gate"]["level"], p["autonomy"]["full_release"]["level"], sorted(p["checks"]))
+EOF
+)"
+check "['personal/acme/api:verified.lookup/adoption_unverified', 'personal/full_release/adoption_unverified'] act propose ['acme/web']" "$OUT"
 
 it "a rule rewritten after adoption, with its hash recomputed and a real typed prompt, is rejected"
 OUT="$(run_py <<'EOF'

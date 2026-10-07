@@ -110,7 +110,11 @@ session.
 - **Rules**: `propose-rule` stores a rule in the protocol rule format as a
   proposal; `adopt-rule` writes it to the personal protocol layer atomically, with
   an adoption record (machine, run, prompt id, redacted quote, prompt hash, content
-  hash).
+  hash). `adopt-autonomy` sets one autonomy level (a level wider than the plugin
+  default needs `--widening`), and `adopt-check` sets one `verified.lookup` or
+  `verified.deployed_sha` command for a repo, the same way. Each journals a
+  `rule_adopted` approval record naming the entry kind, its target and its hash;
+  the protocol loader loads a same-machine entry only when that record exists.
 - **Items**: `add-item` adds an item with a `source:key` id, or updates one. It
   stores the protocol match for its change kinds (matched rules, and each required
   deliverable with result unknown) and the owning pane and session. `alias-item`
@@ -236,7 +240,8 @@ Every write verb:
 3. revalidates under the run-record lock, then journals after the write commits.
 
 The approval verbs (accepting the agreement, amending a term, recording an
-instruction, withdrawing one, adopting a rule, answering a handed item,
+instruction, withdrawing one, adopting a rule, an autonomy level or a check
+command, answering a handed item,
 reopening a dropped item, and dropping an issue-backed item with an open
 deliverable) need `--prompt <id>` naming a
 prompt that the prompt hook journaled as typed in the driving session. The verb

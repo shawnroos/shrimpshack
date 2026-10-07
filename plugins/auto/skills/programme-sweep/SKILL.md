@@ -23,9 +23,10 @@ from this session's lease.
   rules, run `P rules --ack`, and repeat the refused verb.
 - Never use `/goal`. The programme's stop rule is the only stop rule.
 - Only a checker writes evidence. A worker's "done" is a claim, never evidence.
-- An approval (accept, amend, instruction, adopt a rule, answer a handed item,
-  drop or reopen an issue item) cites the prompt id from the `<auto-data>` tag of
-  Shawn's typed message. Never cite a cron prompt.
+- An approval (accept, amend, instruction, adopt a rule, an autonomy level or a
+  check command, answer a handed item, drop or reopen an issue item) cites the
+  prompt id from the `<auto-data>` tag of Shawn's typed message. Never cite a
+  cron prompt.
 
 ## The sweep
 
@@ -43,6 +44,8 @@ from this session's lease.
    | A standing instruction ("always...", "until...") | `P record-instruction --prompt <id> [--applies-to <item>] [--until <text>]` |
    | Withdraw an instruction | `P close-instruction <instruction-id> --as withdrawn --prompt <id>` |
    | Adopt a proposed rule | `P adopt-rule <rule-id> --prompt <id>` (add `--widening` only when he approved the wider autonomy) |
+   | Change how far the PM may go on an action | `P adopt-autonomy <action> <never\|propose\|act_and_tell\|act> --prompt <id>` (add `--widening` only when he approved a level wider than the default) |
+   | Adopt a repo's build check commands | `P adopt-check <repo> verified.lookup '<argv-json>' --prompt <id>`, then the same for `verified.deployed_sha` |
    | Drop an issue item | `P drop-item <item> --reason <text> --prompt <id>` |
    | Reopen a dropped item | `P reopen-item <item> --prompt <id>` |
    | Two items are one piece of work | `P merge-item <from-item> <into-item>` |

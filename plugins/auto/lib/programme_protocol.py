@@ -84,6 +84,16 @@ def content_hash(entry: dict) -> str:
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def approval_key(target: str, digest: str) -> str:
+    return "%s@%s" % (target, digest)
+
+
+def target_of(section: str, name: str, repo=None) -> str:
+    if section == "checks":
+        return "check:%s:%s" % (repo, name)
+    return "%s:%s" % ("rule" if section == "rules" else "autonomy", name)
+
+
 def _keys(obj, required, optional=()) -> None:
     if not isinstance(obj, dict):
         raise _Reject("bad_value", "not an object")
@@ -145,12 +155,37 @@ def _validate_rule(rule, *, allow_adoption=True) -> None:
     _text(rule["why"], "why")
 
 
-def validate_proposal(rule) -> dict:
+def _verdict(check, *args) -> dict:
     try:
-        _validate_rule(rule, allow_adoption=False)
+        check(*args)
     except _Reject as exc:
         return {"ok": False, "reason": exc.reason, "detail": exc.detail}
     return {"ok": True, "reason": None, "detail": None}
+
+
+def validate_proposal(rule) -> dict:
+    return _verdict(lambda: _validate_rule(rule, allow_adoption=False))
+
+
+def _validate_autonomy(action, entry) -> None:
+    if not isinstance(action, str) or not _KIND_RE.match(action):
+        raise _Reject("bad_value", "action")
+    _keys(entry, ("level",))
+    _check_level(entry["level"])
+
+
+def validate_autonomy(action, entry) -> dict:
+    return _verdict(_validate_autonomy, action, entry)
+
+
+def _validate_bare_check(key, entry) -> None:
+    if isinstance(entry, dict) and "adoption" in entry:
+        raise _Reject("unknown_key", "adoption")
+    _validate_check_block({key: entry})
+
+
+def validate_check(key, entry) -> dict:
+    return _verdict(_validate_bare_check, key, entry)
 
 
 def _validate_adoption(adoption) -> None:
@@ -164,7 +199,7 @@ def _validate_adoption(adoption) -> None:
         raise _Reject("adoption_malformed", exc.detail)
 
 
-def _verify_adoption(entry: dict, prompt_lookup, *, local_only=False, missing="not_adopted",
+def _verify_adoption(entry: dict, prompt_lookup, target, *, local_only=False, missing="not_adopted",
                      elsewhere="check_not_adopted_here"):
     adoption = entry.get("adoption")
     if adoption is None:
@@ -188,7 +223,7 @@ def _verify_adoption(entry: dict, prompt_lookup, *, local_only=False, missing="n
         raise _Reject("adoption_unverified", "prompt not typed")
     if prompt.get("text_hash") != adoption["prompt_hash"]:
         raise _Reject("adoption_unverified", "prompt hash")
-    if adoption["hash"] not in (prompt.get("approved") or ()):
+    if approval_key(target, adoption["hash"]) not in (prompt.get("approved") or ()):
         raise _Reject("adoption_unverified", "no approval")
     return None
 
@@ -205,10 +240,10 @@ def _reject(state, layer, entry_id, reason, detail=None) -> None:
     state["rejected"].append({"layer": layer, "id": entry_id, "reason": reason, "detail": detail})
 
 
-def _adopt(layer, entry, lookup, prior_level, level):
+def _adopt(layer, entry, lookup, prior_level, level, target):
     if layer == "plugin":
         return None
-    adopted_on = _verify_adoption(entry, lookup, local_only=(layer == "project"),
+    adopted_on = _verify_adoption(entry, lookup, target, local_only=(layer == "project"),
                                   elsewhere="not_adopted_here")
     widening = entry["adoption"].get("widening") is True
     if prior_level is not None and _wider(level, prior_level) and not widening:
@@ -227,7 +262,8 @@ def _merge_rules(state, layer, rules, lookup) -> None:
         try:
             _validate_rule(raw)
             prior = state["rules"].get(rid)
-            adopted_on = _adopt(layer, raw, lookup, prior and prior["autonomy"], raw["autonomy"])
+            adopted_on = _adopt(layer, raw, lookup, prior and prior["autonomy"], raw["autonomy"],
+                                target_of("rules", rid))
         except _Reject as exc:
             _reject(state, layer, label, exc.reason, exc.detail)
             continue
@@ -239,12 +275,11 @@ def _merge_rules(state, layer, rules, lookup) -> None:
 def _merge_autonomy(state, layer, entries, lookup) -> None:
     for action, raw in entries.items():
         try:
-            if not _KIND_RE.match(action):
-                raise _Reject("bad_value", "action")
-            _keys(raw, ("level",), ("adoption",))
-            _check_level(raw["level"])
+            _validate_autonomy(action, {k: v for k, v in raw.items() if k != "adoption"}
+                               if isinstance(raw, dict) else raw)
             prior = state["autonomy"].get(action)
-            adopted_on = _adopt(layer, raw, lookup, prior and prior["level"], raw["level"])
+            adopted_on = _adopt(layer, raw, lookup, prior and prior["level"], raw["level"],
+                                target_of("autonomy", action))
         except _Reject as exc:
             _reject(state, layer, action, exc.reason, exc.detail)
             continue
@@ -277,7 +312,8 @@ def _merge_check_block(state, layer, repo, block, lookup) -> None:
     for key, entry in block.items():
         try:
             if layer != "plugin":
-                _verify_adoption(entry, lookup, local_only=True, missing="check_not_adopted")
+                _verify_adoption(entry, lookup, target_of("checks", key, repo), local_only=True,
+                                 missing="check_not_adopted")
         except _Reject as exc:
             _reject(state, layer, "%s:%s" % (repo, key), exc.reason, exc.detail)
             continue
@@ -392,11 +428,15 @@ def _load_layer(state, layer, source, read, lookup, project_repo) -> None:
     _apply_layer(state, layer, source, text, lookup, project_repo)
 
 
-def load(repo_path=None, repo_key=None, prompt_lookup=None, plugin_path=None) -> dict:
+def plugin_layer(plugin_path=None) -> dict:
     state = _new_state()
-    plugin_source = plugin_path or PLUGIN_PATH
-    _load_layer(state, "plugin", plugin_source,
-                lambda: (_read_plugin(plugin_source), plugin_source), None, None)
+    source = plugin_path or PLUGIN_PATH
+    _load_layer(state, "plugin", source, lambda: (_read_plugin(source), source), None, None)
+    return state
+
+
+def load(repo_path=None, repo_key=None, prompt_lookup=None, plugin_path=None) -> dict:
+    state = plugin_layer(plugin_path)
 
     personal = personal_path()
     for conflict in _sync_conflicts(personal):

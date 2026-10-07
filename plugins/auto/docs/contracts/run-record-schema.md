@@ -608,7 +608,7 @@ Programmes live outside every repo, under the auto data dir:
 <data>/programmes/<run-id>/.claude/auto/.stop-nag-<sid>.json   # Stop hook nag state (§10.9)
 <data>/programmes/leases/<server>.<workspace>.json   # one lease per herdr space (§10.3)
 <data>/programmes/leases.lock                  # flock for leases; beside the folder, never in it
-<data>/programmes/.personal-protocol.lock      # flock for adopt-rule's personal-file write
+<data>/programmes/.personal-protocol.lock      # flock for the adopt verbs' personal-file write
 <data>/sessions/<server>.<workspace>.jsonl     # the session registry (§10.10)
 ```
 
@@ -730,6 +730,17 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
   process_ids, request, lease_status}`; `request_refused {verb, reason, lease_status}`.
   A used request is marked on the consuming line as `request = {kind, at, session_id, prompt_id}`.
+  An expired programme found by `end`, `expire` or `takeover` journals `programme_ended`
+  with reason `agreement_unaccepted` and `request: null`; `takeover` also journals its
+  `request_refused`.
+- `rule_adopted` is the approval record written by `adopt-rule`, `adopt-autonomy` and
+  `adopt-check`: `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
+  quote}` with `cites: [prompt_id]`, plus `rule` for a rule, `action` and `level` for an
+  autonomy entry, and `repo` and `check` for a check. `target` is `rule:<id>`,
+  `autonomy:<action>` or `check:<repo>:<check>`, and `hash` is the entry's content hash.
+  The protocol loader needs this line: a same-machine adoption loads only when a
+  `rule_adopted` line in the cited run cites the adoption's prompt and carries the entry's
+  target and hash (programme-protocol-format §4).
 
 - A `prompt` line has `prompt_id` (`p` + 6 hex) and payload `{text, origin: typed|cron}`.
   `text` is redacted: token patterns and every value of 6 or more characters in the
@@ -817,7 +828,7 @@ predicate; the recompute ignores it.
 |---------|---------|---------|
 | `CLAUDE_AUTO_DATA_DIR` | `~/.claude/plugins/data/auto-shrimpshack` | every programme module and hook shim |
 | `CLAUDE_AUTO_SECRETS_FILE` | `~/.secrets` | journal redaction and checker tokens; the path and values are never printed |
-| `CLAUDE_AUTO_PERSONAL_PROTOCOL` | `~/.claude/shared/auto/protocol.json` | the protocol loader and `adopt-rule` |
+| `CLAUDE_AUTO_PERSONAL_PROTOCOL` | `~/.claude/shared/auto/protocol.json` | the protocol loader and the adopt verbs |
 | `CLAUDE_AUTO_MACHINE` | the short host name | adoption records |
 | `CLAUDE_AUTO_CHECK_TIMEOUT_SECONDS` | `30` | each evidence checker command |
 | `CLAUDE_AUTO_SOURCE_TIMEOUT` | herdr 5 s, board 15 s, Linear 15 s | every source read in `sweep` |
