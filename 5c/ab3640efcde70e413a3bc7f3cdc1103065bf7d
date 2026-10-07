@@ -1,0 +1,62 @@
+plugins/auto/docs/contracts/agent-tool-surface.md
+  s_5abb44c8324d7f::t_6131d71d4c555c 132-149
+  s_5abb44c8324d7f::t_5a8b6a891e77d9 150-169
+plugins/auto/tests/unit/programme-evidence.test.sh
+  s_5abb44c8324d7f::t_2880784ed1ab0c 1-422
+  s_5abb44c8324d7f::t_947d9a839c2c9a 423-464
+plugins/auto/lib/programme_sources.py
+  s_5abb44c8324d7f::t_1fd0e814ea1a73 1-658
+  s_5abb44c8324d7f::t_66de85f856b580 659
+plugins/auto/lib/programme_evidence.py
+  s_5abb44c8324d7f::t_fc6eb419b52108 1-546
+  s_5abb44c8324d7f::t_dc7cb0a3906fc2 547-557
+plugins/auto/tests/unit/programme-sources.test.sh
+  s_5abb44c8324d7f::t_8ec40e1c9feea8 1-499
+  s_5abb44c8324d7f::t_c935924a511210 500-519
+plugins/auto/lib/programme.py
+  s_5abb44c8324d7f::t_af822c556add38 541-546
+plugins/auto/lib/programme_journal.py
+  s_5abb44c8324d7f::t_a5c59c269e1e80 68-75
+plugins/auto/lib/verification.py
+  s_5abb44c8324d7f::t_1bd6faec95a12e 66-90,102-107
+plugins/auto/tests/helpers/fake-board.sh
+  s_5abb44c8324d7f::t_45630a9e523b2e 1-9
+plugins/auto/tests/helpers/fake-curl.sh
+  s_5abb44c8324d7f::t_fe3e809294350a 1-26
+plugins/auto/tests/helpers/fake-gh.sh
+  s_5abb44c8324d7f::t_dc29f387f11ad0 1-12
+plugins/auto/tests/helpers/fixtures/evidence/board-unsupported.json
+  s_5abb44c8324d7f::t_7c440663066ed5 1
+plugins/auto/tests/helpers/fixtures/evidence/gh-graphql-clean.json
+  s_5abb44c8324d7f::t_5f3b90ff27b9fd 1-48
+plugins/auto/tests/helpers/fixtures/evidence/gh-graphql-pr97-real.json
+  s_5abb44c8324d7f::t_15531b3acaeb98 1-28
+plugins/auto/tests/helpers/fixtures/evidence/gh-view-merged.json
+  s_5abb44c8324d7f::t_2e5d9e968bf900 1-16
+plugins/auto/tests/helpers/fixtures/evidence/linear-hit.json
+  s_5abb44c8324d7f::t_c73a28c7c38b63 1-29
+plugins/auto/tests/helpers/fixtures/evidence/linear-int-refusal.json
+  s_5abb44c8324d7f::t_b13d7fe11fffe5 1-26
+plugins/auto/tests/helpers/fixtures/evidence/linear-other-team-page.json
+  s_5abb44c8324d7f::t_a39afc58ff40cb 1-58
+plugins/auto/tests/unit/programme-verbs.test.sh
+  s_5abb44c8324d7f::t_dbc1aed1b8287f 98
+plugins/auto/tests/unit/verification.test.sh
+  s_5abb44c8324d7f::t_a3cc277afa807e 84-110,157-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5cab3640efcde70e413a3bc7f3cdc1103065bf7d",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
