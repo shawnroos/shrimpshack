@@ -1,0 +1,26 @@
+plugins/auto/tests/unit/task-run-evidence.test.sh
+  s_5abb44c8324d7f::t_3ce1e23c03cb91 1-243
+  s_5abb44c8324d7f::t_4ad00b883aae8f 244-259
+plugins/auto/lib/run_record_evidence.py
+  s_5abb44c8324d7f::t_2707de963ef1c1 1-93
+plugins/auto/lib/format_compat.py
+  s_5abb44c8324d7f::t_837c4203ab5157 173
+plugins/auto/lib/run_record.py
+  s_5abb44c8324d7f::t_205a237969b9e5 61,466-484,550-557
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "90ed035536e22f1aac81e1b5aba9777a41dbc8d4",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
