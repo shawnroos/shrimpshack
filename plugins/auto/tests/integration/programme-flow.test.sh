@@ -569,6 +569,7 @@ RUN10="$(json_of 'd["run"]')"
 run_py "$RUN10" <<'EOF' >/dev/null
 rec = load(args[0])
 rec["programme"]["created_at"] = ago(2)
+rec["programme"]["watchers"]["cadence"] = {"task_id": "cron-88", "process_id": 4242}
 save(args[0], rec)
 EOF
 
@@ -588,7 +589,12 @@ ENDED="$(last_entry "$RUN10" programme_ended)"
 has '"reason": "agreement_unaccepted"' "$ENDED"
 has '"lease_status": "expired"' "$ENDED"
 has '"session_id": "sess-s"' "$ENDED"
-has '"cron_task_ids": []' "$ENDED"
+has '"cron_task_ids": ["cron-88"]' "$ENDED"
+
+it "takeover on an expired programme refreshes the view and names the cadence fallback to remove"
+check "agreement_unaccepted" "$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["model"]["programme"]["ended"]["reason"])' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN10}/views/view.json" 2>&1)"
+has "CronDelete cron-88" "$OUT"
+has "Stop watcher process 4242" "$OUT"
 
 it "beat from a session that does not drive the programme is refused"
 WS=w3

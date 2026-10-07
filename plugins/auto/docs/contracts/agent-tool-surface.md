@@ -203,7 +203,9 @@ session.
   then run-record lock), stamp the driver beat, and journal both session ids.
   Takeover prints the rules in force and the waits and watchers to re-arm. `end`
   releases the leases, sets the run to done (shown as ended) and prints the cron
-  task ids to remove with CronDelete. Refusals are journaled as request_refused.
+  task ids to remove with CronDelete. A `takeover` that finds the lease expired
+  ends the programme the same way: it refreshes the view and prints the same
+  CronDelete lines before it refuses. Refusals are journaled as request_refused.
 - **Driver beat**: `beat` stamps the programme's driver beat; every other
   driving-session write stamps it too, so a working PM keeps its lease live.
 - **Journal pruning**: `python3 lib/programme_journal.py prune --run <id>` drops
@@ -247,6 +249,29 @@ deliverable) need `--prompt <id>` naming a
 prompt that the prompt hook journaled as typed in the driving session. The verb
 copies the quote from the journal, never from its own arguments, and its journal
 entry cites the prompt so pruning keeps it.
+
+The cited prompt must also name what it approves. After separators
+(`_ - . : /` and spaces) are removed and case is ignored, the redacted prompt text
+must contain: for `amend-term`, the term key and the new value; for `adopt-rule`,
+the rule id; for `adopt-autonomy`, the action and the level; for `adopt-check`,
+the repo and the check key (for example `verified.lookup`); for `answer-handed`,
+`drop-item` and `reopen-item`, the item id or its key (for example `AI-753`).
+With `--widening`, the text must also contain the word "widen". A prompt that does not
+name them is refused, and the refusal lists the missing words.
+`accept-agreement`, `record-instruction` and `close-instruction --as withdrawn`
+accept any typed prompt, because the quote is what they record.
+
+The action hook guards each driver's pane. In a session that is not the driving
+session of a live, orphaned or expired lease, it denies any Bash command whose
+text, with quote characters and backslashes removed, names a driver's pane id or
+terminal id as a whole token, however herdr is invoked, and journals
+`blocked_driver_send`. A herdr send call that the hook can parse is also denied
+when its target is a driver's pane, in every session, the driving one included.
+
+The pane guard and the prompt binding stop accidents and casual misuse. A
+determined process running as the same user can still append journal rows or
+type into the pane by means the hook cannot see, such as a raw shell outside
+Claude Code.
 
 This section is fenced by the same test as the run-record verbs: it derives the
 set from `lib/programme.py describe` and fails if any verb is missing here, or if

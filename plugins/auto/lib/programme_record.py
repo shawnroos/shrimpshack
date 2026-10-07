@@ -296,6 +296,15 @@ def _open_deliverables(item) -> list:
                   if (d or {}).get("result") != "confirmed")
 
 
+def _item_names(given, key) -> list:
+    names = []
+    for item_id in (given, key):
+        for name in (item_id.split(":", 1)[-1], item_id):
+            if name not in names:
+                names.append(name)
+    return names
+
+
 def _h_drop_item(host, argv):
     positional, opts = host._parse(argv, values=("run", "reason", "prompt"))
     if len(positional) != 1:
@@ -309,6 +318,7 @@ def _h_drop_item(host, argv):
         if item["state"] not in WAITABLE_STATES:
             raise RecordError(f"item {key!r} is {item['state']}; only an open or waiting item drops")
         still_open = _open_deliverables(item)
+        host.require_named(prompt, _item_names(item_id, key))
         if _issue_backed(key) and still_open and not prompt:
             raise RecordError(
                 f"item {key!r} is issue-backed with open deliverables {still_open}; "
@@ -331,6 +341,7 @@ def _h_reopen_item(host, argv):
         item = programme["items"][key]
         if item["state"] != "dropped":
             raise RecordError(f"item {key!r} is {item['state']}, not dropped")
+        host.require_named(prompt, _item_names(item_id, key))
         item.update(state="open", dropped_reason=None)
         _history(item, "reopened", prompt_id=prompt["prompt_id"])
         return {"item": key}
@@ -497,6 +508,7 @@ def _h_answer_handed(host, argv):
         item = programme["items"][key]
         if item["state"] != "handed":
             raise RecordError(f"item {key!r} is {item['state']}, not handed")
+        host.require_named(prompt, _item_names(item_id, key))
         answered = {"at": _now(), "choice": opts["choice"], "prompt_id": prompt["prompt_id"]}
         item["handed"] = dict(item.get("handed") or {}, answered=answered)
         payload = {"item": key, "choice": opts["choice"]}
@@ -665,9 +677,10 @@ _SPECS = (
     ("merge-item", _h_merge_item, "<from-id> <into-id> [--run <id>]",
      "an unknown id; an item merged into itself."),
     ("drop-item", _h_drop_item, "<id> --reason <text> [--prompt <id>] [--run <id>]",
-     "no --reason; a finished item; an issue-backed item with open deliverables without a typed prompt."),
+     "no --reason; a finished item; an issue-backed item with open deliverables without a typed prompt; "
+     "a prompt whose text does not name the item id or key."),
     ("reopen-item", _h_reopen_item, "<id> --prompt <id> [--run <id>]",
-     "no typed prompt; an item that is not dropped."),
+     "no typed prompt, or one whose text does not name the item id or key; an item that is not dropped."),
     ("set-waiting", _h_set_waiting,
      "<id> --who <name> [--reporter <name>] [--watcher <id> [--process-id <n>] [--task-id <id>]] "
      "[--blocker] [--trace-id <id>] [--job-id <id>] [--due <iso>] [--run <id>] | <id> --clear",
@@ -681,7 +694,8 @@ _SPECS = (
      "a handed or finished item (it notifies once)."),
     ("answer-handed", _h_answer_handed,
      "<id> --choice ship|decline --prompt <id> [--kind <change-kind>]... [--repo <path>] [--run <id>]",
-     "no typed prompt; an item that is not handed; ship with no change kind."),
+     "no typed prompt, or one whose text does not name the item id or key; an item that is not handed; "
+     "ship with no change kind."),
     ("claim", _h_claim, "--run <id> --item <id> --deliverable <name> --ref <reference>",
      "free text; a reference with spaces; an unknown item or a deliverable the item does not "
      "require; an ended programme. Open to any session and exempt from the compact flag."),

@@ -127,7 +127,8 @@ prog() {
   case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
 }
 
-P_TYPED="$(prompt typed 'drop it, we are not doing that')"
+P_TYPED="$(prompt typed 'drop AI-801, we are not doing that')"
+P_VAGUE="$(prompt typed 'drop it, we are not doing that')"
 P_CRON="$(prompt cron 'wake up and sweep the space')"
 
 it "describe lists the item, wait, inbox and working-model verbs"
@@ -233,6 +234,11 @@ it "drop-item without a reason is a usage error"
 prog drop-item herdr:w2/p27
 check 2 "$CODE"
 
+it "drop-item citing a typed prompt that does not name the item is refused"
+prog drop-item linear:AI-801 --reason "Shawn dropped it" --prompt "$P_VAGUE"
+check "1 open" "$CODE $(field 'items["linear:AI-801"]["state"]' | tr -d '"')"
+has "AI-801" "$OUT"
+
 it "drop-item on an issue-backed item with a typed prompt is allowed"
 prog drop-item linear:AI-801 --reason "Shawn dropped it" --prompt "$P_TYPED"
 check '"dropped"' "$(field 'items["linear:AI-801"]["state"]')"
@@ -242,6 +248,11 @@ has "\"cites\": [\"${P_TYPED}\"]" "$(journal_last item_dropped)"
 it "reopen-item on a dropped item with no prompt is refused"
 prog reopen-item linear:AI-801
 check "1 typed prompt" "$CODE $(printf '%s' "$OUT" | grep -o 'typed prompt' | head -1)"
+it "reopen-item citing a typed prompt that names another item is refused"
+P_OTHER_ITEM="$(prompt typed 'reopen AI-802')"
+prog reopen-item linear:AI-801 --prompt "$P_OTHER_ITEM"
+check "1 dropped" "$CODE $(field 'items["linear:AI-801"]["state"]' | tr -d '"')"
+
 it "reopen-item with a typed prompt reopens the dropped item"
 prog reopen-item linear:AI-801 --prompt "$P_TYPED"
 check '["open", null]' "$(field '[items["linear:AI-801"]["state"], items["linear:AI-801"]["dropped_reason"]]')"
@@ -368,7 +379,13 @@ check "1 typed prompt" "$CODE $(printf '%s' "$OUT" | grep -o 'typed prompt' | he
 it "answer-handed with a cron prompt is refused"
 prog answer-handed linear:AI-802 --choice ship --prompt "$P_CRON"
 check 1 "$CODE"
-P_SHIP="$(prompt typed 'ship it')"
+P_VAGUE_SHIP="$(prompt typed 'ship it')"
+it "answer-handed citing a typed prompt that does not name the item is refused"
+prog answer-handed linear:AI-802 --choice ship --prompt "$P_VAGUE_SHIP"
+check "1 handed" "$CODE $(field 'items["linear:AI-802"]["state"]' | tr -d '"')"
+has "AI-802" "$OUT"
+
+P_SHIP="$(prompt typed 'ship ai 802')"
 it "answer-handed choosing ship reopens the item"
 prog answer-handed linear:AI-802 --choice ship --prompt "$P_SHIP"
 check '"open"' "$(field 'items["linear:AI-802"]["state"]')"
@@ -380,13 +397,14 @@ it "answer-handed on an item that is not handed is refused"
 prog answer-handed linear:AI-802 --choice ship --prompt "$P_SHIP"
 check 1 "$CODE"
 it "answer-handed ship on a product question without a new kind is refused"
-prog answer-handed linear:AI-803 --choice ship --prompt "$P_SHIP"
+P_SHIP3="$(prompt typed 'ship AI-803 as flagged code')"
+prog answer-handed linear:AI-803 --choice ship --prompt "$P_SHIP3"
 check 1 "$CODE"
 it "answer-handed ship with a new kind matches that rule"
-prog answer-handed linear:AI-803 --choice ship --kind flagged_code --prompt "$P_SHIP"
+prog answer-handed linear:AI-803 --choice ship --kind flagged_code --prompt "$P_SHIP3"
 check '[["flagged-code"], "open"]' "$(field '[items["linear:AI-803"]["matched_rule"], items["linear:AI-803"]["state"]]')"
 it "answer-handed choosing decline drops the item"
-prog answer-handed herdr:w2/p40 --choice decline --prompt "$P_SHIP"
+prog answer-handed herdr:w2/p40 --choice decline --prompt "$(prompt typed 'decline the w2/p40 pane')"
 check '"dropped"' "$(field 'items["herdr:w2/p40"]["state"]')"
 
 it "record-tested-build stores the shasum"

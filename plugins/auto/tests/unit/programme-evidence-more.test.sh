@@ -151,7 +151,7 @@ EOF
 
 personal_checks() {
   local pid
-  pid="$(typed_prompt "yes, adopt the trace lookup for $1")"
+  pid="$(typed_prompt "yes, adopt the verified lookup and verified deployed_sha for $1")"
   prog adopt-check "$1" verified.lookup "[\"$2\", \"show\", \"{id}\"]" --prompt "$pid"
   ADOPT_CODES="$CODE"
   prog adopt-check "$1" verified.deployed_sha "[\"$2\", \"sha\", \"{id}\", \"{sha}\"]" --prompt "$pid"

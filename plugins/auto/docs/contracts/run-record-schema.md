@@ -732,7 +732,11 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   A used request is marked on the consuming line as `request = {kind, at, session_id, prompt_id}`.
   An expired programme found by `end`, `expire` or `takeover` journals `programme_ended`
   with reason `agreement_unaccepted` and `request: null`; `takeover` also journals its
-  `request_refused`.
+  `request_refused`, rebuilds the view and prints the CronDelete lines.
+- `blocked_driver_send` carries `{verb, target, pane_id, command}`. `verb` is the
+  parsed herdr verb (for example `agent prompt`), or null when the command was denied
+  only because its text names the driver's pane; `target` is then the pane id or
+  terminal id it named. `command` is redacted and capped at 2000 characters.
 - `rule_adopted` is the approval record written by `adopt-rule`, `adopt-autonomy` and
   `adopt-check`: `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
   quote}` with `cites: [prompt_id]`, plus `rule` for a rule, `action` and `level` for an
@@ -740,7 +744,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `autonomy:<action>` or `check:<repo>:<check>`, and `hash` is the entry's content hash.
   The protocol loader needs this line: a same-machine adoption loads only when a
   `rule_adopted` line in the cited run cites the adoption's prompt and carries the entry's
-  target and hash (programme-protocol-format §4).
+  target and hash (programme-protocol-format §4). The verb refuses a prompt whose text
+  does not name the target (agent-tool-surface, Programme verbs), so `quote` names it.
 
 - A `prompt` line has `prompt_id` (`p` + 6 hex) and payload `{text, origin: typed|cron}`.
   `text` is redacted: token patterns and every value of 6 or more characters in the
@@ -781,7 +786,11 @@ appends the rules block to its reason.
 `{view_format: 1, run, generated_at, model, rows}`. `model` holds
 `programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
-`decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`. `rows` is
+`decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`.
+`rules_in_force` holds `agreement`, `rules[] {id, layer, autonomy, requires, caveat,
+adopted_on}`, `autonomy[] {action, level, layer, adopted_on}` (entries not from the
+plugin layer), `rejected_rules[]` and `instructions[]`; an `adopted_on` machine shows
+as "adopted on <machine>". `rows` is
 `[{style: title|head|text|dim|warn, text}]`; `status` prints the rows and the mod
 draws them, so both show the same text. Nothing reads it to decide anything.
 

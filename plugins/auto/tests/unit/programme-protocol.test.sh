@@ -535,6 +535,36 @@ EOF
 )"
 check "[] laptop []" "$OUT"
 
+it "a personal autonomy entry adopted on another machine that widens is rejected as widening_not_adopted_here"
+OUT="$(run_py <<'EOF'
+personal({"autonomy": {"merge_around_gate": adopt({"level": "act"}, machine="laptop", widening=True, target="autonomy:merge_around_gate"),
+                        "canary_deploy": adopt({"level": "act"}, machine="laptop", widening=True, target="autonomy:canary_deploy")}})
+p = pp.load(prompt_lookup=lookup)
+print(reasons(p), p["autonomy"]["merge_around_gate"]["level"], p["autonomy"]["merge_around_gate"]["layer"], "canary_deploy" in p["autonomy"])
+EOF
+)"
+check "['personal/canary_deploy/widening_not_adopted_here', 'personal/merge_around_gate/widening_not_adopted_here'] never plugin False" "$OUT"
+
+it "a personal rule adopted on another machine that widens is rejected, with or without the widening mark"
+OUT="$(run_py <<'EOF'
+personal({"rules": [adopt(rule("shared-blocker", ["shared_blocker"], ["debugged"], autonomy="act"), machine="laptop", widening=True),
+                    adopt(rule("product-question", ["product_question"], ["debugged"], autonomy="act"), machine="laptop")]})
+p = pp.load(prompt_lookup=lookup)
+print(reasons(p), p["rules"]["shared-blocker"]["autonomy"], p["rules"]["product-question"]["autonomy"])
+EOF
+)"
+check "['personal/product-question/widening_not_adopted_here', 'personal/shared-blocker/widening_not_adopted_here'] never propose" "$OUT"
+
+it "a personal autonomy entry adopted on another machine that narrows loads, marked with its machine"
+OUT="$(run_py <<'EOF'
+personal({"autonomy": {"merge_at_gate": adopt({"level": "propose"}, machine="laptop", target="autonomy:merge_at_gate")}})
+p = pp.load(prompt_lookup=lookup)
+a = p["autonomy"]["merge_at_gate"]
+print(p["rejected"], a["level"], a["layer"], a["adopted_on"])
+EOF
+)"
+check "[] propose personal laptop" "$OUT"
+
 fresh
 run_py <<'EOF' >/dev/null
 seed("foreign", {"rules": [adopt(rule("flagged-code", ["flagged_code"], ["merged"]), machine="nowhere")],

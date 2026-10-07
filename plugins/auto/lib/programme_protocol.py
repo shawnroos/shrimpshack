@@ -246,7 +246,12 @@ def _adopt(layer, entry, lookup, prior_level, level, target):
     adopted_on = _verify_adoption(entry, lookup, target, local_only=(layer == "project"),
                                   elsewhere="not_adopted_here")
     widening = entry["adoption"].get("widening") is True
-    if prior_level is not None and _wider(level, prior_level) and not widening:
+    wider = prior_level is not None and _wider(level, prior_level)
+    # Another machine's adoption is checked only by its own hash, which any writer of the
+    # synced file can recompute, so it may narrow here but never widen.
+    if adopted_on is not None and (widening or wider):
+        raise _Reject("widening_not_adopted_here", adopted_on)
+    if wider and not widening:
         raise _Reject("widening_unmarked", "%s over %s" % (level, prior_level))
     return adopted_on
 

@@ -97,7 +97,7 @@ DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
 check "accept-agreement add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed beat check-deliverable claim close-instruction describe drop-item end expire hand-item handover mark-read merge-item prompt-item propose-agreement propose-rule queue record-instruction record-tested-build reopen-item rules set-now set-source set-waiting start start-worker status sweep takeover validate watcher-beat" "$VERBS"
 
-P_TYPED="$(prompt typed 'stop only when everything is done')"
+P_TYPED="$(prompt typed 'stop rule: only when done, stop only when everything is done')"
 P_CRON="$(prompt cron 'wake up and sweep the space')"
 
 it "amend-term with an unknown prompt id is refused"
@@ -133,12 +133,23 @@ check 1 "$CODE"
 it "the refused callers left the term unchanged"
 check '"nothing_it_can_act_on"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["value"]')"
 
+it "amend-term citing a typed prompt that does not name the new value is refused"
+P_VAGUE="$(prompt typed 'change the stop rule')"
+prog amend-term stop_rule only_when_done --prompt "$P_VAGUE"
+check 1 "$CODE"
+has "only_when_done" "$OUT"
+it "amend-term citing a typed prompt that does not name the term is refused"
+prog amend-term stop_rule only_when_done --prompt "$(prompt typed 'only when done please')"
+check 1 "$CODE"
+has "stop_rule" "$OUT"
+check '"nothing_it_can_act_on"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["value"]')"
+
 it "amend-term with a typed prompt changes the term"
 prog amend-term stop_rule only_when_done --prompt "$P_TYPED" --why "the argument wording"
 check 0 "$CODE"
 check '"only_when_done"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["value"]')"
 it "the term records the quote from the journal, not the argument"
-check '"stop only when everything is done"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["quote"]')"
+check '"stop rule: only when done, stop only when everything is done"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["quote"]')"
 it "the journal entry quotes the prompt and cites it"
 GOT="$(run_py "$RUN" "$P_TYPED" <<'EOF'
 run, pid = args
@@ -146,7 +157,7 @@ row = [r for r in pj.read(run) if r["kind"] == "term_amended"][-1]
 print(row["payload"]["quote"] + "|" + ",".join(row.get("cites") or []))
 EOF
 )"
-check "stop only when everything is done|${P_TYPED}" "$GOT"
+check "stop rule: only when done, stop only when everything is done|${P_TYPED}" "$GOT"
 
 it "the cited prompt survives pruning while the uncited cron prompt goes"
 GOT="$(run_py "$RUN" "$P_TYPED" "$P_CRON" <<'EOF'
@@ -243,7 +254,7 @@ prog propose-agreement --term cadence=on_change
 check 1 "$CODE"
 
 touch "${HOME_DIR}/.compact-flag"
-P_AFTER="$(prompt typed 'never stop, keep going')"
+P_AFTER="$(prompt typed 'stop rule never_stop, keep going')"
 it "a write verb is refused while the compact flag is set"
 prog amend-term stop_rule never_stop --prompt "$P_AFTER"
 check 1 "$CODE"
@@ -281,6 +292,12 @@ check '["docs-verified"]' "$(field '[r["id"] for r in prog["proposed_rules"]]')"
 it "adopt-rule citing a cron prompt is refused and writes no personal file"
 prog adopt-rule docs-verified --prompt "$P_CRON"
 check 1 "$CODE"
+check no "$([ -e "$CLAUDE_AUTO_PERSONAL_PROTOCOL" ] && echo yes || echo no)"
+
+it "adopt-rule citing a typed prompt that does not name the rule is refused"
+prog adopt-rule docs-verified --prompt "$(prompt typed 'yes, adopt that rule')"
+check 1 "$CODE"
+has "docs-verified" "$OUT"
 check no "$([ -e "$CLAUDE_AUTO_PERSONAL_PROTOCOL" ] && echo yes || echo no)"
 
 P_ADOPT="$(prompt typed 'yes adopt docs-verified, token hunter2secretvalue')"
@@ -354,11 +371,19 @@ prog adopt-autonomy prod_deploy never
 check "1" "$CODE"
 
 it "adopt-autonomy refuses an unknown level and a bad action"
-P_AUTO="$(prompt typed 'yes, never deploy prod and act on merges around the gate')"
+P_AUTO="$(prompt typed 'yes, set prod deploy to never')"
 prog adopt-autonomy prod_deploy sometimes --prompt "$P_AUTO"
 check "1" "$CODE"
 prog adopt-autonomy 'Bad Action' never --prompt "$P_AUTO"
 check "1" "$CODE"
+
+it "adopt-autonomy citing a typed prompt that does not name the action and level is refused"
+prog adopt-autonomy prod_deploy never --prompt "$(prompt typed 'yes, never deploy prod')"
+check 1 "$CODE"
+has "prod_deploy" "$OUT"
+prog adopt-autonomy prod_deploy never --prompt "$(prompt typed 'yes, prod_deploy')"
+check 1 "$CODE"
+has "never" "$OUT"
 
 it "adopt-autonomy narrowing a level loads from the personal layer"
 prog adopt-autonomy prod_deploy never --prompt "$P_AUTO"
@@ -380,13 +405,18 @@ check "autonomy prod_deploy never True True True" "$GOT"
 
 it "adopt-autonomy widening a level without --widening is refused and writes nothing"
 BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
-prog adopt-autonomy merge_around_gate act --prompt "$P_AUTO"
+prog adopt-autonomy merge_around_gate act --prompt "$(prompt typed 'widen merge around gate to act')"
 check "1" "$CODE"
 has "--widening" "$OUT"
 check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
 
+it "adopt-autonomy --widening citing a prompt without the word widen is refused"
+prog adopt-autonomy merge_around_gate act --widening --prompt "$(prompt typed 'merge around gate: act')"
+check 1 "$CODE"
+has "widen" "$OUT"
+
 it "adopt-autonomy widening with --widening loads"
-prog adopt-autonomy merge_around_gate act --widening --prompt "$P_AUTO"
+prog adopt-autonomy merge_around_gate act --widening --prompt "$(prompt typed 'yes, widen merge_around_gate to act')"
 check "0" "$CODE"
 check '["act", "personal"]' "$(load_personal '[loaded["autonomy"]["merge_around_gate"][k] for k in ("level", "layer")]')"
 
@@ -409,7 +439,7 @@ prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$P_CRON"
 check "1" "$CODE"
 
 it "adopt-check refuses an unknown check key, a bad argv and an unknown placeholder"
-P_CHECK="$(prompt typed 'yes, adopt the trace lookup for acme/web')"
+P_CHECK="$(prompt typed 'yes, adopt the verified lookup for acme/web')"
 prog adopt-check acme/web verified.other "$LOOKUP_ARGV" --prompt "$P_CHECK"
 check "1" "$CODE"
 prog adopt-check acme/web verified.lookup '[]' --prompt "$P_CHECK"
@@ -418,6 +448,15 @@ prog adopt-check acme/web verified.lookup '["trace-cli","{token}"]' --prompt "$P
 check "1" "$CODE"
 prog adopt-check acme/web verified.lookup 'not json' --prompt "$P_CHECK"
 check "1" "$CODE"
+
+it "adopt-check citing a typed prompt that does not name the check or the repo is refused"
+prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$(prompt typed 'yes, adopt the trace lookup for acme/web')"
+check 1 "$CODE"
+has "verified.lookup" "$OUT"
+prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$(prompt typed 'yes, adopt verified.lookup')"
+check 1 "$CODE"
+has "acme/web" "$OUT"
+check '[]' "$(load_personal 'sorted(loaded["checks"])')"
 
 it "adopt-check writes the check under its repo and it loads"
 prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$P_CHECK"
@@ -461,6 +500,24 @@ for kind in term_amended instruction_recorded instruction_closed agreement_propo
   case "$GOT" in *"$kind"*) : ;; *) GOT="missing:${kind}" ;; esac
 done
 lacks "missing:" "$GOT"
+
+it "status shows a personal rule and autonomy entry adopted on another machine as adopted there"
+personal_doc '
+pp = load_lib_module("programme_protocol")
+rule = dict(doc["rules"][0])
+rule.update(id="laptop-docs", autonomy="propose")
+rule.pop("adoption")
+gate = {"level": "propose"}
+for entry in (rule, gate):
+    entry["adoption"] = dict(doc["rules"][0]["adoption"], machine="laptop", hash=pp.content_hash(entry))
+doc["rules"].append(rule)
+doc["autonomy"]["merge_at_gate"] = gate
+'
+prog status
+has "rule laptop-docs: propose, requires merged, adopted on laptop" "$OUT"
+has "autonomy merge_at_gate: propose, adopted on laptop" "$OUT"
+lacks "docs-verified: act_and_tell, requires merged, adopted on" "$OUT"
+personal_doc 'doc["rules"] = [r for r in doc["rules"] if r["id"] != "laptop-docs"]; del doc["autonomy"]["merge_at_gate"]'
 
 it "rules without --run and with no lease for the session is refused"
 CLAUDE_CODE_SESSION_ID="sess-nobody" prog rules

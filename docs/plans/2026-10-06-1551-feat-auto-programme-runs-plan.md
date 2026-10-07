@@ -442,7 +442,7 @@ sequenceDiagram
 - **Adoption filter:** shells with no agent, the PM's own pane and the board's pane never become items.
 - **Pane id reuse:** herdr may reuse a pane id after the pane closes. An item records the pane's terminal id, and a pane whose terminal id changed is "session unknown", never the owner.
 - **Autonomy and spend:** in V1 the PM follows autonomy levels and the spend cap on trust. Code enforces only the ownership, approval and evidence rules above.
-- **Tamper limits:** any session with Bash can edit the run record or a protocol file directly. A process outside Claude Code (a raw shell) can still type into the PM's pane with herdr. The journal, adoption checks and the validate pass make such edits visible; they do not prevent them.
+- **Tamper limits:** the driver-pane guard and approval binding stop accidents and casual misuse. They do not stop a determined process running as the same user: it can still forge journal rows, or type into the pane by means the guard can't see (a raw shell outside Claude Code, a script file). Any session with Bash can also edit the run record or a protocol file directly. The journal, adoption checks and the validate pass make such edits visible; they do not prevent them. An adoption synced from another machine may narrow autonomy but never widen it.
 
 ### Sequencing and Parallelism
 

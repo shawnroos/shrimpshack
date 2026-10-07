@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 
@@ -35,6 +36,7 @@ RULES_TAG = "auto-rules"
 INSTRUCTION_ENDINGS = ("fulfilled", "withdrawn")
 PERSONAL_LOCK = ".personal-protocol.lock"
 APPROVAL_KINDS = ("rule_adopted",)
+_NAME_SEPARATORS = re.compile(r"[\s_\-.:/]+")
 
 
 class ProgrammeError(Exception):
@@ -160,13 +162,18 @@ def rules_in_force(record, journals=None) -> dict:
     protocol = programme_protocol.load(
         prompt_lookup=lambda run_id, prompt_id: prompt_lookup(run_id, prompt_id, journals))
     rules = [{"id": rid, "layer": rule["layer"], "autonomy": rule["autonomy"],
-              "requires": list(rule["requires"]), "caveat": rule["caveat"]}
+              "requires": list(rule["requires"]), "caveat": rule["caveat"],
+              "adopted_on": rule["adopted_on"]}
              for rid, rule in sorted(protocol["rules"].items())]
+    autonomy = [{"action": action, "level": entry["level"], "layer": entry["layer"],
+                 "adopted_on": entry["adopted_on"]}
+                for action, entry in sorted(protocol["autonomy"].items()) if entry["layer"] != "plugin"]
     return {
         "run": record.get("run_id"),
         "agreement": {"accepted": programme["agreement"].get("accepted"),
                       "terms": _terms_view(programme["agreement"])},
         "rules": rules,
+        "autonomy": autonomy,
         "rejected_rules": [{"id": r["id"], "layer": r["layer"], "reason": r["reason"]}
                            for r in protocol["rejected"]],
         "instructions": active_instructions(programme),
@@ -210,6 +217,30 @@ def _typed_prompt(run_id, record, prompt_id) -> dict:
         raise ProgrammeError(f"prompt {prompt_id!r} was not typed in the driving session")
     return {"prompt_id": prompt_id, "quote": payload.get("text") or "",
             "text_hash": text_hash(payload.get("text"))}
+
+
+def _squash(text) -> str:
+    return _NAME_SEPARATORS.sub("", str(text or "")).casefold()
+
+
+def require_named(prompt, *needs) -> None:
+    if not prompt:
+        return
+    text = _squash(programme_journal.redact(prompt["quote"]))
+    missing = []
+    for need in needs:
+        options = [o for o in (need if isinstance(need, (list, tuple)) else (need,)) if _squash(o)]
+        if options and not any(_squash(o) in text for o in options):
+            missing.append(" or ".join(repr(o) for o in options))
+    if missing:
+        raise ProgrammeError(
+            f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "
+            f"contain {' and '.join(missing)}"
+        )
+
+
+def _widen_word(opts) -> tuple:
+    return ("widen",) if opts.get("widening") else ()
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
@@ -292,7 +323,8 @@ def _h_describe(argv):
             "count), revalidate under the run-record lock, refuse while the compact flag "
             "is set (except `rules --ack` and `watcher-beat`), and journal. `claim` is open "
             "to any session with --run <id>. Approval verbs need --prompt <id> "
-            "of a typed prompt and copy its text as the quote. See "
+            "of a typed prompt and copy its text as the quote; a verb that approves a named "
+            "target also needs the prompt text to name it. See "
             "docs/contracts/agent-tool-surface.md."
         ),
         "locate": "--run <id>, else the programme whose lease names this session.",
@@ -367,6 +399,7 @@ def _h_amend_term(argv):
     def change(programme, prompt, rec):
         term = _term(programme, key)
         _check_value(term, value, opts)
+        require_named(prompt, key, value)
         return _set_term(term, value, opts, set_by="shawn", why=opts.get("why"), prompt=prompt)
 
     return _write(opts, change, "term_amended", prompt_id=opts.get("prompt"), needs_prompt=True)
@@ -508,6 +541,7 @@ def _h_adopt_rule(argv):
         if not verdict["ok"]:
             raise ProgrammeError(f"rule refused: {verdict['reason']} ({verdict['detail']})")
         _check_widening("rules", rule["id"], rule["autonomy"], opts.get("widening"))
+        require_named(prompt, rule_id, *_widen_word(opts))
         adoption = _adoption(rule, prompt, rec, opts.get("widening"))
         _write_personal(_put_rule(dict(rule, adoption=adoption)))
         programme["proposed_rules"] = [r for r in proposals if r is not hits[0]]
@@ -530,6 +564,7 @@ def _h_adopt_autonomy(argv):
     _check_widening("autonomy", action, level, opts.get("widening"))
 
     def change(programme, prompt, rec):
+        require_named(prompt, action, level, *_widen_word(opts))
         adopted = dict(entry, adoption=_adoption(entry, prompt, rec, opts.get("widening")))
         _write_personal(lambda doc: doc.setdefault("autonomy", {}).__setitem__(action, adopted))
         return {"entry": "autonomy", "action": action, "level": level,
@@ -553,6 +588,7 @@ def _h_adopt_check(argv):
         raise ProgrammeError(f"check refused: {verdict['reason'] or 'bad_value'} ({verdict['detail'] or 'repo'})")
 
     def change(programme, prompt, rec):
+        require_named(prompt, repo, key)
         adopted = dict(entry, adoption=_adoption(entry, prompt, rec, False))
         _write_personal(lambda doc: doc.setdefault("checks", {}).setdefault(repo, {}).__setitem__(key, adopted))
         return {"entry": "check", "repo": repo, "check": key,
@@ -583,7 +619,7 @@ _VERBS = {
         _h_amend_term,
         "<key> <value> --prompt <id> [--why <text>] [--until <iso>] [--seconds <n>] [--run <id>]",
         rejects="a value outside the term's options (use record-instruction); a prompt that is "
-        "not typed; until_time without --until.",
+        "not typed or does not name the term key and the value; until_time without --until.",
     ),
     "record-instruction": _Verb(
         _h_record_instruction,
@@ -603,19 +639,22 @@ _VERBS = {
     "adopt-rule": _Verb(
         _h_adopt_rule,
         "<rule-id> --prompt <id> [--widening] [--run <id>]",
-        rejects="no proposal with that id; a prompt that is not typed; a widening without --widening.",
+        rejects="no proposal with that id; a prompt that is not typed or does not name the rule id "
+        "(and the word widen with --widening); a widening without --widening.",
     ),
     "adopt-autonomy": _Verb(
         _h_adopt_autonomy,
         "<action> <never|propose|act_and_tell|act> --prompt <id> [--widening] [--run <id>]",
-        rejects="an unknown level or a bad action name; a prompt that is not typed; a level wider "
+        rejects="an unknown level or a bad action name; a prompt that is not typed or does not name "
+        "the action and the level (and the word widen with --widening); a level wider "
         "than the plugin default without --widening.",
     ),
     "adopt-check": _Verb(
         _h_adopt_check,
         "<repo> <verified.lookup|verified.deployed_sha> <argv-json> --prompt <id> [--run <id>]",
         rejects="an unknown check; an argv that is not a non-empty JSON array of strings or names a "
-        "placeholder other than {id}, {sha} or {repo}; a prompt that is not typed.",
+        "placeholder other than {id}, {sha} or {repo}; a prompt that is not typed or does not name "
+        "the repo and the check key.",
     ),
 }
 

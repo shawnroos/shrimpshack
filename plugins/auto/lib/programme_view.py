@@ -166,6 +166,10 @@ def _just_did(journal_entries) -> list:
     return out
 
 
+def _adopted_on(entry) -> str:
+    return f", adopted on {entry['adopted_on']}" if entry.get("adopted_on") else ""
+
+
 def _rules(block, rules) -> dict:
     if rules is not None:
         return rules
@@ -173,7 +177,7 @@ def _rules(block, rules) -> dict:
     return {"agreement": {"accepted": _dict(block.get("agreement")).get("accepted"),
                           "terms": {k: {"value": _dict(t).get("value"), "set_by": _dict(t).get("set_by")}
                                     for k, t in sorted(terms.items())}},
-            "rules": [], "rejected_rules": [], "instructions": []}
+            "rules": [], "autonomy": [], "rejected_rules": [], "instructions": []}
 
 
 def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> dict:
@@ -244,7 +248,9 @@ def _rule_lines(r) -> list:
         out.append(_row(f"  {key}: {term.get('value')} ({term.get('set_by')}){why}"))
     for rule in r.get("rules") or []:
         out.append(_row(f"  rule {rule.get('id')}: {rule.get('autonomy')}, requires "
-                        f"{', '.join(rule.get('requires') or []) or 'nothing'}"))
+                        f"{', '.join(rule.get('requires') or []) or 'nothing'}{_adopted_on(rule)}"))
+    for entry in r.get("autonomy") or []:
+        out.append(_row(f"  autonomy {entry.get('action')}: {entry.get('level')}{_adopted_on(entry)}"))
     for rule in r.get("rejected_rules") or []:
         out.append(_row(f"  rejected rule {rule.get('id')}: {rule.get('reason')}", "warn"))
     for entry in r.get("instructions") or []:

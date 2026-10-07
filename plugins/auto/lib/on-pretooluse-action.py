@@ -588,10 +588,8 @@ def _herdr_sends(command: str, depth: int = 0) -> list:
     """(verb, target) for every herdr call in ``command`` that types into a pane.
 
     A ``bash``/``sh``/``zsh``/``dash`` ``-c`` script, also behind ``env``, is
-    scanned as its own command. Residuals, as with the destructive set: an agent
-    addressed by name, a send built through eval or a variable (``bash -c "$CMD"``),
-    a script file or another language, and ``herdr api``, which has no send call
-    in this herdr build.
+    scanned as its own command. This only names the verb; ``_names_pane`` is the
+    check that does not depend on how herdr is invoked.
     """
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
@@ -641,36 +639,63 @@ def _targets_pane(target: str, driver: dict) -> bool:
     return not here or pane.split(":", 1)[0] == here
 
 
+_ID_EDGE = "A-Za-z0-9_"
+_HIDING_CHARS = re.compile(r"[\"'\\\\]")
+
+
+def _names_pane(command: str, driver: dict):
+    text = _HIDING_CHARS.sub("", command).casefold()
+    for ident in (driver.get("pane_id"), driver.get("terminal_id")):
+        if ident and re.search(r"(?<![%s])%s(?![%s])" % (_ID_EDGE, re.escape(ident.casefold()), _ID_EDGE),
+                               text):
+            return ident
+    return None
+
+
+def _driver_hit(command: str, session_id, sends: list, driver: dict):
+    for verb, target in sends:
+        if _targets_pane(target, driver):
+            return verb, target
+    if session_id == driver.get("session_id"):
+        return None
+    named = _names_pane(command, driver)
+    return (None, named) if named else None
+
+
 def driver_send_denial(stdin_raw: str) -> dict | None:
     session_id, command = _read_stdin(stdin_raw)
-    sends = _herdr_sends(command) if "herdr" in command.lower() else []
-    if not sends:
+    if not command:
         return None
     session_registry = load_lib_module("session_registry")
     drivers = session_registry.driver_panes()
-    for verb, target in sends:
-        for driver in drivers:
-            if not _targets_pane(target, driver):
-                continue
-            try:
-                journal = load_lib_module("programme_journal")
-                journal.append(driver["run"], "blocked_driver_send", session_id, {
-                    "verb": verb, "target": target, "pane_id": driver["pane_id"],
-                    "command": journal.redact(command)[:2000],
-                })
-            except Exception:
-                pass
-            reason = (
-                f"auto: blocked `herdr {verb}` into pane {driver['pane_id']}, the "
-                f"driver's pane of programme {driver['run']!r}. Only the person types "
-                "into the programme driver's pane; report through the programme's "
-                "inbox instead. This attempt is journaled."
-            )
-            return {"hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }}
+    if not drivers:
+        return None
+    sends = _herdr_sends(command)
+    for driver in drivers:
+        hit = _driver_hit(command, session_id, sends, driver)
+        if hit is None:
+            continue
+        verb, target = hit
+        try:
+            journal = load_lib_module("programme_journal")
+            journal.append(driver["run"], "blocked_driver_send", session_id, {
+                "verb": verb, "target": target, "pane_id": driver["pane_id"],
+                "command": journal.redact(command)[:2000],
+            })
+        except Exception:
+            pass
+        what = f"`herdr {verb}` into pane" if verb else "a command naming pane"
+        reason = (
+            f"auto: blocked {what} {driver['pane_id']}, the driver's pane of programme "
+            f"{driver['run']!r}. Only the person types into the programme driver's pane, "
+            "and other sessions may not name it in any command; report through the "
+            "programme's inbox instead. This attempt is journaled."
+        )
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }}
     return None
 
 

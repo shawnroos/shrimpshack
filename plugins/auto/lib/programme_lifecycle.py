@@ -114,11 +114,22 @@ def _journal(run, kind, sid, payload, cites=None) -> None:
         programme_journal.append(run, kind, sid, payload, cites=cites)
 
 
+def _cleanup_lines(ended) -> None:
+    for task_id in ended.get("cron_task_ids") or []:
+        sys.stdout.write(f"Remove the cadence fallback: CronDelete {task_id}\n")
+    for pid in ended.get("process_ids") or []:
+        sys.stdout.write(f"Stop watcher process {pid} if it is still running.\n")
+
+
 def _refuse(host, run, verb, sid, exc):
     if exc.ended is not None:
         _journal(run, "programme_ended", sid, exc.ended)
     _journal(run, "request_refused", sid,
              {"verb": verb, "reason": exc.reason, "lease_status": exc.status})
+    if exc.ended is not None:
+        if os.path.isdir(programme_home.home_path(run)):
+            host.refresh_view(run, programme_home.home_path(run))
+        _cleanup_lines(exc.ended)
     raise host.ProgrammeError(exc.reason)
 
 
@@ -297,10 +308,7 @@ def _h_end(host, argv):
         _refuse(host, run, "end", sid, exc)
     _finish(host, run, "programme_ended", sid, out, cites=cites)
     sys.stdout.write(f"Programme {run} ended.\n")
-    for task_id in out["cron_task_ids"]:
-        sys.stdout.write(f"Remove the cadence fallback: CronDelete {task_id}\n")
-    for pid in out["process_ids"]:
-        sys.stdout.write(f"Stop watcher process {pid} if it is still running.\n")
+    _cleanup_lines(out)
     return 0
 
 

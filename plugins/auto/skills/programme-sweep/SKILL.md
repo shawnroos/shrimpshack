@@ -51,6 +51,13 @@ from this session's lease.
    | Two items are one piece of work | `P merge-item <from-item> <into-item>` |
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
 
+   The cited message must name what it approves, or the verb refuses it and
+   lists the missing words: the item id or key (`AI-753`) for the item rows, the
+   rule id for `adopt-rule`, the action and the level for `adopt-autonomy`, the
+   repo and the check key (`verified.lookup`) for `adopt-check`. A `--widening`
+   needs the word "widen" in his message too. When his message does not name the
+   target, do not run the verb: ask him to confirm in words that name it, for
+   example "adopt merge_around_gate at act, widen it", and cite that reply.
    An answer that fits no row is an instruction: record it. `P describe` lists
    every verb with its arguments and what it refuses.
 4. **Validate.** `P validate` re-checks confirmed evidence that has gone stale.

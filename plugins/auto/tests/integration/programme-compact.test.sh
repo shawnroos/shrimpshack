@@ -108,7 +108,7 @@ EOF
 
 P_RULE="$(typed "don't fix other teams' breaks")"
 P_GONE="$(typed "hold the flaky suite until Friday")"
-P_TERM="$(typed "stop only when everything is done")"
+P_TERM="$(typed "stop rule: only when done")"
 
 it "the PM records the instruction to leave other teams' breaks alone"
 prog record-instruction --prompt "$P_RULE"

@@ -110,6 +110,11 @@ rm -f "${WORK}/python-ran"
 ( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"s0","tool_input":{"command":"ls"}}' )
 if [ ! -e "${WORK}/python-ran" ]; then pass; else fail "python ran"; fi
 
+it "a machine with no leases and no repo: a Bash command naming a pane id runs no Python"
+rm -f "${WORK}/python-ran"
+( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"s0","tool_name":"Bash","tool_input":{"command":"eval herdr agent prompt w2:p31 go"}}' )
+if [ ! -e "${WORK}/python-ran" ]; then pass; else fail "python ran"; fi
+
 it "under the test harness with no data dir, SessionStart skips the registry"
 rm -f "${WORK}/python-ran"
 ( cd "$NOREPO" && unset CLAUDE_AUTO_DATA_DIR && CLAUDE_AUTO_TEST_HARNESS=1 HERDR_PANE_ID="w2:p1" \
@@ -291,9 +296,67 @@ it "the same shell -c wrappers sending to a worker pane are allowed"
 OUT="$(action_hook sess-worker "bash -c 'herdr agent prompt w2:p50 hi'")$(action_hook sess-worker 'sh -c "herdr pane send-text w2:p50 x"')"
 check "" "$OUT"
 
-it "a read-only herdr command naming the PM's pane is allowed"
-OUT="$(action_hook sess-worker 'herdr pane get w2:p31')"
+HIDDEN_FORMS=(
+  'echo `herdr pane send-text PANE hi`'
+  "eval 'herdr pane send-text PANE hi'"
+  "echo 'herdr pane run PANE ls' | bash"
+  "bash -s <<< 'herdr pane run PANE ls'"
+  "python3 -c \"import os; os.system('herdr pane send-text PANE hi')\""
+  "ksh -c 'herdr agent prompt PANE hi'"
+  "fish -c 'herdr agent prompt PANE hi'"
+  "h''erdr pane send-text PANE hi"
+  'her\dr pane send-text PANE hi'
+  "H=herdr; \$H agent prompt PANE go"
+)
+
+it "a send to the PM's pane hidden from the parser is denied and journaled"
+ALL=1
+for form in "${HIDDEN_FORMS[@]}" "herdr pane send-text w2:p3''1 hi" "eval \"herdr agent prompt w2:p3''1 go\"" 'echo w2:p\31' "eval 'herdr agent prompt term_p31 go'"; do
+  c="${form//PANE/w2:p31}"
+  OUT="$(action_hook sess-worker "$c")"
+  ROW="$(run_py "$RUN" <<'EOF'
+r = pj.read(args[0])[-1]
+print(r["kind"], r["session_id"])
+EOF
+)"
+  case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied: $c" ;; esac
+  [ "$ROW" = "blocked_driver_send sess-worker" ] || { ALL=0; echo "      not journaled: $c ($ROW)"; }
+  run_py "$RUN" <<'EOF' >/dev/null
+pj.append(args[0], "rules_acked", "sess-test", {})
+EOF
+done
+check "1" "$ALL"
+
+it "the same hidden forms sending to a worker pane are allowed"
+ALL=1
+for form in "${HIDDEN_FORMS[@]}" "herdr agent prompt w2:p310 go" "herdr agent prompt term_p311 go"; do
+  c="${form//PANE/w2:p50}"
+  OUT="$(action_hook sess-worker "$c")"
+  [ -z "$OUT" ] || { ALL=0; echo "      not allowed: $c ($OUT)"; }
+done
+check "1" "$ALL"
+
+it "the driving session may name its own pane in a command that sends nothing"
+OUT="$(action_hook sess-pm 'herdr pane get w2:p31')$(action_hook sess-pm 'echo "driver is w2:p31"')"
 check "" "$OUT"
+
+it "the driving session is still denied a parsed send into its own pane"
+OUT="$(action_hook sess-pm 'herdr agent prompt w2:p31 "adopt rule"')"
+case "$OUT" in *'"deny"'*) pass ;; *) fail "not denied: $OUT" ;; esac
+
+it "a read-only herdr command naming the PM's pane from another session is denied"
+OUT="$(action_hook sess-worker 'herdr pane get w2:p31')"
+ROW="$(run_py "$RUN" <<'EOF'
+r = pj.read(args[0])[-1]
+print(r["kind"], r["payload"]["verb"], r["payload"]["target"])
+EOF
+)"
+case "$OUT" in *'"deny"'*) check "blocked_driver_send None w2:p31" "$ROW" ;; *) fail "not denied: $OUT" ;; esac
+
+it "with a lease and no repo, a Bash command naming the PM's pane reaches Python"
+rm -f "${WORK}/python-ran"
+( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"s0","tool_name":"Bash","tool_input":{"command":"echo w2:p31"}}' )
+if [ -e "${WORK}/python-ran" ]; then pass; else fail "python did not run"; fi
 
 it "the journaled command is redacted"
 action_hook sess-worker 'herdr pane send-text w2:p31 fixture-value-9f8e7d' >/dev/null
