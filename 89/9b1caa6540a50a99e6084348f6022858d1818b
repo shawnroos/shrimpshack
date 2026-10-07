@@ -1,0 +1,53 @@
+plugins/auto/tests/integration/programme-flow.test.sh
+  s_5abb44c8324d7f::t_278a881c3c998b 1-482
+  s_5abb44c8324d7f::t_132cb42ed8349d 483-518
+plugins/auto/skills/programme-sweep/SKILL.md
+  s_5abb44c8324d7f::t_9891037550056a 1-97
+  s_5abb44c8324d7f::t_a7fa1d9d43cc71 98-99
+plugins/auto/docs/contracts/agent-tool-surface.md
+  s_5abb44c8324d7f::t_67fca745413a82 188-206
+  s_5abb44c8324d7f::t_0ace27f8134836 148-150,207-221
+plugins/auto/lib/programme_lifecycle.py
+  s_5abb44c8324d7f::t_74d1b53f658d44 1-346
+  s_5abb44c8324d7f::t_e6d01a231dea1f 347-359
+plugins/auto/.claude-plugin/plugin.json
+  s_5abb44c8324d7f::t_bd8c87dc4b30cb 4
+plugins/auto/commands/programme-end.md
+  s_5abb44c8324d7f::t_cd197cfd85f8a0 1-19
+plugins/auto/commands/programme-handover.md
+  s_5abb44c8324d7f::t_17a80dcedb1d0c 1-22
+plugins/auto/commands/programme-takeover.md
+  s_5abb44c8324d7f::t_6990a886548902 1-24
+plugins/auto/commands/programme.md
+  s_5abb44c8324d7f::t_d3c5836f587a13 1-61
+plugins/auto/docs/contracts/run-record-schema.md
+  s_5abb44c8324d7f::t_c1c988de6a1404 697,725-732
+plugins/auto/lib/programme.py
+  s_5abb44c8324d7f::t_ebbafc38942aa3 204,624-627
+plugins/auto/lib/programme_journal.py
+  s_5abb44c8324d7f::t_4239b7312100b7 76-80
+plugins/auto/lib/programme_record.py
+  s_5abb44c8324d7f::t_106289e142d2c3 371-374,380-381,673-674
+plugins/auto/skills/programme-sweep/references/waits-and-watchers.md
+  s_5abb44c8324d7f::t_30348b8cf96f5c 1-35
+plugins/auto/tests/unit/import-topology.test.sh
+  s_5abb44c8324d7f::t_5b8fc736483faa 104-106,108-109,416,436
+plugins/auto/tests/unit/programme-verbs.test.sh
+  s_5abb44c8324d7f::t_fa1b1e81cf6c6b 98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "899b1caa6540a50a99e6084348f6022858d1818b",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
