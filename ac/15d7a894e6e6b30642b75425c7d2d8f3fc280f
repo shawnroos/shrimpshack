@@ -1,0 +1,72 @@
+plugins/auto/lib/programme_exec.py
+  s_5abb44c8324d7f::t_50a2d6fa483f5c 1-83
+plugins/auto/tests/unit/programme-source-reads.test.sh
+  s_5abb44c8324d7f::t_1a326c8bd911c2 1-349
+plugins/auto/lib/programme_plans.py
+  s_5abb44c8324d7f::t_b49946f7d12703 1-121
+  s_5abb44c8324d7f::t_abea8cdea0fb91 122-123
+plugins/auto/lib/programme_tracker.py
+  s_5abb44c8324d7f::t_ea126ef77299ec 1-161
+plugins/auto/lib/programme_tasks.py
+  s_5abb44c8324d7f::t_a2be802d04dc10 1-75
+plugins/auto/commands/programme.md
+  s_5abb44c8324d7f::t_3aec2c249dc6fe 26-29,31-38,41-42,47-51,62-64
+plugins/auto/docs/contracts/agent-tool-surface.md
+  s_5abb44c8324d7f::t_7dd49f93e590b9 106-110,143-146,158,160-161,184-208,214,242,244-249
+plugins/auto/docs/contracts/run-record-schema.md
+  s_5abb44c8324d7f::t_ab269cdbcbaa21 674-675,681,797-800,856-857
+plugins/auto/lib/programme-watch.py
+  s_5abb44c8324d7f::t_83367ffad8bbe7 29-31,41,75,79-80,94-95,206-212,221,228-233,244,264-275,278,281,285-328,335-337,370-378,380,382,384-387,393,426-428
+plugins/auto/lib/programme.py
+  s_5abb44c8324d7f::t_bc7e6e4ffdda9f 282-292,350-361,373,438,470-475,694-696
+plugins/auto/lib/programme_home.py
+  s_5abb44c8324d7f::t_256f78f45ca430 42,196,200-211
+plugins/auto/lib/programme_predicate.py
+  s_5abb44c8324d7f::t_153540f3cdebcb 129-130
+plugins/auto/lib/programme_record.py
+  s_5abb44c8324d7f::t_de662b175d30e0 31,34,40,473-475,477,480,653,657-659,679-680,683-684,736-740
+plugins/auto/lib/programme_sources.py
+  s_5abb44c8324d7f::t_f1bded92f9eb48 2,31-34,47,50-54,190-191,195,197-198,202,208-210,245-246,260-289,293-303,310-312,314-318,320,326-333,337,364-373,386-388,390,518-519,569-570,574
+plugins/auto/lib/programme_view.py
+  s_5abb44c8324d7f::t_212386dffbef13 18,87-98,121,166-175,178-180,194-198,201-202,264-265,325-328,367-368
+plugins/auto/skills/programme-sweep/SKILL.md
+  s_5abb44c8324d7f::t_3b32d153401bc2 65-74,130-132
+plugins/auto/skills/programme-sweep/references/waits-and-watchers.md
+  s_5abb44c8324d7f::t_8eac4671b10634 25-27
+plugins/auto/tests/integration/programme-compact.test.sh
+  s_5abb44c8324d7f::t_e354634aa65874 26
+plugins/auto/tests/integration/programme-flow.test.sh
+  s_5abb44c8324d7f::t_b388e8229a7c2f 28,384
+plugins/auto/tests/unit/import-topology.test.sh
+  s_5abb44c8324d7f::t_1840db936a4737 92-95,97-98,103-104,106-107,118-119,424-425,492-501
+plugins/auto/tests/unit/programme-items.test.sh
+  s_5abb44c8324d7f::t_20eb9a56bcaaa7 25,369,372,374-375,381,387,391,453-454,458-459,461-463,467-468,470-472,474,479-498
+plugins/auto/tests/unit/programme-predicate.test.sh
+  s_5abb44c8324d7f::t_0c441beb996896 21,214-215,217,220,222,227,236-237,242,246-248,251-252,256,261
+plugins/auto/tests/unit/programme-sources.test.sh
+  s_5abb44c8324d7f::t_c2a9b8619260f9 31,248-249,266-272,279-280,286-287,290-291,305-310,324-325,328,330,341-343,345-346,372-375,383-385,517-519
+plugins/auto/tests/unit/programme-verbs.test.sh
+  s_5abb44c8324d7f::t_2f043e145aeac1 25
+plugins/auto/tests/unit/programme-view.test.sh
+  s_5abb44c8324d7f::t_d7cd85a175ff0e 26,281,284-285,297,303,305-309
+plugins/auto/tests/unit/programme-watch.test.sh
+  s_5abb44c8324d7f::t_0e6d03d478ca01 32,76,85-86,289,329-330,332-334,339-343,345,348-410
+plugins/auto/tests/unit/stop-session-scope.test.sh
+  s_5abb44c8324d7f::t_10e48046a3d09b 25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ac15d7a894e6e6b30642b75425c7d2d8f3fc280f",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
