@@ -170,7 +170,7 @@ _OPAQUE_KEY_CONTAINERS = frozenset({
 # deliverable names, agreement term names) and never existed in format v1, so
 # its whole subtree passes verbatim in both directions. A one-level opaque entry
 # would still rename a term called `units` two levels down.
-_VERBATIM_CONTAINERS = frozenset({"programme", "programme_status"})
+_VERBATIM_CONTAINERS = frozenset({"programme", "programme_status", "task_evidence"})
 
 
 def _verbatim(node):
