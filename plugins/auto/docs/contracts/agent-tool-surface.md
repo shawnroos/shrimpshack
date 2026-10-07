@@ -60,6 +60,12 @@ shapes and per-verb rejection modes. In brief:
   ownership set — R21), `set-retry-budget` (per-run retry budget the driver owns —
   `should_escalate` honors it), `set-stall-threshold` (per-step stall threshold the
   stall clock reads).
+- **Task-run evidence**: `check-deliverable` (the run's driving session runs the
+  checker for one deliverable against one reference and stores confirmed, refuted
+  or unknown in the run's opaque task_evidence block; refused for any other session;
+  never takes a result as an argument), `evidence-journal` (reads the checks journaled
+  under .claude/auto/journal/). The exit predicate never reads this evidence, so a
+  task run finishes exactly as it would without it.
 
 This table is fenced by `tests/unit/doc-fence-agent-tool-surface.test.sh`: it
 derives the verb set from `describe` (hence from `_VERBS`) and fails if any verb
@@ -84,6 +90,16 @@ session.
   protocol rules, active instructions), rebuilt from the run record and wrapped in
   an `<auto-rules>` tag as data. `rules --ack` clears the compact flag
   `<home>/.compact-flag` and prints the block again.
+- **Status**: `status [<run>|--run <id>] [--json]` prints the working model: what
+  the PM is doing now, its queue, what it watches and why, who waits on whom,
+  decisions for Shawn, what it just did, the rules in force, and each item with its
+  deliverables, evidence, owner pane, session state and marks (new, stopped
+  unwatched). It also shows ended apart from done. Any session may run it; it
+  writes nothing. Every write through the shared write path then rebuilds the same
+  model into `<home>/views/view.json` (mode 0600), which the programme-view mod
+  draws. A failed rebuild prints `view refresh failed` on stderr and never fails
+  the write. `claim` writes only `claims.jsonl`, so a new claim shows at the next
+  write or `status`.
 - **Agreement**: `propose-agreement` sets proposed term values before acceptance;
   `accept-agreement` records the acceptance; `amend-term` changes one term. A term
   value must be one of that term's options. Wording that fits no option is an

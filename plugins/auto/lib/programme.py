@@ -218,6 +218,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
     if journal:
         programme_journal.append(run_id, kind, seen["sid"], payload,
                                  cites=[prompt["prompt_id"]] if prompt else None)
+    refresh_view(run_id, home)
     _emit({"ok": True, "run": run_id, "kind": kind, **payload})
     return 0
 
@@ -543,6 +544,68 @@ _VERBS.update(programme_evidence.build_verbs(sys.modules[__name__]))
 
 programme_sources = load_lib_module("programme_sources")
 _VERBS.update(programme_sources.build_verbs(sys.modules[__name__]))
+
+programme_view = load_lib_module("programme_view")
+VIEW_DIR = "views"
+VIEW_NAME = "view.json"
+
+
+def build_view(run_id, home, record) -> dict:
+    return programme_view.build(record, programme_journal.read(run_id),
+                                inbox_size=programme_record.claims_count(home),
+                                rules=rules_in_force(record))
+
+
+def _write_view(home, view) -> str:
+    folder = programme_home._ensure_dir(os.path.join(home, VIEW_DIR))
+    path = os.path.join(folder, VIEW_NAME)
+    fd, tmp = tempfile.mkstemp(prefix=".view.", suffix=".tmp", dir=folder)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(view, fh, indent=1, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def refresh_view(run_id, home) -> None:
+    # The record write has already committed; a view failure must not report the verb as failed.
+    try:
+        record = run_record_core.read_run_record(home, run_id)
+        _write_view(home, build_view(run_id, home, record))
+    except Exception as exc:
+        sys.stderr.write(f"{PROG}: view refresh failed: {exc}\n")
+
+
+def _h_status(argv):
+    positional, opts = _parse(argv, values=("run",), flags=("json",))
+    positional = [p for p in positional if p]
+    if len(positional) > 1 or (positional and opts.get("run")):
+        raise ValueError("usage: status [<run>|--run <id>] [--json]")
+    if positional:
+        opts["run"] = positional[0]
+    run_id, home, record = _locate(opts)
+    view = build_view(run_id, home, record)
+    if opts.get("json"):
+        _emit(view)
+    else:
+        sys.stdout.write(programme_view.render_text(view) + "\n")
+    return 0
+
+
+_VERBS["status"] = _Verb(
+    _h_status,
+    "[<run>|--run <id>] [--json]  (prints the working model: doing now, queue, watching, "
+    "who waits on whom, decisions for Shawn, just did, rules in force, items)",
+    reads=True,
+)
 
 _ERRORS = (
     ProgrammeError,
