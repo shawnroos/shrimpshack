@@ -552,6 +552,103 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
     }
 
 
+_HERDR_SEND_VERBS = frozenset({
+    ("agent", "prompt"), ("agent", "send"), ("agent", "send-keys"),
+    ("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"),
+})
+_HERDR_GLOBAL_VALUE_OPTS = frozenset({"--session", "--machine", "--remote"})
+_HERDR_VALUE_OPTS = frozenset({"--until", "--timeout", "--seq"})
+_HERDR_BIN_TOKENS = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
+_SHELL_BREAKS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
+
+
+def _is_herdr(token: str) -> bool:
+    return token in _HERDR_BIN_TOKENS or os.path.basename(token) == "herdr"
+
+
+def _herdr_sends(command: str) -> list:
+    """(verb, target) for every herdr call in ``command`` that types into a pane.
+
+    Residuals, as with the destructive set: an agent addressed by name, a send
+    built through eval, a script file or another language, and ``herdr api``,
+    which has no send call in this herdr build.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    sends = []
+    for start, token in enumerate(tokens):
+        if not _is_herdr(token):
+            continue
+        rest = []
+        for tok in tokens[start + 1:]:
+            if tok in _SHELL_BREAKS:
+                break
+            rest.append(tok)
+        i = 0
+        while i < len(rest) and rest[i].startswith("-"):
+            i += 2 if rest[i] in _HERDR_GLOBAL_VALUE_OPTS else 1
+        if i + 1 >= len(rest) or (rest[i], rest[i + 1]) not in _HERDR_SEND_VERBS:
+            continue
+        verb = f"{rest[i]} {rest[i + 1]}"
+        j = i + 2
+        while j < len(rest):
+            if rest[j] in _HERDR_VALUE_OPTS:
+                j += 2
+            elif rest[j].startswith("-"):
+                j += 1
+            else:
+                sends.append((verb, rest[j]))
+                break
+    return sends
+
+
+def _targets_pane(target: str, driver: dict) -> bool:
+    pane = driver.get("pane_id") or ""
+    if target in (pane, driver.get("terminal_id")):
+        return True
+    if ":" in target or not pane.endswith(":" + target):
+        return False
+    here = os.environ.get("HERDR_WORKSPACE_ID")
+    return not here or pane.split(":", 1)[0] == here
+
+
+def driver_send_denial(stdin_raw: str) -> dict | None:
+    session_id, command = _read_stdin(stdin_raw)
+    sends = _herdr_sends(command) if "herdr" in command.lower() else []
+    if not sends:
+        return None
+    session_registry = load_lib_module("session_registry")
+    drivers = session_registry.driver_panes()
+    for verb, target in sends:
+        for driver in drivers:
+            if not _targets_pane(target, driver):
+                continue
+            try:
+                journal = load_lib_module("programme_journal")
+                journal.append(driver["run"], "blocked_driver_send", session_id, {
+                    "verb": verb, "target": target, "pane_id": driver["pane_id"],
+                    "command": journal.redact(command)[:2000],
+                })
+            except Exception:
+                pass
+            reason = (
+                f"auto: blocked `herdr {verb}` into pane {driver['pane_id']}, the "
+                f"driver's pane of programme {driver['run']!r}. Only the person types "
+                "into the programme driver's pane; report through the programme's "
+                "inbox instead. This attempt is journaled."
+            )
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }}
+    return None
+
+
 def _cli(argv) -> int:
     repo_root = argv[0] if argv else os.getcwd()
     stdin_raw = ""
@@ -561,11 +658,17 @@ def _cli(argv) -> int:
         except Exception:
             stdin_raw = ""
     try:
-        decision = decide(repo_root, stdin_raw)
+        driver_denial = driver_send_denial(stdin_raw)
+    except Exception:
+        driver_denial = None
+    try:
+        decision = decide(repo_root, stdin_raw) if repo_root else None
     except Exception:
         decision = None  # any failure => allow (rel-001). Fail-closed is SCOPED
         # to a confirmed destructive match on a confirmed run, handled inside
         # decide(); an unrelated internal error must not brick the tool flow.
+    if decision is None:
+        decision = driver_denial
     if decision is not None:
         json.dump(decision, sys.stdout)
         sys.stdout.write("\n")

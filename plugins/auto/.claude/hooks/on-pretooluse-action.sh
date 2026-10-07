@@ -37,8 +37,20 @@ __cd_find_repo() {
   return 1
 }
 
-__cd_repo="$(__cd_find_repo)" || exit 0
-[ -d "${__cd_repo}/.claude/auto" ] || exit 0
+# Programme gate (runs in every session, repo or not): a lease file means a
+# programme holds a herdr space, and herdr sends to its driver's pane are checked.
+__cd_leases="${CLAUDE_AUTO_DATA_DIR:-${HOME:-}/.claude/plugins/data/auto-shrimpshack}/programmes/leases"
+__cd_any_lease=0
+for __cd_f in "${__cd_leases}"/*.json; do
+  [ -e "$__cd_f" ] && __cd_any_lease=1
+  break
+done
+
+__cd_repo="$(__cd_find_repo)" || __cd_repo=""
+if [ -n "$__cd_repo" ] && [ ! -d "${__cd_repo}/.claude/auto" ]; then
+  __cd_repo=""
+fi
+[ -n "$__cd_repo" ] || [ "$__cd_any_lease" = 1 ] || exit 0
 
 PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
