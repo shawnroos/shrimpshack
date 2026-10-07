@@ -1,0 +1,29 @@
+plugins/auto/CONCEPTS.md
+  s_5abb44c8324d7f::t_c1bcd4d7009e75 41-42
+plugins/auto/README.md
+  s_5abb44c8324d7f::t_5c869c6eb5c25d 27-55,132
+plugins/auto/docs/contracts/programme-protocol-format.md
+  s_5abb44c8324d7f::t_2e7710d0b4dc0e 82,123-138,160
+plugins/auto/docs/contracts/run-record-schema.md
+  s_5abb44c8324d7f::t_f2d2fcde78e9f9 9-15,154-158,172-174,403-405,474-475,529-530,570-823
+plugins/auto/tests/unit/doc-fence-run-record-schema.test.sh
+  s_5abb44c8324d7f::t_a2750d327b731a 87-101
+plugins/auto/tests/unit/import-topology.test.sh
+  s_5abb44c8324d7f::t_3a3ebaaceab89b 30-31,33-36,75-121,129-132,134,136,159-163,410-499
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "41e6e5e44e27269534c67764411a651f7ab86ab3",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
