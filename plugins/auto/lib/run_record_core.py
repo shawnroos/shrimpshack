@@ -69,6 +69,8 @@ DEFAULT_STALL_THRESHOLD_SECONDS = 600  # per-step stall timeout default.
 DRIVER_SELF_STALE_SECONDS = 3900
 
 LOOP_PHASES = ("plan", "handoff", "work", "done")
+RUN_KINDS = ("task", "programme")
+PROGRAMME_FORMAT = 1
 # Valid non-null plan_step values (the plan-phase sub-state — schema §3.1). The
 # backend reads plan_step to compute the NEXT step; the pulse persists the step it
 # ran. `null` (no step yet) is ALSO valid and is the initial value.
@@ -332,7 +334,13 @@ def _atomic_write(path: str, run_record: dict) -> None:
         # phase-grammar) so this file keeps NO top-level run-record sibling import and
         # stays the acyclic DAG root.
         run_record_predicate = _lazy_load("run_record_predicate")
-        run_record["exit_predicate_result"] = run_record_predicate.recompute_predicate(run_record)
+        result = run_record_predicate.recompute_predicate(run_record)
+        if run_kind(run_record) == "programme":
+            # Readers of exit_predicate_result.met take it as "task finished".
+            run_record.pop("exit_predicate_result", None)
+            run_record["programme_status"] = result
+        else:
+            run_record["exit_predicate_result"] = result
 
     # U6: stamp the persisted-format version. Every write goes through here, so
     # this is what LAZILY MIGRATES a v1 record — it was upgraded in memory at
@@ -466,6 +474,7 @@ def init_run_record(
     emit_templates=None,
     goal_intent=None,
     driving_session_id=None,
+    run_kind=None, programme=None,
 ):
     """Create a new run-record. Rejects if one already exists (RunRecordExists).
 
@@ -493,6 +502,7 @@ def init_run_record(
     """
     if backend not in ("ce", "native"):
         raise RunRecordError(f"invalid backend: {backend!r}")
+    kind_fields = _run_kind_fields(run_kind, programme, steps, loop_phase)
     if backend_scale not in ("three-tier", "blocker-only"):
         raise RunRecordError(f"invalid backend_scale: {backend_scale!r}")
 
@@ -587,14 +597,11 @@ def init_run_record(
                     if not uid.startswith(prefix):
                         continue
                     suffix = uid[len(prefix):]
-                    # G1 / ADV-R2-3: use ``isdecimal()`` not ``isdigit()`` —
-                    # ``'²'.isdigit()`` is True but ``int('²')`` raises
-                    # ValueError. ``isdecimal()`` returns True ONLY for the
-                    # base-10 digits ``int()`` actually accepts, so a
-                    # Unicode superscript suffix on a workflow-declared id is
-                    # treated as "not iterate-shaped" and falls through —
-                    # the original isdigit-guard intent, hardened against
-                    # the Unicode class-int() mismatch.
+                    # G1 / ADV-R2-3: isdecimal, not isdigit. ``'²'.isdigit()``
+                    # is True but ``int('²')`` raises ValueError. isdecimal()
+                    # is True ONLY for the base-10 digits int() accepts, so a
+                    # Unicode superscript suffix on a workflow-declared id reads
+                    # as "not iterate-shaped" and falls through.
                     if suffix.isdecimal():
                         seed_count = max(seed_count, int(suffix))
 
@@ -674,10 +681,35 @@ def init_run_record(
             "steps": norm_steps,
             "loop": {"driver": "self", "last_beat_at": now_iso()},
         }
+        run_record.update(kind_fields)
         _atomic_write(path, run_record)
         return run_record
 
     return _flock_run(lpath, body)
+
+
+def _run_kind_fields(kind, programme, steps, loop_phase) -> dict:
+    # Task records stay key-for-key identical to before run kinds existed: an
+    # absent run_kind is what every reader treats as "task".
+    if kind is not None and kind not in RUN_KINDS:
+        raise RunRecordError(f"invalid run_kind: {kind!r}")
+    if kind != "programme":
+        if programme is not None:
+            raise RunRecordError("a programme block needs run_kind='programme'")
+        return {}
+    if steps:
+        raise RunRecordError("a programme run has no steps")
+    if loop_phase != "work":
+        raise RunRecordError(f"a programme run starts in work, not {loop_phase!r}")
+    if not isinstance(programme, dict):
+        raise RunRecordError(f"programme must be a dict: {programme!r}")
+    return {"run_kind": "programme", "programme_format": PROGRAMME_FORMAT,
+            "programme": programme}
+
+
+def run_kind(run_record: dict) -> str:
+    kind = run_record.get("run_kind") if isinstance(run_record, dict) else None
+    return kind if isinstance(kind, str) and kind else "task"
 
 
 def _normalize_step(u: dict, *, loop_phase: str = "plan") -> dict:
