@@ -401,10 +401,6 @@ def _terse_reason_for(blocking) -> str:
     )
 
 
-def rules_block(record) -> str:
-    return load_lib_module("programme").render_rules(record)
-
-
 def _inbox_size(home: str) -> int:
     try:
         with open(os.path.join(home, CLAIMS_FILE), "rb") as fh:
@@ -439,10 +435,8 @@ def _rules_suffix(hold) -> str:
     flag = os.path.join(hold["home"], load_lib_module("programme_home").COMPACT_FLAG)
     if not os.path.exists(flag):
         return ""
-    try:
-        return "\n\n" + rules_block(hold["record"])
-    except Exception:
-        return ""
+    return ("\n\nRules in force were reloaded after compaction; run `programme.sh rules --ack` "
+            "before your next write.")
 
 
 def _programme_reason_for(hold) -> str:

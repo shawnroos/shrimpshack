@@ -14,6 +14,7 @@ Run the dispatch line below:
 
 - Exit 1: show Shawn the refusal line and stop. The refusal is journaled.
 - Success: the leases are released and the run shows "ended" (apart from done).
-  1. Delete every cron task it names with CronDelete.
-  2. Stop the watcher monitors with TaskStop.
+  1. Run each `CronDelete <id>` line it prints.
+  2. Run each `TaskStop <id>` line it prints, then stop any other watcher
+     Monitor this session still runs.
   3. Tell Shawn in one line that the programme ended and the space is free.

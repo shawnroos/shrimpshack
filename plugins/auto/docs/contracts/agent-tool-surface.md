@@ -132,7 +132,9 @@ session.
   trace or job id; `--clear` returns the item to open. `watcher-beat` updates a
   watcher's heartbeat, and registers a new watcher when given a process or task
   id. A beat for an unknown watcher without an id is refused. `watcher-beat` is
-  not journaled.
+  not journaled. Both take `--kind cron|monitor` to record the watcher kind; a
+  task id with no kind counts as cron when a prompt is given and as a Monitor
+  otherwise.
 - **Handing**: `hand-item` hands an item to Shawn with a question and notifies
   once: the board's needs-you mark for a Linear item, else a herdr notification.
   Its journal entry records both exit statuses (null when not run or not found,
@@ -148,7 +150,8 @@ session.
   `queue` adds a next action (a worker start is action start_worker with
   `--item`) or removes one; `record-tested-build` stores the tested build's
   shasum on an item for the released check; `set-source` records a source
-  (herdr, board or linear) going unavailable or coming back.
+  (herdr, board or linear) going unavailable or coming back, or with
+  `--unsupported` as one this machine cannot read, which never holds the stop.
 - **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref,
   optional --repo <clone> for the verified and released checks; the path is
   stored and reused by `validate`)
@@ -203,7 +206,8 @@ session.
   then run-record lock), stamp the driver beat, and journal both session ids.
   Takeover prints the rules in force and the waits and watchers to re-arm. `end`
   releases the leases, sets the run to done (shown as ended) and prints the cron
-  task ids to remove with CronDelete. A `takeover` that finds the lease expired
+  task ids to remove with CronDelete and the Monitor task ids to stop with
+  TaskStop; programme_ended carries both lists. A `takeover` that finds the lease expired
   ends the programme the same way: it refreshes the view and prints the same
   CronDelete lines before it refuses. Refusals are journaled as request_refused.
 - **Driver beat**: `beat` stamps the programme's driver beat; every other

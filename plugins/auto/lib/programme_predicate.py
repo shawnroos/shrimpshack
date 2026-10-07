@@ -122,16 +122,18 @@ def _item_reasons(item_id, item, ctx) -> list:
     return out
 
 
-def _source_status(block: dict, now, cadence: int):
+def _source_status(block: dict, watchers: dict, now, cadence: int):
     reasons, waits = [], []
     for name, source in sorted(_dict(block.get("sources")).items()):
         source = _dict(source)
-        if "unavailable_since" not in source or source["unavailable_since"] is None:
+        if source.get("unsupported_since") or source.get("unavailable_since") is None:
             continue
+        named = source.get("watcher")
+        watched = bool(named) and watcher_live(watchers.get(named), now, cadence)
+        wait = {"system": name, "since": source["unavailable_since"], "watcher": named, "watched": watched}
         age = _age(source["unavailable_since"], now)
-        if age is not None and age >= SOURCE_OUTAGE_PERIODS * cadence:
-            waits.append({"system": name, "since": source["unavailable_since"],
-                          "watcher": source.get("watcher")})
+        if watched or (age is not None and age >= SOURCE_OUTAGE_PERIODS * cadence):
+            waits.append(wait)
         elif not _off("SOURCE_OUTAGE"):
             reasons.append({"kind": "source_unavailable", "system": name})
     return reasons, waits
@@ -173,7 +175,7 @@ def _scan(block: dict, now, inbox_size, cadence: int) -> dict:
     offset = _int(block.get("inbox_offset")) or 0
     if inbox_size is not None and inbox_size > offset and not _off("UNREAD_CLAIM"):
         floor.append({"kind": "unread_claim", "count": inbox_size - offset})
-    source_reasons, source_waits = _source_status(block, now, cadence)
+    source_reasons, source_waits = _source_status(block, watchers, now, cadence)
     floor.extend(source_reasons)
     finished = counts["finished"] == counts["total"] and len(items) == counts["total"]
     return {"done": finished or _off("DONE_CHECK"), "floor": floor,

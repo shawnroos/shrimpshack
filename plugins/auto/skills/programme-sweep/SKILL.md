@@ -68,10 +68,15 @@ from this session's lease.
      `P alias-item` or `P add-item`.
    - An item whose owner pane now reports a different session: confirm the new
      owner with `P add-item <item> --pane <pane> --session <session>`.
-6. **Sources.** For each watcher line `source-unavailable <name>` or
-   `source-available <name>` since the last sweep, run
-   `P set-source <name> --unavailable` or `--available`. The sweep records the
-   changes it saw itself.
+6. **Sources.** For each watcher line since the last sweep:
+   - `source-unavailable <name> missing`, or a reason naming `op unsupported`:
+     this machine cannot read the source. Run `P set-source <name> --unsupported`;
+     an unsupported source never holds the stop.
+   - any other `source-unavailable <name> <reason>`: run
+     `P set-source <name> --unavailable --watcher remit`. The remit watcher reports
+     `source-available` when the source returns, so the outage is a watched wait.
+   - `source-available <name>`: run `P set-source <name> --available`.
+   The sweep records the changes it saw itself, including unsupported sources.
 7. **Read the inbox.** `P status --json` shows `unread_claims`. Read the new
    lines of `<home>/claims.jsonl` (past the programme's `inbox_offset`), then
    `P mark-read`.
@@ -96,7 +101,8 @@ from this session's lease.
 11. **Record waits.** Every wait has a live watcher or a named reporter.
     - A wait the PM watches: Monitor
       `programme-watch.sh --item <item> -- <watch command>` (for example
-      `gh run watch <id>`), then `P set-waiting <item> --who <who> --watcher <watcher id>`. The watcher id is
+      `gh run watch <id>`), then `P set-waiting <item> --who <who> --watcher <watcher id>
+      --task-id <Monitor task id> --kind monitor`. The watcher id is
       `item-` plus the item id with every character outside `A-Za-z0-9_-` turned
       into `-` (for example `item-linear-AI-753`).
     - A wait a person reports back on: `P set-waiting <item> --who <who> --reporter <name>`.
@@ -113,11 +119,12 @@ from this session's lease.
 14. **Re-arm the wake-ups.**
     - Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh"` with the
       longest timeout. Add `--linear` only when the space is bound to a Linear
-      project. A second watcher exits by itself, so re-arming is safe.
+      project. A second watcher exits by itself, so re-arming is safe. Record
+      the Monitor: `P watcher-beat remit --task-id <Monitor task id> --kind monitor`.
     - Keep the cron fallback. If it is missing (after a resume or takeover),
       CronCreate it again at the cadence term with the exact text
       `Run the programme sweep: load the auto:programme-sweep skill and follow it.`
-      and run `P watcher-beat cron --task-id <id> --prompt "<that exact text>"`.
+      and run `P watcher-beat cron --task-id <id> --kind cron --prompt "<that exact text>"`.
 15. **Stop.** End the turn. The Stop hook holds you while you have a next action
     of your own or a wait with no watcher; act on the reason it gives.
 

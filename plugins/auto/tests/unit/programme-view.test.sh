@@ -270,6 +270,39 @@ OUT="$("$PY" "$PROG" status --run "$QUIET" --json 2>&1)"
 it "an unwatched wait with no stopped_unwatched entry carries no stopped mark"
 check "False False" "$("$PY" -c 'import json,sys; i=json.loads(sys.argv[1])["model"]["items"][0]; print("stopped unwatched" in i["marks"], i["needs_shawn"])' "$OUT")"
 
+WATCHED="$(new_run w8)"
+run_py "$WATCHED" <<'EOF' >/dev/null
+def seed(p):
+    now = core.now_iso()
+    p["watchers"] = {
+        "cron": {"task_id": "c1", "kind": "cron", "prompt": "Run the programme sweep.", "last_beat_at": now},
+        "remit": {"process_id": "4242", "last_beat_at": now},
+        "linear-source": {"task_id": "bh1i1vbv7", "kind": "monitor", "last_beat_at": now},
+        "stray": {"task_id": "t9", "kind": "monitor", "last_beat_at": now},
+    }
+    p["sources"] = {"board": {"unsupported_since": now, "unavailable_since": None},
+                    "linear": {"unavailable_since": now, "watcher": "linear-source"},
+                    "herdr": {"unavailable_since": now, "watcher": "remit"}}
+mutate(args[0], seed)
+EOF
+OUT="$("$PY" "$PROG" status --run "$WATCHED" 2>&1)"
+it "a watcher with no item never renders as None"
+lacks "None:" "$OUT"
+it "the cron watcher renders as the cadence fallback"
+has "cron (live) — hourly fallback" "$OUT"
+it "the remit watcher renders as watching the space"
+has "remit (live) — watches the space" "$OUT"
+it "a source watcher renders by the source it watches"
+has "linear-source (live) — watches source linear" "$OUT"
+it "the remit watcher still watches the space when it also covers a source outage"
+has "herdr: remit (live) — herdr unavailable since" "$OUT"
+it "a watcher that watches nothing recorded says so"
+has "stray (live) — watches nothing recorded" "$OUT"
+it "a source outage with a live watcher renders live"
+has "linear: linear-source (live) — linear unavailable since" "$OUT"
+it "an unsupported source renders as not available on this machine"
+has "board: not available on this machine" "$OUT"
+
 it "the mod reads the view format this module writes"
 FORMAT="$(run_py <<'EOF'
 print(load_lib_module("programme_view").VIEW_FORMAT)

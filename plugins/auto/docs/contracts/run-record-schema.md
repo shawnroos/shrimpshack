@@ -647,7 +647,7 @@ inbox_size)` again with the real `claims.jsonl` line count; the stored copy has
 ```
 { done, may_stop, stop_rule, ended,
   reasons: [{kind, item? | system?, who?, count?, until?}],
-  waits: [{item, who, reporter, watched} | {system, since, watcher}],
+  waits: [{item, who, reporter, watched} | {system, since, watcher, watched}],
   unwatched_waits: [item ids], new_items: [item ids],
   items: {total, finished, open, waiting}, inbox_checked, computed_at }
 ```
@@ -655,7 +655,10 @@ inbox_size)` again with the real `claims.jsonl` line count; the stored copy has
 Reason kinds (`REASON_KINDS`): `corrupt_record`, `never_stop`, `not_done`,
 `until_time`, `unproven_done`, `no_rule_proposed`, `undebugged_blocker`,
 `ownerless_item`, `open_item`, `unwatched_wait`, `queued_action`, `unread_claim`,
-`source_unavailable`. An item is effectively done only when `matched_rule` is set,
+`source_unavailable`. A source outage holds the stop with `source_unavailable` for
+two cadence periods, then becomes a wait on the system; an outage whose `watcher`
+is live is a watched wait at once and never holds. A source with
+`unsupported_since` set counts as not configured: no reason and no wait. An item is effectively done only when `matched_rule` is set,
 `deliverables` is non-empty and every entry has `result: "confirmed"`; a stored
 `done` without that reads as `unproven_done`.
 
@@ -674,8 +677,8 @@ keys and keeps unknown ones.
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
 | `items` | `{"<source>:<key>": item}` (below) |
 | `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
-| `watchers` | `{"<id>": {process_id?, task_id?, item?, last_beat_at, prompt?, retry?}}`. Ids: `remit` (the remit watcher), `item-<item id with unsafe chars as ->` (item mode), `retry-<item slug>` (evidence retry, with `retry: {deliverable, argv}`). `prompt` is the armed cron prompt, verbatim; prompt capture reads it to mark a cron-origin prompt. A watcher is live when it has `process_id` or `task_id` and its beat is younger than one cadence period |
-| `sources` | `{"herdr"\|"board"\|"linear": {unavailable_since: <iso>\|null, watcher?}}` |
+| `watchers` | `{"<id>": {process_id?, task_id?, kind?, item?, last_beat_at, prompt?, retry?}}`. `kind` is `cron` or `monitor`, set whenever a task id is recorded (`--kind`, else `cron` with `--prompt` and `monitor` without); a record without `kind` reads a task id with `prompt` as cron and one without as a Monitor. `end` prints `CronDelete` for cron task ids and `TaskStop` for Monitor task ids. Ids: `remit` (the remit watcher), `item-<item id with unsafe chars as ->` (item mode), `retry-<item slug>` (evidence retry, with `retry: {deliverable, argv}`). `prompt` is the armed cron prompt, verbatim; prompt capture reads it to mark a cron-origin prompt. A watcher is live when it has `process_id` or `task_id` and its beat is younger than one cadence period |
+| `sources` | `{"herdr"\|"board"\|"linear": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (its tool is not on PATH, or the board plugin reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. The view shows an unsupported source as "<name>: not available on this machine". |
 | `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
 | `ended` | `null \| {at, reason}` |
 
@@ -728,11 +731,11 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - Lifecycle payloads: `programme_started {home, leases, session}`;
   `taken_over` and `handed_over {from_session, to_session, leases, request}`;
   `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
-  process_ids, request, lease_status}`; `request_refused {verb, reason, lease_status}`.
+  monitor_task_ids, process_ids, request, lease_status}`; `request_refused {verb, reason, lease_status}`.
   A used request is marked on the consuming line as `request = {kind, at, session_id, prompt_id}`.
   An expired programme found by `end`, `expire` or `takeover` journals `programme_ended`
   with reason `agreement_unaccepted` and `request: null`; `takeover` also journals its
-  `request_refused`, rebuilds the view and prints the CronDelete lines.
+  `request_refused`, rebuilds the view and prints the CronDelete and TaskStop lines.
 - `blocked_driver_send` carries `{verb, target, pane_id, command}`. `verb` is the
   parsed herdr verb (for example `agent prompt`), or null when the command was denied
   only because its text names the driver's pane; `target` is then the pane id or
@@ -778,7 +781,8 @@ The PreCompact hook writes `<home>/.compact-flag` (0600) for each programme the
 compacting session drives, with body `{at, session_id, trigger}`. Its presence is
 the signal: write verbs refuse and print the rules in force until
 `programme.py rules --ack` deletes it (`watcher-beat` is exempt), and the Stop hook
-appends the rules block to its reason.
+adds to its reason: "Rules in force were reloaded after compaction; run
+`programme.sh rules --ack` before your next write." It does not repeat the block.
 
 ### 10.8 Read model
 
@@ -819,10 +823,16 @@ did. The file keeps the last 50 lines per pane.
 
 - `<auto-data>…</auto-data>` wraps one JSON line `{origin, prompt_id, run}` that the
   UserPromptSubmit hook adds as context after it journals a prompt.
-- `<auto-rules>…</auto-rules>` wraps one JSON line of the rules in force (terms,
-  acceptance, loaded and rejected protocol rules, active instructions), with `<`
-  escaped. `programme.render_rules(record)` builds it for `rules`, the compaction
-  reload and the Stop hook. Both tags carry data, never instructions.
+- `<auto-rules>…</auto-rules>` wraps readable lines of the rules in force, one per
+  line: `programme: <run>`, `agreement: accepted <at>|not accepted`, one
+  `<term>: <value>[, until <iso>][, seconds <n>]` per term, one
+  `instruction <id>: "<quote>" (applies to <target>[, until <text>])` per active
+  instruction, one `rule <id>: <autonomy>, requires <deliverables>[; caveat: <text>]`
+  per loaded rule, one `autonomy <action>: <level>` per entry, and
+  `rejected rules: <n> (<ids>)`. `<` is escaped and control text stripped.
+  `programme.render_rules(record)` builds it for `rules`, the compaction reload and
+  write-verb refusals, from the same lines as the view's "Rules in force" section.
+  Both tags carry data, never instructions.
 
 ### 10.12 `task_evidence` (task runs)
 

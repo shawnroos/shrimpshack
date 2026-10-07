@@ -59,7 +59,8 @@ cat > "${FAKES}/board" <<'EOF'
 #!/bin/bash
 printf 'board %s\n' "$*" >> "$CALLS"
 if [ -n "${FAKE_BOARD_JSON:-}" ]; then cat "$FAKE_BOARD_JSON"; exit 0; fi
-echo '{"error":{"code":7,"message":"plugin op unsupported"}}'
+if [ -n "${FAKE_BOARD_OUTAGE:-}" ]; then echo "board: linear request failed: connection reset" >&2; exit 2; fi
+echo '{"error":{"code":7,"message":"plugin op unsupported: work plugin 0.6.1 has no bin/work-snapshot.sh"}}'
 exit 1
 EOF
 
@@ -271,6 +272,19 @@ it "sweep writes nothing to the journal"
 check 0 "$(journal_count source_changed)"
 it "sweep calls herdr snapshot once, bounded behind a probe"
 check '2' "$(grep -cE '^herdr (status server|api snapshot)' "$CALLS")"
+it "a board plugin with no snapshot op is unsupported, not an outage"
+check '"unsupported"' "$(jq_py 'd["sources"]["board"]["state"]')"
+it "herdr answering is available"
+check '"available"' "$(jq_py 'd["sources"]["herdr"]["state"]')"
+export FAKE_BOARD_OUTAGE=1
+prog sweep
+unset FAKE_BOARD_OUTAGE
+it "a supported board command that fails is an outage"
+check '["unavailable", true]' "$(jq_py '[d["sources"]["board"]["state"], d["sources"]["board"]["unavailable"]]')"
+mkdir -p "${WORK}/nopath"
+PATH="${WORK}/nopath" prog sweep
+it "herdr and board missing from PATH are unsupported"
+check '["unsupported", "unsupported"]' "$(jq_py '[d["sources"]["herdr"]["state"], d["sources"]["board"]["state"]]')"
 
 registry_line sess-w2 w2:p31 term_p31
 prog sweep
@@ -304,6 +318,10 @@ prog sweep
 it "a failing Linear read flags Linear unavailable"
 check '[true, null]' "$(jq_py '[d["sources"]["linear"]["unavailable"], d["issues_source"]]')"
 unset FAKE_CURL_EXIT
+it "curl missing from PATH makes Linear unsupported"
+check 'unsupported' "$(PATH="${WORK}/nopath" "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); from _bootstrap import load_lib_module; print(load_lib_module("programme_sources").read_linear(["AI-753"])["state"])' "${AUTO_ROOT}/lib" 2>&1)"
+it "a failing curl leaves Linear an outage"
+check 'unavailable' "$(FAKE_CURL_EXIT=7 "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); from _bootstrap import load_lib_module; print(load_lib_module("programme_sources").read_linear(["AI-753"])["state"])' "${AUTO_ROOT}/lib" 2>&1)"
 
 export FAKE_BOARD_JSON="${WORK}/board.json"
 cat > "$FAKE_BOARD_JSON" <<'EOF'
@@ -347,10 +365,18 @@ it "the change is journaled through set-source"
 check 1 "$(source_count herdr)"
 it "the failing board is recorded in the same sweep"
 check 1 "$(source_count board)"
+it "the unsupported board is recorded as unsupported, with no outage"
+check '[true, null]' "$(field '[prog["sources"]["board"]["unsupported_since"] is not None, prog["sources"]["board"]["unavailable_since"]]')"
 prog sweep --record-sources
 it "an unchanged source is not recorded again"
 check 1 "$(source_count herdr)"
 unset FAKE_HERDR_DOWN
+export FAKE_BOARD_OUTAGE=1
+prog sweep --record-sources
+unset FAKE_BOARD_OUTAGE
+it "a real board outage after unsupported is recorded as an outage"
+check '[null, true]' "$(field '[prog["sources"]["board"]["unsupported_since"], prog["sources"]["board"]["unavailable_since"] is not None]')"
+check 2 "$(source_count board)"
 prog sweep --record-sources
 it "herdr coming back is recorded"
 check 'null' "$(field 'prog["sources"]["herdr"]["unavailable_since"]')"

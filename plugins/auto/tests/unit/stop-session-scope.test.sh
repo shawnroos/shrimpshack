@@ -206,31 +206,29 @@ ph.end_programme(args[0], "test")
 EOF
 check "allow" "$(verdict "$(stop_py "" sess-pm6)")"
 
-it "with the compact flag set, the block reason carries the rules-in-force block"
+it "with the compact flag set, the block reason says the rules were reloaded and does not repeat them"
 touch "${PM_HOME}/.compact-flag"
 GOT="$("$PY" - "$AUTO_ROOT" <<'EOF'
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("on_stop", os.path.join(sys.argv[1], "lib", "on-stop.py"))
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-mod.rules_block = lambda record: "STUB-RULES-" + record["run_id"]
-out = mod.decide("", json.dumps({"session_id": "sess-pm"}))
-print("STUB-RULES-" in (out or {}).get("reason", ""))
+reason = (mod.decide("", json.dumps({"session_id": "sess-pm"})) or {}).get("reason", "")
+print("Rules in force were reloaded after compaction" in reason, "<auto-rules>" in reason)
 EOF
 )"
-check "True" "$GOT"
+check "True False" "$GOT"
 
-it "without the compact flag, the block reason has no rules-in-force block"
+it "without the compact flag, the block reason does not mention reloaded rules"
 rm -f "${PM_HOME}/.compact-flag"
 GOT="$("$PY" - "$AUTO_ROOT" <<'EOF'
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("on_stop", os.path.join(sys.argv[1], "lib", "on-stop.py"))
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-mod.rules_block = lambda record: "STUB-RULES-" + record["run_id"]
-out = mod.decide("", json.dumps({"session_id": "sess-pm"}))
-print("STUB-RULES-" in (out or {}).get("reason", ""))
+out = mod.decide("", json.dumps({"session_id": "sess-pm"})) or {}
+print(out.get("decision"), "Rules in force were reloaded" in out.get("reason", ""))
 EOF
 )"
-check "False" "$GOT"
+check "block False" "$GOT"
 
 it "the shim runs the check from a cwd outside any repo when a lease exists"
 OUT="$( cd "$NOREPO" && bash "$ON_STOP_SH" <<< "$(payload sess-pm)" )"

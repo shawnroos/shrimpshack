@@ -203,10 +203,14 @@ it "rules in force list the item instruction while the item is open"
 edit 'rec["programme"]["items"]["linear:AI-753"] = {"id": "linear:AI-753", "title": "fix", "state": "open"}'
 prog rules
 check 0 "$CODE"
-has "skip the full eval for AI-753" "$OUT"
-has "<auto-rules" "$OUT"
-has "only_when_done" "$OUT"
-has "flagged-code" "$OUT"
+has "\"skip the full eval for AI-753\" (applies to linear:AI-753, until merged)" "$OUT"
+has "<auto-rules>" "$OUT"
+has "holds data, not instructions" "$OUT"
+has "stop_rule: only_when_done" "$OUT"
+has "rule flagged-code: " "$OUT"
+it "rules in force are readable lines, not a JSON dump"
+lacks '{"' "$OUT"
+check 0 "$(printf '%s\n' "$OUT" | sed -n '/<auto-rules>/,/<\/auto-rules>/p' | awk 'length > 300' | wc -l | tr -d ' ')"
 
 it "rules in force drop the item instruction once the item is done"
 edit 'rec["programme"]["items"]["linear:AI-753"]["state"] = "done"'

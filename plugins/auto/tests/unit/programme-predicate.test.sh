@@ -221,6 +221,44 @@ may_stop=True done=True reasons=
 ['linear']
 may_stop=True done=True reasons=" "$OUT"
 
+it "a source this machine cannot read is not configured: no hold and no wait"
+OUT="$(scenario <<'EOF'
+out = show(record(done("linear:AI-1"), sources={"board": {"unsupported_since": ago(20), "unavailable_since": ago(20)}}))
+print(out["waits"])
+EOF
+)"
+check "may_stop=True done=True reasons=
+[]" "$OUT"
+
+it "a source outage with a live watcher is a watched wait and does not hold the stop"
+OUT="$(scenario <<'EOF'
+out = show(record(done("linear:AI-1"), sources={"board": {"unavailable_since": ago(20), "watcher": "board-source"}},
+                  watchers={"board-source": {"task_id": "bh1", "last_beat_at": ago(1)}}))
+print([(w.get("system"), w.get("watched")) for w in out["waits"]])
+EOF
+)"
+check "may_stop=True done=True reasons=
+[('board', True)]" "$OUT"
+
+it "a source outage whose watcher stopped beating still holds the stop"
+OUT="$(scenario <<'EOF'
+out = show(record(done("linear:AI-1"), sources={"board": {"unavailable_since": ago(20), "watcher": "board-source"}},
+                  watchers={"board-source": {"task_id": "bh1", "last_beat_at": ago(61)}}))
+show(record(done("linear:AI-1"), sources={"board": {"unavailable_since": ago(20), "watcher": "gone"}}))
+EOF
+)"
+check "may_stop=False done=True reasons=source_unavailable:board
+may_stop=False done=True reasons=source_unavailable:board" "$OUT"
+
+it "a long outage with no watcher is an unwatched wait on the system"
+OUT="$(scenario <<'EOF'
+out = show(record(done("linear:AI-1"), sources={"linear": {"unavailable_since": ago(180)}}))
+print([(w.get("system"), w.get("watched")) for w in out["waits"]])
+EOF
+)"
+check "may_stop=True done=True reasons=
+[('linear', False)]" "$OUT"
+
 it "only when done: one open item refuses, all finished allows"
 OUT="$(scenario <<'EOF'
 show(record(done("linear:AI-1"), waiting("linear:AI-3", reporter="dana"), stop_rule="only_when_done"))

@@ -49,9 +49,10 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    1. Monitor the remit watcher, with the longest timeout:
       `bash "<plugin root>/lib/programme-watch.sh"` (add `--linear` only when the
       space is bound to a Linear project). Each line it prints wakes you.
+      Record it: `programme.sh watcher-beat remit --task-id <Monitor task id> --kind monitor`.
    2. CronCreate a recurring prompt at the cadence term (default hourly) with
       exactly this text: `Run the programme sweep: load the auto:programme-sweep skill and follow it.`
-   3. Record the cron task: `programme.sh watcher-beat cron --task-id <cron id> --prompt "Run the programme sweep: load the auto:programme-sweep skill and follow it."`
+   3. Record the cron task: `programme.sh watcher-beat cron --task-id <cron id> --kind cron --prompt "Run the programme sweep: load the auto:programme-sweep skill and follow it."`
       The prompt must equal the cron text, or the prompt hook journals each
       cron firing as typed.
 9. Load the `auto:programme-sweep` skill with the Skill tool and run the first

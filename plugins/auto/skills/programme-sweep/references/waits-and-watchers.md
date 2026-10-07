@@ -23,8 +23,13 @@ exits when anything in the space changes:
 | `claim <n> new` | sweep: read the inbox |
 | `wait-due <item>` | check that item's wait |
 | `linear-changed ...` | sweep: issue states moved |
-| `source-unavailable <name> <reason>` | `set-source <name> --unavailable` |
+| `source-unavailable <name> missing`, or a reason naming `op unsupported` | `set-source <name> --unsupported` (this machine cannot read it; it never holds the stop) |
+| any other `source-unavailable <name> <reason>` | `set-source <name> --unavailable --watcher remit` (a watched outage does not hold the stop) |
 | `source-available <name>` | `set-source <name> --available` |
+
+Record every watcher's kind with its task id: `--kind cron` for the cadence
+cron, `--kind monitor` for a Monitor. `/auto:programme-end` prints
+`CronDelete <id>` for cron watchers and `TaskStop <id>` for Monitor watchers.
 
 Every Monitor expires after at most 30 minutes; re-arm the remit watcher at the
 end of every sweep. The cron fallback (default hourly) wakes the PM when no

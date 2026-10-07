@@ -380,6 +380,7 @@ it "an end request from a worker session is journaled as refused"
 has '"verb": "end"' "$(last_entry "$RUN" request_refused)"
 
 as sess-d watcher-beat cron --task-id cron-77 --prompt "sweep the programme now"
+as sess-d watcher-beat board-source --task-id bh1i1vbv7 --kind monitor
 
 it "end with no typed request is refused"
 as sess-d end
@@ -392,7 +393,10 @@ check "0" "$CODE"
 check "<none>" "$(lease_session w2)"
 
 it "end names the cron fallback to remove"
-has "cron-77" "$OUT"
+has "CronDelete cron-77" "$OUT"
+it "end stops a Monitor watcher with TaskStop, never CronDelete"
+has "TaskStop bh1i1vbv7" "$OUT"
+lacks "CronDelete bh1i1vbv7" "$OUT"
 
 it "the ended run shows ended"
 as sess-d status --run "$RUN"
@@ -402,6 +406,7 @@ it "the ended run journals its end with both reason and request"
 ENTRY="$(last_entry "$RUN" programme_ended)"
 has '"reason": "ended_by_shawn"' "$ENTRY"
 has '"cron_task_ids": ["cron-77"]' "$ENTRY"
+has '"monitor_task_ids": ["bh1i1vbv7"]' "$ENTRY"
 
 it "after end the driver is no longer held"
 check "allow" "$(verdict "$(stop_hook sess-d)")"
@@ -569,7 +574,7 @@ RUN10="$(json_of 'd["run"]')"
 run_py "$RUN10" <<'EOF' >/dev/null
 rec = load(args[0])
 rec["programme"]["created_at"] = ago(2)
-rec["programme"]["watchers"]["cadence"] = {"task_id": "cron-88", "process_id": 4242}
+rec["programme"]["watchers"]["cadence"] = {"task_id": "cron-88", "process_id": 4242, "prompt": "sweep"}
 save(args[0], rec)
 EOF
 

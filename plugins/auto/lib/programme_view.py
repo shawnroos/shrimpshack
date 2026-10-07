@@ -20,6 +20,7 @@ session_registry = load_lib_module("session_registry")
 VIEW_FORMAT = 1
 JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
+REMIT_WATCHER = "remit"
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
 
@@ -110,24 +111,69 @@ def _item_view(item_id, item, status, flagged, sessions) -> dict:
     }
 
 
+def _cadence_text(seconds) -> str:
+    if seconds == 3600:
+        return "hourly"
+    if seconds % 3600 == 0:
+        return f"every {seconds // 3600} hours"
+    if seconds % 60 == 0:
+        return f"every {seconds // 60} minutes"
+    return f"every {seconds}s"
+
+
+def _watches(watcher_id, watcher, sources, cadence) -> str:
+    retry = _dict(watcher.get("retry"))
+    if retry:
+        return f"retries {retry.get('deliverable')}"
+    if watcher.get("item"):
+        return "watches its item"
+    if watcher_id == REMIT_WATCHER:
+        return "watches the space"
+    named = [name for name, source in sorted(sources.items()) if _dict(source).get("watcher") == watcher_id]
+    if named:
+        return "watches source " + ", ".join(named)
+    if programme_home.watcher_kind(watcher) == "cron":
+        return f"{_cadence_text(cadence)} fallback"
+    return "watches nothing recorded"
+
+
 def _watching(block, status, now, cadence) -> list:
     out = []
-    for watcher_id, watcher in sorted(_dict(block.get("watchers")).items()):
+    watchers = _dict(block.get("watchers"))
+    sources = _dict(block.get("sources"))
+    for watcher_id, watcher in sorted(watchers.items()):
         watcher = _dict(watcher)
-        retry = _dict(watcher.get("retry"))
-        why = f"retries {retry.get('deliverable')}" if retry else "watches its item"
         out.append({"watcher": watcher_id, "item": watcher.get("item"),
                     "live": programme_predicate.watcher_live(watcher, now, cadence),
-                    "last_beat_at": watcher.get("last_beat_at"), "why": why})
+                    "last_beat_at": watcher.get("last_beat_at"),
+                    "why": _watches(watcher_id, watcher, sources, cadence)})
     for item_id in status["unwatched_waits"]:
         out.append({"watcher": None, "item": item_id, "live": False, "last_beat_at": None,
                     "why": "nothing watches this wait"})
-    for name, source in sorted(_dict(block.get("sources")).items()):
-        since = _dict(source).get("unavailable_since")
+    for name, source in sorted(sources.items()):
+        source = _dict(source)
+        if source.get("unsupported_since"):
+            out.append({"watcher": None, "item": None, "source": name, "live": False, "last_beat_at": None,
+                        "unsupported": True, "why": "not available on this machine"})
+            continue
+        since = source.get("unavailable_since")
         if since:
-            out.append({"watcher": _dict(source).get("watcher"), "item": None, "source": name,
-                        "live": False, "last_beat_at": None, "why": f"{name} unavailable since {since}"})
+            named = source.get("watcher")
+            out.append({"watcher": named, "item": None, "source": name,
+                        "live": bool(named) and programme_predicate.watcher_live(watchers.get(named), now, cadence),
+                        "last_beat_at": None, "why": f"{name} unavailable since {since}"})
     return out
+
+
+def _watching_row(w) -> dict:
+    live = " (live)" if w["live"] else ""
+    if w.get("unsupported"):
+        return _row(f"  {w['source']}: {w['why']}", "dim")
+    if w.get("item") or w.get("source"):
+        text = f"  {w.get('item') or w.get('source')}: {w['watcher'] or 'no watcher'}{live} — {w['why']}"
+    else:
+        text = f"  {w['watcher']}{live} — {w['why']}"
+    return _row(text, "text" if w["live"] else "warn")
 
 
 def _decisions(block, items) -> list:
@@ -164,10 +210,6 @@ def _just_did(journal_entries) -> list:
             continue
         out.append(entry)
     return out
-
-
-def _adopted_on(entry) -> str:
-    return f", adopted on {entry['adopted_on']}" if entry.get("adopted_on") else ""
 
 
 def _rules(block, rules) -> dict:
@@ -240,23 +282,41 @@ def _header(p) -> dict:
     return _row(text, "title")
 
 
-def _rule_lines(r) -> list:
-    out = []
-    for key, term in sorted(_dict(_dict(r.get("agreement")).get("terms")).items()):
-        term = _dict(term)
-        why = f" — {term['why']}" if term.get("why") else ""
-        out.append(_row(f"  {key}: {term.get('value')} ({term.get('set_by')}){why}"))
-    for rule in r.get("rules") or []:
-        out.append(_row(f"  rule {rule.get('id')}: {rule.get('autonomy')}, requires "
-                        f"{', '.join(rule.get('requires') or []) or 'nothing'}{_adopted_on(rule)}"))
-    for entry in r.get("autonomy") or []:
-        out.append(_row(f"  autonomy {entry.get('action')}: {entry.get('level')}{_adopted_on(entry)}"))
-    for rule in r.get("rejected_rules") or []:
-        out.append(_row(f"  rejected rule {rule.get('id')}: {rule.get('reason')}", "warn"))
-    for entry in r.get("instructions") or []:
-        out.append(_row(f"  instruction {entry.get('id')} ({entry.get('applies_to')}): "
-                        f"\"{entry.get('quote')}\""))
-    return out
+def _adopted_on(entry) -> str:
+    return f", adopted on {entry['adopted_on']}" if entry.get("adopted_on") else ""
+
+
+def _term_text(key, term) -> str:
+    extras = [f"{name} {term[name]}" for name in ("until", "seconds") if term.get(name) is not None]
+    return f"{key}: {term.get('value')}" + "".join(f", {e}" for e in extras)
+
+
+def _instruction_text(entry) -> str:
+    scope = f"applies to {entry.get('applies_to') or 'programme'}"
+    if entry.get("until"):
+        scope += f", until {entry['until']}"
+    return f"instruction {entry.get('id')}: \"{entry.get('quote')}\" ({scope})"
+
+
+def _rule_text(rule) -> str:
+    text = (f"rule {rule.get('id')}: {rule.get('autonomy')}, requires "
+            f"{', '.join(rule.get('requires') or []) or 'nothing'}{_adopted_on(rule)}")
+    return text + (f"; caveat: {rule['caveat']}" if rule.get("caveat") else "")
+
+
+def rule_texts(r) -> list:
+    agreement = _dict(r.get("agreement"))
+    accepted = _dict(agreement.get("accepted"))
+    out = [("agreement: " + (f"accepted {accepted.get('at')}" if accepted else "not accepted"), "text")]
+    out += [(_term_text(key, _dict(term)), "text") for key, term in sorted(_dict(agreement.get("terms")).items())]
+    out += [(_instruction_text(_dict(e)), "text") for e in r.get("instructions") or []]
+    out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]
+    out += [(f"autonomy {_dict(e).get('action')}: {_dict(e).get('level')}{_adopted_on(_dict(e))}", "text")
+            for e in r.get("autonomy") or []]
+    rejected = [str(_dict(rule).get("id")) for rule in r.get("rejected_rules") or []]
+    if rejected:
+        out.append((f"rejected rules: {len(rejected)} ({', '.join(rejected)})", "warn"))
+    return [(programme_sanitize.clean(text, cap=0), style) for text, style in out]
 
 
 def _item_lines(item) -> list:
@@ -282,11 +342,7 @@ def rows(model) -> list:
     _section(out, "Queue", [_row(f"  {e.get('action')} {e.get('item') or ''}".rstrip()
                                  + (f": {e['why']}" if e.get("why") else ""))
                             for e in model["queue"]], "empty")
-    _section(out, "Watching", [_row(f"  {w.get('item') or w.get('source')}: "
-                                    f"{w['watcher'] or 'no watcher'}"
-                                    f"{' (live)' if w['live'] else ''} — {w['why']}",
-                                    "text" if w["live"] else "warn")
-                               for w in model["watching"]], "nothing")
+    _section(out, "Watching", [_watching_row(w) for w in model["watching"]], "nothing")
     _section(out, "Who waits on whom", [_row(f"  {w['item'] or w['system']} waits on {w['who']} "
                                              f"({'watched' if w['watched'] else 'unwatched'})",
                                              "text" if w["watched"] else "warn")
@@ -298,7 +354,8 @@ def rows(model) -> list:
                                     + (f": {j['summary']}" if j.get("summary") else "")
                                     + (f" (x{j['repeats']})" if j["repeats"] > 1 else ""), "dim")
                                for j in model["just_did"]], "nothing yet")
-    _section(out, "Rules in force", _rule_lines(model["rules_in_force"]), "none")
+    _section(out, "Rules in force", [_row(f"  {text}", style) for text, style in rule_texts(model["rules_in_force"])],
+             "none")
     _section(out, "Items", [line for item in model["items"] for line in _item_lines(item)], "no items")
     return out
 

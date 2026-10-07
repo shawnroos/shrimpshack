@@ -38,6 +38,7 @@ AUTONOMY_LEVELS = ("act", "act_and_tell", "propose", "never")
 LEASE_STATES = ("free", "live", "orphaned", "ended", "expired", "newer")
 HELD_LEASE_STATES = ("live", "orphaned", "expired")
 COMPACT_FLAG = ".compact-flag"
+WATCHER_KINDS = ("cron", "monitor")
 
 ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
@@ -263,6 +264,16 @@ def cadence_seconds(record: dict) -> int:
     except (KeyError, TypeError, ValueError):
         return DEFAULT_CADENCE_SECONDS
     return seconds if seconds > 0 else DEFAULT_CADENCE_SECONDS
+
+
+def watcher_kind(watcher) -> str | None:
+    watcher = watcher if isinstance(watcher, dict) else {}
+    if watcher.get("kind") in WATCHER_KINDS:
+        return watcher["kind"]
+    # Records written before kinds existed: only the cadence cron was registered with its prompt.
+    if watcher.get("task_id"):
+        return "cron" if watcher.get("prompt") else "monitor"
+    return "process" if watcher.get("process_id") else None
 
 
 def read_lease(path: str):

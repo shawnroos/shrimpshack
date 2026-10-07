@@ -31,6 +31,7 @@ driver_session = load_lib_module("driver_session")
 
 CLAIMS_NAME = "claims.jsonl"
 SOURCES = ("herdr", "board", "linear")
+SOURCE_STATES = ("available", "unavailable", "unsupported")
 CHOICES = ("ship", "decline")
 ID_CAP = 128
 CRON_PROMPT_CAP = 4000
@@ -353,7 +354,13 @@ def _watcher_ids(opts) -> dict:
     pid = opts.get("process-id")
     if pid is not None and not _PID_RE.fullmatch(pid):
         raise RecordError(f"--process-id must be a number: {pid!r}")
-    return {"process_id": pid, "task_id": _token(opts.get("task-id"), "task-id")}
+    task_id = _token(opts.get("task-id"), "task-id")
+    kind = opts.get("kind")
+    if kind is not None and kind not in programme_home.WATCHER_KINDS:
+        raise RecordError(f"--kind must be one of {', '.join(programme_home.WATCHER_KINDS)}: {kind!r}")
+    if task_id and kind is None:
+        kind = "cron" if opts.get("prompt") else "monitor"
+    return {"process_id": pid, "task_id": task_id, "kind": kind if task_id else None}
 
 
 def _upsert_watcher(programme, watcher_id, ids, item=None) -> dict:
@@ -388,8 +395,8 @@ def _wait_spec(opts, watcher) -> dict:
 
 def _h_set_waiting(host, argv):
     positional, opts = host._parse(
-        argv, values=("run", "who", "reporter", "watcher", "process-id", "task-id", "trace-id", "job-id",
-                      "due"),
+        argv, values=("run", "who", "reporter", "watcher", "process-id", "task-id", "kind", "trace-id",
+                      "job-id", "due"),
         flags=("blocker", "clear"))
     if len(positional) != 1:
         raise ValueError("usage: set-waiting <id> --who <name> [--watcher <id>] ... | --clear")
@@ -421,10 +428,10 @@ def _h_set_waiting(host, argv):
 
 
 def _h_watcher_beat(host, argv):
-    positional, opts = host._parse(argv, values=("run", "process-id", "task-id", "item", "prompt"))
+    positional, opts = host._parse(argv, values=("run", "process-id", "task-id", "kind", "item", "prompt"))
     if len(positional) != 1:
-        raise ValueError("usage: watcher-beat <watcher-id> [--process-id <n>|--task-id <id>] [--item <id>] "
-                         "[--prompt <cron prompt>]")
+        raise ValueError("usage: watcher-beat <watcher-id> [--process-id <n>|--task-id <id> [--kind cron|monitor]] "
+                         "[--item <id>] [--prompt <cron prompt>]")
     watcher_id = programme_home.check_segment(positional[0])
     ids = _watcher_ids(opts)
     item_id = check_item_id(opts["item"]) if opts.get("item") else None
@@ -642,26 +649,32 @@ def _h_record_tested_build(host, argv):
 
 
 def _h_set_source(host, argv):
-    positional, opts = host._parse(argv, values=("run", "watcher"), flags=("available", "unavailable"))
+    positional, opts = host._parse(argv, values=("run", "watcher"),
+                                   flags=("available", "unavailable", "unsupported"))
     if len(positional) != 1 or positional[0] not in SOURCES:
-        raise ValueError(f"usage: set-source <{'|'.join(SOURCES)}> --available|--unavailable")
-    if bool(opts.get("available")) == bool(opts.get("unavailable")):
-        raise ValueError("set-source needs exactly one of --available or --unavailable")
-    name = positional[0]
+        raise ValueError(f"usage: set-source <{'|'.join(SOURCES)}> --available|--unavailable|--unsupported")
+    states = [flag for flag in SOURCE_STATES if opts.get(flag)]
+    if len(states) != 1:
+        raise ValueError("set-source needs exactly one of --available, --unavailable or --unsupported")
+    name, state = positional[0], states[0]
     watcher = programme_home.check_segment(opts["watcher"]) if opts.get("watcher") else None
 
     def change(programme, prompt, rec):
         sources = programme.setdefault("sources", {})
         entry = dict(sources.get(name) or {})
-        if opts.get("available"):
-            entry["unavailable_since"] = None
-        else:
+        if state == "unavailable":
             entry["unavailable_since"] = entry.get("unavailable_since") or _now()
+        else:
+            entry["unavailable_since"] = None
+        if state == "unsupported":
+            entry["unsupported_since"] = entry.get("unsupported_since") or _now()
+        else:
+            entry["unsupported_since"] = None
         if watcher is not None:
             entry["watcher"] = watcher
         sources[name] = entry
-        return {"source": name, "unavailable_since": entry["unavailable_since"],
-                "watcher": entry.get("watcher")}
+        return {"source": name, "state": state, "unavailable_since": entry["unavailable_since"],
+                "unsupported_since": entry["unsupported_since"], "watcher": entry.get("watcher")}
 
     return host._write(opts, change, "source_changed")
 
@@ -682,12 +695,16 @@ _SPECS = (
     ("reopen-item", _h_reopen_item, "<id> --prompt <id> [--run <id>]",
      "no typed prompt, or one whose text does not name the item id or key; an item that is not dropped."),
     ("set-waiting", _h_set_waiting,
-     "<id> --who <name> [--reporter <name>] [--watcher <id> [--process-id <n>] [--task-id <id>]] "
+     "<id> --who <name> [--reporter <name>] [--watcher <id> [--process-id <n>] [--task-id <id> "
+     "[--kind cron|monitor]]] "
      "[--blocker] [--trace-id <id>] [--job-id <id>] [--due <iso>] [--run <id>] | <id> --clear",
      "no --who; a finished item; a watcher id that is not a safe name; a --due that is not an ISO time."),
     ("watcher-beat", _h_watcher_beat,
-     "<watcher-id> [--process-id <n>|--task-id <id>] [--item <id>] [--prompt <cron prompt>] [--run <id>]",
-     "an unknown watcher with no process or task id; an empty or overlong --prompt. --prompt stores the "
+     "<watcher-id> [--process-id <n>|--task-id <id> [--kind cron|monitor]] [--item <id>] "
+     "[--prompt <cron prompt>] [--run <id>]",
+     "an unknown watcher with no process or task id; a --kind other than cron or monitor; an empty or "
+     "overlong --prompt. A task id is a cron watcher when --prompt is given and a Monitor otherwise, "
+     "unless --kind says which. --prompt stores the "
      "armed cron prompt verbatim, so a prompt that equals it is journaled with origin cron. "
      "Exempt from the compact flag; not journaled."),
     ("hand-item", _h_hand_item, "<id> --question <text> [--run <id>]",
@@ -709,8 +726,9 @@ _SPECS = (
      "<id> --shasum <sha> [--package <name>] [--version <v>] [--run <id>]",
      "a shasum that is not hex sha1/sha256 or an sha integrity string."),
     ("set-source", _h_set_source,
-     "herdr|board|linear --available|--unavailable [--watcher <id>] [--run <id>]",
-     "an unknown source; both flags or neither."),
+     "herdr|board|linear --available|--unavailable|--unsupported [--watcher <id>] [--run <id>]",
+     "an unknown source; more than one state flag or none. --unsupported marks a source this "
+     "machine cannot read (a missing tool or plugin op); it never holds the stop."),
 )
 
 

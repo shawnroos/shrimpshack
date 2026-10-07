@@ -282,6 +282,26 @@ check '"99"' "$(field 'prog["watchers"]["w-sweep"]["process_id"]')"
 it "a watcher id that is not a safe name is refused"
 prog watcher-beat '../w' --process-id 1
 check 1 "$CODE"
+it "a task id registered with the cron prompt is a cron watcher"
+prog watcher-beat w-cron --task-id c-1 --prompt "Run the programme sweep."
+check '"cron"' "$(field 'prog["watchers"]["w-cron"]["kind"]')"
+it "a task id with no prompt is a Monitor watcher"
+prog watcher-beat w-mon --task-id bh1i1vbv7
+check '"monitor"' "$(field 'prog["watchers"]["w-mon"]["kind"]')"
+it "--kind names the watcher kind outright"
+prog watcher-beat w-mon2 --task-id t-2 --kind cron
+check '"cron"' "$(field 'prog["watchers"]["w-mon2"]["kind"]')"
+it "a beat with no task id keeps the recorded kind"
+prog watcher-beat w-mon
+check '"monitor"' "$(field 'prog["watchers"]["w-mon"]["kind"]')"
+it "a process-only watcher records no task kind"
+check 'null' "$(field 'prog["watchers"]["w-sweep"].get("kind")')"
+it "an unknown --kind is refused"
+prog watcher-beat w-bad --task-id t-3 --kind daemon
+check 1 "$CODE"
+it "set-waiting with a Monitor task id records a Monitor watcher"
+prog set-waiting linear:AI-800 --who ci --watcher w-ci2 --task-id m-4
+check '"monitor"' "$(field 'prog["watchers"]["w-ci2"]["kind"]')"
 
 it "set-waiting --clear returns the item to open"
 prog set-waiting linear:AI-800 --clear
@@ -436,6 +456,22 @@ has '"source_unavailable"' "$(predicate -)"
 it "set-source --available clears it"
 prog set-source linear --available
 check 'null' "$(field 'prog["sources"]["linear"]["unavailable_since"]')"
+it "set-source --unsupported marks the source unusable here and ends the outage"
+prog set-source linear --unavailable
+prog set-source linear --unsupported
+check '[true, null]' "$(field '[prog["sources"]["linear"]["unsupported_since"] is not None, prog["sources"]["linear"]["unavailable_since"]]')"
+it "an unsupported source does not hold the stop"
+lacks '"source_unavailable"' "$(predicate -)"
+it "set-source --unavailable after --unsupported is a real outage again"
+prog set-source linear --unavailable
+check '[null, true]' "$(field '[prog["sources"]["linear"]["unsupported_since"], prog["sources"]["linear"]["unavailable_since"] is not None]')"
+it "set-source --available clears both states"
+prog set-source linear --unsupported
+prog set-source linear --available
+check '[null, null]' "$(field '[prog["sources"]["linear"]["unsupported_since"], prog["sources"]["linear"]["unavailable_since"]]')"
+it "set-source with two states is refused"
+prog set-source linear --unsupported --available
+check 2 "$CODE"
 it "an unknown source is refused"
 prog set-source jira --unavailable
 check 2 "$CODE"

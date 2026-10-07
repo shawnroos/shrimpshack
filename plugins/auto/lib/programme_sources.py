@@ -53,6 +53,7 @@ SIGNALS = ("board", "branch", "title", "label", "registry")
 _IDENT = re.compile(r"\b([A-Za-z][A-Za-z0-9]{1,7})-(\d{1,6})\b")
 _BOARD_LABEL = re.compile(r"Linear(?:: .+)?")
 _PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
+_UNSUPPORTED_OP = re.compile(r"\bop unsupported\b", re.IGNORECASE)
 
 
 def _seconds(env_name, default) -> float:
@@ -79,10 +80,11 @@ def _kill(proc) -> None:
 
 
 def bounded(argv, timeout, stdin_text=None) -> dict:
-    out = {"ran": False, "code": None, "stdout": "", "stderr": "", "timed_out": False, "error": None}
+    out = {"ran": False, "code": None, "stdout": "", "stderr": "", "timed_out": False, "error": None,
+           "missing": False}
     path = argv[0] if os.path.isabs(argv[0]) else shutil.which(argv[0])
     if not path:
-        out["error"] = f"{argv[0]} not found on PATH"
+        out.update(error=f"{argv[0]} not found on PATH", missing=True)
         return out
     try:
         proc = subprocess.Popen(
@@ -289,9 +291,11 @@ def read_board(workspaces) -> dict:
             message = error.get("message") if isinstance(error, dict) else None
             reason = (programme_sanitize.clean(message, 200) if message
                       else _failure(result, "board linear snapshot"))
-            return {"unavailable": True, "reason": f"{ws}: {reason}", "issues": None, "bindings": {}}
+            unsupported = result["missing"] or bool(_UNSUPPORTED_OP.search(reason))
+            return {"unavailable": True, "state": "unsupported" if unsupported else "unavailable",
+                    "reason": f"{ws}: {reason}", "issues": None, "bindings": {}}
         if not isinstance(doc.get("issues"), dict):
-            return {"unavailable": True, "reason": f"{ws}: board snapshot has no issues",
+            return {"unavailable": True, "state": "unavailable", "reason": f"{ws}: board snapshot has no issues",
                     "issues": None, "bindings": {}}
         for key, raw in doc["issues"].items():
             ident = programme_sanitize.token(key)
@@ -301,7 +305,7 @@ def read_board(workspaces) -> dict:
             for binding in raw.get("bindings") or []:
                 for pane in (binding or {}).get("panes") or []:
                     bindings.setdefault(pane, []).append(ident)
-    return {"unavailable": False, "reason": None, "issues": issues, "bindings": bindings}
+    return {"unavailable": False, "state": "available", "reason": None, "issues": issues, "bindings": bindings}
 
 
 def linear_key():
@@ -335,8 +339,9 @@ def read_linear(idents) -> dict:
     doc = _json(result["stdout"]) if result["ran"] and result["code"] == 0 else None
     data = doc.get("data") if isinstance(doc, dict) else None
     if not isinstance(data, dict):
-        return {"unavailable": True, "reason": _failure(result, "Linear read") if not doc
-                else "Linear answered with no data", "issues": None}
+        return {"unavailable": True, "state": "unsupported" if result["missing"] else "unavailable",
+                "reason": _failure(result, "Linear read") if not doc else "Linear answered with no data",
+                "issues": None}
     issues = {}
     for raw in data.values():
         ident = programme_sanitize.token((raw or {}).get("identifier")) if isinstance(raw, dict) else None
@@ -400,7 +405,8 @@ def _issue_lookup(candidates, board) -> dict:
     if not candidates:
         return out
     linear = read_linear(candidates)
-    out["linear"] = {"unavailable": linear["unavailable"], "reason": linear["reason"]}
+    out["linear"] = {"unavailable": linear["unavailable"], "state": linear.get("state"),
+                     "reason": linear["reason"]}
     if not linear["unavailable"]:
         out.update(issues=linear["issues"], verified=set(linear["issues"]), issues_source="linear-direct")
     return out
@@ -423,8 +429,10 @@ def sweep(record) -> dict:
     result = {
         "run": record.get("run_id"), "at": run_record_core.now_iso(),
         "server": scope["server"], "workspaces": scope["workspaces"], "unreached": scope["unreached"],
-        "sources": {"herdr": {"unavailable": snap is None, "reason": herdr_reason},
-                    "board": {"unavailable": board["unavailable"], "reason": board["reason"]},
+        "sources": {"herdr": {"unavailable": snap is None, "state": _herdr_state(snap),
+                              "reason": herdr_reason},
+                    "board": {"unavailable": board["unavailable"], "state": board["state"],
+                              "reason": board["reason"]},
                     "linear": lookup["linear"]},
         "issues_source": lookup["issues_source"],
         "issues": {k: v for k, v in lookup["issues"].items() if k in candidates},
@@ -436,15 +444,31 @@ def sweep(record) -> dict:
     return result
 
 
+def _herdr_state(snap) -> str:
+    if snap is not None:
+        return "available"
+    return "unavailable" if shutil.which("herdr") else "unsupported"
+
+
+def _seen_state(seen) -> str | None:
+    if seen.get("unavailable") is None:
+        return None
+    return seen.get("state") or ("unavailable" if seen["unavailable"] else "available")
+
+
+def _recorded_state(entry) -> str:
+    if entry.get("unsupported_since"):
+        return "unsupported"
+    return "unavailable" if entry.get("unavailable_since") else "available"
+
+
 def source_changes(programme, sources) -> list:
     recorded = programme.get("sources") or {}
     changes = []
     for name in programme_record.SOURCES:
-        down = sources.get(name, {}).get("unavailable")
-        if down is None:
-            continue
-        if down != bool((recorded.get(name) or {}).get("unavailable_since")):
-            changes.append({"source": name, "unavailable": down})
+        state = _seen_state(sources.get(name) or {})
+        if state is not None and state != _recorded_state(recorded.get(name) or {}):
+            changes.append({"source": name, "state": state, "unavailable": state != "available"})
     return changes
 
 
@@ -457,7 +481,7 @@ def _h_sweep(host, argv):
     result["recorded_sources"] = []
     if opts.get("record-sources"):
         for change in result["source_changes"]:
-            flag = "--unavailable" if change["unavailable"] else "--available"
+            flag = "--" + change["state"]
             with contextlib.redirect_stdout(io.StringIO()):
                 programme_record._h_set_source(host, ["set-source", change["source"], flag, "--run", run_id])
             result["recorded_sources"].append(change)

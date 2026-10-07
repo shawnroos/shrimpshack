@@ -117,6 +117,8 @@ def _journal(run, kind, sid, payload, cites=None) -> None:
 def _cleanup_lines(ended) -> None:
     for task_id in ended.get("cron_task_ids") or []:
         sys.stdout.write(f"Remove the cadence fallback: CronDelete {task_id}\n")
+    for task_id in ended.get("monitor_task_ids") or []:
+        sys.stdout.write(f"Stop the watcher Monitor: TaskStop {task_id}\n")
     for pid in ended.get("process_ids") or []:
         sys.stdout.write(f"Stop watcher process {pid} if it is still running.\n")
 
@@ -278,7 +280,12 @@ def _end_request(run, sid, status):
 def _watcher_ids(record) -> dict:
     watchers = (record.get("programme") or {}).get("watchers") or {}
     entries = [w for w in watchers.values() if isinstance(w, dict)]
-    return {"cron_task_ids": sorted({str(w["task_id"]) for w in entries if w.get("task_id")}),
+
+    def task_ids(kind):
+        return sorted({str(w["task_id"]) for w in entries
+                       if w.get("task_id") and programme_home.watcher_kind(w) == kind})
+
+    return {"cron_task_ids": task_ids("cron"), "monitor_task_ids": task_ids("monitor"),
             "process_ids": sorted({str(w["process_id"]) for w in entries if w.get("process_id")})}
 
 
@@ -358,7 +365,8 @@ _SPECS = (
      "the driving session. Refusals are journaled as request_refused."),
     ("end", _h_end, "[--why <text>] [--run <id>]",
      "no typed /auto:programme-end from the driving session, unless the lease is orphaned; an "
-     "ended programme. Prints the cron task ids to remove. Refusals are journaled."),
+     "ended programme. Prints CronDelete for each cron watcher and TaskStop for each Monitor "
+     "watcher. Refusals are journaled."),
     ("expire", _h_expire, "[--run <id>]",
      "nothing: it ends the programme only when its agreement stayed unaccepted past one cadence."),
     ("beat", _h_beat, "[--run <id>]",

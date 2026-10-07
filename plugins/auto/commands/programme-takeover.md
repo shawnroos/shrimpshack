@@ -17,8 +17,9 @@ Run the dispatch line below:
 - Success: the lease and the driving session now name this session. Read the
   rules in force it printed; they bind you from now on. Then:
   1. Re-arm the remit watcher under Monitor, and every watcher for the waits it
-     listed (`programme-watch.sh --item <id> -- <command>`).
+     listed (`programme-watch.sh --item <id> -- <command>`). Record each Monitor
+     with `watcher-beat <watcher id> --task-id <Monitor task id> --kind monitor`.
   2. CronCreate the cadence fallback again and record it with
-     `watcher-beat cron --task-id <id> --prompt "<exact cron text>"` (the text is
+     `watcher-beat cron --task-id <id> --kind cron --prompt "<exact cron text>"` (the text is
      in `/auto:programme` step 8).
   3. Load the `auto:programme-sweep` skill and run a sweep.
