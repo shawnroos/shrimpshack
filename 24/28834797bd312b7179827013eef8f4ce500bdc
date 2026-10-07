@@ -1,0 +1,40 @@
+plugins/auto/mods/programme-view/register.tsx
+  s_5abb44c8324d7f::t_821183c7d6afc8 1-141
+  s_5abb44c8324d7f::t_09c29b5cc6a5fc 142-147
+plugins/auto/docs/contracts/agent-tool-surface.md
+  s_5abb44c8324d7f::t_2653f4c7255228 93-102
+  s_5abb44c8324d7f::t_0bc8d5a571ec6e 63-68
+plugins/auto/mods/programme-view/programme-view.test.ts
+  s_5abb44c8324d7f::t_9f7b0450fcf220 1-94
+  s_5abb44c8324d7f::t_3f8a2b3ef271b5 95-96
+plugins/auto/lib/programme_view.py
+  s_5abb44c8324d7f::t_bc4a3e6f0cde40 1-285
+  s_5abb44c8324d7f::t_0d872a33eb619e 286-291
+plugins/auto/tests/unit/programme-view.test.sh
+  s_5abb44c8324d7f::t_e07218fcb15534 261-272
+  s_5abb44c8324d7f::t_d758d708a4bedf 1-260,273-288
+plugins/auto/commands/programme-status.md
+  s_5abb44c8324d7f::t_038e7f3f680f3a 1-20
+plugins/auto/.claude/hooks/hooks.json
+  s_5abb44c8324d7f::t_e7a5fd55de02d4 3
+plugins/auto/lib/programme.py
+  s_5abb44c8324d7f::t_0e843f98952ad5 221,548-609
+plugins/auto/tests/unit/programme-verbs.test.sh
+  s_5abb44c8324d7f::t_4e015cc0a24a6e 98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2428834797bd312b7179827013eef8f4ce500bdc",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
