@@ -36,7 +36,9 @@ RULES_TAG = "auto-rules"
 INSTRUCTION_ENDINGS = ("fulfilled", "withdrawn")
 PERSONAL_LOCK = ".personal-protocol.lock"
 APPROVAL_KINDS = ("rule_adopted",)
-_NAME_SEPARATORS = re.compile(r"[\s_\-.:/]+")
+_NAME_WORD = re.compile(r"[0-9a-z_\-]+")
+_NAME_JOINERS = re.compile(r"[_\-]")
+_NEGATIONS = ("not", "never", "no", "dont", "t")
 
 
 class ProgrammeError(Exception):
@@ -219,18 +221,54 @@ def _typed_prompt(run_id, record, prompt_id) -> dict:
             "text_hash": text_hash(payload.get("text"))}
 
 
+def _name_words(text) -> list:
+    words = (_NAME_JOINERS.sub("", w) for w in _NAME_WORD.findall(str(text or "").casefold()))
+    return [w for w in words if w]
+
+
 def _squash(text) -> str:
-    return _NAME_SEPARATORS.sub("", str(text or "")).casefold()
+    return "".join(_name_words(text))
+
+
+def _runs(words, name) -> list:
+    runs = []
+    for start in range(len(words)):
+        joined = ""
+        for end in range(start, len(words)):
+            joined += words[end]
+            if joined == name:
+                runs.append((start, end))
+            if not name.startswith(joined) or joined == name:
+                break
+    return runs
+
+
+def _affirmed(words, start) -> bool:
+    return start == 0 or words[start - 1] not in _NEGATIONS
+
+
+def _levels_named(words) -> set:
+    found, used = set(), set()
+    for level in sorted(programme_home.AUTONOMY_LEVELS, key=lambda lv: -len(_squash(lv))):
+        for start, end in _runs(words, _squash(level)):
+            span = set(range(start, end + 1))
+            if span & used:
+                continue
+            used |= span
+            if _affirmed(words, start):
+                found.add(level)
+    return found
 
 
 def require_named(prompt, *needs) -> None:
     if not prompt:
         return
-    text = _squash(programme_journal.redact(prompt["quote"]))
+    words = _name_words(programme_journal.redact(prompt["quote"]))
+    levels = _levels_named(words)
     missing = []
     for need in needs:
         options = [o for o in (need if isinstance(need, (list, tuple)) else (need,)) if _squash(o)]
-        if options and not any(_squash(o) in text for o in options):
+        if options and not any(_named(words, levels, o) for o in options):
             missing.append(" or ".join(repr(o) for o in options))
     if missing:
         raise ProgrammeError(
@@ -239,8 +277,14 @@ def require_named(prompt, *needs) -> None:
         )
 
 
+def _named(words, levels, option) -> bool:
+    if option in programme_home.AUTONOMY_LEVELS:
+        return option in levels
+    return any(_affirmed(words, start) for start, _ in _runs(words, _squash(option)))
+
+
 def _widen_word(opts) -> tuple:
-    return ("widen",) if opts.get("widening") else ()
+    return (("widen", "widening", "widened"),) if opts.get("widening") else ()
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,

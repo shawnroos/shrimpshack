@@ -336,6 +336,41 @@ for form in "${HIDDEN_FORMS[@]}" "herdr agent prompt w2:p310 go" "herdr agent pr
 done
 check "1" "$ALL"
 
+ANSI_FORMS=(
+  "herdr pane send-text w2:\$'p31' hi"
+  "herdr pane send-text \$'\\x77'2:p31 hi"
+  "herdr pane send-text \$'\\167'2:p31 hi"
+  "herdr pane send-text \$'w2:\\u0070'31 hi"
+  "herdr pane send-text \$\"w2:p31\" hi"
+  "herdr pane send-text w2:\$\"p31\" hi"
+)
+
+it "a command naming the PM's pane with \$'..' quoting is denied"
+ALL=1
+for c in "${ANSI_FORMS[@]}" "echo w2:\$'p31'" "herdr pane get \$'\\x77'2:p31"; do
+  OUT="$(action_hook sess-worker "$c")"
+  case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied: $c" ;; esac
+done
+check "1" "$ALL"
+
+it "the driving session is denied a \$'..' spelled send into its own pane"
+ALL=1
+for c in "${ANSI_FORMS[@]}"; do
+  OUT="$(action_hook sess-pm "${c/pane send-text/agent prompt}")"
+  case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied: $c" ;; esac
+done
+check "1" "$ALL"
+
+it "the same \$'..' forms naming a worker pane are allowed"
+ALL=1
+for c in "${ANSI_FORMS[@]}"; do
+  c="${c//p31/p50}"
+  c="${c//\'31/\'50}"
+  OUT="$(action_hook sess-worker "$c")"
+  [ -z "$OUT" ] || { ALL=0; echo "      not allowed: $c ($OUT)"; }
+done
+check "1" "$ALL"
+
 it "the driving session may name its own pane in a command that sends nothing"
 OUT="$(action_hook sess-pm 'herdr pane get w2:p31')$(action_hook sess-pm 'echo "driver is w2:p31"')"
 check "" "$OUT"
@@ -394,6 +429,33 @@ print(a, b, c)
 EOF
 )"
 check "False True False" "$OUT"
+
+it "an expired lease still guards the driver's pane from other sessions"
+STAMP="$(run_py "$RUN" <<'EOF'
+core = load_lib_module("run_record_core")
+seen = {}
+def age(rec):
+    seen["old"] = json.dumps([rec["programme"].get("created_at"), rec["programme"]["agreement"].get("accepted")])
+    rec["programme"]["agreement"]["accepted"] = None
+    rec["programme"]["created_at"] = "2000-01-01T00:00:00Z"
+core._with_locked_run_record(ph.home_path(args[0]), args[0], age)
+lease = dict(ph.iter_leases())["default.w2"]
+print(ph.lease_status(lease), seen["old"])
+EOF
+)"
+OUT="$(action_hook sess-worker 'herdr agent prompt w2:p31 go')"
+ROW="$(run_py "$RUN" <<'EOF'
+r = pj.read(args[0])[-1]
+print(r["kind"], r["session_id"])
+EOF
+)"
+case "$STAMP $OUT" in "expired "*'"deny"'*) check "blocked_driver_send sess-worker" "$ROW" ;; *) fail "status/out [$STAMP $OUT]" ;; esac
+run_py "$RUN" "${STAMP#expired }" <<'EOF' >/dev/null
+core = load_lib_module("run_record_core")
+def restore(rec):
+    rec["programme"]["created_at"], rec["programme"]["agreement"]["accepted"] = json.loads(args[1])
+core._with_locked_run_record(ph.home_path(args[0]), args[0], restore)
+EOF
 
 it "a lease written by a newer auto holds nothing: no capture, no deny"
 LEASE="${CLAUDE_AUTO_DATA_DIR}/programmes/leases/default.w2.json"

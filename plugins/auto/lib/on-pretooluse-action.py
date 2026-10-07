@@ -61,6 +61,7 @@ rel-001: ALWAYS exit 0 at the process level.
 
 from __future__ import annotations
 
+import codecs
 import json
 import os
 import re
@@ -584,6 +585,21 @@ def _shell_script(rest: list):
     return None
 
 
+_ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
+_LOCALE_DOLLAR = re.compile(r"\$(?=\")")
+
+
+def _ansi_c(match) -> str:
+    try:
+        return codecs.decode(match.group(1).encode("latin-1", "backslashreplace"), "unicode_escape")
+    except Exception:
+        return match.group(1)
+
+
+def _unquote_dollar(command: str) -> str:
+    return _LOCALE_DOLLAR.sub("", _ANSI_C.sub(lambda m: shlex.quote(_ansi_c(m)), command))
+
+
 def _herdr_sends(command: str, depth: int = 0) -> list:
     """(verb, target) for every herdr call in ``command`` that types into a pane.
 
@@ -592,7 +608,7 @@ def _herdr_sends(command: str, depth: int = 0) -> list:
     check that does not depend on how herdr is invoked.
     """
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(_unquote_dollar(command), posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError:
@@ -641,10 +657,8 @@ def _targets_pane(target: str, driver: dict) -> bool:
 
 _ID_EDGE = "A-Za-z0-9_"
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
-
-
 def _names_pane(command: str, driver: dict):
-    text = _HIDING_CHARS.sub("", command).casefold()
+    text = _HIDING_CHARS.sub("", _unquote_dollar(command)).casefold()
     for ident in (driver.get("pane_id"), driver.get("terminal_id")):
         if ident and re.search(r"(?<![%s])%s(?![%s])" % (_ID_EDGE, re.escape(ident.casefold()), _ID_EDGE),
                                text):

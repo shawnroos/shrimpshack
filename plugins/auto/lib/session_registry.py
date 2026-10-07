@@ -30,7 +30,7 @@ LINES_PER_PANE = 50
 PANE_GET_TIMEOUT = 1.0
 REPORT_TIMEOUT = 1.0
 FIELD_CAP = 512
-DRIVER_LEASE_STATES = ("live", "orphaned")
+DRIVER_LEASE_STATES = ("live", "orphaned", "expired")
 
 _CONTROL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x00-\x1f\x7f]")
 
