@@ -135,6 +135,16 @@
       },
       "source": "./plugins/data-presentation",
       "category": "utilities"
+    },
+    {
+      "name": "peek",
+      "description": "A side pane that shows the files and links in a conversation. Click a path or URL in a reply, or run /peek, and it opens beside the transcript: markdown as one scrolling page with styled headings, quotes, code, Mermaid diagrams, images and clickable tasks; code with syntax colours; images, folders and web pages. /peek also finds a recent file by description, and /peek-menu opens a command menu. A Claude Code mod: needs CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Shawn Roos"
+      },
+      "source": "./plugins/peek",
+      "category": "utilities"
     }
   ]
 }
