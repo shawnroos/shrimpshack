@@ -79,6 +79,7 @@ Every personal or project rule, autonomy entry and check needs an `adoption` obj
 - The six fields other than `widening` are required strings. Only `quote` can be empty. `widening` is optional and boolean. Any other problem gives `adoption_malformed`.
 - `hash` is `content_hash(entry)`: the SHA-256 of the entry without its `adoption` key, as JSON with sorted keys and no spaces. An edit after adoption gives `adoption_unverified`.
 - `machine` is compared with `machine_name()`. The env var `CLAUDE_AUTO_MACHINE` replaces the host name (tests use it).
+- `prompt_hash` is the prompt's `text_hash`: `"sha256:"` followed by the hex SHA-256 of the prompt's `payload.text` in the run journal, encoded as UTF-8. That text is already redacted when the journal stores it, so the hash is over the redacted text. `programme.text_hash(text)` computes it, and `adopt-rule` writes `prompt_hash` with it.
 - When `machine` is this machine, the loader calls `prompt_lookup(run_id, prompt_id)`. The result must be an object with `origin` equal to `typed` and `text_hash` equal to `prompt_hash`. A missing prompt, another origin, a different hash, no lookup, or a lookup that raises gives `adoption_unverified`.
 - When `machine` is another machine, a rule or autonomy entry loads without a lookup, and `adopted_on` names that machine. A check does not load (section 6).
 - The `adopt-rule` verb writes the record and the file in one atomic rename.
@@ -119,6 +120,22 @@ A check is an argv template that an evidence checker runs. The only command keys
 - A command loads only with an adoption record from this machine that passes section 4. An adoption from another machine gives `check_not_adopted_here`. This stops a worker from supplying the command that checks its own claim.
 - A project command replaces a personal command with the same key for the same repo.
 
+### 6.1 Output contract
+
+The `verified` checker runs both commands for a deliverable whose `merged` entry is confirmed with a merge commit.
+
+| Placeholder | Value |
+| --- | --- |
+| `{id}` | The deliverable's ref: the `--ref` given, else the newest claim's ref, else the stored ref, else the item's `waiting_on.trace_id` or `job_id`. |
+| `{sha}` | The merge commit, from the `merged` entry's `fields.merge_commit`. |
+| `{repo}` | The `checks` key that matched: `owner/name` from the merged PR ref when that key has both commands, else the clone's real path. |
+
+- Each command runs with the clone as its working folder, an environment of only `PATH` and `HOME`, stdin from `/dev/null`, and the `CLAUDE_AUTO_CHECK_TIMEOUT_SECONDS` limit (default 30). Output past 1 MB is cut off and gives `unknown`.
+- `verified.lookup` must exit 0 and print some text. The checker keeps that text, redacted and capped at 500 characters, as `fields.lookup`. It does not parse it.
+- `verified.deployed_sha` must exit 0 and print a 40-character lowercase hex commit sha. The first such sha in its output is the build sha.
+- A non-zero exit, a timeout, empty output, or no sha gives `unknown`, never `refuted`.
+- The checker then runs `git -C <clone> merge-base --is-ancestor <merge commit> <build sha>`. Exit 0 confirms. Exit 1 refutes ("build X does not contain the merge commit Y"). Any other exit, for example a sha the clone does not have, gives `unknown`. The checker never fetches.
+
 ## 7. Proposed rules
 
 A proposed rule lives in the programme record at `programme.proposed_rules`, never in a layer file. It uses the section 3 format with no `adoption` key. `validate_proposal(rule)` checks it. A proposed rule never changes a match result. `summary(protocol, record)` lists it with status `proposed`.
@@ -140,7 +157,7 @@ A proposed rule lives in the programme record at `programme.proposed_rules`, nev
 
 - `adopted_on` is null for the plugin layer and for an adoption from this machine.
 - A rejection for a whole layer has `id` null. A rejection for one check has id `<repo>:<command key>`.
-- `prompt_lookup(run_id, prompt_id)` returns `{"origin": ..., "text_hash": ...}` or null. The programme journal supplies it.
+- `prompt_lookup(run_id, prompt_id)` returns `{"origin": ..., "text_hash": ...}` or null. `programme.prompt_lookup` is the real supplier: it finds the prompt in the run journal and hashes its stored text as section 4 defines. The loader never loads the journal itself.
 
 Rejection reasons: `malformed_layer`, `newer_format`, `no_default_branch`, `unknown_key`, `missing_field`, `bad_value`, `unknown_deliverable`, `unknown_autonomy`, `duplicate_id`, `not_adopted`, `adoption_malformed`, `adoption_unverified`, `widening_unmarked`, `unknown_check`, `check_not_adopted`, `check_not_adopted_here`.
 

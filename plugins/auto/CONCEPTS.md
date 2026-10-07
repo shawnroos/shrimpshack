@@ -38,6 +38,8 @@ vocabulary to learn, not two.
 | a programme's record of actions | **journal** | An append-only log beside the run-record: Shawn's prompts, items joining, evidence checked, terms amended, rules adopted, ownership changes. |
 | a standing order from chat | **instruction** | Something Shawn says that is not a term change ("skip full eval"), recorded with his words, what it applies to, and until when. |
 | the claim on a remit | **lease** | The per-space record that makes a programme the only live one in its remit; replaced only by a typed takeover. |
+| which session runs in which pane | **session registry** | A per-space log the SessionStart hook writes inside herdr: each session's id, pane, terminal and whether it is interactive. The PM reads it to know who owns a pane. |
+| a worker's report of finished work | **claim** | A line a worker session adds to the programme's **inbox** (`claims.jsonl`) naming an item, a deliverable and a ref. The PM checks the evidence before it believes it; a claim alone never makes an item done. |
 
 ## The shape in one line
 
