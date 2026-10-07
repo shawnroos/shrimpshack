@@ -72,6 +72,91 @@ utilities for upgrading a workflow file on disk — deliberately kept out of
 `_VERBS`/`describe` so the locked, set-equality-enforced agent verb surface stays
 the set of verbs an agent actually drives a run with.
 
+## Programme verbs
+
+A programme's agreement, instructions and protocol rules change only through
+`python3 lib/programme.py <verb>` (shim: `lib/programme.sh`). Run
+`python3 lib/programme.py describe` for argument shapes and rejection modes. The
+programme is found by `--run <id>`, or else by the lease that names the caller's
+session.
+
+- **Read**: `describe`; `rules` prints the rules in force (agreement terms, adopted
+  protocol rules, active instructions), rebuilt from the run record and wrapped in
+  an `<auto-rules>` tag as data. `rules --ack` clears the compact flag
+  `<home>/.compact-flag` and prints the block again.
+- **Agreement**: `propose-agreement` sets proposed term values before acceptance;
+  `accept-agreement` records the acceptance; `amend-term` changes one term. A term
+  value must be one of that term's options. Wording that fits no option is an
+  instruction.
+- **Instructions**: `record-instruction` records the cited words, what they apply
+  to (the programme or one item), and until when; `close-instruction` marks one
+  fulfilled (needs `--why`) or withdrawn (needs `--prompt`).
+- **Rules**: `propose-rule` stores a rule in the protocol rule format as a
+  proposal; `adopt-rule` writes it to the personal protocol layer atomically, with
+  an adoption record (machine, run, prompt id, redacted quote, prompt hash, content
+  hash).
+- **Items**: `add-item` adds an item with a `source:key` id, or updates one. It
+  stores the protocol match for its change kinds (matched rules, and each required
+  deliverable with result unknown) and the owning pane and session. `alias-item`
+  gives an item a new id and keeps the old one as an alias; when the new id
+  already exists, the two items merge. `merge-item` folds one item into another.
+  A merge combines sessions, aliases, linked task runs and evidence (confirmed
+  evidence wins), and moves queue, watcher, instruction and proposed-rule
+  references to the surviving id. `drop-item` needs `--reason`, and a typed
+  `--prompt` when the item is issue-backed (its source is not herdr) and has an
+  open deliverable. `reopen-item` reopens a dropped item and always needs a
+  typed `--prompt`. No verb sets an item to done: done is derived from confirmed
+  evidence.
+- **Waits and watchers**: `set-waiting` sets who an item waits on, with an
+  optional named reporter, a watcher (process or task id), the blocker kind and a
+  trace or job id; `--clear` returns the item to open. `watcher-beat` updates a
+  watcher's heartbeat, and registers a new watcher when given a process or task
+  id. A beat for an unknown watcher without an id is refused. `watcher-beat` is
+  not journaled.
+- **Handing**: `hand-item` hands an item to Shawn with a question and notifies
+  once: the board's needs-you mark for a Linear item, else a herdr notification.
+  Its journal entry records both exit statuses (null when not run or not found,
+  "skipped" for the board on an item with no Linear issue). `answer-handed`
+  needs a typed `--prompt` and `--choice ship|decline`. Ship reopens the item with
+  the deliverables its change kinds imply (or the kinds passed with `--kind`);
+  decline drops it.
+- **Worker inbox**: `claim --run <id> --item <id> --deliverable <name> --ref <ref>`
+  appends one structured claim to `<home>/claims.jsonl`. Free text and a
+  reference with spaces are refused, and a claim never changes evidence. `mark-read`
+  moves the programme's inbox read offset to the claim count, or to `--offset`.
+- **Working model and sources**: `set-now` records what the PM is doing now;
+  `queue` adds a next action (a worker start is action start_worker with
+  `--item`) or removes one; `record-tested-build` stores the tested build's
+  shasum on an item for the released check; `set-source` records a source
+  (herdr, board or linear) going unavailable or coming back.
+
+Text from outside the PM (titles, reasons, questions, references) passes through
+the sanitizer in lib/programme_sanitize.py: control and escape sequences are
+stripped and the length is capped. Item ids are checked as `source:key` with no
+`..`, spaces or control text, and are never used as a path.
+
+Every write verb:
+
+1. runs only in the driving session: `CLAUDE_CODE_SESSION_ID` must equal the
+   record's `driving_session_id`; `agent_session_ids` never count. `claim` is
+   the exception: any session may call it, and it names the programme with
+   `--run`;
+2. refuses while the compact flag exists and prints the rules-in-force block,
+   except `rules --ack`, `claim` and `watcher-beat`;
+3. revalidates under the run-record lock, then journals after the write commits.
+
+The approval verbs (accepting the agreement, amending a term, recording an
+instruction, withdrawing one, adopting a rule, answering a handed item,
+reopening a dropped item, and dropping an issue-backed item with an open
+deliverable) need `--prompt <id>` naming a
+prompt that the prompt hook journaled as typed in the driving session. The verb
+copies the quote from the journal, never from its own arguments, and its journal
+entry cites the prompt so pruning keeps it.
+
+This section is fenced by the same test as the run-record verbs: it derives the
+set from `lib/programme.py describe` and fails if any verb is missing here, or if
+this section names a verb that does not dispatch.
+
 ## Phase model
 
 `describe` publishes the loop's phase model so an agent orients to phases without
