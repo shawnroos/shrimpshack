@@ -1,0 +1,24 @@
+plugins/auto/lib/programme-watch.sh
+  s_5abb44c8324d7f::t_efa7972b4117ff 1-11
+plugins/auto/lib/programme-watch.py
+  s_5abb44c8324d7f::t_743cac9a468343 1-442
+  s_5abb44c8324d7f::t_2f11a1ef676b01 443
+plugins/auto/tests/unit/programme-watch.test.sh
+  s_5abb44c8324d7f::t_df477187906487 1-429
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f4f454580f3c03a3451968d911214f7c8f01ba34",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
