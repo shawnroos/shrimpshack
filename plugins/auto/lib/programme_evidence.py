@@ -29,6 +29,7 @@ programme_journal = load_lib_module("programme_journal")
 programme_predicate = load_lib_module("programme_predicate")
 programme_record = load_lib_module("programme_record")
 programme_sanitize = load_lib_module("programme_sanitize")
+programme_protocol = load_lib_module("programme_protocol")
 driver_session = load_lib_module("driver_session")
 verification = load_lib_module("verification")
 
@@ -48,10 +49,19 @@ PASSING = ("SUCCESS",)
 BAD_OUTCOMES = ("CANCELLED", "SKIPPED", "FAILURE", "TIMED_OUT", "ACTION_REQUIRED",
                 "STARTUP_FAILURE", "STALE", "ERROR")
 FROZEN_AT_DONE = ("flagged",)
-CHECKERS = ("merged", "recorded")
+CHECKERS = ("merged", "recorded", "flagged", "verified", "released")
+LD_KEY = "LD_ACCESS_TOKEN"
+BT_KEY = "BRAINTRUST_API_KEY"
+LD_DEFAULT_PROJECT = "default"
+FLAG_BAR = (("production", False), ("stage", True), ("development", True))
+FLAG_EXCEPTIONS = ("rules", "targets", "contextTargets")
 _PR_REF = re.compile(r"(?:https://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:#|/pull/)([0-9]+)/?")
 _ISSUE_REF = re.compile(r"(?:linear:)?([A-Z][A-Z0-9]*)-([0-9]+)")
 _ROOT_CAUSE = re.compile(r"root[ -]cause", re.IGNORECASE)
+_FLAG_REF = re.compile(r"(?:([A-Za-z0-9._-]+)/)?([A-Za-z0-9._-]+)")
+_EXPERIMENT_REF = re.compile(r"bt:([^/\s]+)/(\S+)")
+_SHA = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
+_WAIVER = re.compile(r"waiv", re.IGNORECASE)
 _SECRET_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
 
 _PR_QUERY = (
@@ -119,15 +129,21 @@ def _note(*parts) -> str:
     return programme_journal.redact(text)[:NOTE_CAP]
 
 
-def _run_json(argv, env):
-    run = verification.run_capped(argv, timeout=_timeout(), env=env, cap=OUTPUT_CAP_BYTES,
+def _run(argv, env, cwd=None) -> dict:
+    run = verification.run_capped(argv, cwd=cwd, timeout=_timeout(), env=env, cap=OUTPUT_CAP_BYTES,
                                    stdin=subprocess.DEVNULL)
     if not run["ran"]:
         raise Unknown(_note(run["error"]))
     if run["truncated"]:
         raise Unknown(f"{argv[0]} output passed {OUTPUT_CAP_BYTES} bytes")
-    if run["exit_code"] != 0:
-        raise Unknown(_note(f"{argv[0]} exited {run['exit_code']}:", run["stderr"], run["stdout"]))
+    return run
+
+
+def _failed(argv, run):
+    return Unknown(_note(f"{argv[0]} exited {run['exit_code']}:", run["stderr"], run["stdout"]))
+
+
+def _json_of(argv, run):
     try:
         doc = json.loads(run["stdout"].decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
@@ -135,6 +151,18 @@ def _run_json(argv, env):
     if not isinstance(doc, dict):
         raise Unknown(f"{argv[0]} gave JSON that is not an object")
     return doc
+
+
+def _run_json(argv, env, cwd=None):
+    run = _run(argv, env, cwd)
+    if run["exit_code"] != 0:
+        raise _failed(argv, run)
+    return _json_of(argv, run)
+
+
+def _need(tool, env) -> None:
+    if shutil.which(tool, path=env["PATH"]) is None:
+        raise Unknown(f"{tool} is not on PATH")
 
 
 def _dig(doc, *path):
@@ -310,6 +338,211 @@ def check_recorded(ref) -> dict:
     return {"result": "refuted" if misses else "confirmed", "fields": fields, "misses": misses}
 
 
+def _variation(flag, index, where):
+    variations = flag.get("variations")
+    if isinstance(index, bool) or not isinstance(index, int) or not isinstance(variations, list) \
+            or not 0 <= index < len(variations) or not isinstance(variations[index], dict):
+        raise Unknown(f"{where}: variation {index!r} is not one of the flag's variations")
+    value = variations[index].get("value")
+    if not isinstance(value, bool):
+        raise Unknown(f"{where}: the flag does not serve booleans")
+    return value
+
+
+def _served_by(flag, entry, where) -> set:
+    if entry.get("variation") is not None:
+        return {_variation(flag, entry["variation"], where)}
+    weights = _dig(entry, "rollout", "variations")
+    if not isinstance(weights, list):
+        raise Unknown(f"{where} serves neither a variation nor a rollout")
+    return {_variation(flag, w.get("variation"), where) for w in weights
+            if isinstance(w, dict) and (w.get("weight") or 0) > 0}
+
+
+def _env_served(flag, name, env) -> dict:
+    if not isinstance(env, dict) or not isinstance(env.get("on"), bool):
+        raise Unknown(f"the flag read has no {name} environment")
+    if not env["on"]:
+        return {"on": False, "served": _variation(flag, env.get("offVariation"), name), "others": []}
+    fall = env.get("fallthrough") or {}
+    if fall.get("variation") is None:
+        raise Unknown(f"{name} serves a percentage rollout, not one value")
+    others, counts = set(), {}
+    for kind in FLAG_EXCEPTIONS:
+        entries = [e for e in env.get(kind) or [] if isinstance(e, dict)]
+        counts[kind] = len(entries)
+        for entry in entries:
+            others |= _served_by(flag, entry, f"{name} {kind}")
+    if env.get("prerequisites"):
+        others.add(_variation(flag, env.get("offVariation"), name))
+    return dict(counts, on=True, served=_variation(flag, fall["variation"], name), others=sorted(others))
+
+
+def check_flagged(ref) -> dict:
+    match = _FLAG_REF.fullmatch(ref or "")
+    if not match:
+        raise Unknown(f"flagged needs a flag key or project/flag-key, got {ref!r}")
+    project, key = match.group(1) or LD_DEFAULT_PROJECT, match.group(2)
+    token = secret(LD_KEY)
+    if not token:
+        raise Unknown(f"no {LD_KEY} in the secrets file")
+    env = dict(_base_env(), **{LD_KEY: token})
+    _need("ldcli", env)
+    flag = _run_json(["ldcli", "flags", "get", "--project", project, "--flag", key, "-o", "json"], env)
+    envs = flag.get("environments")
+    if not isinstance(envs, dict):
+        raise Unknown("ldcli returned no environments")
+    fields = {"flag": key, "project": project, "environments": {}}
+    misses = []
+    for name, want in FLAG_BAR:
+        state = _env_served(flag, name, envs.get(name))
+        fields["environments"][name] = dict(state, bar=want)
+        if state["served"] != want:
+            misses.append(f"{name} serves {str(state['served']).lower()}")
+        elif (not want) in state["others"]:
+            misses.append(f"{name} has a rule or target serving {str(not want).lower()}")
+    return {"result": "refuted" if misses else "confirmed", "fields": fields, "misses": misses}
+
+
+def _fill(argv, values) -> list:
+    out = []
+    for part in argv:
+        for name, value in values.items():
+            part = part.replace("{" + name + "}", value)
+        out.append(part)
+    return out
+
+
+def _repo_keys(item, repo) -> list:
+    keys = []
+    pr = _dig(item, "deliverables", "merged", "fields", "pr") or _dig(item, "deliverables", "merged", "ref")
+    match = _PR_REF.fullmatch(pr or "")
+    if match:
+        keys.append(f"{match.group(1)}/{match.group(2)}")
+    if repo:
+        keys.append(os.path.realpath(repo))
+    return keys
+
+
+def _commands(checks, keys):
+    for key in keys:
+        block = (checks or {}).get(key) or {}
+        if all(name in block for name in programme_protocol.CHECK_KEYS):
+            return key, {name: block[name]["argv"] for name in programme_protocol.CHECK_KEYS}
+    raise Unknown("no adopted verified.lookup and verified.deployed_sha for this repo; a claim alone "
+                  "never verifies")
+
+
+def _adopted_output(argv, cwd) -> str:
+    run = _run(argv, _base_env(home=True), cwd)
+    if run["exit_code"] != 0:
+        raise _failed(argv, run)
+    text = run["stdout"].decode("utf-8", "replace").strip()
+    if not text:
+        raise Unknown(f"{argv[0]} printed nothing")
+    return text
+
+
+def check_verified(ref, context) -> dict:
+    item, repo = context.get("item") or {}, context.get("repo")
+    merged = _dig(item, "deliverables", "merged") or {}
+    merge_commit = _dig(merged, "fields", "merge_commit")
+    if merged.get("result") != "confirmed" or not merge_commit:
+        raise Unknown("verified needs merged confirmed first, with its merge commit")
+    repo_key, argv = _commands(context.get("checks"), _repo_keys(item, repo))
+    if not repo:
+        raise Unknown("verified needs --repo <clone> to test that the build contains the merge commit")
+    values = {"id": ref, "sha": merge_commit, "repo": repo_key}
+    lookup = _adopted_output(_fill(argv["verified.lookup"], values), repo)
+    shas = _SHA.findall(_adopted_output(_fill(argv["verified.deployed_sha"], values), repo))
+    if not shas:
+        raise Unknown("verified.deployed_sha printed no 40-character commit sha")
+    build = shas[0]
+    fields = {"id": ref, "repo": repo_key, "repo_path": os.path.realpath(repo), "merge_commit": merge_commit,
+              "build_sha": build, "lookup": _note(lookup)}
+    git = ["git", "-C", fields["repo_path"], "merge-base", "--is-ancestor", merge_commit, build]
+    run = _run(git, _base_env(home=True))
+    if run["exit_code"] not in (0, 1):
+        raise Unknown(_note(f"the clone cannot compare {build} with the merge commit:", run["stderr"]))
+    misses = [] if run["exit_code"] == 0 else [f"build {build} does not contain the merge commit {merge_commit}"]
+    return {"result": "refuted" if misses else "confirmed", "fields": fields, "misses": misses}
+
+
+def _registry(build, repo) -> dict:
+    env = _base_env(home=True)
+    _need("npm", env)
+    spec = f"{build['package']}@{build['version']}"
+    argv = ["npm", "view", spec, "dist.shasum", "dist.integrity", "version", "--json"]
+    run = _run(argv, env, os.path.realpath(repo) if repo else None)
+    if run["exit_code"] == 0:
+        return _json_of(argv, run)
+    try:
+        code = _dig(_json_of(argv, run), "error", "code")
+    except Unknown:
+        code = None
+    if code == "E404" and repo:
+        return {"missing": spec}
+    raise _failed(argv, run)
+
+
+def _experiment(ref):
+    match = _EXPERIMENT_REF.fullmatch(ref or "")
+    if not match:
+        return None
+    project, name = match.group(1), match.group(2)
+    env = _base_env(home=True)
+    key = secret(BT_KEY)
+    if key:
+        env[BT_KEY] = key
+    _need("bt", env)
+    argv = ["bt", "experiments", "view", name, "--project", project, "--json", "--no-input"]
+    run = _run(argv, env)
+    try:
+        doc = _json_of(argv, run)
+    except Unknown:
+        raise _failed(argv, run) if run["exit_code"] else Unknown("bt gave no JSON")
+    message = str(_dig(doc, "error", "message") or "")
+    if run["exit_code"] == 0 and not doc.get("error"):
+        return {"experiment": name, "experiment_project": project, "experiment_id": doc.get("id")}
+    if "not found" in message.lower():
+        return {"experiment": name, "experiment_project": project, "experiment_id": None}
+    raise Unknown(_note(f"bt exited {run['exit_code']}:", message or run["stderr"]))
+
+
+def check_released(ref, context) -> dict:
+    item, repo = context.get("item") or {}, context.get("repo")
+    build = item.get("tested_build") or {}
+    if not all(build.get(k) for k in ("shasum", "package", "version")):
+        raise Unknown("no tested build with a package and version; run record-tested-build first")
+    doc = _registry(build, repo)
+    tested = build["shasum"]
+    published = doc.get("dist.integrity") if "-" in tested else doc.get("dist.shasum")
+    fields = {"package": build["package"], "version": build["version"], "tested_shasum": tested,
+              "registry_shasum": published, "registry_version": doc.get("version"),
+              "repo_path": os.path.realpath(repo) if repo else None, "waiver": None, "experiment": None}
+    misses = []
+    if doc.get("missing"):
+        misses.append(f"the registry has no {doc['missing']}")
+    elif published != tested:
+        misses.append(f"registry shasum {published} does not match the tested shasum {tested}")
+    elif doc.get("version") != build["version"]:
+        misses.append(f"registry version {doc.get('version')} is not the tested version {build['version']}")
+    if misses:
+        return {"result": "refuted", "fields": fields, "misses": misses}
+    waivers = context.get("waivers") or []
+    if waivers:
+        fields["waiver"] = waivers[0].get("id")
+    else:
+        found = _experiment(ref)
+        if found is None:
+            misses.append("no eval experiment and no active waiver")
+        else:
+            fields.update(found)
+            if not found["experiment_id"]:
+                misses.append(f"no eval experiment {found['experiment']} in {found['experiment_project']}")
+    return {"result": "refuted" if misses else "confirmed", "fields": fields, "misses": misses}
+
+
 def _pin_for(run_id, item, ref):
     pin = None
     for row in programme_journal.read(run_id):
@@ -319,14 +552,21 @@ def _pin_for(run_id, item, ref):
     return pin
 
 
-def run_check(run_id, item, deliverable, ref) -> dict:
+def run_check(run_id, item, deliverable, ref, context=None) -> dict:
+    context = context or {}
     try:
         if deliverable == "merged":
             verdict = check_merged(ref, pin=_pin_for(run_id, item, ref))
         elif deliverable == "recorded":
             verdict = check_recorded(ref)
+        elif deliverable == "flagged":
+            verdict = check_flagged(ref)
+        elif deliverable == "verified":
+            verdict = check_verified(ref, context)
+        elif deliverable == "released":
+            verdict = check_released(ref, context)
         else:
-            raise Unknown(f"no checker for {deliverable!r} yet")
+            raise Unknown(f"no checker for {deliverable!r}")
     except Unknown as exc:
         return {"result": "unknown", "fields": {}, "misses": [], "note": str(exc)}
     except Exception as exc:  # noqa: BLE001 -- a checker bug must read as unknown, never confirmed
@@ -363,13 +603,44 @@ def _claimed_ref(home, key, deliverable):
     return ref
 
 
-def _default_ref(key, deliverable):
+def _default_ref(key, deliverable, item):
     source, _, rest = key.partition(":")
     if deliverable == "recorded" and source == "linear":
         return rest
     if deliverable == "merged" and source in ("github", "pr"):
         return rest
+    if deliverable == "verified":
+        wait = item.get("waiting_on") or {}
+        return wait.get("trace_id") or wait.get("job_id")
+    build = item.get("tested_build") or {}
+    if deliverable == "released" and build.get("package") and build.get("version"):
+        return f"{build['package']}@{build['version']}"
     return None
+
+
+def _repo_arg(value):
+    if value is None:
+        return None
+    if not os.path.isdir(value):
+        raise ValueError(f"--repo must be a local clone directory, got {value!r}")
+    return os.path.realpath(value)
+
+
+def _context(host, programme, key, deliverable, repo, cache=None) -> dict:
+    item = programme["items"][key]
+    context = {"item": item, "repo": repo, "checks": {}, "waivers": []}
+    if deliverable == "verified":
+        cache = {} if cache is None else cache
+        keys = _repo_keys(item, None)
+        mark = (repo, keys[0] if keys else None)
+        if mark not in cache:
+            cache[mark] = programme_protocol.load(repo_path=repo, repo_key=mark[1],
+                                                  prompt_lookup=host.prompt_lookup)["checks"]
+        context["checks"] = cache[mark]
+    if deliverable == "released":
+        context["waivers"] = [e for e in host.active_instructions(programme) if e.get("applies_to") == key
+                              and _WAIVER.search(f"{e.get('quote') or ''} {e.get('why') or ''}")]
+    return context
 
 
 def _age(stamp, now):
@@ -442,9 +713,9 @@ def _store(programme, run_id, key, deliverable, ref, verdict) -> dict:
 
 
 def _h_check_deliverable(host, argv):
-    positional, opts = host._parse(argv, values=("run", "ref"))
+    positional, opts = host._parse(argv, values=("run", "ref", "repo"))
     if len(positional) != 2:
-        raise ValueError("usage: check-deliverable <item> <deliverable> [--ref <reference>]")
+        raise ValueError("usage: check-deliverable <item> <deliverable> [--ref <reference>] [--repo <clone>]")
     item_id = programme_record.check_item_id(positional[0])
     deliverable = positional[1]
     if deliverable not in programme_home.DELIVERABLES:
@@ -455,13 +726,15 @@ def _h_check_deliverable(host, argv):
     key = _resolve(programme, item_id)
     if deliverable not in (programme["items"][key].get("deliverables") or {}):
         raise programme_record.RecordError(f"{deliverable!r} is not a deliverable of {key!r}")
-    stored = (programme["items"][key]["deliverables"].get(deliverable) or {}).get("ref")
+    entry = programme["items"][key]["deliverables"].get(deliverable) or {}
     ref = (_ref_token(opts.get("ref")) or _claimed_ref(home, key, deliverable)
-           or stored or _default_ref(key, deliverable))
+           or entry.get("ref") or _default_ref(key, deliverable, programme["items"][key]))
     if not ref:
         raise programme_record.RecordError(
             f"no reference for {key} {deliverable}: no claim names one; pass --ref")
-    verdict = run_check(run_id, key, deliverable, ref)
+    repo = _repo_arg(opts.get("repo")) or _dig(entry, "fields", "repo_path")
+    verdict = run_check(run_id, key, deliverable, ref,
+                        _context(host, programme, key, deliverable, repo))
 
     def change(programme, prompt, rec):
         return _store(programme, run_id, _resolve(programme, key), deliverable, ref, verdict)
@@ -495,7 +768,7 @@ def _due(record, now) -> tuple:
             elif not entry.get("ref"):
                 skipped.append({"item": key, "deliverable": name, "why": "no_ref"})
             else:
-                due.append((key, name, entry["ref"]))
+                due.append((key, name, entry["ref"], _dig(entry, "fields", "repo_path")))
     return due, skipped
 
 
@@ -526,7 +799,11 @@ def _h_validate(host, argv):
     host._guard(home, record)
     now = datetime.datetime.now(datetime.timezone.utc)
     due, skipped = _due(record, now)
-    checked = [(key, name, ref, run_check(run_id, key, name, ref)) for key, name, ref in due]
+    programme = programme_home.normalize_programme(record.get("programme") or {})
+    cache = {}
+    checked = [(key, name, ref, run_check(run_id, key, name, ref,
+                                          _context(host, programme, key, name, repo, cache)))
+               for key, name, ref, repo in due]
 
     def change(programme, prompt, rec):
         return dict(_apply_validate(programme, run_id, checked), skipped=skipped)
@@ -542,7 +819,7 @@ def _h_validate(host, argv):
 
 _SPECS = (
     ("check-deliverable", _h_check_deliverable,
-     "<item> <deliverable> [--ref <reference>] [--run <id>]",
+     "<item> <deliverable> [--ref <reference>] [--repo <clone>] [--run <id>]",
      "a deliverable the item does not require; no reference (no claim, no --ref, no issue key in the "
      "item id). Stores confirmed, refuted or unknown from the checker; never takes a result."),
     ("validate", _h_validate, "[--run <id>]",

@@ -1,0 +1,125 @@
+{
+ "archived": false,
+ "deprecated": false,
+ "environments": {
+  "development": {
+   "_environmentName": "development",
+   "archived": false,
+   "contextTargets": [],
+   "fallthrough": {
+    "variation": 0
+   },
+   "lastModified": 1781181451215,
+   "offVariation": 1,
+   "on": true,
+   "prerequisites": [],
+   "rules": [],
+   "targets": [],
+   "trackEvents": false,
+   "trackEventsFallthrough": false,
+   "version": 2
+  },
+  "production": {
+   "_environmentName": "Production",
+   "archived": false,
+   "contextTargets": [],
+   "fallthrough": {
+    "variation": 1
+   },
+   "lastModified": 1788449338466,
+   "offVariation": 1,
+   "on": true,
+   "prerequisites": [],
+   "rules": [
+    {
+     "_id": "9d7ca114-66f3-4de8-a67a-3cc801ddf12a",
+     "clauses": [
+      {
+       "_id": "8411daab-ff5d-4c1c-a619-ac10478a9a9f",
+       "attribute": "segmentMatch",
+       "contextKind": "user",
+       "negate": false,
+       "op": "segmentMatch",
+       "values": [
+        "slate-org-accounts",
+        "ai-tools-batch"
+       ]
+      }
+     ],
+     "trackEvents": false,
+     "variation": 0
+    }
+   ],
+   "targets": [],
+   "trackEvents": false,
+   "trackEventsFallthrough": false,
+   "version": 4
+  },
+  "stage": {
+   "_environmentName": "Stage",
+   "archived": false,
+   "contextTargets": [],
+   "fallthrough": {
+    "variation": 0
+   },
+   "lastModified": 1781185813545,
+   "offVariation": 1,
+   "on": true,
+   "prerequisites": [],
+   "rules": [
+    {
+     "_id": "33598aed-ca2d-4c75-83a0-95120c5b778e",
+     "clauses": [
+      {
+       "_id": "8d908373-0c5a-4a89-be9e-bfb601d75664",
+       "attribute": "environment",
+       "contextKind": "user",
+       "negate": false,
+       "op": "in",
+       "values": [
+        "stage",
+        "dev1",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "qa1",
+        "local",
+        "local:stage",
+        "local:dev1",
+        "local:dev2",
+        "local:dev3",
+        "local:dev4",
+        "local:dev5",
+        "local:qa1"
+       ]
+      }
+     ],
+     "description": "Launch set: ON in non-prod",
+     "trackEvents": false,
+     "variation": 0
+    }
+   ],
+   "targets": [],
+   "trackEvents": false,
+   "trackEventsFallthrough": false,
+   "version": 5
+  }
+ },
+ "key": "wcs-ai-tool-relight",
+ "kind": "boolean",
+ "name": "AI Tool \u2014 Relight Image",
+ "temporary": true,
+ "variations": [
+  {
+   "_id": "b8897c95-6a5c-434d-931a-e79d9bfc3f8f",
+   "value": true,
+   "valueHash": "b326b5062b2f0e69046810717534cb09"
+  },
+  {
+   "_id": "5b396e48-d0fc-4556-9c06-5b7d79b3a90c",
+   "value": false,
+   "valueHash": "68934a3e9455fa72420237eb05902327"
+  }
+ ]
+}

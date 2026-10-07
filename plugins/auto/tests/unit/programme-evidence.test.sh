@@ -446,8 +446,9 @@ check '"confirmed"' "$(result_of linear:AI-3 flagged)"
 it "validate: evidence checked within one cadence is not re-checked"
 has '{"deliverable": "merged", "item": "linear:AI-3", "why": "fresh"}' "$J"
 
-it "validate: a deliverable with no checker is skipped, not failed"
-has '{"deliverable": "verified", "item": "linear:AI-3", "why": "no_checker"}' "$J"
+it "validate: a verified re-check with no adopted lookup is unknown and keeps the evidence"
+has '{"deliverable": "verified", "item": "linear:AI-3", "result": "unknown"}' "$J"
+check '"confirmed"' "$(result_of linear:AI-3 verified)"
 
 it "validate: an open item's stale confirmed evidence is re-checked"
 edit 'items["linear:AI-9"]["deliverables"]["merged"] = {"result": "confirmed", "ref": "shawnroos/shrimpshack#97", "checked_at": ago(7200), "confirmed_at": ago(7200), "fields": {}}'
