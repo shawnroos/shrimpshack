@@ -73,6 +73,11 @@ KINDS = (
     "worker_start_failed",
     "prompt_sent",
     "prompt_refused",
+    "programme_started",
+    "taken_over",
+    "handed_over",
+    "programme_ended",
+    "request_refused",
 )
 
 _TOKEN_PATTERNS = [

@@ -368,12 +368,17 @@ def _wait_spec(opts, watcher) -> dict:
     for flag in ("trace-id", "job-id"):
         if opts.get(flag):
             spec[flag.replace("-", "_")] = _token(opts[flag], flag)
+    if opts.get("due") is not None:
+        if run_record_core.parse_iso(opts["due"]) is None:
+            raise RecordError(f"--due must be an ISO time: {opts['due']!r}")
+        spec["due_at"] = opts["due"]
     return spec
 
 
 def _h_set_waiting(host, argv):
     positional, opts = host._parse(
-        argv, values=("run", "who", "reporter", "watcher", "process-id", "task-id", "trace-id", "job-id"),
+        argv, values=("run", "who", "reporter", "watcher", "process-id", "task-id", "trace-id", "job-id",
+                      "due"),
         flags=("blocker", "clear"))
     if len(positional) != 1:
         raise ValueError("usage: set-waiting <id> --who <name> [--watcher <id>] ... | --clear")
@@ -665,8 +670,8 @@ _SPECS = (
      "no typed prompt; an item that is not dropped."),
     ("set-waiting", _h_set_waiting,
      "<id> --who <name> [--reporter <name>] [--watcher <id> [--process-id <n>] [--task-id <id>]] "
-     "[--blocker] [--trace-id <id>] [--job-id <id>] [--run <id>] | <id> --clear",
-     "no --who; a finished item; a watcher id that is not a safe name."),
+     "[--blocker] [--trace-id <id>] [--job-id <id>] [--due <iso>] [--run <id>] | <id> --clear",
+     "no --who; a finished item; a watcher id that is not a safe name; a --due that is not an ISO time."),
     ("watcher-beat", _h_watcher_beat,
      "<watcher-id> [--process-id <n>|--task-id <id>] [--item <id>] [--prompt <cron prompt>] [--run <id>]",
      "an unknown watcher with no process or task id; an empty or overlong --prompt. --prompt stores the "

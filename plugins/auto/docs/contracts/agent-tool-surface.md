@@ -145,7 +145,9 @@ session.
   `--item`) or removes one; `record-tested-build` stores the tested build's
   shasum on an item for the released check; `set-source` records a source
   (herdr, board or linear) going unavailable or coming back.
-- **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref)
+- **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref,
+  optional --repo <clone> for the verified and released checks; the path is
+  stored and reused by `validate`)
   runs that deliverable's checker and stores confirmed, refuted or unknown with
   the parsed fields. No verb takes a result as an argument. The reference is
   --ref, else the newest claim for that deliverable, else the stored one, else the
@@ -183,6 +185,40 @@ session.
   pane with no live agent, and a pane whose reported session is not the item's
   owner. Refusals and sends are journaled; a pane with no reported or
   registered session is sent to and marked session unknown.
+- **Lifecycle**: `start` takes the remit lease for the caller's herdr space (or
+  each `--space`) before anything else, creates the programme home and journals
+  programme_started. It is refused while a space's lease is live, orphaned or
+  newer, and the error names the holding run and session. `takeover`, `handover
+  <session-id>` and `end` act only on a request that the prompt hook journaled
+  from the caller's own session, and each request is used once. `takeover` needs
+  an orphaned lease and a typed takeover request made while it was orphaned.
+  `handover` runs in the driving session and needs a typed handover request that
+  names the new session and cites its prompt. `end` needs a typed end request in
+  the driving session, or an orphaned lease. Takeover and handover rewrite every
+  lease of the run and the record's `driving_session_id` together (leases lock,
+  then run-record lock), stamp the driver beat, and journal both session ids.
+  Takeover prints the rules in force and the waits and watchers to re-arm. `end`
+  releases the leases, sets the run to done (shown as ended) and prints the cron
+  task ids to remove with CronDelete. Refusals are journaled as request_refused.
+- **Driver beat**: `beat` stamps the programme's driver beat; every other
+  driving-session write stamps it too, so a working PM keeps its lease live.
+- **Journal pruning**: `python3 lib/programme_journal.py prune --run <id>` drops
+  captured prompts older than 7 days that no journal line cites. The sweep runs
+  it first.
+- **Wake watcher** (`lib/programme-watch.sh`, not a verb): remit mode
+  `programme-watch.sh [--run <id>] [--linear] [--max-polls <n>]` beats the remit
+  watcher each interval and prints one line when the remit changes
+  (remit-changed, claim, wait-due, linear-changed or source-available),
+  then exits 0; it prints "source-unavailable <name> <reason>" once and keeps
+  polling. Item mode `programme-watch.sh [--run <id>] --item <id> -- <argv>`
+  beats that item's watcher while the command runs, then prints
+  "item-exited <id> exit=N". Exit codes: 0 change or quiet exit, 1 runtime error
+  or 3 refused beats, 2 usage. Settings: `CLAUDE_AUTO_WATCH_INTERVAL_SECONDS`
+  (default 30), `CLAUDE_AUTO_PROGRAMME_CLI`.
+  `expire` ends a programme whose agreement stayed unaccepted past one cadence,
+  with reason agreement_unaccepted, and otherwise does nothing. `beat` stamps the
+  driver beat that keeps the lease live; the sweep runs it each time, because a
+  beat older than two cadence periods reads as orphaned.
 
 Text from outside the PM (titles, reasons, questions, references) passes through
 the sanitizer in lib/programme_sanitize.py: control and escape sequences are

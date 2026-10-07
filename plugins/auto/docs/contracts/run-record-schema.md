@@ -694,7 +694,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `deliverables` | `{"<name>": entry}`, names from `DELIVERABLES` (`merged`, `flagged`, `verified`, `released`, `recorded`); a new entry is `{result: "unknown"}` |
 | deliverable entry | `{result: confirmed\|refuted\|unknown, ref, checked_at, confirmed_at, fields, misses, note, unknown_streak, validate?: {at, result, note}}`. `fields` per checker: merged `{state, merge_commit, head, merged_at, merged_by, url, …}`; recorded `{issue, state, state_type, read_by, root_cause_comment, bot_root_cause_comments}`; flagged `{flag, project, environments: {production\|stage\|development: {on, served, others, rules, targets, contextTargets, bar}}}`; verified `{id, repo, repo_path, merge_commit, build_sha, lookup}`; released `{package, version, tested_shasum, registry_shasum, registry_version, repo_path, waiver, experiment, experiment_project, experiment_id}`. A released ref names an eval as `bt:<project>/<experiment>` |
 | `done_at` | `<iso>` when evidence first became complete; cleared when a check stops confirming |
-| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?}`. A non-empty `reporter` or a live watcher makes the wait watched. The wake watcher reads `due_at`; no verb writes it yet |
+| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it |
 | `handed` | `{at, question, answered: null \| {at, choice: ship\|decline, prompt_id}}` |
 | `tested_build` | `{shasum, package, version, at}` |
 | `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
@@ -722,7 +722,14 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `item_handed`, `handed_answered`, `claim`, `claims_read`, `working_now`,
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
 `evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
-`worker_start_failed`, `prompt_sent`, `prompt_refused`.
+`worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
+`taken_over`, `handed_over`, `programme_ended`, `request_refused`.
+
+- Lifecycle payloads: `programme_started {home, leases, session}`;
+  `taken_over` and `handed_over {from_session, to_session, leases, request}`;
+  `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
+  process_ids, request, lease_status}`; `request_refused {verb, reason, lease_status}`.
+  A used request is marked on the consuming line as `request = {kind, at, session_id, prompt_id}`.
 
 - A `prompt` line has `prompt_id` (`p` + 6 hex) and payload `{text, origin: typed|cron}`.
   `text` is redacted: token patterns and every value of 6 or more characters in the

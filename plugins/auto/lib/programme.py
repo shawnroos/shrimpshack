@@ -201,6 +201,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
 
     def mutate(rec):
         seen["sid"] = _guard(home, rec, compact_exempt=compact_exempt)
+        rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
         prompt = _typed_prompt(run_id, rec, prompt_id) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
@@ -618,6 +619,10 @@ _ERRORS = (
 
 def _cli(argv) -> int:
     return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS)
+
+
+programme_lifecycle = load_lib_module("programme_lifecycle")
+_VERBS.update(programme_lifecycle.build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":
