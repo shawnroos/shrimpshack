@@ -1,0 +1,29 @@
+plugins/auto/.claude/hooks/hooks.json
+  s_5abb44c8324d7f::t_ab3b226b33c28d 2,15-36
+plugins/auto/.claude/hooks/on-pre-compact.sh
+  s_5abb44c8324d7f::t_e8b54538c9c938 1-29
+plugins/auto/.claude/hooks/on-session-start.sh
+  s_5abb44c8324d7f::t_7b6275fab71b0d 25-44,48,61-68,70-72,74,80
+plugins/auto/lib/on-pre-compact.py
+  s_5abb44c8324d7f::t_3854f63bbf8371 1-95
+plugins/auto/lib/on-session-start.py
+  s_5abb44c8324d7f::t_eb7da0da290268 7-10,28,30,45-46,79-96,100,103-111
+plugins/auto/tests/integration/programme-compact.test.sh
+  s_5abb44c8324d7f::t_e8e8c385edb1ea 1-292
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "59045d3ac7685971fb8c94b94080947407eb2246",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
