@@ -1,0 +1,33 @@
+plugins/auto/.claude/hooks/on-pretooluse-action.sh
+  s_5abb44c8324d7f::t_843284faf3e9ef 40-53
+plugins/auto/.claude/hooks/on-user-prompt.sh
+  s_5abb44c8324d7f::t_d1a4678e70b05e 1-26
+plugins/auto/lib/on-pretooluse-action.py
+  s_5abb44c8324d7f::t_93130c72c5294a 555-651,661-665,670-671
+plugins/auto/lib/on-user-prompt.py
+  s_5abb44c8324d7f::t_7de6d5091bfba1 1-124
+plugins/auto/lib/programme_journal.py
+  s_5abb44c8324d7f::t_8c57bcc8577577 1-276
+plugins/auto/lib/session_registry.py
+  s_5abb44c8324d7f::t_7668b1683e7585 1-280
+plugins/auto/tests/integration/programme-hooks.test.sh
+  s_5abb44c8324d7f::t_609804eb04b0d5 1-374
+plugins/auto/tests/unit/programme-journal.test.sh
+  s_5abb44c8324d7f::t_5c76f1f24cc4d9 1-192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5fe2ce4e50a444a53e761f5390f91f0cf31da83b",
+  "prompts": {},
+  "sessions": {
+    "s_5abb44c8324d7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2becded7-e8e0-4a3a-b45c-c8994c7fe1a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Shawn <shawn.roos@gmail.com>"
+    }
+  }
+}
