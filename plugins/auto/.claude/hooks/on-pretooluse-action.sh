@@ -63,6 +63,14 @@ if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
 fi
 
+# Outside a repo the only check is the driver-pane send check, which needs
+# "herdr" in the command; a \u escape could hide it, so that goes to Python too.
+if [ -z "$__cd_repo" ]; then
+  shopt -s nocasematch
+  [[ $__cd_stdin_json == *herdr* || $__cd_stdin_json == *\\u* ]] || exit 0
+  shopt -u nocasematch
+fi
+
 # Hand off ALL decision logic to Python. `|| true` keeps the PROCESS exit 0
 # (rel-001); the fail-closed halt is recorded on the RUN_RECORD inside the .py, not
 # via a non-zero exit code.

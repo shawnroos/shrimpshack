@@ -268,6 +268,29 @@ for c in 'herdr pane send-text w2:p31 hi' 'herdr pane send-keys w2:p31 enter' 'h
 done
 check "1" "$ALL"
 
+it "a send to the PM's pane inside a quoted shell -c script is denied and journaled"
+ALL=1
+for c in "bash -c 'herdr agent prompt w2:p31 hi'" 'sh -c "herdr pane send-text w2:p31 x"' \
+         "env FOO=1 bash -c 'herdr agent prompt w2:p31 hi'" "zsh -lc 'cd /tmp; herdr pane run w2:p31 ls'" \
+         "dash -c \"sh -c 'herdr agent prompt w2:p31 hi'\"" "/bin/bash -ec 'herdr agent send-keys w2:p31 esc'"; do
+  OUT="$(action_hook sess-worker "$c")"
+  ROW="$(run_py "$RUN" <<'EOF'
+r = pj.read(args[0])[-1]
+print(r["kind"], r["payload"]["target"])
+EOF
+)"
+  case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied: $c" ;; esac
+  [ "$ROW" = "blocked_driver_send w2:p31" ] || { ALL=0; echo "      not journaled: $c ($ROW)"; }
+  run_py "$RUN" <<'EOF' >/dev/null
+pj.append(args[0], "rules_acked", "sess-test", {})
+EOF
+done
+check "1" "$ALL"
+
+it "the same shell -c wrappers sending to a worker pane are allowed"
+OUT="$(action_hook sess-worker "bash -c 'herdr agent prompt w2:p50 hi'")$(action_hook sess-worker 'sh -c "herdr pane send-text w2:p50 x"')"
+check "" "$OUT"
+
 it "a read-only herdr command naming the PM's pane is allowed"
 OUT="$(action_hook sess-worker 'herdr pane get w2:p31')"
 check "" "$OUT"

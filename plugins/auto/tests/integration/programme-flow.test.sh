@@ -513,6 +513,90 @@ it "cross-session: only the PM gets the rules in force after compaction"
 check "" "$(compact_start sess-fork)$(compact_start sess-child)"
 has "auto-rules" "$(compact_start sess-e)"
 
+as_nospace() {
+  local sid="$1"; shift
+  OUT="$(env -u HERDR_WORKSPACE_ID -u HERDR_PANE_ID CLAUDE_CODE_SESSION_ID="$sid" "$PY" "$PROG" "$@" 2>&1)"
+  CODE=$?
+}
+
+typed_nospace() {
+  local payload
+  payload="$("$PY" -c 'import json,sys; print(json.dumps({"session_id": sys.argv[1], "prompt": sys.argv[2], "hook_event_name": "UserPromptSubmit"}))' "$1" "$2")"
+  ( cd "$NOREPO" && env -u HERDR_WORKSPACE_ID -u HERDR_PANE_ID bash "${HOOKS}/on-user-prompt.sh" <<< "$payload" 2>/dev/null )
+}
+
+it "a programme started with --space from outside herdr is handed over by its typed request"
+as_nospace sess-n start --space w8
+RUN8="$(json_of 'd["run"]')"
+typed_nospace sess-n '/auto:programme-handover sess-m' >/dev/null
+as_nospace sess-n handover sess-m
+check "0 sess-m sess-m" "$CODE $(lease_session w8) $(driver_of "$RUN8")"
+
+it "the outside-herdr handover request was journaled as driving and cites its prompt"
+ENTRY="$(last_entry "$RUN8" handover_request)"
+has '"driving": true' "$ENTRY"
+has '"cites": ["p' "$ENTRY"
+
+it "a programme driven from outside herdr is ended by its typed request"
+typed_nospace sess-m '/auto:programme-end' >/dev/null
+as_nospace sess-m end
+check "0 <none>" "$CODE $(lease_session w8)"
+
+WS=w9
+as sess-p start
+RUN9="$(json_of 'd["run"]')"
+age_beat "$RUN9"
+
+it "an orphaned programme is not ended by a non-driving session without a typed request"
+as sess-q end
+check "1 sess-p" "$CODE $(lease_session w9)"
+has "no typed /auto:programme-end" "$OUT"
+
+it "an orphaned programme is ended by a non-driving session's typed request"
+typed sess-q '/auto:programme-end' >/dev/null
+as sess-q end
+check "0 <none>" "$CODE $(lease_session w9)"
+has '"lease_status": "orphaned"' "$(last_entry "$RUN9" programme_ended)"
+
+it "end on an already-ended programme is refused"
+as sess-p end --run "$RUN9"
+check "1" "$CODE"
+has "holds no lease" "$OUT"
+
+WS=w10
+as sess-r start
+RUN10="$(json_of 'd["run"]')"
+run_py "$RUN10" <<'EOF' >/dev/null
+rec = load(args[0])
+rec["programme"]["created_at"] = ago(2)
+save(args[0], rec)
+EOF
+
+it "takeover on an expired programme ends it and refuses the takeover"
+typed sess-s '/auto:programme-takeover' >/dev/null
+as sess-s takeover
+check "1 <none> sess-r" "$CODE $(lease_session w10) $(driver_of "$RUN10")"
+has "never accepted" "$OUT"
+check "agreement_unaccepted" "$(run_py "$RUN10" <<'EOF'
+print(load(args[0])["programme"]["ended"]["reason"])
+EOF
+)"
+has '"verb": "takeover"' "$(last_entry "$RUN10" request_refused)"
+
+it "beat from a session that does not drive the programme is refused"
+WS=w3
+BEAT_BEFORE="$(run_py "$RUN3" <<'EOF'
+print(load(args[0])["loop"]["last_beat_at"])
+EOF
+)"
+as sess-w1 beat --run "$RUN3"
+check "1" "$CODE"
+has "only the programme's driving session" "$OUT"
+check "$BEAT_BEFORE" "$(run_py "$RUN3" <<'EOF'
+print(load(args[0])["loop"]["last_beat_at"])
+EOF
+)"
+
 echo
 echo "programme-flow.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

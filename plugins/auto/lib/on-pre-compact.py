@@ -18,8 +18,6 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
-COMPACT_FLAG = ".compact-flag"
-DRIVING_LEASE_STATES = ("live", "orphaned", "expired")
 
 
 def hook_input(raw) -> dict:
@@ -40,22 +38,7 @@ def main_thread_session(data):
 def driven_programmes(session_id) -> list:
     if not session_id:
         return []
-    programme_home = load_lib_module("programme_home")
-    found = []
-    for lease in programme_home.leases_for_session(session_id):
-        try:
-            run = lease.get("run")
-            if any(hold["run"] == run for hold in found):
-                continue
-            if programme_home.lease_status(lease) not in DRIVING_LEASE_STATES:
-                continue
-            record = programme_home._read_record(run)
-            if not isinstance(record, dict) or record.get("driving_session_id") != session_id:
-                continue
-            found.append({"run": run, "home": programme_home.home_path(run), "record": record})
-        except Exception:
-            continue
-    return found
+    return load_lib_module("programme_home").driven_runs(session_id)
 
 
 def _set_flag(home, session_id, data) -> None:
@@ -64,7 +47,8 @@ def _set_flag(home, session_id, data) -> None:
         "session_id": session_id,
         "trigger": data.get("trigger"),
     })
-    fd = os.open(os.path.join(home, COMPACT_FLAG), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flag = os.path.join(home, load_lib_module("programme_home").COMPACT_FLAG)
+    fd = os.open(flag, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write(body + "\n")
 

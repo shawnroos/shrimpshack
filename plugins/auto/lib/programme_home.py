@@ -33,11 +33,11 @@ ORPHAN_CADENCE_PERIODS = 2
 ITEM_STATES = ("open", "waiting", "done", "handed", "dropped")
 FINISHED_ITEM_STATES = ("done", "handed", "dropped")
 DELIVERABLES = ("merged", "flagged", "verified", "released", "recorded")
-EVIDENCE_RESULTS = ("confirmed", "refuted", "unknown")
 STOP_RULES = ("nothing_it_can_act_on", "only_when_done", "until_time", "never_stop")
 AUTONOMY_LEVELS = ("act", "act_and_tell", "propose", "never")
-TERM_KEYS = ("remit", "stop_rule", "autonomy", "cadence")
 LEASE_STATES = ("free", "live", "orphaned", "ended", "expired", "newer")
+HELD_LEASE_STATES = ("live", "orphaned", "expired")
+COMPACT_FLAG = ".compact-flag"
 
 ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
@@ -349,6 +349,24 @@ def leases_for_session(session_id) -> list:
         return []
 
 
+def driven_runs(session_id, now=None) -> list:
+    found = []
+    for lease in leases_for_session(session_id):
+        try:
+            run = lease.get("run")
+            if any(hold["run"] == run for hold in found):
+                continue
+            if lease_status(lease, now) not in HELD_LEASE_STATES:
+                continue
+            record = _read_record(run)
+            if not isinstance(record, dict) or record.get("driving_session_id") != session_id:
+                continue
+            found.append({"run": run, "home": home_path(run), "record": record})
+        except Exception:
+            continue
+    return found
+
+
 def _write_lease(server, workspace, run_id, home, session_id, now_iso):
     lease = {
         "programme_format": run_record_core.PROGRAMME_FORMAT,
@@ -359,14 +377,21 @@ def _write_lease(server, workspace, run_id, home, session_id, now_iso):
         "workspace": workspace,
         "created_at": now_iso,
     }
-    path = lease_path(server, workspace)
-    fd, tmp = tempfile.mkstemp(prefix=".lease.", suffix=".tmp", dir=os.path.dirname(path))
+
+    def write(fh):
+        json.dump(lease, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+    atomic_write(lease_path(server, workspace), write, ".lease.")
+
+
+def atomic_write(path, write, prefix, folder=None) -> None:
+    fd, tmp = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=folder or os.path.dirname(path))
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as fh:
-            json.dump(lease, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        os.rename(tmp, path)
+            write(fh)
+        os.replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

@@ -21,6 +21,7 @@ trap 'rm -rf "$WORK"' EXIT
 export CLAUDE_AUTO_DATA_DIR="${WORK}/data"
 export CLAUDE_AUTO_MACHINE="studio"
 export PROMPTS_FILE="${WORK}/prompts.json"
+export APPROVALS_FILE="${WORK}/approvals.json"
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL=/dev/null
 printf '%s' '{"prog-1/p1": {"origin": "typed", "text_hash": "h1"}, "prog-1/p2": {"origin": "cron", "text_hash": "h2"}}' > "$PROMPTS_FILE"
@@ -40,8 +41,22 @@ pp = load_lib_module("programme_protocol")
 args = sys.argv[2:]
 with open(os.environ["PROMPTS_FILE"]) as fh:
     PROMPTS = json.load(fh)
+def approvals():
+    try:
+        with open(os.environ["APPROVALS_FILE"]) as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return {}
+def approve(run_id, prompt_id, digest):
+    data = approvals()
+    data.setdefault(run_id + "/" + prompt_id, []).append(digest)
+    with open(os.environ["APPROVALS_FILE"], "w") as fh:
+        json.dump(data, fh)
 def lookup(run_id, prompt_id):
-    return PROMPTS.get(run_id + "/" + prompt_id)
+    prompt = PROMPTS.get(run_id + "/" + prompt_id)
+    if prompt is None:
+        return None
+    return dict(prompt, approved=approvals().get(run_id + "/" + prompt_id, []))
 def rule(rid, kinds, requires, autonomy="act"):
     return {"id": rid, "applies_when": {"change_kinds": kinds}, "requires": requires,
             "evidence_bar": {r: "checked" for r in requires}, "caveat": "", "autonomy": autonomy,
@@ -51,6 +66,7 @@ def adopt(entry, machine="studio", prompt="p1", widening=None, prompt_hash="h1")
               "prompt_hash": prompt_hash, "hash": pp.content_hash(entry)}
     if widening is not None:
         record["widening"] = widening
+    approve("prog-1", prompt, record["hash"])
     out = dict(entry)
     out["adoption"] = record
     return out
@@ -517,6 +533,45 @@ print(p["rejected"], p["rules"]["docs-verified"]["adopted_on"], calls)
 EOF
 )"
 check "[] laptop []" "$OUT"
+
+fresh
+run_py <<'EOF' >/dev/null
+seed("foreign", {"rules": [adopt(rule("flagged-code", ["flagged_code"], ["merged"]), machine="nowhere")],
+                 "autonomy": {"merge_around_gate": adopt({"level": "act"}, machine="nowhere", widening=True)}})
+EOF
+REPO_F="$(publish foreign)"
+it "a project rule and autonomy entry adopted on another machine are rejected"
+OUT="$(run_py "$REPO_F" <<'EOF'
+p = pp.load(repo_path=args[0], prompt_lookup=lookup)
+print(reasons(p), p["rules"]["flagged-code"]["requires"], p["autonomy"]["merge_around_gate"]["level"])
+EOF
+)"
+check "['project/flagged-code/not_adopted_here', 'project/merge_around_gate/not_adopted_here'] ['merged', 'flagged', 'verified', 'recorded'] never" "$OUT"
+
+fresh
+it "a check whose argv changed after adoption, with its hash recomputed and a real typed prompt, is rejected"
+OUT="$(run_py <<'EOF'
+entry = adopt({"argv": ["dd-trace", "{id}"]})
+entry["argv"] = ["forged-lookup", "{id}"]
+entry["adoption"]["hash"] = pp.content_hash(entry)
+personal({"checks": {"acme/web": {"verified.lookup": entry}}})
+p = pp.load(repo_key="acme/web", prompt_lookup=lookup)
+print(reasons(p), [r["detail"] for r in p["rejected"]], "acme/web" in p["checks"])
+EOF
+)"
+check "['personal/acme/web:verified.lookup/adoption_unverified'] ['no approval'] False" "$OUT"
+
+it "a rule rewritten after adoption, with its hash recomputed and a real typed prompt, is rejected"
+OUT="$(run_py <<'EOF'
+r = adopt(rule("docs-verified", ["evals_or_docs"], ["verified"]))
+r["requires"] = ["merged"]
+r["evidence_bar"] = {"merged": "checked"}
+r["adoption"]["hash"] = pp.content_hash(r)
+personal({"rules": [r]})
+print(reasons(pp.load(prompt_lookup=lookup)))
+EOF
+)"
+check "['personal/docs-verified/adoption_unverified']" "$OUT"
 
 it "machine_name follows the override"
 OUT="$(run_py <<'EOF'

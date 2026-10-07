@@ -560,18 +560,38 @@ _HERDR_GLOBAL_VALUE_OPTS = frozenset({"--session", "--machine", "--remote"})
 _HERDR_VALUE_OPTS = frozenset({"--until", "--timeout", "--seq"})
 _HERDR_BIN_TOKENS = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
 _SHELL_BREAKS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
+_SHELL_BINS = frozenset({"bash", "sh", "zsh", "dash"})
+_SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+MAX_SHELL_DEPTH = 4
 
 
 def _is_herdr(token: str) -> bool:
     return token in _HERDR_BIN_TOKENS or os.path.basename(token) == "herdr"
 
 
-def _herdr_sends(command: str) -> list:
+def _shell_script(rest: list):
+    i, takes_script = 0, False
+    while i < len(rest) and rest[i] not in _SHELL_BREAKS:
+        tok = rest[i]
+        if tok in _SHELL_VALUE_OPTS:
+            i += 2
+            continue
+        if tok[:1] in ("-", "+"):
+            takes_script = takes_script or (tok[:2] != "--" and "c" in tok[1:])
+            i += 1
+            continue
+        return tok if takes_script else None
+    return None
+
+
+def _herdr_sends(command: str, depth: int = 0) -> list:
     """(verb, target) for every herdr call in ``command`` that types into a pane.
 
-    Residuals, as with the destructive set: an agent addressed by name, a send
-    built through eval, a script file or another language, and ``herdr api``,
-    which has no send call in this herdr build.
+    A ``bash``/``sh``/``zsh``/``dash`` ``-c`` script, also behind ``env``, is
+    scanned as its own command. Residuals, as with the destructive set: an agent
+    addressed by name, a send built through eval or a variable (``bash -c "$CMD"``),
+    a script file or another language, and ``herdr api``, which has no send call
+    in this herdr build.
     """
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
@@ -581,6 +601,11 @@ def _herdr_sends(command: str) -> list:
         return []
     sends = []
     for start, token in enumerate(tokens):
+        if os.path.basename(token) in _SHELL_BINS and depth < MAX_SHELL_DEPTH:
+            script = _shell_script(tokens[start + 1:])
+            if script:
+                sends.extend(_herdr_sends(script, depth + 1))
+            continue
         if not _is_herdr(token):
             continue
         rest = []

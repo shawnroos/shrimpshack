@@ -96,8 +96,6 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 phase_grammar = load_lib_module("phase-grammar")
 
 
-PROGRAMME_HOLD_STATES = ("live", "orphaned", "expired")
-COMPACT_FLAG = ".compact-flag"
 CLAIMS_FILE = "claims.jsonl"
 _SID_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 
@@ -421,33 +419,25 @@ def _driven_programmes(session_id, now) -> list:
     try:
         programme_home = load_lib_module("programme_home")
         programme_predicate = load_lib_module("programme_predicate")
-        leases = programme_home.leases_for_session(session_id)
+        holds = programme_home.driven_runs(session_id, now)
     except Exception:
         return []
     found = []
-    for lease in leases:
+    for hold in holds:
         try:
-            run = lease.get("run")
-            if any(hold["run"] == run for hold in found):
-                continue
-            if programme_home.lease_status(lease, now) not in PROGRAMME_HOLD_STATES:
-                continue
-            record = programme_home._read_record(run)
-            if not isinstance(record, dict) or record.get("driving_session_id") != session_id:
-                continue
-            home = programme_home.home_path(run)
-            status = programme_predicate.compute(record, now, _inbox_size(home))
+            status = programme_predicate.compute(hold["record"], now, _inbox_size(hold["home"]))
             if any(isinstance(r, dict) and r.get("kind") == "corrupt_record"
                    for r in status.get("reasons") or []):
                 continue
-            found.append({"run": run, "home": home, "record": record, "status": status})
+            found.append(dict(hold, status=status))
         except Exception:
             continue
     return found
 
 
 def _rules_suffix(hold) -> str:
-    if not os.path.exists(os.path.join(hold["home"], COMPACT_FLAG)):
+    flag = os.path.join(hold["home"], load_lib_module("programme_home").COMPACT_FLAG)
+    if not os.path.exists(flag):
         return ""
     try:
         return "\n\n" + rules_block(hold["record"])
@@ -549,7 +539,6 @@ def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
     parts = [_programme_reason_for(hold) for hold in programmes]
     if blocking:
         parts.append(_reason_for(blocking))
-    if blocking:
         message = (
             f"auto held the stop: {len(blocking)} run(s) have unmet loop exit "
             "conditions. If you have background work in flight, the harness "

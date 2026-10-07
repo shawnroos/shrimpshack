@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """UserPromptSubmit: journal prompts typed into a programme's driving session.
 
-Takeover, handover and end requests are journaled from any session, into the
-home of the lease for that session's herdr space. Always exits 0.
+A request typed in a driving session is journaled into the run it drives, citing
+the prompt. Takeover, handover and end requests from any other session go into
+the home of the lease for that session's herdr space. Always exits 0.
 """
 
 from __future__ import annotations
@@ -22,8 +23,6 @@ programme_journal = load_lib_module("programme_journal")
 session_registry = load_lib_module("session_registry")
 
 DATA_TAG = "auto-data"
-CAPTURE_LEASE_STATES = ("live", "orphaned", "expired")
-REQUEST_LEASE_STATES = ("live", "orphaned", "expired")
 _REQUEST = re.compile(r"^\s*/auto:programme-(takeover|handover|end)(?=\s|$)")
 
 
@@ -43,34 +42,40 @@ def classify_origin(text: str, record: dict) -> str:
 
 def _driving_run(session_id):
     for lease in programme_home.leases_for_session(session_id):
-        if programme_home.lease_status(lease) not in CAPTURE_LEASE_STATES:
+        if programme_home.lease_status(lease) not in programme_home.HELD_LEASE_STATES:
             continue
         record = programme_home._read_record(lease.get("run"))
         if session_registry.caller_drives(record, session_id=session_id):
-            return lease["run"], record
-    return None, None
+            return lease["run"], record, lease
+    return None, None, None
 
 
-def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_run):
+def _space_lease(session_id, env):
     space = session_registry.space_of_session(session_id, env)
     if not space:
-        return
+        return None
     try:
         lease = programme_home.read_lease(programme_home.lease_path(*space))
     except programme_home.ProgrammeHomeError:
-        return
+        return None
     if not lease or lease.get("corrupt"):
+        return None
+    return lease
+
+
+def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lease):
+    lease = driving_lease or _space_lease(session_id, env)
+    if lease is None:
         return
     status = programme_home.lease_status(lease)
-    if status not in REQUEST_LEASE_STATES:
+    if status not in programme_home.HELD_LEASE_STATES:
         return
-    run = lease["run"]
-    driving = run == driving_run
+    driving = driving_lease is not None
     programme_journal.append(
-        run, f"{verb}_request", session_id,
+        lease["run"], f"{verb}_request", session_id,
         {"verb": verb, "text": programme_journal.redact(text), "origin": origin,
-         "space": programme_home.space_key(*space), "lease_status": status,
-         "driving": driving},
+         "space": programme_home.space_key(lease.get("server"), lease.get("workspace")),
+         "lease_status": status, "driving": driving},
         cites=[prompt_id] if driving and prompt_id else None,
     )
 
@@ -83,7 +88,7 @@ def handle(raw: str, env) -> dict | None:
     text = data.get("prompt")
     if not isinstance(session_id, str) or not session_id or not isinstance(text, str):
         return None
-    run, record = _driving_run(session_id)
+    run, record, driving_lease = _driving_run(session_id)
     entry = None
     origin = "typed"
     if run:
@@ -93,7 +98,7 @@ def handle(raw: str, env) -> dict | None:
     if request:
         try:
             _journal_request(request.group(1), session_id, text, env, origin,
-                             entry and entry["prompt_id"], run)
+                             entry and entry["prompt_id"], driving_lease)
         except Exception:
             pass
     if not entry:

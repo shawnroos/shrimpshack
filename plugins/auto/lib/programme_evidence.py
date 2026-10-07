@@ -62,7 +62,6 @@ _FLAG_REF = re.compile(r"(?:([A-Za-z0-9._-]+)/)?([A-Za-z0-9._-]+)")
 _EXPERIMENT_REF = re.compile(r"bt:([^/\s]+)/(\S+)")
 _SHA = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
 _WAIVER = re.compile(r"waiv", re.IGNORECASE)
-_SECRET_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
 
 _PR_QUERY = (
     "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name)"
@@ -97,22 +96,14 @@ def _timeout() -> int:
 
 
 def secret(name, path=None):
-    path = os.path.expanduser(path or os.environ.get(programme_journal.SECRETS_ENV)
-                              or programme_journal.DEFAULT_SECRETS_FILE)
     try:
-        with open(path) as fh:
-            lines = fh.read().splitlines()
+        assignments = programme_journal.secret_assignments(path)
     except (OSError, UnicodeDecodeError):
         return None
     found = None
-    for line in lines:
-        match = _SECRET_LINE.match(line)
-        if not match or match.group(1) != name:
-            continue
-        value = match.group(2)
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        found = value or None
+    for key, value in assignments:
+        if key == name:
+            found = programme_journal.unquote(value) or None
     return found
 
 

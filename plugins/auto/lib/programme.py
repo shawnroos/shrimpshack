@@ -13,7 +13,6 @@ import json
 import os
 import secrets
 import sys
-import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -32,11 +31,10 @@ verb_cli = load_lib_module("verb_cli")
 _Verb = run_record._Verb
 
 PROG = "programme.py"
-COMPACT_FLAG = ".compact-flag"
 RULES_TAG = "auto-rules"
-LOCATING_LEASE_STATES = ("live", "orphaned", "expired")
 INSTRUCTION_ENDINGS = ("fulfilled", "withdrawn")
 PERSONAL_LOCK = ".personal-protocol.lock"
+APPROVAL_KINDS = ("rule_adopted",)
 
 
 class ProgrammeError(Exception):
@@ -47,15 +45,29 @@ def text_hash(text) -> str:
     return "sha256:" + hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
 
 
-def prompt_lookup(run_id, prompt_id):
+def _approved(rows, prompt_id) -> list:
+    return [(row.get("payload") or {}).get("hash") for row in rows
+            if row.get("kind") in APPROVAL_KINDS and (row.get("cites") or [None])[0] == prompt_id
+            and (row.get("payload") or {}).get("prompt_id") == prompt_id]
+
+
+def prompt_lookup(run_id, prompt_id, journals=None):
     try:
-        row = programme_journal.find_prompt(programme_home.check_run_id(run_id), prompt_id)
+        run_id = programme_home.check_run_id(run_id)
+        if journals is None:
+            rows = programme_journal.read(run_id)
+        else:
+            if run_id not in journals:
+                journals[run_id] = programme_journal.read(run_id)
+            rows = journals[run_id]
+        row = programme_journal.find_prompt(run_id, prompt_id, rows)
     except programme_home.ProgrammeHomeError:
         return None
     if row is None:
         return None
     payload = row.get("payload") or {}
-    return {"origin": payload.get("origin"), "text_hash": text_hash(payload.get("text"))}
+    return {"origin": payload.get("origin"), "text_hash": text_hash(payload.get("text")),
+            "approved": _approved(rows, prompt_id)}
 
 
 def _parse(argv, *, values=(), flags=(), multi=()):
@@ -88,7 +100,7 @@ def _run_from_leases(sid):
         status = programme_home.lease_status(lease)
         if status == "newer":
             raise ProgrammeError("programme written by a newer auto")
-        if status in LOCATING_LEASE_STATES:
+        if status in programme_home.HELD_LEASE_STATES:
             runs.add(lease.get("run"))
     if not runs:
         raise ProgrammeError("no programme lease names this session; pass --run <id>")
@@ -110,7 +122,7 @@ def _locate(opts):
 
 
 def _flag_path(home) -> str:
-    return os.path.join(home, COMPACT_FLAG)
+    return os.path.join(home, programme_home.COMPACT_FLAG)
 
 
 def _item_open(programme, item_id) -> bool:
@@ -138,9 +150,11 @@ def _terms_view(agreement) -> dict:
     return view
 
 
-def rules_in_force(record) -> dict:
+def rules_in_force(record, journals=None) -> dict:
     programme = programme_home.normalize_programme(record.get("programme") or {})
-    protocol = programme_protocol.load(prompt_lookup=prompt_lookup)
+    journals = {} if journals is None else journals
+    protocol = programme_protocol.load(
+        prompt_lookup=lambda run_id, prompt_id: prompt_lookup(run_id, prompt_id, journals))
     rules = [{"id": rid, "layer": rule["layer"], "autonomy": rule["autonomy"],
               "requires": list(rule["requires"]), "caveat": rule["caveat"]}
              for rid, rule in sorted(protocol["rules"].items())]
@@ -206,6 +220,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
         seen["prompt"] = prompt
+        seen["record"] = rec
 
     run_record_core._with_locked_run_record(home, run_id, mutate)
     prompt = seen["prompt"]
@@ -219,7 +234,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
     if journal:
         programme_journal.append(run_id, kind, seen["sid"], payload,
                                  cites=[prompt["prompt_id"]] if prompt else None)
-    refresh_view(run_id, home)
+    refresh_view(run_id, home, seen["record"])
     _emit({"ok": True, "run": run_id, "kind": kind, **payload})
     return 0
 
@@ -432,19 +447,12 @@ def _write_personal(entry) -> None:
                         if not (isinstance(r, dict) and r.get("id") == entry["id"])] + [entry]
         folder = os.path.dirname(os.path.abspath(path))
         os.makedirs(folder, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=".protocol.", suffix=".tmp", dir=folder)
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w") as fh:
-                json.dump(doc, fh, indent=2, sort_keys=True)
-                fh.write("\n")
-            os.replace(tmp, path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+
+        def write(fh):
+            json.dump(doc, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+
+        programme_home.atomic_write(path, write, ".protocol.", folder)
 
     lock = os.path.join(programme_home.programmes_dir(), PERSONAL_LOCK)
     run_record_core._flock_run(lock, body)
@@ -485,7 +493,7 @@ def _h_adopt_rule(argv):
             adoption["widening"] = True
         _write_personal(dict(rule, adoption=adoption))
         programme["proposed_rules"] = [r for r in proposals if r is not hits[0]]
-        return {"rule": rule_id, "personal_path": programme_protocol.personal_path(),
+        return {"rule": rule_id, "entry": "rule", "personal_path": programme_protocol.personal_path(),
                 "hash": adoption["hash"]}
 
     return _write(opts, change, "rule_adopted", prompt_id=opts.get("prompt"), needs_prompt=True)
@@ -552,34 +560,29 @@ VIEW_NAME = "view.json"
 
 
 def build_view(run_id, home, record) -> dict:
-    return programme_view.build(record, programme_journal.read(run_id),
+    journal = programme_journal.read(run_id)
+    return programme_view.build(record, journal,
                                 inbox_size=programme_record.claims_count(home),
-                                rules=rules_in_force(record))
+                                rules=rules_in_force(record, {run_id: journal}))
 
 
 def _write_view(home, view) -> str:
     folder = programme_home._ensure_dir(os.path.join(home, VIEW_DIR))
     path = os.path.join(folder, VIEW_NAME)
-    fd, tmp = tempfile.mkstemp(prefix=".view.", suffix=".tmp", dir=folder)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            json.dump(view, fh, indent=1, sort_keys=True)
-            fh.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+
+    def write(fh):
+        json.dump(view, fh, indent=1, sort_keys=True)
+        fh.write("\n")
+
+    programme_home.atomic_write(path, write, ".view.", folder)
     return path
 
 
-def refresh_view(run_id, home) -> None:
+def refresh_view(run_id, home, record=None) -> None:
     # The record write has already committed; a view failure must not report the verb as failed.
     try:
-        record = run_record_core.read_run_record(home, run_id)
+        if record is None:
+            record = run_record_core.read_run_record(home, run_id)
         _write_view(home, build_view(run_id, home, record))
     except Exception as exc:
         sys.stderr.write(f"{PROG}: view refresh failed: {exc}\n")

@@ -15,7 +15,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -135,19 +134,12 @@ def _append(path: str, entry: dict) -> None:
 
     def body():
         rows = _trimmed(_read_rows(path) + [entry])
-        fd, tmp = tempfile.mkstemp(prefix=".registry.", suffix=".tmp", dir=folder)
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w") as fh:
-                for row in rows:
-                    fh.write(json.dumps(row, sort_keys=True) + "\n")
-            os.rename(tmp, path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+
+        def write(fh):
+            for row in rows:
+                fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+        programme_home.atomic_write(path, write, ".registry.", folder)
 
     run_record_core._flock_run(os.path.join(folder, ".registry.lock"), body)
 
@@ -221,6 +213,26 @@ def lookup(session_id, server=None, workspace=None, *, include_headless=False):
     if not found:
         return None
     return max(found, key=lambda r: r.get("at") or "")
+
+
+def latest_rows(*, include_headless=False) -> dict:
+    latest = {}
+    for row in _all_rows():
+        if not (include_headless or row.get("interactive")):
+            continue
+        sid = row.get("session_id")
+        try:
+            if sid in latest and latest[sid] is None:
+                continue
+            best = latest.get(sid)
+        except TypeError:
+            continue
+        try:
+            if best is None or (row.get("at") or "") > (best.get("at") or ""):
+                latest[sid] = row
+        except TypeError:
+            latest[sid] = None
+    return latest
 
 
 def space_of_session(session_id, env):

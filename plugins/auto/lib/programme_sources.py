@@ -50,11 +50,9 @@ LINEAR_URL = "https://api.linear.app/graphql"
 LINEAR_KEY = "LINEAR_API_KEY"
 SPINOFF_REL = os.path.join("skills", "spinoff", "scripts", "spinoff.sh")
 SIGNALS = ("board", "branch", "title", "label", "registry")
-ISSUE_SOURCES = ("board", "linear-direct")
 _IDENT = re.compile(r"\b([A-Za-z][A-Za-z0-9]{1,7})-(\d{1,6})\b")
 _BOARD_LABEL = re.compile(r"Linear(?:: .+)?")
 _PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
-_KEY_LINE = re.compile(r"^\s*(?:export\s+)?" + LINEAR_KEY + r"\s*=\s*(.*?)\s*$")
 
 
 def _seconds(env_name, default) -> float:
@@ -309,14 +307,10 @@ def read_board(workspaces) -> dict:
 def linear_key():
     value = os.environ.get(LINEAR_KEY)
     if not value:
-        path = os.path.expanduser(os.environ.get(programme_journal.SECRETS_ENV)
-                                  or programme_journal.DEFAULT_SECRETS_FILE)
         try:
-            with open(path, encoding="utf-8") as fh:
-                for line in fh:
-                    match = _KEY_LINE.match(line)
-                    if match:
-                        value = match.group(1).strip("'\"")
+            for key, raw in programme_journal.secret_assignments(encoding="utf-8"):
+                if key == LINEAR_KEY:
+                    value = raw.strip("'\"")
         except OSError:
             value = None
     if not value or any(ch in value for ch in "\"\\\n\r ") or len(value) > 200:

@@ -14,7 +14,6 @@ import os
 import re
 import secrets
 import sys
-import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -97,30 +96,34 @@ _ASSIGNMENT = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY)[A-Z0-9_]*)(\s*[=:]\s*)"
     r"(\"[^\"]*\"|'[^']*'|\S+)"
 )
-_SECRETS_LINE = re.compile(r"^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.*?)\s*$")
+_SECRETS_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
 
 
 class JournalError(Exception):
     pass
 
 
-def _secret_values(path=None) -> list:
+def secret_assignments(path=None, encoding=None) -> list:
     path = os.path.expanduser(path or os.environ.get(SECRETS_ENV) or DEFAULT_SECRETS_FILE)
+    with open(path, encoding=encoding) as fh:
+        lines = fh.read().splitlines()
+    return [match.groups() for match in map(_SECRETS_LINE.match, lines) if match]
+
+
+def unquote(value) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def _secret_values(path=None) -> list:
     try:
-        with open(path) as fh:
-            lines = fh.read().splitlines()
+        assignments = secret_assignments(path)
     except (OSError, UnicodeDecodeError):
         return []
     values = set()
-    for line in lines:
-        if line.lstrip().startswith("#"):
-            continue
-        match = _SECRETS_LINE.match(line)
-        if not match:
-            continue
-        value = match.group(1)
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+    for _, value in assignments:
+        value = unquote(value)
         if len(value) >= MIN_SECRET_LEN:
             values.add(value)
     return sorted(values, key=len, reverse=True)
@@ -217,8 +220,8 @@ def read(run_id: str) -> list:
     return read_path(journal_path(run_id))
 
 
-def find_prompt(run_id: str, prompt_id: str):
-    for row in read(run_id):
+def find_prompt(run_id: str, prompt_id: str, rows=None):
+    for row in read(run_id) if rows is None else rows:
         if row.get("kind") == "prompt" and row.get("prompt_id") == prompt_id:
             return row
     return None
@@ -252,19 +255,12 @@ def prune_uncited_prompts(run_id: str, now=None, max_age_seconds=PRUNE_AFTER_SEC
             keep.append(row)
         if not removed:
             return 0
-        fd, tmp = tempfile.mkstemp(prefix=".journal.", suffix=".tmp", dir=os.path.dirname(path))
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w") as fh:
-                for row in keep:
-                    fh.write(json.dumps(row, sort_keys=True) + "\n")
-            os.rename(tmp, path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+
+        def write(fh):
+            for row in keep:
+                fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+        programme_home.atomic_write(path, write, ".journal.")
         _write_line(path, {"kind": "prompts_pruned", "at": _iso(now), "session_id": None,
                            "payload": {"removed": removed}})
         return removed

@@ -220,8 +220,10 @@ EOF
 )"
 check "True" "$OUT"
 
+FAKE_HOME="${WORK}/home"
+mkdir -p "$FAKE_HOME"
 it "with the data dir under ~/.claude/shared the resolver refuses and creates nothing"
-OUT="$(CLAUDE_AUTO_DATA_DIR="${HOME}/.claude/shared/auto-programme-test-$$" run_py <<'EOF'
+OUT="$(HOME="$FAKE_HOME" CLAUDE_AUTO_DATA_DIR="${FAKE_HOME}/.claude/shared/auto-programme-test" run_py <<'EOF'
 try:
     ph.data_dir()
     print("allowed")
@@ -229,10 +231,10 @@ except ph.UnsafeDataDir:
     print("refused")
 EOF
 )"
-check "refused|absent" "$OUT|$([ -e "${HOME}/.claude/shared/auto-programme-test-$$" ] && echo present || echo absent)"
+check "refused|absent" "$OUT|$([ -e "${FAKE_HOME}/.claude/shared/auto-programme-test" ] && echo present || echo absent)"
 
 it "the resolver refuses ~/.claude/skills, ~/.claude/auto and a memory dir"
-OUT="$(run_py "$HOME" <<'EOF'
+OUT="$(HOME="$FAKE_HOME" run_py "$FAKE_HOME" <<'EOF'
 home = args[0]
 res = []
 for sub in (".claude/skills/x", ".claude/auto/x", ".claude/projects/-Users-x/memory/x"):

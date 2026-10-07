@@ -50,13 +50,22 @@ def _stopped_unwatched(journal_entries) -> set:
     return items
 
 
-def _session_state(owner) -> str:
+def _sessions(items) -> dict:
+    if not any(_dict(_dict(item).get("owner")).get("session_id") for item in items.values()):
+        return {}
+    try:
+        return session_registry.latest_rows(include_headless=True)
+    except Exception:
+        return {}
+
+
+def _session_state(owner, sessions) -> str:
     sid = owner.get("session_id")
     if not sid:
         return "session unknown"
     try:
-        row = session_registry.lookup(sid, include_headless=True)
-    except Exception:
+        row = sessions.get(sid)
+    except TypeError:
         row = None
     if not row:
         return f"session {sid} not seen"
@@ -73,7 +82,7 @@ def _evidence(item) -> str:
     return f"{confirmed} of {len(deliverables)} confirmed"
 
 
-def _item_view(item_id, item, status, flagged) -> dict:
+def _item_view(item_id, item, status, flagged, sessions) -> dict:
     owner = _dict(item.get("owner"))
     marks = []
     if item_id in status["new_items"]:
@@ -89,7 +98,7 @@ def _item_view(item_id, item, status, flagged) -> dict:
         "state": item.get("state"),
         "effective_state": effective,
         "owner_pane": owner.get("pane"),
-        "session": _session_state(owner),
+        "session": _session_state(owner, sessions),
         "deliverables": [{"name": name, "result": _dict(d).get("result"), "ref": _dict(d).get("ref"),
                           "checked_at": _dict(d).get("checked_at"), "misses": _dict(d).get("misses")}
                          for name, d in sorted(_dict(item.get("deliverables")).items())],
@@ -172,7 +181,8 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
     block = programme_home.normalize_programme(_dict(record.get("programme")))
     status = programme_predicate.compute(record, now, inbox_size)
     flagged = _stopped_unwatched(journal_entries or [])
-    items = [_item_view(i, block["items"][i], status, flagged) for i in sorted(block["items"])]
+    sessions = _sessions(block["items"])
+    items = [_item_view(i, block["items"][i], status, flagged, sessions) for i in sorted(block["items"])]
     waits = [{"item": w.get("item"), "system": w.get("system"), "who": w.get("who") or "system",
               "reporter": w.get("reporter"), "watched": bool(w.get("watched"))}
              for w in status["waits"]]

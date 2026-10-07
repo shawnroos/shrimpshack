@@ -50,13 +50,6 @@ ADOPTION_FIELDS = ("machine", "run_id", "prompt_id", "quote", "prompt_hash", "ha
 LAYER_KEYS = ("protocol_format", "rules", "autonomy", "checks")
 CHECK_KEYS = ("verified.lookup", "verified.deployed_sha")
 CHECK_PLACEHOLDERS = ("id", "sha", "repo")
-REJECT_REASONS = (
-    "malformed_layer", "newer_format", "no_default_branch", "unknown_key",
-    "missing_field", "bad_value", "unknown_deliverable", "unknown_autonomy",
-    "duplicate_id", "not_adopted", "adoption_malformed", "adoption_unverified",
-    "widening_unmarked", "unknown_check", "check_not_adopted",
-    "check_not_adopted_here",
-)
 
 _RULE_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 _KIND_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -171,7 +164,8 @@ def _validate_adoption(adoption) -> None:
         raise _Reject("adoption_malformed", exc.detail)
 
 
-def _verify_adoption(entry: dict, prompt_lookup, *, local_only=False, missing="not_adopted"):
+def _verify_adoption(entry: dict, prompt_lookup, *, local_only=False, missing="not_adopted",
+                     elsewhere="check_not_adopted_here"):
     adoption = entry.get("adoption")
     if adoption is None:
         raise _Reject(missing)
@@ -180,7 +174,7 @@ def _verify_adoption(entry: dict, prompt_lookup, *, local_only=False, missing="n
         raise _Reject("adoption_unverified", "hash")
     if adoption["machine"] != machine_name():
         if local_only:
-            raise _Reject("check_not_adopted_here", adoption["machine"])
+            raise _Reject(elsewhere, adoption["machine"])
         return adoption["machine"]
     if prompt_lookup is None:
         raise _Reject("adoption_unverified", "no prompt lookup")
@@ -194,6 +188,8 @@ def _verify_adoption(entry: dict, prompt_lookup, *, local_only=False, missing="n
         raise _Reject("adoption_unverified", "prompt not typed")
     if prompt.get("text_hash") != adoption["prompt_hash"]:
         raise _Reject("adoption_unverified", "prompt hash")
+    if adoption["hash"] not in (prompt.get("approved") or ()):
+        raise _Reject("adoption_unverified", "no approval")
     return None
 
 
@@ -212,7 +208,8 @@ def _reject(state, layer, entry_id, reason, detail=None) -> None:
 def _adopt(layer, entry, lookup, prior_level, level):
     if layer == "plugin":
         return None
-    adopted_on = _verify_adoption(entry, lookup)
+    adopted_on = _verify_adoption(entry, lookup, local_only=(layer == "project"),
+                                  elsewhere="not_adopted_here")
     widening = entry["adoption"].get("widening") is True
     if prior_level is not None and _wider(level, prior_level) and not widening:
         raise _Reject("widening_unmarked", "%s over %s" % (level, prior_level))

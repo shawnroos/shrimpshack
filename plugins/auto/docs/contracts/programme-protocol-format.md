@@ -80,9 +80,10 @@ Every personal or project rule, autonomy entry and check needs an `adoption` obj
 - `hash` is `content_hash(entry)`: the SHA-256 of the entry without its `adoption` key, as JSON with sorted keys and no spaces. An edit after adoption gives `adoption_unverified`.
 - `machine` is compared with `machine_name()`. The env var `CLAUDE_AUTO_MACHINE` replaces the host name (tests use it).
 - `prompt_hash` is the prompt's `text_hash`: `"sha256:"` followed by the hex SHA-256 of the prompt's `payload.text` in the run journal, encoded as UTF-8. That text is already redacted when the journal stores it, so the hash is over the redacted text. `programme.text_hash(text)` computes it, and `adopt-rule` writes `prompt_hash` with it.
-- When `machine` is this machine, the loader calls `prompt_lookup(run_id, prompt_id)`. The result must be an object with `origin` equal to `typed` and `text_hash` equal to `prompt_hash`. A missing prompt, another origin, a different hash, no lookup, or a lookup that raises gives `adoption_unverified`.
-- When `machine` is another machine, a rule or autonomy entry loads without a lookup, and `adopted_on` names that machine. A check does not load (section 6).
-- The `adopt-rule` verb writes the record and the file in one atomic rename.
+- When `machine` is this machine, the loader calls `prompt_lookup(run_id, prompt_id)`. The result must be an object with `origin` equal to `typed`, `text_hash` equal to `prompt_hash`, and `approved` containing `hash`. A missing prompt, another origin, a different hash, a `hash` absent from `approved` (detail `no approval`), no lookup, or a lookup that raises gives `adoption_unverified`.
+- `approved` lists the `payload.hash` of every approval record in the cited run's journal that cites `prompt_id`. An approval record is a `rule_adopted` entry whose `cites[0]` and `payload.prompt_id` both equal `prompt_id`. A hash beside the entry is not proof by itself: anyone can recompute it after changing the entry, so the loader needs the journal record that the approval wrote at that time.
+- When `machine` is another machine, only a personal-layer rule or autonomy entry loads without a lookup, and `adopted_on` names that machine. Syncthing syncs the personal layer between Shawn's machines; nothing else carries an adoption from another machine. A project-layer rule or autonomy entry from another machine gives `not_adopted_here`, and a check from another machine does not load (section 6).
+- The `adopt-rule` verb writes the record and the file in one atomic rename, then journals `rule_adopted` with `entry`, `hash`, `prompt_id` and `cites: [prompt_id]`. Until that journal entry exists, the rule does not load. No verb writes an approval record for an autonomy entry or a check yet, so on this machine one loads only when a `rule_adopted` entry for its hash is journaled.
 
 ## 5. Merge and autonomy width
 
@@ -157,9 +158,9 @@ A proposed rule lives in the programme record at `programme.proposed_rules`, nev
 
 - `adopted_on` is null for the plugin layer and for an adoption from this machine.
 - A rejection for a whole layer has `id` null. A rejection for one check has id `<repo>:<command key>`.
-- `prompt_lookup(run_id, prompt_id)` returns `{"origin": ..., "text_hash": ...}` or null. `programme.prompt_lookup` is the real supplier: it finds the prompt in the run journal and hashes its stored text as section 4 defines. The loader never loads the journal itself.
+- `prompt_lookup(run_id, prompt_id)` returns `{"origin": ..., "text_hash": ..., "approved": [<hash>, ...]}` or null. `programme.prompt_lookup` is the real supplier: it finds the prompt in the run journal, hashes its stored text, and collects the approval records as section 4 defines. The loader never loads the journal itself.
 
-Rejection reasons: `malformed_layer`, `newer_format`, `no_default_branch`, `unknown_key`, `missing_field`, `bad_value`, `unknown_deliverable`, `unknown_autonomy`, `duplicate_id`, `not_adopted`, `adoption_malformed`, `adoption_unverified`, `widening_unmarked`, `unknown_check`, `check_not_adopted`, `check_not_adopted_here`.
+Rejection reasons: `malformed_layer`, `newer_format`, `no_default_branch`, `unknown_key`, `missing_field`, `bad_value`, `unknown_deliverable`, `unknown_autonomy`, `duplicate_id`, `not_adopted`, `not_adopted_here`, `adoption_malformed`, `adoption_unverified`, `widening_unmarked`, `unknown_check`, `check_not_adopted`, `check_not_adopted_here`.
 
 `match(protocol, change_kinds)` returns the rules whose `change_kinds` include any given kind:
 

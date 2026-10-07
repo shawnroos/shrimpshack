@@ -154,6 +154,9 @@ def adopt(entry):
     entry = dict(entry)
     entry["adoption"] = {"machine": "studio", "run_id": run, "prompt_id": row["prompt_id"], "quote": text,
                          "prompt_hash": prog.text_hash(row["payload"]["text"]), "hash": pp.content_hash(entry)}
+    pj.append(run, "rule_adopted", "sess-pm",
+              {"entry": "check", "hash": entry["adoption"]["hash"], "prompt_id": row["prompt_id"]},
+              cites=[row["prompt_id"]])
     return entry
 block = {"verified.lookup": adopt({"argv": [program, "show", "{id}"]}),
          "verified.deployed_sha": adopt({"argv": [program, "sha", "{id}", "{sha}"]})}

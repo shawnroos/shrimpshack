@@ -35,7 +35,6 @@ READ_TIMEOUT_SECONDS = 20
 BEAT_TIMEOUT_SECONDS = 20
 REFUSED_BEATS_LIMIT = 3
 MAX_LISTED_CHANGES = 6
-LOCATING_LEASE_STATES = ("live", "orphaned", "expired")
 USAGE = ("usage: programme-watch [--run <id>] [--linear] [--max-polls <n>]\n"
          "       programme-watch [--run <id>] --item <id> -- <command> [args...]")
 
@@ -102,7 +101,7 @@ def _run_from_leases() -> str:
     if not sid:
         raise WatchError("CLAUDE_CODE_SESSION_ID is unset; pass --run <id>")
     runs = {lease.get("run") for lease in programme_home.leases_for_session(sid)
-            if programme_home.lease_status(lease) in LOCATING_LEASE_STATES}
+            if programme_home.lease_status(lease) in programme_home.HELD_LEASE_STATES}
     if len(runs) != 1:
         raise WatchError("this session holds no single programme lease; pass --run <id>")
     return runs.pop()
