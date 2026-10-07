@@ -59,6 +59,7 @@ from _bootstrap import (
 # The run-record facade owns the canonical ISO-Z time stamp (run_record.now_iso). Load
 # it via the facade — not run_record_core — to keep facade discipline (U4).
 run_record = load_run_record()
+driver_session = load_lib_module("driver_session")
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -525,6 +526,9 @@ def fanout(plan_paths, *, composite_intent=None):
 
     # ── COMMIT the sidecar (every worktree landed) ────────────────────────
     sidecar["status"] = "committed"
+    host_session_id = driver_session.driving_session_id()
+    if host_session_id:
+        sidecar["host_session_id"] = host_session_id
     _atomic_write_sidecar(sidecar_path, sidecar)
 
     _spawn_all_via_cmux(plans, host_repo=host_repo)
