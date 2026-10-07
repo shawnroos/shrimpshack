@@ -129,6 +129,44 @@ session.
   `--item`) or removes one; `record-tested-build` stores the tested build's
   shasum on an item for the released check; `set-source` records a source
   (herdr, board or linear) going unavailable or coming back.
+- **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref)
+  runs that deliverable's checker and stores confirmed, refuted or unknown with
+  the parsed fields. No verb takes a result as an argument. The reference is
+  --ref, else the newest claim for that deliverable, else the stored one, else the
+  issue key in a linear item id. The merged check reads gh pr view and a GraphQL
+  read of the review threads and the merged head's checks; the recorded check
+  reads the Linear issue (through the board's issue read when that works, else
+  GraphQL with LINEAR_API_KEY from the secrets file, filters inside the query). A
+  checker that did not run, timed out, was truncated or could not be parsed gives
+  unknown, and unknown never becomes confirmed. Each child gets a minimal
+  environment and at most one credential, through its environment; kept output is
+  scrubbed. Two unknown results in a row set the item waiting on the system, with
+  a retry watcher named retry-<item> and a queued arm_retry_watcher action.
+  `validate` re-runs checks for confirmed evidence older than one cadence on open
+  items and on items done less than 7 days ago; a refutation reopens the item and
+  journals evidence_refuted. An unknown re-check keeps the evidence. Flagged
+  evidence is frozen once its item is done, and evidence on an item done 7 days or
+  more is final.
+- **Sweep and workers**: `sweep` reads the remit's workspaces from one bounded
+  herdr snapshot (behind a status probe), the session registry checked against
+  that snapshot, and the board snapshot, falling back to Linear read directly.
+  It prints panes, issues, proposals and an unavailable flag with a reason for
+  each source; a source that could not be read gives no list, never an empty
+  one. A pane's owner is the snapshot's reported agent session first, then a
+  registry line for the same pane and terminal. Issues are found in the pane's
+  branch, title, label, registry name and board bindings. Shells with no agent,
+  a driver's pane and the board's pane are skipped, never proposed. `sweep`
+  writes nothing unless given `--record-sources`, which records source changes
+  through set-source. `start-worker` (item, then spinoff arguments after
+  `--`) mints a session id, runs spinoff with `--session-id`, and checks the agent list for
+  the new agent, because spinoff can exit 0 with a bare shell. The item records
+  every start; a verified start also sets the owner's pane, terminal and
+  session. `prompt-item` (item, then text) sends through herdr agent prompt to
+  the item's recorded pane only. Right before sending it reads a fresh snapshot
+  and refuses a driver's or the board's pane, a pane whose terminal changed, a
+  pane with no live agent, and a pane whose reported session is not the item's
+  owner. Refusals and sends are journaled; a pane with no reported or
+  registered session is sent to and marked session unknown.
 
 Text from outside the PM (titles, reasons, questions, references) passes through
 the sanitizer in lib/programme_sanitize.py: control and escape sequences are

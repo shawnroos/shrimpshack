@@ -95,7 +95,7 @@ prog() {
 it "describe lists exactly the programme verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-check "accept-agreement add-item adopt-rule alias-item amend-term answer-handed claim close-instruction describe drop-item hand-item mark-read merge-item propose-agreement propose-rule queue record-instruction record-tested-build reopen-item rules set-now set-source set-waiting watcher-beat" "$VERBS"
+check "accept-agreement add-item adopt-rule alias-item amend-term answer-handed check-deliverable claim close-instruction describe drop-item hand-item mark-read merge-item prompt-item propose-agreement propose-rule queue record-instruction record-tested-build reopen-item rules set-now set-source set-waiting start-worker sweep validate watcher-beat" "$VERBS"
 
 P_TYPED="$(prompt typed 'stop only when everything is done')"
 P_CRON="$(prompt cron 'wake up and sweep the space')"

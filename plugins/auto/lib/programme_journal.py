@@ -65,6 +65,14 @@ KINDS = (
     "queue_changed",
     "tested_build_recorded",
     "source_changed",
+    "evidence_checked",
+    "evidence_refuted",
+    "validate_pass",
+    "merge_pinned",
+    "worker_started",
+    "worker_start_failed",
+    "prompt_sent",
+    "prompt_refused",
 )
 
 _TOKEN_PATTERNS = [

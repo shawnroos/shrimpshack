@@ -538,6 +538,12 @@ _VERBS = {
 programme_record = load_lib_module("programme_record")
 _VERBS.update(programme_record.build_verbs(sys.modules[__name__]))
 
+programme_evidence = load_lib_module("programme_evidence")
+_VERBS.update(programme_evidence.build_verbs(sys.modules[__name__]))
+
+programme_sources = load_lib_module("programme_sources")
+_VERBS.update(programme_sources.build_verbs(sys.modules[__name__]))
+
 _ERRORS = (
     ProgrammeError,
     programme_record.RecordError,
