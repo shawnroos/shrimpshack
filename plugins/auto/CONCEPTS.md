@@ -29,6 +29,15 @@ vocabulary to learn, not two.
 | the durable source of truth | **run-record** | Append-through state; the run's memory. Outlives any single agent. (Identifier form: `run_record`.) |
 | the objective | **goal** | What a run drives to *done*. |
 | the steering session | **driver** | The agent that steers a run — distinct from the *dispatcher*, which fans work out. |
+| a PM-managed collection of work | **programme** | A run kind beside task runs: a PM agent managing every **item** within a **remit**. A task run drives steps; a programme drives items. |
+| the boundary of a programme | **remit** | What a programme covers — by default one herdr space. One live programme per remit. |
+| one piece of work in a programme | **item** | A namespaced entry (`linear:AI-753`) with a state, owner sessions, and **deliverables** backed by PM-checked evidence. |
+| a run's settled operating terms | **agreement** | Remit, stop rule, autonomy, cadence and budget — set at start, amended in plain chat, reloaded after compaction. |
+| standing rules across runs | **protocol** | Rules mapping a kind of change to its required deliverables, evidence bar and autonomy level; three layers (plugin, personal, project). |
+| the PM's live state of mind | **working model** | Now, queue, watching, waits, decisions for the human, just did, rules in force — shown in a PM-only mod. |
+| a programme's record of actions | **journal** | An append-only log beside the run-record: Shawn's prompts, items joining, evidence checked, terms amended, rules adopted, ownership changes. |
+| a standing order from chat | **instruction** | Something Shawn says that is not a term change ("skip full eval"), recorded with his words, what it applies to, and until when. |
+| the claim on a remit | **lease** | The per-space record that makes a programme the only live one in its remit; replaced only by a typed takeover. |
 
 ## The shape in one line
 
