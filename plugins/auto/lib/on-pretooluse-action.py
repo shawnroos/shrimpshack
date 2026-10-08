@@ -61,6 +61,7 @@ rel-001: ALWAYS exit 0 at the process level.
 
 from __future__ import annotations
 
+import codecs
 import json
 import os
 import re
@@ -552,6 +553,311 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
     }
 
 
+_HERDR_SEND_VERBS = frozenset({
+    ("agent", "prompt"), ("agent", "send"), ("agent", "send-keys"),
+    ("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"),
+})
+_HERDR_GLOBAL_VALUE_OPTS = frozenset({"--session", "--machine", "--remote"})
+_HERDR_VALUE_OPTS = frozenset({"--until", "--timeout", "--seq"})
+_HERDR_BIN_TOKENS = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
+_SHELL_BREAKS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
+_SHELL_BINS = frozenset({"bash", "sh", "zsh", "dash"})
+_SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+MAX_SHELL_DEPTH = 4
+
+
+def _is_herdr(token: str) -> bool:
+    return token in _HERDR_BIN_TOKENS or os.path.basename(token) == "herdr"
+
+
+def _shell_script(rest: list):
+    i, takes_script = 0, False
+    while i < len(rest) and rest[i] not in _SHELL_BREAKS:
+        tok = rest[i]
+        if tok in _SHELL_VALUE_OPTS:
+            i += 2
+            continue
+        if tok[:1] in ("-", "+"):
+            takes_script = takes_script or (tok[:2] != "--" and "c" in tok[1:])
+            i += 1
+            continue
+        return tok if takes_script else None
+    return None
+
+
+_ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
+_LOCALE_DOLLAR = re.compile(r"\$(?=\")")
+
+
+def _ansi_c(match) -> str:
+    try:
+        return codecs.decode(match.group(1).encode("latin-1", "backslashreplace"), "unicode_escape")
+    except Exception:
+        return match.group(1)
+
+
+def _unquote_dollar(command: str) -> str:
+    return _LOCALE_DOLLAR.sub("", _ANSI_C.sub(lambda m: shlex.quote(_ansi_c(m)), command))
+
+
+def _herdr_sends(command: str, depth: int = 0) -> list:
+    """(verb, target) for every herdr call in ``command`` that types into a pane.
+
+    A ``bash``/``sh``/``zsh``/``dash`` ``-c`` script, also behind ``env``, is
+    scanned as its own command. This only names the verb; ``_names_pane`` is the
+    check that does not depend on how herdr is invoked.
+    """
+    try:
+        lexer = shlex.shlex(_unquote_dollar(command), posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    sends = []
+    for start, token in enumerate(tokens):
+        if os.path.basename(token) in _SHELL_BINS and depth < MAX_SHELL_DEPTH:
+            script = _shell_script(tokens[start + 1:])
+            if script:
+                sends.extend(_herdr_sends(script, depth + 1))
+            continue
+        if not _is_herdr(token):
+            continue
+        rest = []
+        for tok in tokens[start + 1:]:
+            if tok in _SHELL_BREAKS:
+                break
+            rest.append(tok)
+        i = 0
+        while i < len(rest) and rest[i].startswith("-"):
+            i += 2 if rest[i] in _HERDR_GLOBAL_VALUE_OPTS else 1
+        if i + 1 >= len(rest) or (rest[i], rest[i + 1]) not in _HERDR_SEND_VERBS:
+            continue
+        verb = f"{rest[i]} {rest[i + 1]}"
+        j = i + 2
+        while j < len(rest):
+            if rest[j] in _HERDR_VALUE_OPTS:
+                j += 2
+            elif rest[j].startswith("-"):
+                j += 1
+            else:
+                sends.append((verb, rest[j]))
+                break
+    return sends
+
+
+def _targets_pane(target: str, driver: dict) -> bool:
+    pane = driver.get("pane_id") or ""
+    if target in (pane, driver.get("terminal_id")):
+        return True
+    if ":" in target or not pane.endswith(":" + target):
+        return False
+    here = os.environ.get("HERDR_WORKSPACE_ID")
+    return not here or pane.split(":", 1)[0] == here
+
+
+_ID_EDGE = "A-Za-z0-9_"
+_HIDING_CHARS = re.compile(r"[\"'\\\\]")
+def _names_pane(command: str, driver: dict):
+    text = _HIDING_CHARS.sub("", _unquote_dollar(command)).casefold()
+    for ident in (driver.get("pane_id"), driver.get("terminal_id")):
+        if ident and re.search(r"(?<![%s])%s(?![%s])" % (_ID_EDGE, re.escape(ident.casefold()), _ID_EDGE),
+                               text):
+            return ident
+    return None
+
+
+def _driver_hit(command: str, session_id, sends: list, driver: dict):
+    for verb, target in sends:
+        if _targets_pane(target, driver):
+            return verb, target
+    if session_id == driver.get("session_id"):
+        return None
+    named = _names_pane(command, driver)
+    return (None, named) if named else None
+
+
+def driver_send_denial(stdin_raw: str) -> dict | None:
+    session_id, command = _read_stdin(stdin_raw)
+    if not command:
+        return None
+    session_registry = load_lib_module("session_registry")
+    drivers = session_registry.driver_panes()
+    if not drivers:
+        return None
+    sends = _herdr_sends(command)
+    for driver in drivers:
+        hit = _driver_hit(command, session_id, sends, driver)
+        if hit is None:
+            continue
+        verb, target = hit
+        try:
+            journal = load_lib_module("programme_journal")
+            journal.append(driver["run"], "blocked_driver_send", session_id, {
+                "verb": verb, "target": target, "pane_id": driver["pane_id"],
+                "command": journal.redact(command)[:2000],
+            })
+        except Exception:
+            pass
+        what = f"`herdr {verb}` into pane" if verb else "a command naming pane"
+        reason = (
+            f"auto: blocked {what} {driver['pane_id']}, the driver's pane of programme "
+            f"{driver['run']!r}. Only the person types into the programme driver's pane, "
+            "and other sessions may not name it in any command; report through the "
+            "programme's inbox instead. This attempt is journaled."
+        )
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }}
+    return None
+
+
+DONE_STATE_NAMES = frozenset({"done", "completed", "complete", "canceled", "cancelled",
+                              "duplicate", "closed"})
+DONE_STATE_TYPES = frozenset({"completed", "canceled", "cancelled"})
+_STATE_FIELDS = ("state", "stateId", "status", "stateType", "type")
+_STRICT_STATE_FIELDS = ("state", "stateId")
+_COMMENT_FIELDS = ("body", "comment")
+_ISSUE_FIELDS = ("issueId", "issue")
+_ISSUE_TOOLS = ("save_issue", "update_issue")
+_ISSUE_KEY = re.compile(r"[A-Z][A-Z0-9]{0,7}-[0-9]{1,6}")
+_STATE_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _is_tracker_tool(name) -> bool:
+    if not isinstance(name, str) or not name.startswith("mcp__"):
+        return False
+    server = name[len("mcp__"):].rpartition("__")[0]
+    return "linear" in server.lower()
+
+
+def _driven_programme(session_id):
+    if not session_id:
+        return None
+    programme_home = load_lib_module("programme_home")
+    run_record_core = load_lib_module("run_record_core")
+    runs = {lease.get("run") for lease in programme_home.leases_for_session(session_id)
+            if programme_home.lease_status(lease) in programme_home.HELD_LEASE_STATES}
+    for run_id in sorted(r for r in runs if isinstance(r, str)):
+        record = run_record_core.read_run_record(programme_home.home_path(run_id), run_id)
+        programme = record.get("programme") if isinstance(record, dict) else None
+        if (isinstance(programme, dict) and not programme.get("ended")
+                and record.get("driving_session_id") == session_id):
+            return run_id, programme
+    return None
+
+
+def _recorded_states(programme) -> list:
+    issues = (programme.get("recorded_issues") or {}).get("issues")
+    return [i for i in issues.values() if isinstance(i, dict)] if isinstance(issues, dict) else []
+
+
+def _done_type(issue) -> bool:
+    return str(issue.get("state_type") or "").casefold() in DONE_STATE_TYPES
+
+
+def _done_state(value, programme, strict):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return f"a state given as {type(value).__name__}, which cannot be checked" if strict else None
+    text = value.strip()
+    if text.casefold() in DONE_STATE_NAMES or text.casefold() in DONE_STATE_TYPES:
+        return f"the done state {value!r}"
+    recorded = _recorded_states(programme)
+    if _STATE_ID.fullmatch(text):
+        known = [i for i in recorded if i.get("state_id") == text]
+        if not known or any(_done_type(i) for i in known):
+            return f"the state id {text!r}, which the recorded issues do not show as open; pass the state by name"
+        return None
+    if any(str(i.get("state") or "").casefold() == text.casefold() and _done_type(i) for i in recorded):
+        return f"{value!r}, a done state in the recorded issues"
+    return None
+
+
+def _proof_write(tool_input, programme):
+    for field in _STATE_FIELDS:
+        found = _done_state(tool_input.get(field), programme, field in _STRICT_STATE_FIELDS)
+        if found:
+            return f"sets {found}"
+    if tool_input.get("duplicateOf"):
+        return "marks the issue a duplicate, which closes it"
+    root_cause = load_lib_module("programme_evidence")._ROOT_CAUSE
+    for field in _COMMENT_FIELDS:
+        text = tool_input.get(field)
+        if text is not None and not isinstance(text, str):
+            return f"posts a {field} that cannot be checked"
+        if text and root_cause.search(text):
+            return "posts a root-cause comment"
+    return None
+
+
+def _ref_hit(entries, value) -> bool:
+    wanted = {str(v).casefold() for v in (_dict_or_empty(value).get("id"), _dict_or_empty(value).get("name")) if v}
+    return any(wanted & {str(v).casefold() for v in (e.get("key"), e.get("id"), e.get("name")) if v}
+               for e in entries if isinstance(e, dict))
+
+
+def _dict_or_empty(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _issue_refs(tool_name, tool_input) -> list:
+    fields = list(_ISSUE_FIELDS) + (["id"] if tool_name.endswith(_ISSUE_TOOLS) else [])
+    return [tool_input[f] for f in fields if tool_input.get(f) is not None]
+
+
+def _remit_write(tool_name, tool_input, programme):
+    scope = _dict_or_empty(_dict_or_empty(programme.get("remit")).get("tracker"))
+    teams = [t for t in scope.get("teams") or [] if isinstance(t, dict)]
+    team = tool_input.get("team")
+    if teams and team is not None and not _ref_hit(teams, {"name": team}):
+        return f"creates an issue in team {team!r}, outside the remit's teams"
+    issues = _dict_or_empty(_dict_or_empty(programme.get("recorded_issues")).get("issues"))
+    for ref in _issue_refs(tool_name, tool_input):
+        key = ref.strip().upper() if isinstance(ref, str) else ""
+        if teams:
+            if not _ISSUE_KEY.fullmatch(key):
+                return f"names the issue {ref!r}, which cannot be checked against the remit; pass the issue key"
+            if key.split("-")[0] not in {t.get("key") for t in teams}:
+                return f"writes to {key}, outside the remit's teams"
+        recorded = _dict_or_empty(issues.get(key))
+        projects, initiatives = scope.get("projects") or [], scope.get("initiatives") or []
+        if (projects or initiatives) and recorded.get("project") and not _ref_hit(projects, recorded["project"]) \
+                and not any(_ref_hit(initiatives, i) for i in recorded.get("initiatives") or []):
+            return f"writes to {key}, whose project is outside the remit"
+    return None
+
+
+def tracker_write_denial(stdin_raw: str) -> dict | None:
+    data = json.loads(stdin_raw) if stdin_raw else None
+    if not isinstance(data, dict) or not _is_tracker_tool(data.get("tool_name")):
+        return None
+    session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
+    driven = _driven_programme(session_id)
+    if driven is None:
+        return None
+    run_id, programme = driven
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    what = _proof_write(tool_input, programme) or _remit_write(data["tool_name"], tool_input, programme)
+    if what is None:
+        return None
+    try:
+        load_lib_module("programme_journal").append(run_id, "blocked_tracker_write", session_id, {
+            "tool": data["tool_name"][:200], "reason": what[:300]})
+    except Exception:
+        pass
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            f"auto: the programme's PM may not make this tracker write; this call {what}. "
+            "A done or canceled state and a root-cause comment come from a worker or Shawn, "
+            "and the PM writes only inside the remit."),
+    }}
+
+
 def _cli(argv) -> int:
     repo_root = argv[0] if argv else os.getcwd()
     stdin_raw = ""
@@ -561,11 +867,25 @@ def _cli(argv) -> int:
         except Exception:
             stdin_raw = ""
     try:
-        decision = decide(repo_root, stdin_raw)
+        tracker_denial = tracker_write_denial(stdin_raw)
+    except Exception:
+        tracker_denial = None
+    if tracker_denial is not None:
+        json.dump(tracker_denial, sys.stdout)
+        sys.stdout.write("\n")
+        return 0
+    try:
+        driver_denial = driver_send_denial(stdin_raw)
+    except Exception:
+        driver_denial = None
+    try:
+        decision = decide(repo_root, stdin_raw) if repo_root else None
     except Exception:
         decision = None  # any failure => allow (rel-001). Fail-closed is SCOPED
         # to a confirmed destructive match on a confirmed run, handled inside
         # decide(); an unrelated internal error must not brick the tool flow.
+    if decision is None:
+        decision = driver_denial
     if decision is not None:
         json.dump(decision, sys.stdout)
         sys.stdout.write("\n")

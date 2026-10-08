@@ -27,11 +27,13 @@
 # lines, which are noise you eyeball past, not sibling edges.)
 #
 # Three EDGE KINDS, and telling them apart is the whole point of this file:
-#   [top]   `x = load_lib_module("y")` at module top — the only kind `loads_sibling`
-#           (and therefore every check below) can SEE.
+#   [top]   `x = load_lib_module("y")` at module top — a visible edge, and the kind the
+#           DAG lines below list first.
 #   [plain] a bare `import y` at module top — a real edge this lint CANNOT see.
-#   [lazy]  a load INSIDE a function body — a real runtime edge, invisible to the lint,
-#           and the mechanism that lets a "cycle" on paper not be one at import time.
+#   [lazy]  a load INSIDE a function body — a real runtime edge, and the mechanism that
+#           lets a "cycle" on paper not be one at import time. Two spellings exist:
+#           `load_lib_module("y")` and `run_record_core._lazy_load("y")`; `loads_sibling`
+#           greps both, so a forbidden edge cannot dodge the lint by switching loader.
 #
 #   format_compat        → (nothing)                          DAG root; pure stdlib
 #   run_record_core      → format_compat [lazy], run_record_predicate [lazy]
@@ -70,6 +72,63 @@
 #   workflows         → workflow_validate, format_compat       (resolve() read shim)
 #   presets           → workflow_validate, backend_ops, format_compat  (load_preset shim)
 #   iteration         → verification [lazy]
+#   run_record_predicate → programme_predicate [lazy, via _lazy_load]
+#   run_record (facade)  → run_record_evidence (in addition to the list above)
+#   _bootstrap           → programme_home [lazy] (programme_home imports _bootstrap at top)
+#
+# Programme runs. This family builds on run_record_core directly, not on the facade:
+# a programme record has no steps, so the facade's step verbs never apply to it.
+#   verb_cli             → (nothing)                           leaf
+#   programme_sanitize   → (nothing)                           leaf
+#   programme_home       → run_record_core; run_record [lazy], phase-grammar [lazy]
+#                          The lazy facade load sits inside the end path only, so the
+#                          chain run_record → run_record_evidence → … → programme_home
+#                          closes no import-time cycle.
+#   programme_predicate  → run_record_core, programme_home; phase-grammar [lazy]
+#   programme_protocol   → programme_home                      (never programme_journal:
+#                          the prompt lookup is passed in by the caller)
+#   programme_journal    → run_record_core, programme_home
+#   session_registry     → run_record_core, programme_home, driver_session
+#   programme_exec       → programme_sanitize
+#   programme_tracker    → programme_exec, programme_journal, programme_sanitize
+#   programme_tasks      → programme_sanitize
+#   programme_plans      → programme_exec, programme_sanitize, programme_tracker
+#   programme_record     → run_record_core, programme_home, programme_journal,
+#                          programme_protocol, programme_sanitize, driver_session,
+#                          programme_tracker
+#   programme_evidence   → run_record_core, programme_home, programme_journal,
+#                          programme_predicate, programme_record, programme_sanitize,
+#                          programme_protocol, driver_session, verification
+#   programme_sources    → run_record_core, programme_home, programme_journal,
+#                          programme_sanitize, programme_record, programme_exec,
+#                          programme_tracker, programme_tasks, programme_plans,
+#                          session_registry
+#   programme_view       → programme_home, programme_predicate, programme_sanitize,
+#                          programme_tasks, session_registry
+#   programme            → run_record, run_record_core, programme_home, programme_journal,
+#                          programme_protocol, session_registry, driver_session, verb_cli;
+#                          then, after its verb table is built: programme_record,
+#                          programme_evidence, programme_sources, programme_view,
+#                          programme_lifecycle
+#                          Those five receive `programme` as a `host` argument and never
+#                          load it back.
+#   programme_lifecycle  → run_record_core, programme_home, programme_journal,
+#                          session_registry, driver_session, programme_sanitize
+#   programme-watch      → run_record_core, programme_home, programme_predicate,
+#                          programme_record, programme_sanitize, programme_tracker,
+#                          programme_tasks, programme_plans, driver_session
+#                          (writes go through the programme CLI as a child process)
+#   run_record_evidence  → run_record_core, driver_session; programme_home [lazy],
+#                          programme_journal [lazy], programme_sanitize [lazy],
+#                          programme_evidence [lazy]
+#   on-user-prompt       → programme_home, programme_journal, session_registry
+#   on-pre-compact       → programme_home [lazy]
+#   on-session-start     → phase-grammar; on-pre-compact [lazy], programme [lazy]
+#   on-stop              → phase-grammar; programme_home [lazy], programme_predicate [lazy],
+#                          programme_journal [lazy], programme [lazy]
+#   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy],
+#                          programme_home [lazy], run_record_core [lazy], programme_evidence [lazy]
+#   auto-spawn           → driver_session; auto-workspace [lazy]
 #
 # format_compat is a DAG ROOT (pure stdlib, no sibling import), so every `→ format_compat`
 # edge is a LEAF edge that closes no cycle.
@@ -77,14 +136,14 @@
 # NB this lint is forbidden-edge / negative-grep: an ALLOWED edge missing from this
 # comment does NOT turn it red. That is exactly why the comment drifted, and why the
 # existence asserts below matter — they are what makes a botched rename fail loudly
-# rather than silently vacate a negative grep. `loads_sibling` greps for the
-# `load_lib_module("x")` call form ONLY, so it is blind to both [plain] and [lazy] edges:
-# pulse_advance reaches step_producers via a PLAIN `import step_producers as producers`,
-# and the existence assert is the only thing standing behind that edge.
+# rather than silently vacate a negative grep. `loads_sibling` greps the whole file for
+# the two loader call forms, so it sees [top] and [lazy] loads but is blind to [plain]
+# edges: pulse_advance reaches step_producers via a PLAIN `import step_producers as
+# producers`, and the existence assert is the only thing standing behind that edge.
 #
-# Consumers (auto.py, dispatcher.py, on-stop.py, auto-status.py, etc.) load
+# Task-run consumers (auto.py, dispatcher.py, on-stop.py, auto-status.py, etc.) load
 # the RUN-RECORD FACADE, never run_record_mutators/run_record_producers directly — the facade
-# is the public surface.
+# is the public surface. The programme family reads and writes through run_record_core.
 
 set -uo pipefail
 
@@ -107,7 +166,11 @@ fail() {
 # loads_sibling <file> <sibling-name> → 0 (true) if <file> contains a
 # load_lib_module("<sibling-name>") call. Grep for the exact call form.
 loads_sibling() {
-  grep -q "load_lib_module(\"$2\")" "$LIB/$1"
+  grep -qE "(load_lib_module|_lazy_load)\\(\"$2\"\\)" "$LIB/$1"
+}
+
+loads_any_sibling() {
+  grep -qE "load_lib_module|_lazy_load|^from _bootstrap|^[[:space:]]*import (run_record|programme|session_registry|driver_session|verb_cli)" "$LIB/$1"
 }
 
 # ─── run-record DAG: the pinned family EXISTS (anti-vacuity, F13) ────────────
@@ -353,6 +416,107 @@ if grep -qE 'load_lib_module\(|^from (run_record|workflows|workflow_validate|pul
 else
   pass
 fi
+
+# ─── programme family: every module and shim EXISTS (anti-vacuity) ──────────
+for _pm in programme_home.py programme_predicate.py programme_protocol.py \
+           programme_journal.py session_registry.py on-user-prompt.py on-pre-compact.py \
+           programme.py programme.sh verb_cli.py programme_record.py programme_sanitize.py \
+           programme_evidence.py programme_sources.py programme-watch.py programme-watch.sh \
+           programme_view.py run_record_evidence.py programme_lifecycle.py \
+           programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py; do
+  it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
+  if [ -f "${LIB}/${_pm}" ]; then
+    pass
+  else
+    fail "lib/${_pm} is missing — the programme edge checks below would pass vacuously"
+  fi
+done
+
+for _hook in on-user-prompt.sh on-pre-compact.sh; do
+  it ".claude/hooks/${_hook} exists (the shim that runs its lib module)"
+  if [ -f "${AUTO_ROOT}/.claude/hooks/${_hook}" ]; then
+    pass
+  else
+    fail ".claude/hooks/${_hook} is missing — the hook would never run its lib module"
+  fi
+done
+
+# ─── programme family: forbidden edges ─────────────────────────────────────
+for _host in programme_record programme_evidence programme_sources programme_view \
+             programme-watch run_record_evidence programme_lifecycle; do
+  it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
+  if loads_sibling "${_host}.py" "programme"; then
+    fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"
+  else
+    pass
+  fi
+done
+
+it "programme_evidence.py and run_record_evidence.py do NOT load the run_record facade"
+if loads_sibling "programme_evidence.py" "run_record" \
+   || loads_sibling "run_record_evidence.py" "run_record"; then
+  fail "the facade loads run_record_evidence, which reaches programme_evidence — a facade load from either closes a cycle"
+else
+  pass
+fi
+
+it "programme_protocol.py does NOT load programme_journal (the prompt lookup is injected)"
+if loads_sibling "programme_protocol.py" "programme_journal"; then
+  fail "programme_protocol.py must not load programme_journal — the caller passes prompt_lookup in"
+else
+  pass
+fi
+
+it "programme_predicate.py loads no protocol, journal or task predicate"
+if loads_sibling "programme_predicate.py" "programme_protocol" \
+   || loads_sibling "programme_predicate.py" "programme_journal" \
+   || loads_sibling "programme_predicate.py" "run_record_predicate"; then
+  fail "programme_predicate.py must stay pure over the record — run_record_predicate loads it, and every record write calls it"
+else
+  pass
+fi
+
+it "programme_view.py does NOT load programme_record (rules and inbox size are passed in)"
+if loads_sibling "programme_view.py" "programme_record"; then
+  fail "programme_view.py must not load programme_record — the caller passes rules and inbox size"
+else
+  pass
+fi
+
+it "programme-watch.py does NOT load programme_sources"
+if loads_sibling "programme-watch.py" "programme_sources"; then
+  fail "programme-watch.py must not load programme_sources — it reads herdr itself and writes through the CLI"
+else
+  pass
+fi
+
+for _reader in programme_exec programme_tracker programme_tasks programme_plans; do
+  it "${_reader}.py loads no programme verb module (the watcher and the view load it)"
+  if loads_sibling "${_reader}.py" "programme_sources" || loads_sibling "${_reader}.py" "programme_record" \
+     || loads_sibling "${_reader}.py" "programme"; then
+    fail "${_reader}.py must stay a plain reader — programme_record and programme-watch load it"
+  else
+    pass
+  fi
+done
+
+it "run_record.py does NOT load programme_evidence, programme_record or programme"
+if loads_sibling "run_record.py" "programme_evidence" \
+   || loads_sibling "run_record.py" "programme_record" \
+   || loads_sibling "run_record.py" "programme"; then
+  fail "run_record.py reaches programme checks only through run_record_evidence, lazily"
+else
+  pass
+fi
+
+for _leaf in verb_cli.py programme_sanitize.py; do
+  it "${_leaf} imports NO sibling lib module (leaf)"
+  if loads_any_sibling "${_leaf}"; then
+    fail "${_leaf} must be a pure-stdlib leaf — programme and its parts all load it"
+  else
+    pass
+  fi
+done
 
 # ─── deliberate-fail: prove the lint isn't vacuous ──────────────────────────
 # Write a tmp copy of run_record_mutators.py with a forbidden facade import added;

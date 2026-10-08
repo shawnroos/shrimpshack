@@ -152,6 +152,74 @@ case "$df_missing" in
   *) fail "deliberate-fail: the fence did NOT flag \`add-step\` as missing from the planted doc (got: '${df_missing}') — the fence is vacuous" ;;
 esac
 
+PVERBS="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import json, subprocess, sys
+root = sys.argv[1]
+out = subprocess.run(
+    [sys.executable, f"{root}/lib/programme.py", "describe"],
+    capture_output=True, text=True, check=True,
+).stdout
+print("\n".join(sorted(json.loads(out)["verbs"])))
+PYEOF
+)"
+
+it "programme.py describe yields a non-empty verb set (anti-vacuity)"
+if [ -n "$PVERBS" ] && [ "$(printf '%s\n' "$PVERBS" | grep -c .)" -ge 8 ]; then
+  pass
+else
+  fail "programme.py describe returned ${PVERBS:-<empty>} — the programme fence would check nothing"
+fi
+
+programme_section() {
+  sed -n '/^## Programme verbs$/,/^## /p' "$1"
+}
+
+missing_programme_verbs() {
+  local section verb out=""
+  section="$(programme_section "$1")"
+  while IFS= read -r verb; do
+    [ -z "$verb" ] && continue
+    printf '%s\n' "$section" | grep -q -F -- "\`${verb}\`" || out+="${verb} "
+  done <<< "$PVERBS"
+  printf '%s' "$out"
+}
+
+it "every verb in programme.py describe is named in the Programme verbs section"
+missing="$(missing_programme_verbs "$DOC")"
+if [ -z "$missing" ]; then
+  pass
+else
+  fail "these programme verbs dispatch but are NOT named under \`## Programme verbs\`: ${missing}"
+fi
+
+it "the Programme verbs section advertises no verb that programme.py does not dispatch"
+p_doc_verbs="$(programme_section "$DOC" | grep -oE '`[a-z][a-z-]*`' | tr -d '`' | sort -u)"
+p_doc_count="$(printf '%s\n' "$p_doc_verbs" | grep -c . || true)"
+p_count="$(printf '%s\n' "$PVERBS" | grep -c . || true)"
+if [ "$p_doc_count" -lt "$p_count" ]; then
+  fail "the \`## Programme verbs\` section yielded only ${p_doc_count} verb-shaped code spans but
+      programme.py describe dispatches ${p_count} — the heading was renamed, so this check is vacuous."
+else
+  p_stale=""
+  while IFS= read -r cand; do
+    [ -z "$cand" ] && continue
+    printf '%s\n' "$PVERBS" | grep -qx -- "$cand" || p_stale+="${cand} "
+  done <<< "$p_doc_verbs"
+  if [ -z "$p_stale" ]; then
+    pass
+  else
+    fail "the Programme verbs section names these as verbs, but programme.py does NOT dispatch them: ${p_stale}"
+  fi
+fi
+
+it "deliberate-fail: the programme fence flags a verb stripped from a planted doc"
+sed 's/`amend-term`/`REMOVED-BY-DF-PROBE`/g' "$DOC" > "$tmpdir/doc-prog.md"
+df_missing_p="$(missing_programme_verbs "$tmpdir/doc-prog.md")"
+case "$df_missing_p" in
+  *amend-term*) pass ;;
+  *) fail "deliberate-fail: the programme fence did NOT flag \`amend-term\` (got: '${df_missing_p}') — the fence is vacuous" ;;
+esac
+
 # ─── Scenario 4: the phase model is published by describe AND fenced to the doc ─
 # U1: `describe` composes the phase model (a static schema) so an agent orients to
 # the loop's phases without the skill corpus. Bind each published phase name to the

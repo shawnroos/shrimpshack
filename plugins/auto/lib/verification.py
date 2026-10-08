@@ -63,6 +63,31 @@ def _check_passes(check, returncode: int, stdout: str) -> bool:
     return False
 
 
+def run_capped(argv, cwd=None, timeout=_DEFAULT_TIMEOUT_SEC, env=None, cap=None, stdin=None) -> dict:
+    result = {"ran": False, "exit_code": None, "stdout": b"", "stderr": b"",
+              "truncated": False, "timed_out": False, "missing": False, "error": None}
+    if not argv:
+        result["error"] = "empty argv (nothing to run)"
+        return result
+    try:
+        proc = subprocess.run(list(argv), cwd=cwd, env=env, stdin=stdin,
+                              capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        result["timed_out"] = True
+        result["error"] = f"timed out after {timeout}s: {' '.join(map(str, argv))}"
+        return result
+    except (OSError, ValueError) as e:
+        result["missing"] = isinstance(e, FileNotFoundError)
+        result["error"] = f"could not run {argv!r}: {e}"
+        return result
+    out, err = proc.stdout or b"", proc.stderr or b""
+    if cap is not None and (len(out) > cap or len(err) > cap):
+        result["truncated"] = True
+        out, err = out[:cap], err[:cap]
+    result.update(ran=True, exit_code=proc.returncode, stdout=out, stderr=err)
+    return result
+
+
 def evaluate_programmatic(criterion: dict, cwd: Optional[str] = None) -> dict:
     """Run a programmatic criterion. NEVER raises — a timeout, a missing binary,
     or any OSError becomes a ``status: "fail"`` result with descriptive evidence,
@@ -74,33 +99,12 @@ def evaluate_programmatic(criterion: dict, cwd: Optional[str] = None) -> dict:
     argv = criterion.get("argv") or []
     check = criterion.get("check")
     timeout = criterion.get("timeout_sec", _DEFAULT_TIMEOUT_SEC)
-    if not argv:
-        # Unreachable via a validated workflow (the validator requires a non-empty
-        # argv), but keep the "never raises" contract honest for the debug CLI
-        # and any unvalidated caller — subprocess.run([]) would raise IndexError.
-        return {"criterion_id": cid, "status": "fail", "evidence": "empty argv (nothing to run)"}
-    try:
-        proc = subprocess.run(
-            list(argv),
-            cwd=cwd,
-            capture_output=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return {
-            "criterion_id": cid,
-            "status": "fail",
-            "evidence": f"timed out after {timeout}s: {' '.join(map(str, argv))}",
-        }
-    except (OSError, ValueError) as e:
-        return {
-            "criterion_id": cid,
-            "status": "fail",
-            "evidence": f"could not run {argv!r}: {e}",
-        }
-    combined = (proc.stdout or b"") + (proc.stderr or b"")
-    stdout_text = (proc.stdout or b"").decode("utf-8", errors="replace")
-    ok = _check_passes(check, proc.returncode, stdout_text)
+    run = run_capped(argv, cwd=cwd, timeout=timeout)
+    if not run["ran"]:
+        return {"criterion_id": cid, "status": "fail", "evidence": run["error"]}
+    combined = run["stdout"] + run["stderr"]
+    stdout_text = run["stdout"].decode("utf-8", errors="replace")
+    ok = _check_passes(check, run["exit_code"], stdout_text)
     return {
         "criterion_id": cid,
         "status": "pass" if ok else "fail",

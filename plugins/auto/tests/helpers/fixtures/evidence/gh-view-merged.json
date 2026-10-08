@@ -1,0 +1,16 @@
+{
+ "headRefOid": "9e265cc6c301071b75921e4a73121701f1b5cebd",
+ "mergeCommit": {
+  "oid": "a9fa84f4fb57a66039745e916632b0cdcd33a7dd"
+ },
+ "mergedAt": "2026-10-06T15:58:51Z",
+ "mergedBy": {
+  "id": "MDQ6VXNlcjcyODkzOA==",
+  "is_bot": false,
+  "login": "shawnroos",
+  "name": "Shawn"
+ },
+ "number": 97,
+ "state": "MERGED",
+ "url": "https://github.com/shawnroos/shrimpshack/pull/97"
+}

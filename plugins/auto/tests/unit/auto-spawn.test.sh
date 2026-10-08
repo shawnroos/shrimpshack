@@ -333,6 +333,32 @@ else
 fi
 rm -rf "$H7"
 
+it "fanout: the committed sidecar records the host session as host_session_id"
+H8="$(make_host_repo)"
+seed_plans "$H8" "hosted"
+( cd "$H8" && CLAUDE_CODE_SESSION_ID=sess-host "$PY" "$SPAWN" fanout "docs/plans/hosted.md" >/dev/null 2>&1 )
+host="$("$PY" -c "
+import glob, json
+s = json.load(open(glob.glob('${H8}/.claude/auto/batches/*.json')[0]))
+print(s.get('status'), s.get('host_session_id'))
+")"
+assert_eq "committed sess-host" "$host"
+: > "${CMUX_LOG}"
+rm -rf "$H8"
+
+it "fanout: with no session id the sidecar carries no host_session_id"
+H9="$(make_host_repo)"
+seed_plans "$H9" "unhosted"
+( cd "$H9" && env -u CLAUDE_CODE_SESSION_ID "$PY" "$SPAWN" fanout "docs/plans/unhosted.md" >/dev/null 2>&1 )
+host="$("$PY" -c "
+import glob, json
+s = json.load(open(glob.glob('${H9}/.claude/auto/batches/*.json')[0]))
+print(s.get('status'), 'host_session_id' in s)
+")"
+assert_eq "committed False" "$host"
+: > "${CMUX_LOG}"
+rm -rf "$H9"
+
 # ── summary ────────────────────────────────────────────────────────────────
 echo ""
 echo "auto-spawn.test.sh: ${PASS} passed, ${FAIL} failed"

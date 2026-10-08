@@ -166,6 +166,20 @@ _OPAQUE_KEY_CONTAINERS = frozenset({
     "decision_payload",
 })
 
+# A programme block nests runtime-chosen keys at several depths (item ids,
+# deliverable names, agreement term names) and never existed in format v1, so
+# its whole subtree passes verbatim in both directions. A one-level opaque entry
+# would still rename a term called `units` two levels down.
+_VERBATIM_CONTAINERS = frozenset({"programme", "programme_status", "task_evidence"})
+
+
+def _verbatim(node):
+    if isinstance(node, dict):
+        return {k: _verbatim(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_verbatim(v) for v in node]
+    return node
+
 
 # ── value maps ──────────────────────────────────────────────────────────────
 _PHASE_MAP = {"seam": "handoff"}
@@ -264,6 +278,8 @@ def _convert(node, spec, *, top_level=False, container=None):
     ``exit_reason.kind``, ``dropped_depends_on_edges[].unit``) fire narrowly
     instead of renaming every generic ``from``/``kind``/``unit`` in the tree.
     """
+    if container in _VERBATIM_CONTAINERS:
+        return _verbatim(node)
     if isinstance(node, list):
         return [_convert(v, spec, container=container) for v in node]
     if not isinstance(node, dict):

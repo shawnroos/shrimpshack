@@ -1,0 +1,28 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "commits": {
+     "nodes": [
+      {
+       "commit": {
+        "oid": "9e265cc6c301071b75921e4a73121701f1b5cebd",
+        "statusCheckRollup": null
+       }
+      }
+     ]
+    },
+    "headRefOid": "9e265cc6c301071b75921e4a73121701f1b5cebd",
+    "mergeCommit": {
+     "oid": "a9fa84f4fb57a66039745e916632b0cdcd33a7dd"
+    },
+    "merged": true,
+    "reviewThreads": {
+     "nodes": [],
+     "totalCount": 0
+    },
+    "state": "MERGED"
+   }
+  }
+ }
+}

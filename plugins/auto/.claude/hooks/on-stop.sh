@@ -25,12 +25,11 @@
 #   via systemMessage. The deterministic gate fires ONCE per stop attempt.
 #
 # ACTIVE-RUN POLICY:
-#   There may be N run-records under <repo>/.claude/auto/. We BLOCK if ANY has
-#   `loop_phase != "done" AND exit_predicate_result.met == false`. The reason
-#   names the offending run(s). This matches goal-status.sh's per-run verdict.
-#   The all_steps_terminal gate is honored implicitly: `met` already requires
-#   `all_steps_terminal == true` (schema §5 I-2), so a lurking stalled step
-#   (counters zero) keeps `met == false` and the stop stays blocked.
+#   Only the stopping session's own runs count: a task run holds its
+#   driving_session_id, a batch holds its host_session_id, and a programme holds
+#   the session its lease and record name. A task run or batch that records no
+#   session holds every session in the repo. A held run blocks while
+#   `exit_predicate_result.met == false` (programmes: while may_stop is false).
 #
 # READS THE RUN_RECORD LOCK-FREE: the atomic-rename invariant gives a consistent
 # snapshot; no flock => no contention with a slow writer => trivially under any
@@ -59,8 +58,20 @@ __cd_find_repo() {
   return 1
 }
 
-__cd_repo="$(__cd_find_repo)" || exit 0
-[ -d "${__cd_repo}/.claude/auto" ] || exit 0
+# Programme gate (runs in every session, repo or not): a lease file means a
+# programme holds a herdr space, and its driving session's stop is checked.
+__cd_leases="${CLAUDE_AUTO_DATA_DIR:-${HOME:-}/.claude/plugins/data/auto-shrimpshack}/programmes/leases"
+__cd_any_lease=0
+for __cd_f in "${__cd_leases}"/*.json; do
+  [ -e "$__cd_f" ] && __cd_any_lease=1
+  break
+done
+
+__cd_repo="$(__cd_find_repo)" || __cd_repo=""
+if [ -n "$__cd_repo" ] && [ ! -d "${__cd_repo}/.claude/auto" ]; then
+  __cd_repo=""
+fi
+[ -n "$__cd_repo" ] || [ "$__cd_any_lease" = 1 ] || exit 0
 
 PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -76,6 +87,20 @@ fi
 __cd_stdin_json=""
 if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
+fi
+
+if [ -z "$__cd_repo" ]; then
+  # Python acts only for a session some lease names, so a session id that no lease
+  # file contains ends the hook here. Anything the shell cannot read exactly (no id,
+  # two ids, unusual characters, a \u escape) still goes to Python.
+  __cd_named=1
+  __cd_after_sid="${__cd_stdin_json#*\"session_id\"}"
+  if [[ $__cd_stdin_json != *\\u* && $__cd_after_sid != *\"session_id\"* \
+        && $__cd_stdin_json =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]+)\" ]]; then
+    grep -qsF -- "\"${BASH_REMATCH[1]}\"" "${__cd_leases}"/*.json
+    [ $? = 1 ] && __cd_named=0
+  fi
+  [ "$__cd_named" = 1 ] || exit 0
 fi
 
 # Hand off ALL decision logic to Python (consistent snapshot read + loop-safety
