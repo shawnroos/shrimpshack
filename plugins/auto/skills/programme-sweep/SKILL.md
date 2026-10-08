@@ -60,6 +60,8 @@ from this session's lease.
    example "adopt merge_around_gate at act, widen it", and cite that reply.
    An answer that fits no row is an instruction: record it. `P describe` lists
    every verb with its arguments and what it refuses.
+   An answer that brings new work (a bug, a screenshot, a finding): rank it
+   and route it with sections 1 and 2 of [references/sequencing.md](references/sequencing.md).
 4. **Validate.** `P validate` re-checks confirmed evidence that has gone stale.
    A refuted re-check reopens its item; treat it as open work in this sweep.
 5. **Read the remit.** `P sweep --record-sources`. It reads herdr and the
@@ -91,6 +93,8 @@ from this session's lease.
      (a JSON list of key, title, state, state_type, state_id and url on stdin).
      That sets the tracker available with provider `linear-mcp`. Record them
      again each sweep while the board and the key stay down.
+   - New work the sweep finds (a new issue, a failed check, a review finding):
+     rank it and route it with sections 1 and 2 of [references/sequencing.md](references/sequencing.md).
 6. **Sources.** For each watcher line since the last sweep:
    - `source-unavailable <name> missing`, or a reason naming `op unsupported`:
      this machine cannot read the source. Run `P set-source <name> --unsupported`;
@@ -111,14 +115,15 @@ from this session's lease.
    verified and released (the local clone of the item's repo). Confirmed closes
    the deliverable; unknown or refuted leaves it open, and the item's history
    shows the claim as unconfirmed.
+   For a `merged` claim, and before any merge you do yourself, run the merge
+   gates in section 4 of [references/sequencing.md](references/sequencing.md).
 9. **Arm retry watchers.** For each queue entry with action `arm_retry_watcher`:
    1. Read the item's `watchers["retry-<item>"].retry.argv`.
    2. Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --item <item> -- bash "${CLAUDE_PLUGIN_ROOT}/lib/<argv[0]>" <argv[1:]>`.
    3. `P queue --remove <entry-id>`.
 10. **Drive workers.**
-   - Before you route new work, start or prompt a worker, or merge, follow
-     [references/sequencing.md](references/sequencing.md): rank the work, route
-     it to its owner, find what it waits for, and gate each merge.
+   - Before you start or prompt a worker on new work, find what it waits for
+     with section 3 of [references/sequencing.md](references/sequencing.md).
    - Start a queued worker with `P start-worker <item> -- <spinoff arguments>`.
      Never pass `--session-id`; the verb mints it.
    - Prompt a worker with `P prompt-item <item> "<text>"`. It sends only to the
@@ -142,6 +147,7 @@ from this session's lease.
       `P set-waiting <item> --who shawn --reporter shawn`.
 12. **Hand product calls.** A product question goes to Shawn with
     `P hand-item <item> --question "<one question>"`. It notifies him once.
+    When several are open, order them with section 5 of [references/sequencing.md](references/sequencing.md).
 13. **Update the working model.** `P set-now "<what you do next>" --item <item>`
     (or `--clear`), and `P queue --action <name> --item <item>` or
     `--remove <entry-id>` so the queue matches your next actions.
