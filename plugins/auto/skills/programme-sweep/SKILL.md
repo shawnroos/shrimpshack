@@ -116,6 +116,9 @@ from this session's lease.
    2. Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --item <item> -- bash "${CLAUDE_PLUGIN_ROOT}/lib/<argv[0]>" <argv[1:]>`.
    3. `P queue --remove <entry-id>`.
 10. **Drive workers.**
+   - Before you route new work, start or prompt a worker, or merge, follow
+     [references/sequencing.md](references/sequencing.md): rank the work, route
+     it to its owner, find what it waits for, and gate each merge.
    - Start a queued worker with `P start-worker <item> -- <spinoff arguments>`.
      Never pass `--session-id`; the verb mints it.
    - Prompt a worker with `P prompt-item <item> "<text>"`. It sends only to the
