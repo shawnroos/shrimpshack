@@ -109,12 +109,12 @@ Peek's reader page shows a site's Open Graph details and its text, which works f
 
 - KTD1. **A native helper process renders the page; peek only draws frames and forwards input.** A mod cannot host a browser engine, but `$.process.spawn` keeps a child alive for the session and the engine kills it when the module unloads (types L3489-3525). (session-settled: user-directed — chosen over the `terminal-browser` split-pane handoff: the person asked to build it in peek.) Governs R1, R4, R5.
 - KTD2. **Helper is one Swift source file, compiled on first use with `swiftc` and cached.** Source ships in the plugin; the binary is built into `~/.cache/claude-peek/bin/` keyed by the source hash and ad-hoc signed. `swift file.swift` re-typechecks on every launch (1-3 s); a compiled binary starts in about 0.1-0.3 s. Needs Xcode command-line tools, otherwise R14's message.
-- KTD3. **WebKit setup: a `WKWebView` in a borderless window ordered behind all others, in an accessory-policy app, using `WKWebsiteDataStore.nonPersistent()`.** WebKit throttles pages in hidden or occluded windows and has no public "always render" switch, so the window must count as on screen. The window ignores real mouse events and never becomes key or main, so nothing the person does elsewhere reaches it. U1 settles the exact window state (behind everything at near-zero alpha vs off-screen coordinates) and whether an App Nap activity assertion is needed. Governs R5, R12.
+- KTD3. **WebKit setup: a `WKWebView` in a borderless window ordered behind all others at near-zero alpha, in an accessory-policy app, using `WKWebsiteDataStore.nonPersistent()`, with WebKit occlusion detection turned off.** U1 measured that a hidden window renders only ~4 fresh frames a second (under the 5/s stop line) whether behind or off-screen, with or without an App Nap assertion. Calling the private `_setWindowOcclusionDetectionEnabled:` with false gives 60 of 60 fresh frames at 2-3 ms per snapshot. The helper calls it when the selector exists and otherwise reports `live view throttled` in the status line. No App Nap assertion (no measured effect). The window ignores real mouse events and never becomes key or main. Governs R5, R12.
 - KTD4. **Frames come from `takeSnapshot`, sent only when the page changed, one request in flight, stale frames dropped.** `CALayer` and `cacheDisplay` capture blank or stale output for WKWebView; ScreenCaptureKit needs Screen Recording permission and an on-screen window. The helper marks the page dirty on navigation, input and resize, and on change reports from an injected user script that watches DOM mutations and running animations (a mutation observer plus the page's animation list, posted through a script message handler), so script-driven pages such as dashboards keep updating. KTD13's cap still applies.
-- KTD5. **Frame transport: POSIX shared memory if it draws in the person's terminal, else base64 PNG through `$`.** `$.ui.blit` on a keyed `Image` accepts `shm` (one fresh object per frame, macOS names at most 30 characters, the terminal unlinks each), `file`, and base64 `png`/`rgba` up to 2 MiB (types L5241-5243, L5388-5392). Peek's own comment says a multiplexer may drop path-sent images (`plugins/peek/hooks/register.tsx` above `toPng`), so U1 tests both under herdr and Ghostty. The helper always implements both; U1 picks the default and a peek setting overrides it, because peek gets no signal that a picture was drawn. Shared-memory objects get a per-run random prefix and mode 0600; peek tells the helper when it drops a frame or a blit is refused, and the helper unlinks that object; on quit and on its parent-exit path the helper unlinks every object it created. Governs R5.
+- KTD5. **Frame transport: a PNG file blitted with the `file` source; base64 `png` through `$` as the fallback setting.** U1 under herdr: png, file and shm all draw. png and file blits were never refused (60 of 60, three runs). shm refused 22-30 of 38 frames with "the surface has not written its last frames", so it needs frame-drop and unlink bookkeeping for no gain; it is dropped. `file` keeps the frame bytes out of the plugin process (no read and base64 per frame) and has no 2 MiB cap. The helper writes each frame to a new file in its 0700 run directory, peek blits it by path, and the helper deletes frames older than the last two. Plain Ghostty outside herdr is not yet checked; the fallback setting covers a terminal that drops path images. Governs R5.
 - KTD6. **Control channel: a tiny HTTP server on a Unix socket; event channel: the helper's stdout.** `$.http.fetch` takes `socketPath` (types L3451-3460, L5200-5212); the helper's stdin is written once and closed, so it cannot carry commands. The socket lives in a new `0700` directory under the user's temp dir. Stdout lines report `ready`, `frame`, `nav` (url, title, can-go-back/forward), `load` state and `error`.
-- KTD7. **Viewport pixels = pane cells × an assumed cell size × 2 for Retina on the shared-memory transport (1× on the PNG transport), capped at 4096 per side; a PNG frame over 2 MiB is re-encoded at a lower scale before sending.** No API reports cell pixel size (types L10317-10337); peek already assumes a 2.1 cell aspect in `imageBox`. Pointer mapping stays exact regardless, because the frame stretches to fill its cell box: page x = (pointer fine x, else cell x + 0.5) / columns × viewport width. Governs R4, R8.
-- KTD8. **Input.** Wheel: the pane's `ui.scroll` event carries the pointer cell, forwarded as scroll-at-point. Clicks and keys: a `Client` module laid over the frame (`position: "absolute"`), posting batched events to peek through `ui.message`. If U1 shows the layered Client cannot receive pointer events or hides the frame, R8 is not met and the Goal Capsule stop condition applies. The helper delivers every synthesized click, scroll and key only to its own window or web view (window-targeted events, or `insertText` for text) and never posts system-wide events, so it needs no Accessibility permission and typed text can never reach another app. Typing uses native key events when the window can take them without becoming key, else `insertText` on the focused element (U1 decides). After each click the helper reports whether an editable element has focus. Governs R7, R8, R9.
+- KTD7. **Viewport pixels = pane cells × an assumed cell size at 1× on both transports, capped at 4096 per side; on the base64 fallback a PNG frame over 2 MiB is re-encoded at a lower scale before sending.** 2× would quadruple the ~38 ms PNG encode U1 measured and drop the frame rate toward the 5/s line. No API reports cell pixel size (types L10317-10337); peek already assumes a 2.1 cell aspect in `imageBox`. Pointer mapping stays exact regardless, because the frame stretches to fill its cell box: page x = (pointer fine x, else cell x + 0.5) / columns × viewport width. Governs R4, R8.
+- KTD8. **Input.** Wheel: the pane's `ui.scroll` event carries the pointer cell, forwarded as scroll-at-point. Clicks and keys: a `Client` module laid over the frame (`position: "absolute"`), posting events to peek through `ui.message`. U1 under herdr: the stacked Client received every click and key, and the picture under it stayed visible. Clicks arrive as cell coordinates only (no fine positions under herdr), so peek maps a click to the centre of its cell in page pixels. The helper delivers every synthesized click, scroll and key only to its own window (`window.sendEvent`, and `insertText` for text); U1 showed both work without the window becoming key and without changing the frontmost app. It never posts system-wide events and needs no Accessibility permission. After each click the helper reports whether an editable element has focus. Governs R7, R8, R9.
 - KTD9. **Keyboard scrolling.** While live and not typing, `j`/`k` and the page keys scroll the live page at the viewport centre, alongside the wheel (R7). Governs R7.
 - KTD10. **Keys:** `v` live/reader; `b` page back while live (falls through to peek's own back stack when the page has no history); `u` reload (the existing refresh key). `l` is taken by "move right" and is not used. A focused Client receives every key; Escape is never delivered to it because the engine returns focus to the pane on Escape (types L1401-1418). Escape therefore leaves typing mode, and the "Done typing" footer control is the pointer exit; Escape can never be forwarded to the page. Peek clears its typing state on the first peek key, pane press or scroll it receives while typing is set. While the focused page element is not editable, the Client forwards the live keys above to peek as commands and drops other keys; only while an editable element has focus do keys go to the page. Governs R9, R11.
 - KTD11. **One helper per session, reused across live pages.** Opening live on another page navigates the running helper. After live view stops, a 60-second idle timer shuts it down unless the helper reports that its data store holds cookies, in which case it runs until unload (R3); module unload kills it (engine); the helper also exits on its own when its parent process is gone, checked with a kqueue watch on the parent pid, so a crashed Claude Code never leaves an orphan.
@@ -133,7 +133,7 @@ flowchart LR
     K[Client live-input.tsx]
     F[footer controls]
   end
-  R[register.tsx] -- blit shm or png --> I
+  R[register.tsx] -- blit file or png --> I
   K -- post pointer and key batches --> R
   R -- spawn, read stdout events --> H[peek-web helper]
   R -- HTTP over unix socket: navigate, input, resize, pause --> H
@@ -170,7 +170,7 @@ sequenceDiagram
   W->>H: page changed (dirty)
   H->>W: takeSnapshot at viewport size
   W-->>H: image
-  H->>H: write shm object or encode PNG
+  H->>H: encode PNG, write frame file
   H-->>P: stdout "frame <id> <source>"
   P->>T: ui.blit(live-frame, source)
 ```
@@ -224,6 +224,8 @@ flowchart TB
 
 **Verification:** the plan records snapshot p50/p95, end-to-end fps per transport, PNG sizes, the window state and App Nap setting that keep rendering, which input paths work without leaking to the frontmost app, which frame sources draw under herdr and Ghostty, and whether the stacked Client receives pointer events. A stop condition in the Goal Capsule is checked against these numbers.
 
+**U1 results (2026-10-09).** Snapshot 2-3 ms with occlusion detection off (60/60 fresh), ~4 fresh/s without it. Cold start to first page 1.4-1.5 s; first helper build 38 s. Hacker News PNG at 1x 1200x800: 548 KB, ~38 ms encode. Under herdr: png, file and shm draw; png and file blits never refused, shm refused 22-30 of 38; the stacked Client gets clicks (cell resolution) and keys, picture stays visible. Not checked: plain Ghostty outside herdr. Stop conditions: neither fires (helper side ~25 frames/s is bounded by PNG encode at ~38 ms, above the 5/s line; pointer clicks reach the layer).
+
 ### U2. Helper: hidden WebKit view with socket control and frame output
 
 **Goal:** a helper binary that renders one page off-screen, streams frames, and takes commands.
@@ -239,9 +241,9 @@ flowchart TB
 
 **Approach:**
 1. The helper starts with a viewport size and a socket directory, sets the accessory policy, creates the hidden window (state from U1) and a `WKWebView` with a non-persistent data store, and prints `ready <socket path>`.
-2. Endpoints: navigate, back, reload, resize, input (batched pointer, wheel and text), pause, resume, drop, quit. The navigation delegate refuses non-`http`/`https` schemes on every navigation path (commands, server redirects, and navigations started by page scripts) and refuses downloads, keeps `target=_blank` navigations in the one view, and suppresses JavaScript dialogs (R13).
-3. Frames follow KTD4 (including the injected change-report script) and are written in either transport (KTD5), default from U1; each prints `frame <id> <kind> <source> <w> <h>`. A `drop` command unlinks a frame peek did not draw.
-4. The helper exits when its parent pid goes away (KTD11) and on `quit`, removing its socket directory and unlinking every shared-memory object it created. After each click it prints `focus editable` or `focus none`.
+2. Endpoints: navigate, back, reload, resize, input (batched pointer, wheel and text), pause, resume, quit. The navigation delegate refuses non-`http`/`https` schemes on every navigation path (commands, server redirects, and navigations started by page scripts) and refuses downloads, keeps `target=_blank` navigations in the one view, and suppresses JavaScript dialogs (R13).
+3. Frames follow KTD4 (including the injected change-report script) and are written as PNG files in the run directory (KTD5); each prints `frame <id> <path> <w> <h>`, and the helper deletes frames older than the last two.
+4. The helper exits when its parent pid goes away (KTD11) and on `quit`, removing its run directory (socket and frame files). After each click it prints `focus editable` or `focus none`.
 5. `live.ts` builds the binary with `swiftc -O` into the cache when missing or stale, ad-hoc signs it, and reports `live-unavailable` when `swiftc` is absent or the build fails.
 
 **Patterns to follow:** the io-port pattern in `plugins/peek/hooks/sources.ts`; `runOrThrow` for one-shot process calls.
@@ -253,7 +255,7 @@ flowchart TB
 - An existing cached binary for the current hash skips the build.
 - Stdout lines `ready`, `frame`, `nav`, `load`, `error` parse into typed events; a malformed line is ignored, not thrown.
 
-**Verification:** a manual smoke run of the built helper loads `https://example.com`, prints `ready` and frames, keeps sending frames for a page with a timer-driven counter and no input, navigates on command, and leaves no socket directory or shared-memory objects after `quit` or after its parent is killed (checked against the real spawn parent from U3, not only a shell).
+**Verification:** a manual smoke run of the built helper loads `https://example.com`, prints `ready` and frames, keeps sending frames for a page with a timer-driven counter and no input, navigates on command, and leaves no run directory after `quit` or after its parent is killed (checked against the real spawn parent from U3, not only a shell).
 
 ### U3. Helper manager in peek
 
@@ -391,7 +393,7 @@ flowchart TB
 | Risk | Mitigation |
 |---|---|
 | `takeSnapshot` is too slow or returns stale frames in a hidden window | U1 measures first and stops the plan below 5 fps; snapshot only when dirty at pane pixel size |
-| herdr drops `shm`/`file` images | Base64 PNG transport (KTD5) at 1× with re-encoding above 2 MiB (KTD7); U1 measures its end-to-end fps against the stop condition |
+| A terminal drops `file` images (plain Ghostty unchecked) | Base64 PNG transport setting (KTD5) at 1× with re-encoding above 2 MiB (KTD7); U1 measures its end-to-end fps against the stop condition |
 | The layered Client hides the frame or gets no pointer events | U1 measures it first; the plan stops rather than ship live view without clicks |
 | Typing needs the helper window to be key, stealing focus from the terminal | `insertText` on the focused element as the typing path (KTD8); U1 decides |
 | A crashed Claude Code leaves a helper running | Parent-pid watch in the helper (KTD11) plus engine kill on unload |
@@ -418,6 +420,6 @@ flowchart TB
 - Every requirement (R1-R9, R11-R14) is met and AE1-AE4 have passing tests (AE1-AE3 also checked by hand).
 - U1's measurements are recorded in this plan and the spike code is deleted.
 - Validation, type-check and the full test suite pass.
-- No helper process, socket directory or helper shared-memory object remains after closing the pane, unloading peek, or killing Claude Code.
+- No helper process or run directory remains after closing the pane, unloading peek, or killing Claude Code.
 - No code from abandoned approaches remains in the diff (for example the losing frame transport if U1 rules one out).
 - `plugins/peek/README.md` describes live view, and the live copy at `~/.claude/mods/peek` matches `plugins/peek`.
