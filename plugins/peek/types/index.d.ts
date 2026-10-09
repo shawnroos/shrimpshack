@@ -17,6 +17,9 @@ export type FailureKind =
   | 'query-bug'
   | 'fetch-blocked'
   | 'process-unavailable'
+  | 'live-unavailable'
+  | 'live-crashed'
+  | 'live-stalled'
 
 export type Tier = 'cli' | 'api' | 'session'
 
