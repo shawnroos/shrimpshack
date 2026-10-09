@@ -13,7 +13,7 @@ import type { RemoteIo } from './remote'
 import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
 import { failureText } from './sources'
-import { createLive, isWebUrl, pagePoint, typedInput, wheelPoint } from './live'
+import { createLive, isWebUrl, liveStatusText, pagePoint, typedInput, wheelPoint } from './live'
 import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveIo, LiveState, TypedKey, Viewport } from './live'
 import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
@@ -894,10 +894,18 @@ function onLiveChange($: EngineInterface, state: LiveState, event?: { t: string 
   }
   if (event?.t === 'frame' && isLiveFrameDrawn && liveHref && state.frame) {
     const { path, id } = state.frame
-    void $.ui.blit({ requestId: PANE, key: LIVE_FRAME, source: { file: path, format: 'png', generation: id } }).catch(() => undefined)
+    // A refused blit (Image not mounted yet, or mid-resize) is answered with { deny }, not a rejection; a redraw draws the newest frame instead.
+    void $.ui.blit({ requestId: PANE, key: LIVE_FRAME, source: { file: path, format: 'png', generation: id } }).then(
+      result => {
+        if (result.deny) $.ui.invalidate('ui.render')
+      },
+      () => $.ui.invalidate('ui.render'),
+    )
     return
   }
   if (event?.t === 'focus') isTyping = liveHref !== null && state.isEditable
+  // A new document has no focused field yet; typing resumes only when the next click lands on one.
+  if (event?.t === 'nav' || (event?.t === 'load' && state.load === 'loading')) isTyping = false
   if (event?.t === 'cookies') return
   $.ui.invalidate('ui.render')
 }
@@ -923,8 +931,8 @@ async function liveBack($: EngineInterface) {
 
 async function liveKey($: EngineInterface, key: string) {
   const height = liveViewport?.height ?? 400
-  const current = await read($, view)
   const url = live?.state().url
+  const current = key === 'o' || key === 'c' || key === 'f' ? await read($, view) : null
   switch (key) {
     case 'j':
     case 'down':
@@ -975,7 +983,6 @@ async function onLiveInput($: EngineInterface, events: readonly LiveInputEvent[]
   flush()
 }
 
-
 function liveOf($: EngineInterface): Live {
   live ??= createLive(liveIoOf($), (state, event) => onLiveChange($, state, event))
   return live
@@ -1003,6 +1010,7 @@ async function toggleLive($: EngineInterface, current: View, viewport: Viewport)
 async function leaveLive() {
   liveHref = null
   isLiveFrameDrawn = false
+  isTyping = false
   await live?.leave().catch(() => undefined)
 }
 
@@ -2541,24 +2549,7 @@ export const register: Register = on => {
       )
       position = ''
     }
-    const liveHost = (() => {
-      try {
-        return new URL(liveState?.url ?? current.location).host
-      } catch {
-        return ''
-      }
-    })()
-    const liveStatus = !isLiveHere
-      ? ''
-      : !liveFrame
-        ? liveState.phase === 'building'
-          ? 'building live view (first time, about a minute)'
-          : 'starting live view'
-        : liveState.load === 'failed'
-          ? `failed · ${liveHost} · u reloads`
-          : liveState.load === 'loading'
-            ? `loading · ${liveHost}`
-            : `live · ${liveHost}`
+    const liveStatus = isLiveHere ? liveStatusText(liveState, current.location) : ''
     const notice = liveNotice?.href === current.href ? failureText(liveNotice.kind) : null
     const goNext = jumps.next
     const goPrev = jumps.prev
@@ -2612,7 +2603,7 @@ export const register: Register = on => {
             ? [{ key: 'live', label: liveHref === current.href ? 'Reader' : 'Live', hotkey: 'v', onPress: () => void toggleLive($, current, viewport) }]
             : []),
           ...(liveFrame && isTyping
-            ? [{ key: 'done-typing', label: 'Done typing', hotkey: 'd', onPress: () => $.ui.invalidate('ui.render') }]
+            ? [{ key: 'done-typing', label: 'Done typing', hotkey: 'd', onPress: () => { isTyping = false; $.ui.invalidate('ui.render') } }]
             : []),
           { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
           { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },

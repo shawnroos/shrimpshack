@@ -185,6 +185,7 @@ function liveWorld(options: { swiftcExit?: number } = {}) {
   const children: ReturnType<typeof channel>[] = []
   const posted: Posted[] = []
   const removed: string[] = []
+  let quitHold: Promise<void> | null = null
   const timers: { at: number; fn: () => void; isCancelled: boolean }[] = []
   let now = 0
   const changes: LiveState[] = []
@@ -198,6 +199,7 @@ function liveWorld(options: { swiftcExit?: number } = {}) {
     },
     post: async (socket, path, body) => {
       posted.push(body === undefined ? { path } : { path, body })
+      if (path === 'quit' && quitHold) await quitHold
       return socket === '/run/ctl.sock'
     },
     after: (ms, fn) => {
@@ -221,6 +223,9 @@ function liveWorld(options: { swiftcExit?: number } = {}) {
     changes,
     child: (index = 0) => children[index] as ReturnType<typeof channel>,
     paths: () => posted.map(one => one.path),
+    holdQuit: (hold: Promise<void>) => {
+      quitHold = hold
+    },
     settle,
     advance: async (ms: number) => {
       now += ms
@@ -307,6 +312,7 @@ describe('live helper manager', () => {
     await w.advance(60_000)
     expect(w.paths().at(-1)).toBe('quit')
     expect(w.child().killed()).toBe(true)
+    expect(w.removed).toEqual([])
   })
 
   test('leaving after a cookies report keeps the helper; stop still ends it', async () => {
@@ -322,6 +328,36 @@ describe('live helper manager', () => {
     await w.live.stop()
     expect(w.paths().at(-1)).toBe('quit')
     expect(w.child().killed()).toBe(true)
+  })
+
+  test('coming back while the idle shutdown is quitting starts a fresh helper', async () => {
+    const w = liveWorld()
+    await w.live.start('https://a.dev/', VIEW)
+    await w.ready()
+    await w.frame(1)
+    w.child().say({ t: 'cookies', present: false })
+    await w.settle()
+    await w.live.leave()
+    let release: () => void = () => {}
+    w.holdQuit(new Promise<void>(resolve => (release = resolve)))
+    await w.advance(60_000)
+    const started = w.live.start('https://a.dev/', VIEW)
+    release()
+    await started
+    await w.settle()
+    expect(w.spawns.length).toBe(2)
+    expect(w.live.state().phase === 'off').toBe(false)
+    expect(w.live.state().isShown).toBe(true)
+  })
+
+  test('leaving before the first frame is not a stall', async () => {
+    const w = liveWorld()
+    await w.live.start('https://a.dev/', VIEW)
+    await w.live.leave()
+    await w.ready()
+    await w.advance(15_000)
+    expect(w.live.state().failure).toBeUndefined()
+    expect(w.paths()).not.toContain('quit')
   })
 
   test('re-entering the same page resumes without reloading it', async () => {

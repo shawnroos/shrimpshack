@@ -52,8 +52,10 @@ func makeRunDir() -> String {
   var base = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
   while base.count > 1 && base.hasSuffix("/") { base.removeLast() }
   if base.isEmpty { base = "/tmp" }
-  if let dir = attempt(base), (dir + "/ctl.sock").utf8.count < 104 { return dir }
-  else if let dir = attempt(base) { try? FileManager.default.removeItem(atPath: dir) }
+  if let dir = attempt(base) {
+    if (dir + "/ctl.sock").utf8.count < 104 { return dir }
+    try? FileManager.default.removeItem(atPath: dir)
+  }
   guard let dir = attempt("/tmp") else { debug("peek-web: cannot create run directory"); exit(1) }
   return dir
 }
@@ -180,6 +182,7 @@ let dirtyScript = """
   var raf = window.requestAnimationFrame.bind(window);
   var last = 0, pending = null;
   function post() {
+    if (window.__peekPaused) return;
     var now = Date.now();
     if (now - last >= 30) {
       last = now;
@@ -193,6 +196,8 @@ let dirtyScript = """
   // Canvas and WebGL drawing mutate nothing, so a page's own rAF callbacks count as "something moved".
   window.requestAnimationFrame = function (cb) { return raf(function (t) { post(); cb(t); }); };
   function loop() {
+    // While peek is not showing the page, idle cheaply instead of checking animations every frame.
+    if (window.__peekPaused) { setTimeout(loop, 500); return; }
     try {
       if (document.getAnimations && document.getAnimations().length > 0) post();
       else { var vs = document.getElementsByTagName('video'); for (var i = 0; i < vs.length; i++) if (!vs[i].paused) { post(); break; } }
@@ -282,6 +287,8 @@ final class Helper: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessag
   var frames: [(path: String, at: TimeInterval)] = []
   var sent: [(at: TimeInterval, bytes: Int)] = []
   var lastFrameBytes = 0
+  var lastSentPng: Data?
+  var crashes: [TimeInterval] = []
   var level = 0
   var frameWaited = false
   var waitedInARow = 0
@@ -439,8 +446,11 @@ final class Helper: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessag
       dirty = true
     case "/pause":
       paused = true
+      web.evaluateJavaScript("window.__peekPaused = true") { _, _ in }
     case "/resume":
       paused = false
+      web.evaluateJavaScript("window.__peekPaused = false") { _, _ in }
+      lastSentPng = nil
       dirty = true
     case "/quit":
       return Response(status: 200, body: ["ok": true], after: { [unowned self] in self.shutdown(0) })
@@ -535,7 +545,8 @@ final class Helper: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessag
   func tick() {
     let now = ProcessInfo.processInfo.systemUptime
     sent.removeAll { now - $0.at > 1 }
-    while let oldest = frames.first, now - oldest.at > 1 {
+    // The newest frame is what the pane shows; a redraw may read it again however old it is.
+    while frames.count > 1, let oldest = frames.first, now - oldest.at > 1 {
       unlink(oldest.path)
       frames.removeFirst()
     }
@@ -566,6 +577,7 @@ final class Helper: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessag
   func finishFrame(_ png: Data?, width: Int, height: Int) {
     inFlight = false
     guard let png, !paused else { return }
+    if png == lastSentPng { return }
     let now = ProcessInfo.processInfo.systemUptime
     lastFrameBytes = png.count
     if overBudget(png.count) {
@@ -581,6 +593,7 @@ final class Helper: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessag
       debug("peek-web: cannot write frame")
       return
     }
+    lastSentPng = png
     frames.append((path, now))
     sent.append((now, png.count))
     emit(["t": "frame", "id": frameId, "path": path, "width": width, "height": height, "bytes": png.count])
@@ -660,8 +673,15 @@ final class Helper: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessag
   }
 
   func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+    let now = ProcessInfo.processInfo.systemUptime
+    crashes = crashes.filter { now - $0 < 30 } + [now]
+    // A page that kills its content process on every load would otherwise reload forever; u still reloads by hand.
+    guard crashes.count <= 2 else {
+      emit(["t": "load", "state": "failed", "error": "the page keeps crashing"])
+      return
+    }
     emit(["t": "load", "state": "failed", "error": "web content process terminated"])
-    webView.reload()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak webView] in webView?.reload() }
   }
 
   func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction,
