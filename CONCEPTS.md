@@ -162,3 +162,23 @@ ones, not the only one.
 A named way of composing one kind of name — a worktree, branch or tab. The set
 of schemes is fixed and each is rendered by the plugin, so a name is chosen from an
 enumeration rather than written as a template.
+
+## Peek
+
+### Reader page
+Peek's text rendering of a remote item or web page: its title, details and readable body,
+fetched once and refreshed, with no scripts running. It is the default way any link opens.
+
+### Live view
+The real web page, rendered by a browser engine outside the pane and drawn into the pane as
+a stream of pictures, with scrolling, clicks and typing sent back to it. It replaces the
+reader page only while the person asks for it, and holds site data in memory only.
+
+Typing reaches the page only while a click has put focus on an editable field; a
+navigation or leaving live view returns the keys to peek.
+
+### Frame budget
+The cap on how many bytes of pictures live view sends into the pane each second. The pane
+path stalls above a measured rate without telling the sender, so the cap is fixed ahead of
+time and enforced where frames are made: unchanged pages send nothing, and a busy page gives
+up frame rate first and picture size second to stay under it.
