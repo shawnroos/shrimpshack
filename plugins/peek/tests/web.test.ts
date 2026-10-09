@@ -376,7 +376,13 @@ describe('loadWeb with curl', () => {
   test('an HTTP error maps to a fixed failure kind', async () => {
     const page = 'https://gone.test/'
     const { io } = world({ pages: { [page]: { html: 'secret body text', status: 404 } } })
-    expect(await loadWeb(io, web(page), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access' })
+    expect(await loadWeb(io, web(page), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access', detail: 'HTTP 404 Not Found from gone.test' })
+  })
+
+  test('a site that refuses the fetch names the status and the host that sent it', async () => {
+    const page = 'https://www.news24.co.za/'
+    const { io } = world({ pages: { [page]: { html: 'Forbidden', status: 403, finalUrl: 'https://www.news24.com/' } } })
+    expect(await loadWeb(io, web(page), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access', detail: 'HTTP 403 Forbidden from www.news24.com' })
   })
 
   test('an unreachable host is offline', async () => {

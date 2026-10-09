@@ -50,7 +50,7 @@ export type RemoteRecord = {
 
 export type Loaded =
   | { ok: true; record: RemoteRecord; tier: Tier; fetchedAt: number; liveFailure?: FailureKind }
-  | { ok: false; failure: FailureKind }
+  | { ok: false; failure: FailureKind; detail?: string }
 
 export type View = {
   href: string
@@ -74,6 +74,7 @@ export type View = {
     tier?: Tier
     fetchedAt?: number
     failure?: FailureKind
+    failureDetail?: string
     staleSince?: number
     favicon?: { file: string; width: number; height: number }
     preview?: { file: string; width: number; height: number }

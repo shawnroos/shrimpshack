@@ -466,3 +466,12 @@ for (const [dir, isDeleted] of [['/tmp/peek-web.abc123', true], ['/home', false]
     await ui.unmount()
   })
 }
+
+test('a page the site refuses shows the real HTTP status under the reason', async ($, on) => {
+  liveWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://blocked.test/' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /Not found, or you have no access/ })).toBeDefined()
+  expect(await ui.find({ text: 'HTTP 404 Not Found from blocked.test' })).toBeDefined()
+  await ui.unmount()
+})

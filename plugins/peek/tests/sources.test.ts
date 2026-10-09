@@ -307,7 +307,7 @@ describe('probe and gh', () => {
 describe('httpText', () => {
   test('a 404 page is not-found-or-no-access, a dead host offline, a non-web URL query-bug', async () => {
     const missing = keyed({ tools: ['gh'], fetch: () => answer(404, 'gone') })
-    expect(await seen(httpText(missing.$, 'https://example.com/x'))).toEqual({ ok: false, failure: 'not-found-or-no-access' })
+    expect(await seen(httpText(missing.$, 'https://example.com/x'))).toEqual({ ok: false, failure: 'not-found-or-no-access', detail: 'HTTP 404 Not Found from example.com' })
     const dead = keyed({ tools: ['gh'], fetch: () => new Error('fetch failed: getaddrinfo ENOTFOUND') })
     expect(await seen(httpText(dead.$, 'https://nowhere.invalid/'))).toEqual({ ok: false, failure: 'offline' })
     expect(await seen(httpText(dead.$, 'file:///etc/passwd'))).toEqual({ ok: false, failure: 'query-bug' })
