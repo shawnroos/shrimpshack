@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { C, mute } from '../hooks/theme'
@@ -8,13 +8,13 @@ const NOW = 10 * 3600_000
 const ran: string[][] = []
 let sessions = 0
 
-function fakeWorld(on: On, options: { ghAuthExit?: number } = {}) {
+function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boolean } = {}) {
   ran.length = 0
   on('session.id', () => ({ value: `pane-${++sessions}` }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
   on('http.fetch', () => ({ value: { status: 404, ok: false, headers: {}, text: '' } }))
-  on('clock.now', () => ({ value: NOW }))
+  if (!options.isClockMocked) on('clock.now', () => ({ value: NOW }))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   on('ui.toast', () => ({ value: undefined }))
   on('fs.stat', (_$, e) => {
@@ -112,4 +112,17 @@ test('with the menu open, a remote page dims like a doc page', async ($, on) => 
   expect(await ui.find({ text: /Refresh this page/ })).toBeDefined()
   expect((await ui.find({ text: /^DETAILS$/ }))?.props.color).toBe(mute(C.green))
   await ui.unmount()
+})
+
+test('covers AE5: an open pull request on screen reloads after 60 seconds, not before', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  fakeWorld(on, { isClockMocked: true })
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: 'still here' }] } } as never).catch(() => undefined)
+  const loads = () => ran.filter(argv => argv.join(' ').startsWith('gh pr view 42')).length
+  const first = loads()
+  await clock.advance(45_000)
+  expect(loads()).toBe(first)
+  await clock.advance(30_000)
+  expect(loads()).toBe(first + 1)
 })

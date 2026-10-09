@@ -11,6 +11,9 @@ import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
 import type { RemoteIo } from './remote'
 import { failureText } from './sources'
+import { cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
+import type { CacheEntry, TitleEntry } from './refresh'
+import type { Loaded } from '../types'
 import {
   describeAge,
   describeSize,
@@ -376,11 +379,38 @@ async function remotePicture($: EngineInterface, file: string | undefined) {
   return toPng($, file, 0).catch(() => undefined)
 }
 
+let lastActivity = 0
+let isTicking = false
+let titles: Record<string, TitleEntry> = {}
+
+function remoteLoader($: EngineInterface, canReplay: boolean) {
+  return async (address: string): Promise<Loaded> => {
+    const ref = parseRef(address)
+    if (!ref) return { ok: false, failure: 'query-bug' }
+    return loadItem(remoteIoOf($), ref, await $.clock.now(), { canReplay })
+  }
+}
+
+async function noteTitle($: EngineInterface, entry: CacheEntry) {
+  if (!entry.record) return
+  titles = withTitle(titles, entry.record.address, titleOf(entry.record), await $.clock.now())
+  await $.store.set('titles', titles).catch(() => undefined)
+}
+
 async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Promise<View> {
-  const loaded = await loadItem(remoteIoOf($), ref, await $.clock.now(), { canReplay })
+  if (!isTicking) {
+    isTicking = true
+    $.clock.every(15_000, () => void tickRemote($).catch(() => undefined))
+  }
+  const entry = await refreshItem(ref.address, remoteLoader($, canReplay), await $.clock.now())
+  await noteTitle($, entry)
+  return viewOf($, ref, entry)
+}
+
+async function viewOf($: EngineInterface, ref: Ref, entry: CacheEntry): Promise<View> {
   const base: View = { href: ref.address, title: ref.key ?? ref.address.replace(/^https:\/\//, ''), location: ref.address, kind: ref.kind }
-  if (!loaded.ok) return { ...base, remote: { failure: loaded.failure } }
-  const record = loaded.record
+  const record = entry.record
+  if (!record) return { ...base, remote: { failure: entry.failure ?? 'offline' } }
   return {
     href: record.address,
     title: record.title,
@@ -388,8 +418,9 @@ async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Prom
     kind: record.kind,
     remote: {
       record,
-      tier: loaded.tier,
-      fetchedAt: loaded.fetchedAt,
+      tier: entry.tier,
+      fetchedAt: entry.fetchedAt,
+      staleSince: entry.staleSince,
       favicon: await remotePicture($, record.favicon),
       preview: await remotePicture($, record.og?.image),
     },
@@ -479,6 +510,7 @@ function captureIoOf($: EngineInterface): CaptureIo {
 
 async function noteCapture($: EngineInterface, input: Record<string, unknown>, answer: unknown) {
   const at = await $.clock.now()
+  lastActivity = at
   const { addresses, grewLinear } = record(input, answer, at)
   if (addresses.length) await update($, mentions, list => noteMentions(list, addresses, at, 200, true))
   if (grewLinear) $.ui.invalidate('ui.render')
@@ -617,10 +649,9 @@ async function setStar($: EngineInterface, href: string, wanted?: boolean): Prom
 async function refresh($: EngineInterface, href: string) {
   const ref = remoteRef(href)
   if (ref) {
-    const next = await loadRemote($, ref, true)
-    const now = await $.clock.now()
-    const current = await read($, view)
-    if (current?.href === href) await update($, view, () => keepRecord(current, next, now))
+    const entry = await refreshItem(ref.address, remoteLoader($, true), await $.clock.now())
+    await noteTitle($, entry)
+    await redrawIfCurrent($, entry.address)
     return
   }
   const file = parseHref(href)
@@ -641,9 +672,26 @@ function sourceLine(kind: string, tier: string | undefined, fetchedAt: number | 
   return `${name}${age ? ` · ${age}` : ''}${stale}`
 }
 
-function keepRecord(current: View, next: View, now: number): View {
-  if (next.remote?.record || !current.remote?.record) return next
-  return { ...current, remote: { ...current.remote, staleSince: current.remote.staleSince ?? now, failure: next.remote?.failure } }
+async function redrawIfCurrent($: EngineInterface, address: string) {
+  const current = await read($, view)
+  const ref = current && remoteRef(current.href)
+  const entry = cached(address)
+  if (!current || !ref || !entry || !isCurrent(current.href, address)) return
+  const next = await viewOf($, ref, entry)
+  if ((await read($, view))?.href === current.href) await update($, view, () => next)
+}
+
+async function tickRemote($: EngineInterface) {
+  const current = await read($, view)
+  const onScreen = current?.remote && (await read($, mode)) === 'view' ? current.href : undefined
+  const hrefs = [...(await read($, mentions)).map(one => one.href), ...(await read($, stars))]
+  const background = [...new Set(hrefs)].filter(href => remoteRef(href) && isTimed(href))
+  const changed = await tick({ onScreen, background, now: await $.clock.now(), lastActivity, load: remoteLoader($, true) })
+  for (const address of changed) {
+    const entry = cached(address)
+    if (entry) await noteTitle($, entry)
+    await redrawIfCurrent($, address)
+  }
 }
 
 async function pressLink($: EngineInterface, href: string) {
@@ -684,6 +732,9 @@ async function setMenu($: EngineInterface, isOpen: boolean) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    lastActivity = await $.clock.now()
+    const savedTitles = await $.store.get('titles').catch(() => undefined)
+    if (savedTitles && typeof savedTitles === 'object' && !Array.isArray(savedTitles)) titles = savedTitles as Record<string, TitleEntry>
     const saved = await $.store.get('stars').catch(() => undefined)
     if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
     await $.tool
@@ -709,6 +760,7 @@ export const register: Register = on => {
 
   on('session.append', async ($, e, next) => {
     const stored = await next(e)
+    lastActivity = await $.clock.now()
     if (e.message.type !== 'assistant' || e.agentId) return stored
     const { texts, created, touched } = classifyBlocks(e.message.content)
     await remember($, texts, created, touched).catch(() => undefined)
