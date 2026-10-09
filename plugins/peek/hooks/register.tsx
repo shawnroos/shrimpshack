@@ -13,8 +13,8 @@ import type { RemoteIo } from './remote'
 import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
 import { failureText } from './sources'
-import { createLive } from './live'
-import type { Live, LiveFailureKind, LiveIo, LiveState, Viewport } from './live'
+import { createLive, isWebUrl, pagePoint, typedInput, wheelPoint } from './live'
+import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveIo, LiveState, TypedKey, Viewport } from './live'
 import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
 import {
@@ -859,6 +859,11 @@ let liveHref: string | null = null
 let liveViewport: Viewport | null = null
 let isLiveFrameDrawn = false
 let liveNotice: { href: string; kind: LiveFailureKind } | null = null
+let isTyping = false
+let lastInputSeq = 0
+let liveGeom: FrameGeometry | null = null
+const LINE_SCROLL_PX = 80
+const WHEEL_SCROLL_PX = 60
 
 function liveIoOf($: EngineInterface): LiveIo {
   return {
@@ -892,9 +897,84 @@ function onLiveChange($: EngineInterface, state: LiveState, event?: { t: string 
     void $.ui.blit({ requestId: PANE, key: LIVE_FRAME, source: { file: path, format: 'png', generation: id } }).catch(() => undefined)
     return
   }
-  if (event?.t === 'cookies' || event?.t === 'focus') return
+  if (event?.t === 'focus') isTyping = liveHref !== null && state.isEditable
+  if (event?.t === 'cookies') return
   $.ui.invalidate('ui.render')
 }
+
+function sendInput(events: HelperInput[]) {
+  if (events.length > 0) void live?.command('input', { events }).catch(() => undefined)
+}
+
+function scrollLive(dy: number, at?: { x: number; y: number }) {
+  const viewport = liveViewport
+  if (!viewport) return
+  const point = at ?? { x: Math.floor(viewport.width / 2), y: Math.floor(viewport.height / 2) }
+  sendInput([{ type: 'scroll', ...point, dy }])
+}
+
+async function liveBack($: EngineInterface) {
+  if (live?.state().canBack) await live.command('back')
+  else {
+    await leaveLive()
+    await goBack($)
+  }
+}
+
+async function liveKey($: EngineInterface, key: string) {
+  const height = liveViewport?.height ?? 400
+  const current = await read($, view)
+  const url = live?.state().url
+  switch (key) {
+    case 'j':
+    case 'down':
+      return scrollLive(LINE_SCROLL_PX)
+    case 'k':
+    case 'up':
+      return scrollLive(-LINE_SCROLL_PX)
+    case ' ':
+    case 'pagedown':
+      return scrollLive(Math.round(height * 0.8))
+    case 'pageup':
+      return scrollLive(-Math.round(height * 0.8))
+    case 'b':
+      return liveBack($)
+    case 'u':
+      return void live?.command('reload')
+    case 'v':
+      return leaveLive().then(() => $.ui.invalidate('ui.render'))
+    case 'o':
+      return url && isWebUrl(url) ? void $.process.run(['open', url]).catch(() => undefined) : current ? openExternally($, current) : undefined
+    case 'c':
+      return void $.ui.copy({ text: url ?? current?.location ?? '' })
+    case 'f':
+      return url || current ? void setStar($, url ?? current?.href ?? '') : undefined
+  }
+}
+
+type LiveInputEvent = { seq: number; type: 'click'; x: number; y: number } | ({ seq: number; type: 'key' } & TypedKey)
+
+async function onLiveInput($: EngineInterface, events: readonly LiveInputEvent[]) {
+  const fresh = events.filter(one => one.seq > lastInputSeq).sort((a, b) => a.seq - b.seq)
+  let typed: TypedKey[] = []
+  const flush = () => {
+    sendInput(typedInput(typed))
+    typed = []
+  }
+  for (const one of fresh) {
+    lastInputSeq = one.seq
+    if (one.type === 'click') {
+      flush()
+      if (liveGeom && liveViewport) sendInput([{ type: 'click', ...pagePoint(one, liveGeom, liveViewport) }])
+    } else if (isTyping) typed.push(one)
+    else {
+      flush()
+      await liveKey($, one.key)
+    }
+  }
+  flush()
+}
+
 
 function liveOf($: EngineInterface): Live {
   live ??= createLive(liveIoOf($), (state, event) => onLiveChange($, state, event))
@@ -1314,6 +1394,11 @@ export const register: Register = on => {
   })
 
   on('ui.message', async ($, e, next) => {
+    const input = e.data as { liveInput?: unknown } | null
+    if (e.requestId === PANE && input && Array.isArray(input.liveInput)) {
+      await onLiveInput($, input.liveInput as LiveInputEvent[]).catch(() => undefined)
+      return { props: { width: liveGeom?.columns ?? 1, height: liveGeom?.rows ?? 1, acked: lastInputSeq } }
+    }
     const spike = e.data as { spikeClick?: unknown; spikeKey?: unknown } | null
     if (e.requestId === SPIKE && spike && (spike.spikeClick !== undefined || spike.spikeKey !== undefined)) {
       spikeLog.push(spike.spikeClick !== undefined ? `click reached the layer at ${String(spike.spikeClick)}` : `key reached the layer: ${String(spike.spikeKey)}`)
@@ -1347,6 +1432,13 @@ export const register: Register = on => {
   })
 
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    if (liveHref && liveGeom && liveViewport && e.pointer) {
+      const at = wheelPoint(e.pointer, liveGeom, liveViewport)
+      if (at) {
+        scrollLive(e.by * WHEEL_SCROLL_PX, at)
+        return {}
+      }
+    }
     const isList = (await read($, mode).catch(() => 'view')) !== 'view' || !(await read($, view).catch(() => null))
     if (isList && !e.pointer && e.origin.kind === 'person' && Math.abs(e.by) === 1 && !(await read($, menuOpen).catch(() => false))) {
       await moveSelection($, e.by > 0 ? 'down' : 'up').catch(() => undefined)
@@ -2544,14 +2636,22 @@ export const register: Register = on => {
         liveViewport = viewport
         void live?.command('resize', viewport)
       }
+      liveGeom = { left: Math.floor((e.props.bodyColumns - pageWidth) / 2) + (isNarrow ? 0 : 2), top: HEADER_ROWS + 1 - offset, columns: textWidth, rows: liveRows }
       body = (
-        <Image
-          key={LIVE_FRAME}
-          source={{ file: liveFrame.path, format: 'png', generation: liveFrame.id }}
-          columns={textWidth}
-          rows={liveRows}
-          alt={`${current.title} (the live view cannot draw here: press v for the reader page)`}
-        />
+        <Box width={textWidth} height={liveRows}>
+          <Image
+            key={LIVE_FRAME}
+            source={{ file: liveFrame.path, format: 'png', generation: liveFrame.id }}
+            columns={textWidth}
+            rows={liveRows}
+            alt={`${current.title} (the live view cannot draw here: press v for the reader page)`}
+          />
+          {Client && (
+            <Box position="absolute" top={0} left={0} width={textWidth} height={liveRows}>
+              <Client key="live-input" module="./live-input.tsx" props={{ width: textWidth, height: liveRows, acked: lastInputSeq }} width={textWidth} height={liveRows} />
+            </Box>
+          )}
+        </Box>
       )
       position = ''
     }
@@ -2624,8 +2724,11 @@ export const register: Register = on => {
           ...(canLive
             ? [{ key: 'live', label: liveHref === current.href ? 'Reader' : 'Live', hotkey: 'v', onPress: () => void toggleLive($, current, viewport) }]
             : []),
-          { key: 'next', label: 'Down', hotkey: 'j', onPress: goNext },
-          { key: 'prev', label: 'Up', hotkey: 'k', onPress: goPrev },
+          ...(liveFrame && isTyping
+            ? [{ key: 'done-typing', label: 'Done typing', hotkey: 'd', onPress: () => $.ui.invalidate('ui.render') }]
+            : []),
+          { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
+          { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
           { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: () => void setStar($, current.href) },
           { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: () => void openExternally($, current) },
           ...(remote ? [{ key: 'refresh', label: 'Refresh', hotkey: 'u', onPress: () => void refresh($, current.href) }] : []),
@@ -2637,7 +2740,7 @@ export const register: Register = on => {
             onPress: () => void $.ui.copy({ text: current.location }),
           },
           { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) },
-      ],
+      ].map(one => (isTyping ? { ...one, onPress: () => { isTyping = false; one.onPress() } } : one)),
     )
   })
 }
