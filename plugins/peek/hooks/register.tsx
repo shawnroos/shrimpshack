@@ -886,6 +886,34 @@ async function spikeFrames($: EngineInterface) {
   $.ui.invalidate('ui.render')
 }
 
+let spikeStreaming = false
+
+async function spikeStream($: EngineInterface, kind: 'png' | 'half', fps: number) {
+  if (spikeStreaming) return
+  spikeStreaming = true
+  const total = fps * 10
+  const gap = Math.round(1000 / fps)
+  const start = await $.clock.now()
+  let denied = 0
+  let late = 0
+  for (let i = 0; i < total; i += 1) {
+    const due = start + i * gap
+    const now = await $.clock.now()
+    if (now > due + gap) late += 1
+    else if (now < due) await $.clock.sleep(due - now)
+    const n = i % 30
+    const source = kind === 'png'
+      ? { file: `${SPIKE_DIR}/stream-${n}.png`, format: 'png', generation: i + 1 }
+      : { file: `${SPIKE_DIR}/stream-half-${n}.png`, format: 'png', generation: i + 1 }
+    const result = (await $.ui.blit({ requestId: SPIKE, key: 'spike-stream', source } as never).catch((error: unknown) => ({ deny: String(error) }))) as { deny?: unknown }
+    if (result && 'deny' in result && result.deny) denied += 1
+  }
+  const ms = (await $.clock.now()) - start
+  spikeLog.push(`stream ${kind} ${fps}/s: ${total} blits in ${ms} ms, late ${late}, denied ${denied}`)
+  spikeStreaming = false
+  $.ui.invalidate('ui.render')
+}
+
 export const register: Register = on => {
   on('command.run', { command: 'peek-spike' }, async $ => {
     spikeLog = []
@@ -919,6 +947,14 @@ export const register: Register = on => {
           )}
         </Box>
         <Button key="spike-run" label="Run frame test" onPress={() => void spikeFrames($)} />
+        <Box flexDirection="row" gap={2}>
+          <Button key="spike-s5" label="A: full 5/s" onPress={() => void spikeStream($, 'png', 5)} />
+          <Button key="spike-s10" label="B: full 10/s" onPress={() => void spikeStream($, 'png', 10)} />
+          <Button key="spike-h10" label="C: half 10/s" onPress={() => void spikeStream($, 'half', 10)} />
+          <Button key="spike-h30" label="D: half 30/s" onPress={() => void spikeStream($, 'half', 30)} />
+        </Box>
+        <Text>5. stream — counter 00-29 and a bar sweeping left to right, for 10 s</Text>
+        {Image && <Image key="spike-stream" source={{ file: `${SPIKE_DIR}/stream-0.png`, format: 'png', generation: 0 }} columns={60} rows={19} alt="[stream did not draw]" />}
         {spikeLog.map((line, i) => (
           <Text key={`log-${i}`}>{line}</Text>
         ))}
