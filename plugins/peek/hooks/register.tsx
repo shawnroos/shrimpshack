@@ -601,7 +601,7 @@ async function toHref($: EngineInterface, raw: string): Promise<string | null> {
   const cleaned = raw.trim().replace(/^[`'"<]+|[`'">.]+$/g, '')
   if (/^https?:\/\//.test(cleaned)) return cleaned
   if (cleaned.startsWith('file:')) return cleaned
-  const needsContext = /^(?:#\d+|[A-Z][A-Z0-9]{0,9}-\d+)$/.test(cleaned)
+  const needsContext = /^(?:#\d+|[A-Z][A-Z0-9]{0,9}-\d+)$/i.test(cleaned)
   const ref = parseRef(cleaned, needsContext ? await sessionRefContext($) : {})
   if (ref) return ref.address
   const match = /^(.+?)(?::(\d+))?$/.exec(cleaned)
@@ -624,6 +624,7 @@ async function guess($: EngineInterface, query: string): Promise<string | null> 
     prompt: [
       `I ran /peek ${query}`,
       'Which ONE file path or URL from this conversation do I mean? Prefer the most recent match.',
+      'If I name a website or online service that is not in this conversation (e.g. "the nytimes website"), reply with its homepage URL instead.',
       shortlist ? `Paths and links seen recently, newest first:\n${shortlist}` : '',
       'Reply with only the absolute path (optionally :line) or the URL, nothing else. If nothing fits, reply NONE.',
     ].filter(Boolean).join('\n\n'),

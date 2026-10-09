@@ -248,3 +248,30 @@ test('the details block labels each row with a Nerd Font icon instead of a word'
   expect(await ui.find({ text: /^Author\s*$/ })).toBeUndefined()
   await ui.unmount()
 })
+
+test('/peek with a lowercase Linear ID opens that issue, never a recent one', async ($, on) => {
+  fakeWorld(on)
+  let forks = 0
+  on('model.fork', () => {
+    forks += 1
+    throw new Error('no model in this test')
+  })
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  on('tool.call', async () => reply(JSON.stringify({ identifier: 'WEB-2760', title: 'Lowercase', url: 'https://linear.app/acme/issue/WEB-2760/lowercase' })) as never)
+  await $.tool.call({ tool: 'mcp__claude_ai_Linear__get_issue', tool_use_id: 'l1', id: 'WEB-2760' } as never)
+  const out = (await $.command.run({ command: 'peek', args: 'web-2799' } as never)) as { text?: string }
+  expect(out.text).toContain('https://linear.app/acme/issue/WEB-2799')
+  expect(forks).toBe(0)
+})
+
+test('/peek naming a website the session never saw asks the model and opens the homepage it names', async ($, on) => {
+  fakeWorld(on)
+  const prompts: string[] = []
+  on('model.fork', (_$, e) => {
+    prompts.push(String((e as { prompt?: unknown }).prompt))
+    return { value: { isAnswered: true, text: 'https://www.nytimes.com' } } as never
+  })
+  const out = (await $.command.run({ command: 'peek', args: 'add Nytimes website' } as never)) as { text?: string }
+  expect(prompts[0]).toMatch(/homepage/i)
+  expect(out.text).toContain('https://www.nytimes.com')
+})
