@@ -1,6 +1,7 @@
 import type { Loaded, RemoteRecord } from '../types'
 import type { Captured } from './capture'
 import { htmlToMarkdown } from './lib'
+import { readable } from './defuddle'
 import type { Ref } from './refs'
 import { hasCurl, httpDetail, httpFailure, httpText } from './sources'
 import type { Failed, SourceIo } from './sources'
@@ -243,14 +244,18 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
   const html = page.text.slice(0, MAX_PAGE)
   const head = parseHead(html, finalUrl)
   const host = hostOf(finalUrl) ?? address.hostname
-  const [image, favicon] = isCli ? await Promise.all([download(io, head.image), faviconFor(io, host, head.icons)]) : [undefined, undefined]
+  const [image, favicon, cleaned] = await Promise.all([
+    isCli ? download(io, head.image) : undefined,
+    isCli ? faviconFor(io, host, head.icons) : undefined,
+    readable(io, html, finalUrl),
+  ])
   const record: RemoteRecord = {
     address: ref.address,
     kind: 'web',
     title: head.title ?? host,
     trail: [head.siteName ?? host],
     meta: [{ label: 'Host', value: host }],
-    body: htmlToMarkdown(html),
+    body: cleaned ?? htmlToMarkdown(html),
     og: { title: head.title, description: head.description, siteName: head.siteName, image },
     favicon,
     browserUrl: finalUrl,

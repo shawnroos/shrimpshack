@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { HttpResponse, ProcessRunResult } from 'claude-code'
+import type { HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { Captured } from '../hooks/capture'
 import type { Ref } from '../hooks/refs'
@@ -20,13 +20,27 @@ function exited(exitCode: number, stdout = '', stderr = '', isStdoutTruncated = 
 
 const PUBLIC_IP = '93.184.216.34'
 
-function world(options: { pages?: Record<string, Page>; images?: Record<string, number | string>; hasCurl?: boolean; fetch?: (url: string) => HttpResponse; dns?: Record<string, string | null> }) {
+type DefuddleFake = { isInstalled?: boolean; installExit?: number; output?: string; parseExit?: number }
+
+function world(options: { pages?: Record<string, Page>; images?: Record<string, number | string>; hasCurl?: boolean; fetch?: (url: string) => HttpResponse; dns?: Record<string, string | null>; defuddle?: DefuddleFake }) {
   const session = `web-${++sessions}`
   const argvs: string[][] = []
   const fetched: string[] = []
-  const run = async (argv: readonly string[]): Promise<ProcessRunResult> => {
+  const stdins: string[] = []
+  let isInstalled = options.defuddle?.isInstalled ?? false
+  const run = async (argv: readonly string[], init?: ProcessRunInit): Promise<ProcessRunResult> => {
     argvs.push([...argv])
     const [bin = ''] = argv
+    if (bin === 'test') return exited(isInstalled ? 0 : 1)
+    if (bin === 'npm') {
+      const exit = options.defuddle?.installExit ?? 0
+      if (exit === 0) isInstalled = true
+      return exited(exit, '', exit === 0 ? '' : 'npm ERR! network')
+    }
+    if (bin === 'node') {
+      stdins.push(init?.stdin ?? '')
+      return exited(options.defuddle?.parseExit ?? 0, options.defuddle?.output ?? '')
+    }
     if (bin === 'sh') return exited(0, options.hasCurl === false ? '' : 'curl\n')
     if (bin === '/usr/bin/security') return exited(44, '', 'item not found')
     if (bin === 'mkdir') return exited(0)
@@ -59,7 +73,7 @@ function world(options: { pages?: Record<string, Page>; images?: Record<string, 
       return answer
     },
     linearKeyEnv: async () => undefined,
-    home: async () => undefined,
+    home: async () => (options.defuddle ? '/home' : undefined),
     read: async (path: string) => {
       throw new Error(`ENOENT ${path}`)
     },
@@ -67,7 +81,7 @@ function world(options: { pages?: Record<string, Page>; images?: Record<string, 
   }
   const curls = () => argvs.filter(argv => argv[0] === 'curl')
   const downloads = () => curls().filter(argv => argv.includes('-o')).map(argv => argv[argv.length - 1])
-  return { io, argvs, curls, downloads, fetched }
+  return { io, argvs, curls, downloads, fetched, stdins }
 }
 
 function web(address: string): Ref {
@@ -440,5 +454,39 @@ describe('fromCapture', () => {
 
   test('an unparseable address normalises to nothing', () => {
     expect(fromCapture(captured('x', 'not a url'), web('not a url'))).toBe(null)
+  })
+})
+
+describe('reader body through defuddle', () => {
+  const page = 'https://site.test/post'
+  const html = '<html><head><title>Post</title></head><body><nav>Careers</nav><article><p>Real text.</p></article></body></html>'
+  const parsed = (content: string) => JSON.stringify({ title: 'Post', content })
+
+  test('the body is defuddle\'s markdown, with relative links made absolute', async () => {
+    const { io, stdins } = world({ pages: { [page]: { html } }, defuddle: { isInstalled: true, output: parsed('Real text. [More](/more) and ![pic](img/a.png) and [top](#top) and [ext](https://x.test/)') } })
+    const loaded = await loadWeb(io, web(page), NOW)
+    if (!loaded.ok) throw new Error(loaded.failure)
+    expect(loaded.record.body).toBe('Real text. [More](https://site.test/more) and ![pic](https://site.test/img/a.png) and [top](#top) and [ext](https://x.test/)')
+    expect(stdins).toEqual([html])
+  })
+
+  test('a missing defuddle is installed once, pinned, with install scripts off', async () => {
+    const { io, argvs } = world({ pages: { [page]: { html } }, defuddle: { output: parsed('Real text.') } })
+    await loadWeb(io, web(page), NOW)
+    await loadWeb(io, web(page), NOW)
+    const installs = argvs.filter(argv => argv[0] === 'npm')
+    expect(installs.length).toBe(1)
+    expect(installs[0]?.includes('--ignore-scripts')).toBe(true)
+    expect(installs[0]?.some(arg => /^defuddle@\d+\.\d+\.\d+$/.test(arg))).toBe(true)
+  })
+
+  test('a failed install or parse falls back to the built-in reader', async () => {
+    for (const defuddle of [{ installExit: 1 }, { isInstalled: true, parseExit: 1 }, { isInstalled: true, output: 'not json' }, { isInstalled: true, output: parsed('') }]) {
+      const { io } = world({ pages: { [page]: { html } }, defuddle })
+      const loaded = await loadWeb(io, web(page), NOW)
+      if (!loaded.ok) throw new Error(loaded.failure)
+      expect(loaded.record.body?.includes('Real text.')).toBe(true)
+      expect(loaded.record.body?.includes('Careers')).toBe(true)
+    }
   })
 })
