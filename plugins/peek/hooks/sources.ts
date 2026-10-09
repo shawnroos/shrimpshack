@@ -60,6 +60,12 @@ export function failureText(kind: FailureKind): { title: string; hint: string } 
       return { title: 'Your network policy blocks this request', hint: 'Open it in the browser instead' }
     case 'process-unavailable':
       return { title: 'Command-line tools are unavailable here', hint: 'This surface cannot run command-line tools' }
+    case 'live-unavailable':
+      return { title: 'Live view needs the Swift compiler', hint: 'Install the command-line tools with `xcode-select --install`, then press v' }
+    case 'live-crashed':
+      return { title: 'The live view stopped', hint: 'Press v to start it again' }
+    case 'live-stalled':
+      return { title: 'The live page never drew', hint: 'Press v to try again, or o to open it in the browser' }
   }
 }
 
