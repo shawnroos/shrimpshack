@@ -13,6 +13,8 @@ import type { RemoteIo } from './remote'
 import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
 import { failureText } from './sources'
+import { createLive } from './live'
+import type { Live, LiveFailureKind, LiveIo, LiveState, Viewport } from './live'
 import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
 import {
@@ -848,6 +850,82 @@ async function setMenu($: EngineInterface, isOpen: boolean) {
   await $.ui.open(isOpen ? { id: PANE, title: 'Peek', focus: true, closeOnEscape: true } : { id: PANE, title: 'Peek' })
 }
 
+const LIVE_FRAME = 'live-frame'
+// No API reports a cell's pixel size; 8 CSS px a column keeps text near its normal size at the 1 MB/s frame budget.
+const LIVE_PX_PER_COLUMN = 8
+const CELL_ASPECT = 2.1
+let live: Live | null = null
+let liveHref: string | null = null
+let liveViewport: Viewport | null = null
+let isLiveFrameDrawn = false
+let liveNotice: { href: string; kind: LiveFailureKind } | null = null
+
+function liveIoOf($: EngineInterface): LiveIo {
+  return {
+    root: $.plugin.root,
+    home: () => $.env.get('HOME'),
+    read: path => $.fs.read(path),
+    exists: path => $.fs.exists(path),
+    run: (argv, init) => $.process.run(argv, init),
+    spawn: argv => $.process.spawn({ argv }),
+    post: async (socket, path, body) => {
+      const init = body === undefined ? {} : { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }
+      const answer = await $.http.fetch(`http://peek-web/${path}`, { method: 'POST', socketPath: socket, ...init })
+      return answer.ok
+    },
+    after: (ms, fn) => $.clock.after(ms, fn),
+    removeDir: async dir => {
+      // Only the helper's own mkdtemp directory: a malformed `ready` must never aim rm at anything else.
+      if (/\/peek-web\.[A-Za-z0-9]{6}$/.test(dir)) await $.process.run(['rm', '-rf', dir])
+    },
+  }
+}
+
+function onLiveChange($: EngineInterface, state: LiveState, event?: { t: string }) {
+  if (state.failure && liveHref) {
+    liveNotice = { href: liveHref, kind: state.failure.kind }
+    liveHref = null
+    isLiveFrameDrawn = false
+  }
+  if (event?.t === 'frame' && isLiveFrameDrawn && liveHref && state.frame) {
+    const { path, id } = state.frame
+    void $.ui.blit({ requestId: PANE, key: LIVE_FRAME, source: { file: path, format: 'png', generation: id } }).catch(() => undefined)
+    return
+  }
+  if (event?.t === 'cookies' || event?.t === 'focus') return
+  $.ui.invalidate('ui.render')
+}
+
+function liveOf($: EngineInterface): Live {
+  live ??= createLive(liveIoOf($), (state, event) => onLiveChange($, state, event))
+  return live
+}
+
+function liveBox(columns: number, rows: number): Viewport {
+  const width = Math.round(Math.max(320, Math.min(900, columns * LIVE_PX_PER_COLUMN)))
+  return { width, height: Math.round((width * rows * CELL_ASPECT) / columns) }
+}
+
+async function toggleLive($: EngineInterface, current: View, viewport: Viewport) {
+  if (liveHref === current.href) {
+    await leaveLive()
+    return
+  }
+  liveNotice = null
+  liveHref = current.href
+  liveViewport = viewport
+  isLiveFrameDrawn = false
+  const url = current.remote?.record?.address ?? current.location
+  if (!(await liveOf($).start(url, viewport))) liveHref = null
+  $.ui.invalidate('ui.render')
+}
+
+async function leaveLive() {
+  liveHref = null
+  isLiveFrameDrawn = false
+  await live?.leave().catch(() => undefined)
+}
+
 // Throwaway U1 spike (removed at the end of U2): checks which frame sources draw and whether a Client over an Image gets clicks.
 const SPIKE = 'peek-spike'
 const SPIKE_DIR = '/tmp/claude-peek'
@@ -1021,6 +1099,7 @@ export const register: Register = on => {
       await setMenu($, false).catch(() => undefined)
       return { value: undefined }
     }
+    await leaveLive()
     return next(e)
   })
 
@@ -1301,6 +1380,7 @@ export const register: Register = on => {
     const pageWidth = isNarrow ? columns : textWidth + 4
     const rows = Math.max(4, e.props.scroll.bodyRows - 4)
     const turn = (to: number) => void update($, page, () => Math.max(0, to))
+    if (liveHref && (chosen !== 'view' || current?.href !== liveHref)) void leaveLive()
 
     const chip = (label: string, isOn: boolean) => (
       <Text color={isOn ? C.appBg : C.overlay0} backgroundColor={isOn ? C.accent : C.panelBg} bold={isOn}>
@@ -2452,12 +2532,56 @@ export const register: Register = on => {
         />
       )
     }
+    const liveState = live?.state()
+    const canLive = e.surface === 'terminal' && Boolean(Image) && current.remote !== undefined && parseRef(current.href)?.kind === 'web'
+    const liveRows = Math.max(4, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 2)
+    const viewport = liveBox(textWidth, liveRows)
+    const isLiveHere = canLive && liveHref === current.href && liveState !== undefined && liveState.phase !== 'off'
+    const liveFrame = isLiveHere ? liveState.frame : undefined
+    if (liveFrame && Image) {
+      isLiveFrameDrawn = true
+      if (liveViewport && (liveViewport.width !== viewport.width || liveViewport.height !== viewport.height)) {
+        liveViewport = viewport
+        void live?.command('resize', viewport)
+      }
+      body = (
+        <Image
+          key={LIVE_FRAME}
+          source={{ file: liveFrame.path, format: 'png', generation: liveFrame.id }}
+          columns={textWidth}
+          rows={liveRows}
+          alt={`${current.title} (the live view cannot draw here: press v for the reader page)`}
+        />
+      )
+      position = ''
+    }
+    const liveHost = (() => {
+      try {
+        return new URL(liveState?.url ?? current.location).host
+      } catch {
+        return ''
+      }
+    })()
+    const liveStatus = !isLiveHere
+      ? ''
+      : !liveFrame
+        ? liveState.phase === 'building'
+          ? 'building live view (first time, about a minute)'
+          : 'starting live view'
+        : liveState.load === 'failed'
+          ? `failed · ${liveHost} · u reloads`
+          : liveState.load === 'loading'
+            ? `loading · ${liveHost}`
+            : `live · ${liveHost}`
+    const notice = liveNotice?.href === current.href ? failureText(liveNotice.kind) : null
     const goNext = jumps.next
     const goPrev = jumps.prev
     const isStarred = (await read($, stars)).some(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(current.href))
     const remote = current.remote
     const source = remote?.record ? sourceLine(remote, now) : ''
-    const info = [isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
+    const info = liveFrame
+      ? [isStarred ? '\u{f51a} starred' : '', liveStatus].filter(Boolean).join(' · ')
+      : [liveStatus, isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
     const remoteCrumbs = remote
       ? [
           ...(remote.record?.trail ?? []).map((label, index, all) => ({
@@ -2466,7 +2590,7 @@ export const register: Register = on => {
             bg: C.surface1 as string,
             canShrink: true,
           })),
-          { label: `${iconFor(current.kind)} ${current.title}`, fg: C.appBg, bg: C.accent, bold: true },
+          { label: `${iconFor(current.kind)} ${liveFrame && liveState?.title ? liveState.title : current.title}`, fg: C.appBg, bg: C.accent, bold: true },
         ]
       : null
 
@@ -2486,11 +2610,20 @@ export const register: Register = on => {
             ]),
       <Box flexDirection="column" width={textWidth}>
           {current.error && <Text color={C.red}>{current.error}</Text>}
+          {notice && (
+            <Box key="live-notice" flexDirection="column" marginBottom={1}>
+              <Text color={C.red} bold>{notice.title}</Text>
+              <Text color={C.subtext0}>{notice.hint}</Text>
+            </Box>
+          )}
           {body as never}
       </Box>,
       info,
       [
           ...modeKeys,
+          ...(canLive
+            ? [{ key: 'live', label: liveHref === current.href ? 'Reader' : 'Live', hotkey: 'v', onPress: () => void toggleLive($, current, viewport) }]
+            : []),
           { key: 'next', label: 'Down', hotkey: 'j', onPress: goNext },
           { key: 'prev', label: 'Up', hotkey: 'k', onPress: goPrev },
           { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: () => void setStar($, current.href) },
