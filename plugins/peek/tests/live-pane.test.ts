@@ -7,7 +7,9 @@ const HTML = '<html><head><title>News Test</title></head><body><p>Readable story
 
 type Helper = { say: (event: unknown) => void; end: () => void }
 
-function liveWorld(on: On) {
+function liveWorld(on: On, options: { hasSwiftc?: boolean } = {}) {
+  const ran: string[][] = []
+  const stored: Record<string, unknown> = {}
   const posted: { path: string; body?: unknown }[] = []
   const spawned: string[][] = []
   const blits: unknown[] = []
@@ -19,6 +21,10 @@ function liveWorld(on: On) {
   on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   on('ui.toast', () => ({ value: undefined }))
+  on('store.set', (_$, e, next) => {
+    stored[e.key] = e.value
+    return next(e)
+  })
   on('ui.blit', (_$, e) => {
     blits.push(e)
     return { value: {} }
@@ -30,12 +36,16 @@ function liveWorld(on: On) {
   on('fs.stat', (_$, e) => {
     throw new Error(`ENOENT ${e.path}`)
   })
-  on('fs.exists', (_$, e) => ({ value: e.path.startsWith('/home/.cache/claude-peek/bin/') }))
+  on('fs.exists', (_$, e) => ({ value: options.hasSwiftc !== false && e.path.startsWith('/home/.cache/claude-peek/bin/') }))
   on('fs.read', (_$, e) => {
     if (e.path.endsWith('/helper/peek-web.swift')) return { value: 'print("helper")' }
     throw new Error(`ENOENT ${e.path}`)
   })
-  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', (_$, e) => {
+    ran.push([...e.argv])
+    const isBroken = options.hasSwiftc === false && e.argv[0] === 'sh'
+    return { value: { exitCode: isBroken ? 1 : 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('http.fetch', (_$, e) => {
     if (e.init?.socketPath) {
       const body = e.init.body ? JSON.parse(e.init.body) : undefined
@@ -74,6 +84,8 @@ function liveWorld(on: On) {
     for (let i = 0; i < 400; i += 1) await Promise.resolve()
   }
   return {
+    ran,
+    stored,
     posted,
     spawned,
     blits,
@@ -318,5 +330,78 @@ test('j on the pane while live scrolls the page at its centre', async ($, on) =>
   const last = inputs(w).at(-1) as { type: string; x: number; y: number; dy: number }
   const width = Number(w.spawned[0]?.[w.spawned[0].indexOf('--width') + 1])
   expect([last.type, last.x, last.dy > 0]).toEqual(['scroll', Math.floor(width / 2), true])
+  await ui.unmount()
+})
+
+test('covers AE2: after the page navigates, o opens the story and b goes back in the page', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  w.helper().say({ t: 'nav', url: 'https://news.test/story', title: 'Story', canBack: true, canForward: false })
+  await w.settle()
+  await ui.press({ key: 'open' })
+  expect(w.ran.at(-1)).toEqual(['open', 'https://news.test/story'])
+  await ui.press({ key: 'back' })
+  await w.settle()
+  expect(w.posted.at(-1)).toEqual({ path: 'back' })
+  await ui.unmount()
+})
+
+test('with no page history, b leaves live view and returns to the previous peek page', async ($, on) => {
+  const w = liveWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.unmount()
+  await $.ui.press({ requestId: 'peek', key: 'x' } as never).catch(() => undefined)
+  const live = await goLive($, w)
+  await live.press({ key: 'back' })
+  await w.settle()
+  expect(w.posted.some(one => one.path === 'back')).toBe(false)
+  expect(w.posted.at(-1)).toEqual({ path: 'pause' })
+  await live.unmount()
+})
+
+test('f stars the live page, not the page live view opened on', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  w.helper().say({ t: 'nav', url: 'https://news.test/story', title: 'Story', canBack: true, canForward: false })
+  await w.settle()
+  await ui.press({ key: 'star' })
+  await w.settle()
+  const starred = JSON.stringify(w.stored.stars)
+  expect(starred.includes('https://news.test/story')).toBe(true)
+  expect(starred.includes('"https://news.test/"')).toBe(false)
+  await ui.unmount()
+})
+
+test('covers AE4: without swiftc, v keeps the reader page with the install hint, and v tries again', async ($, on) => {
+  const w = liveWorld(on, { hasSwiftc: false })
+  await $.command.run({ command: 'peek', args: PAGE } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'live' })
+  await w.settle()
+  expect(await ui.find({ text: /Live view needs the Swift compiler/ })).toBeDefined()
+  expect(await ui.find({ text: /xcode-select --install/ })).toBeDefined()
+  expect(await ui.find({ text: /Readable story text/ })).toBeDefined()
+  const probes = w.ran.filter(argv => argv[0] === 'sh').length
+  await ui.press({ key: 'live' })
+  await w.settle()
+  expect(w.ran.filter(argv => argv[0] === 'sh').length).toBe(probes + 1)
+  await ui.unmount()
+})
+
+test('the menu lists Live view on a web page, and Back while the live page has history', async ($, on) => {
+  const w = liveWorld(on)
+  await $.command.run({ command: 'peek', args: PAGE } as never)
+  await $.command.run({ command: 'peek-menu' } as never)
+  const reader = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await reader.find({ text: /Live view/ })).toBeDefined()
+  expect(await reader.find({ key: 'menu-live-back' })).toBeUndefined()
+  await reader.unmount()
+  await $.command.run({ command: 'peek-menu' } as never)
+  const ui = await goLive($, w)
+  w.helper().say({ t: 'nav', url: 'https://news.test/story', title: 'Story', canBack: true, canForward: false })
+  await w.settle()
+  await $.command.run({ command: 'peek-menu' } as never)
+  expect(await ui.find({ key: 'menu-live-back' })).toBeDefined()
   await ui.unmount()
 })
