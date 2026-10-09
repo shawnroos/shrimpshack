@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Loaded, Mention, Mode, View } from '../types'
+import type { Loaded, Mention, Mode, RemoteRecord, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
 import { C as BASE, MUTED, ICON, META_ICON, colorFor, iconFor, mute, ruleParts } from './theme'
 import { capturedLinearContext, record } from './capture'
@@ -503,8 +503,15 @@ async function viewOf($: EngineInterface, ref: Ref, entry: CacheEntry): Promise<
       staleSince: entry.staleSince,
       favicon: await remotePicture($, record.favicon),
       preview: await remotePicture($, record.og?.image),
+      pictures: await mediaPictures($, record.media),
     },
   }
+}
+
+async function mediaPictures($: EngineInterface, media: RemoteRecord['media']) {
+  const found = await Promise.all(Object.entries(media ?? {}).map(async ([key, one]) => [key, await remotePicture($, one.file)] as const))
+  const pictures = Object.fromEntries(found.filter((one): one is readonly [string, NonNullable<(typeof one)[1]>] => Boolean(one[1])))
+  return Object.keys(pictures).length ? pictures : undefined
 }
 
 function remoteRef(href: string, context: RefContext = {}): Ref | null {
@@ -2089,7 +2096,53 @@ export const register: Register = on => {
       const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
       const refs = refContext(ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
       const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
+      const mediaBlock = (index: number, alt: string, url: string, heading: string) => {
+        const key = `media-${index}`
+        const one = record?.media?.[url]
+        const picture = remote.pictures?.[url]
+        const png = picture && pixels.get(picture.file)
+        const host = (() => {
+          try {
+            return new URL(url).host
+          } catch {
+            return url
+          }
+        })()
+        drawnParts.push(
+          embed(key, one?.play ? '\u{f03d}' : ICON.image, one?.play ? 'VIDEO' : 'IMAGE', alt || host, C.teal, (
+            <Box flexDirection="column">
+              {png && Image && picture ? (
+                <Image key={`${key}-image`} source={{ png }} {...imageBox(picture.width, picture.height, textWidth - 4, IMAGE_ROWS - 2)} alt={alt || 'image'} />
+              ) : (
+                !one?.play && <Markdown dimColor={isMenuOpen} key={`${key}-link`} text={`[open image](${url})`} onLinkPress={link => void pressLink($, link.href)} />
+              )}
+              {one?.play && (
+                <Button key={`media-play-${index}`} label="\u{f04b} Play video" plain onPress={() => void (isWebUrl(url) && $.process.run(['open', url]).catch(() => undefined))} />
+              )}
+            </Box>
+          )),
+        )
+        note(png ? IMAGE_ROWS + 1 : 4, heading)
+      }
       const markdownBlocks = (key: string, text: string, heading: string, indent = 0) => {
+        if (key === 'body' && record?.media) {
+          let pending = ''
+          let segment = 0
+          let picture = 0
+          for (const line of text.split('\n')) {
+            const found = /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/.exec(line.trim())
+            if (found && record.media[found[2] ?? '']) {
+              if (pending.trim()) markdownChunks(`body-${segment++}`, pending, heading, indent)
+              pending = ''
+              mediaBlock(picture++, found[1] ?? '', found[2] ?? '', heading)
+            } else pending += `${line}\n`
+          }
+          if (pending.trim()) markdownChunks(`body-${segment}`, pending, heading, indent)
+          return
+        }
+        markdownChunks(key, text, heading, indent)
+      }
+      const markdownChunks = (key: string, text: string, heading: string, indent = 0) => {
         const memoKey = `${memoBase}|${key}`
         let chunks = blockMemo.get(memoKey)
         if (!chunks) {

@@ -490,3 +490,54 @@ describe('reader body through defuddle', () => {
     }
   })
 })
+
+describe('media in the reader body', () => {
+  const page = 'https://site.test/post'
+  const html =
+    '<html><body><article><p>Text.</p><video src="/media/clip.mp4" poster="/media/poster.jpg"></video></article></body></html>'
+  const body = [
+    'Intro.',
+    '',
+    '![A photo](/img/photo.jpg)',
+    '',
+    '<video src="/media/clip.mp4" controls=""></video>',
+    '',
+    '![](https://www.youtube.com/watch?v=dQw4w9WgXcQ)',
+    '',
+    '![](https://site.test/img/missing.png)',
+  ].join('\n')
+
+  test('images and video thumbnails download; videos become playable picture lines', async () => {
+    const { io, downloads } = world({
+      pages: { [page]: { html } },
+      defuddle: { isInstalled: true, output: JSON.stringify({ content: body }) },
+      images: {
+        'https://site.test/img/photo.jpg': 200,
+        'https://site.test/media/poster.jpg': 200,
+        'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg': 200,
+      },
+    })
+    const loaded = await loadWeb(io, web(page), NOW)
+    if (!loaded.ok) throw new Error(loaded.failure)
+    const { record } = loaded
+    expect(record.body?.includes('![video](https://site.test/media/clip.mp4)')).toBe(true)
+    expect(record.body?.includes('<video')).toBe(false)
+    const media = record.media ?? {}
+    expect(media['https://site.test/img/photo.jpg']?.file?.startsWith('/tmp/claude-peek/web-')).toBe(true)
+    expect(media['https://site.test/img/photo.jpg']?.play).toBeUndefined()
+    expect(media['https://site.test/media/clip.mp4']?.play).toBe('https://site.test/media/clip.mp4')
+    expect(media['https://site.test/media/clip.mp4']?.file?.startsWith('/tmp/claude-peek/web-')).toBe(true)
+    expect(media['https://www.youtube.com/watch?v=dQw4w9WgXcQ']?.play).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+    expect(media['https://www.youtube.com/watch?v=dQw4w9WgXcQ']?.file?.startsWith('/tmp/claude-peek/web-')).toBe(true)
+    expect(media['https://site.test/img/missing.png']?.file).toBeUndefined()
+    expect(downloads()).toContain('https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg')
+  })
+
+  test('at most eight pictures are downloaded for one page', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => `![](https://site.test/i${i}.png)`).join('\n\n')
+    const images = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`https://site.test/i${i}.png`, 200 as const]))
+    const { io, downloads } = world({ pages: { [page]: { html } }, defuddle: { isInstalled: true, output: JSON.stringify({ content: many }) }, images })
+    await loadWeb(io, web(page), NOW)
+    expect(downloads().filter(url => url?.startsWith('https://site.test/i')).length).toBe(8)
+  })
+})

@@ -107,7 +107,7 @@ you came from, `v` switches a web page to live view, `x` closes.
 
 macOS: image conversion uses `sips` and `rsvg-convert`, and Open uses `open`.
 Live view needs the Xcode command-line tools (`swiftc`).
-Web reader pages are cleaned with [Defuddle](https://github.com/kepano/defuddle), which strips menus, footers and other page chrome. Peek installs a pinned copy with npm on first use into `~/.cache/claude-peek/` (needs Node). Without it, peek falls back to its own simpler cleanup.
+Web reader pages are cleaned with [Defuddle](https://github.com/kepano/defuddle), which strips menus, footers and other page chrome. Up to 8 of the page's images show inline; a video shows its thumbnail and a Play button that opens it in your browser. Peek installs a pinned copy with npm on first use into `~/.cache/claude-peek/` (needs Node). Without it, peek falls back to its own simpler cleanup.
 
 ## Development
 
