@@ -245,7 +245,7 @@ describe('Linear captures', () => {
 
   test('a captured MCP issue with null assignee and no labels normalises', () => {
     const address = 'https://linear.app/acme/issue/WEB-2757'
-    const loaded = fromCapture(captured(address, 'linear-issue', MCP_ISSUE, 'get_issue'), ref(address), NOW)
+    const loaded = fromCapture(captured(address, 'linear-issue', MCP_ISSUE, 'get_issue'), ref(address))
     const rec = record(loaded)
     expect(loaded?.ok && loaded.tier).toBe('session')
     expect(loaded?.ok && loaded.fetchedAt).toBe(NOW - 5000)
@@ -264,7 +264,7 @@ describe('Linear captures', () => {
     const address = 'https://linear.app/acme/issue/WEB-2757'
     const comments = Array.from({ length: 60 }, (_, i) => ({ id: `c${i}`, body: `n${i}`, createdAt: new Date(NOW + i * 1000).toISOString(), user: 'A' }))
     const result = JSON.stringify({ ...JSON.parse(MCP_ISSUE), comments })
-    const rec = record(fromCapture(captured(address, 'linear-issue', result, 'get_issue'), ref(address), NOW))
+    const rec = record(fromCapture(captured(address, 'linear-issue', result, 'get_issue'), ref(address)))
     expect(rec.comments?.total).toBe(60)
     expect(rec.comments?.shown.length).toBe(50)
     expect(rec.comments?.shown[0]?.body).toBe('n10')
@@ -273,7 +273,7 @@ describe('Linear captures', () => {
 
   test('a captured MCP project normalises', () => {
     const address = 'https://linear.app/acme/project/brand-refresh-1a2b3c4d5e6f'
-    const rec = record(fromCapture(captured(address, 'linear-project', MCP_PROJECT, 'get_project'), ref(address), NOW))
+    const rec = record(fromCapture(captured(address, 'linear-project', MCP_PROJECT, 'get_project'), ref(address)))
     expect(rec.title).toBe('Brand refresh')
     expect(rec.trail).toEqual(['Web'])
     expect(rec.isFrozen).toBe(true)
@@ -283,7 +283,7 @@ describe('Linear captures', () => {
 
   test('a result with no title or no JSON normalises to null', () => {
     const address = 'https://linear.app/acme/issue/WEB-1'
-    expect(fromCapture(captured(address, 'linear-issue', '{"id":"WEB-1"}', 'get_issue'), ref(address), NOW)).toBeNull()
-    expect(fromCapture(captured(address, 'linear-issue', 'not json', 'get_issue'), ref(address), NOW)).toBeNull()
+    expect(fromCapture(captured(address, 'linear-issue', '{"id":"WEB-1"}', 'get_issue'), ref(address))).toBeNull()
+    expect(fromCapture(captured(address, 'linear-issue', 'not json', 'get_issue'), ref(address))).toBeNull()
   })
 })

@@ -101,7 +101,7 @@ function settle(previous: CacheEntry | undefined, address: string, result: Loade
 
 // A refresh-key press bypasses timers and back-off, but a load already in
 // flight is still shared, so a double press sends one request.
-export function refreshItem(address: string, load: Load, now: number, _opts: { force?: boolean } = {}): Promise<CacheEntry> {
+export function refreshItem(address: string, load: Load, now: number): Promise<CacheEntry> {
   const key = itemKey(address)
   const running = inFlight.get(key)
   if (running) return running
@@ -136,9 +136,9 @@ function eligible(address: string, now: number, intervalMs: number): CacheEntry 
   return now - entry.attemptedAt >= intervalMs ? entry : undefined
 }
 
-function plan(input: ScheduleInput): { onScreen?: string; background: string[] } {
+function plan(input: ScheduleInput): { due: string[]; background: string[] } {
   const { now } = input
-  if (now - input.lastActivity >= IDLE_MS) return { background: [] }
+  if (now - input.lastActivity >= IDLE_MS) return { due: [], background: [] }
   const onScreen = input.onScreen && eligible(input.onScreen, now, ON_SCREEN_MS) ? input.onScreen : undefined
   const budget = BACKGROUND_CAP - backgroundLoads.filter(at => at > now - BACKGROUND_MS).length
   const seen = new Set(input.onScreen ? [itemKey(input.onScreen)] : [])
@@ -151,12 +151,12 @@ function plan(input: ScheduleInput): { onScreen?: string; background: string[] }
     if (entry) candidates.push({ address, attemptedAt: entry.attemptedAt, order: candidates.length })
   }
   candidates.sort((a, b) => a.attemptedAt - b.attemptedAt || a.order - b.order)
-  return { onScreen, background: candidates.slice(0, Math.max(0, budget)).map(c => c.address) }
+  const background = candidates.slice(0, Math.max(0, budget)).map(c => c.address)
+  return { due: onScreen ? [onScreen, ...background] : background, background }
 }
 
 export function dueAddresses(input: ScheduleInput): string[] {
-  const { onScreen, background } = plan(input)
-  return onScreen ? [onScreen, ...background] : background
+  return plan(input).due
 }
 
 function signature(entry: CacheEntry | undefined): string {
@@ -166,9 +166,8 @@ function signature(entry: CacheEntry | undefined): string {
 export async function tick(input: ScheduleInput & { load: Load }): Promise<string[]> {
   const { now } = input
   backgroundLoads = backgroundLoads.filter(at => at > now - BACKGROUND_MS)
-  const { onScreen, background } = plan(input)
-  for (const _ of background) backgroundLoads.push(now)
-  const due = onScreen ? [onScreen, ...background] : background
+  const { due, background } = plan(input)
+  backgroundLoads.push(...background.map(() => now))
   const changed = await Promise.all(
     due.map(async address => {
       const before = signature(cached(address))

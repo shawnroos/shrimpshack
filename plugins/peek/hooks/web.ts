@@ -13,7 +13,7 @@ const PROTO = ['--proto', '=http,https', '--proto-redir', '=http,https']
 const MAX_IMAGE_HOPS = 5
 const IMAGE_EXT = /\.(png|ico|jpe?g|gif|webp|svg|bmp)$/i
 
-export type Head = { title?: string; description?: string; siteName?: string; image?: string; icons: string[] }
+type Head = { title?: string; description?: string; siteName?: string; image?: string; icons: string[] }
 
 const favicons = new Map<string, Promise<string | undefined>>()
 
@@ -47,13 +47,17 @@ function attributes(tag: string): Record<string, string> {
   return found
 }
 
+function safeParse(raw: string, base?: string): URL | null {
+  try {
+    return new URL(raw, base)
+  } catch {
+    return null
+  }
+}
+
 function resolve(raw: string | undefined, base: string): string | undefined {
   if (!raw?.trim()) return undefined
-  try {
-    return new URL(decode(raw.trim()), base).href
-  } catch {
-    return undefined
-  }
+  return safeParse(decode(raw.trim()), base)?.href
 }
 
 export function parseHead(html: string, pageUrl: string): Head {
@@ -138,13 +142,8 @@ export function isPrivateHost(hostname: string): boolean {
 }
 
 function fetchable(raw: string | undefined): URL | null {
-  if (!raw) return null
-  let url: URL
-  try {
-    url = new URL(raw)
-  } catch {
-    return null
-  }
+  const url = raw ? safeParse(raw) : null
+  if (!url) return null
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
   return isPrivateHost(url.hostname) ? null : url
 }
@@ -207,11 +206,7 @@ async function curlPage(io: SourceIo, url: string): Promise<{ ok: true; text: st
 }
 
 function hostOf(url: string): string | undefined {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '') || undefined
-  } catch {
-    return undefined
-  }
+  return safeParse(url)?.hostname.replace(/^www\./, '') || undefined
 }
 
 export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Loaded> {
@@ -239,15 +234,7 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
   return { ok: true, record, tier: isCli ? 'cli' : 'api', fetchedAt: now }
 }
 
-function safeParse(raw: string, base?: string): URL | null {
-  try {
-    return new URL(raw, base)
-  } catch {
-    return null
-  }
-}
-
-export function fromCapture(captured: Captured, ref: Ref, _now: number): Loaded | null {
+export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
   const address = ref.address || captured.address
   const host = hostOf(address)
   if (!host) return null

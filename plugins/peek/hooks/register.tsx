@@ -1,20 +1,20 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Mention, Mode, View } from '../types'
+import type { Loaded, Mention, Mode, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
 import { C as BASE, MUTED, ICON, colorFor, iconFor, mute, ruleParts } from './theme'
 import { capturedLinearContext, record } from './capture'
 import type { CaptureIo } from './capture'
-import { itemKey, parseRef } from './refs'
+import { familyOf, itemKey, parseRef } from './refs'
 import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
 import type { RemoteIo } from './remote'
 import { bootstrapLinear } from './linear'
+import type { LinearBootstrap } from './linear'
 import { failureText } from './sources'
-import { cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
+import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
-import type { Loaded } from '../types'
 import {
   describeAge,
   describeSize,
@@ -376,17 +376,24 @@ function remoteIoOf($: EngineInterface): RemoteIo {
 }
 
 async function remotePicture($: EngineInterface, file: string | undefined) {
-  if (!file) return undefined
-  return toPng($, file, 0).catch(() => undefined)
+  if (!file || failedPictures.has(file)) return undefined
+  return toPng($, file, 0).catch(() => {
+    failedPictures.add(file)
+    return undefined
+  })
 }
 
+const LINEAR_BOOT_TTL_MS = 24 * 3600_000
+const MAX_BLOCK_MEMO = 400
 let lastActivity = 0
 let isTicking = false
-let linearBoot: { workspace: string; teamKeys: string[]; fetchedAt: number } | null = null
+let linearBoot: Omit<LinearBootstrap, 'ok'> | null = null
+let titles: Record<string, TitleEntry> = {}
+let topBlockKey = 'block-0'
 const repoContexts = new Map<string, string | null>()
 const backStack: { view: View; key: string }[] = []
-let topBlockKey = 'block-0'
-const LINEAR_BOOT_TTL_MS = 24 * 3600_000
+const failedPictures = new Set<string>()
+const blockMemo = new Map<string, { chunk: string; rows: number }[]>()
 
 async function repoContext($: EngineInterface, cwd: string): Promise<string | undefined> {
   if (!repoContexts.has(cwd)) {
@@ -447,7 +454,6 @@ async function goBack($: EngineInterface) {
   await update($, mode, () => 'view')
   void $.ui.scroll({ in: PANE, to: { key: last.key }, block: 'start' }).catch(() => undefined)
 }
-let titles: Record<string, TitleEntry> = {}
 
 function remoteLoader($: EngineInterface, canReplay: boolean) {
   return async (address: string): Promise<Loaded> => {
@@ -459,7 +465,10 @@ function remoteLoader($: EngineInterface, canReplay: boolean) {
 
 async function noteTitle($: EngineInterface, entry: CacheEntry) {
   if (!entry.record) return
-  titles = withTitle(titles, entry.record.address, titleOf(entry.record), await $.clock.now())
+  const next = titleOf(entry.record)
+  const { updatedAt: _, ...known } = titles[entry.record.address] ?? { updatedAt: 0 }
+  if (JSON.stringify(known) === JSON.stringify(next)) return
+  titles = withTitle(titles, entry.record.address, next, await $.clock.now())
   await $.store.set('titles', titles).catch(() => undefined)
 }
 
@@ -468,6 +477,8 @@ async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Prom
     isTicking = true
     $.clock.every(15_000, () => void tickRemote($).catch(() => undefined))
   }
+  const known = cached(ref.address)
+  if (known?.state === 'frozen') return viewOf($, ref, known)
   const entry = await refreshItem(ref.address, remoteLoader($, canReplay), await $.clock.now())
   await noteTitle($, entry)
   return viewOf($, ref, entry)
@@ -587,7 +598,8 @@ async function toHref($: EngineInterface, raw: string): Promise<string | null> {
   const cleaned = raw.trim().replace(/^[`'"<]+|[`'">.]+$/g, '')
   if (/^https?:\/\//.test(cleaned)) return cleaned
   if (cleaned.startsWith('file:')) return cleaned
-  const ref = parseRef(cleaned, await sessionRefContext($))
+  const needsContext = /^(?:#\d+|[A-Z][A-Z0-9]{0,9}-\d+)$/.test(cleaned)
+  const ref = parseRef(cleaned, needsContext ? await sessionRefContext($) : {})
   if (ref) return ref.address
   const match = /^(.+?)(?::(\d+))?$/.exec(cleaned)
   const abs = resolvePath(match?.[1] ?? cleaned, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
@@ -753,8 +765,9 @@ async function refresh($: EngineInterface, href: string) {
 
 const TIER_NAMES: Record<string, string> = { 'gh-cli': 'via gh', 'web-cli': 'via curl', 'web-api': 'via web fetch', 'linear-api': 'via Linear API' }
 
-function sourceLine(kind: string, tier: string | undefined, fetchedAt: number | undefined, staleSince: number | undefined, now: number): string {
-  const family = kind.startsWith('gh-') ? 'gh' : kind.startsWith('linear-') ? 'linear' : 'web'
+function sourceLine(remote: NonNullable<View['remote']>, now: number): string {
+  const { tier, fetchedAt, staleSince } = remote
+  const family = familyOf(remote.record?.kind ?? 'web')
   const name = tier === 'session' ? 'from this session' : (TIER_NAMES[`${family}-${tier}`] ?? `via ${tier ?? '?'}`)
   const seconds = fetchedAt === undefined ? 0 : Math.max(0, Math.round((now - fetchedAt) / 1000))
   const age = fetchedAt === undefined ? '' : seconds < 60 ? `${seconds}s ago` : describeAge(fetchedAt, now)
@@ -772,6 +785,7 @@ async function redrawIfCurrent($: EngineInterface, address: string) {
 }
 
 async function tickRemote($: EngineInterface) {
+  if ((await $.clock.now()) - lastActivity >= IDLE_MS) return
   const current = await read($, view)
   const onScreen = current?.remote && (await read($, mode)) === 'view' ? current.href : undefined
   const hrefs = [...(await read($, mentions)).map(one => one.href), ...(await read($, stars))]
@@ -1795,6 +1809,18 @@ export const register: Register = on => {
       ? folderPath.slice(current.root.length + 1)
       : shortPath(folderPath, cwd, home)
 
+    const newBlocks = () => {
+      const drawnParts: unknown[] = []
+      const partRows: number[] = []
+      const partHeadings: string[] = []
+      const note = (rows: number, heading = '') => {
+        while (partRows.length < drawnParts.length) {
+          partRows.push(rows)
+          partHeadings.push(heading)
+        }
+      }
+      return { drawnParts, partRows, partHeadings, note }
+    }
     const settleBlocks = (drawnParts: unknown[], partRows: number[], partHeadings: string[]) => {
       for (let i = partRows.length; i < drawnParts.length; i++) {
         partRows.push(IMAGE_ROWS)
@@ -1837,15 +1863,7 @@ export const register: Register = on => {
     if (current.remote) {
       const remote = current.remote
       const record = remote.record
-      const drawnParts: unknown[] = []
-      const partRows: number[] = []
-      const partHeadings: string[] = []
-      const note = (rows: number, heading = '') => {
-        while (partRows.length < drawnParts.length) {
-          partRows.push(rows)
-          partHeadings.push(heading)
-        }
-      }
+      const { drawnParts, partRows, partHeadings, note } = newBlocks()
       const sectionRule = (key: string, label: string, right = '') => {
         const head = `${label.toUpperCase()} `
         const tail = right ? ` ${right}` : ''
@@ -1860,15 +1878,23 @@ export const register: Register = on => {
       }
       const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
       const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
-      const refs: RefContext = { ...capturedLinearContext(), repo: ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined }
+      const refs = refContext(ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
+      const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
       const markdownBlocks = (key: string, text: string, heading: string, indent = 0) => {
-        for (const [i, chunk] of chunkMarkdown(linkify(text, () => null, refs)).entries()) {
+        const memoKey = `${memoBase}|${key}`
+        let chunks = blockMemo.get(memoKey)
+        if (!chunks) {
+          if (blockMemo.size > MAX_BLOCK_MEMO) blockMemo.clear()
+          chunks = chunkMarkdown(linkify(text, () => null, refs)).map(chunk => ({ chunk, rows: estimateRows(chunk, textWidth - indent) }))
+          blockMemo.set(memoKey, chunks)
+        }
+        for (const [i, { chunk, rows }] of chunks.entries()) {
           drawnParts.push(
             <Box key={`${key}-${i}`} marginLeft={indent}>
               <Markdown dimColor={isMenuOpen} key={`${key}-md-${i}`} text={chunk} onLinkPress={link => void pressLink($, link.href)} />
             </Box>,
           )
-          note(estimateRows(chunk, textWidth - indent), heading)
+          note(rows, heading)
         }
       }
       if (!record) {
@@ -2010,15 +2036,7 @@ export const register: Register = on => {
       ;({ body, jumps, position } = settleBlocks(drawnParts, partRows, partHeadings))
     } else if (current.markdown !== undefined) {
       const source = fullText.get(current.href) ?? current.markdown
-      const drawnParts: unknown[] = []
-      const partRows: number[] = []
-      const partHeadings: string[] = []
-      const note = (rows: number, heading = '') => {
-        while (partRows.length < drawnParts.length) {
-          partRows.push(rows)
-          partHeadings.push(heading)
-        }
-      }
+      const { drawnParts, partRows, partHeadings, note } = newBlocks()
       let index = 0
       for (const part of segmentsOf(source)) {
         index += 1
@@ -2295,7 +2313,7 @@ export const register: Register = on => {
     const goPrev = jumps.prev
     const isStarred = (await read($, stars)).includes(current.href)
     const remote = current.remote
-    const source = remote?.record ? sourceLine(remote.record.kind, remote.tier, remote.fetchedAt, remote.staleSince, now) : ''
+    const source = remote?.record ? sourceLine(remote, now) : ''
     const info = [isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
     const remoteCrumbs = remote
       ? [

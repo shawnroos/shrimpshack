@@ -81,6 +81,10 @@ function stateOf(item: Obj): { name?: string; type?: string } {
   }
 }
 
+function isFrozenState(state: { type?: string }): boolean {
+  return state.type ? FROZEN_TYPES.has(state.type.toLowerCase()) : false
+}
+
 function team(item: Obj): string | undefined {
   const found = obj(item.team)
   return found ? str(found.name) ?? str(found.key) : str(item.team)
@@ -153,7 +157,7 @@ function issueRecord(issue: Obj, ref: Ref, commentTotal?: number): RemoteRecord 
     title: identifier ? `${identifier} ${title}` : title,
     trail,
     status: state.name,
-    isFrozen: state.type ? FROZEN_TYPES.has(state.type.toLowerCase()) : false,
+    isFrozen: isFrozenState(state),
     meta,
     body: str(issue.description),
     comments: shown ? { shown, total: Math.max(commentTotal ?? 0, rawComments?.length ?? 0) } : undefined,
@@ -183,7 +187,7 @@ function projectRecord(project: Obj, ref: Ref, issues?: { nodes: unknown[]; isPa
     title,
     trail: teamName ? [teamName] : [],
     status: state.name,
-    isFrozen: state.type ? FROZEN_TYPES.has(state.type.toLowerCase()) : false,
+    isFrozen: isFrozenState(state),
     meta,
     body: str(project.content) ?? str(project.description),
     browserUrl: str(project.url) ?? ref.address,
@@ -267,7 +271,7 @@ export async function bootstrapLinear(io: SourceIo, now: number): Promise<Linear
   return { ok: true, workspace, teamKeys, fetchedAt: now }
 }
 
-export function fromCapture(captured: Captured, ref: Ref, _now: number): Loaded | null {
+export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(captured.result)

@@ -9,24 +9,24 @@ import { fromCapture as webFromCapture, loadWeb } from './web'
 
 export type RemoteIo = SourceIo & CaptureIo
 
-function liveLoader(ref: Ref): (io: SourceIo, ref: Ref, now: number) => Promise<Loaded> {
-  if (ref.kind === 'linear-issue' || ref.kind === 'linear-project') return loadLinear
-  if (ref.kind === 'web') return loadWeb
-  return loadGithub
+type Source = {
+  load: (io: SourceIo, ref: Ref, now: number) => Promise<Loaded>
+  fromCapture: (captured: Captured, ref: Ref) => Loaded | null
 }
 
-function normalise(captured: Captured, ref: Ref, now: number): Loaded | null {
-  if (ref.kind === 'linear-issue' || ref.kind === 'linear-project') return linearFromCapture(captured, ref, now)
-  if (ref.kind === 'web') return webFromCapture(captured, ref, now)
-  return githubFromCapture(captured, ref, now)
+function sourceFor(ref: Ref): Source {
+  if (ref.kind === 'linear-issue' || ref.kind === 'linear-project') return { load: loadLinear, fromCapture: linearFromCapture }
+  if (ref.kind === 'web') return { load: loadWeb, fromCapture: webFromCapture }
+  return { load: loadGithub, fromCapture: githubFromCapture }
 }
 
 // Replay repeats an MCP read with no permission prompt, so only a refresh asks
 // for it; an open uses whatever the session already fetched.
 export async function loadItem(io: RemoteIo, ref: Ref, now: number, options: { canReplay?: boolean } = {}): Promise<Loaded> {
-  const live = await liveLoader(ref)(io, ref, now)
+  const source = sourceFor(ref)
+  const live = await source.load(io, ref, now)
   if (live.ok) return live
   const replayed = options.canReplay ? await replay(io, ref.address).catch(() => null) : null
   const captured = replayed ?? lookup(ref.address)
-  return (captured && normalise(captured, ref, now)) ?? live
+  return (captured && source.fromCapture(captured, ref)) ?? live
 }

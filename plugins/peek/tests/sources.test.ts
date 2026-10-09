@@ -126,6 +126,20 @@ describe('Linear key lookup', () => {
     expect(fromKeychain.argvs[0]).toEqual(['/usr/bin/security', 'find-generic-password', '-a', 'linear-api-key', '-s', 'work-linear', '-w'])
   })
 
+  test('the key is looked up once per session, and again after Linear refuses it', async () => {
+    let status = 200
+    const { $, argvs } = keyed({ fetch: () => answer(status, status === 200 ? { data: {} } : 'Unauthorized') })
+    const lookups = () => argvs.filter(argv => argv[0] === '/usr/bin/security').length
+    await linearQuery($, ISSUE)
+    await linearQuery($, ISSUE)
+    expect(lookups()).toBe(1)
+    status = 401
+    expect(await seen(linearQuery($, ISSUE))).toEqual({ ok: false, failure: 'key-refused' })
+    status = 200
+    expect(await linearQuery($, ISSUE)).toEqual({ ok: true, data: {} })
+    expect(lookups()).toBe(2)
+  })
+
   test('no key anywhere is key-missing, and nothing is sent', async () => {
     const { $, fetches } = world({})
     expect(await linearQuery($, ISSUE)).toEqual({ ok: false, failure: 'key-missing' })
@@ -257,18 +271,13 @@ describe('probe and gh', () => {
 })
 
 describe('httpText', () => {
-  test('curl answers the body and the final URL after redirects', async () => {
-    const { $, argvs } = keyed({ curl: () => exited(0, '<p>page</p>\n__peek_curl__ 200 https://example.com/final') })
-    expect(await seen(httpText($, 'https://example.com/start'))).toEqual({ ok: true, text: '<p>page</p>', finalUrl: 'https://example.com/final' })
-    expect(argvs.at(-1)?.at(-1)).toBe('https://example.com/start')
-  })
-
   test('a 404 page is not-found-or-no-access, a dead host offline, a non-web URL query-bug', async () => {
-    const missing = keyed({ curl: () => exited(0, 'gone\n__peek_curl__ 404 https://example.com/x') })
+    const missing = keyed({ tools: ['gh'], fetch: () => answer(404, 'gone') })
     expect(await seen(httpText(missing.$, 'https://example.com/x'))).toEqual({ ok: false, failure: 'not-found-or-no-access' })
-    const dead = keyed({ curl: () => exited(6, '', 'Could not resolve host') })
+    const dead = keyed({ tools: ['gh'], fetch: () => new Error('fetch failed: getaddrinfo ENOTFOUND') })
     expect(await seen(httpText(dead.$, 'https://nowhere.invalid/'))).toEqual({ ok: false, failure: 'offline' })
     expect(await seen(httpText(dead.$, 'file:///etc/passwd'))).toEqual({ ok: false, failure: 'query-bug' })
+    expect(dead.fetches).toEqual([{ url: 'https://nowhere.invalid/', init: undefined }])
   })
 
   test('without curl a policy refusal is fetch-blocked', async () => {

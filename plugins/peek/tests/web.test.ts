@@ -302,7 +302,7 @@ describe('fromCapture', () => {
   }
 
   test('a WebFetch result shows its text with the first heading as title', () => {
-    const loaded = fromCapture(captured('Intro line\n\n## Getting started\n\nBody'), web('https://docs.test/page'), NOW)
+    const loaded = fromCapture(captured('Intro line\n\n## Getting started\n\nBody'), web('https://docs.test/page'))
     if (!loaded?.ok) throw new Error('no record')
     expect(loaded.tier).toBe('session')
     expect(loaded.fetchedAt).toBe(NOW - 5000)
@@ -314,11 +314,11 @@ describe('fromCapture', () => {
   })
 
   test('without a heading the host is the title', () => {
-    const loaded = fromCapture(captured('just text'), web('https://docs.test/page'), NOW)
+    const loaded = fromCapture(captured('just text'), web('https://docs.test/page'))
     expect(loaded?.ok && loaded.record.title).toBe('docs.test')
   })
 
   test('an unparseable address normalises to nothing', () => {
-    expect(fromCapture(captured('x', 'not a url'), web('not a url'), NOW)).toBe(null)
+    expect(fromCapture(captured('x', 'not a url'), web('not a url'))).toBe(null)
   })
 })

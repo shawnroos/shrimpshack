@@ -56,6 +56,7 @@ type GhRead = { sub: 'pr' | 'issue' | 'repo' | 'api'; verb?: string; argv: strin
 
 function ghRead(command: unknown): GhRead | null {
   if (typeof command !== 'string' || SHELL_META.test(command)) return null
+  if (!/^\s*(?:gh\s|'gh'|"gh")/.test(command)) return null
   const argv = words(command)
   if (!argv || argv[0] !== 'gh') return null
   const [, sub, verb] = argv
@@ -104,7 +105,7 @@ function textOf(answer: unknown): string | null {
 
 function remoteRefs(text: string): Ref[] {
   const seen = new Map<string, Ref>()
-  for (const [url] of text.matchAll(REMOTE_URL)) {
+  for (const url of new Set(text.match(REMOTE_URL))) {
     const ref = parseRef(url)
     if (ref && ref.kind !== 'web' && !seen.has(ref.address)) seen.set(ref.address, ref)
   }
@@ -186,7 +187,7 @@ function ghSource(gh: GhRead): Ref | null {
   return number !== null ? githubAddress(owner, name, number, gh.sub === 'pr') : null
 }
 
-function sourceOf(tool: string, args: Record<string, unknown>, text: string): { ref: Ref; source: CaptureSource; server?: string; name: string } | null {
+function captureSourceOf(tool: string, args: Record<string, unknown>, text: string): { ref: Ref; source: CaptureSource; server?: string; name: string } | null {
   if (tool === 'WebFetch') {
     const ref = typeof args.url === 'string' ? parseRef(args.url) : null
     return ref ? { ref, source: 'webfetch', name: tool } : null
@@ -251,7 +252,7 @@ export function record(input: Record<string, unknown>, answer: unknown, at: numb
   const grewLinear = /linear/i.test(splitMcp(tool)?.server ?? '') ? learnLinear(found) : false
   const addresses = new Set<string>()
   if (isSingleItem(tool, input) && text.length <= MAX_TEXT) {
-    const source = sourceOf(tool, args, text)
+    const source = captureSourceOf(tool, args, text)
     if (source) {
       keep({ address: source.ref.address, kind: source.ref.kind, source: source.source, server: source.server, tool: source.name, args, result: text, at })
       addresses.add(source.ref.address)

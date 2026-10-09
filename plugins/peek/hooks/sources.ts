@@ -15,7 +15,6 @@ const DEFAULT_RETRY_WAIT_MS = 1000
 const GH_TIMEOUT_MS = 20_000
 // A locked Keychain holds `security` on an unlock prompt nobody can answer, so the read is bounded.
 const KEYCHAIN_TIMEOUT_MS = 3000
-const CURL_MARKER = '\n__peek_curl__ '
 
 // `$` cannot cross an import (claude plugin validate), so register.tsx builds this port from `$`.
 export type SourceIo = {
@@ -29,7 +28,6 @@ export type SourceIo = {
 }
 
 export type Probe = {
-  isProcessAvailable: boolean
   gh: FailureKind | null
   hasCurl: boolean
   hasKey: boolean
@@ -38,6 +36,7 @@ export type Probe = {
 export type Failed = { ok: false; failure: FailureKind }
 
 const probes = new Map<string, Promise<Probe>>()
+const keys = new Map<string, Promise<string | null>>()
 
 export function failureText(kind: FailureKind): { title: string; hint: string } {
   switch (kind) {
@@ -74,15 +73,15 @@ export async function probe(io: SourceIo): Promise<Probe> {
 }
 
 async function runProbe(io: SourceIo): Promise<Probe> {
-  const hasKey = (await findKey(io)) !== null
-  const tools = await io.run(['sh', '-c', TOOLS_PROBE], { timeoutMs: 5000 }).catch(() => null)
-  if (!tools) return { isProcessAvailable: false, gh: 'process-unavailable', hasCurl: false, hasKey }
+  const [key, tools] = await Promise.all([findKey(io), io.run(['sh', '-c', TOOLS_PROBE], { timeoutMs: 5000 }).catch(() => null)])
+  const hasKey = key !== null
+  if (!tools) return { gh: 'process-unavailable', hasCurl: false, hasKey }
   const found = new Set(tools.stdout.split('\n').map(line => line.trim()))
   const hasCurl = found.has('curl')
-  if (!found.has('gh')) return { isProcessAvailable: true, gh: 'cli-missing', hasCurl, hasKey }
+  if (!found.has('gh')) return { gh: 'cli-missing', hasCurl, hasKey }
   const status = await io.run(['gh', 'auth', 'status'], { timeoutMs: 10_000 }).catch(() => null)
   const gh: FailureKind | null = status === null ? 'cli-missing' : status.exitCode === 0 ? null : 'cli-unauthed'
-  return { isProcessAvailable: true, gh, hasCurl, hasKey }
+  return { gh, hasCurl, hasKey }
 }
 
 export async function hasCurl(io: SourceIo): Promise<boolean> {
@@ -127,6 +126,19 @@ function unquote(raw: string): string {
 }
 
 async function findKey(io: SourceIo): Promise<string | null> {
+  const session = await io.sessionId()
+  const known = keys.get(session)
+  if (known) return known
+  const pending = lookupKey(io)
+  keys.set(session, pending)
+  return pending
+}
+
+async function forgetKey(io: SourceIo, failure: FailureKind): Promise<void> {
+  if (failure === 'key-refused' || failure === 'key-missing') keys.delete(await io.sessionId())
+}
+
+async function lookupKey(io: SourceIo): Promise<string | null> {
   const keychain = await io
     .run([SECURITY_BIN, 'find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', KEYCHAIN_SERVICE, '-w'], { timeoutMs: KEYCHAIN_TIMEOUT_MS })
     .catch(() => null)
@@ -223,8 +235,9 @@ export async function linearQuery(
   variables: Record<string, unknown> = {},
 ): Promise<{ ok: true; data: unknown } | Failed> {
   const key = await findKey(io)
-  if (!key) return { ok: false, failure: 'key-missing' }
-  return postWithRetry(io, key, query, variables)
+  const answered: { ok: true; data: unknown } | Failed = key ? await postWithRetry(io, key, query, variables) : { ok: false, failure: 'key-missing' }
+  if (!answered.ok) await forgetKey(io, answered.failure)
+  return answered
 }
 
 export type Connection = { nodes: unknown[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } }
@@ -236,12 +249,18 @@ export async function linearPaged(
   pick: (data: unknown) => Connection | null | undefined,
 ): Promise<{ ok: true; nodes: unknown[]; isPartial: boolean } | Failed> {
   const key = await findKey(io)
-  if (!key) return { ok: false, failure: 'key-missing' }
+  if (!key) {
+    await forgetKey(io, 'key-missing')
+    return { ok: false, failure: 'key-missing' }
+  }
   const nodes: unknown[] = []
   let after: string | null = null
   for (let page = 0; page < PAGE_CAP; page++) {
     const answered = await postWithRetry(io, key, query, { ...variables, first: PAGE_SIZE, after })
-    if (!answered.ok) return answered
+    if (!answered.ok) {
+      await forgetKey(io, answered.failure)
+      return answered
+    }
     const connection = pick(answered.data)
     if (!connection || !Array.isArray(connection.nodes)) return { ok: false, failure: 'query-bug' }
     nodes.push(...connection.nodes)
@@ -269,18 +288,6 @@ export async function httpText(io: SourceIo, url: string): Promise<{ ok: true; t
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return { ok: false, failure: 'query-bug' }
   const target = parsed.href
-  if (await hasCurl(io)) {
-    const argv = ['curl', '-sSL', '--proto', '=http,https', '--max-time', '15', '--max-filesize', '4000000', '-w', `${CURL_MARKER}%{http_code} %{url_effective}`, target]
-    const ran = await io.run(argv, { timeoutMs: 20_000 }).catch(() => null)
-    if (!ran) return { ok: false, failure: 'offline' }
-    if (ran.exitCode !== 0) return { ok: false, failure: ran.exitCode === 22 ? 'not-found-or-no-access' : 'offline' }
-    const cut = ran.stdout.lastIndexOf(CURL_MARKER)
-    if (cut < 0) return { ok: false, failure: 'offline' }
-    const [code = '', ...rest] = ran.stdout.slice(cut + CURL_MARKER.length).trim().split(' ')
-    const status = Number.parseInt(code, 10)
-    if (!(status >= 200 && status < 300)) return { ok: false, failure: httpFailure(status) }
-    return { ok: true, text: ran.stdout.slice(0, cut), finalUrl: rest.join(' ') || target }
-  }
   let response
   try {
     response = await io.fetch(target)

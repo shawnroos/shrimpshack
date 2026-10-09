@@ -1,4 +1,6 @@
-export type RefKind = 'gh-repo' | 'gh-issue' | 'gh-pr' | 'gh-number' | 'linear-issue' | 'linear-project' | 'web'
+import type { RemoteKind } from '../types'
+
+export type RefKind = RemoteKind | 'gh-number'
 
 export type Ref = {
   kind: RefKind
@@ -78,6 +80,12 @@ export function parseRef(input: string, context: RefContext = {}): Ref | null {
   return null
 }
 
+export function familyOf(kind: string): 'gh' | 'linear' | 'web' {
+  if (kind.startsWith('gh-')) return 'gh'
+  if (kind.startsWith('linear-')) return 'linear'
+  return 'web'
+}
+
 // A pull request and an issue URL for one number are the same item.
 export function itemKey(address: string): string {
   return address.replace(/^(https:\/\/github\.com\/[^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)$/, '$1#$2')
@@ -88,8 +96,7 @@ export function refHref(text: string, context: RefContext): string | null {
   return ref?.address ?? null
 }
 
-// Bare references in prose. The lookbehinds keep matches out of URLs, paths,
-// HTML entities and longer words.
+// The lookbehind's & and # keep `&#123;` entities from reading as references.
 const PROSE_REF = /(?<![\w/.:&#-])(?:([A-Za-z0-9][\w.-]*\/[\w.-]+#\d+)|(#\d+)|([A-Z][A-Z0-9]{0,9}-\d+))(?![\w-])/g
 
 export function linkRefs(prose: string, context: RefContext): string {

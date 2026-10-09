@@ -258,8 +258,8 @@ describe('in-place replacement', () => {
       calls++
       return new Promise<Loaded>(r => (release = r))
     }
-    const a = refreshItem(pr(33), load, 0, { force: true })
-    const b = refreshItem(pr(33), load, 100, { force: true })
+    const a = refreshItem(pr(33), load, 0)
+    const b = refreshItem(pr(33), load, 100)
     const c = refreshItem(issue(33), load, 200)
     release({ ok: true, record: record(pr(33), 'gh-pr'), tier: 'cli', fetchedAt: 0 })
     expect(calls).toBe(1)

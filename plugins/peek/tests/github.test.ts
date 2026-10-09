@@ -346,7 +346,7 @@ describe('fromCapture', () => {
   }
 
   test('a GitHub MCP pull request with no labels or milestone still normalises', () => {
-    const loaded = fromCapture(captured({ result: JSON.stringify(mcpPullRead) }), ref('https://github.com/acme/widgets/pull/42'), NOW)
+    const loaded = fromCapture(captured({ result: JSON.stringify(mcpPullRead) }), ref('https://github.com/acme/widgets/pull/42'))
     expect(loaded?.ok && loaded.tier).toBe('session')
     const rec = record(loaded as Loaded)
     expect(rec.kind).toBe('gh-pr')
@@ -361,7 +361,7 @@ describe('fromCapture', () => {
 
   test('a Bash-captured gh pr view normalises like a live load', () => {
     const view = pullView({ state: 'MERGED', mergedAt: '2026-09-04T09:00:00Z' })
-    const loaded = fromCapture(captured({ source: 'bash', tool: 'Bash', result: JSON.stringify(view) }), ref('https://github.com/acme/widgets/pull/42'), NOW)
+    const loaded = fromCapture(captured({ source: 'bash', tool: 'Bash', result: JSON.stringify(view) }), ref('https://github.com/acme/widgets/pull/42'))
     const rec = record(loaded as Loaded)
     expect(rec.status).toBe('merged')
     expect(rec.isFrozen).toBe(true)
@@ -372,7 +372,6 @@ describe('fromCapture', () => {
     const loaded = fromCapture(
       captured({ kind: 'gh-number', address: 'https://github.com/acme/widgets/issues/42', result: JSON.stringify(mcpPullRead) }),
       ref('acme/widgets#42'),
-      NOW,
     )
     const rec = record(loaded as Loaded)
     expect(rec.kind).toBe('gh-pr')
@@ -384,7 +383,6 @@ describe('fromCapture', () => {
     const loaded = fromCapture(
       captured({ kind: 'gh-issue', address: 'https://github.com/acme/widgets/issues/1', source: 'bash', tool: 'Bash', result: JSON.stringify(view) }),
       ref('https://github.com/acme/widgets/issues/1'),
-      NOW,
     )
     const rec = record(loaded as Loaded)
     expect(rec.kind).toBe('gh-pr')
@@ -398,7 +396,6 @@ describe('fromCapture', () => {
     const loaded = fromCapture(
       captured({ kind: 'gh-issue', address: 'https://github.com/acme/widgets/issues/7', tool: 'issue_read', result: JSON.stringify(rest) }),
       ref('https://github.com/acme/widgets/issues/7'),
-      NOW,
     )
     const rec = record(loaded as Loaded)
     expect(rec.kind).toBe('gh-issue')
@@ -408,15 +405,14 @@ describe('fromCapture', () => {
   })
 
   test('no title or unparseable text normalises to null', () => {
-    expect(fromCapture(captured({ result: '{"number":1}' }), ref('https://github.com/acme/widgets/pull/42'), NOW)).toBe(null)
-    expect(fromCapture(captured({ result: 'not json' }), ref('https://github.com/acme/widgets/pull/42'), NOW)).toBe(null)
+    expect(fromCapture(captured({ result: '{"number":1}' }), ref('https://github.com/acme/widgets/pull/42'))).toBe(null)
+    expect(fromCapture(captured({ result: 'not json' }), ref('https://github.com/acme/widgets/pull/42'))).toBe(null)
   })
 
   test('a captured repo view normalises', () => {
     const loaded = fromCapture(
       captured({ kind: 'gh-repo', address: 'https://github.com/acme/widgets', source: 'bash', tool: 'Bash', result: JSON.stringify(repoView) }),
       ref('https://github.com/acme/widgets'),
-      NOW,
     )
     const rec = record(loaded as Loaded)
     expect(rec.kind).toBe('gh-repo')

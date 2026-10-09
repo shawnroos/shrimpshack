@@ -133,7 +133,7 @@ function names(value: unknown, key: 'name' | 'login'): string {
     .join(', ')
 }
 
-function words(value: unknown): string {
+function sentenceCase(value: unknown): string {
   const text = str(value).toLowerCase().replace(/_/g, ' ')
   return text ? text[0]?.toUpperCase() + text.slice(1) : ''
 }
@@ -182,13 +182,13 @@ function pullRecord({ view, ref, inline }: ItemShape): RemoteRecord | null {
   if (!title) return null
   const status = prState(view)
   const meta: RemoteRecord['meta'] = []
-  addMeta(meta, 'State', words(status))
+  addMeta(meta, 'State', sentenceCase(status))
   addMeta(meta, 'Author', login(pick(view, 'author', 'user')))
   const head = str(view.headRefName) || str(obj(view.head).ref)
   const base = str(view.baseRefName) || str(obj(view.base).ref)
   if (head && base) addMeta(meta, 'Branch', `${head} → ${base}`)
-  addMeta(meta, 'Review', words(view.reviewDecision))
-  if (status === 'open' || status === 'draft') addMeta(meta, 'Merge state', words(pick(view, 'mergeStateStatus', 'mergeable_state')))
+  addMeta(meta, 'Review', sentenceCase(view.reviewDecision))
+  if (status === 'open' || status === 'draft') addMeta(meta, 'Merge state', sentenceCase(pick(view, 'mergeStateStatus', 'mergeable_state')))
   addMeta(meta, 'Assignees', names(view.assignees, 'login'))
   addMeta(meta, 'Labels', names(view.labels, 'name'))
   addMeta(meta, 'Milestone', str(obj(view.milestone).title))
@@ -226,7 +226,7 @@ function issueRecord({ view, ref }: ItemShape): RemoteRecord | null {
   const title = str(view.title)
   if (!title) return null
   const isClosed = str(view.state).toUpperCase() === 'CLOSED'
-  const reason = words(pick(view, 'stateReason', 'state_reason'))
+  const reason = sentenceCase(pick(view, 'stateReason', 'state_reason'))
   const meta: RemoteRecord['meta'] = []
   addMeta(meta, 'State', isClosed ? (reason ? `Closed (${reason.toLowerCase()})` : 'Closed') : 'Open')
   addMeta(meta, 'Author', login(pick(view, 'author', 'user')))
@@ -356,7 +356,7 @@ function capturedKind(captured: Captured, ref: Ref, view: Json): RemoteKind | nu
   return null
 }
 
-export function fromCapture(captured: Captured, ref: Ref, _now: number): Loaded | null {
+export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
   const parsed = parse(captured.result)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const view = obj(parsed)
