@@ -356,3 +356,10 @@ describe('stars', () => {
     expect(lib.toggleStar([], 'a', false)).toEqual([])
   })
 })
+
+test('fitName keeps short names and shortens long ones but keeps the extension', () => {
+  expect(lib.fitName('plan.md', 20)).toBe('plan.md')
+  expect(lib.fitName('synthesis-and-presentation.md', 16)).toBe('synthesis-an….md')
+  expect(lib.fitName('synthesis-and-presentation.md', 16).length).toBe(16)
+  expect(lib.fitName('averyveryverylongnamewithoutdot', 10)).toBe('averyvery…')
+})

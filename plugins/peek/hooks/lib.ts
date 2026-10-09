@@ -888,3 +888,12 @@ export function toggleStar(stars: readonly string[], href: string, wanted?: bool
   if (next === isOn) return [...stars]
   return next ? [...stars, href] : stars.filter(one => one !== href)
 }
+
+// Keeps a list row to one line: a name past its room keeps its start and its extension.
+export function fitName(name: string, room: number): string {
+  if (name.length <= room) return name
+  const dot = name.lastIndexOf('.')
+  const ext = dot > 0 && name.length - dot <= 6 ? name.slice(dot) : ''
+  const keep = Math.max(1, room - ext.length - 1)
+  return `${name.slice(0, keep)}…${ext}`
+}
