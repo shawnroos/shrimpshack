@@ -41,6 +41,30 @@ Refresh pauses after 10 minutes with no activity and backs off when a service
 rate-limits it. When no tool or key is available, refresh repeats the agent's
 own read call.
 
+## Live view
+
+On a web page, press `v` to switch between the reader page and the real page.
+The real page is rendered by WebKit and drawn in the pane. You can scroll it
+with the wheel or `j`/`k`, and click links and buttons. After you click a text
+field, typing goes to the page. Press Escape or Done typing (`d`) to give the
+keys back to peek. While the page is live, `b` goes back in the page, `u`
+reloads it, and `o`, `c` and `f` open, copy or star the page's current address.
+
+Live view is a page renderer, not a browser. It has one page, no tabs, and no
+downloads. It loads only `http` and `https` pages and refuses pop-up windows
+and JavaScript dialogs.
+
+- **Nothing is saved.** Cookies and site data live only in memory. A login lasts
+  until peek unloads, then it is gone.
+- **Frames are budgeted.** Peek sends a new picture only when the page changes,
+  and at most about 1 MB a second, because faster streams stutter in the pane.
+  A busy page, such as a video, drops to a few frames a second.
+- **First use builds the helper.** Live view uses a small Swift program that is
+  compiled on first use (about 40 seconds) into `~/.cache/claude-peek/bin/`.
+  This needs the Xcode command-line tools: run `xcode-select --install` once.
+- **Terminal only.** Live view needs a terminal that draws images. Under a
+  multiplexer, set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES` (Setup step 4).
+
 ## Commands
 
 | Command | Does |
@@ -55,7 +79,7 @@ own read call.
 In the pane: `j`/`k` jump between blocks, the wheel scrolls, `r` shows recent
 files, `o` opens the file in its own app (a remote page in the browser), `c`
 copies the path or link, `u` refreshes a remote page, `b` goes back to the page
-you came from, `x` closes.
+you came from, `v` switches a web page to live view, `x` closes.
 
 ## Setup
 
@@ -82,6 +106,7 @@ you came from, `x` closes.
 ## Requirements
 
 macOS: image conversion uses `sips` and `rsvg-convert`, and Open uses `open`.
+Live view needs the Xcode command-line tools (`swiftc`).
 
 ## Development
 

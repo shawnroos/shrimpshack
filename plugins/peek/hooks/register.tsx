@@ -1502,6 +1502,12 @@ export const register: Register = on => {
             ...(current.remote
               ? [{ id: 'refresh', icon: '\u{f021}', label: 'Refresh this page', hint: 'u', run: () => void refresh($, current.href) }]
               : []),
+            ...(e.surface === 'terminal' && Image && current.remote && parseRef(current.href)?.kind === 'web'
+              ? [{ id: 'live', icon: '\u{f0ac}', label: liveHref === current.href ? 'Reader view: leave the live page' : 'Live view: the real page, clickable', hint: 'v', run: () => void toggleLive($, current, liveViewport ?? { width: 600, height: 400 }) }]
+              : []),
+            ...(liveHref === current.href && live?.state().canBack
+              ? [{ id: 'live-back', icon: '\u{f060}', label: 'Back in the live page', hint: 'b', run: () => void liveKey($, 'b') }]
+              : []),
             { id: 'copy', icon: '\u{f0c5}', label: current.remote ? 'Copy link' : 'Copy path', hint: 'c', run: () => void $.ui.copy({ text: current.location }) },
             { id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hint: 'f', run: () => void setStar($, current.href) },
           ]
@@ -2556,7 +2562,8 @@ export const register: Register = on => {
     const notice = liveNotice?.href === current.href ? failureText(liveNotice.kind) : null
     const goNext = jumps.next
     const goPrev = jumps.prev
-    const isStarred = (await read($, stars)).some(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(current.href))
+    const starTarget = (liveFrame && liveState?.url) || current.href
+    const isStarred = (await read($, stars)).some(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(starTarget))
     const remote = current.remote
     const source = remote?.record ? sourceLine(remote, now) : ''
     const info = liveFrame
@@ -2609,15 +2616,15 @@ export const register: Register = on => {
             : []),
           { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
           { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
-          { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: () => void setStar($, current.href) },
-          { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: () => void openExternally($, current) },
-          ...(remote ? [{ key: 'refresh', label: 'Refresh', hotkey: 'u', onPress: () => void refresh($, current.href) }] : []),
-          ...(backStack.length ? [{ key: 'back', label: 'Back', hotkey: 'b', onPress: () => void goBack($) }] : []),
+          { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar($, current.href) },
+          { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally($, current) },
+          ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh($, current.href) }] : []),
+          ...(liveFrame || backStack.length ? [{ key: 'back', label: 'Back', hotkey: 'b', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }] : []),
           {
             key: 'copy',
             label: remote ? 'Copy link' : 'Copy path',
             hotkey: 'c',
-            onPress: () => void $.ui.copy({ text: current.location }),
+            onPress: liveFrame ? () => void liveKey($, 'c') : () => void $.ui.copy({ text: current.location }),
           },
           { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) },
       ].map(one => (isTyping ? { ...one, onPress: () => { isTyping = false; one.onPress() } } : one)),
