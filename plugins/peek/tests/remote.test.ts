@@ -9,7 +9,7 @@ import type { RemoteIo } from '../hooks/remote'
 
 let sessions = 0
 
-function io(options: { ghAuthExit?: number; gh?: (argv: readonly string[]) => string; mcp?: () => string } = {}) {
+function io(options: { ghAuthExit?: number; gh?: (argv: readonly string[]) => string; ghStderr?: string; mcp?: () => string } = {}) {
   const session = `remote-${++sessions}`
   const mcpCalls: { server: string; tool: string; args: Record<string, unknown> }[] = []
   const exited = (exitCode: number, stdout = '', stderr = ''): ProcessRunResult =>
@@ -19,6 +19,7 @@ function io(options: { ghAuthExit?: number; gh?: (argv: readonly string[]) => st
     run: async argv => {
       if (argv[0] === 'sh') return exited(0, 'gh\ncurl\n')
       if (argv[0] === 'gh' && argv[1] === 'auth') return exited(options.ghAuthExit ?? 0)
+      if (argv[0] === 'gh' && options.ghStderr) return exited(1, '', options.ghStderr)
       if (argv[0] === 'gh' && options.gh) return exited(0, options.gh(argv))
       return exited(1, '', 'nope')
     },
@@ -54,6 +55,7 @@ describe('loadItem picks the best tier', () => {
     const loaded = await loadItem(port, ref('https://github.com/o/r/pull/77'), 1_000)
     expect(loaded.ok && loaded.tier).toBe('cli')
     expect(loaded.ok && loaded.record.title).toBe('#77 Ship it')
+    expect(loaded.ok && loaded.liveFailure).toBeUndefined()
   })
 
   test('gh signed out and a captured gh result: the page comes from this session', async () => {
@@ -62,6 +64,24 @@ describe('loadItem picks the best tier', () => {
     const loaded = await loadItem(port, ref('o/r#78'), 1_000)
     expect(loaded.ok && loaded.tier).toBe('session')
     expect(loaded.ok && loaded.fetchedAt).toBe(900)
+    expect(loaded.ok && loaded.liveFailure).toBe('cli-unauthed')
+  })
+
+  test('gh rate-limited and a captured result: the page says live was rate-limited, so refresh keeps backing off', async () => {
+    record({ tool: 'Bash', command: 'gh pr view 80 --repo o/r --json title,state' }, { result: { stdout: PR_JSON.replace('77', '80') }, text: PR_JSON.replace('77', '80') }, 900)
+    const { port } = io({ ghStderr: 'HTTP 403: API rate limit exceeded for user' })
+    const loaded = await loadItem(port, ref('https://github.com/o/r/pull/80'), 1_000)
+    expect(loaded.ok && loaded.tier).toBe('session')
+    expect(loaded.ok && loaded.liveFailure).toBe('rate-limited')
+  })
+
+  test('a replayed MCP read after a live failure carries the live failure too', async () => {
+    const issue = { identifier: 'WEB-2760', title: 'Replayed', url: 'https://linear.app/acme/issue/WEB-2760/replayed' }
+    record({ tool: 'mcp__claude_ai_Linear__get_issue', id: 'WEB-2760' }, { result: { content: [{ type: 'text', text: JSON.stringify(issue) }] } }, 800)
+    const { port, mcpCalls } = io({ mcp: () => JSON.stringify(issue) })
+    const loaded = await loadItem(port, ref('https://linear.app/acme/issue/WEB-2760'), 1_000, { canReplay: true })
+    expect(mcpCalls.length).toBe(1)
+    expect(loaded.ok && loaded.liveFailure).toBe('key-missing')
   })
 
   test('gh signed out and nothing captured: the failure kind comes through', async () => {

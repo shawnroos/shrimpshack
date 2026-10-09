@@ -69,6 +69,11 @@ export async function probe(io: SourceIo): Promise<Probe> {
   if (known) return known
   const pending = runProbe(io)
   probes.set(session, pending)
+  // Only a working gh is kept: a later `gh auth login` or install must be noticed without restarting the session.
+  const drop = () => {
+    if (probes.get(session) === pending) probes.delete(session)
+  }
+  void pending.then(found => found.gh !== null && drop(), drop)
   return pending
 }
 
@@ -80,7 +85,7 @@ async function runProbe(io: SourceIo): Promise<Probe> {
   const hasCurl = found.has('curl')
   if (!found.has('gh')) return { gh: 'cli-missing', hasCurl, hasKey }
   const status = await io.run(['gh', 'auth', 'status'], { timeoutMs: 10_000 }).catch(() => null)
-  const gh: FailureKind | null = status === null ? 'cli-missing' : status.exitCode === 0 ? null : 'cli-unauthed'
+  const gh: FailureKind | null = status === null ? 'offline' : status.exitCode === 0 ? null : 'cli-unauthed'
   return { gh, hasCurl, hasKey }
 }
 

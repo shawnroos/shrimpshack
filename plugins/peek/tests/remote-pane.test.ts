@@ -8,7 +8,7 @@ const NOW = 10 * 3600_000
 const ran: string[][] = []
 let sessions = 0
 
-function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boolean } = {}) {
+function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boolean; holdPull?: Promise<void> } = {}) {
   ran.length = 0
   on('session.id', () => ({ value: `pane-${++sessions}` }))
   on('session.cwd', () => ({ value: '/repo' }))
@@ -21,17 +21,19 @@ function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boole
     throw new Error(`ENOENT ${e.path}`)
   })
   on('fs.read', (_$, e) => {
+    if (e.path === '/Users/me/notes.md') return { value: '# Notes\n\n- [ ] one\n' }
     throw new Error(`ENOENT ${e.path}`)
   })
-  on('process.run', (_$, e) => {
+  on('process.run', async (_$, e) => {
     ran.push([...e.argv])
+    if (options.holdPull && e.argv.join(' ').startsWith('gh pr view 42')) await options.holdPull
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     const fail = (stderr: string) => ({ value: { exitCode: 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
     const line = e.argv.join(' ')
     if (e.argv[0] === 'sh') return ok('gh\ncurl\n')
     if (line === 'gh auth status') return (options.ghAuthExit ?? 0) === 0 ? ok('') : fail('You are not logged into any GitHub hosts')
     if (line.startsWith('gh api repos/acme/widgets/issues/42')) return ok(JSON.stringify({ number: 42, pull_request: {} }))
-    if (line.startsWith('gh pr view 42')) return ok(JSON.stringify(pullView({ mergeable: 'CONFLICTING', statusCheckRollup: [], body: 'Follows #45.' })))
+    if (line.startsWith('gh pr view 42')) return ok(JSON.stringify(pullView({ mergeable: 'CONFLICTING', statusCheckRollup: [], body: 'Follows #45. [tick](file:///Users/me/notes.md#task-3)' })))
     if (line.startsWith('gh api repos/acme/widgets/pulls/42')) return ok('2')
     if (line.startsWith('gh repo view')) return ok(JSON.stringify(repoView))
     if (line.startsWith('gh api repos/acme/widgets/readme')) return ok('# Widgets\n\nRead me.')
@@ -194,5 +196,35 @@ test('a #N link inside a pull request opens against that repo; b returns to the 
   await ui.unmount()
   ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
   expect(await ui.find({ text: /^PULL REQUESTS $/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a slow page that finishes after a newer one was opened never replaces it', async ($, on) => {
+  let release = () => {}
+  const holdPull = new Promise<void>(resolve => {
+    release = resolve
+  })
+  fakeWorld(on, { holdPull })
+  const slow = $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets' } as never)
+  release()
+  await slow
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /^PULL REQUESTS $/ })).toBeDefined()
+  expect(await ui.find({ text: /#42 Teach the parser/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a task link inside a remote page never ticks a local file', async ($, on) => {
+  fakeWorld(on)
+  const writes: string[] = []
+  on('fs.write', (_$, e) => {
+    writes.push(e.path)
+    return { value: undefined }
+  })
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'body-md-0', link: { href: 'file:///Users/me/notes.md#task-3' } } as never)
+  expect(writes).toEqual([])
   await ui.unmount()
 })

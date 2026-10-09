@@ -18,7 +18,9 @@ function exited(exitCode: number, stdout = '', stderr = '', isStdoutTruncated = 
   return { exitCode, stdout, stderr, isStdoutTruncated, isStderrTruncated: false }
 }
 
-function world(options: { pages?: Record<string, Page>; images?: Record<string, number | string>; hasCurl?: boolean; fetch?: (url: string) => HttpResponse }) {
+const PUBLIC_IP = '93.184.216.34'
+
+function world(options: { pages?: Record<string, Page>; images?: Record<string, number | string>; hasCurl?: boolean; fetch?: (url: string) => HttpResponse; dns?: Record<string, string | null> }) {
   const session = `web-${++sessions}`
   const argvs: string[][] = []
   const fetched: string[] = []
@@ -28,6 +30,11 @@ function world(options: { pages?: Record<string, Page>; images?: Record<string, 
     if (bin === 'sh') return exited(0, options.hasCurl === false ? '' : 'curl\n')
     if (bin === '/usr/bin/security') return exited(44, '', 'item not found')
     if (bin === 'mkdir') return exited(0)
+    if (bin === '/usr/bin/dscacheutil') {
+      const name = argv[argv.length - 1] ?? ''
+      const answer = options.dns && name in options.dns ? options.dns[name] : `name: ${name}\nip_address: ${PUBLIC_IP}\n`
+      return answer === null || answer === undefined ? exited(1, '', 'lookup failed') : exited(0, answer)
+    }
     if (bin !== 'curl') throw new Error(`spawn ${bin} ENOENT`)
     const url = argv[argv.length - 1] ?? ''
     if (argv.includes('-o')) {
@@ -74,6 +81,7 @@ function assertProtocolPinned(curls: string[][]) {
     const redir = argv.indexOf('--proto-redir')
     expect(proto >= 0 && argv[proto + 1] === '=http,https').toBe(true)
     expect(redir >= 0 && argv[redir + 1] === '=http,https').toBe(true)
+    expect(argv.includes('--globoff')).toBe(true)
   }
 }
 
@@ -257,6 +265,112 @@ describe('loadWeb with curl', () => {
     if (!loaded.ok) throw new Error(loaded.failure)
     expect(loaded.record.og?.image).toBe(undefined)
     expect(downloads().filter(url => url === 'https://loop.test/a.png' || url === 'https://loop.test/b.png').length <= 12).toBe(true)
+  })
+
+  for (const image of ['http://{a.com,127.0.0.1}/x.png', 'http://[1-2].example/x.png', 'http://a{1,2}.example/x.png']) {
+    test(`a curl glob in the image URL ${image} never reaches curl`, async () => {
+      const page = `https://glob-${sessions}.test/`
+      const { io, curls, downloads } = world({ pages: { [page]: { html: privateImage(image) } }, images: { [image]: 200 } })
+      const loaded = await loadWeb(io, web(page), NOW)
+      if (!loaded.ok) throw new Error(loaded.failure)
+      expect(downloads().some(url => (url ?? '').includes('127.0.0.1') || (url ?? '').includes('a.com') || (url ?? '').includes('.example'))).toBe(false)
+      expect(loaded.record.og?.image).toBe(undefined)
+      assertProtocolPinned(curls())
+    })
+  }
+
+  test('every curl the page fetch and image download build carries --globoff', async () => {
+    const page = 'https://globoff.test/'
+    const { io, curls, downloads } = world({ pages: { [page]: { html: FULL_OG } }, images: { 'https://pets.test/img/card.png': 200 } })
+    await loadWeb(io, web(page), NOW)
+    expect(downloads().length > 0).toBe(true)
+    assertProtocolPinned(curls())
+  })
+
+  test('an image host whose name resolves to loopback is never downloaded', async () => {
+    const page = 'https://rebind.test/'
+    const image = 'https://localtest.me/x.png'
+    const { io, downloads } = world({
+      pages: { [page]: { html: privateImage(image) } },
+      images: { [image]: 200 },
+      dns: { 'localtest.me': 'name: localtest.me\nipv6_address: ::1\n\nname: localtest.me\nip_address: 127.0.0.1\n' },
+    })
+    const loaded = await loadWeb(io, web(page), NOW)
+    if (!loaded.ok) throw new Error(loaded.failure)
+    expect(downloads().includes(image)).toBe(false)
+    expect(loaded.record.og?.image).toBe(undefined)
+    expect(loaded.record.favicon).toBe(undefined)
+  })
+
+  test('a name with one public and one private answer is never downloaded', async () => {
+    const page = 'https://mixed.test/'
+    const image = 'https://mixed-cdn.test/x.png'
+    const { io, downloads } = world({
+      pages: { [page]: { html: privateImage(image) } },
+      images: { [image]: 200 },
+      dns: { 'mixed-cdn.test': `ip_address: ${PUBLIC_IP}\nip_address: 192.168.0.9\n` },
+    })
+    await loadWeb(io, web(page), NOW)
+    expect(downloads().includes(image)).toBe(false)
+  })
+
+  test('an image host that resolves publicly is downloaded pinned to the checked address', async () => {
+    const page = 'https://pin.test/'
+    const image = 'https://cdn.pin.test/x.png'
+    const { io, curls } = world({ pages: { [page]: { html: privateImage(image) } }, images: { [image]: 200 } })
+    const loaded = await loadWeb(io, web(page), NOW)
+    if (!loaded.ok) throw new Error(loaded.failure)
+    const fetch = curls().find(argv => argv.includes('-o') && argv[argv.length - 1] === image)
+    expect(fetch?.[(fetch?.indexOf('--resolve') ?? -2) + 1]).toBe(`cdn.pin.test:443:${PUBLIC_IP}`)
+    expect(loaded.record.og?.image?.endsWith('.png')).toBe(true)
+  })
+
+  test('an explicit port and an IPv6 answer are pinned in curl --resolve form', async () => {
+    const page = 'https://pin6.test/'
+    const image = 'http://cdn.pin6.test:8080/x.png'
+    const { io, curls } = world({
+      pages: { [page]: { html: privateImage(image) } },
+      images: { [image]: 200 },
+      dns: { 'cdn.pin6.test': 'ipv6_address: 2606:4700::1111\n' },
+    })
+    await loadWeb(io, web(page), NOW)
+    const fetch = curls().find(argv => argv.includes('-o') && argv[argv.length - 1] === image)
+    expect(fetch?.[(fetch?.indexOf('--resolve') ?? -2) + 1]).toBe('cdn.pin6.test:8080:[2606:4700::1111]')
+  })
+
+  for (const [label, answer] of [['fails', null], ['returns nothing', '']] as const) {
+    test(`an image host whose lookup ${label} is never downloaded`, async () => {
+      const page = `https://nodns-${sessions}.test/`
+      const image = 'https://unresolved.test/x.png'
+      const { io, downloads } = world({ pages: { [page]: { html: privateImage(image) } }, images: { [image]: 200 }, dns: { 'unresolved.test': answer } })
+      const loaded = await loadWeb(io, web(page), NOW)
+      if (!loaded.ok) throw new Error(loaded.failure)
+      expect(downloads().includes(image)).toBe(false)
+      expect(loaded.record.og?.image).toBe(undefined)
+    })
+  }
+
+  test('a redirect hop to a name resolving to a private address fetches nothing further', async () => {
+    const page = 'https://hop-dns.test/'
+    const { io, downloads } = world({
+      pages: { [page]: { html: privateImage('https://cdn.hop-dns.test/a.png') } },
+      images: { 'https://cdn.hop-dns.test/a.png': 'https://internal.hop-dns.test/x.png', 'https://internal.hop-dns.test/x.png': 200 },
+      dns: { 'internal.hop-dns.test': 'ip_address: 10.0.0.5\n' },
+    })
+    const loaded = await loadWeb(io, web(page), NOW)
+    if (!loaded.ok) throw new Error(loaded.failure)
+    expect(downloads().includes('https://cdn.hop-dns.test/a.png')).toBe(true)
+    expect(downloads().includes('https://internal.hop-dns.test/x.png')).toBe(false)
+    expect(loaded.record.og?.image).toBe(undefined)
+  })
+
+  test('the page the person opens is fetched without a DNS check', async () => {
+    const page = 'https://localtest.me/'
+    const { io, argvs } = world({ pages: { [page]: { html: TITLE_ONLY } }, dns: { 'localtest.me': 'ip_address: 127.0.0.1\n' } })
+    const loaded = await loadWeb(io, web(page), NOW)
+    expect(loaded.ok).toBe(true)
+    const pageFetch = argvs.find(argv => argv[0] === 'curl' && !argv.includes('-o'))
+    expect(pageFetch?.includes('--resolve')).toBe(false)
   })
 
   test('an HTTP error maps to a fixed failure kind', async () => {

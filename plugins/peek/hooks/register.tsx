@@ -390,6 +390,7 @@ let isTicking = false
 let linearBoot: Omit<LinearBootstrap, 'ok'> | null = null
 let titles: Record<string, TitleEntry> = {}
 let topBlockKey = 'block-0'
+let showGeneration = 0
 const repoContexts = new Map<string, string | null>()
 const backStack: { view: View; key: string }[] = []
 const failedPictures = new Set<string>()
@@ -513,6 +514,7 @@ function remoteRef(href: string, context: RefContext = {}): Ref | null {
 }
 
 async function show($: EngineInterface, raw: string) {
+  const generation = ++showGeneration
   const ref = remoteRef(raw)
   const href = ref?.address ?? raw
   const file = parseHref(href)
@@ -532,6 +534,7 @@ async function show($: EngineInterface, raw: string) {
   } catch (error) {
     next = { ...loading, title: 'Could not open', error: error instanceof Error ? error.message : String(error) }
   }
+  if (generation !== showGeneration) return
   await update($, view, () => next)
   void $.ui.open({ id: PANE, title: next.title })
 }
@@ -667,6 +670,7 @@ async function sessionEntries($: EngineInterface, list: readonly Mention[]): Pro
         folder: ref.owner ? `${ref.owner}/${ref.repo}` : label?.trail?.join(' · ') || new URL(ref.address).hostname,
         kind: label?.kind ?? ref.kind,
         status: label?.status,
+        favicon: (await remotePicture($, label?.favicon))?.file,
         mtimeMs: 0,
         size: 0,
         mentions: one.count,
@@ -802,7 +806,7 @@ async function pressLink($: EngineInterface, href: string) {
   const task = /#task-(\d+)$/.exec(href)
   const current = await read($, view)
   const file = parseHref(href)
-  if (task && file && current) {
+  if (task && file && current && parseHref(current.href)?.path === file.path) {
     const source = await $.fs.read(file.path)
     const toggled = toggleTaskLine(source, Number(task[1]))
     if (toggled !== null) {
@@ -1514,6 +1518,7 @@ export const register: Register = on => {
       const looks = (one: FileEntry) => ({
         href: one.href,
         isStarred: starSet.has(one.href),
+        favicon: one.favicon && Image ? pixels.get(one.favicon) : undefined,
         icon: iconFor(one.kind),
         color: colorFor(one.kind),
         name: one.name,
@@ -1573,9 +1578,12 @@ export const register: Register = on => {
                   hover={{ backgroundColor: C.surface0 }}
                 >
                   <Box flexDirection="row">
+                    {look.favicon && !look.isStarred && Image && (
+                      <Image key={`favicon-${index}`} source={{ png: look.favicon }} columns={2} rows={1} alt={look.icon} />
+                    )}
                     <Button
                       key={`item-${index}`}
-                      label={look.isStarred ? '\u{f51a}' : look.icon}
+                      label={look.isStarred ? '\u{f51a}' : look.favicon ? ' ' : look.icon}
                       plain
                       autoFocus={isSelected ? true : undefined}
                       onPress={() => void selectAndOpen($, index)}
@@ -1714,10 +1722,15 @@ export const register: Register = on => {
                   hover={{ backgroundColor: C.surface0 }}
                 >
                   <Box flexDirection="row" width={leftWidth} height={1} overflow="hidden">
+                    {look.favicon && !look.isStarred && Image && (
+                      <Box flexShrink={0}>
+                        <Image key={`favicon-${index}`} source={{ png: look.favicon }} columns={2} rows={1} alt={look.icon} />
+                      </Box>
+                    )}
                     <Box flexShrink={0}>
                       <Button
                         key={`item-${index}`}
-                        label={look.isStarred ? '\u{f51a}' : look.icon}
+                        label={look.isStarred ? '\u{f51a}' : look.favicon ? ' ' : look.icon}
                         plain
                         autoFocus={isSelected ? true : undefined}
                         onPress={() => void selectAndOpen($, index)}
@@ -1940,7 +1953,7 @@ export const register: Register = on => {
         note(record.meta.length + 4, 'Details')
         if (record.stats) {
           const ci = record.stats.ci
-          const ciColor = /failed|not running/.test(ci) ? C.red : /pending|computing/.test(ci) ? C.yellow : /passed/.test(ci) ? C.green : C.overlay1
+          const ciColor = { bad: C.red, wait: C.yellow, ok: C.green, none: C.overlay1 }[record.stats.ciTone]
           drawnParts.push(
             embed('remote-stats', ICON['gh-pr'], 'CHANGES', `${record.stats.changedFiles} files`, C.green, (
               <Box flexDirection="column">
@@ -2311,7 +2324,7 @@ export const register: Register = on => {
     }
     const goNext = jumps.next
     const goPrev = jumps.prev
-    const isStarred = (await read($, stars)).includes(current.href)
+    const isStarred = (await read($, stars)).some(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(current.href))
     const remote = current.remote
     const source = remote?.record ? sourceLine(remote, now) : ''
     const info = [isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')

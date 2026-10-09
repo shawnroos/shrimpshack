@@ -703,6 +703,7 @@ export type FileEntry = {
   worktree?: string
   role?: 'artifact' | 'touched'
   status?: string
+  favicon?: string
 }
 
 export type RoleFilter = 'all' | 'artifacts' | 'touched'

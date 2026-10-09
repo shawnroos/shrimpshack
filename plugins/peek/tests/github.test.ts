@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { ProcessRunResult } from 'claude-code'
 
 import type { Captured } from '../hooks/capture'
-import { ciSummary, fromCapture, loadGithub, resolveNumber } from '../hooks/github'
+import { ciSummary, ciTone, fromCapture, loadGithub, resolveNumber } from '../hooks/github'
 import type { Ref } from '../hooks/refs'
 import { parseRef } from '../hooks/refs'
 import type { SourceIo } from '../hooks/sources'
@@ -180,7 +180,7 @@ describe('pull request page', () => {
     expect(rec.title).toContain('Teach the parser trailing commas')
     expect(rec.status).toBe('open')
     expect(rec.isFrozen).toBe(false)
-    expect(rec.stats).toEqual({ additions: 120, deletions: 8, changedFiles: 4, ci: '3 passed' })
+    expect(rec.stats).toEqual({ additions: 120, deletions: 8, changedFiles: 4, ci: '3 passed', ciTone: 'ok' })
     expect(meta(rec, 'Review')).toBe('Review required')
     expect(meta(rec, 'Merge state')).toBe('Blocked')
     expect(meta(rec, 'Branch')).toBe('fix/commas → main')
@@ -273,7 +273,46 @@ describe('CI summary', () => {
 
   test('nothing ran never reads as passing, even when merged', () => {
     expect(ciSummary([], 'UNKNOWN', 'MERGED')).toBe('no checks reported')
-    expect(ciSummary(undefined, 'CONFLICTING', 'CLOSED')).toBe('no checks reported')
+    expect(ciSummary([], 'CONFLICTING', 'CLOSED')).toBe('no checks reported')
+  })
+
+  test('a source with no rollup field at all says CI is not in it, never "no checks reported"', async () => {
+    expect(ciSummary(undefined, 'MERGEABLE', 'OPEN')).toBe('CI not in this source')
+    expect(ciSummary(undefined, 'CONFLICTING', 'CLOSED')).toBe('CI not in this source')
+    const { statusCheckRollup: _dropped, ...noRollup } = pullView({})
+    const { $ } = prWorld(noRollup)
+    const live = record(await loadGithub($, ref('https://github.com/acme/widgets/pull/42'), NOW))
+    expect(live.stats?.ci).toBe('CI not in this source')
+    expect(live.stats?.ciTone).toBe('none')
+    const captured = fromCapture(
+      { address: 'https://github.com/acme/widgets/pull/42', kind: 'gh-pr', source: 'mcp', tool: 'pull_request_read', args: {}, result: JSON.stringify(mcpPullRead), at: NOW },
+      ref('https://github.com/acme/widgets/pull/42'),
+    )
+    expect(record(captured as Loaded).stats?.ci).toBe('CI not in this source')
+    const empty = prWorld(pullView({ statusCheckRollup: [], mergeable: 'MERGEABLE' }))
+    expect(record(await loadGithub(empty.$, ref('https://github.com/acme/widgets/pull/42'), NOW)).stats?.ci).toBe('no checks reported')
+  })
+
+  test('the CI tone is structured, so "passed" next to a cancelled check never reads as green', () => {
+    const run = (conclusion: string) => ({ __typename: 'CheckRun', status: 'COMPLETED', conclusion })
+    expect(ciTone(checks({ passed: 2, cancelled: 1 }), 'MERGEABLE', 'OPEN')).toBe('bad')
+    expect(ciTone(checks({ passed: 2, failed: 1 }), 'MERGEABLE', 'OPEN')).toBe('bad')
+    expect(ciTone(checks({ passed: 2, failed: 1, running: 1 }), 'MERGEABLE', 'OPEN')).toBe('bad')
+    expect(ciTone([], 'CONFLICTING', 'OPEN')).toBe('bad')
+    expect(ciTone(checks({ passed: 2, running: 1 }), 'MERGEABLE', 'OPEN')).toBe('wait')
+    expect(ciTone([], 'UNKNOWN', 'OPEN')).toBe('wait')
+    expect(ciTone(checks({ passed: 3 }), 'MERGEABLE', 'OPEN')).toBe('ok')
+    expect(ciTone([run('SUCCESS'), run('SKIPPED')], 'MERGEABLE', 'OPEN')).toBe('ok')
+    expect(ciTone([run('SKIPPED')], 'MERGEABLE', 'OPEN')).toBe('none')
+    expect(ciTone([], 'MERGEABLE', 'OPEN')).toBe('none')
+    expect(ciTone(undefined, 'MERGEABLE', 'OPEN')).toBe('none')
+  })
+
+  test('a loaded pull request carries the tone next to the CI text', async () => {
+    const { $ } = prWorld(pullView({ statusCheckRollup: checks({ passed: 2, cancelled: 1 }) }))
+    const stats = record(await loadGithub($, ref('https://github.com/acme/widgets/pull/42'), NOW)).stats
+    expect(stats?.ci).toBe('2 passed · 1 cancelled')
+    expect(stats?.ciTone).toBe('bad')
   })
 
   test('status contexts, neutral, skipped and unknown values', () => {

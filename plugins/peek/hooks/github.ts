@@ -2,7 +2,7 @@ import type { Captured } from './capture'
 import type { Ref } from './refs'
 import { runGh } from './sources'
 import type { Failed, SourceIo } from './sources'
-import type { Loaded, RemoteComment, RemoteKind, RemoteList, RemoteListItem, RemoteRecord, Tier } from '../types'
+import type { CiTone, Loaded, RemoteComment, RemoteKind, RemoteList, RemoteListItem, RemoteRecord, Tier } from '../types'
 
 const COMMENTS_SHOWN = 50
 const LIST_LIMIT = '30'
@@ -109,21 +109,33 @@ function bucketOf(check: Json): Bucket {
   }
 }
 
-export function ciSummary(rollup: unknown, mergeable: unknown, state: unknown): string {
+function ci(rollup: unknown, mergeable: unknown, state: unknown): { text: string; tone: CiTone } {
+  // A source that omits the field (a REST or MCP payload) says nothing about CI; an empty array says nothing ran.
+  if (rollup === undefined) return { text: 'CI not in this source', tone: 'none' }
   const checks = arr(rollup)
   if (checks.length === 0) {
     if (str(state).toUpperCase() === 'OPEN') {
       const merge = str(mergeable).toUpperCase()
-      if (merge === 'CONFLICTING') return 'checks not running: merge conflict'
-      if (merge === 'UNKNOWN') return 'computing'
+      if (merge === 'CONFLICTING') return { text: 'checks not running: merge conflict', tone: 'bad' }
+      if (merge === 'UNKNOWN') return { text: 'computing', tone: 'wait' }
     }
-    return 'no checks reported'
+    return { text: 'no checks reported', tone: 'none' }
   }
   const counts: Record<Bucket, number> = { passed: 0, failed: 0, pending: 0, cancelled: 0, skipped: 0 }
   for (const check of checks) counts[bucketOf(obj(check))]++
-  return BUCKETS.filter(bucket => counts[bucket] > 0)
+  const text = BUCKETS.filter(bucket => counts[bucket] > 0)
     .map(bucket => `${counts[bucket]} ${bucket}`)
     .join(' · ')
+  const tone: CiTone = counts.failed + counts.cancelled > 0 ? 'bad' : counts.pending > 0 ? 'wait' : counts.passed > 0 ? 'ok' : 'none'
+  return { text, tone }
+}
+
+export function ciSummary(rollup: unknown, mergeable: unknown, state: unknown): string {
+  return ci(rollup, mergeable, state).text
+}
+
+export function ciTone(rollup: unknown, mergeable: unknown, state: unknown): CiTone {
+  return ci(rollup, mergeable, state).tone
 }
 
 function names(value: unknown, key: 'name' | 'login'): string {
@@ -208,11 +220,13 @@ function pullRecord({ view, ref, inline }: ItemShape): RemoteRecord | null {
     browserUrl: ref.address,
   }
   if (typeof view.additions === 'number') {
+    const checks = ci(view.statusCheckRollup, view.mergeable, rollupState)
     record.stats = {
       additions: num(view.additions),
       deletions: num(view.deletions),
       changedFiles: num(pick(view, 'changedFiles', 'changed_files')),
-      ci: ciSummary(view.statusCheckRollup, view.mergeable, rollupState),
+      ci: checks.text,
+      ciTone: checks.tone,
     }
   }
   const body = str(view.body)

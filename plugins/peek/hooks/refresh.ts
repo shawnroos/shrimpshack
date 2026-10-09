@@ -72,10 +72,17 @@ export function freshness(entry: CacheEntry, now: number): CacheState | 'stale' 
   return entry.state
 }
 
+function extendBackoff(source: Source, now: number): void {
+  const waitMs = Math.min((backoff.get(source)?.waitMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS)
+  backoff.set(source, { waitMs, until: now + waitMs })
+}
+
 function settle(previous: CacheEntry | undefined, address: string, result: Loaded, now: number): CacheEntry {
   const source = sourceOf(address)
   if (result.ok) {
-    backoff.delete(source)
+    // A capture served after a failed live call proves nothing about the service, so only a live answer ends a back-off.
+    if (result.liveFailure === 'rate-limited') extendBackoff(source, now)
+    else if (result.liveFailure === undefined) backoff.delete(source)
     return {
       address,
       record: result.record,
@@ -85,10 +92,7 @@ function settle(previous: CacheEntry | undefined, address: string, result: Loade
       state: result.record.isFrozen ? 'frozen' : 'fresh',
     }
   }
-  if (result.failure === 'rate-limited') {
-    const waitMs = Math.min((backoff.get(source)?.waitMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS)
-    backoff.set(source, { waitMs, until: now + waitMs })
-  }
+  if (result.failure === 'rate-limited') extendBackoff(source, now)
   if (!previous?.record) return { address, attemptedAt: now, state: 'failed', failure: result.failure }
   return {
     ...previous,

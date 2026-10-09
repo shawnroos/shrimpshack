@@ -50,12 +50,11 @@ function world(options: WorldOptions) {
   const fetches: { url: string; init?: HttpInit }[] = []
   const authorizations: string[] = []
   const slept: number[] = []
-  const tools = options.tools ?? ['gh', 'curl']
   const run = async (argv: readonly string[], _init?: ProcessRunInit): Promise<ProcessRunResult> => {
     argvs.push([...argv])
     if (options.isProcessRefused) throw new Error('process.run is not available on this surface')
     const [bin = ''] = argv
-    if (bin === 'sh') return exited(0, tools.map(tool => `${tool}\n`).join(''))
+    if (bin === 'sh') return exited(0, (options.tools ?? ['gh', 'curl']).map(tool => `${tool}\n`).join(''))
     if (bin === '/usr/bin/security') return options.keychain ? exited(0, `${options.keychain}\n`) : exited(44, '', 'item not found')
     if (bin === 'gh' && argv[1] === 'auth' && argv[2] === 'status') return exited(options.ghAuthExit ?? 0, '', 'Logged in')
     const handler = bin === 'gh' ? options.gh : bin === 'curl' ? options.curl : undefined
@@ -250,6 +249,41 @@ describe('probe and gh', () => {
     await runGh($, ['api', 'user'])
     expect(argvs.filter(argv => argv[0] === 'sh').length).toBe(1)
     expect(argvs.filter(argv => argv.join(' ') === 'gh auth status').length).toBe(1)
+  })
+
+  test('signing in to gh mid-session is noticed on the next call; a healthy probe stays cached', async () => {
+    const options: WorldOptions = { keychain: KEY, ghAuthExit: 1, gh: () => exited(0, '{"ok":true}') }
+    const { $, argvs } = world(options)
+    expect(await seen(runGh($, ['api', 'user']))).toEqual({ ok: false, failure: 'cli-unauthed' })
+    options.ghAuthExit = 0
+    expect(await runGh($, ['api', 'user'])).toEqual({ ok: true, stdout: '{"ok":true}' })
+    await runGh($, ['api', 'user'])
+    expect(argvs.filter(argv => argv.join(' ') === 'gh auth status').length).toBe(2)
+  })
+
+  test('gh auth status timing out is offline, not cli-missing, and is probed again', async () => {
+    const made = keyed({ gh: () => exited(0, 'fine') })
+    let isHung = true
+    const run = made.$.run
+    const $: SourceIo = {
+      ...made.$,
+      run: async (argv, init) => {
+        if (isHung && argv.join(' ') === 'gh auth status') throw new Error('process timed out after 10000 ms')
+        return run(argv, init)
+      },
+    }
+    expect(await seen(runGh($, ['api', 'user']))).toEqual({ ok: false, failure: 'offline' })
+    expect(await tierFor($, 'gh-pr')).toEqual({ ok: false, failure: 'offline' })
+    isHung = false
+    expect(await runGh($, ['api', 'user'])).toEqual({ ok: true, stdout: 'fine' })
+  })
+
+  test('a gh found missing is probed again, so installing it mid-session is noticed', async () => {
+    const options: WorldOptions = { keychain: KEY, tools: ['curl'], gh: () => exited(0, 'fine') }
+    const { $ } = world(options)
+    expect(await seen(runGh($, ['api', 'user']))).toEqual({ ok: false, failure: 'cli-missing' })
+    options.tools = ['gh', 'curl']
+    expect(await runGh($, ['api', 'user'])).toEqual({ ok: true, stdout: 'fine' })
   })
 
   test('gh stderr maps to a kind and never travels upward', async () => {

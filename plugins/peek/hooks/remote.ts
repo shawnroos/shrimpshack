@@ -28,5 +28,6 @@ export async function loadItem(io: RemoteIo, ref: Ref, now: number, options: { c
   if (live.ok) return live
   const replayed = options.canReplay ? await replay(io, ref.address).catch(() => null) : null
   const captured = replayed ?? lookup(ref.address)
-  return (captured && source.fromCapture(captured, ref)) ?? live
+  const fallback = captured ? source.fromCapture(captured, ref) : null
+  return fallback?.ok ? { ...fallback, liveFailure: live.failure } : live
 }

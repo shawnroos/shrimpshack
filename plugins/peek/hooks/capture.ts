@@ -83,7 +83,9 @@ function isSingleItem(tool: string, input: Record<string, unknown>): boolean {
     return gh !== null && (gh.sub === 'api' || gh.verb === 'view')
   }
   const name = splitMcp(tool)?.name ?? ''
-  return name.startsWith('get_') || READ_EXACT.has(name)
+  // Only method `get` returns the item itself; get_diff, get_files and the rest would overwrite it with text no page can draw.
+  if (READ_EXACT.has(name)) return input.method === undefined || input.method === 'get'
+  return name.startsWith('get_')
 }
 
 function textOf(answer: unknown): string | null {

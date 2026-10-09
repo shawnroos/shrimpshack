@@ -138,6 +138,25 @@ describe('the capture store', () => {
     expect(lookup('https://github.com/o/r/pull/56')?.kind).toBe('gh-pr')
   })
 
+  test('a sub-method read of a pull request or issue never overwrites its get capture, but still counts as a mention', () => {
+    const pull = JSON.stringify({ number: 60, title: 'Good', html_url: 'https://github.com/o/r/pull/60' })
+    record({ tool: 'mcp__claude_ai_Github__pull_request_read', method: 'get', owner: 'o', repo: 'r', pullNumber: 60 }, reply(pull), at)
+    for (const method of ['get_diff', 'get_files', 'get_comments']) {
+      const noted = record({ tool: 'mcp__claude_ai_Github__pull_request_read', method, owner: 'o', repo: 'r', pullNumber: 60 }, reply('see https://github.com/o/r/pull/60'), at + 1)
+      expect(noted.addresses).toEqual(['https://github.com/o/r/pull/60'])
+    }
+    expect(lookup('https://github.com/o/r/pull/60')?.result).toBe(pull)
+    expect(lookup('https://github.com/o/r/pull/60')?.args.method).toBe('get')
+
+    const issue = JSON.stringify({ number: 61, title: 'Good issue' })
+    record({ tool: 'mcp__claude_ai_Github__issue_read', method: 'get', owner: 'o', repo: 'r', issue_number: 61 }, reply(issue), at)
+    record({ tool: 'mcp__claude_ai_Github__issue_read', method: 'get_comments', owner: 'o', repo: 'r', issue_number: 61 }, reply('[]'), at + 1)
+    expect(lookup('https://github.com/o/r/issues/61')?.result).toBe(issue)
+
+    record({ tool: 'mcp__claude_ai_Github__issue_read', owner: 'o', repo: 'r', issue_number: 62 }, reply(issue), at)
+    expect(lookup('https://github.com/o/r/issues/62')?.kind).toBe('gh-issue')
+  })
+
   test('an errored call, a write tool and a write or chained gh command store nothing', async () => {
     const none = { addresses: [], grewLinear: false }
     expect(record({ tool: 'mcp__claude_ai_Github__pull_request_read', method: 'get', owner: 'o', repo: 'r', pullNumber: 7 }, { isError: true, text: 'boom' }, at)).toEqual(none)

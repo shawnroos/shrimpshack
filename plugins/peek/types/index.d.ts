@@ -26,6 +26,8 @@ export type RemoteListItem = { href: string; title: string; meta?: string; statu
 
 export type RemoteList = { heading: string; items: RemoteListItem[]; total: number; isPartial?: boolean }
 
+export type CiTone = 'bad' | 'wait' | 'ok' | 'none'
+
 export type RemoteRecord = {
   address: string
   kind: RemoteKind
@@ -34,7 +36,7 @@ export type RemoteRecord = {
   status?: string
   isFrozen?: boolean
   meta: { label: string; value: string }[]
-  stats?: { additions: number; deletions: number; changedFiles: number; ci: string }
+  stats?: { additions: number; deletions: number; changedFiles: number; ci: string; ciTone: CiTone }
   body?: string
   comments?: { shown: RemoteComment[]; total: number; inline?: number }
   lists?: RemoteList[]
@@ -44,7 +46,7 @@ export type RemoteRecord = {
 }
 
 export type Loaded =
-  | { ok: true; record: RemoteRecord; tier: Tier; fetchedAt: number }
+  | { ok: true; record: RemoteRecord; tier: Tier; fetchedAt: number; liveFailure?: FailureKind }
   | { ok: false; failure: FailureKind }
 
 export type View = {

@@ -9,7 +9,10 @@ const SCRATCH = '/tmp/claude-peek'
 // The engine cuts stdout at 4 MiB, so the status line rides on stderr where the cut cannot drop it.
 const MARKER = '__peek_curl__ '
 const MAX_PAGE = 4_194_304
-const PROTO = ['--proto', '=http,https', '--proto-redir', '=http,https']
+// --globoff: curl otherwise expands {a,b} and [1-2] in a URL into hosts fetchable() never saw.
+const PROTO = ['--globoff', '--proto', '=http,https', '--proto-redir', '=http,https']
+const DSCACHEUTIL = '/usr/bin/dscacheutil'
+const HOSTNAME = /^(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])$/i
 const MAX_IMAGE_HOPS = 5
 const IMAGE_EXT = /\.(png|ico|jpe?g|gif|webp|svg|bmp)$/i
 
@@ -145,7 +148,26 @@ function fetchable(raw: string | undefined): URL | null {
   const url = raw ? safeParse(raw) : null
   if (!url) return null
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+  if (!HOSTNAME.test(url.hostname)) return null
   return isPrivateHost(url.hostname) ? null : url
+}
+
+function isIpLiteral(hostname: string): boolean {
+  return ipv4(hostname) !== null || (hostname.startsWith('[') && ipv6(hostname.slice(1, -1)) !== null)
+}
+
+async function pinnedAddress(io: SourceIo, url: URL): Promise<string[] | null> {
+  const host = url.hostname
+  if (isIpLiteral(host)) return []
+  const ran = await io.run([DSCACHEUTIL, '-q', 'host', '-a', 'name', host], { timeoutMs: 3000 }).catch(() => null)
+  if (!ran || ran.exitCode !== 0) return null
+  const addresses = [...ran.stdout.matchAll(/^\s*(?:ip_address|ipv6_address):\s*(\S+)\s*$/gm)].map(match => match[1] ?? '')
+  if (addresses.length === 0) return null
+  if (addresses.some(address => (ipv4(address) === null && ipv6(address) === null) || isPrivateHost(address))) return null
+  const [chosen = ''] = addresses
+  const port = url.port || (url.protocol === 'https:' ? '443' : '80')
+  // Pins curl to the address checked above, so a second DNS answer cannot swap in a private one.
+  return ['--resolve', `${host}:${port}:${chosen.includes(':') ? `[${chosen}]` : chosen}`]
 }
 
 async function sha1(text: string): Promise<string> {
@@ -163,7 +185,9 @@ async function download(io: SourceIo, raw: string | undefined): Promise<string |
   let url: URL | null = first
   // curl's own -L would follow a redirect to a private host; each hop is checked here instead.
   for (let hop = 0; url && hop <= MAX_IMAGE_HOPS; hop++) {
-    const argv = ['curl', '-sf', ...PROTO, '--max-redirs', '0', '--max-time', '10', '--max-filesize', '10000000', '-o', file, '-w', '%{http_code} %{size_download} %{redirect_url}', url.href]
+    const pin = await pinnedAddress(io, url)
+    if (!pin) return undefined
+    const argv = ['curl', '-sf', ...PROTO, ...pin, '--max-redirs', '0', '--max-time', '10', '--max-filesize', '10000000', '-o', file, '-w', '%{http_code} %{size_download} %{redirect_url}', url.href]
     const ran = await io.run(argv, { timeoutMs: 15_000 }).catch(() => null)
     if (!ran || ran.exitCode !== 0) return undefined
     const [code = '', size = '', ...rest] = ran.stdout.trim().split(' ')
