@@ -4,6 +4,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Mention, Mode, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
 import { C as BASE, MUTED, ICON, colorFor, iconFor, ruleParts } from './theme'
+import { record } from './capture'
+import type { CaptureIo } from './capture'
 import {
   describeAge,
   describeSize,
@@ -413,6 +415,20 @@ async function remember(
   await update($, mentions, list =>
     noteMentions(noteMentions(list, [...new Set(worked)], at), [...new Set(artifacts)], at, 200, true),
   )
+}
+
+function captureIoOf($: EngineInterface): CaptureIo {
+  return {
+    mcpCall: (server, tool, args) => $.mcp.call(server, tool, args),
+    now: () => $.clock.now(),
+  }
+}
+
+async function noteCapture($: EngineInterface, input: Record<string, unknown>, answer: unknown) {
+  const at = await $.clock.now()
+  const { addresses, grewLinear } = record(input, answer, at)
+  if (addresses.length) await update($, mentions, list => noteMentions(list, addresses, at, 200, true))
+  if (grewLinear) $.ui.invalidate('ui.render')
 }
 
 async function toHref($: EngineInterface, raw: string): Promise<string | null> {
@@ -843,6 +859,13 @@ export const register: Register = on => {
     const isOn = await setStar($, href, input.starred !== false).catch(() => null)
     if (isOn === null) return { result: 'Could not save the star.' }
     return { result: `${isOn ? 'Starred' : 'Unstarred'} ${parseHref(href)?.path ?? href} in peek.` }
+  })
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^(?:Bash$|WebFetch$|mcp__(?!peek__))/ }, async ($, e, next) => {
+    const answer = await next(e)
+    await noteCapture($, e as unknown as Record<string, unknown>, answer).catch(() => undefined)
+    return answer
   })
 
   on('ui.message', async ($, e, next) => {
