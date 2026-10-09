@@ -13,20 +13,49 @@ transcript.
 | Images (PNG, JPG, GIF, WebP, HEIC, SVG) | The picture, on terminals that draw images |
 | Mermaid (`.mmd`, or fenced in markdown) | Drawn as text boxes and arrows when `mermaid-ascii` is installed |
 | Folders | A clickable file list |
-| Web pages | The page text |
+| Web pages | Open Graph title, description and preview image, the site's favicon, then the page text |
+| GitHub pull requests | Details, line counts, files changed, a CI summary, the description and comments |
+| GitHub issues and repos | Details, the body or README, comments, and a repo's open pull requests and issues |
+| Linear issues and projects | Details, the description, comments with replies, and a project's open issues |
+
+## Remote pages
+
+Links and IDs in replies become clickable: GitHub URLs, `owner/repo#12`, `#12`
+inside a GitHub repo, Linear URLs, and Linear IDs such as `WEB-2757` when
+`WEB` is a team in your workspace. Peek is read-only: it never changes
+anything in GitHub or Linear.
+
+Each page comes from the best source available, and the footer names it:
+
+| Source | Used for | Needs |
+|---|---|---|
+| `gh` | GitHub items | `gh auth login` |
+| `curl` | Web pages and their images | `curl` on the path |
+| Linear API | Linear items | `LINEAR_API_KEY` in the environment or `~/.secrets`, or the `work-linear` Keychain item |
+| This session | Anything the agent already read through a GitHub, Linear or web tool | Nothing |
+
+Open issues and pull requests on screen refresh every 60 seconds. Open ones in
+Recent or stars refresh every 5 minutes, at most 20 per round. Closed and merged
+items, repos, projects and web pages refresh when opened or when you press `u`.
+Refresh pauses after 10 minutes with no activity and backs off when a service
+rate-limits it. When no tool or key is available, refresh repeats the agent's
+own read call.
 
 ## Commands
 
 | Command | Does |
 |---|---|
 | `/peek <path or URL>` | Opens it |
+| `/peek WEB-2757` or `/peek owner/repo#12` | Opens a Linear or GitHub item |
 | `/peek the export diagram` | Finds a recent file by description |
 | `/peek` | Reopens the last file |
 | `/peek-menu` | Command menu: switch view, scroll, open, copy, recent files |
 | `/peek-ui` | A live gallery of every UI element a mod can draw |
 
 In the pane: `j`/`k` jump between blocks, the wheel scrolls, `r` shows recent
-files, `o` opens the file in its own app, `c` copies the path, `x` closes.
+files, `o` opens the file in its own app (a remote page in the browser), `c`
+copies the path or link, `u` refreshes a remote page, `b` goes back to the page
+you came from, `x` closes.
 
 ## Setup
 
