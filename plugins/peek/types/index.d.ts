@@ -4,6 +4,49 @@ export type Mention = { href: string; at: number; count: number; isArtifact?: bo
 
 export type Heading = { level: number; text: string }
 
+export type RemoteKind = 'gh-repo' | 'gh-issue' | 'gh-pr' | 'linear-issue' | 'linear-project' | 'web'
+
+export type FailureKind =
+  | 'cli-missing'
+  | 'cli-unauthed'
+  | 'key-missing'
+  | 'key-refused'
+  | 'not-found-or-no-access'
+  | 'rate-limited'
+  | 'offline'
+  | 'query-bug'
+  | 'fetch-blocked'
+  | 'process-unavailable'
+
+export type Tier = 'cli' | 'api' | 'session'
+
+export type RemoteComment = { author: string; at: string; body: string; depth?: number; isReview?: boolean }
+
+export type RemoteListItem = { href: string; title: string; meta?: string; status?: string }
+
+export type RemoteList = { heading: string; items: RemoteListItem[]; total: number; isPartial?: boolean }
+
+export type RemoteRecord = {
+  address: string
+  kind: RemoteKind
+  title: string
+  trail: string[]
+  status?: string
+  isFrozen?: boolean
+  meta: { label: string; value: string }[]
+  stats?: { additions: number; deletions: number; changedFiles: number; ci: string }
+  body?: string
+  comments?: { shown: RemoteComment[]; total: number; inline?: number }
+  lists?: RemoteList[]
+  og?: { title?: string; description?: string; siteName?: string; image?: string }
+  favicon?: string
+  browserUrl: string
+}
+
+export type Loaded =
+  | { ok: true; record: RemoteRecord; tier: Tier; fetchedAt: number }
+  | { ok: false; failure: FailureKind }
+
 export type View = {
   href: string
   title: string
@@ -21,6 +64,7 @@ export type View = {
   code?: { source: string; language: string; startLine: number; focusLine?: number }
   image?: { file: string; width: number; height: number }
   error?: string
+  remote?: { record?: RemoteRecord; tier?: Tier; fetchedAt?: number; failure?: FailureKind; staleSince?: number }
 }
 
 declare module 'claude-code' {

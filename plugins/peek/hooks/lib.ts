@@ -1,3 +1,6 @@
+import { linkRefs, refHref } from './refs'
+import type { RefContext } from './refs'
+
 export type Kind = 'markdown' | 'image' | 'svg' | 'html' | 'mermaid' | 'json' | 'toml' | 'csv' | 'text'
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'tif', 'tiff', 'bmp']
@@ -120,7 +123,11 @@ export function pathCandidates(text: string): string[] {
   return [...found]
 }
 
-export function linkify(text: string, hrefFor: (raw: string, line?: number) => string | null): string {
+export function linkify(
+  text: string,
+  hrefFor: (raw: string, line?: number) => string | null,
+  refs?: RefContext,
+): string {
   return splitFences(text)
     .map(fence => {
       if (!fence.isProse) return fence.text
@@ -130,13 +137,17 @@ export function linkify(text: string, hrefFor: (raw: string, line?: number) => s
           return splitPattern(part.text, CODE_SPAN)
             .map(code => {
               if (code.isProse) {
-                return code.text.replace(BARE_PATH, (whole, raw: string, line?: string) => {
+                const withPaths = code.text.replace(BARE_PATH, (whole, raw: string, line?: string) => {
                   const href = hrefFor(raw, line ? Number(line) : undefined)
                   return href ? `[${whole}](${href})` : whole
                 })
+                if (!refs) return withPaths
+                return splitPattern(withPaths, MD_LINK)
+                  .map(piece => (piece.isProse ? linkRefs(piece.text, refs) : piece.text))
+                  .join('')
               }
               const path = splitCodePath(code.text.slice(1, -1))
-              const href = path && hrefFor(path.raw, path.line)
+              const href = (path && hrefFor(path.raw, path.line)) || (refs && refHref(code.text.slice(1, -1), refs))
               return href ? `[${code.text}](${href})` : code.text
             })
             .join('')
