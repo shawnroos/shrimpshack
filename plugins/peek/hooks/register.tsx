@@ -1006,120 +1006,7 @@ async function leaveLive() {
   await live?.leave().catch(() => undefined)
 }
 
-// Throwaway U1 spike (removed at the end of U2): checks which frame sources draw and whether a Client over an Image gets clicks.
-const SPIKE = 'peek-spike'
-const SPIKE_DIR = '/tmp/claude-peek'
-let spikeLog: string[] = []
-let spikePng: { a: string; b: string } | null = null
-
-async function spikePrep($: EngineInterface) {
-  const home = (await $.env.get('HOME')) ?? ''
-  const script = `${home}/projects/shrimpshack/plugins/peek/helper/spike/prep.py`
-  const ran = await $.process.run(['python3', '-I', script], { timeoutMs: 20000 }).catch(() => null)
-  spikeLog.push(`prep: ${ran?.exitCode === 0 ? 'ok' : `failed ${ran?.stderr.slice(0, 120) ?? 'no run'}`}`)
-  const a = await $.fs.read(`${SPIKE_DIR}/spike-a.png.b64`).catch(() => '')
-  const b = await $.fs.read(`${SPIKE_DIR}/spike-b.png.b64`).catch(() => '')
-  spikePng = { a: a.trim(), b: b.trim() }
-}
-
-async function spikeFrames($: EngineInterface) {
-  const run = async (label: string, key: string, sources: unknown[]) => {
-    const start = await $.clock.now()
-    let denied = 0
-    let lastDeny = ''
-    for (const source of sources) {
-      const result = (await $.ui.blit({ requestId: SPIKE, key, source } as never).catch((error: unknown) => ({ deny: String(error) }))) as { deny?: unknown }
-      if (result && 'deny' in result && result.deny) {
-        denied += 1
-        lastDeny = String(result.deny).slice(0, 80)
-      }
-    }
-    const ms = Math.max(1, (await $.clock.now()) - start)
-    spikeLog.push(`${label}: ${sources.length} blits in ${ms} ms (${Math.round((sources.length * 1000) / ms)}/s), denied ${denied}${lastDeny ? ` (${lastDeny})` : ''}`)
-  }
-  const png = spikePng ?? { a: '', b: '' }
-  await run('png', 'spike-png', Array.from({ length: 60 }, (_, i) => ({ png: i % 2 ? png.a : png.b })))
-  await run('file', 'spike-file', Array.from({ length: 60 }, (_, i) => ({ file: `${SPIKE_DIR}/spike-${i % 2 ? 'a' : 'b'}.rgba`, format: 'rgba', width: 160, height: 80, generation: i + 1 })))
-  await run('shm', 'spike-shm', Array.from({ length: 38 }, (_, i) => ({ shm: `/pkspk${i + 2}`, format: 'rgba', width: 160, height: 80 })))
-  $.ui.invalidate('ui.render')
-}
-
-let spikeStreaming = false
-
-async function spikeStream($: EngineInterface, kind: 'png' | 'half', fps: number) {
-  if (spikeStreaming) return
-  spikeStreaming = true
-  const total = fps * 10
-  const gap = Math.round(1000 / fps)
-  const start = await $.clock.now()
-  let denied = 0
-  let late = 0
-  for (let i = 0; i < total; i += 1) {
-    const due = start + i * gap
-    const now = await $.clock.now()
-    if (now > due + gap) late += 1
-    else if (now < due) await $.clock.sleep(due - now)
-    const n = i % 30
-    const source = kind === 'png'
-      ? { file: `${SPIKE_DIR}/stream-${n}.png`, format: 'png', generation: i + 1 }
-      : { file: `${SPIKE_DIR}/stream-half-${n}.png`, format: 'png', generation: i + 1 }
-    const result = (await $.ui.blit({ requestId: SPIKE, key: 'spike-stream', source } as never).catch((error: unknown) => ({ deny: String(error) }))) as { deny?: unknown }
-    if (result && 'deny' in result && result.deny) denied += 1
-  }
-  const ms = (await $.clock.now()) - start
-  spikeLog.push(`stream ${kind} ${fps}/s: ${total} blits in ${ms} ms, late ${late}, denied ${denied}`)
-  spikeStreaming = false
-  $.ui.invalidate('ui.render')
-}
-
 export const register: Register = on => {
-  on('command.run', { command: 'peek-spike' }, async $ => {
-    spikeLog = []
-    await spikePrep($)
-    await $.ui.open({ id: SPIKE, title: 'Peek spike' })
-    return { text: 'Peek spike opened: check which three pictures show, click the fourth box, then press Run frame test.' }
-  })
-
-  on('ui.render', { component: 'Pane', requestId: SPIKE }, async ($, e) => {
-    const elements = $.ui.resolve(e)
-    const { Box, Text, Button } = elements
-    const Image = 'Image' in elements ? elements.Image : undefined
-    const Client = 'Client' in elements ? elements.Client : undefined
-    const png = spikePng ?? { a: '', b: '' }
-    return (
-      <Box flexDirection="column" padding={1}>
-        <Text bold>{`peek spike · surface ${e.surface ?? '?'} · Image ${Image ? 'yes' : 'no'} · Client ${Client ? 'yes' : 'no'}`}</Text>
-        <Text>1. png (base64) — amber</Text>
-        {Image && <Image key="spike-png" source={{ png: png.b }} columns={20} rows={4} alt="[png did not draw]" />}
-        <Text>2. file (raw rgba) — amber/blue</Text>
-        {Image && <Image key="spike-file" source={{ file: `${SPIKE_DIR}/spike-b.rgba`, format: 'rgba', width: 160, height: 80, generation: 1 }} columns={20} rows={4} alt="[file did not draw]" />}
-        <Text>3. shm — pink/green</Text>
-        {Image && <Image key="spike-shm" source={{ shm: '/pkspk0', format: 'rgba', width: 160, height: 80 }} columns={20} rows={4} alt="[shm did not draw]" />}
-        <Text>4. click layer over a picture — click inside it</Text>
-        <Box width={40} height={6}>
-          {Image && <Image key="spike-under" source={{ png: png.a }} columns={40} rows={6} alt="[under-picture did not draw]" />}
-          {Client && (
-            <Box position="absolute" top={0} left={0} width={40} height={6}>
-              <Client key="spike-input" module="./spike-input.tsx" props={{ width: 40, height: 6 }} width={40} height={6} />
-            </Box>
-          )}
-        </Box>
-        <Button key="spike-run" label="Run frame test" onPress={() => void spikeFrames($)} />
-        <Box flexDirection="row" gap={2}>
-          <Button key="spike-s5" label="A: full 5/s" onPress={() => void spikeStream($, 'png', 5)} />
-          <Button key="spike-s10" label="B: full 10/s" onPress={() => void spikeStream($, 'png', 10)} />
-          <Button key="spike-h10" label="C: half 10/s" onPress={() => void spikeStream($, 'half', 10)} />
-          <Button key="spike-h30" label="D: half 30/s" onPress={() => void spikeStream($, 'half', 30)} />
-        </Box>
-        <Text>5. stream — counter 00-29 and a bar sweeping left to right, for 10 s</Text>
-        {Image && <Image key="spike-stream" source={{ file: `${SPIKE_DIR}/stream-0.png`, format: 'png', generation: 0 }} columns={60} rows={19} alt="[stream did not draw]" />}
-        {spikeLog.map((line, i) => (
-          <Text key={`log-${i}`}>{line}</Text>
-        ))}
-      </Box>
-    )
-  })
-
   on('session.start', async ($, e, next) => {
     lastActivity = await $.clock.now()
     const savedTitles = await $.store.get('titles').catch(() => undefined)
@@ -1144,7 +1031,6 @@ export const register: Register = on => {
       .catch(() => undefined)
     await $.command.register({ name: 'peek-menu', description: 'Open the peek command menu (ctrl+k in the peek pane)' })
     await $.command.register({ name: 'peek-ui', description: 'Show every Claude Code UI element a mod can draw, live' })
-    await $.command.register({ name: 'peek-spike', description: 'Throwaway live-view spike: frame sources and click layering' })
     await $.command.register({ name: 'peek', description: 'Peek at a file, folder or URL in the side pane: a path, a description ("the export diagram"), or nothing for the last one' })
     return next(e)
   })
@@ -1398,12 +1284,6 @@ export const register: Register = on => {
     if (e.requestId === PANE && input && Array.isArray(input.liveInput)) {
       await onLiveInput($, input.liveInput as LiveInputEvent[]).catch(() => undefined)
       return { props: { width: liveGeom?.columns ?? 1, height: liveGeom?.rows ?? 1, acked: lastInputSeq } }
-    }
-    const spike = e.data as { spikeClick?: unknown; spikeKey?: unknown } | null
-    if (e.requestId === SPIKE && spike && (spike.spikeClick !== undefined || spike.spikeKey !== undefined)) {
-      spikeLog.push(spike.spikeClick !== undefined ? `click reached the layer at ${String(spike.spikeClick)}` : `key reached the layer: ${String(spike.spikeKey)}`)
-      $.ui.invalidate('ui.render')
-      return {}
     }
     const starring = e.data as { star?: unknown } | null
     if (e.requestId === PANE && starring && typeof starring.star === 'string') {
