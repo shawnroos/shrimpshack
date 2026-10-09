@@ -39,6 +39,11 @@ export const ICON = {
   peek: '\u{f06e}',
   recent: '\u{f017}',
   gallery: '\u{f0c6c}',
+  'gh-pr': '\u{f407}',
+  'gh-issue': '\u{f41b}',
+  'gh-repo': '\u{f401}',
+  'linear-issue': '\u{f0ae}',
+  'linear-project': '\u{f0e8}',
 } as const
 
 export const KIND_COLOR: Record<string, string> = {
@@ -53,6 +58,11 @@ export const KIND_COLOR: Record<string, string> = {
   toml: C.peach,
   csv: C.green,
   web: C.peach,
+  'gh-pr': C.green,
+  'gh-issue': C.teal,
+  'gh-repo': C.overlay1,
+  'linear-issue': C.blue,
+  'linear-project': C.mauve,
 }
 
 export function iconFor(kind: string | undefined): string {

@@ -3,9 +3,14 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Mention, Mode, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
-import { C as BASE, MUTED, ICON, colorFor, iconFor, ruleParts } from './theme'
-import { record } from './capture'
+import { C as BASE, MUTED, ICON, colorFor, iconFor, mute, ruleParts } from './theme'
+import { capturedLinearContext, record } from './capture'
 import type { CaptureIo } from './capture'
+import { parseRef } from './refs'
+import type { Ref, RefContext } from './refs'
+import { loadItem } from './remote'
+import type { RemoteIo } from './remote'
+import { failureText } from './sources'
 import {
   describeAge,
   describeSize,
@@ -352,8 +357,56 @@ async function loadUrl($: EngineInterface, href: string): Promise<View> {
   return { ...base, outline, markdown: fitMarkdown(markdown) }
 }
 
+function remoteIoOf($: EngineInterface): RemoteIo {
+  return {
+    sessionId: () => $.session.id(),
+    run: (argv, init) => $.process.run(argv, init),
+    fetch: (url, init) => $.http.fetch(url, init),
+    linearKeyEnv: () => $.env.get('LINEAR_API_KEY'),
+    home: () => $.env.get('HOME'),
+    read: path => $.fs.read(path),
+    sleep: ms => $.clock.sleep(ms),
+    mcpCall: (server, tool, args) => $.mcp.call(server, tool, args),
+    now: () => $.clock.now(),
+  }
+}
+
+async function remotePicture($: EngineInterface, file: string | undefined) {
+  if (!file) return undefined
+  return toPng($, file, 0).catch(() => undefined)
+}
+
+async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Promise<View> {
+  const loaded = await loadItem(remoteIoOf($), ref, await $.clock.now(), { canReplay })
+  const base: View = { href: ref.address, title: ref.key ?? ref.address.replace(/^https:\/\//, ''), location: ref.address, kind: ref.kind }
+  if (!loaded.ok) return { ...base, remote: { failure: loaded.failure } }
+  const record = loaded.record
+  return {
+    href: record.address,
+    title: record.title,
+    location: record.browserUrl,
+    kind: record.kind,
+    remote: {
+      record,
+      tier: loaded.tier,
+      fetchedAt: loaded.fetchedAt,
+      favicon: await remotePicture($, record.favicon),
+      preview: await remotePicture($, record.og?.image),
+    },
+  }
+}
+
+function remoteRef(href: string, context: RefContext = {}): Ref | null {
+  if (parseHref(href)) return null
+  const ref = parseRef(href, context)
+  if (!ref) return null
+  const kind = ref.kind === 'web' ? kindOf(new URL(ref.address).pathname) : null
+  return kind === 'image' || kind === 'svg' ? null : ref
+}
+
 async function show($: EngineInterface, href: string) {
   const file = parseHref(href)
+  const ref = remoteRef(href)
   const loading: View = { href, title: 'Loading…', location: file?.path ?? href }
   await update($, view, () => loading)
   const at = await $.clock.now()
@@ -366,7 +419,7 @@ async function show($: EngineInterface, href: string) {
   void $.ui.open({ id: PANE, title: 'Peek' })
   let next: View
   try {
-    next = file ? await loadFile($, href, file.path, file.line) : await loadUrl($, href)
+    next = file ? await loadFile($, href, file.path, file.line) : ref ? await loadRemote($, ref) : await loadUrl($, href)
   } catch (error) {
     next = { ...loading, title: 'Could not open', error: error instanceof Error ? error.message : String(error) }
   }
@@ -562,11 +615,35 @@ async function setStar($: EngineInterface, href: string, wanted?: boolean): Prom
 }
 
 async function refresh($: EngineInterface, href: string) {
+  const ref = remoteRef(href)
+  if (ref) {
+    const next = await loadRemote($, ref, true)
+    const now = await $.clock.now()
+    const current = await read($, view)
+    if (current?.href === href) await update($, view, () => keepRecord(current, next, now))
+    return
+  }
   const file = parseHref(href)
   if (!file) return
   exists.delete(file.path)
   const next = await loadFile($, href, file.path, file.line).catch(() => null)
   if (next) await update($, view, () => next)
+}
+
+const TIER_NAMES: Record<string, string> = { 'gh-cli': 'via gh', 'web-cli': 'via curl', 'web-api': 'via web fetch', 'linear-api': 'via Linear API' }
+
+function sourceLine(kind: string, tier: string | undefined, fetchedAt: number | undefined, staleSince: number | undefined, now: number): string {
+  const family = kind.startsWith('gh-') ? 'gh' : kind.startsWith('linear-') ? 'linear' : 'web'
+  const name = tier === 'session' ? 'from this session' : (TIER_NAMES[`${family}-${tier}`] ?? `via ${tier ?? '?'}`)
+  const seconds = fetchedAt === undefined ? 0 : Math.max(0, Math.round((now - fetchedAt) / 1000))
+  const age = fetchedAt === undefined ? '' : seconds < 60 ? `${seconds}s ago` : describeAge(fetchedAt, now)
+  const stale = staleSince === undefined ? '' : ` · stale since ${describeAge(staleSince, now)}`
+  return `${name}${age ? ` · ${age}` : ''}${stale}`
+}
+
+function keepRecord(current: View, next: View, now: number): View {
+  if (next.remote?.record || !current.remote?.record) return next
+  return { ...current, remote: { ...current.remote, staleSince: current.remote.staleSince ?? now, failure: next.remote?.failure } }
 }
 
 async function pressLink($: EngineInterface, href: string) {
@@ -1075,7 +1152,10 @@ export const register: Register = on => {
       ...(current
         ? [
             { id: 'open', icon: '\u{f08e}', label: 'Open in its own app', hint: 'o', run: () => void openExternally($, current) },
-            { id: 'copy', icon: '\u{f0c5}', label: 'Copy path', hint: 'c', run: () => void $.ui.copy({ text: current.location }) },
+            ...(current.remote
+              ? [{ id: 'refresh', icon: '\u{f021}', label: 'Refresh this page', hint: 'u', run: () => void refresh($, current.href) }]
+              : []),
+            { id: 'copy', icon: '\u{f0c5}', label: current.remote ? 'Copy link' : 'Copy path', hint: 'c', run: () => void $.ui.copy({ text: current.location }) },
             { id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hint: 'f', run: () => void setStar($, current.href) },
           ]
         : []),
@@ -1568,10 +1648,219 @@ export const register: Register = on => {
       ? folderPath.slice(current.root.length + 1)
       : shortPath(folderPath, cwd, home)
 
+    const settleBlocks = (drawnParts: unknown[], partRows: number[], partHeadings: string[]) => {
+      for (let i = partRows.length; i < drawnParts.length; i++) {
+        partRows.push(IMAGE_ROWS)
+        partHeadings.push('')
+      }
+      blockStarts = []
+      blockHeadings = []
+      let running = 0
+      let lastHeading = ''
+      for (const [i, rows] of partRows.entries()) {
+        blockStarts.push(running)
+        lastHeading = partHeadings[i] || lastHeading
+        blockHeadings.push(lastHeading)
+        running += rows + 1
+      }
+      estimatedRows = Math.max(1, running)
+      const topBlock = [...blockStarts.keys()].reverse().find(i => rowOf(i) <= offset + PAGE_TOP + 1) ?? 0
+      const heading = blockHeadings[topBlock] ?? ''
+      const maxScroll = Math.max(0, contentRows - e.props.scroll.bodyRows)
+      const percent = maxScroll > 0 ? Math.min(100, Math.round((offset / maxScroll) * 100)) : 100
+      return {
+        body: (
+          <Box flexDirection="column" width={textWidth}>
+            {drawnParts.map((part, blockIndex) => (
+              <Box key={`block-${blockIndex}`} flexDirection="column" marginBottom={1}>
+                {part as never}
+              </Box>
+            ))}
+          </Box>
+        ),
+        jumps: blockJumps(drawnParts.length, 'block'),
+        position: `${percent}%${heading ? ` · § ${heading}` : ''}`,
+      }
+    }
+
     let body: unknown = null
     let position = ''
     let jumps: { next: () => void; prev: () => void } = { next: () => {}, prev: () => {} }
-    if (current.markdown !== undefined) {
+    if (current.remote) {
+      const remote = current.remote
+      const record = remote.record
+      const drawnParts: unknown[] = []
+      const partRows: number[] = []
+      const partHeadings: string[] = []
+      const note = (rows: number, heading = '') => {
+        while (partRows.length < drawnParts.length) {
+          partRows.push(rows)
+          partHeadings.push(heading)
+        }
+      }
+      const sectionRule = (key: string, label: string, right = '') => {
+        const head = `${label.toUpperCase()} `
+        const tail = right ? ` ${right}` : ''
+        drawnParts.push(
+          <Text key={key} wrap="truncate-end">
+            <Text color={C.accent} bold>{head}</Text>
+            <Text color={C.surface1}>{'─'.repeat(Math.max(1, textWidth - head.length - tail.length))}</Text>
+            <Text color={C.overlay0}>{tail}</Text>
+          </Text>,
+        )
+        note(1, label)
+      }
+      const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
+      const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
+      const refs: RefContext = { ...capturedLinearContext(), repo: ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined }
+      const markdownBlocks = (key: string, text: string, heading: string, indent = 0) => {
+        for (const [i, chunk] of chunkMarkdown(linkify(text, () => null, refs)).entries()) {
+          drawnParts.push(
+            <Box key={`${key}-${i}`} marginLeft={indent}>
+              <Markdown dimColor={isMenuOpen} key={`${key}-md-${i}`} text={chunk} onLinkPress={link => void pressLink($, link.href)} />
+            </Box>,
+          )
+          note(estimateRows(chunk, textWidth - indent), heading)
+        }
+      }
+      if (!record) {
+        const message = failureText(remote.failure ?? 'offline')
+        drawnParts.push(
+          <Box key="remote-failure" flexDirection="column">
+            <Text color={C.red} bold>{message.title}</Text>
+            <Text color={C.subtext0}>{message.hint}</Text>
+            <Text color={C.overlay0}>Press o to open it in the browser.</Text>
+          </Box>,
+        )
+        note(3)
+      } else {
+        const favicon = remote.favicon && pixels.get(remote.favicon.file)
+        drawnParts.push(
+          <Box key="remote-title" flexDirection="row" width={textWidth}>
+            {favicon && Image ? (
+              <Box flexShrink={0} marginRight={1}>
+                <Image key="remote-favicon" source={{ png: favicon }} columns={2} rows={1} alt={iconFor(record.kind)} />
+              </Box>
+            ) : (
+              <Text color={kindColor(record.kind)}>{`${iconFor(record.kind)} `}</Text>
+            )}
+            <Box flexShrink={1}>
+              <Text color={C.text} bold>{record.title}</Text>
+            </Box>
+          </Box>,
+        )
+        note(Math.ceil((record.title.length + 3) / textWidth), record.title)
+        const labelWidth = Math.min(14, Math.max(0, ...record.meta.map(one => one.label.length)) + 2)
+        drawnParts.push(
+          embed('remote-meta', iconFor(record.kind), 'DETAILS', record.status ?? '', kindColor(record.kind), (
+            <Box flexDirection="column">
+              {record.meta.map((one, i) => (
+                <Text key={`meta-${i}`} wrap="truncate-end">
+                  <Text color={C.overlay0}>{one.label.padEnd(labelWidth)}</Text>
+                  <Text color={C.text}>{one.value}</Text>
+                </Text>
+              ))}
+            </Box>
+          )),
+        )
+        note(record.meta.length + 4, 'Details')
+        if (record.stats) {
+          const ci = record.stats.ci
+          const ciColor = /failed|not running/.test(ci) ? C.red : /pending|computing/.test(ci) ? C.yellow : /passed/.test(ci) ? C.green : C.overlay1
+          drawnParts.push(
+            embed('remote-stats', ICON['gh-pr'], 'CHANGES', `${record.stats.changedFiles} files`, C.green, (
+              <Box flexDirection="column">
+                <Text>
+                  <Text color={C.green}>{`+${record.stats.additions}`}</Text>
+                  <Text color={C.overlay0}>{'  '}</Text>
+                  <Text color={C.red}>{`−${record.stats.deletions}`}</Text>
+                  <Text color={C.overlay0}>{`  ·  ${record.stats.changedFiles} files changed`}</Text>
+                </Text>
+                <Text wrap="truncate-end">
+                  <Text color={C.overlay0}>{'CI  '}</Text>
+                  <Text color={ciColor}>{ci}</Text>
+                </Text>
+              </Box>
+            )),
+          )
+          note(6, 'Changes')
+        }
+        const preview = remote.preview && pixels.get(remote.preview.file)
+        if (record.og && (record.og.description || preview)) {
+          drawnParts.push(
+            embed('remote-preview', ICON.web, 'PREVIEW', record.og.siteName ?? '', C.peach, (
+              <Box flexDirection="column">
+                {preview && Image && remote.preview && (
+                  <Image key="remote-preview-image" source={{ png: preview }} {...imageBox(remote.preview.width, remote.preview.height, textWidth - 4, IMAGE_ROWS - 2)} alt="preview image" />
+                )}
+                {record.og.description && <Text color={C.subtext0}>{record.og.description}</Text>}
+              </Box>
+            )),
+          )
+          note((preview ? IMAGE_ROWS : 0) + estimateRows(record.og.description ?? '', textWidth - 2) + 4, 'Preview')
+        }
+        const lists = () => {
+          for (const [li, list] of (record.lists ?? []).entries()) {
+            const more = list.total > list.items.length || list.isPartial
+            sectionRule(`list-head-${li}`, list.heading, more ? `${list.items.length} of ${list.isPartial ? `${list.total}+` : list.total}` : `${list.total}`)
+            drawnParts.push(
+              <Box key={`list-${li}`} flexDirection="column" width={textWidth}>
+                {list.items.length === 0 && <Text color={C.overlay0}>None open.</Text>}
+                {list.items.map((item, i) => {
+                  const meta = [item.status, item.meta].filter(Boolean).join(' · ')
+                  return (
+                    <Box key={`list-${li}-${i}`} flexDirection="row" justifyContent="space-between" width={textWidth} height={1} hover={{ backgroundColor: C.surface0 }}>
+                      <Box flexShrink={1} overflow="hidden" height={1}>
+                        <Button key={`list-item-${li}-${i}`} label={fitName(item.title, Math.max(8, textWidth - meta.length - 2))} plain onPress={() => void show($, item.href)} />
+                      </Box>
+                      <Box flexShrink={0}>
+                        <Text color={C.overlay0}>{meta}</Text>
+                      </Box>
+                    </Box>
+                  )
+                })}
+                {more && <Text color={C.overlay0}>{`showing ${list.items.length} of ${list.isPartial ? 'many' : list.total} · press o for the rest in the browser`}</Text>}
+              </Box>,
+            )
+            note(Math.max(1, list.items.length) + (more ? 1 : 0), list.heading)
+          }
+        }
+        const description = () => {
+          if (!record.body?.trim()) return
+          const label = record.kind === 'gh-repo' ? 'README' : record.kind === 'web' ? 'Page' : 'Description'
+          sectionRule('body-head', label)
+          markdownBlocks('body', record.body, label)
+        }
+        if (record.kind === 'gh-repo') {
+          lists()
+          description()
+        } else {
+          description()
+          lists()
+        }
+        const comments = record.comments
+        if (comments && comments.total > 0) {
+          const shown = comments.shown.length
+          const count = shown < comments.total ? `showing latest ${shown} of ${comments.total}` : `${comments.total}`
+          sectionRule('comments-head', 'Comments', comments.inline ? `${count} · ${comments.inline} inline` : count)
+          for (const [i, one] of comments.shown.entries()) {
+            const indent = (one.depth ?? 0) * 2
+            const when = Number.isNaN(Date.parse(one.at)) ? one.at : describeAge(Date.parse(one.at), now)
+            drawnParts.push(
+              <Box key={`comment-${i}`} marginLeft={indent}>
+                <Text wrap="truncate-end">
+                  <Text color={C.accent} bold>{one.author}</Text>
+                  <Text color={C.overlay0}>{` · ${when}${one.isReview ? ' · review' : ''}`}</Text>
+                </Text>
+              </Box>,
+            )
+            note(1, 'Comments')
+            markdownBlocks(`comment-${i}-body`, one.body || '*(empty)*', 'Comments', indent)
+          }
+        }
+      }
+      ;({ body, jumps, position } = settleBlocks(drawnParts, partRows, partHeadings))
+    } else if (current.markdown !== undefined) {
       const source = fullText.get(current.href) ?? current.markdown
       const drawnParts: unknown[] = []
       const partRows: number[] = []
@@ -1741,36 +2030,7 @@ export const register: Register = on => {
           )
         }
       }
-      for (let i = partRows.length; i < drawnParts.length; i++) {
-        partRows.push(IMAGE_ROWS)
-        partHeadings.push('')
-      }
-      blockStarts = []
-      blockHeadings = []
-      let running = 0
-      let lastHeading = ''
-      for (const [i, rows] of partRows.entries()) {
-        blockStarts.push(running)
-        lastHeading = partHeadings[i] || lastHeading
-        blockHeadings.push(lastHeading)
-        running += rows + 1
-      }
-      estimatedRows = Math.max(1, running)
-      body = (
-        <Box flexDirection="column" width={textWidth}>
-          {drawnParts.map((part, blockIndex) => (
-            <Box key={`block-${blockIndex}`} flexDirection="column" marginBottom={1}>
-              {part as never}
-            </Box>
-          ))}
-        </Box>
-      )
-      jumps = blockJumps(drawnParts.length, 'block')
-      const topBlock = [...blockStarts.keys()].reverse().find(i => rowOf(i) <= offset + PAGE_TOP + 1) ?? 0
-      const heading = blockHeadings[topBlock] ?? ''
-      const maxScroll = Math.max(0, contentRows - e.props.scroll.bodyRows)
-      const percent = maxScroll > 0 ? Math.min(100, Math.round((offset / maxScroll) * 100)) : 100
-      position = `${percent}%${heading ? ` · § ${heading}` : ''}`
+      ;({ body, jumps, position } = settleBlocks(drawnParts, partRows, partHeadings))
     } else if (current.table) {
       const table = current.table
       const widths = columnWidths([table.header, ...table.rows], textWidth)
@@ -1886,10 +2146,18 @@ export const register: Register = on => {
     const goNext = jumps.next
     const goPrev = jumps.prev
     const isStarred = (await read($, stars)).includes(current.href)
-    const info = [isStarred ? '\u{f51a} starred' : '', position, current.summary, current.tasks].filter(Boolean).join(' · ')
+    const remote = current.remote
+    const source = remote?.record ? sourceLine(remote.record.kind, remote.tier, remote.fetchedAt, remote.staleSince, now) : ''
+    const info = [isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
+    const remoteCrumbs = remote
+      ? [
+          ...(remote.record?.trail ?? []).map(label => ({ label, fg: C.subtext0 as string, bg: C.surface1 as string, canShrink: true })),
+          { label: `${iconFor(current.kind)} ${current.title}`, fg: C.appBg, bg: C.accent, bold: true },
+        ]
+      : null
 
     return frame(
-      crumbs([
+      crumbs(remoteCrumbs ?? [
               ...(current.root
                 ? [
                     {
@@ -1912,10 +2180,11 @@ export const register: Register = on => {
           { key: 'next', label: 'Down', hotkey: 'j', onPress: goNext },
           { key: 'prev', label: 'Up', hotkey: 'k', onPress: goPrev },
           { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: () => void setStar($, current.href) },
-          { key: 'open', label: 'Open', hotkey: 'o', onPress: () => void openExternally($, current) },
+          { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: () => void openExternally($, current) },
+          ...(remote ? [{ key: 'refresh', label: 'Refresh', hotkey: 'u', onPress: () => void refresh($, current.href) }] : []),
           {
             key: 'copy',
-            label: 'Copy path',
+            label: remote ? 'Copy link' : 'Copy path',
             hotkey: 'c',
             onPress: () => void $.ui.copy({ text: current.location }),
           },

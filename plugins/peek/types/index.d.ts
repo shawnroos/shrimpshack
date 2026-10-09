@@ -64,7 +64,15 @@ export type View = {
   code?: { source: string; language: string; startLine: number; focusLine?: number }
   image?: { file: string; width: number; height: number }
   error?: string
-  remote?: { record?: RemoteRecord; tier?: Tier; fetchedAt?: number; failure?: FailureKind; staleSince?: number }
+  remote?: {
+    record?: RemoteRecord
+    tier?: Tier
+    fetchedAt?: number
+    failure?: FailureKind
+    staleSince?: number
+    favicon?: { file: string; width: number; height: number }
+    preview?: { file: string; width: number; height: number }
+  }
 }
 
 declare module 'claude-code' {

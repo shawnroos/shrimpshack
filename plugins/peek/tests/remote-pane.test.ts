@@ -1,0 +1,115 @@
+import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+
+import { C, mute } from '../hooks/theme'
+import { issueList, pullList, pullView, repoView } from './fixtures/github/items'
+
+const NOW = 10 * 3600_000
+const ran: string[][] = []
+let sessions = 0
+
+function fakeWorld(on: On, options: { ghAuthExit?: number } = {}) {
+  ran.length = 0
+  on('session.id', () => ({ value: `pane-${++sessions}` }))
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
+  on('http.fetch', () => ({ value: { status: 404, ok: false, headers: {}, text: '' } }))
+  on('clock.now', () => ({ value: NOW }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('fs.stat', (_$, e) => {
+    throw new Error(`ENOENT ${e.path}`)
+  })
+  on('fs.read', (_$, e) => {
+    throw new Error(`ENOENT ${e.path}`)
+  })
+  on('process.run', (_$, e) => {
+    ran.push([...e.argv])
+    const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    const fail = (stderr: string) => ({ value: { exitCode: 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
+    const line = e.argv.join(' ')
+    if (e.argv[0] === 'sh') return ok('gh\ncurl\n')
+    if (line === 'gh auth status') return (options.ghAuthExit ?? 0) === 0 ? ok('') : fail('You are not logged into any GitHub hosts')
+    if (line.startsWith('gh api repos/acme/widgets/issues/42')) return ok(JSON.stringify({ number: 42, pull_request: {} }))
+    if (line.startsWith('gh pr view 42')) return ok(JSON.stringify(pullView({ mergeable: 'CONFLICTING', statusCheckRollup: [] })))
+    if (line.startsWith('gh api repos/acme/widgets/pulls/42')) return ok('2')
+    if (line.startsWith('gh repo view')) return ok(JSON.stringify(repoView))
+    if (line.startsWith('gh api repos/acme/widgets/readme')) return ok('# Widgets\n\nRead me.')
+    if (line.startsWith('gh pr list')) return ok(JSON.stringify(pullList))
+    if (line.startsWith('gh issue list')) return ok(JSON.stringify(issueList))
+    return fail('unexpected')
+  })
+}
+
+const props = {
+  title: 'Peek',
+  isFocused: true,
+  bodyColumns: 100,
+  placement: 'dock' as const,
+  scroll: { offset: 0, bodyRows: 40 },
+  view: {},
+}
+
+test('a pull request draws title, details, the CI line and comments, on terminal and desktop', async ($, on) => {
+  fakeWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42/files#r1' } as never)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'peek', surface, component: 'Pane', props, requestId: 'peek' })
+    expect(await ui.find({ text: /#42 Teach the parser trailing commas/ })).toBeDefined()
+    expect(await ui.find({ text: /^DETAILS$/ })).toBeDefined()
+    expect(await ui.find({ text: 'checks not running: merge conflict' })).toBeDefined()
+    expect(await ui.find({ text: /^\+120$/ })).toBeDefined()
+    expect(await ui.find({ text: /^COMMENTS $/ })).toBeDefined()
+    expect(await ui.find({ text: /3 · 2 inline/ })).toBeDefined()
+    expect(await ui.find({ text: /via gh · 0s ago/ })).toBeDefined()
+    expect(await ui.find({ key: 'refresh' })).toBeDefined()
+    expect(await ui.find({ text: /^ ?acme ?$/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('covers AE6: gh signed out says to run gh auth login and offers Open in browser, no raw error', async ($, on) => {
+  fakeWorld(on, { ghAuthExit: 1 })
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: 'GitHub CLI is not signed in' })).toBeDefined()
+  expect(await ui.find({ text: /gh auth login/ })).toBeDefined()
+  expect(await ui.find({ text: /not logged into/ })).toBeUndefined()
+  expect((await ui.find({ key: 'open' }))?.text).toMatch(/Open in browser/)
+  await ui.unmount()
+})
+
+test('a repo page lists pull requests before the README; a row opens its pull request', async ($, on) => {
+  fakeWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /^PULL REQUESTS $/ })).toBeDefined()
+  expect(await ui.find({ text: / 2 of 41$/ })).toBeDefined()
+  expect(await ui.find({ text: /showing 2 of 41/ })).toBeDefined()
+  expect(await ui.find({ text: /^README $/ })).toBeDefined()
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree.indexOf('PULL REQUESTS')).toBeLessThan(tree.indexOf('README'))
+  await ui.press({ key: 'list-item-0-0' })
+  expect(ran.some(argv => argv.join(' ').startsWith('gh pr view 41'))).toBe(true)
+  await ui.unmount()
+})
+
+test('pressing u reloads a remote page; a doc page has no u key', async ($, on) => {
+  fakeWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  const before = ran.filter(argv => argv.join(' ').startsWith('gh pr view 42')).length
+  await ui.press({ key: 'refresh' })
+  expect(ran.filter(argv => argv.join(' ').startsWith('gh pr view 42')).length).toBe(before + 1)
+  await ui.unmount()
+})
+
+test('with the menu open, a remote page dims like a doc page', async ($, on) => {
+  fakeWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  await $.command.run({ command: 'peek-menu' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /Refresh this page/ })).toBeDefined()
+  expect((await ui.find({ text: /^DETAILS$/ }))?.props.color).toBe(mute(C.green))
+  await ui.unmount()
+})

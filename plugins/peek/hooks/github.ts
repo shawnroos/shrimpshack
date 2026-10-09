@@ -356,16 +356,16 @@ function capturedKind(captured: Captured, ref: Ref, view: Json): RemoteKind | nu
   return null
 }
 
-export function fromCapture(captured: Captured, ref: Ref, now: number): Loaded | null {
+export function fromCapture(captured: Captured, ref: Ref, _now: number): Loaded | null {
   const parsed = parse(captured.result)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const view = obj(parsed)
   const kind = capturedKind(captured, ref, view)
   const { owner, repo } = ref
   if (!kind || !owner || !repo) return null
-  if (kind === 'gh-repo') return loaded(repoRecord(view, owner, repo, undefined), 'session', now)
+  if (kind === 'gh-repo') return loaded(repoRecord(view, owner, repo, undefined), 'session', captured.at)
   const number = ref.number ?? num(view.number)
   if (!number) return null
   const target = itemRef(owner, repo, number, kind === 'gh-pr')
-  return loaded(kind === 'gh-pr' ? pullRecord({ view, ref: target }) : issueRecord({ view, ref: target }), 'session', now)
+  return loaded(kind === 'gh-pr' ? pullRecord({ view, ref: target }) : issueRecord({ view, ref: target }), 'session', captured.at)
 }
