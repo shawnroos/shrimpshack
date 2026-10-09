@@ -1,5 +1,7 @@
 import type { ProcessRunInit, ProcessRunResult } from 'claude-code'
 
+import type { FailureKind } from '../types'
+
 const HELPER_SOURCE = 'helper/peek-web.swift'
 const CACHE_DIR = '.cache/claude-peek/bin'
 // A cold `swiftc -O` of the helper took 38 s on an M-series Mac; leave room for a slower machine.
@@ -110,7 +112,7 @@ export function splitLines(rest: string, text: string): { lines: string[]; rest:
   return { lines: parts.filter(line => line.trim() !== ''), rest: tail }
 }
 
-export type LiveFailureKind = 'live-unavailable' | 'live-crashed' | 'live-stalled'
+export type LiveFailureKind = Extract<FailureKind, 'live-unavailable' | 'live-crashed' | 'live-stalled'>
 
 export type Viewport = { width: number; height: number }
 
@@ -141,16 +143,28 @@ export type LiveIo = BuildIo & {
 
 export type LiveCommand = 'navigate' | 'back' | 'reload' | 'resize' | 'input'
 
-const STALL_MS = 10_000
-const IDLE_MS = 60_000
+const LIVE_STALL_MS = 10_000
+const LIVE_IDLE_MS = 60_000
+
+function parseUrl(url: string): URL | null {
+  try {
+    return new URL(url)
+  } catch {
+    return null
+  }
+}
 
 export function isWebUrl(url: string): boolean {
-  try {
-    const { protocol } = new URL(url)
-    return protocol === 'http:' || protocol === 'https:'
-  } catch {
-    return false
-  }
+  const protocol = parseUrl(url)?.protocol
+  return protocol === 'http:' || protocol === 'https:'
+}
+
+export function liveStatusText(state: LiveState, fallbackUrl: string): string {
+  const host = parseUrl(state.url ?? fallbackUrl)?.host ?? ''
+  if (!state.frame) return state.phase === 'building' ? 'building live view (first time, about a minute)' : 'starting live view'
+  if (state.load === 'failed') return `failed · ${host} · u reloads`
+  if (state.load === 'loading') return `loading · ${host}`
+  return `live · ${host}`
 }
 
 function initial(): LiveState {
@@ -179,19 +193,38 @@ export function createLive(io: LiveIo, onChange: (state: LiveState, event?: Live
   }
   const send = (path: string, body?: unknown) => (socket ? io.post(socket, path, body).catch(() => false) : Promise.resolve(false))
 
-  async function shutdown(failure?: LiveState['failure']) {
+  let stopping: Promise<void> | null = null
+
+  function shutdown(failure?: LiveState['failure']): Promise<void> {
+    stopping ??= finishShutdown(failure).finally(() => {
+      stopping = null
+    })
+    return stopping
+  }
+
+  async function finishShutdown(failure?: LiveState['failure']) {
     generation += 1
     clearTimers()
     const running = child
     const runDir = dir
-    if (socket) await send('quit')
+    const didQuit = socket ? await send('quit') : false
     child = null
     socket = dir = pendingUrl = null
     // Not awaited: a stream blocked on its next read settles return() only after that read, and the engine kills the child on return() either way.
     void running?.return(undefined).catch(() => undefined)
-    if (runDir) await io.removeDir(runDir).catch(() => undefined)
+    // A helper that answered quit removes its own run directory; one that crashed or never answered cannot.
+    if (runDir && !didQuit) await io.removeDir(runDir).catch(() => undefined)
     state = { ...initial(), ...(failure ? { failure } : {}) }
     onChange(state)
+  }
+
+  // A paused helper draws nothing, so the stall clock only runs while live view is on screen.
+  const armStall = () => {
+    stallTimer?.cancel()
+    const armedFor = generation
+    stallTimer = io.after(LIVE_STALL_MS, () => {
+      if (armedFor === generation && state.isShown && !state.frame) void shutdown({ kind: 'live-stalled', reason: 'no picture from the page within 10 seconds' })
+    })
   }
 
   const armIdle = () => {
@@ -199,7 +232,7 @@ export function createLive(io: LiveIo, onChange: (state: LiveState, event?: Live
     idleTimer = null
     if (state.isShown || state.hasCookies || state.phase === 'off') return
     const armedFor = generation
-    idleTimer = io.after(IDLE_MS, () => {
+    idleTimer = io.after(LIVE_IDLE_MS, () => {
       if (armedFor === generation && !state.isShown && !state.hasCookies) void shutdown()
     })
   }
@@ -214,10 +247,8 @@ export function createLive(io: LiveIo, onChange: (state: LiveState, event?: Live
         const url = pendingUrl
         pendingUrl = null
         if (url) await send('navigate', { url })
-        if (!state.isShown) await send('pause')
-        stallTimer = io.after(STALL_MS, () => {
-          if (ownGeneration === generation && !state.frame) void shutdown({ kind: 'live-stalled', reason: 'no picture from the page within 10 seconds' })
-        })
+        if (state.isShown) armStall()
+        else await send('pause')
         return
       }
       case 'frame':
@@ -244,7 +275,7 @@ export function createLive(io: LiveIo, onChange: (state: LiveState, event?: Live
     }
   }
 
-  async function read(stream: AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, unknown>, ownGeneration: number) {
+  async function pump(stream: AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, unknown>, ownGeneration: number) {
     let rest = ''
     try {
       for await (const chunk of stream) {
@@ -260,12 +291,14 @@ export function createLive(io: LiveIo, onChange: (state: LiveState, event?: Live
       // A spawn that cannot start rejects its first pull; that is a crash like any other exit.
     }
     if (ownGeneration !== generation) return
+    socket = null
     const wasShown = state.isShown && state.phase !== 'off'
     await shutdown(wasShown ? { kind: 'live-crashed', reason: 'the live view helper stopped' } : undefined)
   }
 
   async function start(url: string, size: Viewport): Promise<boolean> {
     if (!isWebUrl(url)) return false
+    if (stopping) await stopping
     idleTimer?.cancel()
     idleTimer = null
     const sizeChanged = viewport !== null && (viewport.width !== size.width || viewport.height !== size.height)
@@ -278,6 +311,7 @@ export function createLive(io: LiveIo, onChange: (state: LiveState, event?: Live
         return true
       }
       if (!wasShown) await send('resume')
+      if (!state.frame) armStall()
       if (sizeChanged) await send('resize', size)
       if (url !== state.url) await send('navigate', { url })
       return true
@@ -294,13 +328,15 @@ export function createLive(io: LiveIo, onChange: (state: LiveState, event?: Live
     set({ phase: 'starting' })
     const stream = io.spawn([built.path, '--width', String(size.width), '--height', String(size.height)])
     child = stream
-    void read(stream, ownGeneration)
+    void pump(stream, ownGeneration)
     return true
   }
 
   async function leave() {
     if (state.phase === 'off' || !state.isShown) return
     set({ isShown: false, isEditable: false })
+    stallTimer?.cancel()
+    stallTimer = null
     await send('pause')
     armIdle()
   }

@@ -7,7 +7,7 @@ const HTML = '<html><head><title>News Test</title></head><body><p>Readable story
 
 type Helper = { say: (event: unknown) => void; end: () => void }
 
-function liveWorld(on: On, options: { hasSwiftc?: boolean } = {}) {
+function liveWorld(on: On, options: { hasSwiftc?: boolean; denyBlits?: boolean } = {}) {
   const ran: string[][] = []
   const stored: Record<string, unknown> = {}
   const posted: { path: string; body?: unknown }[] = []
@@ -27,7 +27,7 @@ function liveWorld(on: On, options: { hasSwiftc?: boolean } = {}) {
   })
   on('ui.blit', (_$, e) => {
     blits.push(e)
-    return { value: {} }
+    return { value: options.denyBlits ? { deny: 'not mounted yet' } : {} }
   })
   on('ui.invalidate', (_$, e, next) => {
     invalidations += 1
@@ -92,8 +92,8 @@ function liveWorld(on: On, options: { hasSwiftc?: boolean } = {}) {
     invalidations: () => invalidations,
     helper: (index = 0) => helpers[index] as Helper,
     settle,
-    boot: async (index = 0) => {
-      helpers[index]?.say({ t: 'ready', socket: '/run/ctl.sock', dir: '/tmp/peek-web.abc123', throttled: false })
+    boot: async (index = 0, dir = '/tmp/peek-web.abc123') => {
+      helpers[index]?.say({ t: 'ready', socket: '/run/ctl.sock', dir, throttled: false })
       await settle()
     },
     frame: async (id: number, index = 0) => {
@@ -405,3 +405,64 @@ test('the menu lists Live view on a web page, and Back while the live page has h
   expect(await ui.find({ key: 'menu-live-back' })).toBeDefined()
   await ui.unmount()
 })
+
+test('a navigation ends typing mode, so j scrolls again', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  await ui.pointer({ type: 'down', button: 'left', x: 3, y: 3, in: 'live-input' })
+  w.helper().say({ t: 'focus', editable: true })
+  await w.settle()
+  await ui.key({ key: 'return', in: 'live-input' })
+  w.helper().say({ t: 'nav', url: 'https://news.test/results', title: 'Results', canBack: true, canForward: false })
+  await w.settle()
+  expect(await ui.find({ key: 'done-typing' })).toBeUndefined()
+  await ui.key({ key: 'j', in: 'live-input' })
+  await w.settle()
+  const last = inputs(w).at(-1) as { type: string }
+  expect(last.type).toBe('scroll')
+  await ui.unmount()
+})
+
+test('leaving live view ends typing mode', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  await ui.pointer({ type: 'down', button: 'left', x: 3, y: 3, in: 'live-input' })
+  w.helper().say({ t: 'focus', editable: true })
+  await w.settle()
+  await ui.press({ key: 'live' })
+  await w.settle()
+  await ui.press({ key: 'live' })
+  await w.settle()
+  w.helper().say({ t: 'frame', id: 2, path: '/tmp/peek-web.abc123/frame-2.png', width: 600, height: 400, bytes: 1000 })
+  await w.settle()
+  expect(await ui.find({ key: 'done-typing' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a refused frame update redraws the pane so the newest frame still shows', async ($, on) => {
+  const w = liveWorld(on, { denyBlits: true })
+  const ui = await goLive($, w)
+  const before = w.invalidations()
+  await w.frame(2)
+  expect(w.invalidations()).toBeGreaterThan(before)
+  const image = await ui.find({ key: 'live-frame' })
+  expect((image?.props.source as { file?: string }).file).toBe('/tmp/peek-web.abc123/frame-2.png')
+  await ui.unmount()
+})
+
+for (const [dir, isDeleted] of [['/tmp/peek-web.abc123', true], ['/home', false], ['/tmp/peek-web.abc123/../x', false]] as const) {
+  test(`after a crash, ${dir} is ${isDeleted ? 'deleted' : 'left alone'}`, async ($, on) => {
+    const w = liveWorld(on)
+    await $.command.run({ command: 'peek', args: PAGE } as never)
+    const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+    await ui.press({ key: 'live' })
+    await w.settle()
+    await w.boot(0, dir)
+    await w.frame(1)
+    w.helper().end()
+    await w.settle()
+    const removed = w.ran.filter(argv => argv[0] === 'rm')
+    expect(removed).toEqual(isDeleted ? [['rm', '-rf', dir]] : [])
+    await ui.unmount()
+  })
+}
