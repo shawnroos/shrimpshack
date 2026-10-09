@@ -253,7 +253,7 @@ export async function linearPaged(
   return { ok: true, nodes, isPartial: true }
 }
 
-function httpFailure(status: number): FailureKind {
+export function httpFailure(status: number): FailureKind {
   if (status === 429) return 'rate-limited'
   if (status === 401 || status === 403 || status === 404 || status === 410) return 'not-found-or-no-access'
   if (status === 400) return 'query-bug'
