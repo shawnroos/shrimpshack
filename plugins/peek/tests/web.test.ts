@@ -541,3 +541,15 @@ describe('media in the reader body', () => {
     expect(downloads().filter(url => url?.startsWith('https://site.test/i')).length).toBe(8)
   })
 })
+
+test('an image host that answers IPv6 first is pinned to its IPv4 address', async () => {
+  const page = 'https://dual.test/'
+  const { io, curls } = world({
+    pages: { [page]: { html: FULL_OG } },
+    images: { 'https://dual.test/img/card.png': 200 },
+    dns: { 'dual.test': 'name: dual.test\nipv6_address: 2606:4700:440a::ac40:93d3\n\nname: dual.test\nip_address: 93.184.216.34\n' },
+  })
+  await loadWeb(io, web(page), NOW)
+  const fetch = curls().find(argv => argv.at(-1) === 'https://dual.test/img/card.png')
+  expect(fetch?.[fetch.indexOf('--resolve') + 1]).toBe('dual.test:443:93.184.216.34')
+})

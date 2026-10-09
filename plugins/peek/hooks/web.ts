@@ -165,7 +165,8 @@ async function pinnedAddress(io: SourceIo, url: URL): Promise<string[] | null> {
   const addresses = [...ran.stdout.matchAll(/^\s*(?:ip_address|ipv6_address):\s*(\S+)\s*$/gm)].map(match => match[1] ?? '')
   if (addresses.length === 0) return null
   if (addresses.some(address => (ipv4(address) === null && ipv6(address) === null) || isPrivateHost(address))) return null
-  const [chosen = ''] = addresses
+  // Every address passed the private-host check; IPv4 first, since a machine without an IPv6 route cannot connect over it.
+  const chosen = addresses.find(address => ipv4(address) !== null) ?? addresses[0] ?? ''
   const port = url.port || (url.protocol === 'https:' ? '443' : '80')
   // Pins curl to the address checked above, so a second DNS answer cannot swap in a private one.
   return ['--resolve', `${host}:${port}:${chosen.includes(':') ? `[${chosen}]` : chosen}`]
