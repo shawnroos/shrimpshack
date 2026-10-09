@@ -767,6 +767,15 @@ async function refresh($: EngineInterface, href: string) {
   if (next) await update($, view, () => next)
 }
 
+// The header shortens a crumb by keeping its first two characters as the icon,
+// so every trail piece needs one.
+function trailIcon(kind: string, index: number, count: number): string {
+  const family = familyOf(kind)
+  if (family === 'gh') return index === 0 && count > 1 ? '\u{f09b}' : ICON['gh-repo']
+  if (family === 'linear') return index === 0 ? '\u{f0c0}' : ICON['linear-project']
+  return '\u{f0ac}'
+}
+
 const TIER_NAMES: Record<string, string> = { 'gh-cli': 'via gh', 'web-cli': 'via curl', 'web-api': 'via web fetch', 'linear-api': 'via Linear API' }
 
 function sourceLine(remote: NonNullable<View['remote']>, now: number): string {
@@ -2330,7 +2339,12 @@ export const register: Register = on => {
     const info = [isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
     const remoteCrumbs = remote
       ? [
-          ...(remote.record?.trail ?? []).map(label => ({ label, fg: C.subtext0 as string, bg: C.surface1 as string, canShrink: true })),
+          ...(remote.record?.trail ?? []).map((label, index, all) => ({
+            label: `${trailIcon(current.kind ?? 'web', index, all.length)} ${label}`,
+            fg: C.subtext0 as string,
+            bg: C.surface1 as string,
+            canShrink: true,
+          })),
           { label: `${iconFor(current.kind)} ${current.title}`, fg: C.appBg, bg: C.accent, bold: true },
         ]
       : null
