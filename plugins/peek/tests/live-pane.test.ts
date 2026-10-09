@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, ProcessSpawnChunk } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 
 const PAGE = 'https://news.test/'
 const HTML = '<html><head><title>News Test</title></head><body><p>Readable story text.</p></body></html>'
@@ -223,5 +224,99 @@ test('with the menu open, live frames keep updating behind it', async ($, on) =>
   expect(await ui.find({ text: /COMMANDS/ })).toBeDefined()
   await w.frame(2)
   expect(w.blits.length).toBe(1)
+  await ui.unmount()
+})
+
+async function goLive($: Engine, w: ReturnType<typeof liveWorld>) {
+  await $.command.run({ command: 'peek', args: PAGE } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'live' })
+  await w.settle()
+  await w.boot()
+  await w.frame(1)
+  await ui.find({ key: 'live-input' })
+  return ui
+}
+
+const inputs = (w: ReturnType<typeof liveWorld>) => w.posted.filter(one => one.path === 'input').flatMap(one => (one.body as { events: unknown[] }).events)
+
+test('a click on the frame clicks the page at the matching point', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  const layer = await ui.find({ key: 'live-input' })
+  const columns = layer?.props.width as number
+  await ui.pointer({ type: 'down', button: 'left', x: Math.floor(columns / 2), y: 0, in: 'live-input' })
+  await w.settle()
+  const [click] = inputs(w) as { type: string; x: number; y: number }[]
+  expect(click?.type).toBe('click')
+  expect(Math.abs((click?.x ?? 0) - Number(w.spawned[0]?.[w.spawned[0].indexOf('--width') + 1]) / 2) < 10).toBe(true)
+  await ui.unmount()
+})
+
+test('covers AE3: after a click on a field, typed text and Enter reach the page in order', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  await ui.pointer({ type: 'down', button: 'left', x: 3, y: 3, in: 'live-input' })
+  w.helper().say({ t: 'focus', editable: true })
+  await w.settle()
+  for (const key of ['w', 'e', 'b', 'k', 'i', 't', 'return']) await ui.key({ key, in: 'live-input' })
+  await w.settle()
+  const sent = inputs(w).slice(1) as { type: string; text?: string; key?: string }[]
+  expect(sent.map(one => one.text ?? `<${one.key}>`).join('')).toBe('webkit<Enter>')
+  expect(sent.at(-1)).toEqual({ type: 'key', key: 'Enter' })
+  expect(await ui.find({ key: 'done-typing' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('two key events posted in one frame are both delivered', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  await ui.pointer({ type: 'down', button: 'left', x: 3, y: 3, in: 'live-input' })
+  w.helper().say({ t: 'focus', editable: true })
+  await w.settle()
+  await ui.post({ liveInput: [{ seq: 90, type: 'key', key: 'a' }, { seq: 91, type: 'key', key: 'b' }] }, { in: 'live-input' })
+  await ui.post({ liveInput: [{ seq: 90, type: 'key', key: 'a' }, { seq: 91, type: 'key', key: 'b' }] }, { in: 'live-input' })
+  await w.settle()
+  expect(inputs(w).filter(one => (one as { type: string }).type === 'text')).toEqual([{ type: 'text', text: 'ab' }])
+  await ui.unmount()
+})
+
+test('Done typing stops forwarding text, and j then scrolls the live page', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  await ui.pointer({ type: 'down', button: 'left', x: 3, y: 3, in: 'live-input' })
+  w.helper().say({ t: 'focus', editable: true })
+  await w.settle()
+  await ui.press({ key: 'done-typing' })
+  expect(await ui.find({ key: 'done-typing' })).toBeUndefined()
+  await ui.key({ key: 'j', in: 'live-input' })
+  await w.settle()
+  const last = inputs(w).at(-1) as { type: string; dy: number }
+  expect([last.type, last.dy > 0]).toEqual(['scroll', true])
+  await ui.unmount()
+})
+
+test('covers AE2: after a click on a link, b goes back in the page instead of typing', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  await ui.pointer({ type: 'down', button: 'left', x: 3, y: 3, in: 'live-input' })
+  w.helper().say({ t: 'focus', editable: false })
+  w.helper().say({ t: 'nav', url: 'https://news.test/story', title: 'Story', canBack: true, canForward: false })
+  await w.settle()
+  await ui.key({ key: 'b', in: 'live-input' })
+  await w.settle()
+  expect(w.posted.at(-1)).toEqual({ path: 'back' })
+  expect(inputs(w).some(one => (one as { type: string }).type === 'text')).toBe(false)
+  await ui.unmount()
+})
+
+test('j on the pane while live scrolls the page at its centre', async ($, on) => {
+  const w = liveWorld(on)
+  const ui = await goLive($, w)
+  await ui.press({ key: 'next' })
+  await w.settle()
+  const last = inputs(w).at(-1) as { type: string; x: number; y: number; dy: number }
+  const width = Number(w.spawned[0]?.[w.spawned[0].indexOf('--width') + 1])
+  expect([last.type, last.x, last.dy > 0]).toEqual(['scroll', Math.floor(width / 2), true])
   await ui.unmount()
 })

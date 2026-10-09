@@ -324,3 +324,60 @@ export function createLive(io: LiveIo, onChange: (state: LiveState, event?: Live
 }
 
 export type Live = ReturnType<typeof createLive>
+
+export type HelperInput =
+  | { type: 'click'; x: number; y: number }
+  | { type: 'scroll'; x: number; y: number; dy: number }
+  | { type: 'text'; text: string }
+  | { type: 'key'; key: string }
+
+export type TypedKey = { key: string; ctrl?: boolean; meta?: boolean }
+
+const NAMED_KEYS: Record<string, string> = {
+  return: 'Enter',
+  enter: 'Enter',
+  backspace: 'Backspace',
+  delete: 'Delete',
+  tab: 'Tab',
+  up: 'ArrowUp',
+  down: 'ArrowDown',
+  left: 'ArrowLeft',
+  right: 'ArrowRight',
+  pageup: 'PageUp',
+  pagedown: 'PageDown',
+  home: 'Home',
+  end: 'End',
+}
+
+export function pagePoint(cell: { x: number; y: number }, box: { columns: number; rows: number }, viewport: Viewport) {
+  return {
+    x: Math.floor(((cell.x + 0.5) / box.columns) * viewport.width),
+    y: Math.floor(((cell.y + 0.5) / box.rows) * viewport.height),
+  }
+}
+
+export function typedInput(keys: readonly TypedKey[]): HelperInput[] {
+  const out: HelperInput[] = []
+  for (const one of keys) {
+    if (one.ctrl || one.meta) continue
+    const named = NAMED_KEYS[one.key]
+    if (named) {
+      out.push({ type: 'key', key: named })
+      continue
+    }
+    if ([...one.key].length !== 1) continue
+    const last = out.at(-1)
+    if (last?.type === 'text') last.text += one.key
+    else out.push({ type: 'text', text: one.key })
+  }
+  return out
+}
+
+export type FrameGeometry = { left: number; top: number; columns: number; rows: number }
+
+export function wheelPoint(pointer: { column: number; row: number }, geom: FrameGeometry, viewport: Viewport) {
+  const x = pointer.column - geom.left
+  const y = pointer.row - geom.top
+  if (x < 0 || y < 0 || x >= geom.columns || y >= geom.rows) return null
+  return pagePoint({ x, y }, geom, viewport)
+}

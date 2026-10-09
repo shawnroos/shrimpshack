@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { ProcessRunInit, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 
 import type { BuildIo, LiveIo, LiveState } from '../hooks/live'
-import { createLive, helperBinary, parseEvent, splitLines } from '../hooks/live'
+import { createLive, helperBinary, pagePoint, parseEvent, splitLines, typedInput, wheelPoint } from '../hooks/live'
 import { failureText } from '../hooks/sources'
 
 function exited(exitCode: number, stdout = '', stderr = ''): ProcessRunResult {
@@ -379,4 +379,36 @@ test('each live failure kind has its own title and next action', () => {
   expect(new Set(texts.map(text => text.title)).size).toBe(3)
   expect(texts.every(text => text.hint.length > 0)).toBe(true)
   expect(failureText('live-unavailable').hint).toBe('Install the command-line tools with `xcode-select --install`, then press v')
+})
+
+describe('input mapping', () => {
+  test('a cell maps to its centre in page pixels', () => {
+    expect(pagePoint({ x: 40, y: 0 }, { columns: 80, rows: 20 }, { width: 600, height: 400 })).toEqual({ x: 303, y: 10 })
+    expect(pagePoint({ x: 0, y: 19 }, { columns: 80, rows: 20 }, { width: 600, height: 400 })).toEqual({ x: 3, y: 390 })
+  })
+
+  test('typed characters merge into one text event; special keys keep their order', () => {
+    const keys = ['w', 'e', 'b', 'return', 'k', 'i', 't', 'backspace', 'up', 'tab', ' '].map(key => ({ key }))
+    expect(typedInput(keys)).toEqual([
+      { type: 'text', text: 'web' },
+      { type: 'key', key: 'Enter' },
+      { type: 'text', text: 'kit' },
+      { type: 'key', key: 'Backspace' },
+      { type: 'key', key: 'ArrowUp' },
+      { type: 'key', key: 'Tab' },
+      { type: 'text', text: ' ' },
+    ])
+  })
+
+  test('keys held with ctrl or meta, and unknown named keys, are dropped', () => {
+    expect(typedInput([{ key: 'c', ctrl: true }, { key: 'v', meta: true }, { key: 'f5' }, { key: 'a' }])).toEqual([{ type: 'text', text: 'a' }])
+  })
+})
+
+test('a wheel tick over the frame maps to a page point; outside it does not', () => {
+  const geom = { left: 10, top: 3, columns: 80, rows: 20 }
+  const viewport = { width: 600, height: 400 }
+  expect(wheelPoint({ column: 50, row: 3 }, geom, viewport)).toEqual({ x: 303, y: 10 })
+  expect(wheelPoint({ column: 9, row: 5 }, geom, viewport)).toBeNull()
+  expect(wheelPoint({ column: 50, row: 23 }, geom, viewport)).toBeNull()
 })
