@@ -702,6 +702,7 @@ export type FileEntry = {
   mentionedAt: number
   worktree?: string
   role?: 'artifact' | 'touched'
+  status?: string
 }
 
 export type RoleFilter = 'all' | 'artifacts' | 'touched'
@@ -722,7 +723,7 @@ export function typeOf(kind: string): GalleryType {
   if (kind === 'markdown') return 'markdown'
   if (kind === 'image' || kind === 'svg') return 'image'
   if (kind === 'mermaid') return 'diagram'
-  if (kind === 'html' || kind === 'web') return 'html'
+  if (kind === 'html' || kind === 'web' || kind.startsWith('gh-') || kind.startsWith('linear-')) return 'html'
   if (kind === 'json' || kind === 'toml' || kind === 'csv') return 'data'
   return 'code'
 }

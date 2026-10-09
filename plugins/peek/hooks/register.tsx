@@ -6,10 +6,11 @@ import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './l
 import { C as BASE, MUTED, ICON, colorFor, iconFor, mute, ruleParts } from './theme'
 import { capturedLinearContext, record } from './capture'
 import type { CaptureIo } from './capture'
-import { parseRef } from './refs'
+import { itemKey, parseRef } from './refs'
 import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
 import type { RemoteIo } from './remote'
+import { bootstrapLinear } from './linear'
 import { failureText } from './sources'
 import { cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
@@ -381,6 +382,71 @@ async function remotePicture($: EngineInterface, file: string | undefined) {
 
 let lastActivity = 0
 let isTicking = false
+let linearBoot: { workspace: string; teamKeys: string[]; fetchedAt: number } | null = null
+const repoContexts = new Map<string, string | null>()
+const backStack: { view: View; key: string }[] = []
+let topBlockKey = 'block-0'
+const LINEAR_BOOT_TTL_MS = 24 * 3600_000
+
+async function repoContext($: EngineInterface, cwd: string): Promise<string | undefined> {
+  if (!repoContexts.has(cwd)) {
+    let found: string | null = null
+    for (const remote of ['upstream', 'origin']) {
+      const ran = await $.process.run(['git', '-C', cwd, 'remote', 'get-url', remote]).catch(() => null)
+      const match = ran?.exitCode === 0 ? /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\s*$/.exec(ran.stdout) : null
+      if (match) {
+        found = `${match[1]}/${match[2]}`
+        break
+      }
+    }
+    repoContexts.set(cwd, found)
+  }
+  return repoContexts.get(cwd) ?? undefined
+}
+
+function refContext(repo?: string): RefContext {
+  const captured = capturedLinearContext()
+  return {
+    teamKeys: [...new Set([...(linearBoot?.teamKeys ?? []), ...captured.teamKeys])],
+    workspace: linearBoot?.workspace ?? captured.workspace,
+    repo,
+  }
+}
+
+async function sessionRefContext($: EngineInterface): Promise<RefContext> {
+  return refContext(await repoContext($, await $.session.cwd()))
+}
+
+async function bootLinear($: EngineInterface) {
+  const now = await $.clock.now()
+  const saved = (await $.store.get('linear').catch(() => undefined)) as typeof linearBoot | undefined
+  if (saved && typeof saved.workspace === 'string' && Array.isArray(saved.teamKeys) && now - saved.fetchedAt < LINEAR_BOOT_TTL_MS) {
+    linearBoot = saved
+    return
+  }
+  const boot = await bootstrapLinear(remoteIoOf($), now)
+  if (!boot.ok) return
+  linearBoot = { workspace: boot.workspace, teamKeys: boot.teamKeys, fetchedAt: boot.fetchedAt }
+  await $.store.set('linear', linearBoot).catch(() => undefined)
+  $.ui.invalidate('ui.render')
+}
+
+async function openFromPage($: EngineInterface, href: string) {
+  const current = await read($, view)
+  if (current && (await read($, mode)) === 'view') {
+    backStack.push({ view: current, key: topBlockKey })
+    if (backStack.length > 20) backStack.shift()
+  }
+  await show($, href)
+}
+
+async function goBack($: EngineInterface) {
+  const last = backStack.pop()
+  if (!last) return
+  await update($, view, () => last.view)
+  await update($, mode, () => 'view')
+  void $.ui.scroll({ in: PANE, to: { key: last.key }, block: 'start' }).catch(() => undefined)
+}
 let titles: Record<string, TitleEntry> = {}
 
 function remoteLoader($: EngineInterface, canReplay: boolean) {
@@ -435,9 +501,10 @@ function remoteRef(href: string, context: RefContext = {}): Ref | null {
   return kind === 'image' || kind === 'svg' ? null : ref
 }
 
-async function show($: EngineInterface, href: string) {
+async function show($: EngineInterface, raw: string) {
+  const ref = remoteRef(raw)
+  const href = ref?.address ?? raw
   const file = parseHref(href)
-  const ref = remoteRef(href)
   const loading: View = { href, title: 'Loading…', location: file?.path ?? href }
   await update($, view, () => loading)
   const at = await $.clock.now()
@@ -520,6 +587,8 @@ async function toHref($: EngineInterface, raw: string): Promise<string | null> {
   const cleaned = raw.trim().replace(/^[`'"<]+|[`'">.]+$/g, '')
   if (/^https?:\/\//.test(cleaned)) return cleaned
   if (cleaned.startsWith('file:')) return cleaned
+  const ref = parseRef(cleaned, await sessionRefContext($))
+  if (ref) return ref.address
   const match = /^(.+?)(?::(\d+))?$/.exec(cleaned)
   const abs = resolvePath(match?.[1] ?? cleaned, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
   exists.delete(abs)
@@ -569,12 +638,31 @@ async function listRoot($: EngineInterface, root: string, worktree?: string): Pr
 
 async function sessionEntries($: EngineInterface, list: readonly Mention[]): Promise<FileEntry[]> {
   const out: FileEntry[] = []
+  const remoteTitles = new Map(Object.entries(titles).map(([address, entry]) => [itemKey(address), entry]))
   for (const one of [...list].reverse()) {
     const file = parseHref(one.href)
     const path = file?.path ?? one.href
     const name = path.split('/').pop() || path
     const stat = file ? await $.fs.stat(path).catch(() => null) : null
     if (file && !stat) continue
+    const ref = file ? null : remoteRef(one.href)
+    const label = ref ? remoteTitles.get(itemKey(ref.address)) : undefined
+    if (ref) {
+      out.push({
+        href: one.href,
+        path,
+        name: label?.title ?? ref.key ?? (ref.number ? `#${ref.number}` : path.replace(/^https?:\/\/(www\.)?/, '')),
+        folder: ref.owner ? `${ref.owner}/${ref.repo}` : label?.trail?.join(' · ') || new URL(ref.address).hostname,
+        kind: label?.kind ?? ref.kind,
+        status: label?.status,
+        mtimeMs: 0,
+        size: 0,
+        mentions: one.count,
+        mentionedAt: one.at,
+        role: one.isArtifact ? 'artifact' : 'touched',
+      })
+      continue
+    }
     out.push({
       href: one.href,
       path,
@@ -635,9 +723,11 @@ function withMentions(entries: readonly FileEntry[], list: readonly Mention[]): 
   })
 }
 
-async function setStar($: EngineInterface, href: string, wanted?: boolean): Promise<boolean> {
+async function setStar($: EngineInterface, raw: string, wanted?: boolean): Promise<boolean> {
+  const canonical = remoteRef(raw)?.address ?? raw
   let isOn = false
   await update($, stars, list => {
+    const href = list.find(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(canonical)) ?? canonical
     const next = toggleStar(list, href, wanted)
     isOn = next.includes(href)
     return next
@@ -707,7 +797,7 @@ async function pressLink($: EngineInterface, href: string) {
       return
     }
   }
-  await show($, href)
+  await openFromPage($, href)
 }
 
 async function docImage($: EngineInterface, src: string, docPath: string) {
@@ -735,6 +825,7 @@ export const register: Register = on => {
     lastActivity = await $.clock.now()
     const savedTitles = await $.store.get('titles').catch(() => undefined)
     if (savedTitles && typeof savedTitles === 'object' && !Array.isArray(savedTitles)) titles = savedTitles as Record<string, TitleEntry>
+    void bootLinear($).catch(() => undefined)
     const saved = await $.store.get('stars').catch(() => undefined)
     if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
     await $.tool
@@ -960,10 +1051,14 @@ export const register: Register = on => {
       const abs = resolvePath(raw, cwd, home)
       if (await pathExists($, abs)) real.set(raw, abs)
     }
-    const linked = linkify(e.props.text, (raw, line) => {
-      const abs = real.get(raw)
-      return abs ? fileHref(abs, line) : null
-    })
+    const linked = linkify(
+      e.props.text,
+      (raw, line) => {
+        const abs = real.get(raw)
+        return abs ? fileHref(abs, line) : null
+      },
+      refContext(await repoContext($, cwd)),
+    )
     const text = linked.length <= 10000 ? linked : e.props.text
     if (text.length > 10000) return next(e)
 
@@ -1476,7 +1571,7 @@ export const register: Register = on => {
                     </Box>
                   </Box>
                   <Text color={C.overlay0} wrap="truncate-start">{look.folder || ' '}</Text>
-                  <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${where}${age} · ${describeSize(one.size)}`}</Text>
+                  <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${where}${age} · ${one.status ?? describeSize(one.size)}`}</Text>
                 </Box>
               )
             })}
@@ -1591,7 +1686,7 @@ export const register: Register = on => {
               const look = looks(one)
               const { where, age } = describe(one)
               const count = one.mentions > 1 ? `${one.mentions}× · ` : ''
-              const meta = `${where}${count}${age}`
+              const meta = `${one.status ? `${one.status} · ` : ''}${where}${count}${age}`
               const leftWidth = Math.max(4, textWidth - meta.length - 1)
               const nameRoom = Math.max(8, Math.floor((leftWidth - 3) * 0.6))
               return (
@@ -1717,6 +1812,7 @@ export const register: Register = on => {
       }
       estimatedRows = Math.max(1, running)
       const topBlock = [...blockStarts.keys()].reverse().find(i => rowOf(i) <= offset + PAGE_TOP + 1) ?? 0
+      topBlockKey = `block-${topBlock}`
       const heading = blockHeadings[topBlock] ?? ''
       const maxScroll = Math.max(0, contentRows - e.props.scroll.bodyRows)
       const percent = maxScroll > 0 ? Math.min(100, Math.round((offset / maxScroll) * 100)) : 100
@@ -1863,7 +1959,7 @@ export const register: Register = on => {
                   return (
                     <Box key={`list-${li}-${i}`} flexDirection="row" justifyContent="space-between" width={textWidth} height={1} hover={{ backgroundColor: C.surface0 }}>
                       <Box flexShrink={1} overflow="hidden" height={1}>
-                        <Button key={`list-item-${li}-${i}`} label={fitName(item.title, Math.max(8, textWidth - meta.length - 2))} plain onPress={() => void show($, item.href)} />
+                        <Button key={`list-item-${li}-${i}`} label={fitName(item.title, Math.max(8, textWidth - meta.length - 2))} plain onPress={() => void openFromPage($, item.href)} />
                       </Box>
                       <Box flexShrink={0}>
                         <Text color={C.overlay0}>{meta}</Text>
@@ -2234,6 +2330,7 @@ export const register: Register = on => {
           { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: () => void setStar($, current.href) },
           { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: () => void openExternally($, current) },
           ...(remote ? [{ key: 'refresh', label: 'Refresh', hotkey: 'u', onPress: () => void refresh($, current.href) }] : []),
+          ...(backStack.length ? [{ key: 'back', label: 'Back', hotkey: 'b', onPress: () => void goBack($) }] : []),
           {
             key: 'copy',
             label: remote ? 'Copy link' : 'Copy path',

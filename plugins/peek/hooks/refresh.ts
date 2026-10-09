@@ -24,7 +24,7 @@ export type CacheEntry = {
 
 export type Source = 'github' | 'linear' | 'web'
 
-export type TitleEntry = { title: string; kind: RemoteKind; status?: string; favicon?: string; updatedAt: number }
+export type TitleEntry = { title: string; kind: RemoteKind; status?: string; favicon?: string; trail?: string[]; updatedAt: number }
 
 type Load = (address: string) => Promise<Loaded>
 
@@ -185,6 +185,7 @@ export function titleOf(record: RemoteRecord): Omit<TitleEntry, 'updatedAt'> {
     kind: record.kind,
     ...(record.status ? { status: record.status } : {}),
     ...(record.favicon ? { favicon: record.favicon } : {}),
+    ...(record.trail.length ? { trail: record.trail } : {}),
   }
 }
 

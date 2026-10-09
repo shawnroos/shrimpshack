@@ -31,7 +31,7 @@ function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boole
     if (e.argv[0] === 'sh') return ok('gh\ncurl\n')
     if (line === 'gh auth status') return (options.ghAuthExit ?? 0) === 0 ? ok('') : fail('You are not logged into any GitHub hosts')
     if (line.startsWith('gh api repos/acme/widgets/issues/42')) return ok(JSON.stringify({ number: 42, pull_request: {} }))
-    if (line.startsWith('gh pr view 42')) return ok(JSON.stringify(pullView({ mergeable: 'CONFLICTING', statusCheckRollup: [] })))
+    if (line.startsWith('gh pr view 42')) return ok(JSON.stringify(pullView({ mergeable: 'CONFLICTING', statusCheckRollup: [], body: 'Follows #45.' })))
     if (line.startsWith('gh api repos/acme/widgets/pulls/42')) return ok('2')
     if (line.startsWith('gh repo view')) return ok(JSON.stringify(repoView))
     if (line.startsWith('gh api repos/acme/widgets/readme')) return ok('# Widgets\n\nRead me.')
@@ -125,4 +125,74 @@ test('covers AE5: an open pull request on screen reloads after 60 seconds, not b
   expect(loads()).toBe(first)
   await clock.advance(30_000)
   expect(loads()).toBe(first + 1)
+})
+
+const reply = (text: string) => ({ result: [{ type: 'text', text }], text })
+
+test('/peek resolves references without asking the model: owner/repo#N and a captured Linear ID', async ($, on) => {
+  fakeWorld(on)
+  let forks = 0
+  on('model.fork', () => {
+    forks += 1
+    throw new Error('no model in this test')
+  })
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  on('tool.call', async () => reply(JSON.stringify({ identifier: 'WEB-2757', title: 'Remove Logo', url: 'https://linear.app/acme/issue/WEB-2757/remove-logo' })) as never)
+  await $.tool.call({ tool: 'mcp__claude_ai_Linear__get_issue', tool_use_id: 't1', id: 'WEB-2757' } as never)
+  await $.command.run({ command: 'peek', args: 'WEB-2757' } as never)
+  let ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /WEB-2757 Remove Logo/ })).toBeDefined()
+  expect(await ui.find({ text: /from this session/ })).toBeDefined()
+  await ui.unmount()
+  await $.command.run({ command: 'peek', args: 'acme/widgets#42' } as never)
+  ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /#42 Teach the parser/ })).toBeDefined()
+  expect(forks).toBe(0)
+  await ui.unmount()
+})
+
+test('starring a pull request URL and then owner/repo#N leaves one star', async ($, on) => {
+  fakeWorld(on)
+  const saved: unknown[] = []
+  on('store.set', (_$, e) => {
+    if (e.key === 'stars') saved.push(e.value)
+    return { value: undefined }
+  })
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  await $.tool.call({ tool: 'mcp__peek__star', tool_use_id: 's1', target: 'https://github.com/acme/widgets/pull/42/files' } as never)
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  await $.tool.call({ tool: 'mcp__peek__star', tool_use_id: 's2', target: 'acme/widgets#42' } as never)
+  expect(saved.at(-1)).toEqual(['https://github.com/acme/widgets/pull/42'])
+})
+
+test('Recent labels a pull request with its title, owner/repo and state, not a size', async ($, on) => {
+  fakeWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'mode-recent' })
+  expect(await ui.find({ text: /#42 Teach the parser/ })).toBeDefined()
+  expect(await ui.find({ text: /acme\/widgets/ })).toBeDefined()
+  expect(await ui.find({ text: /^open · / })).toBeDefined()
+  expect(await ui.find({ text: / B$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a #N link inside a pull request opens against that repo; b returns to the page it came from', async ($, on) => {
+  fakeWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  let ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(JSON.stringify(await ui.drawn())).toContain('[#45](https://github.com/acme/widgets/issues/45)')
+  expect(await ui.find({ key: 'back' })).toBeUndefined()
+  await ui.unmount()
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets' } as never)
+  ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'list-item-0-0' })
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /^PULL REQUESTS $/ })).toBeUndefined()
+  await ui.press({ key: 'back' })
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /^PULL REQUESTS $/ })).toBeDefined()
+  await ui.unmount()
 })
