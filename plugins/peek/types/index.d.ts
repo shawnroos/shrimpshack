@@ -45,6 +45,7 @@ export type RemoteRecord = {
   lists?: RemoteList[]
   og?: { title?: string; description?: string; siteName?: string; image?: string }
   favicon?: string
+  media?: Record<string, { file?: string; play?: string }>
   browserUrl: string
 }
 
@@ -78,6 +79,7 @@ export type View = {
     staleSince?: number
     favicon?: { file: string; width: number; height: number }
     preview?: { file: string; width: number; height: number }
+    pictures?: Record<string, { file: string; width: number; height: number }>
   }
 }
 

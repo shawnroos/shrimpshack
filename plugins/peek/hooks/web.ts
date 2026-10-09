@@ -201,6 +201,58 @@ async function download(io: SourceIo, raw: string | undefined): Promise<string |
   return undefined
 }
 
+const MAX_MEDIA = 8
+const PICTURE_LINE = /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/
+const VIDEO_TAG = /<video\b[^>]*>/gi
+
+function attribute(tag: string, name: string): string | undefined {
+  return new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, 'i').exec(tag)?.[1]
+}
+
+// An empty attribute would resolve to the page itself.
+function absolute(raw: string | undefined, base: string): string | undefined {
+  return raw ? safeParse(raw, base)?.href : undefined
+}
+
+function youtubeId(url: URL): string | undefined {
+  if (url.hostname === 'youtu.be') return url.pathname.slice(1) || undefined
+  if (/(^|\.)youtube\.com$/.test(url.hostname)) return url.searchParams.get('v') ?? /^\/embed\/([\w-]+)/.exec(url.pathname)?.[1]
+  return undefined
+}
+
+// Defuddle keeps a <video> as raw HTML and drops its poster; it becomes a picture line here, its poster read from the page.
+function withVideoLines(body: string, html: string, base: string): { body: string; posters: Map<string, string> } {
+  const posters = new Map<string, string>()
+  for (const tag of html.match(VIDEO_TAG) ?? []) {
+    const src = absolute(attribute(tag, 'src'), base)
+    const poster = absolute(attribute(tag, 'poster'), base)
+    if (src && poster) posters.set(src, poster)
+  }
+  const lines = body.split('\n').map(line => {
+    const tag = /^\s*<video\b[^>]*>/i.exec(line)?.[0]
+    const src = tag ? absolute(attribute(tag, 'src'), base) : undefined
+    return src ? `![video](${src})` : line
+  })
+  return { body: lines.join('\n'), posters }
+}
+
+async function pageMedia(io: SourceIo, body: string, posters: Map<string, string>): Promise<RemoteRecord['media']> {
+  const wanted: { key: string; thumb?: string; play?: string }[] = []
+  for (const line of body.split('\n')) {
+    const target = PICTURE_LINE.exec(line.trim())?.[2]
+    const url = target ? safeParse(target) : null
+    if (!url || wanted.some(one => one.key === url.href)) continue
+    const id = youtubeId(url)
+    const isVideo = Boolean(id) || posters.has(url.href) || /^video$/i.test(PICTURE_LINE.exec(line.trim())?.[1] ?? '')
+    const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : isVideo ? posters.get(url.href) : url.href
+    wanted.push({ key: url.href, thumb, play: isVideo ? url.href : undefined })
+  }
+  if (wanted.length === 0) return undefined
+  let budget = MAX_MEDIA
+  const files = await Promise.all(wanted.map(one => (one.thumb && budget-- > 0 ? download(io, one.thumb) : Promise.resolve(undefined))))
+  return Object.fromEntries(wanted.map((one, i) => [one.key, { file: files[i], play: one.play }]))
+}
+
 async function firstIcon(io: SourceIo, icons: readonly string[]): Promise<string | undefined> {
   for (const icon of icons.slice(0, 3)) {
     const file = await download(io, icon)
@@ -249,13 +301,16 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
     isCli ? faviconFor(io, host, head.icons) : undefined,
     readable(io, html, finalUrl),
   ])
+  const video = cleaned ? withVideoLines(cleaned, html, finalUrl) : null
+  const media = video && isCli ? await pageMedia(io, video.body, video.posters) : undefined
   const record: RemoteRecord = {
     address: ref.address,
     kind: 'web',
     title: head.title ?? host,
     trail: [head.siteName ?? host],
     meta: [{ label: 'Host', value: host }],
-    body: cleaned ?? htmlToMarkdown(html),
+    body: video?.body ?? htmlToMarkdown(html),
+    ...(media ? { media } : {}),
     og: { title: head.title, description: head.description, siteName: head.siteName, image },
     favicon,
     browserUrl: finalUrl,
