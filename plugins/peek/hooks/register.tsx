@@ -2027,7 +2027,7 @@ export const register: Register = on => {
           sectionRule('body-head', label)
           markdownBlocks('body', record.body, label)
         }
-        if (record.kind === 'gh-repo') {
+        if (record.kind === 'gh-repo' || record.kind === 'linear-issue') {
           lists()
           description()
         } else {

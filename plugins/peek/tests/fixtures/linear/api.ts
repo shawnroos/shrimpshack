@@ -9,7 +9,13 @@ export const ISSUE_WITH_PROJECT = {
   assignee: { name: 'Ada Lovelace' },
   labels: { nodes: [{ name: 'Bug' }, { name: 'Editor' }] },
   parent: { identifier: 'WEB-2700', title: 'Logo cleanup' },
-  project: { name: 'Brand refresh', url: 'https://linear.app/acme/project/brand-refresh-1a2b3c4d5e6f' },
+  project: { name: 'Brand refresh', url: 'https://linear.app/acme/project/brand-refresh-1a2b3c4d5e6f/overview', state: 'started' },
+  children: {
+    nodes: [
+      { identifier: 'WEB-2758', title: 'Remove the header logo', url: 'https://linear.app/acme/issue/WEB-2758/x', state: { name: 'Done', type: 'completed' }, assignee: { name: 'Grace' } },
+      { identifier: 'WEB-2759', title: 'Remove the footer logo', url: 'https://linear.app/acme/issue/WEB-2759/y', state: { name: 'Todo', type: 'unstarted' }, assignee: null },
+    ],
+  },
   projectMilestone: { name: 'Beta' },
   team: { key: 'WEB', name: 'Web' },
   createdAt: '2026-10-01T09:00:00.000Z',

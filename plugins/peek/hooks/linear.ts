@@ -3,7 +3,7 @@ import { parseRef } from './refs'
 import type { Ref } from './refs'
 import { linearPaged, linearQuery } from './sources'
 import type { Connection, Failed, SourceIo } from './sources'
-import type { Loaded, RemoteComment, RemoteListItem, RemoteRecord } from '../types'
+import type { Loaded, RemoteComment, RemoteList, RemoteListItem, RemoteRecord } from '../types'
 
 const SHOWN_COMMENTS = 50
 const FROZEN_TYPES = new Set(['completed', 'canceled'])
@@ -12,6 +12,7 @@ const ISSUE_QUERY = `query($id: String!) { issue(id: $id) {
   identifier title description url priority priorityLabel
   state { name type } assignee { name } labels(first: 50) { nodes { name } }
   parent { identifier title } project { name url } projectMilestone { name } team { key name }
+  children(first: 50) { nodes { identifier title url state { name type } assignee { name } } }
   createdAt updatedAt completedAt canceledAt
   comments(last: 50) { nodes { id body createdAt user { name } parent { id } } pageInfo { hasPreviousPage } }
 } }`
@@ -142,7 +143,9 @@ function issueRecord(issue: Obj, ref: Ref, commentTotal?: number): RemoteRecord 
   push(meta, 'Assignee', named(issue.assignee) ?? 'Unassigned')
   push(meta, 'Labels', labels.length ? labels.join(', ') : undefined)
   push(meta, 'Priority', priority(issue))
-  push(meta, 'Project', project)
+  const projectUrl = str(obj(issue.project)?.url)
+  const projectHref = projectUrl ? parseRef(projectUrl)?.address : undefined
+  if (!projectHref) push(meta, 'Project', project)
   push(meta, 'Milestone', named(issue.projectMilestone))
   push(meta, 'Parent', parentText)
   push(meta, 'Created', day(issue.createdAt))
@@ -151,7 +154,14 @@ function issueRecord(issue: Obj, ref: Ref, commentTotal?: number): RemoteRecord 
   push(meta, 'Canceled', day(issue.canceledAt))
   const rawComments = issue.comments === undefined || issue.comments === null ? null : nodes(issue.comments)
   const shown = rawComments ? threaded(rawComments) : null
+  const lists: RemoteList[] = []
+  if (project && projectHref) lists.push({ heading: 'Project', items: [{ href: projectHref, title: project }], total: 1 })
+  const children = nodes(issue.children)
+    .map(node => issueItem(node, ref))
+    .filter((item): item is RemoteListItem => item !== null)
+  if (children.length) lists.push({ heading: 'Sub-issues', items: children, total: children.length })
   return {
+    ...(lists.length ? { lists } : {}),
     address: ref.address,
     kind: 'linear-issue',
     title: identifier ? `${identifier} ${title}` : title,

@@ -70,6 +70,29 @@ function issueWorld(issue: unknown) {
 }
 
 describe('Linear issues', () => {
+  test('an issue lists its project and its sub-issues as links, and the query asks for children', async () => {
+    const { io, sent } = issueWorld(ISSUE_WITH_PROJECT)
+    const rec = record(await loadLinear(io, ref('https://linear.app/acme/issue/WEB-2757'), NOW))
+    expect(rec.lists).toEqual([
+      { heading: 'Project', items: [{ href: 'https://linear.app/acme/project/brand-refresh-1a2b3c4d5e6f', title: 'Brand refresh' }], total: 1 },
+      {
+        heading: 'Sub-issues',
+        items: [
+          { href: 'https://linear.app/acme/issue/WEB-2758', title: 'WEB-2758 Remove the header logo', status: 'Done', meta: 'Grace' },
+          { href: 'https://linear.app/acme/issue/WEB-2759', title: 'WEB-2759 Remove the footer logo', status: 'Todo' },
+        ],
+        total: 2,
+      },
+    ])
+    expect(meta(rec, 'Project')).toBeUndefined()
+    expect(JSON.stringify(sent)).toContain('children(first: 50)')
+  })
+
+  test('an issue with no project and no sub-issues has no lists', async () => {
+    const { io } = issueWorld(ISSUE_NO_PROJECT)
+    expect(record(await loadLinear(io, ref('https://linear.app/acme/issue/WEB-12'), NOW)).lists).toBeUndefined()
+  })
+
   test('an issue with a project and parent draws trail [team, project] and the identifier in the title', async () => {
     const { io, sent } = issueWorld(ISSUE_WITH_PROJECT)
     const loaded = await loadLinear(io, ref('https://linear.app/acme/issue/WEB-2757'), NOW)
@@ -87,7 +110,7 @@ describe('Linear issues', () => {
     expect(meta(rec, 'Assignee')).toBe('Ada Lovelace')
     expect(meta(rec, 'Labels')).toBe('Bug, Editor')
     expect(meta(rec, 'Priority')).toBe('High')
-    expect(meta(rec, 'Project')).toBe('Brand refresh')
+    expect(rec.lists?.[0]?.items[0]?.title).toBe('Brand refresh')
     expect(meta(rec, 'Milestone')).toBe('Beta')
     expect(meta(rec, 'Parent')).toBe('WEB-2700 Logo cleanup')
     expect(meta(rec, 'Created')).toBe('2026-10-01')
