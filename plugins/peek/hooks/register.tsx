@@ -490,7 +490,7 @@ async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Prom
 async function viewOf($: EngineInterface, ref: Ref, entry: CacheEntry): Promise<View> {
   const base: View = { href: ref.address, title: ref.key ?? ref.address.replace(/^https:\/\//, ''), location: ref.address, kind: ref.kind }
   const record = entry.record
-  if (!record) return { ...base, remote: { failure: entry.failure ?? 'offline' } }
+  if (!record) return { ...base, remote: { failure: entry.failure ?? 'offline', failureDetail: entry.failureDetail } }
   return {
     href: record.address,
     title: record.title,
@@ -2111,11 +2111,12 @@ export const register: Register = on => {
         drawnParts.push(
           <Box key="remote-failure" flexDirection="column">
             <Text color={C.red} bold>{message.title}</Text>
+            {remote.failureDetail && <Text color={C.overlay1}>{remote.failureDetail}</Text>}
             <Text color={C.subtext0}>{message.hint}</Text>
             <Text color={C.overlay0}>Press o to open it in the browser.</Text>
           </Box>,
         )
-        note(3)
+        note(remote.failureDetail ? 4 : 3)
       } else {
         const favicon = remote.favicon && pixels.get(remote.favicon.file)
         drawnParts.push(

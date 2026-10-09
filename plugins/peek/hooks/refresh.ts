@@ -20,6 +20,7 @@ export type CacheEntry = {
   state: CacheState
   staleSince?: number
   failure?: FailureKind
+  failureDetail?: string
 }
 
 export type Source = 'github' | 'linear' | 'web'
@@ -93,7 +94,7 @@ function settle(previous: CacheEntry | undefined, address: string, result: Loade
     }
   }
   if (result.failure === 'rate-limited') extendBackoff(source, now)
-  if (!previous?.record) return { address, attemptedAt: now, state: 'failed', failure: result.failure }
+  if (!previous?.record) return { address, attemptedAt: now, state: 'failed', failure: result.failure, failureDetail: result.detail }
   return {
     ...previous,
     attemptedAt: now,

@@ -2,7 +2,7 @@ import type { Loaded, RemoteRecord } from '../types'
 import type { Captured } from './capture'
 import { htmlToMarkdown } from './lib'
 import type { Ref } from './refs'
-import { hasCurl, httpFailure, httpText } from './sources'
+import { hasCurl, httpDetail, httpFailure, httpText } from './sources'
 import type { Failed, SourceIo } from './sources'
 
 const SCRATCH = '/tmp/claude-peek'
@@ -225,7 +225,7 @@ async function curlPage(io: SourceIo, url: string): Promise<{ ok: true; text: st
   const [code = '', ...rest] = cut >= 0 ? ran.stderr.slice(cut + MARKER.length).trim().split(' ') : []
   const status = Number.parseInt(code, 10)
   const isUsable = status >= 200 && status < 300 && (ran.exitCode === 0 || ran.stdout.length > 0)
-  if (!isUsable) return { ok: false, failure: cut >= 0 && status > 0 ? httpFailure(status) : 'offline' }
+  if (!isUsable) return cut >= 0 && status > 0 ? { ok: false, failure: httpFailure(status), detail: httpDetail(status, rest.join(' ') || url) } : { ok: false, failure: 'offline' }
   return { ok: true, text: ran.stdout, finalUrl: rest.join(' ') || url }
 }
 
