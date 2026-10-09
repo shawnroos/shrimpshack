@@ -9,7 +9,8 @@ const FILES: Record<string, string> = {
 
 function fakeDisk(on: On) {
   on('session.cwd', () => ({ value: '/repo' }))
-  on('env.get', () => ({ value: '/home' }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
+  on('http.fetch', () => ({ value: { status: 404, ok: false, headers: {}, text: '' } }))
   on('clock.now', () => ({ value: 10 * 3600_000 }))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   on('ui.toast', () => ({ value: undefined }))
