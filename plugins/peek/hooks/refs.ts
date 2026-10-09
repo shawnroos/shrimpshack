@@ -24,7 +24,7 @@ const NAME = /^[\w.-]+$/
 
 const OWNER_REPO_NUMBER = /^([A-Za-z0-9][\w.-]*)\/([\w.-]+)#(\d+)$/
 const HASH_NUMBER = /^#(\d+)$/
-const LINEAR_ID = /^([A-Z][A-Z0-9]{0,9})-(\d+)$/
+const LINEAR_ID = /^([A-Z][A-Z0-9]{0,9})-(\d+)$/i
 
 function github(owner: string, repo: string, kind: 'gh-issue' | 'gh-pr' | 'gh-number', number: number): Ref {
   const path = kind === 'gh-pr' ? 'pull' : 'issues'
@@ -74,8 +74,10 @@ export function parseRef(input: string, context: RefContext = {}): Ref | null {
   const [owner, repo] = context.repo?.split('/') ?? []
   if (bare && owner && repo) return github(owner, repo, 'gh-number', Number(bare[1]))
   const linear = LINEAR_ID.exec(text)
-  if (linear?.[1] && context.workspace && context.teamKeys?.includes(linear[1])) {
-    return { kind: 'linear-issue', address: `https://linear.app/${context.workspace}/issue/${text}`, workspace: context.workspace, key: text }
+  const team = linear?.[1]?.toUpperCase()
+  if (team && context.workspace && context.teamKeys?.includes(team)) {
+    const key = `${team}-${linear?.[2]}`
+    return { kind: 'linear-issue', address: `https://linear.app/${context.workspace}/issue/${key}`, workspace: context.workspace, key }
   }
   return null
 }

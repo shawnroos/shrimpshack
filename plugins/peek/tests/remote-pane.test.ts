@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { C, mute } from '../hooks/theme'
+import { C, META_ICON, mute } from '../hooks/theme'
 import { issueList, pullList, pullView, repoView } from './fixtures/github/items'
 
 const NOW = 10 * 3600_000
@@ -236,5 +236,15 @@ test('a narrow header shortens the trail without cutting into its names', async 
   const tree = JSON.stringify(await ui.drawn())
   expect(tree).not.toMatch(/"ac…/)
   expect(tree).toContain('\u{f09b}')
+  await ui.unmount()
+})
+
+test('the details block labels each row with a Nerd Font icon instead of a word', async ($, on) => {
+  fakeWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: META_ICON.Author })).toBeDefined()
+  expect(await ui.find({ text: META_ICON.Branch })).toBeDefined()
+  expect(await ui.find({ text: /^Author\s*$/ })).toBeUndefined()
   await ui.unmount()
 })

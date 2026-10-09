@@ -69,6 +69,11 @@ describe('parseRef canonical addresses', () => {
     expect(parseRef('WEB-2757', { teamKeys: ['WEB'] })).toBeNull()
   })
 
+  test('a lowercase Linear ID typed into /peek resolves to the uppercase address', () => {
+    expect(parseRef('ai-711', { teamKeys: ['AI'], workspace: 'acme' })?.address).toBe('https://linear.app/acme/issue/AI-711')
+    expect(parseRef('utf-8', { teamKeys: ['AI'], workspace: 'acme' })).toBeNull()
+  })
+
   test('file links, paths and junk are not remote', () => {
     expect(parseRef(fileHref('/a/b.md'))).toBeNull()
     expect(parseRef('docs/plan.md')).toBeNull()

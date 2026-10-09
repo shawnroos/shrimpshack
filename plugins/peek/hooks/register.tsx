@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Loaded, Mention, Mode, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
-import { C as BASE, MUTED, ICON, colorFor, iconFor, mute, ruleParts } from './theme'
+import { C as BASE, MUTED, ICON, META_ICON, colorFor, iconFor, mute, ruleParts } from './theme'
 import { capturedLinearContext, record } from './capture'
 import type { CaptureIo } from './capture'
 import { familyOf, itemKey, parseRef } from './refs'
@@ -1946,13 +1946,13 @@ export const register: Register = on => {
           </Box>,
         )
         note(Math.ceil((record.title.length + 3) / textWidth), record.title)
-        const labelWidth = Math.min(14, Math.max(0, ...record.meta.map(one => one.label.length)) + 2)
+        const labelWidth = Math.min(14, Math.max(0, ...record.meta.map(one => (META_ICON[one.label] ? 1 : one.label.length))) + 2)
         drawnParts.push(
           embed('remote-meta', iconFor(record.kind), 'DETAILS', record.status ?? '', kindColor(record.kind), (
             <Box flexDirection="column">
               {record.meta.map((one, i) => (
                 <Text key={`meta-${i}`} wrap="truncate-end">
-                  <Text color={C.overlay0}>{one.label.padEnd(labelWidth)}</Text>
+                  <Text color={C.overlay0}>{(META_ICON[one.label] ?? one.label).padEnd(labelWidth)}</Text>
                   <Text color={C.text}>{one.value}</Text>
                 </Text>
               ))}

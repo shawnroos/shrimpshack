@@ -46,6 +46,37 @@ export const ICON = {
   'linear-project': '\u{f0e8}',
 } as const
 
+export const META_ICON: Record<string, string> = {
+  State: '\u{f0765}',
+  Status: '\u{f0765}',
+  Author: '\u{f0004}',
+  Assignee: '\u{f0004}',
+  Assignees: '\u{f0849}',
+  Lead: '\u{f1a7d}',
+  Labels: '\u{f04f9}',
+  Priority: '\u{f023b}',
+  Project: '\u{f0e8}',
+  Milestone: '\u{f04fe}',
+  Parent: '\u{f0645}',
+  Branch: '\u{f062c}',
+  'Default branch': '\u{f062c}',
+  Review: '\u{f0208}',
+  'Merge state': '\u{f419}',
+  Merged: '\u{f419}',
+  Created: '\u{f00f3}',
+  Updated: '\u{f0954}',
+  Start: '\u{f00f3}',
+  Target: '\u{f04fe}',
+  Completed: '\u{f00f2}',
+  Closed: '\u{f00f2}',
+  Canceled: '\u{f00f4}',
+  Progress: '\u{f0995}',
+  Description: '\u{f09a8}',
+  Language: '\u{f121}',
+  Stars: '\u{f005}',
+  Host: '\u{f0ac}',
+}
+
 export const KIND_COLOR: Record<string, string> = {
   markdown: C.yellow,
   text: C.blue,
