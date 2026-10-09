@@ -127,8 +127,8 @@ describe('mentions', () => {
     const once = lib.noteMentions([], ['a', 'b'], 1)
     const twice = lib.noteMentions(once, ['a'], 5)
     expect(twice).toEqual([
-      { href: 'b', at: 1, count: 1 },
-      { href: 'a', at: 5, count: 2 },
+      { href: 'b', at: 1, count: 1, isArtifact: false },
+      { href: 'a', at: 5, count: 2, isArtifact: false },
     ])
   })
 
@@ -243,4 +243,116 @@ test('segmentsOf groups consecutive linked tasks into one block with depth and s
     { href: 'file:///w/t.md', line: 3, isDone: true, text: 'two', depth: 1 },
     { href: 'file:///w/t.md', line: 4, isDone: false, text: 'three', depth: 0 },
   ])
+})
+
+describe('scopes and the gallery', () => {
+  const out = ['1700000000 1200 docs/plan.md', '1700000500 90 src/a.rs', '1700000100 5000 shots/x.png', '1700000200 10 node_modules.bin', '1700000300 70 flow.mmd'].join('\n')
+  const entries = lib.parseStatLines(out, '/w', 'tui')
+
+  test('parseStatLines keeps viewable files with their folder, kind, time and size', () => {
+    expect(entries.map(one => one.name)).toEqual(['plan.md', 'a.rs', 'x.png', 'flow.mmd'])
+    expect(entries[0]).toMatchObject({ path: '/w/docs/plan.md', folder: 'docs', kind: 'markdown', mtimeMs: 1700000000000, size: 1200, worktree: 'tui' })
+  })
+
+  test('selectEntries filters by type and words, then sorts', () => {
+    expect(lib.selectEntries(entries, 'image', '', 'recent').map(one => one.name)).toEqual(['x.png'])
+    expect(lib.selectEntries(entries, 'diagram', '', 'recent').map(one => one.name)).toEqual(['flow.mmd'])
+    expect(lib.selectEntries(entries, 'all', 'src', 'recent').map(one => one.name)).toEqual(['a.rs'])
+    expect(lib.selectEntries(entries, 'all', '', 'recent').map(one => one.name)).toEqual(['a.rs', 'flow.mmd', 'x.png', 'plan.md'])
+    expect(lib.selectEntries(entries, 'all', '', 'size').map(one => one.name)).toEqual(['x.png', 'plan.md', 'a.rs', 'flow.mmd'])
+    expect(lib.selectEntries(entries, 'all', '', 'name').map(one => one.name)).toEqual(['a.rs', 'flow.mmd', 'plan.md', 'x.png'])
+  })
+
+  test('nextOf cycles and gridColumns fits whole cards', () => {
+    expect(lib.nextOf(['a', 'b', 'c'], 'c')).toBe('a')
+    expect(lib.gridColumns(80)).toBe(3)
+    expect(lib.gridColumns(79)).toBe(2)
+    expect(lib.gridColumns(20)).toBe(1)
+    expect(lib.gridColumns(107)).toBe(4)
+  })
+})
+
+describe('data files', () => {
+  test('kindOf and typeOf know json, toml and csv', () => {
+    expect(['a.json', 'b.toml', 'c.csv', 'd.tsv'].map(lib.kindOf)).toEqual(['json', 'toml', 'csv', 'csv'])
+    expect(lib.typeOf('json')).toBe('data')
+  })
+
+  test('parseDelimited handles quotes, embedded commas, newlines and CRLF', () => {
+    const text = 'name,note\r\n"Lee, A","said ""hi""\nthen left"\r\nB,plain\n'
+    expect(lib.parseDelimited(text)).toEqual([['name', 'note'], ['Lee, A', 'said "hi"\nthen left'], ['B', 'plain']])
+    expect(lib.parseDelimited('a\tb\n1\t2', '\t')).toEqual([['a', 'b'], ['1', '2']])
+  })
+
+  test('columnWidths keeps natural widths that fit and squeezes the widest when they do not', () => {
+    expect(lib.columnWidths([['ab', 'c'], ['a', 'cdef']], 40)).toEqual([2, 4])
+    const squeezed = lib.columnWidths([['id', 'x'.repeat(80)]], 30)
+    expect(squeezed[0]).toBe(2)
+    expect(squeezed.reduce((a, b) => a + b, 0) + 2).toBeLessThanOrEqual(30)
+  })
+
+  test('fitCell pads short text and cuts long text with an ellipsis', () => {
+    expect(lib.fitCell('ab', 4)).toBe('ab  ')
+    expect(lib.fitCell('abcdef', 4)).toBe('abc…')
+  })
+
+  test('prettyJson re-indents and summarises, and reports a parse error', () => {
+    const out = lib.prettyJson('{"a":1,"b":[1,2]}')
+    expect('text' in out && out.text).toBe('{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}')
+    expect('summary' in out && out.summary).toBe('object · 2 keys')
+    expect('error' in lib.prettyJson('{oops')).toBe(true)
+  })
+
+  test('tomlSections counts tables and array tables', () => {
+    expect(lib.tomlSections('a = 1\n[server]\nport = 1\n[[workers]]\n# [not]\n')).toBe(2)
+  })
+})
+
+describe('artifacts and touched files', () => {
+  test('noteMentions marks artifacts and never demotes one', () => {
+    const touched = lib.noteMentions([], ['a', 'b'], 1)
+    expect(touched.map(one => one.isArtifact)).toEqual([false, false])
+    const shown = lib.noteMentions(touched, ['a'], 2, 200, true)
+    const readAgain = lib.noteMentions(shown, ['a'], 3)
+    expect(readAgain.find(one => one.href === 'a')?.isArtifact).toBe(true)
+    expect(readAgain.find(one => one.href === 'b')?.isArtifact).toBe(false)
+  })
+
+  test('filterRole keeps all, artifacts or touched', () => {
+    const base = { path: '', name: '', folder: '', kind: 'text', mtimeMs: 0, size: 0, mentions: 0, mentionedAt: 0 }
+    const entries = [
+      { ...base, href: 'a', role: 'artifact' as const },
+      { ...base, href: 'b', role: 'touched' as const },
+      { ...base, href: 'c' },
+    ]
+    expect(lib.filterRole(entries, 'all').map(one => one.href)).toEqual(['a', 'b', 'c'])
+    expect(lib.filterRole(entries, 'artifacts').map(one => one.href)).toEqual(['a'])
+    expect(lib.filterRole(entries, 'touched').map(one => one.href)).toEqual(['b'])
+  })
+})
+
+test('classifyBlocks splits reply text and Write from files other tools only worked on', () => {
+  expect(
+    lib.classifyBlocks([
+      { type: 'text', text: 'See out/report.md' },
+      { type: 'tool_use', name: 'Write', input: { file_path: '/w/new.md' } },
+      { type: 'tool_use', name: 'Read', input: { file_path: '/w/a.rs' } },
+      { type: 'tool_use', name: 'Edit', input: { file_path: '/w/b.rs' } },
+      { type: 'tool_use', name: 'Grep', input: { path: '/w/src', pattern: 'x' } },
+    ]),
+  ).toEqual({ texts: ['See out/report.md'], created: ['/w/new.md'], touched: ['/w/a.rs', '/w/b.rs', '/w/src'] })
+})
+
+describe('stars', () => {
+  test('starredFirst lifts starred entries and keeps each group in order', () => {
+    const entries = ['a', 'b', 'c', 'd'].map(href => ({ href }))
+    expect(lib.starredFirst(entries, ['d', 'b']).map(one => one.href)).toEqual(['b', 'd', 'a', 'c'])
+  })
+
+  test('toggleStar flips, or sets a wanted state, without duplicates', () => {
+    expect(lib.toggleStar([], 'a')).toEqual(['a'])
+    expect(lib.toggleStar(['a'], 'a')).toEqual([])
+    expect(lib.toggleStar(['a'], 'a', true)).toEqual(['a'])
+    expect(lib.toggleStar([], 'a', false)).toEqual([])
+  })
 })

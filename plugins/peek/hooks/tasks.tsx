@@ -1,16 +1,18 @@
 import type { ClientModule } from 'claude-code'
 
 import { taskRows } from './lib'
-import { C } from './theme'
+import { C as BASE, MUTED, mute } from './theme'
 
 type Item = { href: string; line: number; isDone: boolean; text: string; depth: number }
-type Props = { width: number; items: Item[] }
+type Props = { width: number; items: Item[]; muted?: boolean }
 type State = { hovered: number }
 
 const latest = new WeakMap<object, Props>()
 
 const TaskList: ClientModule<Props, State> = (props, surface) => {
   const { Box, Text } = surface.elements
+  const C = props.muted ? MUTED : BASE
+  const tone = (color: string) => (props.muted ? mute(color) : color)
   const rows = taskRows(props.items, props.width)
   latest.set(surface, props)
   if (surface.state === undefined) {

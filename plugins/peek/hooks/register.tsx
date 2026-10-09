@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Mention, Mode, View } from '../types'
-import { C, ICON, colorFor, iconFor, ruleParts } from './theme'
+import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
+import { C as BASE, MUTED, ICON, colorFor, iconFor, ruleParts } from './theme'
 import {
   describeAge,
   describeSize,
@@ -15,8 +16,20 @@ import {
   imageBox,
   kindLabel,
   IMAGE_ROWS,
+  gridColumns,
+  classifyBlocks,
+  columnWidths,
+  filterRole,
+  toggleStar,
+  fitCell,
   kindOf,
   linkTasks,
+  parseDelimited,
+  prettyJson,
+  tomlSections,
+  nextOf,
+  parseStatLines,
+  selectEntries,
   linkify,
   markdownPage,
   mermaidFences,
@@ -41,6 +54,8 @@ import {
   urlCandidates,
 } from './lib'
 
+const C = BASE
+
 const PANE = 'peek'
 const SCRATCH = '/tmp/claude-peek'
 const view = atom({ plugin: 'peek', key: 'view' } as const, null)
@@ -57,7 +72,69 @@ const MAX_CPL = 104
 const MODES: { id: Mode; label: string; icon: string; hotkey: string }[] = [
   { id: 'view', label: 'Peek', icon: '\u{f06e}', hotkey: 'p' },
   { id: 'recent', label: 'Recent', icon: '\u{f017}', hotkey: 'r' },
+  { id: 'gallery', label: 'Gallery', icon: '\u{f0c6c}', hotkey: 'g' },
 ]
+const scopeAtom = atom({ plugin: 'peek', key: 'scope' } as const, 'session')
+const galleryType = atom({ plugin: 'peek', key: 'galleryType' } as const, 'all')
+const gallerySort = atom({ plugin: 'peek', key: 'gallerySort' } as const, 'recent')
+const galleryFilter = atom({ plugin: 'peek', key: 'galleryFilter' } as const, '')
+const roleFilter = atom({ plugin: 'peek', key: 'roleFilter' } as const, 'all')
+const stars = atom({ plugin: 'peek', key: 'stars' } as const, [])
+const cursorAtom = atom({ plugin: 'peek', key: 'cursor' } as const, 0)
+type NavItem = { href: string; key: string; line: number; col: number }
+let navOrder: NavItem[] = []
+
+type Direction = 'up' | 'down' | 'left' | 'right'
+
+// Up and down keep the column, so a card grid moves like a grid.
+function stepFrom(at: number, direction: Direction): number {
+  const here = navOrder[at]
+  if (!here) return 0
+  if (direction === 'left' || direction === 'right') {
+    const next = navOrder[at + (direction === 'left' ? -1 : 1)]
+    return next && next.line === here.line ? at + (direction === 'left' ? -1 : 1) : at
+  }
+  const line = here.line + (direction === 'up' ? -1 : 1)
+  let best = -1
+  navOrder.forEach((one, index) => {
+    if (one.line === line && (best < 0 || Math.abs(one.col - here.col) < Math.abs((navOrder[best]?.col ?? 0) - here.col))) best = index
+  })
+  return best < 0 ? at : best
+}
+
+async function moveSelection($: EngineInterface, direction: Direction) {
+  let landed = 0
+  await update($, cursorAtom, at => {
+    landed = stepFrom(Math.max(0, Math.min(navOrder.length - 1, at)), direction)
+    return landed
+  })
+  const key = navOrder[landed]?.key
+  // 'nearest' counts a row under the pinned footer as already showing, so the
+  // cursor could walk behind it; centring always leaves it in the clear.
+  if (key) await $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
+  await $.ui.focus({ requestId: PANE, key: `item-${landed}` }).catch(() => undefined)
+}
+
+async function selectAndOpen($: EngineInterface, index: number) {
+  await update($, cursorAtom, () => index)
+  const href = navOrder[index]?.href
+  if (href) await show($, href)
+}
+
+async function selectedHref($: EngineInterface): Promise<string | undefined> {
+  const at = await read($, cursorAtom)
+  return navOrder[Math.max(0, Math.min(navOrder.length - 1, at))]?.href
+}
+
+const ROLES: RoleFilter[] = ['all', 'artifacts', 'touched']
+const SCOPES: Scope[] = ['session', 'worktree', 'repo']
+const TYPES: GalleryType[] = ['all', 'markdown', 'code', 'data', 'image', 'diagram', 'html']
+const SORTS: GallerySort[] = ['recent', 'name', 'size', 'mentions']
+const SCOPE_ICON: Record<Scope, string> = { session: '\u{f0b79}', worktree: '\u{f418}', repo: '\u{f401}' }
+const LIST_CHUNK = 10
+const CARD_ROWS = 5
+const CARD_MIN = 26
+const CARD_GAP = 2
 const fullText = new Map<string, string>()
 const roots = new Map<string, { root: string; isWorktree: boolean } | null>()
 const GALLERY = 'peek-ui'
@@ -68,7 +145,6 @@ const BORDERS = ['single', 'double', 'round', 'bold', 'singleDouble', 'doubleSin
 const SAMPLE_RUST = 'fn greet(name: &str) -> String {\n    format!("hello, {name}")\n}\n\nfn main() {\n    println!("{}", greet("peek"));\n}'
 const SAMPLE_DIFF = '@@ -1,3 +1,3 @@\n fn main() {\n-    println!("hi");\n+    println!("hello, peek");\n }'
 const SAMPLE_MARKDOWN = '## Markdown\n\nRenders **bold**, *italic*, `code`, [links](https://claude.com) and lists:\n\n- one\n- two\n\n| Element | Use |\n|---|---|\n| Box | layout |\n| Text | words |\n\n```ts\nconst peek = true\n```'
-const FILE_FIELDS = ['file_path', 'path', 'notebook_path']
 
 const MERMAID_ASCII = '/.cache/claude-peek/bin/mermaid-ascii'
 const MAX_PNG_BYTES = 2 * 1024 * 1024
@@ -182,12 +258,13 @@ async function loadFile($: EngineInterface, href: string, path: string, line?: n
   const age = describeAge(stat.mtimeMs, await $.clock.now())
   if (stat.kind === 'dir') {
     const entries = (await $.fs.list(path)).filter(one => !one.name.startsWith('.'))
-    const rows = entries
+    const dir = entries
       .sort((a, b) => Number(b.kind === 'dir') - Number(a.kind === 'dir') || a.name.localeCompare(b.name))
-      .slice(0, 300)
-      .map(one => `- [${one.name}${one.kind === 'dir' ? '/' : ''}](${fileHref(`${path}/${one.name}`)})`)
-    const meta = `${entries.length} items · edited ${age}`
-    return { ...base, kind: 'folder', meta, markdown: fitMarkdown(rows.join('\n') || '*Empty folder.*') }
+      .slice(0, 500)
+      .map(one => ({ name: one.name, isDir: one.kind === 'dir', size: one.size, mtimeMs: one.mtimeMs }))
+    const folders = dir.filter(one => one.isDir).length
+    const summary = `${folders} folders · ${dir.length - folders} files`
+    return { ...base, kind: 'folder', meta: `${entries.length} items · edited ${age}`, summary, dir }
   }
   const kind = kindOf(path)
   const sized = `${describeSize(stat.size)} · edited ${age}`
@@ -217,17 +294,40 @@ async function loadFile($: EngineInterface, href: string, path: string, line?: n
       : `*This diagram type cannot be drawn as text. Press "Open externally" to see it rendered.*\n\n\`\`\`mermaid\n${text}\n\`\`\``
     return { ...base, kind, meta, markdown: fitMarkdown(body) }
   }
-  const lines = text.split('\n')
+  if (kind === 'csv') {
+    const rows = parseDelimited(text, extOf(path) === 'tsv' ? '\t' : ',')
+    const [header = [], ...body] = rows
+    const columns = Math.max(header.length, ...body.slice(0, 200).map(row => row.length))
+    const table = { header, rows: body.slice(0, 500), total: body.length }
+    return { ...base, kind, meta, summary: `${body.length} rows × ${columns} columns`, table }
+  }
+  let source = text
+  let summary: string | undefined
+  if (kind === 'json') {
+    const pretty = prettyJson(text)
+    if ('text' in pretty) {
+      source = pretty.text
+      summary = pretty.summary
+    } else {
+      summary = `invalid JSON: ${pretty.error}`
+    }
+  }
+  if (kind === 'toml') {
+    const sections = tomlSections(text)
+    summary = `${sections} section${sections === 1 ? '' : 's'}`
+  }
+  const lines = source.split('\n')
   const startLine = line ? Math.max(1, line - 10) : 1
   const window: string[] = []
   let used = 0
-  for (const one of lines.slice(startLine - 1, startLine + 299)) {
-    if (used + one.length > 9000) break
+  for (const one of lines.slice(startLine - 1, startLine + 1999)) {
+    if (used + one.length > 80_000) break
     window.push(one)
     used += one.length + 1
   }
-  const code = { source: window.join('\n'), language: extOf(path), startLine, focusLine: line }
-  return { ...base, kind: 'text', meta, code }
+  const language = kind === 'json' ? 'json' : kind === 'toml' ? 'toml' : extOf(path)
+  const code = { source: window.join('\n'), language, startLine, focusLine: line }
+  return { ...base, kind: kind === 'json' || kind === 'toml' ? kind : 'text', meta, summary, code }
 }
 
 async function loadUrl($: EngineInterface, href: string): Promise<View> {
@@ -289,18 +389,29 @@ async function openExternally($: EngineInterface, current: View) {
   await $.process.run(['open', out])
 }
 
-async function remember($: EngineInterface, texts: readonly string[], paths: readonly string[]) {
+async function remember(
+  $: EngineInterface,
+  texts: readonly string[],
+  created: readonly string[],
+  touched: readonly string[],
+) {
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME')) ?? ''
-  const hrefs: string[] = []
-  for (const raw of [...texts.flatMap(pathCandidates), ...paths]) {
-    const abs = resolvePath(raw, cwd, home)
-    if (await pathExists($, abs)) hrefs.push(fileHref(abs))
+  const toHrefs = async (raws: readonly string[]) => {
+    const out: string[] = []
+    for (const raw of raws) {
+      const abs = resolvePath(raw, cwd, home)
+      if (await pathExists($, abs)) out.push(fileHref(abs))
+    }
+    return out
   }
-  hrefs.push(...texts.flatMap(urlCandidates))
-  if (!hrefs.length) return
+  const artifacts = [...(await toHrefs([...texts.flatMap(pathCandidates), ...created])), ...texts.flatMap(urlCandidates)]
+  const worked = await toHrefs(touched)
+  if (!artifacts.length && !worked.length) return
   const at = await $.clock.now()
-  await update($, mentions, list => noteMentions(list, [...new Set(hrefs)], at))
+  await update($, mentions, list =>
+    noteMentions(noteMentions(list, [...new Set(worked)], at), [...new Set(artifacts)], at, 200, true),
+  )
 }
 
 async function toHref($: EngineInterface, raw: string): Promise<string | null> {
@@ -342,6 +453,97 @@ async function guess($: EngineInterface, query: string): Promise<string | null> 
   return first && first.score >= 1 ? first.href : null
 }
 
+const SCOPE_TTL_MS = 30_000
+const MAX_WORKTREES = 12
+const LIST_FILES =
+  "git ls-files -z --cached --others --exclude-standard | head -c 2000000 | xargs -0 stat -f '%m %z %N' 2>/dev/null | head -4000"
+const scopeCache = new Map<string, { at: number; entries: FileEntry[] }>()
+const scopeLoading = new Set<string>()
+
+async function listRoot($: EngineInterface, root: string, worktree?: string): Promise<FileEntry[]> {
+  const ran = await $.process.run(['sh', '-c', LIST_FILES], { cwd: root, timeoutMs: 20_000 }).catch(() => null)
+  return ran ? parseStatLines(ran.stdout, root, worktree) : []
+}
+
+async function sessionEntries($: EngineInterface, list: readonly Mention[]): Promise<FileEntry[]> {
+  const out: FileEntry[] = []
+  for (const one of [...list].reverse()) {
+    const file = parseHref(one.href)
+    const path = file?.path ?? one.href
+    const name = path.split('/').pop() || path
+    const stat = file ? await $.fs.stat(path).catch(() => null) : null
+    if (file && !stat) continue
+    out.push({
+      href: one.href,
+      path,
+      name,
+      folder: path.slice(0, Math.max(0, path.length - name.length - 1)),
+      kind: file ? (stat?.kind === 'dir' ? 'folder' : kindOf(path)) : 'web',
+      mtimeMs: stat?.mtimeMs ?? 0,
+      size: stat?.size ?? 0,
+      mentions: one.count,
+      mentionedAt: one.at,
+      role: one.isArtifact ? 'artifact' : 'touched',
+    })
+  }
+  return out
+}
+
+async function loadScope($: EngineInterface, scope: Exclude<Scope, 'session'>, cwd: string): Promise<FileEntry[]> {
+  const git = await gitRoot($, cwd)
+  if (!git) return []
+  if (scope === 'worktree') return listRoot($, git.root, git.root.split('/').pop())
+  const ran = await $.process.run(['git', '-C', git.root, 'worktree', 'list', '--porcelain']).catch(() => null)
+  const roots = (ran?.stdout ?? '')
+    .split('\n')
+    .filter(line => line.startsWith('worktree '))
+    .map(line => line.slice('worktree '.length))
+    .slice(0, MAX_WORKTREES)
+  const all: FileEntry[] = []
+  for (const root of roots.length ? roots : [git.root]) all.push(...(await listRoot($, root, root.split('/').pop())))
+  return all
+}
+
+// Returns the cached listing, or null while a background load runs; the load
+// redraws the pane when it lands.
+function scopeEntries($: EngineInterface, scope: Exclude<Scope, 'session'>, cwd: string, now: number): FileEntry[] | null {
+  const key = `${scope}|${cwd}`
+  const cached = scopeCache.get(key)
+  if (cached && now - cached.at < SCOPE_TTL_MS) return cached.entries
+  if (!scopeLoading.has(key)) {
+    scopeLoading.add(key)
+    void loadScope($, scope, cwd)
+      .then(entries => scopeCache.set(key, { at: Date.now(), entries }))
+      .catch(() => scopeCache.set(key, { at: Date.now(), entries: [] }))
+      .finally(() => {
+        scopeLoading.delete(key)
+        $.ui.invalidate('ui.render')
+      })
+  }
+  return cached?.entries ?? null
+}
+
+function withMentions(entries: readonly FileEntry[], list: readonly Mention[]): FileEntry[] {
+  const byHref = new Map(list.map(one => [one.href, one]))
+  return entries.map(one => {
+    const hit = byHref.get(one.href)
+    return hit
+      ? { ...one, mentions: hit.count, mentionedAt: hit.at, role: hit.isArtifact ? ('artifact' as const) : ('touched' as const) }
+      : one
+  })
+}
+
+async function setStar($: EngineInterface, href: string, wanted?: boolean): Promise<boolean> {
+  let isOn = false
+  await update($, stars, list => {
+    const next = toggleStar(list, href, wanted)
+    isOn = next.includes(href)
+    return next
+  })
+  await $.store.set('stars', await read($, stars)).catch(() => undefined)
+  return isOn
+}
+
 async function refresh($: EngineInterface, href: string) {
   const file = parseHref(href)
   if (!file) return
@@ -378,8 +580,33 @@ async function docImage($: EngineInterface, src: string, docPath: string) {
   return image && png ? { abs, png, width: image.width, height: image.height } : { abs, png: undefined, width: 0, height: 0 }
 }
 
+// Esc closes a pane only while it is opened with closeOnEscape, so the menu
+// turns that on and the ui.close hook turns the close into closing the menu.
+async function setMenu($: EngineInterface, isOpen: boolean) {
+  await update($, menuFilter, () => '')
+  await update($, menuOpen, () => isOpen)
+  await $.ui.open(isOpen ? { id: PANE, title: 'Peek', focus: true, closeOnEscape: true } : { id: PANE, title: 'Peek' })
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    const saved = await $.store.get('stars').catch(() => undefined)
+    if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
+    await $.tool
+      .register({
+        name: 'star',
+        description:
+          'Star or unstar a file path or URL in the peek side pane, so it sorts first in Recent and Gallery. Star the things the user should look at: a plan, a report, a diagram you made. Use sparingly.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            target: { type: 'string', description: 'An absolute or relative file path, or an http(s) URL' },
+            starred: { type: 'boolean', description: 'true to star (the default), false to unstar' },
+          },
+          required: ['target'],
+        },
+      })
+      .catch(() => undefined)
     await $.command.register({ name: 'peek-menu', description: 'Open the peek command menu (ctrl+k in the peek pane)' })
     await $.command.register({ name: 'peek-ui', description: 'Show every Claude Code UI element a mod can draw, live' })
     await $.command.register({ name: 'peek', description: 'Peek at a file, folder or URL in the side pane: a path, a description ("the export diagram"), or nothing for the last one' })
@@ -389,27 +616,33 @@ export const register: Register = on => {
   on('session.append', async ($, e, next) => {
     const stored = await next(e)
     if (e.message.type !== 'assistant' || e.agentId) return stored
-    const texts: string[] = []
-    const paths: string[] = []
-    for (const block of e.message.content) {
-      if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text)
-      if (block.type === 'tool_use' && block.input && typeof block.input === 'object') {
-        const input = block.input as Record<string, unknown>
-        for (const field of FILE_FIELDS) {
-          const value = input[field]
-          if (typeof value === 'string') paths.push(value)
-        }
-      }
-    }
-    await remember($, texts, paths).catch(() => undefined)
+    const { texts, created, touched } = classifyBlocks(e.message.content)
+    await remember($, texts, created, touched).catch(() => undefined)
     return stored
   })
 
   on('command.run', { command: 'peek-menu' }, async $ => {
-    await update($, menuFilter, () => '')
-    await update($, menuOpen, open => !open)
-    await $.ui.open({ id: PANE, title: 'Peek', focus: true })
+    await setMenu($, !(await read($, menuOpen)))
     return { text: '' }
+  })
+
+  on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const picked = /^item-(\d+)$/.exec(e.element ?? '')
+    if (picked && e.origin.kind === 'person') {
+      const index = Number(picked[1])
+      await update($, cursorAtom, () => index).catch(() => undefined)
+      const key = navOrder[index]?.key
+      if (key) void $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
+    }
+    return next(e)
+  })
+
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    if (e.origin.kind === 'person' && (await read($, menuOpen).catch(() => false))) {
+      await setMenu($, false).catch(() => undefined)
+      return { value: undefined }
+    }
+    return next(e)
   })
 
   on('command.run', { command: 'peek-ui' }, async $ => {
@@ -599,19 +832,49 @@ export const register: Register = on => {
     )
   })
 
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__star$/ }, async ($, e) => {
+    const input = e as unknown as { target?: unknown; starred?: unknown }
+    if (typeof input.target !== 'string') return { result: 'Give a target: a file path or URL.' }
+    const target = input.target
+    const href = await toHref($, target).catch(() => null)
+    if (!href) return { result: `No file or URL at ${target}.` }
+    const isOn = await setStar($, href, input.starred !== false).catch(() => null)
+    if (isOn === null) return { result: 'Could not save the star.' }
+    return { result: `${isOn ? 'Starred' : 'Unstarred'} ${parseHref(href)?.path ?? href} in peek.` }
+  })
+
   on('ui.message', async ($, e, next) => {
+    const starring = e.data as { star?: unknown } | null
+    if (e.requestId === PANE && starring && typeof starring.star === 'string') {
+      await setStar($, starring.star).catch(() => undefined)
+      return {}
+    }
     const data = e.data as { toggle?: unknown } | null
     if (e.requestId === PANE && data && typeof data.toggle === 'string') {
       await pressLink($, data.toggle).catch(() => undefined)
+      return {}
+    }
+    const switching = e.data as { mode?: unknown } | null
+    if (e.requestId === PANE && switching && (switching.mode === 'view' || switching.mode === 'recent' || switching.mode === 'gallery')) {
+      const target = switching.mode
+      await update($, mode, () => target).catch(() => undefined)
+      await update($, page, () => 0).catch(() => undefined)
+      void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
+      return {}
+    }
+    const opening = e.data as { open?: unknown } | null
+    if (e.requestId === PANE && opening && typeof opening.open === 'string') {
+      await show($, opening.open).catch(() => undefined)
       return {}
     }
     return next(e)
   })
 
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    const isRecent = (await read($, mode).catch(() => 'view')) === 'recent' || !(await read($, view).catch(() => null))
-    if (isRecent) {
-      await update($, page, n => Math.min(scrollLimit, Math.max(0, Math.min(n, scrollLimit) + e.by))).catch(() => undefined)
+    const isList = (await read($, mode).catch(() => 'view')) !== 'view' || !(await read($, view).catch(() => null))
+    if (isList && !e.pointer && e.origin.kind === 'person' && Math.abs(e.by) === 1 && !(await read($, menuOpen).catch(() => false))) {
+      await moveSelection($, e.by > 0 ? 'down' : 'up').catch(() => undefined)
       return {}
     }
     contentRows = e.contentRows
@@ -622,6 +885,8 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const isMenuOpen = await read($, menuOpen)
+    const C = isMenuOpen ? MUTED : BASE
     const elements = $.ui.resolve(e)
     const { Box, Text, Button, Markdown, Code } = elements
     const Image = 'Image' in elements ? elements.Image : undefined
@@ -638,7 +903,6 @@ export const register: Register = on => {
     const isNarrow = columns < NARROW
     const textWidth = isNarrow ? columns : Math.min(MAX_CPL, Math.max(MIN_CPL, columns - 6))
     const pageWidth = isNarrow ? columns : textWidth + 4
-    const isMenuOpen = await read($, menuOpen)
     const rows = Math.max(4, e.props.scroll.bodyRows - 4)
     const turn = (to: number) => void update($, page, () => Math.max(0, to))
 
@@ -648,9 +912,10 @@ export const register: Register = on => {
       </Text>
     )
     const peekChip = ` ${MODES[0]?.icon ?? ''} PEEK `
-    const recentChip = ` ${MODES[1]?.icon ?? ''} RECENT ${list.length} `
+    const recentChip = ` ${MODES[1]?.icon ?? ''} RECENT `
+    const galleryChip = ` ${MODES[2]?.icon ?? ''} GALLERY `
     const crumbs = (parts: { label: string; fg: string; bg: string; bold?: boolean; canShrink?: boolean }[]) => {
-      const room = Math.max(8, isNarrow ? columns - 2 : columns - peekChip.length - recentChip.length - 4)
+      const room = Math.max(8, isNarrow ? columns - 2 : columns - peekChip.length - recentChip.length - galleryChip.length - 4)
       const width = (label: string) => label.length + 2
       let spare = room - 2 - parts.reduce((sum, one) => sum + width(one.label), 0)
       const fitted = parts.map(one => ({ ...one }))
@@ -672,40 +937,63 @@ export const register: Register = on => {
       const last = fitted.length - 1
       return (
         <Box flexDirection="row" flexShrink={1} height={1} overflow="hidden">
-          <Text color={fitted[0]?.bg ?? C.surface0} backgroundColor={C.appBg}>{'\u{e0b6}'}</Text>
+          <Text color={fitted[0]?.bg ?? C.surface0} backgroundColor={C.frame}>{'\u{e0b6}'}</Text>
           {fitted.map((one, index) => (
             <Box key={`crumb-${index}`} flexDirection="row" flexShrink={0}>
               <Text color={one.fg} backgroundColor={one.bg} bold={one.bold} wrap="truncate-end">{index === 0 ? `${one.label} ` : ` ${one.label}${index === last ? '' : ' '}`}</Text>
               {index === last ? (
-                <Text color={one.bg} backgroundColor={C.appBg}>{'\u{e0b4}'}</Text>
+                <Text color={one.bg} backgroundColor={C.frame}>{'\u{e0b4}'}</Text>
               ) : (
-                <Text color={one.bg} backgroundColor={fitted[index + 1]?.bg ?? C.appBg}>{'\u{e0bc}'}</Text>
+                <Text color={one.bg} backgroundColor={fitted[index + 1]?.bg ?? C.frame}>{'\u{e0bc}'}</Text>
               )}
             </Box>
           ))}
         </Box>
       )
     }
+    const tabStrip = (key: string, tabs: { id: string; label: string; isOn: boolean }[]) =>
+      Client ? (
+        <Client
+          key={key}
+          module="./tabs.tsx"
+          props={{ muted: isMenuOpen, tabs }}
+          width={tabs.reduce((sum, tab) => sum + tab.label.length, 0)}
+          height={1}
+        />
+      ) : (
+        <Box flexDirection="row">{tabs.map(tab => chip(tab.label, tab.isOn))}</Box>
+      )
     const header = (middle: unknown) =>
       isNarrow ? (
-        <Box flexDirection="row" justifyContent="center" width={columns} height={1} overflow="hidden">
+        <Box flexDirection="row" justifyContent="center" width={e.props.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
           {middle as never}
         </Box>
       ) : (
-        <Box flexDirection="row" justifyContent="space-between" width={columns} height={1} overflow="hidden">
-          {chip(peekChip, chosen === 'view')}
+        <Box flexDirection="row" justifyContent="space-between" width={e.props.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
+          {tabStrip('tabs-left', [{ id: 'view', label: peekChip, isOn: chosen === 'view' }])}
           {middle as never}
-          {chip(recentChip, chosen === 'recent')}
+          {tabStrip('tabs-right', [
+            { id: 'recent', label: recentChip, isOn: chosen === 'recent' },
+            { id: 'gallery', label: galleryChip, isOn: chosen === 'gallery' },
+          ])}
         </Box>
       )
 
-    const footer = (info: string, keys: { key: string; label: string; hotkey: string; onPress: () => void; isDim?: boolean }[]) => (
+    const footer = (info: string, keys: { key: string; label: string; hotkey: string; onPress: () => void; isDim?: boolean; isDefault?: boolean }[]) => (
       <Box flexDirection="row" flexWrap="wrap" columnGap={2} justifyContent="center" width={columns}>
         {info && <Text color={C.overlay1}>{info}</Text>}
         {!isNarrow && info && <Text color={C.surface1}>│</Text>}
         {!isNarrow &&
           keys.map(one => (
-            <Button key={one.key} label={one.label} hotkey={one.hotkey} plain dimColor={one.isDim} onPress={one.onPress} />
+            <Button
+              key={one.key}
+              label={one.label}
+              hotkey={one.hotkey}
+              plain
+              dimColor={one.isDim}
+              autoFocus={one.isDefault ? true : undefined}
+              onPress={one.onPress}
+            />
           ))}
         {!isNarrow && <Text color={C.overlay0}>⌃k menu</Text>}
       </Box>
@@ -735,20 +1023,36 @@ export const register: Register = on => {
     }
 
     const filter = await read($, menuFilter)
-    const closeMenu = () => void update($, menuOpen, () => false)
+    const closeMenu = () => void setMenu($, false)
     const commands: { id: string; icon: string; label: string; hint: string; run: () => void }[] = [
       ...(current
         ? [
             { id: 'peek', icon: ICON.peek, label: 'Peek: show the open file', hint: 'p', run: () => void update($, mode, () => 'view') },
           ]
         : []),
-      { id: 'recent', icon: ICON.recent, label: 'Recent: files mentioned this session', hint: 'r', run: () => void update($, mode, () => 'recent') },
+      { id: 'recent', icon: ICON.recent, label: 'Recent: files by last use', hint: 'r', run: () => void update($, mode, () => 'recent') },
+      { id: 'gallery', icon: ICON.gallery, label: 'Gallery: files as cards by type', hint: 'g', run: () => void update($, mode, () => 'gallery') },
+      ...ROLES.map(one => ({
+        id: `role-${one}`,
+        icon: one === 'artifacts' ? '◆' : one === 'touched' ? '◇' : '\u{f0c9}',
+        label: `Show: ${one}`,
+        hint: 'a',
+        run: () => void update($, roleFilter, () => one),
+      })),
+      ...SCOPES.map(one => ({
+        id: `scope-${one}`,
+        icon: SCOPE_ICON[one],
+        label: `Scope: ${one}`,
+        hint: 's',
+        run: () => void update($, scopeAtom, () => one),
+      })),
       { id: 'top', icon: '\u{f062}', label: 'Scroll to top', hint: 'home', run: () => void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined) },
       { id: 'bottom', icon: '\u{f063}', label: 'Scroll to bottom', hint: 'end', run: () => void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined) },
       ...(current
         ? [
             { id: 'open', icon: '\u{f08e}', label: 'Open in its own app', hint: 'o', run: () => void openExternally($, current) },
             { id: 'copy', icon: '\u{f0c5}', label: 'Copy path', hint: 'c', run: () => void $.ui.copy({ text: current.location }) },
+            { id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hint: 'f', run: () => void setStar($, current.href) },
           ]
         : []),
       { id: 'close', icon: '\u{f00d}', label: 'Close the pane', hint: 'x', run: () => void $.ui.close({ id: PANE }) },
@@ -775,14 +1079,26 @@ export const register: Register = on => {
       one.run()
     }
     const Input = 'Input' in elements ? elements.Input : undefined
+    const menuWidth = Math.max(24, Math.min(64, columns - 8))
     const menu = (
-      <Box flexDirection="column" width={textWidth}>
+      <Box flexDirection="column" width={menuWidth}>
         <Text wrap="truncate-end">
-          <Text color={C.surface1}>─</Text>
-          <Text color={C.accent} bold> COMMANDS </Text>
-          <Text color={C.surface1}>{'─'.repeat(Math.max(1, textWidth - 12))}</Text>
+          <Text color={BASE.surface1}>─</Text>
+          <Text color={BASE.accent} bold> COMMANDS </Text>
+          <Text color={BASE.surface1}>{'─'.repeat(Math.max(1, menuWidth - 12))}</Text>
         </Text>
         {Input && (
+          <Box
+            key="menu-filter-frame"
+            flexDirection="row"
+            width={menuWidth}
+            borderStyle="round"
+            borderColor={BASE.accent}
+            paddingX={1}
+            marginY={1}
+          >
+            <Text color={BASE.accent}>{'\u{f002}  '}</Text>
+            <Box flexGrow={1}>
           <Input
             key="menu-filter"
             placeholder="type to filter · Enter runs the first match"
@@ -791,63 +1107,403 @@ export const register: Register = on => {
             onInput={(value: string) => void update($, menuFilter, () => value)}
             onSubmit={() => runCommand(matches[0])}
           />
+            </Box>
+          </Box>
         )}
-        {matches.length === 0 && <Text color={C.overlay0}>No command matches.</Text>}
+        {matches.length === 0 && <Text color={BASE.overlay0}>No command matches.</Text>}
         {matches.slice(0, 20).map(one => (
-          <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={textWidth}>
+          <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={menuWidth}>
             <Box flexDirection="row" flexShrink={1}>
-              <Text color={C.accent}>{`${one.icon}  `}</Text>
+              <Text color={BASE.accent}>{`${one.icon}  `}</Text>
               <Button key={`menu-${one.id}`} label={one.label} plain onPress={() => runCommand(one)} />
             </Box>
-            <Text color={C.overlay0}>{one.hint}</Text>
+            <Text color={BASE.overlay0}>{one.hint}</Text>
           </Box>
         ))}
         <Button key="menu-close" label="Close menu" plain dimColor onPress={closeMenu} />
       </Box>
     )
 
-    if (chosen === 'recent' || !current) {
-      const newest = [...list].reverse()
-      const visibleRows = rows - 1
-      const recentMax = Math.max(0, newest.length - visibleRows)
-      scrollLimit = recentMax
-      const first = Math.min(at, recentMax)
-      const shown = { items: newest.slice(first, first + visibleRows) }
-      const recentStep = Math.max(3, Math.floor(visibleRows / 2))
-      return (
-        <Box flexDirection="column" backgroundColor={C.appBg} height={Math.max(8, e.props.scroll.bodyRows)} width={e.props.bodyColumns}>
-          {header(crumbs([{ label: 'session', fg: C.text, bg: C.surface0, bold: true }]))}
-          {rule('session', `${list.length} mentioned${newest.length > visibleRows ? ` · ${first + 1}–${first + shown.items.length}` : ''}`)}
-          <Box flexDirection="column" height={rows} overflow="hidden">
-            {isMenuOpen && (menu as never)}
-            {!isMenuOpen && newest.length === 0 && (
-              <Text color={C.overlay0}>Nothing mentioned yet. Paths and links in replies land here.</Text>
-            )}
-            {!isMenuOpen && shown.items.map((one: Mention, index) => {
-              const path = parseHref(one.href)?.path ?? one.href
-              const kind = parseHref(one.href) ? kindOf(path) : 'web'
-              const name = path.split('/').pop() || path
-              const where = shortPath(path.slice(0, Math.max(0, path.length - name.length - 1)), cwd, home)
+    const offset = at
+    const jumpTo = (key: string) => void $.ui.scroll({ in: PANE, to: { key }, block: 'start' }).catch(() => undefined)
+    const realBody = Math.max(1, contentRows - PAGE_TOP - FOOTER_ROWS - 1)
+    const scale = contentRows > 0 ? realBody / Math.max(1, estimatedRows) : 1
+    const rowOf = (index: number) => PAGE_TOP + (blockStarts[index] ?? 0) * scale
+    const keyJumps = (keys: readonly string[]) => ({
+      next: () => {
+        const found = keys.findIndex((_, i) => rowOf(i) > offset + PAGE_TOP + 1)
+        const key = keys[found]
+        if (found < 0 || !key) void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
+        else jumpTo(key)
+      },
+      prev: () => {
+        const found = [...keys.keys()].reverse().find(i => rowOf(i) < offset + PAGE_TOP - 1)
+        const key = found === undefined ? undefined : keys[found]
+        if (!key) void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
+        else jumpTo(key)
+      },
+    })
+    const blockJumps = (count: number, prefix: string) => keyJumps(Array.from({ length: count }, (_, i) => `${prefix}-${i}`))
+    type Key = { key: string; label: string; hotkey: string; onPress: () => void; isDim?: boolean; isDefault?: boolean }
+    const frame = (middle: unknown, content: unknown, info: string, keys: Key[], pageBg: string = C.panelBg) => (
+      <Box
+        flexDirection="column"
+        alignItems="center"
+        backgroundColor={C.appBg}
+        minHeight={e.props.scroll.bodyRows}
+        width={e.props.bodyColumns}
+      >
+        <Box height={HEADER_ROWS} />
+        <Box flexDirection="column" width={pageWidth} backgroundColor={pageBg} paddingX={isNarrow ? 0 : 2} paddingY={1}>
+          <Box flexDirection="column" width={textWidth}>
+            {content as never}
+          </Box>
+        </Box>
+        <Box height={FOOTER_ROWS} />
+        <Box
+          position="absolute"
+          top={offset}
+          left={0}
+          width={e.props.bodyColumns}
+          height={HEADER_ROWS}
+          flexDirection="column"
+          alignItems="center"
+          backgroundColor={C.appBg}
+        >
+          {header(middle)}
+        </Box>
+        <Box
+          position="absolute"
+          top={offset + e.props.scroll.bodyRows - FOOTER_ROWS}
+          left={0}
+          width={e.props.bodyColumns}
+          height={FOOTER_ROWS}
+          flexDirection="column"
+          alignItems="center"
+          justifyContent="flex-end"
+          backgroundColor={C.appBg}
+        >
+          {footer(info, keys)}
+        </Box>
+        {isMenuOpen && (
+          <Box
+            position="absolute"
+            top={offset + HEADER_ROWS + 2}
+            left={Math.max(0, Math.floor((e.props.bodyColumns - menuWidth - 4) / 2))}
+            width={menuWidth + 4}
+            flexDirection="column"
+            backgroundColor={BASE.panelBg}
+            paddingX={2}
+            paddingY={1}
+          >
+            {menu as never}
+          </Box>
+        )}
+      </Box>
+    )
+    const selectKeys: Key[] = [
+      { key: 'next', label: 'Down', hotkey: 'j', onPress: () => void moveSelection($, 'down') },
+      { key: 'prev', label: 'Up', hotkey: 'k', onPress: () => void moveSelection($, 'up') },
+      { key: 'left', label: 'Left', hotkey: 'h', onPress: () => void moveSelection($, 'left') },
+      { key: 'right', label: 'Right', hotkey: 'l', onPress: () => void moveSelection($, 'right') },
+      {
+        key: 'open-selected',
+        label: '⏎ Open',
+        hotkey: 'o',
+        onPress: () => void selectedHref($).then(href => (href ? show($, href) : undefined)),
+      },
+      {
+        key: 'star-selected',
+        label: 'Star',
+        hotkey: 'f',
+        onPress: () => void selectedHref($).then(href => (href ? setStar($, href).then(() => undefined) : undefined)),
+      },
+    ]
+    const closeKey: Key = { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) }
+
+    if (chosen !== 'view' || !current) {
+      const scope = await read($, scopeAtom)
+      const role = await read($, roleFilter)
+      const starList = await read($, stars)
+      const starSet = new Set(starList)
+      const raw = scope === 'session' ? await sessionEntries($, list) : scopeEntries($, scope, cwd, now)
+      const entries = raw ? filterRole(withMentions(raw, list), role) : null
+      const roleKey: Key = {
+        key: 'role',
+        label: `Show: ${role}`,
+        hotkey: 'a',
+        onPress: () => void update($, roleFilter, one => nextOf(ROLES, one)),
+      }
+      const scopeNote = role === 'all' ? scope : `${scope} · ${role}`
+      const scopeKey: Key = {
+        key: 'scope',
+        label: `Scope: ${scope}`,
+        hotkey: 's',
+        onPress: () => void update($, scopeAtom, one => nextOf(SCOPES, one)),
+      }
+      const describe = (one: FileEntry) => {
+        const age = describeAge(Math.max(one.mentionedAt, one.mtimeMs), now)
+        const where = one.worktree && scope === 'repo' ? `${one.worktree} · ` : ''
+        return { where, age }
+      }
+      const looks = (one: FileEntry) => ({
+        href: one.href,
+        isStarred: starSet.has(one.href),
+        icon: iconFor(one.kind),
+        color: colorFor(one.kind),
+        name: one.name,
+        folder: scope === 'session' ? shortPath(one.folder, cwd, home) : one.folder,
+      })
+      const scopeCrumb = crumbs([
+        { label: `${SCOPE_ICON[scope]} ${scope}`, fg: C.appBg, bg: C.accent, bold: true },
+      ])
+      const waiting = <Text color={C.overlay0}>Loading files…</Text>
+
+      const favMentions = starList.map(href => list.find(one => one.href === href) ?? { href, at: 0, count: 0 })
+      const favourites = filterRole(withMentions(await sessionEntries($, favMentions), list), role)
+      const rest = entries ? entries.filter(one => !starSet.has(one.href)) : null
+      const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
+      const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
+      const section = (label: string, right: string) => (
+        <Text wrap="truncate-end">
+          <Text color={C.accent} bold>{`${label} `}</Text>
+          <Text color={C.surface1}>{'─'.repeat(Math.max(1, textWidth - label.length - right.length - 2))}</Text>
+          <Text color={C.overlay0}>{right ? ` ${right}` : ''}</Text>
+        </Text>
+      )
+      const keys: string[] = []
+      const starts: number[] = []
+      let cursor = 0
+      const selected = await read($, cursorAtom)
+      const nav: NavItem[] = []
+      navOrder = nav
+      let navLine = 0
+      const cardGrid = (list: readonly FileEntry[], prefix: string) => {
+        const rowsOfCards = Array.from({ length: Math.ceil(list.length / perRow) }, (_, r) => list.slice(r * perRow, r * perRow + perRow))
+        const firstNav = nav.length
+        rowsOfCards.forEach((cards, r) => {
+          keys.push(`${prefix}-${r}`)
+          starts.push(cursor + r * (CARD_ROWS + 1))
+          const line = navLine++
+          cards.forEach((one, col) => nav.push({ href: one.href, key: `${prefix}-${r}`, line, col }))
+        })
+        cursor += rowsOfCards.length * (CARD_ROWS + 1)
+        return rowsOfCards.map((cards, r) => (
+          <Box key={`${prefix}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
+            {cards.map((one, c) => {
+              const index = firstNav + r * perRow + c
+              const isSelected = index === selected
+              const look = looks(one)
+              const { where, age } = describe(one)
+              const inner = Math.max(4, cardWidth - 7)
               return (
-                <Box key={`row-${index}`} flexDirection="row" justifyContent="space-between">
-                  <Box flexDirection="row" flexShrink={1}>
-                    <Text color={colorFor(kind)}>{`${iconFor(kind)}  `}</Text>
-                    <Button key={`recent-${index}`} label={name} plain onPress={() => void show($, one.href)} />
-                    <Text color={C.overlay0} wrap="truncate-middle">{`  ${where}`}</Text>
+                <Box
+                  key={`${prefix}-${r}-${c}`}
+                  flexDirection="column"
+                  width={cardWidth}
+                  height={CARD_ROWS}
+                  paddingX={2}
+                  paddingY={1}
+                  backgroundColor={isSelected ? C.surface0 : C.panelBg}
+                  hover={{ backgroundColor: C.surface0 }}
+                >
+                  <Box flexDirection="row">
+                    <Button
+                      key={`item-${index}`}
+                      label={look.isStarred ? '\u{f51a}' : look.icon}
+                      plain
+                      autoFocus={isSelected ? true : undefined}
+                      onPress={() => void selectAndOpen($, index)}
+                    />
+                    <Box key={`name-${index}`}>
+                      <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }}>{` ${look.name.slice(0, inner)}`}</Text>
+                    </Box>
                   </Box>
-                  <Text color={C.overlay0}>{`${one.count > 1 ? `${one.count}× · ` : ''}${describeAge(one.at, now)}`}</Text>
+                  <Text color={C.overlay0} wrap="truncate-start">{look.folder || ' '}</Text>
+                  <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${where}${age} · ${describeSize(one.size)}`}</Text>
                 </Box>
               )
             })}
           </Box>
-          <Box height={1} />
-          {footer(newest.length > visibleRows ? `${first + 1}–${first + shown.items.length} of ${newest.length}` : `${newest.length} mentioned`, [
+        ))
+      }
+      const favouritesBlock = (shownFavs: readonly FileEntry[]) => {
+        if (!shownFavs.length) return null
+        cursor += 2
+        const grid = cardGrid(shownFavs, 'favs')
+        cursor += 1
+        return (
+          <Box flexDirection="column" width={textWidth}>
+            {section('FAVOURITES', `${shownFavs.length}`)}
+            <Box height={1} />
+            {grid}
+          </Box>
+        )
+      }
+
+      const groupsOf = (items: readonly FileEntry[]) =>
+        [
+          { id: 'artifacts', label: 'ARTIFACTS', items: items.filter(one => one.role === 'artifact') },
+          { id: 'touched', label: 'TOUCHED', items: items.filter(one => one.role === 'touched') },
+          { id: 'files', label: scope.toUpperCase(), items: items.filter(one => !one.role) },
+        ].filter(group => group.items.length > 0)
+
+      if (chosen === 'gallery') {
+        const type = await read($, galleryType)
+        const sort = await read($, gallerySort)
+        const query = await read($, galleryFilter)
+        const favs = selectEntries(favourites, type, query, sort)
+        const picked = rest ? selectEntries(rest, type, query, sort).slice(0, 240) : []
+        const Input = 'Input' in elements ? elements.Input : undefined
+        cursor = 2
+        const favBlock = favouritesBlock(favs)
+        const groups = groupsOf(picked).map(group => {
+          cursor += 2
+          const grid = cardGrid(group.items, group.id)
+          cursor += 1
+          return { ...group, grid }
+        })
+        blockStarts = starts
+        estimatedRows = Math.max(1, cursor)
+        const jumps = keyJumps(keys)
+        const content = (
+          <Box flexDirection="column" width={textWidth}>
+            <Box flexDirection="row" columnGap={2} width={textWidth}>
+              {Input && (
+                <Box flexGrow={1}>
+                  <Input
+                    key="gallery-filter"
+                    placeholder="filter by name or folder"
+                    value={query}
+                    onInput={(value: string) => void update($, galleryFilter, () => value)}
+                    onSubmit={(value: string) => void update($, galleryFilter, () => value)}
+                  />
+                </Box>
+              )}
+              <Text color={C.overlay1}>{`${type} · ${sort}`}</Text>
+            </Box>
+            <Box height={1} />
+            {favBlock}
+            {!rest && waiting}
+            {rest && picked.length === 0 && favs.length === 0 && <Text color={C.overlay0}>No files match.</Text>}
+            {groups.map(group => (
+              <Box key={`group-${group.id}`} flexDirection="column" width={textWidth}>
+                {section(group.label, `${group.items.length}`)}
+                <Box height={1} />
+                {group.grid}
+              </Box>
+            ))}
+          </Box>
+        )
+        return frame(
+          scopeCrumb,
+          content,
+          rest ? `${favs.length + picked.length} ${type === 'all' ? 'files' : type} · ${scopeNote}` : 'loading…',
+          [
             ...modeKeys,
-            { key: 'next', label: 'Down', hotkey: 'j', onPress: () => turn(Math.min(recentMax, first + recentStep)) },
-            { key: 'prev', label: 'Up', hotkey: 'k', onPress: () => turn(first - recentStep) },
-            { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) },
-          ])}
+            scopeKey,
+            roleKey,
+            { key: 'type', label: 'Type', hotkey: 't', onPress: () => void update($, galleryType, one => nextOf(TYPES, one)) },
+            { key: 'sort', label: 'Sort', hotkey: 'n', onPress: () => void update($, gallerySort, one => nextOf(SORTS, one)) },
+            ...selectKeys,
+            closeKey,
+          ],
+          C.appBg,
+        )
+      }
+
+      const favs = selectEntries(favourites, 'all', '', 'recent')
+      const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
+      cursor = 0
+      const favBlock = favouritesBlock(favs)
+      const rowList = (items: readonly FileEntry[], prefix: string) => {
+        const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
+          items.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
+        )
+        const firstNav = nav.length
+        chunks.forEach((chunk, i) => {
+          keys.push(`${prefix}-${i}`)
+          starts.push(cursor)
+          cursor += chunk.length
+          for (const one of chunk) nav.push({ href: one.href, key: `${prefix}-${i}`, line: navLine++, col: 0 })
+        })
+        return chunks.map((chunk, i) => (
+          <Box key={`${prefix}-${i}`} flexDirection="column" width={textWidth}>
+            {chunk.map((one, j) => {
+              const index = firstNav + i * LIST_CHUNK + j
+              const isSelected = index === selected
+              const look = looks(one)
+              const { where, age } = describe(one)
+              const count = one.mentions > 1 ? `${one.mentions}× · ` : ''
+              const meta = `${where}${count}${age}`
+              return (
+                <Box
+                  key={`${prefix}-${i}-${j}`}
+                  flexDirection="row"
+                  justifyContent="space-between"
+                  width={textWidth}
+                  backgroundColor={isSelected ? C.surface0 : undefined}
+                  hover={{ backgroundColor: C.surface0 }}
+                >
+                  <Box flexDirection="row" width={Math.max(4, textWidth - meta.length - 1)} overflow="hidden">
+                    <Button
+                      key={`item-${index}`}
+                      label={look.isStarred ? '\u{f51a}' : look.icon}
+                      plain
+                      autoFocus={isSelected ? true : undefined}
+                      onPress={() => void selectAndOpen($, index)}
+                    />
+                    <Box key={`name-${index}`}>
+                      <Text color={isSelected ? C.accent : C.text} bold={isSelected} hover={{ color: C.accent }}>{`  ${look.name}`}</Text>
+                    </Box>
+                    <Text color={C.overlay0} wrap="truncate-end">{look.folder ? `  ${look.folder}` : ''}</Text>
+                  </Box>
+                  <Text color={C.overlay0}>{meta}</Text>
+                </Box>
+              )
+            })}
+          </Box>
+        ))
+      }
+      const groups = groupsOf(recentList).map(group => {
+        cursor += 2
+        const list = rowList(group.items, group.id)
+        cursor += 1
+        return { ...group, list }
+      })
+      blockStarts = starts
+      estimatedRows = Math.max(1, cursor)
+      const jumps = keyJumps(keys)
+      const content = (
+        <Box flexDirection="column" width={textWidth}>
+          {favBlock}
+          {!rest && waiting}
+          {rest && recentList.length === 0 && favs.length === 0 && (
+            <Text color={C.overlay0}>
+              {scope === 'session' ? 'Nothing mentioned yet. Paths and links in replies land here.' : 'No files found here.'}
+            </Text>
+          )}
+          {groups.map(group => (
+            <Box key={`group-${group.id}`} flexDirection="column" width={textWidth} marginBottom={1}>
+              {section(group.label, `${group.items.length}`)}
+              <Box height={1} />
+              {group.list as never}
+            </Box>
+          ))}
         </Box>
+      )
+      return frame(
+        scopeCrumb,
+        content,
+        rest ? `${favs.length} favourites · ${recentList.length} files · ${scopeNote}` : 'loading…',
+        [
+          ...modeKeys,
+          scopeKey,
+          roleKey,
+          ...selectKeys,
+          closeKey,
+        ],
+        C.appBg,
       )
     }
 
@@ -882,25 +1538,6 @@ export const register: Register = on => {
     let body: unknown = null
     let position = ''
     let jumps: { next: () => void; prev: () => void } = { next: () => {}, prev: () => {} }
-    const offset = at
-    const jumpTo = (key: string) => void $.ui.scroll({ in: PANE, to: { key }, block: 'start' }).catch(() => undefined)
-    const realBody = Math.max(1, contentRows - PAGE_TOP - FOOTER_ROWS - 1)
-    const scale = contentRows > 0 ? realBody / Math.max(1, estimatedRows) : 1
-    const rowOf = (index: number) => PAGE_TOP + (blockStarts[index] ?? 0) * scale
-    const blockJumps = (count: number, prefix: string) => ({
-      next: () => {
-        const found = Array.from({ length: count }, (_, i) => i).find(i => rowOf(i) > offset + PAGE_TOP + 1)
-        if (found === undefined) void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
-        else jumpTo(`${prefix}-${found}`)
-      },
-      prev: () => {
-        const found = Array.from({ length: count }, (_, i) => i)
-          .reverse()
-          .find(i => rowOf(i) < offset + PAGE_TOP - 1)
-        if (found === undefined) void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
-        else jumpTo(`${prefix}-${found}`)
-      },
-    })
     if (current.markdown !== undefined) {
       const source = fullText.get(current.href) ?? current.markdown
       const drawnParts: unknown[] = []
@@ -918,7 +1555,7 @@ export const register: Register = on => {
         if (part.kind === 'markdown') {
           for (const [chunkIndex, chunk] of chunkMarkdown(part.text).entries()) {
             drawnParts.push(
-              <Markdown key={`body-${index}-${chunkIndex}`} text={chunk} onLinkPress={link => void pressLink($, link.href)} />,
+              <Markdown dimColor={isMenuOpen} key={`body-${index}-${chunkIndex}`} text={chunk} onLinkPress={link => void pressLink($, link.href)} />,
             )
             note(estimateRows(chunk, textWidth))
           }
@@ -965,13 +1602,13 @@ export const register: Register = on => {
           } else if (part.lang === 'mermaid') {
             drawnParts.push(
               embed(`diagram-${index}`, ICON.mermaid, 'DIAGRAM', `${diagramType(part.text)} · press o to see it rendered`, C.mauve, (
-                <Code source={part.text} language="mermaid" wrap="truncate-end" />
+                isMenuOpen ? <Text color={C.overlay1}>{part.text}</Text> : <Code source={part.text} language="mermaid" wrap="truncate-end" />
               )),
             )
           } else {
             drawnParts.push(
               embed(`code-${index}`, ICON.text, 'CODE', part.lang || 'text', C.blue, (
-                <Code source={part.text || ' '} language={part.lang || undefined} wrap="truncate-end" />
+                isMenuOpen ? <Text color={C.overlay1}>{part.text || ' '}</Text> : <Code source={part.text || ' '} language={part.lang || undefined} wrap="truncate-end" />
               )),
             )
           }
@@ -984,7 +1621,7 @@ export const register: Register = on => {
             <Client
               key={`tasks-${index}`}
               module="./tasks.tsx"
-              props={{ width: textWidth, items: part.items }}
+              props={{ muted: isMenuOpen, width: textWidth, items: part.items }}
               width={textWidth}
               height={rowCount}
             />,
@@ -1031,7 +1668,7 @@ export const register: Register = on => {
             <Box key={`quote-${index}`} flexDirection="row" backgroundColor={C.surface0}>
               <Box width={1} backgroundColor={C.accent} />
               <Box flexDirection="column" paddingX={1} flexShrink={1}>
-                <Markdown
+                <Markdown dimColor={isMenuOpen}
                   key={`quote-text-${index}`}
                   text={part.text
                     .split('\n')
@@ -1062,7 +1699,7 @@ export const register: Register = on => {
           const target = picture ? fileHref(picture.abs) : part.src
           drawnParts.push(
             embed(`image-${index}`, ICON.image, 'IMAGE', detail, C.teal, (
-              <Markdown
+              <Markdown dimColor={isMenuOpen}
                 key={`body-${index}`}
                 text={picture ? `[open ${part.src}](${target})` : `*not found: ${part.src}*`}
                 onLinkPress={link => void pressLink($, link.href)}
@@ -1101,6 +1738,79 @@ export const register: Register = on => {
       const maxScroll = Math.max(0, contentRows - e.props.scroll.bodyRows)
       const percent = maxScroll > 0 ? Math.min(100, Math.round((offset / maxScroll) * 100)) : 100
       position = `${percent}%${heading ? ` · § ${heading}` : ''}`
+    } else if (current.table) {
+      const table = current.table
+      const widths = columnWidths([table.header, ...table.rows], textWidth)
+      const line = (row: readonly string[]) => widths.map((w, c) => fitCell(row[c] ?? '', w)).join('  ')
+      const chunks = Array.from({ length: Math.ceil(table.rows.length / LIST_CHUNK) }, (_, i) =>
+        table.rows.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
+      )
+      blockStarts = chunks.map((_, i) => 2 + i * LIST_CHUNK)
+      estimatedRows = Math.max(1, 2 + table.rows.length)
+      body = (
+        <Box flexDirection="column" width={textWidth}>
+          <Text color={C.accent} bold wrap="truncate-end">{line(table.header)}</Text>
+          <Text color={C.surface1} wrap="truncate-end">{widths.map(w => '─'.repeat(w)).join('  ')}</Text>
+          {chunks.map((chunk, i) => (
+            <Box key={`chunk-${i}`} flexDirection="column">
+              {chunk.map((row, r) => (
+                <Text
+                  key={`table-row-${i * LIST_CHUNK + r}`}
+                  color={C.text}
+                  backgroundColor={(i * LIST_CHUNK + r) % 2 ? C.cardBg : undefined}
+                  wrap="truncate-end"
+                >
+                  {line(row)}
+                </Text>
+              ))}
+            </Box>
+          ))}
+          {table.total > table.rows.length && (
+            <Text color={C.overlay0}>{`… ${table.total - table.rows.length} more rows. Press o to open the whole file.`}</Text>
+          )}
+        </Box>
+      )
+      jumps = blockJumps(chunks.length, 'chunk')
+      const first = Math.max(1, Math.min(table.rows.length, offset - PAGE_TOP - 1))
+      position = `row ${first} of ${table.total}`
+    } else if (current.dir) {
+      const folderPath = path
+      const parent = folderPath.slice(0, Math.max(1, folderPath.lastIndexOf('/')))
+      const items = [
+        ...(folderPath !== '/' ? [{ href: fileHref(parent), icon: ICON.up, color: C.overlay1, name: '..', folder: '', meta: 'up', canStar: false }] : []),
+        ...current.dir.map(one => {
+          const kindOfEntry = one.isDir ? 'folder' : kindOf(one.name)
+          return {
+            href: fileHref(`${folderPath}/${one.name}`),
+            icon: iconFor(kindOfEntry),
+            color: colorFor(kindOfEntry),
+            name: one.isDir ? `${one.name}/` : one.name,
+            folder: '',
+            meta: one.isDir ? describeAge(one.mtimeMs, now) : `${describeSize(one.size)} · ${describeAge(one.mtimeMs, now)}`,
+          }
+        }),
+      ]
+      const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
+        items.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
+      )
+      blockStarts = chunks.map((_, i) => i * LIST_CHUNK)
+      estimatedRows = Math.max(1, items.length)
+      body = (
+        <Box flexDirection="column" width={textWidth}>
+          {items.length === 0 && <Text color={C.overlay0}>Empty folder.</Text>}
+          {Client &&
+            chunks.map((chunk, i) => (
+              <Client
+                key={`rows-${i}`}
+                module="./rows.tsx"
+                props={{ muted: isMenuOpen, width: textWidth, rows: chunk }}
+                width={textWidth}
+                height={chunk.length}
+              />
+            ))}
+        </Box>
+      )
+      jumps = blockJumps(chunks.length, 'rows')
     } else if (current.code) {
       const code = current.code
       const lines = code.source.split('\n')
@@ -1112,12 +1822,16 @@ export const register: Register = on => {
         <Box flexDirection="column" width={textWidth}>
           {chunks.map((part, i) => (
             <Box key={`chunk-${i}`} flexDirection="column">
-              <Code
-                source={part.join('\n') || ' '}
-                language={code.language}
-                startLine={code.startLine + i * chunk}
-                wrap="truncate-end"
-              />
+              {isMenuOpen ? (
+                <Text color={C.overlay1}>{part.join('\n') || ' '}</Text>
+              ) : (
+                <Code
+                  source={part.join('\n') || ' '}
+                  language={code.language}
+                  startLine={code.startLine + i * chunk}
+                  wrap="truncate-end"
+                />
+              )}
             </Box>
           ))}
         </Box>
@@ -1138,36 +1852,11 @@ export const register: Register = on => {
     }
     const goNext = jumps.next
     const goPrev = jumps.prev
-    const info = [position, current.tasks].filter(Boolean).join(' · ')
+    const isStarred = (await read($, stars)).includes(current.href)
+    const info = [isStarred ? '\u{f51a} starred' : '', position, current.summary, current.tasks].filter(Boolean).join(' · ')
 
-    return (
-      <Box
-        flexDirection="column"
-        alignItems="center"
-        backgroundColor={C.appBg}
-        minHeight={e.props.scroll.bodyRows}
-        width={e.props.bodyColumns}
-      >
-        <Box height={HEADER_ROWS} />
-        <Box flexDirection="column" width={pageWidth} backgroundColor={C.panelBg} paddingX={isNarrow ? 0 : 2} paddingY={1}>
-          <Box flexDirection="column" width={textWidth}>
-            {current.error && <Text color={C.red}>{current.error}</Text>}
-            {isMenuOpen ? (menu as never) : (body as never)}
-          </Box>
-        </Box>
-        <Box height={FOOTER_ROWS} />
-        <Box
-          position="absolute"
-          top={offset}
-          left={0}
-          width={e.props.bodyColumns}
-          height={HEADER_ROWS}
-          flexDirection="column"
-          alignItems="center"
-          backgroundColor={C.appBg}
-        >
-          {header(
-            crumbs([
+    return frame(
+      crumbs([
               ...(current.root
                 ? [
                     {
@@ -1180,23 +1869,16 @@ export const register: Register = on => {
               ...(folder ? [{ label: `${ICON.folder} ${folder}`, fg: C.subtext0 as string, bg: C.surface1 as string, canShrink: true }] : []),
               { label: `${iconFor(kind)} ${current.title}`, fg: C.appBg, bg: C.accent, bold: true },
             ]),
-          )}
-        </Box>
-        <Box
-          position="absolute"
-          top={offset + e.props.scroll.bodyRows - FOOTER_ROWS}
-          left={0}
-          width={e.props.bodyColumns}
-          height={FOOTER_ROWS}
-          flexDirection="column"
-          alignItems="center"
-          justifyContent="flex-end"
-          backgroundColor={C.appBg}
-        >
-        {footer(info, [
+      <Box flexDirection="column" width={textWidth}>
+          {current.error && <Text color={C.red}>{current.error}</Text>}
+          {body as never}
+      </Box>,
+      info,
+      [
           ...modeKeys,
           { key: 'next', label: 'Down', hotkey: 'j', onPress: goNext },
           { key: 'prev', label: 'Up', hotkey: 'k', onPress: goPrev },
+          { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: () => void setStar($, current.href) },
           { key: 'open', label: 'Open', hotkey: 'o', onPress: () => void openExternally($, current) },
           {
             key: 'copy',
@@ -1205,9 +1887,7 @@ export const register: Register = on => {
             onPress: () => void $.ui.copy({ text: current.location }),
           },
           { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) },
-        ])}
-        </Box>
-      </Box>
+      ],
     )
   })
 }

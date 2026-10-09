@@ -1,9 +1,9 @@
-export type Kind = 'markdown' | 'image' | 'svg' | 'html' | 'mermaid' | 'text'
+export type Kind = 'markdown' | 'image' | 'svg' | 'html' | 'mermaid' | 'json' | 'toml' | 'csv' | 'text'
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'tif', 'tiff', 'bmp']
 const MARKDOWN_EXTS = ['md', 'markdown', 'mdx']
 const PATH_EXTS =
-  'md|markdown|mdx|txt|png|jpe?g|gif|webp|heic|tiff?|bmp|svg|html?|mmd|mermaid|json|ya?ml|toml|ts|tsx|js|jsx|mjs|py|rs|go|sh|css|sql|csv|log'
+  'md|markdown|mdx|txt|png|jpe?g|gif|webp|heic|tiff?|bmp|svg|html?|mmd|mermaid|json|ya?ml|toml|ts|tsx|js|jsx|mjs|py|rs|go|sh|css|sql|csv|tsv|log'
 
 // The negative lookbehind keeps a path inside a URL or a word from matching.
 const BARE_PATH = new RegExp(
@@ -26,6 +26,9 @@ export function kindOf(path: string): Kind {
   if (ext === 'svg') return 'svg'
   if (ext === 'html' || ext === 'htm') return 'html'
   if (ext === 'mmd' || ext === 'mermaid') return 'mermaid'
+  if (ext === 'json' || ext === 'jsonc' || ext === 'json5') return 'json'
+  if (ext === 'toml') return 'toml'
+  if (ext === 'csv' || ext === 'tsv') return 'csv'
   return 'text'
 }
 
@@ -369,14 +372,21 @@ export function rasterGradient(columns: number, rows: number): string {
   return btoa(binary)
 }
 
-export type MentionEntry = { href: string; at: number; count: number }
+export type MentionEntry = { href: string; at: number; count: number; isArtifact?: boolean }
 
-export function noteMentions(list: readonly MentionEntry[], hrefs: readonly string[], at: number, cap = 200): MentionEntry[] {
+// An artifact stays an artifact: a later read of the same file never demotes it.
+export function noteMentions(
+  list: readonly MentionEntry[],
+  hrefs: readonly string[],
+  at: number,
+  cap = 200,
+  isArtifact = false,
+): MentionEntry[] {
   const byHref = new Map(list.map(one => [one.href, one]))
   for (const href of hrefs) {
     const before = byHref.get(href)
     byHref.delete(href)
-    byHref.set(href, { href, at, count: (before?.count ?? 0) + 1 })
+    byHref.set(href, { href, at, count: (before?.count ?? 0) + 1, isArtifact: isArtifact || before?.isArtifact === true })
   }
   return [...byHref.values()].slice(-cap)
 }
@@ -663,4 +673,218 @@ export function taskRows(items: readonly { text: string; depth: number }[], widt
     lines.forEach((text, line) => rows.push({ item: index, isFirst: line === 0, text }))
   })
   return rows
+}
+
+export type Scope = 'session' | 'worktree' | 'repo'
+export type GalleryType = 'all' | 'markdown' | 'code' | 'data' | 'image' | 'diagram' | 'html'
+export type GallerySort = 'recent' | 'name' | 'size' | 'mentions'
+
+export type FileEntry = {
+  href: string
+  path: string
+  name: string
+  folder: string
+  kind: string
+  mtimeMs: number
+  size: number
+  mentions: number
+  mentionedAt: number
+  worktree?: string
+  role?: 'artifact' | 'touched'
+}
+
+export type RoleFilter = 'all' | 'artifacts' | 'touched'
+
+export function filterRole(entries: readonly FileEntry[], filter: RoleFilter): FileEntry[] {
+  if (filter === 'all') return [...entries]
+  const wanted = filter === 'artifacts' ? 'artifact' : 'touched'
+  return entries.filter(one => one.role === wanted)
+}
+
+const VIEWABLE = new RegExp(`\\.(?:${PATH_EXTS})$`, 'i')
+
+export function isViewable(path: string): boolean {
+  return VIEWABLE.test(path)
+}
+
+export function typeOf(kind: string): GalleryType {
+  if (kind === 'markdown') return 'markdown'
+  if (kind === 'image' || kind === 'svg') return 'image'
+  if (kind === 'mermaid') return 'diagram'
+  if (kind === 'html' || kind === 'web') return 'html'
+  if (kind === 'json' || kind === 'toml' || kind === 'csv') return 'data'
+  return 'code'
+}
+
+// `stat -f '%m %z %N'` lines (mtime seconds, size bytes, path relative to root).
+export function parseStatLines(out: string, root: string, worktree?: string): FileEntry[] {
+  const entries: FileEntry[] = []
+  for (const line of out.split('\n')) {
+    const match = /^(\d+) (\d+) (.+)$/.exec(line.trim())
+    if (!match?.[3] || !isViewable(match[3])) continue
+    const rel = match[3].replace(/^\.\//, '')
+    const name = rel.split('/').pop() ?? rel
+    const path = `${root}/${rel}`
+    entries.push({
+      href: fileHref(path),
+      path,
+      name,
+      folder: rel.slice(0, Math.max(0, rel.length - name.length - 1)),
+      kind: kindOf(path),
+      mtimeMs: Number(match[1]) * 1000,
+      size: Number(match[2]),
+      mentions: 0,
+      mentionedAt: 0,
+      worktree,
+    })
+  }
+  return entries
+}
+
+export function selectEntries(
+  entries: readonly FileEntry[],
+  type: GalleryType,
+  query: string,
+  sort: GallerySort,
+): FileEntry[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  const kept = entries.filter(one => {
+    if (type !== 'all' && typeOf(one.kind) !== type) return false
+    const haystack = `${one.folder}/${one.name} ${one.worktree ?? ''}`.toLowerCase()
+    return words.every(word => haystack.includes(word))
+  })
+  const when = (one: FileEntry) => Math.max(one.mentionedAt, one.mtimeMs)
+  const order: Record<GallerySort, (a: FileEntry, b: FileEntry) => number> = {
+    recent: (a, b) => when(b) - when(a),
+    name: (a, b) => a.name.localeCompare(b.name) || a.folder.localeCompare(b.folder),
+    size: (a, b) => b.size - a.size,
+    mentions: (a, b) => b.mentions - a.mentions || when(b) - when(a),
+  }
+  return [...kept].sort(order[sort])
+}
+
+export function nextOf<T>(list: readonly T[], current: T): T {
+  const at = list.indexOf(current)
+  return list[(at + 1) % list.length] ?? current
+}
+
+export function gridColumns(width: number, minCard = 26, gap = 1): number {
+  return Math.max(1, Math.floor((width + gap) / (minCard + gap)))
+}
+
+// RFC 4180: quoted fields may hold the delimiter, newlines and doubled quotes.
+export function parseDelimited(text: string, delimiter = ','): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ''
+  let isQuoted = false
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    if (isQuoted) {
+      if (char === '"' && text[i + 1] === '"') {
+        field += '"'
+        i += 1
+      } else if (char === '"') {
+        isQuoted = false
+      } else {
+        field += char
+      }
+      continue
+    }
+    if (char === '"' && field === '') isQuoted = true
+    else if (char === delimiter) {
+      row.push(field)
+      field = ''
+    } else if (char === '\n' || char === '\r') {
+      if (char === '\r' && text[i + 1] === '\n') i += 1
+      row.push(field)
+      rows.push(row)
+      row = []
+      field = ''
+    } else field += char
+  }
+  if (field !== '' || row.length) {
+    row.push(field)
+    rows.push(row)
+  }
+  return rows.filter(one => one.some(cell => cell !== ''))
+}
+
+export function columnWidths(rows: readonly (readonly string[])[], width: number, gap = 2): number[] {
+  const count = Math.max(0, ...rows.map(row => row.length))
+  const natural = Array.from({ length: count }, (_, c) =>
+    Math.max(1, ...rows.slice(0, 200).map(row => (row[c] ?? '').length)),
+  )
+  const room = Math.max(count, width - gap * Math.max(0, count - 1))
+  if (natural.reduce((a, b) => a + b, 0) <= room) return natural
+  const widths = natural.map(() => 0)
+  let left = room
+  const order = natural.map((w, c) => ({ w, c })).sort((a, b) => a.w - b.w)
+  order.forEach((one, i) => {
+    const share = Math.floor(left / (order.length - i))
+    const take = Math.max(1, Math.min(one.w, share))
+    widths[one.c] = take
+    left -= take
+  })
+  return widths
+}
+
+export function fitCell(text: string, width: number): string {
+  const flat = text.replace(/\s+/g, ' ')
+  if (flat.length <= width) return flat.padEnd(width)
+  return `${flat.slice(0, Math.max(0, width - 1))}…`
+}
+
+export function jsonSummary(value: unknown): string {
+  if (Array.isArray(value)) return `array · ${value.length} items`
+  if (value && typeof value === 'object') return `object · ${Object.keys(value).length} keys`
+  return typeof value
+}
+
+export function prettyJson(text: string): { text: string; summary: string } | { error: string } {
+  try {
+    const value: unknown = JSON.parse(text)
+    return { text: JSON.stringify(value, null, 2), summary: jsonSummary(value) }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+export function tomlSections(text: string): number {
+  return text.split('\n').filter(line => /^\s*\[{1,2}[^\]]+\]{1,2}\s*(#.*)?$/.test(line)).length
+}
+
+const FILE_FIELDS = ['file_path', 'path', 'notebook_path']
+
+// Sorts one assistant row into what it showed or made (reply text, Write) and
+// what it only worked on (every other tool's file inputs).
+export function classifyBlocks(content: readonly { type: string; [field: string]: unknown }[]) {
+  const texts: string[] = []
+  const created: string[] = []
+  const touched: string[] = []
+  for (const block of content) {
+    if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text)
+    if (block.type === 'tool_use' && block.input && typeof block.input === 'object') {
+      const input = block.input as Record<string, unknown>
+      const bucket = block.name === 'Write' ? created : touched
+      for (const field of FILE_FIELDS) {
+        const value = input[field]
+        if (typeof value === 'string') bucket.push(value)
+      }
+    }
+  }
+  return { texts, created, touched }
+}
+
+// Starred first; the order inside each group is the order given.
+export function starredFirst<T extends { href: string }>(entries: readonly T[], stars: readonly string[]): T[] {
+  const starred = new Set(stars)
+  return [...entries.filter(one => starred.has(one.href)), ...entries.filter(one => !starred.has(one.href))]
+}
+
+export function toggleStar(stars: readonly string[], href: string, wanted?: boolean): string[] {
+  const isOn = stars.includes(href)
+  const next = wanted ?? !isOn
+  if (next === isOn) return [...stars]
+  return next ? [...stars, href] : stars.filter(one => one !== href)
 }
