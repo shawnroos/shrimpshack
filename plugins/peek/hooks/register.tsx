@@ -2017,6 +2017,8 @@ export const register: Register = on => {
     }
     const kind = current.kind
     const path = parseHref(current.href)?.path ?? current.href
+    // An embed's content is textWidth - 2 wide; height follows the picture, capped so it fits on screen.
+    const fullWidth = (width: number, height: number) => imageBox(width, height, textWidth - 2, Math.max(IMAGE_ROWS, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 6))
     const embed = (key: string, icon: string, label: string, detail: string, color: string, child: unknown) => (
       <Box key={key} flexDirection="column" width={textWidth} backgroundColor={C.appBg} paddingX={1} paddingY={1}>
         <Box flexDirection="row" width={textWidth - 2}>
@@ -2122,7 +2124,7 @@ export const register: Register = on => {
           embed(key, one?.play ? '\u{f03d}' : ICON.image, one?.play ? 'VIDEO' : 'IMAGE', alt || host, C.teal, (
             <Box flexDirection="column">
               {png && Image && picture ? (
-                <Image key={`${key}-image`} source={{ png }} {...imageBox(picture.width, picture.height, textWidth - 4, IMAGE_ROWS - 2)} alt={alt || 'image'} />
+                <Image key={`${key}-image`} source={{ png }} {...fullWidth(picture.width, picture.height)} alt={alt || 'image'} />
               ) : (
                 !one?.play && <Markdown dimColor={isMenuOpen} key={`${key}-link`} text={`[open image](${url})`} onLinkPress={link => void pressLink($, link.href)} />
               )}
@@ -2132,7 +2134,7 @@ export const register: Register = on => {
             </Box>
           )),
         )
-        note(png ? IMAGE_ROWS + 1 : 4, heading)
+        note(png && picture ? fullWidth(picture.width, picture.height).rows + 4 : 4, heading)
       }
       const markdownBlocks = (key: string, text: string, heading: string, indent = 0) => {
         if (key === 'body' && record?.media) {
@@ -2198,9 +2200,18 @@ export const register: Register = on => {
         )
         note(Math.ceil((record.title.length + 3) / textWidth), record.title)
         const labelWidth = Math.min(14, Math.max(0, ...record.meta.map(one => (META_ICON[one.label] ? 1 : one.label.length))) + 2)
+        const preview = remote.preview && pixels.get(remote.preview.file)
+        const previewBox = preview && Image && remote.preview ? fullWidth(remote.preview.width, remote.preview.height) : null
+        const ogDescription = record.og?.description
         drawnParts.push(
           embed('remote-meta', iconFor(record.kind), 'DETAILS', record.status ?? '', kindColor(record.kind), (
             <Box flexDirection="column">
+              {previewBox && preview && Image && <Image key="remote-preview-image" source={{ png: preview }} {...previewBox} alt="preview image" />}
+              {ogDescription && (
+                <Box marginTop={previewBox ? 1 : 0} marginBottom={1}>
+                  <Text color={C.subtext0}>{ogDescription}</Text>
+                </Box>
+              )}
               {record.meta.map((one, i) => (
                 <Text key={`meta-${i}`} wrap="truncate-end">
                   <Text color={C.overlay0}>{(META_ICON[one.label] ?? one.label).padEnd(labelWidth)}</Text>
@@ -2210,7 +2221,7 @@ export const register: Register = on => {
             </Box>
           )),
         )
-        note(record.meta.length + 4, 'Details')
+        note(record.meta.length + 4 + (previewBox?.rows ?? 0) + (ogDescription ? estimateRows(ogDescription, textWidth - 2) + 1 : 0), 'Details')
         if (record.stats) {
           const ci = record.stats.ci
           const ciColor = { bad: C.red, wait: C.yellow, ok: C.green, none: C.overlay1 }[record.stats.ciTone]
@@ -2231,20 +2242,6 @@ export const register: Register = on => {
             )),
           )
           note(6, 'Changes')
-        }
-        const preview = remote.preview && pixels.get(remote.preview.file)
-        if (record.og && (record.og.description || preview)) {
-          drawnParts.push(
-            embed('remote-preview', ICON.web, 'PREVIEW', record.og.siteName ?? '', C.peach, (
-              <Box flexDirection="column">
-                {preview && Image && remote.preview && (
-                  <Image key="remote-preview-image" source={{ png: preview }} {...imageBox(remote.preview.width, remote.preview.height, textWidth - 4, IMAGE_ROWS - 2)} alt="preview image" />
-                )}
-                {record.og.description && <Text color={C.subtext0}>{record.og.description}</Text>}
-              </Box>
-            )),
-          )
-          note((preview ? IMAGE_ROWS : 0) + estimateRows(record.og.description ?? '', textWidth - 2) + 4, 'Preview')
         }
         const lists = () => {
           for (const [li, list] of (record.lists ?? []).entries()) {

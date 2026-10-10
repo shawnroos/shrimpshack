@@ -30,7 +30,7 @@ function mediaWorld(on: On) {
     if (bin === 'node') return done(0, JSON.stringify({ content: CONTENT }))
     if (bin === '/usr/bin/dscacheutil') return done(0, 'ip_address: 93.184.216.34\n')
     if (bin === 'curl' && e.argv.includes('-o')) return done(22, '404 0 ')
-    if (bin === 'curl') return done(0, '<html><head><title>Post</title></head><body><p>Intro</p></body></html>', `${MARKER}200 ${PAGE}`)
+    if (bin === 'curl') return done(0, '<html><head><title>Post</title><meta property="og:description" content="About the post"></head><body><p>Intro</p></body></html>', `${MARKER}200 ${PAGE}`)
     return done(0)
   })
   return { ran }
@@ -56,5 +56,15 @@ test('an image that could not be downloaded stays a link to it', async ($, on) =
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
   expect(await ui.find({ text: /^IMAGE$/ })).toBeDefined()
   expect(JSON.stringify(await ui.drawn()).includes('https://site.test/missing.png')).toBe(true)
+  await ui.unmount()
+})
+
+test('the page description sits inside the DETAILS block; there is no separate PREVIEW block', async ($, on) => {
+  mediaWorld(on)
+  await $.command.run({ command: 'peek', args: PAGE } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /^PREVIEW$/ })).toBeUndefined()
+  const details = await ui.find({ key: 'remote-meta' })
+  expect(JSON.stringify(details).includes('About the post')).toBe(true)
   await ui.unmount()
 })
