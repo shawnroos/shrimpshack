@@ -616,8 +616,18 @@ async function toHref($: EngineInterface, raw: string): Promise<string | null> {
   const match = /^(.+?)(?::(\d+))?$/.exec(cleaned)
   const abs = resolvePath(match?.[1] ?? cleaned, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
   exists.delete(abs)
-  if (!(await pathExists($, abs))) return null
-  return fileHref(abs, match?.[2] ? Number(match[2]) : undefined)
+  if (await pathExists($, abs)) return fileHref(abs, match?.[2] ? Number(match[2]) : undefined)
+  return bareDomain(cleaned)
+}
+
+// `.md` and friends are real top-level domains, so a missing local file named like one goes to the guess, not the web.
+const FILE_SUFFIX = /\.(?:md|mdx|ts|tsx|js|jsx|json|py|txt|png|jpe?g|gif|svg|pdf|csv|html?|ya?ml|toml|sh|swift|rs|go|css|lock|log)$/i
+
+function bareDomain(text: string): string | null {
+  const found = /^((?:[a-z0-9-]+\.)+[a-z]{2,})(:\d+)?([/?#]\S*)?$/i.exec(text)
+  if (!found?.[1]) return null
+  if (!found[3] && FILE_SUFFIX.test(found[1])) return null
+  return `https://${text}`
 }
 
 async function guess($: EngineInterface, query: string): Promise<string | null> {

@@ -553,3 +553,17 @@ test('an image host that answers IPv6 first is pinned to its IPv4 address', asyn
   const fetch = curls().find(argv => argv.at(-1) === 'https://dual.test/img/card.png')
   expect(fetch?.[fetch.indexOf('--resolve') + 1]).toBe('dual.test:443:93.184.216.34')
 })
+
+test('a row of images on one line becomes one picture each, and images past the cap leave the body', async () => {
+  const page = 'https://gallery.test/'
+  const row = Array.from({ length: 10 }, (_, i) => `![](https://gallery.test/g${i}.png)`).join(' ')
+  const images = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`https://gallery.test/g${i}.png`, 200 as const]))
+  const { io } = world({ pages: { [page]: { html: '<html><body>x</body></html>' } }, defuddle: { isInstalled: true, output: JSON.stringify({ content: `Intro.\n\n${row}\n\nOutro.` }) }, images })
+  const loaded = await loadWeb(io, web(page), NOW)
+  if (!loaded.ok) throw new Error(loaded.failure)
+  const lines = (loaded.record.body ?? '').split('\n').filter(line => line.startsWith('!['))
+  expect(lines.length).toBe(8)
+  expect(Object.keys(loaded.record.media ?? {}).length).toBe(8)
+  expect(loaded.record.body?.includes('g9.png')).toBe(false)
+  expect(loaded.record.body?.includes('Outro.')).toBe(true)
+})

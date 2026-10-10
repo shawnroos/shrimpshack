@@ -237,21 +237,37 @@ function withVideoLines(body: string, html: string, base: string): { body: strin
   return { body: lines.join('\n'), posters }
 }
 
-async function pageMedia(io: SourceIo, body: string, posters: Map<string, string>): Promise<RemoteRecord['media']> {
+const PICTURE_ROW = /^(?:!\[[^\]]*\]\([^)\s]+\)\s*){2,}$/
+const PICTURE = /!\[[^\]]*\]\([^)\s]+\)/g
+
+// A gallery arrives as several pictures on one line; images past the cap leave the body rather than print as raw URLs.
+async function pageMedia(io: SourceIo, body: string, posters: Map<string, string>, canDownload: boolean) {
   const wanted: { key: string; thumb?: string; play?: string }[] = []
-  for (const line of body.split('\n')) {
-    const target = PICTURE_LINE.exec(line.trim())?.[2]
-    const url = target ? safeParse(target) : null
-    if (!url || wanted.some(one => one.key === url.href)) continue
-    const id = youtubeId(url)
-    const isVideo = Boolean(id) || posters.has(url.href) || /^video$/i.test(PICTURE_LINE.exec(line.trim())?.[1] ?? '')
-    const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : isVideo ? posters.get(url.href) : url.href
-    wanted.push({ key: url.href, thumb, play: isVideo ? url.href : undefined })
+  let images = 0
+  const lines: string[] = []
+  for (const raw of body.split('\n')) {
+    const row = PICTURE_ROW.test(raw.trim()) ? (raw.match(PICTURE) ?? []) : [raw]
+    for (const line of row) {
+      const found = PICTURE_LINE.exec(line.trim())
+      const url = found?.[2] ? safeParse(found[2]) : null
+      if (!found || !url) {
+        lines.push(line)
+        continue
+      }
+      const id = youtubeId(url)
+      const isVideo = Boolean(id) || posters.has(url.href) || /^video$/i.test(found[1] ?? '')
+      if (!isVideo && ++images > MAX_MEDIA) continue
+      if (row.length > 1) lines.push('')
+      lines.push(line.trim())
+      if (wanted.some(one => one.key === url.href)) continue
+      const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : isVideo ? posters.get(url.href) : url.href
+      wanted.push({ key: url.href, thumb, play: isVideo ? url.href : undefined })
+    }
   }
-  if (wanted.length === 0) return undefined
   let budget = MAX_MEDIA
-  const files = await Promise.all(wanted.map(one => (one.thumb && budget-- > 0 ? download(io, one.thumb) : Promise.resolve(undefined))))
-  return Object.fromEntries(wanted.map((one, i) => [one.key, { file: files[i], play: one.play }]))
+  const files = await Promise.all(wanted.map(one => (canDownload && one.thumb && budget-- > 0 ? download(io, one.thumb) : Promise.resolve(undefined))))
+  const media = wanted.length ? Object.fromEntries(wanted.map((one, i) => [one.key, { file: files[i], play: one.play }])) : undefined
+  return { body: lines.join('\n'), media }
 }
 
 async function firstIcon(io: SourceIo, icons: readonly string[]): Promise<string | undefined> {
@@ -303,14 +319,15 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
     readable(io, html, finalUrl),
   ])
   const video = cleaned ? withVideoLines(cleaned, html, finalUrl) : null
-  const media = video && isCli ? await pageMedia(io, video.body, video.posters) : undefined
+  const withMedia = video ? await pageMedia(io, video.body, video.posters, isCli) : null
+  const media = withMedia?.media
   const record: RemoteRecord = {
     address: ref.address,
     kind: 'web',
     title: head.title ?? host,
     trail: [head.siteName ?? host],
     meta: [{ label: 'Host', value: host }],
-    body: video?.body ?? htmlToMarkdown(html),
+    body: withMedia?.body ?? htmlToMarkdown(html),
     ...(media ? { media } : {}),
     og: { title: head.title, description: head.description, siteName: head.siteName, image },
     favicon,
