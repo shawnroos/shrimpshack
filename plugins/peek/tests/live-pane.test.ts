@@ -475,3 +475,11 @@ test('a page the site refuses shows the real HTTP status under the reason', asyn
   expect(await ui.find({ text: 'HTTP 404 Not Found from blocked.test' })).toBeDefined()
   await ui.unmount()
 })
+
+test('a bare domain, with or without a path, opens that address directly', async ($, on) => {
+  liveWorld(on)
+  const careers = (await $.command.run({ command: 'peek', args: 'linear.app/careers' } as never)) as { text?: string }
+  expect(careers.text).toBe('Peeking at https://linear.app/careers')
+  const home = (await $.command.run({ command: 'peek', args: 'slateteams.com' } as never)) as { text?: string }
+  expect(home.text).toBe('Peeking at https://slateteams.com')
+})
