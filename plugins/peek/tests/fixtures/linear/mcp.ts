@@ -1,0 +1,37 @@
+// Shapes copied from real mcp__claude_ai_Linear__get_issue / get_project results (2026-10-09), values replaced.
+export const MCP_ISSUE = JSON.stringify({
+  id: 'WEB-2757',
+  uuid: 'cdc293c3-0000-0000-0000-000000000000',
+  title: 'Remove Logo',
+  description: 'The logo should go.',
+  priority: { value: 3, name: 'Medium' },
+  url: 'https://linear.app/acme/issue/WEB-2757/remove-logo',
+  createdAt: '2026-10-01T09:00:00.000Z',
+  updatedAt: '2026-10-05T12:30:00.000Z',
+  completedAt: null,
+  canceledAt: null,
+  status: 'In Progress',
+  statusType: 'started',
+  assignee: null,
+  project: 'Brand refresh',
+  projectId: 'p-1',
+  parentId: 'WEB-2700',
+  team: 'Web',
+  teamId: 't-1',
+})
+
+export const MCP_PROJECT = JSON.stringify({
+  id: 'P-WEB-610',
+  name: 'Brand refresh',
+  summary: '',
+  description: null,
+  url: 'https://linear.app/acme/project/brand-refresh-1a2b3c4d5e6f',
+  startDate: '2026-09-01',
+  targetDate: '2026-12-01',
+  priority: { value: 0, name: 'No priority' },
+  labels: [],
+  lead: { id: 'u-1', name: 'Ada Lovelace' },
+  leadTeam: { id: 't-1', name: 'Web', key: 'WEB' },
+  status: { id: 's-1', name: 'Completed', type: 'completed' },
+  teams: [{ id: 't-1', name: 'Web', key: 'WEB' }],
+})
