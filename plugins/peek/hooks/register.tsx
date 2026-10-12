@@ -625,6 +625,8 @@ function remoteRef(href: string, context: RefContext = {}): Ref | null {
   return ref.kind === 'web' && remoteFileOf(ref.address) ? null : ref
 }
 
+const starKeyOf = (raw: string) => itemKey(remoteRef(raw)?.address ?? raw)
+
 async function show($: EngineInterface, raw: string, isFromGroupChain = false) {
   if (!isFromGroupChain) groupBack = null
   const generation = ++showGeneration
@@ -869,7 +871,7 @@ async function setStar($: EngineInterface, raw: string, wanted?: boolean): Promi
   const canonical = remoteRef(raw)?.address ?? raw
   let isOn = false
   await update($, stars, list => {
-    const href = list.find(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(canonical)) ?? canonical
+    const href = list.find(one => starKeyOf(one) === itemKey(canonical)) ?? canonical
     const next = toggleStar(list, href, wanted)
     isOn = next.includes(href)
     return next
@@ -2464,7 +2466,7 @@ export const register: Register = on => {
       const inner = Math.max(8, textWidth - 4)
       const perRow = Math.min(2, gridColumns(inner, CARD_MIN, CARD_GAP))
       const itemWidth = Math.floor((inner - (perRow - 1) * CARD_GAP) / perRow)
-      const starKeys = new Set((await read($, stars)).map(one => itemKey(remoteRef(one)?.address ?? one)))
+      const starKeys = new Set((await read($, stars)).map(starKeyOf))
       const worktreeRoot = (await groupHome($))?.worktreeRoot
       const known = titlesByKey()
       const drawn = await Promise.all(
@@ -2659,7 +2661,7 @@ export const register: Register = on => {
         navOrder = keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 }))
         blockStarts = []
         const starList = await read($, stars)
-        const starKeys = new Set(starList.map(one => itemKey(remoteRef(one)?.address ?? one)))
+        const starKeys = new Set(starList.map(starKeyOf))
         const missing = looks.filter(one => one.state === 'missing').length
         const row = (one: ItemLook, index: number) => {
           const isSelected = index === selected
@@ -3831,7 +3833,7 @@ export const register: Register = on => {
     const goNext = jumps.next
     const goPrev = jumps.prev
     const starTarget = (liveFrame && liveState?.url) || current.href
-    const isStarred = (await read($, stars)).some(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(starTarget))
+    const isStarred = (await read($, stars)).some(one => starKeyOf(one) === itemKey(starTarget))
     const remote = current.remote
     const source = remote?.record ? sourceLine(remote, now) : ''
     const info = liveFrame
