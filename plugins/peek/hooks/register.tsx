@@ -47,6 +47,7 @@ import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradi
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
+import { type ItemLook, type ItemState, remoteNaming } from './pane/look'
 import { HoverLayer, SectionRule, fitPicture } from './pane/widgets'
 
 const C = BASE
@@ -787,12 +788,13 @@ async function sessionEntries($: EngineInterface, list: readonly Mention[]): Pro
     const ref = file ? null : remoteRef(one.href)
     const label = ref ? remoteTitles.get(itemKey(ref.address)) : undefined
     if (ref) {
+      const naming = remoteNaming(ref, label, { bare: path, namesThread: true, host: () => new URL(ref.address).hostname })
       out.push({
         href: one.href,
         path,
-        name: label?.title ?? ref.key ?? (ref.number ? `#${ref.number}` : ref.channel ? `Thread in ${ref.channel}` : path.replace(/^https?:\/\/(www\.)?/, '')),
-        folder: ref.owner ? `${ref.owner}/${ref.repo}` : label?.trail?.join(' · ') || new URL(ref.address).hostname,
-        kind: label?.kind ?? ref.kind,
+        name: naming.name,
+        folder: naming.where,
+        kind: naming.kind,
         status: label?.status,
         favicon: (await remotePicture($, label?.favicon))?.file,
         mtimeMs: 0,
@@ -1050,9 +1052,7 @@ function toggleExpanded($: EngineInterface, id: string) {
   $.ui.invalidate('ui.render')
 }
 
-type GroupLook = { key: string; href: string; name: string; kind: string; where: string; state: ItemState; favicon?: string }
-
-async function groupItemLook($: EngineInterface, item: GroupItem, worktreeRoot: string | undefined, known: ReadonlyMap<string, TitleEntry>): Promise<GroupLook> {
+async function groupItemLook($: EngineInterface, item: GroupItem, worktreeRoot: string | undefined, known: ReadonlyMap<string, TitleEntry>): Promise<ItemLook> {
   const key = itemKey(item.ref)
   const file = refPath(item.ref, worktreeRoot)
   if (file) {
@@ -1067,17 +1067,20 @@ async function groupItemLook($: EngineInterface, item: GroupItem, worktreeRoot: 
   const ref = remoteRef(item.ref)
   const address = ref?.address ?? item.ref
   const title = known.get(key)
-  const fallback = ref?.key ?? (ref?.number ? `#${ref.number}` : address.replace(/^https?:\/\/(www\.)?/, ''))
-  let host = ''
-  try {
-    host = new URL(address).hostname
-  } catch {}
+  const host = () => {
+    try {
+      return new URL(address).hostname
+    } catch {
+      return ''
+    }
+  }
+  const naming = remoteNaming(ref, title, { label: item.label, bare: address, namesThread: false, host })
   return {
     key,
     href: address,
-    name: title?.title ?? item.label ?? fallback,
-    kind: title?.kind ?? ref?.kind ?? 'web',
-    where: ref?.owner ? `${ref.owner}/${ref.repo}` : title?.trail?.join(' · ') || host,
+    name: naming.name,
+    kind: naming.kind,
+    where: naming.where,
     state,
     favicon: (await remotePicture($, title?.favicon))?.file,
   }
@@ -1180,7 +1183,6 @@ async function groupTarget($: EngineInterface, raw: string, worktreeRoot: string
   return { raw: trimmed, ref: storedRef(fileHref(abs), worktreeRoot) }
 }
 
-type ItemState = 'ok' | 'missing' | 'unavailable'
 
 // stat rejects for a missing path and for any other failure, so only a failed stat asks exists which one it was.
 async function fileState($: EngineInterface, path: string): Promise<{ state: ItemState; stat: { kind: string } | null }> {
@@ -2487,11 +2489,11 @@ export const register: Register = on => {
           const shown = isExpanded ? blocks : blocks.slice(0, 1).map(block => ({ ...block, items: block.items.slice(0, perRow) }))
           const looks = await Promise.all(shown.map(block => Promise.all(block.items.map(one => groupItemLook($, one, worktreeRoot, known)))))
           for (const one of looks.flat()) if (one.href && !parseHref(one.href) && remoteRef(one.href) && !cached(one.href)) loadGroupRemote($, one.href)
-          const open = (look: GroupLook) => void update($, cursorAtom, () => index).then(() => openGroupHref($, group, look.key, look.href))
+          const open = (look: ItemLook) => void update($, cursorAtom, () => index).then(() => openGroupHref($, group, look.key, look.href))
           let layers = 0
-          const layer = (kind: 'rows' | 'cards', height: number, row: GroupLook[]) =>
+          const layer = (kind: 'rows' | 'cards', height: number, row: ItemLook[]) =>
             HoverLayer(w, `hover-${prefix}-items-${i}-${layers++}`, { kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) })
-          const icon = (look: GroupLook, n: number) => {
+          const icon = (look: ItemLook, n: number) => {
             const isStarred = starKeys.has(look.key)
             const favicon = look.favicon && Image && !isStarred ? pixels.get(look.favicon) : undefined
             return [
@@ -2505,7 +2507,7 @@ export const register: Register = on => {
               </Box>,
             ]
           }
-          const itemCard = (look: GroupLook, n: number) => (
+          const itemCard = (look: ItemLook, n: number) => (
             <Box key={`${prefix}-card-${i}-${n}`} flexDirection="column" width={itemWidth} height={CARD_ROWS} paddingX={2} paddingY={1} backgroundColor={C.appBg} hover={{ backgroundColor: C.surface0 }}>
               <Box flexDirection="row" height={1} overflow="hidden">
                 {icon(look, n)}
@@ -2517,7 +2519,7 @@ export const register: Register = on => {
               <Text color={look.state === 'missing' ? C.red : C.overlay0} wrap="truncate-end">{look.state === 'ok' ? kindLabel(look.kind).label : look.state}</Text>
             </Box>
           )
-          const line = (look: GroupLook, n: number) => (
+          const line = (look: ItemLook, n: number) => (
             <Box key={`${prefix}-line-${i}-${n}`} height={1} flexDirection="row" width={inner} overflow="hidden" hover={{ backgroundColor: C.surface0 }}>
               {icon(look, n)}
               <Box key={`${prefix}-itname-${i}-${n}`} flexShrink={0}>
@@ -2660,7 +2662,7 @@ export const register: Register = on => {
         const starList = await read($, stars)
         const starKeys = new Set(starList.map(one => itemKey(remoteRef(one)?.address ?? one)))
         const missing = looks.filter(one => one.state === 'missing').length
-        const row = (one: GroupLook, index: number) => {
+        const row = (one: ItemLook, index: number) => {
           const isSelected = index === selected
           const isStarred = starKeys.has(one.key)
           const favicon = one.favicon && Image ? pixels.get(one.favicon) : undefined
