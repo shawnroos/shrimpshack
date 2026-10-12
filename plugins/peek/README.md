@@ -17,6 +17,8 @@ transcript.
 | GitHub pull requests | Details, line counts, files changed, a CI summary, the description and comments |
 | GitHub issues and repos | Details, the body or README, comments, and a repo's open pull requests and issues |
 | Linear issues and projects | Details, the description, comments with replies, and a project's open issues |
+| A link to a file (`.md`, `.png`, `.json`, `.csv`, code, ...) | Downloaded and drawn like the local file; `o` and `c` still use the link |
+| A link to a video (`.mp4`, `.webm`, `.mov`) | A Play button that opens it in your browser |
 
 ## Remote pages
 
@@ -24,6 +26,11 @@ Links and IDs in replies become clickable: GitHub URLs, `owner/repo#12`, `#12`
 inside a GitHub repo, Linear URLs, and Linear IDs such as `WEB-2757` when
 `WEB` is a team in your workspace. Peek is read-only: it never changes
 anything in GitHub or Linear.
+
+Pictures, videos and Mermaid diagrams in a pull request, issue or Linear
+description or comment draw the same way as on a web page: up to 8 pictures
+inline, a video as its thumbnail and a Play button. A picture that cannot be
+downloaded, such as an attachment in a private repo, stays a link.
 
 Each page comes from the best source available, and the footer names it:
 
