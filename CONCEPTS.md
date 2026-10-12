@@ -188,3 +188,16 @@ The cap on how many bytes of pictures live view sends into the pane each second.
 path stalls above a measured rate without telling the sender, so the cap is fixed ahead of
 time and enforced where frames are made: unchanged pages send nothing, and a busy page gives
 up frame rate first and picture size second to stay under it.
+
+### Page vocabulary
+The closed set of concepts, block types and behaviours every peek page is built from: a
+Page holds a title, Details, ordered Sections and Actions; a Section holds one block
+(markdown, media, table, cards, list or details); Cards and List items open links or files.
+Every page drawn from it gets the same keys, ⌃k menu, hover star and breadcrumbs, so a new
+page type cannot invent its own layout.
+
+### Recipe
+A user-level description of a document type peek does not handle itself: the links it
+claims and a script or MCP tool that returns a Page in the page vocabulary. It lives
+outside the plugin, so it survives peek updates and works in every session of that user.
+A built-in page type wins a link both claim unless the recipe says it overrides it.
