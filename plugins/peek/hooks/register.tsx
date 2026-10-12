@@ -2505,17 +2505,7 @@ export const register: Register = on => {
           const open = (look: GroupLook) => void update($, cursorAtom, () => index).then(() => openGroupHref($, group, look.key, look.href))
           let layers = 0
           const layer = (kind: 'rows' | 'cards', height: number, row: GroupLook[]) =>
-            Client && (
-              <Box position="absolute" top={0} left={0} width={inner} height={height}>
-                <Client
-                  key={`hover-${prefix}-items-${i}-${layers++}`}
-                  module="./hover-layer.tsx"
-                  props={{ kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) }}
-                  width={inner}
-                  height={height}
-                />
-              </Box>
-            )
+            HoverLayer(w, `hover-${prefix}-items-${i}-${layers++}`, { kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) })
           const icon = (look: GroupLook, n: number) => {
             const isStarred = starKeys.has(look.key)
             const favicon = look.favicon && Image && !isStarred ? pixels.get(look.favicon) : undefined
