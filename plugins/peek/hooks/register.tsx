@@ -3164,7 +3164,8 @@ export const register: Register = on => {
     const kind = current.kind
     const path = parseHref(current.href)?.path ?? current.href
     // An embed's content is textWidth - 2 wide; height follows the picture, capped so it fits on screen.
-    const fullWidth = (width: number, height: number) => imageBox(width, height, textWidth - 2, Math.max(IMAGE_ROWS, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 6))
+    const pictureRows = Math.max(IMAGE_ROWS, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 6)
+    const fullWidth = (width: number, height: number) => imageBox(width, height, textWidth - 2, pictureRows)
     const embed = (key: string, icon: string, label: string, detail: string, color: string, child: unknown) => (
       <Box key={key} flexDirection="column" width={textWidth} backgroundColor={C.appBg} paddingX={1} paddingY={1}>
         <Box flexDirection="row" width={textWidth - 2}>
@@ -3450,7 +3451,7 @@ export const register: Register = on => {
             const loaded = picture && pixels.get(picture.file)
             const png = Image ? fitPicture(budget, loaded) : undefined
             if (png && picture && Image) {
-              const box = imageBox(picture.width, picture.height, width, Math.max(IMAGE_ROWS, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 6))
+              const box = imageBox(picture.width, picture.height, width, pictureRows)
               rows.push(<Image key={`${key}-${fi}`} source={{ png }} {...box} alt={file.name} />)
               height += box.rows
               continue
@@ -3505,7 +3506,7 @@ export const register: Register = on => {
               continue
             }
             flush()
-            const box = imageBox(picture.width, picture.height, width, Math.max(IMAGE_ROWS, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 6))
+            const box = imageBox(picture.width, picture.height, width, pictureRows)
             bodyParts.push(<Image key={`${key}-picture-${bodyParts.length}`} source={{ png }} {...box} alt={alt || 'image'} />)
             bodyRows += box.rows
           }
