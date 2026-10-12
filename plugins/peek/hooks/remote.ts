@@ -32,9 +32,9 @@ export async function loadItem(io: RemoteIo, ref: Ref, now: number, options: { c
   return fallback?.ok ? withMedia(io, { ...fallback, liveFailure: live.failure }) : live
 }
 
-// A reader page placed its media while it parsed the HTML.
+// A reader page placed its media while it parsed the HTML. A README's badge row would become a stack of image embeds.
 async function withMedia(io: SourceIo, loaded: Extract<Loaded, { ok: true }>): Promise<Loaded> {
-  if (loaded.record.kind === 'web') return loaded
+  if (loaded.record.kind === 'web' || loaded.record.kind === 'gh-repo') return loaded
   const record = await withRemoteMedia(io, loaded.record).catch(() => loaded.record)
   return { ...loaded, record }
 }

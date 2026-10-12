@@ -180,4 +180,18 @@ describe('media in GitHub and Linear markdown', () => {
     expect(downloads).toEqual([])
     expect(loaded.record.media?.['http://127.0.0.1/x.png']?.file).toBeUndefined()
   })
+
+  test('a repo README keeps its badges as text: only issues, pull requests and Linear items get media', async () => {
+    const readme = '# Widgets\n\n![Build](https://img.shields.io/badge/build-passing-green) ![License](https://img.shields.io/badge/license-MIT-blue)\n'
+    const repo = JSON.stringify({ nameWithOwner: 'o/r', description: 'Widgets', url: 'https://github.com/o/r', defaultBranchRef: { name: 'main' } })
+    const { port, downloads } = io({
+      gh: argv => (argv.includes('view') ? repo : argv.some(arg => arg.includes('readme')) ? readme : '[]'),
+      images: { 'https://img.shields.io/badge/build-passing-green': 200 },
+    })
+    const loaded = await loadItem(port, ref('https://github.com/o/r'), 1_000)
+    if (!loaded.ok) throw new Error(loaded.failure)
+    expect(loaded.record.body).toContain('shields.io')
+    expect(loaded.record.media).toBeUndefined()
+    expect(downloads).toEqual([])
+  })
 })
