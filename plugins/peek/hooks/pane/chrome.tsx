@@ -27,7 +27,6 @@ function chipOf(id: Mode, chosen: Mode, isTabCompact: boolean) {
   return isTabCompact && id !== chosen ? ` ${one.icon} ` : ` ${one.icon} ${one.label.toUpperCase()} `
 }
 
-// Shrinks the crumbs to the room the tabs leave; the tabs go compact first when the full crumbs could not fit beside them.
 export function fitCrumbs(parts: readonly Crumb[], geom: { columns: number; isNarrow: boolean; chosen: Mode }) {
   const { columns, isNarrow, chosen } = geom
   const width = (label: string) => label.length + 2
