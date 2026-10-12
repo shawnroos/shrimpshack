@@ -331,6 +331,6 @@ describe('Speaker and time labels', () => {
   test('a speaker keeps one colour, and different speakers spread over the palette', () => {
     expect(speakerColor('U0AAA1111')).toBe(speakerColor('U0AAA1111'))
     const ids = ['U0AAA1111', 'U0BBB2222', 'U0CCC3333', 'U0DDD4444', 'U0EEE5555', 'U0FFF6666']
-    expect(new Set(ids.map(speakerColor)).size >= 3).toBe(true)
+    expect(new Set(ids.map(id => speakerColor(id))).size >= 3).toBe(true)
   })
 })

@@ -45,9 +45,8 @@ images peek may not read, show as a row with the name, type, size and an
 `open in Slack` link.
 
 Peek reads Slack through the Slack MCP server under your Claude Code
-permissions, so the first read of each Slack tool asks for permission. Choose
-to always allow it, or add these names to `permissions.allow` in
-`~/.claude/settings.json`:
+permissions, so each Slack tool asks for permission until you choose to always
+allow it, or add its name to `permissions.allow` in `~/.claude/settings.json`:
 
 | Tool | Peek uses it for |
 |---|---|
