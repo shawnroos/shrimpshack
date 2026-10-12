@@ -3,6 +3,7 @@ import { gitRoot, toHref } from './entries'
 import { toggleStar } from './gallery'
 import { applyGroupOps, groupsDir, isScheme, refPath, resolveProjectKey, shortId, starGroup, storedRef } from './groups'
 import type { GroupPlace, GroupWrite } from './groups'
+import { remotePicture } from './images'
 import { clamp, nav, noteTitle, remoteLoader, remoteRef, show, starKeyOf, startTicking } from './navigation'
 import type { NavIo } from './navigation'
 import { type ItemLook, type ItemState, remoteNaming } from './pane/look'
@@ -223,7 +224,7 @@ export async function groupItemLook(io: NavIo, item: GroupItem, worktreeRoot: st
     kind: naming.kind,
     where: naming.where,
     state,
-    favicon: (await io.remotePicture(title?.favicon))?.file,
+    favicon: (await remotePicture(io, title?.favicon))?.file,
   }
 }
 

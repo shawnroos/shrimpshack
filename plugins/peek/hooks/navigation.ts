@@ -5,6 +5,7 @@ import { capturedLinearContext } from './capture'
 import { describeAge } from './format'
 import { noteMentions } from './gallery'
 import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
+import { AVATAR_EDGES, SCRATCH, WEB_EDGES, mediaFiles, pictures, remotePicture, withDrawnMermaid } from './images'
 import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
 import { markdownPage, mermaidFences, mermaidPage, toggleTaskLine } from './markdown'
@@ -23,7 +24,6 @@ type Ui = EngineInterface['ui']
 type Fs = EngineInterface['fs']
 type Model = EngineInterface['model']
 type Without<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
-type Picture = { file: string; width: number; height: number }
 
 export type Cell<T> = { read: () => Promise<T>; update: (change: (value: T) => T) => Promise<T> }
 
@@ -48,6 +48,7 @@ export type NavIo = {
   run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
   fetch: (url: string, init?: HttpInit) => Promise<HttpResponse>
   readFile: (path: string) => Promise<string>
+  readBytes: (path: string) => Promise<{ base64: string }>
   list: (path: string) => ReturnType<Fs['list']>
   writeFile: (path: string, text: string) => Promise<unknown>
   storeGet: (key: string) => Promise<unknown>
@@ -69,15 +70,8 @@ export type NavIo = {
   forgetPath: (path: string) => void
   loadFile: (href: string, path: string, line?: number) => Promise<View>
   loadUrl: (href: string) => Promise<View>
-  withDrawnMermaid: (markdown: string) => Promise<string>
-  drawMermaid: (source: string) => Promise<string | null>
-  toPng: (abs: string, mtimeMs: number, edges?: readonly number[]) => Promise<Picture>
-  remotePicture: (file: string | undefined) => Promise<Picture | undefined>
-  mediaPictures: (media: RemoteRecord['media']) => Promise<Record<string, Picture> | undefined>
-  avatarPictures: (avatars: RemoteRecord['avatars']) => Promise<Record<string, Picture> | undefined>
 }
 
-export const SCRATCH = '/tmp/claude-peek'
 const LINEAR_BOOT_TTL_MS = 24 * 3600_000
 // viewOf runs on every refresh tick and redraw; each fence costs one mermaid-ascii process.
 const drawnRecords = new Map<string, RemoteRecord>()
@@ -206,7 +200,7 @@ async function withRecordDiagrams(io: NavIo, record: RemoteRecord, fetchedAt = 0
   const key = `${record.address}|${fetchedAt}|${io.columns()}`
   const known = drawnRecords.get(key)
   if (known) return known
-  const [body, ...comments] = await Promise.all(texts.map(text => io.withDrawnMermaid(text)))
+  const [body, ...comments] = await Promise.all(texts.map(text => withDrawnMermaid(io, text)))
   const drawn: RemoteRecord = {
     ...record,
     ...(record.body !== undefined ? { body } : {}),
@@ -231,10 +225,10 @@ async function viewOf(io: NavIo, ref: Ref, entry: CacheEntry): Promise<View> {
       tier: entry.tier,
       fetchedAt: entry.fetchedAt,
       staleSince: entry.staleSince,
-      favicon: await io.remotePicture(record.favicon),
-      preview: await io.remotePicture(record.og?.image),
-      pictures: await io.mediaPictures(record.media),
-      avatars: await io.avatarPictures(record.avatars),
+      favicon: await remotePicture(io, record.favicon),
+      preview: await remotePicture(io, record.og?.image),
+      pictures: await pictures(io, mediaFiles(record.media), WEB_EDGES),
+      avatars: await pictures(io, record.avatars ?? {}, AVATAR_EDGES),
     },
   }
 }

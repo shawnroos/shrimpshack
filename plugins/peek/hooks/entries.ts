@@ -2,6 +2,7 @@ import type { Mention } from '../types'
 import { record } from './capture'
 import { hasMeaningfulWords, noteMentions, parseStatLines, rankRecent } from './gallery'
 import type { FileEntry, Scope } from './gallery'
+import { remotePicture } from './images'
 import { pathCandidates, urlCandidates } from './markdown'
 import { nav, remoteRef, sessionRefContext, titlesByKey } from './navigation'
 import type { NavIo } from './navigation'
@@ -156,7 +157,7 @@ export async function sessionEntries(io: NavIo, list: readonly Mention[]): Promi
         folder: naming.where,
         kind: naming.kind,
         status: label?.status,
-        favicon: (await io.remotePicture(label?.favicon))?.file,
+        favicon: (await remotePicture(io, label?.favicon))?.file,
         mtimeMs: 0,
         size: 0,
         mentions: one.count,

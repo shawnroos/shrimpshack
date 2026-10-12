@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
+import type { Group, Mode, RemoteComment, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './gallery'
 import { C as BASE, MUTED, ICON, META_ICON, mute, speakerColor } from './theme'
 import { record } from './capture'
@@ -19,18 +19,19 @@ import type { GroupsIo } from './groups'
 import { describeAge, describeSize, plural } from './format'
 import { classifyBlocks, filterRole, gridColumns, nextOf, selectEntries } from './gallery'
 import { colorFor, iconFor, kindLabel } from './kinds'
-import { diagramType, linkify, mermaidFences, pathCandidates, plainInline, segmentsOf, swapMermaidFences } from './markdown'
+import { diagramType, linkify, pathCandidates, plainInline, segmentsOf } from './markdown'
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, taskRows, wrapLines } from './measure'
-import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
+import { fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
 import { type ItemLook, lookOf } from './pane/look'
 import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
-import { SCRATCH, bootLinear, clamp, goBack, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
+import { bootLinear, clamp, goBack, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
 import type { NavIo } from './navigation'
 import { TOOLS } from './group-tools'
 import { createGroupStore } from './groups-store'
 import { fullText, loadFile, loadUrl } from './loaders'
+import { docImage, pixels, toPng } from './images'
 import { expandedGroups, focusGroupRow, groupCommands, groupHome, groupItemLook, groupPage, groupPageRows, loadGroupRemote, openCardItem, openGroupHref, openGroupItem, openGroupPage, selectGroupRow, setStar, starInGroupsTab, starredFirst, toggleExpanded, toggleGroupStar } from './groups-session'
 import type { GroupMenuFor, GroupRows, MenuCommand } from './groups-session'
 import { forgetPath, guess, noteCapture, pathExists, remember, scopeEntries, sessionEntries, toHref, withMentions } from './entries'
@@ -136,10 +137,6 @@ const SAMPLE_RUST = 'fn greet(name: &str) -> String {\n    format!("hello, {name
 const SAMPLE_DIFF = '@@ -1,3 +1,3 @@\n fn main() {\n-    println!("hi");\n+    println!("hello, peek");\n }'
 const SAMPLE_MARKDOWN = '## Markdown\n\nRenders **bold**, *italic*, `code`, [links](https://claude.com) and lists:\n\n- one\n- two\n\n| Element | Use |\n|---|---|\n| Box | layout |\n| Text | words |\n\n```ts\nconst peek = true\n```'
 
-const MERMAID_ASCII = '/.cache/claude-peek/bin/mermaid-ascii'
-const MAX_PNG_BYTES = 2 * 1024 * 1024
-
-const pixels = new Map<string, string>()
 let paneColumns = 100
 let contentRows = 0
 let blockStarts: number[] = []
@@ -164,73 +161,6 @@ const COMMAND_KEYS: Record<string, string> = {
   close: 'close',
 }
 const PAGE_TOP = HEADER_ROWS + 1
-const converted = new Map<string, { file: string; width: number; height: number }>()
-
-async function pngSize($: EngineInterface, file: string) {
-  const { stdout } = await $.process.run(['sips', '-g', 'pixelWidth', '-g', 'pixelHeight', file])
-  const width = Number(/pixelWidth:\s*(\d+)/.exec(stdout)?.[1] ?? 0)
-  const height = Number(/pixelHeight:\s*(\d+)/.exec(stdout)?.[1] ?? 0)
-  return { width: width || 800, height: height || 600 }
-}
-
-async function hashName(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text))
-  return [...new Uint8Array(digest)].slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('')
-}
-
-async function runOrThrow($: EngineInterface, argv: string[]) {
-  const ran = await $.process.run(argv)
-  if (ran.exitCode !== 0) throw new Error(ran.stderr.trim() || `${argv[0]} failed`)
-}
-
-// The bytes go to the terminal inline: a multiplexer between Claude Code and
-// the terminal may pass kitty images sent as data but not ones sent as a path.
-async function toPng($: EngineInterface, abs: string, mtimeMs: number, edges: readonly number[] = [1600, 1000, 600]) {
-  const cacheKey = `${abs}@${mtimeMs}@${edges.join(',')}`
-  const cached = converted.get(cacheKey)
-  if (cached && pixels.has(cached.file)) return cached
-  await $.process.run(['mkdir', '-p', SCRATCH])
-  const name = await hashName(cacheKey)
-  let source = abs
-  if (extOf(abs) === 'svg') {
-    source = `${SCRATCH}/${name}-svg.png`
-    await runOrThrow($, ['rsvg-convert', '-w', '1600', '-o', source, abs])
-  }
-  const file = `${SCRATCH}/${name}.png`
-  for (const edge of edges) {
-    await runOrThrow($, ['sips', '-Z', String(edge), '-s', 'format', 'png', source, '--out', file])
-    const { base64 } = await $.fs.read(file, { as: 'bytes' })
-    if (base64.length * 0.75 <= MAX_PNG_BYTES) {
-      pixels.set(file, base64)
-      break
-    }
-  }
-  if (!pixels.has(file)) throw new Error('Image is too large to show here. Press "Open externally".')
-  const image = { file, ...(await pngSize($, file)) }
-  converted.set(cacheKey, image)
-  return image
-}
-
-async function drawMermaid($: EngineInterface, source: string): Promise<string | null> {
-  const home = (await $.env.get('HOME')) ?? ''
-  const ran = await $.process
-    .run([`${home}${MERMAID_ASCII}`, '-f', '-', '--max-width', String(Math.max(40, paneColumns - 4))], {
-      stdin: source,
-      timeoutMs: 10000,
-    })
-    .catch(() => null)
-  if (!ran || ran.exitCode !== 0 || !ran.stdout.trim()) return null
-  return ran.stdout
-}
-
-async function withDrawnMermaid($: EngineInterface, markdown: string): Promise<string> {
-  const fences = mermaidFences(markdown)
-  if (!fences.length) return markdown
-  const drawn: (string | null)[] = []
-  for (const fence of fences) drawn.push(await drawMermaid($, fence))
-  return swapMermaidFences(markdown, drawn)
-}
-
 function remoteIoOf($: EngineInterface): RemoteIo {
   return {
     sessionId: () => $.session.id(),
@@ -245,44 +175,8 @@ function remoteIoOf($: EngineInterface): RemoteIo {
   }
 }
 
-// A pane is about 100 columns of 8 px, so 800 px is already sharper than it can show, and keeps each picture small.
-const WEB_EDGES = [800, 600, 400]
-
-async function remotePicture($: EngineInterface, file: string | undefined) {
-  if (!file || failedPictures.has(file)) return undefined
-  return toPng($, file, 0, WEB_EDGES).catch(() => {
-    failedPictures.add(file)
-    return undefined
-  })
-}
-
-// A face draws 4 columns by 2 rows; WEB_EDGES would blow Slack's 72 px avatar up to 800 px.
-const AVATAR_EDGES = [72]
-
-async function avatarPictures($: EngineInterface, avatars: RemoteRecord['avatars']) {
-  const found = await Promise.all(
-    Object.entries(avatars ?? {}).map(async ([id, file]) => {
-      if (failedPictures.has(file)) return [id, undefined] as const
-      const picture = await toPng($, file, 0, AVATAR_EDGES).catch(() => {
-        failedPictures.add(file)
-        return undefined
-      })
-      return [id, picture] as const
-    }),
-  )
-  const pictures = Object.fromEntries(found.filter((one): one is readonly [string, NonNullable<(typeof one)[1]>] => Boolean(one[1])))
-  return Object.keys(pictures).length ? pictures : undefined
-}
-
 const MAX_BLOCK_MEMO = 400
-const failedPictures = new Set<string>()
 const blockMemo = new Map<string, { chunk: string; rows: number }[]>()
-
-async function mediaPictures($: EngineInterface, media: RemoteRecord['media']) {
-  const found = await Promise.all(Object.entries(media ?? {}).map(async ([key, one]) => [key, await remotePicture($, one.file)] as const))
-  const pictures = Object.fromEntries(found.filter((one): one is readonly [string, NonNullable<(typeof one)[1]>] => Boolean(one[1])))
-  return Object.keys(pictures).length ? pictures : undefined
-}
 
 function navIoOf($: EngineInterface): NavIo {
   const io: NavIo = {
@@ -306,6 +200,7 @@ function navIoOf($: EngineInterface): NavIo {
     run: (argv, init) => $.process.run(argv, init),
     fetch: (url, init) => $.http.fetch(url, init),
     readFile: path => $.fs.read(path),
+    readBytes: path => $.fs.read(path, { as: 'bytes' }),
     list: path => $.fs.list(path),
     writeFile: (path, text) => $.fs.write(path, text),
     storeGet: key => $.store.get(key),
@@ -327,12 +222,6 @@ function navIoOf($: EngineInterface): NavIo {
     forgetPath,
     loadFile: (href, path, line) => loadFile(io, href, path, line),
     loadUrl: href => loadUrl(io, href),
-    toPng: (abs, mtimeMs, edges) => toPng($, abs, mtimeMs, edges),
-    drawMermaid: source => drawMermaid($, source),
-    withDrawnMermaid: markdown => withDrawnMermaid($, markdown),
-    remotePicture: file => remotePicture($, file),
-    mediaPictures: media => mediaPictures($, media),
-    avatarPictures: avatars => avatarPictures($, avatars),
   }
   return io
 }
@@ -359,18 +248,6 @@ function groupsIoOf($: EngineInterface): GroupsIo {
 const groupStore = createGroupStore()
 
 const sum = (values: readonly number[]) => values.reduce((total, one) => total + one, 0)
-
-async function docImage($: EngineInterface, src: string, docPath: string) {
-  if (/^https?:/.test(src)) return null
-  const folder = docPath.slice(0, docPath.lastIndexOf('/'))
-  const home = (await $.env.get('HOME')) ?? ''
-  const abs = resolvePath(decodeURIComponent(src.replace(/^file:\/\//, '')), folder, home)
-  const stat = await $.fs.stat(abs).catch(() => null)
-  if (!stat || stat.kind !== 'file') return null
-  const image = await toPng($, abs, stat.mtimeMs).catch(() => null)
-  const png = image ? pixels.get(image.file) : undefined
-  return image && png ? { abs, png, width: image.width, height: image.height } : { abs, png: undefined, width: 0, height: 0 }
-}
 
 const LIVE_FRAME = 'live-frame'
 // No API reports a cell's pixel size; 8 CSS px a column keeps text near its normal size at the 1 MB/s frame budget.
@@ -607,7 +484,7 @@ export const register: Register = on => {
     const border = await read($, picked)
     let png: string | undefined
     if (Image) {
-      const image = await toPng($, `${$.plugin.root}/assets/sample.png`, 0).catch(() => undefined)
+      const image = await toPng(navIoOf($), `${$.plugin.root}/assets/sample.png`, 0).catch(() => undefined)
       png = image ? pixels.get(image.file) : undefined
     }
     const heading = (title: string, note: string) => (
@@ -2433,7 +2310,7 @@ export const register: Register = on => {
           note(estimateRows(part.text, textWidth - 3))
           continue
         }
-        const picture = await docImage($, part.src, path)
+        const picture = await docImage(navIoOf($), part.src, path)
         const detail = part.alt || part.src
         if (picture?.png && Image) {
           drawnParts.push(

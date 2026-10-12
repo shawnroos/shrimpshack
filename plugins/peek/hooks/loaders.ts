@@ -1,6 +1,7 @@
 import type { RemoteRecord, View } from '../types'
 import { gitRoot } from './entries'
 import { describeAge, describeSize } from './format'
+import { drawMermaid, toPng, withDrawnMermaid } from './images'
 import { fitMarkdown, htmlToMarkdown, linkTasks, outlineOf } from './markdown'
 import { loadRemote } from './navigation'
 import type { NavIo } from './navigation'
@@ -18,7 +19,7 @@ type TextLoader = (file: FileFacts, text: string, meta: string) => View | Promis
 
 const picture: Loader = async ({ io, path, base, sized, mtimeMs }) => {
   const kind = kindOf(path)
-  const image = await io.toPng(path, mtimeMs)
+  const image = await toPng(io, path, mtimeMs)
   return { ...base, kind, meta: `${image.width}×${image.height} · ${sized}`, image }
 }
 
@@ -32,7 +33,7 @@ function withText(load: TextLoader): Loader {
 
 const markdown: TextLoader = async ({ io, href, path, base }, text, meta) => {
   const tasks = linkTasks(text, fileHref(path))
-  const drawn = await io.withDrawnMermaid(tasks.text)
+  const drawn = await withDrawnMermaid(io, tasks.text)
   fullText.set(href, drawn)
   const outline = outlineOf(drawn).map(({ level, text: heading }) => ({ level, text: heading }))
   const taskCount = tasks.total ? `${tasks.done}/${tasks.total} tasks` : undefined
@@ -40,7 +41,7 @@ const markdown: TextLoader = async ({ io, href, path, base }, text, meta) => {
 }
 
 const mermaid: TextLoader = async ({ io, base }, text, meta) => {
-  const art = await io.drawMermaid(text)
+  const art = await drawMermaid(io, text)
   const body = art
     ? `\`\`\`text\n${art.replace(/\s+$/, '')}\n\`\`\``
     : `*This diagram type cannot be drawn as text. Press "Open externally" to see it rendered.*\n\n\`\`\`mermaid\n${text}\n\`\`\``
