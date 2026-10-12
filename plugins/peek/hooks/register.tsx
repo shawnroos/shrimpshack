@@ -2728,17 +2728,7 @@ export const register: Register = on => {
           const list = blockLooks.length > 0 && (
             <Box key={`group-block-${b}`} flexDirection="column" width={textWidth}>
               {blockLooks.map((one, j) => row(one, first + j))}
-              {Client && (
-                <Box position="absolute" top={0} left={0} width={textWidth} height={blockLooks.length}>
-                  <Client
-                    key={`hover-group-${b}`}
-                    module="./hover-layer.tsx"
-                    props={{ kind: 'rows', width: textWidth, height: blockLooks.length, starX: 0, starY: 0, items: blockLooks.map(one => ({ href: one.href, isStarred: starKeys.has(one.key) })) }}
-                    width={textWidth}
-                    height={blockLooks.length}
-                  />
-                </Box>
-              )}
+              {HoverLayer(w, `hover-group-${b}`, { kind: 'rows', width: textWidth, height: blockLooks.length, starX: 0, starY: 0, items: blockLooks.map(one => ({ href: one.href, isStarred: starKeys.has(one.key) })) })}
             </Box>
           )
           if (b === 0) return list ? <Box key="group-top" flexDirection="column" width={textWidth} marginBottom={1}>{list}</Box> : null
