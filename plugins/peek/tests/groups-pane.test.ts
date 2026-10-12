@@ -4,6 +4,7 @@ import { groupsDir } from '../hooks/groups'
 import { itemKey } from '../hooks/refs'
 import { resetRefresh } from '../hooks/refresh'
 import { pullView } from './fixtures/github/items'
+import { hoverLayers } from './fixtures/overlay'
 
 const HOME = '/home'
 const PR = 'https://github.com/acme/widgets/pull/42'
@@ -1538,5 +1539,54 @@ test('deleting a starred group with force removes it from Recent', async ($, on)
   await ui.redraw()
   expect(await cardTitles(ui)).toEqual([])
   expect(await drawnText(ui)).not.toContain('STARRED GROUPS')
+  await ui.unmount()
+})
+
+test('the hover star paints over group cards, every row of item cards, list rows, pinned cards and group page rows; its click stars there', async ($, on) => {
+  const w = groupsWorld(on)
+  const launch = jsonOf(await launchGroup($)).id as string
+  w.now += 60_000
+  const beta = await create($, [{ target: PR }], 'Beta')
+  editGroup(w, launch, group => (group.starred = true))
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  await ui.press({ key: 'groups-more-0' })
+  await ui.redraw()
+  const tab = hoverLayers(await ui.drawn())
+  expect(tab.onTop).toEqual(expect.arrayContaining(['hover-groups-0', 'hover-groups-1', 'hover-groups-items-0-0', 'hover-groups-items-0-1', 'hover-groups-items-0-2']))
+  expect(tab.buried).toEqual([])
+
+  const secondCards = 'hover-groups-items-0-1'
+  await ui.resize({ columns: paneProps.bodyColumns - 11, rows: 5, in: secondCards })
+  await ui.pointer({ type: 'move', x: 5, y: 3, in: secondCards })
+  const card = JSON.stringify(await ui.drawn({ in: secondCards }))
+  expect(card).toContain('\u{f41e}')
+  expect(card).toContain('"top":1,"left":2')
+  await ui.pointer({ type: 'down', button: 'left', x: 2, y: 1, in: secondCards })
+  expect((await ui.find({ key: 'groups-it-0-2' }))?.props.label).toBe('\u{f51a}')
+
+  const list = 'hover-groups-items-0-2'
+  await ui.resize({ columns: paneProps.bodyColumns - 11, rows: 1, in: list })
+  await ui.pointer({ type: 'move', x: 12, y: 0, in: list })
+  expect(JSON.stringify(await ui.drawn({ in: list }))).toContain('\u{f41e}')
+
+  const second = 'hover-groups-1'
+  await ui.resize({ columns: 60, rows: 1, in: second })
+  await ui.pointer({ type: 'move', x: 20, y: 0, in: second })
+  expect(JSON.stringify(await ui.drawn({ in: second }))).toContain('\u{f41e}')
+  await ui.pointer({ type: 'down', button: 'left', x: 0, y: 0, in: second })
+  expect(savedGroup(w, beta.id)?.starred).toBe(true)
+
+  await ui.press({ key: 'mode-recent' })
+  const recent = hoverLayers(await ui.drawn())
+  expect(recent.onTop).toContain('hover-starred-0')
+  expect(recent.buried).toEqual([])
+
+  await ui.press({ key: 'mode-groups' })
+  await ui.press({ key: 'item-1' })
+  expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Launch/)
+  const page = hoverLayers(await ui.drawn())
+  expect(page.onTop).toEqual(expect.arrayContaining(['hover-group-1', 'hover-group-2']))
+  expect(page.buried).toEqual([])
   await ui.unmount()
 })

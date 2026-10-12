@@ -2589,14 +2589,14 @@ export const register: Register = on => {
               : block.layout === 'list'
                 ? [
                     <Box key={`${prefix}-lines-${i}-${b}`} flexDirection="column" width={inner}>
-                      {layer('rows', blockLooks.length, blockLooks)}
                       {blockLooks.map((look, j) => line(look, block.first + j))}
+                      {layer('rows', blockLooks.length, blockLooks)}
                     </Box>,
                   ]
                 : rows.map((row, r) => (
                     <Box key={`${prefix}-irow-${i}-${b}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginTop={r ? 1 : 0}>
-                      {layer('cards', CARD_ROWS, row)}
                       {row.map((look, c) => itemCard(look, block.first + r * perRow + c))}
+                      {layer('cards', CARD_ROWS, row)}
                     </Box>
                   ))
             height += 1 + (block.title ? 2 : 0) + (!blockLooks.length ? 1 : block.layout === 'list' ? blockLooks.length : rows.length * (CARD_ROWS + 1) - 1)
@@ -2626,17 +2626,6 @@ export const register: Register = on => {
               backgroundColor={isSelected ? C.surface0 : C.panelBg}
             >
               <Box flexDirection="row" width={inner} height={1}>
-                {Client && (
-                  <Box position="absolute" top={0} left={0} width={inner} height={1}>
-                    <Client
-                      key={`hover-${prefix}-${i}`}
-                      module="./hover-layer.tsx"
-                      props={{ kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] }}
-                      width={inner}
-                      height={1}
-                    />
-                  </Box>
-                )}
                 <Box flexShrink={0}>
                   <Button
                     key={`item-${index}`}
@@ -2652,6 +2641,17 @@ export const register: Register = on => {
                 <Box flexShrink={0} marginLeft={1}>
                   <Text color={isSelected ? C.overlay1 : C.overlay0}>{`${plural(group.items.length, 'item')} · ${describeAge(group.updatedAt, now)}`}</Text>
                 </Box>
+                {Client && (
+                  <Box position="absolute" top={0} left={0} width={inner} height={1}>
+                    <Client
+                      key={`hover-${prefix}-${i}`}
+                      module="./hover-layer.tsx"
+                      props={{ kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] }}
+                      width={inner}
+                      height={1}
+                    />
+                  </Box>
+                )}
               </Box>
               {lines.length > 0 && <Box height={1} />}
               {lines.map((text, k) => (
@@ -2775,6 +2775,7 @@ export const register: Register = on => {
           const blockLooks = looks.slice(first, next)
           const list = blockLooks.length > 0 && (
             <Box key={`group-block-${b}`} flexDirection="column" width={textWidth}>
+              {blockLooks.map((one, j) => row(one, first + j))}
               {Client && (
                 <Box position="absolute" top={0} left={0} width={textWidth} height={blockLooks.length}>
                   <Client
@@ -2786,7 +2787,6 @@ export const register: Register = on => {
                   />
                 </Box>
               )}
-              {blockLooks.map((one, j) => row(one, first + j))}
             </Box>
           )
           if (b === 0) return list ? <Box key="group-top" flexDirection="column" width={textWidth} marginBottom={1}>{list}</Box> : null
@@ -2966,17 +2966,6 @@ export const register: Register = on => {
         cursor += rowsOfCards.length * (CARD_ROWS + 1)
         return rowsOfCards.map((cards, r) => (
           <Box key={`${prefix}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
-            {Client && (
-              <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
-                <Client
-                  key={`hover-${prefix}-${r}`}
-                  module="./hover-layer.tsx"
-                  props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
-                  width={textWidth}
-                  height={CARD_ROWS}
-                />
-              </Box>
-            )}
             {cards.map((one, c) => {
               const index = firstNav + r * perRow + c
               const isSelected = index === selected
@@ -3014,6 +3003,17 @@ export const register: Register = on => {
                 </Box>
               )
             })}
+            {Client && (
+              <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
+                <Client
+                  key={`hover-${prefix}-${r}`}
+                  module="./hover-layer.tsx"
+                  props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
+                  width={textWidth}
+                  height={CARD_ROWS}
+                />
+              </Box>
+            )}
           </Box>
         ))
       }
@@ -3144,17 +3144,6 @@ export const register: Register = on => {
         })
         return chunks.map((chunk, i) => (
           <Box key={`${prefix}-${i}`} flexDirection="column" width={textWidth}>
-            {Client && (
-              <Box position="absolute" top={0} left={0} width={textWidth} height={chunk.length}>
-                <Client
-                  key={`hover-${prefix}-${i}`}
-                  module="./hover-layer.tsx"
-                  props={{ kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
-                  width={textWidth}
-                  height={chunk.length}
-                />
-              </Box>
-            )}
             {chunk.map((one, j) => {
               const index = firstNav + i * LIST_CHUNK + j
               const isSelected = index === selected
@@ -3202,6 +3191,17 @@ export const register: Register = on => {
                 </Box>
               )
             })}
+            {Client && (
+              <Box position="absolute" top={0} left={0} width={textWidth} height={chunk.length}>
+                <Client
+                  key={`hover-${prefix}-${i}`}
+                  module="./hover-layer.tsx"
+                  props={{ kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
+                  width={textWidth}
+                  height={chunk.length}
+                />
+              </Box>
+            )}
           </Box>
         ))
       }

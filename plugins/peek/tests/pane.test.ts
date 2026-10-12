@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { C } from '../hooks/theme'
+import { hoverLayers } from './fixtures/overlay'
 
 const WORKTREE = '/Users/shawnroos/projects/herdr-linear-board/worktrees/tui-design'
 const FILES: Record<string, string> = {
@@ -519,6 +520,33 @@ test('Recent rows and Gallery cards: hover shows an accent star, a click anywher
   await ui.pointer({ type: 'move', x: 10, y: 3, in: cards })
   expect(JSON.stringify(await ui.drawn({ in: cards }))).toContain('\u{f41e}')
   await ui.pointer({ type: 'down', button: 'left', x: 2, y: 1, in: cards })
+  expect(JSON.stringify(await ui.drawn())).toContain('\u{f51a}')
+  await ui.unmount()
+})
+
+test('the hover star paints over Recent rows and every row of Gallery cards, and its click stars that item', async ($, on) => {
+  fakeDisk(on)
+  const names = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']
+  for (const name of names) FILES[`/repo/${name}.md`] = `# ${name}\n`
+  for (const name of names) await $.command.run({ command: 'peek', args: `/repo/${name}.md` } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'mode-recent' })
+  const recent = hoverLayers(await ui.drawn())
+  expect(recent.onTop).toContain('hover-touched-0')
+  expect(recent.buried).toEqual([])
+
+  await ui.press({ key: 'mode-gallery' })
+  const gallery = hoverLayers(await ui.drawn())
+  expect(gallery.onTop).toEqual(expect.arrayContaining(['hover-touched-0', 'hover-touched-1']))
+  expect(gallery.buried).toEqual([])
+  const second = 'hover-touched-1'
+  await ui.resize({ columns: 60, rows: 5, in: second })
+  await ui.pointer({ type: 'move', x: 3, y: 2, in: second })
+  const hovered = JSON.stringify(await ui.drawn({ in: second }))
+  expect(hovered).toContain('\u{f41e}')
+  expect(hovered).toContain(C.accent)
+  expect(hovered).toContain('"top":1,"left":2')
+  await ui.pointer({ type: 'down', button: 'left', x: 2, y: 1, in: second })
   expect(JSON.stringify(await ui.drawn())).toContain('\u{f51a}')
   await ui.unmount()
 })
