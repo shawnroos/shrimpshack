@@ -1,0 +1,370 @@
+import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+import { groupsDir } from '../hooks/groups'
+
+const HOME = '/home'
+const PR = 'https://github.com/acme/widgets/pull/42'
+const LINEAR = 'https://linear.app/acme/issue/WEB-12'
+const PAGE = 'https://example.test/page'
+
+type World = {
+  files: Record<string, string>
+  dirs: Map<string, number>
+  log: string[][]
+  now: number
+  root: string
+  commonDirs: Record<string, string>
+  invalidated: number
+  isMvBroken: boolean
+  onLockBusy?: (lock: string) => void
+}
+
+function groupsWorld(on: On, files: Record<string, string> = {}): World {
+  const w: World = {
+    files: { '/repo/docs/plan.md': '# Plan\n', '/repo/notes/todo.md': 'todo\n', '/home/notes.md': 'mine\n', ...files },
+    dirs: new Map(),
+    log: [],
+    now: 10 * 3600_000,
+    root: '/repo',
+    commonDirs: { '/repo': '/repo/.git', '/wt/feature': '/repo/.git', '/other': '/other/.git' },
+    invalidated: 0,
+    isMvBroken: false,
+  }
+  const done = (exitCode: number, stdout = '') => ({ value: { exitCode, stdout, stderr: exitCode ? 'failed' : '', isStdoutTruncated: false, isStderrTruncated: false } })
+  const isDir = (path: string) => w.dirs.has(path) || Object.keys(w.files).some(one => one.startsWith(`${path}/`))
+  on('session.id', () => ({ value: 'groups-pane' }))
+  on('session.cwd', () => ({ value: w.root }))
+  on('session.root', () => ({ value: w.root }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? HOME : undefined }))
+  on('clock.now', () => ({ value: w.now }))
+  on('clock.sleep', (_$, e) => {
+    w.now += (e as { ms?: number }).ms ?? 0
+    return { value: undefined }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('ui.invalidate', () => {
+    w.invalidated++
+    return { value: undefined }
+  })
+  on('http.fetch', () => ({ value: { status: 404, ok: false, headers: {}, text: '' } }))
+  on('process.run', (_$, e) => {
+    const argv = [...e.argv]
+    w.log.push(['run', ...argv])
+    const [bin = '', ...rest] = argv
+    if (bin === 'git' && argv.includes('--git-common-dir') && !argv.includes('--show-toplevel')) {
+      const dir = rest[rest.indexOf('-C') + 1] ?? ''
+      const common = w.commonDirs[dir]
+      return common ? done(0, `${common}\n`) : done(128)
+    }
+    if (bin === 'git' && argv.includes('--show-toplevel')) {
+      const dir = rest[rest.indexOf('-C') + 1] ?? ''
+      const top = Object.keys(w.commonDirs).find(one => dir === one || dir.startsWith(`${one}/`))
+      return top ? done(0, `${top}\n${top}/.git\n${w.commonDirs[top]}\n`) : done(128)
+    }
+    if (bin === 'mkdir' && rest[0] === '-p') {
+      w.dirs.set(rest[1] ?? '', w.now)
+      return done(0)
+    }
+    if (bin === 'mkdir') {
+      const lock = rest[0] ?? ''
+      if (w.dirs.has(lock)) {
+        w.onLockBusy?.(lock)
+        return done(1)
+      }
+      w.dirs.set(lock, w.now)
+      return done(0)
+    }
+    if (bin === 'rmdir') {
+      w.dirs.delete(rest[0] ?? '')
+      return done(0)
+    }
+    if (bin === 'mv' && rest[0] === '-f') {
+      const [, from = '', to = ''] = rest
+      if (w.isMvBroken || w.files[from] === undefined) return done(1)
+      w.files[to] = w.files[from]
+      delete w.files[from]
+      return done(0)
+    }
+    if (bin === 'rm' && rest[0] === '-f') {
+      delete w.files[rest[1] ?? '']
+      return done(0)
+    }
+    return done(1)
+  })
+  on('fs.read', (_$, e) => {
+    const text = w.files[e.path]
+    if (text === undefined) throw new Error(`ENOENT ${e.path}`)
+    return { value: text }
+  })
+  on('fs.write', (_$, e) => {
+    w.log.push(['write', e.path])
+    w.files[e.path] = e.text
+    return { value: undefined }
+  })
+  on('fs.exists', (_$, e) => ({ value: w.files[e.path] !== undefined || isDir(e.path) }))
+  on('fs.stat', (_$, e) => {
+    if (w.files[e.path] !== undefined) return { value: { kind: 'file' as const, size: w.files[e.path]?.length ?? 0, mtimeMs: 8 * 3600_000, isLink: false } }
+    if (isDir(e.path)) return { value: { kind: 'dir' as const, size: 0, mtimeMs: w.dirs.get(e.path) ?? 8 * 3600_000, isLink: false } }
+    throw new Error(`ENOENT ${e.path}`)
+  })
+  on('fs.list', (_$, e) => {
+    if (!isDir(e.path)) throw new Error(`ENOENT ${e.path}`)
+    const prefix = `${e.path}/`
+    const names = new Map<string, boolean>()
+    for (const path of [...Object.keys(w.files), ...w.dirs.keys()]) {
+      if (!path.startsWith(prefix)) continue
+      const [first = '', ...more] = path.slice(prefix.length).split('/')
+      names.set(first, more.length > 0 || w.dirs.has(`${prefix}${first}`) || names.get(first) === true)
+    }
+    return { value: [...names].map(([name, isFolder]) => ({ name, kind: isFolder ? ('dir' as const) : ('file' as const), size: 0, mtimeMs: 0, isLink: false })) }
+  })
+  return w
+}
+
+type ToolAnswer = { result?: unknown; deny?: string }
+
+async function call($: { tool: { call: (input: never) => Promise<unknown> } }, tool: string, input: Record<string, unknown>): Promise<string> {
+  const answer = (await $.tool.call({ tool: `mcp__peek__${tool}`, tool_use_id: `${tool}-${Math.random()}`, ...input } as never)) as ToolAnswer
+  return String(answer.result ?? answer.deny ?? '')
+}
+
+function jsonOf(text: string): Record<string, unknown> {
+  return JSON.parse(text.slice(text.indexOf('\n') + 1)) as Record<string, unknown>
+}
+
+const dirOf = (projectKey: string) => groupsDir(HOME, projectKey)
+
+function savedGroup(w: World, id: string, projectKey = '/repo/.git') {
+  const text = w.files[`${dirOf(projectKey)}/${id}.json`]
+  return text === undefined ? undefined : (JSON.parse(text) as { items: { ref: string; addedBy: string }[]; starred: boolean; title: string })
+}
+
+async function create($: Parameters<typeof call>[0], add: unknown[], title = 'Launch') {
+  const text = await call($, 'save_group', { title, add })
+  const id = String(jsonOf(text).id)
+  return { text, id }
+}
+
+test('save_group with mixed targets creates a group; read_group returns every item, the repo files repo-relative', async ($, on) => {
+  const w = groupsWorld(on)
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  on('tool.call', async () => ({ result: [{ type: 'text', text: '{"identifier":"WEB-12","url":"https://linear.app/acme/issue/WEB-12/fix-login"}' }] }) as never)
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  await $.tool.call({ tool: 'mcp__claude_ai_Linear__get_issue', tool_use_id: 'l1', id: 'WEB-12' } as never)
+  const { text, id } = await create($, [
+    { target: '/repo/docs/plan.md' },
+    { target: 'notes/todo.md' },
+    { target: `${PR}/files` },
+    { target: 'WEB-12' },
+    { target: PAGE },
+    { target: '/home/notes.md' },
+  ])
+  expect(text.split('\n')[0]).toMatch(/^Created group "Launch" \([0-9a-z]{8}\)/)
+  expect(id).toMatch(/^[0-9a-z]{8}$/)
+  const read = jsonOf(await call($, 'read_group', { id })) as { items: Record<string, unknown>[] }
+  expect(read.items.map(one => one.ref)).toEqual(['docs/plan.md', 'notes/todo.md', PR, LINEAR, PAGE, 'file:///home/notes.md'])
+  expect(read.items.every(one => one.addedBy === 'agent' && one.state === 'ok' && one.title === null)).toBe(true)
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual(['docs/plan.md', 'notes/todo.md', PR, LINEAR, PAGE, 'file:///home/notes.md'])
+  expect(JSON.parse(w.files[`${dirOf('/repo/.git')}/${id}.json`] ?? '{}').projectKey).toBe('/repo/.git')
+})
+
+test('a batch with one nonexistent file adds the others and rejects that one with its reason', async ($, on) => {
+  const w = groupsWorld(on)
+  const { text, id } = await create($, [{ target: 'docs/plan.md' }, { target: 'docs/gone.md' }, { target: PAGE }])
+  const outcomes = jsonOf(text).outcomes as { op: string; status: string; reason: string; ref?: string }[]
+  const gone = outcomes.find(one => one.ref === 'docs/gone.md')
+  expect(gone?.status).toBe('refused')
+  expect(gone?.reason).toMatch(/No file or URL at docs\/gone\.md/)
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual(['docs/plan.md', PAGE])
+  expect(text.split('\n')[0]).toMatch(/1 refused/)
+})
+
+test('each write takes the lock, writes a staged file, moves it over the group file, then releases the lock', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  w.log = []
+  await call($, 'save_group', { id, add: [{ target: 'docs/plan.md' }] })
+  const steps = w.log
+    .map(one => one.join(' '))
+    .filter(one => one.includes(`${id}.json`))
+  expect(steps).toEqual([
+    `run mkdir ${file}.lock`,
+    `write ${file}.staged`,
+    `run mv -f ${file}.staged ${file}`,
+    `run rmdir ${file}.lock`,
+  ])
+})
+
+test('a save started while another session holds the lock waits, re-reads, and both changes land', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  w.dirs.set(`${file}.lock`, w.now)
+  w.onLockBusy = lock => {
+    const group = JSON.parse(w.files[file] ?? '{}')
+    group.items.push({ ref: 'notes/todo.md', addedBy: 'person', addedAt: w.now })
+    w.files[file] = JSON.stringify(group)
+    w.dirs.delete(lock)
+    w.onLockBusy = undefined
+  }
+  w.log = []
+  const text = await call($, 'save_group', { id, add: [{ target: 'docs/plan.md' }] })
+  expect(text).not.toMatch(/busy/)
+  expect(w.log.filter(one => one.join(' ') === `run mkdir ${file}.lock`).length).toBe(2)
+  expect(savedGroup(w, id)?.items.map(one => `${one.ref}:${one.addedBy}`)).toEqual([`${PAGE}:agent`, 'notes/todo.md:person', 'docs/plan.md:agent'])
+})
+
+test('two saves from this session to one group queue in process, so neither waits on the lock and both land', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  w.log = []
+  await Promise.all([call($, 'save_group', { id, add: [{ target: 'docs/plan.md' }] }), call($, 'save_group', { id, add: [{ target: 'notes/todo.md' }] })])
+  expect(w.log.filter(one => one.join(' ') === `run mkdir ${file}.lock`).length).toBe(2)
+  expect(savedGroup(w, id)?.items.map(one => one.ref).sort()).toEqual(['docs/plan.md', 'notes/todo.md', PAGE].sort())
+})
+
+test('a lock older than 10 s is broken and the write proceeds', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  w.dirs.set(`${file}.lock`, w.now - 11_000)
+  const text = await call($, 'save_group', { id, add: [{ target: 'docs/plan.md' }] })
+  expect(text).not.toMatch(/busy/)
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual([PAGE, 'docs/plan.md'])
+  expect(w.dirs.has(`${file}.lock`)).toBe(false)
+})
+
+test('a fresh lock held past 2 s refuses the save as busy, and nothing reports the item as added', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  w.dirs.set(`${file}.lock`, w.now)
+  const started = w.now
+  const text = await call($, 'save_group', { id, add: [{ target: 'docs/plan.md' }] })
+  expect(text).toMatch(/busy, try again/)
+  expect(text).not.toMatch(/added|applied/i)
+  expect(w.now - started).toBeGreaterThanOrEqual(2000)
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual([PAGE])
+  expect(w.dirs.has(`${file}.lock`)).toBe(true)
+})
+
+test('a failing mv makes save_group return an error, and nothing reports the item as added', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  w.isMvBroken = true
+  const text = await call($, 'save_group', { id, add: [{ target: 'docs/plan.md' }] })
+  expect(text).toMatch(/^Could not save/)
+  expect(text).not.toMatch(/added|applied/i)
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual([PAGE])
+  expect(w.files[`${file}.staged`]).toBeUndefined()
+  expect(w.dirs.has(`${file}.lock`)).toBe(false)
+})
+
+test('a main checkout and a linked worktree share a project key; another project does not see the group', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  expect(w.log.some(one => one.join(' ') === 'run git -C /repo rev-parse --path-format=absolute --git-common-dir')).toBe(true)
+  w.root = '/wt/feature'
+  const fromWorktree = jsonOf(await call($, 'list_groups', {})) as unknown as { id: string }[]
+  expect(fromWorktree.map(one => one.id)).toEqual([id])
+  w.root = '/other'
+  const fromOther = await call($, 'list_groups', {})
+  expect(fromOther.split('\n')[0]).toMatch(/No groups/)
+  expect(jsonOf(fromOther)).toEqual([])
+})
+
+test('a group file recording another project key is skipped even in the same folder', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  const dir = dirOf('/repo/.git')
+  const other = JSON.parse(w.files[`${dir}/${id}.json`] ?? '{}')
+  w.files[`${dir}/zzzzzzzz.json`] = JSON.stringify({ ...other, id: 'zzzzzzzz', title: 'Elsewhere', projectKey: '/elsewhere/.git' })
+  w.files[`${dir}/${id}.json.staged`] = '{}'
+  const listed = jsonOf(await call($, 'list_groups', {})) as unknown as { id: string }[]
+  expect(listed.map(one => one.id)).toEqual([id])
+  expect(await call($, 'read_group', { id: 'zzzzzzzz' })).toMatch(/^No group zzzzzzzz/)
+})
+
+test('outside git the project key is the session root', async ($, on) => {
+  const w = groupsWorld(on, { '/plain/a.md': 'a\n' })
+  w.root = '/plain'
+  const { id } = await create($, [{ target: 'a.md' }])
+  expect(savedGroup(w, id, '/plain')?.items.map(one => one.ref)).toEqual(['file:///plain/a.md'])
+})
+
+test('delete_group on a starred group without force is refused; with force the file is gone', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  w.files[file] = JSON.stringify({ ...JSON.parse(w.files[file] ?? '{}'), starred: true })
+  const refused = await call($, 'delete_group', { id })
+  expect(refused).toMatch(/^Not deleted: the person starred it/)
+  expect(w.files[file]).toBeDefined()
+  const forced = await call($, 'delete_group', { id, force: true })
+  expect(forced).toMatch(/^Deleted group "Launch"/)
+  expect(w.files[file]).toBeUndefined()
+})
+
+test('read_group marks a local file that vanished as missing; a repo-relative ref removes it', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: 'docs/plan.md' }, { target: PAGE }])
+  delete w.files['/repo/docs/plan.md']
+  const read = jsonOf(await call($, 'read_group', { id })) as { items: { ref: string; state: string }[] }
+  expect(read.items.map(one => `${one.ref}:${one.state}`)).toEqual(['docs/plan.md:missing', `${PAGE}:ok`])
+  await call($, 'save_group', { id, remove: [{ target: 'docs/plan.md' }] })
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual([PAGE])
+})
+
+test('an agent remove of a person-added item is refused without force', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  const group = JSON.parse(w.files[file] ?? '{}')
+  group.items.push({ ref: 'notes/todo.md', addedBy: 'person', addedAt: w.now })
+  w.files[file] = JSON.stringify(group)
+  const text = await call($, 'save_group', { id, remove: [{ target: 'notes/todo.md' }] })
+  const outcome = (jsonOf(text).outcomes as { status: string; needsForce?: boolean }[])[0]
+  expect(outcome).toMatchObject({ status: 'refused', needsForce: true })
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual([PAGE, 'notes/todo.md'])
+})
+
+test('an id that is not a group id is refused before any file is touched', async ($, on) => {
+  const w = groupsWorld(on)
+  w.log = []
+  expect(await call($, 'read_group', { id: '../../etc' })).toMatch(/not a group id/)
+  expect(await call($, 'save_group', { id: '../x', title: 'y' })).toMatch(/not a group id/)
+  expect(w.log.some(one => one[0] === 'write' || one.includes('mkdir'))).toBe(false)
+})
+
+test('a tool write in this session redraws the pane', async ($, on) => {
+  const w = groupsWorld(on)
+  const before = w.invalidated
+  await create($, [{ target: PAGE }])
+  expect(w.invalidated).toBeGreaterThan(before)
+})
+
+async function recentText($: Parameters<typeof call>[0] & { ui: { mount: (input: never) => Promise<{ press: (q: { key: string }) => Promise<unknown>; drawn: () => Promise<unknown>; unmount: () => Promise<void> }> } }) {
+  const props = { title: 'Peek', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' } as never)
+  await ui.press({ key: 'mode-recent' })
+  const text = JSON.stringify(await ui.drawn())
+  await ui.unmount()
+  return text
+}
+
+test('a peek group tool call is not recorded by the capture hook, while a GitHub read is', async ($, on) => {
+  groupsWorld(on)
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  on('tool.call', async () => ({ result: [{ type: 'text', text: `see ${PR}` }] }) as never)
+  const { id } = await create($, [{ target: PR }])
+  await call($, 'read_group', { id })
+  await call($, 'list_groups', {})
+  expect(await recentText($)).not.toContain('widgets')
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  await $.tool.call({ tool: 'mcp__github__get_pull_request', tool_use_id: 'c1', number: 42 } as never)
+  expect(await recentText($)).toContain('widgets')
+})

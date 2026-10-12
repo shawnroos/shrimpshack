@@ -244,3 +244,187 @@ export function deleteGroup(group: Group, force = false): GroupResult {
   }
   return { group: null, outcomes: [{ op: 'delete', status: 'applied', reason: `Deleted "${group.title}"`, groupId: group.id }] }
 }
+
+export type GroupsRun = { exitCode: number; stdout: string; stderr: string }
+
+export type GroupsIo = {
+  read: (path: string) => Promise<string>
+  write: (path: string, text: string) => Promise<void>
+  list: (dir: string) => Promise<readonly { name: string; kind: string }[]>
+  stat: (path: string) => Promise<{ mtimeMs: number } | null>
+  run: (argv: readonly string[]) => Promise<GroupsRun>
+  now: () => Promise<number>
+  sleep: (ms: number) => Promise<void>
+}
+
+export type GroupPlace = { dir: string; projectKey: string }
+
+export type GroupWrite =
+  | { ok: true; group: Group | null; outcomes: GroupOutcome[]; isChanged: boolean }
+  | { ok: false; error: string }
+
+export const LOCK_STALE_MS = 10_000
+const LOCK_POLL_MS = 100
+// 20 polls of 100 ms: a lock still held after about 2 s refuses the write.
+const LOCK_POLLS = 20
+
+const GROUP_ID = /^[0-9a-z]{8}$/
+
+export const isGroupId = (id: string) => GROUP_ID.test(id)
+
+export function projectHash(key: string): string {
+  let a = 0x811c9dc5
+  let b = 0x01000193 ^ key.length
+  for (let i = 0; i < key.length; i++) {
+    const code = key.charCodeAt(i)
+    a = Math.imul(a ^ code, 0x01000193) >>> 0
+    b = Math.imul(b ^ code, 0x5bd1e995) >>> 0
+  }
+  return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`
+}
+
+export function groupsDir(home: string, projectKey: string): string {
+  return `${home}/.local/share/claude-peek/groups/${projectHash(projectKey)}`
+}
+
+export async function resolveProjectKey(run: GroupsIo['run'], root: string): Promise<string> {
+  const ran = await run(['git', '-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => null)
+  const key = ran?.exitCode === 0 ? ran.stdout.trim() : ''
+  return key || root
+}
+
+const isScheme = (ref: string) => /^[a-z][a-z0-9+.-]*:/i.test(ref)
+
+export function storedRef(href: string, worktreeRoot?: string): string {
+  if (!worktreeRoot || !href.startsWith('file:')) return href
+  const url = new URL(href)
+  const path = decodeURIComponent(url.pathname)
+  if (!path.startsWith(`${worktreeRoot}/`)) return href
+  const line = /^#L(\d+)$/.exec(url.hash)
+  return `${path.slice(worktreeRoot.length + 1)}${line ? `#L${line[1]}` : ''}`
+}
+
+export function refPath(ref: string, worktreeRoot?: string): { path: string; line?: number } | null {
+  if (isScheme(ref)) {
+    if (!ref.startsWith('file:')) return null
+    const url = new URL(ref)
+    const line = /^#L(\d+)$/.exec(url.hash)
+    return { path: decodeURIComponent(url.pathname), ...(line ? { line: Number(line[1]) } : {}) }
+  }
+  if (!worktreeRoot) return null
+  const match = /^(.*?)(?:#L(\d+))?$/.exec(ref)
+  return { path: `${worktreeRoot}/${match?.[1] ?? ref}`, ...(match?.[2] ? { line: Number(match[2]) } : {}) }
+}
+
+function parseGroup(text: string, projectKey: string): Group | null {
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch {
+    return null
+  }
+  const group = raw as Partial<Group> | null
+  if (!group || typeof group !== 'object') return null
+  if (group.projectKey !== projectKey || typeof group.id !== 'string' || typeof group.title !== 'string') return null
+  if (!Array.isArray(group.sections) || !Array.isArray(group.items) || !Array.isArray(group.removed)) return null
+  return {
+    projectKey,
+    id: group.id,
+    title: group.title,
+    description: typeof group.description === 'string' ? group.description : '',
+    starred: group.starred === true,
+    updatedAt: typeof group.updatedAt === 'number' ? group.updatedAt : 0,
+    sections: group.sections,
+    items: group.items,
+    removed: group.removed,
+  }
+}
+
+const fileOf = (place: GroupPlace, id: string) => `${place.dir}/${id}.json`
+
+export async function readGroup(io: GroupsIo, place: GroupPlace, id: string): Promise<Group | null> {
+  if (!isGroupId(id)) return null
+  const text = await io.read(fileOf(place, id)).catch(() => null)
+  const group = text === null ? null : parseGroup(text, place.projectKey)
+  return group?.id === id ? group : null
+}
+
+export async function listGroups(io: GroupsIo, place: GroupPlace): Promise<Group[]> {
+  const entries = await io.list(place.dir).catch(() => [])
+  const ids = entries.filter(one => one.kind === 'file' && /^[0-9a-z]{8}\.json$/.test(one.name)).map(one => one.name.slice(0, 8))
+  const groups = await Promise.all(ids.map(id => readGroup(io, place, id)))
+  return groups.filter((one): one is Group => one !== null).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+}
+
+async function takeLock(io: GroupsIo, lock: string): Promise<boolean> {
+  let hasBroken = false
+  for (let poll = 0; poll <= LOCK_POLLS; poll++) {
+    const made = await io.run(['mkdir', lock]).catch(() => null)
+    if (made?.exitCode === 0) return true
+    const held = await io.stat(lock).catch(() => null)
+    if (held && !hasBroken && (await io.now()) - held.mtimeMs > LOCK_STALE_MS) {
+      hasBroken = true
+      await io.run(['rmdir', lock]).catch(() => null)
+      continue
+    }
+    if (poll < LOCK_POLLS) await io.sleep(LOCK_POLL_MS)
+  }
+  return false
+}
+
+async function lockedWrite(
+  io: GroupsIo,
+  place: GroupPlace,
+  id: string,
+  change: (current: Group | null) => GroupResult,
+): Promise<GroupWrite> {
+  const file = fileOf(place, id)
+  const lock = `${file}.lock`
+  const made = await io.run(['mkdir', '-p', place.dir]).catch(() => null)
+  if (made?.exitCode !== 0) return { ok: false, error: `Could not create the groups folder ${place.dir}` }
+  if (!(await takeLock(io, lock))) return { ok: false, error: `Group ${id} is busy, try again` }
+  try {
+    const current = await readGroup(io, place, id)
+    const { group, outcomes } = change(current)
+    if (group === current) return { ok: true, group, outcomes, isChanged: false }
+    if (!group) {
+      const removed = await io.run(['rm', '-f', file]).catch(() => null)
+      if (removed?.exitCode !== 0) return { ok: false, error: `Could not delete ${file}` }
+      return { ok: true, group, outcomes, isChanged: true }
+    }
+    const staged = `${file}.staged`
+    const wrote = await io.write(staged, JSON.stringify(group, null, 2)).then(
+      () => true,
+      () => false,
+    )
+    if (!wrote) return { ok: false, error: `Could not write ${staged}` }
+    const moved = await io.run(['mv', '-f', staged, file]).catch(() => null)
+    if (moved?.exitCode !== 0) {
+      await io.run(['rm', '-f', staged]).catch(() => null)
+      return { ok: false, error: `Could not replace ${file}` }
+    }
+    return { ok: true, group, outcomes, isChanged: true }
+  } finally {
+    await io.run(['rmdir', lock]).catch(() => null)
+  }
+}
+
+const queues = new Map<string, Promise<unknown>>()
+
+// One process queues its own writes per group, so a pane action and a tool call never race each other for the lock.
+export function writeGroup(
+  io: GroupsIo,
+  place: GroupPlace,
+  id: string,
+  change: (current: Group | null) => GroupResult,
+): Promise<GroupWrite> {
+  if (!isGroupId(id)) return Promise.resolve({ ok: false, error: `${id} is not a group id` })
+  const key = fileOf(place, id)
+  const run = (queues.get(key) ?? Promise.resolve()).then(() => lockedWrite(io, place, id, change))
+  const tail = run.catch(() => undefined)
+  queues.set(key, tail)
+  void tail.then(() => {
+    if (queues.get(key) === tail) queues.delete(key)
+  })
+  return run
+}
