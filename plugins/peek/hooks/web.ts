@@ -240,34 +240,105 @@ function withVideoLines(body: string, html: string, base: string): { body: strin
 const PICTURE_ROW = /^(?:!\[[^\]]*\]\([^)\s]+\)\s*){2,}$/
 const PICTURE = /!\[[^\]]*\]\([^)\s]+\)/g
 
-// A gallery arrives as several pictures on one line; images past the cap leave the body rather than print as raw URLs.
-async function pageMedia(io: SourceIo, body: string, posters: Map<string, string>, canDownload: boolean) {
+type Fetch = (url: string) => Promise<string | undefined>
+
+// A gallery arrives as several pictures on one line. On a reader page images past the cap leave the body rather than
+// print as raw URLs; in an issue or comment they stay, drawn as links, since the text is the author's.
+async function pageMedia(texts: readonly string[], posters: Map<string, string>, fetch: Fetch | null, overCap: 'drop' | 'link') {
   const wanted: { key: string; thumb?: string; play?: string }[] = []
   let images = 0
-  const lines: string[] = []
-  for (const raw of body.split('\n')) {
-    const row = PICTURE_ROW.test(raw.trim()) ? (raw.match(PICTURE) ?? []) : [raw]
-    for (const line of row) {
-      const found = PICTURE_LINE.exec(line.trim())
-      const url = found?.[2] ? safeParse(found[2]) : null
-      if (!found || !url) {
-        lines.push(line)
-        continue
+  const bodies = texts.map(body => {
+    const lines: string[] = []
+    for (const raw of body.split('\n')) {
+      const row = PICTURE_ROW.test(raw.trim()) ? (raw.match(PICTURE) ?? []) : [raw]
+      for (const line of row) {
+        const found = PICTURE_LINE.exec(line.trim())
+        const url = found?.[2] ? safeParse(found[2]) : null
+        if (!found || !url) {
+          lines.push(line)
+          continue
+        }
+        const id = youtubeId(url)
+        const isVideo = Boolean(id) || posters.has(url.href) || /^video$/i.test(found[1] ?? '')
+        const isOver = !isVideo && ++images > MAX_MEDIA
+        if (isOver && overCap === 'drop') continue
+        if (row.length > 1) lines.push('')
+        lines.push(line.trim())
+        if (wanted.some(one => one.key === url.href)) continue
+        const thumb = isOver ? undefined : id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : isVideo ? posters.get(url.href) : url.href
+        wanted.push({ key: url.href, thumb, play: isVideo ? url.href : undefined })
       }
-      const id = youtubeId(url)
-      const isVideo = Boolean(id) || posters.has(url.href) || /^video$/i.test(found[1] ?? '')
-      if (!isVideo && ++images > MAX_MEDIA) continue
-      if (row.length > 1) lines.push('')
-      lines.push(line.trim())
-      if (wanted.some(one => one.key === url.href)) continue
-      const thumb = id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : isVideo ? posters.get(url.href) : url.href
-      wanted.push({ key: url.href, thumb, play: isVideo ? url.href : undefined })
     }
-  }
+    return lines.join('\n')
+  })
   let budget = MAX_MEDIA
-  const files = await Promise.all(wanted.map(one => (canDownload && one.thumb && budget-- > 0 ? download(io, one.thumb) : Promise.resolve(undefined))))
+  const files = await Promise.all(wanted.map(one => (fetch && one.thumb && budget-- > 0 ? fetch(one.thumb) : Promise.resolve(undefined))))
   const media = wanted.length ? Object.fromEntries(wanted.map((one, i) => [one.key, { file: files[i], play: one.play }])) : undefined
-  return { body: lines.join('\n'), media }
+  return { bodies, media }
+}
+
+const IMG_ROW = /^(?:<img\b[^>]*>\s*)+$/i
+const BARE_URL = /^<?(https?:\/\/[^\s<>]+)>?$/
+const VIDEO_PATH = /\.(mp4|m4v|webm|mov)$/i
+
+function isVideoUrl(url: URL): boolean {
+  return Boolean(youtubeId(url)) || VIDEO_PATH.test(url.pathname) || (url.hostname === 'github.com' && url.pathname.startsWith('/user-attachments/assets/'))
+}
+
+// GitHub writes an upload as an <img> tag and a video upload as a bare URL on its own line; both become picture lines.
+function withPictureLines(markdown: string): string {
+  let fence = ''
+  return markdown
+    .split('\n')
+    .map(line => {
+      const marker = /^\s*(```|~~~)/.exec(line)?.[1]
+      if (marker && (!fence || marker === fence)) fence = fence ? '' : marker
+      if (fence || marker) return line
+      const text = line.trim()
+      if (IMG_ROW.test(text)) {
+        const pictures = (text.match(/<img\b[^>]*>/gi) ?? []).map(tag => {
+          const src = safeParse(attribute(tag, 'src') ?? '')
+          const isWeb = src?.protocol === 'https:' || src?.protocol === 'http:'
+          return src && isWeb ? `![${(attribute(tag, 'alt') ?? '').replace(/[[\]]/g, '')}](${src.href})` : ''
+        })
+        return pictures.every(Boolean) ? pictures.join(' ') : line
+      }
+      const bare = BARE_URL.exec(text)?.[1]
+      const url = bare ? safeParse(bare) : null
+      return url && isVideoUrl(url) ? `![video](${url.href})` : line
+    })
+    .join('\n')
+}
+
+const remoteFiles = new Map<string, Promise<string | undefined>>()
+const MAX_REMOTE_FILES = 200
+
+// An open issue reloads every minute; the pictures in it are fetched once a session.
+function sessionFetch(io: SourceIo, session: string): Fetch {
+  return url => {
+    const key = `${session} ${url}`
+    const known = remoteFiles.get(key)
+    if (known) return known
+    if (remoteFiles.size > MAX_REMOTE_FILES) remoteFiles.clear()
+    const pending = download(io, url)
+    remoteFiles.set(key, pending)
+    return pending
+  }
+}
+
+export async function withRemoteMedia(io: SourceIo, record: RemoteRecord): Promise<RemoteRecord> {
+  const shown = record.comments?.shown ?? []
+  const texts = [record.body ?? '', ...shown.map(one => one.body)].map(withPictureLines)
+  const fetch = (await hasCurl(io)) ? sessionFetch(io, await io.sessionId()) : null
+  const { bodies, media } = await pageMedia(texts, new Map(), fetch, 'link')
+  if (!media) return record
+  const [body = '', ...comments] = bodies
+  return {
+    ...record,
+    ...(record.body !== undefined ? { body } : {}),
+    ...(record.comments ? { comments: { ...record.comments, shown: shown.map((one, i) => ({ ...one, body: comments[i] ?? one.body })) } } : {}),
+    media,
+  }
 }
 
 async function firstIcon(io: SourceIo, icons: readonly string[]): Promise<string | undefined> {
@@ -319,7 +390,7 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
     readable(io, html, finalUrl),
   ])
   const video = cleaned ? withVideoLines(cleaned, html, finalUrl) : null
-  const withMedia = video ? await pageMedia(io, video.body, video.posters, isCli) : null
+  const withMedia = video ? await pageMedia([video.body], video.posters, isCli ? url => download(io, url) : null, 'drop') : null
   const media = withMedia?.media
   const record: RemoteRecord = {
     address: ref.address,
@@ -327,7 +398,7 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
     title: head.title ?? host,
     trail: [head.siteName ?? host],
     meta: [{ label: 'Host', value: host }],
-    body: withMedia?.body ?? htmlToMarkdown(html),
+    body: withMedia?.bodies[0] ?? htmlToMarkdown(html),
     ...(media ? { media } : {}),
     og: { title: head.title, description: head.description, siteName: head.siteName, image },
     favicon,

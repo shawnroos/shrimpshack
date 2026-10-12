@@ -8,7 +8,7 @@ const NOW = 10 * 3600_000
 const ran: string[][] = []
 let sessions = 0
 
-function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boolean; holdPull?: Promise<void> } = {}) {
+function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boolean; holdPull?: Promise<void>; pull?: Record<string, unknown>; mermaid?: string } = {}) {
   ran.length = 0
   on('session.id', () => ({ value: `pane-${++sessions}` }))
   on('session.cwd', () => ({ value: '/repo' }))
@@ -31,9 +31,10 @@ function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boole
     const fail = (stderr: string) => ({ value: { exitCode: 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
     const line = e.argv.join(' ')
     if (e.argv[0] === 'sh') return ok('gh\ncurl\n')
+    if (e.argv[0] === '/home/.cache/claude-peek/bin/mermaid-ascii') return options.mermaid ? ok(options.mermaid) : fail('no')
     if (line === 'gh auth status') return (options.ghAuthExit ?? 0) === 0 ? ok('') : fail('You are not logged into any GitHub hosts')
     if (line.startsWith('gh api repos/acme/widgets/issues/42')) return ok(JSON.stringify({ number: 42, pull_request: {} }))
-    if (line.startsWith('gh pr view 42')) return ok(JSON.stringify(pullView({ mergeable: 'CONFLICTING', statusCheckRollup: [], body: 'Follows #45. [tick](file:///Users/me/notes.md#task-3)' })))
+    if (line.startsWith('gh pr view 42')) return ok(JSON.stringify(pullView({ mergeable: 'CONFLICTING', statusCheckRollup: [], body: 'Follows #45. [tick](file:///Users/me/notes.md#task-3)', ...options.pull })))
     if (line.startsWith('gh api repos/acme/widgets/pulls/42')) return ok('2')
     if (line.startsWith('gh repo view')) return ok(JSON.stringify(repoView))
     if (line.startsWith('gh api repos/acme/widgets/readme')) return ok('# Widgets\n\nRead me.')
@@ -274,4 +275,32 @@ test('/peek naming a website the session never saw asks the model and opens the 
   const out = (await $.command.run({ command: 'peek', args: 'add Nytimes website' } as never)) as { text?: string }
   expect(prompts[0]).toMatch(/homepage/i)
   expect(out.text).toContain('https://www.nytimes.com')
+})
+
+test('pictures in a pull request body and its comments draw as embeds; one that cannot download is a link', async ($, on) => {
+  fakeWorld(on, {
+    pull: {
+      body: 'Before.\n\n![shot](https://cdn.test/body.png)\n\nAfter.',
+      comments: [{ author: { login: 'a' }, body: 'Here:\n\n![later](https://cdn.test/comment.png)', createdAt: '2026-09-01T11:00:00Z' }],
+    },
+  })
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /^ shot$/ })).toBeDefined()
+  expect(await ui.find({ text: /^ later$/ })).toBeDefined()
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree).toContain('[open image](https://cdn.test/comment.png)')
+  expect(tree.indexOf('COMMENTS')).toBeLessThan(tree.indexOf('[open image](https://cdn.test/comment.png)'))
+  expect(tree).not.toContain('![later]')
+  await ui.unmount()
+})
+
+test('a mermaid fence in a pull request body draws as a diagram', async ($, on) => {
+  fakeWorld(on, { pull: { body: 'Flow:\n\n```mermaid\ngraph TD\n  A --> B\n```\n' }, mermaid: '+---+     +---+\n| A | --> | B |\n+---+     +---+\n' })
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /^DIAGRAM$/ })).toBeDefined()
+  expect(await ui.find({ text: /\| A \| --> \| B \|/ })).toBeDefined()
+  expect(ran.some(argv => argv[0] === '/home/.cache/claude-peek/bin/mermaid-ascii')).toBe(true)
+  await ui.unmount()
 })

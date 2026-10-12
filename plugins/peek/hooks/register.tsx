@@ -402,6 +402,9 @@ const repoContexts = new Map<string, string | null>()
 const backStack: { view: View; key: string }[] = []
 const failedPictures = new Set<string>()
 const blockMemo = new Map<string, { chunk: string; rows: number }[]>()
+// viewOf runs on every refresh tick and redraw; each fence costs one mermaid-ascii process.
+const drawnRecords = new Map<string, RemoteRecord>()
+const MAX_DRAWN_RECORDS = 50
 
 async function repoContext($: EngineInterface, cwd: string): Promise<string | undefined> {
   if (!repoContexts.has(cwd)) {
@@ -492,9 +495,26 @@ async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Prom
   return viewOf($, ref, entry)
 }
 
+async function withRecordDiagrams($: EngineInterface, record: RemoteRecord, fetchedAt = 0): Promise<RemoteRecord> {
+  const texts = [record.body ?? '', ...(record.comments?.shown ?? []).map(one => one.body)]
+  if (!texts.some(text => mermaidFences(text).length)) return record
+  const key = `${record.address}|${fetchedAt}|${paneColumns}`
+  const known = drawnRecords.get(key)
+  if (known) return known
+  const [body, ...comments] = await Promise.all(texts.map(text => withDrawnMermaid($, text)))
+  const drawn: RemoteRecord = {
+    ...record,
+    ...(record.body !== undefined ? { body } : {}),
+    ...(record.comments ? { comments: { ...record.comments, shown: record.comments.shown.map((one, i) => ({ ...one, body: comments[i] ?? one.body })) } } : {}),
+  }
+  if (drawnRecords.size > MAX_DRAWN_RECORDS) drawnRecords.clear()
+  drawnRecords.set(key, drawn)
+  return drawn
+}
+
 async function viewOf($: EngineInterface, ref: Ref, entry: CacheEntry): Promise<View> {
   const base: View = { href: ref.address, title: ref.key ?? ref.address.replace(/^https:\/\//, ''), location: ref.address, kind: ref.kind }
-  const record = entry.record
+  const record = entry.record && (await withRecordDiagrams($, entry.record, entry.fetchedAt))
   if (!record) return { ...base, remote: { failure: entry.failure ?? 'offline', failureDetail: entry.failureDetail } }
   return {
     href: record.address,
@@ -2059,6 +2079,10 @@ export const register: Register = on => {
         </Box>
       </Box>
     )
+    const diagramEmbed = (key: string, info: string, text: string) =>
+      embed(key, ICON.mermaid, 'DIAGRAM', info, C.mauve, (
+        <Text color={C.subtext0}>{text}</Text>
+      ))
     const folderPath = path.slice(0, Math.max(0, path.length - current.title.length - 1))
     const folder = current.root && folderPath.startsWith(current.root)
       ? folderPath.slice(current.root.length + 1)
@@ -2170,23 +2194,43 @@ export const register: Register = on => {
         )
         note(png && picture ? fullWidth(picture.width, picture.height).rows + 4 : 4, heading)
       }
+      let mediaCount = 0
+      // Splits out picture lines and drawn diagrams; a fence's contents stay in the text around them.
       const markdownBlocks = (key: string, text: string, heading: string, indent = 0) => {
-        if (key === 'body' && record?.media) {
-          let pending = ''
-          let segment = 0
-          let picture = 0
-          for (const line of text.split('\n')) {
-            const found = /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/.exec(line.trim())
-            if (found && record.media[found[2] ?? '']) {
-              if (pending.trim()) markdownChunks(`body-${segment++}`, pending, heading, indent)
-              pending = ''
-              mediaBlock(picture++, found[1] ?? '', found[2] ?? '', heading)
-            } else pending += `${line}\n`
-          }
-          if (pending.trim()) markdownChunks(`body-${segment}`, pending, heading, indent)
-          return
+        if (!record?.media && !text.includes('```peek-diagram')) return markdownChunks(key, text, heading, indent)
+        let pending = ''
+        let segment = 0
+        let fence = ''
+        let diagram: { info: string; lines: string[] } | null = null
+        const flush = () => {
+          if (pending.trim()) markdownChunks(`${key}-${segment++}`, pending, heading, indent)
+          pending = ''
         }
-        markdownChunks(key, text, heading, indent)
+        for (const line of text.split('\n')) {
+          if (diagram) {
+            if (/^\s*```\s*$/.test(line)) {
+              drawnParts.push(diagramEmbed(`${key}-diagram-${segment++}`, diagram.info, diagram.lines.join('\n')))
+              note(diagram.lines.length + 4, heading)
+              diagram = null
+            } else diagram.lines.push(line)
+            continue
+          }
+          const marker = /^\s*(```|~~~)/.exec(line)?.[1]
+          const drawn = !fence && /^```peek-diagram\s*(.*)$/.exec(line)
+          if (drawn) {
+            flush()
+            diagram = { info: drawn[1] ?? '', lines: [] }
+            continue
+          }
+          if (marker && (!fence || marker === fence)) fence = fence ? '' : marker
+          const found = !fence && !marker && /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/.exec(line.trim())
+          if (found && record?.media?.[found[2] ?? '']) {
+            flush()
+            mediaBlock(mediaCount++, found[1] ?? '', found[2] ?? '', heading)
+          } else pending += `${line}\n`
+        }
+        if (diagram) pending += ['```text', ...diagram.lines, '```'].join('\n')
+        flush()
       }
       const markdownChunks = (key: string, text: string, heading: string, indent = 0) => {
         const memoKey = `${memoBase}|${key}`
@@ -2388,11 +2432,7 @@ export const register: Register = on => {
         }
         if (part.kind === 'code') {
           if (part.lang === 'peek-diagram') {
-            drawnParts.push(
-              embed(`diagram-${index}`, ICON.mermaid, 'DIAGRAM', part.info, C.mauve, (
-                <Text color={C.subtext0}>{part.text}</Text>
-              )),
-            )
+            drawnParts.push(diagramEmbed(`diagram-${index}`, part.info, part.text))
           } else if (part.lang === 'mermaid') {
             drawnParts.push(
               embed(`diagram-${index}`, ICON.mermaid, 'DIAGRAM', `${diagramType(part.text)} · press o to see it rendered`, C.mauve, (

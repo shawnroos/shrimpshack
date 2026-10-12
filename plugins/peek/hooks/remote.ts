@@ -5,7 +5,7 @@ import { fromCapture as githubFromCapture, loadGithub } from './github'
 import { fromCapture as linearFromCapture, loadLinear } from './linear'
 import type { Ref } from './refs'
 import type { SourceIo } from './sources'
-import { fromCapture as webFromCapture, loadWeb } from './web'
+import { fromCapture as webFromCapture, loadWeb, withRemoteMedia } from './web'
 
 export type RemoteIo = SourceIo & CaptureIo
 
@@ -25,9 +25,16 @@ function sourceFor(ref: Ref): Source {
 export async function loadItem(io: RemoteIo, ref: Ref, now: number, options: { canReplay?: boolean } = {}): Promise<Loaded> {
   const source = sourceFor(ref)
   const live = await source.load(io, ref, now)
-  if (live.ok) return live
+  if (live.ok) return withMedia(io, live)
   const replayed = options.canReplay ? await replay(io, ref.address).catch(() => null) : null
   const captured = replayed ?? lookup(ref.address)
   const fallback = captured ? source.fromCapture(captured, ref) : null
-  return fallback?.ok ? { ...fallback, liveFailure: live.failure } : live
+  return fallback?.ok ? withMedia(io, { ...fallback, liveFailure: live.failure }) : live
+}
+
+// A reader page placed its media while it parsed the HTML.
+async function withMedia(io: SourceIo, loaded: Extract<Loaded, { ok: true }>): Promise<Loaded> {
+  if (loaded.record.kind === 'web') return loaded
+  const record = await withRemoteMedia(io, loaded.record).catch(() => loaded.record)
+  return { ...loaded, record }
 }
