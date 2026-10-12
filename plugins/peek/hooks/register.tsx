@@ -23,7 +23,11 @@ import { diagramType, linkify, pathCandidates, plainInline, segmentsOf } from '.
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, taskRows, wrapLines } from './measure'
 import { fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell } from './tabular'
-import type { PictureBudget, WidgetCtx } from './pane/types'
+import type { Crumb, Direction, DrawContext, Key, NavItem, PaneActions, PictureBudget, WidgetCtx } from './pane/types'
+import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP, frame as drawFrame, geometryOf } from './pane/chrome'
+import { MODES, MOVE_KEYS, closeKey as closeKeyOf, expandKey as expandKeyOf, modeKeys as modeKeysOf, selectKeys as selectKeysOf } from './pane/keys'
+import { ROLES, SCOPES, SCOPE_ICON, menuCommands } from './pane/menu'
+import { layout } from './pane/layout'
 import { type ItemLook, lookOf } from './pane/look'
 import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
 import { bootLinear, clamp, goBack, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
@@ -39,8 +43,6 @@ import { expandedGroups, focusGroupRow, groupCommands, groupHome, groupItemLook,
 import type { GroupMenuFor, GroupRows, MenuCommand } from './groups-session'
 import { forgetPath, guess, noteCapture, pathExists, remember, scopeEntries, sessionEntries, toHref, withMentions } from './entries'
 
-const C = BASE
-
 const PANE = 'peek'
 const view = atom({ plugin: 'peek', key: 'view' } as const, null)
 const mentions = atom({ plugin: 'peek', key: 'mentions' } as const, [])
@@ -49,15 +51,6 @@ const page = atom({ plugin: 'peek', key: 'page' } as const, 0)
 const menuOpen = atom({ plugin: 'peek', key: 'menuOpen' } as const, false)
 const menuFilter = atom({ plugin: 'peek', key: 'menuFilter' } as const, '')
 const openGroup = atom({ plugin: 'peek', key: 'openGroup' } as const, null)
-const NARROW = 60
-const MIN_CPL = 30
-const MAX_CPL = 104
-const MODES: { id: Mode; label: string; icon: string; hotkey: string }[] = [
-  { id: 'view', label: 'Peek', icon: '\u{f06e}', hotkey: 'p' },
-  { id: 'recent', label: 'Recent', icon: '\u{f017}', hotkey: 'r' },
-  { id: 'gallery', label: 'Gallery', icon: '\u{f0c6c}', hotkey: 'g' },
-  { id: 'groups', label: 'Groups', icon: ICON.groups, hotkey: 'e' },
-]
 const scopeAtom = atom({ plugin: 'peek', key: 'scope' } as const, 'session')
 const galleryType = atom({ plugin: 'peek', key: 'galleryType' } as const, 'all')
 const gallerySort = atom({ plugin: 'peek', key: 'gallerySort' } as const, 'recent')
@@ -65,23 +58,18 @@ const galleryFilter = atom({ plugin: 'peek', key: 'galleryFilter' } as const, ''
 const roleFilter = atom({ plugin: 'peek', key: 'roleFilter' } as const, 'all')
 const stars = atom({ plugin: 'peek', key: 'stars' } as const, [])
 const cursorAtom = atom({ plugin: 'peek', key: 'cursor' } as const, 0)
-type NavItem = { href: string; key: string; line: number; col: number; group?: string }
-let navOrder: NavItem[] = []
-
-type Direction = 'up' | 'down' | 'left' | 'right'
-
 // Up and down keep the column, so a card grid moves like a grid.
 function stepFrom(at: number, direction: Direction): number {
-  const here = navOrder[at]
+  const here = layout.navOrder[at]
   if (!here) return 0
   if (direction === 'left' || direction === 'right') {
-    const next = navOrder[at + (direction === 'left' ? -1 : 1)]
+    const next = layout.navOrder[at + (direction === 'left' ? -1 : 1)]
     return next && next.line === here.line ? at + (direction === 'left' ? -1 : 1) : at
   }
   const line = here.line + (direction === 'up' ? -1 : 1)
   let best = -1
-  navOrder.forEach((one, index) => {
-    if (one.line === line && (best < 0 || Math.abs(one.col - here.col) < Math.abs((navOrder[best]?.col ?? 0) - here.col))) best = index
+  layout.navOrder.forEach((one, index) => {
+    if (one.line === line && (best < 0 || Math.abs(one.col - here.col) < Math.abs((layout.navOrder[best]?.col ?? 0) - here.col))) best = index
   })
   return best < 0 ? at : best
 }
@@ -96,10 +84,10 @@ async function moveSelection($: EngineInterface, direction: Direction) {
   }
   let landed = 0
   await update($, cursorAtom, at => {
-    landed = stepFrom(clamp(at, navOrder.length), direction)
+    landed = stepFrom(clamp(at, layout.navOrder.length), direction)
     return landed
   })
-  const key = navOrder[landed]?.key
+  const key = layout.navOrder[landed]?.key
   // 'nearest' counts a row under the pinned footer as already showing, so the
   // cursor could walk behind it; centring always leaves it in the clear.
   if (key) await $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
@@ -108,11 +96,11 @@ async function moveSelection($: EngineInterface, direction: Direction) {
 
 async function selectAndOpen($: EngineInterface, index: number) {
   await update($, cursorAtom, () => index)
-  await openNav($, navOrder[index])
+  await openNav($, layout.navOrder[index])
 }
 
 async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
-  return navOrder[clamp(await read($, cursorAtom), navOrder.length)]
+  return layout.navOrder[clamp(await read($, cursorAtom), layout.navOrder.length)]
 }
 
 async function openNav($: EngineInterface, one: NavItem | undefined) {
@@ -120,11 +108,8 @@ async function openNav($: EngineInterface, one: NavItem | undefined) {
   else if (one?.href) await show(navIoOf($), one.href)
 }
 
-const ROLES: RoleFilter[] = ['all', 'artifacts', 'touched']
-const SCOPES: Scope[] = ['session', 'worktree', 'repo']
 const TYPES: GalleryType[] = ['all', 'markdown', 'code', 'data', 'image', 'diagram', 'html']
 const SORTS: GallerySort[] = ['recent', 'name', 'size', 'mentions']
-const SCOPE_ICON: Record<Scope, string> = { session: '\u{f0b79}', worktree: '\u{f418}', repo: '\u{f401}' }
 const LIST_CHUNK = 10
 const CARD_ROWS = 5
 const CARD_MIN = 26
@@ -137,29 +122,6 @@ const typed = atom({ plugin: 'peek', key: 'galleryText' } as const, '')
 const picked = atom({ plugin: 'peek', key: 'galleryPick' } as const, 'round')
 
 let paneColumns = 100
-let contentRows = 0
-let blockStarts: number[] = []
-let blockHeadings: string[] = []
-let estimatedRows = 1
-const HEADER_ROWS = 2
-const FOOTER_ROWS = 3
-const MOVE_KEYS = new Set(['next', 'prev', 'left', 'right'])
-const COMMAND_KEYS: Record<string, string> = {
-  peek: 'mode-view',
-  recent: 'mode-recent',
-  gallery: 'mode-gallery',
-  groups: 'mode-groups',
-  'role-*': 'role',
-  'scope-*': 'scope',
-  open: 'open',
-  refresh: 'refresh',
-  live: 'live',
-  'live-back': 'back',
-  copy: 'copy',
-  star: 'star',
-  close: 'close',
-}
-const PAGE_TOP = HEADER_ROWS + 1
 function remoteIoOf($: EngineInterface): RemoteIo {
   return {
     sessionId: () => $.session.id(),
@@ -249,6 +211,22 @@ function groupsIoOf($: EngineInterface): GroupsIo {
 
 const groupStore = createGroupStore()
 
+function paneActionsOf($: EngineInterface): PaneActions {
+  return {
+    io: navIoOf($),
+    scope: { read: () => read($, scopeAtom), update: change => update($, scopeAtom, change) },
+    roleFilter: { read: () => read($, roleFilter), update: change => update($, roleFilter, change) },
+    galleryType: { read: () => read($, galleryType), update: change => update($, galleryType, change) },
+    gallerySort: { read: () => read($, gallerySort), update: change => update($, gallerySort, change) },
+    galleryFilter: { read: () => read($, galleryFilter), update: change => update($, galleryFilter, change) },
+    moveSelection: direction => moveSelection($, direction),
+    selectAndOpen: index => selectAndOpen($, index),
+    selectedNav: () => selectedNav($),
+    openNav: one => openNav($, one),
+    close: () => $.ui.close({ id: PANE }),
+  }
+}
+
 const sum = (values: readonly number[]) => values.reduce((total, one) => total + one, 0)
 
 function liveIoOf($: EngineInterface): LiveIo {
@@ -309,7 +287,7 @@ export const register: Register = on => {
       const rows = await groupPageRows(navIoOf($)).catch(() => null)
       if (rows) await selectGroupRow(navIoOf($), rows, index).catch(() => undefined)
       await update($, cursorAtom, () => index).catch(() => undefined)
-      const key = navOrder[index]?.key
+      const key = layout.navOrder[index]?.key
       if (key) void $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
     }
     return next(e)
@@ -494,7 +472,7 @@ export const register: Register = on => {
       await moveSelection($, e.by > 0 ? 'down' : 'up').catch(() => undefined)
       return {}
     }
-    contentRows = e.contentRows
+    layout.contentRows = e.contentRows
     const wanted = e.origin.kind === 'plugin' && e.offset > 0 ? e.offset - HEADER_ROWS : e.offset
     const target = Math.max(0, Math.min(wanted, Math.max(0, e.contentRows - e.bodyRows)))
     await update($, page, () => target).catch(() => undefined)
@@ -505,10 +483,6 @@ export const register: Register = on => {
     const isMenuOpen = await read($, menuOpen)
     const C = isMenuOpen ? MUTED : BASE
     const elements = $.ui.resolve(e)
-    const { Box, Text, Button, Markdown, Code } = elements
-    const Image = 'Image' in elements ? elements.Image : undefined
-    const Client = 'Client' in elements ? elements.Client : undefined
-    const w: WidgetCtx = { Box, Text, Button, Image, Client, C }
     const current = await read($, view)
     const chosen = await read($, mode)
     const at = await read($, page)
@@ -516,249 +490,52 @@ export const register: Register = on => {
     const now = await $.clock.now()
     const cwd = await $.session.cwd()
     const home = (await $.env.get('HOME')) ?? ''
-    const columns = Math.max(20, e.props.bodyColumns - 1)
-    paneColumns = columns
-    const isNarrow = e.props.bodyColumns < NARROW
-    const textWidth = isNarrow ? columns : Math.min(MAX_CPL, Math.max(MIN_CPL, columns - 6))
-    const pageWidth = isNarrow ? columns : textWidth + 4
-    const rows = Math.max(4, e.props.scroll.bodyRows - 4)
-    const turn = (to: number) => void update($, page, () => Math.max(0, to))
+    const geom = geometryOf(e.props.bodyColumns)
+    paneColumns = geom.columns
     if (liveSession.href && (chosen !== 'view' || current?.href !== liveSession.href)) void leaveLive()
-
-    const chip = (label: string, isOn: boolean) => (
-      <Text color={isOn ? C.appBg : C.overlay0} backgroundColor={isOn ? C.accent : C.panelBg} bold={isOn}>
-        {label}
-      </Text>
-    )
-    // crumbs() sets this and header() reads it, so a screen builds its crumb before frame() draws the header.
-    let isTabCompact = false
-    const chipOf = (id: Mode) => {
-      const one = MODES.find(each => each.id === id)
-      if (!one) return ''
-      return isTabCompact && id !== chosen ? ` ${one.icon} ` : ` ${one.icon} ${one.label.toUpperCase()} `
-    }
-    const crumbs = (parts: { label: string; fg: string; bg: string; bold?: boolean; canShrink?: boolean }[]) => {
-      const width = (label: string) => label.length + 2
-      const tabsWidth = () => MODES.reduce((sum, one) => sum + chipOf(one.id).length, 0)
-      const fullTabs = MODES.reduce((sum, one) => sum + ` ${one.icon} ${one.label} `.length, 0)
-      isTabCompact = !isNarrow && 2 + parts.reduce((sum, one) => sum + width(one.label), 0) > columns - fullTabs - 4
-      const room = Math.max(8, isNarrow ? columns - 2 : columns - tabsWidth() - 4)
-      let spare = room - 2 - parts.reduce((sum, one) => sum + width(one.label), 0)
-      const fitted = parts.map(one => ({ ...one }))
-      for (const one of fitted) {
-        if (spare >= 0 || !one.canShrink) continue
-        const keep = Math.max(3, one.label.length + spare)
-        const icon = one.label.slice(0, 2)
-        const rest = one.label.slice(2)
-        const tail = Math.max(1, keep - 3)
-        one.label = rest.length > tail ? `${icon}…${rest.slice(rest.length - tail)}` : one.label
-        spare = room - 2 - fitted.reduce((sum, item) => sum + width(item.label), 0)
-      }
-      for (const one of fitted) {
-        if (spare >= 0) break
-        const cut = Math.max(4, one.label.length + spare)
-        if (cut < one.label.length) one.label = `${one.label.slice(0, cut - 1)}…`
-        spare = room - 2 - fitted.reduce((sum, item) => sum + width(item.label), 0)
-      }
-      const last = fitted.length - 1
-      return (
-        <Box flexDirection="row" flexShrink={1} height={1} overflow="hidden">
-          <Text color={fitted[0]?.bg ?? C.surface0} backgroundColor={C.frame}>{'\u{e0b6}'}</Text>
-          {fitted.map((one, index) => (
-            <Box key={`crumb-${index}`} flexDirection="row" flexShrink={0}>
-              <Text color={one.fg} backgroundColor={one.bg} bold={one.bold} wrap="truncate-end">{index === 0 ? `${one.label} ` : ` ${one.label}${index === last ? '' : ' '}`}</Text>
-              {index === last ? (
-                <Text color={one.bg} backgroundColor={C.frame}>{'\u{e0b4}'}</Text>
-              ) : (
-                <Text color={one.bg} backgroundColor={fitted[index + 1]?.bg ?? C.frame}>{'\u{e0bc}'}</Text>
-              )}
-            </Box>
-          ))}
-        </Box>
-      )
-    }
-    const tabStrip = (key: string, tabs: { id: string; label: string; isOn: boolean }[]) =>
-      Client ? (
-        <Client
-          key={key}
-          module="./tabs.tsx"
-          props={{ muted: isMenuOpen, tabs }}
-          width={tabs.reduce((sum, tab) => sum + tab.label.length, 0)}
-          height={1}
-        />
-      ) : (
-        <Box flexDirection="row">{tabs.map(tab => chip(tab.label, tab.isOn))}</Box>
-      )
-    const header = (middle: unknown) =>
-      isNarrow ? (
-        <Box flexDirection="row" justifyContent="center" width={e.props.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
-          {middle as never}
-        </Box>
-      ) : (
-        <Box flexDirection="row" justifyContent="space-between" width={e.props.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
-          {tabStrip('tabs-left', [{ id: 'view', label: chipOf('view'), isOn: chosen === 'view' }])}
-          {middle as never}
-          {tabStrip('tabs-right', [
-            { id: 'recent', label: chipOf('recent'), isOn: chosen === 'recent' },
-            { id: 'gallery', label: chipOf('gallery'), isOn: chosen === 'gallery' },
-            { id: 'groups', label: chipOf('groups'), isOn: chosen === 'groups' },
-          ])}
-        </Box>
-      )
-
-    type Key = { key: string; label: string; hotkey: string; onPress: () => void; menu?: string }
-    const footer = (info: string, keys: Key[]) => (
-      <Box flexDirection="row" flexWrap="wrap" columnGap={2} justifyContent="center" width={columns}>
-        {info && <Text color={C.overlay1}>{info}</Text>}
-        {!isNarrow && info && <Text color={C.surface1}>│</Text>}
-        <Text color={C.accent}>⌃k menu</Text>
-        {/* Hidden, yet the hotkeys still press: the Pane arms every Button in its drawn tree regardless of display (seen in engine 2.1.295, not promised by the types). Tab still visits them. */}
-        <Box key="footer-keys" display="none">
-          {keys.map(one => (
-            <Button key={one.key} label={one.label} hotkey={one.hotkey} plain onPress={one.onPress} />
-          ))}
-        </Box>
-      </Box>
-    )
-    const modeKeys: Key[] = MODES.map(one => ({
-      key: `mode-${one.id}`,
-      label: one.label,
-      hotkey: one.hotkey,
-      onPress: () => void switchMode(navIoOf($), one.id),
-    }))
-
     const filter = await read($, menuFilter)
-    const closeMenu = () => void setMenu(navIoOf($), false)
-    const commands: MenuCommand[] = [
-      ...(current
-        ? [
-            { id: 'peek', icon: ICON.peek, label: 'Peek: show the open file', hint: 'p', run: () => void update($, mode, () => 'view') },
-          ]
-        : []),
-      { id: 'recent', icon: ICON.recent, label: 'Recent: files by last use', hint: 'r', run: () => void update($, mode, () => 'recent') },
-      { id: 'gallery', icon: ICON.gallery, label: 'Gallery: files as cards by type', hint: 'g', run: () => void update($, mode, () => 'gallery') },
-      { id: 'groups', icon: ICON.groups, label: 'Groups: files and links the agent bundled', hint: 'e', run: () => void switchMode(navIoOf($), 'groups') },
-      ...ROLES.map(one => ({
-        id: `role-${one}`,
-        icon: one === 'artifacts' ? '◆' : one === 'touched' ? '◇' : '\u{f0c9}',
-        label: `Show: ${one}`,
-        hint: 'a',
-        run: () => void update($, roleFilter, () => one),
-      })),
-      ...SCOPES.map(one => ({
-        id: `scope-${one}`,
-        icon: SCOPE_ICON[one],
-        label: `Scope: ${one}`,
-        hint: 's',
-        run: () => void update($, scopeAtom, () => one),
-      })),
-      { id: 'top', icon: '\u{f062}', label: 'Scroll to top', hint: 'home', run: () => void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined) },
-      { id: 'bottom', icon: '\u{f063}', label: 'Scroll to bottom', hint: 'end', run: () => void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined) },
-      ...(current
-        ? [
-            { id: 'open', icon: '\u{f08e}', label: 'Open in its own app', hint: 'o', run: () => void openExternally(navIoOf($), current) },
-            ...(current.remote
-              ? [{ id: 'refresh', icon: '\u{f021}', label: 'Refresh this page', hint: 'u', run: () => void refresh(navIoOf($), current.href) }]
-              : []),
-            ...(e.surface === 'terminal' && Image && current.remote && parseRef(current.href)?.kind === 'web'
-              ? [{ id: 'live', icon: '\u{f0ac}', label: liveSession.href === current.href ? 'Reader view: leave the live page' : 'Live view: the real page, clickable', hint: 'v', run: () => void toggleLive(navIoOf($), current, liveSession.viewport ?? { width: 600, height: 400 }) }]
-              : []),
-            ...(liveSession.href === current.href && liveSession.live?.state().canBack
-              ? [{ id: 'live-back', icon: '\u{f060}', label: 'Back in the live page', hint: 'b', run: () => void liveKey(navIoOf($), 'b') }]
-              : []),
-            { id: 'copy', icon: '\u{f0c5}', label: current.remote ? 'Copy link' : 'Copy path', hint: 'c', run: () => void $.ui.copy({ text: current.location }) },
-            { id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hint: 'f', run: () => void setStar(navIoOf($), current.href) },
-          ]
-        : []),
-      { id: 'close', icon: '\u{f00d}', label: 'Close the pane', hint: 'x', run: () => void $.ui.close({ id: PANE }) },
-      ...[...list]
-        .reverse()
-        .slice(0, 15)
-        .map((one, index) => {
-          const target = parseHref(one.href)?.path ?? one.href
-          const kind = parseHref(one.href) ? kindOf(target) : 'web'
-          return {
-            id: `file-${index}`,
-            icon: iconFor(kind),
-            label: `Go to ${target.split('/').pop() || target}`,
-            hint: describeAge(one.at, now),
-            run: () => void show(navIoOf($), one.href),
-          }
-        }),
-    ]
-    const words = filter.toLowerCase().split(/\s+/).filter(Boolean)
-    const runCommand = (one: (typeof commands)[number] | undefined) => {
-      if (!one) return
-      closeMenu()
-      one.run()
+    const realBody = Math.max(1, layout.contentRows - PAGE_TOP - FOOTER_ROWS - 1)
+    const ctx: DrawContext = {
+      Box: elements.Box,
+      Text: elements.Text,
+      Button: elements.Button,
+      Markdown: elements.Markdown,
+      Code: elements.Code,
+      Image: 'Image' in elements ? elements.Image : undefined,
+      Client: 'Client' in elements ? elements.Client : undefined,
+      Input: 'Input' in elements ? elements.Input : undefined,
+      C,
+      surface: e.surface,
+      isMenuOpen,
+      current,
+      chosen,
+      list,
+      filter,
+      now,
+      cwd,
+      home,
+      offset: at,
+      bodyColumns: e.props.bodyColumns,
+      bodyRows: e.props.scroll.bodyRows,
+      ...geom,
+      scale: layout.contentRows > 0 ? realBody / Math.max(1, layout.estimatedRows) : 1,
     }
-    const Input = 'Input' in elements ? elements.Input : undefined
-    const menuWidth = Math.max(24, Math.min(64, columns - 8))
-    const menuFor = (keys: Key[], groupMenu: MenuCommand[]) => {
-      const fromKeys = keys.flatMap(one => (one.menu ? [{ id: `key-${one.key}`, icon: '\u{f11c}', label: one.menu, hint: one.hotkey, run: one.onPress }] : []))
-      const closeAt = commands.findIndex(one => one.id === 'close')
-      const keyed = commands.map(one => {
-        const owner = COMMAND_KEYS[one.id.replace(/-[^-]+$/, '-*')] ?? COMMAND_KEYS[one.id]
-        return owner ? { ...one, hint: keys.find(key => key.key === owner)?.hotkey ?? '' } : one
-      })
-      const all: MenuCommand[] = [...keyed.slice(0, closeAt), ...fromKeys, ...groupMenu, ...keyed.slice(closeAt)]
-      let others = 0
-      // Group rows sit outside the 20-row cap, so every one of the first eight shows however long the rest of the menu is.
-      const matches = all.filter(
-        one => (words.length > 0 || !one.isFilteredOnly) && words.every(word => one.label.toLowerCase().includes(word)) && (one.isGroupRow || others++ < 20),
-      )
-      const moves = keys.filter(one => MOVE_KEYS.has(one.key)).map(one => one.hotkey)
-      return (
-        <Box flexDirection="column" width={menuWidth}>
-          <Text wrap="truncate-end">
-            <Text color={BASE.surface1}>─</Text>
-            <Text color={BASE.accent} bold> COMMANDS </Text>
-            <Text color={BASE.surface1}>{'─'.repeat(Math.max(1, menuWidth - 12))}</Text>
-          </Text>
-          {Input && (
-            <Box
-              key="menu-filter-frame"
-              flexDirection="row"
-              width={menuWidth}
-              borderStyle="round"
-              borderColor={BASE.accent}
-              paddingX={1}
-              marginY={1}
-            >
-              <Text color={BASE.accent}>{'\u{f002}  '}</Text>
-              <Box flexGrow={1}>
-            <Input
-              key="menu-filter"
-              placeholder="type to filter · Enter runs the first match"
-              value={filter}
-              autoFocus
-              onInput={(value: string) => void update($, menuFilter, () => value)}
-              onSubmit={() => runCommand(matches[0])}
-            />
-              </Box>
-            </Box>
-          )}
-          {matches.length === 0 && <Text color={BASE.overlay0}>No command matches.</Text>}
-          {matches.map(one => (
-            <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={menuWidth}>
-              <Box flexDirection="row" flexShrink={1}>
-                <Text color={BASE.accent}>{`${one.icon}  `}</Text>
-                <Button key={`menu-${one.id}`} label={one.label} plain onPress={() => runCommand(one)} />
-              </Box>
-              <Text color={BASE.overlay0}>{one.hint}</Text>
-            </Box>
-          ))}
-          {moves.length > 0 && <Text color={BASE.overlay0}>{`${moves.join(' ')} move`}</Text>}
-          <Button key="menu-close" label="Close menu" plain dimColor onPress={closeMenu} />
-        </Box>
-      )
-    }
+    const actions = paneActionsOf($)
+    const commands = menuCommands(ctx, actions)
+    const { Box, Text, Button, Markdown, Code, Image, Client } = ctx
+    const w: WidgetCtx = ctx
+    const { columns, isNarrow, textWidth, pageWidth } = geom
+    const crumbs = (parts: Crumb[]) => parts
+    const frame = (parts: Crumb[], content: unknown, info: string, keys: Key[], options: { pageBg?: string; menuOn?: GroupMenuFor } = {}) =>
+      drawFrame(ctx, actions, commands, { crumbs: parts, content, info, keys, ...options })
+    const modeKeys = modeKeysOf(actions)
+    const selectKeys = selectKeysOf(actions)
+    const closeKey = closeKeyOf(actions)
+    const expandKey = expandKeyOf(actions, chosen)
 
     const offset = at
     const jumpTo = (key: string) => void $.ui.scroll({ in: PANE, to: { key }, block: 'start' }).catch(() => undefined)
-    const realBody = Math.max(1, contentRows - PAGE_TOP - FOOTER_ROWS - 1)
-    const scale = contentRows > 0 ? realBody / Math.max(1, estimatedRows) : 1
-    const rowOf = (index: number) => PAGE_TOP + (blockStarts[index] ?? 0) * scale
+    const rowOf = (index: number) => PAGE_TOP + (layout.blockStarts[index] ?? 0) * ctx.scale
     const keyJumps = (keys: readonly string[]) => ({
       next: () => {
         const found = keys.findIndex((_, i) => rowOf(i) > offset + PAGE_TOP + 1)
@@ -774,101 +551,6 @@ export const register: Register = on => {
       },
     })
     const blockJumps = (count: number, prefix: string) => keyJumps(Array.from({ length: count }, (_, i) => `${prefix}-${i}`))
-    const frame = async (middle: unknown, content: unknown, info: string, keys: Key[], { pageBg = C.panelBg, menuOn = {} }: { pageBg?: string; menuOn?: GroupMenuFor } = {}) => {
-      // A group home that cannot resolve leaves the menu without group rows rather than failing the whole pane.
-      const groupMenu = isMenuOpen ? await groupCommands(navIoOf($), menuOn).catch(() => []) : []
-      return (
-        <Box
-          flexDirection="column"
-          alignItems="center"
-          backgroundColor={C.appBg}
-          minHeight={e.props.scroll.bodyRows}
-          width={e.props.bodyColumns}
-        >
-          <Box height={HEADER_ROWS} />
-          <Box flexDirection="column" width={pageWidth} backgroundColor={pageBg} paddingX={isNarrow ? 0 : 2} paddingY={1}>
-            <Box flexDirection="column" width={textWidth}>
-              {content as never}
-            </Box>
-          </Box>
-          <Box height={FOOTER_ROWS} />
-          <Box
-            position="absolute"
-            top={offset}
-            left={0}
-            width={e.props.bodyColumns}
-            height={HEADER_ROWS}
-            flexDirection="column"
-            alignItems="center"
-            backgroundColor={C.appBg}
-          >
-            {header(middle)}
-          </Box>
-          <Box
-            position="absolute"
-            top={offset + e.props.scroll.bodyRows - FOOTER_ROWS}
-            left={0}
-            width={e.props.bodyColumns}
-            height={FOOTER_ROWS}
-            flexDirection="column"
-            alignItems="center"
-            justifyContent="flex-end"
-            backgroundColor={C.appBg}
-          >
-            {footer(info, keys)}
-          </Box>
-          {isMenuOpen && (
-            <Box
-              position="absolute"
-              top={offset + HEADER_ROWS + 2}
-              left={Math.max(0, Math.floor((e.props.bodyColumns - menuWidth - 4) / 2))}
-              width={menuWidth + 4}
-              flexDirection="column"
-              backgroundColor={BASE.panelBg}
-              paddingX={2}
-              paddingY={1}
-            >
-              {menuFor(keys, groupMenu) as never}
-            </Box>
-          )}
-        </Box>
-      )
-    }
-    const selectKeys: Key[] = [
-      { key: 'next', label: 'Down', hotkey: 'j', onPress: () => void moveSelection($, 'down') },
-      { key: 'prev', label: 'Up', hotkey: 'k', onPress: () => void moveSelection($, 'up') },
-      { key: 'left', label: 'Left', hotkey: 'h', onPress: () => void moveSelection($, 'left') },
-      { key: 'right', label: 'Right', hotkey: 'l', onPress: () => void moveSelection($, 'right') },
-      {
-        key: 'open-selected',
-        label: '⏎ Open',
-        hotkey: 'o',
-        menu: 'Open the selected file',
-        onPress: () => void selectedNav($).then(one => openNav($, one)),
-      },
-      {
-        key: 'star-selected',
-        label: 'Star',
-        hotkey: 'f',
-        menu: 'Star or unstar the selected file',
-        onPress: () =>
-          void selectedNav($).then(one => {
-            if (one?.group) return toggleGroupStar(navIoOf($), one.group)
-            return one?.href ? setStar(navIoOf($), one.href).then(() => undefined) : undefined
-          }),
-      },
-    ]
-    const closeKey: Key = { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) }
-    const expandKey: Key = {
-      key: 'expand-selected',
-      label: 'More',
-      hotkey: 'm',
-      menu: 'Expand/Collapse group',
-      onPress: () => void selectedNav($).then(one => {
-        const id = one?.group ?? (one && chosen === 'groups' ? one.href : undefined)
-        if (id) toggleExpanded(navIoOf($), id)
-      }),
-    }
 
     const groupCards = async (groups: readonly Group[], prefix: string, firstIndex: number, selected: number) => {
       const inner = Math.max(8, textWidth - 4)
@@ -1066,8 +748,8 @@ export const register: Register = on => {
         const refs = blocks.flatMap(block => block.items).map(one => one.ref)
         const rows: GroupRows = { id: shown.id, title: shown.title, keys, hrefs: looks.map(one => one.href), selected }
         groupPage.rows = rows
-        navOrder = keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 }))
-        blockStarts = []
+        layout.navOrder = keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 }))
+        layout.blockStarts = []
         const starList = await read($, stars)
         const starKeys = new Set(starList.map(starKeyOf))
         const missing = looks.filter(one => one.state === 'missing').length
@@ -1117,7 +799,7 @@ export const register: Register = on => {
             </Box>
           )
         })
-        estimatedRows = Math.max(1, looks.length + blocks.length * 2 + 3)
+        layout.estimatedRows = Math.max(1, looks.length + blocks.length * 2 + 3)
         const content = (
           <Box flexDirection="column" width={textWidth}>
             <Box key="group-page-title">
@@ -1174,10 +856,10 @@ export const register: Register = on => {
       const crumb = crumbs([{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }])
       const selected = await read($, cursorAtom)
       const { cards, heights } = await groupCards(groups, 'groups', 0, selected)
-      navOrder = groups.map((one, i) => ({ href: one.id, key: `groups-${i}`, line: i, col: 0 }))
-      blockStarts = heights.map((_, i) => sum(heights.slice(0, i)))
-      estimatedRows = Math.max(1, sum(heights))
-      const selectedGroup = () => read($, cursorAtom).then(at => navOrder[clamp(at, navOrder.length)]?.href)
+      layout.navOrder = groups.map((one, i) => ({ href: one.id, key: `groups-${i}`, line: i, col: 0 }))
+      layout.blockStarts = heights.map((_, i) => sum(heights.slice(0, i)))
+      layout.estimatedRows = Math.max(1, sum(heights))
+      const selectedGroup = () => read($, cursorAtom).then(at => layout.navOrder[clamp(at, layout.navOrder.length)]?.href)
       const content = (
         <Box flexDirection="column" width={textWidth}>
           {groups.length === 0 && <Text color={C.overlay0}>No groups yet. The agent makes groups: ask it to group related files and links.</Text>}
@@ -1257,7 +939,7 @@ export const register: Register = on => {
       let cursor = 0
       const selected = await read($, cursorAtom)
       const nav: NavItem[] = []
-      navOrder = nav
+      layout.navOrder = nav
       let navLine = 0
       const cardGrid = (list: readonly FileEntry[], prefix: string) => {
         const rowsOfCards = Array.from({ length: Math.ceil(list.length / perRow) }, (_, r) => list.slice(r * perRow, r * perRow + perRow))
@@ -1337,8 +1019,8 @@ export const register: Register = on => {
           cursor += 1
           return { ...group, grid }
         })
-        blockStarts = starts
-        estimatedRows = Math.max(1, cursor)
+        layout.blockStarts = starts
+        layout.estimatedRows = Math.max(1, cursor)
         const content = (
           <Box flexDirection="column" width={textWidth}>
             <Box flexDirection="row" columnGap={2} width={textWidth}>
@@ -1464,8 +1146,8 @@ export const register: Register = on => {
         cursor += 1
         return { ...group, list }
       })
-      blockStarts = starts
-      estimatedRows = Math.max(1, cursor)
+      layout.blockStarts = starts
+      layout.estimatedRows = Math.max(1, cursor)
       const pinnedId = nav[clamp(selected, nav.length)]?.group
       const pinnedOn = pinned.find(one => one.id === pinnedId)
       const content = (
@@ -1559,21 +1241,21 @@ export const register: Register = on => {
         partRows.push(IMAGE_ROWS)
         partHeadings.push('')
       }
-      blockStarts = []
-      blockHeadings = []
+      layout.blockStarts = []
+      layout.blockHeadings = []
       let running = 0
       let lastHeading = ''
       for (const [i, rows] of partRows.entries()) {
-        blockStarts.push(running)
+        layout.blockStarts.push(running)
         lastHeading = partHeadings[i] || lastHeading
-        blockHeadings.push(lastHeading)
+        layout.blockHeadings.push(lastHeading)
         running += rows + 1
       }
-      estimatedRows = Math.max(1, running)
-      const topBlock = [...blockStarts.keys()].reverse().find(i => rowOf(i) <= offset + PAGE_TOP + 1) ?? 0
+      layout.estimatedRows = Math.max(1, running)
+      const topBlock = [...layout.blockStarts.keys()].reverse().find(i => rowOf(i) <= offset + PAGE_TOP + 1) ?? 0
       nav.topBlockKey = `block-${topBlock}`
-      const heading = blockHeadings[topBlock] ?? ''
-      const maxScroll = Math.max(0, contentRows - e.props.scroll.bodyRows)
+      const heading = layout.blockHeadings[topBlock] ?? ''
+      const maxScroll = Math.max(0, layout.contentRows - e.props.scroll.bodyRows)
       const percent = maxScroll > 0 ? Math.min(100, Math.round((offset / maxScroll) * 100)) : 100
       return {
         body: (
@@ -2100,8 +1782,8 @@ export const register: Register = on => {
       const chunks = Array.from({ length: Math.ceil(table.rows.length / LIST_CHUNK) }, (_, i) =>
         table.rows.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
       )
-      blockStarts = chunks.map((_, i) => 2 + i * LIST_CHUNK)
-      estimatedRows = Math.max(1, 2 + table.rows.length)
+      layout.blockStarts = chunks.map((_, i) => 2 + i * LIST_CHUNK)
+      layout.estimatedRows = Math.max(1, 2 + table.rows.length)
       body = (
         <Box flexDirection="column" width={textWidth}>
           <Text color={C.accent} bold wrap="truncate-end">{line(table.header)}</Text>
@@ -2148,8 +1830,8 @@ export const register: Register = on => {
       const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
         items.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
       )
-      blockStarts = chunks.map((_, i) => i * LIST_CHUNK)
-      estimatedRows = Math.max(1, items.length)
+      layout.blockStarts = chunks.map((_, i) => i * LIST_CHUNK)
+      layout.estimatedRows = Math.max(1, items.length)
       body = (
         <Box flexDirection="column" width={textWidth}>
           {items.length === 0 && <Text color={C.overlay0}>Empty folder.</Text>}
@@ -2171,8 +1853,8 @@ export const register: Register = on => {
       const lines = code.source.split('\n')
       const chunk = 10
       const chunks = Array.from({ length: Math.ceil(lines.length / chunk) }, (_, i) => lines.slice(i * chunk, i * chunk + chunk))
-      blockStarts = chunks.map((_, i) => i * chunk)
-      estimatedRows = Math.max(1, lines.length)
+      layout.blockStarts = chunks.map((_, i) => i * chunk)
+      layout.estimatedRows = Math.max(1, lines.length)
       body = (
         <Box flexDirection="column" width={textWidth}>
           {chunks.map((part, i) => (
@@ -2195,7 +1877,7 @@ export const register: Register = on => {
       const firstLine = code.startLine + Math.max(0, Math.min(lines.length - 1, offset))
       position = `line ${firstLine} of ${code.startLine + lines.length - 1}`
     } else if (current.image && Image && png) {
-      blockStarts = []
+      layout.blockStarts = []
       body = (
         <Image
           key="picture"

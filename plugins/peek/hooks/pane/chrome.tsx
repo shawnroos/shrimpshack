@@ -1,0 +1,198 @@
+import type { Mode } from '../../types'
+import { groupCommands } from '../groups-session'
+import type { MenuCommand } from '../groups-session'
+import { C as BASE } from '../theme'
+import { MODES } from './keys'
+import { Menu, menuWidthOf } from './menu'
+import type { Crumb, DrawContext, Key, PaneActions, Screen } from './types'
+
+export const HEADER_ROWS = 2
+export const FOOTER_ROWS = 3
+export const PAGE_TOP = HEADER_ROWS + 1
+const NARROW = 60
+const MIN_CPL = 30
+const MAX_CPL = 104
+
+export function geometryOf(bodyColumns: number) {
+  const columns = Math.max(20, bodyColumns - 1)
+  const isNarrow = bodyColumns < NARROW
+  const textWidth = isNarrow ? columns : Math.min(MAX_CPL, Math.max(MIN_CPL, columns - 6))
+  const pageWidth = isNarrow ? columns : textWidth + 4
+  return { columns, isNarrow, textWidth, pageWidth }
+}
+
+function chipOf(id: Mode, chosen: Mode, isTabCompact: boolean) {
+  const one = MODES.find(each => each.id === id)
+  if (!one) return ''
+  return isTabCompact && id !== chosen ? ` ${one.icon} ` : ` ${one.icon} ${one.label.toUpperCase()} `
+}
+
+// Shrinks the crumbs to the room the tabs leave; the tabs go compact first when the full crumbs could not fit beside them.
+export function fitCrumbs(parts: readonly Crumb[], geom: { columns: number; isNarrow: boolean; chosen: Mode }) {
+  const { columns, isNarrow, chosen } = geom
+  const width = (label: string) => label.length + 2
+  const fullTabs = MODES.reduce((sum, one) => sum + ` ${one.icon} ${one.label} `.length, 0)
+  const isTabCompact = !isNarrow && 2 + parts.reduce((sum, one) => sum + width(one.label), 0) > columns - fullTabs - 4
+  const tabsWidth = MODES.reduce((sum, one) => sum + chipOf(one.id, chosen, isTabCompact).length, 0)
+  const room = Math.max(8, isNarrow ? columns - 2 : columns - tabsWidth - 4)
+  let spare = room - 2 - parts.reduce((sum, one) => sum + width(one.label), 0)
+  const fitted = parts.map(one => ({ ...one }))
+  for (const one of fitted) {
+    if (spare >= 0 || !one.canShrink) continue
+    const keep = Math.max(3, one.label.length + spare)
+    const icon = one.label.slice(0, 2)
+    const rest = one.label.slice(2)
+    const tail = Math.max(1, keep - 3)
+    one.label = rest.length > tail ? `${icon}…${rest.slice(rest.length - tail)}` : one.label
+    spare = room - 2 - fitted.reduce((sum, item) => sum + width(item.label), 0)
+  }
+  for (const one of fitted) {
+    if (spare >= 0) break
+    const cut = Math.max(4, one.label.length + spare)
+    if (cut < one.label.length) one.label = `${one.label.slice(0, cut - 1)}…`
+    spare = room - 2 - fitted.reduce((sum, item) => sum + width(item.label), 0)
+  }
+  return { fitted, isTabCompact }
+}
+
+function Crumbs(ctx: DrawContext, fitted: readonly Crumb[]) {
+  const { Box, Text, C } = ctx
+  const last = fitted.length - 1
+  return (
+    <Box flexDirection="row" flexShrink={1} height={1} overflow="hidden">
+      <Text color={fitted[0]?.bg ?? C.surface0} backgroundColor={C.frame}>{'\u{e0b6}'}</Text>
+      {fitted.map((one, index) => (
+        <Box key={`crumb-${index}`} flexDirection="row" flexShrink={0}>
+          <Text color={one.fg} backgroundColor={one.bg} bold={one.bold} wrap="truncate-end">{index === 0 ? `${one.label} ` : ` ${one.label}${index === last ? '' : ' '}`}</Text>
+          {index === last ? (
+            <Text color={one.bg} backgroundColor={C.frame}>{'\u{e0b4}'}</Text>
+          ) : (
+            <Text color={one.bg} backgroundColor={fitted[index + 1]?.bg ?? C.frame}>{'\u{e0bc}'}</Text>
+          )}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+function TabStrip(ctx: DrawContext, key: string, tabs: { id: string; label: string; isOn: boolean }[]) {
+  const { Box, Text, Client, C } = ctx
+  const chip = (label: string, isOn: boolean) => (
+    <Text color={isOn ? C.appBg : C.overlay0} backgroundColor={isOn ? C.accent : C.panelBg} bold={isOn}>
+      {label}
+    </Text>
+  )
+  return Client ? (
+    <Client
+      key={key}
+      module="../tabs.tsx"
+      props={{ muted: ctx.isMenuOpen, tabs }}
+      width={tabs.reduce((sum, tab) => sum + tab.label.length, 0)}
+      height={1}
+    />
+  ) : (
+    <Box flexDirection="row">{tabs.map(tab => chip(tab.label, tab.isOn))}</Box>
+  )
+}
+
+function Header(ctx: DrawContext, middle: unknown, isTabCompact: boolean) {
+  const { Box, C, chosen } = ctx
+  const label = (id: Mode) => chipOf(id, chosen, isTabCompact)
+  return ctx.isNarrow ? (
+    <Box flexDirection="row" justifyContent="center" width={ctx.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
+      {middle as never}
+    </Box>
+  ) : (
+    <Box flexDirection="row" justifyContent="space-between" width={ctx.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
+      {TabStrip(ctx, 'tabs-left', [{ id: 'view', label: label('view'), isOn: chosen === 'view' }])}
+      {middle as never}
+      {TabStrip(ctx, 'tabs-right', [
+        { id: 'recent', label: label('recent'), isOn: chosen === 'recent' },
+        { id: 'gallery', label: label('gallery'), isOn: chosen === 'gallery' },
+        { id: 'groups', label: label('groups'), isOn: chosen === 'groups' },
+      ])}
+    </Box>
+  )
+}
+
+function Footer(ctx: DrawContext, info: string, keys: readonly Key[]) {
+  const { Box, Text, Button, C } = ctx
+  return (
+    <Box flexDirection="row" flexWrap="wrap" columnGap={2} justifyContent="center" width={ctx.columns}>
+      {info && <Text color={C.overlay1}>{info}</Text>}
+      {!ctx.isNarrow && info && <Text color={C.surface1}>│</Text>}
+      <Text color={C.accent}>⌃k menu</Text>
+      {/* Hidden, yet the hotkeys still press: the Pane arms every Button in its drawn tree regardless of display (seen in engine 2.1.295, not promised by the types). Tab still visits them. */}
+      <Box key="footer-keys" display="none">
+        {keys.map(one => (
+          <Button key={one.key} label={one.label} hotkey={one.hotkey} plain onPress={one.onPress} />
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+export async function frame(ctx: DrawContext, actions: PaneActions, commands: readonly MenuCommand[], screen: Screen) {
+  const { Box, C, offset, bodyColumns, bodyRows } = ctx
+  const { fitted, isTabCompact } = fitCrumbs(screen.crumbs, ctx)
+  const middle = Crumbs(ctx, fitted)
+  // A group home that cannot resolve leaves the menu without group rows rather than failing the whole pane.
+  const groupMenu = ctx.isMenuOpen ? await groupCommands(actions.io, screen.menuOn ?? {}).catch(() => []) : []
+  const menuWidth = menuWidthOf(ctx.columns)
+  return (
+    <Box
+      flexDirection="column"
+      alignItems="center"
+      backgroundColor={C.appBg}
+      minHeight={bodyRows}
+      width={bodyColumns}
+    >
+      <Box height={HEADER_ROWS} />
+      <Box flexDirection="column" width={ctx.pageWidth} backgroundColor={screen.pageBg ?? C.panelBg} paddingX={ctx.isNarrow ? 0 : 2} paddingY={1}>
+        <Box flexDirection="column" width={ctx.textWidth}>
+          {screen.content as never}
+        </Box>
+      </Box>
+      <Box height={FOOTER_ROWS} />
+      <Box
+        position="absolute"
+        top={offset}
+        left={0}
+        width={bodyColumns}
+        height={HEADER_ROWS}
+        flexDirection="column"
+        alignItems="center"
+        backgroundColor={C.appBg}
+      >
+        {Header(ctx, middle, isTabCompact)}
+      </Box>
+      <Box
+        position="absolute"
+        top={offset + bodyRows - FOOTER_ROWS}
+        left={0}
+        width={bodyColumns}
+        height={FOOTER_ROWS}
+        flexDirection="column"
+        alignItems="center"
+        justifyContent="flex-end"
+        backgroundColor={C.appBg}
+      >
+        {Footer(ctx, screen.info, screen.keys)}
+      </Box>
+      {ctx.isMenuOpen && (
+        <Box
+          position="absolute"
+          top={offset + HEADER_ROWS + 2}
+          left={Math.max(0, Math.floor((bodyColumns - menuWidth - 4) / 2))}
+          width={menuWidth + 4}
+          flexDirection="column"
+          backgroundColor={BASE.panelBg}
+          paddingX={2}
+          paddingY={1}
+        >
+          {Menu(ctx, actions, commands, screen.keys, groupMenu) as never}
+        </Box>
+      )}
+    </Box>
+  )
+}
