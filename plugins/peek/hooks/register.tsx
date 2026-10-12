@@ -46,6 +46,8 @@ import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, markdownP
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, ruleParts, taskRows, wrapLines } from './measure'
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
+import type { WidgetCtx } from './pane/types'
+import { SectionRule } from './pane/widgets'
 
 const C = BASE
 
@@ -2096,6 +2098,7 @@ export const register: Register = on => {
     const { Box, Text, Button, Markdown, Code } = elements
     const Image = 'Image' in elements ? elements.Image : undefined
     const Client = 'Client' in elements ? elements.Client : undefined
+    const w: WidgetCtx = { Box, Text, Button, Image, Client, C }
     const current = await read($, view)
     const chosen = await read($, mode)
     const at = await read($, page)
@@ -2692,13 +2695,6 @@ export const register: Register = on => {
         const starList = await read($, stars)
         const starKeys = new Set(starList.map(one => itemKey(remoteRef(one)?.address ?? one)))
         const missing = looks.filter(one => one.state === 'missing').length
-        const sectionRule = (label: string, right: string) => (
-          <Text wrap="truncate-end">
-            <Text color={C.accent} bold>{`${label} `}</Text>
-            <Text color={C.surface1}>{'─'.repeat(Math.max(1, textWidth - label.length - right.length - 2))}</Text>
-            <Text color={C.overlay0}>{right ? ` ${right}` : ''}</Text>
-          </Text>
-        )
         const row = (one: GroupLook, index: number) => {
           const isSelected = index === selected
           const isStarred = starKeys.has(one.key)
@@ -2768,7 +2764,7 @@ export const register: Register = on => {
           if (b === 0) return list ? <Box key="group-top" flexDirection="column" width={textWidth} marginBottom={1}>{list}</Box> : null
           return (
             <Box key={`group-part-${b}`} flexDirection="column" width={textWidth} marginBottom={1}>
-              <Box key={`group-section-${b - 1}`}>{sectionRule(block.title.toUpperCase(), `${block.items.length}`)}</Box>
+              <Box key={`group-section-${b - 1}`}>{SectionRule(w, block.title.toUpperCase(), `${block.items.length}`, textWidth)}</Box>
               {list || (
                 <Box key={`group-empty-${b - 1}`}>
                   <Text color={C.overlay0}>empty</Text>
