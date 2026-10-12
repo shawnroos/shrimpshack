@@ -1536,7 +1536,7 @@ export const register: Register = on => {
       <Box flexDirection="row" flexWrap="wrap" columnGap={2} justifyContent="center" width={columns}>
         {info && <Text color={C.overlay1}>{info}</Text>}
         {!isNarrow && info && <Text color={C.surface1}>│</Text>}
-        <Text color={C.overlay0}>⌃k menu</Text>
+        <Text color={C.accent}>⌃k menu</Text>
         {/* Hidden, yet the hotkeys still press: the Pane arms every Button in its drawn tree regardless of display (seen in engine 2.1.295, not promised by the types). Tab still visits them. */}
         <Box key="footer-keys" display="none">
           {keys.map(one => (

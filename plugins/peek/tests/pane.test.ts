@@ -233,6 +233,7 @@ test('every view shows only its status text and ⌃k menu in the footer, and the
       expect(footer.texts.filter(text => text !== '│').length).toBe(2)
     }
     expect(footers[0]?.texts[0]).toMatch(/100% · § Handoff/)
+    expect((await ui.find({ text: /^⌃k menu$/ }))?.props.color).toBe(C.accent)
     await ui.unmount()
   }
 })
