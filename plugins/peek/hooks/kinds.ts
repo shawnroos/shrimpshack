@@ -1,4 +1,4 @@
-import type { GalleryType } from './lib'
+import type { GalleryType } from './gallery'
 import { familyOf } from './refs'
 
 const KIND_LABELS: Record<string, { glyph: string; label: string }> = {
