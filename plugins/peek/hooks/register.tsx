@@ -9,6 +9,7 @@ import type { CaptureIo } from './capture'
 import { familyOf, itemKey, parseRef } from './refs'
 import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
+import { downloadFile, remoteFileOf } from './web'
 import type { RemoteIo } from './remote'
 import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
@@ -346,13 +347,52 @@ async function loadFile($: EngineInterface, href: string, path: string, line?: n
   return { ...base, kind: kind === 'json' || kind === 'toml' ? kind : 'text', meta, summary, code }
 }
 
+function urlName(url: URL): string {
+  const last = url.pathname.split('/').filter(Boolean).pop()
+  try {
+    return last ? decodeURIComponent(last) : url.hostname
+  } catch {
+    return last ?? url.hostname
+  }
+}
+
+function videoView(url: URL, now: number): View {
+  const host = url.hostname.replace(/^www\./, '')
+  const record: RemoteRecord = {
+    address: url.href,
+    kind: 'web',
+    title: urlName(url),
+    trail: [host],
+    meta: [{ label: 'Host', value: host }],
+    body: `![video](${url.href})`,
+    media: { [url.href]: { play: url.href } },
+    browserUrl: url.href,
+  }
+  return { href: url.href, title: record.title, location: url.href, kind: 'web', remote: { record, tier: 'cli', fetchedAt: now } }
+}
+
+// The page keeps the URL as its address, so o opens and c copies the URL, not the scratch copy.
+async function loadRemoteFile($: EngineInterface, url: URL, file: { fetchUrl: string; ext: string }): Promise<View | null> {
+  const got = await downloadFile(remoteIoOf($), file.fetchUrl, file.ext).catch(() => undefined)
+  if (!got || /^text\/html/i.test(got.type ?? '')) return null
+  const loaded = await loadFile($, url.href, got.file).catch(() => null)
+  if (!loaded || loaded.error) return null
+  return { ...loaded, title: urlName(url), location: url.href, root: undefined, isWorktree: undefined }
+}
+
 async function loadUrl($: EngineInterface, href: string): Promise<View> {
   const url = new URL(href)
-  const base: View = { href, title: url.hostname + url.pathname, location: href, kind: 'web', meta: url.hostname }
+  const file = remoteFileOf(href)
+  if (file?.kind === 'video') return videoView(url, await $.clock.now())
+  const fromFile = file ? await loadRemoteFile($, url, file) : null
+  if (fromFile) return fromFile
   const kind = kindOf(url.pathname)
+  const base: View = { href, title: url.hostname + url.pathname, location: href, kind: 'web', meta: url.hostname }
   if (kind === 'image' || kind === 'svg') {
     return { ...base, error: 'Remote images open in the browser. Press "Open externally".' }
   }
+  const ref = parseRef(href)
+  if (file && ref) return loadRemote($, ref)
   const response = await $.http.fetch(href)
   if (!response.ok) return { ...base, error: `HTTP ${response.status}` }
   const type = response.headers['content-type'] ?? ''
@@ -543,8 +583,7 @@ function remoteRef(href: string, context: RefContext = {}): Ref | null {
   if (parseHref(href)) return null
   const ref = parseRef(href, context)
   if (!ref) return null
-  const kind = ref.kind === 'web' ? kindOf(new URL(ref.address).pathname) : null
-  return kind === 'image' || kind === 'svg' ? null : ref
+  return ref.kind === 'web' && remoteFileOf(ref.address) ? null : ref
 }
 
 async function show($: EngineInterface, raw: string) {

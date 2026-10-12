@@ -177,10 +177,12 @@ async function sha1(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-async function download(io: SourceIo, raw: string | undefined): Promise<string | undefined> {
+// The content type rides on stderr so the stdout fields every caller parses keep their order.
+const TYPE_MARKER = '__peek_type__ '
+
+async function fetchToScratch(io: SourceIo, raw: string | undefined, ext: string, maxSeconds: number): Promise<{ file: string; type?: string } | undefined> {
   const first = fetchable(raw)
   if (!first) return undefined
-  const ext = IMAGE_EXT.exec(first.pathname)?.[1]?.toLowerCase() ?? 'img'
   const file = `${SCRATCH}/web-${(await sha1(first.href)).slice(0, 12)}.${ext}`
   const made = await io.run(['mkdir', '-p', SCRATCH], { timeoutMs: 5000 }).catch(() => null)
   if (!made || made.exitCode !== 0) return undefined
@@ -189,17 +191,47 @@ async function download(io: SourceIo, raw: string | undefined): Promise<string |
   for (let hop = 0; url && hop <= MAX_IMAGE_HOPS; hop++) {
     const pin = await pinnedAddress(io, url)
     if (!pin) return undefined
-    const argv = ['curl', '-sf', ...PROTO, ...pin, '--max-redirs', '0', '--max-time', '10', '--max-filesize', '10000000', '-o', file, '-w', '%{http_code} %{size_download} %{redirect_url}', url.href]
-    const ran = await io.run(argv, { timeoutMs: 15_000 }).catch(() => null)
+    const format = `%{http_code} %{size_download} %{redirect_url}%{stderr}${TYPE_MARKER}%{content_type}`
+    const argv = ['curl', '-sf', ...PROTO, ...pin, '--max-redirs', '0', '--max-time', String(maxSeconds), '--max-filesize', '10000000', '-o', file, '-w', format, url.href]
+    const ran = await io.run(argv, { timeoutMs: (maxSeconds + 5) * 1000 }).catch(() => null)
     if (!ran || ran.exitCode !== 0) return undefined
     const [code = '', size = '', ...rest] = ran.stdout.trim().split(' ')
     const status = Number.parseInt(code, 10)
-    if (status >= 200 && status < 300) return Number.parseInt(size, 10) > 0 ? file : undefined
+    if (status >= 200 && status < 300) {
+      const cut = ran.stderr.lastIndexOf(TYPE_MARKER)
+      const type = cut >= 0 ? ran.stderr.slice(cut + TYPE_MARKER.length).trim() || undefined : undefined
+      return Number.parseInt(size, 10) > 0 ? { file, type } : undefined
+    }
     if (status < 300 || status >= 400) return undefined
     const next: string = rest.join(' ')
     url = next ? fetchable(safeParse(next, url.href)?.href) : null
   }
   return undefined
+}
+
+async function download(io: SourceIo, raw: string | undefined): Promise<string | undefined> {
+  const ext = IMAGE_EXT.exec(safeParse(raw ?? '')?.pathname ?? '')?.[1]?.toLowerCase() ?? 'img'
+  return (await fetchToScratch(io, raw, ext, 10))?.file
+}
+
+export async function downloadFile(io: SourceIo, url: string, ext: string): Promise<{ file: string; type?: string } | undefined> {
+  if (!(await hasCurl(io))) return undefined
+  return fetchToScratch(io, url, /^[a-z0-9]{1,8}$/i.test(ext) ? ext.toLowerCase() : 'txt', 20)
+}
+
+const FILE_PATH = /\.(md|mdx|markdown|txt|png|jpe?g|gif|webp|bmp|svg|csv|tsv|json|jsonc|ya?ml|toml|mmd|mermaid|ts|tsx|m?js|cjs|jsx|py|rb|sh|swift|rs|go|css|log|diff|patch)$/i
+const VIDEO_FILE = /\.(mp4|m4v|webm|mov)$/i
+
+// A blob URL is GitHub's HTML page around the file; the raw host serves the file itself.
+export function remoteFileOf(address: string): { kind: 'file'; fetchUrl: string; ext: string } | { kind: 'video' } | null {
+  const url = safeParse(address)
+  if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) return null
+  if (VIDEO_FILE.test(url.pathname)) return { kind: 'video' }
+  const ext = FILE_PATH.exec(url.pathname)?.[1]?.toLowerCase()
+  if (!ext) return null
+  const blob = url.hostname === 'github.com' ? /^\/([^/]+)\/([^/]+)\/blob\/(.+)$/.exec(url.pathname) : null
+  const fetchUrl = blob ? `https://raw.githubusercontent.com/${blob[1]}/${blob[2]}/${blob[3]}${url.search}` : url.href
+  return { kind: 'file', fetchUrl, ext }
 }
 
 const MAX_MEDIA = 8
