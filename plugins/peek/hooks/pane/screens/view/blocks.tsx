@@ -111,3 +111,5 @@ export function settleBlocks(ctx: DrawContext, io: NavIo, { drawnParts, partRows
     position: `${percent}%${heading ? ` · § ${heading}` : ''}`,
   }
 }
+
+export const noJumps = (): Jumps => ({ next: () => {}, prev: () => {} })
