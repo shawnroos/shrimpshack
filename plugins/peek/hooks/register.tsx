@@ -29,7 +29,7 @@ import { MODES, MOVE_KEYS, closeKey as closeKeyOf, expandKey as expandKeyOf, mod
 import { ROLES, SCOPES, SCOPE_ICON, menuCommands } from './pane/menu'
 import { CARD_GAP, CARD_MIN, CARD_ROWS, LIST_CHUNK, layout } from './pane/layout'
 import { groupCards, groupsScreen } from './pane/screens/groups'
-import { fileListing } from './pane/screens/files'
+import { recentScreen } from './pane/screens/recent'
 import { galleryScreen } from './pane/screens/gallery'
 import { type ItemLook, lookOf } from './pane/look'
 import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
@@ -113,7 +113,6 @@ async function openNav($: EngineInterface, one: NavItem | undefined) {
 
 const TYPES: GalleryType[] = ['all', 'markdown', 'code', 'data', 'image', 'diagram', 'html']
 const SORTS: GallerySort[] = ['recent', 'name', 'size', 'mentions']
-const PINNED_GROUPS = 4
 const GALLERY = 'peek-ui'
 const presses = atom({ plugin: 'peek', key: 'galleryPresses' } as const, 0)
 const typed = atom({ plugin: 'peek', key: 'galleryText' } as const, '')
@@ -555,128 +554,7 @@ export const register: Register = on => {
 
     if (chosen !== 'view' || !current) {
       if (chosen === 'gallery') return drawFrame(ctx, actions, commands, await galleryScreen(ctx, actions))
-      const { rest, favourites, scopeNote, roleKey, scopeKey, scopeCrumbs, waiting, selected, nav, keys, starts, at, looks, describe, favouritesBlock, groupsOf, scope, starSet } = await fileListing(ctx, actions)
-      const scopeCrumb = crumbs(scopeCrumbs)
-      const favs = selectEntries(favourites, 'all', '', 'recent')
-      const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
-      at.cursor = 0
-      const starredGroups = await groupHome(navIoOf($))
-        .then(found => (found ? groupStore.shown(groupsIoOf($), found.place) : []))
-        .then(all => all.filter(one => one.starred))
-        .catch(() => [])
-      const pinned = starredGroups.slice(0, PINNED_GROUPS)
-      const pinnedBlock = await (async () => {
-        if (!pinned.length) return null
-        at.cursor += 2
-        const { cards: grid, heights } = await groupCards(ctx, actions, pinned, 'starred', nav.length, selected)
-        pinned.forEach((one, i) => {
-          keys.push(`starred-${i}`)
-          starts.push(at.cursor)
-          at.cursor += heights[i] ?? 0
-          nav.push({ href: '', group: one.id, key: `starred-${i}`, line: at.navLine++, col: 0 })
-        })
-        at.cursor += 1
-        const count = starredGroups.length > pinned.length ? `${pinned.length} of ${starredGroups.length} · e for all` : `${pinned.length}`
-        return (
-          <Box flexDirection="column" width={textWidth}>
-            {SectionRule(w, 'STARRED GROUPS', count, textWidth)}
-            <Box height={1} />
-            {grid}
-          </Box>
-        )
-      })()
-      const favBlock = favouritesBlock(favs)
-      const rowList = (items: readonly FileEntry[], prefix: string) => {
-        const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
-          items.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
-        )
-        const firstNav = nav.length
-        chunks.forEach((chunk, i) => {
-          keys.push(`${prefix}-${i}`)
-          starts.push(at.cursor)
-          at.cursor += chunk.length
-          for (const one of chunk) nav.push({ href: one.href, key: `${prefix}-${i}`, line: at.navLine++, col: 0 })
-        })
-        return chunks.map((chunk, i) => (
-          <Box key={`${prefix}-${i}`} flexDirection="column" width={textWidth}>
-            {chunk.map((one, j) => {
-              const index = firstNav + i * LIST_CHUNK + j
-              const isSelected = index === selected
-              const { look, isStarred, png } = looks(one)
-              const { where, age } = describe(one)
-              const count = one.mentions > 1 ? `${one.mentions}× · ` : ''
-              const meta = `${one.status ? `${one.status} · ` : ''}${where}${count}${age}`
-              return ItemRow(w, look, {
-                key: `${prefix}-${i}-${j}`,
-                width: textWidth,
-                isSelected,
-                icon: {
-                  isStarred,
-                  png,
-                  icon: iconFor(look.kind),
-                  imageKey: `favicon-${index}`,
-                  buttonKey: `item-${index}`,
-                  autoFocus: isSelected ? true : undefined,
-                  onPress: () => void selectAndOpen($, index),
-                  boxes: {},
-                },
-                nameKey: `name-${index}`,
-                nameColor: isSelected ? C.accent : C.text,
-                meta,
-                metaColor: C.overlay0,
-              })
-            })}
-            {HoverLayer(w, `hover-${prefix}-${i}`, { kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
-          </Box>
-        ))
-      }
-      const groups = groupsOf(recentList).map(group => {
-        at.cursor += 2
-        const list = rowList(group.items, group.id)
-        at.cursor += 1
-        return { ...group, list }
-      })
-      layout.blockStarts = starts
-      layout.estimatedRows = Math.max(1, at.cursor)
-      const pinnedId = nav[clamp(selected, nav.length)]?.group
-      const pinnedOn = pinned.find(one => one.id === pinnedId)
-      const content = (
-        <Box flexDirection="column" width={textWidth}>
-          {pinnedBlock}
-          {favBlock}
-          {!rest && waiting}
-          {rest && recentList.length === 0 && favs.length === 0 && pinned.length === 0 && (
-            <Text color={C.overlay0}>
-              {scope === 'session' ? 'Nothing mentioned yet. Paths and links in replies land here.' : 'No files found here.'}
-            </Text>
-          )}
-          {groups.map(group => (
-            <Box key={`group-${group.id}`} flexDirection="column" width={textWidth} marginBottom={1}>
-              {SectionRule(w, group.label, `${group.items.length}`, textWidth)}
-              <Box height={1} />
-              {group.list as never}
-            </Box>
-          ))}
-        </Box>
-      )
-      return frame(
-        scopeCrumb,
-        content,
-        rest ? `${favs.length} favourites · ${recentList.length} files · ${scopeNote}` : 'loading…',
-        [
-          ...modeKeys,
-          scopeKey,
-          roleKey,
-          ...selectKeys.map(one => {
-            if (!pinnedOn) return one
-            if (one.key === 'open-selected') return { ...one, menu: 'Open the selected group' }
-            return one.key === 'star-selected' ? { ...one, menu: 'Unstar the selected group' } : one
-          }),
-          ...(pinned.length ? [expandKey] : []),
-          closeKey,
-        ],
-        { pageBg: C.appBg, menuOn: pinnedOn ? { group: pinnedOn, starHint: 'f' } : { target: nav[clamp(selected, nav.length)]?.href } },
-      )
+      return drawFrame(ctx, actions, commands, await recentScreen(ctx, actions))
     }
 
     let png = current.image ? pixels.get(current.image.file) : undefined
