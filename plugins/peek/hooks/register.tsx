@@ -43,7 +43,7 @@ import { describeAge, describeSize } from './format'
 import { classifyBlocks, filterRole, gridColumns, hasMeaningfulWords, nextOf, noteMentions, parseStatLines, rankRecent, selectEntries, toggleStar } from './gallery'
 import { colorFor, iconFor, kindLabel } from './kinds'
 import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, markdownPage, mermaidFences, mermaidPage, outlineOf, pathCandidates, plainInline, segmentsOf, swapMermaidFences, toggleTaskLine, urlCandidates } from './markdown'
-import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, ruleParts, taskRows, wrapLines } from './measure'
+import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, taskRows, wrapLines } from './measure'
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { WidgetCtx } from './pane/types'
@@ -2216,19 +2216,6 @@ export const register: Register = on => {
       hotkey: one.hotkey,
       onPress: () => void switchMode($, one.id),
     }))
-
-    const rule = (label: string, right: string, color: string = C.accent) => {
-      const parts = ruleParts(label, right, columns)
-      return (
-        <Text wrap="truncate-end">
-          <Text color={C.surface1}>─</Text>
-          <Text color={color} bold>{parts.head}</Text>
-          <Text color={C.surface1}>{parts.fill}</Text>
-          <Text color={color}>{parts.tail}</Text>
-          <Text color={C.surface1}>─</Text>
-        </Text>
-      )
-    }
 
     const filter = await read($, menuFilter)
     const closeMenu = () => void setMenu($, false)
