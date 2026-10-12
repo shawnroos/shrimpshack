@@ -48,7 +48,7 @@ import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './pa
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
 import { type ItemLook, type ItemState, lookOf, remoteNaming } from './pane/look'
-import { HoverLayer, ItemIcon, SectionRule, fitPicture } from './pane/widgets'
+import { HoverLayer, ItemIcon, ItemRow, SectionRule, fitPicture } from './pane/widgets'
 
 const C = BASE
 
@@ -2662,48 +2662,26 @@ export const register: Register = on => {
         const missing = looks.filter(one => one.state === 'missing').length
         const row = (one: ItemLook, index: number) => {
           const isSelected = index === selected
-          const isStarred = starKeys.has(one.key)
-          const favicon = one.favicon && Image ? pixels.get(one.favicon) : undefined
-          const meta = one.state === 'ok' ? '' : one.state
-          const leftWidth = Math.max(4, textWidth - meta.length - 1)
-          const nameRoom = Math.max(8, Math.floor((leftWidth - 3) * 0.6))
-          return (
-            <Box
-              key={`group-row-${index}`}
-              height={1}
-              flexDirection="row"
-              justifyContent="space-between"
-              width={textWidth}
-              backgroundColor={isSelected ? C.surface0 : undefined}
-              hover={{ backgroundColor: C.surface0 }}
-            >
-              <Box flexDirection="row" width={leftWidth} height={1} overflow="hidden">
-                {favicon && !isStarred && Image && (
-                  <Box flexShrink={0}>
-                    <Image key={`favicon-${index}`} source={{ png: favicon }} columns={2} rows={1} alt={iconFor(one.kind)} />
-                  </Box>
-                )}
-                <Box flexShrink={0}>
-                  <Button
-                    key={`item-${index}`}
-                    label={isStarred ? '\u{f51a}' : favicon ? ' ' : iconFor(one.kind)}
-                    plain
-                    autoFocus={isSelected ? true : undefined}
-                    onPress={() => void openGroupItem($, rows, index)}
-                  />
-                </Box>
-                <Box key={`group-item-${index}`} flexShrink={0}>
-                  <Text color={one.state === 'missing' ? C.overlay0 : isSelected ? C.accent : C.text} bold={isSelected} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(one.name, nameRoom)}`}</Text>
-                </Box>
-                <Box flexShrink={1} flexGrow={1} overflow="hidden">
-                  <Text color={C.overlay0} wrap="truncate-middle">{one.where ? `  ${one.where}` : ''}</Text>
-                </Box>
-              </Box>
-              <Box key={`group-meta-${index}`} flexShrink={0} height={1}>
-                <Text color={one.state === 'missing' ? C.red : C.overlay1}>{meta}</Text>
-              </Box>
-            </Box>
-          )
+          return ItemRow(w, one, {
+            key: `group-row-${index}`,
+            width: textWidth,
+            isSelected,
+            icon: {
+              isStarred: starKeys.has(one.key),
+              png: one.favicon && Image ? pixels.get(one.favicon) : undefined,
+              icon: iconFor(one.kind),
+              imageKey: `favicon-${index}`,
+              buttonKey: `item-${index}`,
+              autoFocus: isSelected ? true : undefined,
+              onPress: () => void openGroupItem($, rows, index),
+              boxes: {},
+            },
+            nameKey: `group-item-${index}`,
+            nameColor: one.state === 'missing' ? C.overlay0 : isSelected ? C.accent : C.text,
+            meta: one.state === 'ok' ? '' : one.state,
+            metaColor: one.state === 'missing' ? C.red : C.overlay1,
+            metaKey: `group-meta-${index}`,
+          })
         }
         let next = 0
         const drawn = blocks.map((block, b) => {

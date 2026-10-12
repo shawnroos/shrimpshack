@@ -1,3 +1,5 @@
+import { fitName } from '../measure'
+import type { ItemLook } from './look'
 import type { HoverProps, PictureBudget, WidgetCtx } from './types'
 
 // The engine refuses a whole pane whose Image sources pass 2097152 bytes; past this budget a picture shows as a link.
@@ -57,4 +59,46 @@ export function ItemIcon(ctx: WidgetCtx, slot: IconSlot) {
     picture && (boxes ? <Box {...keyed(boxes.image)} flexShrink={0}>{picture}</Box> : picture),
     boxes ? <Box {...keyed(boxes.button)} flexShrink={0}>{button}</Box> : button,
   ]
+}
+
+export type RowSpec = {
+  key: string
+  width: number
+  isSelected: boolean
+  icon: IconSlot
+  nameKey: string
+  nameColor: string
+  meta: string
+  metaColor: string
+  metaKey?: string
+}
+
+export function ItemRow(ctx: WidgetCtx, look: ItemLook, row: RowSpec) {
+  const { Box, Text, C } = ctx
+  const leftWidth = Math.max(4, row.width - row.meta.length - 1)
+  const nameRoom = Math.max(8, Math.floor((leftWidth - 3) * 0.6))
+  return (
+    <Box
+      key={row.key}
+      height={1}
+      flexDirection="row"
+      justifyContent="space-between"
+      width={row.width}
+      backgroundColor={row.isSelected ? C.surface0 : undefined}
+      hover={{ backgroundColor: C.surface0 }}
+    >
+      <Box flexDirection="row" width={leftWidth} height={1} overflow="hidden">
+        {...ItemIcon(ctx, row.icon)}
+        <Box key={row.nameKey} flexShrink={0}>
+          <Text color={row.nameColor} bold={row.isSelected} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(look.name, nameRoom)}`}</Text>
+        </Box>
+        <Box flexShrink={1} flexGrow={1} overflow="hidden">
+          <Text color={C.overlay0} wrap="truncate-middle">{look.where ? `  ${look.where}` : ''}</Text>
+        </Box>
+      </Box>
+      <Box {...keyed(row.metaKey)} flexShrink={0} height={1}>
+        <Text color={row.metaColor}>{row.meta}</Text>
+      </Box>
+    </Box>
+  )
 }
