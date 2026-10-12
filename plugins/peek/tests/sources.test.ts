@@ -4,6 +4,7 @@ import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'c
 import type { FailureKind } from '../types'
 import type { SourceIo } from '../hooks/sources'
 import { failureText, hasCurl, httpText, linearPaged, linearQuery, probe, runGh } from '../hooks/sources'
+import { exited } from './fixtures/results'
 
 const KEY = 'lin_api_PLANTEDKEY123'
 const ALL_KINDS: FailureKind[] = [
@@ -36,10 +37,6 @@ type WorldOptions = {
 }
 
 let sessions = 0
-
-function exited(exitCode: number, stdout = '', stderr = ''): ProcessRunResult {
-  return { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false }
-}
 
 function answer(status: number, body: unknown, headers: Record<string, string> = {}): HttpResponse {
   return { status, ok: status >= 200 && status < 300, headers, text: typeof body === 'string' ? body : JSON.stringify(body) }
