@@ -315,6 +315,15 @@ describe('items', () => {
     expect(outcomes[1]?.status).toBe('unchanged')
   })
 
+  test('a Slack thread then a reply link inside it leave one item; removing by the reply removes the thread', () => {
+    const thread = 'https://acme.slack.com/archives/C0123ABCD/p1791759796763609'
+    const reply = 'https://acme.slack.com/archives/C0123ABCD/p1791761128357239?thread_ts=1791759796.763609&cid=C0123ABCD'
+    const { group, outcomes } = applyGroupOps(make(), [{ op: 'addItem', ref: thread }, { op: 'addItem', ref: reply }], ctx())
+    expect(group.items.map(one => one.ref)).toEqual([thread])
+    expect(outcomes[1]?.status).toBe('unchanged')
+    expect(applyGroupOps(group, [{ op: 'removeItem', ref: reply }], ctx()).group.items).toEqual([])
+  })
+
   test('removing by the issue URL removes the pull request item', () => {
     const group = make([{ op: 'addItem', ref: PR }])
     expect(applyGroupOps(group, [{ op: 'removeItem', ref: ISSUE }], ctx()).group.items).toEqual([])

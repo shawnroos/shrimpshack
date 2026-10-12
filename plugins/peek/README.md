@@ -17,15 +17,19 @@ transcript.
 | GitHub pull requests | Details, line counts, files changed, a CI summary, the description and comments |
 | GitHub issues and repos | Details, the body or README, comments, and a repo's open pull requests and issues |
 | Linear issues and projects | Details, the description, comments with replies, and a project's open issues |
+| Slack threads | The channel, who started it, the reply count, the first message and every reply |
 | A link to a file (`.md`, `.png`, `.json`, `.csv`, code, ...) | Downloaded and drawn like the local file; `o` and `c` still use the link |
 | A link to a video (`.mp4`, `.webm`, `.mov`) | A Play button that opens it in your browser |
 
 ## Remote pages
 
 Links and IDs in replies become clickable: GitHub URLs, `owner/repo#12`, `#12`
-inside a GitHub repo, Linear URLs, and Linear IDs such as `WEB-2757` when
-`WEB` is a team in your workspace. Peek is read-only: it never changes
-anything in GitHub or Linear.
+inside a GitHub repo, Linear URLs, Linear IDs such as `WEB-2757` when
+`WEB` is a team in your workspace, and Slack message links
+(`https://<workspace>.slack.com/archives/<channel>/p<ts>`). A link to a reply
+opens its whole thread, and Recent and groups count a thread and its reply
+links as one item. Peek is read-only: it never changes anything in GitHub,
+Linear or Slack.
 
 Pictures, videos and Mermaid diagrams in a pull request, issue or Linear
 description or comment draw the same way as on a web page: up to 8 pictures
@@ -39,9 +43,11 @@ Each page comes from the best source available, and the footer names it:
 | `gh` | GitHub items | `gh auth login` |
 | `curl` | Web pages and their images | `curl` on the path |
 | Linear API | Linear items | `LINEAR_API_KEY` in the environment or `~/.secrets`, or the `work-linear` Keychain item |
+| Slack MCP | Slack threads | The Slack plugin's MCP server (or the claude.ai Slack connector) connected in this session; check with `/mcp` |
+| `slack` | Slack threads, when the Slack MCP server is not connected | The public Slack CLI at `~/.slack/bin/slack` or on the path, signed in with `slack login` |
 | This session | Anything the agent already read through a GitHub, Linear or web tool | Nothing |
 
-Open issues and pull requests on screen refresh every 60 seconds. Open ones in
+Open issues, pull requests and Slack threads on screen refresh every 60 seconds. Open ones in
 Recent or stars refresh every 5 minutes, at most 20 per round. Closed and merged
 items, repos, projects and web pages refresh when opened or when you press `u`.
 Refresh pauses after 10 minutes with no activity and backs off when a service
