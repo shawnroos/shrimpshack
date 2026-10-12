@@ -314,3 +314,32 @@ test('a mermaid fence in a pull request body draws as a diagram', async ($, on) 
   expect(ran.some(argv => argv[0] === '/home/.cache/claude-peek/bin/mermaid-ascii')).toBe(true)
   await ui.unmount()
 })
+
+test('Recent and Gallery match a star by its stored href, so a star saved as /issues/42 does not star the /pull/42 entry', async ($, on) => {
+  fakeWorld(on)
+  const issue = 'https://github.com/acme/widgets/issues/42'
+  const pull = 'https://github.com/acme/widgets/pull/42'
+  await $.command.run({ command: 'peek', args: pull } as never)
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  await $.tool.call({ tool: 'mcp__peek__star', tool_use_id: 's1', target: issue } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  const layerItems = async (key: string) => ((await ui.find({ key }))?.props.props as { items: unknown[] } | undefined)?.items
+
+  await ui.press({ key: 'mode-recent' })
+  expect(await ui.find({ text: /1 favourites · 1 files · session/ })).toBeDefined()
+  expect((await ui.find({ key: 'item-0' }))?.props.label).toBe('\u{f51a}')
+  expect((await ui.find({ key: 'item-1' }))?.props.label).not.toBe('\u{f51a}')
+  expect(await layerItems('hover-favs-0')).toEqual([{ href: issue, isStarred: true }])
+  expect(await layerItems('hover-touched-0')).toEqual([{ href: pull, isStarred: false }])
+
+  await ui.press({ key: 'mode-gallery' })
+  expect(await ui.find({ text: /2 files · session/ })).toBeDefined()
+  expect((await ui.find({ key: 'item-0' }))?.props.label).toBe('\u{f51a}')
+  expect((await ui.find({ key: 'item-1' }))?.props.label).not.toBe('\u{f51a}')
+  expect(await layerItems('hover-favs-0')).toEqual([{ href: issue, isStarred: true }])
+  expect(await layerItems('hover-touched-0')).toEqual([{ href: pull, isStarred: false }])
+
+  await ui.press({ key: 'mode-view' })
+  expect(await ui.find({ text: /\u{f51a} starred/u })).toBeDefined()
+  await ui.unmount()
+})
