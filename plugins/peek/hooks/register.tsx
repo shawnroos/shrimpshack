@@ -29,6 +29,8 @@ import { MODES, MOVE_KEYS, closeKey as closeKeyOf, expandKey as expandKeyOf, mod
 import { ROLES, SCOPES, SCOPE_ICON, menuCommands } from './pane/menu'
 import { CARD_GAP, CARD_MIN, CARD_ROWS, LIST_CHUNK, layout } from './pane/layout'
 import { groupCards, groupsScreen } from './pane/screens/groups'
+import { fileListing } from './pane/screens/files'
+import { galleryScreen } from './pane/screens/gallery'
 import { type ItemLook, lookOf } from './pane/look'
 import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
 import { bootLinear, clamp, goBack, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
@@ -552,181 +554,12 @@ export const register: Register = on => {
     if (chosen === 'groups') return drawFrame(ctx, actions, commands, await groupsScreen(ctx, actions))
 
     if (chosen !== 'view' || !current) {
-      const scope = await read($, scopeAtom)
-      const role = await read($, roleFilter)
-      const starList = await read($, stars)
-      const starSet = new Set(starList)
-      const raw = scope === 'session' ? await sessionEntries(navIoOf($), list) : scopeEntries(navIoOf($), scope, cwd, now)
-      const entries = raw ? filterRole(withMentions(raw, list), role) : null
-      const roleKey: Key = {
-        key: 'role',
-        label: `Show: ${role}`,
-        hotkey: 'a',
-        onPress: () => void update($, roleFilter, one => nextOf(ROLES, one)),
-      }
-      const scopeNote = role === 'all' ? scope : `${scope} · ${role}`
-      const scopeKey: Key = {
-        key: 'scope',
-        label: `Scope: ${scope}`,
-        hotkey: 's',
-        onPress: () => void update($, scopeAtom, one => nextOf(SCOPES, one)),
-      }
-      const describe = (one: FileEntry) => {
-        const age = describeAge(Math.max(one.mentionedAt, one.mtimeMs), now)
-        const where = one.worktree && scope === 'repo' ? `${one.worktree} · ` : ''
-        return { where, age }
-      }
-      const looks = (one: FileEntry) => ({
-        look: lookOf(one, scope === 'session' ? shortPath(one.folder, cwd, home) : one.folder),
-        isStarred: starSet.has(one.href),
-        png: one.favicon && Image ? pixels.get(one.favicon) : undefined,
-      })
-      const scopeCrumb = crumbs([
-        { label: `${SCOPE_ICON[scope]} ${scope}`, fg: C.appBg, bg: C.accent, bold: true },
-      ])
-      const waiting = <Text color={C.overlay0}>Loading files…</Text>
-
-      const favMentions = starList.map(href => list.find(one => one.href === href) ?? { href, at: 0, count: 0 })
-      const favourites = filterRole(withMentions(await sessionEntries(navIoOf($), favMentions), list), role)
-      const rest = entries ? entries.filter(one => !starSet.has(one.href)) : null
-      const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
-      const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
-      const keys: string[] = []
-      const starts: number[] = []
-      let cursor = 0
-      const selected = await read($, cursorAtom)
-      const nav: NavItem[] = []
-      layout.navOrder = nav
-      let navLine = 0
-      const cardGrid = (list: readonly FileEntry[], prefix: string) => {
-        const rowsOfCards = Array.from({ length: Math.ceil(list.length / perRow) }, (_, r) => list.slice(r * perRow, r * perRow + perRow))
-        const firstNav = nav.length
-        rowsOfCards.forEach((cards, r) => {
-          keys.push(`${prefix}-${r}`)
-          starts.push(cursor + r * (CARD_ROWS + 1))
-          const line = navLine++
-          cards.forEach((one, col) => nav.push({ href: one.href, key: `${prefix}-${r}`, line, col }))
-        })
-        cursor += rowsOfCards.length * (CARD_ROWS + 1)
-        return rowsOfCards.map((cards, r) => (
-          <Box key={`${prefix}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
-            {cards.map((one, c) => {
-              const index = firstNav + r * perRow + c
-              const isSelected = index === selected
-              const { look, isStarred, png } = looks(one)
-              const { where, age } = describe(one)
-              return ItemCard(w, look, {
-                key: `${prefix}-${r}-${c}`,
-                width: cardWidth,
-                height: CARD_ROWS,
-                background: isSelected ? C.surface0 : C.panelBg,
-                clip: false,
-                icon: {
-                  isStarred,
-                  png,
-                  icon: iconFor(look.kind),
-                  imageKey: `favicon-${index}`,
-                  buttonKey: `item-${index}`,
-                  autoFocus: isSelected ? true : undefined,
-                  onPress: () => void selectAndOpen($, index),
-                },
-                nameKey: `name-${index}`,
-                nameColor: isSelected ? C.accent : C.text,
-                meta: `${where}${age} · ${one.status ?? describeSize(one.size)}`,
-                metaColor: isSelected ? C.overlay1 : C.overlay0,
-              })
-            })}
-            {HoverLayer(w, `hover-${prefix}-${r}`, { kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
-          </Box>
-        ))
-      }
-      const favouritesBlock = (shownFavs: readonly FileEntry[]) => {
-        if (!shownFavs.length) return null
-        cursor += 2
-        const grid = cardGrid(shownFavs, 'favs')
-        cursor += 1
-        return (
-          <Box flexDirection="column" width={textWidth}>
-            {SectionRule(w, 'FAVOURITES', `${shownFavs.length}`, textWidth)}
-            <Box height={1} />
-            {grid}
-          </Box>
-        )
-      }
-
-      const groupsOf = (items: readonly FileEntry[]) =>
-        [
-          { id: 'artifacts', label: 'ARTIFACTS', items: items.filter(one => one.role === 'artifact') },
-          { id: 'touched', label: 'TOUCHED', items: items.filter(one => one.role === 'touched') },
-          { id: 'files', label: scope.toUpperCase(), items: items.filter(one => !one.role) },
-        ].filter(group => group.items.length > 0)
-
-      if (chosen === 'gallery') {
-        const type = await read($, galleryType)
-        const sort = await read($, gallerySort)
-        const query = await read($, galleryFilter)
-        const favs = selectEntries(favourites, type, query, sort)
-        const picked = rest ? selectEntries(rest, type, query, sort).slice(0, 240) : []
-        const Input = 'Input' in elements ? elements.Input : undefined
-        cursor = 2
-        const favBlock = favouritesBlock(favs)
-        const groups = groupsOf(picked).map(group => {
-          cursor += 2
-          const grid = cardGrid(group.items, group.id)
-          cursor += 1
-          return { ...group, grid }
-        })
-        layout.blockStarts = starts
-        layout.estimatedRows = Math.max(1, cursor)
-        const content = (
-          <Box flexDirection="column" width={textWidth}>
-            <Box flexDirection="row" columnGap={2} width={textWidth}>
-              {Input && (
-                <Box flexGrow={1}>
-                  <Input
-                    key="gallery-filter"
-                    placeholder="filter by name or folder"
-                    value={query}
-                    onInput={(value: string) => void update($, galleryFilter, () => value)}
-                    onSubmit={(value: string) => void update($, galleryFilter, () => value)}
-                  />
-                </Box>
-              )}
-              <Text color={C.overlay1}>{`${type} · ${sort}`}</Text>
-            </Box>
-            <Box height={1} />
-            {favBlock}
-            {!rest && waiting}
-            {rest && picked.length === 0 && favs.length === 0 && <Text color={C.overlay0}>No files match.</Text>}
-            {groups.map(group => (
-              <Box key={`group-${group.id}`} flexDirection="column" width={textWidth}>
-                {SectionRule(w, group.label, `${group.items.length}`, textWidth)}
-                <Box height={1} />
-                {group.grid}
-              </Box>
-            ))}
-          </Box>
-        )
-        return frame(
-          scopeCrumb,
-          content,
-          rest ? `${favs.length + picked.length} ${type === 'all' ? 'files' : type} · ${scopeNote}` : 'loading…',
-          [
-            ...modeKeys,
-            scopeKey,
-            roleKey,
-            { key: 'type', label: 'Type', hotkey: 't', menu: `Next file type (now ${type})`, onPress: () => void update($, galleryType, one => nextOf(TYPES, one)) },
-            { key: 'sort', label: 'Sort', hotkey: 'n', menu: `Next sort order (now ${sort})`, onPress: () => void update($, gallerySort, one => nextOf(SORTS, one)) },
-            ...selectKeys,
-            closeKey,
-          ],
-          { pageBg: C.appBg, menuOn: { target: nav[clamp(selected, nav.length)]?.href } },
-        )
-      }
-
+      if (chosen === 'gallery') return drawFrame(ctx, actions, commands, await galleryScreen(ctx, actions))
+      const { rest, favourites, scopeNote, roleKey, scopeKey, scopeCrumbs, waiting, selected, nav, keys, starts, at, looks, describe, favouritesBlock, groupsOf, scope, starSet } = await fileListing(ctx, actions)
+      const scopeCrumb = crumbs(scopeCrumbs)
       const favs = selectEntries(favourites, 'all', '', 'recent')
       const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
-      cursor = 0
+      at.cursor = 0
       const starredGroups = await groupHome(navIoOf($))
         .then(found => (found ? groupStore.shown(groupsIoOf($), found.place) : []))
         .then(all => all.filter(one => one.starred))
@@ -734,15 +567,15 @@ export const register: Register = on => {
       const pinned = starredGroups.slice(0, PINNED_GROUPS)
       const pinnedBlock = await (async () => {
         if (!pinned.length) return null
-        cursor += 2
+        at.cursor += 2
         const { cards: grid, heights } = await groupCards(ctx, actions, pinned, 'starred', nav.length, selected)
         pinned.forEach((one, i) => {
           keys.push(`starred-${i}`)
-          starts.push(cursor)
-          cursor += heights[i] ?? 0
-          nav.push({ href: '', group: one.id, key: `starred-${i}`, line: navLine++, col: 0 })
+          starts.push(at.cursor)
+          at.cursor += heights[i] ?? 0
+          nav.push({ href: '', group: one.id, key: `starred-${i}`, line: at.navLine++, col: 0 })
         })
-        cursor += 1
+        at.cursor += 1
         const count = starredGroups.length > pinned.length ? `${pinned.length} of ${starredGroups.length} · e for all` : `${pinned.length}`
         return (
           <Box flexDirection="column" width={textWidth}>
@@ -760,9 +593,9 @@ export const register: Register = on => {
         const firstNav = nav.length
         chunks.forEach((chunk, i) => {
           keys.push(`${prefix}-${i}`)
-          starts.push(cursor)
-          cursor += chunk.length
-          for (const one of chunk) nav.push({ href: one.href, key: `${prefix}-${i}`, line: navLine++, col: 0 })
+          starts.push(at.cursor)
+          at.cursor += chunk.length
+          for (const one of chunk) nav.push({ href: one.href, key: `${prefix}-${i}`, line: at.navLine++, col: 0 })
         })
         return chunks.map((chunk, i) => (
           <Box key={`${prefix}-${i}`} flexDirection="column" width={textWidth}>
@@ -798,13 +631,13 @@ export const register: Register = on => {
         ))
       }
       const groups = groupsOf(recentList).map(group => {
-        cursor += 2
+        at.cursor += 2
         const list = rowList(group.items, group.id)
-        cursor += 1
+        at.cursor += 1
         return { ...group, list }
       })
       layout.blockStarts = starts
-      layout.estimatedRows = Math.max(1, cursor)
+      layout.estimatedRows = Math.max(1, at.cursor)
       const pinnedId = nav[clamp(selected, nav.length)]?.group
       const pinnedOn = pinned.find(one => one.id === pinnedId)
       const content = (
