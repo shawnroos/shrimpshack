@@ -77,9 +77,8 @@ describe('rankRecent', () => {
 })
 
 test('urlCandidates trims trailing punctuation', () => {
-  const { urlCandidates, pushRecent } = lib
+  const { urlCandidates } = lib
   expect(urlCandidates('see https://x.dev/a. and (https://y.dev/b)')).toEqual(['https://x.dev/a', 'https://y.dev/b'])
-  expect(pushRecent(['a', 'b'], ['a', 'c'])).toEqual(['b', 'a', 'c'])
 })
 
 describe('mermaid fences', () => {
@@ -101,11 +100,6 @@ describe('outline', () => {
 
   test('lists headings outside code fences, with levels', () => {
     expect(lib.outlineOf(doc).map(one => `${one.level}:${one.text}`)).toEqual(['1:Title', '2:Part one', '3:Detail', '2:Part two'])
-  })
-
-  test('fromSection starts at the chosen heading', () => {
-    expect(lib.fromSection(doc, 3)).toBe('## Part two\n')
-    expect(lib.fromSection(doc, 99)).toBe(doc)
   })
 })
 

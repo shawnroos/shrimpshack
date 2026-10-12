@@ -224,11 +224,6 @@ export function urlCandidates(text: string): string[] {
   return [...text.matchAll(/https?:\/\/[^\s)<>\]"'`]+/g)].map(match => match[0].replace(/[.,;:!?]+$/, ''))
 }
 
-export function pushRecent(list: readonly string[], hrefs: readonly string[], cap = 60): string[] {
-  const next = list.filter(one => !hrefs.includes(one))
-  return [...next, ...hrefs].slice(-cap)
-}
-
 const STOP_WORDS = new Set(
   'a an the that this those these me my show open view see peek at of for to in on file doc docs document one it please last new'.split(' '),
 )
@@ -311,11 +306,6 @@ export function outlineOf(markdown: string): Outline {
     offset += line.length + 1
   }
   return found
-}
-
-export function fromSection(markdown: string, index: number): string {
-  const heading = outlineOf(markdown)[index]
-  return heading ? markdown.slice(heading.offset) : markdown
 }
 
 export function describeSize(bytes: number): string {
