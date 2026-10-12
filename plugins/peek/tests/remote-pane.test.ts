@@ -4,6 +4,8 @@ import type { On } from 'claude-code'
 import { C, META_ICON, mute } from '../hooks/theme'
 import { issueList, pullList, pullView, repoView } from './fixtures/github/items'
 import { hoverLayers } from './fixtures/overlay'
+import { exited } from './fixtures/results'
+import { PANE_PROPS, baseWorld, fakeHttp, fakeProcess, noDisk } from './fixtures/world'
 
 const NOW = 10 * 3600_000
 const ran: string[][] = []
@@ -12,47 +14,38 @@ let sessions = 0
 function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boolean; holdPull?: Promise<void>; pull?: Record<string, unknown>; mermaid?: string } = {}) {
   ran.length = 0
   on('session.id', () => ({ value: `pane-${++sessions}` }))
-  on('session.cwd', () => ({ value: '/repo' }))
-  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
-  on('http.fetch', () => ({ value: { status: 404, ok: false, headers: {}, text: '' } }))
+  baseWorld(on)
+  fakeHttp(on)
   if (!options.isClockMocked) on('clock.now', () => ({ value: NOW }))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
-  on('ui.toast', () => ({ value: undefined }))
-  on('fs.stat', (_$, e) => {
-    throw new Error(`ENOENT ${e.path}`)
-  })
+  noDisk(on)
   on('fs.read', (_$, e) => {
     if (e.path === '/Users/me/notes.md') return { value: '# Notes\n\n- [ ] one\n' }
     throw new Error(`ENOENT ${e.path}`)
   })
-  on('process.run', async (_$, e) => {
-    ran.push([...e.argv])
-    if (options.holdPull && e.argv.join(' ').startsWith('gh pr view 42')) await options.holdPull
-    const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-    const fail = (stderr: string) => ({ value: { exitCode: 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
-    const line = e.argv.join(' ')
-    if (e.argv[0] === 'sh') return ok('gh\ncurl\n')
-    if (e.argv[0] === '/home/.cache/claude-peek/bin/mermaid-ascii') return options.mermaid ? ok(options.mermaid) : fail('no')
-    if (line === 'gh auth status') return (options.ghAuthExit ?? 0) === 0 ? ok('') : fail('You are not logged into any GitHub hosts')
-    if (line.startsWith('gh api repos/acme/widgets/issues/42')) return ok(JSON.stringify({ number: 42, pull_request: {} }))
-    if (line.startsWith('gh pr view 42')) return ok(JSON.stringify(pullView({ mergeable: 'CONFLICTING', statusCheckRollup: [], body: 'Follows #45. [tick](file:///Users/me/notes.md#task-3)', ...options.pull })))
-    if (line.startsWith('gh api repos/acme/widgets/pulls/42')) return ok('2')
-    if (line.startsWith('gh repo view')) return ok(JSON.stringify(repoView))
-    if (line.startsWith('gh api repos/acme/widgets/readme')) return ok('# Widgets\n\nRead me.')
-    if (line.startsWith('gh pr list')) return ok(JSON.stringify(pullList))
-    if (line.startsWith('gh issue list')) return ok(JSON.stringify(issueList))
-    return fail('unexpected')
-  })
+  fakeProcess(
+    on,
+    async argv => {
+      if (options.holdPull && argv.join(' ').startsWith('gh pr view 42')) await options.holdPull
+      const ok = (stdout: string) => exited(0, stdout)
+      const fail = (stderr: string) => exited(1, '', stderr)
+      const line = argv.join(' ')
+      if (argv[0] === 'sh') return ok('gh\ncurl\n')
+      if (argv[0] === '/home/.cache/claude-peek/bin/mermaid-ascii') return options.mermaid ? ok(options.mermaid) : fail('no')
+      if (line === 'gh auth status') return (options.ghAuthExit ?? 0) === 0 ? ok('') : fail('You are not logged into any GitHub hosts')
+      if (line.startsWith('gh api repos/acme/widgets/issues/42')) return ok(JSON.stringify({ number: 42, pull_request: {} }))
+      if (line.startsWith('gh pr view 42')) return ok(JSON.stringify(pullView({ mergeable: 'CONFLICTING', statusCheckRollup: [], body: 'Follows #45. [tick](file:///Users/me/notes.md#task-3)', ...options.pull })))
+      if (line.startsWith('gh api repos/acme/widgets/pulls/42')) return ok('2')
+      if (line.startsWith('gh repo view')) return ok(JSON.stringify(repoView))
+      if (line.startsWith('gh api repos/acme/widgets/readme')) return ok('# Widgets\n\nRead me.')
+      if (line.startsWith('gh pr list')) return ok(JSON.stringify(pullList))
+      if (line.startsWith('gh issue list')) return ok(JSON.stringify(issueList))
+      return fail('unexpected')
+    },
+    ran,
+  )
 }
 
-const props = {
-  title: 'Peek',
-  isFocused: true,
-  bodyColumns: 100,
-  placement: 'dock' as const,
-  scroll: { offset: 0, bodyRows: 40 },
-  view: {},
-}
+const props = PANE_PROPS
 
 test('a pull request draws title, details, the CI line and comments, on terminal and desktop', async ($, on) => {
   fakeWorld(on)
