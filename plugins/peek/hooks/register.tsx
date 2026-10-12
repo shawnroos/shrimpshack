@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, GroupOp, GroupOutcome, GroupResult, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
+import type { Group, GroupResult, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './gallery'
 import { C as BASE, MUTED, ICON, META_ICON, mute, speakerColor } from './theme'
 import { record } from './capture'
@@ -35,7 +35,7 @@ import {
   writeGroup,
 } from './groups'
 import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
-import { describeAge, describeSize } from './format'
+import { describeAge, describeSize, plural } from './format'
 import { classifyBlocks, filterRole, gridColumns, nextOf, selectEntries } from './gallery'
 import { colorFor, iconFor, kindLabel } from './kinds'
 import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, mermaidFences, outlineOf, pathCandidates, plainInline, segmentsOf, swapMermaidFences } from './markdown'
@@ -47,8 +47,9 @@ import { type ItemLook, lookOf } from './pane/look'
 import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
 import { SCRATCH, bootLinear, clamp, goBack, loadRemote, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
 import type { NavIo } from './navigation'
-import { expandedGroups, focusGroupRow, groupCommands, groupHome, groupItemLook, groupPage, groupPageRows, groupTarget, itemState, loadGroupRemote, openCardItem, openGroupHref, openGroupItem, openGroupPage, selectGroupRow, setStar, starInGroupsTab, starredFirst, toggleExpanded, toggleGroupStar } from './groups-session'
-import type { GroupMenuFor, GroupRows, GroupTarget, MenuCommand } from './groups-session'
+import { TOOLS } from './group-tools'
+import { expandedGroups, focusGroupRow, groupCommands, groupHome, groupItemLook, groupPage, groupPageRows, loadGroupRemote, openCardItem, openGroupHref, openGroupItem, openGroupPage, selectGroupRow, setStar, starInGroupsTab, starredFirst, toggleExpanded, toggleGroupStar } from './groups-session'
+import type { GroupMenuFor, GroupRows, MenuCommand } from './groups-session'
 import { forgetPath, gitRoot, guess, noteCapture, pathExists, remember, scopeEntries, sessionEntries, toHref, withMentions } from './entries'
 
 const C = BASE
@@ -541,273 +542,7 @@ function writeGroupHere(io: GroupsIo, place: GroupPlace, id: string, change: (cu
   })
 }
 
-async function groupJson($: EngineInterface, group: Group, worktreeRoot?: string) {
-  const known = titlesByKey()
-  const items = await Promise.all(
-    group.items.map(async one => ({
-      ref: one.ref,
-      title: known.get(itemKey(one.ref))?.title ?? null,
-      label: one.label ?? null,
-      section: one.section ?? null,
-      addedBy: one.addedBy,
-      state: await itemState(navIoOf($), one.ref, worktreeRoot),
-    })),
-  )
-  return { id: group.id, title: group.title, description: group.description, starred: group.starred, sections: group.sections.map(one => ({ ...one, layout: layoutOf(one) })), items, removed: group.removed }
-}
-
 const sum = (values: readonly number[]) => values.reduce((total, one) => total + one, 0)
-
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
-
-function tally(outcomes: readonly GroupOutcome[]): string {
-  const count = (status: GroupOutcome['status']) => outcomes.filter(one => one.status === status).length
-  return `${count('applied')} applied, ${count('unchanged')} unchanged, ${count('refused')} refused`
-}
-
-const failedWrite = (verb: string, write: Extract<GroupWrite, { ok: false }>) => ({ result: `Could not ${verb}: ${write.error}. Nothing was changed.` })
-
-type SaveInput = {
-  id?: unknown
-  title?: unknown
-  description?: unknown
-  sections?: unknown
-  order?: unknown
-  add?: unknown
-  move?: unknown
-  remove?: unknown
-}
-
-const isText = (value: unknown): value is string => typeof value === 'string'
-const isGroupRef = (id: unknown): id is string => isText(id) && isGroupId(id)
-const badId = (id: unknown) => ({ result: `${String(id)} is not a group id. Use an id from list_groups.` })
-const listOf = (value: unknown): Record<string, unknown>[] | null =>
-  value === undefined ? [] : Array.isArray(value) && value.every(one => one && typeof one === 'object') ? (value as Record<string, unknown>[]) : null
-
-function sectionOps(value: unknown): GroupOp[] | string {
-  const list = listOf(value)
-  if (!list) return 'sections must be a list of { action, section, title }'
-  const ops: GroupOp[] = []
-  for (const one of list) {
-    const isLaid = one.action === 'layout' || (one.action === 'add' && one.layout !== undefined)
-    if (isLaid && one.layout !== 'cards' && one.layout !== 'list') return `A section layout is cards or list, not "${String(one.layout)}"`
-    const layout = one.layout as SectionLayout
-    if (one.action === 'add' && isText(one.title)) ops.push({ op: 'addSection', title: one.title, ...(isLaid ? { layout } : {}) })
-    else if (one.action === 'layout' && isText(one.section)) ops.push({ op: 'setSectionLayout', section: one.section, layout })
-    else if (one.action === 'rename' && isText(one.section) && isText(one.title)) ops.push({ op: 'renameSection', section: one.section, title: one.title })
-    else if (one.action === 'remove' && isText(one.section)) ops.push({ op: 'removeSection', section: one.section })
-    else return `Unreadable section change ${JSON.stringify(one)}`
-  }
-  return ops
-}
-
-async function saveGroup($: EngineInterface, input: SaveInput) {
-  const home = await groupHome(navIoOf($))
-  if (!home) return { result: 'Could not save the group: HOME is not set.' }
-  const { place, worktreeRoot } = home
-  const id = input.id
-  if (id !== undefined && !isGroupRef(id)) return badId(id)
-  if (input.title !== undefined && !isText(input.title)) return { result: 'title must be text.' }
-  if (input.description !== undefined && !isText(input.description)) return { result: 'description must be text.' }
-  if (id === undefined && !isText(input.title)) return { result: 'Give a title to create a group, or an id to change one.' }
-  const sections = sectionOps(input.sections)
-  if (typeof sections === 'string') return { result: sections }
-  const order = input.order
-  if (order !== undefined && !(Array.isArray(order) && order.every(isText))) return { result: 'order must be a list of section ids or titles.' }
-  const adds = listOf(input.add)
-  const moves = listOf(input.move)
-  const removes = listOf(input.remove)
-  if (!adds || !moves || !removes || [...adds, ...moves, ...removes].some(one => !isText(one.target))) {
-    return { result: 'add, move and remove are lists of objects, each with a target.' }
-  }
-
-  const resolveAll = (list: Record<string, unknown>[], isAdd: boolean) => Promise.all(list.map(one => groupTarget(navIoOf($), String(one.target), worktreeRoot, isAdd)))
-  const [added, moved, removed] = await Promise.all([resolveAll(adds, true), resolveAll(moves, false), resolveAll(removes, false)])
-  const rejected: GroupOutcome[] = added.flatMap(one => ('error' in one ? [refused('addItem', one.error, { ref: one.raw })] : []))
-  const optional = <T,>(value: unknown, wrap: (v: string) => T) => (isText(value) ? wrap(value) : {})
-  const opsFor = (group: Group | null): GroupOp[] => {
-    const pick = (target: Extract<GroupTarget, { ref: string }>) => {
-      const exact = group?.items.find(one => itemKey(one.ref) === itemKey(target.raw))
-      return exact ? exact.ref : target.ref
-    }
-    return [
-      ...sections,
-      ...(order ? [{ op: 'reorderSections' as const, order: order as string[] }] : []),
-      ...added.flatMap((one, i) =>
-        'error' in one
-          ? []
-          : [{ op: 'addItem' as const, ref: one.ref, ...optional(adds[i]?.section, section => ({ section })), ...optional(adds[i]?.label, label => ({ label })), ...(adds[i]?.force === true ? { force: true } : {}) }],
-      ),
-      ...moved.flatMap((one, i) => ('error' in one ? [] : [{ op: 'moveItem' as const, ref: pick(one), ...optional(moves[i]?.section, section => ({ section })) }])),
-      ...removed.flatMap((one, i) => ('error' in one ? [] : [{ op: 'removeItem' as const, ref: pick(one), ...(removes[i]?.force === true ? { force: true } : {}) }])),
-    ]
-  }
-
-  const io = groupsIoOf($)
-  const isCreate = id === undefined
-  const others = isCreate || isText(input.title) ? await listGroups(io, place) : []
-  const ctx = { now: await $.clock.now(), newId: () => shortId(Math.random), actor: 'agent' as const }
-  const target = isCreate ? freshId(others) : id
-  const write = await writeGroupHere(io, place, target, current => {
-    if (isCreate) {
-      if (current) return { group: current, outcomes: [refused('create', 'That id is taken; try again')] }
-      return createGroup(
-        { projectKey: place.projectKey, id: target, title: String(input.title), ...optional(input.description, description => ({ description })) },
-        opsFor(null),
-        { ...ctx, others },
-      )
-    }
-    if (!current) return { group: null, outcomes: [refused('setTitle', `No group ${target} in this project; it may have been deleted`)] }
-    const head: GroupOp[] = [
-      ...(isText(input.title) ? [{ op: 'setTitle' as const, title: input.title }] : []),
-      ...(isText(input.description) ? [{ op: 'setDescription' as const, description: input.description }] : []),
-    ]
-    return applyGroupOps(current, [...head, ...opsFor(current)], { ...ctx, others: others.filter(one => one.id !== target) })
-  })
-  if (!write.ok) return failedWrite(isCreate ? 'create the group' : 'save the group', write)
-  if (write.isChanged) $.ui.invalidate('ui.render')
-  const outcomes = [...write.outcomes, ...rejected]
-  const group = write.group
-  if (isCreate && !write.isChanged) return { result: `Not created: ${outcomes[0]?.reason ?? 'refused'}.\n${JSON.stringify({ outcomes })}` }
-  if (!group) return { result: `Not saved: ${outcomes[0]?.reason ?? 'unknown group'}.\n${JSON.stringify({ outcomes })}` }
-  const line = `${isCreate ? 'Created' : 'Saved'} group "${group.title}" (${group.id}): ${tally(isCreate ? outcomes.slice(1) : outcomes)}.`
-  return { result: `${line}\n${JSON.stringify({ ...(await groupJson($, group, worktreeRoot)), outcomes })}` }
-}
-
-const TARGET_HELP = 'A file path (absolute, or relative to the session folder), a URL, a GitHub owner/repo#N, or a Linear key'
-
-const GROUP_TOOLS = [
-  {
-    name: 'list_groups',
-    description:
-      'List the peek groups in this project: titled bundles of related files and links (a collection) shown in the peek side pane. Returns each group id, title, description, star and counts. Call before save_group to reuse a group rather than make a near-duplicate.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'read_group',
-    description:
-      'Read one peek group (a collection or bundle of files and links) in full: title, description, sections, and every item (file or link) with its title (null until peek has fetched it), label, section id, who added it (agent or person) and state (ok, missing, unavailable). Read before you change a group: the person may have added or removed items.',
-    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'The group id from list_groups' } }, required: ['id'] },
-  },
-  {
-    name: 'save_group',
-    description:
-      'Create or change a peek group: a titled, described bundle of files and links with sections, kept per project in the peek side pane so the person can come back to it. Without id it creates a group (title required); with id it applies the given changes. Changes are edits, never a replace: items the person added stay unless you remove one by name with force, and an item the person removed is only re-added with force. Sections are named by id or title, so one call can add a section and fill it. A section shows its items as cards (the default) or as a list of lines; set it with layout on add, or with the layout action.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'The group to change; leave out to create one' },
-        title: { type: 'string' },
-        description: { type: 'string', description: 'Up to 500 characters' },
-        sections: {
-          type: 'array',
-          description: 'Section changes, applied in order before item changes',
-          items: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['add', 'rename', 'remove', 'layout'] },
-              section: { type: 'string', description: 'Section id or title, for rename, remove and layout' },
-              title: { type: 'string', description: 'New title, for add and rename' },
-              layout: { type: 'string', enum: ['cards', 'list'], description: 'How the section shows its items, for add and layout: cards (the default) or list' },
-            },
-            required: ['action'],
-          },
-        },
-        order: { type: 'array', items: { type: 'string' }, description: 'Every section, by id or title, in the new order' },
-        add: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              target: { type: 'string', description: TARGET_HELP },
-              section: { type: 'string', description: 'Section id or title; leave out for the top block' },
-              label: { type: 'string', description: 'A short note shown with the item, up to 200 characters' },
-              force: { type: 'boolean', description: 'Re-add an item the person removed' },
-            },
-            required: ['target'],
-          },
-        },
-        move: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: { target: { type: 'string' }, section: { type: 'string', description: 'Leave out to move to the top block' } },
-            required: ['target'],
-          },
-        },
-        remove: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: { target: { type: 'string' }, force: { type: 'boolean', description: 'Remove an item the person added' } },
-            required: ['target'],
-          },
-        },
-      },
-    },
-  },
-  {
-    name: 'delete_group',
-    description:
-      'Delete a peek group: a collection or bundle of files and links. A group the person starred, or one holding items the person added, needs force; without it you are told what would be lost.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' }, force: { type: 'boolean', description: 'Delete even a starred group or one with items the person added' } },
-      required: ['id'],
-    },
-  },
-]
-
-async function listGroupsTool($: EngineInterface) {
-  const home = await groupHome(navIoOf($))
-  if (!home) return { result: 'Could not list groups: HOME is not set.' }
-  const groups = await listGroups(groupsIoOf($), home.place)
-  const summaries = groups.map(one => ({
-    id: one.id,
-    title: one.title,
-    description: one.description,
-    starred: one.starred,
-    sections: one.sections.length,
-    items: one.items.length,
-    updatedAt: one.updatedAt,
-  }))
-  const line = groups.length ? `${plural(groups.length, 'group')} in this project.` : 'No groups in this project yet.'
-  return { result: `${line}\n${JSON.stringify(summaries)}` }
-}
-
-async function readGroupTool($: EngineInterface, id: unknown) {
-  if (!isGroupRef(id)) return badId(id)
-  const home = await groupHome(navIoOf($))
-  if (!home) return { result: 'Could not read the group: HOME is not set.' }
-  const group = await readGroup(groupsIoOf($), home.place, id)
-  if (!group) return { result: `No group ${id} in this project.` }
-  const line = `Group "${group.title}" (${group.id}): ${plural(group.items.length, 'item')} in ${plural(group.sections.length, 'section')}.`
-  return { result: `${line}\n${JSON.stringify(await groupJson($, group, home.worktreeRoot))}` }
-}
-
-async function deleteGroupTool($: EngineInterface, id: unknown, force: boolean) {
-  if (!isGroupRef(id)) return badId(id)
-  const home = await groupHome(navIoOf($))
-  if (!home) return { result: 'Could not delete the group: HOME is not set.' }
-  let title = ''
-  const write = await writeGroupHere(groupsIoOf($), home.place, id, current => {
-    if (!current) return { group: null, outcomes: [refused('delete', `No group ${id} in this project`)] }
-    title = current.title
-    return deleteGroup(current, force)
-  })
-  if (!write.ok) return failedWrite('delete the group', write)
-  const [outcome] = write.outcomes
-  if (!write.isChanged) return { result: outcome?.reason.startsWith('Not deleted') ? outcome.reason : `Not deleted: ${outcome?.reason ?? 'refused'}.` }
-  $.ui.invalidate('ui.render')
-  return { result: `Deleted group "${title}" (${id}).` }
-}
-
-function freshId(others: readonly Group[]): string {
-  const taken = new Set(others.map(one => one.id))
-  let id = shortId(Math.random)
-  while (taken.has(id)) id = shortId(Math.random)
-  return id
-}
 
 async function docImage($: EngineInterface, src: string, docPath: string) {
   if (/^https?:/.test(src)) return null
@@ -993,22 +728,7 @@ export const register: Register = on => {
     void bootLinear(navIoOf($)).catch(() => undefined)
     const saved = await $.store.get('stars').catch(() => undefined)
     if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
-    await $.tool
-      .register({
-        name: 'star',
-        description:
-          'Star or unstar a file path or URL in the peek side pane, so it sorts first in Recent and Gallery. Star the things the user should look at: a plan, a report, a diagram you made. Use sparingly. For several related files and links, make a peek group instead (save_group).',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            target: { type: 'string', description: 'An absolute or relative file path, or an http(s) URL' },
-            starred: { type: 'boolean', description: 'true to star (the default), false to unstar' },
-          },
-          required: ['target'],
-        },
-      })
-      .catch(() => undefined)
-    for (const spec of GROUP_TOOLS) await $.tool.register(spec).catch(() => undefined)
+    for (const tool of Object.values(TOOLS)) await $.tool.register(tool.spec).catch(() => undefined)
     void groupHome(navIoOf($)).catch(() => undefined)
     await $.command.register({ name: 'peek-menu', description: 'Open the peek command menu (ctrl+k in the peek pane)' })
     await $.command.register({ name: 'peek-ui', description: 'Show every Claude Code UI element a mod can draw, live' })
@@ -1244,31 +964,19 @@ export const register: Register = on => {
   })
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
-  on('tool.call', { tool: /^mcp__peek__star$/ }, async ($, e) => {
-    const input = e as unknown as { target?: unknown; starred?: unknown }
-    if (typeof input.target !== 'string') return { result: 'Give a target: a file path or URL.' }
-    const target = input.target
-    const href = await toHref(navIoOf($), target).catch(() => null)
-    if (!href) return { result: `No file or URL at ${target}.` }
-    const isOn = await setStar(navIoOf($), href, input.starred !== false).catch(() => null)
-    if (isOn === null) return { result: 'Could not save the star.' }
-    return { result: `${isOn ? 'Starred' : 'Unstarred'} ${parseHref(href)?.path ?? href} in peek.` }
-  })
+  on('tool.call', { tool: /^mcp__peek__star$/ }, async ($, e) => TOOLS.star.run(navIoOf($), e))
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
-  on('tool.call', { tool: /^mcp__peek__list_groups$/ }, async $ => listGroupsTool($))
+  on('tool.call', { tool: /^mcp__peek__list_groups$/ }, async ($, e) => TOOLS.list_groups.run(navIoOf($), e))
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
-  on('tool.call', { tool: /^mcp__peek__read_group$/ }, async ($, e) => readGroupTool($, (e as unknown as { id?: unknown }).id))
+  on('tool.call', { tool: /^mcp__peek__read_group$/ }, async ($, e) => TOOLS.read_group.run(navIoOf($), e))
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
-  on('tool.call', { tool: /^mcp__peek__save_group$/ }, async ($, e) => saveGroup($, e as unknown as SaveInput))
+  on('tool.call', { tool: /^mcp__peek__save_group$/ }, async ($, e) => TOOLS.save_group.run(navIoOf($), e))
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
-  on('tool.call', { tool: /^mcp__peek__delete_group$/ }, async ($, e) => {
-    const input = e as unknown as { id?: unknown; force?: unknown }
-    return deleteGroupTool($, input.id, input.force === true)
-  })
+  on('tool.call', { tool: /^mcp__peek__delete_group$/ }, async ($, e) => TOOLS.delete_group.run(navIoOf($), e))
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
   on('tool.call', { tool: /^(?:Bash$|WebFetch$|mcp__(?!peek__))/ }, async ($, e, next) => {

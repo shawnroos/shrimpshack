@@ -12,3 +12,5 @@ export function describeAge(thenMs: number, nowMs: number): string {
   if (hours < 48) return `${hours}h ago`
   return `${Math.round(hours / 24)}d ago`
 }
+
+export const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
