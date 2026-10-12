@@ -8,3 +8,8 @@ export const layout = {
   estimatedRows: 1,
   contentRows: 0,
 }
+
+export const LIST_CHUNK = 10
+export const CARD_ROWS = 5
+export const CARD_MIN = 26
+export const CARD_GAP = 2
