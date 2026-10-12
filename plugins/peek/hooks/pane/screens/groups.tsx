@@ -11,15 +11,13 @@ import { parseHref } from '../../paths'
 import { cached } from '../../refresh'
 import { ICON } from '../../theme'
 import { MOVE_KEYS, closeAction, expandAction, modeActions, selectActions } from '../actions'
-import { CARD_GAP, CARD_MIN, CARD_ROWS } from '../layout'
+import { CARD_GAP, CARD_MIN, CARD_ROWS, layoutBuilder, rowCounter } from '../layout'
 import type { ItemLook } from '../look'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { HoverLayer, ItemCard, ItemIcon, type IconSlot } from '../widgets'
 import { groupPageScreen } from './group-page'
 
 const GROUP_CARD_LINES = 3
-
-const sum = (values: readonly number[]) => values.reduce((total, one) => total + one, 0)
 
 export async function groupCards(ctx: DrawContext, actions: PaneActions, groups: readonly Group[], prefix: string, firstIndex: number, selected: number) {
   const { Box, Text, Button, Image, C, textWidth, now } = ctx
@@ -96,39 +94,46 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
           </Box>
         </Box>
       )
-      let height = 2 + 1 + (lines.length ? 1 + lines.length : 0) + (canExpand ? 2 : 0) + 1
+      const size = rowCounter()
       const parts = shown.map((block, b) => {
         const blockLooks = looks[b] ?? []
         const rows = Array.from({ length: Math.ceil(blockLooks.length / perRow) }, (_, r) => blockLooks.slice(r * perRow, r * perRow + perRow))
         const body = !blockLooks.length
-          ? [<Text key={`${prefix}-empty-${i}-${b}`} color={C.overlay0}>empty</Text>]
+          ? [size.line(<Text key={`${prefix}-empty-${i}-${b}`} color={C.overlay0}>empty</Text>)]
           : block.layout === 'list'
             ? [
-                <Box key={`${prefix}-lines-${i}-${b}`} flexDirection="column" width={inner}>
-                  {blockLooks.map((look, j) => line(look, block.first + j))}
-                  {layer('rows', blockLooks.length, blockLooks)}
-                </Box>,
+                size.line(
+                  <Box key={`${prefix}-lines-${i}-${b}`} flexDirection="column" width={inner}>
+                    {blockLooks.map((look, j) => line(look, block.first + j))}
+                    {layer('rows', blockLooks.length, blockLooks)}
+                  </Box>,
+                  blockLooks.length,
+                ),
               ]
-            : rows.map((row, r) => (
-                <Box key={`${prefix}-irow-${i}-${b}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginTop={r ? 1 : 0}>
-                  {row.map((look, c) => itemCard(look, block.first + r * perRow + c))}
-                  {layer('cards', CARD_ROWS, row)}
-                </Box>
-              ))
-        height += 1 + (block.title ? 2 : 0) + (!blockLooks.length ? 1 : block.layout === 'list' ? blockLooks.length : rows.length * (CARD_ROWS + 1) - 1)
+            : rows.map((row, r) =>
+                size.line(
+                  <Box key={`${prefix}-irow-${i}-${b}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginTop={r ? size.margin(1) : 0}>
+                    {row.map((look, c) => itemCard(look, block.first + r * perRow + c))}
+                    {layer('cards', CARD_ROWS, row)}
+                  </Box>,
+                  CARD_ROWS,
+                ),
+              )
         return (
-          <Box key={`${prefix}-block-${i}-${b}`} flexDirection="column" width={inner} marginTop={1}>
-            {block.title ? (
-              <Box key={`${prefix}-sec-${i}-${block.section}`} flexDirection="column" width={inner}>
-                <Text color={C.text} bold wrap="truncate-end">{block.title}</Text>
-                <Text color={C.surface1}>{'─'.repeat(inner)}</Text>
-              </Box>
-            ) : null}
+          <Box key={`${prefix}-block-${i}-${b}`} flexDirection="column" width={inner} marginTop={size.margin(1)}>
+            {block.title
+              ? size.line(
+                  <Box key={`${prefix}-sec-${i}-${block.section}`} flexDirection="column" width={inner}>
+                    <Text color={C.text} bold wrap="truncate-end">{block.title}</Text>
+                    <Text color={C.surface1}>{'─'.repeat(inner)}</Text>
+                  </Box>,
+                  2,
+                )
+              : null}
             {body}
           </Box>
         )
       })
-      if (!blocks.length) height += 2
       const barLabel = isExpanded ? 'LESS ▲' : 'MORE ▼'
       const barPad = Math.max(0, inner - barLabel.length)
       const node = (
@@ -137,54 +142,55 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
           flexDirection="column"
           width={textWidth}
           paddingX={2}
-          paddingY={1}
-          marginBottom={1}
+          paddingY={size.paddingY(1)}
+          marginBottom={size.margin(1)}
           backgroundColor={isSelected ? C.surface0 : C.panelBg}
         >
-          <Box flexDirection="row" width={inner} height={1}>
-            <Box flexShrink={0}>
-              <Button
-                key={`item-${index}`}
-                label={group.starred ? '\u{f51a}' : ICON.groups}
-                plain
-                autoFocus={isSelected ? true : undefined}
-                onPress={() => void io.cursor.update(() => index).then(() => openGroupPage(io, group.id))}
-              />
-            </Box>
-            <Box key={`group-name-${index}`} flexGrow={1} flexShrink={1} overflow="hidden">
-              <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${group.title.toUpperCase()}`}</Text>
-            </Box>
-            <Box flexShrink={0} marginLeft={1}>
-              <Text color={isSelected ? C.overlay1 : C.overlay0}>{`${plural(group.items.length, 'item')} · ${describeAge(group.updatedAt, now)}`}</Text>
-            </Box>
-            {HoverLayer(w, `hover-${prefix}-${i}`, { kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] })}
-          </Box>
-          {lines.length > 0 && <Box height={1} />}
-          {lines.map((text, k) => (
-            <Text key={`${prefix}-desc-${i}-${k}`} color={C.subtext0}>{text}</Text>
-          ))}
-          {parts}
-          {!blocks.length && (
-            <Box marginTop={1}>
-              <Text color={C.overlay0}>No items</Text>
-            </Box>
+          {size.line(
+            <Box flexDirection="row" width={inner} height={1}>
+              <Box flexShrink={0}>
+                <Button
+                  key={`item-${index}`}
+                  label={group.starred ? '\u{f51a}' : ICON.groups}
+                  plain
+                  autoFocus={isSelected ? true : undefined}
+                  onPress={() => void io.cursor.update(() => index).then(() => openGroupPage(io, group.id))}
+                />
+              </Box>
+              <Box key={`group-name-${index}`} flexGrow={1} flexShrink={1} overflow="hidden">
+                <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${group.title.toUpperCase()}`}</Text>
+              </Box>
+              <Box flexShrink={0} marginLeft={1}>
+                <Text color={isSelected ? C.overlay1 : C.overlay0}>{`${plural(group.items.length, 'item')} · ${describeAge(group.updatedAt, now)}`}</Text>
+              </Box>
+              {HoverLayer(w, `hover-${prefix}-${i}`, { kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] })}
+            </Box>,
           )}
-          {canExpand && <Box key={`${prefix}-moregap-${i}`} height={1} />}
-          {canExpand && (
-            <Box key={`${prefix}-morebar-${i}`} width={inner} height={1} backgroundColor={isSelected ? C.surface1 : C.surface0}>
-              <Button
-                key={`${prefix}-more-${i}`}
-                label={`${' '.repeat(Math.floor(barPad / 2))}${barLabel}${' '.repeat(Math.ceil(barPad / 2))}`}
-                plain
-                dimColor
-                hover={{ color: C.accent }}
-                onPress={() => void io.cursor.update(() => index).then(() => toggleExpanded(io, group.id))}
-              />
-            </Box>
+          {lines.length > 0 && size.line(<Box height={1} />)}
+          {lines.map((text, k) => size.line(<Text key={`${prefix}-desc-${i}-${k}`} color={C.subtext0}>{text}</Text>))}
+          {parts}
+          {!blocks.length &&
+            size.line(
+              <Box marginTop={size.margin(1)}>
+                <Text color={C.overlay0}>No items</Text>
+              </Box>,
+            )}
+          {canExpand && size.line(<Box key={`${prefix}-moregap-${i}`} height={1} />)}
+          {canExpand && size.line(
+              <Box key={`${prefix}-morebar-${i}`} width={inner} height={1} backgroundColor={isSelected ? C.surface1 : C.surface0}>
+                <Button
+                  key={`${prefix}-more-${i}`}
+                  label={`${' '.repeat(Math.floor(barPad / 2))}${barLabel}${' '.repeat(Math.ceil(barPad / 2))}`}
+                  plain
+                  dimColor
+                  hover={{ color: C.accent }}
+                  onPress={() => void io.cursor.update(() => index).then(() => toggleExpanded(io, group.id))}
+                />
+              </Box>,
           )}
         </Box>
       )
-      return { node, height }
+      return { node, height: size.rows }
     }),
   )
   return { cards: drawn.map(one => one.node), heights: drawn.map(one => one.height) }
@@ -208,6 +214,8 @@ export async function groupsScreen(ctx: DrawContext, actions: PaneActions): Prom
   const starredCount = groups.filter(one => one.starred).length
   const selected = await io.cursor.read()
   const { cards, heights } = await groupCards(ctx, actions, groups, 'groups', 0, selected)
+  const layout = layoutBuilder()
+  layout.measured(groups.map((one, i) => ({ rows: heights[i] ?? 0, place: { href: one.id, key: `groups-${i}` } })))
   const selectedGroup = () => actions.selectedNav().then(one => one?.href)
   const content = (
     <Box flexDirection="column" width={textWidth}>
@@ -241,10 +249,6 @@ export async function groupsScreen(ctx: DrawContext, actions: PaneActions): Prom
     ],
     pageBg: C.appBg,
     menuOn: { group: groups[clamp(selected, groups.length)], starHint: 'f' },
-    layout: {
-      nav: groups.map((one, i) => ({ href: one.id, key: `groups-${i}`, line: i, col: 0 })),
-      blockStarts: heights.map((_, i) => sum(heights.slice(0, i))),
-      estimatedRows: Math.max(1, sum(heights)),
-    },
+    layout: layout.done(),
   }
 }

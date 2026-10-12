@@ -12,20 +12,15 @@ const SORTS: GallerySort[] = ['recent', 'name', 'size', 'mentions']
 export async function galleryScreen(ctx: DrawContext, actions: PaneActions): Promise<Screen> {
   const { Box, Text, C, textWidth, Input } = ctx
   const w = ctx
-  const { rest, favourites, scopeNote, scope, role, scopeCrumbs, waiting, selected, nav, starts, at, cardGrid, favouritesBlock, groupsOf } = await fileListing(ctx, actions)
+  const { rest, favourites, scopeNote, scope, role, scopeCrumbs, waiting, selected, layout, cardGrid, favouritesBlock, groupsOf } = await fileListing(ctx, actions)
   const type = await actions.galleryType.read()
   const sort = await actions.gallerySort.read()
   const query = await actions.galleryFilter.read()
   const favs = selectEntries(favourites, type, query, sort)
   const picked = rest ? selectEntries(rest, type, query, sort).slice(0, 240) : []
-  at.cursor = 2
+  layout.space(2)
   const favBlock = favouritesBlock(favs)
-  const groups = groupsOf(picked).map(group => {
-    at.cursor += 2
-    const grid = cardGrid(group.items, group.id)
-    at.cursor += 1
-    return { ...group, grid }
-  })
+  const groups = groupsOf(picked).map(group => ({ ...group, grid: layout.section(() => cardGrid(group.items, group.id)) }))
   const content = (
     <Box flexDirection="column" width={textWidth}>
       <Box flexDirection="row" columnGap={2} width={textWidth}>
@@ -69,7 +64,7 @@ export async function galleryScreen(ctx: DrawContext, actions: PaneActions): Pro
       closeAction(actions),
     ],
     pageBg: C.appBg,
-    menuOn: { target: nav[clamp(selected, nav.length)]?.href },
-    layout: { nav, blockStarts: starts, estimatedRows: Math.max(1, at.cursor) },
+    menuOn: { target: layout.nav[clamp(selected, layout.nav.length)]?.href },
+    layout: layout.done(),
   }
 }

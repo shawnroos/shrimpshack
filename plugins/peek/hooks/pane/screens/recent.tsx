@@ -16,10 +16,9 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
   const { Box, Text, C, textWidth } = ctx
   const w = ctx
   const io = actions.io
-  const { rest, favourites, scopeNote, role, scopeCrumbs, waiting, selected, nav, keys, starts, at, looks, describe, favouritesBlock, groupsOf, scope, starSet } = await fileListing(ctx, actions)
+  const { rest, favourites, scopeNote, role, scopeCrumbs, waiting, selected, layout, looks, describe, favouritesBlock, groupsOf, scope, starSet } = await fileListing(ctx, actions)
   const favs = selectEntries(favourites, 'all', '', 'recent')
   const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
-  at.cursor = 0
   const starredGroups = await groupHome(io)
     .then(found => (found ? io.shownGroups(found.place) : []))
     .then(all => all.filter(one => one.starred))
@@ -27,15 +26,8 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
   const pinned = starredGroups.slice(0, PINNED_GROUPS)
   const pinnedBlock = await (async () => {
     if (!pinned.length) return null
-    at.cursor += 2
-    const { cards: grid, heights } = await groupCards(ctx, actions, pinned, 'starred', nav.length, selected)
-    pinned.forEach((one, i) => {
-      keys.push(`starred-${i}`)
-      starts.push(at.cursor)
-      at.cursor += heights[i] ?? 0
-      nav.push({ href: '', group: one.id, key: `starred-${i}`, line: at.navLine++, col: 0 })
-    })
-    at.cursor += 1
+    const { cards: grid, heights } = await groupCards(ctx, actions, pinned, 'starred', layout.nav.length, selected)
+    layout.section(() => layout.measured(pinned.map((one, i) => ({ rows: heights[i] ?? 0, place: { href: '', group: one.id, key: `starred-${i}` } }))))
     const count = starredGroups.length > pinned.length ? `${pinned.length} of ${starredGroups.length} · e for all` : `${pinned.length}`
     return (
       <Box flexDirection="column" width={textWidth}>
@@ -46,21 +38,11 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
     )
   })()
   const favBlock = favouritesBlock(favs)
-  const rowList = (items: readonly FileEntry[], prefix: string) => {
-    const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
-      items.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
-    )
-    const firstNav = nav.length
-    chunks.forEach((chunk, i) => {
-      keys.push(`${prefix}-${i}`)
-      starts.push(at.cursor)
-      at.cursor += chunk.length
-      for (const one of chunk) nav.push({ href: one.href, key: `${prefix}-${i}`, line: at.navLine++, col: 0 })
-    })
-    return chunks.map((chunk, i) => (
+  const rowList = (items: readonly FileEntry[], prefix: string) =>
+    layout.list(items, LIST_CHUNK, (one, i) => ({ href: one.href, key: `${prefix}-${i}` }), (chunk, i, first) => (
       <Box key={`${prefix}-${i}`} flexDirection="column" width={textWidth}>
         {chunk.map((one, j) => {
-          const index = firstNav + i * LIST_CHUNK + j
+          const index = first + j
           const isSelected = index === selected
           const { look, isStarred, png } = looks(one)
           const { where, age } = describe(one)
@@ -89,13 +71,8 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
         {HoverLayer(w, `hover-${prefix}-${i}`, { kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
       </Box>
     ))
-  }
-  const groups = groupsOf(recentList).map(group => {
-    at.cursor += 2
-    const list = rowList(group.items, group.id)
-    at.cursor += 1
-    return { ...group, list }
-  })
+  const groups = groupsOf(recentList).map(group => ({ ...group, list: layout.section(() => rowList(group.items, group.id)) }))
+  const nav = layout.nav
   const pinnedId = nav[clamp(selected, nav.length)]?.group
   const pinnedOn = pinned.find(one => one.id === pinnedId)
   const content = (
@@ -135,6 +112,6 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
     ],
     pageBg: C.appBg,
     menuOn: pinnedOn ? { group: pinnedOn, starHint: 'f' } : { target: nav[clamp(selected, nav.length)]?.href },
-    layout: { nav, blockStarts: starts, estimatedRows: Math.max(1, at.cursor) },
+    layout: layout.done(),
   }
 }

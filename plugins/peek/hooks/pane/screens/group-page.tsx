@@ -11,6 +11,7 @@ import { parseHref } from '../../paths'
 import { cached, isTimed } from '../../refresh'
 import { ICON } from '../../theme'
 import { closeAction, modeActions } from '../actions'
+import { layoutBuilder } from '../layout'
 import type { ItemLook } from '../look'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { HoverLayer, ItemRow, SectionRule } from '../widgets'
@@ -67,14 +68,18 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
       metaKey: `group-meta-${index}`,
     })
   }
+  const layout = layoutBuilder()
+  // Three rows for the title and the gap under it, two per block whether it draws or not: the estimate as it was.
+  layout.space(3)
   let next = 0
   const drawn = blocks.map((block, b) => {
+    layout.space(2)
     const first = next
     next += block.items.length
     const blockLooks = looks.slice(first, next)
     const list = blockLooks.length > 0 && (
       <Box key={`group-block-${b}`} flexDirection="column" width={textWidth}>
-        {blockLooks.map((one, j) => row(one, first + j))}
+        {layout.lines(blockLooks, (one, index) => ({ href: one.key, key: `group-row-${index}` }), row)}
         {HoverLayer(w, `hover-group-${b}`, { kind: 'rows', width: textWidth, height: blockLooks.length, starX: 0, starY: 0, items: blockLooks.map(one => ({ href: one.href, isStarred: starKeys.has(one.key) })) })}
       </Box>
     )
@@ -137,10 +142,6 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
     ],
     pageBg: C.appBg,
     menuOn: { target: rows.hrefs[selected] || undefined, group: shown, selectedRef: refs[selected] },
-    layout: {
-      nav: keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 })),
-      blockStarts: [],
-      estimatedRows: Math.max(1, looks.length + blocks.length * 2 + 3),
-    },
+    layout: layout.done(),
   }
 }
