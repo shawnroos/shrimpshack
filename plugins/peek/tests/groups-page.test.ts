@@ -1016,3 +1016,23 @@ test('the MORE bar is a quiet strip one step off the card, a blank row below the
   expect(await itemNames(ui, 'groups', 0)).toEqual(['plan.md', 'todo.md', 'notes.md', 'The page'])
   await ui.unmount()
 })
+
+test('an untitled Slack thread is named by its channel in Recent but by its address on a group page, and a group label outranks both', async ($, on) => {
+  fakeFs(on)
+  const thread = 'https://acme.slack.com/archives/C0123ABCD/p1700000000123456'
+  const web = 'https://www.example.test/docs/start'
+  await create($, [{ target: thread }, { target: web, label: 'Start here' }, { target: PR }])
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  await $.tool.call({ tool: 'mcp__peek__star', tool_use_id: 's1', target: thread } as never)
+  const recent = await recentText($)
+  expect(recent).toContain('Thread in C0123ABCD')
+  expect(recent).toContain('acme.slack.com')
+
+  const ui = await openFirstGroup($ as never)
+  const rows = await rowTexts(ui)
+  expect(rows[0]).toStartWith('acme.slack.com/archives/C0123ABCD/p')
+  expect(rows).toContain('Start here')
+  expect(rows).not.toContain('Thread in C0123ABCD')
+  expect(await ui.find({ text: /acme\/widgets/ })).toBeDefined()
+  await ui.unmount()
+})
