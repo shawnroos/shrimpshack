@@ -4,10 +4,7 @@ import type { ProcessRunInit, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnR
 import type { BuildIo, LiveIo, LiveState } from '../hooks/live'
 import { createLive, helperBinary, pagePoint, parseEvent, splitLines, typedInput, wheelPoint } from '../hooks/live'
 import { failureText } from '../hooks/sources'
-
-function exited(exitCode: number, stdout = '', stderr = ''): ProcessRunResult {
-  return { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false }
-}
+import { exited } from './fixtures/results'
 
 type BuildWorld = { source?: string; hasSwiftc?: boolean; swiftcExit?: number; cached?: string[] }
 
