@@ -80,13 +80,19 @@ and JavaScript dialogs.
 | `/peek WEB-2757` or `/peek owner/repo#12` | Opens a Linear or GitHub item |
 | `/peek the export diagram` | Finds a recent file by description |
 | `/peek` | Reopens the last file |
-| `/peek-menu` | Command menu: switch view, scroll, open, copy, recent files |
+| `/peek-menu` | Command menu: every action in the current view with its key, plus recent files |
 | `/peek-ui` | A live gallery of every UI element a mod can draw |
 
 In the pane: `j`/`k` jump between blocks, the wheel scrolls, `r` shows recent
 files, `o` opens the file in its own app (a remote page in the browser), `c`
 copies the path or link, `u` refreshes a remote page, `b` goes back to the page
-you came from, `v` switches a web page to live view, `x` closes.
+you came from, `v` switches a web page to live view, `x` closes. In Recent and
+Gallery, `j`/`k`/`h`/`l` move the selection, `o` opens it and `f` stars it;
+in Gallery, `t` and `n` change the file type and the sort order.
+
+The footer shows only the page status and `⌃k menu`. The keys are not drawn,
+but they all work. Open the menu (Ctrl+K, Setup step 2) to see each action
+that applies to the current view, with its key.
 
 ## Setup
 

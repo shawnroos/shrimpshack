@@ -176,6 +176,7 @@ let blockHeadings: string[] = []
 let estimatedRows = 1
 const HEADER_ROWS = 2
 const FOOTER_ROWS = 3
+const MOVE_KEYS = new Set(['next', 'prev', 'left', 'right'])
 const PAGE_TOP = HEADER_ROWS + 1
 const converted = new Map<string, { file: string; width: number; height: number }>()
 
@@ -1516,30 +1517,24 @@ export const register: Register = on => {
         </Box>
       )
 
-    const footer = (info: string, keys: { key: string; label: string; hotkey: string; onPress: () => void; isDim?: boolean; isDefault?: boolean }[]) => (
+    type Key = { key: string; label: string; hotkey: string; onPress: () => void; menu?: string }
+    const footer = (info: string, keys: Key[]) => (
       <Box flexDirection="row" flexWrap="wrap" columnGap={2} justifyContent="center" width={columns}>
         {info && <Text color={C.overlay1}>{info}</Text>}
         {!isNarrow && info && <Text color={C.surface1}>│</Text>}
-        {!isNarrow &&
-          keys.map(one => (
-            <Button
-              key={one.key}
-              label={one.label}
-              hotkey={one.hotkey}
-              plain
-              dimColor={one.isDim}
-              autoFocus={one.isDefault ? true : undefined}
-              onPress={one.onPress}
-            />
+        <Text color={C.overlay0}>⌃k menu</Text>
+        {/* Hidden, yet the hotkeys still press: the Pane arms every Button in its drawn tree regardless of display (seen in engine 2.1.295, not promised by the types). Tab still visits them. */}
+        <Box key="footer-keys" display="none">
+          {keys.map(one => (
+            <Button key={one.key} label={one.label} hotkey={one.hotkey} plain onPress={one.onPress} />
           ))}
-        {!isNarrow && <Text color={C.overlay0}>⌃k menu</Text>}
+        </Box>
       </Box>
     )
-    const modeKeys = MODES.map(one => ({
+    const modeKeys: Key[] = MODES.map(one => ({
       key: `mode-${one.id}`,
       label: one.label,
       hotkey: one.hotkey,
-      isDim: one.id !== chosen,
       onPress: () => {
         void update($, mode, () => one.id)
         void update($, page, () => 0)
@@ -1618,7 +1613,6 @@ export const register: Register = on => {
         }),
     ]
     const words = filter.toLowerCase().split(/\s+/).filter(Boolean)
-    const matches = commands.filter(one => words.every(word => one.label.toLowerCase().includes(word)))
     const runCommand = (one: (typeof commands)[number] | undefined) => {
       if (!one) return
       closeMenu()
@@ -1626,49 +1620,57 @@ export const register: Register = on => {
     }
     const Input = 'Input' in elements ? elements.Input : undefined
     const menuWidth = Math.max(24, Math.min(64, columns - 8))
-    const menu = (
-      <Box flexDirection="column" width={menuWidth}>
-        <Text wrap="truncate-end">
-          <Text color={BASE.surface1}>─</Text>
-          <Text color={BASE.accent} bold> COMMANDS </Text>
-          <Text color={BASE.surface1}>{'─'.repeat(Math.max(1, menuWidth - 12))}</Text>
-        </Text>
-        {Input && (
-          <Box
-            key="menu-filter-frame"
-            flexDirection="row"
-            width={menuWidth}
-            borderStyle="round"
-            borderColor={BASE.accent}
-            paddingX={1}
-            marginY={1}
-          >
-            <Text color={BASE.accent}>{'\u{f002}  '}</Text>
-            <Box flexGrow={1}>
-          <Input
-            key="menu-filter"
-            placeholder="type to filter · Enter runs the first match"
-            value={filter}
-            autoFocus
-            onInput={(value: string) => void update($, menuFilter, () => value)}
-            onSubmit={() => runCommand(matches[0])}
-          />
+    const menuFor = (keys: Key[]) => {
+      const fromKeys = keys.flatMap(one => (one.menu ? [{ id: `key-${one.key}`, icon: '\u{f11c}', label: one.menu, hint: one.hotkey, run: one.onPress }] : []))
+      const closeAt = commands.findIndex(one => one.id === 'close')
+      const all = [...commands.slice(0, closeAt), ...fromKeys, ...commands.slice(closeAt)]
+      const matches = all.filter(one => words.every(word => one.label.toLowerCase().includes(word)))
+      const moves = keys.filter(one => MOVE_KEYS.has(one.key)).map(one => one.hotkey)
+      return (
+        <Box flexDirection="column" width={menuWidth}>
+          <Text wrap="truncate-end">
+            <Text color={BASE.surface1}>─</Text>
+            <Text color={BASE.accent} bold> COMMANDS </Text>
+            <Text color={BASE.surface1}>{'─'.repeat(Math.max(1, menuWidth - 12))}</Text>
+          </Text>
+          {Input && (
+            <Box
+              key="menu-filter-frame"
+              flexDirection="row"
+              width={menuWidth}
+              borderStyle="round"
+              borderColor={BASE.accent}
+              paddingX={1}
+              marginY={1}
+            >
+              <Text color={BASE.accent}>{'\u{f002}  '}</Text>
+              <Box flexGrow={1}>
+            <Input
+              key="menu-filter"
+              placeholder="type to filter · Enter runs the first match"
+              value={filter}
+              autoFocus
+              onInput={(value: string) => void update($, menuFilter, () => value)}
+              onSubmit={() => runCommand(matches[0])}
+            />
+              </Box>
             </Box>
-          </Box>
-        )}
-        {matches.length === 0 && <Text color={BASE.overlay0}>No command matches.</Text>}
-        {matches.slice(0, 20).map(one => (
-          <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={menuWidth}>
-            <Box flexDirection="row" flexShrink={1}>
-              <Text color={BASE.accent}>{`${one.icon}  `}</Text>
-              <Button key={`menu-${one.id}`} label={one.label} plain onPress={() => runCommand(one)} />
+          )}
+          {matches.length === 0 && <Text color={BASE.overlay0}>No command matches.</Text>}
+          {matches.slice(0, 20).map(one => (
+            <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={menuWidth}>
+              <Box flexDirection="row" flexShrink={1}>
+                <Text color={BASE.accent}>{`${one.icon}  `}</Text>
+                <Button key={`menu-${one.id}`} label={one.label} plain onPress={() => runCommand(one)} />
+              </Box>
+              <Text color={BASE.overlay0}>{one.hint}</Text>
             </Box>
-            <Text color={BASE.overlay0}>{one.hint}</Text>
-          </Box>
-        ))}
-        <Button key="menu-close" label="Close menu" plain dimColor onPress={closeMenu} />
-      </Box>
-    )
+          ))}
+          {moves.length > 0 && <Text color={BASE.overlay0}>{`${moves.join(' ')} move`}</Text>}
+          <Button key="menu-close" label="Close menu" plain dimColor onPress={closeMenu} />
+        </Box>
+      )
+    }
 
     const offset = at
     const jumpTo = (key: string) => void $.ui.scroll({ in: PANE, to: { key }, block: 'start' }).catch(() => undefined)
@@ -1690,7 +1692,6 @@ export const register: Register = on => {
       },
     })
     const blockJumps = (count: number, prefix: string) => keyJumps(Array.from({ length: count }, (_, i) => `${prefix}-${i}`))
-    type Key = { key: string; label: string; hotkey: string; onPress: () => void; isDim?: boolean; isDefault?: boolean }
     const frame = (middle: unknown, content: unknown, info: string, keys: Key[], pageBg: string = C.panelBg) => (
       <Box
         flexDirection="column"
@@ -1742,7 +1743,7 @@ export const register: Register = on => {
             paddingX={2}
             paddingY={1}
           >
-            {menu as never}
+            {menuFor(keys) as never}
           </Box>
         )}
       </Box>
@@ -1756,12 +1757,14 @@ export const register: Register = on => {
         key: 'open-selected',
         label: '⏎ Open',
         hotkey: 'o',
+        menu: 'Open the selected file',
         onPress: () => void selectedHref($).then(href => (href ? show($, href) : undefined)),
       },
       {
         key: 'star-selected',
         label: 'Star',
         hotkey: 'f',
+        menu: 'Star or unstar the selected file',
         onPress: () => void selectedHref($).then(href => (href ? setStar($, href).then(() => undefined) : undefined)),
       },
     ]
@@ -1964,8 +1967,8 @@ export const register: Register = on => {
             ...modeKeys,
             scopeKey,
             roleKey,
-            { key: 'type', label: 'Type', hotkey: 't', onPress: () => void update($, galleryType, one => nextOf(TYPES, one)) },
-            { key: 'sort', label: 'Sort', hotkey: 'n', onPress: () => void update($, gallerySort, one => nextOf(SORTS, one)) },
+            { key: 'type', label: 'Type', hotkey: 't', menu: `Next file type (now ${type})`, onPress: () => void update($, galleryType, one => nextOf(TYPES, one)) },
+            { key: 'sort', label: 'Sort', hotkey: 'n', menu: `Next sort order (now ${sort})`, onPress: () => void update($, gallerySort, one => nextOf(SORTS, one)) },
             ...selectKeys,
             closeKey,
           ],
@@ -2779,14 +2782,14 @@ export const register: Register = on => {
             ? [{ key: 'live', label: liveHref === current.href ? 'Reader' : 'Live', hotkey: 'v', onPress: () => void toggleLive($, current, viewport) }]
             : []),
           ...(liveFrame && isTyping
-            ? [{ key: 'done-typing', label: 'Done typing', hotkey: 'd', onPress: () => { isTyping = false; $.ui.invalidate('ui.render') } }]
+            ? [{ key: 'done-typing', label: 'Done typing', hotkey: 'd', menu: 'Done typing: give the keys back to peek', onPress: () => { isTyping = false; $.ui.invalidate('ui.render') } }]
             : []),
           { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
           { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
           { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar($, current.href) },
           { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally($, current) },
           ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh($, current.href) }] : []),
-          ...(liveFrame || backStack.length ? [{ key: 'back', label: 'Back', hotkey: 'b', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }] : []),
+          ...(liveFrame || backStack.length ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : 'Back to the previous page', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }] : []),
           {
             key: 'copy',
             label: remote ? 'Copy link' : 'Copy path',
