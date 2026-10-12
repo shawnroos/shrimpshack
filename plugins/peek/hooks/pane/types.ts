@@ -53,7 +53,8 @@ export type DrawContext = WidgetCtx & {
   layout: () => Layout
 }
 
-export type NavItem = { href: string; key: string; line: number; col: number; group?: string }
+// `group` opens that group's page; `groupItem` is a row of the open group's page, selected as that group's item.
+export type NavItem = { href: string; key: string; line: number; col: number; group?: string; groupItem?: { group: string; title: string; key: string } }
 
 export type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -66,6 +67,7 @@ export type PaneActions = {
   galleryFilter: Cell<PaneState['galleryFilter']>
   moveSelection: (direction: Direction) => Promise<void>
   selectAndOpen: (index: number) => Promise<void>
+  selectedIndex: () => Promise<number>
   selectedNav: () => Promise<NavItem | undefined>
   openNav: (one: NavItem | undefined) => Promise<void>
   close: () => Promise<unknown>

@@ -168,6 +168,6 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
     info,
     actions: liveSession.isTyping ? shown.map(endTypingFirst) : shown,
     menuOn: { target: current.error || (remote?.failure && !remote.record) || isLiveHere ? undefined : current.href },
-    layout,
+    layout: { nav: [], ...layout },
   }
 }

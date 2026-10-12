@@ -208,7 +208,7 @@ export async function groupsScreen(ctx: DrawContext, actions: PaneActions): Prom
   }
   const project = (home?.worktreeRoot ?? cwd).split('/').filter(Boolean).pop() ?? 'project'
   if (opened && shown) return groupPageScreen(ctx, actions, { home, opened, shown, project })
-  groupPage.rows = null
+  groupPage.drawn = null
   groupPage.remotes = []
   const groups = home ? starredFirst(await io.shownGroups(home.place)) : []
   const starredCount = groups.filter(one => one.starred).length

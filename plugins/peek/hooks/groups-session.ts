@@ -4,7 +4,7 @@ import { toggleStar } from './gallery'
 import { applyGroupOps, groupsDir, isScheme, refPath, resolveProjectKey, shortId, starGroup, storedRef } from './groups'
 import type { GroupPlace, GroupWrite } from './groups'
 import { remotePicture } from './images'
-import { clamp, nav, noteTitle, remoteLoader, remoteRef, show, starKeyOf, startTicking } from './navigation'
+import { nav, noteTitle, remoteLoader, remoteRef, show, starKeyOf, startTicking } from './navigation'
 import type { NavIo } from './navigation'
 import { type ItemLook, type ItemState, remoteNaming } from './pane/look'
 import type { Action } from './pane/types'
@@ -131,39 +131,13 @@ export async function groupMenuRows(io: NavIo, on: GroupMenuFor): Promise<Action
   return [...own, ...rows].map(one => ({ ...one, isGroupRow: true }))
 }
 
-export type GroupRows = { id: string; title: string; keys: string[]; hrefs: string[]; selected: number }
-
-// Drawing may not write state, so the page keeps what its handlers need here: the rows as last drawn, the
-// remote items the refresh tick should keep fresh, and which deleted group was already reported.
+// Drawing may not write state, so the page keeps what its handlers need here: the item keys and the selected row
+// as last drawn (a selected item another session removes falls to the row it was on), the remote items the
+// refresh tick should keep fresh, and which deleted group was already reported. The Groups tab clears `drawn`.
 export const groupPage = {
-  rows: null as GroupRows | null,
+  drawn: null as { id: string; keys: readonly string[]; selected: number } | null,
   goneNotice: '',
   remotes: [] as string[],
-}
-
-export async function groupPageRows(io: NavIo): Promise<GroupRows | null> {
-  if (!groupPage.rows || (await io.mode.read()) !== 'groups') return null
-  return (await io.openGroup.read())?.id === groupPage.rows.id ? groupPage.rows : null
-}
-
-export async function selectGroupRow(io: NavIo, rows: GroupRows, wanted: number): Promise<boolean> {
-  const index = clamp(wanted, rows.keys.length)
-  const key = rows.keys[index]
-  if (key === undefined) return false
-  rows.selected = index
-  await io.openGroup.update(opened => (opened?.id === rows.id ? { ...opened, item: key } : opened))
-  await io.cursor.update(() => index)
-  return true
-}
-
-export async function focusGroupRow(io: NavIo, index: number) {
-  await io.scroll({ to: { key: `group-row-${index}` }, block: 'center' }).catch(() => undefined)
-  await io.focus({ key: `item-${index}` }).catch(() => undefined)
-}
-
-export async function openGroupItem(io: NavIo, rows: GroupRows, index: number) {
-  await selectGroupRow(io, rows, index)
-  await openGroupHref(io, rows, rows.keys[rows.selected] ?? '', rows.hrefs[rows.selected] ?? '')
 }
 
 // Opening from a card sets openGroup too, so Back lands on the group page with this item selected.

@@ -4,6 +4,9 @@ import type { NavItem } from './types'
 // block starts and headings for the jump keys, and the row estimate the next draw scales by.
 export type Layout = {
   nav: NavItem[]
+  // Set by a group page, whose selection is kept as the open group's item: the row it drew selected, which
+  // stands while that item is not among its rows.
+  group?: { id: string; selected: number }
   blockStarts: number[]
   blockHeadings: string[]
   estimatedRows: number

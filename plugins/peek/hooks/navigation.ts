@@ -61,7 +61,6 @@ export type NavIo = {
   fork: (request: Parameters<Model['fork']>[0]) => ReturnType<Model['fork']>
   scroll: (options: Without<Parameters<Ui['scroll']>[0], 'in'>) => ReturnType<Ui['scroll']>
   open: (options: Without<Parameters<Ui['open']>[0], 'id'>) => ReturnType<Ui['open']>
-  focus: (options: Without<Parameters<Ui['focus']>[0], 'requestId'>) => ReturnType<Ui['focus']>
   remoteIo: () => RemoteIo
   liveIo: () => LiveIo
   groupsIo: () => GroupsIo

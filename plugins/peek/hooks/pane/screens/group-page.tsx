@@ -2,8 +2,8 @@ import type { PluginState } from 'claude-code'
 
 import type { Group } from '../../../types'
 import { plural } from '../../format'
-import { groupItemLook, groupPage, groupPageRows, loadGroupRemote, openGroupItem, setStar } from '../../groups-session'
-import type { GroupHome, GroupRows } from '../../groups-session'
+import { groupItemLook, groupPage, loadGroupRemote, openGroupHref, setStar } from '../../groups-session'
+import type { GroupHome } from '../../groups-session'
 import { pixels } from '../../images'
 import { iconFor } from '../../kinds'
 import { clamp, remoteRef, starKeyOf, titlesByKey } from '../../navigation'
@@ -37,11 +37,12 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
   groupPage.remotes = remotes.map(one => one.href).filter(isTimed)
   const keys = looks.map(one => one.key)
   const found = opened.item === null ? 0 : keys.indexOf(opened.item)
-  const previous = groupPage.rows?.id === shown.id ? groupPage.rows.selected : 0
+  const before = groupPage.drawn?.id === shown.id ? groupPage.drawn : null
+  const wasAt = before && opened.item !== null ? before.keys.indexOf(opened.item) : -1
+  const previous = !before ? 0 : wasAt >= 0 ? wasAt : before.selected
   const selected = clamp(found >= 0 ? found : previous, keys.length)
   const refs = blocks.flatMap(block => block.items).map(one => one.ref)
-  const rows: GroupRows = { id: shown.id, title: shown.title, keys, hrefs: looks.map(one => one.href), selected }
-  groupPage.rows = rows
+  groupPage.drawn = { id: shown.id, keys, selected }
   const starList = await io.stars.read()
   const starKeys = new Set(starList.map(starKeyOf))
   const missing = looks.filter(one => one.state === 'missing').length
@@ -58,7 +59,7 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
         imageKey: `favicon-${index}`,
         buttonKey: `item-${index}`,
         autoFocus: isSelected ? true : undefined,
-        onPress: () => void openGroupItem(io, rows, index),
+        onPress: () => void actions.selectAndOpen(index),
         boxes: {},
       },
       nameKey: `group-item-${index}`,
@@ -79,7 +80,7 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
     const blockLooks = looks.slice(first, next)
     const list = blockLooks.length > 0 && (
       <Box key={`group-block-${b}`} flexDirection="column" width={textWidth}>
-        {layout.lines(blockLooks, (one, index) => ({ href: one.key, key: `group-row-${index}` }), row)}
+        {layout.lines(blockLooks, (one, index) => ({ href: one.href, key: `group-row-${index}`, groupItem: { group: shown.id, title: shown.title, key: one.key } }), row)}
         {HoverLayer(w, `hover-group-${b}`, { kind: 'rows', width: textWidth, height: blockLooks.length, starX: 0, starY: 0, items: blockLooks.map(one => ({ href: one.href, isStarred: starKeys.has(one.key) })) })}
       </Box>
     )
@@ -126,22 +127,20 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
         label: '⏎ Open',
         hotkey: 'o',
         menu: 'Open the selected item',
-        run: () => void groupPageRows(io).then(now => (now ? openGroupItem(io, now, now.selected) : undefined)),
+        // An empty page answers o with the gone-file toast it always gave.
+        run: () => void (looks.length ? actions.selectedIndex().then(at => actions.selectAndOpen(at)) : openGroupHref(io, shown, '', '')),
       },
       {
         id: 'star-selected',
         label: 'Star',
         hotkey: 'f',
         menu: 'Star or unstar the selected item',
-        run: () => void groupPageRows(io).then(now => {
-          const href = now?.hrefs[now.selected]
-          return href ? setStar(io, href).then(() => io.invalidate()) : undefined
-        }),
+        run: () => void actions.selectedNav().then(one => (one?.href ? setStar(io, one.href).then(() => io.invalidate()) : undefined)),
       },
       closeAction(actions),
     ],
     pageBg: C.appBg,
-    menuOn: { target: rows.hrefs[selected] || undefined, group: shown, selectedRef: refs[selected] },
-    layout: layout.done(),
+    menuOn: { target: looks[selected]?.href || undefined, group: shown, selectedRef: refs[selected] },
+    layout: { ...layout.done(), group: { id: shown.id, selected } },
   }
 }

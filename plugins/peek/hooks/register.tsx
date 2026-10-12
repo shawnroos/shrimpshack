@@ -31,7 +31,7 @@ import { pixels, toPng } from './images'
 import { WHEEL_SCROLL_PX, leaveLive, liveSession, onLiveInput, scrollLive } from './live-pane'
 import type { LiveInputEvent } from './live-pane'
 import { UiGallery } from './ui-gallery'
-import { focusGroupRow, groupHome, groupPage, groupPageRows, openCardItem, openGroupItem, openGroupPage, selectGroupRow, setStar, starInGroupsTab, toggleGroupStar } from './groups-session'
+import { groupHome, groupPage, openCardItem, openGroupHref, openGroupPage, setStar, starInGroupsTab, toggleGroupStar } from './groups-session'
 import { forgetPath, guess, noteCapture, pathExists, remember, toHref } from './entries'
 
 const PANE = 'peek'
@@ -70,19 +70,30 @@ function stepFrom(at: number, direction: Direction): number {
   return best < 0 ? at : best
 }
 
-async function moveSelection($: EngineInterface, direction: Direction) {
-  const rows = await groupPageRows(navIoOf($))
-  if (rows) {
-    if ((direction === 'up' || direction === 'down') && (await selectGroupRow(navIoOf($), rows, rows.selected + (direction === 'down' ? 1 : -1)))) {
-      await focusGroupRow(navIoOf($), rows.selected)
-    }
-    return
+// A group page keeps its selection as the open group's item, falling back to the row it drew selected; every other
+// list keeps it in the cursor.
+async function selectedIndex($: EngineInterface): Promise<number> {
+  const { nav, group } = paneLayout
+  if (!group) return clamp(await read($, cursorAtom), nav.length)
+  const opened = await read($, openGroup)
+  const at = opened?.id === group.id ? nav.findIndex(one => one.groupItem?.key === opened.item) : -1
+  return at >= 0 ? at : group.selected
+}
+
+// On a group page the item is written first, then the cursor; a page with no row there selects nothing.
+async function select($: EngineInterface, index: number): Promise<boolean> {
+  const item = paneLayout.nav[index]?.groupItem
+  if (paneLayout.group) {
+    if (!item) return false
+    await update($, openGroup, opened => (opened?.id === item.group ? { ...opened, item: item.key } : opened))
   }
-  let landed = 0
-  await update($, cursorAtom, at => {
-    landed = stepFrom(clamp(at, paneLayout.nav.length), direction)
-    return landed
-  })
+  await update($, cursorAtom, () => index)
+  return true
+}
+
+async function moveSelection($: EngineInterface, direction: Direction) {
+  const landed = stepFrom(await selectedIndex($), direction)
+  if (!(await select($, landed))) return
   const key = paneLayout.nav[landed]?.key
   // 'nearest' counts a row under the pinned footer as already showing, so the
   // cursor could walk behind it; centring always leaves it in the clear.
@@ -91,16 +102,17 @@ async function moveSelection($: EngineInterface, direction: Direction) {
 }
 
 async function selectAndOpen($: EngineInterface, index: number) {
-  await update($, cursorAtom, () => index)
+  await select($, index)
   await openNav($, paneLayout.nav[index])
 }
 
 async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
-  return paneLayout.nav[clamp(await read($, cursorAtom), paneLayout.nav.length)]
+  return paneLayout.nav[await selectedIndex($)]
 }
 
 async function openNav($: EngineInterface, one: NavItem | undefined) {
-  if (one?.group) await openGroupPage(navIoOf($), one.group)
+  if (one?.groupItem) await openGroupHref(navIoOf($), { id: one.groupItem.group, title: one.groupItem.title }, one.groupItem.key, one.href)
+  else if (one?.group) await openGroupPage(navIoOf($), one.group)
   else if (one?.href) await show(navIoOf($), one.href)
 }
 
@@ -159,7 +171,6 @@ function navIoOf($: EngineInterface): NavIo {
     fork: request => $.model.fork(request),
     scroll: options => $.ui.scroll({ in: PANE, ...options }),
     open: options => $.ui.open({ id: PANE, ...options }),
-    focus: options => $.ui.focus({ requestId: PANE, ...options }),
     remoteIo: () => remoteIoOf($),
     liveIo: () => liveIoOf($),
     groupsIo: () => groupsIoOf($),
@@ -215,6 +226,7 @@ function paneActionsOf($: EngineInterface): PaneActions {
     galleryFilter: { read: () => read($, galleryFilter), update: change => update($, galleryFilter, change) },
     moveSelection: direction => moveSelection($, direction),
     selectAndOpen: index => selectAndOpen($, index),
+    selectedIndex: () => selectedIndex($),
     selectedNav: () => selectedNav($),
     openNav: one => openNav($, one),
     close: () => $.ui.close({ id: PANE }),
@@ -276,9 +288,7 @@ export const register: Register = on => {
     const picked = /^item-(\d+)$/.exec(e.element ?? '')
     if (picked && e.origin.kind === 'person') {
       const index = Number(picked[1])
-      const rows = await groupPageRows(navIoOf($)).catch(() => null)
-      if (rows) await selectGroupRow(navIoOf($), rows, index).catch(() => undefined)
-      await update($, cursorAtom, () => index).catch(() => undefined)
+      await select($, index).catch(() => undefined)
       const key = paneLayout.nav[index]?.key
       if (key) void $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
     }
@@ -443,9 +453,9 @@ export const register: Register = on => {
       return {}
     }
     if (e.requestId === PANE && opening && typeof opening.open === 'string') {
-      const rows = await groupPageRows(navIoOf($)).catch(() => null)
-      const at = rows ? rows.hrefs.indexOf(opening.open) : -1
-      await (rows && at >= 0 ? openGroupItem(navIoOf($), rows, at) : show(navIoOf($), opening.open)).catch(() => undefined)
+      const href = opening.open
+      const at = paneLayout.nav.findIndex(one => one.groupItem && one.href === href)
+      await (at >= 0 ? selectAndOpen($, at) : show(navIoOf($), href)).catch(() => undefined)
       return {}
     }
     return next(e)
@@ -517,7 +527,8 @@ export const register: Register = on => {
     const actions = paneActionsOf($)
     const lists = menuLists(ctx, actions)
     const screen = await SCREENS[chosen](ctx, actions)
-    paneLayout = { ...paneLayout, ...screen.layout }
+    // Only the group page that drew it keeps `group`; any other screen ends it.
+    paneLayout = { ...paneLayout, ...screen.layout, group: screen.layout.group }
     return drawFrame(ctx, actions, lists, screen)
   })
 }
