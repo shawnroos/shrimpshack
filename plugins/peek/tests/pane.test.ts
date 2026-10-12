@@ -2,6 +2,8 @@ import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { C } from '../hooks/theme'
 import { hoverLayers } from './fixtures/overlay'
+import { exited } from './fixtures/results'
+import { PANE_PROPS, baseWorld, fakeHttp, fakeProcess } from './fixtures/world'
 
 const WORKTREE = '/Users/shawnroos/projects/herdr-linear-board/worktrees/tui-design'
 const FILES: Record<string, string> = {
@@ -10,17 +12,13 @@ const FILES: Record<string, string> = {
 }
 
 function fakeDisk(on: On) {
-  on('session.cwd', () => ({ value: '/repo' }))
-  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
-  on('http.fetch', () => ({ value: { status: 404, ok: false, headers: {}, text: '' } }))
+  baseWorld(on)
+  fakeHttp(on)
   on('clock.now', () => ({ value: 10 * 3600_000 }))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
-  on('ui.toast', () => ({ value: undefined }))
-  on('process.run', (_$, e) => {
-    const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-    if (e.argv[0] === 'git' && e.argv.includes('rev-parse')) return ok('/repo\n/repo/.git\n/repo/.git\n')
-    if (e.argv[0] === 'sh') return ok('1700000000 1200 docs/plan.md\n1700000500 90 src/a.rs\n1700000100 5000 shots/x.png\n')
-    return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
+  fakeProcess(on, argv => {
+    if (argv[0] === 'git' && argv.includes('rev-parse')) return exited(0, '/repo\n/repo/.git\n/repo/.git\n')
+    if (argv[0] === 'sh') return exited(0, '1700000000 1200 docs/plan.md\n1700000500 90 src/a.rs\n1700000100 5000 shots/x.png\n')
+    return exited(1, '', 'unexpected')
   })
   on('fs.list', (_$, e) => {
     const prefix = `${e.path}/`
@@ -70,14 +68,7 @@ async function focusedItem(ui: { find: (q: { key: string }) => Promise<{ props: 
   return -1
 }
 
-const props = {
-  title: 'Peek',
-  isFocused: true,
-  bodyColumns: 100,
-  placement: 'dock' as const,
-  scroll: { offset: 0, bodyRows: 40 },
-  view: {},
-}
+const props = PANE_PROPS
 
 test('header, paged content and footer draw for a doc and a code file; Recent lists and reopens them', async ($, on) => {
   fakeDisk(on)
