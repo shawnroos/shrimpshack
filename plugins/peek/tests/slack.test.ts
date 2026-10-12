@@ -1,13 +1,11 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { ProcessRunResult } from 'claude-code'
 
-import { parseRef } from '../hooks/refs'
-import type { Ref } from '../hooks/refs'
 import { initials, loadSlack, mrkdwnToMarkdown, parseThreadText, whenLabel } from '../hooks/slack'
 import { speakerColor } from '../hooks/theme'
 import type { SlackIo } from '../hooks/slack'
-import type { Loaded, RemoteRecord } from '../types'
 import { ADA_PIC, CHANNEL_RESULT, CLI_CHANNEL, CLI_REPLIES, FILES_RESULT, FILES_TEXT, LONE_MESSAGE, THREAD_MORE, THREAD_RESULT, THREAD_TEXT, fileResult, usersResult } from './fixtures/slack/mcp'
+import { exited, meta, record, ref } from './fixtures/results'
 
 const NOW = 1_792_000_000_000
 const THREAD = 'https://acme.slack.com/archives/C0123ABCD/p1791759796763609'
@@ -16,10 +14,6 @@ let sessions = 0
 
 type Call = { server: string; tool: string; args: Record<string, unknown> }
 type McpReply = (call: Call) => { content: unknown[]; isError: boolean }
-
-function exited(exitCode: number, stdout = ''): ProcessRunResult {
-  return { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
-}
 
 const text = (body: string, isError = false) => ({ content: [{ type: 'text', text: body }], isError })
 
@@ -51,19 +45,6 @@ function world(options: { mcp?: McpReply | 'absent'; cli?: string | null; cliRun
   }
   return { io, calls, ran, stdins, downloads }
 }
-
-function ref(address: string): Ref {
-  const found = parseRef(address)
-  if (!found) throw new Error(`bad ref ${address}`)
-  return found
-}
-
-function record(loaded: Loaded): RemoteRecord {
-  if (!loaded.ok) throw new Error(`not loaded: ${JSON.stringify(loaded)}`)
-  return loaded.record
-}
-
-const meta = (rec: RemoteRecord, label: string) => rec.meta.find(one => one.label === label)?.value
 
 function threadMcp(thread = THREAD_RESULT): McpReply {
   return ({ tool }) => (tool === 'slack_read_thread' ? text(thread) : text(CHANNEL_RESULT))
