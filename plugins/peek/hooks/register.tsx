@@ -922,7 +922,73 @@ async function toggleGroupStar($: EngineInterface, id: string) {
   $.ui.invalidate('ui.render')
 }
 
-type GroupRows = { id: string; title: string; keys: string[]; hrefs: string[]; selected: number }
+async function personGroupWrite($: EngineInterface, id: string, title: string, op: Extract<GroupOp, { op: 'addItem' | 'removeItem' }>) {
+  const verb = op.op === 'addItem' ? 'add to' : 'remove from'
+  const home = await groupHome($)
+  if (!home) {
+    $.ui.toast(`Could not ${verb} ${title}: HOME is not set.`)
+    return
+  }
+  const now = await $.clock.now()
+  let isGone = false
+  const write = await writeGroup(groupsIoOf($), home.place, id, current => {
+    if (current) return applyGroupOps(current, [op], { now, newId: () => shortId(Math.random), actor: 'person', others: [] })
+    isGone = true
+    return { group: null, outcomes: [] }
+  })
+  if (!write.ok) $.ui.toast(`Could not ${verb} ${title}: ${write.error}.`)
+  else if (isGone) {
+    $.ui.toast('That group was deleted.')
+    if ((await read($, openGroup))?.id === id) await update($, openGroup, () => null)
+  } else {
+    const outcome = write.outcomes[0]
+    const name = write.group?.title ?? title
+    if (outcome?.status === 'applied') $.ui.toast(op.op === 'addItem' ? `Added to ${name}` : `Removed from ${name}`)
+    else if (outcome?.status === 'unchanged' && op.op === 'addItem') $.ui.toast(`Already in ${name}`)
+    else $.ui.toast(outcome?.reason ?? `Could not ${verb} ${name}.`)
+  }
+  $.ui.invalidate('ui.render')
+}
+
+async function personGroupAdd($: EngineInterface, id: string, title: string, href: string) {
+  const target = await groupTarget($, href, (await groupHome($))?.worktreeRoot, true)
+  if ('error' in target) $.ui.toast(`Could not add to ${title}: ${target.error}.`)
+  else await personGroupWrite($, id, title, { op: 'addItem', ref: target.ref })
+}
+
+type MenuCommand = { id: string; icon: string; label: string; hint: string; run: () => void; isGroupRow?: boolean; isFilteredOnly?: boolean }
+type GroupMenuFor = { target?: string; group?: Group; selectedRef?: string; starHint?: string }
+
+const GROUP_MENU_ROWS = 8
+
+async function groupCommands($: EngineInterface, on: GroupMenuFor): Promise<MenuCommand[]> {
+  const home = await groupHome($)
+  if (!home) return []
+  const open = on.group
+  const own: MenuCommand[] = open
+    ? [
+        { id: 'group-star', icon: '\u{f51a}', label: `${open.starred ? 'Unstar' : 'Star'} this group`, hint: on.starHint ?? '', run: () => void toggleGroupStar($, open.id) },
+        ...(on.selectedRef !== undefined
+          ? [{ id: 'group-remove-here', icon: '\u{f068}', label: 'Remove from this group', hint: '', run: () => void personGroupWrite($, open.id, open.title, { op: 'removeItem', ref: on.selectedRef ?? '' }) }]
+          : []),
+      ]
+    : []
+  const href = on.target
+  const target = href ? await groupTarget($, href, home.worktreeRoot, false) : null
+  if (!href || !target || 'error' in target) return own.map(one => ({ ...one, isGroupRow: true }))
+  const key = itemKey(target.ref)
+  const groups = (await listGroups(groupsIoOf($), home.place)).filter(one => one.id !== open?.id).sort((a, b) => b.updatedAt - a.updatedAt)
+  const rows = groups.map((one, index): MenuCommand => {
+    const held = one.items.find(item => itemKey(item.ref) === key)
+    const isFilteredOnly = index >= GROUP_MENU_ROWS
+    return held
+      ? { id: `group-remove-${one.id}`, icon: '\u{f068}', label: `Remove from group: ${one.title}`, hint: '', isFilteredOnly, run: () => void personGroupWrite($, one.id, one.title, { op: 'removeItem', ref: held.ref }) }
+      : { id: `group-add-${one.id}`, icon: '\u{f067}', label: `Add to group: ${one.title}`, hint: '', isFilteredOnly, run: () => void personGroupAdd($, one.id, one.title, href) }
+  })
+  return [...own, ...rows].map(one => ({ ...one, isGroupRow: true }))
+}
+
+type GroupRows = { id: string; title: string; keys: string[]; refs: string[]; hrefs: string[]; selected: number }
 
 // Drawing may not write state, so the page keeps what its handlers need here: the rows as last drawn, the
 // back step to the group, and which deleted group was already reported.
@@ -2077,7 +2143,7 @@ export const register: Register = on => {
 
     const filter = await read($, menuFilter)
     const closeMenu = () => void setMenu($, false)
-    const commands: { id: string; icon: string; label: string; hint: string; run: () => void }[] = [
+    const commands: MenuCommand[] = [
       ...(current
         ? [
             { id: 'peek', icon: ICON.peek, label: 'Peek: show the open file', hint: 'p', run: () => void update($, mode, () => 'view') },
@@ -2142,15 +2208,19 @@ export const register: Register = on => {
     }
     const Input = 'Input' in elements ? elements.Input : undefined
     const menuWidth = Math.max(24, Math.min(64, columns - 8))
-    const menuFor = (keys: Key[]) => {
+    const menuFor = (keys: Key[], groupMenu: MenuCommand[]) => {
       const fromKeys = keys.flatMap(one => (one.menu ? [{ id: `key-${one.key}`, icon: '\u{f11c}', label: one.menu, hint: one.hotkey, run: one.onPress }] : []))
       const closeAt = commands.findIndex(one => one.id === 'close')
       const keyed = commands.map(one => {
         const owner = COMMAND_KEYS[one.id.replace(/-[^-]+$/, '-*')] ?? COMMAND_KEYS[one.id]
         return owner ? { ...one, hint: keys.find(key => key.key === owner)?.hotkey ?? '' } : one
       })
-      const all = [...keyed.slice(0, closeAt), ...fromKeys, ...keyed.slice(closeAt)]
-      const matches = all.filter(one => words.every(word => one.label.toLowerCase().includes(word)))
+      const all: MenuCommand[] = [...keyed.slice(0, closeAt), ...fromKeys, ...groupMenu, ...keyed.slice(closeAt)]
+      let others = 0
+      // Group rows sit outside the 20-row cap, so every one of the first eight shows however long the rest of the menu is.
+      const matches = all.filter(
+        one => (words.length > 0 || !one.isFilteredOnly) && words.every(word => one.label.toLowerCase().includes(word)) && (one.isGroupRow || others++ < 20),
+      )
       const moves = keys.filter(one => MOVE_KEYS.has(one.key)).map(one => one.hotkey)
       return (
         <Box flexDirection="column" width={menuWidth}>
@@ -2183,7 +2253,7 @@ export const register: Register = on => {
             </Box>
           )}
           {matches.length === 0 && <Text color={BASE.overlay0}>No command matches.</Text>}
-          {matches.slice(0, 20).map(one => (
+          {matches.map(one => (
             <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={menuWidth}>
               <Box flexDirection="row" flexShrink={1}>
                 <Text color={BASE.accent}>{`${one.icon}  `}</Text>
@@ -2218,62 +2288,66 @@ export const register: Register = on => {
       },
     })
     const blockJumps = (count: number, prefix: string) => keyJumps(Array.from({ length: count }, (_, i) => `${prefix}-${i}`))
-    const frame = (middle: unknown, content: unknown, info: string, keys: Key[], pageBg: string = C.panelBg) => (
-      <Box
-        flexDirection="column"
-        alignItems="center"
-        backgroundColor={C.appBg}
-        minHeight={e.props.scroll.bodyRows}
-        width={e.props.bodyColumns}
-      >
-        <Box height={HEADER_ROWS} />
-        <Box flexDirection="column" width={pageWidth} backgroundColor={pageBg} paddingX={isNarrow ? 0 : 2} paddingY={1}>
-          <Box flexDirection="column" width={textWidth}>
-            {content as never}
+    const frame = async (middle: unknown, content: unknown, info: string, keys: Key[], pageBg: string = C.panelBg, menuOn: GroupMenuFor = {}) => {
+      // A group home that cannot resolve leaves the menu without group rows rather than failing the whole pane.
+      const groupMenu = isMenuOpen ? await groupCommands($, menuOn).catch(() => []) : []
+      return (
+        <Box
+          flexDirection="column"
+          alignItems="center"
+          backgroundColor={C.appBg}
+          minHeight={e.props.scroll.bodyRows}
+          width={e.props.bodyColumns}
+        >
+          <Box height={HEADER_ROWS} />
+          <Box flexDirection="column" width={pageWidth} backgroundColor={pageBg} paddingX={isNarrow ? 0 : 2} paddingY={1}>
+            <Box flexDirection="column" width={textWidth}>
+              {content as never}
+            </Box>
           </Box>
-        </Box>
-        <Box height={FOOTER_ROWS} />
-        <Box
-          position="absolute"
-          top={offset}
-          left={0}
-          width={e.props.bodyColumns}
-          height={HEADER_ROWS}
-          flexDirection="column"
-          alignItems="center"
-          backgroundColor={C.appBg}
-        >
-          {header(middle)}
-        </Box>
-        <Box
-          position="absolute"
-          top={offset + e.props.scroll.bodyRows - FOOTER_ROWS}
-          left={0}
-          width={e.props.bodyColumns}
-          height={FOOTER_ROWS}
-          flexDirection="column"
-          alignItems="center"
-          justifyContent="flex-end"
-          backgroundColor={C.appBg}
-        >
-          {footer(info, keys)}
-        </Box>
-        {isMenuOpen && (
+          <Box height={FOOTER_ROWS} />
           <Box
             position="absolute"
-            top={offset + HEADER_ROWS + 2}
-            left={Math.max(0, Math.floor((e.props.bodyColumns - menuWidth - 4) / 2))}
-            width={menuWidth + 4}
+            top={offset}
+            left={0}
+            width={e.props.bodyColumns}
+            height={HEADER_ROWS}
             flexDirection="column"
-            backgroundColor={BASE.panelBg}
-            paddingX={2}
-            paddingY={1}
+            alignItems="center"
+            backgroundColor={C.appBg}
           >
-            {menuFor(keys) as never}
+            {header(middle)}
           </Box>
-        )}
-      </Box>
-    )
+          <Box
+            position="absolute"
+            top={offset + e.props.scroll.bodyRows - FOOTER_ROWS}
+            left={0}
+            width={e.props.bodyColumns}
+            height={FOOTER_ROWS}
+            flexDirection="column"
+            alignItems="center"
+            justifyContent="flex-end"
+            backgroundColor={C.appBg}
+          >
+            {footer(info, keys)}
+          </Box>
+          {isMenuOpen && (
+            <Box
+              position="absolute"
+              top={offset + HEADER_ROWS + 2}
+              left={Math.max(0, Math.floor((e.props.bodyColumns - menuWidth - 4) / 2))}
+              width={menuWidth + 4}
+              flexDirection="column"
+              backgroundColor={BASE.panelBg}
+              paddingX={2}
+              paddingY={1}
+            >
+              {menuFor(keys, groupMenu) as never}
+            </Box>
+          )}
+        </Box>
+      )
+    }
     const selectKeys: Key[] = [
       { key: 'next', label: 'Down', hotkey: 'j', onPress: () => void moveSelection($, 'down') },
       { key: 'prev', label: 'Up', hotkey: 'k', onPress: () => void moveSelection($, 'up') },
@@ -2323,7 +2397,8 @@ export const register: Register = on => {
         const found = opened.item === null ? 0 : keys.indexOf(opened.item)
         const previous = groupRows?.id === shown.id ? groupRows.selected : 0
         const selected = Math.max(0, Math.min(keys.length - 1, found >= 0 ? found : previous))
-        const rows: GroupRows = { id: shown.id, title: shown.title, keys, hrefs: looks.map(one => one.href), selected }
+        const refs = blocks.flatMap(block => block.items).map(one => one.ref)
+        const rows: GroupRows = { id: shown.id, title: shown.title, keys, refs, hrefs: looks.map(one => one.href), selected }
         groupRows = rows
         navOrder = keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 }))
         blockStarts = []
@@ -2463,6 +2538,7 @@ export const register: Register = on => {
             closeKey,
           ],
           C.appBg,
+          { target: rows.hrefs[selected] || undefined, group: shown, selectedRef: refs[selected] },
         )
       }
       groupRows = null
@@ -2555,6 +2631,7 @@ export const register: Register = on => {
           closeKey,
         ],
         C.appBg,
+        { group: groups[Math.max(0, Math.min(groups.length - 1, selected))], starHint: 'f' },
       )
     }
 
@@ -2761,6 +2838,7 @@ export const register: Register = on => {
             closeKey,
           ],
           C.appBg,
+          { target: nav[Math.max(0, Math.min(nav.length - 1, selected))]?.href },
         )
       }
 
@@ -2881,6 +2959,7 @@ export const register: Register = on => {
           closeKey,
         ],
         C.appBg,
+        { target: nav[Math.max(0, Math.min(nav.length - 1, selected))]?.href },
       )
     }
 
@@ -3588,6 +3667,8 @@ export const register: Register = on => {
           },
           { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) },
       ].map(one => (isTyping ? { ...one, onPress: () => { isTyping = false; one.onPress() } } : one)),
+      undefined,
+      { target: current.error || (remote?.failure && !remote.record) || isLiveHere ? undefined : current.href },
     )
   })
 }

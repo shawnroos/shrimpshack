@@ -812,3 +812,210 @@ test('the open group\'s remote items join the background refresh', async ($, on)
   expect(views).toBe(2)
   await ui.unmount()
 })
+
+async function openMenu($: { command: { run: (input: never) => Promise<unknown> } }, ui: MountedUi) {
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.redraw()
+}
+
+function keysIn(node: unknown, out: string[] = []): string[] {
+  const key = (node as Node)?.props?.key
+  if (typeof key === 'string') out.push(key)
+  for (const child of (node as Node)?.children ?? []) keysIn(child, out)
+  return out
+}
+
+const menuKeys = async (ui: MountedUi, prefix: string) => keysIn(await ui.drawn()).filter(one => one.startsWith(prefix))
+
+const menuLabel = async (ui: MountedUi, key: string) => (await ui.find({ key }))?.props.label
+
+type MenuUi = MountedUi & { input: (q: { key: string; text: string; kind?: 'change' | 'submit' }) => Promise<unknown> }
+
+async function mountPane($: { ui: { mount: (input: never) => Promise<unknown> } }): Promise<MenuUi> {
+  return (await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' } as never)) as MenuUi
+}
+
+test('Star this group in the ctrl+k menu, on a group page and on a card, toggles the group star shown in the Groups tab', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: 'docs/plan.md' }], 'Alpha')
+  const ui = await openFirstGroup($)
+  await openMenu($, ui)
+  expect(await menuLabel(ui, 'menu-group-star')).toBe('Star this group')
+  await ui.press({ key: 'menu-group-star' })
+  expect(savedGroup(w, id)?.starred).toBe(true)
+  await ui.press({ key: 'mode-groups' })
+  expect(await ui.find({ text: /^1 group · 1 starred$/ })).toBeDefined()
+  await openMenu($, ui)
+  expect(await menuLabel(ui, 'menu-group-star')).toBe('Unstar this group')
+  await ui.press({ key: 'menu-group-star' })
+  expect(savedGroup(w, id)?.starred).toBe(false)
+  expect(await ui.find({ text: /^1 group · 0 starred$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('adding the viewed file through ctrl+k puts it in the unsectioned block; read_group says the person added it', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }], 'Launch')
+  await call($, 'save_group', { id, sections: [{ action: 'add', title: 'Docs' }], add: [{ target: PR, section: 'Docs' }] })
+  await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
+  const ui = await mountPane($)
+  await openMenu($, ui)
+  expect(await menuLabel(ui, `menu-group-add-${id}`)).toBe('Add to group: Launch')
+  expect(await ui.find({ key: `menu-group-remove-${id}` })).toBeUndefined()
+  await ui.press({ key: `menu-group-add-${id}` })
+  expect(w.toasts).toContain('Added to Launch')
+  const read = jsonOf(await call($, 'read_group', { id })) as { items: { ref: string; addedBy: string; section: string | null }[] }
+  expect(read.items.find(one => one.ref === 'docs/plan.md')).toMatchObject({ addedBy: 'person', section: null })
+  await ui.press({ key: 'mode-groups' })
+  await ui.press({ key: 'item-0' })
+  expect(await rowTexts(ui)).toContain('plan.md')
+  await ui.unmount()
+})
+
+test('after the person removes an agent item from the group page, an agent re-add is skipped and reported', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: 'docs/plan.md' }, { target: 'notes/todo.md' }])
+  const ui = await openFirstGroup($)
+  await ui.press({ key: 'next' })
+  await openMenu($, ui)
+  expect(await menuLabel(ui, 'menu-group-remove-here')).toBe('Remove from this group')
+  await ui.press({ key: 'menu-group-remove-here' })
+  expect(w.toasts).toContain('Removed from Launch')
+  expect(await rowTexts(ui)).toEqual(['plan.md'])
+  const text = await call($, 'save_group', { id, add: [{ target: 'notes/todo.md' }] })
+  const outcome = (jsonOf(text).outcomes as { status: string; reason: string; needsForce?: boolean }[])[0]
+  expect(outcome).toMatchObject({ status: 'refused', needsForce: true })
+  expect(outcome?.reason).toMatch(/person removed/)
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual(['docs/plan.md'])
+  await ui.unmount()
+})
+
+test('an agent update after the person added an item keeps that item', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }])
+  await $.command.run({ command: 'peek', args: '/repo/notes/todo.md' } as never)
+  const ui = await mountPane($)
+  await openMenu($, ui)
+  await ui.press({ key: `menu-group-add-${id}` })
+  await call($, 'save_group', { id, title: 'Launch v2', sections: [{ action: 'add', title: 'Later' }], add: [{ target: 'docs/plan.md', section: 'Later' }], remove: [{ target: PAGE }] })
+  expect(savedGroup(w, id)?.items).toEqual([
+    expect.objectContaining({ ref: 'notes/todo.md', addedBy: 'person' }),
+    expect.objectContaining({ ref: 'docs/plan.md', addedBy: 'agent' }),
+  ])
+  expect(savedGroup(w, id)?.title).toBe('Launch v2')
+  await ui.unmount()
+})
+
+test('Remove from group shows only for groups holding the viewed item, matched by the same normalisation the agent uses', async ($, on) => {
+  const w = groupsWorld(on)
+  const a = await create($, [{ target: 'docs/plan.md' }], 'Alpha')
+  w.now += 1000
+  const b = await create($, [{ target: PAGE }], 'Beta')
+  w.now += 1000
+  const c = await create($, [{ target: '/repo/docs/plan.md' }], 'Gamma')
+  await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
+  const ui = await mountPane($)
+  await openMenu($, ui)
+  expect(await menuKeys(ui, 'menu-group-')).toEqual([`menu-group-remove-${c.id}`, `menu-group-add-${b.id}`, `menu-group-remove-${a.id}`])
+  expect(await menuLabel(ui, `menu-group-remove-${a.id}`)).toBe('Remove from group: Alpha')
+  await ui.press({ key: `menu-group-remove-${a.id}` })
+  expect(w.toasts).toContain('Removed from Alpha')
+  expect(savedGroup(w, a.id)?.items).toEqual([])
+  await openMenu($, ui)
+  expect(await ui.find({ key: `menu-group-add-${a.id}` })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a PR read in Recent matches a group holding its /files URL; adding in Recent acts on the selected entry', async ($, on) => {
+  const w = groupsWorld(on)
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  on('tool.call', async () => ({ result: [{ type: 'text', text: `see ${PR}` }] }) as never)
+  const held = await create($, [{ target: `${PR}/files` }], 'Alpha')
+  w.now += 1000
+  const empty = await create($, [{ target: PAGE }], 'Beta')
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  await $.tool.call({ tool: 'mcp__github__get_pull_request', tool_use_id: 'c1', number: 42 } as never)
+  await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
+  const ui = await mountPane($)
+  await ui.press({ key: 'mode-recent' })
+  await openMenu($, ui)
+  expect(await menuKeys(ui, 'menu-group-')).toEqual([`menu-group-add-${empty.id}`, `menu-group-remove-${held.id}`])
+  await openMenu($, ui)
+  await ui.press({ key: 'next' })
+  await openMenu($, ui)
+  expect(await menuKeys(ui, 'menu-group-')).toEqual([`menu-group-add-${empty.id}`, `menu-group-add-${held.id}`])
+  await ui.press({ key: `menu-group-add-${empty.id}` })
+  expect(savedGroup(w, empty.id)?.items.map(one => one.ref)).toEqual([PAGE, 'docs/plan.md'])
+  await ui.unmount()
+})
+
+test('a folder view adds the folder itself, never its .. row; an error view lists no add rows', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }], 'Alpha')
+  await $.command.run({ command: 'peek', args: '/repo/docs' } as never)
+  const ui = await mountPane($)
+  await openMenu($, ui)
+  await ui.press({ key: `menu-group-add-${id}` })
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual([PAGE, 'docs'])
+  await $.command.run({ command: 'peek', args: 'https://example.test/broken' } as never)
+  await openMenu($, ui)
+  expect(await ui.find({ text: /Could not open|HTTP 404|Not found/ })).toBeDefined()
+  expect(await menuKeys(ui, 'menu-group-')).toEqual([])
+  await ui.unmount()
+})
+
+test('with 12 groups the menu shows 8 add rows, most recently updated first, and typing finds the others', async ($, on) => {
+  const w = groupsWorld(on)
+  const ids: string[] = []
+  for (let i = 1; i <= 12; i++) {
+    w.now += 1000
+    ids.push((await create($, [{ target: PAGE }], `Set ${String(i).padStart(2, '0')}`)).id)
+  }
+  await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
+  const ui = await mountPane($)
+  await openMenu($, ui)
+  const shown = await menuKeys(ui, 'menu-group-add-')
+  expect(shown).toEqual(ids.slice(4).reverse().map(one => `menu-group-add-${one}`))
+  const rowKeys = await menuKeys(ui, 'menu-row-')
+  expect(rowKeys.filter(one => one.startsWith('menu-row-group-'))).toHaveLength(8)
+  expect(new Set(rowKeys).size).toBe(rowKeys.length)
+  await ui.input({ key: 'menu-filter', text: 'set 02', kind: 'change' })
+  expect(await menuKeys(ui, 'menu-group-add-')).toEqual([`menu-group-add-${ids[1]}`])
+  await ui.input({ key: 'menu-filter', text: 'set 02' })
+  expect(w.toasts).toContain('Added to Set 02')
+  expect(savedGroup(w, ids[1] ?? '')?.items.map(one => one.ref)).toEqual([PAGE, 'docs/plan.md'])
+  await ui.unmount()
+})
+
+test('a person add to a deleted group is refused with a toast; a failed write never says Added', async ($, on) => {
+  const w = groupsWorld(on)
+  const gone = await create($, [{ target: PAGE }], 'Alpha')
+  const kept = await create($, [{ target: PAGE }], 'Beta')
+  await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
+  const ui = await mountPane($)
+  await openMenu($, ui)
+  delete w.files[`${dirOf('/repo/.git')}/${gone.id}.json`]
+  await ui.press({ key: `menu-group-add-${gone.id}` })
+  expect(w.toasts).toEqual(['That group was deleted.'])
+  expect(savedGroup(w, gone.id)).toBeUndefined()
+  w.isMvBroken = true
+  await openMenu($, ui)
+  await ui.press({ key: `menu-group-add-${kept.id}` })
+  expect(w.toasts.at(-1)).toMatch(/^Could not add to Beta: /)
+  expect(w.toasts.some(one => one.startsWith('Added'))).toBe(false)
+  expect(savedGroup(w, kept.id)?.items.map(one => one.ref)).toEqual([PAGE])
+  await ui.unmount()
+})
+
+test('an add row pressed after another writer already added the item says Already in, and adds nothing twice', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }], 'Launch')
+  await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
+  const ui = await mountPane($)
+  await openMenu($, ui)
+  editGroup(w, id, group => (group.items as unknown[]).push({ ref: 'docs/plan.md', addedBy: 'agent', addedAt: w.now }))
+  await ui.press({ key: `menu-group-add-${id}` })
+  expect(w.toasts).toEqual(['Already in Launch'])
+  expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual([PAGE, 'docs/plan.md'])
+  await ui.unmount()
+})
