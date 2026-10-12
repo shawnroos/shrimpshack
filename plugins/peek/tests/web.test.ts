@@ -6,6 +6,7 @@ import type { Ref } from '../hooks/refs'
 import type { SourceIo } from '../hooks/sources'
 import { fromCapture, isPrivateHost, loadWeb, parseHead } from '../hooks/web'
 import { FULL_OG, HOSTILE, ICO_ICON, NO_ICON, TITLE_ONLY, privateImage } from './fixtures/web/pages'
+import { exited } from './fixtures/results'
 
 const NOW = 1_700_000_000_000
 const MARKER = '__peek_curl__ '
@@ -13,10 +14,6 @@ const MARKER = '__peek_curl__ '
 type Page = { html: string; status?: number; finalUrl?: string; isTruncated?: boolean; exitCode?: number }
 
 let sessions = 0
-
-function exited(exitCode: number, stdout = '', stderr = '', isStdoutTruncated = false): ProcessRunResult {
-  return { exitCode, stdout, stderr, isStdoutTruncated, isStderrTruncated: false }
-}
 
 const PUBLIC_IP = '93.184.216.34'
 
