@@ -47,7 +47,7 @@ import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradi
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { WidgetCtx } from './pane/types'
-import { SectionRule } from './pane/widgets'
+import { HoverLayer, SectionRule } from './pane/widgets'
 
 const C = BASE
 
@@ -3162,17 +3162,7 @@ export const register: Register = on => {
                 </Box>
               )
             })}
-            {Client && (
-              <Box position="absolute" top={0} left={0} width={textWidth} height={chunk.length}>
-                <Client
-                  key={`hover-${prefix}-${i}`}
-                  module="./hover-layer.tsx"
-                  props={{ kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
-                  width={textWidth}
-                  height={chunk.length}
-                />
-              </Box>
-            )}
+            {HoverLayer(w, `hover-${prefix}-${i}`, { kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
           </Box>
         ))
       }

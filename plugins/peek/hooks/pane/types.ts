@@ -12,3 +12,7 @@ export type WidgetCtx = {
   Client?: ElementConstructor<ClientProps>
   C: Palette
 }
+
+export type HoverItem = { href: string; isStarred?: boolean; inGroup?: string; key?: string } | { group: string; isStarred?: boolean }
+
+export type HoverProps = { kind: 'rows' | 'cards'; width: number; height: number; cardWidth?: number; cardHeight?: number; gap?: number; starX: number; starY: number; items: HoverItem[] }
