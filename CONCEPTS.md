@@ -177,6 +177,12 @@ reader page only while the person asks for it, and holds site data in memory onl
 Typing reaches the page only while a click has put focus on an editable field; a
 navigation or leaving live view returns the keys to peek.
 
+### Group
+A titled, described set of files and links, optionally split into sections, that the
+agent makes for the person and that lasts across sessions of one project. The agent
+creates and edits it; the person stars it and adds or removes items. An item the person
+removed stays removed until the agent forces it back.
+
 ### Frame budget
 The cap on how many bytes of pictures live view sends into the pane each second. The pane
 path stalls above a measured rate without telling the sender, so the cap is fixed ahead of

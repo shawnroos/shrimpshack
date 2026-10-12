@@ -390,7 +390,7 @@ describe('loadWeb with curl', () => {
   test('an HTTP error maps to a fixed failure kind', async () => {
     const page = 'https://gone.test/'
     const { io } = world({ pages: { [page]: { html: 'secret body text', status: 404 } } })
-    expect(await loadWeb(io, web(page), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access', detail: 'HTTP 404 Not Found from gone.test' })
+    expect(await loadWeb(io, web(page), NOW)).toEqual({ ok: false, failure: 'gone', detail: 'HTTP 404 Not Found from gone.test' })
   })
 
   test('a site that refuses the fetch names the status and the host that sent it', async () => {

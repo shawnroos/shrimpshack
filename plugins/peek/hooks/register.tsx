@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Loaded, Mention, Mode, RemoteRecord, View } from '../types'
+import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Loaded, Mention, Mode, RemoteRecord, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
 import { C as BASE, MUTED, ICON, META_ICON, colorFor, iconFor, mute, ruleParts } from './theme'
 import { capturedLinearContext, record } from './capture'
@@ -18,6 +18,26 @@ import { createLive, isWebUrl, liveStatusText, pagePoint, typedInput, wheelPoint
 import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveIo, LiveState, TypedKey, Viewport } from './live'
 import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
+import {
+  applyGroupOps,
+  createGroup,
+  deleteGroup,
+  fileOf,
+  groupsDir,
+  isGroupId,
+  isScheme,
+  layoutOf,
+  listGroups,
+  readGroup,
+  refPath,
+  refused,
+  resolveProjectKey,
+  shortId,
+  starGroup,
+  storedRef,
+  writeGroup,
+} from './groups'
+import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
 import {
   describeAge,
   describeSize,
@@ -67,6 +87,7 @@ import {
   taskRows,
   toggleTaskLine,
   urlCandidates,
+  wrapLines,
 } from './lib'
 
 const C = BASE
@@ -81,6 +102,7 @@ const trail = atom({ plugin: 'peek', key: 'trail' } as const, [])
 const section = atom({ plugin: 'peek', key: 'section' } as const, -1)
 const menuOpen = atom({ plugin: 'peek', key: 'menuOpen' } as const, false)
 const menuFilter = atom({ plugin: 'peek', key: 'menuFilter' } as const, '')
+const openGroup = atom({ plugin: 'peek', key: 'openGroup' } as const, null)
 const NARROW = 60
 const MIN_CPL = 30
 const MAX_CPL = 104
@@ -88,6 +110,7 @@ const MODES: { id: Mode; label: string; icon: string; hotkey: string }[] = [
   { id: 'view', label: 'Peek', icon: '\u{f06e}', hotkey: 'p' },
   { id: 'recent', label: 'Recent', icon: '\u{f017}', hotkey: 'r' },
   { id: 'gallery', label: 'Gallery', icon: '\u{f0c6c}', hotkey: 'g' },
+  { id: 'groups', label: 'Groups', icon: ICON.groups, hotkey: 'e' },
 ]
 const scopeAtom = atom({ plugin: 'peek', key: 'scope' } as const, 'session')
 const galleryType = atom({ plugin: 'peek', key: 'galleryType' } as const, 'all')
@@ -96,10 +119,12 @@ const galleryFilter = atom({ plugin: 'peek', key: 'galleryFilter' } as const, ''
 const roleFilter = atom({ plugin: 'peek', key: 'roleFilter' } as const, 'all')
 const stars = atom({ plugin: 'peek', key: 'stars' } as const, [])
 const cursorAtom = atom({ plugin: 'peek', key: 'cursor' } as const, 0)
-type NavItem = { href: string; key: string; line: number; col: number }
+type NavItem = { href: string; key: string; line: number; col: number; group?: string }
 let navOrder: NavItem[] = []
 
 type Direction = 'up' | 'down' | 'left' | 'right'
+
+const clamp = (at: number, length: number) => Math.max(0, Math.min(length - 1, at))
 
 // Up and down keep the column, so a card grid moves like a grid.
 function stepFrom(at: number, direction: Direction): number {
@@ -118,9 +143,16 @@ function stepFrom(at: number, direction: Direction): number {
 }
 
 async function moveSelection($: EngineInterface, direction: Direction) {
+  const rows = await groupPageRows($)
+  if (rows) {
+    if ((direction === 'up' || direction === 'down') && (await selectGroupRow($, rows, rows.selected + (direction === 'down' ? 1 : -1)))) {
+      await focusGroupRow($, rows.selected)
+    }
+    return
+  }
   let landed = 0
   await update($, cursorAtom, at => {
-    landed = stepFrom(Math.max(0, Math.min(navOrder.length - 1, at)), direction)
+    landed = stepFrom(clamp(at, navOrder.length), direction)
     return landed
   })
   const key = navOrder[landed]?.key
@@ -132,13 +164,16 @@ async function moveSelection($: EngineInterface, direction: Direction) {
 
 async function selectAndOpen($: EngineInterface, index: number) {
   await update($, cursorAtom, () => index)
-  const href = navOrder[index]?.href
-  if (href) await show($, href)
+  await openNav($, navOrder[index])
 }
 
-async function selectedHref($: EngineInterface): Promise<string | undefined> {
-  const at = await read($, cursorAtom)
-  return navOrder[Math.max(0, Math.min(navOrder.length - 1, at))]?.href
+async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
+  return navOrder[clamp(await read($, cursorAtom), navOrder.length)]
+}
+
+async function openNav($: EngineInterface, one: NavItem | undefined) {
+  if (one?.group) await openGroupPage($, one.group)
+  else if (one?.href) await show($, one.href)
 }
 
 const ROLES: RoleFilter[] = ['all', 'artifacts', 'touched']
@@ -150,6 +185,8 @@ const LIST_CHUNK = 10
 const CARD_ROWS = 5
 const CARD_MIN = 26
 const CARD_GAP = 2
+const PINNED_GROUPS = 4
+const GROUP_CARD_LINES = 3
 const fullText = new Map<string, string>()
 const roots = new Map<string, { root: string; isWorktree: boolean } | null>()
 const GALLERY = 'peek-ui'
@@ -181,6 +218,7 @@ const COMMAND_KEYS: Record<string, string> = {
   peek: 'mode-view',
   recent: 'mode-recent',
   gallery: 'mode-gallery',
+  groups: 'mode-groups',
   'role-*': 'role',
   'scope-*': 'scope',
   open: 'open',
@@ -510,10 +548,19 @@ async function openFromPage($: EngineInterface, href: string) {
     backStack.push({ view: current, key: topBlockKey })
     if (backStack.length > 20) backStack.shift()
   }
-  await show($, href)
+  await show($, href, true)
 }
 
+// b walks the page history first, so a link followed inside a group item comes back before the group does.
 async function goBack($: EngineInterface) {
+  if (groupBack && backStack.length <= groupBack.depth) {
+    const target = groupBack
+    groupBack = null
+    await update($, openGroup, opened => (opened?.id === target.id ? opened : { id: target.id, item: null }))
+    await update($, mode, () => 'groups')
+    await update($, page, () => 0)
+    return
+  }
   const last = backStack.pop()
   if (!last) return
   await update($, view, () => last.view)
@@ -538,11 +585,14 @@ async function noteTitle($: EngineInterface, entry: CacheEntry) {
   await $.store.set('titles', titles).catch(() => undefined)
 }
 
+function startTicking($: EngineInterface) {
+  if (isTicking) return
+  isTicking = true
+  $.clock.every(15_000, () => void tickRemote($).catch(() => undefined))
+}
+
 async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Promise<View> {
-  if (!isTicking) {
-    isTicking = true
-    $.clock.every(15_000, () => void tickRemote($).catch(() => undefined))
-  }
+  startTicking($)
   const known = cached(ref.address)
   if (known?.state === 'frozen') return viewOf($, ref, known)
   const entry = await refreshItem(ref.address, remoteLoader($, canReplay), await $.clock.now())
@@ -601,7 +651,8 @@ function remoteRef(href: string, context: RefContext = {}): Ref | null {
   return ref.kind === 'web' && remoteFileOf(ref.address) ? null : ref
 }
 
-async function show($: EngineInterface, raw: string) {
+async function show($: EngineInterface, raw: string, isFromGroupChain = false) {
+  if (!isFromGroupChain) groupBack = null
   const generation = ++showGeneration
   const ref = remoteRef(raw)
   const href = ref?.address ?? raw
@@ -750,9 +801,11 @@ async function listRoot($: EngineInterface, root: string, worktree?: string): Pr
   return ran ? parseStatLines(ran.stdout, root, worktree) : []
 }
 
+const titlesByKey = () => new Map(Object.entries(titles).map(([address, entry]) => [itemKey(address), entry]))
+
 async function sessionEntries($: EngineInterface, list: readonly Mention[]): Promise<FileEntry[]> {
   const out: FileEntry[] = []
-  const remoteTitles = new Map(Object.entries(titles).map(([address, entry]) => [itemKey(address), entry]))
+  const remoteTitles = titlesByKey()
   for (const one of [...list].reverse()) {
     const file = parseHref(one.href)
     const path = file?.path ?? one.href
@@ -851,6 +904,600 @@ async function setStar($: EngineInterface, raw: string, wanted?: boolean): Promi
   return isOn
 }
 
+// e on an open group page goes back to the group list; from any other screen it keeps the open group.
+async function switchMode($: EngineInterface, to: Mode) {
+  if (to === 'groups' && (await read($, mode)) === 'groups') await update($, openGroup, () => null)
+  await update($, mode, () => to)
+  await update($, page, () => 0)
+}
+
+async function openGroupPage($: EngineInterface, id: string) {
+  await update($, openGroup, () => ({ id, item: null }))
+  await update($, mode, () => 'groups')
+  await update($, page, () => 0)
+}
+
+async function personWrite(
+  $: EngineInterface,
+  id: string,
+  failure: string,
+  change: (current: Group, now: number) => GroupResult,
+  onWritten: (write: Extract<GroupWrite, { ok: true }>) => void = () => undefined,
+) {
+  const home = await groupHome($)
+  if (!home) {
+    $.ui.toast(`${failure}: HOME is not set.`)
+    return
+  }
+  const now = await $.clock.now()
+  let isGone = false
+  const write = await writeGroupHere(groupsIoOf($), home.place, id, current => {
+    if (current) return change(current, now)
+    isGone = true
+    return { group: null, outcomes: [] }
+  })
+  if (!write.ok) $.ui.toast(`${failure}: ${write.error}.`)
+  else if (isGone) {
+    $.ui.toast('That group was deleted.')
+    if ((await read($, openGroup))?.id === id) await update($, openGroup, () => null)
+  } else onWritten(write)
+  $.ui.invalidate('ui.render')
+}
+
+async function toggleGroupStar($: EngineInterface, id: string) {
+  await personWrite($, id, 'Could not star the group', current => starGroup(current, !current.starred))
+}
+
+const starredFirst = (groups: readonly Group[]) => [...groups].sort((a, b) => Number(b.starred) - Number(a.starred))
+
+// The tab re-sorts starred-first, so the cursor index is re-pointed at the group it was on;
+// left on its old index, the next f would toggle a different card.
+async function starInGroupsTab($: EngineInterface, id: string) {
+  const kept = (await selectedNav($))?.href
+  await toggleGroupStar($, id)
+  const home = await groupHome($)
+  if (!home || !kept) return
+  const index = starredFirst(await shownGroups(groupsIoOf($), home.place)).findIndex(one => one.id === kept)
+  if (index >= 0) await update($, cursorAtom, () => index)
+  $.ui.invalidate('ui.render')
+}
+
+async function personGroupWrite($: EngineInterface, id: string, title: string, op: Extract<GroupOp, { op: 'addItem' | 'removeItem' }>) {
+  const verb = op.op === 'addItem' ? 'add to' : 'remove from'
+  await personWrite(
+    $,
+    id,
+    `Could not ${verb} ${title}`,
+    (current, now) => applyGroupOps(current, [op], { now, newId: () => shortId(Math.random), actor: 'person', others: [] }),
+    write => {
+      const outcome = write.outcomes[0]
+      const name = write.group?.title ?? title
+      if (outcome?.status === 'applied') $.ui.toast(op.op === 'addItem' ? `Added to ${name}` : `Removed from ${name}`)
+      else if (outcome?.status === 'unchanged' && op.op === 'addItem') $.ui.toast(`Already in ${name}`)
+      else $.ui.toast(outcome?.reason ?? `Could not ${verb} ${name}.`)
+    },
+  )
+}
+
+async function personGroupAdd($: EngineInterface, id: string, title: string, href: string) {
+  const target = await groupTarget($, href, (await groupHome($))?.worktreeRoot, true)
+  if ('error' in target) $.ui.toast(`Could not add to ${title}: ${target.error}.`)
+  else await personGroupWrite($, id, title, { op: 'addItem', ref: target.ref })
+}
+
+type MenuCommand = { id: string; icon: string; label: string; hint: string; run: () => void; isGroupRow?: boolean; isFilteredOnly?: boolean }
+type GroupMenuFor = { target?: string; group?: Group; selectedRef?: string; starHint?: string }
+
+const GROUP_MENU_ROWS = 8
+
+async function groupCommands($: EngineInterface, on: GroupMenuFor): Promise<MenuCommand[]> {
+  const home = await groupHome($)
+  if (!home) return []
+  const open = on.group
+  const own: MenuCommand[] = open
+    ? [
+        { id: 'group-star', icon: '\u{f51a}', label: `${open.starred ? 'Unstar' : 'Star'} this group`, hint: on.starHint ?? '', run: () => void toggleGroupStar($, open.id) },
+        ...(on.selectedRef !== undefined
+          ? [{ id: 'group-remove-here', icon: '\u{f068}', label: 'Remove from this group', hint: '', run: () => void personGroupWrite($, open.id, open.title, { op: 'removeItem', ref: on.selectedRef ?? '' }) }]
+          : []),
+      ]
+    : []
+  const href = on.target
+  const target = href ? await groupTarget($, href, home.worktreeRoot, false) : null
+  if (!href || !target || 'error' in target) return own.map(one => ({ ...one, isGroupRow: true }))
+  const key = itemKey(target.ref)
+  const groups = (await shownGroups(groupsIoOf($), home.place)).filter(one => one.id !== open?.id)
+  const rows = groups.map((one, index): MenuCommand => {
+    const held = one.items.find(item => itemKey(item.ref) === key)
+    const isFilteredOnly = index >= GROUP_MENU_ROWS
+    return held
+      ? { id: `group-remove-${one.id}`, icon: '\u{f068}', label: `Remove from group: ${one.title}`, hint: '', isFilteredOnly, run: () => void personGroupWrite($, one.id, one.title, { op: 'removeItem', ref: held.ref }) }
+      : { id: `group-add-${one.id}`, icon: '\u{f067}', label: `Add to group: ${one.title}`, hint: '', isFilteredOnly, run: () => void personGroupAdd($, one.id, one.title, href) }
+  })
+  return [...own, ...rows].map(one => ({ ...one, isGroupRow: true }))
+}
+
+type GroupRows = { id: string; title: string; keys: string[]; hrefs: string[]; selected: number }
+
+// Drawing may not write state, so the page keeps what its handlers need here: the rows as last drawn, the
+// back step to the group, and which deleted group was already reported.
+let groupRows: GroupRows | null = null
+let groupBack: { id: string; title: string; depth: number } | null = null
+let goneGroupNotice = ''
+let openGroupRemotes: string[] = []
+
+async function groupPageRows($: EngineInterface): Promise<GroupRows | null> {
+  if (!groupRows || (await read($, mode)) !== 'groups') return null
+  return (await read($, openGroup))?.id === groupRows.id ? groupRows : null
+}
+
+async function selectGroupRow($: EngineInterface, rows: GroupRows, wanted: number): Promise<boolean> {
+  const index = clamp(wanted, rows.keys.length)
+  const key = rows.keys[index]
+  if (key === undefined) return false
+  rows.selected = index
+  await update($, openGroup, opened => (opened?.id === rows.id ? { ...opened, item: key } : opened))
+  await update($, cursorAtom, () => index)
+  return true
+}
+
+async function focusGroupRow($: EngineInterface, index: number) {
+  await $.ui.scroll({ in: PANE, to: { key: `group-row-${index}` }, block: 'center' }).catch(() => undefined)
+  await $.ui.focus({ requestId: PANE, key: `item-${index}` }).catch(() => undefined)
+}
+
+async function openGroupItem($: EngineInterface, rows: GroupRows, index: number) {
+  await selectGroupRow($, rows, index)
+  await openGroupHref($, rows, rows.keys[rows.selected] ?? '', rows.hrefs[rows.selected] ?? '')
+}
+
+// Opening from a card sets openGroup too, so Back lands on the group page with this item selected.
+async function openGroupHref($: EngineInterface, group: { id: string; title: string }, key: string, href: string) {
+  const file = href ? parseHref(href) : null
+  if (!href || (file && !(await $.fs.exists(file.path).catch(() => false)))) {
+    $.ui.toast(`That file is gone: ${file?.path ?? key}`)
+    return
+  }
+  await update($, openGroup, () => ({ id: group.id, item: key }))
+  groupBack = { id: group.id, title: group.title, depth: backStack.length }
+  await show($, href, true)
+}
+
+async function openCardItem($: EngineInterface, id: string, key: string, href: string) {
+  const home = await groupHome($)
+  const group = home ? await shownGroup(groupsIoOf($), home.place, id) : null
+  if (group) await openGroupHref($, group, key, href)
+  else $.ui.toast('That group was deleted.')
+}
+
+// Per pane and never saved. Only handlers change it: a draw may not write state.
+const expandedGroups = new Set<string>()
+
+function toggleExpanded($: EngineInterface, id: string) {
+  if (!expandedGroups.delete(id)) expandedGroups.add(id)
+  $.ui.invalidate('ui.render')
+}
+
+type GroupLook = { key: string; href: string; name: string; kind: string; where: string; state: ItemState; favicon?: string }
+
+async function groupItemLook($: EngineInterface, item: GroupItem, worktreeRoot: string | undefined, known: ReadonlyMap<string, TitleEntry>): Promise<GroupLook> {
+  const key = itemKey(item.ref)
+  const file = refPath(item.ref, worktreeRoot)
+  if (file) {
+    const { state, stat } = await fileState($, file.path)
+    const name = file.path.split('/').pop() || file.path
+    const folder = file.path.slice(0, Math.max(0, file.path.length - name.length - 1))
+    const where = worktreeRoot && folder.startsWith(worktreeRoot) ? folder.slice(worktreeRoot.length + 1) : folder
+    return { key, href: fileHref(file.path, file.line), name: item.label ?? name, kind: stat?.kind === 'dir' ? 'folder' : kindOf(file.path), where, state }
+  }
+  const state = await itemState($, item.ref, worktreeRoot)
+  if (!isScheme(item.ref)) return { key, href: '', name: item.label ?? item.ref, kind: kindOf(item.ref), where: '', state }
+  const ref = remoteRef(item.ref)
+  const address = ref?.address ?? item.ref
+  const title = known.get(key)
+  const fallback = ref?.key ?? (ref?.number ? `#${ref.number}` : address.replace(/^https?:\/\/(www\.)?/, ''))
+  let host = ''
+  try {
+    host = new URL(address).hostname
+  } catch {}
+  return {
+    key,
+    href: address,
+    name: title?.title ?? item.label ?? fallback,
+    kind: title?.kind ?? ref?.kind ?? 'web',
+    where: ref?.owner ? `${ref.owner}/${ref.repo}` : title?.trail?.join(' · ') || host,
+    state,
+    favicon: (await remotePicture($, title?.favicon))?.file,
+  }
+}
+
+function loadGroupRemote($: EngineInterface, address: string) {
+  startTicking($)
+  void $.clock
+    .now()
+    .then(now => refreshItem(address, remoteLoader($, false), now))
+    .then(entry => noteTitle($, entry))
+    .then(() => $.ui.invalidate('ui.render'))
+    .catch(() => undefined)
+}
+
+function groupsIoOf($: EngineInterface): GroupsIo {
+  return {
+    read: path => $.fs.read(path),
+    write: (path, text) => $.fs.write(path, text),
+    list: dir => $.fs.list(dir),
+    stat: path => $.fs.stat(path).catch(() => null),
+    run: argv => $.process.run(argv),
+    now: () => $.clock.now(),
+    sleep: ms => $.clock.sleep(ms),
+  }
+}
+
+type GroupHome = { place: GroupPlace; worktreeRoot?: string }
+
+// Render reads only: a write that decided from these could act on another session's stale group.
+const groupLists = new Map<string, { mtimeMs: number | null; groups: readonly Group[] }>()
+let openGroupFile: { file: string; projectKey: string; mtimeMs: number; group: Group | null } | null = null
+
+async function shownGroups(io: GroupsIo, place: GroupPlace): Promise<readonly Group[]> {
+  const mtimeMs = (await io.stat(place.dir))?.mtimeMs ?? null
+  const key = `${place.dir}|${place.projectKey}`
+  const known = groupLists.get(key)
+  if (known && known.mtimeMs === mtimeMs) return known.groups
+  const groups = await listGroups(io, place)
+  groupLists.set(key, { mtimeMs, groups })
+  return groups
+}
+
+async function shownGroup(io: GroupsIo, place: GroupPlace, id: string): Promise<Group | null> {
+  const file = fileOf(place, id)
+  const stat = isGroupId(id) ? await io.stat(file) : null
+  const known = openGroupFile
+  if (stat && known?.file === file && known.projectKey === place.projectKey && known.mtimeMs === stat.mtimeMs) return known.group
+  const group = await readGroup(io, place, id)
+  openGroupFile = stat ? { file, projectKey: place.projectKey, mtimeMs: stat.mtimeMs, group } : null
+  return group
+}
+
+function writeGroupHere(io: GroupsIo, place: GroupPlace, id: string, change: (current: Group | null) => GroupResult): Promise<GroupWrite> {
+  return writeGroup(io, place, id, change).then(write => {
+    if (write.ok && write.isChanged) {
+      groupLists.delete(`${place.dir}|${place.projectKey}`)
+      openGroupFile = null
+    }
+    return write
+  })
+}
+
+const groupHomes = new Map<string, Promise<GroupHome | null>>()
+
+async function findGroupHome($: EngineInterface, root: string): Promise<GroupHome | null> {
+  const homeDir = await $.env.get('HOME')
+  if (!homeDir) return null
+  const projectKey = await resolveProjectKey(argv => $.process.run(argv), root)
+  const git = await gitRoot($, root)
+  return { place: { dir: groupsDir(homeDir, projectKey), projectKey }, worktreeRoot: git?.root }
+}
+
+async function groupHome($: EngineInterface): Promise<GroupHome | null> {
+  const root = await $.session.root()
+  const key = `${await $.session.id()}|${root}`
+  const known = groupHomes.get(key)
+  if (known) return known
+  const found = findGroupHome($, root)
+  groupHomes.set(key, found)
+  found.catch(() => {
+    if (groupHomes.get(key) === found) groupHomes.delete(key)
+  })
+  return found
+}
+
+type GroupTarget = { raw: string; ref: string } | { raw: string; error: string }
+
+async function groupTarget($: EngineInterface, raw: string, worktreeRoot: string | undefined, isAdd: boolean): Promise<GroupTarget> {
+  const trimmed = raw.trim()
+  const href = await toHref($, trimmed).catch(() => null)
+  if (href) {
+    const file = parseHref(href)
+    if (isAdd && file && !(await $.fs.exists(file.path).catch(() => false))) return { raw: trimmed, error: `No file at ${file.path}` }
+    return { raw: trimmed, ref: storedRef(remoteRef(href)?.address ?? href, worktreeRoot) }
+  }
+  if (isAdd || !trimmed) return { raw: trimmed, error: `No file or URL at ${trimmed}` }
+  if (isScheme(trimmed)) return { raw: trimmed, ref: trimmed }
+  const abs = resolvePath(trimmed.replace(/:\d+$/, ''), await $.session.cwd(), (await $.env.get('HOME')) ?? '')
+  return { raw: trimmed, ref: storedRef(fileHref(abs), worktreeRoot) }
+}
+
+type ItemState = 'ok' | 'missing' | 'unavailable'
+
+// stat rejects for a missing path and for any other failure, so only a failed stat asks exists which one it was.
+async function fileState($: EngineInterface, path: string): Promise<{ state: ItemState; stat: { kind: string } | null }> {
+  const stat = await $.fs.stat(path).catch(() => null)
+  if (stat) return { state: 'ok', stat }
+  const state = await $.fs.exists(path).then(
+    (found): ItemState => (found ? 'ok' : 'missing'),
+    (): ItemState => 'unavailable',
+  )
+  return { state, stat: null }
+}
+
+async function itemState($: EngineInterface, ref: string, worktreeRoot?: string): Promise<ItemState> {
+  const file = refPath(ref, worktreeRoot)
+  if (file) return (await fileState($, file.path)).state
+  if (!isScheme(ref)) return 'missing'
+  const entry = cached(ref)
+  if (entry?.failure === 'gone') return 'missing'
+  return entry?.state === 'failed' || entry?.state === 'stale-since' ? 'unavailable' : 'ok'
+}
+
+async function groupJson($: EngineInterface, group: Group, worktreeRoot?: string) {
+  const known = titlesByKey()
+  const items = await Promise.all(
+    group.items.map(async one => ({
+      ref: one.ref,
+      title: known.get(itemKey(one.ref))?.title ?? null,
+      label: one.label ?? null,
+      section: one.section ?? null,
+      addedBy: one.addedBy,
+      state: await itemState($, one.ref, worktreeRoot),
+    })),
+  )
+  return { id: group.id, title: group.title, description: group.description, starred: group.starred, sections: group.sections.map(one => ({ ...one, layout: layoutOf(one) })), items, removed: group.removed }
+}
+
+const sum = (values: readonly number[]) => values.reduce((total, one) => total + one, 0)
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
+
+function tally(outcomes: readonly GroupOutcome[]): string {
+  const count = (status: GroupOutcome['status']) => outcomes.filter(one => one.status === status).length
+  return `${count('applied')} applied, ${count('unchanged')} unchanged, ${count('refused')} refused`
+}
+
+const failedWrite = (verb: string, write: Extract<GroupWrite, { ok: false }>) => ({ result: `Could not ${verb}: ${write.error}. Nothing was changed.` })
+
+type SaveInput = {
+  id?: unknown
+  title?: unknown
+  description?: unknown
+  sections?: unknown
+  order?: unknown
+  add?: unknown
+  move?: unknown
+  remove?: unknown
+}
+
+const isText = (value: unknown): value is string => typeof value === 'string'
+const isGroupRef = (id: unknown): id is string => isText(id) && isGroupId(id)
+const badId = (id: unknown) => ({ result: `${String(id)} is not a group id. Use an id from list_groups.` })
+const listOf = (value: unknown): Record<string, unknown>[] | null =>
+  value === undefined ? [] : Array.isArray(value) && value.every(one => one && typeof one === 'object') ? (value as Record<string, unknown>[]) : null
+
+function sectionOps(value: unknown): GroupOp[] | string {
+  const list = listOf(value)
+  if (!list) return 'sections must be a list of { action, section, title }'
+  const ops: GroupOp[] = []
+  for (const one of list) {
+    const isLaid = one.action === 'layout' || (one.action === 'add' && one.layout !== undefined)
+    if (isLaid && one.layout !== 'cards' && one.layout !== 'list') return `A section layout is cards or list, not "${String(one.layout)}"`
+    const layout = one.layout as SectionLayout
+    if (one.action === 'add' && isText(one.title)) ops.push({ op: 'addSection', title: one.title, ...(isLaid ? { layout } : {}) })
+    else if (one.action === 'layout' && isText(one.section)) ops.push({ op: 'setSectionLayout', section: one.section, layout })
+    else if (one.action === 'rename' && isText(one.section) && isText(one.title)) ops.push({ op: 'renameSection', section: one.section, title: one.title })
+    else if (one.action === 'remove' && isText(one.section)) ops.push({ op: 'removeSection', section: one.section })
+    else return `Unreadable section change ${JSON.stringify(one)}`
+  }
+  return ops
+}
+
+async function saveGroup($: EngineInterface, input: SaveInput) {
+  const home = await groupHome($)
+  if (!home) return { result: 'Could not save the group: HOME is not set.' }
+  const { place, worktreeRoot } = home
+  const id = input.id
+  if (id !== undefined && !isGroupRef(id)) return badId(id)
+  if (input.title !== undefined && !isText(input.title)) return { result: 'title must be text.' }
+  if (input.description !== undefined && !isText(input.description)) return { result: 'description must be text.' }
+  if (id === undefined && !isText(input.title)) return { result: 'Give a title to create a group, or an id to change one.' }
+  const sections = sectionOps(input.sections)
+  if (typeof sections === 'string') return { result: sections }
+  const order = input.order
+  if (order !== undefined && !(Array.isArray(order) && order.every(isText))) return { result: 'order must be a list of section ids or titles.' }
+  const adds = listOf(input.add)
+  const moves = listOf(input.move)
+  const removes = listOf(input.remove)
+  if (!adds || !moves || !removes || [...adds, ...moves, ...removes].some(one => !isText(one.target))) {
+    return { result: 'add, move and remove are lists of objects, each with a target.' }
+  }
+
+  const resolveAll = (list: Record<string, unknown>[], isAdd: boolean) => Promise.all(list.map(one => groupTarget($, String(one.target), worktreeRoot, isAdd)))
+  const [added, moved, removed] = await Promise.all([resolveAll(adds, true), resolveAll(moves, false), resolveAll(removes, false)])
+  const rejected: GroupOutcome[] = added.flatMap(one => ('error' in one ? [refused('addItem', one.error, { ref: one.raw })] : []))
+  const optional = <T,>(value: unknown, wrap: (v: string) => T) => (isText(value) ? wrap(value) : {})
+  const opsFor = (group: Group | null): GroupOp[] => {
+    const pick = (target: Extract<GroupTarget, { ref: string }>) => {
+      const exact = group?.items.find(one => itemKey(one.ref) === itemKey(target.raw))
+      return exact ? exact.ref : target.ref
+    }
+    return [
+      ...sections,
+      ...(order ? [{ op: 'reorderSections' as const, order: order as string[] }] : []),
+      ...added.flatMap((one, i) =>
+        'error' in one
+          ? []
+          : [{ op: 'addItem' as const, ref: one.ref, ...optional(adds[i]?.section, section => ({ section })), ...optional(adds[i]?.label, label => ({ label })), ...(adds[i]?.force === true ? { force: true } : {}) }],
+      ),
+      ...moved.flatMap((one, i) => ('error' in one ? [] : [{ op: 'moveItem' as const, ref: pick(one), ...optional(moves[i]?.section, section => ({ section })) }])),
+      ...removed.flatMap((one, i) => ('error' in one ? [] : [{ op: 'removeItem' as const, ref: pick(one), ...(removes[i]?.force === true ? { force: true } : {}) }])),
+    ]
+  }
+
+  const io = groupsIoOf($)
+  const isCreate = id === undefined
+  const others = isCreate || isText(input.title) ? await listGroups(io, place) : []
+  const ctx = { now: await $.clock.now(), newId: () => shortId(Math.random), actor: 'agent' as const }
+  const target = isCreate ? freshId(others) : id
+  const write = await writeGroupHere(io, place, target, current => {
+    if (isCreate) {
+      if (current) return { group: current, outcomes: [refused('create', 'That id is taken; try again')] }
+      return createGroup(
+        { projectKey: place.projectKey, id: target, title: String(input.title), ...optional(input.description, description => ({ description })) },
+        opsFor(null),
+        { ...ctx, others },
+      )
+    }
+    if (!current) return { group: null, outcomes: [refused('setTitle', `No group ${target} in this project; it may have been deleted`)] }
+    const head: GroupOp[] = [
+      ...(isText(input.title) ? [{ op: 'setTitle' as const, title: input.title }] : []),
+      ...(isText(input.description) ? [{ op: 'setDescription' as const, description: input.description }] : []),
+    ]
+    return applyGroupOps(current, [...head, ...opsFor(current)], { ...ctx, others: others.filter(one => one.id !== target) })
+  })
+  if (!write.ok) return failedWrite(isCreate ? 'create the group' : 'save the group', write)
+  if (write.isChanged) $.ui.invalidate('ui.render')
+  const outcomes = [...write.outcomes, ...rejected]
+  const group = write.group
+  if (isCreate && !write.isChanged) return { result: `Not created: ${outcomes[0]?.reason ?? 'refused'}.\n${JSON.stringify({ outcomes })}` }
+  if (!group) return { result: `Not saved: ${outcomes[0]?.reason ?? 'unknown group'}.\n${JSON.stringify({ outcomes })}` }
+  const line = `${isCreate ? 'Created' : 'Saved'} group "${group.title}" (${group.id}): ${tally(isCreate ? outcomes.slice(1) : outcomes)}.`
+  return { result: `${line}\n${JSON.stringify({ ...(await groupJson($, group, worktreeRoot)), outcomes })}` }
+}
+
+const TARGET_HELP = 'A file path (absolute, or relative to the session folder), a URL, a GitHub owner/repo#N, or a Linear key'
+
+const GROUP_TOOLS = [
+  {
+    name: 'list_groups',
+    description:
+      'List the peek groups in this project: titled bundles of related files and links (a collection) shown in the peek side pane. Returns each group id, title, description, star and counts. Call before save_group to reuse a group rather than make a near-duplicate.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'read_group',
+    description:
+      'Read one peek group (a collection or bundle of files and links) in full: title, description, sections, and every item (file or link) with its title (null until peek has fetched it), label, section id, who added it (agent or person) and state (ok, missing, unavailable). Read before you change a group: the person may have added or removed items.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'The group id from list_groups' } }, required: ['id'] },
+  },
+  {
+    name: 'save_group',
+    description:
+      'Create or change a peek group: a titled, described bundle of files and links with sections, kept per project in the peek side pane so the person can come back to it. Without id it creates a group (title required); with id it applies the given changes. Changes are edits, never a replace: items the person added stay unless you remove one by name with force, and an item the person removed is only re-added with force. Sections are named by id or title, so one call can add a section and fill it. A section shows its items as cards (the default) or as a list of lines; set it with layout on add, or with the layout action.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The group to change; leave out to create one' },
+        title: { type: 'string' },
+        description: { type: 'string', description: 'Up to 500 characters' },
+        sections: {
+          type: 'array',
+          description: 'Section changes, applied in order before item changes',
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['add', 'rename', 'remove', 'layout'] },
+              section: { type: 'string', description: 'Section id or title, for rename, remove and layout' },
+              title: { type: 'string', description: 'New title, for add and rename' },
+              layout: { type: 'string', enum: ['cards', 'list'], description: 'How the section shows its items, for add and layout: cards (the default) or list' },
+            },
+            required: ['action'],
+          },
+        },
+        order: { type: 'array', items: { type: 'string' }, description: 'Every section, by id or title, in the new order' },
+        add: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              target: { type: 'string', description: TARGET_HELP },
+              section: { type: 'string', description: 'Section id or title; leave out for the top block' },
+              label: { type: 'string', description: 'A short note shown with the item, up to 200 characters' },
+              force: { type: 'boolean', description: 'Re-add an item the person removed' },
+            },
+            required: ['target'],
+          },
+        },
+        move: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { target: { type: 'string' }, section: { type: 'string', description: 'Leave out to move to the top block' } },
+            required: ['target'],
+          },
+        },
+        remove: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { target: { type: 'string' }, force: { type: 'boolean', description: 'Remove an item the person added' } },
+            required: ['target'],
+          },
+        },
+      },
+    },
+  },
+  {
+    name: 'delete_group',
+    description:
+      'Delete a peek group: a collection or bundle of files and links. A group the person starred, or one holding items the person added, needs force; without it you are told what would be lost.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' }, force: { type: 'boolean', description: 'Delete even a starred group or one with items the person added' } },
+      required: ['id'],
+    },
+  },
+]
+
+async function listGroupsTool($: EngineInterface) {
+  const home = await groupHome($)
+  if (!home) return { result: 'Could not list groups: HOME is not set.' }
+  const groups = await listGroups(groupsIoOf($), home.place)
+  const summaries = groups.map(one => ({
+    id: one.id,
+    title: one.title,
+    description: one.description,
+    starred: one.starred,
+    sections: one.sections.length,
+    items: one.items.length,
+    updatedAt: one.updatedAt,
+  }))
+  const line = groups.length ? `${plural(groups.length, 'group')} in this project.` : 'No groups in this project yet.'
+  return { result: `${line}\n${JSON.stringify(summaries)}` }
+}
+
+async function readGroupTool($: EngineInterface, id: unknown) {
+  if (!isGroupRef(id)) return badId(id)
+  const home = await groupHome($)
+  if (!home) return { result: 'Could not read the group: HOME is not set.' }
+  const group = await readGroup(groupsIoOf($), home.place, id)
+  if (!group) return { result: `No group ${id} in this project.` }
+  const line = `Group "${group.title}" (${group.id}): ${plural(group.items.length, 'item')} in ${plural(group.sections.length, 'section')}.`
+  return { result: `${line}\n${JSON.stringify(await groupJson($, group, home.worktreeRoot))}` }
+}
+
+async function deleteGroupTool($: EngineInterface, id: unknown, force: boolean) {
+  if (!isGroupRef(id)) return badId(id)
+  const home = await groupHome($)
+  if (!home) return { result: 'Could not delete the group: HOME is not set.' }
+  let title = ''
+  const write = await writeGroupHere(groupsIoOf($), home.place, id, current => {
+    if (!current) return { group: null, outcomes: [refused('delete', `No group ${id} in this project`)] }
+    title = current.title
+    return deleteGroup(current, force)
+  })
+  if (!write.ok) return failedWrite('delete the group', write)
+  const [outcome] = write.outcomes
+  if (!write.isChanged) return { result: outcome?.reason.startsWith('Not deleted') ? outcome.reason : `Not deleted: ${outcome?.reason ?? 'refused'}.` }
+  $.ui.invalidate('ui.render')
+  return { result: `Deleted group "${title}" (${id}).` }
+}
+
+function freshId(others: readonly Group[]): string {
+  const taken = new Set(others.map(one => one.id))
+  let id = shortId(Math.random)
+  while (taken.has(id)) id = shortId(Math.random)
+  return id
+}
+
 async function refresh($: EngineInterface, href: string) {
   const ref = remoteRef(href)
   if (ref) {
@@ -900,7 +1547,7 @@ async function tickRemote($: EngineInterface) {
   if ((await $.clock.now()) - lastActivity >= IDLE_MS) return
   const current = await read($, view)
   const onScreen = current?.remote && (await read($, mode)) === 'view' ? current.href : undefined
-  const hrefs = [...(await read($, mentions)).map(one => one.href), ...(await read($, stars))]
+  const hrefs = [...(await read($, mentions)).map(one => one.href), ...(await read($, stars)), ...((await read($, openGroup)) ? openGroupRemotes : [])]
   const background = [...new Set(hrefs)].filter(href => remoteRef(href) && isTimed(href))
   const changed = await tick({ onScreen, background, now: await $.clock.now(), lastActivity, load: remoteLoader($, true) })
   for (const address of changed) {
@@ -1122,7 +1769,7 @@ export const register: Register = on => {
       .register({
         name: 'star',
         description:
-          'Star or unstar a file path or URL in the peek side pane, so it sorts first in Recent and Gallery. Star the things the user should look at: a plan, a report, a diagram you made. Use sparingly.',
+          'Star or unstar a file path or URL in the peek side pane, so it sorts first in Recent and Gallery. Star the things the user should look at: a plan, a report, a diagram you made. Use sparingly. For several related files and links, make a peek group instead (save_group).',
         inputSchema: {
           type: 'object',
           properties: {
@@ -1133,6 +1780,8 @@ export const register: Register = on => {
         },
       })
       .catch(() => undefined)
+    for (const spec of GROUP_TOOLS) await $.tool.register(spec).catch(() => undefined)
+    void groupHome($).catch(() => undefined)
     await $.command.register({ name: 'peek-menu', description: 'Open the peek command menu (ctrl+k in the peek pane)' })
     await $.command.register({ name: 'peek-ui', description: 'Show every Claude Code UI element a mod can draw, live' })
     await $.command.register({ name: 'peek', description: 'Peek at a file, folder or URL in the side pane: a path, a description ("the export diagram"), or nothing for the last one' })
@@ -1157,6 +1806,8 @@ export const register: Register = on => {
     const picked = /^item-(\d+)$/.exec(e.element ?? '')
     if (picked && e.origin.kind === 'person') {
       const index = Number(picked[1])
+      const rows = await groupPageRows($).catch(() => null)
+      if (rows) await selectGroupRow($, rows, index).catch(() => undefined)
       await update($, cursorAtom, () => index).catch(() => undefined)
       const key = navOrder[index]?.key
       if (key) void $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
@@ -1377,6 +2028,21 @@ export const register: Register = on => {
   })
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__list_groups$/ }, async $ => listGroupsTool($))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__read_group$/ }, async ($, e) => readGroupTool($, (e as unknown as { id?: unknown }).id))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__save_group$/ }, async ($, e) => saveGroup($, e as unknown as SaveInput))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__delete_group$/ }, async ($, e) => {
+    const input = e as unknown as { id?: unknown; force?: unknown }
+    return deleteGroupTool($, input.id, input.force === true)
+  })
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
   on('tool.call', { tool: /^(?:Bash$|WebFetch$|mcp__(?!peek__))/ }, async ($, e, next) => {
     const answer = await next(e)
     await noteCapture($, e as unknown as Record<string, unknown>, answer).catch(() => undefined)
@@ -1400,16 +2066,31 @@ export const register: Register = on => {
       return {}
     }
     const switching = e.data as { mode?: unknown } | null
-    if (e.requestId === PANE && switching && (switching.mode === 'view' || switching.mode === 'recent' || switching.mode === 'gallery')) {
-      const target = switching.mode
-      await update($, mode, () => target).catch(() => undefined)
-      await update($, page, () => 0).catch(() => undefined)
+    const target = MODES.find(one => one.id === switching?.mode)?.id
+    if (e.requestId === PANE && target) {
+      await switchMode($, target).catch(() => undefined)
       void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
       return {}
     }
-    const opening = e.data as { open?: unknown } | null
+    const group = e.data as { openGroup?: unknown; starGroup?: unknown } | null
+    if (e.requestId === PANE && group && typeof group.openGroup === 'string') {
+      await openGroupPage($, group.openGroup).catch(() => undefined)
+      return {}
+    }
+    if (e.requestId === PANE && group && typeof group.starGroup === 'string') {
+      const isGroupsTab = (await read($, mode)) === 'groups' && !(await read($, openGroup))
+      await (isGroupsTab ? starInGroupsTab($, group.starGroup) : toggleGroupStar($, group.starGroup)).catch(() => undefined)
+      return {}
+    }
+    const opening = e.data as { open?: unknown; inGroup?: unknown; key?: unknown } | null
+    if (e.requestId === PANE && opening && typeof opening.open === 'string' && typeof opening.inGroup === 'string') {
+      await openCardItem($, opening.inGroup, String(opening.key ?? ''), opening.open).catch(() => undefined)
+      return {}
+    }
     if (e.requestId === PANE && opening && typeof opening.open === 'string') {
-      await show($, opening.open).catch(() => undefined)
+      const rows = await groupPageRows($).catch(() => null)
+      const at = rows ? rows.hrefs.indexOf(opening.open) : -1
+      await (rows && at >= 0 ? openGroupItem($, rows, at) : show($, opening.open)).catch(() => undefined)
       return {}
     }
     return next(e)
@@ -1451,7 +2132,7 @@ export const register: Register = on => {
     const home = (await $.env.get('HOME')) ?? ''
     const columns = Math.max(20, e.props.bodyColumns - 1)
     paneColumns = columns
-    const isNarrow = columns < NARROW
+    const isNarrow = e.props.bodyColumns < NARROW
     const textWidth = isNarrow ? columns : Math.min(MAX_CPL, Math.max(MIN_CPL, columns - 6))
     const pageWidth = isNarrow ? columns : textWidth + 4
     const rows = Math.max(4, e.props.scroll.bodyRows - 4)
@@ -1463,12 +2144,19 @@ export const register: Register = on => {
         {label}
       </Text>
     )
-    const peekChip = ` ${MODES[0]?.icon ?? ''} PEEK `
-    const recentChip = ` ${MODES[1]?.icon ?? ''} RECENT `
-    const galleryChip = ` ${MODES[2]?.icon ?? ''} GALLERY `
+    // crumbs() sets this and header() reads it, so a screen builds its crumb before frame() draws the header.
+    let isTabCompact = false
+    const chipOf = (id: Mode) => {
+      const one = MODES.find(each => each.id === id)
+      if (!one) return ''
+      return isTabCompact && id !== chosen ? ` ${one.icon} ` : ` ${one.icon} ${one.label.toUpperCase()} `
+    }
     const crumbs = (parts: { label: string; fg: string; bg: string; bold?: boolean; canShrink?: boolean }[]) => {
-      const room = Math.max(8, isNarrow ? columns - 2 : columns - peekChip.length - recentChip.length - galleryChip.length - 4)
       const width = (label: string) => label.length + 2
+      const tabsWidth = () => MODES.reduce((sum, one) => sum + chipOf(one.id).length, 0)
+      const fullTabs = MODES.reduce((sum, one) => sum + ` ${one.icon} ${one.label} `.length, 0)
+      isTabCompact = !isNarrow && 2 + parts.reduce((sum, one) => sum + width(one.label), 0) > columns - fullTabs - 4
+      const room = Math.max(8, isNarrow ? columns - 2 : columns - tabsWidth() - 4)
       let spare = room - 2 - parts.reduce((sum, one) => sum + width(one.label), 0)
       const fitted = parts.map(one => ({ ...one }))
       for (const one of fitted) {
@@ -1522,11 +2210,12 @@ export const register: Register = on => {
         </Box>
       ) : (
         <Box flexDirection="row" justifyContent="space-between" width={e.props.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
-          {tabStrip('tabs-left', [{ id: 'view', label: peekChip, isOn: chosen === 'view' }])}
+          {tabStrip('tabs-left', [{ id: 'view', label: chipOf('view'), isOn: chosen === 'view' }])}
           {middle as never}
           {tabStrip('tabs-right', [
-            { id: 'recent', label: recentChip, isOn: chosen === 'recent' },
-            { id: 'gallery', label: galleryChip, isOn: chosen === 'gallery' },
+            { id: 'recent', label: chipOf('recent'), isOn: chosen === 'recent' },
+            { id: 'gallery', label: chipOf('gallery'), isOn: chosen === 'gallery' },
+            { id: 'groups', label: chipOf('groups'), isOn: chosen === 'groups' },
           ])}
         </Box>
       )
@@ -1549,10 +2238,7 @@ export const register: Register = on => {
       key: `mode-${one.id}`,
       label: one.label,
       hotkey: one.hotkey,
-      onPress: () => {
-        void update($, mode, () => one.id)
-        void update($, page, () => 0)
-      },
+      onPress: () => void switchMode($, one.id),
     }))
 
     const rule = (label: string, right: string, color: string = C.accent) => {
@@ -1570,7 +2256,7 @@ export const register: Register = on => {
 
     const filter = await read($, menuFilter)
     const closeMenu = () => void setMenu($, false)
-    const commands: { id: string; icon: string; label: string; hint: string; run: () => void }[] = [
+    const commands: MenuCommand[] = [
       ...(current
         ? [
             { id: 'peek', icon: ICON.peek, label: 'Peek: show the open file', hint: 'p', run: () => void update($, mode, () => 'view') },
@@ -1578,6 +2264,7 @@ export const register: Register = on => {
         : []),
       { id: 'recent', icon: ICON.recent, label: 'Recent: files by last use', hint: 'r', run: () => void update($, mode, () => 'recent') },
       { id: 'gallery', icon: ICON.gallery, label: 'Gallery: files as cards by type', hint: 'g', run: () => void update($, mode, () => 'gallery') },
+      { id: 'groups', icon: ICON.groups, label: 'Groups: files and links the agent bundled', hint: 'e', run: () => void switchMode($, 'groups') },
       ...ROLES.map(one => ({
         id: `role-${one}`,
         icon: one === 'artifacts' ? '◆' : one === 'touched' ? '◇' : '\u{f0c9}',
@@ -1634,15 +2321,19 @@ export const register: Register = on => {
     }
     const Input = 'Input' in elements ? elements.Input : undefined
     const menuWidth = Math.max(24, Math.min(64, columns - 8))
-    const menuFor = (keys: Key[]) => {
+    const menuFor = (keys: Key[], groupMenu: MenuCommand[]) => {
       const fromKeys = keys.flatMap(one => (one.menu ? [{ id: `key-${one.key}`, icon: '\u{f11c}', label: one.menu, hint: one.hotkey, run: one.onPress }] : []))
       const closeAt = commands.findIndex(one => one.id === 'close')
       const keyed = commands.map(one => {
         const owner = COMMAND_KEYS[one.id.replace(/-[^-]+$/, '-*')] ?? COMMAND_KEYS[one.id]
         return owner ? { ...one, hint: keys.find(key => key.key === owner)?.hotkey ?? '' } : one
       })
-      const all = [...keyed.slice(0, closeAt), ...fromKeys, ...keyed.slice(closeAt)]
-      const matches = all.filter(one => words.every(word => one.label.toLowerCase().includes(word)))
+      const all: MenuCommand[] = [...keyed.slice(0, closeAt), ...fromKeys, ...groupMenu, ...keyed.slice(closeAt)]
+      let others = 0
+      // Group rows sit outside the 20-row cap, so every one of the first eight shows however long the rest of the menu is.
+      const matches = all.filter(
+        one => (words.length > 0 || !one.isFilteredOnly) && words.every(word => one.label.toLowerCase().includes(word)) && (one.isGroupRow || others++ < 20),
+      )
       const moves = keys.filter(one => MOVE_KEYS.has(one.key)).map(one => one.hotkey)
       return (
         <Box flexDirection="column" width={menuWidth}>
@@ -1675,7 +2366,7 @@ export const register: Register = on => {
             </Box>
           )}
           {matches.length === 0 && <Text color={BASE.overlay0}>No command matches.</Text>}
-          {matches.slice(0, 20).map(one => (
+          {matches.map(one => (
             <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={menuWidth}>
               <Box flexDirection="row" flexShrink={1}>
                 <Text color={BASE.accent}>{`${one.icon}  `}</Text>
@@ -1710,62 +2401,66 @@ export const register: Register = on => {
       },
     })
     const blockJumps = (count: number, prefix: string) => keyJumps(Array.from({ length: count }, (_, i) => `${prefix}-${i}`))
-    const frame = (middle: unknown, content: unknown, info: string, keys: Key[], pageBg: string = C.panelBg) => (
-      <Box
-        flexDirection="column"
-        alignItems="center"
-        backgroundColor={C.appBg}
-        minHeight={e.props.scroll.bodyRows}
-        width={e.props.bodyColumns}
-      >
-        <Box height={HEADER_ROWS} />
-        <Box flexDirection="column" width={pageWidth} backgroundColor={pageBg} paddingX={isNarrow ? 0 : 2} paddingY={1}>
-          <Box flexDirection="column" width={textWidth}>
-            {content as never}
+    const frame = async (middle: unknown, content: unknown, info: string, keys: Key[], { pageBg = C.panelBg, menuOn = {} }: { pageBg?: string; menuOn?: GroupMenuFor } = {}) => {
+      // A group home that cannot resolve leaves the menu without group rows rather than failing the whole pane.
+      const groupMenu = isMenuOpen ? await groupCommands($, menuOn).catch(() => []) : []
+      return (
+        <Box
+          flexDirection="column"
+          alignItems="center"
+          backgroundColor={C.appBg}
+          minHeight={e.props.scroll.bodyRows}
+          width={e.props.bodyColumns}
+        >
+          <Box height={HEADER_ROWS} />
+          <Box flexDirection="column" width={pageWidth} backgroundColor={pageBg} paddingX={isNarrow ? 0 : 2} paddingY={1}>
+            <Box flexDirection="column" width={textWidth}>
+              {content as never}
+            </Box>
           </Box>
-        </Box>
-        <Box height={FOOTER_ROWS} />
-        <Box
-          position="absolute"
-          top={offset}
-          left={0}
-          width={e.props.bodyColumns}
-          height={HEADER_ROWS}
-          flexDirection="column"
-          alignItems="center"
-          backgroundColor={C.appBg}
-        >
-          {header(middle)}
-        </Box>
-        <Box
-          position="absolute"
-          top={offset + e.props.scroll.bodyRows - FOOTER_ROWS}
-          left={0}
-          width={e.props.bodyColumns}
-          height={FOOTER_ROWS}
-          flexDirection="column"
-          alignItems="center"
-          justifyContent="flex-end"
-          backgroundColor={C.appBg}
-        >
-          {footer(info, keys)}
-        </Box>
-        {isMenuOpen && (
+          <Box height={FOOTER_ROWS} />
           <Box
             position="absolute"
-            top={offset + HEADER_ROWS + 2}
-            left={Math.max(0, Math.floor((e.props.bodyColumns - menuWidth - 4) / 2))}
-            width={menuWidth + 4}
+            top={offset}
+            left={0}
+            width={e.props.bodyColumns}
+            height={HEADER_ROWS}
             flexDirection="column"
-            backgroundColor={BASE.panelBg}
-            paddingX={2}
-            paddingY={1}
+            alignItems="center"
+            backgroundColor={C.appBg}
           >
-            {menuFor(keys) as never}
+            {header(middle)}
           </Box>
-        )}
-      </Box>
-    )
+          <Box
+            position="absolute"
+            top={offset + e.props.scroll.bodyRows - FOOTER_ROWS}
+            left={0}
+            width={e.props.bodyColumns}
+            height={FOOTER_ROWS}
+            flexDirection="column"
+            alignItems="center"
+            justifyContent="flex-end"
+            backgroundColor={C.appBg}
+          >
+            {footer(info, keys)}
+          </Box>
+          {isMenuOpen && (
+            <Box
+              position="absolute"
+              top={offset + HEADER_ROWS + 2}
+              left={Math.max(0, Math.floor((e.props.bodyColumns - menuWidth - 4) / 2))}
+              width={menuWidth + 4}
+              flexDirection="column"
+              backgroundColor={BASE.panelBg}
+              paddingX={2}
+              paddingY={1}
+            >
+              {menuFor(keys, groupMenu) as never}
+            </Box>
+          )}
+        </Box>
+      )
+    }
     const selectKeys: Key[] = [
       { key: 'next', label: 'Down', hotkey: 'j', onPress: () => void moveSelection($, 'down') },
       { key: 'prev', label: 'Up', hotkey: 'k', onPress: () => void moveSelection($, 'up') },
@@ -1776,17 +2471,430 @@ export const register: Register = on => {
         label: '⏎ Open',
         hotkey: 'o',
         menu: 'Open the selected file',
-        onPress: () => void selectedHref($).then(href => (href ? show($, href) : undefined)),
+        onPress: () => void selectedNav($).then(one => openNav($, one)),
       },
       {
         key: 'star-selected',
         label: 'Star',
         hotkey: 'f',
         menu: 'Star or unstar the selected file',
-        onPress: () => void selectedHref($).then(href => (href ? setStar($, href).then(() => undefined) : undefined)),
+        onPress: () =>
+          void selectedNav($).then(one => {
+            if (one?.group) return toggleGroupStar($, one.group)
+            return one?.href ? setStar($, one.href).then(() => undefined) : undefined
+          }),
       },
     ]
     const closeKey: Key = { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) }
+    const expandKey: Key = {
+      key: 'expand-selected',
+      label: 'More',
+      hotkey: 'm',
+      menu: 'Expand/Collapse group',
+      onPress: () => void selectedNav($).then(one => {
+        const id = one?.group ?? (one && chosen === 'groups' ? one.href : undefined)
+        if (id) toggleExpanded($, id)
+      }),
+    }
+
+    const groupCards = async (groups: readonly Group[], prefix: string, firstIndex: number, selected: number) => {
+      const inner = Math.max(8, textWidth - 4)
+      const perRow = Math.min(2, gridColumns(inner, CARD_MIN, CARD_GAP))
+      const itemWidth = Math.floor((inner - (perRow - 1) * CARD_GAP) / perRow)
+      const starKeys = new Set((await read($, stars)).map(one => itemKey(remoteRef(one)?.address ?? one)))
+      const worktreeRoot = (await groupHome($))?.worktreeRoot
+      const known = titlesByKey()
+      const drawn = await Promise.all(
+        groups.map(async (group, i) => {
+          const index = firstIndex + i
+          const isSelected = index === selected
+          const isExpanded = expandedGroups.has(group.id)
+          const sectionIds = new Set(group.sections.map(one => one.id))
+          const loose = group.items.filter(one => !one.section || !sectionIds.has(one.section))
+          let first = 0
+          const blocks = [
+            ...(loose.length ? [{ section: -1, title: '', layout: 'cards' as SectionLayout, items: loose }] : []),
+            ...group.sections.map((one, section) => ({ section, title: one.title, layout: layoutOf(one), items: group.items.filter(item => item.section === one.id) })),
+          ].map(block => {
+            const numbered = { ...block, first }
+            first += block.items.length
+            return numbered
+          })
+          const description = wrapLines(group.description, inner, Number.POSITIVE_INFINITY)
+          const canExpand = description.length > GROUP_CARD_LINES || blocks.length > 1 || (blocks[0]?.items.length ?? 0) > perRow
+          const lines = isExpanded ? description : wrapLines(group.description, inner, GROUP_CARD_LINES)
+          const shown = isExpanded ? blocks : blocks.slice(0, 1).map(block => ({ ...block, items: block.items.slice(0, perRow) }))
+          const looks = await Promise.all(shown.map(block => Promise.all(block.items.map(one => groupItemLook($, one, worktreeRoot, known)))))
+          for (const one of looks.flat()) if (one.href && !parseHref(one.href) && remoteRef(one.href) && !cached(one.href)) loadGroupRemote($, one.href)
+          const open = (look: GroupLook) => void update($, cursorAtom, () => index).then(() => openGroupHref($, group, look.key, look.href))
+          let layers = 0
+          const layer = (kind: 'rows' | 'cards', height: number, row: GroupLook[]) =>
+            Client && (
+              <Box position="absolute" top={0} left={0} width={inner} height={height}>
+                <Client
+                  key={`hover-${prefix}-items-${i}-${layers++}`}
+                  module="./hover-layer.tsx"
+                  props={{ kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) }}
+                  width={inner}
+                  height={height}
+                />
+              </Box>
+            )
+          const icon = (look: GroupLook, n: number) => {
+            const isStarred = starKeys.has(look.key)
+            const favicon = look.favicon && Image && !isStarred ? pixels.get(look.favicon) : undefined
+            return [
+              favicon && Image && (
+                <Box key={`${prefix}-fav-${i}-${n}`} flexShrink={0}>
+                  <Image key={`${prefix}-favicon-${i}-${n}`} source={{ png: favicon }} columns={2} rows={1} alt={iconFor(look.kind)} />
+                </Box>
+              ),
+              <Box key={`${prefix}-icon-${i}-${n}`} flexShrink={0}>
+                <Button key={`${prefix}-it-${i}-${n}`} label={isStarred ? '\u{f51a}' : favicon ? ' ' : iconFor(look.kind)} plain onPress={() => open(look)} />
+              </Box>,
+            ]
+          }
+          const itemCard = (look: GroupLook, n: number) => (
+            <Box key={`${prefix}-card-${i}-${n}`} flexDirection="column" width={itemWidth} height={CARD_ROWS} paddingX={2} paddingY={1} backgroundColor={C.appBg} hover={{ backgroundColor: C.surface0 }}>
+              <Box flexDirection="row" height={1} overflow="hidden">
+                {icon(look, n)}
+                <Box key={`${prefix}-itname-${i}-${n}`} flexShrink={1}>
+                  <Text color={look.state === 'missing' ? C.overlay0 : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${look.name}`}</Text>
+                </Box>
+              </Box>
+              <Text color={C.overlay0} wrap="truncate-start">{look.where || ' '}</Text>
+              <Text color={look.state === 'missing' ? C.red : C.overlay0} wrap="truncate-end">{look.state === 'ok' ? kindLabel(look.kind).label : look.state}</Text>
+            </Box>
+          )
+          const line = (look: GroupLook, n: number) => (
+            <Box key={`${prefix}-line-${i}-${n}`} height={1} flexDirection="row" width={inner} overflow="hidden" hover={{ backgroundColor: C.surface0 }}>
+              {icon(look, n)}
+              <Box key={`${prefix}-itname-${i}-${n}`} flexShrink={0}>
+                <Text color={look.state === 'missing' ? C.overlay0 : C.text} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(look.name, Math.max(8, inner - 6))}`}</Text>
+              </Box>
+              <Box flexShrink={1} flexGrow={1} overflow="hidden">
+                <Text color={C.overlay0} wrap="truncate-middle">{look.where ? `  ${look.where}` : ''}</Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text color={look.state === 'missing' ? C.red : C.overlay1}>{look.state === 'ok' ? '' : ` ${look.state}`}</Text>
+              </Box>
+            </Box>
+          )
+          let height = 2 + 1 + (lines.length ? 1 + lines.length : 0) + (canExpand ? 1 : 0) + 1
+          const parts = shown.map((block, b) => {
+            const blockLooks = looks[b] ?? []
+            const rows = Array.from({ length: Math.ceil(blockLooks.length / perRow) }, (_, r) => blockLooks.slice(r * perRow, r * perRow + perRow))
+            const body = !blockLooks.length
+              ? [<Text key={`${prefix}-empty-${i}-${b}`} color={C.overlay0}>empty</Text>]
+              : block.layout === 'list'
+                ? [
+                    <Box key={`${prefix}-lines-${i}-${b}`} flexDirection="column" width={inner}>
+                      {layer('rows', blockLooks.length, blockLooks)}
+                      {blockLooks.map((look, j) => line(look, block.first + j))}
+                    </Box>,
+                  ]
+                : rows.map((row, r) => (
+                    <Box key={`${prefix}-irow-${i}-${b}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginTop={r ? 1 : 0}>
+                      {layer('cards', CARD_ROWS, row)}
+                      {row.map((look, c) => itemCard(look, block.first + r * perRow + c))}
+                    </Box>
+                  ))
+            height += 1 + (block.title ? 2 : 0) + (!blockLooks.length ? 1 : block.layout === 'list' ? blockLooks.length : rows.length * (CARD_ROWS + 1) - 1)
+            return (
+              <Box key={`${prefix}-block-${i}-${b}`} flexDirection="column" width={inner} marginTop={1}>
+                {block.title ? (
+                  <Box key={`${prefix}-sec-${i}-${block.section}`} flexDirection="column" width={inner}>
+                    <Text color={C.text} bold wrap="truncate-end">{block.title}</Text>
+                    <Text color={C.surface1}>{'─'.repeat(inner)}</Text>
+                  </Box>
+                ) : null}
+                {body}
+              </Box>
+            )
+          })
+          if (!blocks.length) height += 2
+          const barLabel = isExpanded ? 'LESS ▲' : 'MORE ▼'
+          const barPad = Math.max(0, inner - barLabel.length)
+          const node = (
+            <Box
+              key={`${prefix}-${i}`}
+              flexDirection="column"
+              width={textWidth}
+              paddingX={2}
+              paddingY={1}
+              marginBottom={1}
+              backgroundColor={isSelected ? C.surface0 : C.panelBg}
+            >
+              <Box flexDirection="row" width={inner} height={1}>
+                {Client && (
+                  <Box position="absolute" top={0} left={0} width={inner} height={1}>
+                    <Client
+                      key={`hover-${prefix}-${i}`}
+                      module="./hover-layer.tsx"
+                      props={{ kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] }}
+                      width={inner}
+                      height={1}
+                    />
+                  </Box>
+                )}
+                <Box flexShrink={0}>
+                  <Button
+                    key={`item-${index}`}
+                    label={group.starred ? '\u{f51a}' : ICON.groups}
+                    plain
+                    autoFocus={isSelected ? true : undefined}
+                    onPress={() => void update($, cursorAtom, () => index).then(() => openGroupPage($, group.id))}
+                  />
+                </Box>
+                <Box key={`group-name-${index}`} flexGrow={1} flexShrink={1} overflow="hidden">
+                  <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${group.title.toUpperCase()}`}</Text>
+                </Box>
+                <Box flexShrink={0} marginLeft={1}>
+                  <Text color={isSelected ? C.overlay1 : C.overlay0}>{`${plural(group.items.length, 'item')} · ${describeAge(group.updatedAt, now)}`}</Text>
+                </Box>
+              </Box>
+              {lines.length > 0 && <Box height={1} />}
+              {lines.map((text, k) => (
+                <Text key={`${prefix}-desc-${i}-${k}`} color={C.subtext0}>{text}</Text>
+              ))}
+              {parts}
+              {!blocks.length && (
+                <Box marginTop={1}>
+                  <Text color={C.overlay0}>No items</Text>
+                </Box>
+              )}
+              {canExpand && (
+                <Box key={`${prefix}-morebar-${i}`} width={inner} height={1} backgroundColor={C.accent}>
+                  <Button
+                    key={`${prefix}-more-${i}`}
+                    label={`${' '.repeat(Math.floor(barPad / 2))}${barLabel}${' '.repeat(Math.ceil(barPad / 2))}`}
+                    plain
+                    onPress={() => void update($, cursorAtom, () => index).then(() => toggleExpanded($, group.id))}
+                  />
+                </Box>
+              )}
+            </Box>
+          )
+          return { node, height }
+        }),
+      )
+      return { cards: drawn.map(one => one.node), heights: drawn.map(one => one.height) }
+    }
+
+    if (chosen === 'groups') {
+      const home = await groupHome($)
+      const io = groupsIoOf($)
+      const opened = await read($, openGroup)
+      const shown = opened && home ? await shownGroup(io, home.place, opened.id) : null
+      if (opened && !shown && goneGroupNotice !== opened.id) {
+        goneGroupNotice = opened.id
+        $.ui.toast('That group was deleted.')
+      }
+      const project = (home?.worktreeRoot ?? cwd).split('/').filter(Boolean).pop() ?? 'project'
+      if (opened && shown) {
+        goneGroupNotice = ''
+        const worktreeRoot = home?.worktreeRoot
+        const known = titlesByKey()
+        const sectionIds = new Set(shown.sections.map(one => one.id))
+        const blocks = [
+          { title: '', items: shown.items.filter(one => !one.section || !sectionIds.has(one.section)) },
+          ...shown.sections.map(one => ({ title: one.title, items: shown.items.filter(item => item.section === one.id) })),
+        ]
+        const looks = await Promise.all(blocks.flatMap(block => block.items).map(one => groupItemLook($, one, worktreeRoot, known)))
+        const remotes = looks.filter(one => one.href && !parseHref(one.href) && remoteRef(one.href))
+        for (const one of remotes) if (!cached(one.href)) loadGroupRemote($, one.href)
+        openGroupRemotes = remotes.map(one => one.href).filter(isTimed)
+        const keys = looks.map(one => one.key)
+        const found = opened.item === null ? 0 : keys.indexOf(opened.item)
+        const previous = groupRows?.id === shown.id ? groupRows.selected : 0
+        const selected = clamp(found >= 0 ? found : previous, keys.length)
+        const refs = blocks.flatMap(block => block.items).map(one => one.ref)
+        const rows: GroupRows = { id: shown.id, title: shown.title, keys, hrefs: looks.map(one => one.href), selected }
+        groupRows = rows
+        navOrder = keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 }))
+        blockStarts = []
+        const starList = await read($, stars)
+        const starKeys = new Set(starList.map(one => itemKey(remoteRef(one)?.address ?? one)))
+        const missing = looks.filter(one => one.state === 'missing').length
+        const sectionRule = (label: string, right: string) => (
+          <Text wrap="truncate-end">
+            <Text color={C.accent} bold>{`${label} `}</Text>
+            <Text color={C.surface1}>{'─'.repeat(Math.max(1, textWidth - label.length - right.length - 2))}</Text>
+            <Text color={C.overlay0}>{right ? ` ${right}` : ''}</Text>
+          </Text>
+        )
+        const row = (one: GroupLook, index: number) => {
+          const isSelected = index === selected
+          const isStarred = starKeys.has(one.key)
+          const favicon = one.favicon && Image ? pixels.get(one.favicon) : undefined
+          const meta = one.state === 'ok' ? '' : one.state
+          const leftWidth = Math.max(4, textWidth - meta.length - 1)
+          const nameRoom = Math.max(8, Math.floor((leftWidth - 3) * 0.6))
+          return (
+            <Box
+              key={`group-row-${index}`}
+              height={1}
+              flexDirection="row"
+              justifyContent="space-between"
+              width={textWidth}
+              backgroundColor={isSelected ? C.surface0 : undefined}
+              hover={{ backgroundColor: C.surface0 }}
+            >
+              <Box flexDirection="row" width={leftWidth} height={1} overflow="hidden">
+                {favicon && !isStarred && Image && (
+                  <Box flexShrink={0}>
+                    <Image key={`favicon-${index}`} source={{ png: favicon }} columns={2} rows={1} alt={iconFor(one.kind)} />
+                  </Box>
+                )}
+                <Box flexShrink={0}>
+                  <Button
+                    key={`item-${index}`}
+                    label={isStarred ? '\u{f51a}' : favicon ? ' ' : iconFor(one.kind)}
+                    plain
+                    autoFocus={isSelected ? true : undefined}
+                    onPress={() => void openGroupItem($, rows, index)}
+                  />
+                </Box>
+                <Box key={`group-item-${index}`} flexShrink={0}>
+                  <Text color={one.state === 'missing' ? C.overlay0 : isSelected ? C.accent : C.text} bold={isSelected} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(one.name, nameRoom)}`}</Text>
+                </Box>
+                <Box flexShrink={1} flexGrow={1} overflow="hidden">
+                  <Text color={C.overlay0} wrap="truncate-middle">{one.where ? `  ${one.where}` : ''}</Text>
+                </Box>
+              </Box>
+              <Box key={`group-meta-${index}`} flexShrink={0} height={1}>
+                <Text color={one.state === 'missing' ? C.red : C.overlay1}>{meta}</Text>
+              </Box>
+            </Box>
+          )
+        }
+        let next = 0
+        const drawn = blocks.map((block, b) => {
+          const first = next
+          next += block.items.length
+          const blockLooks = looks.slice(first, next)
+          const list = blockLooks.length > 0 && (
+            <Box key={`group-block-${b}`} flexDirection="column" width={textWidth}>
+              {Client && (
+                <Box position="absolute" top={0} left={0} width={textWidth} height={blockLooks.length}>
+                  <Client
+                    key={`hover-group-${b}`}
+                    module="./hover-layer.tsx"
+                    props={{ kind: 'rows', width: textWidth, height: blockLooks.length, starX: 0, starY: 0, items: blockLooks.map(one => ({ href: one.href, isStarred: starKeys.has(one.key) })) }}
+                    width={textWidth}
+                    height={blockLooks.length}
+                  />
+                </Box>
+              )}
+              {blockLooks.map((one, j) => row(one, first + j))}
+            </Box>
+          )
+          if (b === 0) return list ? <Box key="group-top" flexDirection="column" width={textWidth} marginBottom={1}>{list}</Box> : null
+          return (
+            <Box key={`group-part-${b}`} flexDirection="column" width={textWidth} marginBottom={1}>
+              <Box key={`group-section-${b - 1}`}>{sectionRule(block.title.toUpperCase(), `${block.items.length}`)}</Box>
+              {list || (
+                <Box key={`group-empty-${b - 1}`}>
+                  <Text color={C.overlay0}>empty</Text>
+                </Box>
+              )}
+            </Box>
+          )
+        })
+        estimatedRows = Math.max(1, looks.length + blocks.length * 2 + 3)
+        const content = (
+          <Box flexDirection="column" width={textWidth}>
+            <Box key="group-page-title">
+              <Text color={C.accent} bold>{`${shown.starred ? '\u{f51a}' : ICON.groups} ${shown.title}`}</Text>
+            </Box>
+            {shown.description ? <Text color={C.subtext0}>{shown.description}</Text> : null}
+            <Box height={1} />
+            {shown.items.length === 0 && (
+              <Box key="group-no-items" marginBottom={1}>
+                <Text color={C.overlay0}>No items</Text>
+              </Box>
+            )}
+            {drawn}
+          </Box>
+        )
+        const crumb = crumbs([
+          { label: `${ICON.groups} ${project}`, fg: C.overlay1, bg: C.surface0, canShrink: true },
+          { label: `${shown.starred ? '\u{f51a}' : ICON.groups} ${shown.title}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true },
+        ])
+        return frame(
+          crumb,
+          content,
+          `${shown.title} · ${plural(looks.length, 'item')} · ${missing} missing`,
+          [
+            ...modeKeys,
+            { key: 'next', label: 'Down', hotkey: 'j', onPress: () => void moveSelection($, 'down') },
+            { key: 'prev', label: 'Up', hotkey: 'k', onPress: () => void moveSelection($, 'up') },
+            {
+              key: 'open-selected',
+              label: '⏎ Open',
+              hotkey: 'o',
+              menu: 'Open the selected item',
+              onPress: () => void groupPageRows($).then(now => (now ? openGroupItem($, now, now.selected) : undefined)),
+            },
+            {
+              key: 'star-selected',
+              label: 'Star',
+              hotkey: 'f',
+              menu: 'Star or unstar the selected item',
+              onPress: () => void groupPageRows($).then(now => {
+                const href = now?.hrefs[now.selected]
+                return href ? setStar($, href).then(() => $.ui.invalidate('ui.render')) : undefined
+              }),
+            },
+            closeKey,
+          ],
+          { pageBg: C.appBg, menuOn: { target: rows.hrefs[selected] || undefined, group: shown, selectedRef: refs[selected] } },
+        )
+      }
+      groupRows = null
+      openGroupRemotes = []
+      const groups = home ? starredFirst(await shownGroups(io, home.place)) : []
+      const starredCount = groups.filter(one => one.starred).length
+      const crumb = crumbs([{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }])
+      const selected = await read($, cursorAtom)
+      const { cards, heights } = await groupCards(groups, 'groups', 0, selected)
+      navOrder = groups.map((one, i) => ({ href: one.id, key: `groups-${i}`, line: i, col: 0 }))
+      blockStarts = heights.map((_, i) => sum(heights.slice(0, i)))
+      estimatedRows = Math.max(1, sum(heights))
+      const selectedGroup = () => read($, cursorAtom).then(at => navOrder[clamp(at, navOrder.length)]?.href)
+      const content = (
+        <Box flexDirection="column" width={textWidth}>
+          {groups.length === 0 && <Text color={C.overlay0}>No groups yet. The agent makes groups: ask it to group related files and links.</Text>}
+          {cards}
+        </Box>
+      )
+      return frame(
+        crumb,
+        content,
+        `${plural(groups.length, 'group')} · ${starredCount} starred`,
+        [
+          ...modeKeys,
+          ...selectKeys.filter(one => MOVE_KEYS.has(one.key)),
+          {
+            key: 'open-selected',
+            label: '⏎ Open',
+            hotkey: 'o',
+            menu: 'Open the selected group',
+            onPress: () => void selectedGroup().then(id => (id ? openGroupPage($, id) : undefined)),
+          },
+          {
+            key: 'star-selected',
+            label: 'Star',
+            hotkey: 'f',
+            menu: 'Star or unstar the selected group',
+            onPress: () => void selectedGroup().then(id => (id ? starInGroupsTab($, id) : undefined)),
+          },
+          expandKey,
+          closeKey,
+        ],
+        { pageBg: C.appBg, menuOn: { group: groups[clamp(selected, groups.length)], starHint: 'f' } },
+      )
+    }
 
     if (chosen !== 'view' || !current) {
       const scope = await read($, scopeAtom)
@@ -1990,13 +3098,38 @@ export const register: Register = on => {
             ...selectKeys,
             closeKey,
           ],
-          C.appBg,
+          { pageBg: C.appBg, menuOn: { target: nav[clamp(selected, nav.length)]?.href } },
         )
       }
 
       const favs = selectEntries(favourites, 'all', '', 'recent')
       const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
       cursor = 0
+      const starredGroups = await groupHome($)
+        .then(found => (found ? shownGroups(groupsIoOf($), found.place) : []))
+        .then(all => all.filter(one => one.starred))
+        .catch(() => [])
+      const pinned = starredGroups.slice(0, PINNED_GROUPS)
+      const pinnedBlock = await (async () => {
+        if (!pinned.length) return null
+        cursor += 2
+        const { cards: grid, heights } = await groupCards(pinned, 'starred', nav.length, selected)
+        pinned.forEach((one, i) => {
+          keys.push(`starred-${i}`)
+          starts.push(cursor)
+          cursor += heights[i] ?? 0
+          nav.push({ href: '', group: one.id, key: `starred-${i}`, line: navLine++, col: 0 })
+        })
+        cursor += 1
+        const count = starredGroups.length > pinned.length ? `${pinned.length} of ${starredGroups.length} · e for all` : `${pinned.length}`
+        return (
+          <Box flexDirection="column" width={textWidth}>
+            {section('STARRED GROUPS', count)}
+            <Box height={1} />
+            {grid}
+          </Box>
+        )
+      })()
       const favBlock = favouritesBlock(favs)
       const rowList = (items: readonly FileEntry[], prefix: string) => {
         const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
@@ -2081,11 +3214,14 @@ export const register: Register = on => {
       blockStarts = starts
       estimatedRows = Math.max(1, cursor)
       const jumps = keyJumps(keys)
+      const pinnedId = nav[clamp(selected, nav.length)]?.group
+      const pinnedOn = pinned.find(one => one.id === pinnedId)
       const content = (
         <Box flexDirection="column" width={textWidth}>
+          {pinnedBlock}
           {favBlock}
           {!rest && waiting}
-          {rest && recentList.length === 0 && favs.length === 0 && (
+          {rest && recentList.length === 0 && favs.length === 0 && pinned.length === 0 && (
             <Text color={C.overlay0}>
               {scope === 'session' ? 'Nothing mentioned yet. Paths and links in replies land here.' : 'No files found here.'}
             </Text>
@@ -2107,10 +3243,15 @@ export const register: Register = on => {
           ...modeKeys,
           scopeKey,
           roleKey,
-          ...selectKeys,
+          ...selectKeys.map(one => {
+            if (!pinnedOn) return one
+            if (one.key === 'open-selected') return { ...one, menu: 'Open the selected group' }
+            return one.key === 'star-selected' ? { ...one, menu: 'Unstar the selected group' } : one
+          }),
+          ...(pinned.length ? [expandKey] : []),
           closeKey,
         ],
-        C.appBg,
+        { pageBg: C.appBg, menuOn: pinnedOn ? { group: pinnedOn, starHint: 'f' } : { target: nav[clamp(selected, nav.length)]?.href } },
       )
     }
 
@@ -2807,7 +3948,9 @@ export const register: Register = on => {
           { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar($, current.href) },
           { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally($, current) },
           ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh($, current.href) }] : []),
-          ...(liveFrame || backStack.length ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : 'Back to the previous page', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }] : []),
+          ...(liveFrame || backStack.length || groupBack
+            ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : groupBack && backStack.length <= groupBack.depth ? `Back to ${groupBack.title}` : 'Back to the previous page', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }]
+            : []),
           {
             key: 'copy',
             label: remote ? 'Copy link' : 'Copy path',
@@ -2816,6 +3959,7 @@ export const register: Register = on => {
           },
           { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) },
       ].map(one => (isTyping ? { ...one, onPress: () => { isTyping = false; one.onPress() } } : one)),
+      { menuOn: { target: current.error || (remote?.failure && !remote.record) || isLiveHere ? undefined : current.href } },
     )
   })
 }

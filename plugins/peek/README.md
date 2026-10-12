@@ -72,6 +72,48 @@ and JavaScript dialogs.
 - **Terminal only.** Live view needs a terminal that draws images. Under a
   multiplexer, set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES` (Setup step 4).
 
+## Groups
+
+A group is a titled set of files and links that the agent put together for
+you, such as a plan, its pull request and the docs it rests on. It has a
+description and can split its items into sections. Each section shows its
+items as cards (the default) or as a list of lines; the agent picks this with
+`save_group`, as `layout` on a new section or with the `layout` section action.
+
+The agent makes and changes groups with four tools: `list_groups`,
+`read_group`, `save_group` and `delete_group`. Ask it to "group the files for
+this feature" and the group shows in the Groups tab. The agent's changes are
+edits, never a rewrite: it cannot remove an item you added, or put back an item
+you removed, unless it forces the change. It also needs force to delete a
+starred group or one holding items you added.
+
+You manage groups in the pane:
+
+- `e` opens the Groups tab: one full-width card per group, with its title,
+  description, first section and that section's first row of items. Click
+  **MORE ▼** or press `m` (⌃k "Expand/Collapse group") to show every section
+  in place; **LESS ▲** or `m` again folds it back. `j`/`k` move between cards.
+- Click an item on a card to open it; `b` then returns to the group page.
+  Click a card's title or press `o` to open the group page; `e` again goes
+  back to the list.
+- `f` on a card stars the group. Up to 4 starred groups sit at the top of
+  Recent, above Favourites, whatever the scope and filter, as the same cards,
+  folded until you expand them; the rest are in the Groups tab. On a group page, `f` stars the selected item, as everywhere else.
+- ⌃k on any file or link lists "Add to group" and "Remove from group" for each
+  group. On a group page, ⌃k also has "Remove from this group" and "Star this
+  group". The footer hint stays `⌃k menu`.
+
+Groups belong to a project: every worktree of one repo sees the same groups,
+and a session in another project does not. They live as one JSON file per
+group in `~/.local/share/claude-peek/groups/`, so they survive plugin updates
+and cache cleanups. A file path inside the repo is stored relative to it and
+opens the copy in the current worktree.
+
+An item that no longer exists, such as a deleted file or a pull request that
+returns "not found", shows as **missing** and is counted in the status line.
+An item peek cannot load right now, such as a link that times out, shows as
+**unavailable**; it is not counted as missing.
+
 ## Commands
 
 | Command | Does |
@@ -86,9 +128,10 @@ and JavaScript dialogs.
 In the pane: `j`/`k` jump between blocks, the wheel scrolls, `r` shows recent
 files, `o` opens the file in its own app (a remote page in the browser), `c`
 copies the path or link, `u` refreshes a remote page, `b` goes back to the page
-you came from, `v` switches a web page to live view, `x` closes. In Recent and
-Gallery, `j`/`k`/`h`/`l` move the selection, `o` opens it and `f` stars it;
-in Gallery, `t` and `n` change the file type and the sort order.
+you came from, `v` switches a web page to live view, `e` shows groups, `x`
+closes. In Recent, Gallery and Groups, `j`/`k`/`h`/`l` move the selection, `o`
+opens it and `f` stars it; in Gallery, `t` and `n` change the file type and the
+sort order.
 
 The footer shows only the page status and `⌃k menu`. The keys are not drawn,
 but they all work. Open the menu (Ctrl+K, Setup step 2) to see each action

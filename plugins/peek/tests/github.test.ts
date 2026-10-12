@@ -230,19 +230,19 @@ describe('pull request page', () => {
     expect(rec.comments?.inline).toBeUndefined()
   })
 
-  test('"Could not resolve to a PullRequest" is not-found-or-no-access', async () => {
+  test('"Could not resolve to a PullRequest" is gone', async () => {
     const { $ } = world(
       routes({
         'pr view 42': () => exited(1, '', 'GraphQL: Could not resolve to a PullRequest with the number of 42. (repository.pullRequest)'),
         'api repos/acme/widgets/pulls/42': () => exited(1, '', 'gh: Not Found (HTTP 404)'),
       }),
     )
-    expect(await loadGithub($, ref('https://github.com/acme/widgets/pull/42'), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access' })
+    expect(await loadGithub($, ref('https://github.com/acme/widgets/pull/42'), NOW)).toEqual({ ok: false, failure: 'gone' })
   })
 
   test('a failed issue-or-PR check fails the page with its kind', async () => {
     const { $ } = world(routes({ 'api repos/acme/widgets/issues/9': () => exited(1, '', 'gh: Not Found (HTTP 404)') }))
-    expect(await loadGithub($, ref('acme/widgets#9'), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access' })
+    expect(await loadGithub($, ref('acme/widgets#9'), NOW)).toEqual({ ok: false, failure: 'gone' })
   })
 })
 
@@ -375,7 +375,7 @@ describe('repo page', () => {
 
   test('the repo view failing fails the page', async () => {
     const { $ } = world(routes({ 'repo view': () => exited(1, '', 'GraphQL: Could not resolve to a Repository with the name') }))
-    expect(await loadGithub($, ref('https://github.com/acme/widgets'), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access' })
+    expect(await loadGithub($, ref('https://github.com/acme/widgets'), NOW)).toEqual({ ok: false, failure: 'gone' })
   })
 })
 

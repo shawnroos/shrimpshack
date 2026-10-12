@@ -910,3 +910,30 @@ export function fitName(name: string, room: number): string {
   const keep = Math.max(1, room - ext.length - 1)
   return `${name.slice(0, keep)}…${ext}`
 }
+
+export function wrapLines(text: string, width: number, max: number): string[] {
+  const room = Math.max(1, width)
+  const lines: string[] = []
+  for (const paragraph of text.split('\n')) {
+    let line = ''
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      for (let rest = word; rest; ) {
+        const joined = line ? `${line} ${rest}` : rest
+        if (joined.length <= room) {
+          line = joined
+          rest = ''
+        } else if (line) {
+          lines.push(line)
+          line = ''
+        } else {
+          lines.push(rest.slice(0, room))
+          rest = rest.slice(room)
+        }
+      }
+    }
+    if (line) lines.push(line)
+  }
+  if (lines.length <= max) return lines
+  const last = lines[max - 1] ?? ''
+  return [...lines.slice(0, max - 1), `${last.length >= room ? last.slice(0, room - 1).trimEnd() : last}…`]
+}
