@@ -3,7 +3,6 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Mode } from '../types'
 import { C as BASE, MUTED } from './theme'
-import type { CaptureIo } from './capture'
 import type { RemoteIo } from './remote'
 import { wheelPoint } from './live'
 import type { LiveIo } from './live'
@@ -186,13 +185,6 @@ function navIoOf($: EngineInterface): NavIo {
     loadUrl: href => loadUrl(io, href),
   }
   return io
-}
-
-function captureIoOf($: EngineInterface): CaptureIo {
-  return {
-    mcpCall: (server, tool, args) => $.mcp.call(server, tool, args),
-    now: () => $.clock.now(),
-  }
 }
 
 function groupsIoOf($: EngineInterface): GroupsIo {
