@@ -131,3 +131,12 @@ export function mute(color: string): string {
 export const MUTED = Object.fromEntries(
   Object.entries(C).map(([name, value]) => [name, name === 'appBg' ? value : mute(value)]),
 ) as { [K in keyof typeof C]: string }
+
+// Red reads as a failure and accent is the section-rule colour, so neither names a person.
+const SPEAKER_COLORS = [C.yellow, C.peach, C.teal, C.green, C.blue, C.mauve]
+
+export function speakerColor(id: string): string {
+  let hash = 0x811c9dc5
+  for (const char of id) hash = Math.imul(hash ^ (char.codePointAt(0) ?? 0), 0x01000193) >>> 0
+  return SPEAKER_COLORS[hash % SPEAKER_COLORS.length] ?? C.text
+}

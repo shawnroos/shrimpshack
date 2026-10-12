@@ -3,13 +3,15 @@ import type { ProcessRunResult } from 'claude-code'
 
 import { parseRef } from '../hooks/refs'
 import type { Ref } from '../hooks/refs'
-import { loadSlack, mrkdwnToMarkdown, parseThreadText } from '../hooks/slack'
+import { initials, loadSlack, mrkdwnToMarkdown, parseThreadText, whenLabel } from '../hooks/slack'
+import { speakerColor } from '../hooks/theme'
 import type { SlackIo } from '../hooks/slack'
 import type { Loaded, RemoteRecord } from '../types'
-import { CHANNEL_RESULT, CLI_CHANNEL, CLI_REPLIES, LONE_MESSAGE, THREAD_MORE, THREAD_RESULT, THREAD_TEXT } from './fixtures/slack/mcp'
+import { ADA_PIC, CHANNEL_RESULT, CLI_CHANNEL, CLI_REPLIES, FILES_RESULT, FILES_TEXT, LONE_MESSAGE, THREAD_MORE, THREAD_RESULT, THREAD_TEXT, fileResult, usersResult } from './fixtures/slack/mcp'
 
 const NOW = 1_792_000_000_000
 const THREAD = 'https://acme.slack.com/archives/C0123ABCD/p1791759796763609'
+const REPLY_LINK = 'https://acme.slack.com/archives/C0123ABCD/p1791761128357239?thread_ts=1791759796.763609&cid=C0123ABCD'
 let sessions = 0
 
 type Call = { server: string; tool: string; args: Record<string, unknown> }
@@ -21,11 +23,17 @@ function exited(exitCode: number, stdout = ''): ProcessRunResult {
 
 const text = (body: string, isError = false) => ({ content: [{ type: 'text', text: body }], isError })
 
-function world(options: { mcp?: McpReply | 'absent'; cli?: string | null; cliRun?: (argv: readonly string[]) => ProcessRunResult } = {}) {
-  const session = `slack-${++sessions}`
+function world(options: { mcp?: McpReply | 'absent'; cli?: string | null; cliRun?: (argv: readonly string[]) => ProcessRunResult; session?: string } = {}) {
+  const session = options.session ?? `slack-${++sessions}`
   const calls: Call[] = []
   const ran: string[][] = []
+  const stdins: string[] = []
+  const downloads: string[] = []
   const io: SlackIo = {
+    downloadImage: async url => {
+      downloads.push(url)
+      return `/tmp/claude-peek/web-${downloads.length}.png`
+    },
     sessionId: async () => session,
     mcpCall: async (server, tool, args) => {
       calls.push({ server, tool, args })
@@ -33,13 +41,15 @@ function world(options: { mcp?: McpReply | 'absent'; cli?: string | null; cliRun
       if (mcp === 'absent') throw new Error(`MCP server "${server}" is not connected`)
       return mcp({ server, tool, args })
     },
-    run: async argv => {
+    run: async (argv, init) => {
       ran.push([...argv])
+      if (argv[0] === 'base64') stdins.push(String(init?.stdin ?? ''))
+      if (argv[0] === 'base64' || argv[0] === 'mkdir') return exited(0)
       if (argv[0] === 'sh') return options.cli ? exited(0, `${options.cli}\n`) : exited(0, '')
       return options.cliRun ? options.cliRun(argv) : exited(1)
     },
   }
-  return { io, calls, ran }
+  return { io, calls, ran, stdins, downloads }
 }
 
 function ref(address: string): Ref {
@@ -184,7 +194,7 @@ describe('loadSlack without the MCP server', () => {
     expect(rec.trail).toEqual(['acme', '#release-notes'])
     expect(meta(rec, 'Started by')).toBe('Ada Lovelace')
     expect(rec.body).toBe('Parent **text**')
-    expect(rec.comments?.shown).toEqual([{ author: 'U0BBB2222', at: new Date(1791761128357).toISOString(), body: 'A reply' }])
+    expect(rec.comments?.shown).toEqual([{ author: 'U0BBB2222', authorId: 'U0BBB2222', at: new Date(1791761128357).toISOString(), body: 'A reply', href: REPLY_LINK }])
     const replies = ran.find(argv => argv[2] === 'conversations.replies')
     expect(replies).toEqual(['/home/.slack/bin/slack', 'api', 'conversations.replies', 'channel=C0123ABCD', 'ts=1791759796.763609', 'limit=200'])
     expect(ran.flat().some(arg => arg.startsWith('--token'))).toBe(false)
@@ -199,5 +209,128 @@ describe('loadSlack without the MCP server', () => {
   test('CLI output that is not JSON is a peek bug', async () => {
     const { io } = world({ mcp: 'absent', cli: '/usr/local/bin/slack', cliRun: () => exited(0, 'Usage: slack api …') })
     expect(await loadSlack(io, ref(THREAD), NOW)).toEqual({ ok: false, failure: 'query-bug' })
+  })
+})
+
+function filesMcp(options: { file?: (id: string) => { content: unknown[]; isError: boolean } | 'reject'; users?: string } = {}): McpReply {
+  return ({ tool, args }) => {
+    if (tool === 'slack_read_thread') return text(FILES_RESULT)
+    if (tool === 'slack_read_channel') return text(CHANNEL_RESULT)
+    if (tool === 'slack_read_file') {
+      const answer = options.file?.(String(args.file_id)) ?? fileResult(String(args.file_id), 'iVBORw0KGgo=', args.file_id === 'F0EEE5555' ? 'image/jpeg' : 'image/png')
+      if (answer === 'reject') throw new Error('permission denied')
+      return answer
+    }
+    if (tool === 'slack_search_users') return text(options.users ?? usersResult([]))
+    return text('', true)
+  }
+}
+
+describe('Slack messages: speakers, links and files', () => {
+  test('each message keeps its speaker id and its own permalink; the Files: line becomes files, not text', async () => {
+    const thread = parseThreadText(FILES_TEXT)
+    expect(thread?.parent.userId).toBe('U0AAA1111')
+    expect(thread?.parent.text).toBe('Cutting too early, see the shot.')
+    expect(thread?.parent.files).toEqual([{ id: 'F0C7A02R0AY', name: 'Screenshot 2026-10-06 at 1.22.47 PM.png', type: 'image/png', size: '221.4 KB' }])
+    expect(thread?.replies[0]?.files).toEqual([
+      { id: 'F0DDD4444', name: 'spec, v2.pdf', type: 'application/pdf', size: '1.2 MB' },
+      { id: 'F0EEE5555', name: 'crop.jpg', type: 'image/jpeg', size: '80.0 KB' },
+    ])
+    const { io } = world({ mcp: threadMcp() })
+    const rec = record(await loadSlack(io, ref(REPLY_LINK), NOW))
+    expect(rec.lead).toMatchObject({ author: 'Ada Lovelace', authorId: 'U0AAA1111', href: THREAD, at: new Date(1791759796764).toISOString() })
+    expect(rec.lead?.body).toContain('Widgets 0.82 published')
+    expect(rec.lead?.files).toEqual([{ id: 'F0AAA', name: 'notes.mp4', type: 'video/quicktime', size: '2.0 MB' }])
+    expect(rec.comments?.shown[0]).toMatchObject({ authorId: 'U0BBB2222', href: REPLY_LINK })
+  })
+
+  test('an image file is read once through the server that read the thread and decoded to a scratch picture; other files are not read', async () => {
+    const { io, calls, stdins } = world({ mcp: filesMcp() })
+    const rec = record(await loadSlack(io, ref(THREAD), NOW))
+    const reads = calls.filter(one => one.tool === 'slack_read_file')
+    expect(reads.map(one => [one.server, one.args.file_id])).toEqual([
+      ['plugin_slack_slack', 'F0C7A02R0AY'],
+      ['plugin_slack_slack', 'F0EEE5555'],
+    ])
+    expect(stdins).toEqual(['iVBORw0KGgo=', 'iVBORw0KGgo='])
+    expect(rec.media?.['slack-file:F0C7A02R0AY']?.file).toMatch(/^\/tmp\/claude-peek\/slack-F0C7A02R0AY\.png$/)
+    expect(rec.media?.['slack-file:F0EEE5555']?.file).toMatch(/slack-F0EEE5555\.jpg$/)
+    expect(rec.media?.['slack-file:F0DDD4444']).toBeUndefined()
+    await loadSlack(io, ref(THREAD), NOW + 60_000)
+    expect(calls.filter(one => one.tool === 'slack_read_file').length).toBe(2)
+  })
+
+  test('a file read that is refused or fails leaves the page whole, asks only one server, and is not retried on refresh', async () => {
+    const { io, calls } = world({ mcp: filesMcp({ file: id => (id === 'F0C7A02R0AY' ? 'reject' : text('execution_failed: file_not_found', true)) }) })
+    const loaded = await loadSlack(io, ref(THREAD), NOW)
+    const rec = record(loaded)
+    expect(rec.media).toBeUndefined()
+    expect(rec.lead?.files?.[0]?.id).toBe('F0C7A02R0AY')
+    await loadSlack(io, ref(THREAD), NOW + 60_000)
+    expect(calls.filter(one => one.tool === 'slack_read_file').map(one => one.server)).toEqual(['plugin_slack_slack', 'plugin_slack_slack'])
+  })
+
+  test('a speaker avatar comes from the search result whose user id matches, at the small 72 px size', async () => {
+    const users = usersResult([
+      { name: 'Ada Lovelace', id: 'U0OTHER99', pic: 'https://avatars.slack-edge.com/other_original.png' },
+      { name: 'Ada Lovelace', id: 'U0AAA1111', pic: ADA_PIC },
+    ])
+    const { io, calls, downloads } = world({ mcp: filesMcp({ users }) })
+    const rec = record(await loadSlack(io, ref(THREAD), NOW))
+    expect(downloads).toContain('https://avatars.slack-edge.com/2022-11-23/4416337781877_a24dc51906aa11d635a2_72.png')
+    expect(downloads.some(url => url.includes('other'))).toBe(false)
+    expect(rec.avatars?.U0AAA1111).toMatch(/^\/tmp\/claude-peek\/web-\d+\.png$/)
+    expect(rec.avatars?.U0BBB2222).toBeUndefined()
+    const search = calls.find(one => one.tool === 'slack_search_users' && JSON.stringify(one.args).includes('Ada'))
+    expect(search?.args).toMatchObject({ response_format: 'detailed' })
+  })
+
+  test('one avatar lookup per speaker, however many messages they wrote and however often the page refreshes', async () => {
+    const { io, calls } = world({ mcp: threadMcp() })
+    await loadSlack(io, ref(THREAD), NOW)
+    await loadSlack(io, ref(THREAD), NOW + 60_000)
+    const searches = calls.filter(one => one.tool === 'slack_search_users')
+    expect(searches.length).toBe(2)
+  })
+
+  test('a search with no picture, or a refused search, leaves the speaker without an avatar', async () => {
+    const { io } = world({ mcp: filesMcp({ users: usersResult([{ name: 'Ada Lovelace', id: 'U0AAA1111' }]) }) })
+    expect(record(await loadSlack(io, ref(THREAD), NOW)).avatars).toBeUndefined()
+  })
+
+  test('the CLI path takes the avatar from user_profile.image_72', async () => {
+    const replies = JSON.stringify({
+      ok: true,
+      messages: [{ ts: '1791759796.763609', user: 'U0AAA1111', user_profile: { real_name: 'Ada Lovelace', image_72: 'https://avatars.slack-edge.com/a_72.png' }, text: 'Parent', files: [{ id: 'F0X', name: 'a.pdf', mimetype: 'application/pdf', size: 2048 }] }],
+    })
+    const cliRun = (argv: readonly string[]) => (argv[2] === 'conversations.replies' ? exited(0, replies) : exited(0, CLI_CHANNEL))
+    const { io, downloads } = world({ mcp: 'absent', cli: '/home/.slack/bin/slack', cliRun })
+    const rec = record(await loadSlack(io, ref(THREAD), NOW))
+    expect(downloads).toEqual(['https://avatars.slack-edge.com/a_72.png'])
+    expect(rec.avatars?.U0AAA1111).toBeDefined()
+    expect(rec.lead?.files).toEqual([{ id: 'F0X', name: 'a.pdf', type: 'application/pdf', size: '2.0 KB' }])
+  })
+})
+
+describe('Speaker and time labels', () => {
+  test('a message from today reads relative; an older one reads as a date and time; another year adds the year', () => {
+    const noon = Date.parse('2026-10-12T12:00:00Z')
+    expect(whenLabel('2026-10-12T11:55:00Z', noon, 'UTC')).toBe('5m ago')
+    expect(whenLabel('2026-10-06T13:22:47Z', noon, 'UTC')).toBe('Oct 6, 1:22 PM')
+    expect(whenLabel('2025-10-06T13:22:47Z', noon, 'UTC')).toBe('Oct 6, 2025, 1:22 PM')
+    expect(whenLabel('2026-10-11T23:59:00Z', noon, 'UTC')).toBe('Oct 11, 11:59 PM')
+  })
+
+  test('initials come from the first and last name', () => {
+    expect(initials('Ada Lovelace')).toBe('AL')
+    expect(initials('Grace Brewster Hopper')).toBe('GH')
+    expect(initials('cher')).toBe('C')
+    expect(initials('')).toBe('?')
+  })
+
+  test('a speaker keeps one colour, and different speakers spread over the palette', () => {
+    expect(speakerColor('U0AAA1111')).toBe(speakerColor('U0AAA1111'))
+    const ids = ['U0AAA1111', 'U0BBB2222', 'U0CCC3333', 'U0DDD4444', 'U0EEE5555', 'U0FFF6666']
+    expect(new Set(ids.map(speakerColor)).size >= 3).toBe(true)
   })
 })

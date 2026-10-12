@@ -54,3 +54,49 @@ export const CLI_REPLIES = JSON.stringify({
 })
 
 export const CLI_CHANNEL = JSON.stringify({ ok: true, channel: { id: 'C0123ABCD', name: 'release-notes' } })
+
+// A parent with a screenshot and a reply carrying two files on one Files: line. The single-file line is copied from a real
+// thread; two files on one line joined by ", " is assumed, not observed.
+export const FILES_TEXT = [
+  '=== THREAD PARENT MESSAGE ===',
+  'From: Ada Lovelace <ada@example.com> (U0AAA1111)',
+  'Time: 2026-10-06 19:23:12 CAT',
+  'Message TS: 1791307392.000200',
+  'Cutting too early, see the shot.',
+  'Files: Screenshot 2026-10-06 at 1.22.47 PM.png (ID: F0C7A02R0AY, image/png, 221.4 KB)',
+  '',
+  '=== THREAD REPLIES (1 total) ===',
+  '',
+  '--- Reply 1 of 1 ---',
+  'From: Grace Hopper <grace@example.com> (U0BBB2222)',
+  'Time: 2026-10-06 19:30:00 CAT',
+  'Message TS: 1791307800.000300',
+  'Spec attached.',
+  'Files: spec, v2.pdf (ID: F0DDD4444, application/pdf, 1.2 MB), crop.jpg (ID: F0EEE5555, image/jpeg, 80.0 KB)',
+  '',
+].join('\n')
+
+export const FILES_RESULT = JSON.stringify({ messages: FILES_TEXT, pagination_info: 'There are no more messages in this thread.\n' })
+
+// slack_read_file on an image, as the session saw it: a metadata text block, then an image block. The harness showed the
+// image; `data` + `mimeType` is the MCP image-block shape, inferred rather than seen as raw JSON.
+export function fileResult(id: string, data: string, mimeType = 'image/png') {
+  return {
+    content: [
+      { type: 'text', text: `File ID: ${id}\nTitle: Screenshot 2026-10-06 at 1.22.47 PM.png\nMIME Type: ${mimeType}\nSize: 221.4 KB\nCreated: 2026-10-06 19:23:12 CAT\n` },
+      { type: 'image', data, mimeType },
+    ],
+    isError: false,
+  }
+}
+
+// slack_search_users, detailed: the only Slack MCP read that returns a profile picture (slack_read_user_profile has none).
+export function usersResult(people: { name: string; id: string; pic?: string }[]): string {
+  const blocks = people.map(
+    (one, i) =>
+      `### Result ${i + 1} of ${people.length}\nName: ${one.name}\nUser ID: ${one.id}\nTitle: Engineer\nEmail: x@example.com\nTimezone: Africa/Harare\n${one.pic ? `Profile Pic: [Photo](${one.pic})\n` : ''}Permalink: [link](https://acme.slack.com/team/${one.id})\n\n---\n\n`,
+  )
+  return JSON.stringify({ results: `# Search Results for: \n\n## Users (${people.length} results)\n${blocks.join('')}`, pagination_info: 'End of results - No more pages available.\\n' })
+}
+
+export const ADA_PIC = 'https://avatars.slack-edge.com/2022-11-23/4416337781877_a24dc51906aa11d635a2_original.png'

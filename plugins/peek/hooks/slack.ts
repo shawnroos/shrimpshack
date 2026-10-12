@@ -1,11 +1,13 @@
 import type { CaptureIo } from './capture'
 import type { Ref } from './refs'
+import { describeAge } from './lib'
 import type { SourceIo } from './sources'
-import type { FailureKind, Loaded, RemoteComment, RemoteRecord } from '../types'
+import type { FailureKind, Loaded, RemoteComment, RemoteFile, RemoteRecord } from '../types'
 
-export type SlackIo = Pick<SourceIo, 'sessionId' | 'run'> & Pick<CaptureIo, 'mcpCall'>
+export type SlackIo = Pick<SourceIo, 'sessionId' | 'run'> &
+  Pick<CaptureIo, 'mcpCall'> & { downloadImage?: (url: string, ext: string) => Promise<string | undefined> }
 
-export type SlackMessage = { author: string; ts: string; text: string }
+export type SlackMessage = { author: string; ts: string; text: string; userId?: string; files: RemoteFile[]; avatarUrl?: string }
 
 export type SlackThread = { parent: SlackMessage; replies: SlackMessage[]; hasMore: boolean }
 
@@ -23,8 +25,24 @@ const PARENT_HEAD = '=== THREAD PARENT MESSAGE ==='
 const REPLIES_HEAD = /^=== THREAD REPLIES \(\d+ total\) ===$/m
 const REPLY_HEAD = /^--- Reply \d+ of \d+ ---$/m
 
+const FILES_LINE = /^Files: (.*)$/
+const FILE_ENTRY = /(?:^|, )(.+?) \(ID: (F[A-Z0-9]+), ([^,()]+), ([^()]+?)\)/g
+const USER_ID = /^[UWB][A-Z0-9]+$/
+const SCRATCH = '/tmp/claude-peek'
+// Each read is a file download and, the first time, a permission prompt; past these the rest show as file rows.
+const MAX_FILE_READS = 6
+const MAX_SPEAKERS = 12
+// slack_read_file's own limit.
+const MAX_FILE_BYTES = 10_000_000
+// The pane draws an avatar 4 columns by 2 rows; Slack's 72 px variant is about 12 KB where the original was 1.4 MB.
+const AVATAR_PX = 72
+const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }
+
 const preferredServer = new Map<string, string>()
 const cliPaths = new Map<string, Promise<string | null>>()
+// Refresh reloads a thread every minute; files and faces are fetched, and refused, once per session.
+const filePictures = new Map<string, Promise<string | undefined>>()
+const avatarFiles = new Map<string, Promise<string | undefined>>()
 
 type Obj = Record<string, unknown>
 type Unavailable = { ok: false; failure: 'unavailable' }
@@ -81,20 +99,31 @@ function plainLine(text: string): string {
   return plain.length > TITLE_CAP ? `${plain.slice(0, TITLE_CAP - 1)}…` : plain
 }
 
+function parseFiles(line: string): RemoteFile[] {
+  return [...line.matchAll(FILE_ENTRY)].map(found => ({ id: found[2] ?? '', name: (found[1] ?? '').trim(), type: (found[3] ?? '').trim(), size: (found[4] ?? '').trim() }))
+}
+
 function parseMessage(block: string): SlackMessage | null {
   const lines = block.replace(/^\n+/, '').split('\n')
   let author = ''
   let ts = ''
+  let userId: string | undefined
   while (lines.length) {
     const head = /^(From|Time|Message TS): ?(.*)$/.exec(lines[0] ?? '')
     if (!head) break
     lines.shift()
-    // The email in "Name <email> (U123)" is dropped on purpose: the page never shows it.
-    if (head[1] === 'From') author = (head[2] ?? '').replace(/\s*<[^>]*>.*$/, '').replace(/\s*\([UWB][A-Z0-9]+\)\s*$/, '').trim()
+    if (head[1] === 'From') {
+      const from = head[2] ?? ''
+      userId = /\(([UWB][A-Z0-9]+)\)\s*$/.exec(from)?.[1]
+      // The email in "Name <email> (U123)" is dropped on purpose: the page never shows it.
+      author = from.replace(/\s*<[^>]*>.*$/, '').replace(/\s*\([UWB][A-Z0-9]+\)\s*$/, '').trim()
+    }
     if (head[1] === 'Message TS') ts = (head[2] ?? '').trim()
   }
   if (!/^\d+\.\d+$/.test(ts)) return null
-  return { author: author || 'Unknown', ts, text: lines.join('\n').trim() }
+  const files = lines.flatMap(line => parseFiles(FILES_LINE.exec(line)?.[1] ?? ''))
+  const text = lines.filter(line => !FILES_LINE.test(line)).join('\n').trim()
+  return { author: author || 'Unknown', ts, text, ...(userId ? { userId } : {}), files }
 }
 
 export function parseThreadText(text: string): Omit<SlackThread, 'hasMore'> | null {
@@ -130,6 +159,41 @@ function replyCount(count: number, hasMore: boolean): string {
   return count === 1 ? '1 reply' : `${count} replies`
 }
 
+export function initials(name: string): string {
+  const words = name.split(/\s+/).map(word => word.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean)
+  const first = words[0]?.[0] ?? ''
+  const last = words.length > 1 ? (words.at(-1)?.[0] ?? '') : ''
+  return `${first}${last}`.toUpperCase() || '?'
+}
+
+export function whenLabel(iso: string, now: number, timeZone?: string): string {
+  const at = Date.parse(iso)
+  if (Number.isNaN(at)) return iso
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+  if (day.format(at) === day.format(now)) return describeAge(at, now)
+  const isThisYear = day.format(at).slice(0, 4) === day.format(now).slice(0, 4)
+  const date = new Intl.DateTimeFormat('en-US', { timeZone, month: 'short', day: 'numeric', ...(isThisYear ? {} : { year: 'numeric' }) }).format(at)
+  const time = new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit' }).format(at)
+  // Newer ICU puts a narrow no-break space before AM/PM.
+  return `${date}, ${time}`.replace(/\s/g, ' ')
+}
+
+function permalink(ref: Ref, ts: string, parentTs: string): string {
+  const base = `https://${ref.workspace}.slack.com/archives/${ref.channel}/p${ts.replace('.', '')}`
+  return ts === parentTs ? base : `${base}?thread_ts=${parentTs}&cid=${ref.channel}`
+}
+
+function messageOf(ref: Ref, one: SlackMessage, parentTs: string): RemoteComment {
+  return {
+    author: one.author,
+    ...(one.userId ? { authorId: one.userId } : {}),
+    at: isoOf(one.ts),
+    body: mrkdwnToMarkdown(one.text),
+    href: permalink(ref, one.ts, parentTs),
+    ...(one.files.length ? { files: one.files } : {}),
+  }
+}
+
 export function threadRecord(ref: Ref, thread: SlackThread, channelName: string | undefined): RemoteRecord {
   const channel = channelName ? `#${channelName}` : (ref.channel ?? '')
   const count = thread.replies.length
@@ -141,7 +205,7 @@ export function threadRecord(ref: Ref, thread: SlackThread, channelName: string 
     { label: 'Replies', value: `${count}${thread.hasMore ? '+' : ''}` },
   ]
   if (last) meta.push({ label: 'Last reply', value: isoOf(last.ts).slice(0, 10) })
-  const shown: RemoteComment[] = thread.replies.map(one => ({ author: one.author, at: isoOf(one.ts), body: mrkdwnToMarkdown(one.text) }))
+  const shown = thread.replies.map(one => messageOf(ref, one, thread.parent.ts))
   return {
     address: ref.address,
     kind: 'slack-thread',
@@ -151,6 +215,7 @@ export function threadRecord(ref: Ref, thread: SlackThread, channelName: string 
     meta,
     body: mrkdwnToMarkdown(thread.parent.text) || undefined,
     comments: { shown, total: count },
+    lead: messageOf(ref, thread.parent, thread.parent.ts),
     browserUrl: ref.address,
   }
 }
@@ -174,7 +239,7 @@ function unwrap(text: string): { messages: string; more: boolean } {
   return { messages: text, more: false }
 }
 
-async function mcpRead(io: SlackIo, tool: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean } | null> {
+async function mcpRead(io: SlackIo, tool: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; server: string } | null> {
   const session = await io.sessionId()
   const known = preferredServer.get(session)
   const order = known ? [known, ...SLACK_SERVERS.filter(one => one !== known)] : SLACK_SERVERS
@@ -183,9 +248,103 @@ async function mcpRead(io: SlackIo, tool: string, args: Record<string, unknown>)
     const answer = await io.mcpCall(server, tool, args).catch(() => null)
     if (!answer) continue
     preferredServer.set(session, server)
-    return { text: blockText(answer.content), isError: answer.isError }
+    return { text: blockText(answer.content), isError: answer.isError, server }
   }
   return null
+}
+
+function bytesOf(size: string): number {
+  const found = /^([\d.]+)\s*(B|KB|MB|GB)$/i.exec(size.trim())
+  if (!found) return Number.POSITIVE_INFINITY
+  return Number(found[1]) * 1024 ** ['B', 'KB', 'MB', 'GB'].indexOf((found[2] ?? 'B').toUpperCase())
+}
+
+function sizeLabel(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+}
+
+// A refused or failed call is a rejection or an error result; asking the other server spellings would ask again.
+async function filePicture(io: SlackIo, server: string, file: RemoteFile): Promise<string | undefined> {
+  const answer = await io.mcpCall(server, 'slack_read_file', { file_id: file.id }).catch(() => null)
+  if (!answer || answer.isError) return undefined
+  const image = answer.content.map(block => obj(block)).find(block => block?.type === 'image' && typeof block.data === 'string')
+  const ext = IMAGE_EXT[String(image?.mimeType ?? file.type)]
+  if (!image || !ext) return undefined
+  const path = `${SCRATCH}/slack-${file.id}.${ext}`
+  const made = await io.run(['mkdir', '-p', SCRATCH], { timeoutMs: 5000 }).catch(() => null)
+  if (!made || made.exitCode !== 0) return undefined
+  const wrote = await io.run(['base64', '-d', '-o', path], { stdin: image.data as string, timeoutMs: 10_000 }).catch(() => null)
+  return wrote?.exitCode === 0 ? path : undefined
+}
+
+function smallAvatar(raw: string): string {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return raw
+  }
+  if (url.hostname === 'avatars.slack-edge.com') return raw.replace(/_(?:original|\d+)\.(png|jpe?g|gif)$/i, `_${AVATAR_PX}.$1`)
+  if (url.hostname.endsWith('gravatar.com')) {
+    url.searchParams.set('s', String(AVATAR_PX))
+    return url.href
+  }
+  return raw
+}
+
+// slack_read_user_profile returns no picture in either format; the detailed user search is the read that does.
+async function searchedAvatar(io: SlackIo, server: string, one: SlackMessage): Promise<string | undefined> {
+  const keywords = one.author.split(/\s+/).map(word => word.replace(/[^\p{L}\p{N}'-]/gu, '')).filter(Boolean).slice(0, 3)
+  if (!keywords.length || !one.userId || !USER_ID.test(one.userId)) return undefined
+  const args = { keywords, natural_language_query: one.author, limit: 5, response_format: 'detailed' }
+  const answer = await io.mcpCall(server, 'slack_search_users', args).catch(() => null)
+  if (!answer || answer.isError) return undefined
+  const raw = blockText(answer.content)
+  let results = raw
+  try {
+    const parsed = obj(JSON.parse(raw))
+    if (parsed && typeof parsed.results === 'string') results = parsed.results
+  } catch {}
+  const mine = new RegExp(`^User ID: ${one.userId}\\s*$`, 'm')
+  const block = results.replaceAll('\\/', '/').split(/^### Result /m).find(part => mine.test(part))
+  return block ? /^Profile Pic: \[[^\]]*\]\((https:\/\/[^)\s]+)\)/m.exec(block)?.[1] : undefined
+}
+
+async function avatarFile(io: SlackIo, server: string | undefined, one: SlackMessage): Promise<string | undefined> {
+  const found = one.avatarUrl ?? (server ? await searchedAvatar(io, server, one) : undefined)
+  if (!found || !io.downloadImage) return undefined
+  const url = smallAvatar(found)
+  const ext = /\.(png|jpe?g|gif|webp)$/i.exec(new URL(url).pathname)?.[1]?.toLowerCase() ?? 'png'
+  return io.downloadImage(url, ext)
+}
+
+function once(cache: Map<string, Promise<string | undefined>>, key: string, make: () => Promise<string | undefined>): Promise<string | undefined> {
+  const known = cache.get(key)
+  if (known) return known
+  const pending = make().catch(() => undefined)
+  cache.set(key, pending)
+  return pending
+}
+
+async function withPictures(io: SlackIo, record: RemoteRecord, messages: readonly SlackMessage[], server: string | undefined): Promise<RemoteRecord> {
+  const session = await io.sessionId()
+  const images = server
+    ? messages.flatMap(one => one.files).filter(file => IMAGE_EXT[file.type] && bytesOf(file.size) <= MAX_FILE_BYTES).slice(0, MAX_FILE_READS)
+    : []
+  const speakers = [...new Map(messages.filter(one => one.userId).map(one => [one.userId ?? '', one])).values()].slice(0, MAX_SPEAKERS)
+  const [files, faces] = await Promise.all([
+    Promise.all(images.map(async file => [file.id, await once(filePictures, `${session} ${file.id}`, () => filePicture(io, server ?? '', file))] as const)),
+    Promise.all(speakers.map(async one => [one.userId ?? '', await once(avatarFiles, `${session} ${one.userId}`, () => avatarFile(io, server, one))] as const)),
+  ])
+  const media = Object.fromEntries(files.flatMap(([id, file]) => (file ? [[`slack-file:${id}`, { file }]] : [])))
+  const avatars = Object.fromEntries(faces.flatMap(([id, file]) => (file ? [[id, file]] : [])))
+  return {
+    ...record,
+    ...(Object.keys(media).length ? { media } : {}),
+    ...(Object.keys(avatars).length ? { avatars } : {}),
+  }
 }
 
 async function loadViaMcp(io: SlackIo, ref: Ref, channel: string, ts: string, now: number): Promise<Loaded | Unavailable> {
@@ -199,7 +358,9 @@ async function loadViaMcp(io: SlackIo, ref: Ref, channel: string, ts: string, no
   const parsed = parseThreadText(messages)
   if (!parsed) return { ok: false, failure: 'query-bug' }
   const name = info && !info.isError ? /^Channel: #(\S+)/m.exec(unwrap(info.text).messages)?.[1] : undefined
-  return { ok: true, record: threadRecord(ref, { ...parsed, hasMore: more }, name), tier: 'mcp', fetchedAt: now }
+  const base = threadRecord(ref, { ...parsed, hasMore: more }, name)
+  const record = await withPictures(io, base, [parsed.parent, ...parsed.replies], thread.server)
+  return { ok: true, record, tier: 'mcp', fetchedAt: now }
 }
 
 async function findCli(io: SlackIo): Promise<string | null> {
@@ -235,6 +396,27 @@ function cliAuthor(message: Obj): string {
   return str(profile?.real_name) ?? str(profile?.display_name) ?? str(obj(message.bot_profile)?.name) ?? str(message.username) ?? str(message.user) ?? 'Unknown'
 }
 
+function cliFiles(message: Obj): RemoteFile[] {
+  const raw = Array.isArray(message.files) ? message.files : []
+  return raw
+    .map(one => obj(one))
+    .filter((one): one is Obj => one !== null && typeof one.id === 'string' && /^F[A-Z0-9]+$/.test(one.id))
+    .map(one => ({ id: one.id as string, name: str(one.name) ?? (one.id as string), type: str(one.mimetype) ?? 'file', size: typeof one.size === 'number' ? sizeLabel(one.size) : '' }))
+}
+
+function cliMessage(one: Obj): SlackMessage {
+  const user = str(one.user)
+  const avatarUrl = str(obj(one.user_profile)?.image_72)
+  return {
+    author: cliAuthor(one),
+    ts: one.ts as string,
+    text: typeof one.text === 'string' ? one.text : '',
+    ...(user && USER_ID.test(user) ? { userId: user } : {}),
+    files: cliFiles(one),
+    ...(avatarUrl ? { avatarUrl } : {}),
+  }
+}
+
 async function loadViaCli(io: SlackIo, ref: Ref, channel: string, ts: string, now: number): Promise<Loaded | Unavailable> {
   const bin = await findCli(io)
   if (!bin) return { ok: false, failure: 'unavailable' }
@@ -247,12 +429,13 @@ async function loadViaCli(io: SlackIo, ref: Ref, channel: string, ts: string, no
   const messages = raw
     .map(one => obj(one))
     .filter((one): one is Obj => one !== null && typeof one.ts === 'string')
-    .map(one => ({ author: cliAuthor(one), ts: one.ts as string, text: typeof one.text === 'string' ? one.text : '' }))
+    .map(one => cliMessage(one))
   const [parent, ...rest] = messages
   if (!parent) return { ok: false, failure: 'query-bug' }
   const name = info.ok ? str(obj(info.body.channel)?.name) : undefined
   const thread = { parent, replies: rest, hasMore: replies.body.has_more === true }
-  return { ok: true, record: threadRecord(ref, thread, name), tier: 'cli', fetchedAt: now }
+  const record = await withPictures(io, threadRecord(ref, thread, name), messages, undefined)
+  return { ok: true, record, tier: 'cli', fetchedAt: now }
 }
 
 export async function loadSlack(io: SlackIo, ref: Ref, now: number): Promise<Loaded> {
