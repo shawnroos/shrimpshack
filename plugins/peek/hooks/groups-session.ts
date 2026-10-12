@@ -4,7 +4,7 @@ import { toggleStar } from './gallery'
 import { applyGroupOps, groupsDir, isScheme, refPath, resolveProjectKey, shortId, starGroup, storedRef } from './groups'
 import type { GroupPlace, GroupWrite } from './groups'
 import { remotePicture } from './images'
-import { nav, noteTitle, remoteLoader, remoteRef, show, starKeyOf, startTicking } from './navigation'
+import { nav, navigate, noteTitle, remoteLoader, remoteRef, show, starKeyOf, startTicking } from './navigation'
 import type { NavIo } from './navigation'
 import { type ItemLook, type ItemState, remoteNaming } from './pane/look'
 import type { Action } from './pane/types'
@@ -27,9 +27,7 @@ export async function setStar(io: NavIo, raw: string, wanted?: boolean): Promise
 }
 
 export async function openGroupPage(io: NavIo, id: string) {
-  await io.openGroup.update(() => ({ id, item: null }))
-  await io.mode.update(() => 'groups')
-  await io.page.update(() => 0)
+  await navigate(io, [{ to: 'openGroup', change: () => ({ id, item: null }) }, { to: 'mode', mode: 'groups' }, { to: 'page' }])
 }
 
 async function personWrite(

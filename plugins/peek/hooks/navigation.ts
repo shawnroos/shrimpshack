@@ -86,6 +86,25 @@ let showGeneration = 0
 
 export const clamp = (at: number, length: number) => Math.max(0, Math.min(length - 1, at))
 
+export type NavWrite =
+  | { to: 'openGroup'; change: (opened: PaneState['openGroup']) => PaneState['openGroup'] }
+  | { to: 'view'; view: View }
+  | { to: 'mentions'; change: (list: PaneState['mentions']) => PaneState['mentions'] }
+  | { to: 'mode'; mode: Mode }
+  | { to: 'page' }
+
+// One screen change: work out every target first, then write the atoms back to back. The engine has no batched
+// write, so each write is still one state.set that hooks see in turn; callers keep the order they always had.
+export async function navigate(io: NavIo, writes: readonly NavWrite[]) {
+  for (const write of writes) {
+    if (write.to === 'openGroup') await io.openGroup.update(write.change)
+    else if (write.to === 'view') await io.view.update(() => write.view)
+    else if (write.to === 'mentions') await io.mentions.update(write.change)
+    else if (write.to === 'mode') await io.mode.update(() => write.mode)
+    else await io.page.update(() => 0)
+  }
+}
+
 export const nav = {
   lastActivity: 0,
   titles: {} as Record<string, TitleEntry>,
@@ -151,15 +170,12 @@ export async function goBack(io: NavIo) {
   if (nav.groupBack && nav.backStack.length <= nav.groupBack.depth) {
     const target = nav.groupBack
     nav.groupBack = null
-    await io.openGroup.update(opened => (opened?.id === target.id ? opened : { id: target.id, item: null }))
-    await io.mode.update(() => 'groups')
-    await io.page.update(() => 0)
+    await navigate(io, [{ to: 'openGroup', change: opened => (opened?.id === target.id ? opened : { id: target.id, item: null }) }, { to: 'mode', mode: 'groups' }, { to: 'page' }])
     return
   }
   const last = nav.backStack.pop()
   if (!last) return
-  await io.view.update(() => last.view)
-  await io.mode.update(() => 'view')
+  await navigate(io, [{ to: 'view', view: last.view }, { to: 'mode', mode: 'view' }])
   void io.scroll({ to: { key: last.key }, block: 'start' }).catch(() => undefined)
 }
 
@@ -252,11 +268,8 @@ export async function show(io: NavIo, raw: string, isFromGroupChain = false) {
   const href = ref?.address ?? raw
   const file = parseHref(href)
   const loading: View = { href, title: 'Loading…', location: file?.path ?? href }
-  await io.view.update(() => loading)
   const at = await io.now()
-  await io.mentions.update(list => noteMentions(list, [href], at))
-  await io.page.update(() => 0)
-  await io.mode.update(() => 'view')
+  await navigate(io, [{ to: 'view', view: loading }, { to: 'mentions', change: list => noteMentions(list, [href], at) }, { to: 'page' }, { to: 'mode', mode: 'view' }])
   void io.scroll({ to: 'start' }).catch(() => undefined)
   void io.open({ title: 'Peek' })
   let next: View
@@ -290,9 +303,8 @@ export async function openExternally(io: NavIo, current: View) {
 
 // e on an open group page goes back to the group list; from any other screen it keeps the open group.
 export async function switchMode(io: NavIo, to: Mode) {
-  if (to === 'groups' && (await io.mode.read()) === 'groups') await io.openGroup.update(() => null)
-  await io.mode.update(() => to)
-  await io.page.update(() => 0)
+  const isLeavingGroupPage = to === 'groups' && (await io.mode.read()) === 'groups'
+  await navigate(io, [...(isLeavingGroupPage ? [{ to: 'openGroup', change: () => null } as const] : []), { to: 'mode', mode: to }, { to: 'page' }])
 }
 
 export async function refresh(io: NavIo, href: string) {
