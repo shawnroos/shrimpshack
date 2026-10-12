@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { C } from '../hooks/theme'
 
 const WORKTREE = '/Users/shawnroos/projects/herdr-linear-board/worktrees/tui-design'
 const FILES: Record<string, string> = {
@@ -411,4 +412,32 @@ test('the gallery draws every element and its controls work', async ($, on) => {
     }
     await ui.unmount()
   }
+})
+
+test('Recent rows and Gallery cards: hover shows an accent star, a click anywhere opens, a click on the star stars', async ($, on) => {
+  fakeDisk(on)
+  FILES['/repo/a.md'] = '# A\n'
+  FILES['/repo/b.md'] = '# B\n'
+  await $.command.run({ command: 'peek', args: '/repo/a.md' } as never)
+  await $.command.run({ command: 'peek', args: '/repo/b.md' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'mode-recent' })
+  const layer = 'hover-touched-0'
+  await ui.resize({ columns: 80, rows: 2, in: layer })
+  expect(JSON.stringify(await ui.drawn({ in: layer }))).not.toContain('\u{f41e}')
+  await ui.pointer({ type: 'move', x: 20, y: 1, in: layer })
+  const hovered = JSON.stringify(await ui.drawn({ in: layer }))
+  expect(hovered).toContain('\u{f41e}')
+  expect(hovered).toContain(C.accent)
+  await ui.pointer({ type: 'down', button: 'left', x: 30, y: 1, in: layer })
+  expect(await ui.find({ text: /^# ?A$|^A$/ })).toBeDefined()
+
+  await ui.press({ key: 'mode-gallery' })
+  const cards = 'hover-touched-0'
+  await ui.resize({ columns: 60, rows: 5, in: cards })
+  await ui.pointer({ type: 'move', x: 10, y: 3, in: cards })
+  expect(JSON.stringify(await ui.drawn({ in: cards }))).toContain('\u{f41e}')
+  await ui.pointer({ type: 'down', button: 'left', x: 2, y: 1, in: cards })
+  expect(JSON.stringify(await ui.drawn())).toContain('\u{f51a}')
+  await ui.unmount()
 })
