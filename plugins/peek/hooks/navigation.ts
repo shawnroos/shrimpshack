@@ -20,6 +20,8 @@ import { remoteFileOf } from './web'
 
 type PaneState = PluginState['peek']
 type Ui = EngineInterface['ui']
+type Fs = EngineInterface['fs']
+type Model = EngineInterface['model']
 type Without<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 type Picture = { file: string; width: number; height: number }
 
@@ -39,12 +41,15 @@ export type NavIo = {
   every: (ms: number, fn: () => void) => void
   cwd: () => Promise<string>
   home: () => Promise<string | undefined>
+  stat: (path: string) => ReturnType<Fs['stat']>
   run: (argv: string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
   readFile: (path: string) => Promise<string>
   writeFile: (path: string, text: string) => Promise<unknown>
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<unknown>
   invalidate: () => void
+  toast: (text: string) => void
+  fork: (request: Parameters<Model['fork']>[0]) => ReturnType<Model['fork']>
   scroll: (options: Without<Parameters<Ui['scroll']>[0], 'in'>) => ReturnType<Ui['scroll']>
   open: (options: Without<Parameters<Ui['open']>[0], 'id'>) => ReturnType<Ui['open']>
   remoteIo: () => RemoteIo

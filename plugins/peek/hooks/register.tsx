@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Mention, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
+import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './gallery'
 import { C as BASE, MUTED, ICON, META_ICON, mute, speakerColor } from './theme'
 import { record } from './capture'
@@ -36,17 +36,18 @@ import {
 } from './groups'
 import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
 import { describeAge, describeSize } from './format'
-import { classifyBlocks, filterRole, gridColumns, hasMeaningfulWords, nextOf, noteMentions, parseStatLines, rankRecent, selectEntries, toggleStar } from './gallery'
+import { classifyBlocks, filterRole, gridColumns, nextOf, selectEntries, toggleStar } from './gallery'
 import { colorFor, iconFor, kindLabel } from './kinds'
-import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, mermaidFences, outlineOf, pathCandidates, plainInline, segmentsOf, swapMermaidFences, urlCandidates } from './markdown'
+import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, mermaidFences, outlineOf, pathCandidates, plainInline, segmentsOf, swapMermaidFences } from './markdown'
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, taskRows, wrapLines } from './measure'
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
 import { type ItemLook, type ItemState, lookOf, remoteNaming } from './pane/look'
 import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
-import { SCRATCH, bootLinear, goBack, loadRemote, nav, noteTitle, openExternally, openFromPage, pressLink, refContext, refresh, remoteLoader, remoteRef, repoContext, sessionRefContext, setMenu, show, sourceLine, starKeyOf, startTicking, switchMode, titlesByKey, trailIcon } from './navigation'
+import { SCRATCH, bootLinear, goBack, loadRemote, nav, noteTitle, openExternally, openFromPage, pressLink, refContext, refresh, remoteLoader, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, startTicking, switchMode, titlesByKey, trailIcon } from './navigation'
 import type { NavIo } from './navigation'
+import { forgetPath, gitRoot, guess, noteCapture, pathExists, remember, scopeEntries, sessionEntries, toHref, withMentions } from './entries'
 
 const C = BASE
 
@@ -143,7 +144,6 @@ const CARD_GAP = 2
 const PINNED_GROUPS = 4
 const GROUP_CARD_LINES = 3
 const fullText = new Map<string, string>()
-const roots = new Map<string, { root: string; isWorktree: boolean } | null>()
 const GALLERY = 'peek-ui'
 const presses = atom({ plugin: 'peek', key: 'galleryPresses' } as const, 0)
 const typed = atom({ plugin: 'peek', key: 'galleryText' } as const, '')
@@ -156,7 +156,6 @@ const SAMPLE_MARKDOWN = '## Markdown\n\nRenders **bold**, *italic*, `code`, [lin
 const MERMAID_ASCII = '/.cache/claude-peek/bin/mermaid-ascii'
 const MAX_PNG_BYTES = 2 * 1024 * 1024
 
-const exists = new Map<string, boolean>()
 const pixels = new Map<string, string>()
 let paneColumns = 100
 let contentRows = 0
@@ -183,17 +182,6 @@ const COMMAND_KEYS: Record<string, string> = {
 }
 const PAGE_TOP = HEADER_ROWS + 1
 const converted = new Map<string, { file: string; width: number; height: number }>()
-
-async function pathExists($: EngineInterface, abs: string): Promise<boolean> {
-  const known = exists.get(abs)
-  if (known !== undefined) return known
-  const found = await $.fs.stat(abs).then(
-    stat => stat.kind !== 'other',
-    () => false,
-  )
-  exists.set(abs, found)
-  return found
-}
 
 async function pngSize($: EngineInterface, file: string) {
   const { stdout } = await $.process.run(['sips', '-g', 'pixelWidth', '-g', 'pixelHeight', file])
@@ -260,21 +248,10 @@ async function withDrawnMermaid($: EngineInterface, markdown: string): Promise<s
   return swapMermaidFences(markdown, drawn)
 }
 
-async function gitRoot($: EngineInterface, folder: string): Promise<{ root: string; isWorktree: boolean } | null> {
-  if (roots.has(folder)) return roots.get(folder) ?? null
-  const ran = await $.process
-    .run(['git', '-C', folder, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-dir', '--git-common-dir'])
-    .catch(() => null)
-  const [root, gitDir, commonDir] = ran && ran.exitCode === 0 ? ran.stdout.trim().split('\n') : []
-  const found = root ? { root, isWorktree: Boolean(gitDir && commonDir && gitDir !== commonDir) } : null
-  roots.set(folder, found)
-  return found
-}
-
 async function loadFile($: EngineInterface, href: string, path: string, line?: number): Promise<View> {
   const title = path.split('/').pop() || path
   const folderOf = path.slice(0, Math.max(1, path.length - title.length - 1))
-  const git = await gitRoot($, folderOf)
+  const git = await gitRoot(navIoOf($), folderOf)
   const base: View = { href, title, location: line ? `${path}:${line}` : path, root: git?.root, isWorktree: git?.isWorktree }
   const stat = await $.fs.stat(path)
   const age = describeAge(stat.mtimeMs, await $.clock.now())
@@ -478,19 +455,22 @@ function navIoOf($: EngineInterface): NavIo {
     every: (ms, fn) => $.clock.every(ms, fn),
     cwd: () => $.session.cwd(),
     home: () => $.env.get('HOME'),
+    stat: path => $.fs.stat(path),
     run: (argv, init) => $.process.run(argv, init),
     readFile: path => $.fs.read(path),
     writeFile: (path, text) => $.fs.write(path, text),
     storeGet: key => $.store.get(key),
     storeSet: (key, value) => $.store.set(key, value),
     invalidate: () => $.ui.invalidate('ui.render'),
+    toast: text => $.ui.toast(text),
+    fork: request => $.model.fork(request),
     scroll: options => $.ui.scroll({ in: PANE, ...options }),
     open: options => $.ui.open({ id: PANE, ...options }),
     remoteIo: () => remoteIoOf($),
     groupsIo: () => groupsIoOf($),
     columns: () => paneColumns,
     openGroupRemotes: () => openGroupRemotes,
-    forgetPath: path => void exists.delete(path),
+    forgetPath,
     loadFile: (href, path, line) => loadFile($, href, path, line),
     loadUrl: href => loadUrl($, href),
     withDrawnMermaid: markdown => withDrawnMermaid($, markdown),
@@ -500,199 +480,11 @@ function navIoOf($: EngineInterface): NavIo {
   }
 }
 
-async function remember(
-  $: EngineInterface,
-  texts: readonly string[],
-  created: readonly string[],
-  touched: readonly string[],
-) {
-  const cwd = await $.session.cwd()
-  const home = (await $.env.get('HOME')) ?? ''
-  const toHrefs = async (raws: readonly string[]) => {
-    const out: string[] = []
-    for (const raw of raws) {
-      const abs = resolvePath(raw, cwd, home)
-      if (await pathExists($, abs)) out.push(fileHref(abs))
-    }
-    return out
-  }
-  const urls = texts.flatMap(urlCandidates).map(url => (parseRef(url)?.kind === 'slack-thread' ? (parseRef(url)?.address ?? url) : url))
-  const artifacts = [...(await toHrefs([...texts.flatMap(pathCandidates), ...created])), ...urls]
-  const worked = await toHrefs(touched)
-  if (!artifacts.length && !worked.length) return
-  const at = await $.clock.now()
-  await update($, mentions, list =>
-    noteMentions(noteMentions(list, [...new Set(worked)], at), [...new Set(artifacts)], at, 200, true),
-  )
-}
-
 function captureIoOf($: EngineInterface): CaptureIo {
   return {
     mcpCall: (server, tool, args) => $.mcp.call(server, tool, args),
     now: () => $.clock.now(),
   }
-}
-
-async function noteCapture($: EngineInterface, input: Record<string, unknown>, answer: unknown) {
-  const at = await $.clock.now()
-  nav.lastActivity = at
-  const { addresses, grewLinear } = record(input, answer, at)
-  if (addresses.length) await update($, mentions, list => noteMentions(list, addresses, at, 200, true))
-  if (grewLinear) $.ui.invalidate('ui.render')
-}
-
-async function toHref($: EngineInterface, raw: string): Promise<string | null> {
-  const cleaned = raw.trim().replace(/^[`'"<]+|[`'">.]+$/g, '')
-  if (/^https?:\/\//.test(cleaned)) return cleaned
-  if (cleaned.startsWith('file:')) return cleaned
-  const needsContext = /^(?:#\d+|[A-Z][A-Z0-9]{0,9}-\d+)$/i.test(cleaned)
-  const ref = parseRef(cleaned, needsContext ? await sessionRefContext(navIoOf($)) : {})
-  if (ref) return ref.address
-  const match = /^(.+?)(?::(\d+))?$/.exec(cleaned)
-  const abs = resolvePath(match?.[1] ?? cleaned, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
-  exists.delete(abs)
-  if (await pathExists($, abs)) return fileHref(abs, match?.[2] ? Number(match[2]) : undefined)
-  return bareDomain(cleaned)
-}
-
-// `.md` and friends are real top-level domains, so a missing local file named like one goes to the guess, not the web.
-const FILE_SUFFIX = /\.(?:md|mdx|ts|tsx|js|jsx|json|py|txt|png|jpe?g|gif|svg|pdf|csv|html?|ya?ml|toml|sh|swift|rs|go|css|lock|log)$/i
-
-function bareDomain(text: string): string | null {
-  const found = /^((?:[a-z0-9-]+\.)+[a-z]{2,})(:\d+)?([/?#]\S*)?$/i.exec(text)
-  if (!found?.[1]) return null
-  if (!found[3] && FILE_SUFFIX.test(found[1])) return null
-  return `https://${text}`
-}
-
-async function guess($: EngineInterface, query: string): Promise<string | null> {
-  const list = (await read($, mentions)).map(one => one.href)
-  const ranked = rankRecent(query, list)
-  const [first, second] = ranked
-  if (first && hasMeaningfulWords(query) && first.score >= 3 && first.score - (second?.score ?? 0) >= 1) {
-    return first.href
-  }
-  const shortlist = list.slice(-25).reverse().map(href => `- ${parseHref(href)?.path ?? href}`).join('\n')
-  $.ui.toast('Peek: working out which one you mean…')
-  const reply = await $.model.fork({
-    prompt: [
-      `I ran /peek ${query}`,
-      'Which ONE file path or URL from this conversation do I mean? Prefer the most recent match.',
-      'If I name a website or online service that is not in this conversation (e.g. "the nytimes website"), reply with its homepage URL instead.',
-      shortlist ? `Paths and links seen recently, newest first:\n${shortlist}` : '',
-      'Reply with only the absolute path (optionally :line) or the URL, nothing else. If nothing fits, reply NONE.',
-    ].filter(Boolean).join('\n\n'),
-  })
-  if (reply.isAnswered) {
-    const line = reply.text.trim().split('\n')[0] ?? ''
-    if (line && line !== 'NONE') {
-      const href = await toHref($, line)
-      if (href) return href
-    }
-    return null
-  }
-  return first && first.score >= 1 ? first.href : null
-}
-
-const SCOPE_TTL_MS = 30_000
-const MAX_WORKTREES = 12
-const LIST_FILES =
-  "git ls-files -z --cached --others --exclude-standard | head -c 2000000 | xargs -0 stat -f '%m %z %N' 2>/dev/null | head -4000"
-const scopeCache = new Map<string, { at: number; entries: FileEntry[] }>()
-const scopeLoading = new Set<string>()
-
-async function listRoot($: EngineInterface, root: string, worktree?: string): Promise<FileEntry[]> {
-  const ran = await $.process.run(['sh', '-c', LIST_FILES], { cwd: root, timeoutMs: 20_000 }).catch(() => null)
-  return ran ? parseStatLines(ran.stdout, root, worktree) : []
-}
-
-async function sessionEntries($: EngineInterface, list: readonly Mention[]): Promise<FileEntry[]> {
-  const out: FileEntry[] = []
-  const remoteTitles = titlesByKey()
-  for (const one of [...list].reverse()) {
-    const file = parseHref(one.href)
-    const path = file?.path ?? one.href
-    const name = path.split('/').pop() || path
-    const stat = file ? await $.fs.stat(path).catch(() => null) : null
-    if (file && !stat) continue
-    const ref = file ? null : remoteRef(one.href)
-    const label = ref ? remoteTitles.get(itemKey(ref.address)) : undefined
-    if (ref) {
-      const naming = remoteNaming(ref, label, { bare: path, namesThread: true, host: () => new URL(ref.address).hostname })
-      out.push({
-        href: one.href,
-        path,
-        name: naming.name,
-        folder: naming.where,
-        kind: naming.kind,
-        status: label?.status,
-        favicon: (await remotePicture($, label?.favicon))?.file,
-        mtimeMs: 0,
-        size: 0,
-        mentions: one.count,
-        mentionedAt: one.at,
-        role: one.isArtifact ? 'artifact' : 'touched',
-      })
-      continue
-    }
-    out.push({
-      href: one.href,
-      path,
-      name,
-      folder: path.slice(0, Math.max(0, path.length - name.length - 1)),
-      kind: file ? (stat?.kind === 'dir' ? 'folder' : kindOf(path)) : 'web',
-      mtimeMs: stat?.mtimeMs ?? 0,
-      size: stat?.size ?? 0,
-      mentions: one.count,
-      mentionedAt: one.at,
-      role: one.isArtifact ? 'artifact' : 'touched',
-    })
-  }
-  return out
-}
-
-async function loadScope($: EngineInterface, scope: Exclude<Scope, 'session'>, cwd: string): Promise<FileEntry[]> {
-  const git = await gitRoot($, cwd)
-  if (!git) return []
-  if (scope === 'worktree') return listRoot($, git.root, git.root.split('/').pop())
-  const ran = await $.process.run(['git', '-C', git.root, 'worktree', 'list', '--porcelain']).catch(() => null)
-  const roots = (ran?.stdout ?? '')
-    .split('\n')
-    .filter(line => line.startsWith('worktree '))
-    .map(line => line.slice('worktree '.length))
-    .slice(0, MAX_WORKTREES)
-  const all: FileEntry[] = []
-  for (const root of roots.length ? roots : [git.root]) all.push(...(await listRoot($, root, root.split('/').pop())))
-  return all
-}
-
-// Returns the cached listing, or null while a background load runs; the load
-// redraws the pane when it lands.
-function scopeEntries($: EngineInterface, scope: Exclude<Scope, 'session'>, cwd: string, now: number): FileEntry[] | null {
-  const key = `${scope}|${cwd}`
-  const cached = scopeCache.get(key)
-  if (cached && now - cached.at < SCOPE_TTL_MS) return cached.entries
-  if (!scopeLoading.has(key)) {
-    scopeLoading.add(key)
-    void loadScope($, scope, cwd)
-      .then(entries => scopeCache.set(key, { at: Date.now(), entries }))
-      .catch(() => scopeCache.set(key, { at: Date.now(), entries: [] }))
-      .finally(() => {
-        scopeLoading.delete(key)
-        $.ui.invalidate('ui.render')
-      })
-  }
-  return cached?.entries ?? null
-}
-
-function withMentions(entries: readonly FileEntry[], list: readonly Mention[]): FileEntry[] {
-  const byHref = new Map(list.map(one => [one.href, one]))
-  return entries.map(one => {
-    const hit = byHref.get(one.href)
-    return hit
-      ? { ...one, mentions: hit.count, mentionedAt: hit.at, role: hit.isArtifact ? ('artifact' as const) : ('touched' as const) }
-      : one
-  })
 }
 
 async function setStar($: EngineInterface, raw: string, wanted?: boolean): Promise<boolean> {
@@ -972,7 +764,7 @@ async function findGroupHome($: EngineInterface, root: string): Promise<GroupHom
   const homeDir = await $.env.get('HOME')
   if (!homeDir) return null
   const projectKey = await resolveProjectKey(argv => $.process.run(argv), root)
-  const git = await gitRoot($, root)
+  const git = await gitRoot(navIoOf($), root)
   return { place: { dir: groupsDir(homeDir, projectKey), projectKey }, worktreeRoot: git?.root }
 }
 
@@ -993,7 +785,7 @@ type GroupTarget = { raw: string; ref: string } | { raw: string; error: string }
 
 async function groupTarget($: EngineInterface, raw: string, worktreeRoot: string | undefined, isAdd: boolean): Promise<GroupTarget> {
   const trimmed = raw.trim()
-  const href = await toHref($, trimmed).catch(() => null)
+  const href = await toHref(navIoOf($), trimmed).catch(() => null)
   if (href) {
     const file = parseHref(href)
     if (isAdd && file && !(await $.fs.exists(file.path).catch(() => false))) return { raw: trimmed, error: `No file at ${file.path}` }
@@ -1506,7 +1298,7 @@ export const register: Register = on => {
     nav.lastActivity = await $.clock.now()
     if (e.message.type !== 'assistant' || e.agentId) return stored
     const { texts, created, touched } = classifyBlocks(e.message.content)
-    await remember($, texts, created, touched).catch(() => undefined)
+    await remember(navIoOf($), texts, created, touched).catch(() => undefined)
     return stored
   })
 
@@ -1687,7 +1479,7 @@ export const register: Register = on => {
       await show(navIoOf($), last)
       return { text: `Peeking at ${parseHref(last)?.path ?? last}` }
     }
-    const href = (await toHref($, arg)) ?? (await guess($, arg))
+    const href = (await toHref(navIoOf($), arg)) ?? (await guess(navIoOf($), arg))
     if (!href) {
       const latest = (await read($, mentions)).slice(-5).reverse().map(one => one.href)
       const hint = latest.length ? `\nRecent: ${latest.map(one => parseHref(one)?.path ?? one).join(', ')}` : ''
@@ -1704,7 +1496,7 @@ export const register: Register = on => {
     const real = new Map<string, string>()
     for (const raw of pathCandidates(e.props.text)) {
       const abs = resolvePath(raw, cwd, home)
-      if (await pathExists($, abs)) real.set(raw, abs)
+      if (await pathExists(navIoOf($), abs)) real.set(raw, abs)
     }
     const linked = linkify(
       e.props.text,
@@ -1733,7 +1525,7 @@ export const register: Register = on => {
     const input = e as unknown as { target?: unknown; starred?: unknown }
     if (typeof input.target !== 'string') return { result: 'Give a target: a file path or URL.' }
     const target = input.target
-    const href = await toHref($, target).catch(() => null)
+    const href = await toHref(navIoOf($), target).catch(() => null)
     if (!href) return { result: `No file or URL at ${target}.` }
     const isOn = await setStar($, href, input.starred !== false).catch(() => null)
     if (isOn === null) return { result: 'Could not save the star.' }
@@ -1758,7 +1550,7 @@ export const register: Register = on => {
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
   on('tool.call', { tool: /^(?:Bash$|WebFetch$|mcp__(?!peek__))/ }, async ($, e, next) => {
     const answer = await next(e)
-    await noteCapture($, e as unknown as Record<string, unknown>, answer).catch(() => undefined)
+    await noteCapture(navIoOf($), e as unknown as Record<string, unknown>, answer).catch(() => undefined)
     return answer
   })
 
@@ -2545,7 +2337,7 @@ export const register: Register = on => {
       const role = await read($, roleFilter)
       const starList = await read($, stars)
       const starSet = new Set(starList)
-      const raw = scope === 'session' ? await sessionEntries($, list) : scopeEntries($, scope, cwd, now)
+      const raw = scope === 'session' ? await sessionEntries(navIoOf($), list) : scopeEntries(navIoOf($), scope, cwd, now)
       const entries = raw ? filterRole(withMentions(raw, list), role) : null
       const roleKey: Key = {
         key: 'role',
@@ -2576,7 +2368,7 @@ export const register: Register = on => {
       const waiting = <Text color={C.overlay0}>Loading files…</Text>
 
       const favMentions = starList.map(href => list.find(one => one.href === href) ?? { href, at: 0, count: 0 })
-      const favourites = filterRole(withMentions(await sessionEntries($, favMentions), list), role)
+      const favourites = filterRole(withMentions(await sessionEntries(navIoOf($), favMentions), list), role)
       const rest = entries ? entries.filter(one => !starSet.has(one.href)) : null
       const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
       const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
