@@ -13,7 +13,7 @@ deepened: 2026-10-12
 
 ## Goal Capsule
 
-- **Objective:** An agent can give peek a readable, navigable page for a document type peek has never seen. The page works in every session of that user, and adding the type edits no peek file and needs no peek release.
+- **Objective:** An agent can give peek a readable, navigable page for a document type peek has never seen. The page works in every session of that user (a recipe that calls an MCP tool works wherever that server is connected), and adding the type edits no peek file and needs no peek release.
 - **Means:** A closed page vocabulary inside peek, user-level recipes that return pages in it, person-only approval kept in peek's own store, and a skill shipped with peek that teaches the agent the whole loop (KTD1–KTD11).
 - **Product authority:** Shawn. The Product Contract wins on behaviour; Key Technical Decisions win on mechanism. New top-level tabs, sharing recipes, recipes for local files, and moving the built-in pages onto the vocabulary are not active scope.
 - **Open blockers:** PR #102 (Slack threads as pages) must merge before this work starts; then rebase onto `main` (KTD11).
@@ -46,7 +46,7 @@ Shawn wants to name a document type nobody has thought of yet and have an agent 
 - **Actions only open or copy.** Peek stays read-only: no Action changes an outside system. Governs R17. (session-settled: user-approved — chosen over letting an Action re-run the recipe's source with an argument, which would let a menu key close a ticket or post a comment.)
 - **Overlapping recipes are refused when built.** Governs R19. (session-settled: user-approved — chosen over newest recipe wins with a warning.)
 - **Recipes go live only when the person approves them in the pane.** An edit returns a recipe to draft. Governs R14, R21. (session-settled: user-approved — chosen over approval in chat only, where a later agent edit goes live unseen, and over a read-only-name filter on MCP tools, which catches mistakes but not edits.)
-- **Only opening, refreshing or an opted-in timer runs a recipe's source.** Governs R22. (session-settled: user-approved — chosen over letting groups, stars and the link list load recipe pages to show titles, which would run scripts on display.)
+- **Only opening, refreshing, an opted-in timer or the check runs a recipe's source.** Governs R22. (session-settled: user-approved — chosen over letting groups, stars and the link list load recipe pages to show titles, which would run scripts on display.)
 - **A failing recipe never falls back.** Governs R10. (session-settled: user-approved — chosen over showing a captured copy or the generic web page, which would hide the error page.)
 - **Recipes match web links only in this work.** Governs R7. (session-settled: user-approved — local files are deferred, since peek has no route for them today.)
 - **Recipes load on demand.** Governs R9. (session-settled: user-approved — proposed because the 60-second on-screen refresh would run an API- or model-backed script every minute.)
@@ -72,8 +72,8 @@ Shawn wants to name a document type nobody has thought of yet and have an agent 
 - R10. When a recipe's source fails, times out, or returns something outside the vocabulary, peek shows an error page that names the recipe and the problem, never a captured copy or the generic web page.
 - R18. While a recipe's source runs, peek shows a loading page that names the recipe. During a manual refresh the previous page stays visible with a refreshing marker. A Page or Section with no items shows a one-line empty message.
 - R11. A new or edited recipe takes effect on the next open or plugin reload, without reinstalling peek.
-- R21. A recipe is a draft until the person approves it from the pane, after seeing what it runs. Normal link routing ignores draft recipes; the agent's open tool can preview a draft, marked unapproved. Any change to a recipe's files returns it to draft. No peek tool, command or agent file edit can record an approval.
-- R22. Only opening a recipe page, refreshing it, or a recipe's opted-in timer runs its source. Groups, stars and the conversation's link list show a cached title or the bare link.
+- R21. A recipe is a draft until the person approves it from the pane, after seeing what it runs. Normal link routing ignores draft recipes; the agent's open tool can preview a draft, marked unapproved. Any change to a recipe's files returns it to draft. Peek's tools and commands, and the agent's file-editing tools, never record an approval, and a draft only runs what the session's own permissions would already run.
+- R22. Only opening a recipe page, refreshing it, a recipe's opted-in timer, or the built-in check on a sample link runs its source. Groups, stars and the conversation's link list show a cached title or the bare link.
 
 **Skill and verification**
 
@@ -161,7 +161,7 @@ flowchart TB
 - `docs/plans/2026-10-12-1002-feat-peek-groups-plan.md`: the list of what adding a mode touched.
 - `docs/solutions/architecture-patterns/a-skill-calling-mcp-tools-must-load-them-with-toolsearch-first.md`, `docs/solutions/architecture-patterns/command-and-skill-sharing-a-name.md`, `docs/solutions/security-issues/a-validator-proven-correct-and-proven-unused.md`, `docs/solutions/logic-errors/a-checks-scanner-crash-reads-as-a-clean-result.md`, `docs/solutions/performance-issues/live-frame-streaming-is-capped-by-bytes-per-second-the-sender-cannot-see.md`.
 
-**Product Contract preservation:** changed R7, R10, R14 and added R21, R22, AE6, AE7, after Shawn chose pane approval and confirmed the plan's scoping call-outs on 2026-10-12. Deepening sharpened R21 (the person sees what the recipe runs; approval cannot be written through peek or file edits) and added the forged-marker case to AE6, to carry out that same decision. The Objective's wording was corrected to match Success Criteria. Planning questions moved into the Key Technical Decisions below.
+**Product Contract preservation:** changed R7, R10, R14 and added R21, R22, AE6, AE7, after Shawn chose pane approval and confirmed the plan's scoping call-outs on 2026-10-12. Deepening sharpened R21 (the person sees what the recipe runs; approval cannot be written through peek or file edits) and added the forged-marker case to AE6, to carry out that same decision. Document review then narrowed R21's claim to peek's tools and file edits, added the check to R22, and qualified the Objective for MCP-backed recipes, all approved by Shawn on 2026-10-12. The Objective's wording was corrected to match Success Criteria. Planning questions moved into the Key Technical Decisions below.
 
 ---
 
@@ -193,7 +193,7 @@ flowchart TB
 - KTD5. **One Page schema and one validator, shared by every caller.** This serves R1, R2, R13 and R17.
   - **What `validatePage` returns.** The checked page, or a list of problems with JSON paths (`sections[2].block.type`). It is also the trust boundary for recipe output:
     - It caps sections, items and text lengths.
-    - It strips C0/C1 control characters, direction overrides and zero-width characters from every string. Markdown text keeps tabs and newlines.
+    - It strips C0/C1 control characters and direction overrides from every string, and keeps zero-width joiners, which emoji sequences and some scripts need. Markdown text keeps tabs and newlines.
     - It accepts `http(s)` hrefs and media URLs only when the host is not private (`isPrivateHost`, `plugins/peek/hooks/web.ts:131`).
     - It accepts absolute file hrefs only outside dot-folders, and never `.app`, `.command`, `.terminal` or `.workflow` files.
     - It applies the same link rule to every link inside markdown text.
@@ -403,7 +403,7 @@ flowchart LR
     - a file href to `/Users/x/.ssh/id_rsa`;
     - a file href to `/Applications/X.app`.
   - Markdown text containing `[x](file:///etc/passwd)` is rejected.
-  - A title containing ESC or U+202E is cleaned, and the page still validates.
+  - A title containing ESC or U+202E is cleaned, and the page still validates; an emoji sequence joined by U+200D is kept intact.
   - A `copy` Action with a newline, or over 500 characters, is rejected.
   - Items above the cap are rejected with the count, and ten Actions are rejected.
   - Recipe declarations:
