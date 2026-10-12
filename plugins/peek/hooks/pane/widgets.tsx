@@ -33,3 +33,28 @@ export function fitPicture(budget: PictureBudget, png: string | undefined): stri
   budget.used += png.length
   return png
 }
+
+export type IconSlot = {
+  isStarred: boolean
+  png?: string
+  icon: string
+  imageKey: string
+  buttonKey: string
+  autoFocus?: true
+  onPress: () => void
+  boxes?: { image?: string; button?: string }
+}
+
+const keyed = (key: string | undefined) => (key === undefined ? {} : { key })
+
+// Returns the image and the button as two siblings; `boxes` wraps each in a non-shrinking Box (keyed when given).
+export function ItemIcon(ctx: WidgetCtx, slot: IconSlot) {
+  const { Box, Button, Image } = ctx
+  const boxes = slot.boxes
+  const picture = slot.png && !slot.isStarred && Image && <Image key={slot.imageKey} source={{ png: slot.png }} columns={2} rows={1} alt={slot.icon} />
+  const button = <Button key={slot.buttonKey} label={slot.isStarred ? '\u{f51a}' : slot.png ? ' ' : slot.icon} plain autoFocus={slot.autoFocus} onPress={slot.onPress} />
+  return [
+    picture && (boxes ? <Box {...keyed(boxes.image)} flexShrink={0}>{picture}</Box> : picture),
+    boxes ? <Box {...keyed(boxes.button)} flexShrink={0}>{button}</Box> : button,
+  ]
+}

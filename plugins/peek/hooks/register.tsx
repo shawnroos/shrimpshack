@@ -48,7 +48,7 @@ import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './pa
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
 import { type ItemLook, type ItemState, remoteNaming } from './pane/look'
-import { HoverLayer, SectionRule, fitPicture } from './pane/widgets'
+import { HoverLayer, ItemIcon, SectionRule, fitPicture } from './pane/widgets'
 
 const C = BASE
 
@@ -2495,17 +2495,15 @@ export const register: Register = on => {
             HoverLayer(w, `hover-${prefix}-items-${i}-${layers++}`, { kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) })
           const icon = (look: ItemLook, n: number) => {
             const isStarred = starKeys.has(look.key)
-            const favicon = look.favicon && Image && !isStarred ? pixels.get(look.favicon) : undefined
-            return [
-              favicon && Image && (
-                <Box key={`${prefix}-fav-${i}-${n}`} flexShrink={0}>
-                  <Image key={`${prefix}-favicon-${i}-${n}`} source={{ png: favicon }} columns={2} rows={1} alt={iconFor(look.kind)} />
-                </Box>
-              ),
-              <Box key={`${prefix}-icon-${i}-${n}`} flexShrink={0}>
-                <Button key={`${prefix}-it-${i}-${n}`} label={isStarred ? '\u{f51a}' : favicon ? ' ' : iconFor(look.kind)} plain onPress={() => open(look)} />
-              </Box>,
-            ]
+            return ItemIcon(w, {
+              isStarred,
+              png: look.favicon && Image && !isStarred ? pixels.get(look.favicon) : undefined,
+              icon: iconFor(look.kind),
+              imageKey: `${prefix}-favicon-${i}-${n}`,
+              buttonKey: `${prefix}-it-${i}-${n}`,
+              onPress: () => open(look),
+              boxes: { image: `${prefix}-fav-${i}-${n}`, button: `${prefix}-icon-${i}-${n}` },
+            })
           }
           const itemCard = (look: ItemLook, n: number) => (
             <Box key={`${prefix}-card-${i}-${n}`} flexDirection="column" width={itemWidth} height={CARD_ROWS} paddingX={2} paddingY={1} backgroundColor={C.appBg} hover={{ backgroundColor: C.surface0 }}>
