@@ -3034,45 +3034,25 @@ export const register: Register = on => {
               const { where, age } = describe(one)
               const count = one.mentions > 1 ? `${one.mentions}× · ` : ''
               const meta = `${one.status ? `${one.status} · ` : ''}${where}${count}${age}`
-              const leftWidth = Math.max(4, textWidth - meta.length - 1)
-              const nameRoom = Math.max(8, Math.floor((leftWidth - 3) * 0.6))
-              return (
-                <Box
-                  key={`${prefix}-${i}-${j}`}
-                  height={1}
-                  flexDirection="row"
-                  justifyContent="space-between"
-                  width={textWidth}
-                  backgroundColor={isSelected ? C.surface0 : undefined}
-                  hover={{ backgroundColor: C.surface0 }}
-                >
-                  <Box flexDirection="row" width={leftWidth} height={1} overflow="hidden">
-                    {png && !isStarred && Image && (
-                      <Box flexShrink={0}>
-                        <Image key={`favicon-${index}`} source={{ png }} columns={2} rows={1} alt={iconFor(look.kind)} />
-                      </Box>
-                    )}
-                    <Box flexShrink={0}>
-                      <Button
-                        key={`item-${index}`}
-                        label={isStarred ? '\u{f51a}' : png ? ' ' : iconFor(look.kind)}
-                        plain
-                        autoFocus={isSelected ? true : undefined}
-                        onPress={() => void selectAndOpen($, index)}
-                      />
-                    </Box>
-                    <Box key={`name-${index}`} flexShrink={0}>
-                      <Text color={isSelected ? C.accent : C.text} bold={isSelected} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(look.name, nameRoom)}`}</Text>
-                    </Box>
-                    <Box flexShrink={1} flexGrow={1} overflow="hidden">
-                      <Text color={C.overlay0} wrap="truncate-middle">{look.where ? `  ${look.where}` : ''}</Text>
-                    </Box>
-                  </Box>
-                  <Box flexShrink={0} height={1}>
-                    <Text color={C.overlay0}>{meta}</Text>
-                  </Box>
-                </Box>
-              )
+              return ItemRow(w, look, {
+                key: `${prefix}-${i}-${j}`,
+                width: textWidth,
+                isSelected,
+                icon: {
+                  isStarred,
+                  png,
+                  icon: iconFor(look.kind),
+                  imageKey: `favicon-${index}`,
+                  buttonKey: `item-${index}`,
+                  autoFocus: isSelected ? true : undefined,
+                  onPress: () => void selectAndOpen($, index),
+                  boxes: {},
+                },
+                nameKey: `name-${index}`,
+                nameColor: isSelected ? C.accent : C.text,
+                meta,
+                metaColor: C.overlay0,
+              })
             })}
             {HoverLayer(w, `hover-${prefix}-${i}`, { kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
           </Box>
