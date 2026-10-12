@@ -1,39 +1,23 @@
 import type { ClientModule } from 'claude-code'
 
+import { hoverable, paletteOf } from './hover'
+import type { Hovered } from './hover'
 import { taskRows } from './measure'
-import { C as BASE, MUTED, mute } from './theme'
 
 type Item = { href: string; line: number; isDone: boolean; text: string; depth: number }
 type Props = { width: number; items: Item[]; muted?: boolean }
-type State = { hovered: number }
 
-const latest = new WeakMap<object, Props>()
-
-const TaskList: ClientModule<Props, State> = (props, surface) => {
+const TaskList: ClientModule<Props, Hovered> = (props, surface) => {
   const { Box, Text } = surface.elements
-  const C = props.muted ? MUTED : BASE
-  const tone = (color: string) => (props.muted ? mute(color) : color)
+  const { C } = paletteOf(props.muted)
   const rows = taskRows(props.items, props.width)
-  latest.set(surface, props)
-  if (surface.state === undefined) {
-    surface.setState({ hovered: -1 })
-    surface.onPointer(event => {
-      const now = latest.get(surface) ?? props
-      const row = taskRows(now.items, now.width)[event.y]
-      const item = row ? row.item : -1
-      if (event.type === 'leave') {
-        surface.setState({ hovered: -1 })
-        return
-      }
-      if (event.type === 'down' && event.button === 'left' && row) {
-        const target = now.items[row.item]
-        if (target) surface.post({ toggle: `${target.href}#task-${target.line}` })
-        return
-      }
-      if ((surface.state?.hovered ?? -1) !== item) surface.setState({ hovered: item })
-    })
-  }
-  const hovered = surface.state?.hovered ?? -1
+  const hovered = hoverable(props, surface, {
+    hit: (now, _x, y) => {
+      const row = taskRows(now.items, now.width)[y]
+      return row ? { hovered: row.item, target: now.items[row.item] } : null
+    },
+    click: (_now, target) => ({ toggle: `${target.href}#task-${target.line}` }),
+  })
 
   return (
     <Box flexDirection="column" width={props.width}>

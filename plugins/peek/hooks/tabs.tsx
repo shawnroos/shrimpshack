@@ -1,9 +1,10 @@
 import type { ClientModule } from 'claude-code'
 
+import type { Mode } from '../types'
 import { hoverable, paletteOf } from './hover'
 import type { Hovered } from './hover'
 
-type Tab = { id: string; label: string; isOn: boolean }
+type Tab = { id: Mode; label: string; isOn: boolean }
 type Props = { tabs: Tab[]; muted?: boolean }
 
 function tabAt(tabs: readonly Tab[], x: number): number {

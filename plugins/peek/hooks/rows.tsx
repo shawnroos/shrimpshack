@@ -1,35 +1,21 @@
 import type { ClientModule } from 'claude-code'
 
-import { C as BASE, MUTED, mute } from './theme'
+import { hoverable, paletteOf } from './hover'
+import type { Hovered } from './hover'
 
 type Row = { href: string; icon: string; color: string; name: string; folder: string; meta: string; isStarred?: boolean; canStar?: boolean }
 type Props = { width: number; rows: Row[]; selected?: number; muted?: boolean }
-type State = { hovered: number }
 
-const latest = new WeakMap<object, Props>()
-
-const Rows: ClientModule<Props, State> = (props, surface) => {
+const Rows: ClientModule<Props, Hovered> = (props, surface) => {
   const { Box, Text } = surface.elements
-  const C = props.muted ? MUTED : BASE
-  const tone = (color: string) => (props.muted ? mute(color) : color)
-  latest.set(surface, props)
-  if (surface.state === undefined) {
-    surface.setState({ hovered: -1 })
-    surface.onPointer(event => {
-      const now = latest.get(surface) ?? props
-      const row = now.rows[event.y]
-      if (event.type === 'leave' || !row) {
-        if ((surface.state?.hovered ?? -1) !== -1) surface.setState({ hovered: -1 })
-        return
-      }
-      if (event.type === 'down' && event.button === 'left') {
-        surface.post(event.x < 2 && row.canStar !== false ? { star: row.href } : { open: row.href })
-        return
-      }
-      if ((surface.state?.hovered ?? -1) !== event.y) surface.setState({ hovered: event.y })
-    })
-  }
-  const hovered = surface.state?.hovered ?? -1
+  const { C, tone } = paletteOf(props.muted)
+  const hovered = hoverable(props, surface, {
+    hit: (now, x, y) => {
+      const row = now.rows[y]
+      return row ? { hovered: y, target: { row, x } } : null
+    },
+    click: (_now, { row, x }) => (x < 2 && row.canStar !== false ? { star: row.href } : { open: row.href }),
+  })
 
   return (
     <Box flexDirection="column" width={props.width}>

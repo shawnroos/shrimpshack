@@ -1,5 +1,6 @@
-import type { ClientSurface, JsonValue } from 'claude-code'
+import type { ClientSurface } from 'claude-code'
 
+import type { PaneWire } from './pane/messages'
 import { C as BASE, MUTED, mute } from './theme'
 
 export type Hovered = { hovered: number }
@@ -15,7 +16,7 @@ const latest = new WeakMap<object, unknown>()
 export function hoverable<P, T>(
   props: P,
   surface: ClientSurface<Hovered>,
-  options: { hit: (props: P, x: number, y: number) => Hit<T> | null; click: (props: P, target: T) => JsonValue },
+  options: { hit: (props: P, x: number, y: number) => Hit<T> | null; click: (props: P, target: T) => PaneWire },
 ): number {
   latest.set(surface, props)
   if (surface.state === undefined) {

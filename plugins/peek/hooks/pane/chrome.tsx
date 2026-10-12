@@ -74,7 +74,7 @@ function Crumbs(ctx: DrawContext, fitted: readonly Crumb[]) {
   )
 }
 
-function TabStrip(ctx: DrawContext, key: string, tabs: { id: string; label: string; isOn: boolean }[]) {
+function TabStrip(ctx: DrawContext, key: string, tabs: { id: Mode; label: string; isOn: boolean }[]) {
   const { Box, Text, Client, C } = ctx
   const chip = (label: string, isOn: boolean) => (
     <Text color={isOn ? C.appBg : C.overlay0} backgroundColor={isOn ? C.accent : C.panelBg} bold={isOn}>

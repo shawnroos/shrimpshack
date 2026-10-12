@@ -19,7 +19,9 @@ export type WidgetCtx = {
 
 export type HoverItem = { href: string; isStarred?: boolean; inGroup?: string; key?: string } | { group: string; isStarred?: boolean }
 
-export type HoverProps = { kind: 'rows' | 'cards'; width: number; height: number; cardWidth?: number; cardHeight?: number; gap?: number; starX: number; starY: number; items: HoverItem[] }
+type HoverBase = { width: number; height: number; starX: number; starY: number; items: HoverItem[] }
+
+export type HoverProps = (HoverBase & { kind: 'rows' }) | (HoverBase & { kind: 'cards'; cardWidth: number; cardHeight: number; gap: number })
 
 export type PictureBudget = { used: number }
 

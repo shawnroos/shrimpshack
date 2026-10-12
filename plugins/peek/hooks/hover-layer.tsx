@@ -1,51 +1,44 @@
 import type { ClientModule } from 'claude-code'
 
+import { hoverable } from './hover'
+import type { Hovered } from './hover'
+import type { PaneWire } from './pane/messages'
+import type { HoverItem, HoverProps } from './pane/types'
 import { C } from './theme'
 
-type Item = { href: string; isStarred?: boolean; inGroup?: string; key?: string } | { group: string; isStarred?: boolean }
-type Props = { kind: 'rows' | 'cards'; width: number; height: number; items: Item[]; cardWidth?: number; cardHeight?: number; gap?: number; starX: number; starY: number }
-type State = { hovered: number }
+type Spot = { index: number; x: number; y: number }
 
-const latest = new WeakMap<object, Props>()
-
-function itemAt(props: Props, x: number, y: number): { index: number; x: number; y: number } | null {
+function itemAt(props: HoverProps, x: number, y: number): Spot | null {
   if (props.kind === 'rows') return y >= 0 && y < props.items.length ? { index: y, x, y: 0 } : null
-  const span = (props.cardWidth ?? 1) + (props.gap ?? 0)
+  const span = props.cardWidth + props.gap
   const index = Math.floor(x / span)
   const inside = x - index * span
-  const isInCard = inside < (props.cardWidth ?? 1) && y >= 0 && y < (props.cardHeight ?? 1)
+  const isInCard = inside < props.cardWidth && y >= 0 && y < props.cardHeight
   return isInCard && index < props.items.length ? { index, x: inside, y } : null
+}
+
+function message(props: HoverProps, { item, spot }: { item: HoverItem; spot: Spot }): PaneWire {
+  const isOnStar = spot.y === props.starY && spot.x >= props.starX && spot.x < props.starX + 2
+  if ('group' in item) return isOnStar ? { starGroup: item.group } : { openGroup: item.group }
+  if (isOnStar) return { star: item.href }
+  return item.inGroup ? { open: item.href, inGroup: item.inGroup, key: item.key ?? '' } : { open: item.href }
 }
 
 // Drawn over the item buttons: transparent except the hovered item's star, and the whole item is the pointer target.
 // Mount it as the last child of its parent: an absolute Box paints under every sibling after it, which hides the star.
-const HoverLayer: ClientModule<Props, State> = (props, surface) => {
+const HoverLayer: ClientModule<HoverProps, Hovered> = (props, surface) => {
   const { Box, Text } = surface.elements
-  latest.set(surface, props)
-  if (surface.state === undefined) {
-    surface.setState({ hovered: -1 })
-    surface.onPointer(event => {
-      const now = latest.get(surface) ?? props
-      const hit = itemAt(now, event.x, event.y)
-      if (event.type === 'leave' || !hit) {
-        if ((surface.state?.hovered ?? -1) !== -1) surface.setState({ hovered: -1 })
-        return
-      }
-      const item = now.items[hit.index]
-      if (event.type === 'down' && event.button === 'left' && item) {
-        const isOnStar = hit.y === now.starY && hit.x >= now.starX && hit.x < now.starX + 2
-        if ('group' in item) surface.post(isOnStar ? { starGroup: item.group } : { openGroup: item.group })
-        else if (isOnStar) surface.post({ star: item.href })
-        else surface.post(item.inGroup ? { open: item.href, inGroup: item.inGroup, key: item.key ?? '' } : { open: item.href })
-        return
-      }
-      if ((surface.state?.hovered ?? -1) !== hit.index) surface.setState({ hovered: hit.index })
-    })
-  }
-  const hovered = surface.state?.hovered ?? -1
+  const hovered = hoverable(props, surface, {
+    hit: (now, x, y) => {
+      const spot = itemAt(now, x, y)
+      if (!spot) return null
+      const item = now.items[spot.index]
+      return { hovered: spot.index, target: item && { item, spot } }
+    },
+    click: message,
+  })
   const item = props.items[hovered]
-  const span = (props.cardWidth ?? 0) + (props.gap ?? 0)
-  const left = props.kind === 'rows' ? props.starX : hovered * span + props.starX
+  const left = props.kind === 'rows' ? props.starX : hovered * (props.cardWidth + props.gap) + props.starX
   const top = props.kind === 'rows' ? hovered : props.starY
   return (
     <Box width={props.width} height={props.height}>
