@@ -14,7 +14,7 @@ import { linkify, pathCandidates } from './markdown'
 import { fileHref, parseHref, resolvePath } from './paths'
 import type { Direction, DrawContext, NavItem, PaneActions, Screen } from './pane/types'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP, frame as drawFrame, geometryOf } from './pane/chrome'
-import { MODES } from './pane/actions'
+import { parsePaneMessage } from './pane/messages'
 import { menuLists } from './pane/menu'
 import { EMPTY_LAYOUT } from './pane/layout'
 import type { Layout } from './pane/layout'
@@ -29,7 +29,6 @@ import { createGroupStore } from './groups-store'
 import { loadFile, loadUrl } from './loaders'
 import { pixels, toPng } from './images'
 import { WHEEL_SCROLL_PX, leaveLive, liveSession, onLiveInput, scrollLive } from './live-pane'
-import type { LiveInputEvent } from './live-pane'
 import { UiGallery } from './ui-gallery'
 import { groupHome, groupPage, openCardItem, openGroupHref, openGroupPage, setStar, starInGroupsTab, toggleGroupStar } from './groups-session'
 import { forgetPath, guess, noteCapture, pathExists, remember, toHref } from './entries'
@@ -417,50 +416,40 @@ export const register: Register = on => {
   })
 
   on('ui.message', async ($, e, next) => {
-    const input = e.data as { liveInput?: unknown } | null
-    if (e.requestId === PANE && input && Array.isArray(input.liveInput)) {
-      await onLiveInput(navIoOf($), input.liveInput as LiveInputEvent[]).catch(() => undefined)
-      return { props: { width: liveSession.geom?.columns ?? 1, height: liveSession.geom?.rows ?? 1, acked: liveSession.lastInputSeq } }
+    const message = e.requestId === PANE ? parsePaneMessage(e.data) : null
+    if (!message) return next(e)
+    const io = navIoOf($)
+    switch (message.t) {
+      case 'liveInput':
+        await onLiveInput(io, message.events).catch(() => undefined)
+        return { props: { width: liveSession.geom?.columns ?? 1, height: liveSession.geom?.rows ?? 1, acked: liveSession.lastInputSeq } }
+      case 'star':
+        await setStar(io, message.href).catch(() => undefined)
+        return {}
+      case 'toggle':
+        await pressLink(io, message.href).catch(() => undefined)
+        return {}
+      case 'mode':
+        await switchMode(io, message.mode).catch(() => undefined)
+        void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
+        return {}
+      case 'openGroup':
+        await openGroupPage(io, message.id).catch(() => undefined)
+        return {}
+      case 'starGroup': {
+        const isGroupsTab = (await read($, mode)) === 'groups' && !(await read($, openGroup))
+        await (isGroupsTab ? starInGroupsTab(io, message.id) : toggleGroupStar(io, message.id)).catch(() => undefined)
+        return {}
+      }
+      case 'openInGroup':
+        await openCardItem(io, message.group, message.key, message.href).catch(() => undefined)
+        return {}
+      case 'open': {
+        const at = paneLayout.nav.findIndex(one => one.groupItem && one.href === message.href)
+        await (at >= 0 ? selectAndOpen($, at) : show(io, message.href)).catch(() => undefined)
+        return {}
+      }
     }
-    const starring = e.data as { star?: unknown } | null
-    if (e.requestId === PANE && starring && typeof starring.star === 'string') {
-      await setStar(navIoOf($), starring.star).catch(() => undefined)
-      return {}
-    }
-    const data = e.data as { toggle?: unknown } | null
-    if (e.requestId === PANE && data && typeof data.toggle === 'string') {
-      await pressLink(navIoOf($), data.toggle).catch(() => undefined)
-      return {}
-    }
-    const switching = e.data as { mode?: unknown } | null
-    const target = MODES.find(one => one.id === switching?.mode)?.id
-    if (e.requestId === PANE && target) {
-      await switchMode(navIoOf($), target).catch(() => undefined)
-      void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
-      return {}
-    }
-    const group = e.data as { openGroup?: unknown; starGroup?: unknown } | null
-    if (e.requestId === PANE && group && typeof group.openGroup === 'string') {
-      await openGroupPage(navIoOf($), group.openGroup).catch(() => undefined)
-      return {}
-    }
-    if (e.requestId === PANE && group && typeof group.starGroup === 'string') {
-      const isGroupsTab = (await read($, mode)) === 'groups' && !(await read($, openGroup))
-      await (isGroupsTab ? starInGroupsTab(navIoOf($), group.starGroup) : toggleGroupStar(navIoOf($), group.starGroup)).catch(() => undefined)
-      return {}
-    }
-    const opening = e.data as { open?: unknown; inGroup?: unknown; key?: unknown } | null
-    if (e.requestId === PANE && opening && typeof opening.open === 'string' && typeof opening.inGroup === 'string') {
-      await openCardItem(navIoOf($), opening.inGroup, String(opening.key ?? ''), opening.open).catch(() => undefined)
-      return {}
-    }
-    if (e.requestId === PANE && opening && typeof opening.open === 'string') {
-      const href = opening.open
-      const at = paneLayout.nav.findIndex(one => one.groupItem && one.href === href)
-      await (at >= 0 ? selectAndOpen($, at) : show(navIoOf($), href)).catch(() => undefined)
-      return {}
-    }
-    return next(e)
   })
 
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
