@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, GroupOp, GroupOutcome, Loaded, Mention, Mode, RemoteRecord, View } from '../types'
+import type { Group, GroupItem, GroupOp, GroupOutcome, Loaded, Mention, Mode, RemoteRecord, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
 import { C as BASE, MUTED, ICON, META_ICON, colorFor, iconFor, mute, ruleParts } from './theme'
 import { capturedLinearContext, record } from './capture'
@@ -136,6 +136,11 @@ function stepFrom(at: number, direction: Direction): number {
 }
 
 async function moveSelection($: EngineInterface, direction: Direction) {
+  const rows = await groupPageRows($)
+  if (rows) {
+    if (direction === 'up' || direction === 'down') await selectGroupRow($, rows, rows.selected + (direction === 'down' ? 1 : -1))
+    return
+  }
   let landed = 0
   await update($, cursorAtom, at => {
     landed = stepFrom(Math.max(0, Math.min(navOrder.length - 1, at)), direction)
@@ -529,10 +534,19 @@ async function openFromPage($: EngineInterface, href: string) {
     backStack.push({ view: current, key: topBlockKey })
     if (backStack.length > 20) backStack.shift()
   }
-  await show($, href)
+  await show($, href, true)
 }
 
+// b walks the page history first, so a link followed inside a group item comes back before the group does.
 async function goBack($: EngineInterface) {
+  if (groupBack && backStack.length <= groupBack.depth) {
+    const target = groupBack
+    groupBack = null
+    await update($, openGroup, opened => (opened?.id === target.id ? opened : { id: target.id, item: null }))
+    await update($, mode, () => 'groups')
+    await update($, page, () => 0)
+    return
+  }
   const last = backStack.pop()
   if (!last) return
   await update($, view, () => last.view)
@@ -557,11 +571,14 @@ async function noteTitle($: EngineInterface, entry: CacheEntry) {
   await $.store.set('titles', titles).catch(() => undefined)
 }
 
+function startTicking($: EngineInterface) {
+  if (isTicking) return
+  isTicking = true
+  $.clock.every(15_000, () => void tickRemote($).catch(() => undefined))
+}
+
 async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Promise<View> {
-  if (!isTicking) {
-    isTicking = true
-    $.clock.every(15_000, () => void tickRemote($).catch(() => undefined))
-  }
+  startTicking($)
   const known = cached(ref.address)
   if (known?.state === 'frozen') return viewOf($, ref, known)
   const entry = await refreshItem(ref.address, remoteLoader($, canReplay), await $.clock.now())
@@ -620,7 +637,8 @@ function remoteRef(href: string, context: RefContext = {}): Ref | null {
   return ref.kind === 'web' && remoteFileOf(ref.address) ? null : ref
 }
 
-async function show($: EngineInterface, raw: string) {
+async function show($: EngineInterface, raw: string, isFromGroupChain = false) {
+  if (!isFromGroupChain) groupBack = null
   const generation = ++showGeneration
   const ref = remoteRef(raw)
   const href = ref?.address ?? raw
@@ -904,6 +922,87 @@ async function toggleGroupStar($: EngineInterface, id: string) {
   $.ui.invalidate('ui.render')
 }
 
+type GroupRows = { id: string; title: string; keys: string[]; hrefs: string[]; selected: number }
+
+// Drawing may not write state, so the page keeps what its handlers need here: the rows as last drawn, the
+// back step to the group, and which deleted group was already reported.
+let groupRows: GroupRows | null = null
+let groupBack: { id: string; title: string; depth: number } | null = null
+let goneGroupNotice = ''
+let openGroupRemotes: string[] = []
+
+async function groupPageRows($: EngineInterface): Promise<GroupRows | null> {
+  if (!groupRows || (await read($, mode)) !== 'groups') return null
+  return (await read($, openGroup))?.id === groupRows.id ? groupRows : null
+}
+
+async function selectGroupRow($: EngineInterface, rows: GroupRows, wanted: number, isFocusing = true) {
+  const index = Math.max(0, Math.min(rows.keys.length - 1, wanted))
+  const key = rows.keys[index]
+  if (key === undefined) return
+  rows.selected = index
+  await update($, openGroup, opened => (opened?.id === rows.id ? { ...opened, item: key } : opened))
+  await update($, cursorAtom, () => index)
+  if (!isFocusing) return
+  await $.ui.scroll({ in: PANE, to: { key: `group-row-${index}` }, block: 'center' }).catch(() => undefined)
+  await $.ui.focus({ requestId: PANE, key: `item-${index}` }).catch(() => undefined)
+}
+
+async function openGroupItem($: EngineInterface, rows: GroupRows, index: number) {
+  await selectGroupRow($, rows, index, false)
+  const href = rows.hrefs[rows.selected]
+  const file = href ? parseHref(href) : null
+  if (!href || (file && !(await $.fs.exists(file.path).catch(() => false)))) {
+    $.ui.toast(`That file is gone: ${file?.path ?? rows.keys[rows.selected] ?? ''}`)
+    return
+  }
+  groupBack = { id: rows.id, title: rows.title, depth: backStack.length }
+  await show($, href, true)
+}
+
+type GroupLook = { key: string; href: string; name: string; kind: string; where: string; state: ItemState; favicon?: string }
+
+async function groupItemLook($: EngineInterface, item: GroupItem, worktreeRoot: string | undefined, known: ReadonlyMap<string, TitleEntry>): Promise<GroupLook> {
+  const key = itemKey(item.ref)
+  const state = await itemState($, item.ref, worktreeRoot)
+  const file = refPath(item.ref, worktreeRoot)
+  if (file) {
+    const name = file.path.split('/').pop() || file.path
+    const stat = state === 'ok' ? await $.fs.stat(file.path).catch(() => null) : null
+    const folder = file.path.slice(0, Math.max(0, file.path.length - name.length - 1))
+    const where = worktreeRoot && folder.startsWith(worktreeRoot) ? folder.slice(worktreeRoot.length + 1) : folder
+    return { key, href: fileHref(file.path, file.line), name: item.label ?? name, kind: stat?.kind === 'dir' ? 'folder' : kindOf(file.path), where, state }
+  }
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(item.ref)) return { key, href: '', name: item.label ?? item.ref, kind: kindOf(item.ref), where: '', state }
+  const ref = remoteRef(item.ref)
+  const address = ref?.address ?? item.ref
+  const title = known.get(key)
+  const fallback = ref?.key ?? (ref?.number ? `#${ref.number}` : address.replace(/^https?:\/\/(www\.)?/, ''))
+  let host = ''
+  try {
+    host = new URL(address).hostname
+  } catch {}
+  return {
+    key,
+    href: address,
+    name: title?.title ?? item.label ?? fallback,
+    kind: title?.kind ?? ref?.kind ?? 'web',
+    where: ref?.owner ? `${ref.owner}/${ref.repo}` : title?.trail?.join(' · ') || host,
+    state,
+    favicon: (await remotePicture($, title?.favicon))?.file,
+  }
+}
+
+function loadGroupRemote($: EngineInterface, address: string) {
+  startTicking($)
+  void $.clock
+    .now()
+    .then(now => refreshItem(address, remoteLoader($, false), now))
+    .then(entry => noteTitle($, entry))
+    .then(() => $.ui.invalidate('ui.render'))
+    .catch(() => undefined)
+}
+
 function groupsIoOf($: EngineInterface): GroupsIo {
   return {
     read: path => $.fs.read(path),
@@ -960,7 +1059,10 @@ async function itemState($: EngineInterface, ref: string, worktreeRoot?: string)
     found => (found ? 'ok' : 'missing'),
     () => 'unavailable',
   )
-  return cached(ref)?.state === 'failed' ? 'unavailable' : 'ok'
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(ref)) return 'missing'
+  const entry = cached(ref)
+  if (entry?.failure === 'gone') return 'missing'
+  return entry?.state === 'failed' || entry?.state === 'stale-since' ? 'unavailable' : 'ok'
 }
 
 async function groupJson($: EngineInterface, group: Group, worktreeRoot?: string) {
@@ -1271,7 +1373,7 @@ async function tickRemote($: EngineInterface) {
   if ((await $.clock.now()) - lastActivity >= IDLE_MS) return
   const current = await read($, view)
   const onScreen = current?.remote && (await read($, mode)) === 'view' ? current.href : undefined
-  const hrefs = [...(await read($, mentions)).map(one => one.href), ...(await read($, stars))]
+  const hrefs = [...(await read($, mentions)).map(one => one.href), ...(await read($, stars)), ...((await read($, openGroup)) ? openGroupRemotes : [])]
   const background = [...new Set(hrefs)].filter(href => remoteRef(href) && isTimed(href))
   const changed = await tick({ onScreen, background, now: await $.clock.now(), lastActivity, load: remoteLoader($, true) })
   for (const address of changed) {
@@ -1530,6 +1632,8 @@ export const register: Register = on => {
     const picked = /^item-(\d+)$/.exec(e.element ?? '')
     if (picked && e.origin.kind === 'person') {
       const index = Number(picked[1])
+      const rows = await groupPageRows($).catch(() => null)
+      if (rows) await selectGroupRow($, rows, index, false).catch(() => undefined)
       await update($, cursorAtom, () => index).catch(() => undefined)
       const key = navOrder[index]?.key
       if (key) void $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
@@ -1805,7 +1909,9 @@ export const register: Register = on => {
     }
     const opening = e.data as { open?: unknown } | null
     if (e.requestId === PANE && opening && typeof opening.open === 'string') {
-      await show($, opening.open).catch(() => undefined)
+      const rows = await groupPageRows($).catch(() => null)
+      const at = rows ? rows.hrefs.indexOf(opening.open) : -1
+      await (rows && at >= 0 ? openGroupItem($, rows, at) : show($, opening.open)).catch(() => undefined)
       return {}
     }
     return next(e)
@@ -2192,27 +2298,178 @@ export const register: Register = on => {
 
     if (chosen === 'groups') {
       const home = await groupHome($)
-      const groups = (home ? await listGroups(groupsIoOf($), home.place) : []).sort((a, b) => Number(b.starred) - Number(a.starred))
-      const starredCount = groups.filter(one => one.starred).length
+      const io = groupsIoOf($)
       const opened = await read($, openGroup)
-      const shown = opened ? groups.find(one => one.id === opened.id) : undefined
-      if (opened && !shown) void update($, openGroup, () => null)
+      const shown = opened && home ? await readGroup(io, home.place, opened.id) : null
+      if (opened && !shown && goneGroupNotice !== opened.id) {
+        goneGroupNotice = opened.id
+        $.ui.toast('That group was deleted.')
+      }
       const project = (home?.worktreeRoot ?? cwd).split('/').filter(Boolean).pop() ?? 'project'
-      const crumb = crumbs([{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }])
-      if (shown) {
-        navOrder = []
+      if (opened && shown) {
+        goneGroupNotice = ''
+        const worktreeRoot = home?.worktreeRoot
+        const known = new Map(Object.entries(titles).map(([address, entry]) => [itemKey(address), entry]))
+        const sectionIds = new Set(shown.sections.map(one => one.id))
+        const blocks = [
+          { title: '', items: shown.items.filter(one => !one.section || !sectionIds.has(one.section)) },
+          ...shown.sections.map(one => ({ title: one.title, items: shown.items.filter(item => item.section === one.id) })),
+        ]
+        const looks = await Promise.all(blocks.flatMap(block => block.items).map(one => groupItemLook($, one, worktreeRoot, known)))
+        const remotes = looks.filter(one => one.href && !parseHref(one.href) && remoteRef(one.href))
+        for (const one of remotes) if (!cached(one.href)) loadGroupRemote($, one.href)
+        openGroupRemotes = remotes.map(one => one.href).filter(isTimed)
+        const keys = looks.map(one => one.key)
+        const found = opened.item === null ? 0 : keys.indexOf(opened.item)
+        const previous = groupRows?.id === shown.id ? groupRows.selected : 0
+        const selected = Math.max(0, Math.min(keys.length - 1, found >= 0 ? found : previous))
+        const rows: GroupRows = { id: shown.id, title: shown.title, keys, hrefs: looks.map(one => one.href), selected }
+        groupRows = rows
+        navOrder = keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 }))
         blockStarts = []
-        estimatedRows = 1
+        const starList = await read($, stars)
+        const starKeys = new Set(starList.map(one => itemKey(remoteRef(one)?.address ?? one)))
+        const missing = looks.filter(one => one.state === 'missing').length
+        const sectionRule = (label: string, right: string) => (
+          <Text wrap="truncate-end">
+            <Text color={C.accent} bold>{`${label} `}</Text>
+            <Text color={C.surface1}>{'─'.repeat(Math.max(1, textWidth - label.length - right.length - 2))}</Text>
+            <Text color={C.overlay0}>{right ? ` ${right}` : ''}</Text>
+          </Text>
+        )
+        const row = (one: GroupLook, index: number) => {
+          const isSelected = index === selected
+          const isStarred = starKeys.has(one.key)
+          const favicon = one.favicon && Image ? pixels.get(one.favicon) : undefined
+          const meta = one.state === 'ok' ? '' : one.state
+          const leftWidth = Math.max(4, textWidth - meta.length - 1)
+          const nameRoom = Math.max(8, Math.floor((leftWidth - 3) * 0.6))
+          return (
+            <Box
+              key={`group-row-${index}`}
+              height={1}
+              flexDirection="row"
+              justifyContent="space-between"
+              width={textWidth}
+              backgroundColor={isSelected ? C.surface0 : undefined}
+              hover={{ backgroundColor: C.surface0 }}
+            >
+              <Box flexDirection="row" width={leftWidth} height={1} overflow="hidden">
+                {favicon && !isStarred && Image && (
+                  <Box flexShrink={0}>
+                    <Image key={`favicon-${index}`} source={{ png: favicon }} columns={2} rows={1} alt={iconFor(one.kind)} />
+                  </Box>
+                )}
+                <Box flexShrink={0}>
+                  <Button
+                    key={`item-${index}`}
+                    label={isStarred ? '\u{f51a}' : favicon ? ' ' : iconFor(one.kind)}
+                    plain
+                    autoFocus={isSelected ? true : undefined}
+                    onPress={() => void openGroupItem($, rows, index)}
+                  />
+                </Box>
+                <Box key={`group-item-${index}`} flexShrink={0}>
+                  <Text color={one.state === 'missing' ? C.overlay0 : isSelected ? C.accent : C.text} bold={isSelected} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(one.name, nameRoom)}`}</Text>
+                </Box>
+                <Box flexShrink={1} flexGrow={1} overflow="hidden">
+                  <Text color={C.overlay0} wrap="truncate-middle">{one.where ? `  ${one.where}` : ''}</Text>
+                </Box>
+              </Box>
+              <Box key={`group-meta-${index}`} flexShrink={0} height={1}>
+                <Text color={one.state === 'missing' ? C.red : C.overlay1}>{meta}</Text>
+              </Box>
+            </Box>
+          )
+        }
+        let next = 0
+        const drawn = blocks.map((block, b) => {
+          const first = next
+          next += block.items.length
+          const blockLooks = looks.slice(first, next)
+          const list = blockLooks.length > 0 && (
+            <Box key={`group-block-${b}`} flexDirection="column" width={textWidth}>
+              {Client && (
+                <Box position="absolute" top={0} left={0} width={textWidth} height={blockLooks.length}>
+                  <Client
+                    key={`hover-group-${b}`}
+                    module="./hover-layer.tsx"
+                    props={{ kind: 'rows', width: textWidth, height: blockLooks.length, starX: 0, starY: 0, items: blockLooks.map(one => ({ href: one.href, isStarred: starKeys.has(one.key) })) }}
+                    width={textWidth}
+                    height={blockLooks.length}
+                  />
+                </Box>
+              )}
+              {blockLooks.map((one, j) => row(one, first + j))}
+            </Box>
+          )
+          if (b === 0) return list ? <Box key="group-top" flexDirection="column" width={textWidth} marginBottom={1}>{list}</Box> : null
+          return (
+            <Box key={`group-part-${b}`} flexDirection="column" width={textWidth} marginBottom={1}>
+              <Box key={`group-section-${b - 1}`}>{sectionRule(block.title.toUpperCase(), `${block.items.length}`)}</Box>
+              {list || (
+                <Box key={`group-empty-${b - 1}`}>
+                  <Text color={C.overlay0}>empty</Text>
+                </Box>
+              )}
+            </Box>
+          )
+        })
+        estimatedRows = Math.max(1, looks.length + blocks.length * 2 + 3)
         const content = (
           <Box flexDirection="column" width={textWidth}>
             <Box key="group-page-title">
               <Text color={C.accent} bold>{`${shown.starred ? '\u{f51a}' : ICON.groups} ${shown.title}`}</Text>
             </Box>
             {shown.description ? <Text color={C.subtext0}>{shown.description}</Text> : null}
+            <Box height={1} />
+            {shown.items.length === 0 && (
+              <Box key="group-no-items" marginBottom={1}>
+                <Text color={C.overlay0}>No items</Text>
+              </Box>
+            )}
+            {drawn}
           </Box>
         )
-        return frame(crumb, content, `${plural(shown.items.length, 'item')} · ${plural(shown.sections.length, 'section')}`, [...modeKeys, closeKey], C.appBg)
+        const crumb = crumbs([
+          { label: `${ICON.groups} ${project}`, fg: C.overlay1, bg: C.surface0, canShrink: true },
+          { label: `${shown.starred ? '\u{f51a}' : ICON.groups} ${shown.title}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true },
+        ])
+        return frame(
+          crumb,
+          content,
+          `${shown.title} · ${plural(looks.length, 'item')} · ${missing} missing`,
+          [
+            ...modeKeys,
+            { key: 'next', label: 'Down', hotkey: 'j', onPress: () => void moveSelection($, 'down') },
+            { key: 'prev', label: 'Up', hotkey: 'k', onPress: () => void moveSelection($, 'up') },
+            {
+              key: 'open-selected',
+              label: '⏎ Open',
+              hotkey: 'o',
+              menu: 'Open the selected item',
+              onPress: () => void groupPageRows($).then(now => (now ? openGroupItem($, now, now.selected) : undefined)),
+            },
+            {
+              key: 'star-selected',
+              label: 'Star',
+              hotkey: 'f',
+              menu: 'Star or unstar the selected item',
+              onPress: () => void groupPageRows($).then(now => {
+                const href = now?.hrefs[now.selected]
+                return href ? setStar($, href).then(() => $.ui.invalidate('ui.render')) : undefined
+              }),
+            },
+            closeKey,
+          ],
+          C.appBg,
+        )
       }
+      groupRows = null
+      openGroupRemotes = []
+      const groups = (home ? await listGroups(io, home.place) : []).sort((a, b) => Number(b.starred) - Number(a.starred))
+      const starredCount = groups.filter(one => one.starred).length
+      const crumb = crumbs([{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }])
       const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
       const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
       const selected = await read($, cursorAtom)
@@ -3320,7 +3577,9 @@ export const register: Register = on => {
           { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar($, current.href) },
           { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally($, current) },
           ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh($, current.href) }] : []),
-          ...(liveFrame || backStack.length ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : 'Back to the previous page', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }] : []),
+          ...(liveFrame || backStack.length || groupBack
+            ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : groupBack && backStack.length <= groupBack.depth ? `Back to ${groupBack.title}` : 'Back to the previous page', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }]
+            : []),
           {
             key: 'copy',
             label: remote ? 'Copy link' : 'Copy path',

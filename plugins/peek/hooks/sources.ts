@@ -50,6 +50,8 @@ export function failureText(kind: FailureKind): { title: string; hint: string } 
       return { title: 'Linear refused the API key', hint: 'Create a new key in Linear settings and update LINEAR_API_KEY' }
     case 'not-found-or-no-access':
       return { title: 'Not found, or you have no access', hint: 'Check the link, or open it in the browser' }
+    case 'gone':
+      return { title: 'Not found: it was deleted or moved', hint: 'Check the link, or open it in the browser' }
     case 'rate-limited':
       return { title: 'Rate limited', hint: 'Wait a minute, then refresh' }
     case 'offline':
@@ -113,7 +115,8 @@ export async function tierFor(io: SourceIo, kind: RemoteKind): Promise<{ ok: tru
 function ghFailure(stderr: string): FailureKind {
   if (/rate limit|secondary rate|HTTP 429/i.test(stderr)) return 'rate-limited'
   if (/gh auth login|not logged in|authentication|HTTP 401|bad credentials/i.test(stderr)) return 'cli-unauthed'
-  if (/Could not resolve to a|HTTP 404|Not Found|HTTP 403|no access|permission/i.test(stderr)) return 'not-found-or-no-access'
+  if (/HTTP 403|no access|permission/i.test(stderr)) return 'not-found-or-no-access'
+  if (/Could not resolve to a|HTTP 404|HTTP 410|Not Found/i.test(stderr)) return 'gone'
   if (/dial tcp|could not connect|connection refused|timeout|timed out|no such host|network is unreachable|error connecting/i.test(stderr)) {
     return 'offline'
   }
@@ -180,9 +183,8 @@ function graphqlFailure(error: unknown, status: number): FailureKind | 'retry' {
   const tags = [code, type]
   if (tags.includes('RATELIMITED')) return 'retry'
   if (tags.includes('AUTHENTICATION_ERROR')) return 'key-refused'
-  if (tags.some(tag => ['FORBIDDEN', 'NOT_FOUND', 'INPUT_ERROR', 'INVALID_INPUT'].includes(tag)) || /entity not found/i.test(message)) {
-    return 'not-found-or-no-access'
-  }
+  if (tags.includes('NOT_FOUND') || /entity not found/i.test(message)) return 'gone'
+  if (tags.some(tag => ['FORBIDDEN', 'INPUT_ERROR', 'INVALID_INPUT'].includes(tag))) return 'not-found-or-no-access'
   if (tags.some(tag => tag.startsWith('GRAPHQL_') || tag === 'BAD_USER_INPUT') || status === 400) return 'query-bug'
   if (status === 401) return 'key-refused'
   if (status === 403) return 'not-found-or-no-access'
@@ -305,7 +307,8 @@ export function httpDetail(status: number, url: string): string {
 
 export function httpFailure(status: number): FailureKind {
   if (status === 429) return 'rate-limited'
-  if (status === 401 || status === 403 || status === 404 || status === 410) return 'not-found-or-no-access'
+  if (status === 404 || status === 410) return 'gone'
+  if (status === 401 || status === 403) return 'not-found-or-no-access'
   if (status === 400) return 'query-bug'
   return 'offline'
 }

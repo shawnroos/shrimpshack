@@ -12,6 +12,7 @@ export type FailureKind =
   | 'key-missing'
   | 'key-refused'
   | 'not-found-or-no-access'
+  | 'gone'
   | 'rate-limited'
   | 'offline'
   | 'query-bug'

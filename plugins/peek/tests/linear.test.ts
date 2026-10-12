@@ -169,9 +169,9 @@ describe('Linear issues', () => {
     expect(rec.comments?.total).toBe(120)
   })
 
-  test('an ID Linear cannot find is not-found-or-no-access', async () => {
+  test('an ID Linear cannot find is gone', async () => {
     const { io } = world(() => json(200, { data: null, errors: [{ message: 'Entity not found: Issue', extensions: { code: 'INPUT_ERROR' } }] }))
-    expect(await loadLinear(io, ref('https://linear.app/other/issue/ZZQ-9'), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access' })
+    expect(await loadLinear(io, ref('https://linear.app/other/issue/ZZQ-9'), NOW)).toEqual({ ok: false, failure: 'gone' })
   })
 
   test('an issue the key resolves in a different workspace is not-found-or-no-access', async () => {

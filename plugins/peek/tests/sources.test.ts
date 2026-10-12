@@ -12,6 +12,7 @@ const ALL_KINDS: FailureKind[] = [
   'key-missing',
   'key-refused',
   'not-found-or-no-access',
+  'gone',
   'rate-limited',
   'offline',
   'query-bug',
@@ -178,9 +179,11 @@ describe('Linear failures', () => {
     expect(await seen(linearQuery($, ISSUE))).toEqual({ ok: false, failure: 'query-bug' })
   })
 
-  test('entity not found is not-found-or-no-access', async () => {
+  test('entity not found is gone; a forbidden entity is not-found-or-no-access', async () => {
     const { $ } = keyed({ fetch: () => answer(200, { errors: [{ message: 'Entity not found: Issue', extensions: { code: 'INPUT_ERROR' } }] }) })
-    expect(await seen(linearQuery($, ISSUE))).toEqual({ ok: false, failure: 'not-found-or-no-access' })
+    expect(await seen(linearQuery($, ISSUE))).toEqual({ ok: false, failure: 'gone' })
+    const forbidden = keyed({ fetch: () => answer(200, { errors: [{ message: 'You cannot access this team', extensions: { code: 'FORBIDDEN' } }] }) })
+    expect(await seen(linearQuery(forbidden.$, ISSUE))).toEqual({ ok: false, failure: 'not-found-or-no-access' })
   })
 
   test('a fetch that throws is offline', async () => {
@@ -288,7 +291,9 @@ describe('probe and gh', () => {
 
   test('gh stderr maps to a kind and never travels upward', async () => {
     const cases: [string, FailureKind][] = [
-      ['GraphQL: Could not resolve to a PullRequest with the number of 9.', 'not-found-or-no-access'],
+      ['GraphQL: Could not resolve to a PullRequest with the number of 9.', 'gone'],
+      ['gh: Not Found (HTTP 404)', 'gone'],
+      ['gh: Resource not accessible by integration (HTTP 403)', 'not-found-or-no-access'],
       ['HTTP 403: API rate limit exceeded for user', 'rate-limited'],
       ['To get started with GitHub CLI, please run:  gh auth login', 'cli-unauthed'],
       ['dial tcp: lookup api.github.com: no such host', 'offline'],
@@ -305,9 +310,13 @@ describe('probe and gh', () => {
 })
 
 describe('httpText', () => {
-  test('a 404 page is not-found-or-no-access, a dead host offline, a non-web URL query-bug', async () => {
+  test('a 404 or 410 page is gone, a 403 not-found-or-no-access, a dead host offline, a non-web URL query-bug', async () => {
     const missing = keyed({ tools: ['gh'], fetch: () => answer(404, 'gone') })
-    expect(await seen(httpText(missing.$, 'https://example.com/x'))).toEqual({ ok: false, failure: 'not-found-or-no-access', detail: 'HTTP 404 Not Found from example.com' })
+    expect(await seen(httpText(missing.$, 'https://example.com/x'))).toEqual({ ok: false, failure: 'gone', detail: 'HTTP 404 Not Found from example.com' })
+    const removed = keyed({ tools: ['gh'], fetch: () => answer(410, 'removed') })
+    expect(await seen(httpText(removed.$, 'https://example.com/y'))).toEqual({ ok: false, failure: 'gone', detail: 'HTTP 410 Gone from example.com' })
+    const refused = keyed({ tools: ['gh'], fetch: () => answer(403, 'no') })
+    expect((await seen(httpText(refused.$, 'https://example.com/z'))) as unknown).toMatchObject({ ok: false, failure: 'not-found-or-no-access' })
     const dead = keyed({ tools: ['gh'], fetch: () => new Error('fetch failed: getaddrinfo ENOTFOUND') })
     expect(await seen(httpText(dead.$, 'https://nowhere.invalid/'))).toEqual({ ok: false, failure: 'offline' })
     expect(await seen(httpText(dead.$, 'file:///etc/passwd'))).toEqual({ ok: false, failure: 'query-bug' })

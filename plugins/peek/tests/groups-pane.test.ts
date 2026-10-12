@@ -1,6 +1,8 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { groupsDir } from '../hooks/groups'
+import { resetRefresh } from '../hooks/refresh'
+import { pullView } from './fixtures/github/items'
 
 const HOME = '/home'
 const PR = 'https://github.com/acme/widgets/pull/42'
@@ -18,9 +20,14 @@ type World = {
   toasts: string[]
   isMvBroken: boolean
   onLockBusy?: (lock: string) => void
+  onRun?: (argv: string[]) => Promise<RunAnswer | undefined> | RunAnswer | undefined
+  onFetch?: (url: string) => { status: number; text?: string } | Error | undefined
 }
 
-function groupsWorld(on: On, files: Record<string, string> = {}): World {
+type RunAnswer = { exitCode: number; stdout?: string; stderr?: string }
+
+function groupsWorld(on: On, files: Record<string, string> = {}, options: { isClockMocked?: boolean } = {}): World {
+  resetRefresh()
   const w: World = {
     files: { '/repo/docs/plan.md': '# Plan\n', '/repo/notes/todo.md': 'todo\n', '/home/notes.md': 'mine\n', ...files },
     dirs: new Map(),
@@ -38,11 +45,13 @@ function groupsWorld(on: On, files: Record<string, string> = {}): World {
   on('session.cwd', () => ({ value: w.root }))
   on('session.root', () => ({ value: w.root }))
   on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? HOME : undefined }))
-  on('clock.now', () => ({ value: w.now }))
-  on('clock.sleep', (_$, e) => {
-    w.now += (e as { ms?: number }).ms ?? 0
-    return { value: undefined }
-  })
+  if (!options.isClockMocked) {
+    on('clock.now', () => ({ value: w.now }))
+    on('clock.sleep', (_$, e) => {
+      w.now += (e as { ms?: number }).ms ?? 0
+      return { value: undefined }
+    })
+  }
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   on('ui.toast', (_$, e) => {
     w.toasts.push(e.text)
@@ -52,10 +61,16 @@ function groupsWorld(on: On, files: Record<string, string> = {}): World {
     w.invalidated++
     return { value: undefined }
   })
-  on('http.fetch', () => ({ value: { status: 404, ok: false, headers: {}, text: '' } }))
-  on('process.run', (_$, e) => {
+  on('http.fetch', (_$, e) => {
+    const answer = w.onFetch?.(e.url) ?? { status: 404 }
+    if (answer instanceof Error) throw answer
+    return { value: { status: answer.status, ok: answer.status < 300, headers: {}, text: answer.text ?? '' } }
+  })
+  on('process.run', async (_$, e) => {
     const argv = [...e.argv]
     w.log.push(['run', ...argv])
+    const custom = await w.onRun?.(argv)
+    if (custom) return { value: { stdout: '', stderr: '', ...custom, isStdoutTruncated: false, isStderrTruncated: false } }
     const [bin = '', ...rest] = argv
     if (bin === 'git' && argv.includes('--git-common-dir') && !argv.includes('--show-toplevel')) {
       const dir = rest[rest.indexOf('-C') + 1] ?? ''
@@ -563,4 +578,237 @@ test('at 60, 70 and 100 columns the header draws all four tabs and the crumb sho
   expect((await headerFit(narrow, 59)).tabIds).toEqual([])
   expect((await narrow.find({ key: 'mode-groups' }))?.props.hotkey).toBe('e')
   await narrow.unmount()
+})
+
+type PageUi = Awaited<ReturnType<typeof openFirstGroup>>
+
+async function openFirstGroup($: { ui: { mount: (input: never) => Promise<MountedUi> } }) {
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' } as never)
+  await ui.press({ key: 'mode-groups' })
+  await ui.press({ key: 'item-0' })
+  return ui
+}
+
+type MountedUi = {
+  press: (q: { key: string }) => Promise<unknown>
+  find: (q: { key?: string; text?: RegExp | string }) => Promise<Found>
+  drawn: () => Promise<unknown>
+  redraw: () => Promise<unknown>
+  unmount: () => Promise<void>
+}
+
+async function rowTexts(ui: PageUi) {
+  const texts: string[] = []
+  for (let i = 0; i < 20; i++) {
+    const one = await ui.find({ key: `group-item-${i}` })
+    if (one) texts.push(one.text.trim())
+  }
+  return texts
+}
+
+const selectedRow = async (ui: PageUi) => {
+  for (let i = 0; i < 20; i++) if ((await ui.find({ key: `item-${i}` }))?.props.autoFocus === true) return i
+  return -1
+}
+
+// Remote loads run in the background of a render, so a test redraws until they land.
+async function settle(ui: PageUi, isDone: () => Promise<boolean>) {
+  for (let i = 0; i < 20 && !(await isDone()); i++) await ui.redraw()
+}
+
+const statusShown = (ui: PageUi, status: string) => async () => (await ui.find({ text: status })) !== undefined
+
+function ghWorld(w: World, answer: (line: string) => Promise<RunAnswer | undefined> | RunAnswer | undefined) {
+  w.onRun = argv => {
+    const line = argv.join(' ')
+    if (argv[0] === 'sh') return { exitCode: 0, stdout: 'gh\n' }
+    if (line === 'gh auth status') return { exitCode: 0 }
+    return argv[0] === 'gh' ? answer(line) : undefined
+  }
+}
+
+const pull = (n: number) => `https://github.com/acme/widgets/pull/${n}`
+
+test('a group page shows the description, the top block first, then each section header over its items; an empty section says so', async ($, on) => {
+  groupsWorld(on)
+  await call($, 'save_group', {
+    title: 'Launch',
+    description: 'Everything for the launch',
+    sections: [{ action: 'add', title: 'Docs' }, { action: 'add', title: 'Links' }, { action: 'add', title: 'Later' }],
+    add: [
+      { target: 'docs/plan.md', section: 'Docs' },
+      { target: 'https://example.test/launch', section: 'Links', label: 'The launch page' },
+      { target: '/home/notes.md' },
+      { target: 'notes/todo.md', section: 'Docs' },
+    ],
+  })
+  const ui = await openFirstGroup($)
+  expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Launch/)
+  expect(await ui.find({ text: /^Everything for the launch$/ })).toBeDefined()
+  expect(await rowTexts(ui)).toEqual(['notes.md', 'plan.md', 'todo.md', 'The launch page'])
+  expect((await ui.find({ key: 'group-section-0' }))?.text).toMatch(/DOCS/)
+  expect((await ui.find({ key: 'group-section-1' }))?.text).toMatch(/LINKS/)
+  expect((await ui.find({ key: 'group-section-2' }))?.text).toMatch(/LATER/)
+  expect((await ui.find({ key: 'group-empty-2' }))?.text).toMatch(/empty/)
+  const tree = JSON.stringify(await ui.drawn())
+  const order = ['group-item-0', 'group-section-0', 'group-item-1', 'group-item-2', 'group-section-1', 'group-item-3', 'group-section-2'].map(key => tree.indexOf(`"${key}"`))
+  expect(order.every(at => at >= 0)).toBe(true)
+  expect([...order].sort((a, b) => a - b)).toEqual(order)
+  await settle(ui, statusShown(ui, 'Launch · 4 items · 1 missing'))
+  expect(await ui.find({ text: 'Launch · 4 items · 1 missing' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an empty group says No items', async ($, on) => {
+  groupsWorld(on)
+  await call($, 'save_group', { title: 'Nothing yet' })
+  const ui = await openFirstGroup($)
+  expect(await ui.find({ text: /^No items$/ })).toBeDefined()
+  expect(await ui.find({ text: 'Nothing yet · 0 items · 0 missing' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an item whose file was deleted shows as missing, stays selectable, says the file is gone when opened, and can be removed', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: 'docs/plan.md' }, { target: 'notes/todo.md' }])
+  delete w.files['/repo/docs/plan.md']
+  const ui = await openFirstGroup($)
+  expect(await ui.find({ text: 'Launch · 2 items · 1 missing' })).toBeDefined()
+  expect((await ui.find({ key: 'group-meta-0' }))?.text).toMatch(/missing/)
+  expect((await ui.find({ key: 'group-meta-1' }))?.text ?? '').not.toMatch(/missing/)
+  expect(await selectedRow(ui)).toBe(0)
+  await ui.press({ key: 'next' })
+  expect(await selectedRow(ui)).toBe(1)
+  await ui.press({ key: 'prev' })
+  expect(await selectedRow(ui)).toBe(0)
+  await ui.press({ key: 'open-selected' })
+  expect(w.toasts.some(one => /gone/.test(one) && one.includes('plan.md'))).toBe(true)
+  expect(await ui.find({ key: 'group-page-title' })).toBeDefined()
+  const read = jsonOf(await call($, 'read_group', { id })) as { items: { ref: string; state: string }[] }
+  expect(read.items.map(one => `${one.ref}:${one.state}`)).toEqual(['docs/plan.md:missing', 'notes/todo.md:ok'])
+  await call($, 'save_group', { id, remove: [{ target: 'docs/plan.md' }] })
+  await ui.redraw()
+  expect(await rowTexts(ui)).toEqual(['todo.md'])
+  expect(await ui.find({ text: 'Launch · 1 item · 0 missing' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a remote item whose refresh says not found is missing; one that times out is unavailable and not counted as missing', async ($, on) => {
+  const w = groupsWorld(on)
+  ghWorld(w, line => {
+    if (/\b142\b/.test(line)) return { exitCode: 1, stderr: 'GraphQL: Could not resolve to a PullRequest with the number of 142.' }
+    if (/\b143\b/.test(line)) return { exitCode: 1, stderr: 'Post "https://api.github.com/graphql": dial tcp 140.82.112.6:443: i/o timeout' }
+    return undefined
+  })
+  const { id } = await create($, [{ target: pull(142) }, { target: pull(143) }])
+  const ui = await openFirstGroup($)
+  await settle(ui, async () => /unavailable/.test((await ui.find({ key: 'group-meta-1' }))?.text ?? ''))
+  expect((await ui.find({ key: 'group-meta-0' }))?.text).toMatch(/missing/)
+  expect((await ui.find({ key: 'group-meta-1' }))?.text).toMatch(/unavailable/)
+  expect(await ui.find({ text: 'Launch · 2 items · 1 missing' })).toBeDefined()
+  const read = jsonOf(await call($, 'read_group', { id })) as { items: { ref: string; state: string }[] }
+  expect(read.items.map(one => one.state)).toEqual(['missing', 'unavailable'])
+  await ui.unmount()
+})
+
+test('a repo-relative item added in worktree A opens worktree B\'s copy when the session runs in B', async ($, on) => {
+  const w = groupsWorld(on, { '/repo/docs/plan.md': '# Plan from A\n', '/wt/feature/docs/plan.md': '# Plan from B\n' })
+  await create($, [{ target: 'docs/plan.md' }])
+  w.root = '/wt/feature'
+  const ui = await openFirstGroup($)
+  expect(await rowTexts(ui)).toEqual(['plan.md'])
+  await ui.press({ key: 'open-selected' })
+  expect(await ui.find({ text: /Plan from B/ })).toBeDefined()
+  expect(await ui.find({ text: /Plan from A/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('back from an opened item returns to the page with that item selected; if it was removed meanwhile, the nearest row', async ($, on) => {
+  const w = groupsWorld(on)
+  const stored: unknown[] = []
+  on('store.set', (_$, e, next) => {
+    if (e.key === 'stars') stored.push(e.value)
+    return next(e)
+  })
+  const { id } = await create($, [{ target: 'docs/plan.md' }, { target: 'notes/todo.md' }, { target: '/home/notes.md' }])
+  const ui = await openFirstGroup($)
+  await ui.press({ key: 'next' })
+  await ui.press({ key: 'open-selected' })
+  expect(await ui.find({ key: 'group-page-title' })).toBeUndefined()
+  expect(await ui.find({ text: /todo\.md/ })).toBeDefined()
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.redraw()
+  expect((await ui.find({ key: 'menu-row-key-back' }))?.text).toMatch(/Back to Launch ?b$/)
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.press({ key: 'back' })
+  expect(await ui.find({ key: 'group-page-title' })).toBeDefined()
+  expect(await selectedRow(ui)).toBe(1)
+  await ui.press({ key: 'open-selected' })
+  await call($, 'save_group', { id, remove: [{ target: 'notes/todo.md' }] })
+  await ui.press({ key: 'back' })
+  expect(await rowTexts(ui)).toEqual(['plan.md', 'notes.md'])
+  expect(await selectedRow(ui)).toBe(1)
+  await ui.press({ key: 'star-selected' })
+  expect(stored.at(-1)).toEqual(['file:///home/notes.md'])
+  expect(w.toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('a remote item with no cached title shows the agent\'s label, then its title after the refresh', async ($, on) => {
+  const w = groupsWorld(on)
+  let release = () => {}
+  const held = new Promise<void>(resolve => (release = resolve))
+  ghWorld(w, async line => {
+    if (line.startsWith('gh pr view 144')) {
+      await held
+      return { exitCode: 0, stdout: JSON.stringify(pullView({ number: 144, title: 'Teach the parser trailing commas' })) }
+    }
+    if (line.startsWith('gh api repos/acme/widgets/pulls/144')) return { exitCode: 0, stdout: '0' }
+    return undefined
+  })
+  const { id } = await create($, [{ target: pull(144), label: 'Review this first' }])
+  const ui = await openFirstGroup($)
+  expect(await rowTexts(ui)).toEqual(['Review this first'])
+  expect((jsonOf(await call($, 'read_group', { id })).items as { title: unknown }[])[0]?.title).toBeNull()
+  release()
+  await settle(ui, async () => (await rowTexts(ui))[0] !== 'Review this first')
+  expect(await rowTexts(ui)).toEqual(['#144 Teach the parser trailing commas'])
+  expect((jsonOf(await call($, 'read_group', { id })).items as { title: unknown }[])[0]?.title).toBe('#144 Teach the parser trailing commas')
+  await ui.unmount()
+})
+
+test('when the open group\'s file is gone at the next render, the pane returns to the Groups tab with a toast', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: 'docs/plan.md' }])
+  const ui = await openFirstGroup($)
+  expect(await ui.find({ key: 'group-page-title' })).toBeDefined()
+  delete w.files[`${dirOf('/repo/.git')}/${id}.json`]
+  await ui.redraw()
+  await ui.redraw()
+  expect(await ui.find({ key: 'group-page-title' })).toBeUndefined()
+  expect(await ui.find({ text: /^No groups yet/ })).toBeDefined()
+  expect(w.toasts.filter(one => one === 'That group was deleted.')).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('the open group\'s remote items join the background refresh', async ($, on) => {
+  const clock = mock.clock(on, { now: 10 * 3600_000 })
+  const w = groupsWorld(on, {}, { isClockMocked: true })
+  let views = 0
+  ghWorld(w, line => {
+    if (line.startsWith('gh pr view 145')) {
+      views++
+      return { exitCode: 0, stdout: JSON.stringify(pullView({ number: 145 })) }
+    }
+    if (line.startsWith('gh api repos/acme/widgets/pulls/145')) return { exitCode: 0, stdout: '0' }
+    return undefined
+  })
+  await create($, [{ target: pull(145) }])
+  const ui = await openFirstGroup($)
+  await settle(ui, async () => views > 0 && /Teach/.test((await rowTexts(ui))[0] ?? ''))
+  expect(views).toBe(1)
+  await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: 'still here' }] } } as never).catch(() => undefined)
+  await clock.advance(5 * 60_000 + 15_000)
+  expect(views).toBe(2)
+  await ui.unmount()
 })
