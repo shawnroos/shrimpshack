@@ -177,6 +177,20 @@ let estimatedRows = 1
 const HEADER_ROWS = 2
 const FOOTER_ROWS = 3
 const MOVE_KEYS = new Set(['next', 'prev', 'left', 'right'])
+const COMMAND_KEYS: Record<string, string> = {
+  peek: 'mode-view',
+  recent: 'mode-recent',
+  gallery: 'mode-gallery',
+  'role-*': 'role',
+  'scope-*': 'scope',
+  open: 'open',
+  refresh: 'refresh',
+  live: 'live',
+  'live-back': 'back',
+  copy: 'copy',
+  star: 'star',
+  close: 'close',
+}
 const PAGE_TOP = HEADER_ROWS + 1
 const converted = new Map<string, { file: string; width: number; height: number }>()
 
@@ -1623,7 +1637,11 @@ export const register: Register = on => {
     const menuFor = (keys: Key[]) => {
       const fromKeys = keys.flatMap(one => (one.menu ? [{ id: `key-${one.key}`, icon: '\u{f11c}', label: one.menu, hint: one.hotkey, run: one.onPress }] : []))
       const closeAt = commands.findIndex(one => one.id === 'close')
-      const all = [...commands.slice(0, closeAt), ...fromKeys, ...commands.slice(closeAt)]
+      const keyed = commands.map(one => {
+        const owner = COMMAND_KEYS[one.id.replace(/-[^-]+$/, '-*')] ?? COMMAND_KEYS[one.id]
+        return owner ? { ...one, hint: keys.find(key => key.key === owner)?.hotkey ?? '' } : one
+      })
+      const all = [...keyed.slice(0, closeAt), ...fromKeys, ...keyed.slice(closeAt)]
       const matches = all.filter(one => words.every(word => one.label.toLowerCase().includes(word)))
       const moves = keys.filter(one => MOVE_KEYS.has(one.key)).map(one => one.hotkey)
       return (
