@@ -234,3 +234,22 @@ export async function create($: Parameters<typeof call>[0], add: unknown[], titl
   const id = String(jsonOf(text).id)
   return { text, id }
 }
+
+export type Found = { props: Record<string, unknown>; text: string } | undefined
+
+export async function cardTitles(ui: { find: (q: { key: string }) => Promise<Found> }) {
+  const titles: string[] = []
+  for (let i = 0; i < 10; i++) {
+    const one = await ui.find({ key: `group-name-${i}` })
+    if (one) titles.push(one.text.trim())
+  }
+  return titles
+}
+
+export function editGroup(w: World, id: string, change: (group: Record<string, unknown>) => void) {
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  const group = JSON.parse(w.files[file] ?? '{}') as Record<string, unknown>
+  change(group)
+  w.files[file] = JSON.stringify(group)
+  w.touch(file)
+}
