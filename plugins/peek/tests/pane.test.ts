@@ -541,3 +541,25 @@ test('the hover star paints over Recent rows and every row of Gallery cards, and
   expect(JSON.stringify(await ui.drawn())).toContain('\u{f51a}')
   await ui.unmount()
 })
+
+test('an html file reads as markdown, and a code file opened at a line starts ten lines above it', async ($, on) => {
+  fakeDisk(on)
+  FILES['/repo/site/page.html'] = '<html><body><h1>Hello page</h1><p>Some <b>bold</b> words</p></body></html>'
+  FILES['/repo/src/long.ts'] = Array.from({ length: 40 }, (_, i) => `const line${i + 1} = ${i + 1}`).join('\n')
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+
+  await $.command.run({ command: 'peek', args: '/repo/site/page.html' } as never)
+  await ui.redraw()
+  const page = JSON.stringify(await ui.drawn())
+  expect(page).toContain('HELLO PAGE')
+  expect(page).toContain('"text":"Some bold words"')
+
+  await $.command.run({ command: 'peek', args: '/repo/src/long.ts:15' } as never)
+  await ui.redraw()
+  const code = JSON.stringify(await ui.drawn())
+  expect(code).toContain('"startLine":5')
+  expect(code).toContain('const line5 = 5')
+  expect(code).not.toContain('const line4 = 4')
+  expect(code).toContain('line 5 of 40')
+  await ui.unmount()
+})
