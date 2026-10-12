@@ -86,7 +86,9 @@ export type View = {
 
 export type GroupActor = 'agent' | 'person'
 
-export type GroupSection = { id: string; title: string }
+export type SectionLayout = 'cards' | 'list'
+
+export type GroupSection = { id: string; title: string; layout?: SectionLayout }
 
 export type GroupItem = { ref: string; section?: string; addedBy: GroupActor; addedAt: number; label?: string }
 
@@ -106,9 +108,10 @@ export type Group = {
 export type GroupOp =
   | { op: 'setTitle'; title: string }
   | { op: 'setDescription'; description: string }
-  | { op: 'addSection'; title: string }
+  | { op: 'addSection'; title: string; layout?: SectionLayout }
   | { op: 'renameSection'; section: string; title: string }
   | { op: 'removeSection'; section: string }
+  | { op: 'setSectionLayout'; section: string; layout: SectionLayout }
   | { op: 'reorderSections'; order: string[] }
   | { op: 'addItem'; ref: string; section?: string; label?: string; force?: boolean }
   | { op: 'moveItem'; ref: string; section?: string }

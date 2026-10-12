@@ -76,7 +76,9 @@ and JavaScript dialogs.
 
 A group is a titled set of files and links that the agent put together for
 you, such as a plan, its pull request and the docs it rests on. It has a
-description and can split its items into sections.
+description and can split its items into sections. Each section shows its
+items as cards (the default) or as a list of lines; the agent picks this with
+`save_group`, as `layout` on a new section or with the `layout` section action.
 
 The agent makes and changes groups with four tools: `list_groups`,
 `read_group`, `save_group` and `delete_group`. Ask it to "group the files for
@@ -87,11 +89,16 @@ starred group or one holding items you added.
 
 You manage groups in the pane:
 
-- `e` opens the Groups tab. Click a card or press `o` to open a group; `e`
-  again goes back to the list.
+- `e` opens the Groups tab: one full-width card per group, with its title,
+  description, first section and that section's first row of items. Click
+  **MORE ▼** or press `m` (⌃k "Expand/Collapse group") to show every section
+  in place; **LESS ▲** or `m` again folds it back. `j`/`k` move between cards.
+- Click an item on a card to open it; `b` then returns to the group page.
+  Click a card's title or press `o` to open the group page; `e` again goes
+  back to the list.
 - `f` on a card stars the group. Up to 4 starred groups sit at the top of
-  Recent, above Favourites, whatever the scope and filter; the rest are in the
-  Groups tab. On a group page, `f` stars the selected item, as everywhere else.
+  Recent, above Favourites, whatever the scope and filter, as the same cards,
+  folded until you expand them; the rest are in the Groups tab. On a group page, `f` stars the selected item, as everywhere else.
 - ⌃k on any file or link lists "Add to group" and "Remove from group" for each
   group. On a group page, ⌃k also has "Remove from this group" and "Star this
   group". The footer hint stays `⌃k menu`.

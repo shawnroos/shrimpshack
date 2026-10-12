@@ -1,4 +1,4 @@
-import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupSection } from '../types'
+import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupSection, SectionLayout } from '../types'
 import { parseHref } from './lib'
 import { itemKey } from './refs'
 
@@ -24,6 +24,8 @@ function titleTaken(title: string, others: readonly Group[], selfId?: string): G
 function findSection(group: Group, name: string): GroupSection | undefined {
   return group.sections.find(one => one.id === name) ?? group.sections.find(one => fold(one.title) === fold(name))
 }
+
+export const layoutOf = (section: { layout?: unknown }): SectionLayout => (section.layout === 'list' ? 'list' : 'cards')
 
 function sectionTitle(group: Group, id: string | undefined): string {
   return id ? `"${group.sections.find(one => one.id === id)?.title ?? id}"` : 'the unsectioned block'
@@ -80,7 +82,7 @@ function applyOne(group: Group, op: GroupOp, ctx: GroupContext): Step {
       if (group.sections.length >= GROUP_CAPS.sections) {
         return keep('refused', `A group holds at most ${GROUP_CAPS.sections} sections`)
       }
-      const section = { id: ctx.newId(), title }
+      const section: GroupSection = { id: ctx.newId(), title, ...(op.layout ? { layout: op.layout } : {}) }
       return done({ ...group, sections: [...group.sections, section] }, `Added section "${title}"`, { sectionId: section.id })
     }
     case 'renameSection': {
@@ -93,6 +95,13 @@ function applyOne(group: Group, op: GroupOp, ctx: GroupContext): Step {
       if (title === section.title) return keep('unchanged', 'The section is already called that', { sectionId: section.id })
       const sections = group.sections.map(one => (one.id === section.id ? { ...one, title } : one))
       return done({ ...group, sections }, `Renamed section to "${title}"`, { sectionId: section.id })
+    }
+    case 'setSectionLayout': {
+      const section = findSection(group, op.section)
+      if (!section) return noSection(op.section)
+      if (layoutOf(section) === op.layout) return keep('unchanged', `The section already shows as ${op.layout}`, { sectionId: section.id })
+      const sections = group.sections.map(one => (one.id === section.id ? { ...one, layout: op.layout } : one))
+      return done({ ...group, sections }, `Section "${section.title}" shows as ${op.layout}`, { sectionId: section.id })
     }
     case 'removeSection': {
       const section = findSection(group, op.section)
@@ -330,7 +339,7 @@ function parseItem(one: unknown): GroupItem[] {
 }
 
 const parseSection = (one: unknown): GroupSection[] =>
-  isLoose(one) && typeof one.id === 'string' && typeof one.title === 'string' ? [{ id: one.id, title: one.title }] : []
+  isLoose(one) && typeof one.id === 'string' && typeof one.title === 'string' ? [{ id: one.id, title: one.title, layout: layoutOf(one) }] : []
 
 function parseGroup(text: string, projectKey: string): Group | null {
   let raw: unknown

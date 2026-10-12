@@ -363,3 +363,13 @@ test('fitName keeps short names and shortens long ones but keeps the extension',
   expect(lib.fitName('synthesis-and-presentation.md', 16).length).toBe(16)
   expect(lib.fitName('averyveryverylongnamewithoutdot', 10)).toBe('averyvery…')
 })
+
+describe('wrapLines', () => {
+  test('wraps on spaces, keeps paragraph breaks, and caps with an ellipsis on the last kept line', () => {
+    expect(lib.wrapLines('one two three four', 9, 5)).toEqual(['one two', 'three', 'four'])
+    expect(lib.wrapLines('first\nsecond', 20, 5)).toEqual(['first', 'second'])
+    expect(lib.wrapLines('a b c d e f', 3, 2)).toEqual(['a b', 'c…'])
+    expect(lib.wrapLines('abcdefghij', 4, 5)).toEqual(['abcd', 'efgh', 'ij'])
+    expect(lib.wrapLines('', 10, 3)).toEqual([])
+  })
+})

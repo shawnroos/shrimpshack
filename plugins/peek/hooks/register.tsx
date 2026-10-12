@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Loaded, Mention, Mode, RemoteRecord, View } from '../types'
+import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Loaded, Mention, Mode, RemoteRecord, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
 import { C as BASE, MUTED, ICON, META_ICON, colorFor, iconFor, mute, ruleParts } from './theme'
 import { capturedLinearContext, record } from './capture'
@@ -26,6 +26,7 @@ import {
   groupsDir,
   isGroupId,
   isScheme,
+  layoutOf,
   listGroups,
   readGroup,
   refPath,
@@ -86,6 +87,7 @@ import {
   taskRows,
   toggleTaskLine,
   urlCandidates,
+  wrapLines,
 } from './lib'
 
 const C = BASE
@@ -184,6 +186,7 @@ const CARD_ROWS = 5
 const CARD_MIN = 26
 const CARD_GAP = 2
 const PINNED_GROUPS = 4
+const GROUP_CARD_LINES = 3
 const fullText = new Map<string, string>()
 const roots = new Map<string, { root: string; isWorktree: boolean } | null>()
 const GALLERY = 'peek-ui'
@@ -1045,14 +1048,34 @@ async function focusGroupRow($: EngineInterface, index: number) {
 
 async function openGroupItem($: EngineInterface, rows: GroupRows, index: number) {
   await selectGroupRow($, rows, index)
-  const href = rows.hrefs[rows.selected]
+  await openGroupHref($, rows, rows.keys[rows.selected] ?? '', rows.hrefs[rows.selected] ?? '')
+}
+
+// Opening from a card sets openGroup too, so Back lands on the group page with this item selected.
+async function openGroupHref($: EngineInterface, group: { id: string; title: string }, key: string, href: string) {
   const file = href ? parseHref(href) : null
   if (!href || (file && !(await $.fs.exists(file.path).catch(() => false)))) {
-    $.ui.toast(`That file is gone: ${file?.path ?? rows.keys[rows.selected] ?? ''}`)
+    $.ui.toast(`That file is gone: ${file?.path ?? key}`)
     return
   }
-  groupBack = { id: rows.id, title: rows.title, depth: backStack.length }
+  await update($, openGroup, () => ({ id: group.id, item: key }))
+  groupBack = { id: group.id, title: group.title, depth: backStack.length }
   await show($, href, true)
+}
+
+async function openCardItem($: EngineInterface, id: string, key: string, href: string) {
+  const home = await groupHome($)
+  const group = home ? await shownGroup(groupsIoOf($), home.place, id) : null
+  if (group) await openGroupHref($, group, key, href)
+  else $.ui.toast('That group was deleted.')
+}
+
+// Per pane and never saved. Only handlers change it: a draw may not write state.
+const expandedGroups = new Set<string>()
+
+function toggleExpanded($: EngineInterface, id: string) {
+  if (!expandedGroups.delete(id)) expandedGroups.add(id)
+  $.ui.invalidate('ui.render')
 }
 
 type GroupLook = { key: string; href: string; name: string; kind: string; where: string; state: ItemState; favicon?: string }
@@ -1219,8 +1242,10 @@ async function groupJson($: EngineInterface, group: Group, worktreeRoot?: string
       state: await itemState($, one.ref, worktreeRoot),
     })),
   )
-  return { id: group.id, title: group.title, description: group.description, starred: group.starred, sections: group.sections, items, removed: group.removed }
+  return { id: group.id, title: group.title, description: group.description, starred: group.starred, sections: group.sections.map(one => ({ ...one, layout: layoutOf(one) })), items, removed: group.removed }
 }
+
+const sum = (values: readonly number[]) => values.reduce((total, one) => total + one, 0)
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 
@@ -1253,7 +1278,11 @@ function sectionOps(value: unknown): GroupOp[] | string {
   if (!list) return 'sections must be a list of { action, section, title }'
   const ops: GroupOp[] = []
   for (const one of list) {
-    if (one.action === 'add' && isText(one.title)) ops.push({ op: 'addSection', title: one.title })
+    const isLaid = one.action === 'layout' || (one.action === 'add' && one.layout !== undefined)
+    if (isLaid && one.layout !== 'cards' && one.layout !== 'list') return `A section layout is cards or list, not "${String(one.layout)}"`
+    const layout = one.layout as SectionLayout
+    if (one.action === 'add' && isText(one.title)) ops.push({ op: 'addSection', title: one.title, ...(isLaid ? { layout } : {}) })
+    else if (one.action === 'layout' && isText(one.section)) ops.push({ op: 'setSectionLayout', section: one.section, layout })
     else if (one.action === 'rename' && isText(one.section) && isText(one.title)) ops.push({ op: 'renameSection', section: one.section, title: one.title })
     else if (one.action === 'remove' && isText(one.section)) ops.push({ op: 'removeSection', section: one.section })
     else return `Unreadable section change ${JSON.stringify(one)}`
@@ -1352,7 +1381,7 @@ const GROUP_TOOLS = [
   {
     name: 'save_group',
     description:
-      'Create or change a peek group: a titled, described bundle of files and links with sections, kept per project in the peek side pane so the person can come back to it. Without id it creates a group (title required); with id it applies the given changes. Changes are edits, never a replace: items the person added stay unless you remove one by name with force, and an item the person removed is only re-added with force. Sections are named by id or title, so one call can add a section and fill it.',
+      'Create or change a peek group: a titled, described bundle of files and links with sections, kept per project in the peek side pane so the person can come back to it. Without id it creates a group (title required); with id it applies the given changes. Changes are edits, never a replace: items the person added stay unless you remove one by name with force, and an item the person removed is only re-added with force. Sections are named by id or title, so one call can add a section and fill it. A section shows its items as cards (the default) or as a list of lines; set it with layout on add, or with the layout action.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1365,9 +1394,10 @@ const GROUP_TOOLS = [
           items: {
             type: 'object',
             properties: {
-              action: { type: 'string', enum: ['add', 'rename', 'remove'] },
-              section: { type: 'string', description: 'Section id or title, for rename and remove' },
+              action: { type: 'string', enum: ['add', 'rename', 'remove', 'layout'] },
+              section: { type: 'string', description: 'Section id or title, for rename, remove and layout' },
               title: { type: 'string', description: 'New title, for add and rename' },
+              layout: { type: 'string', enum: ['cards', 'list'], description: 'How the section shows its items, for add and layout: cards (the default) or list' },
             },
             required: ['action'],
           },
@@ -2052,7 +2082,11 @@ export const register: Register = on => {
       await (isGroupsTab ? starInGroupsTab($, group.starGroup) : toggleGroupStar($, group.starGroup)).catch(() => undefined)
       return {}
     }
-    const opening = e.data as { open?: unknown } | null
+    const opening = e.data as { open?: unknown; inGroup?: unknown; key?: unknown } | null
+    if (e.requestId === PANE && opening && typeof opening.open === 'string' && typeof opening.inGroup === 'string') {
+      await openCardItem($, opening.inGroup, String(opening.key ?? ''), opening.open).catch(() => undefined)
+      return {}
+    }
     if (e.requestId === PANE && opening && typeof opening.open === 'string') {
       const rows = await groupPageRows($).catch(() => null)
       const at = rows ? rows.hrefs.indexOf(opening.open) : -1
@@ -2452,59 +2486,199 @@ export const register: Register = on => {
       },
     ]
     const closeKey: Key = { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) }
+    const expandKey: Key = {
+      key: 'expand-selected',
+      label: 'More',
+      hotkey: 'm',
+      menu: 'Expand/Collapse group',
+      onPress: () => void selectedNav($).then(one => {
+        const id = one?.group ?? (one && chosen === 'groups' ? one.href : undefined)
+        if (id) toggleExpanded($, id)
+      }),
+    }
 
-    const groupCards = (groups: readonly Group[], prefix: string, firstIndex: number, selected: number) => {
-      const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
-      const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
-      const rowsOfCards = Array.from({ length: Math.ceil(groups.length / perRow) }, (_, r) => groups.slice(r * perRow, r * perRow + perRow))
-      const openAt = (index: number, id: string) => void update($, cursorAtom, () => index).then(() => openGroupPage($, id))
-      const grid = rowsOfCards.map((cards, r) => (
-        <Box key={`${prefix}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
-          {Client && (
-            <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
-              <Client
-                key={`hover-${prefix}-${r}`}
-                module="./hover-layer.tsx"
-                props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ group: one.id, isStarred: one.starred })) }}
-                width={textWidth}
-                height={CARD_ROWS}
-              />
-            </Box>
-          )}
-          {cards.map((one, c) => {
-            const index = firstIndex + r * perRow + c
-            const isSelected = index === selected
-            return (
-              <Box
-                key={`${prefix}-${r}-${c}`}
-                flexDirection="column"
-                width={cardWidth}
-                height={CARD_ROWS}
-                paddingX={2}
-                paddingY={1}
-                backgroundColor={isSelected ? C.surface0 : C.panelBg}
-                hover={{ backgroundColor: C.surface0 }}
-              >
-                <Box flexDirection="row">
-                  <Button
-                    key={`item-${index}`}
-                    label={one.starred ? '\u{f51a}' : ICON.groups}
-                    plain
-                    autoFocus={isSelected ? true : undefined}
-                    onPress={() => openAt(index, one.id)}
-                  />
-                  <Box key={`group-name-${index}`}>
-                    <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${one.title}`}</Text>
-                  </Box>
-                </Box>
-                <Text color={C.overlay0} wrap="truncate-end">{one.description.split('\n')[0] || ' '}</Text>
-                <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${plural(one.items.length, 'item')} · ${describeAge(one.updatedAt, now)}`}</Text>
+    const groupCards = async (groups: readonly Group[], prefix: string, firstIndex: number, selected: number) => {
+      const inner = Math.max(8, textWidth - 4)
+      const perRow = Math.min(2, gridColumns(inner, CARD_MIN, CARD_GAP))
+      const itemWidth = Math.floor((inner - (perRow - 1) * CARD_GAP) / perRow)
+      const starKeys = new Set((await read($, stars)).map(one => itemKey(remoteRef(one)?.address ?? one)))
+      const worktreeRoot = (await groupHome($))?.worktreeRoot
+      const known = titlesByKey()
+      const drawn = await Promise.all(
+        groups.map(async (group, i) => {
+          const index = firstIndex + i
+          const isSelected = index === selected
+          const isExpanded = expandedGroups.has(group.id)
+          const sectionIds = new Set(group.sections.map(one => one.id))
+          const loose = group.items.filter(one => !one.section || !sectionIds.has(one.section))
+          let first = 0
+          const blocks = [
+            ...(loose.length ? [{ section: -1, title: '', layout: 'cards' as SectionLayout, items: loose }] : []),
+            ...group.sections.map((one, section) => ({ section, title: one.title, layout: layoutOf(one), items: group.items.filter(item => item.section === one.id) })),
+          ].map(block => {
+            const numbered = { ...block, first }
+            first += block.items.length
+            return numbered
+          })
+          const description = wrapLines(group.description, inner, Number.POSITIVE_INFINITY)
+          const canExpand = description.length > GROUP_CARD_LINES || blocks.length > 1 || (blocks[0]?.items.length ?? 0) > perRow
+          const lines = isExpanded ? description : wrapLines(group.description, inner, GROUP_CARD_LINES)
+          const shown = isExpanded ? blocks : blocks.slice(0, 1).map(block => ({ ...block, items: block.items.slice(0, perRow) }))
+          const looks = await Promise.all(shown.map(block => Promise.all(block.items.map(one => groupItemLook($, one, worktreeRoot, known)))))
+          for (const one of looks.flat()) if (one.href && !parseHref(one.href) && remoteRef(one.href) && !cached(one.href)) loadGroupRemote($, one.href)
+          const open = (look: GroupLook) => void update($, cursorAtom, () => index).then(() => openGroupHref($, group, look.key, look.href))
+          let layers = 0
+          const layer = (kind: 'rows' | 'cards', height: number, row: GroupLook[]) =>
+            Client && (
+              <Box position="absolute" top={0} left={0} width={inner} height={height}>
+                <Client
+                  key={`hover-${prefix}-items-${i}-${layers++}`}
+                  module="./hover-layer.tsx"
+                  props={{ kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) }}
+                  width={inner}
+                  height={height}
+                />
               </Box>
             )
-          })}
-        </Box>
-      ))
-      return { rowsOfCards, grid }
+          const icon = (look: GroupLook, n: number) => {
+            const isStarred = starKeys.has(look.key)
+            const favicon = look.favicon && Image && !isStarred ? pixels.get(look.favicon) : undefined
+            return [
+              favicon && Image && (
+                <Box key={`${prefix}-fav-${i}-${n}`} flexShrink={0}>
+                  <Image key={`${prefix}-favicon-${i}-${n}`} source={{ png: favicon }} columns={2} rows={1} alt={iconFor(look.kind)} />
+                </Box>
+              ),
+              <Box key={`${prefix}-icon-${i}-${n}`} flexShrink={0}>
+                <Button key={`${prefix}-it-${i}-${n}`} label={isStarred ? '\u{f51a}' : favicon ? ' ' : iconFor(look.kind)} plain onPress={() => open(look)} />
+              </Box>,
+            ]
+          }
+          const itemCard = (look: GroupLook, n: number) => (
+            <Box key={`${prefix}-card-${i}-${n}`} flexDirection="column" width={itemWidth} height={CARD_ROWS} paddingX={2} paddingY={1} backgroundColor={C.appBg} hover={{ backgroundColor: C.surface0 }}>
+              <Box flexDirection="row" height={1} overflow="hidden">
+                {icon(look, n)}
+                <Box key={`${prefix}-itname-${i}-${n}`} flexShrink={1}>
+                  <Text color={look.state === 'missing' ? C.overlay0 : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${look.name}`}</Text>
+                </Box>
+              </Box>
+              <Text color={C.overlay0} wrap="truncate-start">{look.where || ' '}</Text>
+              <Text color={look.state === 'missing' ? C.red : C.overlay0} wrap="truncate-end">{look.state === 'ok' ? kindLabel(look.kind).label : look.state}</Text>
+            </Box>
+          )
+          const line = (look: GroupLook, n: number) => (
+            <Box key={`${prefix}-line-${i}-${n}`} height={1} flexDirection="row" width={inner} overflow="hidden" hover={{ backgroundColor: C.surface0 }}>
+              {icon(look, n)}
+              <Box key={`${prefix}-itname-${i}-${n}`} flexShrink={0}>
+                <Text color={look.state === 'missing' ? C.overlay0 : C.text} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(look.name, Math.max(8, inner - 6))}`}</Text>
+              </Box>
+              <Box flexShrink={1} flexGrow={1} overflow="hidden">
+                <Text color={C.overlay0} wrap="truncate-middle">{look.where ? `  ${look.where}` : ''}</Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text color={look.state === 'missing' ? C.red : C.overlay1}>{look.state === 'ok' ? '' : ` ${look.state}`}</Text>
+              </Box>
+            </Box>
+          )
+          let height = 2 + 1 + (lines.length ? 1 + lines.length : 0) + (canExpand ? 1 : 0) + 1
+          const parts = shown.map((block, b) => {
+            const blockLooks = looks[b] ?? []
+            const rows = Array.from({ length: Math.ceil(blockLooks.length / perRow) }, (_, r) => blockLooks.slice(r * perRow, r * perRow + perRow))
+            const body = !blockLooks.length
+              ? [<Text key={`${prefix}-empty-${i}-${b}`} color={C.overlay0}>empty</Text>]
+              : block.layout === 'list'
+                ? [
+                    <Box key={`${prefix}-lines-${i}-${b}`} flexDirection="column" width={inner}>
+                      {layer('rows', blockLooks.length, blockLooks)}
+                      {blockLooks.map((look, j) => line(look, block.first + j))}
+                    </Box>,
+                  ]
+                : rows.map((row, r) => (
+                    <Box key={`${prefix}-irow-${i}-${b}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginTop={r ? 1 : 0}>
+                      {layer('cards', CARD_ROWS, row)}
+                      {row.map((look, c) => itemCard(look, block.first + r * perRow + c))}
+                    </Box>
+                  ))
+            height += 1 + (block.title ? 2 : 0) + (!blockLooks.length ? 1 : block.layout === 'list' ? blockLooks.length : rows.length * (CARD_ROWS + 1) - 1)
+            return (
+              <Box key={`${prefix}-block-${i}-${b}`} flexDirection="column" width={inner} marginTop={1}>
+                {block.title ? (
+                  <Box key={`${prefix}-sec-${i}-${block.section}`} flexDirection="column" width={inner}>
+                    <Text color={C.text} bold wrap="truncate-end">{block.title}</Text>
+                    <Text color={C.surface1}>{'─'.repeat(inner)}</Text>
+                  </Box>
+                ) : null}
+                {body}
+              </Box>
+            )
+          })
+          if (!blocks.length) height += 2
+          const barLabel = isExpanded ? 'LESS ▲' : 'MORE ▼'
+          const barPad = Math.max(0, inner - barLabel.length)
+          const node = (
+            <Box
+              key={`${prefix}-${i}`}
+              flexDirection="column"
+              width={textWidth}
+              paddingX={2}
+              paddingY={1}
+              marginBottom={1}
+              backgroundColor={isSelected ? C.surface0 : C.panelBg}
+            >
+              <Box flexDirection="row" width={inner} height={1}>
+                {Client && (
+                  <Box position="absolute" top={0} left={0} width={inner} height={1}>
+                    <Client
+                      key={`hover-${prefix}-${i}`}
+                      module="./hover-layer.tsx"
+                      props={{ kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] }}
+                      width={inner}
+                      height={1}
+                    />
+                  </Box>
+                )}
+                <Box flexShrink={0}>
+                  <Button
+                    key={`item-${index}`}
+                    label={group.starred ? '\u{f51a}' : ICON.groups}
+                    plain
+                    autoFocus={isSelected ? true : undefined}
+                    onPress={() => void update($, cursorAtom, () => index).then(() => openGroupPage($, group.id))}
+                  />
+                </Box>
+                <Box key={`group-name-${index}`} flexGrow={1} flexShrink={1} overflow="hidden">
+                  <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${group.title.toUpperCase()}`}</Text>
+                </Box>
+                <Box flexShrink={0} marginLeft={1}>
+                  <Text color={isSelected ? C.overlay1 : C.overlay0}>{`${plural(group.items.length, 'item')} · ${describeAge(group.updatedAt, now)}`}</Text>
+                </Box>
+              </Box>
+              {lines.length > 0 && <Box height={1} />}
+              {lines.map((text, k) => (
+                <Text key={`${prefix}-desc-${i}-${k}`} color={C.subtext0}>{text}</Text>
+              ))}
+              {parts}
+              {!blocks.length && (
+                <Box marginTop={1}>
+                  <Text color={C.overlay0}>No items</Text>
+                </Box>
+              )}
+              {canExpand && (
+                <Box key={`${prefix}-morebar-${i}`} width={inner} height={1} backgroundColor={C.accent}>
+                  <Button
+                    key={`${prefix}-more-${i}`}
+                    label={`${' '.repeat(Math.floor(barPad / 2))}${barLabel}${' '.repeat(Math.ceil(barPad / 2))}`}
+                    plain
+                    onPress={() => void update($, cursorAtom, () => index).then(() => toggleExpanded($, group.id))}
+                  />
+                </Box>
+              )}
+            </Box>
+          )
+          return { node, height }
+        }),
+      )
+      return { cards: drawn.map(one => one.node), heights: drawn.map(one => one.height) }
     }
 
     if (chosen === 'groups') {
@@ -2683,15 +2857,15 @@ export const register: Register = on => {
       const starredCount = groups.filter(one => one.starred).length
       const crumb = crumbs([{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }])
       const selected = await read($, cursorAtom)
-      const { rowsOfCards, grid } = groupCards(groups, 'groups', 0, selected)
-      navOrder = rowsOfCards.flatMap((cards, r) => cards.map((one, col) => ({ href: one.id, key: `groups-${r}`, line: r, col })))
-      blockStarts = rowsOfCards.map((_, r) => r * (CARD_ROWS + 1))
-      estimatedRows = Math.max(1, rowsOfCards.length * (CARD_ROWS + 1))
+      const { cards, heights } = await groupCards(groups, 'groups', 0, selected)
+      navOrder = groups.map((one, i) => ({ href: one.id, key: `groups-${i}`, line: i, col: 0 }))
+      blockStarts = heights.map((_, i) => sum(heights.slice(0, i)))
+      estimatedRows = Math.max(1, sum(heights))
       const selectedGroup = () => read($, cursorAtom).then(at => navOrder[clamp(at, navOrder.length)]?.href)
       const content = (
         <Box flexDirection="column" width={textWidth}>
           {groups.length === 0 && <Text color={C.overlay0}>No groups yet. The agent makes groups: ask it to group related files and links.</Text>}
-          {grid}
+          {cards}
         </Box>
       )
       return frame(
@@ -2715,6 +2889,7 @@ export const register: Register = on => {
             menu: 'Star or unstar the selected group',
             onPress: () => void selectedGroup().then(id => (id ? starInGroupsTab($, id) : undefined)),
           },
+          expandKey,
           closeKey,
         ],
         { pageBg: C.appBg, menuOn: { group: groups[clamp(selected, groups.length)], starHint: 'f' } },
@@ -2935,17 +3110,17 @@ export const register: Register = on => {
         .then(all => all.filter(one => one.starred))
         .catch(() => [])
       const pinned = starredGroups.slice(0, PINNED_GROUPS)
-      const pinnedBlock = (() => {
+      const pinnedBlock = await (async () => {
         if (!pinned.length) return null
         cursor += 2
-        const { rowsOfCards, grid } = groupCards(pinned, 'starred', nav.length, selected)
-        rowsOfCards.forEach((cards, r) => {
-          keys.push(`starred-${r}`)
-          starts.push(cursor + r * (CARD_ROWS + 1))
-          const line = navLine++
-          cards.forEach((one, col) => nav.push({ href: '', group: one.id, key: `starred-${r}`, line, col }))
+        const { cards: grid, heights } = await groupCards(pinned, 'starred', nav.length, selected)
+        pinned.forEach((one, i) => {
+          keys.push(`starred-${i}`)
+          starts.push(cursor)
+          cursor += heights[i] ?? 0
+          nav.push({ href: '', group: one.id, key: `starred-${i}`, line: navLine++, col: 0 })
         })
-        cursor += rowsOfCards.length * (CARD_ROWS + 1) + 1
+        cursor += 1
         const count = starredGroups.length > pinned.length ? `${pinned.length} of ${starredGroups.length} · e for all` : `${pinned.length}`
         return (
           <Box flexDirection="column" width={textWidth}>
@@ -3073,6 +3248,7 @@ export const register: Register = on => {
             if (one.key === 'open-selected') return { ...one, menu: 'Open the selected group' }
             return one.key === 'star-selected' ? { ...one, menu: 'Unstar the selected group' } : one
           }),
+          ...(pinned.length ? [expandKey] : []),
           closeKey,
         ],
         { pageBg: C.appBg, menuOn: pinnedOn ? { group: pinnedOn, starHint: 'f' } : { target: nav[clamp(selected, nav.length)]?.href } },

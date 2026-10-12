@@ -2,7 +2,7 @@ import type { ClientModule } from 'claude-code'
 
 import { C } from './theme'
 
-type Item = { href: string; isStarred?: boolean } | { group: string; isStarred?: boolean }
+type Item = { href: string; isStarred?: boolean; inGroup?: string; key?: string } | { group: string; isStarred?: boolean }
 type Props = { kind: 'rows' | 'cards'; width: number; height: number; items: Item[]; cardWidth?: number; cardHeight?: number; gap?: number; starX: number; starY: number }
 type State = { hovered: number }
 
@@ -34,7 +34,8 @@ const HoverLayer: ClientModule<Props, State> = (props, surface) => {
       if (event.type === 'down' && event.button === 'left' && item) {
         const isOnStar = hit.y === now.starY && hit.x >= now.starX && hit.x < now.starX + 2
         if ('group' in item) surface.post(isOnStar ? { starGroup: item.group } : { openGroup: item.group })
-        else surface.post(isOnStar ? { star: item.href } : { open: item.href })
+        else if (isOnStar) surface.post({ star: item.href })
+        else surface.post(item.inGroup ? { open: item.href, inGroup: item.inGroup, key: item.key ?? '' } : { open: item.href })
         return
       }
       if ((surface.state?.hovered ?? -1) !== hit.index) surface.setState({ hovered: hit.index })

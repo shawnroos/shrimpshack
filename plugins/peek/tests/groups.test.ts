@@ -226,6 +226,16 @@ describe('sections', () => {
     expect(outcomes[0]?.reason).toContain('20')
   })
 
+  test('a section is added with a layout, and setSectionLayout switches it; the same layout again is unchanged', () => {
+    const group = make([{ op: 'addSection', title: 'Links', layout: 'list' }, { op: 'addSection', title: 'Docs' }])
+    expect(group.sections.map(one => one.layout ?? 'cards')).toEqual(['list', 'cards'])
+    const { group: after, outcomes } = applyGroupOps(group, [{ op: 'setSectionLayout', section: 'docs', layout: 'list' }], ctx())
+    expect(outcomes[0]).toMatchObject({ status: 'applied', sectionId: group.sections[1]?.id })
+    expect(after.sections.map(one => one.layout)).toEqual(['list', 'list'])
+    expect(applyGroupOps(after, [{ op: 'setSectionLayout', section: 'Links', layout: 'list' }], ctx()).outcomes[0]?.status).toBe('unchanged')
+    expect(applyGroupOps(after, [{ op: 'setSectionLayout', section: 'Nope', layout: 'cards' }], ctx()).outcomes[0]?.status).toBe('refused')
+  })
+
   test('reorder takes every section once, by id or title', () => {
     const group = make([{ op: 'addSection', title: 'A' }, { op: 'addSection', title: 'B' }, { op: 'addSection', title: 'C' }])
     const [a, b, c] = group.sections

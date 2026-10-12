@@ -422,7 +422,7 @@ test('a damaged group file with a null item, a numeric ref, bad sections and non
   expect(savedGroup(w, id)?.items.map(one => one.ref)).toEqual([PAGE, 'notes/todo.md', 'docs/plan.md'])
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
-  expect(await cardTitles(ui)).toEqual(['Launch'])
+  expect(await cardTitles(ui)).toEqual(['LAUNCH'])
   await ui.press({ key: 'item-0' })
   expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Launch/)
   await ui.unmount()
@@ -491,11 +491,36 @@ test('save_group refuses unreadable input with its exact message and writes no g
     [{ title: 'Launch', add: [{}] }, 'add, move and remove are lists of objects, each with a target.'],
     [{ title: 'Launch', add: [null] }, 'add, move and remove are lists of objects, each with a target.'],
     [{ id: 'BAD', title: 'Launch' }, 'BAD is not a group id. Use an id from list_groups.'],
+    [{ title: 'Launch', sections: [{ action: 'add', title: 'Links', layout: 'grid' }] }, 'A section layout is cards or list, not "grid"'],
+    [{ title: 'Launch', sections: [{ action: 'layout', section: 'Links' }] }, 'A section layout is cards or list, not "undefined"'],
   ]
   for (const [input, message] of cases) {
     expect([input, await call($, 'save_group', input)]).toEqual([input, message])
   }
   expect(Object.keys(w.files).filter(one => one.startsWith(`${dirOf('/repo/.git')}/`))).toEqual([])
+})
+
+test('save_group sets a section layout on add and with a layout change; read_group reads a missing or unknown layout as cards', async ($, on) => {
+  const w = groupsWorld(on)
+  const text = await call($, 'save_group', {
+    title: 'Launch',
+    sections: [{ action: 'add', title: 'Links', layout: 'list' }, { action: 'add', title: 'Docs' }],
+  })
+  const id = String(jsonOf(text).id)
+  const layouts = async () => ((jsonOf(await call($, 'read_group', { id })) as { sections: { layout: string }[] }).sections).map(one => one.layout)
+  expect(await layouts()).toEqual(['list', 'cards'])
+  const changed = await call($, 'save_group', { id, sections: [{ action: 'layout', section: 'Docs', layout: 'list' }] })
+  expect(changed.split('\n')[0]).toMatch(/1 applied/)
+  expect(await layouts()).toEqual(['list', 'list'])
+  editGroup(w, id, group => {
+    const sections = group.sections as Record<string, unknown>[]
+    if (sections[0]) delete sections[0].layout
+    if (sections[1]) sections[1].layout = 'mosaic'
+  })
+  expect(await layouts()).toEqual(['cards', 'cards'])
+  await call($, 'save_group', { id, description: 'resaved' })
+  const stored = JSON.parse(w.files[`${dirOf('/repo/.git')}/${id}.json`] ?? '{}') as { sections: { layout?: string }[] }
+  expect(stored.sections.map(one => one.layout)).toEqual(['cards', 'cards'])
 })
 
 test('save_group moves items, reorders, renames and removes sections, and force overrides a person tombstone and a person add', async ($, on) => {
@@ -602,14 +627,14 @@ test('after the agent creates two groups, the Groups tab lists both as cards, st
   await call($, 'save_group', { title: 'Beta', description: 'Ship notes\nsecond line', add: [{ target: PR }] })
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
-  expect(await cardTitles(ui)).toEqual(['Beta', 'Alpha'])
+  expect(await cardTitles(ui)).toEqual(['BETA', 'ALPHA'])
   expect(await ui.find({ text: /^2 groups · 0 starred$/ })).toBeDefined()
   expect(await ui.find({ text: /Ship notes/ })).toBeDefined()
-  expect(await ui.find({ text: /second line/ })).toBeUndefined()
+  expect(await ui.find({ text: /second line/ })).toBeDefined()
   expect(await ui.find({ text: /^2 items/ })).toBeDefined()
   editGroup(w, alpha.id, group => (group.starred = true))
   await ui.redraw()
-  expect(await cardTitles(ui)).toEqual(['Alpha', 'Beta'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA', 'BETA'])
   expect(await ui.find({ text: /^2 groups · 1 starred$/ })).toBeDefined()
   expect((await ui.find({ key: 'item-0' }))?.props.label).toBe('\u{f51a}')
   await ui.unmount()
@@ -620,10 +645,10 @@ test('the Groups tab checks the folder on every render: another session\'s chang
   const { id } = await create($, [{ target: PAGE }], 'Alpha')
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
   editGroup(w, id, group => (group.title = 'Renamed elsewhere'))
   await ui.redraw()
-  expect(await cardTitles(ui)).toEqual(['Renamed elsewhere'])
+  expect(await cardTitles(ui)).toEqual(['RENAMED ELSEWHERE'])
   await ui.unmount()
 })
 
@@ -632,14 +657,14 @@ test('a render over an unchanged groups folder stats it but reads no group file 
   await create($, [{ target: PAGE }], 'Alpha')
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
   const dir = dirOf('/repo/.git')
   const groupReads = () => w.reads.filter(one => one.startsWith(`${dir}/`)).length
   const dirStats = () => w.dirStats.filter(one => one === dir).length
   const [readsBefore, statsBefore] = [groupReads(), dirStats()]
   await ui.redraw()
   await ui.redraw()
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
   expect(groupReads()).toBe(readsBefore)
   expect(dirStats()).toBeGreaterThan(statsBefore)
   await ui.unmount()
@@ -665,17 +690,17 @@ test('clicking a group card opens its group page; e returns to the list; the hov
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
   const layer = 'hover-groups-0'
-  await ui.resize({ columns: 60, rows: 5, in: layer })
-  await ui.pointer({ type: 'move', x: 10, y: 3, in: layer })
+  await ui.resize({ columns: 60, rows: 1, in: layer })
+  await ui.pointer({ type: 'move', x: 10, y: 0, in: layer })
   expect(JSON.stringify(await ui.drawn({ in: layer }))).toContain('\u{f41e}')
-  await ui.pointer({ type: 'down', button: 'left', x: 10, y: 3, in: layer })
+  await ui.pointer({ type: 'down', button: 'left', x: 10, y: 0, in: layer })
   expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Alpha/)
   await ui.press({ key: 'mode-groups' })
   expect(await ui.find({ key: 'group-page-title' })).toBeUndefined()
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
-  await ui.resize({ columns: 60, rows: 5, in: layer })
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
+  await ui.resize({ columns: 60, rows: 1, in: layer })
   const before = w.invalidated
-  await ui.pointer({ type: 'down', button: 'left', x: 2, y: 1, in: layer })
+  await ui.pointer({ type: 'down', button: 'left', x: 0, y: 0, in: layer })
   expect(savedGroup(w, id)?.starred).toBe(true)
   expect(w.invalidated).toBeGreaterThan(before)
   await ui.redraw()
@@ -698,11 +723,11 @@ test('f on a selected group card toggles its star; o opens it; a deleted group i
   expect(savedGroup(w, beta.id)?.starred).toBe(true)
   await ui.press({ key: 'star-selected' })
   expect(savedGroup(w, beta.id)?.starred).toBe(false)
-  await ui.press({ key: 'right' })
+  await ui.press({ key: 'next' })
   await ui.press({ key: 'open-selected' })
   expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Alpha/)
   await ui.press({ key: 'mode-groups' })
-  await ui.press({ key: 'left' })
+  await ui.press({ key: 'prev' })
   delete w.files[`${dirOf('/repo/.git')}/${beta.id}.json`]
   w.touch(`${dirOf('/repo/.git')}/${beta.id}.json`)
   await ui.press({ key: 'star-selected' })
@@ -721,12 +746,12 @@ test('starring a card in the Groups tab keeps that group selected as the list re
   editGroup(w, alpha.id, group => (group.starred = true))
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
-  expect(await cardTitles(ui)).toEqual(['Alpha', 'Gamma', 'Beta'])
-  await ui.press({ key: 'right' })
+  expect(await cardTitles(ui)).toEqual(['ALPHA', 'GAMMA', 'BETA'])
+  await ui.press({ key: 'next' })
   await ui.press({ key: 'star-selected' })
   expect(savedGroup(w, gamma.id)?.starred).toBe(true)
   await ui.redraw()
-  expect(await cardTitles(ui)).toEqual(['Gamma', 'Alpha', 'Beta'])
+  expect(await cardTitles(ui)).toEqual(['GAMMA', 'ALPHA', 'BETA'])
   await ui.press({ key: 'star-selected' })
   expect(savedGroup(w, gamma.id)?.starred).toBe(false)
   expect(savedGroup(w, alpha.id)?.starred).toBe(true)
@@ -744,16 +769,146 @@ test('a mouse star on another card in the Groups tab keeps the cursor on the gro
   editGroup(w, alpha.id, group => (group.starred = true))
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
-  await ui.press({ key: 'right' })
+  await ui.press({ key: 'next' })
   const layer = 'hover-groups-0'
-  await ui.resize({ columns: 60, rows: 5, in: layer })
-  await ui.pointer({ type: 'down', button: 'left', x: 2, y: 1, in: layer })
+  await ui.resize({ columns: 60, rows: 1, in: layer })
+  await ui.pointer({ type: 'down', button: 'left', x: 0, y: 0, in: layer })
   expect(savedGroup(w, alpha.id)?.starred).toBe(false)
   await ui.redraw()
-  expect(await cardTitles(ui)).toEqual(['Gamma', 'Beta', 'Alpha'])
+  expect(await cardTitles(ui)).toEqual(['GAMMA', 'BETA', 'ALPHA'])
   await ui.press({ key: 'star-selected' })
   expect(savedGroup(w, gamma.id)?.starred).toBe(true)
   expect(savedGroup(w, beta.id)?.starred).toBe(false)
+  await ui.unmount()
+})
+
+async function launchGroup($: Parameters<typeof call>[0]) {
+  return call($, 'save_group', {
+    title: 'Launch',
+    description: 'Ship it this week\nwith the notes',
+    sections: [{ action: 'add', title: 'Docs' }, { action: 'add', title: 'Links', layout: 'list' }],
+    add: [
+      { target: 'docs/plan.md', section: 'Docs' },
+      { target: 'notes/todo.md', section: 'Docs' },
+      { target: '/home/notes.md', section: 'Docs' },
+      { target: PAGE, section: 'Links', label: 'The page' },
+    ],
+  })
+}
+
+async function itemNames(ui: { find: (q: { key: string }) => Promise<Found> }, prefix: string, card: number) {
+  const names: string[] = []
+  for (let n = 0; n < 12; n++) {
+    const one = await ui.find({ key: `${prefix}-itname-${card}-${n}` })
+    if (one) names.push(one.text.trim())
+  }
+  return names
+}
+
+test('a compact group card shows the title, the description, the first section header and only its first row of items, then MORE', async ($, on) => {
+  groupsWorld(on)
+  await launchGroup($)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  expect((await ui.find({ key: 'group-name-0' }))?.text.trim()).toBe('LAUNCH')
+  expect(await ui.find({ text: /Ship it this week/ })).toBeDefined()
+  expect(await ui.find({ text: /with the notes/ })).toBeDefined()
+  expect((await ui.find({ key: 'groups-sec-0-0' }))?.text).toMatch(/Docs/)
+  expect(await itemNames(ui, 'groups', 0)).toEqual(['plan.md', 'todo.md'])
+  expect(await ui.find({ key: 'groups-sec-0-1' })).toBeUndefined()
+  expect((await ui.find({ key: 'groups-more-0' }))?.props.label).toMatch(/MORE ▼/)
+  await ui.unmount()
+})
+
+test('MORE expands a card in place to every section, cards as item cards and list as lines; m and LESS collapse it', async ($, on) => {
+  groupsWorld(on)
+  await launchGroup($)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  await ui.press({ key: 'groups-more-0' })
+  await ui.redraw()
+  expect(await itemNames(ui, 'groups', 0)).toEqual(['plan.md', 'todo.md', 'notes.md', 'The page'])
+  expect((await ui.find({ key: 'groups-sec-0-1' }))?.text).toMatch(/Links/)
+  expect((await ui.find({ key: 'groups-more-0' }))?.props.label).toMatch(/LESS ▲/)
+  expect(await ui.find({ key: 'groups-card-0-2' })).toBeDefined()
+  expect(await ui.find({ key: 'groups-line-0-2' })).toBeUndefined()
+  expect(await ui.find({ key: 'groups-line-0-3' })).toBeDefined()
+  expect(await ui.find({ key: 'groups-card-0-3' })).toBeUndefined()
+  expect((await ui.find({ key: 'expand-selected' }))?.props.hotkey).toBe('m')
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.redraw()
+  expect((await ui.find({ key: 'menu-row-key-expand-selected' }))?.text).toMatch(/Expand\/Collapse group ?m$/)
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.press({ key: 'expand-selected' })
+  await ui.redraw()
+  expect(await itemNames(ui, 'groups', 0)).toEqual(['plan.md', 'todo.md'])
+  expect((await ui.find({ key: 'groups-more-0' }))?.props.label).toMatch(/MORE ▼/)
+  await ui.press({ key: 'expand-selected' })
+  await ui.redraw()
+  await ui.press({ key: 'groups-more-0' })
+  await ui.redraw()
+  expect(await itemNames(ui, 'groups', 0)).toEqual(['plan.md', 'todo.md'])
+  await ui.unmount()
+})
+
+test('a group card with nothing more to show draws no MORE bar', async ($, on) => {
+  groupsWorld(on)
+  await create($, [{ target: PAGE }], 'Alpha')
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  expect(await itemNames(ui, 'groups', 0)).toEqual(['example.test/page'])
+  expect(await ui.find({ key: 'groups-more-0' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('clicking an item on a card opens it and Back returns to its group page with that item selected', async ($, on) => {
+  groupsWorld(on)
+  await launchGroup($)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  await ui.press({ key: 'groups-it-0-1' })
+  expect(await ui.find({ key: 'group-page-title' })).toBeUndefined()
+  expect(await ui.find({ text: /todo\.md/ })).toBeDefined()
+  await ui.press({ key: 'back' })
+  expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Launch/)
+  expect(await selectedRow(ui)).toBe(1)
+  await ui.press({ key: 'mode-groups' })
+  const layer = 'hover-groups-items-0-0'
+  await ui.resize({ columns: paneProps.bodyColumns - 11, rows: 5, in: layer })
+  await ui.pointer({ type: 'down', button: 'left', x: 2, y: 2, in: layer })
+  expect(await ui.find({ text: /plan\.md/ })).toBeDefined()
+  await ui.press({ key: 'back' })
+  expect(await selectedRow(ui)).toBe(0)
+  await ui.unmount()
+})
+
+test('a group card spans the full text width at 60 and 100 columns', async ($, on) => {
+  groupsWorld(on)
+  await launchGroup($)
+  for (const bodyColumns of [60, 100]) {
+    const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...paneProps, bodyColumns }, requestId: 'peek' })
+    await ui.press({ key: 'mode-groups' })
+    expect((await ui.find({ key: 'groups-0' }))?.props.width).toBe(bodyColumns - 7)
+    expect((await ui.find({ key: 'groups-morebar-0' }))?.props.width).toBe(bodyColumns - 11)
+    await ui.unmount()
+  }
+})
+
+test('a pinned card in Recent is compact and expands with MORE or m', async ($, on) => {
+  const w = groupsWorld(on)
+  const id = String(jsonOf(await launchGroup($)).id)
+  editGroup(w, id, group => (group.starred = true))
+  const ui = await mountPane($)
+  await ui.press({ key: 'mode-recent' })
+  expect((await ui.find({ key: 'starred-sec-0-0' }))?.text).toMatch(/Docs/)
+  expect(await itemNames(ui, 'starred', 0)).toEqual(['plan.md', 'todo.md'])
+  await ui.press({ key: 'starred-more-0' })
+  await ui.redraw()
+  expect(await itemNames(ui, 'starred', 0)).toEqual(['plan.md', 'todo.md', 'notes.md', 'The page'])
+  expect((await ui.find({ key: 'starred-more-0' }))?.props.label).toMatch(/LESS ▲/)
+  await ui.press({ key: 'expand-selected' })
+  await ui.redraw()
+  expect(await itemNames(ui, 'starred', 0)).toEqual(['plan.md', 'todo.md'])
   await ui.unmount()
 })
 
@@ -777,17 +932,17 @@ test('the Groups tab is reachable from the header tab, the e key and the ctrl+k 
   const before = tabs.slice(0, 2).reduce((sum, one) => sum + one.label.length, 0)
   await ui.resize({ columns: Number(right?.props.width), rows: 1, in: 'tabs-right' })
   await ui.pointer({ type: 'down', button: 'left', x: before + 2, y: 0, in: 'tabs-right' })
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
   await ui.press({ key: 'mode-recent' })
   expect(await cardTitles(ui)).toEqual([])
   await ui.press({ key: 'mode-groups' })
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
   await ui.press({ key: 'mode-recent' })
   await $.command.run({ command: 'peek-menu' } as never)
   await ui.redraw()
   expect((await ui.find({ key: 'menu-row-groups' }))?.text).toMatch(/e$/)
   await ui.press({ key: 'menu-groups' })
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
   await $.command.run({ command: 'peek-menu' } as never)
   await ui.redraw()
   expect((await ui.find({ key: 'menu-row-key-star-selected' }))?.text).toMatch(/group ?f$/)
@@ -1296,7 +1451,7 @@ test('a starred group sits above Favourites in Recent; f on it unstars the group
   const text = await drawnText(ui)
   expect(text.indexOf('STARRED GROUPS')).toBeGreaterThan(-1)
   expect(text.indexOf('STARRED GROUPS')).toBeLessThan(text.indexOf('FAVOURITES'))
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
   expect((await ui.find({ key: 'item-0' }))?.props.label).toBe('\u{f51a}')
   expect(await ui.find({ key: 'hover-starred-0' })).toBeDefined()
   await openMenu($, ui)
@@ -1326,8 +1481,8 @@ test('pinned group cards come first in Recent\'s keyboard order; o and a click o
   expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Alpha/)
   await ui.press({ key: 'mode-recent' })
   const layer = 'hover-starred-0'
-  await ui.resize({ columns: 60, rows: 5, in: layer })
-  await ui.pointer({ type: 'down', button: 'left', x: 10, y: 3, in: layer })
+  await ui.resize({ columns: 60, rows: 1, in: layer })
+  await ui.pointer({ type: 'down', button: 'left', x: 10, y: 0, in: layer })
   expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Alpha/)
   await ui.press({ key: 'mode-recent' })
   await ui.press({ key: 'next' })
@@ -1347,7 +1502,7 @@ test('with 6 starred groups Recent pins the 4 most recently updated; the Groups 
   }
   const ui = await mountPane($)
   await ui.press({ key: 'mode-recent' })
-  expect(await cardTitles(ui)).toEqual(['Set 6', 'Set 5', 'Set 4', 'Set 3'])
+  expect(await cardTitles(ui)).toEqual(['SET 6', 'SET 5', 'SET 4', 'SET 3'])
   expect(await ui.find({ text: /4 of 6/ })).toBeDefined()
   await ui.press({ key: 'mode-groups' })
   expect(await cardTitles(ui)).toHaveLength(6)
@@ -1364,7 +1519,7 @@ test('the pinned block ignores Recent\'s scope and role filters, shows only this
   await ui.press({ key: 'scope' })
   await ui.press({ key: 'role' })
   expect(await ui.find({ text: /Show: artifacts/ })).toBeDefined()
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
   expect(await drawnText(ui)).toContain('STARRED GROUPS')
   w.root = '/other'
   await ui.redraw()
@@ -1378,7 +1533,7 @@ test('deleting a starred group with force removes it from Recent', async ($, on)
   editGroup(w, alpha.id, group => (group.starred = true))
   const ui = await mountPane($)
   await ui.press({ key: 'mode-recent' })
-  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  expect(await cardTitles(ui)).toEqual(['ALPHA'])
   expect(await call($, 'delete_group', { id: alpha.id, force: true })).toMatch(/^Deleted group "Alpha"/)
   await ui.redraw()
   expect(await cardTitles(ui)).toEqual([])
