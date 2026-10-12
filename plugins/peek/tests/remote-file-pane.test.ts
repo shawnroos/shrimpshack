@@ -1,10 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-
-// A PNG signature and an 800x600 IHDR chunk: the engine checks both before it draws.
-const PNG_HEAD = 'iVBORw0KGgoAAAANSUhEUgAAAyAAAAJYCAIAAAAVFBUn'
-const TYPE_MARKER = '__peek_type__ '
-const MARKER = '__peek_curl__ '
+import { exited } from './fixtures/results'
+import { CURL_MARKER, PANE_PROPS, PNG_HEAD, TYPE_MARKER, baseWorld, fakeHttp, fakeProcess } from './fixtures/world'
 
 type Served = { status?: number; type?: string; text?: string }
 
@@ -18,10 +15,7 @@ function fileWorld(on: On, served: Record<string, Served>) {
   const files = new Map<string, string>()
   mock.clock(on, { now: 10 * 3600_000 })
   on('session.id', () => ({ value: 'remote-file-pane' }))
-  on('session.cwd', () => ({ value: '/repo' }))
-  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
-  on('ui.toast', () => ({ value: undefined }))
+  baseWorld(on)
   on('fs.stat', (_$, e) => {
     if (files.has(e.path)) return { value: { kind: 'file' as const, size: 40, mtimeMs: 9 * 3600_000, isLink: false } }
     throw new Error(`ENOENT ${e.path}`)
@@ -32,31 +26,33 @@ function fileWorld(on: On, served: Record<string, Served>) {
     if (text !== undefined) return { value: text }
     throw new Error(`ENOENT ${e.path}`)
   })
-  on('http.fetch', () => ({ value: { status: 404, ok: false, headers: {} as Record<string, string>, text: '' } }))
-  on('process.run', (_$, e) => {
-    ran.push([...e.argv])
-    const done = (exitCode: number, stdout = '', stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
-    const [bin = ''] = e.argv
-    if (bin === 'sh') return done(0, 'curl\n')
-    if (bin === 'test') return done(1)
-    if (bin === 'npm') return done(1)
-    if (bin === 'sips') return done(0, 'pixelWidth: 800\npixelHeight: 600\n')
-    if (bin === '/usr/bin/dscacheutil') return done(0, 'ip_address: 93.184.216.34\n')
-    const url = e.argv[e.argv.length - 1] ?? ''
-    const answer = served[url]
-    if (bin === 'curl' && e.argv.includes('-o')) {
-      if (!answer || (answer.status ?? 200) !== 200) return done(22, '404 0 ')
-      files.set(e.argv[e.argv.indexOf('-o') + 1] ?? '', answer.text ?? '')
-      return done(0, `200 ${(answer.text ?? '').length || 40} `, answer.type ? `${TYPE_MARKER}${answer.type}` : '')
-    }
-    if (bin === 'curl') return done(0, '<html><head><title>Reader page</title></head><body><p>Reader body</p></body></html>', `${MARKER}200 ${url}`)
-    return done(0)
-  })
+  fakeHttp(on)
+  fakeProcess(
+    on,
+    argv => {
+      const [bin = ''] = argv
+      if (bin === 'sh') return exited(0, 'curl\n')
+      if (bin === 'test') return exited(1)
+      if (bin === 'npm') return exited(1)
+      if (bin === 'sips') return exited(0, 'pixelWidth: 800\npixelHeight: 600\n')
+      if (bin === '/usr/bin/dscacheutil') return exited(0, 'ip_address: 93.184.216.34\n')
+      const url = argv[argv.length - 1] ?? ''
+      const answer = served[url]
+      if (bin === 'curl' && argv.includes('-o')) {
+        if (!answer || (answer.status ?? 200) !== 200) return exited(22, '404 0 ')
+        files.set(argv[argv.indexOf('-o') + 1] ?? '', answer.text ?? '')
+        return exited(0, `200 ${(answer.text ?? '').length || 40} `, answer.type ? `${TYPE_MARKER}${answer.type}` : '')
+      }
+      if (bin === 'curl') return exited(0, '<html><head><title>Reader page</title></head><body><p>Reader body</p></body></html>', `${CURL_MARKER}200 ${url}`)
+      return exited(0)
+    },
+    ran,
+  )
   const downloads = () => ran.filter(argv => argv[0] === 'curl' && argv.includes('-o')).map(argv => argv[argv.length - 1])
   return { ran, downloads, copied }
 }
 
-const props = { title: 'Peek', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
+const props = PANE_PROPS
 
 test('a markdown file URL downloads and draws like a local markdown file, and keeps the URL as its location', async ($, on) => {
   const url = 'https://files.test/docs/notes.md'
