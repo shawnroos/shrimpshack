@@ -5,6 +5,7 @@ import { capturedLinearContext } from './capture'
 import { describeAge } from './format'
 import { noteMentions } from './gallery'
 import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
+import type { LiveIo } from './live'
 import { AVATAR_EDGES, SCRATCH, WEB_EDGES, mediaFiles, pictures, remotePicture, withDrawnMermaid } from './images'
 import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
@@ -54,12 +55,15 @@ export type NavIo = {
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<unknown>
   invalidate: () => void
+  blit: (options: Without<Parameters<Ui['blit']>[0], 'requestId'>) => ReturnType<Ui['blit']>
+  copy: (options: Parameters<Ui['copy']>[0]) => ReturnType<Ui['copy']>
   toast: (text: string) => void
   fork: (request: Parameters<Model['fork']>[0]) => ReturnType<Model['fork']>
   scroll: (options: Without<Parameters<Ui['scroll']>[0], 'in'>) => ReturnType<Ui['scroll']>
   open: (options: Without<Parameters<Ui['open']>[0], 'id'>) => ReturnType<Ui['open']>
   focus: (options: Without<Parameters<Ui['focus']>[0], 'requestId'>) => ReturnType<Ui['focus']>
   remoteIo: () => RemoteIo
+  liveIo: () => LiveIo
   groupsIo: () => GroupsIo
   columns: () => number
   selectedNav: () => Promise<{ href: string } | undefined>
