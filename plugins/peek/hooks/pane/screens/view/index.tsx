@@ -3,23 +3,49 @@ import { setStar } from '../../../groups-session'
 import { pixels } from '../../../images'
 import { iconFor } from '../../../kinds'
 import { liveStatusText } from '../../../live'
-import { LINE_SCROLL_PX, LIVE_FRAME, liveBox, liveKey, liveSession, scrollLive, toggleLive } from '../../../live-pane'
+import { LIVE_FRAME, liveActions, liveBox, liveSession, toggleLive } from '../../../live-pane'
 import { goBack, nav, openExternally, refresh, sourceLine, starKeyOf, trailIcon } from '../../../navigation'
+import type { NavIo } from '../../../navigation'
 import { parseHref, shortPath } from '../../../paths'
 import { itemKey, parseRef } from '../../../refs'
 import { failureText } from '../../../sources'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP } from '../../chrome'
-import { modeActions } from '../../actions'
-import type { DrawContext, PaneActions, Screen } from '../../types'
+import { closeAction, modeActions } from '../../actions'
+import type { Action, DrawContext, PaneActions, Screen } from '../../types'
 import { noJumps } from './blocks'
-import type { ViewBody } from './blocks'
+import type { Jumps, ViewBody } from './blocks'
 import { codeBody } from './code'
 import { dirBody } from './dir'
 import { imageBody } from './image'
 import { markdownBody } from './markdown'
 import { remoteBody } from './remote'
 import { tableBody } from './table'
+
+function readerActions(io: NavIo, current: View, jumps: Jumps, isStarred: boolean): Action[] {
+  const remote = current.remote
+  return [
+    { id: 'next', label: 'Down', hotkey: 'j', run: jumps.next },
+    { id: 'prev', label: 'Up', hotkey: 'k', run: jumps.prev },
+    { id: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', run: () => void setStar(io, current.href) },
+    { id: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', run: () => void openExternally(io, current) },
+    ...(remote ? [{ id: 'refresh', label: 'Refresh', hotkey: 'u', run: () => void refresh(io, current.href) }] : []),
+    ...(nav.backStack.length || nav.groupBack
+      ? [{ id: 'back', label: 'Back', hotkey: 'b', menu: nav.groupBack && nav.backStack.length <= nav.groupBack.depth ? `Back to ${nav.groupBack.title}` : 'Back to the previous page', run: () => void goBack(io) }]
+      : []),
+    { id: 'copy', label: remote ? 'Copy link' : 'Copy path', hotkey: 'c', run: () => void io.copy({ text: current.location }) },
+  ]
+}
+
+// The typing flag can outlast the live frame (a helper failure drops the frame and keeps the flag), so on the reader
+// page too, any key ends typing before it acts.
+const endTypingFirst = (one: Action): Action => ({
+  ...one,
+  run: () => {
+    liveSession.isTyping = false
+    one.run()
+  },
+})
 
 export async function viewScreen(ctx: DrawContext, actions: PaneActions, current: View): Promise<Screen> {
   const { Box, Text, Image, Client, C, textWidth, pageWidth, isNarrow, offset, now, cwd, home } = ctx
@@ -79,8 +105,6 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
   }
   const liveStatus = isLiveHere ? liveStatusText(liveState, current.location) : ''
   const notice = liveSession.notice?.href === current.href ? failureText(liveSession.notice.kind) : null
-  const goNext = jumps.next
-  const goPrev = jumps.prev
   const starTarget = (liveFrame && liveState?.url) || current.href
   const isStarred = (await io.stars.read()).some(one => starKeyOf(one) === itemKey(starTarget))
   const remote = current.remote
@@ -99,6 +123,21 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
         { label: `${iconFor(current.kind)} ${liveFrame && liveState?.title ? liveState.title : current.title}`, fg: C.appBg, bg: C.accent, bold: true },
       ]
     : null
+
+  const liveToggle: Action[] = canLive
+    ? [{ id: 'live', label: liveSession.href === current.href ? 'Reader' : 'Live', hotkey: 'v', run: () => void toggleLive(io, current, viewport) }]
+    : []
+  const shown: Action[] = liveFrame
+    ? [
+        ...modeActions(actions),
+        ...liveToggle,
+        ...(liveSession.isTyping
+          ? [{ id: 'done-typing', label: 'Done typing', hotkey: 'd', menu: 'Done typing: give the keys back to peek', run: () => { liveSession.isTyping = false; io.invalidate() } }]
+          : []),
+        ...liveActions(io, isStarred).filter(one => one.hotkey),
+        closeAction(actions),
+      ]
+    : [...modeActions(actions), ...liveToggle, ...readerActions(io, current, jumps, isStarred), closeAction(actions)]
 
   return {
     crumbs: remoteCrumbs ?? [
@@ -127,30 +166,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
       </Box>
     ),
     info,
-    actions: [
-      ...modeActions(actions),
-      ...(canLive
-        ? [{ id: 'live', label: liveSession.href === current.href ? 'Reader' : 'Live', hotkey: 'v', run: () => void toggleLive(io, current, viewport) }]
-        : []),
-      ...(liveFrame && liveSession.isTyping
-        ? [{ id: 'done-typing', label: 'Done typing', hotkey: 'd', menu: 'Done typing: give the keys back to peek', run: () => { liveSession.isTyping = false; io.invalidate() } }]
-        : []),
-      { id: 'next', label: 'Down', hotkey: 'j', run: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
-      { id: 'prev', label: 'Up', hotkey: 'k', run: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
-      { id: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', run: liveFrame ? () => void liveKey(io, 'f') : () => void setStar(io, current.href) },
-      { id: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', run: liveFrame ? () => void liveKey(io, 'o') : () => void openExternally(io, current) },
-      ...(remote ? [{ id: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', run: liveFrame ? () => void liveKey(io, 'u') : () => void refresh(io, current.href) }] : []),
-      ...(liveFrame || nav.backStack.length || nav.groupBack
-        ? [{ id: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : nav.groupBack && nav.backStack.length <= nav.groupBack.depth ? `Back to ${nav.groupBack.title}` : 'Back to the previous page', run: liveFrame ? () => void liveKey(io, 'b') : () => void goBack(io) }]
-        : []),
-      {
-        id: 'copy',
-        label: remote ? 'Copy link' : 'Copy path',
-        hotkey: 'c',
-        run: liveFrame ? () => void liveKey(io, 'c') : () => void io.copy({ text: current.location }),
-      },
-      { id: 'close', label: 'Close', hotkey: 'x', run: () => void actions.close() },
-    ].map(one => (liveSession.isTyping ? { ...one, run: () => { liveSession.isTyping = false; one.run() } } : one)),
+    actions: liveSession.isTyping ? shown.map(endTypingFirst) : shown,
     menuOn: { target: current.error || (remote?.failure && !remote.record) || isLiveHere ? undefined : current.href },
   }
 }

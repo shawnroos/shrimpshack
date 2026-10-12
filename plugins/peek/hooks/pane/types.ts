@@ -73,6 +73,8 @@ export type Action = {
   run: () => unknown
   icon?: string
   hotkey?: string
+  // More keys that reach it from the live page's own input layer; never drawn.
+  keys?: readonly string[]
   menu?: string
   hint?: string
   // The row's hint is the hotkey of the screen's footer key with this id, or blank when the screen has none.

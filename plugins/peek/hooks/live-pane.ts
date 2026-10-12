@@ -4,6 +4,7 @@ import { createLive, isWebUrl, pagePoint, typedInput } from './live'
 import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveState, TypedKey, Viewport } from './live'
 import { goBack, openExternally } from './navigation'
 import type { NavIo } from './navigation'
+import type { Action } from './pane/types'
 
 export const LIVE_FRAME = 'live-frame'
 // No API reports a cell's pixel size; 8 CSS px a column keeps text near its normal size at the 1 MB/s frame budget.
@@ -66,35 +67,53 @@ async function liveBack(io: NavIo) {
   }
 }
 
+// The keys the live page answers to, from the footer and from the live input layer alike; liveKey routes by hotkey or `keys`.
+export function liveActions(io: NavIo, isStarred = false): Action[] {
+  const pageHeight = () => liveSession.viewport?.height ?? 400
+  const liveUrl = () => liveSession.live?.state().url
+  return [
+    { id: 'next', label: 'Down', hotkey: 'j', keys: ['down'], run: () => scrollLive(LINE_SCROLL_PX) },
+    { id: 'prev', label: 'Up', hotkey: 'k', keys: ['up'], run: () => scrollLive(-LINE_SCROLL_PX) },
+    {
+      id: 'star',
+      label: isStarred ? 'Unstar' : 'Star',
+      hotkey: 'f',
+      run: async () => {
+        const url = liveUrl()
+        const current = await io.view.read()
+        return url || current ? void setStar(io, url ?? current?.href ?? '') : undefined
+      },
+    },
+    {
+      id: 'open',
+      label: 'Open in browser',
+      hotkey: 'o',
+      run: async () => {
+        const url = liveUrl()
+        const current = await io.view.read()
+        return url && isWebUrl(url) ? void io.run(['open', url]).catch(() => undefined) : current ? openExternally(io, current) : undefined
+      },
+    },
+    { id: 'refresh', label: 'Reload', hotkey: 'u', run: () => void liveSession.live?.command('reload') },
+    { id: 'back', label: 'Back', hotkey: 'b', run: () => liveBack(io) },
+    {
+      id: 'copy',
+      label: 'Copy link',
+      hotkey: 'c',
+      run: async () => {
+        const url = liveUrl()
+        const current = await io.view.read()
+        return void io.copy({ text: url ?? current?.location ?? '' })
+      },
+    },
+    { id: 'page-down', label: 'Page down', keys: [' ', 'pagedown'], run: () => scrollLive(Math.round(pageHeight() * 0.8)) },
+    { id: 'page-up', label: 'Page up', keys: ['pageup'], run: () => scrollLive(-Math.round(pageHeight() * 0.8)) },
+    { id: 'reader', label: 'Reader', keys: ['v'], run: () => leaveLive().then(() => io.invalidate()) },
+  ]
+}
+
 export async function liveKey(io: NavIo, key: string) {
-  const height = liveSession.viewport?.height ?? 400
-  const url = liveSession.live?.state().url
-  const current = key === 'o' || key === 'c' || key === 'f' ? await io.view.read() : null
-  switch (key) {
-    case 'j':
-    case 'down':
-      return scrollLive(LINE_SCROLL_PX)
-    case 'k':
-    case 'up':
-      return scrollLive(-LINE_SCROLL_PX)
-    case ' ':
-    case 'pagedown':
-      return scrollLive(Math.round(height * 0.8))
-    case 'pageup':
-      return scrollLive(-Math.round(height * 0.8))
-    case 'b':
-      return liveBack(io)
-    case 'u':
-      return void liveSession.live?.command('reload')
-    case 'v':
-      return leaveLive().then(() => io.invalidate())
-    case 'o':
-      return url && isWebUrl(url) ? void io.run(['open', url]).catch(() => undefined) : current ? openExternally(io, current) : undefined
-    case 'c':
-      return void io.copy({ text: url ?? current?.location ?? '' })
-    case 'f':
-      return url || current ? void setStar(io, url ?? current?.href ?? '') : undefined
-  }
+  return liveActions(io).find(one => one.hotkey === key || one.keys?.includes(key))?.run()
 }
 
 export type LiveInputEvent = { seq: number; type: 'click'; x: number; y: number } | ({ seq: number; type: 'key' } & TypedKey)
