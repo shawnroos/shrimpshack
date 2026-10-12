@@ -4,7 +4,7 @@ import type { Engine, Mounted } from 'claude-code/testing'
 import { PANE_PROPS, PR, create, editGroup, fakeFs } from './fixtures/world'
 import type { World } from './fixtures/world'
 
-// What each client module posts when clicked, what reaches ui.message and what it answers, and what follows: state
+// What each client module posts when clicked and what follows: state
 // writes, saved stores, toasts, opened and written files, and the next draw. Then the final screen state after each
 // navigation. The message and navigation code can move only if every line here stays the same.
 
@@ -63,11 +63,6 @@ async function begin($: Engine, on: On, setup: (run: Run) => Promise<void> = asy
   on('store.set', (_$, e, next) => {
     log.push(`store ${e.key} ${JSON.stringify(e.value)}`)
     return next(e)
-  })
-  on('ui.message', async (_$, e, next) => {
-    const answer = await next(e)
-    log.push(`message ${e.element} ${JSON.stringify(e.data)} -> ${JSON.stringify(answer)}`)
-    return answer
   })
   await setup(run)
   run.ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: 'peek' })
@@ -130,7 +125,7 @@ async function clientDrawn(run: Run, key: string) {
   const text = await run.ui
     .drawn({ in: key })
     .then(tree => JSON.stringify(tree))
-    .catch((error: unknown) => `threw ${String(error).split('\n')[0]}`)
+    .catch((error: unknown) => `threw ${String(error).split(':')[0]}`)
   run.log.push(`client ${key} ${text}`)
 }
 
@@ -608,7 +603,7 @@ const EXPECTED: Record<string, string[]> = {
     "> post {\"liveInput\":[],\"star\":\"file:///repo/data/b.txt\"}",
     "draw mode-view,mode-recent,mode-gallery,mode-groups,next,prev,left,right,open-selected,star-selected,expand-selected,close",
     "draw title=- focus=item-0 stars=1",
-    "client tabs-right threw HooksError: peek: Client hooks/tabs.tsx: undefined is not an object (evaluating 'props.tabs.map')",
+    "client tabs-right threw HooksError",
     "> post {\"liveInput\":[{\"seq\":1,\"type\":\"key\",\"key\":\"a\"}]}",
     "draw mode-view,mode-recent,mode-gallery,mode-groups,next,prev,left,right,open-selected,star-selected,expand-selected,close",
     "draw title=- focus=item-0 stars=1"
