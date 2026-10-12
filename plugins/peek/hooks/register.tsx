@@ -162,6 +162,8 @@ const SAMPLE_MARKDOWN = '## Markdown\n\nRenders **bold**, *italic*, `code`, [lin
 
 const MERMAID_ASCII = '/.cache/claude-peek/bin/mermaid-ascii'
 const MAX_PNG_BYTES = 2 * 1024 * 1024
+// The engine refuses a whole pane whose Image sources pass 2097152 bytes; past this budget a picture shows as a link.
+const IMAGE_TREE_BUDGET = 1_900_000
 
 const exists = new Map<string, boolean>()
 const pixels = new Map<string, string>()
@@ -206,8 +208,8 @@ async function runOrThrow($: EngineInterface, argv: string[]) {
 
 // The bytes go to the terminal inline: a multiplexer between Claude Code and
 // the terminal may pass kitty images sent as data but not ones sent as a path.
-async function toPng($: EngineInterface, abs: string, mtimeMs: number) {
-  const cacheKey = `${abs}@${mtimeMs}`
+async function toPng($: EngineInterface, abs: string, mtimeMs: number, edges: readonly number[] = [1600, 1000, 600]) {
+  const cacheKey = `${abs}@${mtimeMs}@${edges.join(',')}`
   const cached = converted.get(cacheKey)
   if (cached && pixels.has(cached.file)) return cached
   await $.process.run(['mkdir', '-p', SCRATCH])
@@ -218,7 +220,7 @@ async function toPng($: EngineInterface, abs: string, mtimeMs: number) {
     await runOrThrow($, ['rsvg-convert', '-w', '1600', '-o', source, abs])
   }
   const file = `${SCRATCH}/${name}.png`
-  for (const edge of [1600, 1000, 600]) {
+  for (const edge of edges) {
     await runOrThrow($, ['sips', '-Z', String(edge), '-s', 'format', 'png', source, '--out', file])
     const { base64 } = await $.fs.read(file, { as: 'bytes' })
     if (base64.length * 0.75 <= MAX_PNG_BYTES) {
@@ -377,9 +379,12 @@ function remoteIoOf($: EngineInterface): RemoteIo {
   }
 }
 
+// A pane is about 100 columns of 8 px, so 800 px is already sharper than it can show, and keeps each picture small.
+const WEB_EDGES = [800, 600, 400]
+
 async function remotePicture($: EngineInterface, file: string | undefined) {
   if (!file || failedPictures.has(file)) return undefined
-  return toPng($, file, 0).catch(() => {
+  return toPng($, file, 0, WEB_EDGES).catch(() => {
     failedPictures.add(file)
     return undefined
   })
@@ -2105,6 +2110,12 @@ export const register: Register = on => {
         note(1, label)
       }
       const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
+      let imageBytes = 0
+      const fitsPane = (png: string) => {
+        if (imageBytes + png.length > IMAGE_TREE_BUDGET) return false
+        imageBytes += png.length
+        return true
+      }
       const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
       const refs = refContext(ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
       const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
@@ -2112,7 +2123,8 @@ export const register: Register = on => {
         const key = `media-${index}`
         const one = record?.media?.[url]
         const picture = remote.pictures?.[url]
-        const png = picture && pixels.get(picture.file)
+        const loadedPng = picture && pixels.get(picture.file)
+        const png = loadedPng && fitsPane(loadedPng) ? loadedPng : undefined
         const host = (() => {
           try {
             return new URL(url).host
@@ -2183,7 +2195,8 @@ export const register: Register = on => {
         )
         note(remote.failureDetail ? 4 : 3)
       } else {
-        const favicon = remote.favicon && pixels.get(remote.favicon.file)
+        const faviconPng = remote.favicon && pixels.get(remote.favicon.file)
+        const favicon = faviconPng && fitsPane(faviconPng) ? faviconPng : undefined
         drawnParts.push(
           <Box key="remote-title" flexDirection="row" width={textWidth}>
             {favicon && Image ? (
@@ -2200,7 +2213,8 @@ export const register: Register = on => {
         )
         note(Math.ceil((record.title.length + 3) / textWidth), record.title)
         const labelWidth = Math.min(14, Math.max(0, ...record.meta.map(one => (META_ICON[one.label] ? 1 : one.label.length))) + 2)
-        const preview = remote.preview && pixels.get(remote.preview.file)
+        const previewPng = remote.preview && pixels.get(remote.preview.file)
+        const preview = previewPng && fitsPane(previewPng) ? previewPng : undefined
         const previewBox = preview && Image && remote.preview ? fullWidth(remote.preview.width, remote.preview.height) : null
         const ogDescription = record.og?.description
         drawnParts.push(
