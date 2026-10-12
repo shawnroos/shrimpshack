@@ -3,22 +3,17 @@ import type { HttpInit, HttpResponse, ProcessRunResult } from 'claude-code'
 
 import type { Captured } from '../hooks/capture'
 import { bootstrapLinear, fromCapture, loadLinear } from '../hooks/linear'
-import { parseRef } from '../hooks/refs'
-import type { Ref } from '../hooks/refs'
 import type { SourceIo } from '../hooks/sources'
-import type { Loaded, RemoteRecord } from '../types'
 import { ISSUE_NO_PROJECT, ISSUE_WITH_PROJECT, PROJECT, openIssue } from './fixtures/linear/api'
 import { MCP_ISSUE, MCP_PROJECT } from './fixtures/linear/mcp'
+import { parseRef } from '../hooks/refs'
+import { exited, meta, record, ref } from './fixtures/results'
 
 const NOW = 1_760_000_000_000
 let sessions = 0
 
 type Sent = { query: string; variables: Record<string, unknown> }
 type Reply = (sent: Sent) => unknown
-
-function exited(exitCode: number, stdout = ''): ProcessRunResult {
-  return { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
-}
 
 function json(status: number, body: unknown): HttpResponse {
   return { status, ok: status >= 200 && status < 300, headers: {}, text: JSON.stringify(body) }
@@ -48,21 +43,6 @@ function world(reply: Reply, hasKey = true) {
     sleep: async () => {},
   }
   return { io, sent }
-}
-
-function ref(text: string): Ref {
-  const found = parseRef(text)
-  if (!found) throw new Error(`bad ref ${text}`)
-  return found
-}
-
-function record(loaded: Loaded | null): RemoteRecord {
-  if (!loaded || !loaded.ok) throw new Error(`not loaded: ${JSON.stringify(loaded)}`)
-  return loaded.record
-}
-
-function meta(rec: RemoteRecord, label: string): string | undefined {
-  return rec.meta.find(entry => entry.label === label)?.value
 }
 
 function issueWorld(issue: unknown) {
