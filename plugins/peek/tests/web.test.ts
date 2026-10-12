@@ -4,12 +4,11 @@ import type { HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code
 import type { Captured } from '../hooks/capture'
 import type { Ref } from '../hooks/refs'
 import type { SourceIo } from '../hooks/sources'
-import { fromCapture, isPrivateHost, loadWeb, parseHead } from '../hooks/web'
+import { MARKER, fromCapture, isPrivateHost, loadWeb, parseHead } from '../hooks/web'
 import { FULL_OG, HOSTILE, ICO_ICON, NO_ICON, TITLE_ONLY, privateImage } from './fixtures/web/pages'
 import { exited } from './fixtures/results'
 
 const NOW = 1_700_000_000_000
-const MARKER = '__peek_curl__ '
 
 type Page = { html: string; status?: number; finalUrl?: string; isTruncated?: boolean; exitCode?: number }
 
