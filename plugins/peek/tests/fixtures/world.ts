@@ -2,6 +2,7 @@ import type { On, ProcessRunResult } from 'claude-code'
 import { groupsDir } from '../../hooks/groups'
 import { resetRefresh } from '../../hooks/refresh'
 
+// A PNG signature and an 800x600 IHDR chunk: the engine checks both before it draws.
 export const PNG_HEAD = 'iVBORw0KGgoAAAANSUhEUgAAAyAAAAJYCAIAAAAVFBUn'
 export { MARKER as CURL_MARKER, TYPE_MARKER } from '../../hooks/web'
 

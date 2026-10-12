@@ -1,11 +1,10 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { hoverLayers } from './fixtures/overlay'
+import { exited } from './fixtures/results'
+import { CURL_MARKER, PANE_PROPS, PNG_HEAD, baseWorld, fakeHttp, fakeProcess, noDisk } from './fixtures/world'
 
 const PAGE = 'https://site.test/post'
-// A PNG signature and an 800x600 IHDR chunk: the engine checks both before it draws.
-const PNG_HEAD = 'iVBORw0KGgoAAAANSUhEUgAAAyAAAAJYCAIAAAAVFBUn'
-const MARKER = '__peek_curl__ '
 const VIDEO = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 const CONTENT = ['Intro text for the post.', '', `![](${VIDEO})`, '', 'Closing text.', '', '![A diagram](https://site.test/missing.png)'].join('\n')
 
@@ -13,35 +12,32 @@ function mediaWorld(on: On, options: { content?: string; pngBytes?: number } = {
   const ran: string[][] = []
   mock.clock(on, { now: 10 * 3600_000 })
   on('session.id', () => ({ value: 'media-pane' }))
-  on('session.cwd', () => ({ value: '/repo' }))
-  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
-  on('ui.toast', () => ({ value: undefined }))
-  on('fs.stat', (_$, e) => {
-    throw new Error(`ENOENT ${e.path}`)
-  })
+  baseWorld(on)
+  noDisk(on)
   on('fs.read', (_$, e) => {
     if (options.pngBytes && e.as === 'bytes' && e.path.endsWith('.png')) return { value: { base64: `${PNG_HEAD}${'A'.repeat(options.pngBytes - PNG_HEAD.length)}` } }
     throw new Error(`ENOENT ${e.path}`)
   })
-  on('http.fetch', () => ({ value: { status: 404, ok: false, headers: {} as Record<string, string>, text: '' } }))
-  on('process.run', (_$, e) => {
-    ran.push([...e.argv])
-    const done = (exitCode: number, stdout = '', stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
-    const [bin = ''] = e.argv
-    if (bin === 'sh') return done(0, 'curl\n')
-    if (bin === 'test') return done(0)
-    if (bin === 'node') return done(0, JSON.stringify({ content: options.content ?? CONTENT }))
-    if (bin === 'sips') return done(0, 'pixelWidth: 800\npixelHeight: 600\n')
-    if (bin === '/usr/bin/dscacheutil') return done(0, 'ip_address: 93.184.216.34\n')
-    if (bin === 'curl' && e.argv.includes('-o')) return options.pngBytes ? done(0, '200 512 ') : done(22, '404 0 ')
-    if (bin === 'curl') return done(0, '<html><head><title>Post</title><meta property="og:description" content="About the post"></head><body><p>Intro</p></body></html>', `${MARKER}200 ${PAGE}`)
-    return done(0)
-  })
+  fakeHttp(on)
+  fakeProcess(
+    on,
+    argv => {
+      const [bin = ''] = argv
+      if (bin === 'sh') return exited(0, 'curl\n')
+      if (bin === 'test') return exited(0)
+      if (bin === 'node') return exited(0, JSON.stringify({ content: options.content ?? CONTENT }))
+      if (bin === 'sips') return exited(0, 'pixelWidth: 800\npixelHeight: 600\n')
+      if (bin === '/usr/bin/dscacheutil') return exited(0, 'ip_address: 93.184.216.34\n')
+      if (bin === 'curl' && argv.includes('-o')) return options.pngBytes ? exited(0, '200 512 ') : exited(22, '404 0 ')
+      if (bin === 'curl') return exited(0, '<html><head><title>Post</title><meta property="og:description" content="About the post"></head><body><p>Intro</p></body></html>', `${CURL_MARKER}200 ${PAGE}`)
+      return exited(0)
+    },
+    ran,
+  )
   return { ran }
 }
 
-const props = { title: 'Peek', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
+const props = PANE_PROPS
 
 test('a video in a reader page shows a play button that opens it in the browser', async ($, on) => {
   const w = mediaWorld(on)
