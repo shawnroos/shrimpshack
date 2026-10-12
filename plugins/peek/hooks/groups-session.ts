@@ -7,6 +7,7 @@ import { remotePicture } from './images'
 import { clamp, nav, noteTitle, remoteLoader, remoteRef, show, starKeyOf, startTicking } from './navigation'
 import type { NavIo } from './navigation'
 import { type ItemLook, type ItemState, remoteNaming } from './pane/look'
+import type { Action } from './pane/types'
 import { fileHref, kindOf, parseHref, resolvePath } from './paths'
 import { cached, refreshItem } from './refresh'
 import type { TitleEntry } from './refresh'
@@ -99,17 +100,15 @@ export async function personGroupAdd(io: NavIo, id: string, title: string, href:
   else await personGroupWrite(io, id, title, { op: 'addItem', ref: target.ref })
 }
 
-export type MenuCommand = { id: string; icon: string; label: string; hint: string; run: () => void; isGroupRow?: boolean; isFilteredOnly?: boolean }
-
 export type GroupMenuFor = { target?: string; group?: Group; selectedRef?: string; starHint?: string }
 
 const GROUP_MENU_ROWS = 8
 
-export async function groupCommands(io: NavIo, on: GroupMenuFor): Promise<MenuCommand[]> {
+export async function groupMenuRows(io: NavIo, on: GroupMenuFor): Promise<Action[]> {
   const home = await groupHome(io)
   if (!home) return []
   const open = on.group
-  const own: MenuCommand[] = open
+  const own: Action[] = open
     ? [
         { id: 'group-star', icon: '\u{f51a}', label: `${open.starred ? 'Unstar' : 'Star'} this group`, hint: on.starHint ?? '', run: () => void toggleGroupStar(io, open.id) },
         ...(on.selectedRef !== undefined
@@ -122,7 +121,7 @@ export async function groupCommands(io: NavIo, on: GroupMenuFor): Promise<MenuCo
   if (!href || !target || 'error' in target) return own.map(one => ({ ...one, isGroupRow: true }))
   const key = itemKey(target.ref)
   const groups = (await io.shownGroups(home.place)).filter(one => one.id !== open?.id)
-  const rows = groups.map((one, index): MenuCommand => {
+  const rows = groups.map((one, index): Action => {
     const held = one.items.find(item => itemKey(item.ref) === key)
     const isFilteredOnly = index >= GROUP_MENU_ROWS
     return held

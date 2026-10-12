@@ -1,10 +1,10 @@
 import type { Mode } from '../../types'
-import { groupCommands } from '../groups-session'
-import type { MenuCommand } from '../groups-session'
+import { groupMenuRows } from '../groups-session'
 import { C as BASE } from '../theme'
-import { MODES } from './keys'
-import { Menu, menuWidthOf } from './menu'
-import type { Crumb, DrawContext, Key, PaneActions, Screen } from './types'
+import { MODES } from './actions'
+import { Menu, menuRows, menuWidthOf } from './menu'
+import type { MenuLists } from './menu'
+import type { Action, Crumb, DrawContext, PaneActions, Screen } from './types'
 
 export const HEADER_ROWS = 2
 export const FOOTER_ROWS = 3
@@ -114,7 +114,7 @@ function Header(ctx: DrawContext, middle: unknown, isTabCompact: boolean) {
   )
 }
 
-function Footer(ctx: DrawContext, info: string, keys: readonly Key[]) {
+function Footer(ctx: DrawContext, info: string, footer: readonly Action[]) {
   const { Box, Text, Button, C } = ctx
   return (
     <Box flexDirection="row" flexWrap="wrap" columnGap={2} justifyContent="center" width={ctx.columns}>
@@ -123,20 +123,18 @@ function Footer(ctx: DrawContext, info: string, keys: readonly Key[]) {
       <Text color={C.accent}>⌃k menu</Text>
       {/* Hidden, yet the hotkeys still press: the Pane arms every Button in its drawn tree regardless of display (seen in engine 2.1.295, not promised by the types). Tab still visits them. */}
       <Box key="footer-keys" display="none">
-        {keys.map(one => (
-          <Button key={one.key} label={one.label} hotkey={one.hotkey} plain onPress={one.onPress} />
-        ))}
+        {footer.flatMap(one => (one.hotkey ? [<Button key={one.id} label={one.label} hotkey={one.hotkey} plain onPress={() => void one.run()} />] : []))}
       </Box>
     </Box>
   )
 }
 
-export async function frame(ctx: DrawContext, actions: PaneActions, commands: readonly MenuCommand[], screen: Screen) {
+export async function frame(ctx: DrawContext, actions: PaneActions, lists: MenuLists, screen: Screen) {
   const { Box, C, offset, bodyColumns, bodyRows } = ctx
   const { fitted, isTabCompact } = fitCrumbs(screen.crumbs, ctx)
   const middle = Crumbs(ctx, fitted)
   // A group home that cannot resolve leaves the menu without group rows rather than failing the whole pane.
-  const groupMenu = ctx.isMenuOpen ? await groupCommands(actions.io, screen.menuOn ?? {}).catch(() => []) : []
+  const groupMenu = ctx.isMenuOpen ? await groupMenuRows(actions.io, screen.menuOn ?? {}).catch(() => []) : []
   const menuWidth = menuWidthOf(ctx.columns)
   return (
     <Box
@@ -176,7 +174,7 @@ export async function frame(ctx: DrawContext, actions: PaneActions, commands: re
         justifyContent="flex-end"
         backgroundColor={C.appBg}
       >
-        {Footer(ctx, screen.info, screen.keys)}
+        {Footer(ctx, screen.info, screen.actions)}
       </Box>
       {ctx.isMenuOpen && (
         <Box
@@ -189,7 +187,7 @@ export async function frame(ctx: DrawContext, actions: PaneActions, commands: re
           paddingX={2}
           paddingY={1}
         >
-          {Menu(ctx, actions, commands, screen.keys, groupMenu) as never}
+          {Menu(ctx, actions, menuRows(lists, screen.actions, groupMenu), screen.actions) as never}
         </Box>
       )}
     </Box>

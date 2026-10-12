@@ -10,7 +10,7 @@ import { clamp, remoteRef, starKeyOf, titlesByKey } from '../../navigation'
 import { parseHref } from '../../paths'
 import { cached } from '../../refresh'
 import { ICON } from '../../theme'
-import { MOVE_KEYS, closeKey, expandKey, modeKeys, selectKeys } from '../keys'
+import { MOVE_KEYS, closeAction, expandAction, modeActions, selectActions } from '../actions'
 import { CARD_GAP, CARD_MIN, CARD_ROWS, layout } from '../layout'
 import type { ItemLook } from '../look'
 import type { DrawContext, PaneActions, Screen } from '../types'
@@ -222,25 +222,25 @@ export async function groupsScreen(ctx: DrawContext, actions: PaneActions): Prom
     crumbs: [{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }],
     content,
     info: `${plural(groups.length, 'group')} · ${starredCount} starred`,
-    keys: [
-      ...modeKeys(actions),
-      ...selectKeys(actions).filter(one => MOVE_KEYS.has(one.key)),
+    actions: [
+      ...modeActions(actions),
+      ...selectActions(actions).filter(one => MOVE_KEYS.has(one.id)),
       {
-        key: 'open-selected',
+        id: 'open-selected',
         label: '⏎ Open',
         hotkey: 'o',
         menu: 'Open the selected group',
-        onPress: () => void selectedGroup().then(id => (id ? openGroupPage(io, id) : undefined)),
+        run: () => void selectedGroup().then(id => (id ? openGroupPage(io, id) : undefined)),
       },
       {
-        key: 'star-selected',
+        id: 'star-selected',
         label: 'Star',
         hotkey: 'f',
         menu: 'Star or unstar the selected group',
-        onPress: () => void selectedGroup().then(id => (id ? starInGroupsTab(io, id) : undefined)),
+        run: () => void selectedGroup().then(id => (id ? starInGroupsTab(io, id) : undefined)),
       },
-      expandKey(actions, ctx.chosen),
-      closeKey(actions),
+      expandAction(actions, ctx.chosen),
+      closeAction(actions),
     ],
     pageBg: C.appBg,
     menuOn: { group: groups[clamp(selected, groups.length)], starHint: 'f' },

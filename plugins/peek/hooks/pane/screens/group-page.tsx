@@ -10,7 +10,7 @@ import { clamp, remoteRef, starKeyOf, titlesByKey } from '../../navigation'
 import { parseHref } from '../../paths'
 import { cached, isTimed } from '../../refresh'
 import { ICON } from '../../theme'
-import { closeKey, modeKeys } from '../keys'
+import { closeAction, modeActions } from '../actions'
 import { layout } from '../layout'
 import type { ItemLook } from '../look'
 import type { DrawContext, PaneActions, Screen } from '../types'
@@ -116,28 +116,28 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
     ],
     content,
     info: `${shown.title} · ${plural(looks.length, 'item')} · ${missing} missing`,
-    keys: [
-      ...modeKeys(actions),
-      { key: 'next', label: 'Down', hotkey: 'j', onPress: () => void actions.moveSelection('down') },
-      { key: 'prev', label: 'Up', hotkey: 'k', onPress: () => void actions.moveSelection('up') },
+    actions: [
+      ...modeActions(actions),
+      { id: 'next', label: 'Down', hotkey: 'j', run: () => void actions.moveSelection('down') },
+      { id: 'prev', label: 'Up', hotkey: 'k', run: () => void actions.moveSelection('up') },
       {
-        key: 'open-selected',
+        id: 'open-selected',
         label: '⏎ Open',
         hotkey: 'o',
         menu: 'Open the selected item',
-        onPress: () => void groupPageRows(io).then(now => (now ? openGroupItem(io, now, now.selected) : undefined)),
+        run: () => void groupPageRows(io).then(now => (now ? openGroupItem(io, now, now.selected) : undefined)),
       },
       {
-        key: 'star-selected',
+        id: 'star-selected',
         label: 'Star',
         hotkey: 'f',
         menu: 'Star or unstar the selected item',
-        onPress: () => void groupPageRows(io).then(now => {
+        run: () => void groupPageRows(io).then(now => {
           const href = now?.hrefs[now.selected]
           return href ? setStar(io, href).then(() => io.invalidate()) : undefined
         }),
       },
-      closeKey(actions),
+      closeAction(actions),
     ],
     pageBg: C.appBg,
     menuOn: { target: rows.hrefs[selected] || undefined, group: shown, selectedRef: refs[selected] },

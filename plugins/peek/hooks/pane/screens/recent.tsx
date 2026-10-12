@@ -3,7 +3,7 @@ import { selectEntries } from '../../gallery'
 import { groupHome } from '../../groups-session'
 import { iconFor } from '../../kinds'
 import { clamp } from '../../navigation'
-import { closeKey, expandKey, modeKeys, selectKeys } from '../keys'
+import { closeAction, expandAction, modeActions, roleAction, scopeAction, selectActions } from '../actions'
 import { LIST_CHUNK, layout } from '../layout'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { HoverLayer, ItemRow, SectionRule } from '../widgets'
@@ -16,7 +16,7 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
   const { Box, Text, C, textWidth } = ctx
   const w = ctx
   const io = actions.io
-  const { rest, favourites, scopeNote, roleKey, scopeKey, scopeCrumbs, waiting, selected, nav, keys, starts, at, looks, describe, favouritesBlock, groupsOf, scope, starSet } = await fileListing(ctx, actions)
+  const { rest, favourites, scopeNote, role, scopeCrumbs, waiting, selected, nav, keys, starts, at, looks, describe, favouritesBlock, groupsOf, scope, starSet } = await fileListing(ctx, actions)
   const favs = selectEntries(favourites, 'all', '', 'recent')
   const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
   at.cursor = 0
@@ -123,17 +123,17 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
     crumbs: scopeCrumbs,
     content,
     info: rest ? `${favs.length} favourites · ${recentList.length} files · ${scopeNote}` : 'loading…',
-    keys: [
-      ...modeKeys(actions),
-      scopeKey,
-      roleKey,
-      ...selectKeys(actions).map(one => {
+    actions: [
+      ...modeActions(actions),
+      scopeAction(actions, scope),
+      roleAction(actions, role),
+      ...selectActions(actions).map(one => {
         if (!pinnedOn) return one
-        if (one.key === 'open-selected') return { ...one, menu: 'Open the selected group' }
-        return one.key === 'star-selected' ? { ...one, menu: 'Unstar the selected group' } : one
+        if (one.id === 'open-selected') return { ...one, menu: 'Open the selected group' }
+        return one.id === 'star-selected' ? { ...one, menu: 'Unstar the selected group' } : one
       }),
-      ...(pinned.length ? [expandKey(actions, ctx.chosen)] : []),
-      closeKey(actions),
+      ...(pinned.length ? [expandAction(actions, ctx.chosen)] : []),
+      closeAction(actions),
     ],
     pageBg: C.appBg,
     menuOn: pinnedOn ? { group: pinnedOn, starHint: 'f' } : { target: nav[clamp(selected, nav.length)]?.href },

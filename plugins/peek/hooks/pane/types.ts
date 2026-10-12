@@ -66,8 +66,21 @@ export type PaneActions = {
   close: () => Promise<unknown>
 }
 
-export type Key = { key: string; label: string; hotkey: string; onPress: () => void; menu?: string }
+// A footer key when it has a hotkey, and a ⌃k row: a footer key under its `menu` label, or a menu list entry as is.
+export type Action = {
+  id: string
+  label: string
+  run: () => unknown
+  icon?: string
+  hotkey?: string
+  menu?: string
+  hint?: string
+  // The row's hint is the hotkey of the screen's footer key with this id, or blank when the screen has none.
+  hintFrom?: string
+  isGroupRow?: boolean
+  isFilteredOnly?: boolean
+}
 
 export type Crumb = { label: string; fg: string; bg: string; bold?: boolean; canShrink?: boolean }
 
-export type Screen = { crumbs: Crumb[]; content: unknown; info: string; keys: Key[]; menuOn?: GroupMenuFor; pageBg?: string }
+export type Screen = { crumbs: Crumb[]; content: unknown; info: string; actions: Action[]; menuOn?: GroupMenuFor; pageBg?: string }

@@ -14,8 +14,8 @@ import { linkify, pathCandidates } from './markdown'
 import { fileHref, parseHref, resolvePath } from './paths'
 import type { Direction, DrawContext, NavItem, PaneActions, Screen } from './pane/types'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP, frame as drawFrame, geometryOf } from './pane/chrome'
-import { MODES } from './pane/keys'
-import { menuCommands } from './pane/menu'
+import { MODES } from './pane/actions'
+import { menuLists } from './pane/menu'
 import { layout } from './pane/layout'
 import { groupsScreen } from './pane/screens/groups'
 import { recentScreen } from './pane/screens/recent'
@@ -507,7 +507,7 @@ export const register: Register = on => {
       scale: layout.contentRows > 0 ? realBody / Math.max(1, layout.estimatedRows) : 1,
     }
     const actions = paneActionsOf($)
-    const commands = menuCommands(ctx, actions)
-    return drawFrame(ctx, actions, commands, await SCREENS[chosen](ctx, actions))
+    const lists = menuLists(ctx, actions)
+    return drawFrame(ctx, actions, lists, await SCREENS[chosen](ctx, actions))
   })
 }

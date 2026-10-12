@@ -1,5 +1,5 @@
 import { describeAge, describeSize } from '../../format'
-import { filterRole, gridColumns, nextOf } from '../../gallery'
+import { filterRole, gridColumns } from '../../gallery'
 import type { FileEntry } from '../../gallery'
 import { scopeEntries, sessionEntries, withMentions } from '../../entries'
 import { pixels } from '../../images'
@@ -7,8 +7,8 @@ import { iconFor } from '../../kinds'
 import { shortPath } from '../../paths'
 import { CARD_GAP, CARD_MIN, CARD_ROWS, layout } from '../layout'
 import { lookOf } from '../look'
-import { ROLES, SCOPES, SCOPE_ICON } from '../menu'
-import type { Crumb, DrawContext, Key, NavItem, PaneActions } from '../types'
+import { SCOPE_ICON } from '../actions'
+import type { Crumb, DrawContext, NavItem, PaneActions } from '../types'
 import { HoverLayer, ItemCard, SectionRule } from '../widgets'
 
 // Recent and Gallery share one listing: the same reads in the same order, and one running row count and keyboard
@@ -23,19 +23,7 @@ export async function fileListing(ctx: DrawContext, actions: PaneActions) {
   const starSet = new Set(starList)
   const raw = scope === 'session' ? await sessionEntries(io, list) : scopeEntries(io, scope, cwd, now)
   const entries = raw ? filterRole(withMentions(raw, list), role) : null
-  const roleKey: Key = {
-    key: 'role',
-    label: `Show: ${role}`,
-    hotkey: 'a',
-    onPress: () => void actions.roleFilter.update(one => nextOf(ROLES, one)),
-  }
   const scopeNote = role === 'all' ? scope : `${scope} · ${role}`
-  const scopeKey: Key = {
-    key: 'scope',
-    label: `Scope: ${scope}`,
-    hotkey: 's',
-    onPress: () => void actions.scope.update(one => nextOf(SCOPES, one)),
-  }
   const describe = (one: FileEntry) => {
     const age = describeAge(Math.max(one.mentionedAt, one.mtimeMs), now)
     const where = one.worktree && scope === 'repo' ? `${one.worktree} · ` : ''
@@ -122,5 +110,5 @@ export async function fileListing(ctx: DrawContext, actions: PaneActions) {
       { id: 'touched', label: 'TOUCHED', items: items.filter(one => one.role === 'touched') },
       { id: 'files', label: scope.toUpperCase(), items: items.filter(one => !one.role) },
     ].filter(group => group.items.length > 0)
-  return { scope, role, starSet, rest, favourites, scopeNote, roleKey, scopeKey, scopeCrumbs, waiting, selected, nav, keys, starts, at, looks, describe, cardGrid, favouritesBlock, groupsOf }
+  return { scope, role, starSet, rest, favourites, scopeNote, scopeCrumbs, waiting, selected, nav, keys, starts, at, looks, describe, cardGrid, favouritesBlock, groupsOf }
 }

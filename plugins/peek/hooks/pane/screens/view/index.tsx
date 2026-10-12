@@ -10,7 +10,7 @@ import { itemKey, parseRef } from '../../../refs'
 import { failureText } from '../../../sources'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP } from '../../chrome'
-import { modeKeys } from '../../keys'
+import { modeActions } from '../../actions'
 import type { DrawContext, PaneActions, Screen } from '../../types'
 import { noJumps } from './blocks'
 import type { ViewBody } from './blocks'
@@ -127,30 +127,30 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
       </Box>
     ),
     info,
-    keys: [
-      ...modeKeys(actions),
+    actions: [
+      ...modeActions(actions),
       ...(canLive
-        ? [{ key: 'live', label: liveSession.href === current.href ? 'Reader' : 'Live', hotkey: 'v', onPress: () => void toggleLive(io, current, viewport) }]
+        ? [{ id: 'live', label: liveSession.href === current.href ? 'Reader' : 'Live', hotkey: 'v', run: () => void toggleLive(io, current, viewport) }]
         : []),
       ...(liveFrame && liveSession.isTyping
-        ? [{ key: 'done-typing', label: 'Done typing', hotkey: 'd', menu: 'Done typing: give the keys back to peek', onPress: () => { liveSession.isTyping = false; io.invalidate() } }]
+        ? [{ id: 'done-typing', label: 'Done typing', hotkey: 'd', menu: 'Done typing: give the keys back to peek', run: () => { liveSession.isTyping = false; io.invalidate() } }]
         : []),
-      { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
-      { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
-      { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey(io, 'f') : () => void setStar(io, current.href) },
-      { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey(io, 'o') : () => void openExternally(io, current) },
-      ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey(io, 'u') : () => void refresh(io, current.href) }] : []),
+      { id: 'next', label: 'Down', hotkey: 'j', run: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
+      { id: 'prev', label: 'Up', hotkey: 'k', run: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
+      { id: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', run: liveFrame ? () => void liveKey(io, 'f') : () => void setStar(io, current.href) },
+      { id: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', run: liveFrame ? () => void liveKey(io, 'o') : () => void openExternally(io, current) },
+      ...(remote ? [{ id: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', run: liveFrame ? () => void liveKey(io, 'u') : () => void refresh(io, current.href) }] : []),
       ...(liveFrame || nav.backStack.length || nav.groupBack
-        ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : nav.groupBack && nav.backStack.length <= nav.groupBack.depth ? `Back to ${nav.groupBack.title}` : 'Back to the previous page', onPress: liveFrame ? () => void liveKey(io, 'b') : () => void goBack(io) }]
+        ? [{ id: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : nav.groupBack && nav.backStack.length <= nav.groupBack.depth ? `Back to ${nav.groupBack.title}` : 'Back to the previous page', run: liveFrame ? () => void liveKey(io, 'b') : () => void goBack(io) }]
         : []),
       {
-        key: 'copy',
+        id: 'copy',
         label: remote ? 'Copy link' : 'Copy path',
         hotkey: 'c',
-        onPress: liveFrame ? () => void liveKey(io, 'c') : () => void io.copy({ text: current.location }),
+        run: liveFrame ? () => void liveKey(io, 'c') : () => void io.copy({ text: current.location }),
       },
-      { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void actions.close() },
-    ].map(one => (liveSession.isTyping ? { ...one, onPress: () => { liveSession.isTyping = false; one.onPress() } } : one)),
+      { id: 'close', label: 'Close', hotkey: 'x', run: () => void actions.close() },
+    ].map(one => (liveSession.isTyping ? { ...one, run: () => { liveSession.isTyping = false; one.run() } } : one)),
     menuOn: { target: current.error || (remote?.failure && !remote.record) || isLiveHere ? undefined : current.href },
   }
 }

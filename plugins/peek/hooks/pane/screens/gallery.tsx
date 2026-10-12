@@ -1,7 +1,7 @@
 import type { GallerySort, GalleryType } from '../../gallery'
 import { nextOf, selectEntries } from '../../gallery'
 import { clamp } from '../../navigation'
-import { closeKey, modeKeys, selectKeys } from '../keys'
+import { closeAction, modeActions, roleAction, scopeAction, selectActions } from '../actions'
 import { layout } from '../layout'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { SectionRule } from '../widgets'
@@ -13,7 +13,7 @@ const SORTS: GallerySort[] = ['recent', 'name', 'size', 'mentions']
 export async function galleryScreen(ctx: DrawContext, actions: PaneActions): Promise<Screen> {
   const { Box, Text, C, textWidth, Input } = ctx
   const w = ctx
-  const { rest, favourites, scopeNote, roleKey, scopeKey, scopeCrumbs, waiting, selected, nav, starts, at, cardGrid, favouritesBlock, groupsOf } = await fileListing(ctx, actions)
+  const { rest, favourites, scopeNote, scope, role, scopeCrumbs, waiting, selected, nav, starts, at, cardGrid, favouritesBlock, groupsOf } = await fileListing(ctx, actions)
   const type = await actions.galleryType.read()
   const sort = await actions.gallerySort.read()
   const query = await actions.galleryFilter.read()
@@ -62,14 +62,14 @@ export async function galleryScreen(ctx: DrawContext, actions: PaneActions): Pro
     crumbs: scopeCrumbs,
     content,
     info: rest ? `${favs.length + picked.length} ${type === 'all' ? 'files' : type} · ${scopeNote}` : 'loading…',
-    keys: [
-      ...modeKeys(actions),
-      scopeKey,
-      roleKey,
-      { key: 'type', label: 'Type', hotkey: 't', menu: `Next file type (now ${type})`, onPress: () => void actions.galleryType.update(one => nextOf(TYPES, one)) },
-      { key: 'sort', label: 'Sort', hotkey: 'n', menu: `Next sort order (now ${sort})`, onPress: () => void actions.gallerySort.update(one => nextOf(SORTS, one)) },
-      ...selectKeys(actions),
-      closeKey(actions),
+    actions: [
+      ...modeActions(actions),
+      scopeAction(actions, scope),
+      roleAction(actions, role),
+      { id: 'type', label: 'Type', hotkey: 't', menu: `Next file type (now ${type})`, run: () => void actions.galleryType.update(one => nextOf(TYPES, one)) },
+      { id: 'sort', label: 'Sort', hotkey: 'n', menu: `Next sort order (now ${sort})`, run: () => void actions.gallerySort.update(one => nextOf(SORTS, one)) },
+      ...selectActions(actions),
+      closeAction(actions),
     ],
     pageBg: C.appBg,
     menuOn: { target: nav[clamp(selected, nav.length)]?.href },
