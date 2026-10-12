@@ -2945,17 +2945,7 @@ export const register: Register = on => {
                 </Box>
               )
             })}
-            {Client && (
-              <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
-                <Client
-                  key={`hover-${prefix}-${r}`}
-                  module="./hover-layer.tsx"
-                  props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
-                  width={textWidth}
-                  height={CARD_ROWS}
-                />
-              </Box>
-            )}
+            {HoverLayer(w, `hover-${prefix}-${r}`, { kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
           </Box>
         ))
       }
