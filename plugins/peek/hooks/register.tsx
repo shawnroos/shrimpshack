@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, GroupResult, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
+import type { Group, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './gallery'
 import { C as BASE, MUTED, ICON, META_ICON, mute, speakerColor } from './theme'
 import { record } from './capture'
@@ -15,26 +15,8 @@ import { createLive, isWebUrl, liveStatusText, pagePoint, typedInput, wheelPoint
 import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveIo, LiveState, TypedKey, Viewport } from './live'
 import { cached, isTimed } from './refresh'
 import type { TitleEntry } from './refresh'
-import {
-  applyGroupOps,
-  createGroup,
-  deleteGroup,
-  fileOf,
-  groupsDir,
-  isGroupId,
-  isScheme,
-  layoutOf,
-  listGroups,
-  readGroup,
-  refPath,
-  refused,
-  resolveProjectKey,
-  shortId,
-  starGroup,
-  storedRef,
-  writeGroup,
-} from './groups'
-import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
+import { layoutOf } from './groups'
+import type { GroupsIo } from './groups'
 import { describeAge, describeSize, plural } from './format'
 import { classifyBlocks, filterRole, gridColumns, nextOf, selectEntries } from './gallery'
 import { colorFor, iconFor, kindLabel } from './kinds'
@@ -48,6 +30,7 @@ import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type 
 import { SCRATCH, bootLinear, clamp, goBack, loadRemote, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
 import type { NavIo } from './navigation'
 import { TOOLS } from './group-tools'
+import { createGroupStore } from './groups-store'
 import { expandedGroups, focusGroupRow, groupCommands, groupHome, groupItemLook, groupPage, groupPageRows, loadGroupRemote, openCardItem, openGroupHref, openGroupItem, openGroupPage, selectGroupRow, setStar, starInGroupsTab, starredFirst, toggleExpanded, toggleGroupStar } from './groups-session'
 import type { GroupMenuFor, GroupRows, MenuCommand } from './groups-session'
 import { forgetPath, gitRoot, guess, noteCapture, pathExists, remember, scopeEntries, sessionEntries, toHref, withMentions } from './entries'
@@ -475,9 +458,9 @@ function navIoOf($: EngineInterface): NavIo {
     groupsIo: () => groupsIoOf($),
     columns: () => paneColumns,
     selectedNav: () => selectedNav($),
-    shownGroups: place => shownGroups(groupsIoOf($), place),
-    shownGroup: (place, id) => shownGroup(groupsIoOf($), place, id),
-    writeGroup: (place, id, change) => writeGroupHere(groupsIoOf($), place, id, change),
+    shownGroups: place => groupStore.shown(groupsIoOf($), place),
+    shownGroup: (place, id) => groupStore.shownOne(groupsIoOf($), place, id),
+    writeGroup: (place, id, change) => groupStore.write(groupsIoOf($), place, id, change),
     openGroupRemotes: () => groupPage.remotes,
     forgetPath,
     loadFile: (href, path, line) => loadFile($, href, path, line),
@@ -508,39 +491,7 @@ function groupsIoOf($: EngineInterface): GroupsIo {
   }
 }
 
-// Render reads only: a write that decided from these could act on another session's stale group.
-const groupLists = new Map<string, { mtimeMs: number | null; groups: readonly Group[] }>()
-let openGroupFile: { file: string; projectKey: string; mtimeMs: number; group: Group | null } | null = null
-
-async function shownGroups(io: GroupsIo, place: GroupPlace): Promise<readonly Group[]> {
-  const mtimeMs = (await io.stat(place.dir))?.mtimeMs ?? null
-  const key = `${place.dir}|${place.projectKey}`
-  const known = groupLists.get(key)
-  if (known && known.mtimeMs === mtimeMs) return known.groups
-  const groups = await listGroups(io, place)
-  groupLists.set(key, { mtimeMs, groups })
-  return groups
-}
-
-async function shownGroup(io: GroupsIo, place: GroupPlace, id: string): Promise<Group | null> {
-  const file = fileOf(place, id)
-  const stat = isGroupId(id) ? await io.stat(file) : null
-  const known = openGroupFile
-  if (stat && known?.file === file && known.projectKey === place.projectKey && known.mtimeMs === stat.mtimeMs) return known.group
-  const group = await readGroup(io, place, id)
-  openGroupFile = stat ? { file, projectKey: place.projectKey, mtimeMs: stat.mtimeMs, group } : null
-  return group
-}
-
-function writeGroupHere(io: GroupsIo, place: GroupPlace, id: string, change: (current: Group | null) => GroupResult): Promise<GroupWrite> {
-  return writeGroup(io, place, id, change).then(write => {
-    if (write.ok && write.isChanged) {
-      groupLists.delete(`${place.dir}|${place.projectKey}`)
-      openGroupFile = null
-    }
-    return write
-  })
-}
+const groupStore = createGroupStore()
 
 const sum = (values: readonly number[]) => values.reduce((total, one) => total + one, 0)
 
@@ -1591,7 +1542,7 @@ export const register: Register = on => {
       const home = await groupHome(navIoOf($))
       const io = groupsIoOf($)
       const opened = await read($, openGroup)
-      const shown = opened && home ? await shownGroup(io, home.place, opened.id) : null
+      const shown = opened && home ? await groupStore.shownOne(io, home.place, opened.id) : null
       if (opened && !shown && groupPage.goneNotice !== opened.id) {
         groupPage.goneNotice = opened.id
         $.ui.toast('That group was deleted.')
@@ -1720,7 +1671,7 @@ export const register: Register = on => {
       }
       groupPage.rows = null
       groupPage.remotes = []
-      const groups = home ? starredFirst(await shownGroups(io, home.place)) : []
+      const groups = home ? starredFirst(await groupStore.shown(io, home.place)) : []
       const starredCount = groups.filter(one => one.starred).length
       const crumb = crumbs([{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }])
       const selected = await read($, cursorAtom)
@@ -1940,7 +1891,7 @@ export const register: Register = on => {
       const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
       cursor = 0
       const starredGroups = await groupHome(navIoOf($))
-        .then(found => (found ? shownGroups(groupsIoOf($), found.place) : []))
+        .then(found => (found ? groupStore.shown(groupsIoOf($), found.place) : []))
         .then(all => all.filter(one => one.starred))
         .catch(() => [])
       const pinned = starredGroups.slice(0, PINNED_GROUPS)
