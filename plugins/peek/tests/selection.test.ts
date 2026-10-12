@@ -677,6 +677,55 @@ const EXPECTED: Record<string, string[]> = {
     "focus none",
     "> prev",
     "focus none"
+  ],
+  "pinned card item removed": [
+    "> mode-groups",
+    "set mode \"groups\"",
+    "set page 0",
+    "focus item-0 in groups-0",
+    "name PINNED",
+    "> open-selected",
+    "set openGroup {\"id\":\"GROUP0\",\"item\":null}",
+    "set mode \"groups\"",
+    "set page 0",
+    "focus item-0 in group-top/group-block-0/group-row-0",
+    "name a.md",
+    "> next",
+    "set openGroup {\"id\":\"GROUP0\",\"item\":\"b.md\"}",
+    "set cursor 1",
+    "focus item-1 in group-top/group-block-0/group-row-1",
+    "name b.md",
+    "> next",
+    "set openGroup {\"id\":\"GROUP0\",\"item\":\"c.md\"}",
+    "set cursor 2",
+    "focus item-2 in group-top/group-block-0/group-row-2",
+    "name c.md",
+    "> mode-recent",
+    "set mode \"recent\"",
+    "set page 0",
+    "focus none",
+    "> starred-it-0-0",
+    "set cursor 0",
+    "set openGroup {\"id\":\"GROUP0\",\"item\":\"a.md\"}",
+    "set view file:///repo/a.md",
+    "set mentions 1",
+    "set page 0",
+    "set mode \"view\"",
+    "set view file:///repo/a.md",
+    "focus none",
+    "> a.md removed",
+    "focus none",
+    "> back",
+    "set openGroup {\"id\":\"GROUP0\",\"item\":\"a.md\"}",
+    "set mode \"groups\"",
+    "set page 0",
+    "focus item-1 in group-top/group-block-0/group-row-1",
+    "name c.md",
+    "> prev",
+    "set openGroup {\"id\":\"GROUP0\",\"item\":\"b.md\"}",
+    "set cursor 0",
+    "focus item-0 in group-top/group-block-0/group-row-0",
+    "name b.md"
   ]
 }
 
@@ -760,6 +809,24 @@ test('an item removed by another session between draws: the selection follows it
   lines.push(...(await press(run, 'prev')))
   await run.ui.unmount()
   check('item removed between draws', lines)
+})
+
+test('an item opened from a pinned card and removed meanwhile: Back falls to the row the page last selected', async (e, on) => {
+  const run = await mounted(e, on)
+  const id = await threeItemGroup(run, 'Pinned')
+  editGroup(run.w, id, group => (group.starred = true))
+  const lines: string[] = []
+  lines.push(...(await press(run, 'mode-groups')))
+  lines.push(...(await press(run, 'open-selected')))
+  lines.push(...(await press(run, 'next')))
+  lines.push(...(await press(run, 'next')))
+  lines.push(...(await press(run, 'mode-recent')))
+  lines.push(...(await press(run, 'starred-it-0-0')))
+  lines.push(...(await step(run, 'a.md removed', async () => editGroup(run.w, id, group => (group.items = (group.items as { ref: string }[]).filter(one => one.ref !== 'a.md'))))))
+  lines.push(...(await press(run, 'back')))
+  lines.push(...(await press(run, 'prev')))
+  await run.ui.unmount()
+  check('pinned card item removed', lines)
 })
 
 test('the Groups tab with an expanded card: j and k walk the cards and m folds them', async (e, on) => {
