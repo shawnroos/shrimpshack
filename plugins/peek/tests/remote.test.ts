@@ -1,11 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { ProcessRunResult } from 'claude-code'
 
 import { record } from '../hooks/capture'
-import { parseRef } from '../hooks/refs'
-import type { Ref } from '../hooks/refs'
 import { loadItem } from '../hooks/remote'
 import type { RemoteIo } from '../hooks/remote'
+import { exited, ref } from './fixtures/results'
 
 let sessions = 0
 
@@ -13,8 +11,6 @@ function io(options: { ghAuthExit?: number; gh?: (argv: readonly string[]) => st
   const session = `remote-${++sessions}`
   const mcpCalls: { server: string; tool: string; args: Record<string, unknown> }[] = []
   const downloads: string[] = []
-  const exited = (exitCode: number, stdout = '', stderr = ''): ProcessRunResult =>
-    ({ exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false }) as ProcessRunResult
   const port: RemoteIo = {
     sessionId: async () => session,
     run: async argv => {
@@ -45,12 +41,6 @@ function io(options: { ghAuthExit?: number; gh?: (argv: readonly string[]) => st
     now: async () => 5_000,
   }
   return { port, mcpCalls, downloads }
-}
-
-const ref = (text: string): Ref => {
-  const found = parseRef(text)
-  if (!found) throw new Error(`no ref for ${text}`)
-  return found
 }
 
 const PR_JSON = JSON.stringify({ number: 77, title: 'Ship it', state: 'OPEN', url: 'https://github.com/o/r/pull/77' })
