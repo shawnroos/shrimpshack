@@ -10,8 +10,8 @@ export type SlackMessage = { author: string; ts: string; text: string }
 export type SlackThread = { parent: SlackMessage; replies: SlackMessage[]; hasMore: boolean }
 
 // `$.mcp.call` accepts the tool-name spelling of a server: the Slack plugin's tools are mcp__plugin_slack_slack__*,
-// the claude.ai connector's mcp__claude_ai_Slack__*.
-const SLACK_SERVERS = ['plugin_slack_slack', 'claude_ai_Slack']
+// the claude.ai connector's mcp__claude_ai_Slack__*. `plugin:slack:slack` is the /mcp spelling, in case only that one resolves.
+const SLACK_SERVERS = ['plugin_slack_slack', 'claude_ai_Slack', 'plugin:slack:slack']
 const REPLY_LIMIT = 200
 const CLI_TIMEOUT_MS = 20_000
 // The public Slack CLI's `_fingerprint` answer, from the Slack plugin's slack-cli skill; another `slack` binary is not it.
@@ -106,7 +106,7 @@ export function parseThreadText(text: string): Omit<SlackThread, 'hasMore'> | nu
   const replies = repliesPart
     .split(REPLY_HEAD)
     .slice(1)
-    .map(parseMessage)
+    .map(block => parseMessage(block))
     .filter((one): one is SlackMessage => one !== null)
   return { parent, replies }
 }

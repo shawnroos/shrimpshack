@@ -3554,7 +3554,7 @@ export const register: Register = on => {
         }
         const description = () => {
           if (!record.body?.trim()) return
-          const label = record.kind === 'gh-repo' ? 'README' : record.kind === 'web' ? 'Page' : 'Description'
+          const label = record.kind === 'gh-repo' ? 'README' : record.kind === 'web' ? 'Page' : record.kind === 'slack-thread' ? 'Message' : 'Description'
           sectionRule('body-head', label)
           markdownBlocks('body', record.body, label)
         }

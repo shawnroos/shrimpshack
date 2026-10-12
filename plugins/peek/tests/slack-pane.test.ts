@@ -50,6 +50,7 @@ test('a Slack reply link opens its thread: title, channel, starter, reply count,
   expect(await ui.find({ text: /^DETAILS$/ })).toBeDefined()
   expect(await ui.find({ text: 'Ada Lovelace' })).toBeDefined()
   expect(await ui.find({ text: /#release-notes/ })).toBeDefined()
+  expect(await ui.find({ text: /^MESSAGE $/ })).toBeDefined()
   expect(await ui.find({ text: /^COMMENTS $/ })).toBeDefined()
   expect(await ui.find({ text: 'Grace Hopper' })).toBeDefined()
   expect(await ui.find({ text: /via Slack MCP · 0s ago/ })).toBeDefined()
