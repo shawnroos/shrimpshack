@@ -2,9 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Loaded, Mention, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
-import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
-import { colorFor, iconFor } from './kinds'
-import { ruleParts } from './measure'
+import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './gallery'
 import { C as BASE, MUTED, ICON, META_ICON, mute, speakerColor } from './theme'
 import { capturedLinearContext, record } from './capture'
 import type { CaptureIo } from './capture'
@@ -41,55 +39,13 @@ import {
   writeGroup,
 } from './groups'
 import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
-import {
-  describeAge,
-  describeSize,
-  extOf,
-  fileHref,
-  fitMarkdown,
-  hasMeaningfulWords,
-  htmlToMarkdown,
-  imageBox,
-  kindLabel,
-  IMAGE_ROWS,
-  gridColumns,
-  classifyBlocks,
-  columnWidths,
-  filterRole,
-  toggleStar,
-  fitCell,
-  kindOf,
-  linkTasks,
-  parseDelimited,
-  prettyJson,
-  tomlSections,
-  nextOf,
-  parseStatLines,
-  selectEntries,
-  linkify,
-  markdownPage,
-  mermaidFences,
-  mermaidPage,
-  noteMentions,
-  outlineOf,
-  chunkMarkdown,
-  estimateRows,
-  parseHref,
-  pathCandidates,
-  plainInline,
-  fitName,
-  rankRecent,
-  rasterGradient,
-  resolvePath,
-  segmentsOf,
-  shortPath,
-  diagramType,
-  swapMermaidFences,
-  taskRows,
-  toggleTaskLine,
-  urlCandidates,
-  wrapLines,
-} from './lib'
+import { describeAge, describeSize } from './format'
+import { classifyBlocks, filterRole, gridColumns, hasMeaningfulWords, nextOf, noteMentions, parseStatLines, rankRecent, selectEntries, toggleStar } from './gallery'
+import { colorFor, iconFor, kindLabel } from './kinds'
+import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, markdownPage, mermaidFences, mermaidPage, outlineOf, pathCandidates, plainInline, segmentsOf, swapMermaidFences, toggleTaskLine, urlCandidates } from './markdown'
+import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, ruleParts, taskRows, wrapLines } from './measure'
+import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
+import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 
 const C = BASE
 

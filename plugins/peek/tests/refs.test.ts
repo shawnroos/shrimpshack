@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { fileHref, linkify } from '../hooks/lib'
+import { linkify } from '../hooks/markdown'
+import { fileHref } from '../hooks/paths'
 import { itemKey, parseRef, refHref } from '../hooks/refs'
 
 const none = () => null

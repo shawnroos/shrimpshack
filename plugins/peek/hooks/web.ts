@@ -1,6 +1,6 @@
 import type { Loaded, RemoteRecord } from '../types'
 import type { Captured } from './capture'
-import { htmlToMarkdown } from './lib'
+import { htmlToMarkdown } from './markdown'
 import { readable } from './defuddle'
 import type { Ref } from './refs'
 import { hasCurl, httpDetail, httpFailure, httpText } from './sources'

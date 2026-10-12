@@ -1,6 +1,6 @@
 import type { ClientModule } from 'claude-code'
 
-import { taskRows } from './lib'
+import { taskRows } from './measure'
 import { C as BASE, MUTED, mute } from './theme'
 
 type Item = { href: string; line: number; isDone: boolean; text: string; depth: number }

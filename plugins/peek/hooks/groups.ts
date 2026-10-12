@@ -1,5 +1,5 @@
 import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupSection, SectionLayout } from '../types'
-import { parseHref } from './lib'
+import { parseHref } from './paths'
 import { itemKey } from './refs'
 
 // A group file at these caps stays far under the 4 MiB fs.read limit.

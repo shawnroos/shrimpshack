@@ -1,6 +1,6 @@
 import type { CaptureIo } from './capture'
 import type { Ref } from './refs'
-import { describeAge } from './lib'
+import { describeAge } from './format'
 import type { SourceIo } from './sources'
 import type { FailureKind, Loaded, RemoteComment, RemoteFile, RemoteRecord } from '../types'
 
