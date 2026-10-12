@@ -5,6 +5,7 @@ import { itemKey } from '../hooks/refs'
 import { resetRefresh } from '../hooks/refresh'
 import { pullView } from './fixtures/github/items'
 import { hoverLayers } from './fixtures/overlay'
+import { C } from '../hooks/theme'
 
 const HOME = '/home'
 const PR = 'https://github.com/acme/widgets/pull/42'
@@ -1588,5 +1589,24 @@ test('the hover star paints over group cards, every row of item cards, list rows
   const page = hoverLayers(await ui.drawn())
   expect(page.onTop).toEqual(expect.arrayContaining(['hover-group-1', 'hover-group-2']))
   expect(page.buried).toEqual([])
+  await ui.unmount()
+})
+
+test('the MORE bar is a quiet strip one step off the card, a blank row below the content, and a click on it still toggles', async ($, on) => {
+  groupsWorld(on)
+  await launchGroup($)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  const card = await ui.find({ key: 'groups-0' })
+  const bar = await ui.find({ key: 'groups-morebar-0' })
+  expect(bar?.props.backgroundColor).not.toBe(C.accent)
+  expect(bar?.props.backgroundColor).not.toBe(card?.props.backgroundColor)
+  expect([C.surface0, C.surface1]).toContain(bar?.props.backgroundColor)
+  expect((await ui.find({ key: 'groups-more-0' }))?.props.dimColor).toBe(true)
+  expect(JSON.stringify(await ui.drawn())).toContain('{"type":"Box","props":{"key":"groups-moregap-0","height":1}},{"type":"Box","props":{"key":"groups-morebar-0"')
+  await ui.press({ key: 'groups-more-0' })
+  await ui.redraw()
+  expect((await ui.find({ key: 'groups-more-0' }))?.props.label).toMatch(/LESS ▲/)
+  expect(await itemNames(ui, 'groups', 0)).toEqual(['plan.md', 'todo.md', 'notes.md', 'The page'])
   await ui.unmount()
 })

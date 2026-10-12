@@ -2580,7 +2580,7 @@ export const register: Register = on => {
               </Box>
             </Box>
           )
-          let height = 2 + 1 + (lines.length ? 1 + lines.length : 0) + (canExpand ? 1 : 0) + 1
+          let height = 2 + 1 + (lines.length ? 1 + lines.length : 0) + (canExpand ? 2 : 0) + 1
           const parts = shown.map((block, b) => {
             const blockLooks = looks[b] ?? []
             const rows = Array.from({ length: Math.ceil(blockLooks.length / perRow) }, (_, r) => blockLooks.slice(r * perRow, r * perRow + perRow))
@@ -2663,12 +2663,15 @@ export const register: Register = on => {
                   <Text color={C.overlay0}>No items</Text>
                 </Box>
               )}
+              {canExpand && <Box key={`${prefix}-moregap-${i}`} height={1} />}
               {canExpand && (
-                <Box key={`${prefix}-morebar-${i}`} width={inner} height={1} backgroundColor={C.accent}>
+                <Box key={`${prefix}-morebar-${i}`} width={inner} height={1} backgroundColor={isSelected ? C.surface1 : C.surface0}>
                   <Button
                     key={`${prefix}-more-${i}`}
                     label={`${' '.repeat(Math.floor(barPad / 2))}${barLabel}${' '.repeat(Math.ceil(barPad / 2))}`}
                     plain
+                    dimColor
+                    hover={{ color: C.accent }}
                     onPress={() => void update($, cursorAtom, () => index).then(() => toggleExpanded($, group.id))}
                   />
                 </Box>
