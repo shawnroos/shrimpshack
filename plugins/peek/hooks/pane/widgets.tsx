@@ -102,3 +102,37 @@ export function ItemRow(ctx: WidgetCtx, look: ItemLook, row: RowSpec) {
     </Box>
   )
 }
+
+export type CardSpec = {
+  key: string
+  width: number
+  height: number
+  background: string
+  // Clipped: the head row truncates the full name. Otherwise the name is cut to the card's inner width.
+  clip: boolean
+  icon: IconSlot
+  nameKey: string
+  nameColor: string
+  meta: string
+  metaColor: string
+}
+
+export function ItemCard(ctx: WidgetCtx, look: ItemLook, card: CardSpec) {
+  const { Box, Text, C } = ctx
+  return (
+    <Box key={card.key} flexDirection="column" width={card.width} height={card.height} paddingX={2} paddingY={1} backgroundColor={card.background} hover={{ backgroundColor: C.surface0 }}>
+      <Box flexDirection="row" {...(card.clip ? { height: 1, overflow: 'hidden' as const } : {})}>
+        {...ItemIcon(ctx, card.icon)}
+        <Box key={card.nameKey} {...(card.clip ? { flexShrink: 1 } : {})}>
+          {card.clip ? (
+            <Text color={card.nameColor} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${look.name}`}</Text>
+          ) : (
+            <Text color={card.nameColor} bold hover={{ color: C.accent }}>{` ${look.name.slice(0, Math.max(4, card.width - 7))}`}</Text>
+          )}
+        </Box>
+      </Box>
+      <Text color={C.overlay0} wrap="truncate-start">{look.where || ' '}</Text>
+      <Text color={card.metaColor} wrap="truncate-end">{card.meta}</Text>
+    </Box>
+  )
+}

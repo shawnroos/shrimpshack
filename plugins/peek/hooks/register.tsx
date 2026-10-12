@@ -48,7 +48,7 @@ import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './pa
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
 import { type ItemLook, type ItemState, lookOf, remoteNaming } from './pane/look'
-import { HoverLayer, ItemIcon, ItemRow, SectionRule, fitPicture } from './pane/widgets'
+import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture } from './pane/widgets'
 
 const C = BASE
 
@@ -2865,37 +2865,26 @@ export const register: Register = on => {
               const isSelected = index === selected
               const { look, isStarred, png } = looks(one)
               const { where, age } = describe(one)
-              const inner = Math.max(4, cardWidth - 7)
-              return (
-                <Box
-                  key={`${prefix}-${r}-${c}`}
-                  flexDirection="column"
-                  width={cardWidth}
-                  height={CARD_ROWS}
-                  paddingX={2}
-                  paddingY={1}
-                  backgroundColor={isSelected ? C.surface0 : C.panelBg}
-                  hover={{ backgroundColor: C.surface0 }}
-                >
-                  <Box flexDirection="row">
-                    {png && !isStarred && Image && (
-                      <Image key={`favicon-${index}`} source={{ png }} columns={2} rows={1} alt={iconFor(look.kind)} />
-                    )}
-                    <Button
-                      key={`item-${index}`}
-                      label={isStarred ? '\u{f51a}' : png ? ' ' : iconFor(look.kind)}
-                      plain
-                      autoFocus={isSelected ? true : undefined}
-                      onPress={() => void selectAndOpen($, index)}
-                    />
-                    <Box key={`name-${index}`}>
-                      <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }}>{` ${look.name.slice(0, inner)}`}</Text>
-                    </Box>
-                  </Box>
-                  <Text color={C.overlay0} wrap="truncate-start">{look.where || ' '}</Text>
-                  <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${where}${age} · ${one.status ?? describeSize(one.size)}`}</Text>
-                </Box>
-              )
+              return ItemCard(w, look, {
+                key: `${prefix}-${r}-${c}`,
+                width: cardWidth,
+                height: CARD_ROWS,
+                background: isSelected ? C.surface0 : C.panelBg,
+                clip: false,
+                icon: {
+                  isStarred,
+                  png,
+                  icon: iconFor(look.kind),
+                  imageKey: `favicon-${index}`,
+                  buttonKey: `item-${index}`,
+                  autoFocus: isSelected ? true : undefined,
+                  onPress: () => void selectAndOpen($, index),
+                },
+                nameKey: `name-${index}`,
+                nameColor: isSelected ? C.accent : C.text,
+                meta: `${where}${age} · ${one.status ?? describeSize(one.size)}`,
+                metaColor: isSelected ? C.overlay1 : C.overlay0,
+              })
             })}
             {HoverLayer(w, `hover-${prefix}-${r}`, { kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
           </Box>
