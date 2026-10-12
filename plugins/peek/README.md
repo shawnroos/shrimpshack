@@ -17,7 +17,7 @@ transcript.
 | GitHub pull requests | Details, line counts, files changed, a CI summary, the description and comments |
 | GitHub issues and repos | Details, the body or README, comments, and a repo's open pull requests and issues |
 | Linear issues and projects | Details, the description, comments with replies, and a project's open issues |
-| Slack threads | The channel, who started it, the reply count, the first message and every reply |
+| Slack threads | The channel and reply count, then the conversation: the first message full width, replies inset under it, each with the speaker's picture or coloured initials, a time that opens that message in Slack, and images inline |
 | A link to a file (`.md`, `.png`, `.json`, `.csv`, code, ...) | Downloaded and drawn like the local file; `o` and `c` still use the link |
 | A link to a video (`.mp4`, `.webm`, `.mov`) | A Play button that opens it in your browser |
 
@@ -35,6 +35,32 @@ Pictures, videos and Mermaid diagrams in a pull request, issue or Linear
 description or comment draw the same way as on a web page: up to 8 pictures
 inline, a video as its thumbnail and a Play button. A picture that cannot be
 downloaded, such as an attachment in a private repo, stays a link.
+
+A Slack thread draws as a conversation. Each speaker keeps one colour and shows
+their Slack profile picture, or a badge with their initials when there is none.
+Each message shows its time (relative for today, such as `5m ago`, otherwise
+`Oct 6, 1:22 PM`); click the time to open that message in Slack. Up to 6 image
+files per thread draw inline, within the pane's image limit. Other files, and
+images peek may not read, show as a row with the name, type, size and an
+`open in Slack` link.
+
+Peek reads Slack through the Slack MCP server under your Claude Code
+permissions, so the first read of each Slack tool asks for permission. Choose
+to always allow it, or add these names to `permissions.allow` in
+`~/.claude/settings.json`:
+
+| Tool | Peek uses it for |
+|---|---|
+| `mcp__plugin_slack_slack__slack_read_thread` | The messages |
+| `mcp__plugin_slack_slack__slack_read_channel` | The channel name |
+| `mcp__plugin_slack_slack__slack_read_file` | Image files |
+| `mcp__plugin_slack_slack__slack_search_users` | Profile pictures |
+
+With the claude.ai Slack connector the names start with
+`mcp__claude_ai_Slack__` instead. If you decline the file or user-search read,
+the thread still opens: files show as rows and speakers show initials. Peek
+asks for each file and each speaker once per session, so after allowing a tool
+you declined, start a new session to see the pictures.
 
 Each page comes from the best source available, and the footer names it:
 
