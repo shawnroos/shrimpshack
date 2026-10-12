@@ -1,4 +1,4 @@
-export type Mode = 'view' | 'recent' | 'gallery'
+export type Mode = 'view' | 'recent' | 'gallery' | 'groups'
 
 export type Mention = { href: string; at: number; count: number; isArtifact?: boolean }
 
@@ -148,6 +148,7 @@ declare module 'claude-code' {
       galleryPresses: number
       galleryText: string
       galleryPick: string
+      openGroup: { id: string; item: string | null } | null
     }
   }
 }

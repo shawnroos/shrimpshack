@@ -15,6 +15,7 @@ type World = {
   root: string
   commonDirs: Record<string, string>
   invalidated: number
+  toasts: string[]
   isMvBroken: boolean
   onLockBusy?: (lock: string) => void
 }
@@ -28,6 +29,7 @@ function groupsWorld(on: On, files: Record<string, string> = {}): World {
     root: '/repo',
     commonDirs: { '/repo': '/repo/.git', '/wt/feature': '/repo/.git', '/other': '/other/.git' },
     invalidated: 0,
+    toasts: [],
     isMvBroken: false,
   }
   const done = (exitCode: number, stdout = '') => ({ value: { exitCode, stdout, stderr: exitCode ? 'failed' : '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -42,7 +44,10 @@ function groupsWorld(on: On, files: Record<string, string> = {}): World {
     return { value: undefined }
   })
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', (_$, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('ui.invalidate', () => {
     w.invalidated++
     return { value: undefined }
@@ -367,4 +372,195 @@ test('a peek group tool call is not recorded by the capture hook, while a GitHub
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
   await $.tool.call({ tool: 'mcp__github__get_pull_request', tool_use_id: 'c1', number: 42 } as never)
   expect(await recentText($)).toContain('widgets')
+})
+
+const paneProps = {
+  title: 'Peek',
+  isFocused: true,
+  bodyColumns: 100,
+  placement: 'dock' as const,
+  scroll: { offset: 0, bodyRows: 40 },
+  view: {},
+}
+
+type Found = { props: Record<string, unknown>; text: string } | undefined
+
+async function cardTitles(ui: { find: (q: { key: string }) => Promise<Found> }) {
+  const titles: string[] = []
+  for (let i = 0; i < 10; i++) {
+    const one = await ui.find({ key: `group-name-${i}` })
+    if (one) titles.push(one.text.trim())
+  }
+  return titles
+}
+
+function editGroup(w: World, id: string, change: (group: Record<string, unknown>) => void) {
+  const file = `${dirOf('/repo/.git')}/${id}.json`
+  const group = JSON.parse(w.files[file] ?? '{}') as Record<string, unknown>
+  change(group)
+  w.files[file] = JSON.stringify(group)
+}
+
+test('after the agent creates two groups, the Groups tab lists both as cards, starred first, then most recently updated', async ($, on) => {
+  const w = groupsWorld(on)
+  const alpha = await create($, [{ target: PAGE }, { target: 'docs/plan.md' }], 'Alpha')
+  w.now += 60_000
+  await call($, 'save_group', { title: 'Beta', description: 'Ship notes\nsecond line', add: [{ target: PR }] })
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  expect(await cardTitles(ui)).toEqual(['Beta', 'Alpha'])
+  expect(await ui.find({ text: /^2 groups · 0 starred$/ })).toBeDefined()
+  expect(await ui.find({ text: /Ship notes/ })).toBeDefined()
+  expect(await ui.find({ text: /second line/ })).toBeUndefined()
+  expect(await ui.find({ text: /^2 items/ })).toBeDefined()
+  editGroup(w, alpha.id, group => (group.starred = true))
+  await ui.redraw()
+  expect(await cardTitles(ui)).toEqual(['Alpha', 'Beta'])
+  expect(await ui.find({ text: /^2 groups · 1 starred$/ })).toBeDefined()
+  expect((await ui.find({ key: 'item-0' }))?.props.label).toBe('\u{f51a}')
+  await ui.unmount()
+})
+
+test('the Groups tab re-reads group files on every render: another session\'s change shows on the next draw', async ($, on) => {
+  const w = groupsWorld(on)
+  const { id } = await create($, [{ target: PAGE }], 'Alpha')
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  editGroup(w, id, group => (group.title = 'Renamed elsewhere'))
+  await ui.redraw()
+  expect(await cardTitles(ui)).toEqual(['Renamed elsewhere'])
+  await ui.unmount()
+})
+
+test('clicking a group card opens its group page; e returns to the list; the hover star stars the group, not a file', async ($, on) => {
+  const w = groupsWorld(on)
+  const storeKeys: string[] = []
+  on('store.set', (_$, e, next) => {
+    storeKeys.push(e.key)
+    return next(e)
+  })
+  const { id } = await create($, [{ target: PAGE }], 'Alpha')
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  const layer = 'hover-groups-0'
+  await ui.resize({ columns: 60, rows: 5, in: layer })
+  await ui.pointer({ type: 'move', x: 10, y: 3, in: layer })
+  expect(JSON.stringify(await ui.drawn({ in: layer }))).toContain('\u{f41e}')
+  await ui.pointer({ type: 'down', button: 'left', x: 10, y: 3, in: layer })
+  expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Alpha/)
+  await ui.press({ key: 'mode-groups' })
+  expect(await ui.find({ key: 'group-page-title' })).toBeUndefined()
+  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  await ui.resize({ columns: 60, rows: 5, in: layer })
+  const before = w.invalidated
+  await ui.pointer({ type: 'down', button: 'left', x: 2, y: 1, in: layer })
+  expect(savedGroup(w, id)?.starred).toBe(true)
+  expect(w.invalidated).toBeGreaterThan(before)
+  await ui.redraw()
+  expect(await ui.find({ text: /^1 group · 1 starred$/ })).toBeDefined()
+  expect(storeKeys).not.toContain('stars')
+  await ui.press({ key: 'item-0' })
+  expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Alpha/)
+  await ui.unmount()
+})
+
+test('f on a selected group card toggles its star; o opens it; a deleted group is reported, never starred', async ($, on) => {
+  const w = groupsWorld(on)
+  await create($, [{ target: PAGE }], 'Alpha')
+  w.now += 60_000
+  const beta = await create($, [{ target: PR }], 'Beta')
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  expect((await ui.find({ key: 'star-selected' }))?.props.hotkey).toBe('f')
+  await ui.press({ key: 'star-selected' })
+  expect(savedGroup(w, beta.id)?.starred).toBe(true)
+  await ui.press({ key: 'star-selected' })
+  expect(savedGroup(w, beta.id)?.starred).toBe(false)
+  await ui.press({ key: 'right' })
+  await ui.press({ key: 'open-selected' })
+  expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Alpha/)
+  await ui.press({ key: 'mode-groups' })
+  await ui.press({ key: 'left' })
+  delete w.files[`${dirOf('/repo/.git')}/${beta.id}.json`]
+  await ui.press({ key: 'star-selected' })
+  expect(w.toasts).toContain('That group was deleted.')
+  expect(savedGroup(w, beta.id)).toBeUndefined()
+  await ui.unmount()
+})
+
+test('with no groups the tab says the agent makes them', async ($, on) => {
+  groupsWorld(on)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  await ui.press({ key: 'mode-groups' })
+  expect(await ui.find({ text: /^No groups yet\. The agent makes groups: ask it to group related files and links\.$/ })).toBeDefined()
+  expect(await ui.find({ text: /^0 groups · 0 starred$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the Groups tab is reachable from the header tab, the e key and the ctrl+k menu', async ($, on) => {
+  groupsWorld(on)
+  await create($, [{ target: PAGE }], 'Alpha')
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
+  expect((await ui.find({ key: 'mode-groups' }))?.props.hotkey).toBe('e')
+  const right = await ui.find({ key: 'tabs-right' })
+  const tabs = (right?.props.props as { tabs: { id: string; label: string }[] }).tabs
+  expect(tabs.map(one => one.id)).toEqual(['recent', 'gallery', 'groups'])
+  const before = tabs.slice(0, 2).reduce((sum, one) => sum + one.label.length, 0)
+  await ui.resize({ columns: Number(right?.props.width), rows: 1, in: 'tabs-right' })
+  await ui.pointer({ type: 'down', button: 'left', x: before + 2, y: 0, in: 'tabs-right' })
+  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  await ui.press({ key: 'mode-recent' })
+  expect(await cardTitles(ui)).toEqual([])
+  await ui.press({ key: 'mode-groups' })
+  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  await ui.press({ key: 'mode-recent' })
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.redraw()
+  expect((await ui.find({ key: 'menu-row-groups' }))?.text).toMatch(/e$/)
+  await ui.press({ key: 'menu-groups' })
+  expect(await cardTitles(ui)).toEqual(['Alpha'])
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.redraw()
+  expect((await ui.find({ key: 'menu-row-key-star-selected' }))?.text).toMatch(/group ?f$/)
+  expect((await ui.find({ key: 'menu-row-key-open-selected' }))?.text).toMatch(/group ?o$/)
+  await ui.unmount()
+})
+
+type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+
+function textOfNode(node: unknown): string {
+  if (typeof node === 'string') return node
+  return ((node as Node)?.children ?? []).map(textOfNode).join('')
+}
+
+async function headerFit(ui: { drawn: () => Promise<unknown> }, bodyColumns: number) {
+  const tree = (await ui.drawn()) as Node
+  const pinned = (tree.children ?? []) as Node[]
+  const header = (pinned.find(one => one.props?.position === 'absolute' && one.props?.top === 0)?.children?.[0] ?? {}) as Node
+  const parts = (header.children ?? []) as Node[]
+  const tabs = parts.filter(one => String(one.props?.key ?? '').startsWith('tabs-'))
+  const tabIds = tabs.flatMap(one => ((one.props?.props as { tabs?: { id: string }[] })?.tabs ?? []).map(tab => tab.id))
+  const used = parts.reduce((sum, one) => sum + (tabs.includes(one) ? Number(one.props?.width) : [...textOfNode(one)].length), 0)
+  return { tabIds, used, bodyColumns }
+}
+
+test('at 60, 70 and 100 columns the header draws all four tabs and the crumb shortens so nothing overflows', async ($, on) => {
+  const deep = '/repo/a-rather-long-folder-name/another-deeply-nested-folder/a-file-with-quite-a-long-name.md'
+  groupsWorld(on, { [deep]: '# Deep\n' })
+  await $.command.run({ command: 'peek', args: deep } as never)
+  for (const bodyColumns of [60, 70, 100]) {
+    const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...paneProps, bodyColumns }, requestId: 'peek' })
+    for (const key of ['mode-view', 'mode-groups', 'mode-recent']) {
+      await ui.press({ key })
+      const fit = await headerFit(ui, bodyColumns)
+      expect(fit.tabIds).toEqual(['view', 'recent', 'gallery', 'groups'])
+      expect(fit.used).toBeLessThanOrEqual(bodyColumns - 5)
+    }
+    await ui.unmount()
+  }
+  const narrow = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...paneProps, bodyColumns: 59 }, requestId: 'peek' })
+  expect((await headerFit(narrow, 59)).tabIds).toEqual([])
+  expect((await narrow.find({ key: 'mode-groups' }))?.props.hotkey).toBe('e')
+  await narrow.unmount()
 })

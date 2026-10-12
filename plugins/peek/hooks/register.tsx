@@ -29,6 +29,7 @@ import {
   refPath,
   resolveProjectKey,
   shortId,
+  starGroup,
   storedRef,
   writeGroup,
 } from './groups'
@@ -96,6 +97,7 @@ const trail = atom({ plugin: 'peek', key: 'trail' } as const, [])
 const section = atom({ plugin: 'peek', key: 'section' } as const, -1)
 const menuOpen = atom({ plugin: 'peek', key: 'menuOpen' } as const, false)
 const menuFilter = atom({ plugin: 'peek', key: 'menuFilter' } as const, '')
+const openGroup = atom({ plugin: 'peek', key: 'openGroup' } as const, null)
 const NARROW = 60
 const MIN_CPL = 30
 const MAX_CPL = 104
@@ -103,6 +105,7 @@ const MODES: { id: Mode; label: string; icon: string; hotkey: string }[] = [
   { id: 'view', label: 'Peek', icon: '\u{f06e}', hotkey: 'p' },
   { id: 'recent', label: 'Recent', icon: '\u{f017}', hotkey: 'r' },
   { id: 'gallery', label: 'Gallery', icon: '\u{f0c6c}', hotkey: 'g' },
+  { id: 'groups', label: 'Groups', icon: ICON.groups, hotkey: 'e' },
 ]
 const scopeAtom = atom({ plugin: 'peek', key: 'scope' } as const, 'session')
 const galleryType = atom({ plugin: 'peek', key: 'galleryType' } as const, 'all')
@@ -196,6 +199,7 @@ const COMMAND_KEYS: Record<string, string> = {
   peek: 'mode-view',
   recent: 'mode-recent',
   gallery: 'mode-gallery',
+  groups: 'mode-groups',
   'role-*': 'role',
   'scope-*': 'scope',
   open: 'open',
@@ -864,6 +868,40 @@ async function setStar($: EngineInterface, raw: string, wanted?: boolean): Promi
   })
   await $.store.set('stars', await read($, stars)).catch(() => undefined)
   return isOn
+}
+
+// e on an open group page goes back to the group list; from any other screen it keeps the open group.
+async function switchMode($: EngineInterface, to: Mode) {
+  if (to === 'groups' && (await read($, mode)) === 'groups') await update($, openGroup, () => null)
+  await update($, mode, () => to)
+  await update($, page, () => 0)
+}
+
+async function openGroupPage($: EngineInterface, id: string) {
+  await update($, openGroup, () => ({ id, item: null }))
+  await update($, mode, () => 'groups')
+  await update($, page, () => 0)
+}
+
+async function toggleGroupStar($: EngineInterface, id: string) {
+  const home = await groupHome($)
+  if (!home) {
+    $.ui.toast('Could not star the group: HOME is not set.')
+    return
+  }
+  const now = await $.clock.now()
+  let isGone = false
+  const write = await writeGroup(groupsIoOf($), home.place, id, current => {
+    if (current) return starGroup(current, !current.starred, now)
+    isGone = true
+    return { group: null, outcomes: [] }
+  })
+  if (!write.ok) $.ui.toast(`Could not star the group: ${write.error}.`)
+  else if (isGone) {
+    $.ui.toast('That group was deleted.')
+    await update($, openGroup, () => null)
+  }
+  $.ui.invalidate('ui.render')
 }
 
 function groupsIoOf($: EngineInterface): GroupsIo {
@@ -1750,11 +1788,19 @@ export const register: Register = on => {
       return {}
     }
     const switching = e.data as { mode?: unknown } | null
-    if (e.requestId === PANE && switching && (switching.mode === 'view' || switching.mode === 'recent' || switching.mode === 'gallery')) {
-      const target = switching.mode
-      await update($, mode, () => target).catch(() => undefined)
-      await update($, page, () => 0).catch(() => undefined)
+    const target = MODES.find(one => one.id === switching?.mode)?.id
+    if (e.requestId === PANE && target) {
+      await switchMode($, target).catch(() => undefined)
       void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
+      return {}
+    }
+    const group = e.data as { openGroup?: unknown; starGroup?: unknown } | null
+    if (e.requestId === PANE && group && typeof group.openGroup === 'string') {
+      await openGroupPage($, group.openGroup).catch(() => undefined)
+      return {}
+    }
+    if (e.requestId === PANE && group && typeof group.starGroup === 'string') {
+      await toggleGroupStar($, group.starGroup).catch(() => undefined)
       return {}
     }
     const opening = e.data as { open?: unknown } | null
@@ -1801,7 +1847,7 @@ export const register: Register = on => {
     const home = (await $.env.get('HOME')) ?? ''
     const columns = Math.max(20, e.props.bodyColumns - 1)
     paneColumns = columns
-    const isNarrow = columns < NARROW
+    const isNarrow = e.props.bodyColumns < NARROW
     const textWidth = isNarrow ? columns : Math.min(MAX_CPL, Math.max(MIN_CPL, columns - 6))
     const pageWidth = isNarrow ? columns : textWidth + 4
     const rows = Math.max(4, e.props.scroll.bodyRows - 4)
@@ -1813,12 +1859,19 @@ export const register: Register = on => {
         {label}
       </Text>
     )
-    const peekChip = ` ${MODES[0]?.icon ?? ''} PEEK `
-    const recentChip = ` ${MODES[1]?.icon ?? ''} RECENT `
-    const galleryChip = ` ${MODES[2]?.icon ?? ''} GALLERY `
+    // crumbs() sets this and header() reads it, so a screen builds its crumb before frame() draws the header.
+    let isTabCompact = false
+    const chipOf = (id: Mode) => {
+      const one = MODES.find(each => each.id === id)
+      if (!one) return ''
+      return isTabCompact && id !== chosen ? ` ${one.icon} ` : ` ${one.icon} ${one.label.toUpperCase()} `
+    }
     const crumbs = (parts: { label: string; fg: string; bg: string; bold?: boolean; canShrink?: boolean }[]) => {
-      const room = Math.max(8, isNarrow ? columns - 2 : columns - peekChip.length - recentChip.length - galleryChip.length - 4)
       const width = (label: string) => label.length + 2
+      const tabsWidth = () => MODES.reduce((sum, one) => sum + chipOf(one.id).length, 0)
+      const fullTabs = MODES.reduce((sum, one) => sum + ` ${one.icon} ${one.label} `.length, 0)
+      isTabCompact = !isNarrow && 2 + parts.reduce((sum, one) => sum + width(one.label), 0) > columns - fullTabs - 4
+      const room = Math.max(8, isNarrow ? columns - 2 : columns - tabsWidth() - 4)
       let spare = room - 2 - parts.reduce((sum, one) => sum + width(one.label), 0)
       const fitted = parts.map(one => ({ ...one }))
       for (const one of fitted) {
@@ -1872,11 +1925,12 @@ export const register: Register = on => {
         </Box>
       ) : (
         <Box flexDirection="row" justifyContent="space-between" width={e.props.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
-          {tabStrip('tabs-left', [{ id: 'view', label: peekChip, isOn: chosen === 'view' }])}
+          {tabStrip('tabs-left', [{ id: 'view', label: chipOf('view'), isOn: chosen === 'view' }])}
           {middle as never}
           {tabStrip('tabs-right', [
-            { id: 'recent', label: recentChip, isOn: chosen === 'recent' },
-            { id: 'gallery', label: galleryChip, isOn: chosen === 'gallery' },
+            { id: 'recent', label: chipOf('recent'), isOn: chosen === 'recent' },
+            { id: 'gallery', label: chipOf('gallery'), isOn: chosen === 'gallery' },
+            { id: 'groups', label: chipOf('groups'), isOn: chosen === 'groups' },
           ])}
         </Box>
       )
@@ -1899,10 +1953,7 @@ export const register: Register = on => {
       key: `mode-${one.id}`,
       label: one.label,
       hotkey: one.hotkey,
-      onPress: () => {
-        void update($, mode, () => one.id)
-        void update($, page, () => 0)
-      },
+      onPress: () => void switchMode($, one.id),
     }))
 
     const rule = (label: string, right: string, color: string = C.accent) => {
@@ -1928,6 +1979,7 @@ export const register: Register = on => {
         : []),
       { id: 'recent', icon: ICON.recent, label: 'Recent: files by last use', hint: 'r', run: () => void update($, mode, () => 'recent') },
       { id: 'gallery', icon: ICON.gallery, label: 'Gallery: files as cards by type', hint: 'g', run: () => void update($, mode, () => 'gallery') },
+      { id: 'groups', icon: ICON.groups, label: 'Groups: files and links the agent bundled', hint: 'e', run: () => void switchMode($, 'groups') },
       ...ROLES.map(one => ({
         id: `role-${one}`,
         icon: one === 'artifacts' ? '◆' : one === 'touched' ? '◇' : '\u{f0c9}',
@@ -2137,6 +2189,117 @@ export const register: Register = on => {
       },
     ]
     const closeKey: Key = { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) }
+
+    if (chosen === 'groups') {
+      const home = await groupHome($)
+      const groups = (home ? await listGroups(groupsIoOf($), home.place) : []).sort((a, b) => Number(b.starred) - Number(a.starred))
+      const starredCount = groups.filter(one => one.starred).length
+      const opened = await read($, openGroup)
+      const shown = opened ? groups.find(one => one.id === opened.id) : undefined
+      if (opened && !shown) void update($, openGroup, () => null)
+      const project = (home?.worktreeRoot ?? cwd).split('/').filter(Boolean).pop() ?? 'project'
+      const crumb = crumbs([{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }])
+      if (shown) {
+        navOrder = []
+        blockStarts = []
+        estimatedRows = 1
+        const content = (
+          <Box flexDirection="column" width={textWidth}>
+            <Box key="group-page-title">
+              <Text color={C.accent} bold>{`${shown.starred ? '\u{f51a}' : ICON.groups} ${shown.title}`}</Text>
+            </Box>
+            {shown.description ? <Text color={C.subtext0}>{shown.description}</Text> : null}
+          </Box>
+        )
+        return frame(crumb, content, `${plural(shown.items.length, 'item')} · ${plural(shown.sections.length, 'section')}`, [...modeKeys, closeKey], C.appBg)
+      }
+      const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
+      const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
+      const selected = await read($, cursorAtom)
+      const rowsOfCards = Array.from({ length: Math.ceil(groups.length / perRow) }, (_, r) => groups.slice(r * perRow, r * perRow + perRow))
+      navOrder = rowsOfCards.flatMap((cards, r) => cards.map((one, col) => ({ href: one.id, key: `groups-${r}`, line: r, col })))
+      blockStarts = rowsOfCards.map((_, r) => r * (CARD_ROWS + 1))
+      estimatedRows = Math.max(1, rowsOfCards.length * (CARD_ROWS + 1))
+      const selectedGroup = () => read($, cursorAtom).then(at => navOrder[Math.max(0, Math.min(navOrder.length - 1, at))]?.href)
+      const openAt = (index: number, id: string) => void update($, cursorAtom, () => index).then(() => openGroupPage($, id))
+      const grid = rowsOfCards.map((cards, r) => (
+        <Box key={`groups-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
+          {Client && (
+            <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
+              <Client
+                key={`hover-groups-${r}`}
+                module="./hover-layer.tsx"
+                props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ group: one.id, isStarred: one.starred })) }}
+                width={textWidth}
+                height={CARD_ROWS}
+              />
+            </Box>
+          )}
+          {cards.map((one, c) => {
+            const index = r * perRow + c
+            const isSelected = index === selected
+            return (
+              <Box
+                key={`groups-${r}-${c}`}
+                flexDirection="column"
+                width={cardWidth}
+                height={CARD_ROWS}
+                paddingX={2}
+                paddingY={1}
+                backgroundColor={isSelected ? C.surface0 : C.panelBg}
+                hover={{ backgroundColor: C.surface0 }}
+              >
+                <Box flexDirection="row">
+                  <Button
+                    key={`item-${index}`}
+                    label={one.starred ? '\u{f51a}' : ICON.groups}
+                    plain
+                    autoFocus={isSelected ? true : undefined}
+                    onPress={() => openAt(index, one.id)}
+                  />
+                  <Box key={`group-name-${index}`}>
+                    <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${one.title}`}</Text>
+                  </Box>
+                </Box>
+                <Text color={C.overlay0} wrap="truncate-end">{one.description.split('\n')[0] || ' '}</Text>
+                <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${plural(one.items.length, 'item')} · ${describeAge(one.updatedAt, now)}`}</Text>
+              </Box>
+            )
+          })}
+        </Box>
+      ))
+      const content = (
+        <Box flexDirection="column" width={textWidth}>
+          {groups.length === 0 && <Text color={C.overlay0}>No groups yet. The agent makes groups: ask it to group related files and links.</Text>}
+          {grid}
+        </Box>
+      )
+      return frame(
+        crumb,
+        content,
+        `${plural(groups.length, 'group')} · ${starredCount} starred`,
+        [
+          ...modeKeys,
+          ...selectKeys.filter(one => MOVE_KEYS.has(one.key)),
+          {
+            key: 'open-selected',
+            label: '⏎ Open',
+            hotkey: 'o',
+            menu: 'Open the selected group',
+            onPress: () => void selectedGroup().then(id => (id ? openGroupPage($, id) : undefined)),
+          },
+          {
+            key: 'star-selected',
+            label: 'Star',
+            hotkey: 'f',
+            menu: 'Star or unstar the selected group',
+            onPress: () => void selectedGroup().then(id => (id ? toggleGroupStar($, id) : undefined)),
+          },
+          closeKey,
+        ],
+        C.appBg,
+      )
+    }
 
     if (chosen !== 'view' || !current) {
       const scope = await read($, scopeAtom)

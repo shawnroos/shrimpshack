@@ -39,6 +39,7 @@ export const ICON = {
   peek: '\u{f06e}',
   recent: '\u{f017}',
   gallery: '\u{f0c6c}',
+  groups: '\u{f247}',
   'gh-pr': '\u{f407}',
   'gh-issue': '\u{f41b}',
   'gh-repo': '\u{f401}',
