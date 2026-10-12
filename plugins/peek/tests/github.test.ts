@@ -3,21 +3,16 @@ import type { ProcessRunResult } from 'claude-code'
 
 import type { Captured } from '../hooks/capture'
 import { ciSummary, ciTone, fromCapture, loadGithub, resolveNumber } from '../hooks/github'
-import type { Ref } from '../hooks/refs'
-import { parseRef } from '../hooks/refs'
 import type { SourceIo } from '../hooks/sources'
-import type { Loaded, RemoteRecord } from '../types'
 import { checks, conversation, issueList, issueView, issuesApiIssue, issuesApiPull, mcpPullRead, pullList, pullView, repoView } from './fixtures/github/items'
+import type { Loaded } from '../types'
+import { exited, meta, record, ref } from './fixtures/results'
 
 const NOW = 1_790_000_000_000
 
 type Gh = (args: string[]) => ProcessRunResult
 
 let sessions = 0
-
-function exited(exitCode: number, stdout = '', stderr = ''): ProcessRunResult {
-  return { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false }
-}
 
 function ok(value: unknown): ProcessRunResult {
   return exited(0, typeof value === 'string' ? value : JSON.stringify(value))
@@ -56,21 +51,6 @@ function routes(table: Record<string, () => ProcessRunResult>): Gh {
     const hit = Object.keys(table).find(prefix => line.startsWith(prefix))
     return hit ? (table[hit] as () => ProcessRunResult)() : exited(1, '', `unexpected: ${line}`)
   }
-}
-
-function record(loaded: Loaded): RemoteRecord {
-  if (!loaded.ok) throw new Error(`expected a record, got ${loaded.failure}`)
-  return loaded.record
-}
-
-function meta(rec: RemoteRecord, label: string): string | undefined {
-  return rec.meta.find(entry => entry.label === label)?.value
-}
-
-function ref(text: string): Ref {
-  const parsed = parseRef(text)
-  if (!parsed) throw new Error(`unparsed ${text}`)
-  return parsed
 }
 
 function prWorld(view: Record<string, unknown>, inline = 5) {
