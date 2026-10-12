@@ -18,6 +18,7 @@ function itemAt(props: Props, x: number, y: number): { index: number; x: number;
 }
 
 // Drawn over the item buttons: transparent except the hovered item's star, and the whole item is the pointer target.
+// Mount it as the last child of its parent: an absolute Box paints under every sibling after it, which hides the star.
 const HoverLayer: ClientModule<Props, State> = (props, surface) => {
   const { Box, Text } = surface.elements
   latest.set(surface, props)
