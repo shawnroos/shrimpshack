@@ -3258,15 +3258,7 @@ export const register: Register = on => {
       const record = remote.record
       const { drawnParts, partRows, partHeadings, note } = newBlocks()
       const sectionRule = (key: string, label: string, right = '') => {
-        const head = `${label.toUpperCase()} `
-        const tail = right ? ` ${right}` : ''
-        drawnParts.push(
-          <Text key={key} wrap="truncate-end">
-            <Text color={C.accent} bold>{head}</Text>
-            <Text color={C.surface1}>{'─'.repeat(Math.max(1, textWidth - head.length - tail.length))}</Text>
-            <Text color={C.overlay0}>{tail}</Text>
-          </Text>,
-        )
+        drawnParts.push(SectionRule(w, label.toUpperCase(), right, textWidth, key))
         note(1, label)
       }
       const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
