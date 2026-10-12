@@ -1,4 +1,7 @@
-import type { HoverProps, WidgetCtx } from './types'
+import type { HoverProps, PictureBudget, WidgetCtx } from './types'
+
+// The engine refuses a whole pane whose Image sources pass 2097152 bytes; past this budget a picture shows as a link.
+const IMAGE_TREE_BUDGET = 1_900_000
 
 export function SectionRule(ctx: WidgetCtx, label: string, right: string, width: number, key?: string) {
   const { Text, C } = ctx
@@ -23,4 +26,10 @@ export function HoverLayer(ctx: WidgetCtx, key: string, props: HoverProps) {
       </Box>
     )
   )
+}
+
+export function fitPicture(budget: PictureBudget, png: string | undefined): string | undefined {
+  if (!png || budget.used + png.length > IMAGE_TREE_BUDGET) return undefined
+  budget.used += png.length
+  return png
 }

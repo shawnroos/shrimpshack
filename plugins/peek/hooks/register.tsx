@@ -46,8 +46,8 @@ import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, markdownP
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, taskRows, wrapLines } from './measure'
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
-import type { WidgetCtx } from './pane/types'
-import { HoverLayer, SectionRule } from './pane/widgets'
+import type { PictureBudget, WidgetCtx } from './pane/types'
+import { HoverLayer, SectionRule, fitPicture } from './pane/widgets'
 
 const C = BASE
 
@@ -157,8 +157,6 @@ const SAMPLE_MARKDOWN = '## Markdown\n\nRenders **bold**, *italic*, `code`, [lin
 
 const MERMAID_ASCII = '/.cache/claude-peek/bin/mermaid-ascii'
 const MAX_PNG_BYTES = 2 * 1024 * 1024
-// The engine refuses a whole pane whose Image sources pass 2097152 bytes; past this budget a picture shows as a link.
-const IMAGE_TREE_BUDGET = 1_900_000
 
 const exists = new Map<string, boolean>()
 const pixels = new Map<string, string>()
@@ -3249,12 +3247,7 @@ export const register: Register = on => {
         note(1, label)
       }
       const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
-      let imageBytes = 0
-      const fitsPane = (png: string) => {
-        if (imageBytes + png.length > IMAGE_TREE_BUDGET) return false
-        imageBytes += png.length
-        return true
-      }
+      const budget: PictureBudget = { used: 0 }
       const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
       const refs = refContext(ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
       const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
@@ -3263,7 +3256,7 @@ export const register: Register = on => {
         const one = record?.media?.[url]
         const picture = remote.pictures?.[url]
         const loadedPng = picture && pixels.get(picture.file)
-        const png = loadedPng && fitsPane(loadedPng) ? loadedPng : undefined
+        const png = fitPicture(budget, loadedPng)
         const host = (() => {
           try {
             return new URL(url).host
@@ -3355,7 +3348,7 @@ export const register: Register = on => {
         note(remote.failureDetail ? 4 : 3)
       } else {
         const faviconPng = remote.favicon && pixels.get(remote.favicon.file)
-        const favicon = faviconPng && fitsPane(faviconPng) ? faviconPng : undefined
+        const favicon = fitPicture(budget, faviconPng)
         drawnParts.push(
           <Box key="remote-title" flexDirection="row" width={textWidth}>
             {favicon && Image ? (
@@ -3373,7 +3366,7 @@ export const register: Register = on => {
         note(Math.ceil((record.title.length + 3) / textWidth), record.title)
         const labelWidth = Math.min(14, Math.max(0, ...record.meta.map(one => (META_ICON[one.label] ? 1 : one.label.length))) + 2)
         const previewPng = remote.preview && pixels.get(remote.preview.file)
-        const preview = previewPng && fitsPane(previewPng) ? previewPng : undefined
+        const preview = fitPicture(budget, previewPng)
         const previewBox = preview && Image && remote.preview ? fullWidth(remote.preview.width, remote.preview.height) : null
         const ogDescription = record.og?.description
         drawnParts.push(
@@ -3455,7 +3448,7 @@ export const register: Register = on => {
           for (const [fi, file] of (one.files ?? []).entries()) {
             const picture = remote.pictures?.[`slack-file:${file.id}`]
             const loaded = picture && pixels.get(picture.file)
-            const png = loaded && Image && fitsPane(loaded) ? loaded : undefined
+            const png = Image ? fitPicture(budget, loaded) : undefined
             if (png && picture && Image) {
               const box = imageBox(picture.width, picture.height, width, Math.max(IMAGE_ROWS, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 6))
               rows.push(<Image key={`${key}-${fi}`} source={{ png }} {...box} alt={file.name} />)
@@ -3485,7 +3478,7 @@ export const register: Register = on => {
           const color = isMenuOpen ? mute(speakerColor(one.authorId ?? one.author)) : speakerColor(one.authorId ?? one.author)
           const avatar = one.authorId ? remote.avatars?.[one.authorId] : undefined
           const avatarPng = avatar && pixels.get(avatar.file)
-          const face = avatarPng && Image && fitsPane(avatarPng) ? avatarPng : undefined
+          const face = Image ? fitPicture(budget, avatarPng) : undefined
           const when = whenLabel(one.at, now)
           const bodyParts: unknown[] = []
           let bodyRows = 0
@@ -3506,7 +3499,7 @@ export const register: Register = on => {
             const [, alt = '', url = ''] = found
             const picture = remote.pictures?.[url]
             const loaded = picture && pixels.get(picture.file)
-            const png = loaded && Image && fitsPane(loaded) ? loaded : undefined
+            const png = Image ? fitPicture(budget, loaded) : undefined
             if (!png || !picture || !Image) {
               pending.push(`[${alt || 'open image'}](${url})`)
               continue
