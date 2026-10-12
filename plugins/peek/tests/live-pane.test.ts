@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, ProcessSpawnChunk } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
+import { exited } from './fixtures/results'
+import { PANE_PROPS, baseWorld, fakeProcess, noDisk } from './fixtures/world'
 
 const PAGE = 'https://news.test/'
 const HTML = '<html><head><title>News Test</title></head><body><p>Readable story text.</p></body></html>'
@@ -17,10 +19,7 @@ function liveWorld(on: On, options: { hasSwiftc?: boolean; denyBlits?: boolean }
   let invalidations = 0
   mock.clock(on, { now: 10 * 3600_000 })
   on('session.id', () => ({ value: 'live-pane' }))
-  on('session.cwd', () => ({ value: '/repo' }))
-  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
-  on('ui.toast', () => ({ value: undefined }))
+  baseWorld(on)
   on('store.set', (_$, e, next) => {
     stored[e.key] = e.value
     return next(e)
@@ -33,19 +32,20 @@ function liveWorld(on: On, options: { hasSwiftc?: boolean; denyBlits?: boolean }
     invalidations += 1
     return next(e)
   })
-  on('fs.stat', (_$, e) => {
-    throw new Error(`ENOENT ${e.path}`)
-  })
+  noDisk(on)
   on('fs.exists', (_$, e) => ({ value: options.hasSwiftc !== false && e.path.startsWith('/home/.cache/claude-peek/bin/') }))
   on('fs.read', (_$, e) => {
     if (e.path.endsWith('/helper/peek-web.swift')) return { value: 'print("helper")' }
     throw new Error(`ENOENT ${e.path}`)
   })
-  on('process.run', (_$, e) => {
-    ran.push([...e.argv])
-    const isBroken = options.hasSwiftc === false && e.argv[0] === 'sh'
-    return { value: { exitCode: isBroken ? 1 : 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-  })
+  fakeProcess(
+    on,
+    argv => {
+      const isBroken = options.hasSwiftc === false && argv[0] === 'sh'
+      return exited(isBroken ? 1 : 0)
+    },
+    ran,
+  )
   on('http.fetch', (_$, e) => {
     if (e.init?.socketPath) {
       const body = e.init.body ? JSON.parse(e.init.body) : undefined
@@ -103,14 +103,7 @@ function liveWorld(on: On, options: { hasSwiftc?: boolean; denyBlits?: boolean }
   }
 }
 
-const props = {
-  title: 'Peek',
-  isFocused: true,
-  bodyColumns: 100,
-  placement: 'dock' as const,
-  scroll: { offset: 0, bodyRows: 40 },
-  view: {},
-}
+const props = PANE_PROPS
 
 test('the reader page stays up, saying it is starting, until the first frame', async ($, on) => {
   const w = liveWorld(on)
