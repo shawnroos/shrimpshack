@@ -23,7 +23,7 @@ export type CacheEntry = {
   failureDetail?: string
 }
 
-export type Source = 'github' | 'linear' | 'web'
+export type Source = 'github' | 'linear' | 'slack' | 'web'
 
 export type TitleEntry = { title: string; kind: RemoteKind; status?: string; favicon?: string; trail?: string[]; updatedAt: number }
 
@@ -56,12 +56,13 @@ export function sourceOf(address: string): Source {
   }
   if (host === 'github.com') return 'github'
   if (host === 'linear.app') return 'linear'
+  if (host.endsWith('.slack.com')) return 'slack'
   return 'web'
 }
 
 export function isTimed(address: string): boolean {
   const kind = parseRef(address)?.kind
-  return kind === 'gh-pr' || kind === 'gh-issue' || kind === 'gh-number' || kind === 'linear-issue'
+  return kind === 'gh-pr' || kind === 'gh-issue' || kind === 'gh-number' || kind === 'linear-issue' || kind === 'slack-thread'
 }
 
 export function isCurrent(currentHref: string | undefined, address: string): boolean {

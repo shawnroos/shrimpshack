@@ -712,7 +712,8 @@ async function remember(
     }
     return out
   }
-  const artifacts = [...(await toHrefs([...texts.flatMap(pathCandidates), ...created])), ...texts.flatMap(urlCandidates)]
+  const urls = texts.flatMap(urlCandidates).map(url => (parseRef(url)?.kind === 'slack-thread' ? (parseRef(url)?.address ?? url) : url))
+  const artifacts = [...(await toHrefs([...texts.flatMap(pathCandidates), ...created])), ...urls]
   const worked = await toHrefs(touched)
   if (!artifacts.length && !worked.length) return
   const at = await $.clock.now()
@@ -818,7 +819,7 @@ async function sessionEntries($: EngineInterface, list: readonly Mention[]): Pro
       out.push({
         href: one.href,
         path,
-        name: label?.title ?? ref.key ?? (ref.number ? `#${ref.number}` : path.replace(/^https?:\/\/(www\.)?/, '')),
+        name: label?.title ?? ref.key ?? (ref.number ? `#${ref.number}` : ref.channel ? `Thread in ${ref.channel}` : path.replace(/^https?:\/\/(www\.)?/, '')),
         folder: ref.owner ? `${ref.owner}/${ref.repo}` : label?.trail?.join(' · ') || new URL(ref.address).hostname,
         kind: label?.kind ?? ref.kind,
         status: label?.status,
@@ -1519,10 +1520,11 @@ function trailIcon(kind: string, index: number, count: number): string {
   const family = familyOf(kind)
   if (family === 'gh') return index === 0 && count > 1 ? '\u{f09b}' : ICON['gh-repo']
   if (family === 'linear') return index === 0 ? '\u{f0c0}' : ICON['linear-project']
+  if (family === 'slack') return index === 0 ? ICON['slack-thread'] : '\u{f086}'
   return '\u{f0ac}'
 }
 
-const TIER_NAMES: Record<string, string> = { 'gh-cli': 'via gh', 'web-cli': 'via curl', 'web-api': 'via web fetch', 'linear-api': 'via Linear API' }
+const TIER_NAMES: Record<string, string> = { 'gh-cli': 'via gh', 'web-cli': 'via curl', 'web-api': 'via web fetch', 'linear-api': 'via Linear API', 'slack-mcp': 'via Slack MCP', 'slack-cli': 'via slack' }
 
 function sourceLine(remote: NonNullable<View['remote']>, now: number): string {
   const { tier, fetchedAt, staleSince } = remote

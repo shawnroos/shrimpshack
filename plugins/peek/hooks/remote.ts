@@ -4,18 +4,20 @@ import type { Captured, CaptureIo } from './capture'
 import { fromCapture as githubFromCapture, loadGithub } from './github'
 import { fromCapture as linearFromCapture, loadLinear } from './linear'
 import type { Ref } from './refs'
+import { fromCapture as slackFromCapture, loadSlack } from './slack'
 import type { SourceIo } from './sources'
 import { fromCapture as webFromCapture, loadWeb, withRemoteMedia } from './web'
 
 export type RemoteIo = SourceIo & CaptureIo
 
 type Source = {
-  load: (io: SourceIo, ref: Ref, now: number) => Promise<Loaded>
+  load: (io: RemoteIo, ref: Ref, now: number) => Promise<Loaded>
   fromCapture: (captured: Captured, ref: Ref) => Loaded | null
 }
 
 function sourceFor(ref: Ref): Source {
   if (ref.kind === 'linear-issue' || ref.kind === 'linear-project') return { load: loadLinear, fromCapture: linearFromCapture }
+  if (ref.kind === 'slack-thread') return { load: loadSlack, fromCapture: slackFromCapture }
   if (ref.kind === 'web') return { load: loadWeb, fromCapture: webFromCapture }
   return { load: loadGithub, fromCapture: githubFromCapture }
 }

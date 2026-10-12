@@ -45,6 +45,7 @@ export const ICON = {
   'gh-repo': '\u{f401}',
   'linear-issue': '\u{f0ae}',
   'linear-project': '\u{f0e8}',
+  'slack-thread': '\u{f198}',
 } as const
 
 export const META_ICON: Record<string, string> = {
@@ -95,6 +96,7 @@ export const KIND_COLOR: Record<string, string> = {
   'gh-repo': C.overlay1,
   'linear-issue': C.blue,
   'linear-project': C.mauve,
+  'slack-thread': C.yellow,
 }
 
 export function iconFor(kind: string | undefined): string {
