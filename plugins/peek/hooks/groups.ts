@@ -1,10 +1,13 @@
 import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupSection } from '../types'
+import { parseHref } from './lib'
 import { itemKey } from './refs'
 
 // A group file at these caps stays far under the 4 MiB fs.read limit.
 export const GROUP_CAPS = { groups: 50, items: 200, sections: 20, removed: 100, description: 500, label: 200 }
 
 type Step = { group: Group; outcome: GroupOutcome }
+
+export const refused = (op: GroupOutcome['op'], reason: string, extra: Partial<GroupOutcome> = {}): GroupOutcome => ({ op, status: 'refused', reason, ...extra })
 
 export function shortId(random: () => number): string {
   let id = ''
@@ -195,10 +198,7 @@ export function createGroup(
   ops: readonly GroupOp[],
   ctx: GroupContext,
 ): GroupResult {
-  const refuse = (reason: string, groupId?: string): GroupResult => ({
-    group: null,
-    outcomes: [{ op: 'create', status: 'refused', reason, ...(groupId ? { groupId } : {}) }],
-  })
+  const refuse = (reason: string, groupId?: string): GroupResult => ({ group: null, outcomes: [refused('create', reason, groupId ? { groupId } : {})] })
   const title = input.title.trim()
   if (!title) return refuse('A group needs a title')
   const clash = titleTaken(title, ctx.others)
@@ -223,12 +223,12 @@ export function createGroup(
   }
 }
 
-export function starGroup(group: Group, starred: boolean, now: number): { group: Group; outcomes: GroupOutcome[] } {
+export function starGroup(group: Group, starred: boolean): { group: Group; outcomes: GroupOutcome[] } {
   if (group.starred === starred) {
     return { group, outcomes: [{ op: 'star', status: 'unchanged', reason: starred ? 'Already starred' : 'Not starred' }] }
   }
   return {
-    group: { ...group, starred, updatedAt: now },
+    group: { ...group, starred },
     outcomes: [{ op: 'star', status: 'applied', reason: starred ? 'Starred' : 'Unstarred' }],
   }
 }
@@ -263,7 +263,7 @@ export type GroupWrite =
   | { ok: true; group: Group | null; outcomes: GroupOutcome[]; isChanged: boolean }
   | { ok: false; error: string }
 
-export const LOCK_STALE_MS = 10_000
+const LOCK_STALE_MS = 10_000
 const LOCK_POLL_MS = 100
 // 20 polls of 100 ms: a lock still held after about 2 s refuses the write.
 const LOCK_POLLS = 20
@@ -283,8 +283,8 @@ export function projectHash(key: string): string {
   return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`
 }
 
-export function groupsDir(home: string, projectKey: string): string {
-  return `${home}/.local/share/claude-peek/groups/${projectHash(projectKey)}`
+export function groupsDir(homeDir: string, projectKey: string): string {
+  return `${homeDir}/.local/share/claude-peek/groups/${projectHash(projectKey)}`
 }
 
 export async function resolveProjectKey(run: GroupsIo['run'], root: string): Promise<string> {
@@ -293,7 +293,7 @@ export async function resolveProjectKey(run: GroupsIo['run'], root: string): Pro
   return key || root
 }
 
-const isScheme = (ref: string) => /^[a-z][a-z0-9+.-]*:/i.test(ref)
+export const isScheme = (ref: string) => /^[a-z][a-z0-9+.-]*:/i.test(ref)
 
 export function storedRef(href: string, worktreeRoot?: string): string {
   if (!worktreeRoot || !href.startsWith('file:')) return href
@@ -305,16 +305,32 @@ export function storedRef(href: string, worktreeRoot?: string): string {
 }
 
 export function refPath(ref: string, worktreeRoot?: string): { path: string; line?: number } | null {
-  if (isScheme(ref)) {
-    if (!ref.startsWith('file:')) return null
-    const url = new URL(ref)
-    const line = /^#L(\d+)$/.exec(url.hash)
-    return { path: decodeURIComponent(url.pathname), ...(line ? { line: Number(line[1]) } : {}) }
-  }
+  if (isScheme(ref)) return parseHref(ref)
   if (!worktreeRoot) return null
   const match = /^(.*?)(?:#L(\d+))?$/.exec(ref)
   return { path: `${worktreeRoot}/${match?.[1] ?? ref}`, ...(match?.[2] ? { line: Number(match[2]) } : {}) }
 }
+
+type Loose = Record<string, unknown>
+
+const isLoose = (value: unknown): value is Loose => Boolean(value) && typeof value === 'object'
+
+function parseItem(one: unknown): GroupItem[] {
+  if (!isLoose(one) || typeof one.ref !== 'string') return []
+  return [
+    {
+      ref: one.ref,
+      ...(typeof one.section === 'string' ? { section: one.section } : {}),
+      // An unreadable addedBy keeps the person's protection rather than letting the agent remove it.
+      addedBy: one.addedBy === 'agent' ? 'agent' : 'person',
+      addedAt: typeof one.addedAt === 'number' ? one.addedAt : 0,
+      ...(typeof one.label === 'string' ? { label: one.label } : {}),
+    },
+  ]
+}
+
+const parseSection = (one: unknown): GroupSection[] =>
+  isLoose(one) && typeof one.id === 'string' && typeof one.title === 'string' ? [{ id: one.id, title: one.title }] : []
 
 function parseGroup(text: string, projectKey: string): Group | null {
   let raw: unknown
@@ -327,6 +343,8 @@ function parseGroup(text: string, projectKey: string): Group | null {
   if (!group || typeof group !== 'object') return null
   if (group.projectKey !== projectKey || typeof group.id !== 'string' || typeof group.title !== 'string') return null
   if (!Array.isArray(group.sections) || !Array.isArray(group.items) || !Array.isArray(group.removed)) return null
+  const sections = (group.sections as unknown[]).flatMap(parseSection)
+  const kept = new Set(sections.map(one => one.id))
   return {
     projectKey,
     id: group.id,
@@ -334,13 +352,13 @@ function parseGroup(text: string, projectKey: string): Group | null {
     description: typeof group.description === 'string' ? group.description : '',
     starred: group.starred === true,
     updatedAt: typeof group.updatedAt === 'number' ? group.updatedAt : 0,
-    sections: group.sections,
-    items: group.items,
-    removed: group.removed,
+    sections,
+    items: (group.items as unknown[]).flatMap(parseItem).map(one => (one.section && !kept.has(one.section) ? placed(one, undefined) : one)),
+    removed: (group.removed as unknown[]).filter((one): one is string => typeof one === 'string'),
   }
 }
 
-const fileOf = (place: GroupPlace, id: string) => `${place.dir}/${id}.json`
+export const fileOf = (place: GroupPlace, id: string) => `${place.dir}/${id}.json`
 
 export async function readGroup(io: GroupsIo, place: GroupPlace, id: string): Promise<Group | null> {
   if (!isGroupId(id)) return null
@@ -356,20 +374,42 @@ export async function listGroups(io: GroupsIo, place: GroupPlace): Promise<Group
   return groups.filter((one): one is Group => one !== null).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
 }
 
-async function takeLock(io: GroupsIo, lock: string): Promise<boolean> {
+const ownerOf = (lock: string) => `${lock}/owner`
+
+async function dropLock(io: GroupsIo, lock: string) {
+  await io.run(['rm', '-f', ownerOf(lock)]).catch(() => null)
+  await io.run(['rmdir', lock]).catch(() => null)
+}
+
+// A lock older than LOCK_STALE_MS can be broken by another session while its holder is
+// still running, so a holder re-checks this token before it commits or releases.
+async function holdsLock(io: GroupsIo, lock: string, token: string): Promise<boolean> {
+  return (await io.read(ownerOf(lock)).catch(() => null)) === token
+}
+
+async function takeLock(io: GroupsIo, lock: string): Promise<string | null> {
   let hasBroken = false
   for (let poll = 0; poll <= LOCK_POLLS; poll++) {
     const made = await io.run(['mkdir', lock]).catch(() => null)
-    if (made?.exitCode === 0) return true
+    if (made?.exitCode === 0) {
+      const token = `${shortId(Math.random)}${shortId(Math.random)}`
+      const wrote = await io.write(ownerOf(lock), token).then(
+        () => true,
+        () => false,
+      )
+      if (wrote) return token
+      await dropLock(io, lock)
+      return null
+    }
     const held = await io.stat(lock).catch(() => null)
     if (held && !hasBroken && (await io.now()) - held.mtimeMs > LOCK_STALE_MS) {
       hasBroken = true
-      await io.run(['rmdir', lock]).catch(() => null)
+      await dropLock(io, lock)
       continue
     }
     if (poll < LOCK_POLLS) await io.sleep(LOCK_POLL_MS)
   }
-  return false
+  return null
 }
 
 async function lockedWrite(
@@ -382,22 +422,29 @@ async function lockedWrite(
   const lock = `${file}.lock`
   const made = await io.run(['mkdir', '-p', place.dir]).catch(() => null)
   if (made?.exitCode !== 0) return { ok: false, error: `Could not create the groups folder ${place.dir}` }
-  if (!(await takeLock(io, lock))) return { ok: false, error: `Group ${id} is busy, try again` }
+  const busy = { ok: false as const, error: `Group ${id} is busy, try again` }
+  const token = await takeLock(io, lock)
+  if (!token) return busy
   try {
     const current = await readGroup(io, place, id)
     const { group, outcomes } = change(current)
     if (group === current) return { ok: true, group, outcomes, isChanged: false }
     if (!group) {
+      if (!(await holdsLock(io, lock, token))) return busy
       const removed = await io.run(['rm', '-f', file]).catch(() => null)
       if (removed?.exitCode !== 0) return { ok: false, error: `Could not delete ${file}` }
       return { ok: true, group, outcomes, isChanged: true }
     }
-    const staged = `${file}.staged`
+    const staged = `${file}.${token}.staged`
     const wrote = await io.write(staged, JSON.stringify(group, null, 2)).then(
       () => true,
       () => false,
     )
     if (!wrote) return { ok: false, error: `Could not write ${staged}` }
+    if (!(await holdsLock(io, lock, token))) {
+      await io.run(['rm', '-f', staged]).catch(() => null)
+      return busy
+    }
     const moved = await io.run(['mv', '-f', staged, file]).catch(() => null)
     if (moved?.exitCode !== 0) {
       await io.run(['rm', '-f', staged]).catch(() => null)
@@ -405,7 +452,7 @@ async function lockedWrite(
     }
     return { ok: true, group, outcomes, isChanged: true }
   } finally {
-    await io.run(['rmdir', lock]).catch(() => null)
+    if (await holdsLock(io, lock, token)) await dropLock(io, lock)
   }
 }
 

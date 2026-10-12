@@ -51,7 +51,7 @@ export function failureText(kind: FailureKind): { title: string; hint: string } 
     case 'not-found-or-no-access':
       return { title: 'Not found, or you have no access', hint: 'Check the link, or open it in the browser' }
     case 'gone':
-      return { title: 'Not found: it was deleted or moved', hint: 'Check the link, or open it in the browser' }
+      return { title: 'Not found: it was deleted, moved, or you have no access', hint: 'Check the link, or open it in the browser' }
     case 'rate-limited':
       return { title: 'Rate limited', hint: 'Wait a minute, then refresh' }
     case 'offline':

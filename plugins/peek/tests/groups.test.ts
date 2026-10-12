@@ -412,15 +412,18 @@ describe('the person\'s items and removals', () => {
 })
 
 describe('star and delete', () => {
-  test('starring sets the flag and updatedAt; starring again is unchanged', () => {
-    const { group, outcomes } = starGroup(make(), true, LATER)
+  test('starring sets the flag and leaves updatedAt alone, since a star is not a content change; starring again is unchanged', () => {
+    const before = make()
+    const { group, outcomes } = starGroup(before, true)
     expect(group.starred).toBe(true)
-    expect(group.updatedAt).toBe(LATER)
+    expect(group.updatedAt).toBe(before.updatedAt)
     expect(outcomes[0]?.status).toBe('applied')
-    const again = starGroup(group, true, LATER + 1)
+    const again = starGroup(group, true)
     expect(again.outcomes[0]?.status).toBe('unchanged')
-    expect(again.group.updatedAt).toBe(LATER)
-    expect(starGroup(group, false, LATER).group.starred).toBe(false)
+    expect(again.group).toBe(group)
+    const unstarred = starGroup(group, false).group
+    expect(unstarred.starred).toBe(false)
+    expect(unstarred.updatedAt).toBe(before.updatedAt)
   })
 
   test('an unstarred group with only agent items deletes without force', () => {
@@ -430,7 +433,7 @@ describe('star and delete', () => {
   })
 
   test('deleting a starred group or one with person items is refused without force and names what would be lost', () => {
-    const starred = starGroup(make(), true, LATER).group
+    const starred = starGroup(make(), true).group
     const refusedStar = deleteGroup(starred)
     expect(refusedStar.group).toEqual(starred)
     expect(refusedStar.outcomes[0]).toMatchObject({ op: 'delete', status: 'refused', needsForce: true })

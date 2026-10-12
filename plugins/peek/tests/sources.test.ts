@@ -337,6 +337,7 @@ test('every kind has a title and a next action', () => {
   expect(failureText('cli-unauthed').hint).toBe('Run `gh auth login` in a terminal')
   expect(failureText('key-missing').hint).toBe('Set LINEAR_API_KEY or add it to ~/.secrets')
   expect(failureText('process-unavailable').hint).toBe('This surface cannot run command-line tools')
+  expect(failureText('gone')).toEqual({ title: 'Not found: it was deleted, moved, or you have no access', hint: 'Check the link, or open it in the browser' })
 })
 
 test('the planted key appears nowhere but the Authorization header, across every failure kind', () => {

@@ -2,7 +2,6 @@ import type { ClientModule } from 'claude-code'
 
 import { C } from './theme'
 
-// A group card posts its own payloads, so a click on it never reaches the file paths show and setStar.
 type Item = { href: string; isStarred?: boolean } | { group: string; isStarred?: boolean }
 type Props = { kind: 'rows' | 'cards'; width: number; height: number; items: Item[]; cardWidth?: number; cardHeight?: number; gap?: number; starX: number; starY: number }
 type State = { hovered: number }
