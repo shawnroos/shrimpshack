@@ -2882,13 +2882,6 @@ export const register: Register = on => {
       const rest = entries ? entries.filter(one => !starSet.has(one.href)) : null
       const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
       const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
-      const section = (label: string, right: string) => (
-        <Text wrap="truncate-end">
-          <Text color={C.accent} bold>{`${label} `}</Text>
-          <Text color={C.surface1}>{'─'.repeat(Math.max(1, textWidth - label.length - right.length - 2))}</Text>
-          <Text color={C.overlay0}>{right ? ` ${right}` : ''}</Text>
-        </Text>
-      )
       const keys: string[] = []
       const starts: number[] = []
       let cursor = 0
@@ -2956,7 +2949,7 @@ export const register: Register = on => {
         cursor += 1
         return (
           <Box flexDirection="column" width={textWidth}>
-            {section('FAVOURITES', `${shownFavs.length}`)}
+            {SectionRule(w, 'FAVOURITES', `${shownFavs.length}`, textWidth)}
             <Box height={1} />
             {grid}
           </Box>
@@ -3009,7 +3002,7 @@ export const register: Register = on => {
             {rest && picked.length === 0 && favs.length === 0 && <Text color={C.overlay0}>No files match.</Text>}
             {groups.map(group => (
               <Box key={`group-${group.id}`} flexDirection="column" width={textWidth}>
-                {section(group.label, `${group.items.length}`)}
+                {SectionRule(w, group.label, `${group.items.length}`, textWidth)}
                 <Box height={1} />
                 {group.grid}
               </Box>
@@ -3055,7 +3048,7 @@ export const register: Register = on => {
         const count = starredGroups.length > pinned.length ? `${pinned.length} of ${starredGroups.length} · e for all` : `${pinned.length}`
         return (
           <Box flexDirection="column" width={textWidth}>
-            {section('STARRED GROUPS', count)}
+            {SectionRule(w, 'STARRED GROUPS', count, textWidth)}
             <Box height={1} />
             {grid}
           </Box>
@@ -3148,7 +3141,7 @@ export const register: Register = on => {
           )}
           {groups.map(group => (
             <Box key={`group-${group.id}`} flexDirection="column" width={textWidth} marginBottom={1}>
-              {section(group.label, `${group.items.length}`)}
+              {SectionRule(w, group.label, `${group.items.length}`, textWidth)}
               <Box height={1} />
               {group.list as never}
             </Box>
