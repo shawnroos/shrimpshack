@@ -1,5 +1,7 @@
-import { familyOf } from './refs'
+
 import { PATH_EXTS, extOf, fileHref, kindOf, parseHref } from './paths'
+import { typeOf } from './kinds'
+export * from './kinds'
 export * from './markdown'
 export * from './measure'
 export * from './tabular'
@@ -48,21 +50,6 @@ export function rankRecent(query: string, recent: readonly string[]): { href: st
 
 export function hasMeaningfulWords(query: string): boolean {
   return query.toLowerCase().split(/[^a-z0-9]+/).some(word => word && !STOP_WORDS.has(word))
-}
-
-const KIND_LABELS: Record<string, { glyph: string; label: string }> = {
-  markdown: { glyph: '¶', label: 'Markdown' },
-  text: { glyph: '‹›', label: 'Code' },
-  mermaid: { glyph: '◇', label: 'Diagram' },
-  image: { glyph: '▣', label: 'Image' },
-  svg: { glyph: '▣', label: 'SVG' },
-  html: { glyph: '◎', label: 'HTML' },
-  folder: { glyph: '▸', label: 'Folder' },
-  web: { glyph: '◎', label: 'Web page' },
-}
-
-export function kindLabel(kind: string | undefined): { glyph: string; label: string } {
-  return KIND_LABELS[kind ?? ''] ?? { glyph: '·', label: 'File' }
 }
 
 export type MentionEntry = { href: string; at: number; count: number; isArtifact?: boolean }
@@ -116,15 +103,6 @@ const VIEWABLE = new RegExp(`\\.(?:${PATH_EXTS})$`, 'i')
 
 export function isViewable(path: string): boolean {
   return VIEWABLE.test(path)
-}
-
-export function typeOf(kind: string): GalleryType {
-  if (kind === 'markdown') return 'markdown'
-  if (kind === 'image' || kind === 'svg') return 'image'
-  if (kind === 'mermaid') return 'diagram'
-  if (kind === 'html' || kind === 'web' || familyOf(kind) !== 'web') return 'html'
-  if (kind === 'json' || kind === 'toml' || kind === 'csv') return 'data'
-  return 'code'
 }
 
 // `stat -f '%m %z %N'` lines (mtime seconds, size bytes, path relative to root).
