@@ -8,7 +8,7 @@ import type { Failed, SourceIo } from './sources'
 
 const SCRATCH = '/tmp/claude-peek'
 // The engine cuts stdout at 4 MiB, so the status line rides on stderr where the cut cannot drop it.
-const MARKER = '__peek_curl__ '
+export const MARKER = '__peek_curl__ '
 const MAX_PAGE = 4_194_304
 // --globoff: curl otherwise expands {a,b} and [1-2] in a URL into hosts fetchable() never saw.
 const PROTO = ['--globoff', '--proto', '=http,https', '--proto-redir', '=http,https']
@@ -178,7 +178,7 @@ async function sha1(text: string): Promise<string> {
 }
 
 // The content type rides on stderr so the stdout fields every caller parses keep their order.
-const TYPE_MARKER = '__peek_type__ '
+export const TYPE_MARKER = '__peek_type__ '
 
 async function fetchToScratch(io: SourceIo, raw: string | undefined, ext: string, maxSeconds: number): Promise<{ file: string; type?: string } | undefined> {
   const first = fetchable(raw)

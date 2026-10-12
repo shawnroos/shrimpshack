@@ -1,210 +1,13 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
-import { groupsDir } from '../hooks/groups'
 import { itemKey } from '../hooks/refs'
-import { resetRefresh } from '../hooks/refresh'
 import { pullView } from './fixtures/github/items'
 import { hoverLayers } from './fixtures/overlay'
 import { C } from '../hooks/theme'
-
-const HOME = '/home'
-const PR = 'https://github.com/acme/widgets/pull/42'
-const LINEAR = 'https://linear.app/acme/issue/WEB-12'
-const PAGE = 'https://example.test/page'
-
-type World = {
-  files: Record<string, string>
-  dirs: Map<string, number>
-  mtimes: Map<string, number>
-  reads: string[]
-  dirStats: string[]
-  touch: (path: string) => void
-  isHomeBroken: boolean
-  log: string[][]
-  now: number
-  root: string
-  commonDirs: Record<string, string>
-  invalidated: number
-  toasts: string[]
-  isMvBroken: boolean
-  onLockBusy?: (lock: string) => void
-  onWrite?: (path: string) => void
-  onRun?: (argv: string[]) => Promise<RunAnswer | undefined> | RunAnswer | undefined
-  onFetch?: (url: string) => { status: number; text?: string } | Error | undefined
-}
-
-type RunAnswer = { exitCode: number; stdout?: string; stderr?: string }
-
-// Shared by every world, so an mtime never repeats across tests while the plugin's module state lives on.
-let lastMtime = 9 * 3600_000
-
-function groupsWorld(on: On, files: Record<string, string> = {}, options: { isClockMocked?: boolean } = {}): World {
-  resetRefresh()
-  const w: World = {
-    files: { '/repo/docs/plan.md': '# Plan\n', '/repo/notes/todo.md': 'todo\n', '/home/notes.md': 'mine\n', ...files },
-    dirs: new Map(),
-    mtimes: new Map(),
-    reads: [],
-    dirStats: [],
-    touch: path => {
-      lastMtime++
-      w.mtimes.set(path, lastMtime)
-      w.dirs.set(path.slice(0, path.lastIndexOf('/')), lastMtime)
-    },
-    isHomeBroken: false,
-    log: [],
-    now: 10 * 3600_000,
-    root: '/repo',
-    commonDirs: { '/repo': '/repo/.git', '/wt/feature': '/repo/.git', '/other': '/other/.git' },
-    invalidated: 0,
-    toasts: [],
-    isMvBroken: false,
-  }
-  const done = (exitCode: number, stdout = '') => ({ value: { exitCode, stdout, stderr: exitCode ? 'failed' : '', isStdoutTruncated: false, isStderrTruncated: false } })
-  const isDir = (path: string) => w.dirs.has(path) || Object.keys(w.files).some(one => one.startsWith(`${path}/`))
-  on('session.id', () => ({ value: 'groups-pane' }))
-  on('session.cwd', () => ({ value: w.root }))
-  on('session.root', () => ({ value: w.root }))
-  on('env.get', (_$, e) => {
-    if (e.name === 'HOME' && w.isHomeBroken) {
-      w.isHomeBroken = false
-      throw new Error('env unavailable')
-    }
-    return { value: e.name === 'HOME' ? HOME : undefined }
-  })
-  if (!options.isClockMocked) {
-    on('clock.now', () => ({ value: w.now }))
-    on('clock.sleep', (_$, e) => {
-      w.now += (e as { ms?: number }).ms ?? 0
-      return { value: undefined }
-    })
-  }
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
-  on('ui.toast', (_$, e) => {
-    w.toasts.push(e.text)
-    return { value: undefined }
-  })
-  on('ui.invalidate', () => {
-    w.invalidated++
-    return { value: undefined }
-  })
-  on('http.fetch', (_$, e) => {
-    const answer = w.onFetch?.(e.url) ?? { status: 404 }
-    if (answer instanceof Error) throw answer
-    return { value: { status: answer.status, ok: answer.status < 300, headers: {}, text: answer.text ?? '' } }
-  })
-  on('process.run', async (_$, e) => {
-    const argv = [...e.argv]
-    w.log.push(['run', ...argv])
-    const custom = await w.onRun?.(argv)
-    if (custom) return { value: { stdout: '', stderr: '', ...custom, isStdoutTruncated: false, isStderrTruncated: false } }
-    const [bin = '', ...rest] = argv
-    if (bin === 'git' && argv.includes('--git-common-dir') && !argv.includes('--show-toplevel')) {
-      const dir = rest[rest.indexOf('-C') + 1] ?? ''
-      const common = w.commonDirs[dir]
-      return common ? done(0, `${common}\n`) : done(128)
-    }
-    if (bin === 'git' && argv.includes('--show-toplevel')) {
-      const dir = rest[rest.indexOf('-C') + 1] ?? ''
-      const top = Object.keys(w.commonDirs).find(one => dir === one || dir.startsWith(`${one}/`))
-      return top ? done(0, `${top}\n${top}/.git\n${w.commonDirs[top]}\n`) : done(128)
-    }
-    if (bin === 'mkdir' && rest[0] === '-p') {
-      if (!w.dirs.has(rest[1] ?? '')) w.dirs.set(rest[1] ?? '', w.now)
-      return done(0)
-    }
-    if (bin === 'mkdir') {
-      const lock = rest[0] ?? ''
-      if (isDir(lock)) {
-        w.onLockBusy?.(lock)
-        return done(1)
-      }
-      w.dirs.set(lock, w.now)
-      return done(0)
-    }
-    if (bin === 'rmdir') {
-      const dir = rest[0] ?? ''
-      if (Object.keys(w.files).some(one => one.startsWith(`${dir}/`))) return done(1)
-      w.dirs.delete(dir)
-      return done(0)
-    }
-    if (bin === 'mv' && rest[0] === '-f') {
-      const [, from = '', to = ''] = rest
-      if (w.isMvBroken || w.files[from] === undefined) return done(1)
-      w.files[to] = w.files[from]
-      delete w.files[from]
-      w.touch(to)
-      return done(0)
-    }
-    if (bin === 'rm' && rest[0] === '-f') {
-      delete w.files[rest[1] ?? '']
-      w.touch(rest[1] ?? '')
-      return done(0)
-    }
-    return done(1)
-  })
-  on('fs.read', (_$, e) => {
-    const text = w.files[e.path]
-    w.reads.push(e.path)
-    if (text === undefined) throw new Error(`ENOENT ${e.path}`)
-    return { value: text }
-  })
-  on('fs.write', (_$, e) => {
-    w.log.push(['write', e.path])
-    w.files[e.path] = e.text
-    w.touch(e.path)
-    w.onWrite?.(e.path)
-    return { value: undefined }
-  })
-  on('fs.exists', (_$, e) => ({ value: w.files[e.path] !== undefined || isDir(e.path) }))
-  on('fs.stat', (_$, e) => {
-    if (w.files[e.path] !== undefined) return { value: { kind: 'file' as const, size: w.files[e.path]?.length ?? 0, mtimeMs: w.mtimes.get(e.path) ?? 8 * 3600_000, isLink: false } }
-    if (isDir(e.path)) {
-      w.dirStats.push(e.path)
-      return { value: { kind: 'dir' as const, size: 0, mtimeMs: w.dirs.get(e.path) ?? 8 * 3600_000, isLink: false } }
-    }
-    throw new Error(`ENOENT ${e.path}`)
-  })
-  on('fs.list', (_$, e) => {
-    if (!isDir(e.path)) throw new Error(`ENOENT ${e.path}`)
-    const prefix = `${e.path}/`
-    const names = new Map<string, boolean>()
-    for (const path of [...Object.keys(w.files), ...w.dirs.keys()]) {
-      if (!path.startsWith(prefix)) continue
-      const [first = '', ...more] = path.slice(prefix.length).split('/')
-      names.set(first, more.length > 0 || w.dirs.has(`${prefix}${first}`) || names.get(first) === true)
-    }
-    return { value: [...names].map(([name, isFolder]) => ({ name, kind: isFolder ? ('dir' as const) : ('file' as const), size: 0, mtimeMs: 0, isLink: false })) }
-  })
-  return w
-}
-
-type ToolAnswer = { result?: unknown; deny?: string }
-
-async function call($: { tool: { call: (input: never) => Promise<unknown> } }, tool: string, input: Record<string, unknown>): Promise<string> {
-  const answer = (await $.tool.call({ tool: `mcp__peek__${tool}`, tool_use_id: `${tool}-${Math.random()}`, ...input } as never)) as ToolAnswer
-  return String(answer.result ?? answer.deny ?? '')
-}
-
-function jsonOf(text: string): Record<string, unknown> {
-  return JSON.parse(text.slice(text.indexOf('\n') + 1)) as Record<string, unknown>
-}
-
-const dirOf = (projectKey: string) => groupsDir(HOME, projectKey)
-
-function savedGroup(w: World, id: string, projectKey = '/repo/.git') {
-  const text = w.files[`${dirOf(projectKey)}/${id}.json`]
-  return text === undefined ? undefined : (JSON.parse(text) as { items: { ref: string; addedBy: string }[]; starred: boolean; title: string })
-}
-
-async function create($: Parameters<typeof call>[0], add: unknown[], title = 'Launch') {
-  const text = await call($, 'save_group', { title, add })
-  const id = String(jsonOf(text).id)
-  return { text, id }
-}
+import { LINEAR, PAGE, PR, call, create, dirOf, fakeFs, jsonOf, savedGroup } from './fixtures/world'
+import type { RunAnswer, World } from './fixtures/world'
 
 test('save_group with mixed targets creates a group; read_group returns every item, the repo files repo-relative', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
   on('tool.call', async () => ({ result: [{ type: 'text', text: '{"identifier":"WEB-12","url":"https://linear.app/acme/issue/WEB-12/fix-login"}' }] }) as never)
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
@@ -227,7 +30,7 @@ test('save_group with mixed targets creates a group; read_group returns every it
 })
 
 test('a batch with one nonexistent file adds the others and rejects that one with its reason', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { text, id } = await create($, [{ target: 'docs/plan.md' }, { target: 'docs/gone.md' }, { target: PAGE }])
   const outcomes = jsonOf(text).outcomes as { op: string; status: string; reason: string; ref?: string }[]
   const gone = outcomes.find(one => one.ref === 'docs/gone.md')
@@ -238,7 +41,7 @@ test('a batch with one nonexistent file adds the others and rejects that one wit
 })
 
 test('each write takes the lock, writes a staged file, moves it over the group file, then releases the lock', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   w.log = []
@@ -260,7 +63,7 @@ test('each write takes the lock, writes a staged file, moves it over the group f
 })
 
 test('two writers never share a staged path', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   w.log = []
   await call($, 'save_group', { id, add: [{ target: 'docs/plan.md' }] })
@@ -271,7 +74,7 @@ test('two writers never share a staged path', async ($, on) => {
 })
 
 test('a holder whose lock is broken and retaken mid-write commits nothing, the newer edit survives, and the new holder keeps its lock', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   const lock = `${file}.lock`
@@ -298,7 +101,7 @@ test('a holder whose lock is broken and retaken mid-write commits nothing, the n
 })
 
 test('a holder whose lock vanished before its mv commits nothing', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   w.onWrite = path => {
@@ -313,7 +116,7 @@ test('a holder whose lock vanished before its mv commits nothing', async ($, on)
 })
 
 test('a save started while another session holds the lock waits, re-reads, and both changes land', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   w.dirs.set(`${file}.lock`, w.now)
@@ -332,7 +135,7 @@ test('a save started while another session holds the lock waits, re-reads, and b
 })
 
 test('two saves from this session to one group queue in process, so neither waits on the lock and both land', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   w.log = []
@@ -342,7 +145,7 @@ test('two saves from this session to one group queue in process, so neither wait
 })
 
 test('a lock older than 10 s is broken and the write proceeds', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   w.dirs.set(`${file}.lock`, w.now - 11_000)
@@ -356,7 +159,7 @@ test('a lock older than 10 s is broken and the write proceeds', async ($, on) =>
 })
 
 test('a fresh lock held past 2 s refuses the save as busy, and nothing reports the item as added', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   w.dirs.set(`${file}.lock`, w.now)
@@ -370,7 +173,7 @@ test('a fresh lock held past 2 s refuses the save as busy, and nothing reports t
 })
 
 test('a failing mv makes save_group return an error, and nothing reports the item as added', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   w.isMvBroken = true
@@ -383,7 +186,7 @@ test('a failing mv makes save_group return an error, and nothing reports the ite
 })
 
 test('a main checkout and a linked worktree share a project key; another project does not see the group', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   expect(w.log.some(one => one.join(' ') === 'run git -C /repo rev-parse --path-format=absolute --git-common-dir')).toBe(true)
   w.root = '/wt/feature'
@@ -396,7 +199,7 @@ test('a main checkout and a linked worktree share a project key; another project
 })
 
 test('a group file recording another project key is skipped even in the same folder', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const dir = dirOf('/repo/.git')
   const other = JSON.parse(w.files[`${dir}/${id}.json`] ?? '{}')
@@ -408,7 +211,7 @@ test('a group file recording another project key is skipped even in the same fol
 })
 
 test('a damaged group file with a null item, a numeric ref, bad sections and non-text tombstones still reads, saves and draws', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   editGroup(w, id, group => {
     group.items = [null, { ref: 42, addedBy: 'agent', addedAt: 1 }, ...(group.items as unknown[]), 'docs/plan.md', { ref: 'notes/todo.md', section: 'abcdefgh', addedBy: 'agent', addedAt: 1 }]
@@ -431,14 +234,14 @@ test('a damaged group file with a null item, a numeric ref, bad sections and non
 })
 
 test('outside git the project key is the session root', async ($, on) => {
-  const w = groupsWorld(on, { '/plain/a.md': 'a\n' })
+  const w = fakeFs(on, { '/plain/a.md': 'a\n' })
   w.root = '/plain'
   const { id } = await create($, [{ target: 'a.md' }])
   expect(savedGroup(w, id, '/plain')?.items.map(one => one.ref)).toEqual(['file:///plain/a.md'])
 })
 
 test('delete_group on a starred group without force is refused; with force the file is gone', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   w.files[file] = JSON.stringify({ ...JSON.parse(w.files[file] ?? '{}'), starred: true })
@@ -451,7 +254,7 @@ test('delete_group on a starred group without force is refused; with force the f
 })
 
 test('read_group marks a local file that vanished as missing; a repo-relative ref removes it', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: 'docs/plan.md' }, { target: PAGE }])
   delete w.files['/repo/docs/plan.md']
   const read = jsonOf(await call($, 'read_group', { id })) as { items: { ref: string; state: string }[] }
@@ -461,7 +264,7 @@ test('read_group marks a local file that vanished as missing; a repo-relative re
 })
 
 test('an agent remove of a person-added item is refused without force', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   const file = `${dirOf('/repo/.git')}/${id}.json`
   const group = JSON.parse(w.files[file] ?? '{}')
@@ -474,7 +277,7 @@ test('an agent remove of a person-added item is refused without force', async ($
 })
 
 test('an id that is not a group id is refused before any file is touched', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   w.log = []
   expect(await call($, 'read_group', { id: '../../etc' })).toMatch(/not a group id/)
   expect(await call($, 'save_group', { id: '../x', title: 'y' })).toMatch(/not a group id/)
@@ -482,7 +285,7 @@ test('an id that is not a group id is refused before any file is touched', async
 })
 
 test('save_group refuses unreadable input with its exact message and writes no group file', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const cases: [Record<string, unknown>, string][] = [
     [{ title: 5 }, 'title must be text.'],
     [{ title: 'Launch', description: 5 }, 'description must be text.'],
@@ -503,7 +306,7 @@ test('save_group refuses unreadable input with its exact message and writes no g
 })
 
 test('save_group sets a section layout on add and with a layout change; read_group reads a missing or unknown layout as cards', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const text = await call($, 'save_group', {
     title: 'Launch',
     sections: [{ action: 'add', title: 'Links', layout: 'list' }, { action: 'add', title: 'Docs' }],
@@ -526,7 +329,7 @@ test('save_group sets a section layout on add and with a layout change; read_gro
 })
 
 test('save_group moves items, reorders, renames and removes sections, and force overrides a person tombstone and a person add', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const text = await call($, 'save_group', {
     title: 'Launch',
     sections: [
@@ -566,7 +369,7 @@ test('save_group moves items, reorders, renames and removes sections, and force 
 })
 
 test('a tool write in this session redraws the pane', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const before = w.invalidated
   await create($, [{ target: PAGE }])
   expect(w.invalidated).toBeGreaterThan(before)
@@ -582,7 +385,7 @@ async function recentText($: Parameters<typeof call>[0] & { ui: { mount: (input:
 }
 
 test('a peek group tool call is not recorded by the capture hook, while a GitHub read is', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
   on('tool.call', async () => ({ result: [{ type: 'text', text: `see ${PR}` }] }) as never)
   const { id } = await create($, [{ target: PR }])
@@ -623,7 +426,7 @@ function editGroup(w: World, id: string, change: (group: Record<string, unknown>
 }
 
 test('after the agent creates two groups, the Groups tab lists both as cards, starred first, then most recently updated', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const alpha = await create($, [{ target: PAGE }, { target: 'docs/plan.md' }], 'Alpha')
   w.now += 60_000
   await call($, 'save_group', { title: 'Beta', description: 'Ship notes\nsecond line', add: [{ target: PR }] })
@@ -643,7 +446,7 @@ test('after the agent creates two groups, the Groups tab lists both as cards, st
 })
 
 test('the Groups tab checks the folder on every render: another session\'s change shows on the next draw', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }], 'Alpha')
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
@@ -655,7 +458,7 @@ test('the Groups tab checks the folder on every render: another session\'s chang
 })
 
 test('a render over an unchanged groups folder stats it but reads no group file again', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   await create($, [{ target: PAGE }], 'Alpha')
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
@@ -673,7 +476,7 @@ test('a render over an unchanged groups folder stats it but reads no group file 
 })
 
 test('a group home that failed to resolve is tried again on the next call', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   w.root = '/solo'
   w.isHomeBroken = true
   const first = await call($, 'list_groups', {}).catch((error: unknown) => `threw: ${String(error)}`)
@@ -682,7 +485,7 @@ test('a group home that failed to resolve is tried again on the next call', asyn
 })
 
 test('clicking a group card opens its group page; e returns to the list; the hover star stars the group, not a file', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const storeKeys: string[] = []
   on('store.set', (_$, e, next) => {
     storeKeys.push(e.key)
@@ -714,7 +517,7 @@ test('clicking a group card opens its group page; e returns to the list; the hov
 })
 
 test('f on a selected group card toggles its star; o opens it; a deleted group is reported, never starred', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   await create($, [{ target: PAGE }], 'Alpha')
   w.now += 60_000
   const beta = await create($, [{ target: PR }], 'Beta')
@@ -739,7 +542,7 @@ test('f on a selected group card toggles its star; o opens it; a deleted group i
 })
 
 test('starring a card in the Groups tab keeps that group selected as the list re-sorts, so f again unstars it', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const alpha = await create($, [{ target: PAGE }], 'Alpha')
   w.now += 60_000
   const beta = await create($, [{ target: PR }], 'Beta')
@@ -762,7 +565,7 @@ test('starring a card in the Groups tab keeps that group selected as the list re
 })
 
 test('a mouse star on another card in the Groups tab keeps the cursor on the group it was on', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const alpha = await create($, [{ target: PAGE }], 'Alpha')
   w.now += 60_000
   const beta = await create($, [{ target: PR }], 'Beta')
@@ -808,7 +611,7 @@ async function itemNames(ui: { find: (q: { key: string }) => Promise<Found> }, p
 }
 
 test('a compact group card shows the title, the description, the first section header and only its first row of items, then MORE', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   await launchGroup($)
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
@@ -823,7 +626,7 @@ test('a compact group card shows the title, the description, the first section h
 })
 
 test('MORE expands a card in place to every section, cards as item cards and list as lines; m and LESS collapse it', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   await launchGroup($)
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
@@ -854,7 +657,7 @@ test('MORE expands a card in place to every section, cards as item cards and lis
 })
 
 test('a group card with nothing more to show draws no MORE bar', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   await create($, [{ target: PAGE }], 'Alpha')
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
@@ -864,7 +667,7 @@ test('a group card with nothing more to show draws no MORE bar', async ($, on) =
 })
 
 test('clicking an item on a card opens it and Back returns to its group page with that item selected', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   await launchGroup($)
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
@@ -885,7 +688,7 @@ test('clicking an item on a card opens it and Back returns to its group page wit
 })
 
 test('a group card spans the full text width at 60 and 100 columns', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   await launchGroup($)
   for (const bodyColumns of [60, 100]) {
     const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...paneProps, bodyColumns }, requestId: 'peek' })
@@ -897,7 +700,7 @@ test('a group card spans the full text width at 60 and 100 columns', async ($, o
 })
 
 test('a pinned card in Recent is compact and expands with MORE or m', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const id = String(jsonOf(await launchGroup($)).id)
   editGroup(w, id, group => (group.starred = true))
   const ui = await mountPane($)
@@ -915,7 +718,7 @@ test('a pinned card in Recent is compact and expands with MORE or m', async ($, 
 })
 
 test('with no groups the tab says the agent makes them', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
   expect(await ui.find({ text: /^No groups yet\. The agent makes groups: ask it to group related files and links\.$/ })).toBeDefined()
@@ -924,7 +727,7 @@ test('with no groups the tab says the agent makes them', async ($, on) => {
 })
 
 test('the Groups tab is reachable from the header tab, the e key and the ctrl+k menu', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   await create($, [{ target: PAGE }], 'Alpha')
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   expect((await ui.find({ key: 'mode-groups' }))?.props.hotkey).toBe('e')
@@ -972,7 +775,7 @@ async function headerFit(ui: { drawn: () => Promise<unknown> }, bodyColumns: num
 
 test('at 60, 70 and 100 columns the header draws all four tabs and the crumb shortens so nothing overflows', async ($, on) => {
   const deep = '/repo/a-rather-long-folder-name/another-deeply-nested-folder/a-file-with-quite-a-long-name.md'
-  groupsWorld(on, { [deep]: '# Deep\n' })
+  fakeFs(on, { [deep]: '# Deep\n' })
   await $.command.run({ command: 'peek', args: deep } as never)
   for (const bodyColumns of [60, 70, 100]) {
     const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...paneProps, bodyColumns }, requestId: 'peek' })
@@ -1040,7 +843,7 @@ function ghWorld(w: World, answer: (line: string) => Promise<RunAnswer | undefin
 const pull = (n: number) => `https://github.com/acme/widgets/pull/${n}`
 
 test('a group page shows the description, the top block first, then each section header over its items; an empty section says so', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   await call($, 'save_group', {
     title: 'Launch',
     description: 'Everything for the launch',
@@ -1070,7 +873,7 @@ test('a group page shows the description, the top block first, then each section
 })
 
 test('an empty group says No items', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   await call($, 'save_group', { title: 'Nothing yet' })
   const ui = await openFirstGroup($)
   expect(await ui.find({ text: /^No items$/ })).toBeDefined()
@@ -1079,7 +882,7 @@ test('an empty group says No items', async ($, on) => {
 })
 
 test('an item whose file was deleted shows as missing, stays selectable, says the file is gone when opened, and can be removed', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: 'docs/plan.md' }, { target: 'notes/todo.md' }])
   delete w.files['/repo/docs/plan.md']
   const ui = await openFirstGroup($)
@@ -1104,7 +907,7 @@ test('an item whose file was deleted shows as missing, stays selectable, says th
 })
 
 test('a remote item whose refresh says not found is missing; one that times out is unavailable and not counted as missing', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   ghWorld(w, line => {
     if (/\b142\b/.test(line)) return { exitCode: 1, stderr: 'GraphQL: Could not resolve to a PullRequest with the number of 142.' }
     if (/\b143\b/.test(line)) return { exitCode: 1, stderr: 'Post "https://api.github.com/graphql": dial tcp 140.82.112.6:443: i/o timeout' }
@@ -1122,7 +925,7 @@ test('a remote item whose refresh says not found is missing; one that times out 
 })
 
 test('a repo-relative item added in worktree A opens worktree B\'s copy when the session runs in B', async ($, on) => {
-  const w = groupsWorld(on, { '/repo/docs/plan.md': '# Plan from A\n', '/wt/feature/docs/plan.md': '# Plan from B\n' })
+  const w = fakeFs(on, { '/repo/docs/plan.md': '# Plan from A\n', '/wt/feature/docs/plan.md': '# Plan from B\n' })
   await create($, [{ target: 'docs/plan.md' }])
   w.root = '/wt/feature'
   const ui = await openFirstGroup($)
@@ -1134,7 +937,7 @@ test('a repo-relative item added in worktree A opens worktree B\'s copy when the
 })
 
 test('back from an opened item returns to the page with that item selected; if it was removed meanwhile, the nearest row', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const stored: unknown[] = []
   on('store.set', (_$, e, next) => {
     if (e.key === 'stars') stored.push(e.value)
@@ -1165,7 +968,7 @@ test('back from an opened item returns to the page with that item selected; if i
 })
 
 test('a remote item with no cached title shows the agent\'s label, then its title after the refresh', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   let release = () => {}
   const held = new Promise<void>(resolve => (release = resolve))
   ghWorld(w, async line => {
@@ -1188,7 +991,7 @@ test('a remote item with no cached title shows the agent\'s label, then its titl
 })
 
 test('when the open group\'s file is gone at the next render, the pane returns to the Groups tab with a toast', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: 'docs/plan.md' }])
   const ui = await openFirstGroup($)
   expect(await ui.find({ key: 'group-page-title' })).toBeDefined()
@@ -1204,7 +1007,7 @@ test('when the open group\'s file is gone at the next render, the pane returns t
 
 test('the open group\'s remote items join the background refresh', async ($, on) => {
   const clock = mock.clock(on, { now: 10 * 3600_000 })
-  const w = groupsWorld(on, {}, { isClockMocked: true })
+  const w = fakeFs(on, {}, { isClockMocked: true })
   let views = 0
   ghWorld(w, line => {
     if (line.startsWith('gh pr view 145')) {
@@ -1247,7 +1050,7 @@ async function mountPane($: { ui: { mount: (input: never) => Promise<unknown> } 
 }
 
 test('Star this group in the ctrl+k menu, on a group page and on a card, toggles the group star shown in the Groups tab', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: 'docs/plan.md' }], 'Alpha')
   const ui = await openFirstGroup($)
   await openMenu($, ui)
@@ -1265,7 +1068,7 @@ test('Star this group in the ctrl+k menu, on a group page and on a card, toggles
 })
 
 test('adding the viewed file through ctrl+k puts it in the unsectioned block; read_group says the person added it', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }], 'Launch')
   await call($, 'save_group', { id, sections: [{ action: 'add', title: 'Docs' }], add: [{ target: PR, section: 'Docs' }] })
   await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
@@ -1284,7 +1087,7 @@ test('adding the viewed file through ctrl+k puts it in the unsectioned block; re
 })
 
 test('after the person removes an agent item from the group page, an agent re-add is skipped and reported', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: 'docs/plan.md' }, { target: 'notes/todo.md' }])
   const ui = await openFirstGroup($)
   await ui.press({ key: 'next' })
@@ -1302,7 +1105,7 @@ test('after the person removes an agent item from the group page, an agent re-ad
 })
 
 test('an agent update after the person added an item keeps that item', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }])
   await $.command.run({ command: 'peek', args: '/repo/notes/todo.md' } as never)
   const ui = await mountPane($)
@@ -1318,7 +1121,7 @@ test('an agent update after the person added an item keeps that item', async ($,
 })
 
 test('Remove from group shows only for groups holding the viewed item, matched by the same normalisation the agent uses', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const a = await create($, [{ target: 'docs/plan.md' }], 'Alpha')
   w.now += 1000
   const b = await create($, [{ target: PAGE }], 'Beta')
@@ -1338,7 +1141,7 @@ test('Remove from group shows only for groups holding the viewed item, matched b
 })
 
 test('a PR read in Recent matches a group holding its /files URL; adding in Recent acts on the selected entry', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
   on('tool.call', async () => ({ result: [{ type: 'text', text: `see ${PR}` }] }) as never)
   const held = await create($, [{ target: `${PR}/files` }], 'Alpha')
@@ -1361,7 +1164,7 @@ test('a PR read in Recent matches a group holding its /files URL; adding in Rece
 })
 
 test('a folder view adds the folder itself, never its .. row; an error view lists no add rows', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }], 'Alpha')
   await $.command.run({ command: 'peek', args: '/repo/docs' } as never)
   const ui = await mountPane($)
@@ -1376,7 +1179,7 @@ test('a folder view adds the folder itself, never its .. row; an error view list
 })
 
 test('with 12 groups the menu shows 8 add rows, most recently updated first, and typing finds the others', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const ids: string[] = []
   for (let i = 1; i <= 12; i++) {
     w.now += 1000
@@ -1399,7 +1202,7 @@ test('with 12 groups the menu shows 8 add rows, most recently updated first, and
 })
 
 test('a person add to a deleted group is refused with a toast; a failed write never says Added', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const gone = await create($, [{ target: PAGE }], 'Alpha')
   const kept = await create($, [{ target: PAGE }], 'Beta')
   await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
@@ -1420,7 +1223,7 @@ test('a person add to a deleted group is refused with a toast; a failed write ne
 })
 
 test('an add row pressed after another writer already added the item says Already in, and adds nothing twice', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const { id } = await create($, [{ target: PAGE }], 'Launch')
   await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
   const ui = await mountPane($)
@@ -1435,7 +1238,7 @@ test('an add row pressed after another writer already added the item says Alread
 const drawnText = async (ui: MountedUi) => JSON.stringify(await ui.drawn())
 
 test('a starred group sits above Favourites in Recent; f on it unstars the group, not a file, and it leaves the block', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const storeKeys: string[] = []
   on('store.set', (_$, e, next) => {
     storeKeys.push(e.key)
@@ -1470,7 +1273,7 @@ test('a starred group sits above Favourites in Recent; f on it unstars the group
 })
 
 test('pinned group cards come first in Recent\'s keyboard order; o and a click open the group page', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const alpha = await create($, [{ target: PAGE }], 'Alpha')
   editGroup(w, alpha.id, group => (group.starred = true))
   await call($, 'star', { target: '/repo/docs/plan.md' })
@@ -1496,7 +1299,7 @@ test('pinned group cards come first in Recent\'s keyboard order; o and a click o
 })
 
 test('with 6 starred groups Recent pins the 4 most recently updated; the Groups tab lists all 6', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   for (let n = 1; n <= 6; n++) {
     const { id } = await create($, [{ target: PAGE }], `Set ${n}`)
     editGroup(w, id, group => (group.starred = true))
@@ -1512,7 +1315,7 @@ test('with 6 starred groups Recent pins the 4 most recently updated; the Groups 
 })
 
 test('the pinned block ignores Recent\'s scope and role filters, shows only this project, and is absent when nothing is starred', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const alpha = await create($, [{ target: PAGE }], 'Alpha')
   const ui = await mountPane($)
   await ui.press({ key: 'mode-recent' })
@@ -1530,7 +1333,7 @@ test('the pinned block ignores Recent\'s scope and role filters, shows only this
 })
 
 test('deleting a starred group with force removes it from Recent', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const alpha = await create($, [{ target: PAGE }], 'Alpha')
   editGroup(w, alpha.id, group => (group.starred = true))
   const ui = await mountPane($)
@@ -1544,7 +1347,7 @@ test('deleting a starred group with force removes it from Recent', async ($, on)
 })
 
 test('the hover star paints over group cards, every row of item cards, list rows, pinned cards and group page rows; its click stars there', async ($, on) => {
-  const w = groupsWorld(on)
+  const w = fakeFs(on)
   const launch = jsonOf(await launchGroup($)).id as string
   w.now += 60_000
   const beta = await create($, [{ target: PR }], 'Beta')
@@ -1593,7 +1396,7 @@ test('the hover star paints over group cards, every row of item cards, list rows
 })
 
 test('the MORE bar is a quiet strip one step off the card, a blank row below the content, and a click on it still toggles', async ($, on) => {
-  groupsWorld(on)
+  fakeFs(on)
   await launchGroup($)
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: paneProps, requestId: 'peek' })
   await ui.press({ key: 'mode-groups' })
