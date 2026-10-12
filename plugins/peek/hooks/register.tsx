@@ -1,51 +1,37 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, Mode, RemoteComment, SectionLayout } from '../types'
-import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './gallery'
-import { C as BASE, MUTED, ICON, META_ICON, mute, speakerColor } from './theme'
-import { record } from './capture'
+import type { Mode } from '../types'
+import { C as BASE, MUTED } from './theme'
 import type { CaptureIo } from './capture'
-import { itemKey, parseRef } from './refs'
-import { initials, whenLabel } from './slack'
 import type { RemoteIo } from './remote'
-import { failureText } from './sources'
-import { isWebUrl, liveStatusText, wheelPoint } from './live'
-import type { Live, LiveIo } from './live'
-import { cached, isTimed } from './refresh'
+import { wheelPoint } from './live'
+import type { LiveIo } from './live'
 import type { TitleEntry } from './refresh'
-import { layoutOf } from './groups'
 import type { GroupsIo } from './groups'
-import { describeAge, describeSize, plural } from './format'
-import { classifyBlocks, filterRole, gridColumns, nextOf, selectEntries } from './gallery'
-import { colorFor, iconFor, kindLabel } from './kinds'
-import { diagramType, linkify, pathCandidates, plainInline, segmentsOf } from './markdown'
-import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, taskRows, wrapLines } from './measure'
-import { fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
-import { columnWidths, fitCell } from './tabular'
-import type { Crumb, Direction, DrawContext, Key, NavItem, PaneActions, PictureBudget, WidgetCtx } from './pane/types'
+import { classifyBlocks } from './gallery'
+import { linkify, pathCandidates } from './markdown'
+import { fileHref, parseHref, resolvePath } from './paths'
+import type { Direction, DrawContext, NavItem, PaneActions, Screen } from './pane/types'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP, frame as drawFrame, geometryOf } from './pane/chrome'
-import { MODES, MOVE_KEYS, closeKey as closeKeyOf, expandKey as expandKeyOf, modeKeys as modeKeysOf, selectKeys as selectKeysOf } from './pane/keys'
-import { ROLES, SCOPES, SCOPE_ICON, menuCommands } from './pane/menu'
-import { CARD_GAP, CARD_MIN, CARD_ROWS, LIST_CHUNK, layout } from './pane/layout'
-import { groupCards, groupsScreen } from './pane/screens/groups'
+import { MODES } from './pane/keys'
+import { menuCommands } from './pane/menu'
+import { layout } from './pane/layout'
+import { groupsScreen } from './pane/screens/groups'
 import { recentScreen } from './pane/screens/recent'
 import { galleryScreen } from './pane/screens/gallery'
 import { viewScreen } from './pane/screens/view/index'
-import { type ItemLook, lookOf } from './pane/look'
-import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
-import { bootLinear, clamp, goBack, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
+import { bootLinear, clamp, nav, pressLink, refContext, repoContext, setMenu, show, switchMode } from './navigation'
 import type { NavIo } from './navigation'
 import { TOOLS } from './group-tools'
 import { createGroupStore } from './groups-store'
-import { fullText, loadFile, loadUrl } from './loaders'
-import { docImage, pixels, toPng } from './images'
-import { LINE_SCROLL_PX, LIVE_FRAME, WHEEL_SCROLL_PX, leaveLive, liveBox, liveKey, liveSession, onLiveInput, scrollLive, toggleLive } from './live-pane'
+import { loadFile, loadUrl } from './loaders'
+import { pixels, toPng } from './images'
+import { WHEEL_SCROLL_PX, leaveLive, liveSession, onLiveInput, scrollLive } from './live-pane'
 import type { LiveInputEvent } from './live-pane'
 import { UiGallery } from './ui-gallery'
-import { expandedGroups, focusGroupRow, groupCommands, groupHome, groupItemLook, groupPage, groupPageRows, loadGroupRemote, openCardItem, openGroupHref, openGroupItem, openGroupPage, selectGroupRow, setStar, starInGroupsTab, starredFirst, toggleExpanded, toggleGroupStar } from './groups-session'
-import type { GroupMenuFor, GroupRows, MenuCommand } from './groups-session'
-import { forgetPath, guess, noteCapture, pathExists, remember, scopeEntries, sessionEntries, toHref, withMentions } from './entries'
+import { focusGroupRow, groupHome, groupPage, groupPageRows, openCardItem, openGroupItem, openGroupPage, selectGroupRow, setStar, starInGroupsTab, toggleGroupStar } from './groups-session'
+import { forgetPath, guess, noteCapture, pathExists, remember, toHref } from './entries'
 
 const PANE = 'peek'
 const view = atom({ plugin: 'peek', key: 'view' } as const, null)
@@ -112,8 +98,6 @@ async function openNav($: EngineInterface, one: NavItem | undefined) {
   else if (one?.href) await show(navIoOf($), one.href)
 }
 
-const TYPES: GalleryType[] = ['all', 'markdown', 'code', 'data', 'image', 'diagram', 'html']
-const SORTS: GallerySort[] = ['recent', 'name', 'size', 'mentions']
 const GALLERY = 'peek-ui'
 const presses = atom({ plugin: 'peek', key: 'galleryPresses' } as const, 0)
 const typed = atom({ plugin: 'peek', key: 'galleryText' } as const, '')
@@ -207,6 +191,14 @@ function groupsIoOf($: EngineInterface): GroupsIo {
 
 const groupStore = createGroupStore()
 
+// The Peek tab with nothing open shows Recent.
+const SCREENS: Record<Mode, (ctx: DrawContext, actions: PaneActions) => Promise<Screen>> = {
+  view: (ctx, actions) => (ctx.current ? viewScreen(ctx, actions, ctx.current) : recentScreen(ctx, actions)),
+  recent: recentScreen,
+  gallery: galleryScreen,
+  groups: groupsScreen,
+}
+
 function paneActionsOf($: EngineInterface): PaneActions {
   return {
     io: navIoOf($),
@@ -222,8 +214,6 @@ function paneActionsOf($: EngineInterface): PaneActions {
     close: () => $.ui.close({ id: PANE }),
   }
 }
-
-const sum = (values: readonly number[]) => values.reduce((total, one) => total + one, 0)
 
 function liveIoOf($: EngineInterface): LiveIo {
   return {
@@ -518,44 +508,6 @@ export const register: Register = on => {
     }
     const actions = paneActionsOf($)
     const commands = menuCommands(ctx, actions)
-    const { Box, Text, Button, Markdown, Code, Image, Client } = ctx
-    const w: WidgetCtx = ctx
-    const { columns, isNarrow, textWidth, pageWidth } = geom
-    const crumbs = (parts: Crumb[]) => parts
-    const frame = (parts: Crumb[], content: unknown, info: string, keys: Key[], options: { pageBg?: string; menuOn?: GroupMenuFor } = {}) =>
-      drawFrame(ctx, actions, commands, { crumbs: parts, content, info, keys, ...options })
-    const modeKeys = modeKeysOf(actions)
-    const selectKeys = selectKeysOf(actions)
-    const closeKey = closeKeyOf(actions)
-    const expandKey = expandKeyOf(actions, chosen)
-
-    const offset = at
-    const jumpTo = (key: string) => void $.ui.scroll({ in: PANE, to: { key }, block: 'start' }).catch(() => undefined)
-    const rowOf = (index: number) => PAGE_TOP + (layout.blockStarts[index] ?? 0) * ctx.scale
-    const keyJumps = (keys: readonly string[]) => ({
-      next: () => {
-        const found = keys.findIndex((_, i) => rowOf(i) > offset + PAGE_TOP + 1)
-        const key = keys[found]
-        if (found < 0 || !key) void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
-        else jumpTo(key)
-      },
-      prev: () => {
-        const found = [...keys.keys()].reverse().find(i => rowOf(i) < offset + PAGE_TOP - 1)
-        const key = found === undefined ? undefined : keys[found]
-        if (!key) void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
-        else jumpTo(key)
-      },
-    })
-    const blockJumps = (count: number, prefix: string) => keyJumps(Array.from({ length: count }, (_, i) => `${prefix}-${i}`))
-
-
-    if (chosen === 'groups') return drawFrame(ctx, actions, commands, await groupsScreen(ctx, actions))
-
-    if (chosen !== 'view' || !current) {
-      if (chosen === 'gallery') return drawFrame(ctx, actions, commands, await galleryScreen(ctx, actions))
-      return drawFrame(ctx, actions, commands, await recentScreen(ctx, actions))
-    }
-
-    return drawFrame(ctx, actions, commands, await viewScreen(ctx, actions, current))
+    return drawFrame(ctx, actions, commands, await SCREENS[chosen](ctx, actions))
   })
 }
