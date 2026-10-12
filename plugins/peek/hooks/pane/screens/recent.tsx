@@ -4,7 +4,7 @@ import { groupHome } from '../../groups-session'
 import { iconFor } from '../../kinds'
 import { clamp } from '../../navigation'
 import { closeAction, expandAction, modeActions, roleAction, scopeAction, selectActions } from '../actions'
-import { LIST_CHUNK, layout } from '../layout'
+import { LIST_CHUNK } from '../layout'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { HoverLayer, ItemRow, SectionRule } from '../widgets'
 import { fileListing } from './files'
@@ -96,8 +96,6 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
     at.cursor += 1
     return { ...group, list }
   })
-  layout.blockStarts = starts
-  layout.estimatedRows = Math.max(1, at.cursor)
   const pinnedId = nav[clamp(selected, nav.length)]?.group
   const pinnedOn = pinned.find(one => one.id === pinnedId)
   const content = (
@@ -137,5 +135,6 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
     ],
     pageBg: C.appBg,
     menuOn: pinnedOn ? { group: pinnedOn, starHint: 'f' } : { target: nav[clamp(selected, nav.length)]?.href },
+    layout: { nav, blockStarts: starts, estimatedRows: Math.max(1, at.cursor) },
   }
 }

@@ -2,7 +2,6 @@ import type { GallerySort, GalleryType } from '../../gallery'
 import { nextOf, selectEntries } from '../../gallery'
 import { clamp } from '../../navigation'
 import { closeAction, modeActions, roleAction, scopeAction, selectActions } from '../actions'
-import { layout } from '../layout'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { SectionRule } from '../widgets'
 import { fileListing } from './files'
@@ -27,8 +26,6 @@ export async function galleryScreen(ctx: DrawContext, actions: PaneActions): Pro
     at.cursor += 1
     return { ...group, grid }
   })
-  layout.blockStarts = starts
-  layout.estimatedRows = Math.max(1, at.cursor)
   const content = (
     <Box flexDirection="column" width={textWidth}>
       <Box flexDirection="row" columnGap={2} width={textWidth}>
@@ -73,5 +70,6 @@ export async function galleryScreen(ctx: DrawContext, actions: PaneActions): Pro
     ],
     pageBg: C.appBg,
     menuOn: { target: nav[clamp(selected, nav.length)]?.href },
+    layout: { nav, blockStarts: starts, estimatedRows: Math.max(1, at.cursor) },
   }
 }

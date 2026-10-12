@@ -11,7 +11,7 @@ import { parseHref } from '../../paths'
 import { cached } from '../../refresh'
 import { ICON } from '../../theme'
 import { MOVE_KEYS, closeAction, expandAction, modeActions, selectActions } from '../actions'
-import { CARD_GAP, CARD_MIN, CARD_ROWS, layout } from '../layout'
+import { CARD_GAP, CARD_MIN, CARD_ROWS } from '../layout'
 import type { ItemLook } from '../look'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { HoverLayer, ItemCard, ItemIcon, type IconSlot } from '../widgets'
@@ -208,10 +208,7 @@ export async function groupsScreen(ctx: DrawContext, actions: PaneActions): Prom
   const starredCount = groups.filter(one => one.starred).length
   const selected = await io.cursor.read()
   const { cards, heights } = await groupCards(ctx, actions, groups, 'groups', 0, selected)
-  layout.navOrder = groups.map((one, i) => ({ href: one.id, key: `groups-${i}`, line: i, col: 0 }))
-  layout.blockStarts = heights.map((_, i) => sum(heights.slice(0, i)))
-  layout.estimatedRows = Math.max(1, sum(heights))
-  const selectedGroup = () => io.cursor.read().then(at => layout.navOrder[clamp(at, layout.navOrder.length)]?.href)
+  const selectedGroup = () => actions.selectedNav().then(one => one?.href)
   const content = (
     <Box flexDirection="column" width={textWidth}>
       {groups.length === 0 && <Text color={C.overlay0}>No groups yet. The agent makes groups: ask it to group related files and links.</Text>}
@@ -244,5 +241,10 @@ export async function groupsScreen(ctx: DrawContext, actions: PaneActions): Prom
     ],
     pageBg: C.appBg,
     menuOn: { group: groups[clamp(selected, groups.length)], starHint: 'f' },
+    layout: {
+      nav: groups.map((one, i) => ({ href: one.id, key: `groups-${i}`, line: i, col: 0 })),
+      blockStarts: heights.map((_, i) => sum(heights.slice(0, i))),
+      estimatedRows: Math.max(1, sum(heights)),
+    },
   }
 }

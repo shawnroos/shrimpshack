@@ -4,7 +4,7 @@ import { colorFor, iconFor } from '../../../kinds'
 import type { NavIo } from '../../../navigation'
 import { fileHref, kindOf } from '../../../paths'
 import { ICON } from '../../../theme'
-import { LIST_CHUNK, layout } from '../../layout'
+import { LIST_CHUNK } from '../../layout'
 import type { DrawContext } from '../../types'
 import { blockJumps } from './blocks'
 import type { ViewBody } from './blocks'
@@ -29,8 +29,6 @@ export function dirBody(ctx: DrawContext, io: NavIo, folderPath: string, dir: No
   const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
     items.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
   )
-  layout.blockStarts = chunks.map((_, i) => i * LIST_CHUNK)
-  layout.estimatedRows = Math.max(1, items.length)
   const body = (
     <Box flexDirection="column" width={textWidth}>
       {items.length === 0 && <Text color={C.overlay0}>Empty folder.</Text>}
@@ -46,5 +44,5 @@ export function dirBody(ctx: DrawContext, io: NavIo, folderPath: string, dir: No
         ))}
     </Box>
   )
-  return { body, jumps: blockJumps(ctx, io, chunks.length, 'rows'), position: '' }
+  return { body, jumps: blockJumps(ctx, io, chunks.length, 'rows'), position: '', layout: { blockStarts: chunks.map((_, i) => i * LIST_CHUNK), estimatedRows: Math.max(1, items.length) } }
 }

@@ -65,13 +65,13 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
     ? folderPath.slice(current.root.length + 1)
     : shortPath(folderPath, cwd, home)
 
-  let { body, jumps, position }: ViewBody = { body: null, jumps: noJumps(), position: '' }
-  if (current.remote) ({ body, jumps, position } = remoteBody(ctx, io, current, current.remote))
-  else if (current.markdown !== undefined) ({ body, jumps, position } = await markdownBody(ctx, io, current, current.markdown, path))
-  else if (current.table) ({ body, jumps, position } = tableBody(ctx, io, current.table))
-  else if (current.dir) ({ body, jumps, position } = dirBody(ctx, io, path, current.dir))
-  else if (current.code) ({ body, jumps, position } = codeBody(ctx, io, current.code))
-  else if (current.image && Image && png) ({ body, jumps, position } = imageBody(ctx, Image, current, current.image, png))
+  let { body, jumps, position, layout }: ViewBody = { body: null, jumps: noJumps(), position: '', layout: {} }
+  if (current.remote) ({ body, jumps, position, layout } = remoteBody(ctx, io, current, current.remote))
+  else if (current.markdown !== undefined) ({ body, jumps, position, layout } = await markdownBody(ctx, io, current, current.markdown, path))
+  else if (current.table) ({ body, jumps, position, layout } = tableBody(ctx, io, current.table))
+  else if (current.dir) ({ body, jumps, position, layout } = dirBody(ctx, io, path, current.dir))
+  else if (current.code) ({ body, jumps, position, layout } = codeBody(ctx, io, current.code))
+  else if (current.image && Image && png) ({ body, jumps, position, layout } = imageBody(ctx, Image, current, current.image, png))
   const liveState = liveSession.live?.state()
   const canLive = ctx.surface === 'terminal' && Boolean(Image) && current.remote !== undefined && parseRef(current.href)?.kind === 'web'
   const liveRows = Math.max(4, ctx.bodyRows - PAGE_TOP - FOOTER_ROWS - 2)
@@ -168,5 +168,6 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
     info,
     actions: liveSession.isTyping ? shown.map(endTypingFirst) : shown,
     menuOn: { target: current.error || (remote?.failure && !remote.record) || isLiveHere ? undefined : current.href },
+    layout,
   }
 }

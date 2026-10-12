@@ -4,6 +4,7 @@ import type { Mode, View } from '../../types'
 import type { GroupMenuFor } from '../groups-session'
 import type { Cell, NavIo } from '../navigation'
 import type { MUTED } from '../theme'
+import type { Layout, ScreenLayout } from './layout'
 
 export type Palette = typeof MUTED
 
@@ -46,6 +47,10 @@ export type DrawContext = WidgetCtx & {
   pageWidth: number
   // From the previous draw's row estimate, taken before this draw's screen replaces it.
   scale: number
+  // The content height the last scroll reported.
+  contentRows: number
+  // The layout as last stored, for handlers that read it when pressed rather than when drawn.
+  layout: () => Layout
 }
 
 export type NavItem = { href: string; key: string; line: number; col: number; group?: string }
@@ -85,4 +90,4 @@ export type Action = {
 
 export type Crumb = { label: string; fg: string; bg: string; bold?: boolean; canShrink?: boolean }
 
-export type Screen = { crumbs: Crumb[]; content: unknown; info: string; actions: Action[]; menuOn?: GroupMenuFor; pageBg?: string }
+export type Screen = { crumbs: Crumb[]; content: unknown; info: string; actions: Action[]; menuOn?: GroupMenuFor; pageBg?: string; layout: ScreenLayout }

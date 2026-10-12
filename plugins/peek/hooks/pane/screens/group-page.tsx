@@ -11,7 +11,6 @@ import { parseHref } from '../../paths'
 import { cached, isTimed } from '../../refresh'
 import { ICON } from '../../theme'
 import { closeAction, modeActions } from '../actions'
-import { layout } from '../layout'
 import type { ItemLook } from '../look'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { HoverLayer, ItemRow, SectionRule } from '../widgets'
@@ -42,8 +41,6 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
   const refs = blocks.flatMap(block => block.items).map(one => one.ref)
   const rows: GroupRows = { id: shown.id, title: shown.title, keys, hrefs: looks.map(one => one.href), selected }
   groupPage.rows = rows
-  layout.navOrder = keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 }))
-  layout.blockStarts = []
   const starList = await io.stars.read()
   const starKeys = new Set(starList.map(starKeyOf))
   const missing = looks.filter(one => one.state === 'missing').length
@@ -93,7 +90,6 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
       </Box>
     )
   })
-  layout.estimatedRows = Math.max(1, looks.length + blocks.length * 2 + 3)
   const content = (
     <Box flexDirection="column" width={textWidth}>
       <Box key="group-page-title">
@@ -141,5 +137,10 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
     ],
     pageBg: C.appBg,
     menuOn: { target: rows.hrefs[selected] || undefined, group: shown, selectedRef: refs[selected] },
+    layout: {
+      nav: keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 })),
+      blockStarts: [],
+      estimatedRows: Math.max(1, looks.length + blocks.length * 2 + 3),
+    },
   }
 }

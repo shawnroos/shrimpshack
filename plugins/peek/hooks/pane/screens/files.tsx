@@ -5,7 +5,7 @@ import { scopeEntries, sessionEntries, withMentions } from '../../entries'
 import { pixels } from '../../images'
 import { iconFor } from '../../kinds'
 import { shortPath } from '../../paths'
-import { CARD_GAP, CARD_MIN, CARD_ROWS, layout } from '../layout'
+import { CARD_GAP, CARD_MIN, CARD_ROWS } from '../layout'
 import { lookOf } from '../look'
 import { SCOPE_ICON } from '../actions'
 import type { Crumb, DrawContext, NavItem, PaneActions } from '../types'
@@ -46,7 +46,6 @@ export async function fileListing(ctx: DrawContext, actions: PaneActions) {
   const starts: number[] = []
   const selected = await io.cursor.read()
   const nav: NavItem[] = []
-  layout.navOrder = nav
   const at = { cursor: 0, navLine: 0 }
   const cardGrid = (list: readonly FileEntry[], prefix: string) => {
     const rowsOfCards = Array.from({ length: Math.ceil(list.length / perRow) }, (_, r) => list.slice(r * perRow, r * perRow + perRow))

@@ -16,7 +16,8 @@ import type { Direction, DrawContext, NavItem, PaneActions, Screen } from './pan
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP, frame as drawFrame, geometryOf } from './pane/chrome'
 import { MODES } from './pane/actions'
 import { menuLists } from './pane/menu'
-import { layout } from './pane/layout'
+import { EMPTY_LAYOUT } from './pane/layout'
+import type { Layout } from './pane/layout'
 import { groupsScreen } from './pane/screens/groups'
 import { recentScreen } from './pane/screens/recent'
 import { galleryScreen } from './pane/screens/gallery'
@@ -48,18 +49,23 @@ const galleryFilter = atom({ plugin: 'peek', key: 'galleryFilter' } as const, ''
 const roleFilter = atom({ plugin: 'peek', key: 'roleFilter' } as const, 'all')
 const stars = atom({ plugin: 'peek', key: 'stars' } as const, [])
 const cursorAtom = atom({ plugin: 'peek', key: 'cursor' } as const, 0)
+// Module state, not UI state, so the draw may write them: the last drawn screen's layout and the content height
+// the last scroll reported.
+let paneLayout: Layout = EMPTY_LAYOUT
+let contentRows = 0
+
 // Up and down keep the column, so a card grid moves like a grid.
 function stepFrom(at: number, direction: Direction): number {
-  const here = layout.navOrder[at]
+  const here = paneLayout.nav[at]
   if (!here) return 0
   if (direction === 'left' || direction === 'right') {
-    const next = layout.navOrder[at + (direction === 'left' ? -1 : 1)]
+    const next = paneLayout.nav[at + (direction === 'left' ? -1 : 1)]
     return next && next.line === here.line ? at + (direction === 'left' ? -1 : 1) : at
   }
   const line = here.line + (direction === 'up' ? -1 : 1)
   let best = -1
-  layout.navOrder.forEach((one, index) => {
-    if (one.line === line && (best < 0 || Math.abs(one.col - here.col) < Math.abs((layout.navOrder[best]?.col ?? 0) - here.col))) best = index
+  paneLayout.nav.forEach((one, index) => {
+    if (one.line === line && (best < 0 || Math.abs(one.col - here.col) < Math.abs((paneLayout.nav[best]?.col ?? 0) - here.col))) best = index
   })
   return best < 0 ? at : best
 }
@@ -74,10 +80,10 @@ async function moveSelection($: EngineInterface, direction: Direction) {
   }
   let landed = 0
   await update($, cursorAtom, at => {
-    landed = stepFrom(clamp(at, layout.navOrder.length), direction)
+    landed = stepFrom(clamp(at, paneLayout.nav.length), direction)
     return landed
   })
-  const key = layout.navOrder[landed]?.key
+  const key = paneLayout.nav[landed]?.key
   // 'nearest' counts a row under the pinned footer as already showing, so the
   // cursor could walk behind it; centring always leaves it in the clear.
   if (key) await $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
@@ -86,11 +92,11 @@ async function moveSelection($: EngineInterface, direction: Direction) {
 
 async function selectAndOpen($: EngineInterface, index: number) {
   await update($, cursorAtom, () => index)
-  await openNav($, layout.navOrder[index])
+  await openNav($, paneLayout.nav[index])
 }
 
 async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
-  return layout.navOrder[clamp(await read($, cursorAtom), layout.navOrder.length)]
+  return paneLayout.nav[clamp(await read($, cursorAtom), paneLayout.nav.length)]
 }
 
 async function openNav($: EngineInterface, one: NavItem | undefined) {
@@ -273,7 +279,7 @@ export const register: Register = on => {
       const rows = await groupPageRows(navIoOf($)).catch(() => null)
       if (rows) await selectGroupRow(navIoOf($), rows, index).catch(() => undefined)
       await update($, cursorAtom, () => index).catch(() => undefined)
-      const key = layout.navOrder[index]?.key
+      const key = paneLayout.nav[index]?.key
       if (key) void $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
     }
     return next(e)
@@ -458,7 +464,7 @@ export const register: Register = on => {
       await moveSelection($, e.by > 0 ? 'down' : 'up').catch(() => undefined)
       return {}
     }
-    layout.contentRows = e.contentRows
+    contentRows = e.contentRows
     const wanted = e.origin.kind === 'plugin' && e.offset > 0 ? e.offset - HEADER_ROWS : e.offset
     const target = Math.max(0, Math.min(wanted, Math.max(0, e.contentRows - e.bodyRows)))
     await update($, page, () => target).catch(() => undefined)
@@ -480,7 +486,7 @@ export const register: Register = on => {
     paneColumns = geom.columns
     if (liveSession.href && (chosen !== 'view' || current?.href !== liveSession.href)) void leaveLive()
     const filter = await read($, menuFilter)
-    const realBody = Math.max(1, layout.contentRows - PAGE_TOP - FOOTER_ROWS - 1)
+    const realBody = Math.max(1, contentRows - PAGE_TOP - FOOTER_ROWS - 1)
     const ctx: DrawContext = {
       Box: elements.Box,
       Text: elements.Text,
@@ -504,10 +510,14 @@ export const register: Register = on => {
       bodyColumns: e.props.bodyColumns,
       bodyRows: e.props.scroll.bodyRows,
       ...geom,
-      scale: layout.contentRows > 0 ? realBody / Math.max(1, layout.estimatedRows) : 1,
+      scale: contentRows > 0 ? realBody / Math.max(1, paneLayout.estimatedRows) : 1,
+      contentRows,
+      layout: () => paneLayout,
     }
     const actions = paneActionsOf($)
     const lists = menuLists(ctx, actions)
-    return drawFrame(ctx, actions, lists, await SCREENS[chosen](ctx, actions))
+    const screen = await SCREENS[chosen](ctx, actions)
+    paneLayout = { ...paneLayout, ...screen.layout }
+    return drawFrame(ctx, actions, lists, screen)
   })
 }

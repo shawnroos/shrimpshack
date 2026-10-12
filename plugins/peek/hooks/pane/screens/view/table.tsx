@@ -2,7 +2,7 @@ import type { View } from '../../../../types'
 import type { NavIo } from '../../../navigation'
 import { columnWidths, fitCell } from '../../../tabular'
 import { PAGE_TOP } from '../../chrome'
-import { LIST_CHUNK, layout } from '../../layout'
+import { LIST_CHUNK } from '../../layout'
 import type { DrawContext } from '../../types'
 import { blockJumps } from './blocks'
 import type { ViewBody } from './blocks'
@@ -14,8 +14,6 @@ export function tableBody(ctx: DrawContext, io: NavIo, table: NonNullable<View['
   const chunks = Array.from({ length: Math.ceil(table.rows.length / LIST_CHUNK) }, (_, i) =>
     table.rows.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
   )
-  layout.blockStarts = chunks.map((_, i) => 2 + i * LIST_CHUNK)
-  layout.estimatedRows = Math.max(1, 2 + table.rows.length)
   const body = (
     <Box flexDirection="column" width={textWidth}>
       <Text color={C.accent} bold wrap="truncate-end">{line(table.header)}</Text>
@@ -41,5 +39,5 @@ export function tableBody(ctx: DrawContext, io: NavIo, table: NonNullable<View['
   )
   const jumps = blockJumps(ctx, io, chunks.length, 'chunk')
   const first = Math.max(1, Math.min(table.rows.length, offset - PAGE_TOP - 1))
-  return { body, jumps, position: `row ${first} of ${table.total}` }
+  return { body, jumps, position: `row ${first} of ${table.total}`, layout: { blockStarts: chunks.map((_, i) => 2 + i * LIST_CHUNK), estimatedRows: Math.max(1, 2 + table.rows.length) } }
 }

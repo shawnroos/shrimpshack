@@ -3,29 +3,30 @@ import { nav } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, PAGE_TOP } from '../../chrome'
-import { layout } from '../../layout'
+import type { ScreenLayout } from '../../layout'
 import type { DrawContext } from '../../types'
 
 export type Jumps = { next: () => void; prev: () => void }
 
-export type ViewBody = { body: unknown; jumps: Jumps; position: string }
+export type ViewBody = { body: unknown; jumps: Jumps; position: string; layout: ScreenLayout }
 
-// blockStarts is read when the key is pressed, scale when the page was drawn.
-const rowOf = (ctx: DrawContext, index: number) => PAGE_TOP + (layout.blockStarts[index] ?? 0) * ctx.scale
+const rowOf = (starts: readonly number[], scale: number, index: number) => PAGE_TOP + (starts[index] ?? 0) * scale
 
 export function blockJumps(ctx: DrawContext, io: NavIo, count: number, prefix: string): Jumps {
   const keys = Array.from({ length: count }, (_, i) => `${prefix}-${i}`)
   const { offset } = ctx
+  // The block starts are read when the key is pressed, the scale as the page was drawn.
+  const rowAt = (index: number) => rowOf(ctx.layout().blockStarts, ctx.scale, index)
   const jumpTo = (key: string) => void io.scroll({ to: { key }, block: 'start' }).catch(() => undefined)
   return {
     next: () => {
-      const found = keys.findIndex((_, i) => rowOf(ctx, i) > offset + PAGE_TOP + 1)
+      const found = keys.findIndex((_, i) => rowAt(i) > offset + PAGE_TOP + 1)
       const key = keys[found]
       if (found < 0 || !key) void io.scroll({ to: 'end' }).catch(() => undefined)
       else jumpTo(key)
     },
     prev: () => {
-      const found = [...keys.keys()].reverse().find(i => rowOf(ctx, i) < offset + PAGE_TOP - 1)
+      const found = [...keys.keys()].reverse().find(i => rowAt(i) < offset + PAGE_TOP - 1)
       const key = found === undefined ? undefined : keys[found]
       if (!key) void io.scroll({ to: 'start' }).catch(() => undefined)
       else jumpTo(key)
@@ -81,21 +82,20 @@ export function settleBlocks(ctx: DrawContext, io: NavIo, { drawnParts, partRows
     partRows.push(IMAGE_ROWS)
     partHeadings.push('')
   }
-  layout.blockStarts = []
-  layout.blockHeadings = []
+  const blockStarts: number[] = []
+  const blockHeadings: string[] = []
   let running = 0
   let lastHeading = ''
   for (const [i, rows] of partRows.entries()) {
-    layout.blockStarts.push(running)
+    blockStarts.push(running)
     lastHeading = partHeadings[i] || lastHeading
-    layout.blockHeadings.push(lastHeading)
+    blockHeadings.push(lastHeading)
     running += rows + 1
   }
-  layout.estimatedRows = Math.max(1, running)
-  const topBlock = [...layout.blockStarts.keys()].reverse().find(i => rowOf(ctx, i) <= offset + PAGE_TOP + 1) ?? 0
+  const topBlock = [...blockStarts.keys()].reverse().find(i => rowOf(blockStarts, ctx.scale, i) <= offset + PAGE_TOP + 1) ?? 0
   nav.topBlockKey = `block-${topBlock}`
-  const heading = layout.blockHeadings[topBlock] ?? ''
-  const maxScroll = Math.max(0, layout.contentRows - ctx.bodyRows)
+  const heading = blockHeadings[topBlock] ?? ''
+  const maxScroll = Math.max(0, ctx.contentRows - ctx.bodyRows)
   const percent = maxScroll > 0 ? Math.min(100, Math.round((offset / maxScroll) * 100)) : 100
   return {
     body: (
@@ -109,6 +109,7 @@ export function settleBlocks(ctx: DrawContext, io: NavIo, { drawnParts, partRows
     ),
     jumps: blockJumps(ctx, io, drawnParts.length, 'block'),
     position: `${percent}%${heading ? ` · § ${heading}` : ''}`,
+    layout: { blockStarts, blockHeadings, estimatedRows: Math.max(1, running) },
   }
 }
 
