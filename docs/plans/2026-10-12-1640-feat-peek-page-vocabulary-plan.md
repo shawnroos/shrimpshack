@@ -16,7 +16,7 @@ deepened: 2026-10-12
 - **Objective:** An agent can give peek a readable, navigable page for a document type peek has never seen. The page works in every session of that user, and adding the type edits no peek file and needs no peek release.
 - **Means:** A closed page vocabulary inside peek, user-level recipes that return pages in it, person-only approval kept in peek's own store, and a skill shipped with peek that teaches the agent the whole loop (KTD1–KTD11).
 - **Product authority:** Shawn. The Product Contract wins on behaviour; Key Technical Decisions win on mechanism. New top-level tabs, sharing recipes, recipes for local files, and moving the built-in pages onto the vocabulary are not active scope.
-- **Open blockers:** None. This work lands after PR #102 (Slack threads as pages) merges, rebased onto `main`.
+- **Open blockers:** PR #102 (Slack threads as pages) must merge before this work starts; then rebase onto `main` (KTD11).
 - **Execution profile:** Test-first per unit with observed red, pane tests through `claude-code/testing`, then a live look in a real session after `/reload-plugins`.
 - **Stop conditions:** Stop and ask Shawn if a mod plugin cannot ship a skill at runtime and the fallback in KTD9 is not enough, if the U8 hoist cannot keep the existing pane tests green, or if a settled decision proves infeasible.
 - **Who finishes:** `ce-work` implements and verifies; Shawn approves the fresh-agent eval page and the PR.
@@ -174,7 +174,8 @@ flowchart TB
 - KTD3. **Routing is a pure function, and recipe pages bypass the remote loader.**
   - `routeOf(link, recipes, { allowDraft })` returns one of four routes: built-in, recipe, web fallback, or conflict. It runs after `parseRef` (`plugins/peek/hooks/refs.ts:62`); a `web` result, or an overridden family, goes to the recipe.
   - Recipe loads never enter `remote.ts` `sourceFor`/`loadItem`. That code silently loads GitHub by default and replays session captures on failure, which would hide the error page (R10).
-  - Recipe pages live in their own `View.page` field, carrying recipe id, draft flag, preview digest, fetched time and pictures, not a new `RemoteKind`. `refresh.ts`, `isTimed` and the background tier therefore never see them (R22).
+  - Recipe pages live in their own `View.page` field, carrying recipe id, draft flag, preview digest, fetched time and pictures, not a new `RemoteKind`, so `refresh.ts` and `isTimed` never schedule them (R22).
+  - The background tier can still load an overridden GitHub or Linear link through its built-in loader when that link sits in mentions or stars. `redrawIfCurrent`, `refresh()` and `tickRemote` therefore check `current.page` before `remoteRef(href)`, and leave a recipe page untouched when a built-in load lands for the same href.
   - Every `register.tsx` path that branches on `View.remote` gets a `page` arm (U5). Where none is given, a recipe page silently becomes the web reader.
   - A group card holding a recipe link keeps today's web-reader title and favicon. This is intended: it runs no recipe (R22, AE7).
 - KTD4. **The source contract is JSON on stdout, under one runner.** This serves R7, R10 and R13.
@@ -184,9 +185,11 @@ flowchart TB
     - The working directory is the recipe folder. The link is passed as the last argument and in `PEEK_URL`.
     - The timeout is 20 s by default, and a recipe may raise it to 60 s. Output is capped at `$.process.run`'s 4 MiB.
   - **MCP source.** It names a server, a tool and arguments, and `{{url}}` is replaced by the link.
-  - **Typed outcomes.** Every outcome has a type: started-failed, exit-nonzero, timeout, output-truncated, not-JSON, server-not-connected, tool-error, invalid-page (with paths), and changed-during-run.
+  - **Typed outcomes.** Every outcome has a type: started-failed, exit-nonzero, timeout, output-truncated, not-JSON, server-not-connected, tool-error, invalid-page (with paths), changed-during-run, and needs-permission.
   - **Stderr.** The excerpt is capped at 500 characters, and the values of the declared variables are redacted from it.
   - **One runner for both callers.** The check tool and the pane call the same runner, so a recipe cannot pass the check and fail in the pane.
+  - **Drafts run only what the session would run anyway.** Before running a draft source (`allowDraft`), the runner asks `$.tool.check` about the equivalent call: Bash with the script's argv in the recipe folder, or `mcp__<server>__<tool>` with the substituted arguments. It runs only on `allow`. On `ask` or `deny` it returns a needs-permission outcome naming the command or tool, so the agent asks the person to allow it. A draft therefore never gives the agent more reach than its own Bash and MCP permissions.
+  - **Telling start failures from timeouts.** `$.process.run` rejects in both cases; the runner classes a rejection as timeout when the elapsed time reached the limit, and as started-failed otherwise.
 - KTD5. **One Page schema and one validator, shared by every caller.** This serves R1, R2, R13 and R17.
   - **What `validatePage` returns.** The checked page, or a list of problems with JSON paths (`sections[2].block.type`). It is also the trust boundary for recipe output:
     - It caps sections, items and text lengths.
@@ -195,6 +198,7 @@ flowchart TB
     - It accepts absolute file hrefs only outside dot-folders, and never `.app`, `.command`, `.terminal` or `.workflow` files.
     - It applies the same link rule to every link inside markdown text.
     - It requires `copy` text to be one line of at most 500 characters.
+    - It allows at most 9 Actions, one per hotkey.
   - **Who calls it.** The pane's load path, the check tool and the skill's example test. A test counts the production callers (`docs/solutions/security-issues/a-validator-proven-correct-and-proven-unused.md`).
   - **The outline.** The same module produces the outline the tools return.
 - KTD6. **Hoist the block writers, then draw pages with them.**
@@ -205,17 +209,21 @@ flowchart TB
   - Serves R2, R3, R5, R16.
 - KTD7. **Approvals live in peek's store, against a digest captured at preview.** Serves R21.
   - **Where approvals live.** In `$.store` under `recipeApprovals` as `{ id: digest }`, beside `titles` (`register.tsx:579-586`). The store is a file under the Claude Code config folder, not the recipe folder, so an agent writing a marker into the folder changes nothing.
-  - **Guard against file tools.** A `tool.call` hook denies Write, Edit, MultiEdit and NotebookEdit on the store's path.
-  - **What the digest covers.** SHA-256 (`crypto.subtle`) over each entry's relative path, kind, executable bit, length and bytes. It recurses and sorts by path. Every file counts, dotfiles included: editor junk drops approval, which fails safe.
+  - **Guard against file tools.** A `tool.call` hook denies Write, Edit, MultiEdit and NotebookEdit when the target's real path is inside `<config dir>/plugins/store/` and its file name starts with `peek_`, where the config dir is `CLAUDE_CONFIG_DIR` or `$HOME/.claude`. The store's exact file name carries an install hash peek cannot derive, so the guard matches the folder and prefix.
+  - **What the digest covers.** SHA-256 (`crypto.subtle`) over each entry's relative path, kind, length and bytes, plus a per-file hash kept for the approval surface. It recurses and sorts by path. Every file counts, dotfiles included: editor junk drops approval, which fails safe. The engine's file API exposes no file mode, and the approved bytes already fix what can run, so the executable bit is not hashed.
+  - **Recipe shape.** A recipe holds at most 50 files. Scripts are single files that use interpreters and libraries already on PATH; `npm install` or a virtualenv inside the folder would add symlinks and thousands of files, which make the recipe invalid with a problem that points to this rule.
   - **What makes a recipe invalid.** A symlink or non-regular entry, or a file over 4 MiB, makes the recipe invalid rather than a draft.
   - **Preview and press.**
     - Opening a draft preview captures the digest in `View.page`.
-    - The approval surface lists what will run: the source argv or MCP server, tool and arguments; the match and overrides; the timer; the declared env names; the file list with sizes; and a warning when an MCP tool name looks mutating (`create|update|delete|send|post|set|close|merge`).
-    - Pressing Approve re-hashes. Approval is recorded only if the new digest equals the preview's; otherwise the pane shows "changed since preview".
-  - **How Approve can be pressed.** Approve is a pane Button with no hotkey, and it is not in ⌃k.
+    - The approval surface draws as the first block above the previewed page and lists what will run: the source argv or MCP server, tool and arguments; the match and overrides; the timer; the declared env names; any overlap with an approved recipe; a warning when an MCP tool name looks mutating (`create|update|delete|send|post|set|close|merge`); and a warning naming any line in a script that refers to an absolute, `~` or `..` path, since the digest pins only the folder.
+    - It shows the full text of every file that is new or changed since the last approval (every file on first approval), marking non-text files as binary with their size. `recipeApprovals[id]` stores `{ digest, files }` so the changed files can be found.
+    - Pressing Approve re-hashes and re-runs the overlap test against approved recipes. Approval is recorded only if the digest equals the preview's and nothing overlaps. Otherwise the surface shows "changed since preview" with a Preview again key that re-captures the digest, or names the overlapping recipe.
+    - After a recorded approval the view reloads as approved and the source line changes from draft to approved. There is no Reject control: the person leaves with back, and the recipe stays a draft.
+  - **How Approve can be pressed.** Approve is a pane Button with no hotkey and no keybinding `action`, not in ⌃k, and it takes the initial focus on the approval surface.
     - `ui.press` has no origin field (engine types `UiPressArgument`), so origin cannot be checked.
-    - What makes the press person-only: a Button's `onPress` runs only when a surface raises a press, and no plugin, tool or command can raise one.
+    - What makes the press person-only: a Button's `onPress` runs only when a surface raises `ui.press` (engine types, `Button` props). The plugin `$` API has no press method; `press` exists only on the test harness's mounted drawing (engine types `EnginePress`).
     - Approve is never dispatched from `ui.message`, `/peek`, `check_recipe` or `open`.
+    - Residual: a tool that types into the person's terminal, such as a pane-automation CLI, could press it. Risks names this.
 - KTD8. **Two deferred agent tools: `check_recipe` and `open`.** Serves R13, R19, R20.
   - Both are registered with `isDeferred: true`, so sessions that never build recipes pay no context for them.
   - Both return a first line of plain text, then JSON, matching the `save_group` result shape.
@@ -321,7 +329,7 @@ flowchart LR
   U6 --> U7[U7 skill and docs]
 ```
 
-- **Parallel:** U8 can run beside U1, U2 and U3. U8 edits only `register.tsx` and its existing tests; U1, U2 and U3 are new pure modules.
+- **Parallel:** U8 can run beside U1, U2 and U3. U8 edits only `register.tsx` and its existing tests; U1, U2 and U3 touch only new modules and their tests.
 - **Sequential:** U5, U9, U10, U6 and U7 all edit `register.tsx`, so one worker runs them in order. U10 can go any time after U5.
 
 ### Risks and Threat Model
@@ -331,7 +339,8 @@ flowchart LR
   - Environment secrets: KTD4 keeps them from scripts.
   - Local files and local services: KTD5 link rules, plus the media pass using `web.ts` safe download.
   - Outside systems reached through MCP: the KTD7 approval surface shows the tool and warns on mutating names.
-- **Residual gap.** A same-user process run through Bash can still edit peek's store file directly. Approval protects against agent mistakes and against prompt injection through normal file tools. It does not protect against a determined process running as the user.
+- **Residual gap.** A same-user process run through Bash, or a draft script the session's permissions allow (KTD4), can still edit peek's store file directly, and a terminal-automation tool could press Approve. Approval protects against agent mistakes and against prompt injection through peek's tools and normal file tools. It does not protect against a determined process running as the user.
+- **Code outside the folder.** The digest pins only the recipe folder. A script that calls code elsewhere can change behaviour without returning to draft; the approval surface warns on such paths (KTD7).
 - **Prompt injection back into the agent.** Tool results label page text as data and cap it (KTD8).
 - **MCP permission behaviour is unknown.** The engine says `$.mcp.call` never prompts, but the Slack branch says Slack tools ask. U3 treats a rejected call as server-not-connected, and the live look records what actually happens.
 - **Hoist regressions.** U8 changes the code every remote page draws with. Mitigation: U8 changes no behaviour and is pinned by the existing `remote-pane`, `media-pane` and `groups-pane` tests.
@@ -396,7 +405,7 @@ flowchart LR
   - Markdown text containing `[x](file:///etc/passwd)` is rejected.
   - A title containing ESC or U+202E is cleaned, and the page still validates.
   - A `copy` Action with a newline, or over 500 characters, is rejected.
-  - Items above the cap are rejected with the count.
+  - Items above the cap are rejected with the count, and ten Actions are rejected.
   - Recipe declarations:
     - A recipe id of `../x` or `A_B` fails; `figma-files` passes.
     - `refreshMinutes: 2` fails.
@@ -411,7 +420,7 @@ flowchart LR
 - **Dependencies:** U1.
 - **Files:** `plugins/peek/hooks/recipes.ts` (new), `plugins/peek/tests/recipes.test.ts` (new).
 - **Approach:**
-  1. A `RecipesIo` port (list, read, stat with real path, home, digest, store get) built in `register.tsx` from `$`, like `groupsIoOf`.
+  1. A `RecipesIo` port type (list, read, stat with real path, home, digest, store get) in `recipes.ts`; tests use a fake. U5 builds the real `recipesIoOf($)` in `register.tsx`, which keeps U2 parallel with U8.
   2. `loadRecipes` lists folders, validates each with U1, computes the KTD7 digest, and marks a recipe approved only when `recipeApprovals[id]` equals it. Invalid recipes are reported with their problems.
   3. `matches` and `overlaps` implement KTD2.
   4. `routeOf` implements KTD3.
@@ -425,7 +434,8 @@ flowchart LR
   - Covers AE6. A recipe approved in the store whose script bytes change → draft. `routeOf` without `allowDraft` returns web; with `allowDraft` it returns the recipe, marked draft.
   - Covers AE6. A `.approved` file written into the folder has no effect on routing.
   - Digest:
-    - Renaming a file or flipping its executable bit changes the digest.
+    - Renaming a file changes the digest.
+    - A folder with 51 files → invalid, pointing to the recipe-shape rule.
     - A new file in a subfolder changes the digest.
   - Invalid recipes:
     - A symlink in the folder → invalid, named.
@@ -475,6 +485,8 @@ flowchart LR
   - The script receives the link as its last argument and in `PEEK_URL`, with the recipe folder as its working directory.
   - With `LINEAR_API_KEY` set, a script that prints its environment does not see it unless the recipe declares it. A declared value is redacted from stderr.
   - A file changes after the pre-run digest → changed-during-run, and the output is discarded.
+  - A draft script whose Bash equivalent `$.tool.check` answers `ask` → needs-permission, and `process.run` is never called. On `allow` it runs.
+  - A draft MCP source the session would prompt for → needs-permission, and `mcp.call` is never called.
   - MCP source:
     - `{{url}}` is substituted;
     - a rejected call → server-not-connected;
@@ -494,7 +506,7 @@ flowchart LR
      - table → `columnWidths` and `fitCell` from `lib.ts`;
      - cards and list → the hoisted builders, after mapping page items to their item shape;
      - fields → label/value rows.
-  3. Focus order: one nav line per card row, list item and table row, in section order (R16).
+  3. Focus order: one nav item per card, list item and table row, in section order (R16).
   4. Actions become `Key`s with `menu` set and hotkeys `1`–`9`, assigned by peek in order. A copy Action shows what it copied (R17).
   5. An empty page or an empty section draws one line (R18).
 - **Patterns to follow:** the hoisted `cardGrid`/`rowList` and `hover-layer.tsx`; the CSV table branch.
@@ -503,6 +515,7 @@ flowchart LR
   - Actions `Open in Figma` and `Copy link` become Keys with hotkeys `1` and `2`.
   - An empty cards section, and a page with no sections, each produce their empty line.
   - Three images over the image budget → the third becomes a link part.
+  - A tenth Action never reaches the renderer, because the validator rejects it (U1).
 - **Verification:** Pure tests pass; the pane-level assertions run in U5.
 
 ### U5. Wire recipe pages into the pane
@@ -543,6 +556,7 @@ flowchart LR
   - Two quick `u` presses run the script once.
   - `b` back to a recipe page restores it without re-running.
   - A recipe page offers no `v` Live key.
+  - An approved recipe with `overrides: ["github"]` is on screen for a PR link that is also in mentions; after a background tick the view is still the recipe page and the script ran once.
   - A failed media download draws the `[open image]` link, and the page still shows.
 - **Verification:** Pane tests pass, and each new test was mutated once and seen red.
 
@@ -562,8 +576,12 @@ flowchart LR
   - Pressing Approve on an unchanged preview records approval, and the next normal open shows the recipe page.
   - A file edited between preview and press → "changed since preview", and nothing is recorded.
   - Covers AE6. An agent-written `.approved` file in the folder → still draft.
-  - These record nothing: a hover-layer `ui.message`, `/peek`, `check_recipe` and `open`.
-  - A Write tool call on the store path is denied.
+  - These record nothing: a hover-layer `ui.message` and `/peek`.
+  - After one approval, the test finds the real store file under `<config dir>/plugins/store/` that holds `recipeApprovals`, and a Write to that exact path is denied.
+  - The approval surface draws above the page, Approve has the initial focus, and the script's full text appears before Approve.
+  - On re-approval after an edit, only the changed file's text is shown as changed.
+  - A second recipe overlapping an approved one → Approve refuses and names the other recipe.
+  - After a recorded approval the source line reads approved.
   - An overriding recipe's surface shows "overrides: github" before Approve.
   - An MCP recipe calling `create_comment` shows the mutating warning.
 - **Verification:** The approval tests pass, and each was seen red.
@@ -607,6 +625,7 @@ flowchart LR
   - `open` with the pane unplaced reports `isPlaced: false` and the reason.
   - Page text in results sits under the data field and is capped.
   - The validator caller-count test finds the load path and `check_recipe`.
+  - Neither `check_recipe` nor `open` records an approval.
 - **Verification:** The tool tests pass, and the outline order equals the pane focus order in one shared fixture.
 
 ### U7. Skill, manifest and docs
@@ -631,7 +650,7 @@ flowchart LR
   2. SKILL.md steps, in order:
      1. Load the two tools with ToolSearch.
      2. Learn the concepts, blocks and patterns, one example each.
-     3. Write a self-contained recipe folder. Scripts must not fetch code at run time.
+     3. Write a self-contained recipe folder: a single script using what is already on PATH, no installs, no code outside the folder.
      4. Run `check_recipe` until it passes.
      5. Preview the page with `open`.
      6. Ask the person to review the approval surface and press Approve.
