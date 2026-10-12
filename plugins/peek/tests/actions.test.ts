@@ -143,6 +143,10 @@ function liveWorld(on: On) {
   baseWorld(on)
   const watch = watching(on)
   on('ui.blit', () => ({ value: {} }))
+  on('ui.invalidate', (_$, e, next) => {
+    watch.log.push('invalidate')
+    return next(e)
+  })
   noDisk(on)
   on('fs.exists', (_$, e) => ({ value: e.path.startsWith('/home/.cache/claude-peek/bin/') }))
   on('fs.read', (_$, e) => {
@@ -927,7 +931,15 @@ const EXPECTED: Record<string, Expected> = {
         "set page 0",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,scope|Scope: session,role|Show: all,type|Type,sort|Sort,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,close|Close"
       ],
+      "mode-groups": [
+        "set mode \"groups\"",
+        "set page 0",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,expand-selected|More,close|Close"
+      ],
       "live": [
+        "invalidate",
+        "invalidate",
+        "invalidate",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Refresh,copy|Copy link,close|Close"
       ],
       "next": [
@@ -956,11 +968,6 @@ const EXPECTED: Record<string, Expected> = {
       "close": [
         "close",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Live,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Refresh,copy|Copy link,close|Close"
-      ],
-      "mode-groups": [
-        "set mode \"groups\"",
-        "set page 0",
-        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,expand-selected|More,close|Close"
       ]
     }
   },
@@ -1013,16 +1020,26 @@ const EXPECTED: Record<string, Expected> = {
       "mode-recent": [
         "set mode \"recent\"",
         "set page 0",
+        "invalidate",
         "post pause",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,scope|Scope: session,role|Show: all,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,close|Close"
       ],
       "mode-gallery": [
         "set mode \"gallery\"",
         "set page 0",
+        "invalidate",
         "post pause",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,scope|Scope: session,role|Show: all,type|Type,sort|Sort,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,close|Close"
       ],
+      "mode-groups": [
+        "set mode \"groups\"",
+        "set page 0",
+        "invalidate",
+        "post pause",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,expand-selected|More,close|Close"
+      ],
       "live": [
+        "invalidate",
         "post pause",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Live,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Refresh,copy|Copy link,close|Close"
       ],
@@ -1067,11 +1084,80 @@ const EXPECTED: Record<string, Expected> = {
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
-      "mode-groups": [
-        "set mode \"groups\"",
-        "set page 0",
+      "input j": [
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":80}]}",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input down": [
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":80}]}",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input k": [
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":-80}]}",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input up": [
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":-80}]}",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input  ": [
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":430}]}",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input pagedown": [
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":430}]}",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input pageup": [
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":-430}]}",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input b": [
+        "post back",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input u": [
+        "post reload",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input v": [
+        "invalidate",
+        "invalidate",
         "post pause",
-        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,expand-selected|More,close|Close"
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Live,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Refresh,copy|Copy link,close|Close"
+      ],
+      "input o": [
+        "run open https://news.test/story",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input c": [
+        "copy {\"text\":\"https://news.test/story\"}",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input f": [
+        "set stars [\"https://news.test/story\"]",
+        "store stars [\"https://news.test/story\"]",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Unstar,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input d": [
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
+      ],
+      "input x": [
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
+        "live frame"
       ]
     }
   },
@@ -1125,20 +1211,31 @@ const EXPECTED: Record<string, Expected> = {
       "mode-recent": [
         "set mode \"recent\"",
         "set page 0",
+        "invalidate",
         "post pause",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,scope|Scope: session,role|Show: all,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,close|Close"
       ],
       "mode-gallery": [
         "set mode \"gallery\"",
         "set page 0",
+        "invalidate",
         "post pause",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,scope|Scope: session,role|Show: all,type|Type,sort|Sort,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,close|Close"
       ],
+      "mode-groups": [
+        "set mode \"groups\"",
+        "set page 0",
+        "invalidate",
+        "post pause",
+        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,expand-selected|More,close|Close"
+      ],
       "live": [
+        "invalidate",
         "post pause",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Live,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Refresh,copy|Copy link,close|Close"
       ],
       "done-typing": [
+        "invalidate",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
@@ -1182,12 +1279,6 @@ const EXPECTED: Record<string, Expected> = {
         "close",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
-      ],
-      "mode-groups": [
-        "set mode \"groups\"",
-        "set page 0",
-        "post pause",
-        "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,next|Down,prev|Up,left|Left,right|Right,open-selected|⏎ Open,star-selected|Star,expand-selected|More,close|Close"
       ]
     }
   }
@@ -1232,4 +1323,18 @@ for (const name of ['view reader, local file', 'group page']) {
       expect(effect).toEqual(EXPECTED[name]?.presses[`menu-${row}`])
     })
   }
+}
+
+// Keys typed on the live page itself, outside a text field, reach peek through the live input layer.
+const LIVE_INPUT_KEYS = ['j', 'down', 'k', 'up', ' ', 'pagedown', 'pageup', 'b', 'u', 'v', 'o', 'c', 'f', 'd', 'x']
+for (const key of LIVE_INPUT_KEYS) {
+  test(`view live: the live page's own key ${JSON.stringify(key)}`, async ($, on) => {
+    const { ui, watch, settle } = await SCREENS['view live']!($, on)
+    watch.log.splice(0)
+    await ui.key({ key, in: 'live-input' })
+    await settle()
+    const effect = watch.log.map(one => normalized(one, watch.ids))
+    await ui.unmount()
+    expect(effect).toEqual(EXPECTED['view live']?.presses[`input ${key}`])
+  })
 }
