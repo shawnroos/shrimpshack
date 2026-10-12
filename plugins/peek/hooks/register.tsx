@@ -85,6 +85,8 @@ async function select($: EngineInterface, index: number): Promise<boolean> {
   const item = paneLayout.nav[index]?.groupItem
   if (paneLayout.group) {
     if (!item) return false
+    // Opening from a card sets the item without this, so the row a removed item falls to stays the page's own.
+    if (groupPage.drawn?.id === item.group) groupPage.drawn.selected = index
     await update($, openGroup, opened => (opened?.id === item.group ? { ...opened, item: item.key } : opened))
   }
   await update($, cursorAtom, () => index)

@@ -131,11 +131,11 @@ export async function groupMenuRows(io: NavIo, on: GroupMenuFor): Promise<Action
   return [...own, ...rows].map(one => ({ ...one, isGroupRow: true }))
 }
 
-// Drawing may not write state, so the page keeps what its handlers need here: the item keys and the selected row
-// as last drawn (a selected item another session removes falls to the row it was on), the remote items the
-// refresh tick should keep fresh, and which deleted group was already reported. The Groups tab clears `drawn`.
+// Drawing may not write state, so the page keeps what its handlers need here: the row last drawn or selected (a
+// selected item another session removes falls to it), the remote items the refresh tick should keep fresh, and
+// which deleted group was already reported. The Groups tab clears `drawn`.
 export const groupPage = {
-  drawn: null as { id: string; keys: readonly string[]; selected: number } | null,
+  drawn: null as { id: string; selected: number } | null,
   goneNotice: '',
   remotes: [] as string[],
 }

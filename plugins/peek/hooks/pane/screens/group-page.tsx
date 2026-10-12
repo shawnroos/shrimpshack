@@ -37,12 +37,10 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
   groupPage.remotes = remotes.map(one => one.href).filter(isTimed)
   const keys = looks.map(one => one.key)
   const found = opened.item === null ? 0 : keys.indexOf(opened.item)
-  const before = groupPage.drawn?.id === shown.id ? groupPage.drawn : null
-  const wasAt = before && opened.item !== null ? before.keys.indexOf(opened.item) : -1
-  const previous = !before ? 0 : wasAt >= 0 ? wasAt : before.selected
+  const previous = groupPage.drawn?.id === shown.id ? groupPage.drawn.selected : 0
   const selected = clamp(found >= 0 ? found : previous, keys.length)
   const refs = blocks.flatMap(block => block.items).map(one => one.ref)
-  groupPage.drawn = { id: shown.id, keys, selected }
+  groupPage.drawn = { id: shown.id, selected }
   const starList = await io.stars.read()
   const starKeys = new Set(starList.map(starKeyOf))
   const missing = looks.filter(one => one.state === 'missing').length
