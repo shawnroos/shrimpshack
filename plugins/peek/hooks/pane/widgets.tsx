@@ -10,7 +10,7 @@ export function SectionRule(ctx: WidgetCtx, label: string, right: string, width:
   const head = `${label} `
   const tail = right ? ` ${right}` : ''
   return (
-    <Text {...(key === undefined ? {} : { key })} wrap="truncate-end">
+    <Text {...keyed(key)} wrap="truncate-end">
       <Text color={C.accent} bold>{head}</Text>
       <Text color={C.surface1}>{'─'.repeat(Math.max(1, width - head.length - tail.length))}</Text>
       <Text color={C.overlay0}>{tail}</Text>
@@ -49,7 +49,6 @@ export type IconSlot = {
 
 const keyed = (key: string | undefined) => (key === undefined ? {} : { key })
 
-// Returns the image and the button as two siblings; `boxes` wraps each in a non-shrinking Box (keyed when given).
 export function ItemIcon(ctx: WidgetCtx, slot: IconSlot) {
   const { Box, Button, Image } = ctx
   const boxes = slot.boxes
@@ -108,7 +107,6 @@ export type CardSpec = {
   width: number
   height: number
   background: string
-  // Clipped: the head row truncates the full name. Otherwise the name is cut to the card's inner width.
   clip: boolean
   icon: IconSlot
   nameKey: string
