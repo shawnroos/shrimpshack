@@ -1,24 +1,20 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Loaded, Mention, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
+import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Mention, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './gallery'
 import { C as BASE, MUTED, ICON, META_ICON, mute, speakerColor } from './theme'
-import { capturedLinearContext, record } from './capture'
+import { record } from './capture'
 import type { CaptureIo } from './capture'
-import { familyOf, itemKey, parseRef } from './refs'
-import type { Ref, RefContext } from './refs'
-import { loadItem } from './remote'
+import { itemKey, parseRef } from './refs'
 import { initials, whenLabel } from './slack'
 import { downloadFile, remoteFileOf } from './web'
 import type { RemoteIo } from './remote'
-import { bootstrapLinear } from './linear'
-import type { LinearBootstrap } from './linear'
 import { failureText } from './sources'
 import { createLive, isWebUrl, liveStatusText, pagePoint, typedInput, wheelPoint } from './live'
 import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveIo, LiveState, TypedKey, Viewport } from './live'
-import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
-import type { CacheEntry, TitleEntry } from './refresh'
+import { cached, isTimed, refreshItem } from './refresh'
+import type { TitleEntry } from './refresh'
 import {
   applyGroupOps,
   createGroup,
@@ -42,18 +38,19 @@ import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
 import { describeAge, describeSize } from './format'
 import { classifyBlocks, filterRole, gridColumns, hasMeaningfulWords, nextOf, noteMentions, parseStatLines, rankRecent, selectEntries, toggleStar } from './gallery'
 import { colorFor, iconFor, kindLabel } from './kinds'
-import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, markdownPage, mermaidFences, mermaidPage, outlineOf, pathCandidates, plainInline, segmentsOf, swapMermaidFences, toggleTaskLine, urlCandidates } from './markdown'
+import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, mermaidFences, outlineOf, pathCandidates, plainInline, segmentsOf, swapMermaidFences, urlCandidates } from './markdown'
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, taskRows, wrapLines } from './measure'
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
 import { type ItemLook, type ItemState, lookOf, remoteNaming } from './pane/look'
 import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
+import { SCRATCH, bootLinear, goBack, loadRemote, nav, noteTitle, openExternally, openFromPage, pressLink, refContext, refresh, remoteLoader, remoteRef, repoContext, sessionRefContext, setMenu, show, sourceLine, starKeyOf, startTicking, switchMode, titlesByKey, trailIcon } from './navigation'
+import type { NavIo } from './navigation'
 
 const C = BASE
 
 const PANE = 'peek'
-const SCRATCH = '/tmp/claude-peek'
 const view = atom({ plugin: 'peek', key: 'view' } as const, null)
 const mentions = atom({ plugin: 'peek', key: 'mentions' } as const, [])
 const mode = atom({ plugin: 'peek', key: 'mode' } as const, 'view')
@@ -131,7 +128,7 @@ async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
 
 async function openNav($: EngineInterface, one: NavItem | undefined) {
   if (one?.group) await openGroupPage($, one.group)
-  else if (one?.href) await show($, one.href)
+  else if (one?.href) await show(navIoOf($), one.href)
 }
 
 const ROLES: RoleFilter[] = ['all', 'artifacts', 'touched']
@@ -400,7 +397,7 @@ async function loadUrl($: EngineInterface, href: string): Promise<View> {
     return { ...base, error: 'Remote images open in the browser. Press "Open externally".' }
   }
   const ref = parseRef(href)
-  if (file && ref) return loadRemote($, ref)
+  if (file && ref) return loadRemote(navIoOf($), ref)
   const response = await $.http.fetch(href)
   if (!response.ok) return { ...base, error: `HTTP ${response.status}` }
   const type = response.headers['content-type'] ?? ''
@@ -456,161 +453,9 @@ async function avatarPictures($: EngineInterface, avatars: RemoteRecord['avatars
   return Object.keys(pictures).length ? pictures : undefined
 }
 
-const LINEAR_BOOT_TTL_MS = 24 * 3600_000
 const MAX_BLOCK_MEMO = 400
-let lastActivity = 0
-let isTicking = false
-let linearBoot: Omit<LinearBootstrap, 'ok'> | null = null
-let titles: Record<string, TitleEntry> = {}
-let topBlockKey = 'block-0'
-let showGeneration = 0
-const repoContexts = new Map<string, string | null>()
-const backStack: { view: View; key: string }[] = []
 const failedPictures = new Set<string>()
 const blockMemo = new Map<string, { chunk: string; rows: number }[]>()
-// viewOf runs on every refresh tick and redraw; each fence costs one mermaid-ascii process.
-const drawnRecords = new Map<string, RemoteRecord>()
-const MAX_DRAWN_RECORDS = 50
-
-async function repoContext($: EngineInterface, cwd: string): Promise<string | undefined> {
-  if (!repoContexts.has(cwd)) {
-    let found: string | null = null
-    for (const remote of ['upstream', 'origin']) {
-      const ran = await $.process.run(['git', '-C', cwd, 'remote', 'get-url', remote]).catch(() => null)
-      const match = ran?.exitCode === 0 ? /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\s*$/.exec(ran.stdout) : null
-      if (match) {
-        found = `${match[1]}/${match[2]}`
-        break
-      }
-    }
-    repoContexts.set(cwd, found)
-  }
-  return repoContexts.get(cwd) ?? undefined
-}
-
-function refContext(repo?: string): RefContext {
-  const captured = capturedLinearContext()
-  return {
-    teamKeys: [...new Set([...(linearBoot?.teamKeys ?? []), ...captured.teamKeys])],
-    workspace: linearBoot?.workspace ?? captured.workspace,
-    repo,
-  }
-}
-
-async function sessionRefContext($: EngineInterface): Promise<RefContext> {
-  return refContext(await repoContext($, await $.session.cwd()))
-}
-
-async function bootLinear($: EngineInterface) {
-  const now = await $.clock.now()
-  const saved = (await $.store.get('linear').catch(() => undefined)) as typeof linearBoot | undefined
-  if (saved && typeof saved.workspace === 'string' && Array.isArray(saved.teamKeys) && now - saved.fetchedAt < LINEAR_BOOT_TTL_MS) {
-    linearBoot = saved
-    return
-  }
-  const boot = await bootstrapLinear(remoteIoOf($), now)
-  if (!boot.ok) return
-  linearBoot = { workspace: boot.workspace, teamKeys: boot.teamKeys, fetchedAt: boot.fetchedAt }
-  await $.store.set('linear', linearBoot).catch(() => undefined)
-  $.ui.invalidate('ui.render')
-}
-
-async function openFromPage($: EngineInterface, href: string) {
-  const current = await read($, view)
-  if (current && (await read($, mode)) === 'view') {
-    backStack.push({ view: current, key: topBlockKey })
-    if (backStack.length > 20) backStack.shift()
-  }
-  await show($, href, true)
-}
-
-// b walks the page history first, so a link followed inside a group item comes back before the group does.
-async function goBack($: EngineInterface) {
-  if (groupBack && backStack.length <= groupBack.depth) {
-    const target = groupBack
-    groupBack = null
-    await update($, openGroup, opened => (opened?.id === target.id ? opened : { id: target.id, item: null }))
-    await update($, mode, () => 'groups')
-    await update($, page, () => 0)
-    return
-  }
-  const last = backStack.pop()
-  if (!last) return
-  await update($, view, () => last.view)
-  await update($, mode, () => 'view')
-  void $.ui.scroll({ in: PANE, to: { key: last.key }, block: 'start' }).catch(() => undefined)
-}
-
-function remoteLoader($: EngineInterface, canReplay: boolean) {
-  return async (address: string): Promise<Loaded> => {
-    const ref = parseRef(address)
-    if (!ref) return { ok: false, failure: 'query-bug' }
-    return loadItem(remoteIoOf($), ref, await $.clock.now(), { canReplay })
-  }
-}
-
-async function noteTitle($: EngineInterface, entry: CacheEntry) {
-  if (!entry.record) return
-  const next = titleOf(entry.record)
-  const { updatedAt: _, ...known } = titles[entry.record.address] ?? { updatedAt: 0 }
-  if (JSON.stringify(known) === JSON.stringify(next)) return
-  titles = withTitle(titles, entry.record.address, next, await $.clock.now())
-  await $.store.set('titles', titles).catch(() => undefined)
-}
-
-function startTicking($: EngineInterface) {
-  if (isTicking) return
-  isTicking = true
-  $.clock.every(15_000, () => void tickRemote($).catch(() => undefined))
-}
-
-async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Promise<View> {
-  startTicking($)
-  const known = cached(ref.address)
-  if (known?.state === 'frozen') return viewOf($, ref, known)
-  const entry = await refreshItem(ref.address, remoteLoader($, canReplay), await $.clock.now())
-  await noteTitle($, entry)
-  return viewOf($, ref, entry)
-}
-
-async function withRecordDiagrams($: EngineInterface, record: RemoteRecord, fetchedAt = 0): Promise<RemoteRecord> {
-  const texts = [record.body ?? '', ...(record.comments?.shown ?? []).map(one => one.body)]
-  if (!texts.some(text => mermaidFences(text).length)) return record
-  const key = `${record.address}|${fetchedAt}|${paneColumns}`
-  const known = drawnRecords.get(key)
-  if (known) return known
-  const [body, ...comments] = await Promise.all(texts.map(text => withDrawnMermaid($, text)))
-  const drawn: RemoteRecord = {
-    ...record,
-    ...(record.body !== undefined ? { body } : {}),
-    ...(record.comments ? { comments: { ...record.comments, shown: record.comments.shown.map((one, i) => ({ ...one, body: comments[i] ?? one.body })) } } : {}),
-  }
-  if (drawnRecords.size > MAX_DRAWN_RECORDS) drawnRecords.clear()
-  drawnRecords.set(key, drawn)
-  return drawn
-}
-
-async function viewOf($: EngineInterface, ref: Ref, entry: CacheEntry): Promise<View> {
-  const base: View = { href: ref.address, title: ref.key ?? ref.address.replace(/^https:\/\//, ''), location: ref.address, kind: ref.kind }
-  const record = entry.record && (await withRecordDiagrams($, entry.record, entry.fetchedAt))
-  if (!record) return { ...base, remote: { failure: entry.failure ?? 'offline', failureDetail: entry.failureDetail } }
-  return {
-    href: record.address,
-    title: record.title,
-    location: record.browserUrl,
-    kind: record.kind,
-    remote: {
-      record,
-      tier: entry.tier,
-      fetchedAt: entry.fetchedAt,
-      staleSince: entry.staleSince,
-      favicon: await remotePicture($, record.favicon),
-      preview: await remotePicture($, record.og?.image),
-      pictures: await mediaPictures($, record.media),
-      avatars: await avatarPictures($, record.avatars),
-    },
-  }
-}
 
 async function mediaPictures($: EngineInterface, media: RemoteRecord['media']) {
   const found = await Promise.all(Object.entries(media ?? {}).map(async ([key, one]) => [key, await remotePicture($, one.file)] as const))
@@ -618,56 +463,41 @@ async function mediaPictures($: EngineInterface, media: RemoteRecord['media']) {
   return Object.keys(pictures).length ? pictures : undefined
 }
 
-function remoteRef(href: string, context: RefContext = {}): Ref | null {
-  if (parseHref(href)) return null
-  const ref = parseRef(href, context)
-  if (!ref) return null
-  return ref.kind === 'web' && remoteFileOf(ref.address) ? null : ref
-}
-
-const starKeyOf = (raw: string) => itemKey(remoteRef(raw)?.address ?? raw)
-
-async function show($: EngineInterface, raw: string, isFromGroupChain = false) {
-  if (!isFromGroupChain) groupBack = null
-  const generation = ++showGeneration
-  const ref = remoteRef(raw)
-  const href = ref?.address ?? raw
-  const file = parseHref(href)
-  const loading: View = { href, title: 'Loading…', location: file?.path ?? href }
-  await update($, view, () => loading)
-  const at = await $.clock.now()
-  await update($, mentions, list => noteMentions(list, [href], at))
-  await update($, page, () => 0)
-  await update($, mode, () => 'view')
-  void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
-  void $.ui.open({ id: PANE, title: 'Peek' })
-  let next: View
-  try {
-    next = file ? await loadFile($, href, file.path, file.line) : ref ? await loadRemote($, ref) : await loadUrl($, href)
-  } catch (error) {
-    next = { ...loading, title: 'Could not open', error: error instanceof Error ? error.message : String(error) }
+function navIoOf($: EngineInterface): NavIo {
+  return {
+    view: { read: () => read($, view), update: change => update($, view, change) },
+    mode: { read: () => read($, mode), update: change => update($, mode, change) },
+    page: { read: () => read($, page), update: change => update($, page, change) },
+    mentions: { read: () => read($, mentions), update: change => update($, mentions, change) },
+    openGroup: { read: () => read($, openGroup), update: change => update($, openGroup, change) },
+    stars: { read: () => read($, stars), update: change => update($, stars, change) },
+    cursor: { read: () => read($, cursorAtom), update: change => update($, cursorAtom, change) },
+    menuOpen: { read: () => read($, menuOpen), update: change => update($, menuOpen, change) },
+    menuFilter: { read: () => read($, menuFilter), update: change => update($, menuFilter, change) },
+    now: () => $.clock.now(),
+    every: (ms, fn) => $.clock.every(ms, fn),
+    cwd: () => $.session.cwd(),
+    home: () => $.env.get('HOME'),
+    run: (argv, init) => $.process.run(argv, init),
+    readFile: path => $.fs.read(path),
+    writeFile: (path, text) => $.fs.write(path, text),
+    storeGet: key => $.store.get(key),
+    storeSet: (key, value) => $.store.set(key, value),
+    invalidate: () => $.ui.invalidate('ui.render'),
+    scroll: options => $.ui.scroll({ in: PANE, ...options }),
+    open: options => $.ui.open({ id: PANE, ...options }),
+    remoteIo: () => remoteIoOf($),
+    groupsIo: () => groupsIoOf($),
+    columns: () => paneColumns,
+    openGroupRemotes: () => openGroupRemotes,
+    forgetPath: path => void exists.delete(path),
+    loadFile: (href, path, line) => loadFile($, href, path, line),
+    loadUrl: href => loadUrl($, href),
+    withDrawnMermaid: markdown => withDrawnMermaid($, markdown),
+    remotePicture: file => remotePicture($, file),
+    mediaPictures: media => mediaPictures($, media),
+    avatarPictures: avatars => avatarPictures($, avatars),
   }
-  if (generation !== showGeneration) return
-  await update($, view, () => next)
-  void $.ui.open({ id: PANE, title: next.title })
-}
-
-async function openExternally($: EngineInterface, current: View) {
-  const file = parseHref(current.href)
-  if (!file) {
-    await $.process.run(['open', current.href])
-    return
-  }
-  const kind = kindOf(file.path)
-  if (kind !== 'markdown' && kind !== 'mermaid') {
-    await $.process.run(['open', file.path])
-    return
-  }
-  const source = await $.fs.read(file.path)
-  const page = kind === 'mermaid' ? mermaidPage(current.title, source) : markdownPage(current.title, source)
-  const out = `${SCRATCH}/${current.title.replace(/[^\w.-]/g, '_')}.html`
-  await $.fs.write(out, page)
-  await $.process.run(['open', out])
 }
 
 async function remember(
@@ -705,7 +535,7 @@ function captureIoOf($: EngineInterface): CaptureIo {
 
 async function noteCapture($: EngineInterface, input: Record<string, unknown>, answer: unknown) {
   const at = await $.clock.now()
-  lastActivity = at
+  nav.lastActivity = at
   const { addresses, grewLinear } = record(input, answer, at)
   if (addresses.length) await update($, mentions, list => noteMentions(list, addresses, at, 200, true))
   if (grewLinear) $.ui.invalidate('ui.render')
@@ -716,7 +546,7 @@ async function toHref($: EngineInterface, raw: string): Promise<string | null> {
   if (/^https?:\/\//.test(cleaned)) return cleaned
   if (cleaned.startsWith('file:')) return cleaned
   const needsContext = /^(?:#\d+|[A-Z][A-Z0-9]{0,9}-\d+)$/i.test(cleaned)
-  const ref = parseRef(cleaned, needsContext ? await sessionRefContext($) : {})
+  const ref = parseRef(cleaned, needsContext ? await sessionRefContext(navIoOf($)) : {})
   if (ref) return ref.address
   const match = /^(.+?)(?::(\d+))?$/.exec(cleaned)
   const abs = resolvePath(match?.[1] ?? cleaned, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
@@ -775,8 +605,6 @@ async function listRoot($: EngineInterface, root: string, worktree?: string): Pr
   const ran = await $.process.run(['sh', '-c', LIST_FILES], { cwd: root, timeoutMs: 20_000 }).catch(() => null)
   return ran ? parseStatLines(ran.stdout, root, worktree) : []
 }
-
-const titlesByKey = () => new Map(Object.entries(titles).map(([address, entry]) => [itemKey(address), entry]))
 
 async function sessionEntries($: EngineInterface, list: readonly Mention[]): Promise<FileEntry[]> {
   const out: FileEntry[] = []
@@ -878,13 +706,6 @@ async function setStar($: EngineInterface, raw: string, wanted?: boolean): Promi
   })
   await $.store.set('stars', await read($, stars)).catch(() => undefined)
   return isOn
-}
-
-// e on an open group page goes back to the group list; from any other screen it keeps the open group.
-async function switchMode($: EngineInterface, to: Mode) {
-  if (to === 'groups' && (await read($, mode)) === 'groups') await update($, openGroup, () => null)
-  await update($, mode, () => to)
-  await update($, page, () => 0)
 }
 
 async function openGroupPage($: EngineInterface, id: string) {
@@ -998,7 +819,6 @@ type GroupRows = { id: string; title: string; keys: string[]; hrefs: string[]; s
 // Drawing may not write state, so the page keeps what its handlers need here: the rows as last drawn, the
 // back step to the group, and which deleted group was already reported.
 let groupRows: GroupRows | null = null
-let groupBack: { id: string; title: string; depth: number } | null = null
 let goneGroupNotice = ''
 let openGroupRemotes: string[] = []
 
@@ -1035,8 +855,8 @@ async function openGroupHref($: EngineInterface, group: { id: string; title: str
     return
   }
   await update($, openGroup, () => ({ id: group.id, item: key }))
-  groupBack = { id: group.id, title: group.title, depth: backStack.length }
-  await show($, href, true)
+  nav.groupBack = { id: group.id, title: group.title, depth: nav.backStack.length }
+  await show(navIoOf($), href, true)
 }
 
 async function openCardItem($: EngineInterface, id: string, key: string, href: string) {
@@ -1089,11 +909,11 @@ async function groupItemLook($: EngineInterface, item: GroupItem, worktreeRoot: 
 }
 
 function loadGroupRemote($: EngineInterface, address: string) {
-  startTicking($)
+  startTicking(navIoOf($))
   void $.clock
     .now()
-    .then(now => refreshItem(address, remoteLoader($, false), now))
-    .then(entry => noteTitle($, entry))
+    .then(now => refreshItem(address, remoteLoader(navIoOf($), false), now))
+    .then(entry => noteTitle(navIoOf($), entry))
     .then(() => $.ui.invalidate('ui.render'))
     .catch(() => undefined)
 }
@@ -1474,82 +1294,6 @@ function freshId(others: readonly Group[]): string {
   return id
 }
 
-async function refresh($: EngineInterface, href: string) {
-  const ref = remoteRef(href)
-  if (ref) {
-    const entry = await refreshItem(ref.address, remoteLoader($, true), await $.clock.now())
-    await noteTitle($, entry)
-    await redrawIfCurrent($, entry.address)
-    return
-  }
-  const file = parseHref(href)
-  if (!file) return
-  exists.delete(file.path)
-  const next = await loadFile($, href, file.path, file.line).catch(() => null)
-  if (next) await update($, view, () => next)
-}
-
-// The header shortens a crumb by keeping its first two characters as the icon,
-// so every trail piece needs one.
-function trailIcon(kind: string, index: number, count: number): string {
-  const family = familyOf(kind)
-  if (family === 'gh') return index === 0 && count > 1 ? '\u{f09b}' : ICON['gh-repo']
-  if (family === 'linear') return index === 0 ? '\u{f0c0}' : ICON['linear-project']
-  if (family === 'slack') return index === 0 ? ICON['slack-thread'] : '\u{f086}'
-  return '\u{f0ac}'
-}
-
-const TIER_NAMES: Record<string, string> = { 'gh-cli': 'via gh', 'web-cli': 'via curl', 'web-api': 'via web fetch', 'linear-api': 'via Linear API', 'slack-mcp': 'via Slack MCP', 'slack-cli': 'via slack' }
-
-function sourceLine(remote: NonNullable<View['remote']>, now: number): string {
-  const { tier, fetchedAt, staleSince } = remote
-  const family = familyOf(remote.record?.kind ?? 'web')
-  const name = tier === 'session' ? 'from this session' : (TIER_NAMES[`${family}-${tier}`] ?? `via ${tier ?? '?'}`)
-  const seconds = fetchedAt === undefined ? 0 : Math.max(0, Math.round((now - fetchedAt) / 1000))
-  const age = fetchedAt === undefined ? '' : seconds < 60 ? `${seconds}s ago` : describeAge(fetchedAt, now)
-  const stale = staleSince === undefined ? '' : ` · stale since ${describeAge(staleSince, now)}`
-  return `${name}${age ? ` · ${age}` : ''}${stale}`
-}
-
-async function redrawIfCurrent($: EngineInterface, address: string) {
-  const current = await read($, view)
-  const ref = current && remoteRef(current.href)
-  const entry = cached(address)
-  if (!current || !ref || !entry || !isCurrent(current.href, address)) return
-  const next = await viewOf($, ref, entry)
-  if ((await read($, view))?.href === current.href) await update($, view, () => next)
-}
-
-async function tickRemote($: EngineInterface) {
-  if ((await $.clock.now()) - lastActivity >= IDLE_MS) return
-  const current = await read($, view)
-  const onScreen = current?.remote && (await read($, mode)) === 'view' ? current.href : undefined
-  const hrefs = [...(await read($, mentions)).map(one => one.href), ...(await read($, stars)), ...((await read($, openGroup)) ? openGroupRemotes : [])]
-  const background = [...new Set(hrefs)].filter(href => remoteRef(href) && isTimed(href))
-  const changed = await tick({ onScreen, background, now: await $.clock.now(), lastActivity, load: remoteLoader($, true) })
-  for (const address of changed) {
-    const entry = cached(address)
-    if (entry) await noteTitle($, entry)
-    await redrawIfCurrent($, address)
-  }
-}
-
-async function pressLink($: EngineInterface, href: string) {
-  const task = /#task-(\d+)$/.exec(href)
-  const current = await read($, view)
-  const file = parseHref(href)
-  if (task && file && current && parseHref(current.href)?.path === file.path) {
-    const source = await $.fs.read(file.path)
-    const toggled = toggleTaskLine(source, Number(task[1]))
-    if (toggled !== null) {
-      await $.fs.write(file.path, toggled)
-      await refresh($, current.href)
-      return
-    }
-  }
-  await openFromPage($, href)
-}
-
 async function docImage($: EngineInterface, src: string, docPath: string) {
   if (/^https?:/.test(src)) return null
   const folder = docPath.slice(0, docPath.lastIndexOf('/'))
@@ -1560,14 +1304,6 @@ async function docImage($: EngineInterface, src: string, docPath: string) {
   const image = await toPng($, abs, stat.mtimeMs).catch(() => null)
   const png = image ? pixels.get(image.file) : undefined
   return image && png ? { abs, png, width: image.width, height: image.height } : { abs, png: undefined, width: 0, height: 0 }
-}
-
-// Esc closes a pane only while it is opened with closeOnEscape, so the menu
-// turns that on and the ui.close hook turns the close into closing the menu.
-async function setMenu($: EngineInterface, isOpen: boolean) {
-  await update($, menuFilter, () => '')
-  await update($, menuOpen, () => isOpen)
-  await $.ui.open(isOpen ? { id: PANE, title: 'Peek', focus: true, closeOnEscape: true } : { id: PANE, title: 'Peek' })
 }
 
 const LIVE_FRAME = 'live-frame'
@@ -1645,7 +1381,7 @@ async function liveBack($: EngineInterface) {
   if (live?.state().canBack) await live.command('back')
   else {
     await leaveLive()
-    await goBack($)
+    await goBack(navIoOf($))
   }
 }
 
@@ -1672,7 +1408,7 @@ async function liveKey($: EngineInterface, key: string) {
     case 'v':
       return leaveLive().then(() => $.ui.invalidate('ui.render'))
     case 'o':
-      return url && isWebUrl(url) ? void $.process.run(['open', url]).catch(() => undefined) : current ? openExternally($, current) : undefined
+      return url && isWebUrl(url) ? void $.process.run(['open', url]).catch(() => undefined) : current ? openExternally(navIoOf($), current) : undefined
     case 'c':
       return void $.ui.copy({ text: url ?? current?.location ?? '' })
     case 'f':
@@ -1736,10 +1472,10 @@ async function leaveLive() {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    lastActivity = await $.clock.now()
+    nav.lastActivity = await $.clock.now()
     const savedTitles = await $.store.get('titles').catch(() => undefined)
-    if (savedTitles && typeof savedTitles === 'object' && !Array.isArray(savedTitles)) titles = savedTitles as Record<string, TitleEntry>
-    void bootLinear($).catch(() => undefined)
+    if (savedTitles && typeof savedTitles === 'object' && !Array.isArray(savedTitles)) nav.titles = savedTitles as Record<string, TitleEntry>
+    void bootLinear(navIoOf($)).catch(() => undefined)
     const saved = await $.store.get('stars').catch(() => undefined)
     if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
     await $.tool
@@ -1767,7 +1503,7 @@ export const register: Register = on => {
 
   on('session.append', async ($, e, next) => {
     const stored = await next(e)
-    lastActivity = await $.clock.now()
+    nav.lastActivity = await $.clock.now()
     if (e.message.type !== 'assistant' || e.agentId) return stored
     const { texts, created, touched } = classifyBlocks(e.message.content)
     await remember($, texts, created, touched).catch(() => undefined)
@@ -1775,7 +1511,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'peek-menu' }, async $ => {
-    await setMenu($, !(await read($, menuOpen)))
+    await setMenu(navIoOf($), !(await read($, menuOpen)))
     return { text: '' }
   })
 
@@ -1794,7 +1530,7 @@ export const register: Register = on => {
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
     if (e.origin.kind === 'person' && (await read($, menuOpen).catch(() => false))) {
-      await setMenu($, false).catch(() => undefined)
+      await setMenu(navIoOf($), false).catch(() => undefined)
       return { value: undefined }
     }
     await leaveLive()
@@ -1948,7 +1684,7 @@ export const register: Register = on => {
         await $.ui.open({ id: PANE, title: 'Peek' })
         return { text: 'Nothing to reopen yet. Peek pane opened.' }
       }
-      await show($, last)
+      await show(navIoOf($), last)
       return { text: `Peeking at ${parseHref(last)?.path ?? last}` }
     }
     const href = (await toHref($, arg)) ?? (await guess($, arg))
@@ -1957,7 +1693,7 @@ export const register: Register = on => {
       const hint = latest.length ? `\nRecent: ${latest.map(one => parseHref(one)?.path ?? one).join(', ')}` : ''
       return { text: `Could not tell which file "${arg}" means.${hint}` }
     }
-    await show($, href)
+    await show(navIoOf($), href)
     return { text: `Peeking at ${parseHref(href)?.path ?? href}` }
   })
 
@@ -1976,12 +1712,12 @@ export const register: Register = on => {
         const abs = real.get(raw)
         return abs ? fileHref(abs, line) : null
       },
-      refContext(await repoContext($, cwd)),
+      refContext(await repoContext(navIoOf($), cwd)),
     )
     const text = linked.length <= 10000 ? linked : e.props.text
     if (text.length > 10000) return next(e)
 
-    const body = <Markdown key="reply" text={text} onLinkPress={link => void show($, link.href)} />
+    const body = <Markdown key="reply" text={text} onLinkPress={link => void show(navIoOf($), link.href)} />
     if (!e.props.isFirstOfReply) return body
 
     return (
@@ -2039,13 +1775,13 @@ export const register: Register = on => {
     }
     const data = e.data as { toggle?: unknown } | null
     if (e.requestId === PANE && data && typeof data.toggle === 'string') {
-      await pressLink($, data.toggle).catch(() => undefined)
+      await pressLink(navIoOf($), data.toggle).catch(() => undefined)
       return {}
     }
     const switching = e.data as { mode?: unknown } | null
     const target = MODES.find(one => one.id === switching?.mode)?.id
     if (e.requestId === PANE && target) {
-      await switchMode($, target).catch(() => undefined)
+      await switchMode(navIoOf($), target).catch(() => undefined)
       void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
       return {}
     }
@@ -2067,7 +1803,7 @@ export const register: Register = on => {
     if (e.requestId === PANE && opening && typeof opening.open === 'string') {
       const rows = await groupPageRows($).catch(() => null)
       const at = rows ? rows.hrefs.indexOf(opening.open) : -1
-      await (rows && at >= 0 ? openGroupItem($, rows, at) : show($, opening.open)).catch(() => undefined)
+      await (rows && at >= 0 ? openGroupItem($, rows, at) : show(navIoOf($), opening.open)).catch(() => undefined)
       return {}
     }
     return next(e)
@@ -2216,11 +1952,11 @@ export const register: Register = on => {
       key: `mode-${one.id}`,
       label: one.label,
       hotkey: one.hotkey,
-      onPress: () => void switchMode($, one.id),
+      onPress: () => void switchMode(navIoOf($), one.id),
     }))
 
     const filter = await read($, menuFilter)
-    const closeMenu = () => void setMenu($, false)
+    const closeMenu = () => void setMenu(navIoOf($), false)
     const commands: MenuCommand[] = [
       ...(current
         ? [
@@ -2229,7 +1965,7 @@ export const register: Register = on => {
         : []),
       { id: 'recent', icon: ICON.recent, label: 'Recent: files by last use', hint: 'r', run: () => void update($, mode, () => 'recent') },
       { id: 'gallery', icon: ICON.gallery, label: 'Gallery: files as cards by type', hint: 'g', run: () => void update($, mode, () => 'gallery') },
-      { id: 'groups', icon: ICON.groups, label: 'Groups: files and links the agent bundled', hint: 'e', run: () => void switchMode($, 'groups') },
+      { id: 'groups', icon: ICON.groups, label: 'Groups: files and links the agent bundled', hint: 'e', run: () => void switchMode(navIoOf($), 'groups') },
       ...ROLES.map(one => ({
         id: `role-${one}`,
         icon: one === 'artifacts' ? '◆' : one === 'touched' ? '◇' : '\u{f0c9}',
@@ -2248,9 +1984,9 @@ export const register: Register = on => {
       { id: 'bottom', icon: '\u{f063}', label: 'Scroll to bottom', hint: 'end', run: () => void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined) },
       ...(current
         ? [
-            { id: 'open', icon: '\u{f08e}', label: 'Open in its own app', hint: 'o', run: () => void openExternally($, current) },
+            { id: 'open', icon: '\u{f08e}', label: 'Open in its own app', hint: 'o', run: () => void openExternally(navIoOf($), current) },
             ...(current.remote
-              ? [{ id: 'refresh', icon: '\u{f021}', label: 'Refresh this page', hint: 'u', run: () => void refresh($, current.href) }]
+              ? [{ id: 'refresh', icon: '\u{f021}', label: 'Refresh this page', hint: 'u', run: () => void refresh(navIoOf($), current.href) }]
               : []),
             ...(e.surface === 'terminal' && Image && current.remote && parseRef(current.href)?.kind === 'web'
               ? [{ id: 'live', icon: '\u{f0ac}', label: liveHref === current.href ? 'Reader view: leave the live page' : 'Live view: the real page, clickable', hint: 'v', run: () => void toggleLive($, current, liveViewport ?? { width: 600, height: 400 }) }]
@@ -2274,7 +2010,7 @@ export const register: Register = on => {
             icon: iconFor(kind),
             label: `Go to ${target.split('/').pop() || target}`,
             hint: describeAge(one.at, now),
-            run: () => void show($, one.href),
+            run: () => void show(navIoOf($), one.href),
           }
         }),
     ]
@@ -3163,7 +2899,7 @@ export const register: Register = on => {
       }
       estimatedRows = Math.max(1, running)
       const topBlock = [...blockStarts.keys()].reverse().find(i => rowOf(i) <= offset + PAGE_TOP + 1) ?? 0
-      topBlockKey = `block-${topBlock}`
+      nav.topBlockKey = `block-${topBlock}`
       const heading = blockHeadings[topBlock] ?? ''
       const maxScroll = Math.max(0, contentRows - e.props.scroll.bodyRows)
       const percent = maxScroll > 0 ? Math.min(100, Math.round((offset / maxScroll) * 100)) : 100
@@ -3217,7 +2953,7 @@ export const register: Register = on => {
               {png && Image && picture ? (
                 <Image key={`${key}-image`} source={{ png }} {...fullWidth(picture.width, picture.height)} alt={alt || 'image'} />
               ) : (
-                !one?.play && <Markdown dimColor={isMenuOpen} key={`${key}-link`} text={`[open image](${url})`} onLinkPress={link => void pressLink($, link.href)} />
+                !one?.play && <Markdown dimColor={isMenuOpen} key={`${key}-link`} text={`[open image](${url})`} onLinkPress={link => void pressLink(navIoOf($), link.href)} />
               )}
               {one?.play && (
                 <Button key={`media-play-${index}`} label="\u{f04b} Play video" plain onPress={() => void (isWebUrl(url) && $.process.run(['open', url]).catch(() => undefined))} />
@@ -3276,7 +3012,7 @@ export const register: Register = on => {
         for (const [i, { chunk, rows }] of chunks.entries()) {
           drawnParts.push(
             <Box key={`${key}-${i}`} marginLeft={indent}>
-              <Markdown dimColor={isMenuOpen} key={`${key}-md-${i}`} text={chunk} onLinkPress={link => void pressLink($, link.href)} />
+              <Markdown dimColor={isMenuOpen} key={`${key}-md-${i}`} text={chunk} onLinkPress={link => void pressLink(navIoOf($), link.href)} />
             </Box>,
           )
           note(rows, heading)
@@ -3368,7 +3104,7 @@ export const register: Register = on => {
                   return (
                     <Box key={`list-${li}-${i}`} flexDirection="row" justifyContent="space-between" width={textWidth} height={1} hover={{ backgroundColor: C.surface0 }}>
                       <Box flexShrink={1} overflow="hidden" height={1}>
-                        <Button key={`list-item-${li}-${i}`} label={fitName(item.title, Math.max(8, textWidth - meta.length - 2))} plain onPress={() => void openFromPage($, item.href)} />
+                        <Button key={`list-item-${li}-${i}`} label={fitName(item.title, Math.max(8, textWidth - meta.length - 2))} plain onPress={() => void openFromPage(navIoOf($), item.href)} />
                       </Box>
                       <Box flexShrink={0}>
                         <Text color={C.overlay0}>{meta}</Text>
@@ -3434,7 +3170,7 @@ export const register: Register = on => {
             const chunk = pending.join('\n')
             pending = []
             if (!chunk.trim()) return
-            bodyParts.push(<Markdown dimColor={isMenuOpen} key={`${key}-md-${bodyParts.length}`} text={chunk} onLinkPress={link => void pressLink($, link.href)} />)
+            bodyParts.push(<Markdown dimColor={isMenuOpen} key={`${key}-md-${bodyParts.length}`} text={chunk} onLinkPress={link => void pressLink(navIoOf($), link.href)} />)
             bodyRows += estimateRows(chunk, width)
           }
           for (const line of linkify(one.body || '*(empty)*', () => null, refs).split('\n')) {
@@ -3535,7 +3271,7 @@ export const register: Register = on => {
         if (part.kind === 'markdown') {
           for (const [chunkIndex, chunk] of chunkMarkdown(part.text).entries()) {
             drawnParts.push(
-              <Markdown dimColor={isMenuOpen} key={`body-${index}-${chunkIndex}`} text={chunk} onLinkPress={link => void pressLink($, link.href)} />,
+              <Markdown dimColor={isMenuOpen} key={`body-${index}-${chunkIndex}`} text={chunk} onLinkPress={link => void pressLink(navIoOf($), link.href)} />,
             )
             note(estimateRows(chunk, textWidth))
           }
@@ -3609,7 +3345,7 @@ export const register: Register = on => {
           drawnParts.push(
             <Box key={`tasks-${index}`} flexDirection="column" width={textWidth}>
               {part.items.map(item => {
-                const toggle = () => void pressLink($, `${item.href}#task-${item.line}`)
+                const toggle = () => void pressLink(navIoOf($), `${item.href}#task-${item.line}`)
                 const scope = `task-${item.line}`
                 return (
                   <Box key={`task-row-${item.line}`} flexDirection="row" marginLeft={item.depth * 2}>
@@ -3650,7 +3386,7 @@ export const register: Register = on => {
                     .split('\n')
                     .map(line => (line.trim() ? `*${line.trim()}*` : ''))
                     .join('\n')}
-                  onLinkPress={link => void pressLink($, link.href)}
+                  onLinkPress={link => void pressLink(navIoOf($), link.href)}
                 />
               </Box>
             </Box>,
@@ -3678,7 +3414,7 @@ export const register: Register = on => {
               <Markdown dimColor={isMenuOpen}
                 key={`body-${index}`}
                 text={picture ? `[open ${part.src}](${target})` : `*not found: ${part.src}*`}
-                onLinkPress={link => void pressLink($, link.href)}
+                onLinkPress={link => void pressLink(navIoOf($), link.href)}
               />
             )),
           )
@@ -3887,10 +3623,10 @@ export const register: Register = on => {
           { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
           { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
           { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar($, current.href) },
-          { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally($, current) },
-          ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh($, current.href) }] : []),
-          ...(liveFrame || backStack.length || groupBack
-            ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : groupBack && backStack.length <= groupBack.depth ? `Back to ${groupBack.title}` : 'Back to the previous page', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }]
+          { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally(navIoOf($), current) },
+          ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh(navIoOf($), current.href) }] : []),
+          ...(liveFrame || nav.backStack.length || nav.groupBack
+            ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : nav.groupBack && nav.backStack.length <= nav.groupBack.depth ? `Back to ${nav.groupBack.title}` : 'Back to the previous page', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack(navIoOf($)) }]
             : []),
           {
             key: 'copy',
