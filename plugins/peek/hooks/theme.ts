@@ -79,42 +79,6 @@ export const META_ICON: Record<string, string> = {
   Host: '\u{f0ac}',
 }
 
-export const KIND_COLOR: Record<string, string> = {
-  markdown: C.yellow,
-  text: C.blue,
-  mermaid: C.mauve,
-  image: C.teal,
-  svg: C.teal,
-  html: C.peach,
-  folder: C.overlay1,
-  json: C.yellow,
-  toml: C.peach,
-  csv: C.green,
-  web: C.peach,
-  'gh-pr': C.green,
-  'gh-issue': C.teal,
-  'gh-repo': C.overlay1,
-  'linear-issue': C.blue,
-  'linear-project': C.mauve,
-  'slack-thread': C.yellow,
-}
-
-export function iconFor(kind: string | undefined): string {
-  return ICON[(kind ?? 'file') as keyof typeof ICON] ?? ICON.file
-}
-
-export function colorFor(kind: string | undefined): string {
-  return KIND_COLOR[kind ?? ''] ?? C.overlay1
-}
-
-// `─ LABEL ──────── right ─`, the toy's lane rule, sized to the pane.
-export function ruleParts(label: string, right: string, columns: number) {
-  const head = ` ${label.toUpperCase()} `
-  const tail = right ? ` ${right} ` : ''
-  const fill = Math.max(1, columns - 2 - head.length - tail.length)
-  return { head, fill: '─'.repeat(fill), tail }
-}
-
 function mix(color: string, toward: string, amount: number): string {
   const parse = (hex: string) => [1, 3, 5].map(i => Number.parseInt(hex.slice(i, i + 2), 16))
   if (!/^#[0-9a-f]{6}$/i.test(color)) return color

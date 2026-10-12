@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { kindLabel, typeOf } from '../hooks/lib'
-import { C, ICON, colorFor, iconFor } from '../hooks/theme'
+import { colorFor, iconFor, kindLabel, typeOf } from '../hooks/kinds'
+import { C, ICON } from '../hooks/theme'
 
 const FILE_LABEL = { glyph: '·', label: 'File' }
 
