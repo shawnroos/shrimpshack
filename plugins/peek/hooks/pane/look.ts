@@ -1,3 +1,4 @@
+import type { FileEntry } from '../gallery'
 import type { Ref } from '../refs'
 import type { TitleEntry } from '../refresh'
 
@@ -21,4 +22,8 @@ export function remoteNaming(
     where: ref?.owner ? `${ref.owner}/${ref.repo}` : title?.trail?.join(' · ') || fallback.host(),
     kind: title?.kind ?? ref?.kind ?? 'web',
   }
+}
+
+export function lookOf(entry: FileEntry, where: string): ItemLook {
+  return { key: entry.href, href: entry.href, name: entry.name, kind: entry.kind, where, state: 'ok', favicon: entry.favicon }
 }

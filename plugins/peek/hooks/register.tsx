@@ -47,7 +47,7 @@ import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradi
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
-import { type ItemLook, type ItemState, remoteNaming } from './pane/look'
+import { type ItemLook, type ItemState, lookOf, remoteNaming } from './pane/look'
 import { HoverLayer, ItemIcon, SectionRule, fitPicture } from './pane/widgets'
 
 const C = BASE
@@ -2849,13 +2849,9 @@ export const register: Register = on => {
         return { where, age }
       }
       const looks = (one: FileEntry) => ({
-        href: one.href,
+        look: lookOf(one, scope === 'session' ? shortPath(one.folder, cwd, home) : one.folder),
         isStarred: starSet.has(one.href),
-        favicon: one.favicon && Image ? pixels.get(one.favicon) : undefined,
-        icon: iconFor(one.kind),
-        color: colorFor(one.kind),
-        name: one.name,
-        folder: scope === 'session' ? shortPath(one.folder, cwd, home) : one.folder,
+        png: one.favicon && Image ? pixels.get(one.favicon) : undefined,
       })
       const scopeCrumb = crumbs([
         { label: `${SCOPE_ICON[scope]} ${scope}`, fg: C.appBg, bg: C.accent, bold: true },
@@ -2889,7 +2885,7 @@ export const register: Register = on => {
             {cards.map((one, c) => {
               const index = firstNav + r * perRow + c
               const isSelected = index === selected
-              const look = looks(one)
+              const { look, isStarred, png } = looks(one)
               const { where, age } = describe(one)
               const inner = Math.max(4, cardWidth - 7)
               return (
@@ -2904,12 +2900,12 @@ export const register: Register = on => {
                   hover={{ backgroundColor: C.surface0 }}
                 >
                   <Box flexDirection="row">
-                    {look.favicon && !look.isStarred && Image && (
-                      <Image key={`favicon-${index}`} source={{ png: look.favicon }} columns={2} rows={1} alt={look.icon} />
+                    {png && !isStarred && Image && (
+                      <Image key={`favicon-${index}`} source={{ png }} columns={2} rows={1} alt={iconFor(look.kind)} />
                     )}
                     <Button
                       key={`item-${index}`}
-                      label={look.isStarred ? '\u{f51a}' : look.favicon ? ' ' : look.icon}
+                      label={isStarred ? '\u{f51a}' : png ? ' ' : iconFor(look.kind)}
                       plain
                       autoFocus={isSelected ? true : undefined}
                       onPress={() => void selectAndOpen($, index)}
@@ -2918,7 +2914,7 @@ export const register: Register = on => {
                       <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }}>{` ${look.name.slice(0, inner)}`}</Text>
                     </Box>
                   </Box>
-                  <Text color={C.overlay0} wrap="truncate-start">{look.folder || ' '}</Text>
+                  <Text color={C.overlay0} wrap="truncate-start">{look.where || ' '}</Text>
                   <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${where}${age} · ${one.status ?? describeSize(one.size)}`}</Text>
                 </Box>
               )
@@ -3056,7 +3052,7 @@ export const register: Register = on => {
             {chunk.map((one, j) => {
               const index = firstNav + i * LIST_CHUNK + j
               const isSelected = index === selected
-              const look = looks(one)
+              const { look, isStarred, png } = looks(one)
               const { where, age } = describe(one)
               const count = one.mentions > 1 ? `${one.mentions}× · ` : ''
               const meta = `${one.status ? `${one.status} · ` : ''}${where}${count}${age}`
@@ -3073,15 +3069,15 @@ export const register: Register = on => {
                   hover={{ backgroundColor: C.surface0 }}
                 >
                   <Box flexDirection="row" width={leftWidth} height={1} overflow="hidden">
-                    {look.favicon && !look.isStarred && Image && (
+                    {png && !isStarred && Image && (
                       <Box flexShrink={0}>
-                        <Image key={`favicon-${index}`} source={{ png: look.favicon }} columns={2} rows={1} alt={look.icon} />
+                        <Image key={`favicon-${index}`} source={{ png }} columns={2} rows={1} alt={iconFor(look.kind)} />
                       </Box>
                     )}
                     <Box flexShrink={0}>
                       <Button
                         key={`item-${index}`}
-                        label={look.isStarred ? '\u{f51a}' : look.favicon ? ' ' : look.icon}
+                        label={isStarred ? '\u{f51a}' : png ? ' ' : iconFor(look.kind)}
                         plain
                         autoFocus={isSelected ? true : undefined}
                         onPress={() => void selectAndOpen($, index)}
@@ -3091,7 +3087,7 @@ export const register: Register = on => {
                       <Text color={isSelected ? C.accent : C.text} bold={isSelected} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(look.name, nameRoom)}`}</Text>
                     </Box>
                     <Box flexShrink={1} flexGrow={1} overflow="hidden">
-                      <Text color={C.overlay0} wrap="truncate-middle">{look.folder ? `  ${look.folder}` : ''}</Text>
+                      <Text color={C.overlay0} wrap="truncate-middle">{look.where ? `  ${look.where}` : ''}</Text>
                     </Box>
                   </Box>
                   <Box flexShrink={0} height={1}>
