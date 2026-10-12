@@ -68,6 +68,8 @@ export function failureText(kind: FailureKind): { title: string; hint: string } 
       return { title: 'The live view stopped', hint: 'Press v to start it again' }
     case 'live-stalled':
       return { title: 'The live page never drew', hint: 'Press v to try again, or o to open it in the browser' }
+    case 'slack-unavailable':
+      return { title: 'Slack is not connected', hint: 'Slack: connect the Slack MCP server (/mcp), or install the Slack CLI and run `slack login`' }
   }
 }
 

@@ -11,6 +11,8 @@ export type Ref = {
   workspace?: string
   key?: string
   slug?: string
+  channel?: string
+  ts?: string
 }
 
 export type RefContext = { teamKeys?: readonly string[]; workspace?: string; repo?: string }
@@ -29,6 +31,23 @@ const LINEAR_ID = /^([A-Z][A-Z0-9]{0,9})-(\d+)$/i
 function github(owner: string, repo: string, kind: 'gh-issue' | 'gh-pr' | 'gh-number', number: number): Ref {
   const path = kind === 'gh-pr' ? 'pull' : 'issues'
   return { kind, address: `https://github.com/${owner}/${repo}/${path}/${number}`, owner, repo, number }
+}
+
+const SLACK_HOST = /^([a-z0-9][a-z0-9-]*)\.slack\.com$/
+const SLACK_CHANNEL = /^[CDG][A-Z0-9]{2,}$/
+const SLACK_P_TS = /^p(\d{10})(\d{6})$/
+const SLACK_TS = /^(\d{10})\.(\d{6})$/
+
+// A reply's link carries its parent in thread_ts; the thread is the item, so the address is always the parent's.
+function slackThread(host: string, parts: string[], threadTs: string | null): Ref | null {
+  const workspace = SLACK_HOST.exec(host)?.[1]
+  const [section, channel = '', message = ''] = parts
+  if (!workspace || section !== 'archives' || parts.length !== 3 || !SLACK_CHANNEL.test(channel)) return null
+  const own = SLACK_P_TS.exec(message)
+  if (!own) return null
+  const parent = (threadTs && SLACK_TS.exec(threadTs)) || own
+  const ts = `${parent[1]}.${parent[2]}`
+  return { kind: 'slack-thread', address: `https://${workspace}.slack.com/archives/${channel}/p${parent[1]}${parent[2]}`, workspace, channel, ts }
 }
 
 function fromUrl(url: URL): Ref | null {
@@ -55,6 +74,8 @@ function fromUrl(url: URL): Ref | null {
       return { kind: 'linear-project', address: `https://linear.app/${workspace}/project/${id}`, workspace, slug: id }
     }
   }
+  const slack = slackThread(host, parts, url.searchParams.get('thread_ts'))
+  if (slack) return slack
   url.hash = ''
   return { kind: 'web', address: url.toString() }
 }
@@ -82,14 +103,19 @@ export function parseRef(input: string, context: RefContext = {}): Ref | null {
   return null
 }
 
-export function familyOf(kind: string): 'gh' | 'linear' | 'web' {
+export function familyOf(kind: string): 'gh' | 'linear' | 'slack' | 'web' {
   if (kind.startsWith('gh-')) return 'gh'
   if (kind.startsWith('linear-')) return 'linear'
+  if (kind.startsWith('slack-')) return 'slack'
   return 'web'
 }
 
-// A pull request and an issue URL for one number are the same item.
+// A pull request and an issue URL for one number are the same item, as are a Slack thread and a reply link inside it.
 export function itemKey(address: string): string {
+  if (/^https:\/\/[^/]+\.slack\.com\/archives\//i.test(address)) {
+    const ref = parseRef(address)
+    if (ref?.kind === 'slack-thread') return ref.address
+  }
   return address.replace(/^(https:\/\/github\.com\/[^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)$/, '$1#$2')
 }
 

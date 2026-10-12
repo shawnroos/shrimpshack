@@ -4,7 +4,7 @@ export type Mention = { href: string; at: number; count: number; isArtifact?: bo
 
 export type Heading = { level: number; text: string }
 
-export type RemoteKind = 'gh-repo' | 'gh-issue' | 'gh-pr' | 'linear-issue' | 'linear-project' | 'web'
+export type RemoteKind = 'gh-repo' | 'gh-issue' | 'gh-pr' | 'linear-issue' | 'linear-project' | 'slack-thread' | 'web'
 
 export type FailureKind =
   | 'cli-missing'
@@ -21,8 +21,9 @@ export type FailureKind =
   | 'live-unavailable'
   | 'live-crashed'
   | 'live-stalled'
+  | 'slack-unavailable'
 
-export type Tier = 'cli' | 'api' | 'session'
+export type Tier = 'cli' | 'api' | 'mcp' | 'session'
 
 export type RemoteComment = { author: string; at: string; body: string; depth?: number; isReview?: boolean }
 
