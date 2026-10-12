@@ -8,7 +8,6 @@ import { record } from './capture'
 import type { CaptureIo } from './capture'
 import { itemKey, parseRef } from './refs'
 import { initials, whenLabel } from './slack'
-import { downloadFile, remoteFileOf } from './web'
 import type { RemoteIo } from './remote'
 import { failureText } from './sources'
 import { createLive, isWebUrl, liveStatusText, pagePoint, typedInput, wheelPoint } from './live'
@@ -20,20 +19,21 @@ import type { GroupsIo } from './groups'
 import { describeAge, describeSize, plural } from './format'
 import { classifyBlocks, filterRole, gridColumns, nextOf, selectEntries } from './gallery'
 import { colorFor, iconFor, kindLabel } from './kinds'
-import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, mermaidFences, outlineOf, pathCandidates, plainInline, segmentsOf, swapMermaidFences } from './markdown'
+import { diagramType, linkify, mermaidFences, pathCandidates, plainInline, segmentsOf, swapMermaidFences } from './markdown'
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, taskRows, wrapLines } from './measure'
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
-import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
+import { columnWidths, fitCell } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
 import { type ItemLook, lookOf } from './pane/look'
 import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
-import { SCRATCH, bootLinear, clamp, goBack, loadRemote, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
+import { SCRATCH, bootLinear, clamp, goBack, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
 import type { NavIo } from './navigation'
 import { TOOLS } from './group-tools'
 import { createGroupStore } from './groups-store'
+import { fullText, loadFile, loadUrl } from './loaders'
 import { expandedGroups, focusGroupRow, groupCommands, groupHome, groupItemLook, groupPage, groupPageRows, loadGroupRemote, openCardItem, openGroupHref, openGroupItem, openGroupPage, selectGroupRow, setStar, starInGroupsTab, starredFirst, toggleExpanded, toggleGroupStar } from './groups-session'
 import type { GroupMenuFor, GroupRows, MenuCommand } from './groups-session'
-import { forgetPath, gitRoot, guess, noteCapture, pathExists, remember, scopeEntries, sessionEntries, toHref, withMentions } from './entries'
+import { forgetPath, guess, noteCapture, pathExists, remember, scopeEntries, sessionEntries, toHref, withMentions } from './entries'
 
 const C = BASE
 
@@ -127,7 +127,6 @@ const CARD_MIN = 26
 const CARD_GAP = 2
 const PINNED_GROUPS = 4
 const GROUP_CARD_LINES = 3
-const fullText = new Map<string, string>()
 const GALLERY = 'peek-ui'
 const presses = atom({ plugin: 'peek', key: 'galleryPresses' } as const, 0)
 const typed = atom({ plugin: 'peek', key: 'galleryText' } as const, '')
@@ -232,145 +231,6 @@ async function withDrawnMermaid($: EngineInterface, markdown: string): Promise<s
   return swapMermaidFences(markdown, drawn)
 }
 
-async function loadFile($: EngineInterface, href: string, path: string, line?: number): Promise<View> {
-  const title = path.split('/').pop() || path
-  const folderOf = path.slice(0, Math.max(1, path.length - title.length - 1))
-  const git = await gitRoot(navIoOf($), folderOf)
-  const base: View = { href, title, location: line ? `${path}:${line}` : path, root: git?.root, isWorktree: git?.isWorktree }
-  const stat = await $.fs.stat(path)
-  const age = describeAge(stat.mtimeMs, await $.clock.now())
-  if (stat.kind === 'dir') {
-    const entries = (await $.fs.list(path)).filter(one => !one.name.startsWith('.'))
-    const dir = entries
-      .sort((a, b) => Number(b.kind === 'dir') - Number(a.kind === 'dir') || a.name.localeCompare(b.name))
-      .slice(0, 500)
-      .map(one => ({ name: one.name, isDir: one.kind === 'dir', size: one.size, mtimeMs: one.mtimeMs }))
-    const folders = dir.filter(one => one.isDir).length
-    const summary = `${folders} folders · ${dir.length - folders} files`
-    return { ...base, kind: 'folder', meta: `${entries.length} items · edited ${age}`, summary, dir }
-  }
-  const kind = kindOf(path)
-  const sized = `${describeSize(stat.size)} · edited ${age}`
-  if (kind === 'image' || kind === 'svg') {
-    const image = await toPng($, path, stat.mtimeMs)
-    return { ...base, kind, meta: `${image.width}×${image.height} · ${sized}`, image }
-  }
-  if (kind === 'html') {
-    const html = await $.fs.read(path)
-    return { ...base, kind, meta: sized, markdown: fitMarkdown(htmlToMarkdown(html)) }
-  }
-  const text = await $.fs.read(path)
-  const lineCount = text.split('\n').length
-  const meta = `${lineCount} lines · ${sized}`
-  if (kind === 'markdown') {
-    const tasks = linkTasks(text, fileHref(path))
-    const drawn = await withDrawnMermaid($, tasks.text)
-    fullText.set(href, drawn)
-    const outline = outlineOf(drawn).map(({ level, text: heading }) => ({ level, text: heading }))
-    const taskCount = tasks.total ? `${tasks.done}/${tasks.total} tasks` : undefined
-    return { ...base, kind, meta, tasks: taskCount, outline, markdown: fitMarkdown(drawn) }
-  }
-  if (kind === 'mermaid') {
-    const art = await drawMermaid($, text)
-    const body = art
-      ? `\`\`\`text\n${art.replace(/\s+$/, '')}\n\`\`\``
-      : `*This diagram type cannot be drawn as text. Press "Open externally" to see it rendered.*\n\n\`\`\`mermaid\n${text}\n\`\`\``
-    return { ...base, kind, meta, markdown: fitMarkdown(body) }
-  }
-  if (kind === 'csv') {
-    const rows = parseDelimited(text, extOf(path) === 'tsv' ? '\t' : ',')
-    const [header = [], ...body] = rows
-    const columns = Math.max(header.length, ...body.slice(0, 200).map(row => row.length))
-    const table = { header, rows: body.slice(0, 500), total: body.length }
-    return { ...base, kind, meta, summary: `${body.length} rows × ${columns} columns`, table }
-  }
-  let source = text
-  let summary: string | undefined
-  if (kind === 'json') {
-    const pretty = prettyJson(text)
-    if ('text' in pretty) {
-      source = pretty.text
-      summary = pretty.summary
-    } else {
-      summary = `invalid JSON: ${pretty.error}`
-    }
-  }
-  if (kind === 'toml') {
-    const sections = tomlSections(text)
-    summary = `${sections} section${sections === 1 ? '' : 's'}`
-  }
-  const lines = source.split('\n')
-  const startLine = line ? Math.max(1, line - 10) : 1
-  const window: string[] = []
-  let used = 0
-  for (const one of lines.slice(startLine - 1, startLine + 1999)) {
-    if (used + one.length > 80_000) break
-    window.push(one)
-    used += one.length + 1
-  }
-  const language = kind === 'json' ? 'json' : kind === 'toml' ? 'toml' : extOf(path)
-  const code = { source: window.join('\n'), language, startLine, focusLine: line }
-  return { ...base, kind: kind === 'json' || kind === 'toml' ? kind : 'text', meta, summary, code }
-}
-
-function urlName(url: URL): string {
-  const last = url.pathname.split('/').filter(Boolean).pop()
-  try {
-    return last ? decodeURIComponent(last) : url.hostname
-  } catch {
-    return last ?? url.hostname
-  }
-}
-
-function videoView(url: URL, now: number): View {
-  const host = url.hostname.replace(/^www\./, '')
-  const record: RemoteRecord = {
-    address: url.href,
-    kind: 'web',
-    title: urlName(url),
-    trail: [host],
-    meta: [{ label: 'Host', value: host }],
-    body: `![video](${url.href})`,
-    media: { [url.href]: { play: url.href } },
-    browserUrl: url.href,
-  }
-  return { href: url.href, title: record.title, location: url.href, kind: 'web', remote: { record, tier: 'cli', fetchedAt: now } }
-}
-
-// The page keeps the URL as its address, so o opens and c copies the URL, not the scratch copy.
-async function loadRemoteFile($: EngineInterface, url: URL, file: { fetchUrl: string; ext: string }): Promise<View | null> {
-  const got = await downloadFile(remoteIoOf($), file.fetchUrl, file.ext).catch(() => undefined)
-  if (!got || /^text\/html/i.test(got.type ?? '')) return null
-  const loaded = await loadFile($, url.href, got.file).catch(() => null)
-  if (!loaded || loaded.error) return null
-  return { ...loaded, title: urlName(url), location: url.href, root: undefined, isWorktree: undefined }
-}
-
-async function loadUrl($: EngineInterface, href: string): Promise<View> {
-  const url = new URL(href)
-  const file = remoteFileOf(href)
-  if (file?.kind === 'video') return videoView(url, await $.clock.now())
-  const fromFile = file ? await loadRemoteFile($, url, file) : null
-  if (fromFile) return fromFile
-  const kind = kindOf(url.pathname)
-  const base: View = { href, title: url.hostname + url.pathname, location: href, kind: 'web', meta: url.hostname }
-  if (kind === 'image' || kind === 'svg') {
-    return { ...base, error: 'Remote images open in the browser. Press "Open externally".' }
-  }
-  const ref = parseRef(href)
-  if (file && ref) return loadRemote(navIoOf($), ref)
-  const response = await $.http.fetch(href)
-  if (!response.ok) return { ...base, error: `HTTP ${response.status}` }
-  const type = response.headers['content-type'] ?? ''
-  if (type.startsWith('image/')) {
-    return { ...base, error: 'Remote images open in the browser. Press "Open externally".' }
-  }
-  const markdown = type.includes('html') ? htmlToMarkdown(response.text) : response.text
-  fullText.set(href, markdown)
-  const outline = outlineOf(markdown).map(({ level, text }) => ({ level, text }))
-  return { ...base, outline, markdown: fitMarkdown(markdown) }
-}
-
 function remoteIoOf($: EngineInterface): RemoteIo {
   return {
     sessionId: () => $.session.id(),
@@ -425,7 +285,7 @@ async function mediaPictures($: EngineInterface, media: RemoteRecord['media']) {
 }
 
 function navIoOf($: EngineInterface): NavIo {
-  return {
+  const io: NavIo = {
     view: { read: () => read($, view), update: change => update($, view, change) },
     mode: { read: () => read($, mode), update: change => update($, mode, change) },
     page: { read: () => read($, page), update: change => update($, page, change) },
@@ -444,7 +304,9 @@ function navIoOf($: EngineInterface): NavIo {
     stat: path => $.fs.stat(path),
     exists: path => $.fs.exists(path),
     run: (argv, init) => $.process.run(argv, init),
+    fetch: (url, init) => $.http.fetch(url, init),
     readFile: path => $.fs.read(path),
+    list: path => $.fs.list(path),
     writeFile: (path, text) => $.fs.write(path, text),
     storeGet: key => $.store.get(key),
     storeSet: (key, value) => $.store.set(key, value),
@@ -463,13 +325,16 @@ function navIoOf($: EngineInterface): NavIo {
     writeGroup: (place, id, change) => groupStore.write(groupsIoOf($), place, id, change),
     openGroupRemotes: () => groupPage.remotes,
     forgetPath,
-    loadFile: (href, path, line) => loadFile($, href, path, line),
-    loadUrl: href => loadUrl($, href),
+    loadFile: (href, path, line) => loadFile(io, href, path, line),
+    loadUrl: href => loadUrl(io, href),
+    toPng: (abs, mtimeMs, edges) => toPng($, abs, mtimeMs, edges),
+    drawMermaid: source => drawMermaid($, source),
     withDrawnMermaid: markdown => withDrawnMermaid($, markdown),
     remotePicture: file => remotePicture($, file),
     mediaPictures: media => mediaPictures($, media),
     avatarPictures: avatars => avatarPictures($, avatars),
   }
+  return io
 }
 
 function captureIoOf($: EngineInterface): CaptureIo {

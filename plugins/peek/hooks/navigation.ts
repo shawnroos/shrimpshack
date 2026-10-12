@@ -1,4 +1,4 @@
-import type { EngineInterface, PluginState, ProcessRunInit, ProcessRunResult } from 'claude-code'
+import type { EngineInterface, HttpInit, HttpResponse, PluginState, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { Group, GroupResult, Loaded, Mode, RemoteRecord, View } from '../types'
 import { capturedLinearContext } from './capture'
@@ -46,7 +46,9 @@ export type NavIo = {
   stat: (path: string) => ReturnType<Fs['stat']>
   exists: (path: string) => Promise<boolean>
   run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
+  fetch: (url: string, init?: HttpInit) => Promise<HttpResponse>
   readFile: (path: string) => Promise<string>
+  list: (path: string) => ReturnType<Fs['list']>
   writeFile: (path: string, text: string) => Promise<unknown>
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<unknown>
@@ -68,6 +70,8 @@ export type NavIo = {
   loadFile: (href: string, path: string, line?: number) => Promise<View>
   loadUrl: (href: string) => Promise<View>
   withDrawnMermaid: (markdown: string) => Promise<string>
+  drawMermaid: (source: string) => Promise<string | null>
+  toPng: (abs: string, mtimeMs: number, edges?: readonly number[]) => Promise<Picture>
   remotePicture: (file: string | undefined) => Promise<Picture | undefined>
   mediaPictures: (media: RemoteRecord['media']) => Promise<Record<string, Picture> | undefined>
   avatarPictures: (avatars: RemoteRecord['avatars']) => Promise<Record<string, Picture> | undefined>
