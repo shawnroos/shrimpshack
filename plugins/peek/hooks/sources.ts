@@ -1,6 +1,6 @@
 import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
-import type { FailureKind, RemoteKind, Tier } from '../types'
+import type { FailureKind } from '../types'
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
 // Copied from herdr-board crates/board-daemon/src/linear/credential.rs: one Keychain item serves both tools.
@@ -101,17 +101,6 @@ async function runProbe(io: SourceIo): Promise<Probe> {
 
 export async function hasCurl(io: SourceIo): Promise<boolean> {
   return (await probe(io)).hasCurl
-}
-
-export async function tierFor(io: SourceIo, kind: RemoteKind): Promise<{ ok: true; tier: Tier } | Failed> {
-  const found = await probe(io)
-  if (kind === 'gh-repo' || kind === 'gh-issue' || kind === 'gh-pr') {
-    return found.gh ? { ok: false, failure: found.gh } : { ok: true, tier: 'cli' }
-  }
-  if (kind === 'linear-issue' || kind === 'linear-project') {
-    return found.hasKey ? { ok: true, tier: 'api' } : { ok: false, failure: 'key-missing' }
-  }
-  return { ok: true, tier: found.hasCurl ? 'cli' : 'api' }
 }
 
 function ghFailure(stderr: string): FailureKind {

@@ -184,21 +184,6 @@ export function fitMarkdown(text: string, limit = 9500): string {
   return `${cut}${isInFence ? '\n```' : ''}\n\n*… cut at ${limit} characters. Open externally for the rest.*`
 }
 
-export function codeWindow(text: string, lang: string, line?: number): string {
-  const lines = text.split('\n')
-  const start = line ? Math.max(0, line - 11) : 0
-  const shown = lines.slice(start, start + 200)
-  const width = String(start + shown.length).length
-  const body = shown
-    .map((one, index) => {
-      const number = start + index + 1
-      const mark = number === line ? '▶' : ' '
-      return `${mark}${String(number).padStart(width)}  ${one}`
-    })
-    .join('\n')
-  return `\`\`\`${lang}\n${body}\n\`\`\``
-}
-
 export function imageBox(width: number, height: number, maxColumns: number, maxRows: number) {
   const cellAspect = 2.1
   let columns = Math.max(1, Math.min(255, maxColumns))
@@ -402,12 +387,6 @@ export function noteMentions(
   return [...byHref.values()].slice(-cap)
 }
 
-export function pageOf<T>(items: readonly T[], page: number, size: number): { items: T[]; page: number; pages: number } {
-  const pages = Math.max(1, Math.ceil(items.length / Math.max(1, size)))
-  const clamped = Math.min(Math.max(0, page), pages - 1)
-  return { items: items.slice(clamped * size, clamped * size + size), page: clamped, pages }
-}
-
 export function shortPath(path: string, cwd: string, home: string): string {
   if (cwd && path.startsWith(`${cwd}/`)) return path.slice(cwd.length + 1)
   if (home && path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`
@@ -493,10 +472,6 @@ export function paginateMarkdown(text: string, width: number, rows: number): str
 
 const TASK = /^(\s*[-*+]\s+)\[( |x|X)\]\s+(.*)$/
 const IMAGE_LINE = /^\s*!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)\s*$/
-
-export function isImageLine(line: string): boolean {
-  return IMAGE_LINE.test(line)
-}
 
 // Task lines become a checkbox glyph linked to `<base>#task-<line>` so a press
 // can find and flip that exact source line.
@@ -652,18 +627,6 @@ export function chunkMarkdown(text: string, maxChars = 9000): string[] {
   }
   if (current) chunks.push(current)
   return chunks
-}
-
-export function headingAtRow(text: string, width: number, row: number): string {
-  let used = 0
-  let heading = ''
-  for (const block of markdownBlocks(text)) {
-    if (used > row) break
-    const match = /^#{1,6}\s+(.+)$/.exec(block[0] ?? '')
-    if (match?.[1]) heading = match[1]
-    used += block.reduce((rows, line) => rows + rowsFor(line, width), 0) + 1
-  }
-  return heading
 }
 
 export type TaskRow = { item: number; isFirst: boolean; text: string }
@@ -887,12 +850,6 @@ export function classifyBlocks(content: readonly { type: string; [field: string]
     }
   }
   return { texts, created, touched }
-}
-
-// Starred first; the order inside each group is the order given.
-export function starredFirst<T extends { href: string }>(entries: readonly T[], stars: readonly string[]): T[] {
-  const starred = new Set(stars)
-  return [...entries.filter(one => starred.has(one.href)), ...entries.filter(one => !starred.has(one.href))]
 }
 
 export function toggleStar(stars: readonly string[], href: string, wanted?: boolean): string[] {

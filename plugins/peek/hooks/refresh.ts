@@ -69,11 +69,6 @@ export function isCurrent(currentHref: string | undefined, address: string): boo
   return currentHref !== undefined && itemKey(currentHref) === itemKey(address)
 }
 
-export function freshness(entry: CacheEntry, now: number): CacheState | 'stale' {
-  if (entry.state === 'fresh' && entry.fetchedAt !== undefined && now - entry.fetchedAt >= ON_SCREEN_MS) return 'stale'
-  return entry.state
-}
-
 function extendBackoff(source: Source, now: number): void {
   const waitMs = Math.min((backoff.get(source)?.waitMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS)
   backoff.set(source, { waitMs, until: now + waitMs })

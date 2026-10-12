@@ -132,10 +132,6 @@ describe('mentions', () => {
     ])
   })
 
-  test('pageOf clamps the page and counts pages', () => {
-    expect(lib.pageOf([1, 2, 3, 4, 5], 9, 2)).toEqual({ items: [5], page: 2, pages: 3 })
-  })
-
   test('shortPath trims the working folder, then home', () => {
     expect(lib.shortPath('/w/docs/a.md', '/w', '/h')).toBe('docs/a.md')
     expect(lib.shortPath('/h/x.png', '/w', '/h')).toBe('~/x.png')
@@ -344,11 +340,6 @@ test('classifyBlocks splits reply text and Write from files other tools only wor
 })
 
 describe('stars', () => {
-  test('starredFirst lifts starred entries and keeps each group in order', () => {
-    const entries = ['a', 'b', 'c', 'd'].map(href => ({ href }))
-    expect(lib.starredFirst(entries, ['d', 'b']).map(one => one.href)).toEqual(['b', 'd', 'a', 'c'])
-  })
-
   test('toggleStar flips, or sets a wanted state, without duplicates', () => {
     expect(lib.toggleStar([], 'a')).toEqual(['a'])
     expect(lib.toggleStar(['a'], 'a')).toEqual([])

@@ -5,7 +5,6 @@ import {
   BACKGROUND_CAP,
   cached,
   dueAddresses,
-  freshness,
   isCurrent,
   refreshItem,
   resetRefresh,
@@ -314,13 +313,6 @@ describe('in-place replacement', () => {
     expect(isCurrent(pr(34), entry.address)).toBe(true)
     expect(isCurrent(issue(34), entry.address)).toBe(true)
     expect(isCurrent(undefined, entry.address)).toBe(false)
-  })
-
-  test('a fresh entry reads as stale once its 60 s TTL passes', async () => {
-    resetRefresh()
-    const entry = await refreshItem(issue(36), async a => ({ ok: true, record: record(a, 'gh-issue'), tier: 'cli', fetchedAt: 0 }), 0)
-    expect(freshness(entry, 59 * SEC)).toBe('fresh')
-    expect(freshness(entry, 60 * SEC)).toBe('stale')
   })
 })
 

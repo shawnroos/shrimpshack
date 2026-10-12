@@ -3,7 +3,7 @@ import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'c
 
 import type { FailureKind } from '../types'
 import type { SourceIo } from '../hooks/sources'
-import { failureText, hasCurl, httpText, linearPaged, linearQuery, probe, runGh, tierFor } from '../hooks/sources'
+import { failureText, hasCurl, httpText, linearPaged, linearQuery, probe, runGh } from '../hooks/sources'
 
 const KEY = 'lin_api_PLANTEDKEY123'
 const ALL_KINDS: FailureKind[] = [
@@ -143,7 +143,6 @@ describe('Linear key lookup', () => {
   test('no key anywhere is key-missing, and nothing is sent', async () => {
     const { $, fetches } = world({})
     expect(await linearQuery($, ISSUE)).toEqual({ ok: false, failure: 'key-missing' })
-    expect(await tierFor($, 'linear-issue')).toEqual({ ok: false, failure: 'key-missing' })
     expect(fetches).toEqual([])
   })
 })
@@ -229,7 +228,6 @@ describe('probe and gh', () => {
   test('gh auth status exiting non-zero is cli-unauthed', async () => {
     const { $ } = keyed({ ghAuthExit: 1 })
     expect(await seen(runGh($, ['issue', 'view', '1']))).toEqual({ ok: false, failure: 'cli-unauthed' })
-    expect(await tierFor($, 'gh-pr')).toEqual({ ok: false, failure: 'cli-unauthed' })
   })
 
   test('gh missing from PATH is cli-missing', async () => {
@@ -241,7 +239,6 @@ describe('probe and gh', () => {
   test('process.run rejecting outright is process-unavailable, and web pages fall back to fetch', async () => {
     const { $ } = keyed({ isProcessRefused: true, fetch: () => answer(200, '<html>hi</html>') })
     expect(await seen(runGh($, ['issue', 'view', '1']))).toEqual({ ok: false, failure: 'process-unavailable' })
-    expect(await tierFor($, 'web')).toEqual({ ok: true, tier: 'api' })
     expect(await seen(httpText($, 'https://example.com/'))).toEqual({ ok: true, text: '<html>hi</html>' })
   })
 
@@ -276,7 +273,6 @@ describe('probe and gh', () => {
       },
     }
     expect(await seen(runGh($, ['api', 'user']))).toEqual({ ok: false, failure: 'offline' })
-    expect(await tierFor($, 'gh-pr')).toEqual({ ok: false, failure: 'offline' })
     isHung = false
     expect(await runGh($, ['api', 'user'])).toEqual({ ok: true, stdout: 'fine' })
   })

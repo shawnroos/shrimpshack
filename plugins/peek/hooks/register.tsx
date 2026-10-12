@@ -45,7 +45,6 @@ import {
   extOf,
   fileHref,
   fitMarkdown,
-  fromSection,
   hasMeaningfulWords,
   htmlToMarkdown,
   imageBox,
@@ -77,7 +76,6 @@ import {
   pathCandidates,
   plainInline,
   fitName,
-  pushRecent,
   rankRecent,
   rasterGradient,
   resolvePath,
@@ -99,8 +97,6 @@ const view = atom({ plugin: 'peek', key: 'view' } as const, null)
 const mentions = atom({ plugin: 'peek', key: 'mentions' } as const, [])
 const mode = atom({ plugin: 'peek', key: 'mode' } as const, 'view')
 const page = atom({ plugin: 'peek', key: 'page' } as const, 0)
-const trail = atom({ plugin: 'peek', key: 'trail' } as const, [])
-const section = atom({ plugin: 'peek', key: 'section' } as const, -1)
 const menuOpen = atom({ plugin: 'peek', key: 'menuOpen' } as const, false)
 const menuFilter = atom({ plugin: 'peek', key: 'menuFilter' } as const, '')
 const openGroup = atom({ plugin: 'peek', key: 'openGroup' } as const, null)
@@ -207,7 +203,6 @@ const IMAGE_TREE_BUDGET = 1_900_000
 const exists = new Map<string, boolean>()
 const pixels = new Map<string, string>()
 let paneColumns = 100
-let scrollLimit = 0
 let contentRows = 0
 let blockStarts: number[] = []
 let blockHeadings: string[] = []
@@ -681,8 +676,6 @@ async function show($: EngineInterface, raw: string, isFromGroupChain = false) {
   await update($, view, () => loading)
   const at = await $.clock.now()
   await update($, mentions, list => noteMentions(list, [href], at))
-  await update($, trail, list => pushRecent(list, [href], 8))
-  await update($, section, () => -1)
   await update($, page, () => 0)
   await update($, mode, () => 'view')
   void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
@@ -3080,7 +3073,6 @@ export const register: Register = on => {
         })
         blockStarts = starts
         estimatedRows = Math.max(1, cursor)
-        const jumps = keyJumps(keys)
         const content = (
           <Box flexDirection="column" width={textWidth}>
             <Box flexDirection="row" columnGap={2} width={textWidth}>
@@ -3238,7 +3230,6 @@ export const register: Register = on => {
       })
       blockStarts = starts
       estimatedRows = Math.max(1, cursor)
-      const jumps = keyJumps(keys)
       const pinnedId = nav[clamp(selected, nav.length)]?.group
       const pinnedOn = pinned.find(one => one.id === pinnedId)
       const content = (
