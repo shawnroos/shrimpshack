@@ -187,11 +187,3 @@ export function wrapLines(text: string, width: number, max: number): string[] {
   const last = lines[max - 1] ?? ''
   return [...lines.slice(0, max - 1), `${last.length >= room ? last.slice(0, room - 1).trimEnd() : last}…`]
 }
-
-// `─ LABEL ──────── right ─`, the toy's lane rule, sized to the pane.
-export function ruleParts(label: string, right: string, columns: number) {
-  const head = ` ${label.toUpperCase()} `
-  const tail = right ? ` ${right} ` : ''
-  const fill = Math.max(1, columns - 2 - head.length - tail.length)
-  return { head, fill: '─'.repeat(fill), tail }
-}
