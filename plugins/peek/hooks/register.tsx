@@ -48,7 +48,7 @@ import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './pa
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
 import { type ItemLook, type ItemState, lookOf, remoteNaming } from './pane/look'
-import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture } from './pane/widgets'
+import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
 
 const C = BASE
 
@@ -2493,9 +2493,9 @@ export const register: Register = on => {
           let layers = 0
           const layer = (kind: 'rows' | 'cards', height: number, row: ItemLook[]) =>
             HoverLayer(w, `hover-${prefix}-items-${i}-${layers++}`, { kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) })
-          const icon = (look: ItemLook, n: number) => {
+          const iconSlot = (look: ItemLook, n: number): IconSlot => {
             const isStarred = starKeys.has(look.key)
-            return ItemIcon(w, {
+            return {
               isStarred,
               png: look.favicon && Image && !isStarred ? pixels.get(look.favicon) : undefined,
               icon: iconFor(look.kind),
@@ -2503,23 +2503,24 @@ export const register: Register = on => {
               buttonKey: `${prefix}-it-${i}-${n}`,
               onPress: () => open(look),
               boxes: { image: `${prefix}-fav-${i}-${n}`, button: `${prefix}-icon-${i}-${n}` },
-            })
+            }
           }
-          const itemCard = (look: ItemLook, n: number) => (
-            <Box key={`${prefix}-card-${i}-${n}`} flexDirection="column" width={itemWidth} height={CARD_ROWS} paddingX={2} paddingY={1} backgroundColor={C.appBg} hover={{ backgroundColor: C.surface0 }}>
-              <Box flexDirection="row" height={1} overflow="hidden">
-                {icon(look, n)}
-                <Box key={`${prefix}-itname-${i}-${n}`} flexShrink={1}>
-                  <Text color={look.state === 'missing' ? C.overlay0 : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${look.name}`}</Text>
-                </Box>
-              </Box>
-              <Text color={C.overlay0} wrap="truncate-start">{look.where || ' '}</Text>
-              <Text color={look.state === 'missing' ? C.red : C.overlay0} wrap="truncate-end">{look.state === 'ok' ? kindLabel(look.kind).label : look.state}</Text>
-            </Box>
-          )
+          const itemCard = (look: ItemLook, n: number) =>
+            ItemCard(w, look, {
+              key: `${prefix}-card-${i}-${n}`,
+              width: itemWidth,
+              height: CARD_ROWS,
+              background: C.appBg,
+              clip: true,
+              icon: iconSlot(look, n),
+              nameKey: `${prefix}-itname-${i}-${n}`,
+              nameColor: look.state === 'missing' ? C.overlay0 : C.text,
+              meta: look.state === 'ok' ? kindLabel(look.kind).label : look.state,
+              metaColor: look.state === 'missing' ? C.red : C.overlay0,
+            })
           const line = (look: ItemLook, n: number) => (
             <Box key={`${prefix}-line-${i}-${n}`} height={1} flexDirection="row" width={inner} overflow="hidden" hover={{ backgroundColor: C.surface0 }}>
-              {icon(look, n)}
+              {ItemIcon(w, iconSlot(look, n))}
               <Box key={`${prefix}-itname-${i}-${n}`} flexShrink={0}>
                 <Text color={look.state === 'missing' ? C.overlay0 : C.text} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(look.name, Math.max(8, inner - 6))}`}</Text>
               </Box>
